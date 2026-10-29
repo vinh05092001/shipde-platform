@@ -38,7 +38,13 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
   carrierGhnTier = 'L2',
   selectedCaseId: propSelectedCaseId,
 }) => {
+  const [prevExceptions, setPrevExceptions] = useState(exceptions);
   const [caseList, setCaseList] = useState<UIExceptionItem[]>(exceptions);
+  if (prevExceptions !== exceptions) {
+    setPrevExceptions(exceptions);
+    setCaseList(exceptions);
+  }
+
   const [selectedCaseId, setSelectedCaseId] = useState<string>(
     propSelectedCaseId || caseList[0]?.id || ''
   );
@@ -51,27 +57,11 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
   const activeCaseId = propSelectedCaseId || selectedCaseId;
-
+  const isCaseActivated = Boolean(propSelectedCaseId);
+  const matchedCase = isCaseActivated ? caseList.find((e) => e.id === propSelectedCaseId) : null;
+  const isCaseNotFound = isCaseActivated && !matchedCase;
   const selectedCase =
-    caseList.find((e) => e.id === activeCaseId) ||
-    (activeCaseId
-      ? ({
-          id: activeCaseId,
-          tracking_code: 'TRA-CUU-TIM-KIEM',
-          carrier_code: 'GHN',
-          order_code: 'ORD-CASE',
-          recipient_name: 'Khách hàng',
-          recipient_phone: '0901234567',
-          cod_amount: 0,
-          exception_type: 'DELIVERY_FAIL',
-          status: 'OPEN',
-          deadline_at: '2026-11-01T00:00:00.000Z',
-          version: 1,
-          attempts: 1,
-          priority_score: 90,
-          occurred_at: '2026-10-30T00:00:00.000Z',
-        } as UIExceptionItem)
-      : caseList[0]);
+    matchedCase || caseList.find((e) => e.id === activeCaseId) || caseList[0] || null;
 
   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
@@ -136,6 +126,36 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Activated Case Not Found Alert (Real Not-Found State with Recovery) */}
+      {isCaseNotFound && (
+        <div
+          data-testid="activated-case-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy sự cố vận hành{' '}
+                <span className="font-mono underline">{propSelectedCaseId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Sự cố không tồn tại trong danh sách ca chờ xử lý hoặc đã được xử lý xong.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedCaseId(caseList[0]?.id || '')}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Xem sự cố ưu tiên
+            </button>
+          </div>
         </div>
       )}
 
@@ -253,7 +273,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
         </div>
 
         {/* Right Column (5 cols): Operational Action Drawer */}
-        {selectedCase && (
+        {selectedCase && !isCaseNotFound && (
           <div
             data-testid="selected-exception-drawer"
             data-selected-case-id={selectedCase.id}
@@ -387,6 +407,27 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {isCaseNotFound && (
+          <div
+            data-testid="selected-exception-drawer-not-found"
+            className="lg:col-span-5 modern-card p-6 flex flex-col items-center justify-center text-center space-y-3 text-slate-500 min-h-[300px]"
+          >
+            <AlertTriangle className="w-10 h-10 text-amber-500" />
+            <div className="font-bold text-slate-800">Không tìm thấy ca sự cố</div>
+            <p className="text-xs max-w-xs text-slate-600">
+              Mã sự cố <span className="font-mono font-semibold">{propSelectedCaseId}</span> không
+              có trong hệ thống hoặc đã được xử lý xong.
+            </p>
+            <button
+              type="button"
+              onClick={() => setSelectedCaseId(caseList[0]?.id || '')}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Xem sự cố ưu tiên
+            </button>
           </div>
         )}
       </div>

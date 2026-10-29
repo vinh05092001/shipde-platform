@@ -43,31 +43,25 @@ export const ShipmentListTab: React.FC<Props> = ({
   selectedOrderId,
   selectedOrderCode,
 }) => {
-  const [shipments, setShipments] = useState<UnifiedShipment[]>(() => {
-    if (selectedOrderCode && !MASTER_SHIPMENTS.some((s) => s.order_code === selectedOrderCode)) {
-      return [
-        {
-          id: selectedOrderId || `ord-shim-${selectedOrderCode}`,
-          tracking_code: `WAYBILL-${selectedOrderCode}`,
-          order_code: selectedOrderCode,
-          recipient_name: 'Khách hàng',
-          recipient_phone: '0901234567',
-          recipient_address: 'Hà Nội',
-          carrier_code: 'GHN',
-          status: 'DELIVERED',
-          match_status: 'MATCHED_EXACT',
-          cod_amount: 0,
-          shipping_fee: 0,
-          created_at: '2026-10-30T00:00:00.000Z',
-          warehouse_id: 'wh-1',
-        } as any,
-        ...MASTER_SHIPMENTS,
-      ];
-    }
-    return MASTER_SHIPMENTS;
-  });
+  const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
   const [loading, setLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState(selectedOrderCode || '');
+
+  // Cursor Pagination State
+  const [cursorIndex, setCursorIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Synchronize search term and reset cursor when selectedOrderCode changes
+  const [prevSelectedOrderCode, setPrevSelectedOrderCode] = useState(selectedOrderCode);
+  const [userSearchTerm, setUserSearchTerm] = useState<string | null>(null);
+
+  if (prevSelectedOrderCode !== selectedOrderCode) {
+    setPrevSelectedOrderCode(selectedOrderCode);
+    setUserSearchTerm(null);
+    setCursorIndex(0);
+  }
+
+  const searchTerm = userSearchTerm ?? (selectedOrderCode || '');
+  const setSearchTerm = (term: string) => setUserSearchTerm(term);
 
   // Filter Controls
   const [carrierFilter, setCarrierFilter] = useState('ALL');
@@ -81,10 +75,6 @@ export const ShipmentListTab: React.FC<Props> = ({
   // PII Masking State
   const [unmaskedRows, setUnmaskedRows] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
-
-  // Cursor Pagination State
-  const [cursorIndex, setCursorIndex] = useState(0);
-  const [pageSize, setPageSize] = useState(20);
 
   const fetchShipments = async () => {
     setLoading(true);
@@ -176,8 +166,56 @@ export const ShipmentListTab: React.FC<Props> = ({
     dateRangeFilter !== '30d' ||
     hasOpenCaseFilter;
 
+  const isOrderActivated = Boolean(selectedOrderId || selectedOrderCode);
+  const matchedShipment = isOrderActivated
+    ? shipments.find(
+        (s) =>
+          (selectedOrderCode && s.order_code === selectedOrderCode) ||
+          (selectedOrderId && (s.id === selectedOrderId || (s as any).order_id === selectedOrderId))
+      )
+    : null;
+  const isOrderNotFound = isOrderActivated && !matchedShipment;
+
   return (
     <div className="w-full space-y-4">
+      {/* Activated Order Not Found Alert (Real Not-Found State with Recovery) */}
+      {isOrderNotFound && (
+        <div
+          data-testid="activated-order-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy đơn hàng{' '}
+                <span className="font-mono underline">{selectedOrderCode || selectedOrderId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Bản ghi không tồn tại trong danh sách vận đơn hiện tại hoặc nằm ngoài phạm vi truy
+                cập của bạn.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại danh sách
+            </button>
+            <button
+              type="button"
+              onClick={fetchShipments}
+              className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700 transition"
+            >
+              Thử lại
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {toast && (
         <div className="p-3 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">

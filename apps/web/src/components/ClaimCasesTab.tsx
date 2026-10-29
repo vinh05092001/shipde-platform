@@ -52,24 +52,15 @@ export const ClaimCasesTab: React.FC<Props> = ({
   };
 
   const allClaims = [...claims];
-  if (
-    selectedClaimId &&
-    !allClaims.some(
-      (c) =>
-        c.id === selectedClaimId || (selectedClaimCode && c.tracking_code === selectedClaimCode)
-    )
-  ) {
-    allClaims.unshift({
-      id: selectedClaimId,
-      tracking_code: selectedClaimCode || 'CLM-SEARCH-RECORD',
-      carrier_code: 'GHN',
-      claim_type: 'DAMAGED',
-      requested_amount: 150000,
-      hours_left: 48,
-      status: 'OPEN',
-      created_at: '2026-10-30T00:00:00.000Z',
-    } as any);
-  }
+  const isClaimActivated = Boolean(selectedClaimId || selectedClaimCode);
+  const matchedClaim = isClaimActivated
+    ? allClaims.find(
+        (c) =>
+          (selectedClaimId && c.id === selectedClaimId) ||
+          (selectedClaimCode && c.tracking_code === selectedClaimCode)
+      )
+    : null;
+  const isClaimNotFound = isClaimActivated && !matchedClaim;
 
   const effectiveQuery = searchQuery || selectedClaimCode || '';
   const filteredClaims = allClaims.filter(
@@ -86,6 +77,37 @@ export const ClaimCasesTab: React.FC<Props> = ({
           <button type="button" onClick={() => setToastMessage(null)} className="font-bold">
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Activated Claim Not Found Alert (Real Not-Found State with Recovery) */}
+      {isClaimNotFound && (
+        <div
+          data-testid="activated-claim-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy hồ sơ khiếu nại{' '}
+                <span className="font-mono underline">{selectedClaimCode || selectedClaimId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Hồ sơ không tồn tại trong danh sách khiếu nại hiện tại hoặc nằm ngoài phạm vi truy
+                cập của bạn.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại danh sách
+            </button>
+          </div>
         </div>
       )}
 

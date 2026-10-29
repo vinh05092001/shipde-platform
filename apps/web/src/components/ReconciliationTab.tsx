@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { UIDiscrepancyItem } from './types';
-import { MASTER_DISCREPANCIES } from '@/services/unifiedDataStore';
+import { UIDiscrepancyItem, UIStatementBatch } from './types';
+import { MASTER_DISCREPANCIES, MASTER_STATEMENTS } from '@/services/unifiedDataStore';
 import {
   TrackingCode,
   Money,
@@ -32,6 +32,7 @@ interface Props {
   role?: string;
   selectedBatchId?: string | null;
   selectedDiscrepancyId?: string | null;
+  statements?: UIStatementBatch[];
 }
 
 export const ReconciliationTab: React.FC<Props> = ({
@@ -40,47 +41,60 @@ export const ReconciliationTab: React.FC<Props> = ({
   role = 'OWNER',
   selectedBatchId,
   selectedDiscrepancyId,
+  statements,
 }) => {
-  const [items, setItems] = useState<UIDiscrepancyItem[]>(() => {
-    if (selectedDiscrepancyId && !discrepancies.some((d) => d.id === selectedDiscrepancyId)) {
-      return [
-        {
-          id: selectedDiscrepancyId,
-          tracking_code: 'GHN88291042',
-          carrier_code: 'GHN',
-          order_code: 'ORD-DISC-01',
-          type: 'WEIGHT_MISMATCH' as any,
-          discrepancy_amount: 15000,
-          status: 'OPEN' as any,
-          created_by_user: 'system',
-          version: 1,
-        } as UIDiscrepancyItem,
-        ...discrepancies,
-      ];
-    }
-    return discrepancies;
-  });
+  const [prevDiscrepancies, setPrevDiscrepancies] = useState(discrepancies);
+  const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
+
+  if (prevDiscrepancies !== discrepancies) {
+    setPrevDiscrepancies(discrepancies);
+    setItems(discrepancies);
+  }
+
   const [selectedDiscrepancyType, setSelectedDiscrepancyType] = useState<string>('ALL');
-  const [resolvingItem, setResolvingItem] = useState<UIDiscrepancyItem | null>(() => {
-    if (selectedDiscrepancyId) {
-      return items.find((d) => d.id === selectedDiscrepancyId) || null;
+  const [manualResolvingItem, setManualResolvingItem] = useState<UIDiscrepancyItem | null>(null);
+  const [dismissedDiscrepancyId, setDismissedDiscrepancyId] = useState<string | null>(null);
+  const [prevSelectedDiscrepancyId, setPrevSelectedDiscrepancyId] = useState(selectedDiscrepancyId);
+
+  if (prevSelectedDiscrepancyId !== selectedDiscrepancyId) {
+    setPrevSelectedDiscrepancyId(selectedDiscrepancyId);
+    setDismissedDiscrepancyId(null);
+    setManualResolvingItem(null);
+  }
+
+  const resolvingItem =
+    manualResolvingItem ??
+    (selectedDiscrepancyId && selectedDiscrepancyId !== dismissedDiscrepancyId
+      ? items.find((d) => d.id === selectedDiscrepancyId) || null
+      : null);
+
+  const setResolvingItem = (item: UIDiscrepancyItem | null) => {
+    setManualResolvingItem(item);
+    if (!item && selectedDiscrepancyId) {
+      setDismissedDiscrepancyId(selectedDiscrepancyId);
     }
-    return null;
-  });
+  };
+
   const [resolvingAction, setResolvingAction] = useState<DiscrepancyResolution>(
     DiscrepancyResolution.DISPUTE
   );
   const [isPeriodClosed, setIsPeriodClosed] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const statementSummary = {
-    period: 'Kỳ Đối Soát Tuần 33 (10/08/2026 – 16/08/2026)',
-    carrier: 'GHN Express & GHTK',
-    total_rows: 50,
-    total_cod: 14250000,
-    total_freight: 1240000,
-    matched_exact: 48,
-  };
+  const availableStatements = statements && statements.length > 0 ? statements : MASTER_STATEMENTS;
+
+  const isBatchActivated = Boolean(selectedBatchId);
+  const matchedBatch = isBatchActivated
+    ? availableStatements.find((s) => s.id === selectedBatchId)
+    : null;
+  const isBatchNotFound = isBatchActivated && !matchedBatch;
+  const activeStatement = matchedBatch || availableStatements[0];
+
+  const isDiscrepancyActivated = Boolean(selectedDiscrepancyId);
+  const matchedDiscrepancy = isDiscrepancyActivated
+    ? items.find((d) => d.id === selectedDiscrepancyId)
+    : null;
+  const isDiscrepancyNotFound = isDiscrepancyActivated && !matchedDiscrepancy;
 
   const openDiscrepancies = items.filter((d) => String(d.status).toUpperCase() === 'OPEN');
   const openCount = openDiscrepancies.length;
@@ -140,61 +154,96 @@ export const ReconciliationTab: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Statement Summary Card */}
-      <div
-        data-selected-batch={selectedBatchId ? 'true' : undefined}
-        data-testid={selectedBatchId ? `selected-batch-${selectedBatchId}` : undefined}
-        className={`modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-white border-slate-800 ${
-          selectedBatchId ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
-        }`}
-      >
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-bold text-white flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-[#c23807]" />
-              <span>Đối Soát COD, Cước Vận Chuyển & Phụ Phí</span>
-            </h1>
-            <span className="badge-ok text-xs">Kỳ Mở</span>
-          </div>
-          <p className="text-xs text-slate-300">
-            {statementSummary.period} · {statementSummary.carrier} · Tổng 50 dòng sao kê
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <div className="text-xs text-slate-400">Tổng COD Đối Soát</div>
-            <div className="text-xl font-bold font-mono text-emerald-400">
-              <Money
-                amount={statementSummary.total_cod}
-                state="confirmed"
-                className="text-emerald-400 text-xl"
-              />
+      {/* Activated Batch Not Found Alert */}
+      {isBatchNotFound && (
+        <div
+          data-testid="activated-batch-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy bảng kê đối soát{' '}
+                <span className="font-mono underline">{selectedBatchId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Bảng kê không tồn tại trong danh sách kỳ đối soát hoặc đã bị xóa.
+              </div>
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (openCount > 0) {
-                alert(
-                  `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
-                );
-                return;
-              }
-              setIsPeriodClosed(true);
-              setToastMessage(
-                '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
-              );
-            }}
-            disabled={isPeriodClosed}
-            className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <Lock className="w-4 h-4" />
-            <span>{isPeriodClosed ? 'Kỳ Đã Khóa' : 'Chốt Kỳ Đối Soát'}</span>
-          </button>
         </div>
-      </div>
+      )}
+
+      {/* Statement Summary Card */}
+      {!isBatchNotFound && (
+        <div
+          data-selected-batch={selectedBatchId && matchedBatch ? 'true' : undefined}
+          data-testid={
+            selectedBatchId && matchedBatch
+              ? `selected-batch-${selectedBatchId}`
+              : `batch-${activeStatement.id}`
+          }
+          className={`modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-white border-slate-800 ${
+            selectedBatchId && matchedBatch ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
+          }`}
+        >
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-bold text-white flex items-center gap-2">
+                <DollarSign className="w-5 h-5 text-[#c23807]" />
+                <span>Đối Soát COD, Cước Vận Chuyển & Phụ Phí</span>
+              </h1>
+              <span className="badge-ok text-xs">
+                {activeStatement.status === 'OPEN' ? 'Kỳ Mở' : 'Kỳ Đã Khóa'}
+              </span>
+              {selectedBatchId && matchedBatch && (
+                <span className="text-xs bg-[#c23807] px-2 py-0.5 rounded font-mono font-bold">
+                  {matchedBatch.id}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-300">
+              {activeStatement.period} · {activeStatement.carrier} · Tổng{' '}
+              {activeStatement.total_rows} dòng sao kê
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <div className="text-xs text-slate-400">Tổng COD Đối Soát</div>
+              <div className="text-xl font-bold font-mono text-emerald-400">
+                <Money
+                  amount={activeStatement.total_cod}
+                  state="confirmed"
+                  className="text-emerald-400 text-xl"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (openCount > 0) {
+                  alert(
+                    `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
+                  );
+                  return;
+                }
+                setIsPeriodClosed(true);
+                setToastMessage(
+                  '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
+                );
+              }}
+              disabled={isPeriodClosed}
+              className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <Lock className="w-4 h-4" />
+              <span>{isPeriodClosed ? 'Kỳ Đã Khóa' : 'Chốt Kỳ Đối Soát'}</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Discrepancy Classification Filter Bar */}
       <div className="modern-card p-4 space-y-3">
@@ -238,6 +287,27 @@ export const ReconciliationTab: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* Activated Discrepancy Not Found Alert */}
+      {isDiscrepancyNotFound && (
+        <div
+          data-testid="activated-discrepancy-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy khoản sai lệch{' '}
+                <span className="font-mono underline">{selectedDiscrepancyId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Khoản sai lệch không tồn tại trong danh sách đối soát hoặc đã được xử lý xong.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Discrepancies Table */}
       <div className="modern-card overflow-hidden">
         <div className="overflow-x-auto">
@@ -256,9 +326,7 @@ export const ReconciliationTab: React.FC<Props> = ({
             <tbody>
               {filteredDiscrepancies.map((disc) => {
                 const isResolved = disc.status !== 'OPEN';
-                const isSelected = Boolean(
-                  selectedDiscrepancyId && disc.id === selectedDiscrepancyId
-                );
+                const isSelected = Boolean(matchedDiscrepancy && disc.id === selectedDiscrepancyId);
 
                 return (
                   <tr
