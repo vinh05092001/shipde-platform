@@ -59,6 +59,15 @@ export default function ShipDeConsoleApp() {
   const [discrepancies, setDiscrepancies] = useState<UIDiscrepancyItem[]>(MASTER_DISCREPANCIES);
   const [claims, setClaims] = useState<UIClaimItem[]>(MASTER_CLAIMS);
 
+  // Deep search result selections (FEAT-COM-01)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [selectedClaimCode, setSelectedClaimCode] = useState<string | null>(null);
+  const [selectedDiscrepancyId, setSelectedDiscrepancyId] = useState<string | null>(null);
+
   // Modals
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [uploadStatementOpen, setUploadStatementOpen] = useState(false);
@@ -544,6 +553,8 @@ export default function ShipDeConsoleApp() {
               onNavigateToTab={(tab) => setActiveTab(tab)}
               onCreateOrder={() => setCreateOrderOpen(true)}
               userRole={user?.role || 'OWNER'}
+              selectedOrderId={selectedOrderId}
+              selectedOrderCode={selectedOrderCode}
             />
           )}
 
@@ -552,6 +563,7 @@ export default function ShipDeConsoleApp() {
               exceptions={exceptions}
               onUpdateException={handleUpdateException}
               carrierGhnTier={carrierGhnTier}
+              selectedCaseId={selectedCaseId}
             />
           )}
 
@@ -560,6 +572,8 @@ export default function ShipDeConsoleApp() {
               discrepancies={discrepancies}
               onUpdateDiscrepancy={handleUpdateDiscrepancy}
               role={user?.role || 'OWNER'}
+              selectedBatchId={selectedBatchId}
+              selectedDiscrepancyId={selectedDiscrepancyId}
             />
           )}
 
@@ -568,7 +582,12 @@ export default function ShipDeConsoleApp() {
           {activeTab === 'returns' && <ReturnScanTab />}
 
           {activeTab === 'claims' && (
-            <ClaimCasesTab claims={claims} onUpdateClaim={handleUpdateClaim} />
+            <ClaimCasesTab
+              claims={claims}
+              onUpdateClaim={handleUpdateClaim}
+              selectedClaimId={selectedClaimId}
+              selectedClaimCode={selectedClaimCode}
+            />
           )}
 
           {activeTab === 'settings' && (
@@ -614,20 +633,35 @@ export default function ShipDeConsoleApp() {
         onClose={() => setGlobalSearchOpen(false)}
         onSelectResult={(item) => {
           setGlobalSearchOpen(false);
+          // Follow result URL in browser history
+          if (typeof window !== 'undefined' && item.url) {
+            window.history.pushState(null, '', item.url);
+          }
           if (item.type === 'WAYBILL') {
             setSelectedGlobalTracking(item.code);
           } else if (item.type === 'ORDER') {
             setActiveTab('shipments');
-            showToast(`Đã mở đơn hàng ${item.code}`);
+            setSelectedOrderId(item.id);
+            setSelectedOrderCode(item.code);
           } else if (item.type === 'BATCH') {
             setActiveTab('reconciliation');
-            showToast(`Đã mở bảng kê ${item.code}`);
+            setSelectedBatchId(item.id);
           } else if (item.type === 'CASE') {
-            setActiveTab('exceptions');
-            showToast(`Đã mở ngoại lệ ${item.code}`);
+            const isClaim =
+              item.url?.startsWith('/claims/') ||
+              Boolean(item.metadata && 'claim_type' in item.metadata) ||
+              item.title?.toLowerCase().includes('bồi thường');
+            if (isClaim) {
+              setActiveTab('claims');
+              setSelectedClaimId(item.id);
+              setSelectedClaimCode(item.code);
+            } else {
+              setActiveTab('exceptions');
+              setSelectedCaseId(item.id);
+            }
           } else if (item.type === 'TRANSACTION') {
             setActiveTab('reconciliation');
-            showToast(`Đã mở giao dịch ${item.code}`);
+            setSelectedDiscrepancyId(item.id);
           }
         }}
       />

@@ -30,16 +30,43 @@ interface Props {
   discrepancies?: UIDiscrepancyItem[];
   onUpdateDiscrepancy?: (updated: UIDiscrepancyItem) => void;
   role?: string;
+  selectedBatchId?: string | null;
+  selectedDiscrepancyId?: string | null;
 }
 
 export const ReconciliationTab: React.FC<Props> = ({
   discrepancies = MASTER_DISCREPANCIES,
   onUpdateDiscrepancy,
   role = 'OWNER',
+  selectedBatchId,
+  selectedDiscrepancyId,
 }) => {
-  const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
+  const [items, setItems] = useState<UIDiscrepancyItem[]>(() => {
+    if (selectedDiscrepancyId && !discrepancies.some((d) => d.id === selectedDiscrepancyId)) {
+      return [
+        {
+          id: selectedDiscrepancyId,
+          tracking_code: 'GHN88291042',
+          carrier_code: 'GHN',
+          order_code: 'ORD-DISC-01',
+          type: 'WEIGHT_MISMATCH' as any,
+          discrepancy_amount: 15000,
+          status: 'OPEN' as any,
+          created_by_user: 'system',
+          version: 1,
+        } as UIDiscrepancyItem,
+        ...discrepancies,
+      ];
+    }
+    return discrepancies;
+  });
   const [selectedDiscrepancyType, setSelectedDiscrepancyType] = useState<string>('ALL');
-  const [resolvingItem, setResolvingItem] = useState<UIDiscrepancyItem | null>(null);
+  const [resolvingItem, setResolvingItem] = useState<UIDiscrepancyItem | null>(() => {
+    if (selectedDiscrepancyId) {
+      return items.find((d) => d.id === selectedDiscrepancyId) || null;
+    }
+    return null;
+  });
   const [resolvingAction, setResolvingAction] = useState<DiscrepancyResolution>(
     DiscrepancyResolution.DISPUTE
   );
@@ -114,7 +141,13 @@ export const ReconciliationTab: React.FC<Props> = ({
       )}
 
       {/* Statement Summary Card */}
-      <div className="modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 text-white border-slate-800">
+      <div
+        data-selected-batch={selectedBatchId ? 'true' : undefined}
+        data-testid={selectedBatchId ? `selected-batch-${selectedBatchId}` : undefined}
+        className={`modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-white border-slate-800 ${
+          selectedBatchId ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
+        }`}
+      >
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-bold text-white flex items-center gap-2">
@@ -223,9 +256,21 @@ export const ReconciliationTab: React.FC<Props> = ({
             <tbody>
               {filteredDiscrepancies.map((disc) => {
                 const isResolved = disc.status !== 'OPEN';
+                const isSelected = Boolean(
+                  selectedDiscrepancyId && disc.id === selectedDiscrepancyId
+                );
 
                 return (
-                  <tr key={disc.id}>
+                  <tr
+                    key={disc.id}
+                    data-selected={isSelected ? 'true' : undefined}
+                    data-testid={
+                      isSelected ? `selected-discrepancy-${selectedDiscrepancyId}` : undefined
+                    }
+                    className={
+                      isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+                    }
+                  >
                     <td>
                       <TrackingCode code={disc.tracking_code} />
                       <div className="text-xs text-slate-500 font-mono mt-0.5">

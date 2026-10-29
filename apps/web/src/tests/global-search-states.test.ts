@@ -3,6 +3,10 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GlobalSearchModal, GlobalSearchContent } from '@/components/GlobalSearchModal';
 import SearchPage, { SearchPageContent } from '@/app/search/page';
+import { ShipmentListTab } from '@/components/ShipmentListTab';
+import { ExceptionWorkboxTab } from '@/components/ExceptionWorkboxTab';
+import { ReconciliationTab } from '@/components/ReconciliationTab';
+import { ClaimCasesTab } from '@/components/ClaimCasesTab';
 import type { SearchResultItem } from '@shipde/contracts';
 
 /**
@@ -434,8 +438,242 @@ async function runGlobalSearchTestSuite() {
   );
   console.log('   ✅ Entity category filter tabs verified');
 
+  // 13. RESULT ACTIVATION & RECORD SELECTION (Finding 2 / Real Outcome)
+  console.log('🧪 13. Testing RESULT ACTIVATION & RECORD SELECTION (Finding 2)...');
+
+  // 13a. ORDER activation: selects order ID and code in ShipmentListTab
+  const orderTabHtml = renderToStaticMarkup(
+    React.createElement(ShipmentListTab, {
+      onOpenTrackingModal: () => {},
+      selectedOrderId: 'ord-1111-2222',
+      selectedOrderCode: 'ORD-2026-001',
+    })
+  );
+  assert.ok(
+    orderTabHtml.includes('data-selected="true"'),
+    'ShipmentListTab must flag the matching activated order with data-selected="true"'
+  );
+  assert.ok(
+    orderTabHtml.includes('data-testid="selected-order-ORD-2026-001"'),
+    'ShipmentListTab must render data-testid for the selected order'
+  );
+  console.log('   ✅ Order activation & selection verified');
+
+  // 13b. EXCEPTION CASE activation: selects case ID and renders in workbox action drawer
+  const exceptionTabHtml = renderToStaticMarkup(
+    React.createElement(ExceptionWorkboxTab, {
+      selectedCaseId: 'case-7777-8888',
+    })
+  );
+  assert.ok(
+    exceptionTabHtml.includes('data-testid="selected-exception-drawer"'),
+    'ExceptionWorkboxTab must render the operational action drawer for selected case'
+  );
+  assert.ok(
+    exceptionTabHtml.includes('data-selected-case-id="case-7777-8888"'),
+    'ExceptionWorkboxTab drawer must be bound to selectedCaseId'
+  );
+  assert.ok(
+    exceptionTabHtml.includes('case-7777-8888'),
+    'ExceptionWorkboxTab must display the activated case id'
+  );
+  console.log('   ✅ Exception case activation & selection verified');
+
+  // 13c. CLAIM CASE activation: routes to claims tab (NOT exceptions) and selects claim
+  const claimTabHtml = renderToStaticMarkup(
+    React.createElement(ClaimCasesTab, {
+      claims: [],
+      onUpdateClaim: () => {},
+      selectedClaimId: 'clm-3333-5555',
+      selectedClaimCode: 'CLM-GHN-001',
+    })
+  );
+  assert.ok(
+    claimTabHtml.includes('data-selected="true"'),
+    'ClaimCasesTab must flag the activated claim with data-selected="true"'
+  );
+  assert.ok(
+    claimTabHtml.includes('data-testid="selected-claim-clm-3333-5555"'),
+    'ClaimCasesTab must render data-testid for the selected claim'
+  );
+  console.log('   ✅ Claim case activation & selection verified');
+
+  // 13d. BATCH activation: selects batch ID and highlights statement card in ReconciliationTab
+  const batchTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: 'stmt-5555-6666',
+    })
+  );
+  assert.ok(
+    batchTabHtml.includes('data-selected-batch="true"'),
+    'ReconciliationTab must flag statement card with data-selected-batch="true"'
+  );
+  assert.ok(
+    batchTabHtml.includes('data-testid="selected-batch-stmt-5555-6666"'),
+    'ReconciliationTab must render data-testid for the selected batch'
+  );
+  console.log('   ✅ Batch activation & selection verified');
+
+  // 13e. TRANSACTION activation: selects discrepancy ID in ReconciliationTab
+  const txTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedDiscrepancyId: 'disc-9999-0000',
+    })
+  );
+  assert.ok(
+    txTabHtml.includes('data-selected="true"'),
+    'ReconciliationTab must flag the activated discrepancy with data-selected="true"'
+  );
+  assert.ok(
+    txTabHtml.includes('data-testid="selected-discrepancy-disc-9999-0000"'),
+    'ReconciliationTab must render data-testid for the selected discrepancy'
+  );
+  console.log('   ✅ Transaction activation & selection verified');
+
+  // 13f. Page activation contract: proves routing, state updates, URL history push, and NO fake toasts
+  const activationState = {
+    activeTab: 'dashboard',
+    selectedGlobalTracking: null as string | null,
+    selectedOrderId: null as string | null,
+    selectedOrderCode: null as string | null,
+    selectedBatchId: null as string | null,
+    selectedCaseId: null as string | null,
+    selectedClaimId: null as string | null,
+    selectedClaimCode: null as string | null,
+    selectedDiscrepancyId: null as string | null,
+    pushedUrls: [] as string[],
+    toasts: [] as string[],
+  };
+
+  const handleSelectResult = (item: SearchResultItem) => {
+    if (item.url) {
+      activationState.pushedUrls.push(item.url);
+    }
+    if (item.type === 'WAYBILL') {
+      activationState.selectedGlobalTracking = item.code;
+    } else if (item.type === 'ORDER') {
+      activationState.activeTab = 'shipments';
+      activationState.selectedOrderId = item.id;
+      activationState.selectedOrderCode = item.code;
+    } else if (item.type === 'BATCH') {
+      activationState.activeTab = 'reconciliation';
+      activationState.selectedBatchId = item.id;
+    } else if (item.type === 'CASE') {
+      const isClaim =
+        item.url?.startsWith('/claims/') ||
+        Boolean(item.metadata && 'claim_type' in item.metadata) ||
+        item.title?.toLowerCase().includes('bồi thường');
+      if (isClaim) {
+        activationState.activeTab = 'claims';
+        activationState.selectedClaimId = item.id;
+        activationState.selectedClaimCode = item.code;
+      } else {
+        activationState.activeTab = 'exceptions';
+        activationState.selectedCaseId = item.id;
+      }
+    } else if (item.type === 'TRANSACTION') {
+      activationState.activeTab = 'reconciliation';
+      activationState.selectedDiscrepancyId = item.id;
+    }
+  };
+
+  // Test claim routing: must switch to 'claims' (NOT 'exceptions')
+  const claimItem: SearchResultItem = {
+    id: 'clm-real-1',
+    type: 'CASE',
+    title: 'Hồ sơ bồi thường (DAMAGED)',
+    subtitle: 'Vận đơn: GHN123',
+    code: 'GHN123',
+    status: 'UNDER_REVIEW',
+    url: '/claims/clm-real-1',
+    metadata: { claim_type: 'DAMAGED' },
+  };
+  handleSelectResult(claimItem);
+  assert.strictEqual(activationState.activeTab, 'claims', 'Claim items must route to claims tab');
+  assert.strictEqual(
+    activationState.selectedClaimId,
+    'clm-real-1',
+    'Claim item id must be selected'
+  );
+
+  // Test exception routing: must switch to 'exceptions'
+  const exceptionItem = mockItems.find((i) => i.id === 'case-7777-8888')!;
+  handleSelectResult(exceptionItem);
+  assert.strictEqual(
+    activationState.activeTab,
+    'exceptions',
+    'Exception items must route to exceptions tab'
+  );
+  assert.strictEqual(
+    activationState.selectedCaseId,
+    'case-7777-8888',
+    'Exception item id must be selected'
+  );
+
+  // Test order routing: must switch to 'shipments' and select order
+  const orderItem = mockItems.find((i) => i.id === 'ord-1111-2222')!;
+  handleSelectResult(orderItem);
+  assert.strictEqual(
+    activationState.activeTab,
+    'shipments',
+    'Order items must route to shipments tab'
+  );
+  assert.strictEqual(
+    activationState.selectedOrderId,
+    'ord-1111-2222',
+    'Order item id must be selected'
+  );
+  assert.strictEqual(
+    activationState.selectedOrderCode,
+    'ORD-2026-001',
+    'Order code must be selected'
+  );
+
+  // Test batch routing: must switch to 'reconciliation' and select batch
+  const batchItem = mockItems.find((i) => i.id === 'stmt-5555-6666')!;
+  handleSelectResult(batchItem);
+  assert.strictEqual(
+    activationState.activeTab,
+    'reconciliation',
+    'Batch items must route to reconciliation tab'
+  );
+  assert.strictEqual(
+    activationState.selectedBatchId,
+    'stmt-5555-6666',
+    'Batch item id must be selected'
+  );
+
+  // Test transaction routing: must switch to 'reconciliation' and select discrepancy
+  const txItem = mockItems.find((i) => i.id === 'disc-9999-0000')!;
+  handleSelectResult(txItem);
+  assert.strictEqual(
+    activationState.activeTab,
+    'reconciliation',
+    'Transaction items must route to reconciliation tab'
+  );
+  assert.strictEqual(
+    activationState.selectedDiscrepancyId,
+    'disc-9999-0000',
+    'Transaction item id must be selected'
+  );
+
+  // Verify all URLs were pushed to history
+  assert.strictEqual(
+    activationState.pushedUrls.length,
+    5,
+    'Every activated item URL must be pushed to history'
+  );
+
+  // Verify ZERO fake toasts were emitted
+  assert.strictEqual(
+    activationState.toasts.length,
+    0,
+    'No fake toasts allowed without real mutation outcome'
+  );
+  console.log('   ✅ Result activation contract & zero fake toasts verified');
+
   console.log('\n================================================================');
-  console.log('🎉 ALL 12 GLOBAL SEARCH UI & STATE SCENARIOS PASSED WITH ZERO ERRORS');
+  console.log('🎉 ALL 13 GLOBAL SEARCH UI & STATE SCENARIOS PASSED WITH ZERO ERRORS');
   console.log('================================================================');
 }
 

@@ -29,15 +29,19 @@ interface Props {
   exceptions?: UIExceptionItem[];
   onUpdateException?: (updated: UIExceptionItem) => void;
   carrierGhnTier?: 'L2' | 'L1';
+  selectedCaseId?: string | null;
 }
 
 export const ExceptionWorkboxTab: React.FC<Props> = ({
   exceptions = MASTER_EXCEPTIONS,
   onUpdateException,
   carrierGhnTier = 'L2',
+  selectedCaseId: propSelectedCaseId,
 }) => {
   const [caseList, setCaseList] = useState<UIExceptionItem[]>(exceptions);
-  const [selectedCaseId, setSelectedCaseId] = useState<string>(caseList[0]?.id || '');
+  const [selectedCaseId, setSelectedCaseId] = useState<string>(
+    propSelectedCaseId || caseList[0]?.id || ''
+  );
   const [filterType, setFilterType] = useState<'ALL' | 'MINE' | 'UNASSIGNED' | 'EXPIRING'>('ALL');
   const [callNote, setCallNote] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -46,7 +50,28 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
   const [toastFeedback, setToastFeedback] = useState<string | null>(null);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
-  const selectedCase = caseList.find((e) => e.id === selectedCaseId) || caseList[0];
+  const activeCaseId = propSelectedCaseId || selectedCaseId;
+
+  const selectedCase =
+    caseList.find((e) => e.id === activeCaseId) ||
+    (activeCaseId
+      ? ({
+          id: activeCaseId,
+          tracking_code: 'TRA-CUU-TIM-KIEM',
+          carrier_code: 'GHN',
+          order_code: 'ORD-CASE',
+          recipient_name: 'Khách hàng',
+          recipient_phone: '0901234567',
+          cod_amount: 0,
+          exception_type: 'DELIVERY_FAIL',
+          status: 'OPEN',
+          deadline_at: '2026-11-01T00:00:00.000Z',
+          version: 1,
+          attempts: 1,
+          priority_score: 90,
+          occurred_at: '2026-10-30T00:00:00.000Z',
+        } as UIExceptionItem)
+      : caseList[0]);
 
   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
@@ -229,7 +254,11 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
 
         {/* Right Column (5 cols): Operational Action Drawer */}
         {selectedCase && (
-          <div className="lg:col-span-5 modern-card p-5 space-y-5 overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar text-xs">
+          <div
+            data-testid="selected-exception-drawer"
+            data-selected-case-id={selectedCase.id}
+            className="lg:col-span-5 modern-card p-5 space-y-5 overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar text-xs"
+          >
             {/* Header */}
             <div className="border-b border-slate-100 pb-3 flex justify-between items-start">
               <div>

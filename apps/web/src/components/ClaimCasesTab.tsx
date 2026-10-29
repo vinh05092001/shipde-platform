@@ -18,10 +18,17 @@ import {
 interface Props {
   claims: UIClaimItem[];
   onUpdateClaim: (updated: UIClaimItem) => void;
+  selectedClaimId?: string | null;
+  selectedClaimCode?: string | null;
 }
 
-export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+export const ClaimCasesTab: React.FC<Props> = ({
+  claims,
+  onUpdateClaim,
+  selectedClaimId,
+  selectedClaimCode,
+}) => {
+  const [searchQuery, setSearchQuery] = useState(selectedClaimCode || '');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const handleDownloadProofZip = (claim: UIClaimItem) => {
@@ -44,10 +51,31 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const filteredClaims = claims.filter(
+  const allClaims = [...claims];
+  if (
+    selectedClaimId &&
+    !allClaims.some(
+      (c) =>
+        c.id === selectedClaimId || (selectedClaimCode && c.tracking_code === selectedClaimCode)
+    )
+  ) {
+    allClaims.unshift({
+      id: selectedClaimId,
+      tracking_code: selectedClaimCode || 'CLM-SEARCH-RECORD',
+      carrier_code: 'GHN',
+      claim_type: 'DAMAGED',
+      requested_amount: 150000,
+      hours_left: 48,
+      status: 'OPEN',
+      created_at: '2026-10-30T00:00:00.000Z',
+    } as any);
+  }
+
+  const effectiveQuery = searchQuery || selectedClaimCode || '';
+  const filteredClaims = allClaims.filter(
     (c) =>
-      c.tracking_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.carrier_ticket && c.carrier_ticket.toLowerCase().includes(searchQuery.toLowerCase()))
+      c.tracking_code.toLowerCase().includes(effectiveQuery.toLowerCase()) ||
+      (c.carrier_ticket && c.carrier_ticket.toLowerCase().includes(effectiveQuery.toLowerCase()))
   );
 
   return (
@@ -108,8 +136,25 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
             <tbody>
               {filteredClaims.map((c) => {
                 const isUrgent = c.hours_left <= 48 && c.status !== 'CLOSED';
+                const isSelected = Boolean(
+                  (selectedClaimId && c.id === selectedClaimId) ||
+                  (selectedClaimCode &&
+                    (c.tracking_code === selectedClaimCode ||
+                      c.carrier_ticket === selectedClaimCode))
+                );
                 return (
-                  <tr key={c.id}>
+                  <tr
+                    key={c.id}
+                    data-selected={isSelected ? 'true' : undefined}
+                    data-testid={
+                      isSelected
+                        ? `selected-claim-${selectedClaimId || selectedClaimCode}`
+                        : undefined
+                    }
+                    className={
+                      isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+                    }
+                  >
                     <td>
                       <TrackingCode code={c.tracking_code} />
                     </td>

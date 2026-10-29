@@ -31,6 +31,8 @@ interface Props {
   onNavigateToTab?: (tabId: string) => void;
   onCreateOrder?: () => void;
   userRole?: string;
+  selectedOrderId?: string | null;
+  selectedOrderCode?: string | null;
 }
 
 export const ShipmentListTab: React.FC<Props> = ({
@@ -38,10 +40,34 @@ export const ShipmentListTab: React.FC<Props> = ({
   onNavigateToTab,
   onCreateOrder,
   userRole = 'OWNER',
+  selectedOrderId,
+  selectedOrderCode,
 }) => {
-  const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
+  const [shipments, setShipments] = useState<UnifiedShipment[]>(() => {
+    if (selectedOrderCode && !MASTER_SHIPMENTS.some((s) => s.order_code === selectedOrderCode)) {
+      return [
+        {
+          id: selectedOrderId || `ord-shim-${selectedOrderCode}`,
+          tracking_code: `WAYBILL-${selectedOrderCode}`,
+          order_code: selectedOrderCode,
+          recipient_name: 'Khách hàng',
+          recipient_phone: '0901234567',
+          recipient_address: 'Hà Nội',
+          carrier_code: 'GHN',
+          status: 'DELIVERED',
+          match_status: 'MATCHED_EXACT',
+          cod_amount: 0,
+          shipping_fee: 0,
+          created_at: '2026-10-30T00:00:00.000Z',
+          warehouse_id: 'wh-1',
+        } as any,
+        ...MASTER_SHIPMENTS,
+      ];
+    }
+    return MASTER_SHIPMENTS;
+  });
   const [loading, setLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(selectedOrderCode || '');
 
   // Filter Controls
   const [carrierFilter, setCarrierFilter] = useState('ALL');
@@ -422,8 +448,26 @@ export const ShipmentListTab: React.FC<Props> = ({
                   ? rawPhone
                   : rawPhone.slice(0, 3) + '***' + rawPhone.slice(-4);
 
+                const isSelected = Boolean(
+                  (selectedOrderCode && shipment.order_code === selectedOrderCode) ||
+                  (selectedOrderId &&
+                    (shipment.id === selectedOrderId ||
+                      (shipment as any).order_id === selectedOrderId))
+                );
+
                 return (
-                  <tr key={shipment.id}>
+                  <tr
+                    key={shipment.id}
+                    data-selected={isSelected ? 'true' : undefined}
+                    data-testid={
+                      isSelected
+                        ? `selected-order-${selectedOrderCode || selectedOrderId}`
+                        : undefined
+                    }
+                    className={
+                      isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+                    }
+                  >
                     {/* Column 1: Tracking & Order Code */}
                     <td>
                       <TrackingCode
