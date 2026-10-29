@@ -87,6 +87,12 @@ const {
   routeProbeCandidate,
 } = require('./orchestrate/route-probe');
 
+// failedKeys entry that blocks every model on one exhausted account.
+function exhaustedAccountKey(c) {
+  if (!c || !c.accountId || c.accountId === '*') return null;
+  return `account-exhausted::${c.harness || ''}::${c.accountId}`;
+}
+
 function providerFailureBodyMatches(body) {
   return [...PROVIDER_LEVEL_FAILURE_CAUSES].some((cause) => {
     const escaped = String(cause).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -3369,18 +3375,23 @@ function buildCandidates(options, evidenceData) {
   if (Array.isArray(o.candidates)) {
     baseCandidates = o.candidates;
   } else if (o.accounts || o.catalogue) {
-    baseCandidates = candidatesApi.generateCandidates({
-      registry: o.registry || sourcesApi.loadSources(),
-      catalogue: o.catalogue || [],
-      accounts: o.accounts || [],
-      externalWorkers: o.externalWorkers,
-      fakeRunsDir: o.fakeRunsDir || o.runsDir,
-      poolRuntimeDir: o.poolRuntimeDir,
-      discoverPool: o.discoverPool,
-      openCodeIds: o.openCodeIds || [],
-      codexOpts: o.codexOpts,
-      sourceModels: o.sourceModels,
-    });
+    baseCandidates = candidatesApi.generateCandidates(
+      Object.assign(
+        {
+          registry: o.registry || sourcesApi.loadSources(),
+          catalogue: o.catalogue || [],
+          accounts: o.accounts || [],
+          externalWorkers: o.externalWorkers,
+          fakeRunsDir: o.fakeRunsDir || o.runsDir,
+          poolRuntimeDir: o.poolRuntimeDir,
+          discoverPool: o.discoverPool,
+          openCodeIds: o.openCodeIds || [],
+          codexOpts: o.codexOpts,
+          sourceModels: o.sourceModels,
+        },
+        o
+      )
+    );
   }
   const testsInjectedCandidates = Array.isArray(o.candidates);
   const evData =
@@ -3550,6 +3561,14 @@ async function selectCandidateForProfile(
           blocked: true,
           blockReason: 'LAUNCH_FAILED',
           blockScope: 'candidate',
+        });
+      }
+      const accountMark = exhaustedAccountKey(c);
+      if (accountMark && failedKeySet.has(accountMark)) {
+        return Object.assign({}, c, {
+          blocked: true,
+          blockReason: 'ACCOUNT_QUOTA_EXHAUSTED',
+          blockScope: 'account',
         });
       }
       const cDomain = routing.canonicalFailureDomain(c);
@@ -5371,6 +5390,11 @@ async function runOrchestration(goal, opts) {
         writerProbeResults.set(decision.chosen, probeResult);
         if (probeResult?.quota?.status === 'exhausted') {
           failedKeys.add(decision.chosen);
+          const accMark = exhaustedAccountKey(candidate);
+          if (accMark) {
+            failedKeys.add(accMark);
+            if (item && item.failedKeys instanceof Set) item.failedKeys.add(accMark);
+          }
           recordPostSelectFailure('QUOTA_EXHAUSTED: route probe', 'QUOTA_EXHAUSTED', 'candidate');
           continue;
         }
@@ -6090,6 +6114,18 @@ async function runOrchestration(goal, opts) {
         // RI-R03: local scope failures (like missing base commit) don't add to failedKeys
         if (classification.scope !== 'local') {
           failedKeys.add(decision.chosen);
+          if (
+            classification.scope === 'account' ||
+            classification.cause === 'account_quota_exhausted' ||
+            classification.cause === 'QUOTA_EXHAUSTED' ||
+            classification.cause === 'account_exhausted'
+          ) {
+            const accMark = exhaustedAccountKey(candidate);
+            if (accMark) {
+              failedKeys.add(accMark);
+              if (item && item.failedKeys instanceof Set) item.failedKeys.add(accMark);
+            }
+          }
           if (classification.scope === 'gateway' || classification.scope === 'upstream') {
             excludedDomains.add(candDomain);
             const forbidden =
@@ -8171,6 +8207,7 @@ async function reviewItem(
       stdout: res ? res.stdout : undefined,
       stderr: res ? res.stderr : '',
       accountId: cand.accountId,
+      harness: cand.harness,
       timedOut: isLauncherTimedOut,
     });
 
@@ -8182,6 +8219,28 @@ async function reviewItem(
       if (item && item.failedKeys instanceof Set) item.failedKeys.add(revKey);
       if (session && session.failedKeys instanceof Set) session.failedKeys.add(revKey);
       if (options && options.failedKeys instanceof Set) options.failedKeys.add(revKey);
+      if (
+        classification.scope === 'account' ||
+        classification.cause === 'account_quota_exhausted' ||
+        classification.cause === 'QUOTA_EXHAUSTED' ||
+        classification.cause === 'account_exhausted'
+      ) {
+        const accMark = exhaustedAccountKey(cand);
+        if (accMark) {
+          failedKeySet.add(accMark);
+          if (item && item.failedKeys instanceof Set) item.failedKeys.add(accMark);
+          else if (item && Array.isArray(item.failedKeys) && !item.failedKeys.includes(accMark))
+            item.failedKeys.push(accMark);
+          if (session && session.failedKeys instanceof Set) session.failedKeys.add(accMark);
+          if (options && options.failedKeys instanceof Set) options.failedKeys.add(accMark);
+          else if (
+            options &&
+            Array.isArray(options.failedKeys) &&
+            !options.failedKeys.includes(accMark)
+          )
+            options.failedKeys.push(accMark);
+        }
+      }
     }
 
     const candDomain = routing.canonicalFailureDomain(cand);
@@ -9042,6 +9101,18 @@ function repairRound(
       if (blaming) {
         failedKeySet.add(decision.chosen);
         if (item && item.failedKeys instanceof Set) item.failedKeys.add(decision.chosen);
+        if (
+          classification.scope === 'account' ||
+          classification.cause === 'account_quota_exhausted' ||
+          classification.cause === 'QUOTA_EXHAUSTED' ||
+          classification.cause === 'account_exhausted'
+        ) {
+          const accMark = exhaustedAccountKey(candidate);
+          if (accMark) {
+            failedKeySet.add(accMark);
+            if (item && item.failedKeys instanceof Set) item.failedKeys.add(accMark);
+          }
+        }
       }
       const candDomain = routing.canonicalFailureDomain(candidate);
       const attemptsInDomain = domainAttemptsMap.get(candDomain) || 0;

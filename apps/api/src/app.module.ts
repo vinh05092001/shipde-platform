@@ -15,9 +15,18 @@ import { RbacModule } from './rbac/rbac.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
+import { WarehousesModule } from './warehouses/warehouses.module';
 
 @Module({
-  imports: [AuthModule, SessionModule, RbacModule, InvitationsModule, UsersModule, ShopsModule],
+  imports: [
+    AuthModule,
+    SessionModule,
+    RbacModule,
+    InvitationsModule,
+    UsersModule,
+    ShopsModule,
+    WarehousesModule,
+  ],
   controllers: [HealthController],
   providers: [
     {

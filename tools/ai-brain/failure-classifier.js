@@ -498,6 +498,19 @@ function classifyFailure(input) {
     /\[ISOLATION_LAUNCHER\] worker timed out/i.test(input?.failureReason || '')
   );
 
+  // The agy-pool runtime reports a job that outlived its deadline as the bare word
+  // POOL_TIMEOUT. It indicts that model on that account, not the whole upstream.
+  if (/^\s*POOL_TIMEOUT\s*$/m.test(stderr)) {
+    return addRetryFields({
+      cause: Cause.TIMEOUT,
+      scope: Scope.MODEL,
+      cooldownMs: DEFAULT_COOLDOWNS[Cause.TIMEOUT],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: Date.now() + DEFAULT_COOLDOWNS[Cause.TIMEOUT],
+    });
+  }
+
   if (isTimedOut) {
     return addRetryFields({
       cause: Cause.TIMEOUT,
@@ -902,7 +915,8 @@ function classifyFailure(input) {
   }
 
   // Case 8: account quota exhausted (agy CLI exit 3 with "limit reached" and reset time)
-  if (exitCode === 3 && /limit reached|quota exhausted|usage limit/i.test(text)) {
+  // The agy-pool runtime reports its quota state as the bare word "quota" with exit 3.
+  if (exitCode === 3 && /limit reached|quota exhausted|usage limit|^\s*quota\s*$/im.test(text)) {
     const resetMs = parseResetTime(text);
     return addRetryFields({
       cause: Cause.ACCOUNT_QUOTA_EXHAUSTED,

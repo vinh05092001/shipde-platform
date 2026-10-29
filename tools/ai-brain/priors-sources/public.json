@@ -2,6 +2,56 @@
   "kind": "public-leaderboards",
   "endpoint": "https://artificialanalysis.ai/leaderboards/models",
   "benchlm": "https://benchlm.ai/data/models.json",
+  "normalizationMethod": "percentile",
+  "normalization": {
+    "method": "percentile"
+  },
+  "effortVariants": [
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "xhigh",
+    "thinking",
+    "agentic",
+    "none",
+    "reasoning",
+    "non-reasoning"
+  ],
+  "excludeEffortVariants": ["max"],
+  "deploymentSuffixes": ["batch", "flex", "cloud", "fast", "latest", "volc", "turbo"],
+  "deploymentSuffixPatterns": [
+    "-?\\[\\d+(?:\\.\\d+)?(?:-\\d+)?[km]\\]",
+    "-(?:\\d{4}-\\d{2}-\\d{2}|\\d{8}|\\d{6}|\\d{4})"
+  ],
+  "routerPrefixes": [
+    "gcli",
+    "cl",
+    "gh",
+    "ag",
+    "agy",
+    "provider",
+    "openai",
+    "ninerouter",
+    "9router",
+    "openrouter",
+    "nebius",
+    "xai",
+    "alims-intl",
+    "tokenrouter",
+    "ocg",
+    "ocz",
+    "bzl",
+    "gw",
+    "gateway",
+    "custom-prefix",
+    "some-prefix"
+  ],
+  "aliasRules": {
+    "stripSuffixes": [":free", "-free", ":batch", ":flex", ":cloud"],
+    "digitBoundaryHyphen": true,
+    "singleLetterPrefixes": ["o"]
+  },
   "sources": [
     {
       "id": "artificial-analysis",

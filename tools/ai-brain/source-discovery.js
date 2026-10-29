@@ -212,6 +212,7 @@ function discoverSources(options = {}) {
       credential: source.credential || null,
       ...(source.headers ? { headers: { ...source.headers } } : {}),
       ...(source.opencodeProvider ? { opencodeProvider: source.opencodeProvider } : {}),
+      ...(source.modelsFilter ? { modelsFilter: { ...source.modelsFilter } } : {}),
       status: 'discovered',
       lastProbeAt: null,
       nextCheckAt: null,
@@ -376,11 +377,29 @@ function discoverSources(options = {}) {
       endpoint: 'https://api.scaleway.ai/v1',
     },
     PGSGROVE_API_KEY: { id: 'pgsgrove', name: 'pgsgrove', endpoint: 'https://api.pgsgrove.com/v1' },
+    // llm7's anonymous free tier: the token is a public placeholder, and only the
+    // models its own /models listing marks tier "turbo" are free.
+    LLM7_FREE_TOKEN: {
+      id: 'llm7-free',
+      name: 'llm7-free',
+      endpoint: 'https://api.llm7.io/v1',
+      modelsFilter: { tier: 'turbo' },
+    },
     SOVINFRA_API_KEY: { id: 'sovinfra', name: 'sovinfra', endpoint: 'https://api.sovinfra.ai/v1' },
     INTERNLM_API_KEY: {
       id: 'internlm',
       name: 'internlm',
       endpoint: 'https://chat.intern-ai.org.cn/api/v1',
+    },
+    ITERACOMPUTE_API_KEY: {
+      id: 'iteracompute',
+      name: 'iteracompute',
+      endpoint: 'https://api.iteracompute.com/v1',
+    },
+    ITERA_COMPUTE_API_KEY: {
+      id: 'iteracompute',
+      name: 'iteracompute',
+      endpoint: 'https://api.iteracompute.com/v1',
     },
     AGENTROUTER_API_KEY: {
       id: 'agentrouter',
@@ -437,6 +456,7 @@ function discoverSources(options = {}) {
         name: op ? op.name : name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1'),
         endpoint: op ? op.endpoint : null,
         headers: op ? op.headers : undefined,
+        ...(op && op.modelsFilter ? { modelsFilter: op.modelsFilter } : {}),
         credential: { type: 'env', name },
       });
     }
@@ -502,8 +522,14 @@ function modelMeta(body) {
   return meta;
 }
 
-function modelIds(body) {
-  const rows = body && (body.data || body.models || body.items || body);
+function modelIds(body, filter) {
+  let rows = body && (body.data || body.models || body.items || body);
+  if (Array.isArray(rows) && filter && typeof filter === 'object') {
+    rows = rows.filter(
+      (row) =>
+        row && typeof row === 'object' && Object.entries(filter).every(([k, v]) => row[k] === v)
+    );
+  }
   return Array.isArray(rows)
     ? rows
         .map((row) => (typeof row === 'string' ? row : row && (row.id || row.name)))
@@ -549,7 +575,7 @@ async function probeSource(source, options = {}) {
     const body = await response.json();
     return {
       ...record,
-      models: [...new Set([...record.models, ...modelIds(body)])],
+      models: [...new Set([...record.models, ...modelIds(body, source.modelsFilter)])],
       modelMeta: Object.assign({}, record.modelMeta || {}, modelMeta(body)),
       status: 'available',
       reason: null,

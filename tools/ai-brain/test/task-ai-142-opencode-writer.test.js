@@ -401,6 +401,70 @@ describe('TASK-AI-142: opencode-direct writer configuration and execution', () =
     }
   });
 
+  test('keyless built-in source deletes literal apiKey from options so none is written to opencode.json', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-142-keyless-'));
+    try {
+      const { fakeHostCwd, fakeWorkerRoot, verdictFile } = makeFakeWorker(tmpDir);
+      const directAdapter = getHarness('opencode-direct');
+      const runIso = isoMod.getIsolatedLauncher();
+
+      const secretToken = 'literal-keyless-secret-token-12345';
+
+      const keylessSourceWithSecret = {
+        id: 'keyless-test-source',
+        label: 'Keyless Test Source',
+        kind: 'model-source',
+        endpoint: 'https://opencode.ai/zen/v1',
+        opencodeProvider: 'opencode',
+        opencodeBuiltin: true,
+        credential: { type: 'none' },
+        options: {
+          apiKey: secretToken, // Buggy or injected raw key on keyless source
+        },
+      };
+
+      const args = directAdapter.launch({
+        isolatedWorker: true,
+        model: 'opencode/test-model',
+        cwd: fakeWorkerRoot,
+        prompt: 'test prompt',
+      });
+
+      try {
+        runIso(directAdapter, args, {
+          cwd: fakeHostCwd,
+          workerRoot: fakeWorkerRoot,
+          verdictPath: verdictFile,
+          getWorkerSid: () => 'TEST-SID',
+          verifyBoundary: () => true,
+          baseSha: '0123456789012345678901234567890123456789',
+          workerTimeoutMs: 1000,
+          selectedSource: keylessSourceWithSecret,
+          sourceId: keylessSourceWithSecret.id,
+        });
+      } catch (_) {}
+
+      const cfgPath = path.join(fakeWorkerRoot, 'opencode.json');
+      assert.ok(fs.existsSync(cfgPath), 'opencode.json must exist');
+      const rawText = fs.readFileSync(cfgPath, 'utf8');
+      const cfg = JSON.parse(rawText);
+
+      // The raw token must never appear anywhere in opencode.json
+      assert.equal(
+        rawText.includes(secretToken),
+        false,
+        'literal secret key value must NEVER leak into opencode.json on keyless branch'
+      );
+      assert.equal(
+        cfg.provider.opencode.options.apiKey,
+        undefined,
+        'providerOptions.apiKey must be deleted on keyless branch'
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test('empty response from opencode produces HARNESS_EMPTY_RESPONSE (not success)', async () => {
     const directAdapter = getHarness('opencode-direct');
     assert.ok(directAdapter);
