@@ -235,6 +235,13 @@ export default function WarehousesSettingsPage({
               <Store className="w-3.5 h-3.5 text-slate-500" />
               <span>Hồ sơ Shop</span>
             </Link>
+            <Link
+              href="/settings/branches"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 transition font-medium"
+            >
+              <GitBranch className="w-3.5 h-3.5 text-slate-500" />
+              <span>Chi nhánh</span>
+            </Link>
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 font-bold">
               <WarehouseIcon className="w-3.5 h-3.5 text-orange-600" />
               <span>Kho hàng</span>

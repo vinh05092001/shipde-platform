@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Warehouse as WarehouseIcon,
   Plus,
@@ -21,6 +21,7 @@ import {
   Power,
   RotateCcw,
   FileText,
+  FilterX,
 } from 'lucide-react';
 import type {
   Warehouse,
@@ -33,6 +34,7 @@ import {
   ALLOWED_WAREHOUSE_PAPER_SIZES,
   ALLOWED_WAREHOUSE_DPIS,
 } from '@shipde/contracts';
+import { PaginationControls } from './common/SharedListControls';
 
 export interface WarehouseManagementViewProps {
   warehouses?: Warehouse[];
@@ -46,6 +48,10 @@ export interface WarehouseManagementViewProps {
   initialFormState?: Partial<WarehouseFormState>;
   initialValidationErrors?: Record<string, string>;
   initialActiveTab?: 'pickup' | 'return' | 'schedule' | 'printer';
+  initialPage?: number;
+  initialPageSize?: number;
+  initialSortBy?: string;
+  initialSortOrder?: 'asc' | 'desc';
   onRefresh?: () => void;
   onCreate?: (input: CreateWarehouseInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateWarehouseInput) => Promise<void>;
@@ -72,10 +78,112 @@ export function WarehouseManagementView({
   onSetDefault,
   onActivate,
   onDeactivate,
+  initialPage = 1,
+  initialPageSize = 10,
+  initialSortBy = 'created_at',
+  initialSortOrder = 'desc',
 }: WarehouseManagementViewProps) {
-  // Filter & Search states
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'inactive'>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Filter & Search & Pagination & Sort states (FEAT-COM-02 shared list contract)
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'inactive'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const s = new URLSearchParams(window.location.search).get('status');
+        if (s === 'active' || s === 'inactive' || s === 'ALL') return s;
+      } catch {
+        // Fallback
+      }
+    }
+    return 'ALL';
+  });
+
+  const [searchQuery, setSearchQuery] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const q =
+          new URLSearchParams(window.location.search).get('search') ||
+          new URLSearchParams(window.location.search).get('q');
+        if (q) return q;
+      } catch {
+        // Fallback
+      }
+    }
+    return '';
+  });
+
+  const [page, setPage] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const p = new URLSearchParams(window.location.search).get('page');
+        if (p && /^\d+$/.test(p) && Number(p) > 0) return Number(p);
+      } catch {
+        // Fallback
+      }
+    }
+    return initialPage;
+  });
+
+  const [pageSize, setPageSize] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const l = new URLSearchParams(window.location.search).get('limit');
+        if (l && /^\d+$/.test(l) && Number(l) > 0) return Number(l);
+      } catch {
+        // Fallback
+      }
+    }
+    return initialPageSize;
+  });
+
+  const [sortBy, setSortBy] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const sb = new URLSearchParams(window.location.search).get('sort_by');
+        if (sb) return sb;
+      } catch {
+        // Fallback
+      }
+    }
+    return initialSortBy;
+  });
+
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const so = new URLSearchParams(window.location.search).get('sort_order');
+        if (so === 'asc' || so === 'desc') return so;
+      } catch {
+        // Fallback
+      }
+    }
+    return initialSortOrder;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (page > 1) params.set('page', String(page));
+      else params.delete('page');
+      if (pageSize !== 10) params.set('limit', String(pageSize));
+      else params.delete('limit');
+      if (statusFilter !== 'ALL') params.set('status', statusFilter);
+      else params.delete('status');
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      else {
+        params.delete('search');
+        params.delete('q');
+      }
+      if (sortBy !== 'created_at') params.set('sort_by', sortBy);
+      else params.delete('sort_by');
+      if (sortOrder !== 'desc') params.set('sort_order', sortOrder);
+      else params.delete('sort_order');
+      const qs = params.toString();
+      const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+      window.history.replaceState(null, '', newUrl);
+    } catch {
+      // Ignore URL history errors
+    }
+  }, [page, pageSize, statusFilter, searchQuery, sortBy, sortOrder]);
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -182,6 +290,30 @@ export function WarehouseManagementView({
     () => warehouses.filter((w) => w.status === 'inactive').length,
     [warehouses]
   );
+
+  // Sorted warehouses (FEAT-COM-02 shared list contract)
+  const sortedWarehouses = useMemo(() => {
+    const list = [...filteredWarehouses];
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
+      else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
+      else if (sortBy === 'created_at')
+        cmp = (a.created_at || '').localeCompare(b.created_at || '');
+      else cmp = (a.created_at || '').localeCompare(b.created_at || '');
+      if (cmp === 0) cmp = a.id.localeCompare(b.id);
+      return sortOrder === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [filteredWarehouses, sortBy, sortOrder]);
+
+  const total = sortedWarehouses.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const pagedWarehouses = useMemo(() => {
+    const skip = (safePage - 1) * pageSize;
+    return sortedWarehouses.slice(skip, skip + pageSize);
+  }, [sortedWarehouses, safePage, pageSize]);
 
   const isRestrictedScope = useMemo(() => {
     return (
@@ -628,15 +760,59 @@ export function WarehouseManagementView({
             id="filter-status"
             aria-label="Lọc theo trạng thái kho hàng"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as any);
+              setPage(1);
+            }}
             data-testid="filter-status"
-            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-orange-500 transition"
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-orange-500 transition cursor-pointer"
           >
             <option value="ALL">Tất cả ({warehouses.length})</option>
             <option value="active">Đang hoạt động ({activeCount})</option>
             <option value="inactive">Tạm ngưng ({inactiveCount})</option>
           </select>
         </div>
+
+        <div className="flex items-center gap-2">
+          <label htmlFor="filter-sort" className="text-xs text-slate-500 font-medium">
+            Sắp xếp:
+          </label>
+          <select
+            id="filter-sort"
+            aria-label="Sắp xếp danh sách kho hàng"
+            value={`${sortBy}-${sortOrder}`}
+            onChange={(e) => {
+              const [f, o] = e.target.value.split('-');
+              setSortBy(f);
+              setSortOrder(o as any);
+              setPage(1);
+            }}
+            data-testid="filter-sort"
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-orange-500 transition cursor-pointer"
+          >
+            <option value="created_at-desc">Mới nhất (Mặc định)</option>
+            <option value="created_at-asc">Cũ nhất</option>
+            <option value="name-asc">Tên kho (A-Z)</option>
+            <option value="name-desc">Tên kho (Z-A)</option>
+            <option value="code-asc">Mã kho (A-Z)</option>
+          </select>
+        </div>
+
+        {(searchQuery.trim() || statusFilter !== 'ALL') && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setStatusFilter('ALL');
+              setPage(1);
+            }}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-xl transition cursor-pointer"
+            data-testid="warehouse-clear-filters-btn"
+          >
+            <FilterX className="w-3.5 h-3.5" />
+            <span>Xóa lọc</span>
+          </button>
+        )}
       </div>
 
       {/* Loading Skeleton State */}
@@ -671,7 +847,14 @@ export function WarehouseManagementView({
             <WarehouseIcon className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-sm font-bold text-slate-800">
+            <h3
+              className="text-sm font-bold text-slate-800"
+              data-testid={
+                searchQuery || statusFilter !== 'ALL'
+                  ? 'warehouse-no-results-state'
+                  : 'warehouse-clean-empty-state'
+              }
+            >
               {searchQuery || statusFilter !== 'ALL'
                 ? 'Không tìm thấy kho hàng phù hợp'
                 : 'Chưa có kho hàng nào được thiết lập'}
@@ -682,237 +865,272 @@ export function WarehouseManagementView({
                 : 'Tạo kho hàng đầu tiên để bắt đầu tạo vận đơn, thiết lập điểm lấy hàng và địa chỉ hoàn trả.'}
             </p>
           </div>
-          {canEdit && !searchQuery && statusFilter === 'ALL' && (
+          {searchQuery || statusFilter !== 'ALL' ? (
             <button
               type="button"
-              onClick={handleOpenCreate}
-              data-testid="empty-create-warehouse-button"
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
+              onClick={() => {
+                setSearchQuery('');
+                setStatusFilter('ALL');
+                setPage(1);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-xl transition cursor-pointer"
+              data-testid="warehouse-empty-clear-btn"
             >
-              <Plus className="w-4 h-4" />
-              <span>Thêm kho hàng đầu tiên</span>
+              <FilterX className="w-3.5 h-3.5" />
+              <span>Xóa bộ lọc tìm kiếm</span>
             </button>
+          ) : (
+            canEdit && (
+              <button
+                type="button"
+                onClick={handleOpenCreate}
+                data-testid="empty-create-warehouse-button"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Thêm kho hàng đầu tiên</span>
+              </button>
+            )
           )}
         </div>
       )}
 
       {/* List / Grid Cards */}
       {!loading && filteredWarehouses.length > 0 && (
-        <div data-testid="warehouse-list-state" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {filteredWarehouses.map((wh) => {
-            const isActionBusy = actionLoadingId === wh.id;
-            return (
-              <div
-                key={wh.id}
-                data-testid={`warehouse-card-${wh.id}`}
-                className={`bg-white border rounded-2xl p-5 shadow-xs transition space-y-4 ${
-                  wh.is_default
-                    ? 'border-orange-300/80 ring-1 ring-orange-200/50'
-                    : 'border-slate-200/80 hover:border-slate-300'
-                }`}
-              >
-                {/* Card Header */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-sm text-slate-900">{wh.name}</span>
-                      <span className="px-2 py-0.5 text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 rounded-md">
-                        {wh.code}
-                      </span>
-                      {wh.is_default && (
-                        <span
-                          data-testid={`badge-default-warehouse-${wh.id}`}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-orange-100 text-orange-700 rounded-md"
-                        >
-                          <Star className="w-3 h-3 fill-orange-500 text-orange-500" />
-                          <span>Kho mặc định</span>
+        <div className="space-y-4">
+          <div data-testid="warehouse-list-state" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {pagedWarehouses.map((wh) => {
+              const isActionBusy = actionLoadingId === wh.id;
+              return (
+                <div
+                  key={wh.id}
+                  data-testid={`warehouse-card-${wh.id}`}
+                  className={`bg-white border rounded-2xl p-5 shadow-xs transition space-y-4 ${
+                    wh.is_default
+                      ? 'border-orange-300/80 ring-1 ring-orange-200/50'
+                      : 'border-slate-200/80 hover:border-slate-300'
+                  }`}
+                >
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-slate-900">{wh.name}</span>
+                        <span className="px-2 py-0.5 text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 rounded-md">
+                          {wh.code}
                         </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        data-testid={`badge-status-warehouse-${wh.id}`}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md ${
-                          wh.status === 'active'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-slate-100 text-slate-500 border border-slate-200'
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            wh.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
-                          }`}
-                        />
-                        <span>{wh.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Top Action Buttons */}
-                  {canEdit && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEdit(wh)}
-                        data-testid={`edit-warehouse-button-${wh.id}`}
-                        className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                        aria-label={`Chỉnh sửa kho ${wh.name}`}
-                        title="Chỉnh sửa kho"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Pickup Address Section */}
-                <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                  <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-orange-600" />
-                    <span>Địa chỉ lấy hàng (Pickup):</span>
-                  </div>
-                  <p className="pl-5 text-slate-700 font-medium">
-                    {wh.address_line}
-                    {wh.ward ? `, ${wh.ward}` : ''}, {wh.district}, {wh.city}
-                    {wh.postal_code ? ` (Mã bưu chính: ${wh.postal_code})` : ''}
-                  </p>
-                  <div className="pl-5 flex items-center gap-4 text-slate-500 flex-wrap">
-                    <span className="inline-flex items-center gap-1">
-                      <span className="font-medium text-slate-700">{wh.contact_name}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Phone className="w-3 h-3 text-slate-400" />
-                      <span>{wh.contact_phone}</span>
-                    </span>
-                    {wh.contact_email && (
-                      <span className="inline-flex items-center gap-1">
-                        <Mail className="w-3 h-3 text-slate-400" />
-                        <span>{wh.contact_email}</span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Return Address Section */}
-                <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                  <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                    <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Địa chỉ nhận hoàn (Return):</span>
-                  </div>
-                  {wh.use_different_return_address ? (
-                    <div className="pl-5 space-y-1">
-                      <p className="text-slate-700 font-medium">
-                        {wh.return_address_line}
-                        {wh.return_ward ? `, ${wh.return_ward}` : ''}, {wh.return_district},{' '}
-                        {wh.return_city}
-                      </p>
-                      <div className="flex items-center gap-4 text-slate-500">
-                        {wh.return_contact_name && (
-                          <span className="font-medium text-slate-700">
-                            {wh.return_contact_name}
-                          </span>
-                        )}
-                        {wh.return_contact_phone && (
-                          <span className="inline-flex items-center gap-1">
-                            <Phone className="w-3 h-3 text-slate-400" />
-                            <span>{wh.return_contact_phone}</span>
+                        {wh.is_default && (
+                          <span
+                            data-testid={`badge-default-warehouse-${wh.id}`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-orange-100 text-orange-700 rounded-md"
+                          >
+                            <Star className="w-3 h-3 fill-orange-500 text-orange-500" />
+                            <span>Kho mặc định</span>
                           </span>
                         )}
                       </div>
-                    </div>
-                  ) : (
-                    <p className="pl-5 text-slate-500 italic">Cùng địa chỉ với điểm lấy hàng</p>
-                  )}
-                </div>
-
-                {/* Schedule & Printer Settings Overview */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                  {/* Schedule */}
-                  <div className="space-y-1">
-                    <div className="font-semibold text-slate-700 flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-400" />
-                      <span>Lịch lấy hàng:</span>
-                    </div>
-                    <div>
-                      {wh.cutoff_time ? (
-                        <span>
-                          Giờ cắt ca lấy:{' '}
-                          <span className="font-bold text-slate-800">{wh.cutoff_time}</span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          data-testid={`badge-status-warehouse-${wh.id}`}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md ${
+                            wh.status === 'active'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-500 border border-slate-200'
+                          }`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              wh.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
+                            }`}
+                          />
+                          <span>{wh.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}</span>
                         </span>
-                      ) : (
-                        <span className="italic">Chưa cài đặt giờ cắt ca</span>
-                      )}
+                      </div>
                     </div>
-                    {wh.schedule_notes && (
-                      <p className="text-slate-600 line-clamp-1" title={wh.schedule_notes}>
-                        Ghi chú: {wh.schedule_notes}
-                      </p>
-                    )}
-                  </div>
 
-                  {/* Printer */}
-                  <div className="space-y-1">
-                    <div className="font-semibold text-slate-700 flex items-center gap-1">
-                      <Printer className="w-3 h-3 text-slate-400" />
-                      <span>In nhãn nhiệt:</span>
-                    </div>
-                    <div>
-                      Khổ giấy:{' '}
-                      <span className="font-bold text-slate-800">{wh.printer_paper_size}</span> (
-                      {wh.printer_dpi} DPI)
-                      {wh.printer_name && (
-                        <span className="text-slate-500 font-normal"> - {wh.printer_name}</span>
-                      )}
-                    </div>
-                    {wh.printer_auto_print && (
-                      <div className="text-emerald-600 font-semibold">Tự động in khi duyệt đơn</div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Card Actions Footer */}
-                {canEdit && (
-                  <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
-                    <div>
-                      {!wh.is_default && (
+                    {/* Top Action Buttons */}
+                    {canEdit && (
+                      <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => handleSetDefaultAction(wh)}
-                          data-testid={`set-default-warehouse-button-${wh.id}`}
-                          disabled={isActionBusy}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition cursor-pointer disabled:opacity-50"
+                          onClick={() => handleOpenEdit(wh)}
+                          data-testid={`edit-warehouse-button-${wh.id}`}
+                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                          aria-label={`Chỉnh sửa kho ${wh.name}`}
+                          title="Chỉnh sửa kho"
                         >
-                          <Star className="w-3.5 h-3.5" />
-                          <span>Đặt làm mặc định</span>
+                          <Edit3 className="w-4 h-4" />
                         </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pickup Address Section */}
+                  <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-orange-600" />
+                      <span>Địa chỉ lấy hàng (Pickup):</span>
+                    </div>
+                    <p className="pl-5 text-slate-700 font-medium">
+                      {wh.address_line}
+                      {wh.ward ? `, ${wh.ward}` : ''}, {wh.district}, {wh.city}
+                      {wh.postal_code ? ` (Mã bưu chính: ${wh.postal_code})` : ''}
+                    </p>
+                    <div className="pl-5 flex items-center gap-4 text-slate-500 flex-wrap">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="font-medium text-slate-700">{wh.contact_name}</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Phone className="w-3 h-3 text-slate-400" />
+                        <span>{wh.contact_phone}</span>
+                      </span>
+                      {wh.contact_email && (
+                        <span className="inline-flex items-center gap-1">
+                          <Mail className="w-3 h-3 text-slate-400" />
+                          <span>{wh.contact_email}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Return Address Section */}
+                  <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                      <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Địa chỉ nhận hoàn (Return):</span>
+                    </div>
+                    {wh.use_different_return_address ? (
+                      <div className="pl-5 space-y-1">
+                        <p className="text-slate-700 font-medium">
+                          {wh.return_address_line}
+                          {wh.return_ward ? `, ${wh.return_ward}` : ''}, {wh.return_district},{' '}
+                          {wh.return_city}
+                        </p>
+                        <div className="flex items-center gap-4 text-slate-500">
+                          {wh.return_contact_name && (
+                            <span className="font-medium text-slate-700">
+                              {wh.return_contact_name}
+                            </span>
+                          )}
+                          {wh.return_contact_phone && (
+                            <span className="inline-flex items-center gap-1">
+                              <Phone className="w-3 h-3 text-slate-400" />
+                              <span>{wh.return_contact_phone}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="pl-5 text-slate-500 italic">Cùng địa chỉ với điểm lấy hàng</p>
+                    )}
+                  </div>
+
+                  {/* Schedule & Printer Settings Overview */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                    {/* Schedule */}
+                    <div className="space-y-1">
+                      <div className="font-semibold text-slate-700 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        <span>Lịch lấy hàng:</span>
+                      </div>
+                      <div>
+                        {wh.cutoff_time ? (
+                          <span>
+                            Giờ cắt ca lấy:{' '}
+                            <span className="font-bold text-slate-800">{wh.cutoff_time}</span>
+                          </span>
+                        ) : (
+                          <span className="italic">Chưa cài đặt giờ cắt ca</span>
+                        )}
+                      </div>
+                      {wh.schedule_notes && (
+                        <p className="text-slate-600 line-clamp-1" title={wh.schedule_notes}>
+                          Ghi chú: {wh.schedule_notes}
+                        </p>
                       )}
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleStatusAction(wh)}
-                        data-testid={
-                          wh.status === 'active'
-                            ? `deactivate-warehouse-button-${wh.id}`
-                            : `activate-warehouse-button-${wh.id}`
-                        }
-                        disabled={isActionBusy}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-50 ${
-                          wh.status === 'active'
-                            ? 'text-slate-600 hover:text-rose-700 hover:bg-rose-50'
-                            : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
-                        }`}
-                      >
-                        <Power className="w-3.5 h-3.5" />
-                        <span>{wh.status === 'active' ? 'Tạm ngưng' : 'Kích hoạt lại'}</span>
-                      </button>
+                    {/* Printer */}
+                    <div className="space-y-1">
+                      <div className="font-semibold text-slate-700 flex items-center gap-1">
+                        <Printer className="w-3 h-3 text-slate-400" />
+                        <span>In nhãn nhiệt:</span>
+                      </div>
+                      <div>
+                        Khổ giấy:{' '}
+                        <span className="font-bold text-slate-800">{wh.printer_paper_size}</span> (
+                        {wh.printer_dpi} DPI)
+                        {wh.printer_name && (
+                          <span className="text-slate-500 font-normal"> - {wh.printer_name}</span>
+                        )}
+                      </div>
+                      {wh.printer_auto_print && (
+                        <div className="text-emerald-600 font-semibold">
+                          Tự động in khi duyệt đơn
+                        </div>
+                      )}
                     </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
+
+                  {/* Card Actions Footer */}
+                  {canEdit && (
+                    <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
+                      <div>
+                        {!wh.is_default && (
+                          <button
+                            type="button"
+                            onClick={() => handleSetDefaultAction(wh)}
+                            data-testid={`set-default-warehouse-button-${wh.id}`}
+                            disabled={isActionBusy}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition cursor-pointer disabled:opacity-50"
+                          >
+                            <Star className="w-3.5 h-3.5" />
+                            <span>Đặt làm mặc định</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatusAction(wh)}
+                          data-testid={
+                            wh.status === 'active'
+                              ? `deactivate-warehouse-button-${wh.id}`
+                              : `activate-warehouse-button-${wh.id}`
+                          }
+                          disabled={isActionBusy}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-50 ${
+                            wh.status === 'active'
+                              ? 'text-slate-600 hover:text-rose-700 hover:bg-rose-50'
+                              : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                          }`}
+                        >
+                          <Power className="w-3.5 h-3.5" />
+                          <span>{wh.status === 'active' ? 'Tạm ngưng' : 'Kích hoạt lại'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Pagination Controls (FEAT-COM-02 shared list contract) */}
+          <PaginationControls
+            page={safePage}
+            pageSize={pageSize}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={(p) => setPage(p)}
+            onPageSizeChange={(s) => {
+              setPageSize(s);
+              setPage(1);
+            }}
+            pageSizeOptions={[2, 4, 10, 20]}
+            testIdPrefix="warehouse-pagination"
+          />
         </div>
       )}
 

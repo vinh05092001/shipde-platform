@@ -15,3 +15,37 @@ export const USERS_LIST_POLICY = {
     search: null,
   },
 } as const;
+
+/** FEAT-COM-02: warehouses list policy. */
+export const WAREHOUSES_LIST_POLICY = {
+  pageKey: 'page',
+  sizeKey: 'limit',
+  defaultPage: 1,
+  defaultSize: 10,
+  maxSize: 100,
+  sortFields: ['created_at', 'name', 'code', 'id'],
+  defaultSort: 'created_at',
+  defaultDirection: 'desc',
+  tieBreaker: 'id',
+  filters: {
+    status: ['active', 'inactive'],
+    search: null,
+  },
+} as const;
+
+/** FEAT-COM-02: branches list policy. */
+export const BRANCHES_LIST_POLICY = {
+  pageKey: 'page',
+  sizeKey: 'limit',
+  defaultPage: 1,
+  defaultSize: 10,
+  maxSize: 100,
+  sortFields: ['created_at', 'name', 'code', 'id'],
+  defaultSort: 'name',
+  defaultDirection: 'asc',
+  tieBreaker: 'id',
+  filters: {
+    status: ['ACTIVE', 'INACTIVE'],
+    search: null,
+  },
+} as const;

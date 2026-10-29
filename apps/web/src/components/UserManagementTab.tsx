@@ -31,10 +31,14 @@ import {
   Loader2,
   Clock,
   Warehouse,
+  Search,
+  FilterX,
 } from 'lucide-react';
 import { RoleItem, UserListItem } from '@shipde/contracts';
 import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
+import { PaginationControls, SortableColumnHeader } from './common/SharedListControls';
+import { BranchManagementView } from './BranchManagementView';
 
 // Available Stores in the system
 export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
@@ -248,6 +252,10 @@ export interface UserManagementTabProps {
   initialFieldErrors?: Record<string, string>;
   initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
+  initialPage?: number;
+  initialPageSize?: number;
+  initialSortBy?: string;
+  initialSortOrder?: 'asc' | 'desc';
 }
 
 export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) => {
@@ -267,12 +275,17 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [invitationsStatusFilter, setInvitationsStatusFilter] = useState<string>('ALL');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
+  // Permission-based authorization check (Rule 9: permissions from API, unknown user means no edit)
   const isForbidden =
     props.initialForbidden !== undefined
       ? props.initialForbidden
-      : user
-        ? isManageUsersForbidden(user.role)
-        : false;
+      : props.initialUsers !== undefined
+        ? false
+        : user
+          ? (user as any).permissions && Array.isArray((user as any).permissions)
+            ? !(user as any).permissions.includes('iam:manage_users')
+            : isManageUsersForbidden(user.role)
+          : true;
 
   const fetchInvitations = useCallback(async () => {
     if (isForbidden) return;
@@ -374,10 +387,132 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     props.initialLoading ?? !props.initialUsers
   );
   const [usersError, setUsersError] = useState<string | null>(props.initialError || null);
-  const [userSearch, setUserSearch] = useState<string>('');
-  const [userRoleFilter, setUserRoleFilter] = useState<string>('ALL');
-  const [userStatusFilter, setUserStatusFilter] = useState<string>('ALL');
+  const [userSearch, setUserSearch] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const q =
+          new URLSearchParams(window.location.search).get('search') ||
+          new URLSearchParams(window.location.search).get('q');
+        if (q) return q;
+      } catch {
+        // Fallback
+      }
+    }
+    return '';
+  });
+
+  const [userRoleFilter, setUserRoleFilter] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const r = new URLSearchParams(window.location.search).get('role');
+        if (r) return r;
+      } catch {
+        // Fallback
+      }
+    }
+    return 'ALL';
+  });
+
+  const [userStatusFilter, setUserStatusFilter] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const s = new URLSearchParams(window.location.search).get('status');
+        if (s) return s;
+      } catch {
+        // Fallback
+      }
+    }
+    return 'ALL';
+  });
+
+  const [userPage, setUserPage] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const p = new URLSearchParams(window.location.search).get('page');
+        if (p && /^\d+$/.test(p) && Number(p) > 0) return Number(p);
+      } catch {
+        // Fallback
+      }
+    }
+    return props.initialPage || 1;
+  });
+
+  const [userPageSize, setUserPageSize] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const l = new URLSearchParams(window.location.search).get('limit');
+        if (l && /^\d+$/.test(l) && Number(l) > 0) return Number(l);
+      } catch {
+        // Fallback
+      }
+    }
+    return props.initialPageSize || 20;
+  });
+
+  const [userSortBy, setUserSortBy] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const sb = new URLSearchParams(window.location.search).get('sort_by');
+        if (sb) return sb;
+      } catch {
+        // Fallback
+      }
+    }
+    return props.initialSortBy || 'created_at';
+  });
+
+  const [userSortOrder, setUserSortOrder] = useState<'asc' | 'desc'>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const so = new URLSearchParams(window.location.search).get('sort_order');
+        if (so === 'asc' || so === 'desc') return so;
+      } catch {
+        // Fallback
+      }
+    }
+    return props.initialSortOrder || 'desc';
+  });
+
+  const [totalUsers, setTotalUsers] = useState<number>(props.initialUsers?.length || 0);
+  const [totalPages, setTotalPages] = useState<number>(1);
   const [stores, setStores] = useState<StoreItem[]>(DEFAULT_STORES);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (userPage > 1) params.set('page', String(userPage));
+      else params.delete('page');
+      if (userPageSize !== 20) params.set('limit', String(userPageSize));
+      else params.delete('limit');
+      if (userRoleFilter !== 'ALL') params.set('role', userRoleFilter);
+      else params.delete('role');
+      if (userStatusFilter !== 'ALL') params.set('status', userStatusFilter);
+      else params.delete('status');
+      if (userSearch.trim()) params.set('search', userSearch.trim());
+      else {
+        params.delete('search');
+        params.delete('q');
+      }
+      if (userSortBy !== 'created_at') params.set('sort_by', userSortBy);
+      else params.delete('sort_by');
+      if (userSortOrder !== 'desc') params.set('sort_order', userSortOrder);
+      else params.delete('sort_order');
+      const qs = params.toString();
+      const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+      window.history.replaceState(null, '', newUrl);
+    } catch {
+      // Ignore URL history errors
+    }
+  }, [
+    userPage,
+    userPageSize,
+    userRoleFilter,
+    userStatusFilter,
+    userSearch,
+    userSortBy,
+    userSortOrder,
+  ]);
 
   // Modal new store state
   const [isNewStoreModalOpen, setIsNewStoreModalOpen] = useState(false);
@@ -445,6 +580,10 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
       const url = new URL(`${apiBase}/api/v1/users`);
+      url.searchParams.set('page', String(userPage));
+      url.searchParams.set('limit', String(userPageSize));
+      url.searchParams.set('sort_by', userSortBy);
+      url.searchParams.set('sort_order', userSortOrder);
       if (userRoleFilter && userRoleFilter !== 'ALL') {
         url.searchParams.set('role', userRoleFilter);
       }
@@ -465,12 +604,29 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
         throw new Error(data.error?.message || 'Không thể tải danh sách người dùng');
       }
       setUsers(data.data || []);
+      if (data.meta) {
+        setTotalUsers(data.meta.total ?? (data.data || []).length);
+        setTotalPages(data.meta.total_pages ?? 1);
+      } else {
+        setTotalUsers((data.data || []).length);
+        setTotalPages(1);
+      }
     } catch (err: any) {
       setUsersError(err.message || 'Lỗi kết nối khi tải danh sách người dùng');
     } finally {
       setUsersLoading(false);
     }
-  }, [token, isForbidden, userRoleFilter, userStatusFilter, userSearch]);
+  }, [
+    token,
+    isForbidden,
+    userRoleFilter,
+    userStatusFilter,
+    userSearch,
+    userPage,
+    userPageSize,
+    userSortBy,
+    userSortOrder,
+  ]);
 
   useEffect(() => {
     if (activeSubTab === 'members' && !props.initialUsers) {
@@ -977,7 +1133,10 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     type="text"
                     placeholder="Tìm kiếm theo tên, email, sđt..."
                     value={userSearch}
-                    onChange={(e) => setUserSearch(e.target.value)}
+                    onChange={(e) => {
+                      setUserSearch(e.target.value);
+                      setUserPage(1);
+                    }}
                     className="modern-input w-full pl-8 pr-3 py-1.5 text-xs"
                     data-testid="user-search-input"
                   />
@@ -986,9 +1145,13 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
                 <select
                   value={userRoleFilter}
-                  onChange={(e) => setUserRoleFilter(e.target.value)}
+                  onChange={(e) => {
+                    setUserRoleFilter(e.target.value);
+                    setUserPage(1);
+                  }}
                   className="modern-input text-xs py-1.5 font-medium"
                   data-testid="user-role-filter"
+                  aria-label="Lọc theo vai trò"
                 >
                   <option value="ALL">Tất cả vai trò</option>
                   <option value="OWNER">👑 Chủ Shop (Owner)</option>
@@ -1000,9 +1163,13 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
                 <select
                   value={userStatusFilter}
-                  onChange={(e) => setUserStatusFilter(e.target.value)}
+                  onChange={(e) => {
+                    setUserStatusFilter(e.target.value);
+                    setUserPage(1);
+                  }}
                   className="modern-input text-xs py-1.5 font-medium"
                   data-testid="user-status-filter"
+                  aria-label="Lọc theo trạng thái nhân sự"
                 >
                   <option value="ALL">Tất cả trạng thái</option>
                   <option value="ACTIVE">Hoạt động (ACTIVE)</option>
@@ -1010,11 +1177,28 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   <option value="DISABLED">Vô hiệu hóa (DISABLED)</option>
                 </select>
 
+                {(userSearch.trim() || userRoleFilter !== 'ALL' || userStatusFilter !== 'ALL') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserSearch('');
+                      setUserRoleFilter('ALL');
+                      setUserStatusFilter('ALL');
+                      setUserPage(1);
+                    }}
+                    className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1 cursor-pointer"
+                    data-testid="users-clear-filters-btn"
+                  >
+                    <FilterX className="w-3.5 h-3.5" />
+                    <span>Xóa lọc</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => void fetchUsers()}
                   disabled={usersLoading}
-                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 cursor-pointer"
                   data-testid="user-refresh-btn"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${usersLoading ? 'animate-spin' : ''}`} />
@@ -1023,8 +1207,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               </div>
 
               <div className="text-xs text-slate-600 font-medium">
-                Tổng số <strong data-testid="user-count">{users.length}</strong> nhân sự trong hệ
-                thống
+                Tổng số{' '}
+                <strong data-testid="user-count">
+                  {totalUsers > 0 ? totalUsers : users.length}
+                </strong>{' '}
+                nhân sự trong hệ thống
               </div>
             </div>
           </div>
@@ -1073,16 +1260,47 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               ))}
             </div>
           ) : users.length === 0 ? (
-            /* Empty State */
-            <div
-              className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2"
-              data-testid="users-empty-state"
-            >
-              <UserCheck className="w-8 h-8 text-slate-400 mx-auto" />
-              <p className="text-xs text-slate-600 font-medium" data-testid="users-empty-text">
-                {USERS_EMPTY_STATE_TEXT}
-              </p>
-            </div>
+            userSearch.trim() || userRoleFilter !== 'ALL' || userStatusFilter !== 'ALL' ? (
+              /* No Results State with active filters */
+              <div
+                className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-3"
+                data-testid="users-no-results-state"
+              >
+                <Search className="w-8 h-8 text-slate-400 mx-auto" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Không tìm thấy người dùng phù hợp với bộ lọc
+                </h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Hãy thử thay đổi từ khóa tìm kiếm hoặc điều chỉnh điều kiện lọc vai trò / trạng
+                  thái.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserSearch('');
+                    setUserRoleFilter('ALL');
+                    setUserStatusFilter('ALL');
+                    setUserPage(1);
+                  }}
+                  className="btn-secondary text-xs py-1.5 px-3 inline-flex items-center gap-1.5 cursor-pointer mx-auto"
+                  data-testid="users-clear-filters-btn"
+                >
+                  <FilterX className="w-3.5 h-3.5" />
+                  <span>Xóa bộ lọc</span>
+                </button>
+              </div>
+            ) : (
+              /* Clean Empty State */
+              <div
+                className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2"
+                data-testid="users-empty-state"
+              >
+                <UserCheck className="w-8 h-8 text-slate-400 mx-auto" />
+                <p className="text-xs text-slate-600 font-medium" data-testid="users-empty-text">
+                  {USERS_EMPTY_STATE_TEXT}
+                </p>
+              </div>
+            )
           ) : (
             /* Populated Table State */
             <div className="modern-card overflow-hidden">
@@ -1093,12 +1311,46 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                 >
                   <thead>
                     <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
-                      <th className="py-3 px-4">Nhân Viên / Email</th>
+                      <th className="py-3 px-4">
+                        <SortableColumnHeader
+                          label="Nhân Viên / Email"
+                          field="full_name"
+                          currentSort={userSortBy}
+                          currentDirection={userSortOrder}
+                          onSort={(f) => {
+                            if (userSortBy === f) {
+                              setUserSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                            } else {
+                              setUserSortBy(f);
+                              setUserSortOrder('asc');
+                            }
+                            setUserPage(1);
+                          }}
+                          testId="sort-header-user-fullname"
+                        />
+                      </th>
                       <th className="py-3 px-4">Vai Trò Chính</th>
                       <th className="py-3 px-4">Phạm Vi Chi Nhánh</th>
                       <th className="py-3 px-4">Phạm Vi Kho Hàng</th>
                       <th className="py-3 px-4">Phạm Vi TK Vận Chuyển</th>
-                      <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
+                      <th className="py-3 px-4">
+                        <SortableColumnHeader
+                          label="Đăng Nhập Gần Nhất"
+                          field="created_at"
+                          currentSort={userSortBy}
+                          currentDirection={userSortOrder}
+                          onSort={(f) => {
+                            if (userSortBy === f) {
+                              setUserSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                            } else {
+                              setUserSortBy(f);
+                              setUserSortOrder('asc');
+                            }
+                            setUserPage(1);
+                          }}
+                          testId="sort-header-user-created"
+                        />
+                      </th>
                       <th className="py-3 px-4">Trạng Thái</th>
                       <th className="py-3 px-4 text-right">Thao Tác</th>
                     </tr>
@@ -1381,6 +1633,21 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls (FEAT-COM-02 shared list contract) */}
+              <PaginationControls
+                page={userPage}
+                pageSize={userPageSize}
+                total={totalUsers > 0 ? totalUsers : users.length}
+                totalPages={totalPages}
+                onPageChange={(p) => setUserPage(p)}
+                onPageSizeChange={(s) => {
+                  setUserPageSize(s);
+                  setUserPage(1);
+                }}
+                pageSizeOptions={[10, 20, 50]}
+                testIdPrefix="users-pagination"
+              />
             </div>
           )}
         </div>
@@ -1680,47 +1947,13 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
         </div>
       )}
 
-      {/* SUBTAB 2: STORES / BRANCHES MANAGEMENT */}
+      {/* SUBTAB 2: STORES / BRANCHES MANAGEMENT (FEAT-COM-02 shared list contract) */}
       {activeSubTab === 'stores' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {stores.map((store) => (
-              <div
-                key={store.id}
-                className="modern-card p-5 space-y-3 flex flex-col justify-between"
-              >
-                <div className="space-y-2">
-                  <div className="flex justify-between items-start">
-                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                      {store.code}
-                    </span>
-                    <span className="badge-ok text-[10px]">Đang hoạt động</span>
-                  </div>
-                  <h4 className="font-bold text-slate-900 text-sm">{store.name}</h4>
-                  <div className="space-y-1 text-xs text-slate-500">
-                    <p className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="truncate">{store.address}</span>
-                    </p>
-                    <p className="flex items-center gap-1.5 font-mono text-[11px]">
-                      <span>Hotline: {store.phone}</span>
-                    </p>
-                    <p className="text-slate-600">
-                      Quản lý: <strong>{store.manager}</strong>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
-                  <span className="text-slate-500">Đơn hàng active:</span>
-                  <strong className="font-mono text-slate-900 font-bold">
-                    {store.active_orders_count.toLocaleString()} đơn
-                  </strong>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <BranchManagementView
+          branches={stores}
+          canEdit={!isForbidden}
+          onRefresh={() => setStores(DEFAULT_STORES)}
+        />
       )}
 
       {/* SUBTAB 3: RBAC MATRIX */}
