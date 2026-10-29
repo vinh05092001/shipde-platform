@@ -3208,6 +3208,43 @@ function dispatchCommand(args, deps = {}) {
         exitCode: 0,
         source: 'dispatch',
       });
+      try {
+        const routeHealthApi = require('./route-health');
+        const routeHealthFile =
+          (deps && (deps.routeHealthFile || deps['route-health'])) ||
+          args['route-health'] ||
+          args.routeHealthFile ||
+          (args.root
+            ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+            : null) ||
+          path.join(__dirname, 'data', 'model-route-health.json');
+        const modelId =
+          finalChosenCandidate.modelId || finalChosenCandidate.model || finalChosenCandidate.id;
+        const routeId =
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.source ||
+          finalChosenCandidate.gateway;
+        const concurrency =
+          deps && typeof deps.concurrency === 'number'
+            ? deps.concurrency
+            : deps && deps.load && typeof deps.load.activeWriters === 'number'
+              ? deps.load.activeWriters
+              : Array.isArray(deps && deps.load)
+                ? deps.load.length
+                : undefined;
+        routeHealthApi.recordExecutionResult(
+          routeHealthFile,
+          modelId,
+          routeId,
+          {
+            status: 200,
+            ok: true,
+            elapsedMs: launchRes ? launchRes.elapsedMs : undefined,
+            concurrency,
+          },
+          { now, persist: deps && deps.persistRouteHealth !== false }
+        );
+      } catch (_) {}
       log('Dispatch succeeded on ' + finalChosenKey);
       exit(0);
       return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
@@ -3239,6 +3276,50 @@ function dispatchCommand(args, deps = {}) {
         stderr: rawFail.stderr,
         accountId: finalChosenCandidate.accountId,
       });
+      const isTimeout =
+        classification?.cause === 'TIMEOUT' ||
+        /timeout|stall|hang/i.test(
+          String(rawFail.body || rawFail.stderr || (thrownError && thrownError.message) || '')
+        );
+      try {
+        const routeHealthApi = require('./route-health');
+        const routeHealthFile =
+          (deps && (deps.routeHealthFile || deps['route-health'])) ||
+          args['route-health'] ||
+          args.routeHealthFile ||
+          (args.root
+            ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+            : null) ||
+          path.join(__dirname, 'data', 'model-route-health.json');
+        const modelId =
+          finalChosenCandidate.modelId || finalChosenCandidate.model || finalChosenCandidate.id;
+        const routeId =
+          finalChosenCandidate.upstream ||
+          finalChosenCandidate.source ||
+          finalChosenCandidate.gateway;
+        const concurrency =
+          deps && typeof deps.concurrency === 'number'
+            ? deps.concurrency
+            : deps && deps.load && typeof deps.load.activeWriters === 'number'
+              ? deps.load.activeWriters
+              : Array.isArray(deps && deps.load)
+                ? deps.load.length
+                : undefined;
+        routeHealthApi.recordExecutionResult(
+          routeHealthFile,
+          modelId,
+          routeId,
+          {
+            status: isTimeout ? 408 : rawFail.httpStatus || 500,
+            ok: false,
+            timedOut: Boolean(isTimeout),
+            reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+            elapsedMs: launchRes ? launchRes.elapsedMs : undefined,
+            concurrency,
+          },
+          { now, persist: deps && deps.persistRouteHealth !== false }
+        );
+      } catch (_) {}
       const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
       const outcome =
         parsedOutcome && parsedOutcome.candidateKey

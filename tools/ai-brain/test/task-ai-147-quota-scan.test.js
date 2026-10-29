@@ -13,10 +13,11 @@ const {
   syncNinerouterModelsToOpenCode,
   scanScope,
   scanAllQuotas,
+  schedulePeriodicQuotaScan,
 } = require('../quota-scan');
 const { recordExecutionResult, loadStore } = require('../route-health');
 const routingApi = require('../routing');
-const { quotaScanCommand } = require('../cli');
+const { quotaScanCommand, dispatchCommand } = require('../cli');
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-147-test-'));
@@ -508,4 +509,464 @@ test('TASK-AI-147 Req 7 CLI: quotaScanCommand with --sync-opencode invokes syncN
   assert.equal(result.modelCount, 1);
   const updated = JSON.parse(fs.readFileSync(ocPath, 'utf8'));
   assert.ok(updated.provider.ninerouter.models['model-x']);
+});
+
+test('TASK-AI-147 Review R2-1: fetchSourceModels fail-closed on malformed response shapes', async () => {
+  const liveSource = {
+    id: 'live-src',
+    servesModels: true,
+    endpoint: 'https://live.example/v1',
+    credential: { env: 'KEY' },
+  };
+  const env = { KEY: 'secret' };
+
+  // Case A: HTTP 200 with {} (empty object, not array)
+  await assert.rejects(async () => {
+    await fetchSourceModels(liveSource, {
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({}),
+      }),
+      env,
+    });
+  }, /MALFORMED_MODELS_RESPONSE/);
+
+  // Case B: HTTP 200 with { data: [{}] } (missing id/name)
+  await assert.rejects(async () => {
+    await fetchSourceModels(liveSource, {
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ data: [{}] }),
+      }),
+      env,
+    });
+  }, /MALFORMED_MODELS_RESPONSE/);
+
+  // Case C: HTTP 200 with { data: [{ id: '' }] } (empty string id)
+  await assert.rejects(async () => {
+    await fetchSourceModels(liveSource, {
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ data: [{ id: '' }] }),
+      }),
+      env,
+    });
+  }, /MALFORMED_MODELS_RESPONSE/);
+
+  // Case D: HTTP 200 with { data: "not-an-array" }
+  await assert.rejects(async () => {
+    await fetchSourceModels(liveSource, {
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ data: 'not-an-array' }),
+      }),
+      env,
+    });
+  }, /MALFORMED_MODELS_RESPONSE/);
+});
+
+test('TASK-AI-147 Review R2-2: schedulePeriodicQuotaScan prevents overlapping scans via lock and shares limiter', async (t) => {
+  let scanRunCount = 0;
+  let slowScanResolver;
+  const slowScanPromise = new Promise((resolve) => {
+    slowScanResolver = resolve;
+  });
+
+  const customScan = async () => {
+    scanRunCount++;
+    await slowScanPromise;
+    return { ok: true };
+  };
+
+  let registeredIntervalFn = null;
+  const fakeSetInterval = (fn, ms) => {
+    registeredIntervalFn = fn;
+    return 12345;
+  };
+
+  schedulePeriodicQuotaScan({
+    initialScan: false,
+    intervalMs: 100,
+    scanFn: customScan,
+    setInterval: fakeSetInterval,
+    clearInterval: () => {},
+  });
+
+  assert.ok(registeredIntervalFn, 'interval callback should be registered');
+
+  // Trigger first tick - starts scanning
+  const tick1 = registeredIntervalFn();
+  assert.equal(scanRunCount, 1, 'first scan should start');
+
+  // Trigger second tick while first is still in flight - should skip due to lock
+  const tick2 = registeredIntervalFn();
+  assert.equal(scanRunCount, 1, 'second scan should be skipped while first is in-flight');
+
+  // Complete first scan
+  slowScanResolver();
+  await tick1;
+  await tick2;
+
+  // Now a subsequent tick should run
+  let fastResolved = false;
+  const fastScan = async () => {
+    scanRunCount++;
+    fastResolved = true;
+  };
+  registeredIntervalFn = null;
+  schedulePeriodicQuotaScan({
+    initialScan: false,
+    intervalMs: 100,
+    scanFn: fastScan,
+    setInterval: fakeSetInterval,
+    clearInterval: () => {},
+  });
+  await registeredIntervalFn();
+  assert.equal(scanRunCount, 2, 'scan runs again after lock is cleared');
+  assert.equal(fastResolved, true);
+});
+
+test('TASK-AI-147 Review R2-2: scanAllFullRoutes shares upstream concurrency limiter across multiple runs', async (t) => {
+  const dir = fixture(t);
+  const quotaFile1 = path.join(dir, 'quota-1.json');
+  const quotaFile2 = path.join(dir, 'quota-2.json');
+
+  let activeUpstream = 0;
+  let maxConcurrent = 0;
+
+  const fakeFetch = async (url) => {
+    if (url.endsWith('/models')) {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ data: [{ id: 'm1' }, { id: 'm2' }] }),
+      };
+    }
+    activeUpstream++;
+    maxConcurrent = Math.max(maxConcurrent, activeUpstream);
+    await new Promise((r) => setTimeout(r, 25));
+    activeUpstream--;
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map(),
+      text: async () =>
+        JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }),
+    };
+  };
+
+  const registry = {
+    dispatch: {
+      maxConcurrentUpstreamProbes: 1,
+      probeRetry429Count: 0,
+      probeRetry429BackoffMs: 10,
+      maxConcurrentProbes: 4,
+    },
+    sources: [
+      {
+        id: 'shared-up',
+        kind: 'model-source',
+        servesModels: true,
+        endpoint: 'https://shared.example/v1',
+        credential: { env: 'K' },
+      },
+    ],
+  };
+
+  const sharedLimiter = {
+    active: new Map(),
+    waiters: new Map(),
+  };
+
+  await Promise.all([
+    scanAllFullRoutes({
+      registry,
+      quotaStateFile: quotaFile1,
+      fetch: fakeFetch,
+      env: { K: 'val' },
+      upstreamLimiter: sharedLimiter,
+      concurrency: 2,
+    }),
+    scanAllFullRoutes({
+      registry,
+      quotaStateFile: quotaFile2,
+      fetch: fakeFetch,
+      env: { K: 'val' },
+      upstreamLimiter: sharedLimiter,
+      concurrency: 2,
+    }),
+  ]);
+
+  assert.equal(
+    maxConcurrent,
+    1,
+    `Max concurrency ${maxConcurrent} should not exceed cap 1 across runs`
+  );
+});
+
+test('TASK-AI-147 Review R2-3: scanAllFullRoutes overwrites previously OK scope when probe fails, and marks router discovery failure', async (t) => {
+  const dir = fixture(t);
+  const quotaFile = path.join(dir, 'quota-state.json');
+
+  const initialQuota = {
+    version: '1.0',
+    updatedAt: '2026-10-29T10:00:00Z',
+    scopes: {
+      'src-failing': { status: 200, code: 'OK', checkedAt: '2026-10-29T10:00:00Z' },
+      'src-failing::src-failing': { status: 200, code: 'OK', checkedAt: '2026-10-29T10:00:00Z' },
+    },
+    sources: {
+      'src-failing': { checkedAt: '2026-10-29T10:00:00Z' },
+    },
+  };
+  fs.writeFileSync(quotaFile, JSON.stringify(initialQuota, null, 2), 'utf8');
+
+  const fakeFetch = async (url) => {
+    if (url.endsWith('/models')) {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ data: [{ id: 'src-failing/m1' }] }),
+      };
+    }
+    return {
+      ok: false,
+      status: 500,
+      headers: new Map(),
+      text: async () => JSON.stringify({ error: 'Internal Server Error' }),
+    };
+  };
+
+  const registry = {
+    dispatch: {
+      maxConcurrentUpstreamProbes: 2,
+      probeRetry429Count: 0,
+      probeRetry429BackoffMs: 10,
+      maxConcurrentProbes: 4,
+    },
+    sources: [
+      {
+        id: 'src-failing',
+        kind: 'model-source',
+        servesModels: true,
+        endpoint: 'https://fail.example/v1',
+        credential: { env: 'K' },
+      },
+    ],
+  };
+
+  const scanNow = 1735689700000;
+  await scanAllFullRoutes({
+    registry,
+    quotaStateFile: quotaFile,
+    fetch: fakeFetch,
+    env: { K: 'val' },
+    now: scanNow,
+  });
+
+  const updatedState = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+  assert.equal(
+    updatedState.scopes['src-failing'].status,
+    500,
+    'Scope status should be overwritten with failure status 500'
+  );
+  assert.notEqual(
+    updatedState.scopes['src-failing'].code,
+    'OK',
+    'Scope code should be overwritten with failure code'
+  );
+  assert.equal(
+    updatedState.scopes['src-failing::src-failing'].status,
+    500,
+    'Scope source::source should be overwritten with failure status 500'
+  );
+
+  // Router discovery failure case
+  const routerRegistry = {
+    dispatch: {
+      maxConcurrentUpstreamProbes: 2,
+      probeRetry429Count: 0,
+      probeRetry429BackoffMs: 10,
+      maxConcurrentProbes: 4,
+    },
+    sources: [
+      {
+        id: 'broken-router',
+        kind: 'router',
+        endpoint: 'https://router.example/v1',
+        credential: { env: 'K' },
+      },
+    ],
+  };
+
+  const fakeFetchRouterFail = async (url) => {
+    return {
+      ok: false,
+      status: 503,
+      headers: new Map(),
+      text: async () => 'Service Unavailable',
+    };
+  };
+
+  const routerScanRes = await scanAllFullRoutes({
+    registry: routerRegistry,
+    quotaStateFile: quotaFile,
+    fetch: fakeFetchRouterFail,
+    env: { K: 'val' },
+    now: scanNow + 1000,
+  });
+
+  const finalState = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+  assert.equal(
+    finalState.scopes['broken-router'].code,
+    'DISCOVERY_FAILED',
+    'Router scope should be marked DISCOVERY_FAILED'
+  );
+  assert.equal(
+    finalState.scopes['broken-router::broken-router'].code,
+    'DISCOVERY_FAILED',
+    'Router broken-router::broken-router scope should be DISCOVERY_FAILED'
+  );
+  assert.ok(
+    routerScanRes.failedSources.includes('broken-router'),
+    'failedSources should include broken-router'
+  );
+  assert.equal(
+    finalState.sourceFreshness?.['broken-router'],
+    undefined,
+    'sourceFreshness should not advance for failed router'
+  );
+});
+
+test('TASK-AI-147 Review R2-4: dispatchCommand and reportOutcomeCommand record execution results to route health', async (t) => {
+  const dir = fixture(t);
+  const healthFile = path.join(dir, 'model-route-health.json');
+  const evidenceDir = path.join(dir, 'evidence');
+
+  const candA = {
+    harness: 'paseo',
+    accessPath: 'http://127.0.0.1:20128/v1',
+    gateway: '9router',
+    upstream: 'mock-up',
+    accountId: 'mock-scope',
+    quotaScope: 'mock-scope',
+    modelId: 'm-alpha',
+    qualifiedRoles: ['author.foundation'],
+    cost: 5,
+    quality: 90,
+  };
+  candA.candidateKey = [
+    candA.harness,
+    candA.accessPath,
+    candA.gateway,
+    candA.upstream,
+    candA.accountId,
+    candA.quotaScope,
+    candA.modelId,
+  ].join('\u241f');
+
+  // 1. dispatchCommand on SUCCESS
+  let exitCode = -1;
+  dispatchCommand(
+    { execute: true, item: 'TASK-TEST-HEALTH-SUCCESS' },
+    {
+      candidates: [candA],
+      run: () => ({
+        exitCode: 0,
+        stdout: JSON.stringify({ id: 'sess-01', status: 'running' }),
+        elapsedMs: 150,
+      }),
+      routeHealthFile: healthFile,
+      evidenceDir,
+      home: dir,
+      exit: (code) => {
+        exitCode = code;
+      },
+      log: () => {},
+      concurrency: 2,
+    }
+  );
+
+  assert.equal(exitCode, 0);
+  const storeAfterSuccess = loadStore(healthFile);
+  const healthRecSuccess = storeAfterSuccess.paths['m-alpha|mock-up'];
+  assert.ok(healthRecSuccess, 'route health record should exist after dispatchCommand success');
+  assert.equal(healthRecSuccess.status, 'AVAILABLE');
+  assert.equal(healthRecSuccess.elapsedMs, 150);
+  assert.equal(healthRecSuccess.concurrency, 2);
+
+  // 2. dispatchCommand on FAILURE/TIMEOUT
+  let exitCodeFail = -1;
+  dispatchCommand(
+    { execute: true, item: 'TASK-TEST-HEALTH-FAIL' },
+    {
+      candidates: [candA],
+      run: () => ({ exitCode: 1, stderr: 'Request timed out after 30000ms', elapsedMs: 30000 }),
+      routeHealthFile: healthFile,
+      evidenceDir,
+      home: dir,
+      exit: (code) => {
+        exitCodeFail = code;
+      },
+      log: () => {},
+      maxAttempts: 1,
+      concurrency: 1,
+    }
+  );
+
+  assert.equal(exitCodeFail, 1);
+  const storeAfterFail = loadStore(healthFile);
+  const healthRecFail = storeAfterFail.paths['m-alpha|mock-up'];
+  assert.ok(healthRecFail);
+  assert.notEqual(healthRecFail.status, 'AVAILABLE', 'status should reflect failure');
+  assert.equal(healthRecFail.concurrency, 1);
+
+  // 3. routingApi.reportDispatchOutcome
+  const candReport = [
+    'paseo',
+    'http://127.0.0.1:20128/v1',
+    '9router',
+    'mock-gateway',
+    'mock-acc',
+    'mock-scope',
+    'm-beta',
+  ].join('\u241f');
+
+  const outcomeFile = path.join(dir, 'outcome.json');
+  fs.writeFileSync(
+    outcomeFile,
+    JSON.stringify({
+      candidateKey: candReport,
+      status: 'completed',
+      elapsedMs: 220,
+      concurrency: 3,
+    })
+  );
+
+  routingApi.reportDispatchOutcome(
+    { 'report-outcome': outcomeFile },
+    {
+      routeHealthFile: healthFile,
+      evidenceDir,
+      home: dir,
+      exit: () => {},
+    }
+  );
+
+  const storeAfterReport = loadStore(healthFile);
+  const healthRecReport = storeAfterReport.paths['m-beta|mock-gateway'];
+  assert.ok(healthRecReport, 'route health record should exist after reportDispatchOutcome');
+  assert.equal(healthRecReport.status, 'AVAILABLE');
+  assert.equal(healthRecReport.elapsedMs, 220);
+  assert.equal(healthRecReport.concurrency, 3);
 });

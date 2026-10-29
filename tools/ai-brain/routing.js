@@ -1860,36 +1860,70 @@ function reportDispatchOutcome(args, deps) {
   const stall = stallAssessment(outcome, now);
   const evidenceDir = d.evidenceDir || path.join(__dirname, 'data', 'evidence');
 
-  if (terminal) {
-    evidence.recordOutcome(evidenceDir, candidate, {
-      status: failed ? 'failed' : 'passed',
-      exitCode: failed ? 1 : 0,
-      body: typeof outcome.reason === 'string' ? outcome.reason : null,
-      stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
-      cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
-      httpStatus: Number.isFinite(Number(outcome.httpStatus))
-        ? Number(outcome.httpStatus)
-        : undefined,
-      // The reporter observed when this budget clears. Passing it through is what
-      // keeps "quota exhausted until 01:55" from decaying into a five-minute
-      // cooldown the classifier scraped out of a message.
-      cooldownUntil:
-        failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
-      level: evidence.Level.API,
-      source: 'report-outcome',
-    });
+  if (terminal || stall.stalled) {
+    if (terminal) {
+      evidence.recordOutcome(evidenceDir, candidate, {
+        status: failed ? 'failed' : 'passed',
+        exitCode: failed ? 1 : 0,
+        body: typeof outcome.reason === 'string' ? outcome.reason : null,
+        stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
+        cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
+        httpStatus: Number.isFinite(Number(outcome.httpStatus))
+          ? Number(outcome.httpStatus)
+          : undefined,
+        // The reporter observed when this budget clears. Passing it through is what
+        // keeps "quota exhausted until 01:55" from decaying into a five-minute
+        // cooldown the classifier scraped out of a message.
+        cooldownUntil:
+          failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
+        level: evidence.Level.API,
+        source: 'report-outcome',
+      });
 
-    const quotaStore = require('./quota-store');
-    const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
-    quotaStore.releaseReservation(
-      outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME',
-      outcome.candidateKey,
-      {
-        home: d.home,
-        path: targetPath,
-        now,
-      }
-    );
+      const quotaStore = require('./quota-store');
+      const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
+      quotaStore.releaseReservation(
+        outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME',
+        outcome.candidateKey,
+        {
+          home: d.home,
+          path: targetPath,
+          now,
+        }
+      );
+    }
+
+    try {
+      const routeHealthApi = require('./route-health');
+      const healthFile =
+        d.routeHealthFile ||
+        d['route-health'] ||
+        (d.root
+          ? path.join(d.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
+          : null) ||
+        path.join(__dirname, 'data', 'model-route-health.json');
+      const modelId = candidate.modelId || candidate.model;
+      const routeId = candidate.upstream || candidate.gateway || candidate.accessPath;
+      const isTimeout =
+        stall.stalled ||
+        String(outcome.status).toLowerCase() === 'timeout' ||
+        outcome.timedOut === true ||
+        /timeout|stall|hang/i.test(String(outcome.reason || outcome.errorClass || ''));
+      routeHealthApi.recordExecutionResult(
+        healthFile,
+        modelId,
+        routeId,
+        {
+          status: passed ? 200 : isTimeout ? 408 : Number(outcome.httpStatus) || 500,
+          ok: passed,
+          timedOut: Boolean(isTimeout),
+          reason: typeof outcome.reason === 'string' ? outcome.reason : outcome.errorClass,
+          elapsedMs: Number(outcome.elapsedMs) || undefined,
+          concurrency: Number(outcome.concurrency) || undefined,
+        },
+        { now, persist: d.persistRouteHealth !== false }
+      );
+    } catch (_) {}
   }
 
   const recorded = {

@@ -781,14 +781,39 @@ async function fetchSourceModels(source, options = {}) {
         abortErr.name = 'AbortError';
         throw abortErr;
       }
-      let list = [];
+      let rawList;
       if (Array.isArray(data?.data)) {
-        list = data.data.map((m) => m.id || m.model || m).filter(Boolean);
+        rawList = data.data;
       } else if (Array.isArray(data?.models)) {
-        list = data.models.map((m) => m.id || m.model || m).filter(Boolean);
+        rawList = data.models;
       } else if (Array.isArray(data)) {
-        list = data.map((m) => m.id || m.model || m).filter(Boolean);
+        rawList = data;
+      } else {
+        const shapeErr = new Error(
+          `MALFORMED_MODELS_RESPONSE: source ${source.id} returned invalid payload shape (expected array at data, models, or root)`
+        );
+        shapeErr.source = source.id;
+        throw shapeErr;
       }
+
+      const list = rawList.map((m, idx) => {
+        let id = null;
+        if (typeof m === 'string') {
+          id = m.trim();
+        } else if (m && typeof m === 'object') {
+          if (typeof m.id === 'string') id = m.id.trim();
+          else if (typeof m.model === 'string') id = m.model.trim();
+        }
+        if (!id) {
+          const entryErr = new Error(
+            `MALFORMED_MODELS_RESPONSE: source ${source.id} entry at index ${idx} is not a valid model identifier`
+          );
+          entryErr.source = source.id;
+          throw entryErr;
+        }
+        return id;
+      });
+
       return list;
     })();
 
@@ -808,61 +833,11 @@ async function fetchSourceModels(source, options = {}) {
 }
 
 async function discover9RouterScopes(source, options = {}) {
-  const fetchFn = options.fetch || globalThis.fetch;
-  const apiKey = (options.env || process.env)[source.credential?.env] || '';
-  const endpoint = String(source.endpoint || '').replace(/\/+$/, '');
-  const url = `${endpoint}/models`;
-
-  const headers = {};
-  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-
-  const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
-  const dispatchConfig =
-    registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
-  const timeoutMs = requireConfiguredLimit(
-    options.timeoutMs ?? dispatchConfig.probeTimeoutMs,
-    'probeTimeoutMs'
-  );
-
-  const controller = new AbortController();
-  let timer;
   let modelsList = [];
-
   try {
-    const fetchPromise = (async () => {
-      const res = await fetchFn(url, { method: 'GET', headers, signal: controller.signal });
-      if (res.ok) {
-        let data;
-        if (typeof res.json === 'function') {
-          data = await res.json();
-        } else {
-          const raw = await res.text();
-          data = JSON.parse(raw);
-        }
-        if (controller.signal.aborted) {
-          throw new Error('Request timed out');
-        }
-        if (Array.isArray(data?.data)) {
-          return data.data.map((m) => m.id || m.model || m).filter(Boolean);
-        }
-      }
-      return [];
-    })();
-
-    const timeoutPromise = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        const err = new Error('Request timed out');
-        err.name = 'AbortError';
-        reject(err);
-      }, timeoutMs);
-    });
-
-    modelsList = await Promise.race([fetchPromise, timeoutPromise]);
+    modelsList = await fetchSourceModels(source, options);
   } catch {
-    // Timeout or fetch error falls through to live catalogue fallback
-  } finally {
-    clearTimeout(timer);
+    // Timeout, network failure, or malformed response falls through to live catalogue fallback
   }
 
   const parsePrefixedGroups = (list) => {
@@ -1170,13 +1145,39 @@ function schedulePeriodicQuotaScan(options = {}) {
   const registry = options.registry || sourcesApi.loadSources(options.sourceOpts);
   const dispatchConfig =
     registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry) : {};
-  const intervalMin = requireConfiguredLimit(
-    options.intervalMin ?? dispatchConfig.quotaScanIntervalMin,
-    'quotaScanIntervalMin'
-  );
-  const intervalMs = intervalMin * 60 * 1000;
+  let intervalMin;
+  let intervalMs;
+  if (typeof options.intervalMs === 'number' && options.intervalMs > 0) {
+    intervalMs = options.intervalMs;
+    intervalMin = intervalMs / (60 * 1000);
+  } else {
+    intervalMin = requireConfiguredLimit(
+      options.intervalMin ?? dispatchConfig.quotaScanIntervalMin,
+      'quotaScanIntervalMin'
+    );
+    intervalMs = intervalMin * 60 * 1000;
+  }
 
-  const scanFn = (opts) => scanAllFullRoutes({ ...options, ...opts });
+  const upstreamLimiter = options.upstreamLimiter || {
+    active: defaultSharedActivePerUpstream,
+    waiters: defaultSharedUpstreamWaiters,
+  };
+
+  let inFlight = null;
+  const scanFn = (opts) => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      try {
+        if (typeof options.scanFn === 'function') {
+          return await options.scanFn({ ...options, ...opts, upstreamLimiter });
+        }
+        return await scanAllFullRoutes({ ...options, ...opts, upstreamLimiter });
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
+  };
 
   let initialPromise = null;
   if (options.initialScan !== false) {
@@ -1189,7 +1190,10 @@ function schedulePeriodicQuotaScan(options = {}) {
     })();
   }
 
-  const timer = setInterval(async () => {
+  const setIntervalFn = options.setInterval || setInterval;
+  const clearIntervalFn = options.clearInterval || clearInterval;
+
+  const timer = setIntervalFn(async () => {
     try {
       await scanFn(options);
     } catch (err) {
@@ -1197,13 +1201,14 @@ function schedulePeriodicQuotaScan(options = {}) {
     }
   }, intervalMs);
 
-  if (options.unref && timer.unref) timer.unref();
+  if (options.unref && timer && timer.unref) timer.unref();
   return {
     timer,
     intervalMin,
     intervalMs,
     initialPromise,
-    stop: () => clearInterval(timer),
+    scanNow: (opts) => scanFn(opts),
+    stop: () => clearIntervalFn(timer),
   };
 }
 
@@ -1334,6 +1339,9 @@ async function scanSourceQuotas(src, options = {}) {
   return results.map((r) => r.result);
 }
 
+const defaultSharedActivePerUpstream = new Map();
+const defaultSharedUpstreamWaiters = new Map();
+
 async function scanAllFullRoutes(options = {}) {
   const now = options.now ?? Date.now();
   const quotaState = loadQuotaState(options);
@@ -1379,6 +1387,8 @@ async function scanAllFullRoutes(options = {}) {
   const sources = (registry && registry.sources) || [];
   const allTargets = [];
   const sourceStats = new Map();
+  const failedSources = new Set();
+  const scannedSources = new Set();
 
   for (const src of sources) {
     if (
@@ -1405,11 +1415,46 @@ async function scanAllFullRoutes(options = {}) {
 
     if (src.kind === 'router') {
       let modelsList = [];
+      let discoveryError = null;
       try {
         modelsList = await fetchSourceModels(src, { registry, ...options });
-      } catch {}
+      } catch (err) {
+        discoveryError = err;
+      }
       sourceStats.get(src.id).listed = modelsList.length;
 
+      if (discoveryError || modelsList.length === 0) {
+        failedSources.add(src.id);
+        const failureCode = QUOTA_STATUS_CODES.DISCOVERY_FAILED;
+        const failureEntry = {
+          source: src.id,
+          scope: src.id,
+          upstream: src.id,
+          model: null,
+          code: failureCode,
+          status: discoveryError?.status || 503,
+          reason: sanitizeStatusDescription(
+            discoveryError?.message || 'NO_MODELS_DISCOVERED',
+            'DISCOVERY_FAILED'
+          ),
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+          error: sanitizeStatusDescription(
+            discoveryError?.message || 'NO_MODELS_DISCOVERED',
+            'DISCOVERY_FAILED'
+          ),
+        };
+        quotaState.scopes[src.id] = failureEntry;
+        quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+        for (const key of Object.keys(quotaState.scopes)) {
+          if (key.startsWith(`${src.id}::`)) {
+            quotaState.scopes[key] = failureEntry;
+          }
+        }
+        continue;
+      }
+
+      scannedSources.add(src.id);
       const ownPrefixes = getSourcePrefixes(src);
 
       for (const mId of modelsList) {
@@ -1431,16 +1476,51 @@ async function scanAllFullRoutes(options = {}) {
       }
     } else if (src.kind === 'model-source' || src.endpoint) {
       let modelsList = [];
+      let discoveryError = null;
       if (Array.isArray(src.models) && src.models.length > 0) {
         modelsList = src.models;
       } else {
-        modelsList = await fetchSourceModels(src, { registry, ...options });
+        try {
+          modelsList = await fetchSourceModels(src, { registry, ...options });
+        } catch (err) {
+          discoveryError = err;
+        }
       }
       if (modelsList.length === 0 && src.verify?.model) {
         modelsList = [src.verify.model];
       }
       sourceStats.get(src.id).listed = modelsList.length;
 
+      if (modelsList.length === 0) {
+        failedSources.add(src.id);
+        const failureCode = discoveryError
+          ? QUOTA_STATUS_CODES.DISCOVERY_FAILED
+          : QUOTA_STATUS_CODES.UNSCANNABLE;
+        const failureEntry = {
+          source: src.id,
+          scope: src.id,
+          upstream: src.routerAlias || src.id,
+          model: null,
+          code: failureCode,
+          status:
+            discoveryError?.status || (failureCode === QUOTA_STATUS_CODES.UNSCANNABLE ? 0 : 503),
+          reason: sanitizeStatusDescription(
+            discoveryError?.message || 'NO_MODELS_CONFIGURED',
+            failureCode
+          ),
+          at: new Date(now).toISOString(),
+          retryAfter: null,
+          error: sanitizeStatusDescription(
+            discoveryError?.message || 'NO_MODELS_CONFIGURED',
+            failureCode
+          ),
+        };
+        quotaState.scopes[src.id] = failureEntry;
+        quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+        continue;
+      }
+
+      scannedSources.add(src.id);
       for (const mId of modelsList) {
         allTargets.push({
           source: src.id,
@@ -1455,8 +1535,10 @@ async function scanAllFullRoutes(options = {}) {
     }
   }
 
-  const activePerUpstream = new Map();
-  const upstreamWaiters = new Map();
+  const activePerUpstream =
+    options.upstreamLimiter?.active || options.activePerUpstream || defaultSharedActivePerUpstream;
+  const upstreamWaiters =
+    options.upstreamLimiter?.waiters || options.upstreamWaiters || defaultSharedUpstreamWaiters;
 
   async function acquireUpstream(upstreamKey) {
     const active = activePerUpstream.get(upstreamKey) || 0;
@@ -1482,10 +1564,10 @@ async function scanAllFullRoutes(options = {}) {
   }
 
   const aliveRows = [];
-  const scannedSources = new Set();
+  const scopeResults = new Map();
+  const sourceResults = new Map();
 
   async function processTarget(target) {
-    scannedSources.add(target.source);
     const upstreamKey = `${target.source}::${target.upstream}`;
     await acquireUpstream(upstreamKey);
 
@@ -1531,15 +1613,11 @@ async function scanAllFullRoutes(options = {}) {
     quotaState.scopes[modelKey] = result;
 
     const scopeKey = `${target.source}::${target.scope}`;
-    if (result.code === QUOTA_STATUS_CODES.OK || !quotaState.scopes[scopeKey]) {
-      quotaState.scopes[scopeKey] = result;
-    }
-    if (
-      target.source === target.scope &&
-      (result.code === QUOTA_STATUS_CODES.OK || !quotaState.scopes[target.source])
-    ) {
-      quotaState.scopes[target.source] = result;
-    }
+    if (!scopeResults.has(scopeKey)) scopeResults.set(scopeKey, []);
+    scopeResults.get(scopeKey).push({ target, result });
+
+    if (!sourceResults.has(target.source)) sourceResults.set(target.source, []);
+    sourceResults.get(target.source).push({ target, result });
 
     if (result.code === QUOTA_STATUS_CODES.OK) {
       aliveRows.push({
@@ -1570,9 +1648,46 @@ async function scanAllFullRoutes(options = {}) {
   );
   await Promise.all(workers);
 
+  function aggregateScopeOutcome(items) {
+    if (!items || items.length === 0) return null;
+    const okItem = items.find((it) => it.result.code === QUOTA_STATUS_CODES.OK);
+    if (okItem) return okItem.result;
+
+    const priority = [
+      QUOTA_STATUS_CODES.AUTH,
+      QUOTA_STATUS_CODES.REGION,
+      QUOTA_STATUS_CODES.QUOTA,
+      QUOTA_STATUS_CODES.TIMEOUT,
+      QUOTA_STATUS_CODES.NO_CHANNEL,
+      QUOTA_STATUS_CODES.RATE,
+    ];
+    for (const code of priority) {
+      const match = items.find((it) => it.result.code === code);
+      if (match) return match.result;
+    }
+    return items[0].result;
+  }
+
+  for (const [scopeKey, items] of scopeResults.entries()) {
+    quotaState.scopes[scopeKey] = aggregateScopeOutcome(items);
+  }
+
+  for (const [srcId, items] of sourceResults.entries()) {
+    const agg = aggregateScopeOutcome(items);
+    quotaState.scopes[srcId] = agg;
+    if (
+      quotaState.scopes[`${srcId}::${srcId}`] === undefined ||
+      !items.some((it) => it.target.scope === srcId)
+    ) {
+      quotaState.scopes[`${srcId}::${srcId}`] = agg;
+    }
+  }
+
   quotaState.sourceFreshness = quotaState.sourceFreshness || {};
   for (const srcId of scannedSources) {
-    quotaState.sourceFreshness[srcId] = new Date(now).toISOString();
+    if (!failedSources.has(srcId)) {
+      quotaState.sourceFreshness[srcId] = new Date(now).toISOString();
+    }
   }
   quotaState.updatedAt = new Date(now).toISOString();
 
@@ -1657,6 +1772,7 @@ async function scanAllFullRoutes(options = {}) {
     sourceStats: Array.from(sourceStats.values()),
     rankedAlive,
     scopes: quotaState.scopes,
+    failedSources: Array.from(failedSources),
   };
 }
 
