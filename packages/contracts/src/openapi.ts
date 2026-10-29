@@ -519,6 +519,110 @@ export interface paths {
     patch: operations['updateRole'];
     trace?: never;
   };
+  '/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List merchant users (API-USR-LIST, FEAT-USR-02, FEAT-RBAC-02) */
+    get: operations['listUsers'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get user details (API-USR-GET, FEAT-USR-02) */
+    get: operations['getUser'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update user profile and scopes (API-USR-UPDATE, FEAT-USR-02) */
+    patch: operations['updateUser'];
+    trace?: never;
+  };
+  '/users/{id}/scopes': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get user scope assignments (API-USR-GET-SCOPES, FEAT-RBAC-02) */
+    get: operations['getUserScopes'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update user scope assignments (API-USR-UPDATE-SCOPES, FEAT-RBAC-02) */
+    patch: operations['updateUserScopes'];
+    trace?: never;
+  };
+  '/users/{id}/suspend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Suspend user account (API-USR-SUSPEND, FEAT-USR-02) */
+    post: operations['suspendUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/activate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reinstate suspended user (API-USR-ACTIVATE, FEAT-USR-02) */
+    post: operations['activateUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/deactivate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Deactivate user account (API-USR-DEACTIVATE, FEAT-USR-02) */
+    post: operations['deactivateUser'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/users/check-scope': {
     parameters: {
       query?: never;
@@ -632,13 +736,33 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
+    /** Get current authenticated user profile and preferences (FEAT-PRO-01) */
     get: operations['getMe'];
     put?: never;
     post?: never;
     delete?: never;
     options?: never;
     head?: never;
-    patch?: never;
+    /** Update current authenticated user profile (FEAT-PRO-01) */
+    patch: operations['updateMe'];
+    trace?: never;
+  };
+  '/me/preferences': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get current user personal preferences (FEAT-PRO-01) */
+    get: operations['getMyPreferences'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update current user personal preferences (FEAT-PRO-01) */
+    patch: operations['updateMyPreferences'];
     trace?: never;
   };
   '/sessions': {
@@ -717,6 +841,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
+    /** List authorized shops (FEAT-ORG-01) */
     get: operations['listShops'];
     put?: never;
     post: operations['createShop'];
@@ -724,6 +849,54 @@ export interface paths {
     options?: never;
     head?: never;
     patch?: never;
+    trace?: never;
+  };
+  '/shops/profile': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get current shop profile (FEAT-ORG-01)
+     * @description Returns the legal, billing and operating defaults of the caller's authorized shop.
+     */
+    get: operations['getShopProfile'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update current shop profile (FEAT-ORG-01)
+     * @description Updates legal, billing and operating defaults. Requires iam:shop_config capability.
+     */
+    patch: operations['updateShopProfile'];
+    trace?: never;
+  };
+  '/shops/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get shop profile by ID (FEAT-ORG-01)
+     * @description Returns the shop profile by ID with strict server-side tenant scoping.
+     */
+    get: operations['getShopById'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Update shop profile by ID (FEAT-ORG-01)
+     * @description Updates shop profile by ID with strict server-side tenant scoping and permission enforcement.
+     */
+    patch: operations['updateShopById'];
     trace?: never;
   };
   '/admin/shops': {
@@ -1198,6 +1371,79 @@ export interface components {
       /** @default Asia/Ho_Chi_Minh */
       timezone: string;
     };
+    ShopProfile: {
+      /** Format: uuid */
+      id: string;
+      name: string;
+      code: string;
+      status: string;
+      legal_name?: string | null;
+      tax_code?: string | null;
+      contact_email?: string | null;
+      contact_phone?: string | null;
+      legal_address?: string | null;
+      billing_email?: string | null;
+      billing_address?: string | null;
+      bank_name?: string | null;
+      bank_account_number?: string | null;
+      bank_account_name?: string | null;
+      bank_branch?: string | null;
+      /** @default Asia/Ho_Chi_Minh */
+      timezone: string;
+      /** @default VND */
+      currency: string;
+      /**
+       * @default SHOP
+       * @enum {string}
+       */
+      default_fee_payer: 'SHOP' | 'RECIPIENT';
+      /**
+       * @default g
+       * @enum {string}
+       */
+      default_weight_unit: 'g' | 'kg';
+      /** @default false */
+      auto_routing_enabled: boolean;
+      operating_notes?: string | null;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+    };
+    UpdateShopProfileInput: {
+      name?: string;
+      legal_name?: string | null;
+      tax_code?: string | null;
+      contact_email?: string | null;
+      contact_phone?: string | null;
+      legal_address?: string | null;
+      billing_email?: string | null;
+      billing_address?: string | null;
+      bank_name?: string | null;
+      bank_account_number?: string | null;
+      bank_account_name?: string | null;
+      bank_branch?: string | null;
+      timezone?: string;
+      currency?: string;
+      /** @enum {string} */
+      default_fee_payer?: 'SHOP' | 'RECIPIENT';
+      /** @enum {string} */
+      default_weight_unit?: 'g' | 'kg';
+      auto_routing_enabled?: boolean;
+      operating_notes?: string | null;
+    };
+    ShopProfileResponse: {
+      success: boolean;
+      data: components['schemas']['ShopProfile'];
+      meta: components['schemas']['Meta'];
+    };
+    ListShopsResponse: {
+      success: boolean;
+      data: {
+        shops: components['schemas']['ShopProfile'][];
+      };
+      meta: components['schemas']['Meta'];
+    };
     CarrierAccountInput: {
       /** @enum {string} */
       carrier_code: 'GHN' | 'GHTK' | 'VIETTEL_POST' | 'JT_EXPRESS';
@@ -1518,6 +1764,7 @@ export interface components {
       role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
       store_scopes?: string[];
       warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
     };
     InvitationItem: {
       /** Format: uuid */
@@ -1530,6 +1777,7 @@ export interface components {
       role: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT';
       store_scopes?: string[];
       warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
       status: components['schemas']['InvitationStatus'];
       /** Format: uuid */
       invited_by_user_id?: string | null;
@@ -1601,9 +1849,55 @@ export interface components {
       };
       meta: components['schemas']['Meta'];
     };
+    UserListItem: {
+      /** Format: uuid */
+      id: string;
+      email?: string | null;
+      phone?: string | null;
+      full_name: string;
+      role: string;
+      /** Format: uuid */
+      custom_role_id?: string | null;
+      custom_role?: {
+        /** Format: uuid */
+        id?: string;
+        name?: string;
+      } | null;
+      store_scopes: string[];
+      warehouse_scopes: string[];
+      carrier_account_scopes: string[];
+      status: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      last_active_at?: string | null;
+    };
+    UserListResponse: {
+      data: components['schemas']['UserListItem'][];
+      meta: components['schemas']['Meta'];
+    };
+    UserScopesResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        role: string;
+        /** Format: uuid */
+        custom_role_id?: string | null;
+        store_scopes: string[];
+        warehouse_scopes: string[];
+        carrier_account_scopes: string[];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    UpdateUserScopesRequest: {
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
+    };
     CheckScopeRequest: {
       store_id?: string;
       warehouse_id?: string;
+      carrier_account_id?: string;
     };
     CheckScopeResponse: {
       data: {
@@ -1613,6 +1907,190 @@ export interface components {
         role: string;
         store_scopes: string[];
         warehouse_scopes: string[];
+        carrier_account_scopes: string[];
+      };
+      meta: components['schemas']['Meta'];
+    };
+    NotificationChannels: {
+      email?: boolean;
+      in_app?: boolean;
+      push?: boolean;
+    };
+    NotificationSubscriptions: {
+      delivery_fail?: boolean;
+      rate_discrepancy?: boolean;
+      cod_overdue?: boolean;
+      claim_deadline_warning?: boolean;
+      abnormal_return?: boolean;
+      security_alerts?: boolean;
+      create_unknown?: boolean;
+    };
+    NotificationPreferences: {
+      channels?: components['schemas']['NotificationChannels'];
+      /** @example 15 */
+      digest_window_minutes?: number;
+      subscriptions?: components['schemas']['NotificationSubscriptions'];
+    };
+    UserProfile: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id?: string | null;
+      /** Format: email */
+      email?: string | null;
+      phone?: string | null;
+      full_name: string;
+      role: string;
+      status?: string;
+      avatar_url?: string | null;
+      /** @example vi */
+      language: string;
+      /** @example Asia/Ho_Chi_Minh */
+      timezone: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+      /** Format: uuid */
+      custom_role_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+      merchant?: {
+        /** Format: uuid */
+        id?: string;
+        name?: string;
+      } | null;
+      /** Format: date-time */
+      created_at?: string;
+    };
+    UserPreferences: {
+      /** @example vi */
+      language: string;
+      /** @example Asia/Ho_Chi_Minh */
+      timezone: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+    };
+    GetMeResponse: {
+      data: components['schemas']['UserProfile'];
+      meta?: components['schemas']['Meta'];
+    };
+    UpdateMeRequest: {
+      full_name?: string;
+      phone?: string | null;
+      avatar_url?: string | null;
+      /** @enum {string} */
+      language?: 'vi' | 'en';
+      timezone?: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+    };
+    UpdateMeResponse: {
+      data: components['schemas']['UserProfile'];
+      meta?: components['schemas']['Meta'];
+    };
+    GetPreferencesResponse: {
+      data: components['schemas']['UserPreferences'];
+      meta?: components['schemas']['Meta'];
+    };
+    UpdatePreferencesRequest: {
+      /** @enum {string} */
+      language?: 'vi' | 'en';
+      timezone?: string;
+      /** Format: uuid */
+      default_warehouse_id?: string | null;
+      notification_preferences?: components['schemas']['NotificationPreferences'];
+    };
+    UpdatePreferencesResponse: {
+      data: components['schemas']['UserPreferences'];
+      meta?: components['schemas']['Meta'];
+    };
+    ListUsersResponse: {
+      data: components['schemas']['UserListItem'][];
+      meta: {
+        total: number;
+        page: number;
+        limit: number;
+        total_pages: number;
+        correlation_id: string;
+      };
+    };
+    UserDetail: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      full_name: string;
+      email?: string | null;
+      phone?: string | null;
+      role: string;
+      /** Format: uuid */
+      custom_role_id?: string | null;
+      custom_role?: {
+        /** Format: uuid */
+        id?: string;
+        name?: string;
+      } | null;
+      status: string;
+      store_scopes: string[];
+      warehouse_scopes: string[];
+      carrier_account_scopes: string[];
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      updated_at: string;
+      /** Format: date-time */
+      last_active_at?: string | null;
+    };
+    UserDetailResponse: {
+      data: components['schemas']['UserDetail'];
+      meta: components['schemas']['Meta'];
+    };
+    UpdateUserRequest: {
+      full_name?: string;
+      role?: string;
+      /** Format: uuid */
+      custom_role_id?: string | null;
+      store_scopes?: string[];
+      warehouse_scopes?: string[];
+      carrier_account_scopes?: string[];
+    };
+    SuspendUserRequest: {
+      reason: string;
+    };
+    SuspendUserResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: string;
+        revoked_sessions_count: number;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    ActivateUserRequest: {
+      reason?: string;
+    };
+    ActivateUserResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: string;
+        message: string;
+      };
+      meta: components['schemas']['Meta'];
+    };
+    DeactivateUserRequest: {
+      reason?: string;
+    };
+    DeactivateUserResponse: {
+      data: {
+        /** Format: uuid */
+        id: string;
+        status: string;
+        revoked_sessions_count: number;
+        message: string;
       };
       meta: components['schemas']['Meta'];
     };
@@ -2282,6 +2760,232 @@ export interface operations {
       404: components['responses']['Error'];
     };
   };
+  listUsers: {
+    parameters: {
+      query?: {
+        page?: number;
+        limit?: number;
+        role?: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
+        status?: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'PENDING_VERIFICATION' | 'INVITED';
+        search?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of tenant users */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListUsersResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  getUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description User profile and scopes */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserDetailResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  updateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated user profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserDetailResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  getUserScopes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description User scope assignments */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserScopesResponse'];
+        };
+      };
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateUserScopes: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateUserScopesRequest'];
+      };
+    };
+    responses: {
+      /** @description Updated user scope assignments */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UserScopesResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  suspendUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['SuspendUserRequest'];
+      };
+    };
+    responses: {
+      /** @description User suspended and sessions revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SuspendUserResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  activateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ActivateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description User reinstated to active status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ActivateUserResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  deactivateUser: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['DeactivateUserRequest'];
+      };
+    };
+    responses: {
+      /** @description User deactivated and sessions revoked */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeactivateUserResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['Error'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
   checkUserScope: {
     parameters: {
       query?: never;
@@ -2479,13 +3183,97 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Current user and memberships */
+      /** @description Current user profile, merchant metadata, and personal preferences */
       200: {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          'application/json': components['schemas']['GetMeResponse'];
+        };
       };
+      401: components['responses']['SessionInvalid'];
+    };
+  };
+  updateMe: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateMeRequest'];
+      };
+    };
+    responses: {
+      /** @description Profile updated successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpdateMeResponse'];
+        };
+      };
+      /** @description Validation error or invalid phone/timezone format */
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      /** @description Privilege escalation denied or warehouse scope unauthorized */
+      403: components['responses']['Error'];
+      /** @description Phone number already exists */
+      409: components['responses']['Error'];
+    };
+  };
+  getMyPreferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current user preferences */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['GetPreferencesResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+    };
+  };
+  updateMyPreferences: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdatePreferencesRequest'];
+      };
+    };
+    responses: {
+      /** @description Preferences updated successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['UpdatePreferencesResponse'];
+        };
+      };
+      /** @description Validation error or critical notification cannot be disabled */
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      /** @description Warehouse scope unauthorized */
+      403: components['responses']['Error'];
     };
   };
   listSessions: {
@@ -2605,8 +3393,12 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          'application/json': components['schemas']['ListShopsResponse'];
+        };
       };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
     };
   };
   createShop: {
@@ -2630,6 +3422,110 @@ export interface operations {
         content?: never;
       };
       400: components['responses']['Error'];
+    };
+  };
+  getShopProfile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Current shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  updateShopProfile: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateShopProfileInput'];
+      };
+    };
+    responses: {
+      /** @description Updated shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  getShopById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  updateShopById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateShopProfileInput'];
+      };
+    };
+    responses: {
+      /** @description Updated shop profile */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ShopProfileResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
     };
   };
   listAdminShops: {
