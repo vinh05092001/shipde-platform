@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
+import { BranchesService } from './branches.service';
 
 async function runBranchesSupertestSuite() {
   console.log('================================================================');
@@ -78,15 +79,14 @@ async function runBranchesSupertestSuite() {
   await app.get(RbacService).ensurePlatformSeed();
 
   const testSuffix = Date.now().toString().slice(-6);
+  const merchantIdA = randomUUID();
+  const merchantIdB = randomUUID();
 
   try {
     const tokenSecret = 'test-token-secret-for-branches-supertest-32-chars';
     process.env.AUTH_TOKEN_SECRET = tokenSecret;
 
     // 1. Fixture: Merchant A & Merchant B
-    const merchantIdA = randomUUID();
-    const merchantIdB = randomUUID();
-
     await prisma.merchant.createMany({
       data: [
         {
@@ -734,6 +734,106 @@ async function runBranchesSupertestSuite() {
       );
     }
     console.log('  PASS: AC-ORG-02-15 verified audit log masking.');
+
+    // Real overlapping transactions: the privileged writer holds the tenant lock
+    // and changes the default while the scoped request is entering its transaction.
+    // The scoped request must re-read the committed default and leave it untouched.
+    for (const operation of ['create', 'update'] as const) {
+      const prefix = `RACE-${operation.toUpperCase()}`;
+      const [current, target, outside] = await Promise.all(
+        ['CURRENT', 'TARGET', 'OUTSIDE'].map((suffix) =>
+          prisma.branch.create({
+            data: { merchant_id: merchantIdA, code: `${prefix}-${suffix}`, name: suffix },
+          })
+        )
+      );
+      await prisma.branch.updateMany({
+        where: { merchant_id: merchantIdA },
+        data: { is_default: false },
+      });
+      await prisma.branch.update({ where: { id: current.id }, data: { is_default: true } });
+      const { userId } = await setupUserSession(
+        merchantIdA,
+        RoleEnum.OPS_CSKH,
+        `race_${operation}`,
+        [current.code, target.code, `${prefix}-NEW`]
+      );
+      const actor = { userId, merchantId: merchantIdA, role: RoleEnum.OPS_CSKH };
+      let entered!: () => void;
+      const transactionEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const db = new Proxy(prisma, {
+        get(client, key) {
+          if (key === '$transaction') {
+            return (cb: any) =>
+              client.$transaction(async (tx) => {
+                entered();
+                return cb(tx);
+              });
+          }
+          return Reflect.get(client, key);
+        },
+      });
+      const service = new BranchesService(db, app.get(RbacService));
+      const correlationId = `race-${operation}-${testSuffix}`;
+      let result!: Promise<unknown>;
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantIdA}::uuid FOR NO KEY UPDATE`;
+        await tx.branch.update({ where: { id: current.id }, data: { is_default: false } });
+        await tx.branch.update({ where: { id: outside.id }, data: { is_default: true } });
+        const pending =
+          operation === 'create'
+            ? service.createBranch(
+                merchantIdA,
+                actor,
+                { name: 'Concurrent create', code: `${prefix}-NEW`, is_default: true },
+                '',
+                correlationId
+              )
+            : service.updateBranch(
+                target.id,
+                merchantIdA,
+                actor,
+                { is_default: true },
+                '',
+                correlationId
+              );
+        result = assert.rejects(
+          pending,
+          (err: any) => err.getStatus() === 403 && err.code === 'FORBIDDEN'
+        );
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            transactionEntered,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error('Scoped transaction did not start')), 3000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+      await result;
+      const defaults = await prisma.branch.findMany({
+        where: { merchant_id: merchantIdA, is_default: true },
+      });
+      assert.deepStrictEqual(
+        defaults.map((branch) => branch.id),
+        [outside.id]
+      );
+      assert.strictEqual(
+        await prisma.branch.count({ where: { merchant_id: merchantIdA, code: `${prefix}-NEW` } }),
+        0
+      );
+      assert.strictEqual(
+        await prisma.auditLog.count({
+          where: { merchant_id: merchantIdA, reason: `correlation_id:${correlationId}` },
+        }),
+        0
+      );
+    }
 
     console.log('================================================================');
     console.log('🎉 ALL FEAT-ORG-02 SUPERTEST CHECKS PASSED (AC-01..16)!');

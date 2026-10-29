@@ -63,7 +63,7 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
    - Branch `is_default`: boolean, default `false`. Setting `true` resets any other branch in the merchant to `false` in a transaction.
 9. RBAC & Access control:
    - Mutation endpoints (`POST`, `PATCH`, `activate`, `deactivate`, `DELETE`) require `iam:shop_config` capability via `PermissionsGuard` and `@RequirePermissions('iam:shop_config')`.
-   - Read endpoints (`GET`) permit `OWNER`, `OPS_CSKH`, `FINANCE`, or any authenticated member holding `iam:shop_config`.
+   - Read endpoints (`GET`) require `iam:shop_view` or `iam:shop_config`, resolved server-side from the permission registry. The registry grants `iam:shop_view` to the existing Owner, Ops and Finance system roles to preserve the approved view behavior. Role codes or names never grant read access independently; custom roles require an explicit capability grant.
    - Branch reporting/scope enforcement: Team members with restricted `store_scopes` are filtered to only their assigned branches in list responses and blocked with 403 `FORBIDDEN` when accessing branches outside their scope.
 10. Immutable audit logging:
     - Every mutation writes to `audit_logs` capturing `merchant_id`, `user_id`, `actor`, `action`, `entity_type: 'branch'`, `entity_id`, before/after diffs with phone numbers masked, client IP hash, and correlation ID.
@@ -90,6 +90,7 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 - `BR-BRANCH-01 — Tenant Scoping`: All branch operations are strictly isolated to the caller's authenticated `merchant_id`. Cross-tenant requests return 403 `FORBIDDEN` or 404 `BRANCH_NOT_FOUND`.
 - `BR-BRANCH-02 — Unique Branch Code`: Branch `code` must be unique within each merchant tenant (case-insensitive). Duplicate code returns 409 `BRANCH_CODE_EXISTS`.
 - `BR-BRANCH-03 — Default Branch Invariant`: At most one branch per merchant can have `is_default = true`. When a branch is set to `is_default = true`, all other branches in that merchant are atomically updated to `is_default = false`.
+- Concurrent create/update requests lock the merchant row before reading the branch count, target branch or affected defaults. Scope checks and default mutations execute inside that same transaction, so a concurrent default change cannot introduce an unauthorized affected branch.
 - `BR-BRANCH-04 — Default Branch Protection`: A default branch cannot be deactivated or deleted. Attempting to deactivate a default branch returns 400 `CANNOT_DEACTIVATE_DEFAULT_BRANCH`.
 - `BR-BRANCH-05 — User Store Scoping`: Users with non-wildcard `store_scopes` (e.g. `['HCM-Q3']`) can only view and interact with branches whose ID or code is in their `store_scopes`. Attempting to access an unassigned branch returns 403 `FORBIDDEN`.
 - `BR-BRANCH-06 — RBAC Authority`: Branch mutations require `iam:shop_config`. Users lacking this capability are rejected with 403 `FORBIDDEN`.

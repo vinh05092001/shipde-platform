@@ -42,6 +42,25 @@ export class BranchesService {
     return createHash('sha256').update(ip).digest('hex').substring(0, 16);
   }
 
+  private async lockMerchantBranches(
+    tx: Prisma.TransactionClient,
+    merchantId: string
+  ): Promise<void> {
+    // A stable tenant row also serializes first-branch creation, where no branch
+    // exists to lock yet. Every create/update must acquire it before reading defaults.
+    const merchants = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE
+    `;
+    if (merchants.length === 0) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false
+      );
+    }
+  }
+
   private formatBranch(branch: any): FormattedBranch {
     return {
       id: branch.id,
@@ -344,39 +363,41 @@ export class BranchesService {
       }
     }
 
-    // Check if this is the first branch; if so, make it default automatically
-    const existingCount = await this.prisma.branch.count({
-      where: { merchant_id: merchantId },
-    });
-
-    const isDefault = existingCount === 0 ? true : Boolean(dto.is_default);
-
-    // If making this branch default when other branches exist, any existing default
-    // branch will have its default status unset. A scoped actor must not modify an
-    // out-of-scope default branch. Authorize every affected branch before the transaction.
-    if (isDefault && existingCount > 0) {
-      const existingDefaults = await this.prisma.branch.findMany({
-        where: {
-          merchant_id: merchantId,
-          is_default: true,
-        },
-      });
-      for (const defBranch of existingDefaults) {
-        const canModify = await this.checkActorBranchScope(actor, defBranch);
-        if (!canModify) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            'Người dùng không có quyền thay đổi chi nhánh mặc định ngoài phạm vi được phân quyền',
-            false,
-            'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
-          );
-        }
-      }
-    }
-
     try {
       const created = await this.prisma.$transaction(async (tx) => {
+        await this.lockMerchantBranches(tx, merchantId);
+
+        // Count and authorize affected defaults only after the tenant lock is held.
+        const existingCount = await tx.branch.count({
+          where: { merchant_id: merchantId },
+        });
+
+        const isDefault = existingCount === 0 ? true : Boolean(dto.is_default);
+
+        // If making this branch default when other branches exist, any existing default
+        // branch will have its default status unset. A scoped actor must not modify an
+        // out-of-scope default branch. Keep authorization and mutation under the same lock.
+        if (isDefault && existingCount > 0) {
+          const existingDefaults = await tx.branch.findMany({
+            where: {
+              merchant_id: merchantId,
+              is_default: true,
+            },
+          });
+          for (const defBranch of existingDefaults) {
+            const canModify = await this.checkActorBranchScope(actor, defBranch);
+            if (!canModify) {
+              throw new CanonicalApiException(
+                HttpStatus.FORBIDDEN,
+                'FORBIDDEN',
+                'Người dùng không có quyền thay đổi chi nhánh mặc định ngoài phạm vi được phân quyền',
+                false,
+                'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+              );
+            }
+          }
+        }
+
         if (isDefault && existingCount > 0) {
           await tx.branch.updateMany({
             where: {
@@ -494,114 +515,117 @@ export class BranchesService {
       );
     }
 
-    const existing = await this.prisma.branch.findFirst({
-      where: {
-        id: branchId,
-        merchant_id: merchantId,
-      },
-    });
-
-    if (!existing) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'BRANCH_NOT_FOUND',
-        'Không tìm thấy thông tin chi nhánh',
-        false,
-        'Chi nhánh không tồn tại hoặc đã bị xóa'
-      );
-    }
-
-    const hasScope = await this.checkActorBranchScope(actor, existing);
-    if (!hasScope) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Người dùng không có quyền chỉnh sửa chi nhánh được yêu cầu',
-        false
-      );
-    }
-
-    // Code uniqueness check if code is being updated
     let normalizedCode: string | undefined;
-    if (dto.code !== undefined) {
-      normalizedCode = dto.code.trim().toUpperCase();
-      if (normalizedCode !== existing.code) {
-        const duplicate = await this.prisma.branch.findFirst({
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        await this.lockMerchantBranches(tx, merchantId);
+
+        const existing = await tx.branch.findFirst({
           where: {
+            id: branchId,
             merchant_id: merchantId,
-            code: normalizedCode,
-            id: { not: branchId },
           },
         });
 
-        if (duplicate) {
+        if (!existing) {
           throw new CanonicalApiException(
-            HttpStatus.CONFLICT,
-            'BRANCH_CODE_EXISTS',
-            `Mã chi nhánh "${normalizedCode}" đã tồn tại trong cửa hàng`,
-            false
+            HttpStatus.NOT_FOUND,
+            'BRANCH_NOT_FOUND',
+            'Không tìm thấy thông tin chi nhánh',
+            false,
+            'Chi nhánh không tồn tại hoặc đã bị xóa'
           );
         }
-      }
-    }
 
-    // Default branch invariant checks (BR-BRANCH-04)
-    if (existing.is_default && dto.status === 'INACTIVE') {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
-        'Không thể vô hiệu hóa chi nhánh mặc định',
-        false,
-        'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi vô hiệu hóa chi nhánh này'
-      );
-    }
-
-    if (existing.is_default && dto.is_default === false) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'CANNOT_REMOVE_DEFAULT_STATUS',
-        'Không thể hủy trạng thái mặc định của chi nhánh trực tiếp',
-        false,
-        'Vui lòng chỉ định một chi nhánh khác làm mặc định'
-      );
-    }
-
-    // If setting is_default to true on a branch that is not currently default,
-    // any existing default branch will have its default status unset.
-    // Authorize every affected default branch before the transaction.
-    if (dto.is_default === true && !existing.is_default) {
-      const existingDefaults = await this.prisma.branch.findMany({
-        where: {
-          merchant_id: merchantId,
-          is_default: true,
-          id: { not: branchId },
-        },
-      });
-      for (const defBranch of existingDefaults) {
-        const canModify = await this.checkActorBranchScope(actor, defBranch);
-        if (!canModify) {
+        const hasScope = await this.checkActorBranchScope(actor, existing);
+        if (!hasScope) {
           throw new CanonicalApiException(
             HttpStatus.FORBIDDEN,
             'FORBIDDEN',
-            'Người dùng không có quyền thay đổi chi nhánh mặc định ngoài phạm vi được phân quyền',
-            false,
-            'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+            'Người dùng không có quyền chỉnh sửa chi nhánh được yêu cầu',
+            false
           );
         }
-      }
-    }
 
-    const dataToUpdate: any = {};
-    if (dto.name !== undefined) dataToUpdate.name = dto.name.trim();
-    if (normalizedCode !== undefined) dataToUpdate.code = normalizedCode;
-    if (dto.address !== undefined) dataToUpdate.address = dto.address ? dto.address.trim() : null;
-    if (dto.phone !== undefined)
-      dataToUpdate.phone = dto.phone ? dto.phone.trim().replace(/[\s.-]/g, '') : null;
-    if (dto.is_default !== undefined) dataToUpdate.is_default = dto.is_default;
-    if (dto.status !== undefined) dataToUpdate.status = dto.status;
+        // Code uniqueness check if code is being updated
+        if (dto.code !== undefined) {
+          normalizedCode = dto.code.trim().toUpperCase();
+          if (normalizedCode !== existing.code) {
+            const duplicate = await tx.branch.findFirst({
+              where: {
+                merchant_id: merchantId,
+                code: normalizedCode,
+                id: { not: branchId },
+              },
+            });
 
-    try {
-      const updated = await this.prisma.$transaction(async (tx) => {
+            if (duplicate) {
+              throw new CanonicalApiException(
+                HttpStatus.CONFLICT,
+                'BRANCH_CODE_EXISTS',
+                `Mã chi nhánh "${normalizedCode}" đã tồn tại trong cửa hàng`,
+                false
+              );
+            }
+          }
+        }
+
+        // Default branch invariant checks (BR-BRANCH-04)
+        if (existing.is_default && dto.status === 'INACTIVE') {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+            'Không thể vô hiệu hóa chi nhánh mặc định',
+            false,
+            'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi vô hiệu hóa chi nhánh này'
+          );
+        }
+
+        if (existing.is_default && dto.is_default === false) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'CANNOT_REMOVE_DEFAULT_STATUS',
+            'Không thể hủy trạng thái mặc định của chi nhánh trực tiếp',
+            false,
+            'Vui lòng chỉ định một chi nhánh khác làm mặc định'
+          );
+        }
+
+        // If setting is_default to true,
+        // any existing default branch will have its default status unset.
+        // Authorize every affected default branch while holding the tenant lock.
+        if (dto.is_default === true) {
+          const existingDefaults = await tx.branch.findMany({
+            where: {
+              merchant_id: merchantId,
+              is_default: true,
+              id: { not: branchId },
+            },
+          });
+          for (const defBranch of existingDefaults) {
+            const canModify = await this.checkActorBranchScope(actor, defBranch);
+            if (!canModify) {
+              throw new CanonicalApiException(
+                HttpStatus.FORBIDDEN,
+                'FORBIDDEN',
+                'Người dùng không có quyền thay đổi chi nhánh mặc định ngoài phạm vi được phân quyền',
+                false,
+                'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+              );
+            }
+          }
+        }
+
+        const dataToUpdate: any = {};
+        if (dto.name !== undefined) dataToUpdate.name = dto.name.trim();
+        if (normalizedCode !== undefined) dataToUpdate.code = normalizedCode;
+        if (dto.address !== undefined)
+          dataToUpdate.address = dto.address ? dto.address.trim() : null;
+        if (dto.phone !== undefined)
+          dataToUpdate.phone = dto.phone ? dto.phone.trim().replace(/[\s.-]/g, '') : null;
+        if (dto.is_default !== undefined) dataToUpdate.is_default = dto.is_default;
+        if (dto.status !== undefined) dataToUpdate.status = dto.status;
+
         if (dto.is_default === true) {
           await tx.branch.updateMany({
             where: {
@@ -614,7 +638,7 @@ export class BranchesService {
         }
 
         const result = await tx.branch.update({
-          where: { id: branchId },
+          where: { id: branchId, merchant_id: merchantId },
           data: dataToUpdate,
         });
 

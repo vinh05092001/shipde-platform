@@ -25,7 +25,6 @@ import type { ActorContext } from '../rbac/rbac.dto';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 import { CanonicalApiException } from '../auth/auth.service';
-import { PrismaService } from '../prisma/prisma.service';
 
 @Controller(['api/v1/branches', 'branches'])
 @UseGuards(RbacSeedGuard, SessionGuard, PermissionsGuard)
@@ -33,8 +32,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class BranchesController {
   constructor(
     @Inject(BranchesService) private readonly branchesService: BranchesService,
-    @Inject(RbacService) private readonly rbacService: RbacService,
-    @Inject(PrismaService) private readonly prisma: PrismaService
+    @Inject(RbacService) private readonly rbacService: RbacService
   ) {}
 
   private async resolveActor(req: any): Promise<ActorContext> {
@@ -62,8 +60,8 @@ export class BranchesController {
   }
 
   /**
-   * FEAT-ORG-02 §9: Read endpoints permit OWNER, OPS_CSKH, FINANCE, or any
-   * authenticated member holding iam:shop_config. Otherwise fail closed with 403.
+   * Resolve view and configuration capabilities through the authoritative RBAC
+   * registry. Role codes and display names never grant branch access directly.
    */
   private async assertCanViewBranches(actor: ActorContext): Promise<void> {
     const hasPerm = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
@@ -71,18 +69,7 @@ export class BranchesController {
       return;
     }
 
-    const allowedRoles: readonly string[] = ['OWNER', 'OPS_CSKH', 'FINANCE'];
-    let roleCode: string | null | undefined = actor.role;
-    if (actor.customRoleId) {
-      const customRole = await this.prisma.role.findUnique({
-        where: { id: actor.customRoleId },
-        select: { code: true },
-      });
-      // Custom role takes precedence over enum role. Authorize strictly from authoritative
-      // role code; arbitrary display names must never grant access.
-      roleCode = customRole?.code ?? null;
-    }
-    if (!roleCode || !allowedRoles.includes(roleCode)) {
+    if (!(await this.rbacService.actorHasPermissions(actor, ['iam:shop_view']))) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
