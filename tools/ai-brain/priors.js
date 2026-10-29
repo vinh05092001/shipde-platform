@@ -504,6 +504,160 @@ function matchModelPrior(modelId, ranking, options) {
   };
 }
 
+function getNormalizationMethod(config) {
+  const cfg = config || defaultDescriptor;
+  return (
+    (cfg && cfg.normalization && cfg.normalization.method) ||
+    (cfg && cfg.normalizationMethod) ||
+    (typeof cfg?.normalization === 'string' ? cfg.normalization : 'percentile')
+  );
+}
+
+function normalizeScore(score, allScores, method) {
+  if (!Number.isFinite(score)) return null;
+  if (!Array.isArray(allScores) || allScores.length === 0) return score;
+  const m = (method || 'percentile').toLowerCase();
+  if (m === 'none' || m === 'raw') {
+    return score;
+  }
+  if (m === 'min-max') {
+    const min = Math.min(...allScores);
+    const max = Math.max(...allScores);
+    if (max === min) return 100;
+    return ((score - min) / (max - min)) * 100;
+  }
+  // 'percentile': percentile within source distribution (percentage of observed scores <= score)
+  const n = allScores.length;
+  if (n <= 1) return 100;
+  const countLe = allScores.filter((s) => s <= score).length;
+  return (countLe / n) * 100;
+}
+
+function benchmarkTimestamp(b) {
+  if (b && b.source && typeof b.source.retrievedAt === 'string') {
+    const ts = Date.parse(b.source.retrievedAt);
+    if (Number.isFinite(ts)) return ts;
+  }
+  return 0;
+}
+
+function dedupeBenchmarks(benchmarks) {
+  const byName = new Map();
+  for (const b of benchmarks || []) {
+    if (!b || typeof b !== 'object' || typeof b.name !== 'string') continue;
+    const existing = byName.get(b.name);
+    if (!existing) {
+      byName.set(b.name, b);
+    } else {
+      const tsExisting = benchmarkTimestamp(existing);
+      const tsNew = benchmarkTimestamp(b);
+      // Replace if new is newer or equal (latest value per source, deterministic)
+      if (tsNew >= tsExisting) {
+        byName.set(b.name, b);
+      }
+    }
+  }
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getBenchmarkStreamKey(b) {
+  if (!b) return '';
+  const sourceId = (b.source && (b.source.id || b.source.url)) || '';
+  const name = b.name || 'aggregate';
+  return sourceId ? `${sourceId}::${name}` : name;
+}
+
+function applyNormalizationAndTiers(rows, config, now) {
+  const method = getNormalizationMethod(config);
+
+  // 1. Deduplicate benchmarks on each row and effort
+  for (const row of rows) {
+    row.benchmarks = dedupeBenchmarks(row.benchmarks);
+    for (const effData of Object.values(row.efforts || {})) {
+      effData.benchmarks = dedupeBenchmarks(effData.benchmarks);
+    }
+  }
+
+  // 2. Collect distribution of scores per benchmark source
+  const streamScores = new Map();
+  for (const row of rows) {
+    for (const b of row.benchmarks || []) {
+      if (Number.isFinite(b.score)) {
+        const key = getBenchmarkStreamKey(b);
+        if (!streamScores.has(key)) streamScores.set(key, []);
+        streamScores.get(key).push(b.score);
+      }
+    }
+    for (const effData of Object.values(row.efforts || {})) {
+      for (const eb of effData.benchmarks || []) {
+        if (Number.isFinite(eb.score)) {
+          const key = getBenchmarkStreamKey(eb);
+          if (!streamScores.has(key)) streamScores.set(key, []);
+          streamScores.get(key).push(eb.score);
+        }
+      }
+    }
+  }
+
+  // 3. Normalize each benchmark independently within its source
+  for (const row of rows) {
+    for (const b of row.benchmarks || []) {
+      const key = getBenchmarkStreamKey(b);
+      const pool = streamScores.get(key) || [b.score];
+      const norm = normalizeScore(b.score, pool, method);
+      b.normalizedScore = norm === null ? null : Math.round(norm * 10) / 10;
+    }
+    for (const effData of Object.values(row.efforts || {})) {
+      for (const eb of effData.benchmarks || []) {
+        const key = getBenchmarkStreamKey(eb);
+        const pool = streamScores.get(key) || [eb.score];
+        const norm = normalizeScore(eb.score, pool, method);
+        eb.normalizedScore = norm === null ? null : Math.round(norm * 10) / 10;
+      }
+    }
+
+    // 4. Derive aggregate score from normalized scores
+    const normScores = (row.benchmarks || []).map((b) => b.normalizedScore).filter(Number.isFinite);
+    const score = normScores.length
+      ? Math.round((normScores.reduce((sum, v) => sum + v, 0) / normScores.length) * 10) / 10
+      : null;
+    row.score = score;
+    row.normalizedScore = score;
+
+    const rawScores = (row.benchmarks || []).map((b) => b.score).filter(Number.isFinite);
+    row.rawScore = rawScores.length
+      ? Math.round((rawScores.reduce((sum, v) => sum + v, 0) / rawScores.length) * 10) / 10
+      : null;
+
+    for (const effData of Object.values(row.efforts || {})) {
+      const effNormScores = (effData.benchmarks || [])
+        .map((b) => b.normalizedScore)
+        .filter(Number.isFinite);
+      effData.score = effNormScores.length
+        ? Math.round((effNormScores.reduce((sum, v) => sum + v, 0) / effNormScores.length) * 10) /
+          10
+        : null;
+      effData.normalizedScore = effData.score;
+
+      const effRawScores = (effData.benchmarks || []).map((b) => b.score).filter(Number.isFinite);
+      effData.rawScore = effRawScores.length
+        ? Math.round((effRawScores.reduce((sum, v) => sum + v, 0) / effRawScores.length) * 10) / 10
+        : null;
+    }
+
+    if (now) {
+      row.stale =
+        !row.sources ||
+        row.sources.length === 0 ||
+        row.sources.some((source) => isStale(source.retrievedAt, now));
+    }
+  }
+
+  // 5. Derive codingTier / reviewTier from the normalized aggregate
+  assignQuartileTiers(rows);
+  return rows;
+}
+
 function mergePriorDocuments(documents, now, options) {
   const config = (options && (options.config || options.descriptor)) || defaultDescriptor;
   const byCanonical = new Map();
@@ -569,7 +723,7 @@ function mergePriorDocuments(documents, now, options) {
       }
 
       const directScore = benchmarkScore(item);
-      if (directScore !== null) {
+      if (directScore !== null && targetBenchmarks.length === 0) {
         const directSource = sourceRows[0]
           ? {
               ...(sourceRows[0].id
@@ -607,31 +761,14 @@ function mergePriorDocuments(documents, now, options) {
       byCanonical.set(canonical, row);
     }
   }
-  const rows = Array.from(byCanonical.values()).map((row) => {
-    const scores = row.benchmarks.map((benchmark) => benchmark.score);
-    const score = scores.length
-      ? scores.reduce((sum, value) => sum + value, 0) / scores.length
-      : null;
-
-    for (const [effName, effData] of Object.entries(row.efforts || {})) {
-      const effScores = (effData.benchmarks || []).map((b) => b.score);
-      effData.score = effScores.length
-        ? Math.round((effScores.reduce((sum, v) => sum + v, 0) / effScores.length) * 10) / 10
-        : null;
-    }
-
-    return Object.assign(row, {
-      score: score === null ? null : Math.round(score * 10) / 10,
-      codingTier: null,
-      reviewTier: null,
-      stale:
-        row.sources.length === 0 || row.sources.some((source) => isStale(source.retrievedAt, now)),
-    });
-  });
-  assignQuartileTiers(rows);
+  const rows = Array.from(byCanonical.values());
+  applyNormalizationAndTiers(rows, config, now);
+  const method = getNormalizationMethod(config);
   return {
     label: 'EXTERNAL_PRIOR',
     generatedAt: new Date(now || Date.now()).toISOString(),
+    normalizationMethod: method,
+    normalization: { method },
     sources,
     ranking: rows,
   };
@@ -639,7 +776,11 @@ function mergePriorDocuments(documents, now, options) {
 
 function assignQuartileTiers(rows) {
   const scores = rows
-    .map((row) => row.score)
+    .map((row) =>
+      row.normalizedScore !== undefined && row.normalizedScore !== null
+        ? row.normalizedScore
+        : row.score
+    )
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
   // Nearest-rank quartiles of the scored population; ties share a tier.
@@ -648,13 +789,17 @@ function assignQuartileTiers(rows) {
     .slice(1)
     .map((_, index) => scores[Math.ceil(((index + 1) * scores.length) / tiers.length) - 1]);
   for (const row of rows) {
-    if (row.score === null || row.score === undefined || !Number.isFinite(row.score)) {
+    const s =
+      row.normalizedScore !== undefined && row.normalizedScore !== null
+        ? row.normalizedScore
+        : row.score;
+    if (s === null || s === undefined || !Number.isFinite(s)) {
       row.score = null;
       row.codingTier = null;
       row.reviewTier = null;
       continue;
     }
-    const tier = tiers[quartiles.filter((threshold) => row.score > threshold).length];
+    const tier = tiers[quartiles.filter((threshold) => s > threshold).length];
     row.codingTier = tier;
     row.reviewTier = tier;
   }
@@ -663,6 +808,8 @@ function assignQuartileTiers(rows) {
 
 async function refreshPriors(options) {
   const opts = options || {};
+  const config = (opts && (opts.config || opts.descriptor)) || defaultDescriptor;
+  const method = getNormalizationMethod(config);
   const output =
     opts.file ||
     (opts.root
@@ -682,27 +829,62 @@ async function refreshPriors(options) {
     'coding agent model benchmarks SWE-bench Aider Terminal-Bench';
   const results = await opts.search(query);
   if (!Array.isArray(results)) throw new Error('PRIORS_SEARCH_RESULT_INVALID');
-  const document = mergePriorDocuments(results, opts.now);
+  const document = mergePriorDocuments(results, opts.now, { ...opts, config });
   if (opts.preserveHistory) {
     for (const row of loadPriors(output).ranking) {
       const fresh = document.ranking.find((item) => item.canonical === row.canonical);
       if (!fresh) {
         document.ranking.push(row);
       } else {
-        const added = (row.benchmarks || []).filter(
-          (b) => !fresh.benchmarks.some((n) => JSON.stringify(n) === JSON.stringify(b))
-        );
-        if (added.length) {
-          fresh.benchmarks.push(...added);
-          const scores = fresh.benchmarks.map((b) => b.score).filter(Number.isFinite);
-          fresh.score = scores.length
-            ? Math.round((scores.reduce((sum, v) => sum + v, 0) / scores.length) * 10) / 10
-            : null;
+        const mergedBenchmarks = fresh.benchmarks ? fresh.benchmarks.slice() : [];
+        for (const oldB of row.benchmarks || []) {
+          const freshIdx = mergedBenchmarks.findIndex((b) => b.name === oldB.name);
+          if (freshIdx === -1) {
+            mergedBenchmarks.push(oldB);
+          } else {
+            const freshB = mergedBenchmarks[freshIdx];
+            if (benchmarkTimestamp(oldB) > benchmarkTimestamp(freshB)) {
+              mergedBenchmarks[freshIdx] = oldB;
+            }
+          }
+        }
+        fresh.benchmarks = dedupeBenchmarks(mergedBenchmarks);
+
+        if (row.efforts) {
+          fresh.efforts = fresh.efforts || {};
+          for (const [effName, effData] of Object.entries(row.efforts)) {
+            if (!fresh.efforts[effName]) {
+              fresh.efforts[effName] = effData;
+            } else {
+              const mergedEff = (fresh.efforts[effName].benchmarks || []).slice();
+              for (const oldB of effData.benchmarks || []) {
+                const idx = mergedEff.findIndex((b) => b.name === oldB.name);
+                if (idx === -1) {
+                  mergedEff.push(oldB);
+                } else {
+                  if (benchmarkTimestamp(oldB) > benchmarkTimestamp(mergedEff[idx])) {
+                    mergedEff[idx] = oldB;
+                  }
+                }
+              }
+              fresh.efforts[effName].benchmarks = dedupeBenchmarks(mergedEff);
+            }
+          }
+        }
+
+        const existingUrls = new Set((fresh.sources || []).map((s) => s.url));
+        for (const s of row.sources || []) {
+          if (s && s.url && !existingUrls.has(s.url)) {
+            fresh.sources.push(s);
+            existingUrls.add(s.url);
+          }
         }
       }
     }
-    assignQuartileTiers(document.ranking);
+    applyNormalizationAndTiers(document.ranking, config, opts.now);
   }
+  document.normalizationMethod = method;
+  document.normalization = { method };
   const liveModels = opts.liveModels || require('./priors-public').liveModelIds();
   const scoredRows = document.ranking.filter((row) => !row.matchedVia);
   document.ranking = scoredRows.slice();
@@ -775,4 +957,7 @@ module.exports = {
   DEFAULT_PRIORS_FILE,
   LIVE_PRIORS_FILE,
   splitModelEffort,
+  getNormalizationMethod,
+  normalizeScore,
+  dedupeBenchmarks,
 };

@@ -41,14 +41,15 @@ Prevent model scoring distortion and candidate misrouting in the Controller by e
 ## In scope
 
 - One canonical model entry per model in `mergePriorDocuments`, with per-effort benchmark values stored under the canonical entry.
-- External configuration in `tools/ai-brain/priors-sources/public.json` specifying `effortVariants`, `deploymentSuffixes`, `routerPrefixes`, and `aliasRules`.
+- External configuration in `tools/ai-brain/priors-sources/public.json` specifying `effortVariants`, `deploymentSuffixes`, `routerPrefixes`, `aliasRules`, and `normalizationMethod`.
 - Effort-suffixed or router-prefixed live IDs resolve to the canonical model entry using configuration rules; unknown models remain unmatched (fail-closed).
 - Missing benchmark values for an effort level fall back to the base model's value and are explicitly recorded as fallback in the prior evidence.
-- Full regression tests covering Defect 1 (merging effort rows into one canonical entry) and Defect 3 (alias resolution for router IDs and models without base rows).
+- Independent normalization of each benchmark source (e.g. percentile within source) before aggregating, with codingTier and reviewTier derived from the normalized aggregate, and the normalization method recorded in output.
+- Priors refresh replaces and deduplicates benchmarks per source, keeping only the latest value deterministically without appending old+new duplicate benchmark rows.
+- Full regression tests covering Defect 1 (merging effort rows into one canonical entry), Defect 2 (independent source normalization and tier derivation), Defect 3 (alias resolution for router IDs and models without base rows), and refresh deduplication.
 
 ## Out of scope
 
-- Defect 2 (independent source normalization, e.g. min-max / percentile within source before aggregation), which is deferred to the next run.
 - Network calls in test suites (tests use deterministic fixtures only).
 - Editing gate allowlists or baseline files.
 
@@ -57,8 +58,10 @@ Prevent model scoring distortion and candidate misrouting in the Controller by e
 - `BR-PRIOR-01`: Each physical model must have exactly one canonical ranking row in priors documents.
 - `BR-PRIOR-02`: Effort suffixes (e.g. `high`, `medium`, `thinking`) must not create separate top-level ranking rows.
 - `BR-PRIOR-03`: When an effort variant lacks a benchmark required by a role profile, it falls back to the base model's benchmark value and marks `fallback: true` in evidence.
-- `BR-PRIOR-04`: Effort and prefix vocabulary must be loaded from configuration, never hardcoded as code literals.
+- `BR-PRIOR-04`: Effort and prefix vocabulary and normalization methods must be loaded from configuration, never hardcoded as code literals.
 - `BR-PRIOR-05`: Unknown models must never be guessed or synthesized (fail closed).
+- `BR-PRIOR-06`: Benchmark sources must be normalized independently before aggregation to prevent source scale bias, with tiers derived from the normalized aggregate.
+- `BR-PRIOR-07`: Priors refresh must replace duplicate benchmarks, keeping only the latest value per source deterministically.
 
 ## UI states
 
@@ -66,7 +69,8 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 
 ## API, event and data impact
 
-- Priors documents (`model-priors.json`, `model-priors-live.json`) have a single ranking entry per model with per-effort benchmark values.
+- Priors documents (`model-priors.json`, `model-priors-live.json`) have a single ranking entry per model with per-effort benchmark values and normalized scores.
+- Document output records `normalizationMethod` and `normalization: { method }`.
 - Backward compatibility: Existing lookups and tests remain supported.
 
 ## Acceptance matrix
@@ -78,13 +82,15 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 | `AC-AI-144-03` | Resolve model that only exists as effort row (e.g. `grok-4.7-high`) via router prefix (e.g. `gcli/grok-4.7`) | Matches canonical base `grok-4-7` cleanly | Unit test in `task-ai-144-priors-effort.test.js` |
 | `AC-AI-144-04` | Resolve router-prefixed ID with suffix (e.g. `qwen/qwen3.8-max:free`) | Strips prefix and suffix according to configuration and matches canonical `qwen-3-8-max` | Unit test in `task-ai-144-priors-effort.test.js` |
 | `AC-AI-144-05` | Verify no hardcoded literals | `node scripts/ai/check-no-hardcode.mjs` exits with code 0 | Terminal output |
+| `AC-AI-144-06` | Normalize multiple benchmark sources independently before aggregating | Each source normalized according to configured method (e.g. percentile); codingTier and reviewTier derived from normalized aggregate; normalizationMethod recorded in output | Unit test in `task-ai-144-priors-effort.test.js` |
+| `AC-AI-144-07` | Refresh priors with historical benchmarks (preserveHistory: true) | Refreshed row keeps only latest value per source without appending duplicate benchmark rows; non-overlapping historical benchmarks preserved | Unit test in `task-ai-144-priors-effort.test.js` |
 
 ## Verification commands
 
 - `node --test tools/ai-brain/test/task-ai-144-priors-effort.test.js`
 - `node --test tools/ai-brain/test/priors-public.test.js tools/ai-brain/test/priors-variants.test.js tools/ai-brain/test/task-ai-142-*.test.js`
 - `node scripts/ai/check-no-hardcode.mjs`
-- `pnpm exec prettier --check docs/product-spec/work-items/TASK-AI-144.md tools/ai-brain/priors.js tools/ai-brain/priors-public.js tools/ai-brain/priors-sources/public.json`
+- `pnpm exec prettier --check docs/product-spec/work-items/TASK-AI-144.md tools/ai-brain/priors.js tools/ai-brain/priors-sources/public.json tools/ai-brain/test/task-ai-144-priors-effort.test.js`
 
 ## Codex review record
 
@@ -94,4 +100,4 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 
 ## Residual limitations
 
-Defect 2 (independent source scale normalization before aggregation) is deferred to step 2 of TASK-AI-144 in the next run.
+None

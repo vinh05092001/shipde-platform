@@ -2,7 +2,18 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mergePriorDocuments, matchModelPrior, priorFor } = require('../priors');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {
+  mergePriorDocuments,
+  matchModelPrior,
+  priorFor,
+  refreshPriors,
+  getNormalizationMethod,
+  normalizeScore,
+  dedupeBenchmarks,
+} = require('../priors');
 const config = require('../priors-sources/public.json');
 
 test('Defect 1: mergePriorDocuments merges effort rows into single canonical model entry with per-effort benchmarks', () => {
@@ -170,4 +181,267 @@ test('Unknown model ID stays unmatched (fail closed)', () => {
   const prior = priorFor({ modelId: 'unknown/fabricated-model:free' }, 'writer', priors);
   assert.equal(prior.score, null);
   assert.equal(prior.priorUnknown, true);
+});
+
+test('Defect 2: normalize each benchmark source independently (percentile within source) before aggregating', () => {
+  const docs = [
+    {
+      sources: [
+        { id: 'artificial-analysis', url: 'https://artificialanalysis.ai/leaderboards/models' },
+      ],
+      models: [
+        { modelId: 'm1', benchmarks: { intelligenceIndex: 10 } },
+        { modelId: 'm2', benchmarks: { intelligenceIndex: 20 } },
+        { modelId: 'm3', benchmarks: { intelligenceIndex: 30 } },
+        { modelId: 'm4', benchmarks: { intelligenceIndex: 40 } },
+      ],
+    },
+    {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        { modelId: 'm1', benchmarks: { benchlm: 400 } },
+        { modelId: 'm2', benchmarks: { benchlm: 300 } },
+        { modelId: 'm3', benchmarks: { benchlm: 200 } },
+        { modelId: 'm4', benchmarks: { benchlm: 100 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs);
+
+  // Normalization method recorded in output
+  assert.equal(merged.normalizationMethod, 'percentile');
+  assert.deepEqual(merged.normalization, { method: 'percentile' });
+
+  // Each source is normalized independently before aggregating:
+  // For intelligenceIndex: m1=25, m2=50, m3=75, m4=100
+  // For benchlm: m1=100, m2=75, m3=50, m4=25
+  // Aggregating normalized scores gives (25+100)/2 = 62.5 for all four models!
+  const m1 = merged.ranking.find((r) => r.canonical === 'm1');
+  assert.ok(m1);
+  assert.equal(m1.score, 62.5);
+  assert.equal(m1.normalizedScore, 62.5);
+  // Raw scores preserved on benchmarks and rawScore
+  assert.equal(m1.rawScore, 205); // (10 + 400) / 2
+  const m1Intel = m1.benchmarks.find((b) => b.name === 'intelligenceIndex');
+  assert.equal(m1Intel.score, 10);
+  assert.equal(m1Intel.normalizedScore, 25);
+  const m1Bench = m1.benchmarks.find((b) => b.name === 'benchlm');
+  assert.equal(m1Bench.score, 400);
+  assert.equal(m1Bench.normalizedScore, 100);
+
+  // Derive codingTier/reviewTier from the normalized aggregate
+  for (const r of merged.ranking) {
+    assert.ok(r.codingTier, `model ${r.canonical} must have codingTier`);
+    assert.ok(r.reviewTier, `model ${r.canonical} must have reviewTier`);
+  }
+});
+
+test('Defect 2: custom normalization method (e.g. min-max) from config', () => {
+  const customConfig = {
+    ...config,
+    normalizationMethod: 'min-max',
+    normalization: { method: 'min-max' },
+  };
+
+  const docs = [
+    {
+      sources: [{ id: 'bench-a', url: 'https://example.com/a' }],
+      models: [
+        { modelId: 'model-lo', benchmarks: { scoreA: 10 } },
+        { modelId: 'model-hi', benchmarks: { scoreA: 50 } },
+      ],
+    },
+  ];
+
+  const merged = mergePriorDocuments(docs, undefined, { config: customConfig });
+  assert.equal(merged.normalizationMethod, 'min-max');
+  assert.deepEqual(merged.normalization, { method: 'min-max' });
+
+  const lo = merged.ranking.find((r) => r.canonical === 'model-lo');
+  const hi = merged.ranking.find((r) => r.canonical === 'model-hi');
+
+  // min-max: (10 - 10) / 40 * 100 = 0; (50 - 10) / 40 * 100 = 100
+  assert.equal(lo.score, 0);
+  assert.equal(hi.score, 100);
+});
+
+test('New defect: priors refresh replaces and deduplicates benchmarks per source (e.g. benchlm=85.3 and benchlm=84.4 on gpt-6-1-sol)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'priors-dedupe-'));
+  const file = path.join(dir, 'priors.json');
+  const now = Date.parse('2026-10-29T00:00:00Z');
+
+  try {
+    // Initial document written with gpt-6-1-sol having benchlm=85.3 (older date) and aaCodingIndex=78.5
+    await refreshPriors({
+      file,
+      now: Date.parse('2026-10-15T00:00:00Z'),
+      search: async () => [
+        {
+          sources: [
+            {
+              id: 'benchlm',
+              url: 'https://benchlm.ai/data/models.json',
+              retrievedAt: '2026-10-15T00:00:00Z',
+            },
+          ],
+          models: [
+            {
+              modelId: 'gpt-6-1-sol',
+              benchmarks: {
+                benchlm: 85.3,
+                aaCodingIndex: 78.5,
+              },
+              sources: [
+                {
+                  id: 'benchlm',
+                  url: 'https://benchlm.ai/data/models.json',
+                  retrievedAt: '2026-10-15T00:00:00Z',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      liveModels: ['gpt-6-1-sol'],
+    });
+
+    // Fresh refresh where benchlm updated to 84.4 (newer date), without aaCodingIndex in fresh search
+    const refreshed = await refreshPriors({
+      file,
+      now,
+      preserveHistory: true,
+      search: async () => [
+        {
+          sources: [
+            {
+              id: 'benchlm',
+              url: 'https://benchlm.ai/data/models.json',
+              retrievedAt: '2026-10-29T00:00:00Z',
+            },
+          ],
+          models: [
+            {
+              modelId: 'gpt-6-1-sol',
+              benchmarks: {
+                benchlm: 84.4,
+              },
+              sources: [
+                {
+                  id: 'benchlm',
+                  url: 'https://benchlm.ai/data/models.json',
+                  retrievedAt: '2026-10-29T00:00:00Z',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      liveModels: ['gpt-6-1-sol'],
+    });
+
+    const row = refreshed.ranking.find((r) => r.canonical === 'gpt-6-1-sol');
+    assert.ok(row, 'gpt-6-1-sol must exist in refreshed ranking');
+
+    // Exactly one benchlm benchmark (latest value 84.4 replaced 85.3, no duplicate second copy)
+    const benchlmList = row.benchmarks.filter((b) => b.name === 'benchlm');
+    assert.equal(
+      benchlmList.length,
+      1,
+      'must have exactly one benchlm benchmark, not old+new duplicates'
+    );
+    assert.equal(benchlmList[0].score, 84.4, 'must keep only the latest value for benchlm');
+    assert.equal(benchlmList[0].source.retrievedAt, '2026-10-29T00:00:00Z');
+
+    // Historical benchmark for unrefreshed source is preserved
+    const codingList = row.benchmarks.filter((b) => b.name === 'aaCodingIndex');
+    assert.equal(codingList.length, 1, 'historical benchmark aaCodingIndex must be preserved');
+    assert.equal(codingList[0].score, 78.5);
+
+    // Total benchmarks exactly 2
+    assert.equal(row.benchmarks.length, 2);
+
+    // Normalization method recorded in refresh output
+    assert.equal(refreshed.normalizationMethod, 'percentile');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('New defect: priors refresh preserves newer historical benchmark if incoming search is older', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'priors-ts-'));
+  const file = path.join(dir, 'priors.json');
+
+  try {
+    // Initial document with newer date: 2026-10-20
+    await refreshPriors({
+      file,
+      now: Date.parse('2026-10-20T00:00:00Z'),
+      search: async () => [
+        {
+          sources: [
+            {
+              id: 'benchlm',
+              url: 'https://benchlm.ai/data/models.json',
+              retrievedAt: '2026-10-20T00:00:00Z',
+            },
+          ],
+          models: [
+            {
+              modelId: 'm1',
+              benchmarks: { benchlm: 90.0 },
+              sources: [
+                {
+                  id: 'benchlm',
+                  url: 'https://benchlm.ai/data/models.json',
+                  retrievedAt: '2026-10-20T00:00:00Z',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      liveModels: ['m1'],
+    });
+
+    // Refresh with older date: 2026-10-10
+    const refreshed = await refreshPriors({
+      file,
+      now: Date.parse('2026-10-20T00:00:00Z'),
+      preserveHistory: true,
+      search: async () => [
+        {
+          sources: [
+            {
+              id: 'benchlm',
+              url: 'https://benchlm.ai/data/models.json',
+              retrievedAt: '2026-10-10T00:00:00Z',
+            },
+          ],
+          models: [
+            {
+              modelId: 'm1',
+              benchmarks: { benchlm: 80.0 },
+              sources: [
+                {
+                  id: 'benchlm',
+                  url: 'https://benchlm.ai/data/models.json',
+                  retrievedAt: '2026-10-10T00:00:00Z',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      liveModels: ['m1'],
+    });
+
+    const row = refreshed.ranking.find((r) => r.canonical === 'm1');
+    const benchlmList = row.benchmarks.filter((b) => b.name === 'benchlm');
+    assert.equal(benchlmList.length, 1);
+    assert.equal(benchlmList[0].score, 90.0, 'latest timestamp value must be kept');
+    assert.equal(benchlmList[0].source.retrievedAt, '2026-10-20T00:00:00Z');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -2,6 +2,10 @@
   "kind": "public-leaderboards",
   "endpoint": "https://artificialanalysis.ai/leaderboards/models",
   "benchlm": "https://benchlm.ai/data/models.json",
+  "normalizationMethod": "percentile",
+  "normalization": {
+    "method": "percentile"
+  },
   "effortVariants": [
     "high",
     "medium",
