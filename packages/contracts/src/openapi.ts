@@ -1,4 +1,24 @@
 export interface paths {
+  '/search': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Global search (FEAT-COM-01)
+     * @description Search across orders, waybills, batches, cases and transactions with tenant scoping and RBAC enforcement.
+     */
+    get: operations['globalSearch'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/health/live': {
     parameters: {
       query?: never;
@@ -2094,6 +2114,30 @@ export interface components {
       };
       meta: components['schemas']['Meta'];
     };
+    SearchResultItem: {
+      /** Format: uuid */
+      id: string;
+      /** @enum {string} */
+      type: 'ORDER' | 'WAYBILL' | 'BATCH' | 'CASE' | 'TRANSACTION';
+      title: string;
+      subtitle: string;
+      code: string;
+      status: string;
+      metadata?: {
+        [key: string]: unknown;
+      };
+      url: string;
+    };
+    SearchResponseData: {
+      query: string;
+      total: number;
+      items: components['schemas']['SearchResultItem'][];
+    };
+    SearchResponse: {
+      success: boolean;
+      data: components['schemas']['SearchResponseData'];
+      meta: components['schemas']['Meta'];
+    };
   };
   responses: {
     /** @description Canonical error */
@@ -2167,6 +2211,36 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  globalSearch: {
+    parameters: {
+      query: {
+        /** @description Search keyword (minimum 2 characters) */
+        q: string;
+        /** @description Filter entity type */
+        type?: 'ALL' | 'ORDER' | 'WAYBILL' | 'BATCH' | 'CASE' | 'TRANSACTION';
+        /** @description Maximum number of results to return */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Search results */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['SearchResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
   getHealthLive: {
     parameters: {
       query?: never;
