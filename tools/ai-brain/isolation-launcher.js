@@ -2583,6 +2583,11 @@ function getIsolatedLauncher() {
       }
 
       // DS-R02: validate that the source has an https endpoint (or http://127.0.0.1 / localhost) and credential.env
+      const isKeyless = Boolean(
+        selectedSource.opencodeBuiltin &&
+        selectedSource.credential &&
+        selectedSource.credential.type === 'none'
+      );
       const endpoint = selectedSource.endpoint;
       const credentialEnv =
         (selectedSource.credential &&
@@ -2595,7 +2600,7 @@ function getIsolatedLauncher() {
           endpoint.startsWith('http://127.0.0.1') ||
           endpoint.startsWith('http://localhost'));
 
-      if (!isHttpsOrLocalhost || !credentialEnv) {
+      if (!isHttpsOrLocalhost || (!credentialEnv && !isKeyless)) {
         const err = new Error(
           `OPENCODE_DIRECT_SOURCE_UNSUPPORTED: source '${sourceId}' does not have a valid https endpoint (or http://127.0.0.1 / localhost) and credential.env`
         );
@@ -2606,7 +2611,7 @@ function getIsolatedLauncher() {
       const isRouter = selectedSource.kind === 'router' || Boolean(selectedSource.modelPrefix);
 
       // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; router never checked)
-      if (!isRouter && !process.env[credentialEnv]) {
+      if (!isRouter && !isKeyless && !process.env[credentialEnv]) {
         const err = new Error(
           `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
         );
@@ -2615,7 +2620,7 @@ function getIsolatedLauncher() {
       }
 
       // Store for later use in buildWorkerLaunchScript
-      selectedCredentialEnv = credentialEnv;
+      selectedCredentialEnv = credentialEnv || null;
 
       // DS-R03: for direct sources, provider id must be the source id, not the model name
       const providerId =
@@ -2676,15 +2681,20 @@ function getIsolatedLauncher() {
 
       const providerOptions = {
         baseURL: selectedSource.endpoint,
-        apiKey: `{env:${credentialEnv}}`,
+        ...(credentialEnv ? { apiKey: `{env:${credentialEnv}}` } : {}),
         ...(selectedSource.headers && typeof selectedSource.headers === 'object'
           ? { headers: selectedSource.headers }
           : {}),
       };
       if (selectedSource.options && typeof selectedSource.options === 'object') {
         Object.assign(providerOptions, selectedSource.options);
-        // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten
+      }
+      // Ensure apiKey is strictly {env:credentialEnv} and never leaked/overwritten.
+      // On the keyless branch, delete any apiKey copied from options so no literal key is written.
+      if (credentialEnv) {
         providerOptions.apiKey = `{env:${credentialEnv}}`;
+      } else {
+        delete providerOptions.apiKey;
       }
 
       // Permission scoping: strictly worker root and report dir; no whole-machine wildcard

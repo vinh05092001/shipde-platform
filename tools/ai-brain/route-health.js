@@ -160,6 +160,9 @@ function recordResult(store, modelId, routeId, result, now, options) {
   const key = healthKey(modelId, routeId);
   const previous = store.paths[key] || { failures: 0 };
   const lastCheckedAt = new Date(now).toISOString();
+  if (previous.probeCause === 'WRITER_NOT_AUTONOMOUS') {
+    return { key, eligible: false };
+  }
   if (result && result.ok) {
     store.paths[key] = {
       modelId: String(modelId),
@@ -439,7 +442,12 @@ function extractAccountKey(candidate, options) {
       ) {
         const src = options.registry.sources.find((s) => s.id === fields[2] || s.id === fields[3]);
         if (src && (src.endpoint || src.accessPath)) {
-          base = (src.accessPath || src.endpoint).replace(/\/+$/, '');
+          base = (
+            (/^https?:\/\//i.test(src.accessPath) && src.accessPath) ||
+            src.endpoint ||
+            src.accessPath ||
+            ''
+          ).replace(/\/+$/, '');
         }
       }
       if (base === 'http://127.0.0.1:20128/v1' && fields[4]) {
@@ -448,7 +456,13 @@ function extractAccountKey(candidate, options) {
       return `${fields[2]}::${fields[3]}`;
     }
   }
-  const base = (candidate.accessPath || candidate.endpoint || '').replace(/\/+$/, '');
+  const base = (
+    (/^https?:\/\//i.test(candidate.accessPath) && candidate.accessPath) ||
+    candidate.endpoint ||
+    candidate.sourceEndpoint ||
+    candidate.accessPath ||
+    ''
+  ).replace(/\/+$/, '');
   const gw = candidate.gateway || candidate.sourceId || candidate.source || '';
   const up = candidate.upstream || '';
   const acc = candidate.account !== undefined ? candidate.account : candidate.accountId || '';
@@ -518,7 +532,16 @@ function probeCooldown(candidate, options) {
   const account = extractAccountKey(candidate, o);
   if (account && store.accounts && store.accounts[account]) {
     const accountRecord = store.accounts[account];
-    if (accountRecord && accountRecord.nextCheckAt && Date.parse(accountRecord.nextCheckAt) > now) {
+    // A paid model's credit/billing refusal says nothing about the gateway's free tier,
+    // which the gateway itself marks in the model id (":free", "-free", "cline-free/").
+    const billingCause = /credit|quota|auth/i.test(String(accountRecord.probeCause || ''));
+    const freeTier = /(^|[/:-])free($|[/:-])/i.test(String(identity.model || ''));
+    if (
+      !(billingCause && freeTier) &&
+      accountRecord &&
+      accountRecord.nextCheckAt &&
+      Date.parse(accountRecord.nextCheckAt) > now
+    ) {
       return `PROBE_COOLDOWN_ACCOUNT: ${account} until ${accountRecord.nextCheckAt}`;
     }
   }
@@ -1210,6 +1233,7 @@ async function refreshCatalogueRoutes(catalogue, registry, accounts, store, prob
     const key = healthKey(modelId, routeId);
     if (seen.has(key) || (o.skipKeys && o.skipKeys.has(key))) continue;
     const record = store.paths[key] || getPathRecord(store, modelId, routeId);
+    if (record && record.probeCause === 'WRITER_NOT_AUTONOMOUS') continue;
     if (record && record.status === 'AVAILABLE') continue;
     if (record && !isDue(store, modelId, routeId, now)) continue;
     if (record && record.status !== 'AVAILABLE' && !isDue(store, modelId, routeId, now)) continue;
@@ -1234,7 +1258,10 @@ async function recheckDue(store, probe, options) {
   const now = Number(o.now) || Date.now();
   const cap = Math.max(0, Number(o.cap ?? 20));
   const due = Object.values(store.paths)
-    .filter((row) => unverifiedRecord(row) || dueAt(row, now))
+    .filter(
+      (row) =>
+        (unverifiedRecord(row) || dueAt(row, now)) && row.probeCause !== 'WRITER_NOT_AUTONOMOUS'
+    )
     .slice(0, cap);
   const checkedKeys = due.map((row) => healthKey(row.modelId, row.routeId));
   const restored = [];
@@ -1455,6 +1482,7 @@ async function runDueCli(options) {
 }
 
 module.exports = {
+  unverifiedRecord,
   atomicRenameSync,
   DEFAULT_ROUTE_HEALTH_PATH,
   resolveRouteHealthFile,

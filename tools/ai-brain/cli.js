@@ -2433,6 +2433,8 @@ function dispatchCommand(args, deps = {}) {
       storePath: deps && deps.storePath,
       accounts,
       now,
+      ...(quotaStateFile ? { quotaStateFile } : {}),
+      ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
     };
     const routing = require('./routing');
     const profile =

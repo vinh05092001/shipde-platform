@@ -46,6 +46,48 @@ function computeBinding(key, route) {
     .digest('hex');
 }
 
+// Rebuilds one chat completion from an SSE stream: content and tool_calls are
+// concatenated from the per-chunk deltas. Null when the text is not a stream.
+function sseCompletion(text) {
+  const chunks = String(text || '')
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .filter((data) => data && data !== '[DONE]');
+  if (!chunks.length) return null;
+  let content = '';
+  const calls = [];
+  let error = null;
+  for (const data of chunks) {
+    let event;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      continue;
+    }
+    if (event.error) error = event.error;
+    const choice = event.choices && event.choices[0];
+    const delta = (choice && (choice.delta || choice.message)) || {};
+    if (typeof delta.content === 'string') content += delta.content;
+    for (const call of delta.tool_calls || []) {
+      const index = Number.isInteger(call.index) ? call.index : calls.length;
+      const slot = (calls[index] = calls[index] || {
+        type: 'function',
+        function: { name: '', arguments: '' },
+      });
+      if (call.id) slot.id = call.id;
+      if (call.function && call.function.name) slot.function.name += call.function.name;
+      if (call.function && call.function.arguments)
+        slot.function.arguments += call.function.arguments;
+    }
+  }
+  if (error) return { error };
+  const toolCalls = calls.filter(Boolean);
+  return {
+    choices: [{ message: { content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) } }],
+  };
+}
+
 async function httpProof(candidate, capability, route, options) {
   const o = options;
   const env = { ...process.env, ...o.env };
@@ -116,7 +158,26 @@ async function httpProof(candidate, capability, route, options) {
       };
       o.onHttpFailure?.(httpFailure);
     }
-    const body = await response.json();
+    let body;
+    if (typeof response.text === 'function') {
+      const rawText = await response.text();
+      try {
+        body = JSON.parse(rawText);
+      } catch (parseErr) {
+        const cleaned = rawText.replace(/\s*data:\s*\[DONE\]\s*$/i, '').trim();
+        try {
+          body = JSON.parse(cleaned);
+        } catch {
+          // Some gateway lanes stream (SSE) even for a non-stream request.
+          body = sseCompletion(rawText);
+          if (!body) throw parseErr;
+        }
+      }
+    } else {
+      body = await response.json();
+    }
+    // Some gateway upstreams (9router cline lanes) wrap the completion as {"data": {...}}.
+    if (body && !body.choices && body.data && Array.isArray(body.data.choices)) body = body.data;
     if (!response.ok) {
       const cause = routeProbe.failureReason(
         routeProbe.classifyProbeFailure({ status: response.status, body: JSON.stringify(body) })
@@ -281,7 +342,24 @@ function orderCandidatesForProbe(candidates, profile, options = {}) {
       );
     }
 
+    const isPrioritySource = (src) => {
+      if (!src) return false;
+      const ext = options.externalWorkers || options['external-workers'];
+      if (ext) {
+        const list = Array.isArray(ext)
+          ? ext
+          : String(ext)
+              .split(',')
+              .map((s) => s.trim());
+        return list.includes(src);
+      }
+      return false;
+    };
+
     const sortedSources = Array.from(sourceQueues.keys()).sort((srcA, srcB) => {
+      const prioA = isPrioritySource(srcA) ? 1 : 0;
+      const prioB = isPrioritySource(srcB) ? 1 : 0;
+      if (prioB !== prioA) return prioB - prioA;
       const topA = sourceQueues.get(srcA)[0];
       const topB = sourceQueues.get(srcB)[0];
       return (
@@ -383,8 +461,11 @@ async function probeCapabilities(candidates, profile, options = {}) {
       source?.id,
       source?.reachedVia,
     ].some((id) => ['9router', 'ninerouter'].includes(String(id || '').toLowerCase()));
+    // OpenCode's built-in provider refuses HTTP from outside opencode, so it is
+    // proved by a real CLI run like the pure CLI harnesses.
     const direct =
       !isPureCli &&
+      !source?.opencodeBuiltin &&
       (c.harness === 'direct-http' ||
         c.harness === 'opencode-direct' ||
         ((c.harness === 'opencode' || c.harness === 'paseo') && isVia9Router) ||
@@ -500,7 +581,7 @@ async function probeCapabilities(candidates, profile, options = {}) {
       const forceSchema = cap === 'jsonSchema' && ['codex', 'agy-pool'].includes(c.harness);
       if (
         c.capabilities[cap] !== undefined &&
-        !c.capabilityDeclarations?.[cap] &&
+        (!c.capabilityDeclarations?.[cap] || c.capabilityEvidence?.[cap]?.ok === true) &&
         !forceSchema &&
         (!isPool || sourcesApi.isAgyPoolWriterEnabled(o.registry, o))
       )
@@ -521,10 +602,10 @@ async function probeCapabilities(candidates, profile, options = {}) {
           observedAt: new Date(o.now ?? Date.now()).toISOString(),
         };
       }
-      if (!proof && authorized && cap === 'tools') {
-        if (c.capabilityEvidence?.tools?.ok === true && c.capabilityEvidence.tools.observedAt) {
-          proof = c.capabilityEvidence.tools;
-        } else {
+      if (!proof && authorized && (cap === 'tools' || cap === 'jsonSchema')) {
+        if (c.capabilityEvidence?.[cap]?.ok === true && c.capabilityEvidence[cap].observedAt) {
+          proof = c.capabilityEvidence[cap];
+        } else if (cap === 'tools') {
           // Gateway prefixes come from the registry (modelPrefix or "<id>/"), never a fixed name.
           const prefixes = (o.registry?.sources || [])
             .filter((s) => [c.gateway, c.source, c.sourceId, c.upstream].includes(s.id))
