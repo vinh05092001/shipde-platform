@@ -3,6 +3,8 @@ import { test, describe, beforeEach } from 'node:test';
 import { UsersService } from './users.service';
 import { RoleEnum } from '@prisma/client';
 import { CanonicalApiException } from '../auth/auth.service';
+// Keep shared list acceptance coverage in the existing API test entry point.
+import './lists.unit.spec';
 
 /**
  * Mock Prisma Client for UsersService unit testing.

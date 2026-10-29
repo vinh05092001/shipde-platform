@@ -537,3 +537,5 @@ export function resolveMfaEncryptionKey(configuredKey?: string): string {
   }
   return ephemeralMfaKey;
 }
+
+export { USERS_LIST_POLICY } from './list-policies.js';

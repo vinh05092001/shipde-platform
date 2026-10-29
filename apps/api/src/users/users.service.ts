@@ -9,6 +9,8 @@ import {
 import { CanonicalApiException } from '../auth/auth.service';
 import { RoleEnum } from '@prisma/client';
 import { isActiveStatus } from '@shipde/contracts';
+import { USERS_LIST_POLICY } from '@shipde/config';
+import { parseCanonicalListQuery, requireListTenant } from './list-scope';
 import {
   ListUsersQueryDto,
   UpdateUserDto,
@@ -345,112 +347,120 @@ export class UsersService {
         ? queryOrCorrelationId
         : '';
 
-    const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
-    const skip = (page - 1) * limit;
-
-    const where: any = {
-      merchant_id: merchantId,
-    };
-
-    if (query.role) {
-      where.role = query.role as RoleEnum;
-    }
-
-    if (query.status) {
-      where.status = {
-        equals: query.status.trim(),
-        mode: 'insensitive',
-      };
-    }
-
-    if (query.search && query.search.trim().length > 0) {
-      const search = query.search.trim();
-      where.OR = [
-        { full_name: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    const [total, users] = await Promise.all([
-      this.prisma.user.count({ where }),
-      this.prisma.user.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { created_at: 'desc' },
-        select: {
-          id: true,
-          full_name: true,
-          email: true,
-          phone: true,
-          role: true,
-          custom_role_id: true,
-          status: true,
-          store_scopes: true,
-          warehouse_scopes: true,
-          carrier_account_scopes: true,
-          created_at: true,
-          device_sessions: {
-            take: 1,
-            orderBy: { last_active_at: 'desc' },
-            select: { last_active_at: true },
-          },
-        },
-      }),
-    ]);
-
-    const customRoleIds = Array.from(
-      new Set(users.map((u) => u.custom_role_id).filter((id): id is string => Boolean(id)))
+    const tenant = requireListTenant(merchantId);
+    const { page, limit, skip, filters, orderBy } = parseCanonicalListQuery(
+      query,
+      USERS_LIST_POLICY
     );
+    try {
+      const where: any = { ...tenant };
 
-    const customRolesMap = new Map();
-    if (
-      customRoleIds.length > 0 &&
-      this.prisma.role &&
-      typeof this.prisma.role.findMany === 'function'
-    ) {
-      const roles = await this.prisma.role.findMany({
-        where: { id: { in: customRoleIds } },
-        select: { id: true, name: true },
-      });
-      for (const r of roles) {
-        customRolesMap.set(r.id, r.name);
+      if (filters.role) {
+        where.role = filters.role as RoleEnum;
       }
+
+      if (filters.status) {
+        where.status = {
+          equals: filters.status.trim(),
+          mode: 'insensitive',
+        };
+      }
+
+      if (filters.search && filters.search.trim().length > 0) {
+        const search = filters.search.trim();
+        where.OR = [
+          { full_name: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      const [total, users] = await Promise.all([
+        this.prisma.user.count({ where }),
+        this.prisma.user.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy,
+          select: {
+            id: true,
+            full_name: true,
+            email: true,
+            phone: true,
+            role: true,
+            custom_role_id: true,
+            status: true,
+            store_scopes: true,
+            warehouse_scopes: true,
+            carrier_account_scopes: true,
+            created_at: true,
+            device_sessions: {
+              take: 1,
+              orderBy: { last_active_at: 'desc' },
+              select: { last_active_at: true },
+            },
+          },
+        }),
+      ]);
+
+      const customRoleIds = Array.from(
+        new Set(users.map((u) => u.custom_role_id).filter((id): id is string => Boolean(id)))
+      );
+
+      const customRolesMap = new Map();
+      if (
+        customRoleIds.length > 0 &&
+        this.prisma.role &&
+        typeof this.prisma.role.findMany === 'function'
+      ) {
+        const roles = await this.prisma.role.findMany({
+          where: { ...tenant, id: { in: customRoleIds } },
+          select: { id: true, name: true },
+        });
+        for (const r of roles) {
+          customRolesMap.set(r.id, r.name);
+        }
+      }
+
+      const formattedUsers = users.map((u) => ({
+        id: u.id,
+        full_name: u.full_name,
+        email: u.email,
+        phone: u.phone,
+        role: u.role,
+        custom_role_id: u.custom_role_id,
+        custom_role: u.custom_role_id
+          ? {
+              id: u.custom_role_id,
+              name: customRolesMap.get(u.custom_role_id) || 'Tùy chỉnh',
+            }
+          : null,
+        status: (u.status || 'ACTIVE').toUpperCase(),
+        store_scopes: u.store_scopes || [],
+        warehouse_scopes: u.warehouse_scopes || [],
+        carrier_account_scopes: u.carrier_account_scopes || [],
+        created_at: u.created_at.toISOString(),
+        last_active_at: u.device_sessions?.[0]?.last_active_at?.toISOString() || null,
+      }));
+
+      return {
+        data: formattedUsers,
+        meta: {
+          page,
+          limit,
+          total,
+          total_pages: Math.ceil(total / limit) || 1,
+          correlation_id: correlationId,
+        },
+      };
+    } catch {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'TEMPORARILY_UNAVAILABLE',
+        'Danh sách tạm thời không khả dụng',
+        true
+      );
     }
-
-    const formattedUsers = users.map((u) => ({
-      id: u.id,
-      full_name: u.full_name,
-      email: u.email,
-      phone: u.phone,
-      role: u.role,
-      custom_role_id: u.custom_role_id,
-      custom_role: u.custom_role_id
-        ? {
-            id: u.custom_role_id,
-            name: customRolesMap.get(u.custom_role_id) || 'Tùy chỉnh',
-          }
-        : null,
-      status: (u.status || 'ACTIVE').toUpperCase(),
-      store_scopes: u.store_scopes || [],
-      warehouse_scopes: u.warehouse_scopes || [],
-      carrier_account_scopes: u.carrier_account_scopes || [],
-      created_at: u.created_at.toISOString(),
-      last_active_at: u.device_sessions?.[0]?.last_active_at?.toISOString() || null,
-    }));
-
-    return {
-      data: formattedUsers,
-      meta: {
-        page,
-        limit,
-        total,
-        total_pages: Math.ceil(total / limit) || 1,
-        correlation_id: correlationId,
-      },
-    };
   }
 
   /**

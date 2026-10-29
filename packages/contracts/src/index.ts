@@ -3,6 +3,8 @@
  * Core domain contracts, enumerations, and canonical error definitions for Ship Dễ.
  */
 
+export * from './lists.js';
+
 // --- Canonical Roles ---
 export const UserRole = {
   OWNER: 'OWNER',
