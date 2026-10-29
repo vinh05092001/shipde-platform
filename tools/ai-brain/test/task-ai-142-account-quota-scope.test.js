@@ -291,3 +291,71 @@ test('an operator weight profile for the role overrides JEV and the Controller p
   assert.equal(assessment.weightSource, 'operator:BENCHMARK_ONLY');
   assert.ok(assessment.reasonCodes.includes('WEIGHTS_BENCHMARK_ONLY_OPERATOR'));
 });
+
+test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as quota text, and models-out.txt filters candidates', () => {
+  const poolRuntime = require('../agy-pool-runtime');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-quota-test-'));
+
+  try {
+    const accDir = path.join(tempDir, 'agy01');
+    fs.mkdirSync(accDir, { recursive: true });
+
+    const quotaOutPath = path.join(accDir, 'quota-out.txt');
+    const outPath = path.join(accDir, 'out.txt');
+
+    fs.writeFileSync(quotaOutPath, 'Limit Remaining: 80%');
+    // Ensure out.txt is newer but only has model output mention of Argon, not quota text
+    const pastTime = new Date(Date.now() - 5000);
+    fs.utimesSync(quotaOutPath, pastTime, pastTime);
+    fs.writeFileSync(outPath, 'Selected model: gemini-2-Argon running execution steps');
+
+    const result = poolRuntime.readQuotaText('agy01', { runsDir: tempDir });
+    // Must NOT return outPath content because Argon is not quota text; must fall back to quotaOutPath
+    assert.equal(
+      result,
+      'Limit Remaining: 80%',
+      'readQuotaText must not treat Argon model name as quota text'
+    );
+
+    // Test models-out.txt filtering and unknown family exclusion in candidates
+    const candidatesApi = require('../candidates');
+    fs.writeFileSync(path.join(accDir, 'models-out.txt'), 'gemini-2.5-pro\n');
+    const catalog = ['gemini-2.5-pro', 'gemini-2.5-flash', 'unknown-mystery-model'];
+    const poolCandidates = candidatesApi.poolAccountCandidates({
+      runsDir: tempDir,
+      models: catalog,
+      allowUnprobedCandidates: true,
+      catalogue: catalog,
+      registry: {
+        sources: [
+          {
+            id: 'agy-pool',
+            kind: 'pool',
+            harness: 'agy-pool',
+            servesModels: true,
+            models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'unknown-mystery-model'],
+          },
+        ],
+      },
+    });
+    const emittedModels = poolCandidates
+      .filter((c) => c.accountId === 'agy01')
+      .map((c) => c.modelId);
+    assert.ok(
+      emittedModels.includes('gemini-2.5-pro'),
+      'must emit allowed model from models-out.txt'
+    );
+    assert.equal(
+      emittedModels.includes('gemini-2.5-flash'),
+      false,
+      'must not emit model absent from models-out.txt'
+    );
+    assert.equal(
+      emittedModels.includes('unknown-mystery-model'),
+      false,
+      'must not emit unknown family model'
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});

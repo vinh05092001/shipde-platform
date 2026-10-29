@@ -7,9 +7,43 @@ const crypto = require('crypto');
 const { loadPriors, priorFor } = require('./priors');
 const evidenceApi = require('./evidence');
 
-const DEFAULT_COMBO_NAME = 'shipde-writer';
-const DEFAULT_HOST = '127.0.0.1';
-const DEFAULT_PORT = 20128;
+function resolveEndpoint(opts = {}) {
+  let endpoint = opts.endpoint;
+  if (!endpoint) {
+    try {
+      const sourcesApi = require('./sources');
+      const reg = opts.registry || (sourcesApi.loadSources ? sourcesApi.loadSources() : null);
+      const src = (reg?.sources || []).find((s) => s.id === '9router' || s.kind === 'router');
+      endpoint = src?.endpoint;
+    } catch {}
+  }
+  if (!endpoint) {
+    return { host: opts.host || null, port: opts.port ? Number(opts.port) : null };
+  }
+  try {
+    const url = new URL(endpoint);
+    return {
+      host: opts.host || url.hostname,
+      port: opts.port ? Number(opts.port) : url.port ? Number(url.port) : 80,
+    };
+  } catch {
+    return { host: opts.host || null, port: opts.port ? Number(opts.port) : null };
+  }
+}
+
+function resolveComboName(opts = {}) {
+  if (opts.name) return opts.name;
+  try {
+    const sourcesApi = require('./sources');
+    const reg = opts.registry || (sourcesApi.loadSources ? sourcesApi.loadSources() : null);
+    const dispatch = reg?.dispatch || {};
+    return dispatch.nineRouterWriterCombo || dispatch.writerCombo || null;
+  } catch {
+    return null;
+  }
+}
+
+const DEFAULT_COMBO_NAME = resolveComboName();
 const CLI_TOKEN_SALT = '9r-cli-auth';
 
 function get9routerDataDir() {
@@ -125,7 +159,11 @@ function buildWriterComboModels(listing, evidenceData, priorsData, now = Date.no
   return scored.map((s) => s.modelId);
 }
 
-function httpRequest({ host, port, path: reqPath, method, headers, body }) {
+function httpRequest({ host, port, path: reqPath, method, headers, body, endpoint, registry }) {
+  const resolved = resolveEndpoint({ host, port, endpoint, registry });
+  if (!resolved.host || !resolved.port) {
+    return Promise.reject(new Error('CONFIG_MISSING: 9router host and port are required'));
+  }
   return new Promise((resolve, reject) => {
     const payload = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
     const reqHeaders = { ...headers };
@@ -134,8 +172,8 @@ function httpRequest({ host, port, path: reqPath, method, headers, body }) {
     }
     const req = http.request(
       {
-        hostname: host || DEFAULT_HOST,
-        port: port || DEFAULT_PORT,
+        hostname: resolved.host,
+        port: resolved.port,
         path: reqPath,
         method: method || 'GET',
         headers: reqHeaders,
@@ -186,9 +224,14 @@ async function fetchLiveModels({ host, port, apiKey }) {
  * @returns {Promise<{name: string, models: string[], created: boolean, updated: boolean}>}
  */
 async function syncWriterCombo(opts = {}) {
-  const name = opts.name || DEFAULT_COMBO_NAME;
-  const host = opts.host || DEFAULT_HOST;
-  const port = opts.port || DEFAULT_PORT;
+  const name = resolveComboName(opts);
+  if (!name) {
+    throw new Error('CONFIG_MISSING: writer combo name is required');
+  }
+  const { host, port } = resolveEndpoint(opts);
+  if (!host || !port) {
+    throw new Error('CONFIG_MISSING: 9router host and port are required');
+  }
 
   let models = opts.models;
   if (!models) {

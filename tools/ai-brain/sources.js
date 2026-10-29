@@ -499,21 +499,12 @@ function getDispatchConfig(registry, options = {}) {
     // the JEV/Controller weighting contract.
     options.weightProfileByRole ?? dispatch.weightProfileByRole;
 
-  const isExplicitFixture = Boolean(
-    registry &&
-    ((registry.file && registry.file !== DEFAULT_PATH) ||
-      (dispatch && 'hermesOrchestrator' in dispatch && !dispatch.hermesOrchestrator) ||
-      registry.isFixture)
-  );
-
   const hermesOrchRaw =
     options.hermesOrchestrator !== undefined
       ? options.hermesOrchestrator
       : dispatch.hermesOrchestrator !== undefined
         ? dispatch.hermesOrchestrator
-        : isExplicitFixture
-          ? undefined
-          : defaults.hermesOrchestrator;
+        : defaults.hermesOrchestrator;
 
   let hermesOrchestrator = undefined;
   if (hermesOrchRaw) {
@@ -627,18 +618,8 @@ function getDispatchConfig(registry, options = {}) {
       Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs) > 0
         ? Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs)
         : configuredLimit('quotaBlockTtlMin') * 60 * 1000,
-    blockedNoRouteTimeoutMs:
-      Number(
-        options.blockedNoRouteTimeoutMs ??
-          dispatch.blockedNoRouteTimeoutMs ??
-          defaults.blockedNoRouteTimeoutMs
-      ) || 3600000,
-    blockedNoRoutePollIntervalMs:
-      Number(
-        options.blockedNoRoutePollIntervalMs ??
-          dispatch.blockedNoRoutePollIntervalMs ??
-          defaults.blockedNoRoutePollIntervalMs
-      ) || 30000,
+    blockedNoRouteTimeoutMs: configuredLimit('blockedNoRouteTimeoutMs'),
+    blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),

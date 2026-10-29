@@ -14,6 +14,7 @@ const {
   saveQuotaState,
   isScopeBlocked,
   getQuotaScopeState,
+  scanAllFullRoutes,
 } = require('../quota-scan');
 
 function fixture(t) {
@@ -593,4 +594,89 @@ test('TASK-AI-142 Finding 8: NO_CHANNEL stays model-scoped and does not block so
   // Sibling candidate on same source is NOT blocked
   const stateSibling = getQuotaScopeState(candSibling, quotaState, { now });
   assert.equal(isScopeBlocked(stateSibling, now), false);
+});
+
+test('TASK-AI-142 Finding 6: scanAllFullRoutes does not promote model failure to prefix or source scope', async () => {
+  const quotaState = { scopes: {} };
+  const now = Date.now();
+  const registry = {
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        harness: 'paseo',
+        endpoint: 'http://127.0.0.1:20128/v1',
+        credential: { env: 'TEST_KEY' },
+        servesModels: true,
+      },
+    ],
+    dispatch: {
+      routeEvidenceMaxAgeMs: 60000,
+      fullRouteScan: {
+        timeoutMs: 1000,
+        maxTokens: 5,
+        concurrency: 1,
+        nineRouterConcurrency: 1,
+        nineRouterModelsTimeoutMs: 1000,
+        gatewayModelsTimeoutMs: 1000,
+        externalModelsTimeoutMs: 1000,
+      },
+    },
+  };
+
+  const fetchFn = async (url) => {
+    if (url.includes('/models')) {
+      return {
+        ok: true,
+        json: async () => ({
+          data: [{ id: 'anthropic/claude-3-opus', owned_by: 'anthropic' }],
+        }),
+      };
+    }
+    // Probe fails with 404 NO_CHANNEL
+    return {
+      status: 404,
+      ok: false,
+      text: async () =>
+        JSON.stringify({ error: { message: 'no channel available for this model' } }),
+      headers: { get: () => null },
+    };
+  };
+
+  const tmpLog = path.join(os.tmpdir(), `test-scan-${Date.now()}.jsonl`);
+  try {
+    await scanAllFullRoutes({
+      quotaState,
+      registry,
+      jsonlFile: tmpLog,
+      now,
+      fetchFn,
+      source: '9router',
+      env: { TEST_KEY: 'mock-key' },
+    });
+
+    // 1. Model key must be recorded
+    assert.ok(
+      quotaState.scopes['9router::anthropic/claude-3-opus'],
+      'exact model key must be recorded'
+    );
+    assert.equal(quotaState.scopes['9router::anthropic/claude-3-opus'].code, 'NO_CHANNEL');
+
+    // 2. Prefix scope and source scope must NOT be stamped
+    assert.equal(quotaState.scopes['9router::anthropic'], undefined, 'must not stamp prefix scope');
+    assert.equal(quotaState.scopes['9router'], undefined, 'must not stamp blanket source scope');
+
+    // 3. Sibling model must remain unblocked
+    const candSibling = { gateway: '9router', modelId: 'anthropic/claude-3-5-sonnet' };
+    const siblingScope = getQuotaScopeState(candSibling, quotaState, { now });
+    assert.equal(
+      isScopeBlocked(siblingScope, now),
+      false,
+      'sibling model must not be blocked by unscanned prefix'
+    );
+  } finally {
+    try {
+      fs.unlinkSync(tmpLog);
+    } catch {}
+  }
 });

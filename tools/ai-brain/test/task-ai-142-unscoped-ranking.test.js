@@ -218,3 +218,81 @@ test('TASK-AI-142: scanCliLanes records UNSCOPED explicitly with reason for CLI 
   assert.equal(agyEntry.code, 'UNSCOPED');
   assert.match(agyEntry.reason, /NO_CHEAP_CHECK/);
 });
+
+test('TASK-AI-142: hasFreshOkOrCompletion fails closed on missing maxAge, excludes stale OK, and isolates sibling models', () => {
+  const routeEvidence = require('../route-evidence');
+  const now = Date.now();
+
+  const candidate = {
+    source: '9router',
+    sourceId: '9router',
+    modelId: 'anthropic/claude-3-5-sonnet',
+  };
+
+  const quotaStateOk = {
+    scopes: {
+      '9router::anthropic/claude-3-5-sonnet': {
+        source: '9router',
+        scope: 'anthropic/claude-3-5-sonnet',
+        model: 'anthropic/claude-3-5-sonnet',
+        code: 'OK',
+        at: new Date(now - 1000).toISOString(),
+      },
+    },
+  };
+
+  // 1. Missing routeEvidenceMaxAgeMs MUST fail closed (return false)
+  const missingMaxAge = routeEvidence.hasFreshOkOrCompletion(candidate, quotaStateOk, {
+    now,
+    dispatchConfig: {},
+  });
+  assert.equal(
+    missingMaxAge,
+    false,
+    'must fail closed when routeEvidenceMaxAgeMs is not configured'
+  );
+
+  // 2. Stale OK (older than routeEvidenceMaxAgeMs) MUST return false
+  const stale = routeEvidence.hasFreshOkOrCompletion(candidate, quotaStateOk, {
+    now,
+    dispatchConfig: { routeEvidenceMaxAgeMs: 500 }, // record is 1000ms old
+  });
+  assert.equal(stale, false, 'must return false when OK record is older than maxAgeMs');
+
+  // 3. Sibling model OK or blanket source-level OK must NOT satisfy candidate
+  const siblingCandidate = {
+    source: '9router',
+    sourceId: '9router',
+    modelId: 'anthropic/claude-3-opus',
+  };
+  const blanketSourceQuotaState = {
+    scopes: {
+      '9router': {
+        source: '9router',
+        scope: '9router',
+        code: 'OK',
+        at: new Date(now - 100).toISOString(),
+      },
+      '9router::anthropic/claude-3-5-sonnet': {
+        source: '9router',
+        scope: 'anthropic/claude-3-5-sonnet',
+        model: 'anthropic/claude-3-5-sonnet',
+        code: 'OK',
+        at: new Date(now - 100).toISOString(),
+      },
+    },
+  };
+  const siblingOk = routeEvidence.hasFreshOkOrCompletion(
+    siblingCandidate,
+    blanketSourceQuotaState,
+    {
+      now,
+      dispatchConfig: { routeEvidenceMaxAgeMs: 60000 },
+    }
+  );
+  assert.equal(
+    siblingOk,
+    false,
+    'sibling model must not be satisfied by blanket source OK or other model OK'
+  );
+});

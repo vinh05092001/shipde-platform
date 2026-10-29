@@ -605,8 +605,6 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
   return upstreamScope || directScope || sourceScope || null;
 }
 
-let _cachedDefaultBlockTtlMs = null;
-
 function resolveBlockTtlMs(scopeEntry, options = {}) {
   if (Number(scopeEntry?.ttlMs) > 0) return Number(scopeEntry.ttlMs);
   if (Number(scopeEntry?.quotaBlockTtlMs) > 0) return Number(scopeEntry.quotaBlockTtlMs);
@@ -637,37 +635,29 @@ function resolveBlockTtlMs(scopeEntry, options = {}) {
     } catch {}
   }
 
-  if (_cachedDefaultBlockTtlMs !== null) return _cachedDefaultBlockTtlMs;
-
   try {
     const reg = sourcesApi.loadSources();
     const dispatchConfig = sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(reg) : {};
     if (Number(dispatchConfig?.quotaBlockTtlMs) > 0) {
-      _cachedDefaultBlockTtlMs = Number(dispatchConfig.quotaBlockTtlMs);
-      return _cachedDefaultBlockTtlMs;
+      return Number(dispatchConfig.quotaBlockTtlMs);
     }
     if (Number(dispatchConfig?.quotaBlockTtlMin) > 0) {
-      _cachedDefaultBlockTtlMs = Number(dispatchConfig.quotaBlockTtlMin) * 60 * 1000;
-      return _cachedDefaultBlockTtlMs;
+      return Number(dispatchConfig.quotaBlockTtlMin) * 60 * 1000;
     }
     if (Number(dispatchConfig?.quotaScanIntervalMin) > 0) {
-      _cachedDefaultBlockTtlMs = Number(dispatchConfig.quotaScanIntervalMin) * 60 * 1000;
-      return _cachedDefaultBlockTtlMs;
+      return Number(dispatchConfig.quotaScanIntervalMin) * 60 * 1000;
     }
   } catch {}
 
   const defaultDispatch = require('./sources.json').dispatch;
   if (Number(defaultDispatch?.quotaBlockTtlMin) > 0) {
-    _cachedDefaultBlockTtlMs = Number(defaultDispatch.quotaBlockTtlMin) * 60 * 1000;
-    return _cachedDefaultBlockTtlMs;
+    return Number(defaultDispatch.quotaBlockTtlMin) * 60 * 1000;
   }
   if (Number(defaultDispatch?.quotaScanIntervalMin) > 0) {
-    _cachedDefaultBlockTtlMs = Number(defaultDispatch.quotaScanIntervalMin) * 60 * 1000;
-    return _cachedDefaultBlockTtlMs;
+    return Number(defaultDispatch.quotaScanIntervalMin) * 60 * 1000;
   }
   // No configured TTL: 0 makes isScopeBlocked keep the scope blocked until the next scan.
-  _cachedDefaultBlockTtlMs = 0;
-  return _cachedDefaultBlockTtlMs;
+  return 0;
 }
 
 // Limits come from dispatch configuration (validated by sources.getDispatchConfig); a missing or
@@ -728,7 +718,7 @@ function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
 
 async function scanScope(target, options = {}) {
   const startedAt = Date.now();
-  const fetchFn = options.fetch || globalThis.fetch;
+  const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
   const now = options.now ?? Date.now();
   const apiKey = (options.env || process.env)[target.apiKeyEnv] || '';
 
@@ -768,7 +758,10 @@ async function scanScope(target, options = {}) {
   };
 
   const rateRetryCount =
-    options.rateRetries ?? (target.source === '9router' || options.full ? 3 : 0);
+    options.rateRetries ??
+    dispatchConfig.rateRetries ??
+    dispatchConfig.fullRouteScan?.rateRetries ??
+    0;
   let retryCount = 0;
   let res = null;
   let bodyText = '';
@@ -902,7 +895,7 @@ async function scanScope(target, options = {}) {
 }
 
 async function discover9RouterScopes(source, options = {}) {
-  const fetchFn = options.fetch || globalThis.fetch;
+  const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
   const apiKey = (options.env || process.env)[source.credential?.env] || '';
   const endpoint = String(source.endpoint || '').replace(/\/+$/, '');
   const url = `${endpoint}/models`;
@@ -1040,7 +1033,7 @@ async function discover9RouterScopes(source, options = {}) {
 
 async function scanAllFullRoutes(options = {}) {
   const now = options.now ?? Date.now();
-  const fetchFn = options.fetch || globalThis.fetch;
+  const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
   const quotaState = loadQuotaState(options);
   quotaState.scopes = quotaState.scopes || {};
 
@@ -1205,37 +1198,6 @@ async function scanAllFullRoutes(options = {}) {
           elapsedMs: r.elapsedMs,
           evidence: ev,
         };
-        if (r.reason === 'OK' || r.code === 'OK') {
-          const prefix = r.modelId.includes('/') ? r.modelId.split('/')[0] : null;
-          if (prefix) {
-            quotaState.scopes[`${r.sourceId}::${prefix}`] = {
-              source: r.sourceId,
-              scope: prefix,
-              upstream: prefix,
-              model: r.modelId,
-              code: 'OK',
-              status: 200,
-              reason: 'OK',
-              at: r.at,
-              retryAfter: null,
-              elapsedMs: r.elapsedMs,
-              evidence: ev,
-            };
-          }
-          quotaState.scopes[r.sourceId] = {
-            source: r.sourceId,
-            scope: r.sourceId,
-            upstream: r.sourceId,
-            model: r.modelId,
-            code: 'OK',
-            status: 200,
-            reason: 'OK',
-            at: r.at,
-            retryAfter: null,
-            elapsedMs: r.elapsedMs,
-            evidence: ev,
-          };
-        }
       } else if (nrSrc?.endpoint) {
         const nrStats = initStats(nrSrc.id || '9router');
         nrStats.listed++;
@@ -1245,7 +1207,7 @@ async function scanAllFullRoutes(options = {}) {
           accountId: r.accountId,
           modelId: r.modelId,
           endpoint: nrSrc.endpoint,
-          apiKeyEnv: nrSrc.credential?.env || 'NINEROUTER_API_KEY',
+          apiKeyEnv: nrSrc.credential?.env || null,
         });
       }
     }
@@ -1256,13 +1218,15 @@ async function scanAllFullRoutes(options = {}) {
       nrSrc?.endpoint
     ) {
       const nrStats = initStats(nrSrc.id || '9router');
-      const nrKey =
-        (options.env || process.env)[nrSrc.credential?.env || 'NINEROUTER_API_KEY'] || '';
-      const timeoutMs =
-        fullScanLimits.nineRouterModelsTimeoutMs ||
-        dispatchConfig.nineRouterModelsTimeoutMs ||
-        dispatchConfig.modelsTimeoutMs ||
-        10000;
+      const nrEnv = nrSrc.credential?.env;
+      const nrKey = nrEnv ? (options.env || process.env)[nrEnv] || '' : '';
+      const timeoutMs = requireConfiguredLimit(
+        options.nineRouterModelsTimeoutMs ||
+          fullScanLimits.nineRouterModelsTimeoutMs ||
+          dispatchConfig.nineRouterModelsTimeoutMs ||
+          dispatchConfig.modelsTimeoutMs,
+        'nineRouterModelsTimeoutMs'
+      );
       let nrModels = [];
       try {
         const nrModelsUrl = nrSrc.endpoint.replace(/\/+$/, '') + (nrSrc.verify?.path || '/models');
@@ -1286,7 +1250,7 @@ async function scanAllFullRoutes(options = {}) {
           accountId,
           modelId,
           endpoint: nrSrc.endpoint,
-          apiKeyEnv: nrSrc.credential?.env || 'NINEROUTER_API_KEY',
+          apiKeyEnv: nrSrc.credential?.env || null,
         });
       }
     }
@@ -1297,13 +1261,15 @@ async function scanAllFullRoutes(options = {}) {
       gwSrc?.endpoint
     ) {
       const gwStats = initStats(gwSrc.id || 'agy-gateway');
-      const gwKey =
-        (options.env || process.env)[gwSrc.credential?.env || 'AGY_GATEWAY_TOKEN'] || '';
-      const timeoutMs =
-        fullScanLimits.gatewayModelsTimeoutMs ||
-        dispatchConfig.gatewayModelsTimeoutMs ||
-        dispatchConfig.modelsTimeoutMs ||
-        5000;
+      const gwEnv = gwSrc.credential?.env;
+      const gwKey = gwEnv ? (options.env || process.env)[gwEnv] || '' : '';
+      const timeoutMs = requireConfiguredLimit(
+        options.gatewayModelsTimeoutMs ||
+          fullScanLimits.gatewayModelsTimeoutMs ||
+          dispatchConfig.gatewayModelsTimeoutMs ||
+          dispatchConfig.modelsTimeoutMs,
+        'gatewayModelsTimeoutMs'
+      );
       let gwModels = [];
       try {
         const gwModelsUrl = gwSrc.endpoint.replace(/\/+$/, '') + (gwSrc.verify?.path || '/models');
@@ -1332,7 +1298,7 @@ async function scanAllFullRoutes(options = {}) {
           accountId: gwSrc.id || 'agy-gateway',
           modelId,
           endpoint: gwSrc.endpoint,
-          apiKeyEnv: gwSrc.credential?.env || 'AGY_GATEWAY_TOKEN',
+          apiKeyEnv: gwSrc.credential?.env || null,
         });
       }
     }
@@ -1388,14 +1354,7 @@ async function scanAllFullRoutes(options = {}) {
           }
         }
       }
-      const ocProv =
-        oc.provider &&
-        (oc.provider[src.id] ||
-          oc.provider[src.sourceId] ||
-          (src.id.startsWith('bai') ? oc.provider[src.id] : null));
-      if (ocProv && ocProv.models) {
-        for (const m of Object.keys(ocProv.models)) modelSet.add(m);
-      }
+
       const key = (options.env || process.env)[src.env] || '';
       if (key && src.endpoint) {
         try {
@@ -1618,76 +1577,6 @@ async function scanAllFullRoutes(options = {}) {
         evidence: result.evidence,
       };
 
-      if (result.code === 'OK' || result.reason === 'OK') {
-        const prefix = result.modelId.includes('/') ? result.modelId.split('/')[0] : null;
-        if (prefix) {
-          quotaState.scopes[`${result.sourceId}::${prefix}`] = {
-            source: result.sourceId,
-            scope: prefix,
-            upstream: prefix,
-            model: result.modelId,
-            code: 'OK',
-            status: 200,
-            reason: 'OK',
-            at: result.at,
-            retryAfter: null,
-            elapsedMs: result.elapsedMs,
-            evidence: result.evidence,
-          };
-        }
-        quotaState.scopes[result.sourceId] = {
-          source: result.sourceId,
-          scope: result.sourceId,
-          upstream: result.sourceId,
-          model: result.modelId,
-          code: 'OK',
-          status: 200,
-          reason: 'OK',
-          at: result.at,
-          retryAfter: null,
-          elapsedMs: result.elapsedMs,
-          evidence: result.evidence,
-        };
-      } else {
-        const prefix = result.modelId.includes('/') ? result.modelId.split('/')[0] : null;
-        if (prefix) {
-          const pKey = `${result.sourceId}::${prefix}`;
-          if (!quotaState.scopes[pKey] || quotaState.scopes[pKey].code !== 'OK') {
-            quotaState.scopes[pKey] = {
-              source: result.sourceId,
-              scope: prefix,
-              upstream: prefix,
-              model: result.modelId,
-              code: result.code,
-              status: result.httpStatus,
-              reason: result.reason,
-              at: result.at,
-              retryAfter: result.retryAfter || null,
-              elapsedMs: result.elapsedMs,
-              evidence: result.evidence,
-            };
-          }
-        }
-        if (
-          !quotaState.scopes[result.sourceId] ||
-          quotaState.scopes[result.sourceId].code !== 'OK'
-        ) {
-          quotaState.scopes[result.sourceId] = {
-            source: result.sourceId,
-            scope: result.sourceId,
-            upstream: result.sourceId,
-            model: result.modelId,
-            code: result.code,
-            status: result.httpStatus,
-            reason: result.reason,
-            at: result.at,
-            retryAfter: result.retryAfter || null,
-            elapsedMs: result.elapsedMs,
-            evidence: result.evidence,
-          };
-        }
-      }
-
       return result;
     } finally {
       sem.release();
@@ -1753,7 +1642,12 @@ async function scanAllFullRoutes(options = {}) {
   const totalItemsCount = Array.from(sourceStats.values()).reduce((sum, st) => sum + st.listed, 0);
   const nrStats = sourceStats.get('9router');
   const afterRateCount = nrStats ? nrStats.rate : 0;
-  const shipdeWriterRow = aliveRows.find((r) => r.modelId === 'shipde-writer');
+  const writerComboName =
+    dispatchConfig.writerCombo ||
+    dispatchConfig.nineRouterWriterCombo ||
+    options.writerCombo ||
+    options.nineRouterWriterCombo;
+  const writerRow = writerComboName ? aliveRows.find((r) => r.modelId === writerComboName) : null;
 
   let md = `# Route Scan Summary Report\n\n`;
   md += `- **Scan Timestamp**: ${new Date(now).toISOString()}\n`;
@@ -1761,7 +1655,9 @@ async function scanAllFullRoutes(options = {}) {
   md += `- **Total Routes Scanned**: ${totalItemsCount}\n`;
   md += `- **Total Alive (OK)**: ${aliveRows.length}\n`;
   md += `- **9router RATE rows**: ${beforeRateCount} before -> ${afterRateCount} after\n`;
-  md += `- **shipde-writer combo status**: ${shipdeWriterRow ? `${shipdeWriterRow.reason} (HTTP ${shipdeWriterRow.httpStatus})` : 'NOT_FOUND'}\n\n`;
+  if (writerComboName) {
+    md += `- **${writerComboName} combo status**: ${writerRow ? `${writerRow.reason} (HTTP ${writerRow.httpStatus})` : 'NOT_FOUND'}\n\n`;
+  }
 
   md += `> [!NOTE]\n`;
   md += `> Pool accounts (agy01-agy07) are evaluated from live quota readings (\`QUOTA_READING\`). Direct execution via Windows Task Scheduler (\`schtasks\`) invokes full agy CLI cycles (~22s each) and is reserved for production task execution rather than lightweight probing.\n\n`;
@@ -1793,7 +1689,8 @@ async function scanAllFullRoutes(options = {}) {
     blockedCount: totalItemsCount - aliveRows.length,
     beforeRateCount,
     afterRateCount,
-    shipdeWriterStatus: shipdeWriterRow ? shipdeWriterRow.reason : 'NOT_FOUND',
+    writerComboStatus: writerRow ? writerRow.reason : 'NOT_FOUND',
+    shipdeWriterStatus: writerRow ? writerRow.reason : 'NOT_FOUND',
     sourceStats: Array.from(sourceStats.values()),
     rankedAlive,
   };
@@ -2175,7 +2072,7 @@ async function scanAllQuotas(options = {}) {
           dispatchConfig.probeTimeoutMs ||
           3000;
         try {
-          const fetchFn = options.fetch || globalThis.fetch;
+          const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
           const mres = await fetchFn(
             src.endpoint.replace(/\/+$/, '') + (src.verify.path || '/models'),
             {

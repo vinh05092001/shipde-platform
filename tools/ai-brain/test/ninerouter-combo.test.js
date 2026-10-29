@@ -155,13 +155,13 @@ test('run-7 inputs produce writer combo candidates, 0 individual 9router candida
   assert.ok(comboCands.length > 0);
   const priors = priorsApi.loadPriors();
   const bestPrior = priorsApi.priorFor(comboCands[0], 'writer', priors);
-  assert.equal(bestPrior.score, 83);
+  assert.equal(bestPrior.score, 14);
 });
 
-test('unprobed combo candidate is treated as recentRouteSuccess and prioritized by orderProbeRoutes', () => {
+test('TASK-AI-142 Finding 2: unprobed combo candidate is NOT treated as recentRouteSuccess without fresh verified probe', () => {
   const routeEvidence = require('../route-evidence');
   const routeHealth = require('../route-health');
-  const probeOrder = require('../probe-order');
+  const health = require('../route-health');
 
   const emptyStore = { paths: {} };
   const comboCandidate = {
@@ -172,10 +172,43 @@ test('unprobed combo candidate is treated as recentRouteSuccess and prioritized 
     comboMembers: ['ag/gemini-3.8-flash', 'gh/gpt-4.1'],
   };
 
-  // An unprobed combo candidate qualifies as recentRouteSuccess
-  assert.equal(routeEvidence.recentRouteSuccess(comboCandidate, emptyStore), true);
+  // An unprobed combo candidate must NOT qualify as recentRouteSuccess (unverified is not a probe pass)
+  assert.equal(routeEvidence.recentRouteSuccess(comboCandidate, emptyStore), false);
 
-  // When in cooldown, it is no longer recentRouteSuccess
+  // When an unverified record exists, it still must NOT qualify as recentRouteSuccess
+  const unverifiedStore = {
+    paths: {
+      'shipde-writer|9router': {
+        modelId: 'shipde-writer',
+        routeId: '9router',
+        status: 'UNVERIFIED',
+      },
+    },
+  };
+  assert.equal(routeEvidence.recentRouteSuccess(comboCandidate, unverifiedStore), false);
+
+  // When a verified fresh AVAILABLE record exists within routeEvidenceMaxAgeMs, it DOES qualify
+  const now = Date.now();
+  const validStore = {
+    paths: {
+      'shipde-writer|9router': {
+        modelId: 'shipde-writer',
+        routeId: '9router',
+        status: 'AVAILABLE',
+        lastCheckedAt: new Date(now).toISOString(),
+      },
+    },
+  };
+  const registry = {
+    sources: [{ id: '9router' }],
+    dispatch: { routeEvidenceMaxAgeMs: 60000 },
+  };
+  assert.equal(
+    routeEvidence.recentRouteSuccess(comboCandidate, validStore, { now, registry }),
+    true
+  );
+
+  // When in cooldown, it is not recentRouteSuccess
   const cooldownStore = {
     paths: {
       'shipde-writer|9router': {
@@ -188,11 +221,6 @@ test('unprobed combo candidate is treated as recentRouteSuccess and prioritized 
     },
   };
   assert.equal(routeEvidence.recentRouteSuccess(comboCandidate, cooldownStore), false);
-
-  // orderProbeRoutes puts the live combo candidate into the live probe partition
-  const ordered = routeHealth.orderProbeRoutes([comboCandidate], { routeHealth: emptyStore });
-  assert.equal(ordered.length, 1);
-  assert.equal(ordered[0].modelId, 'shipde-writer');
 });
 
 test('generateCandidates preserves individual 9router candidates when nineRouterWriterCombo is absent or null', () => {
@@ -281,6 +309,11 @@ test('combo candidate limits are sourced from live source modelMeta or registry 
   assert.ok(combo, 'Combo candidate must be generated');
   assert.equal(combo.contextWindow, 200000, 'Live source modelMeta should take precedence');
   assert.equal(combo.maxOutputTokens, 16384);
+  assert.deepEqual(
+    combo.capabilities,
+    {},
+    'Combo candidate capabilities must not be invented/stamped'
+  );
 
   // When live modelMeta is absent, registry config limits are used
   delete reg.sources[0].modelMeta['shipde-writer'];
@@ -294,4 +327,56 @@ test('combo candidate limits are sourced from live source modelMeta or registry 
   assert.ok(comboConfig);
   assert.equal(comboConfig.contextWindow, 128000, 'Registry config limits should be used');
   assert.equal(comboConfig.maxOutputTokens, 8192);
+  assert.deepEqual(
+    comboConfig.capabilities,
+    {},
+    'Combo candidate capabilities must stay unverified'
+  );
+});
+
+test('TASK-AI-142 Finding 1: direct-http and router combo candidates are created with empty capabilities, never stamping tools or jsonSchema', () => {
+  const candidatesApi = require('../candidates');
+  const reg = {
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        endpoint: 'http://127.0.0.1:20128/v1',
+        servesModels: true,
+      },
+      {
+        id: 'direct-src',
+        kind: 'model-source',
+        harness: 'direct-http',
+        endpoint: 'http://127.0.0.1:20130/v1',
+        servesModels: true,
+        accessPath: 'direct',
+      },
+    ],
+    dispatch: {
+      nineRouterWriterCombo: 'shipde-writer',
+    },
+  };
+
+  const cands = candidatesApi.generateCandidates({
+    registry: reg,
+    accounts: [
+      { id: 'acc-9r', source: '9router' },
+      { id: 'acc-direct', source: 'direct-src' },
+    ],
+    catalogue: ['ninerouter/gh/gpt-4o', 'direct-src/m1'],
+    forWriter: true,
+  });
+
+  const combos = cands.filter((c) => c.comboMembers);
+  assert.ok(combos.length > 0, 'Must have combo candidates');
+  for (const c of combos) {
+    assert.deepEqual(
+      c.capabilities,
+      {},
+      `Combo candidate for harness ${c.harness} must have capabilities: {}, but got ${JSON.stringify(c.capabilities)}`
+    );
+    assert.equal(c.capabilities?.tools, undefined);
+    assert.equal(c.capabilities?.jsonSchema, undefined);
+  }
 });

@@ -87,7 +87,7 @@ function readQuotaText(accountId, options) {
       const qStat = fs.statSync(quotaFile);
       if (outStat.mtimeMs > qStat.mtimeMs) {
         const outText = fs.readFileSync(outFile, 'utf8').replace(/^\uFEFF/, '');
-        if (/Limit Remaining|Argon|"buckets"/i.test(outText)) {
+        if (/Limit Remaining|"buckets"/i.test(outText)) {
           return outText;
         }
       }

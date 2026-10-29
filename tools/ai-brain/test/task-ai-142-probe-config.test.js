@@ -471,3 +471,30 @@ test('PR C (Item 1): probeRankedRoutes enforces maxConcurrentProbes from configu
 
   assert.equal(maxObservedInFlight, 3, 'concurrency must be capped at 3');
 });
+
+test('TASK-AI-142 Finding 8: sources.js does not contain test-only isFixture branches', () => {
+  const sourcesCode = fs.readFileSync(path.join(__dirname, '..', 'sources.js'), 'utf8');
+  assert.equal(
+    sourcesCode.includes('isFixture'),
+    false,
+    'production code must not contain isFixture check'
+  );
+  assert.equal(
+    sourcesCode.includes('isExplicitFixture'),
+    false,
+    'production code must not contain isExplicitFixture'
+  );
+
+  // Verify hermesOrchestrator is derived strictly from options/dispatch/defaults
+  const orchConfig = {
+    qualityFloor: 70,
+    costCeiling: 1000,
+    weightProfile: 'BALANCED',
+    complexity: 'standard',
+    maxProbes: 3,
+    maxRoutesPerAccount: 2,
+  };
+  const regWithOrch = { dispatch: { hermesOrchestrator: orchConfig } };
+  const cfg = sourcesApi.getDispatchConfig(regWithOrch);
+  assert.deepEqual(cfg.hermesOrchestrator, orchConfig);
+});

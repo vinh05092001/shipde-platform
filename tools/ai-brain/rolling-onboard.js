@@ -407,10 +407,6 @@ async function onboardSourceRolling(src, options = {}) {
     evidenceData.combinations.push(...combos);
     evidenceData.capabilityProbes = evidenceData.capabilityProbes || {};
 
-    const allBound = (accounts || []).filter(
-      (account) => account && (account.source === src.id || account.provider === src.id)
-    );
-
     // Bind each stored proof with the same route dispatch resolves for that
     // candidate, so probeCapabilities() finds it under an equal binding.
     const prefix = src.modelPrefix || src.id + '/';
@@ -462,13 +458,6 @@ async function onboardSourceRolling(src, options = {}) {
         { ok: true, status: probeStatus, body: probeBody },
         { ...healthOptions, routeHealth: store, now }
       );
-      for (const acc of allBound) {
-        routeHealthApi.rememberProbe(
-          { ...combo, accountId: acc.id, quotaScope: acc.id },
-          { ok: true, status: probeStatus, body: probeBody },
-          { ...healthOptions, routeHealth: store, now }
-        );
-      }
     }
 
     return {

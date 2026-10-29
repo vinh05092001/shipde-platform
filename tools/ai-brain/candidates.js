@@ -35,7 +35,7 @@ const path = require('path');
 const sourcesApi = require('./sources');
 const evidence = require('./evidence');
 const { toPositiveInteger } = require('./source-discovery');
-const comboLib = require(['.', 'nine' + 'router-combo'].join('/'));
+const comboLib = require('./ninerouter-combo');
 const isNineRouterCandidate = comboLib.isNineRouterCandidate;
 const isIndividualNineRouterCandidate = comboLib.isIndividualNineRouterCandidate;
 
@@ -900,8 +900,7 @@ function builtinOpencodeModels(source, o) {
   try {
     const timeoutMs =
       (o && o.registry && o.registry.dispatch && o.registry.dispatch.opencodeModelsTimeoutMs) ||
-      (o && o.dispatchConfig && o.dispatchConfig.opencodeModelsTimeoutMs) ||
-      3000;
+      (o && o.dispatchConfig && o.dispatchConfig.opencodeModelsTimeoutMs);
     const run =
       o?.listOpencodeModels ||
       (() =>
@@ -1359,7 +1358,7 @@ function generateCandidatesWithCatalog(opts) {
           endpoint: source.endpoint,
           sourceEndpoint: source.endpoint,
           kind: source.kind,
-          capabilities: { tools: true, jsonSchema: true },
+          capabilities: {},
           ...(comboLimits.contextWindow !== undefined
             ? { contextWindow: comboLimits.contextWindow }
             : {}),
@@ -1608,7 +1607,7 @@ function generateCandidatesWithCatalog(opts) {
             endpoint: source.endpoint,
             sourceEndpoint: source.endpoint,
             kind: source.kind,
-            capabilities: { tools: true, jsonSchema: true },
+            capabilities: {},
             ...(comboLimits.contextWindow !== undefined
               ? { contextWindow: comboLimits.contextWindow }
               : {}),
@@ -1988,9 +1987,17 @@ function generateCandidatesWithCatalog(opts) {
 
   const comboName = getWriterComboName(o, registry);
   if (comboName) {
-    const kept = candidates.filter((c) => !isIndividualNineRouterCandidate(c, comboName));
-    candidates.length = 0;
-    candidates.push(...kept);
+    const hasActiveCombo = candidates.some(
+      (c) =>
+        (c.modelId === comboName || c.modelId?.endsWith('/' + comboName)) &&
+        Array.isArray(c.comboMembers) &&
+        c.comboMembers.length > 0
+    );
+    if (hasActiveCombo) {
+      const kept = candidates.filter((c) => !isIndividualNineRouterCandidate(c, comboName));
+      candidates.length = 0;
+      candidates.push(...kept);
+    }
   }
 
   return candidates;
@@ -2297,9 +2304,7 @@ function poolAccountCandidates(opts) {
         const mFile = path.join(pool.accountDir(acc, o), 'models-out.txt');
         if (fs.existsSync(mFile)) {
           const parsed = pool.parseCliModels(fs.readFileSync(mFile, 'utf8'));
-          if (parsed && parsed.length > 0) {
-            accAllowedModels = new Set(parsed);
-          }
+          accAllowedModels = new Set(parsed || []);
         }
       } catch {}
     }
@@ -2333,6 +2338,7 @@ function poolAccountCandidates(opts) {
           continue;
       }
       const family = familyOf(model);
+      if (!family) continue;
 
       // Keep exhausted routes in the candidate set so Controller can record
       // the quota rejection in the structured dispatch decision.
