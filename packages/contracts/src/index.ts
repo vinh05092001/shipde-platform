@@ -724,5 +724,69 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+
+// --- Attachment & Evidence Contracts (FEAT-COM-06) ---
+export const AttachmentAuditEvent = {
+  ATTACHMENT_UPLOADED: 'ATTACHMENT_UPLOADED',
+  ATTACHMENT_ACCESSED: 'ATTACHMENT_ACCESSED',
+  ATTACHMENT_DOWNLOADED: 'ATTACHMENT_DOWNLOADED',
+  ATTACHMENT_DELETED: 'ATTACHMENT_DELETED',
+  ATTACHMENT_PURGED: 'ATTACHMENT_PURGED',
+  ATTACHMENT_RETENTION_RUN: 'ATTACHMENT_RETENTION_RUN',
+  ATTACHMENT_BULK_DELETE: 'ATTACHMENT_BULK_DELETE',
+} as const;
+export type AttachmentAuditEvent = (typeof AttachmentAuditEvent)[keyof typeof AttachmentAuditEvent];
+
+export const AttachmentErrorCode = {
+  INVALID_FILE_TYPE: 'INVALID_FILE_TYPE',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  EMPTY_FILE: 'EMPTY_FILE',
+  CHECKSUM_MISMATCH: 'CHECKSUM_MISMATCH',
+  ATTACHMENT_NOT_FOUND: 'ATTACHMENT_NOT_FOUND',
+  SCOPE_FORBIDDEN: 'SCOPE_FORBIDDEN',
+  STORAGE_UNAVAILABLE: 'STORAGE_UNAVAILABLE',
+  CONFIRMATION_REQUIRED: 'CONFIRMATION_REQUIRED',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type AttachmentErrorCode = (typeof AttachmentErrorCode)[keyof typeof AttachmentErrorCode];
+
+export interface FormattedAttachment {
+  id: string;
+  merchant_id: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  checksum_sha256: string;
+  storage_key: string;
+  entity_type: string;
+  entity_id: string | null;
+  branch_id: string | null;
+  warehouse_id: string | null;
+  uploaded_by: string;
+  status: string;
+  retention_days: number | null;
+  expires_at: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AttachmentPerItemResult {
+  id: string;
+  status: 'SUCCEEDED' | 'FAILED';
+  code?: string;
+  message?: string;
+}
+
+export interface AttachmentBulkActionResult {
+  success: boolean;
+  total: number;
+  success_count: number;
+  failure_count: number;
+  succeeded_ids: string[];
+  failed_ids: string[];
+  results: AttachmentPerItemResult[];
+}
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

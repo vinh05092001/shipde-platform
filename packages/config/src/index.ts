@@ -12,6 +12,9 @@ export const WORKSPACE_ENV = {
   DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS: 1000,
   DEFAULT_RBAC_SEED_MAX_ATTEMPTS: 10,
   DEFAULT_RBAC_SEED_BACKOFF_FACTOR: 1.5,
+  DEFAULT_MAX_ATTACHMENT_SIZE_BYTES: 10 * 1024 * 1024,
+  DEFAULT_ATTACHMENT_RETENTION_DAYS: 90,
+  DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS: 300,
 } as const;
 
 export type WorkspaceEnvironment = typeof WORKSPACE_ENV;
@@ -58,6 +61,12 @@ export interface AppConfig {
   RBAC_SEED_MAX_ATTEMPTS?: number;
   /** Backoff multiplier for RBAC platform seed */
   RBAC_SEED_BACKOFF_FACTOR?: number;
+  /** Maximum allowed size in bytes for attachment uploads (FEAT-COM-06). Default 10MB (10485760). */
+  MAX_ATTACHMENT_SIZE_BYTES: number;
+  /** Default retention period in days for evidence attachments (FEAT-COM-06). Default 90 days. */
+  ATTACHMENT_DEFAULT_RETENTION_DAYS: number;
+  /** Download URL expiry / buffer TTL in seconds (FEAT-COM-06). Default 300 seconds (5 min). */
+  ATTACHMENT_DOWNLOAD_TTL_SECONDS: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -342,6 +351,58 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  const maxAttachmentSizeRaw = rawEnv.MAX_ATTACHMENT_SIZE_BYTES;
+  let MAX_ATTACHMENT_SIZE_BYTES: number = WORKSPACE_ENV.DEFAULT_MAX_ATTACHMENT_SIZE_BYTES;
+  if (maxAttachmentSizeRaw !== undefined && maxAttachmentSizeRaw !== '') {
+    if (!/^\d+$/.test(maxAttachmentSizeRaw)) {
+      invalidFields.push('MAX_ATTACHMENT_SIZE_BYTES (must be a positive integer)');
+    } else {
+      const parsed = Number(maxAttachmentSizeRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 104857600) {
+        invalidFields.push(
+          'MAX_ATTACHMENT_SIZE_BYTES (must be a positive integer between 1 and 104857600)'
+        );
+      } else {
+        MAX_ATTACHMENT_SIZE_BYTES = parsed;
+      }
+    }
+  }
+
+  const attachmentRetentionRaw = rawEnv.ATTACHMENT_DEFAULT_RETENTION_DAYS;
+  let ATTACHMENT_DEFAULT_RETENTION_DAYS: number = WORKSPACE_ENV.DEFAULT_ATTACHMENT_RETENTION_DAYS;
+  if (attachmentRetentionRaw !== undefined && attachmentRetentionRaw !== '') {
+    if (!/^\d+$/.test(attachmentRetentionRaw)) {
+      invalidFields.push('ATTACHMENT_DEFAULT_RETENTION_DAYS (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentRetentionRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 3650) {
+        invalidFields.push(
+          'ATTACHMENT_DEFAULT_RETENTION_DAYS (must be a positive integer between 1 and 3650)'
+        );
+      } else {
+        ATTACHMENT_DEFAULT_RETENTION_DAYS = parsed;
+      }
+    }
+  }
+
+  const attachmentDownloadTtlRaw = rawEnv.ATTACHMENT_DOWNLOAD_TTL_SECONDS;
+  let ATTACHMENT_DOWNLOAD_TTL_SECONDS: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS;
+  if (attachmentDownloadTtlRaw !== undefined && attachmentDownloadTtlRaw !== '') {
+    if (!/^\d+$/.test(attachmentDownloadTtlRaw)) {
+      invalidFields.push('ATTACHMENT_DOWNLOAD_TTL_SECONDS (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentDownloadTtlRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 86400) {
+        invalidFields.push(
+          'ATTACHMENT_DOWNLOAD_TTL_SECONDS (must be a positive integer between 1 and 86400)'
+        );
+      } else {
+        ATTACHMENT_DOWNLOAD_TTL_SECONDS = parsed;
+      }
+    }
+  }
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -373,11 +434,42 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     RBAC_SEED_RETRY_INTERVAL_MS,
     RBAC_SEED_MAX_ATTEMPTS,
     RBAC_SEED_BACKOFF_FACTOR,
+    MAX_ATTACHMENT_SIZE_BYTES,
+    ATTACHMENT_DEFAULT_RETENTION_DAYS,
+    ATTACHMENT_DOWNLOAD_TTL_SECONDS,
   };
 }
 
 // --- Correlation Identification ---
 export const CORRELATION_ID_HEADER = 'x-correlation-id' as const;
+
+// --- Attachments & Evidence Configuration (FEAT-COM-06) ---
+export const ATTACHMENT_ALLOWED_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+] as const;
+
+export const ATTACHMENT_DISALLOWED_EXTENSIONS = new Set([
+  '.exe',
+  '.bat',
+  '.cmd',
+  '.sh',
+  '.js',
+  '.mjs',
+  '.html',
+  '.htm',
+  '.svg',
+  '.php',
+  '.py',
+  '.ps1',
+  '.vbs',
+  '.com',
+  '.jar',
+]);
 
 /**
  * Validates whether an incoming correlation identifier adheres to format and safety constraints.

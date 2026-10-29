@@ -16,6 +16,7 @@ import { InvitationsModule } from './invitations/invitations.module';
 import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
+import { AttachmentsModule } from './attachments/attachments.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { WarehousesModule } from './warehouses/warehouses.module';
     UsersModule,
     ShopsModule,
     WarehousesModule,
+    AttachmentsModule,
   ],
   controllers: [HealthController],
   providers: [
