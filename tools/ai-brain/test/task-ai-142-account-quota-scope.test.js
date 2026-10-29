@@ -370,11 +370,51 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
       false,
       'must not emit inventory-listed unmapped model containing gemini substring'
     );
+
+    // Rejection assertions tied specifically to candidate identities that reach family classification
+    const mysteryRejection = rejections.find((r) => r.modelId === 'unknown-mystery-model');
     assert.ok(
-      rejections.some(
-        (r) => r.reasonCode === 'UNKNOWN_MODEL_FAMILY' || r.reasonCode === 'AGY_MODEL_ID_UNMAPPED'
-      ),
-      'must record rejection for inventory-listed unmapped or unknown family models'
+      mysteryRejection,
+      'must record candidate generation rejection specifically for unknown-mystery-model'
+    );
+    assert.equal(
+      mysteryRejection.reasonCode,
+      'UNKNOWN_MODEL_FAMILY',
+      'unknown-mystery-model must be rejected for UNKNOWN_MODEL_FAMILY from family classification'
+    );
+
+    const unmappedRejection = rejections.find(
+      (r) => r.modelId === 'gemini-unmapped-custom' || r.modelId === 'ag/gemini-unmapped-custom'
+    );
+    assert.ok(unmappedRejection, 'must record rejection specifically for unmapped candidate');
+
+    // Case reaching family classification directly (without ID-mapping gate)
+    const rejectionsDirect = [];
+    candidatesApi.poolAccountCandidates({
+      runsDir: tempDir,
+      models: ['gemini-2.5-pro', 'unknown-mystery-model'],
+      discoverPool: false,
+      candidateGenerationRejections: rejectionsDirect,
+      registry: {
+        sources: [
+          {
+            id: 'agy-pool',
+            kind: 'pool',
+            harness: 'agy-pool',
+            servesModels: true,
+          },
+        ],
+      },
+    });
+    const directRej = rejectionsDirect.find((r) => r.modelId === 'unknown-mystery-model');
+    assert.ok(
+      directRej,
+      'rejection record must be created specifically for unknown-mystery-model under direct classification'
+    );
+    assert.equal(
+      directRej.reasonCode,
+      'UNKNOWN_MODEL_FAMILY',
+      'candidate reaching family classification directly must be rejected with UNKNOWN_MODEL_FAMILY'
     );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

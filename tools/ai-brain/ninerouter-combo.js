@@ -182,6 +182,9 @@ function httpRequest({
   body,
   endpoint,
   registry,
+  transport: injectedTransport,
+  httpTransport = http,
+  httpsTransport = https,
 }) {
   const resolved = resolveEndpoint({ host, port, protocol, endpoint, registry });
   if (!resolved.host || !resolved.port || !resolved.protocol) {
@@ -194,7 +197,8 @@ function httpRequest({
       new Error(`INVALID_PROTOCOL: Only http: and https: are supported, got ${resolved.protocol}`)
     );
   }
-  const transport = resolved.protocol === 'https:' ? https : http;
+  const transport =
+    injectedTransport || (resolved.protocol === 'https:' ? httpsTransport : httpTransport);
   return new Promise((resolve, reject) => {
     const payload = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
     const reqHeaders = { ...headers };

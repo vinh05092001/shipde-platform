@@ -898,15 +898,23 @@ function builtinOpencodeModels(source, o) {
   if (Array.isArray(o?.sourceModels?.[source.id])) return o.sourceModels[source.id];
   let models = [];
   try {
-    const dispatch = (o && o.registry && o.registry.dispatch) || (o && o.dispatchConfig) || {};
+    const regDispatch = (o && o.registry && o.registry.dispatch) || {};
+    const dispatchConfig = (o && o.dispatchConfig) || {};
     const configuredTimeout =
-      dispatch.opencodeModelsTimeoutMs || dispatch.modelsTimeoutMs || dispatch.probeTimeoutMs;
+      o?.opencodeModelsTimeoutMs ||
+      regDispatch.opencodeModelsTimeoutMs ||
+      dispatchConfig.opencodeModelsTimeoutMs ||
+      o?.modelsTimeoutMs ||
+      regDispatch.modelsTimeoutMs ||
+      dispatchConfig.modelsTimeoutMs ||
+      o?.probeTimeoutMs ||
+      regDispatch.probeTimeoutMs ||
+      dispatchConfig.probeTimeoutMs ||
+      o?.timeoutMs;
     const timeoutMs = Number(configuredTimeout);
 
-    if (!o?.listOpencodeModels) {
-      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-        return [];
-      }
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return [];
     }
 
     const run =

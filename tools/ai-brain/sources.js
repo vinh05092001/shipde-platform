@@ -493,9 +493,7 @@ function getDispatchConfig(registry, options = {}) {
   const hermesOrchRaw =
     options.hermesOrchestrator !== undefined
       ? options.hermesOrchestrator
-      : dispatch.hermesOrchestrator !== undefined
-        ? dispatch.hermesOrchestrator
-        : defaults.hermesOrchestrator;
+      : dispatch.hermesOrchestrator;
 
   let hermesOrchestrator = undefined;
   if (hermesOrchRaw) {
