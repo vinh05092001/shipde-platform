@@ -125,10 +125,20 @@ test('Finding 2: missing required checks return PENDING; SKIPPED or NEUTRAL retu
   ];
   const r5 = ciGate.classifyRollup(successRollup, required);
   assert.equal(r5.state, 'PASS');
+
+  // Finding 9: Path-filtered skip on unrelated check must NOT fail
+  const pathFilteredRollup = [
+    { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { name: 'product-spec-validation', status: 'COMPLETED', conclusion: 'SKIPPED' },
+  ];
+  const r6 = ciGate.classifyRollup(pathFilteredRollup, required);
+  assert.equal(r6.state, 'PASS', 'Path-filtered unrelated check must stay non-failing');
 });
 
 // Finding 3: Two workers sharing cache update workspace links to their own checkout
 test('Finding 3: two workers sharing cache update workspace links to their own checkout', () => {
+  const { retargetSharedDepsWorkspaceLinks } = require('../isolation-launcher');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-deps-test-'));
   try {
     const depsDir = path.join(tmp, 'deps');
@@ -149,33 +159,8 @@ test('Finding 3: two workers sharing cache update workspace links to their own c
     const pkgLink = path.join(shipdeInDeps, 'contracts');
     fs.symlinkSync(initialTarget, pkgLink, 'junction');
 
-    // Simulate worker A setup
-    function updateLinksForWorker(wRoot) {
-      const st = fs.lstatSync(pkgLink);
-      assert.ok(st.isSymbolicLink());
-      const currentTarget = fs.readlinkSync(pkgLink);
-      const absTarget = path.resolve(path.dirname(pkgLink), currentTarget);
-      const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
-      const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
-      let sub = null;
-      if (normTarget.startsWith(normDeps)) {
-        sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
-      } else {
-        const match = absTarget.match(/[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i);
-        if (match) {
-          sub = match[0].replace(/^[\\/]/, '');
-        }
-      }
-      assert.ok(sub, 'Must determine relative package subpath');
-      const newTarget = path.join(wRoot, sub);
-      if (normTarget !== newTarget.replace(/\\/g, '/').toLowerCase()) {
-        fs.unlinkSync(pkgLink);
-        fs.symlinkSync(newTarget, pkgLink, 'junction');
-      }
-    }
-
-    // Worker A updates links
-    updateLinksForWorker(workerA);
+    // Worker A updates links using the real isolation-launcher implementation
+    retargetSharedDepsWorkspaceLinks(depsDir, workerA);
     const linkAfterA = fs.readlinkSync(pkgLink);
     assert.equal(
       path.resolve(path.dirname(pkgLink), linkAfterA).toLowerCase(),
@@ -183,7 +168,7 @@ test('Finding 3: two workers sharing cache update workspace links to their own c
     );
 
     // Worker B updates links sharing the same depsDir
-    updateLinksForWorker(workerB);
+    retargetSharedDepsWorkspaceLinks(depsDir, workerB);
     const linkAfterB = fs.readlinkSync(pkgLink);
     assert.equal(
       path.resolve(path.dirname(pkgLink), linkAfterB).toLowerCase(),
@@ -266,8 +251,13 @@ test('Finding 6: historical events from other root/SHA/run/freshness do not auth
       decisionDir: dir,
       runId: 'RUN-CURRENT',
     };
+    const extra = {
+      workerRoot: s.workerRoot,
+      retainedHeadSha: s.baseSha,
+      runId: s.runId,
+    };
 
-    // Record from DIFFERENT worker root
+    // 1. Foreign worker root must be rejected
     decisions.recordDecision(
       {
         stage: 'writer-launch-result',
@@ -279,11 +269,83 @@ test('Finding 6: historical events from other root/SHA/run/freshness do not auth
       },
       { dir }
     );
+    assert.equal(launcherModule.retainedRootHasOwnWriterRecord(s, extra), false);
 
-    // Call launcher internal helper directly if exported or check launcher logic
-    // Let's test the ownership check directly with decisions
-    const safeDecs = decisions.readDecisionsSafe({ dir });
-    assert.equal(safeDecs.length, 1);
+    // 2. Foreign SHA must be rejected
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-HIST-01',
+        workerRoot: s.workerRoot,
+        sha: '9'.repeat(40),
+        runId: s.runId,
+        at: new Date().toISOString(),
+      },
+      { dir }
+    );
+    assert.equal(launcherModule.retainedRootHasOwnWriterRecord(s, extra), false);
+
+    // 3. Foreign runId must be rejected
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-HIST-01',
+        workerRoot: s.workerRoot,
+        sha: s.baseSha,
+        runId: 'OTHER-RUN',
+        at: new Date().toISOString(),
+      },
+      { dir }
+    );
+    assert.equal(launcherModule.retainedRootHasOwnWriterRecord(s, extra), false);
+
+    // 4. Stale record must be rejected
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-HIST-01',
+        workerRoot: s.workerRoot,
+        sha: s.baseSha,
+        runId: s.runId,
+        at: new Date(Date.now() - 4000000).toISOString(),
+      },
+      { dir }
+    );
+    assert.equal(launcherModule.retainedRootHasOwnWriterRecord(s, extra), false);
+
+    // 5. Bare record lacking workerRoot/sha/runId/timestamp must be rejected
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-HIST-01',
+      },
+      { dir }
+    );
+    assert.equal(launcherModule.retainedRootHasOwnWriterRecord(s, extra), false);
+
+    // 6. Matching fresh record with all required fields is accepted
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-HIST-01',
+        workerRoot: s.workerRoot,
+        sha: s.baseSha,
+        runId: s.runId,
+        at: new Date().toISOString(),
+      },
+      { dir }
+    );
+    assert.equal(launcherModule.retainedRootHasOwnWriterRecord(s, extra), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -420,4 +482,138 @@ test('Finding 9: scanAllQuotas respects ifDue and skips scanning when fresh', as
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// Round 3 Finding 1 (P0): Hook enforcement in planning-services
+test('Round 3 Finding 1: defaultGit enforces installed pre-commit hook on commit and fails closed if missing', () => {
+  const { defaultGit } = require('../planning-services');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-hook-test-'));
+  try {
+    const cp = require('node:child_process');
+    cp.execSync('git init', { cwd: tmp, stdio: 'pipe' });
+    // Without pre-commit hook, defaultGit commit must fail closed
+    const res = defaultGit(tmp, ['commit', '-m', 'test']);
+    assert.equal(res.ok, false);
+    assert.match(res.stderr, /HOOK_CHECK_FAILED: installed pre-commit hook missing/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 3 Finding 2 (P0): Verification is not weakened
+test('Round 3 Finding 2: verification command does not strip pnpm install or set TURBO_ENV_MODE/IS_WEBPACK_TEST', () => {
+  const orchestrate = require('../orchestrate');
+  let capturedCmd = null;
+  let capturedEnv = null;
+  const mockSpawnSync = (cmd, opts) => {
+    capturedCmd = cmd;
+    capturedEnv = opts ? opts.env : {};
+    return { status: 0, stdout: 'ok', stderr: '' };
+  };
+  const oldVal = process.env.pnpm_config_verify_deps_before_run;
+  delete process.env.pnpm_config_verify_deps_before_run;
+  try {
+    orchestrate.runVerificationCommand(
+      { verification: { command: 'pnpm install --frozen-lockfile && pnpm test' } },
+      {
+        isolatedWorker: true,
+        workerRoot: os.tmpdir(),
+        spawnSync: mockSpawnSync,
+      }
+    );
+    assert.match(capturedCmd, /^pnpm\s+install/i, 'Must not strip leading pnpm install');
+    assert.equal(capturedEnv.TURBO_ENV_MODE, undefined, 'Must not set TURBO_ENV_MODE');
+    assert.equal(capturedEnv.IS_WEBPACK_TEST, undefined, 'Must not set IS_WEBPACK_TEST');
+    assert.equal(capturedEnv.pnpm_config_verify_deps_before_run, undefined);
+  } finally {
+    if (oldVal !== undefined) process.env.pnpm_config_verify_deps_before_run = oldVal;
+  }
+});
+
+// Round 3 Finding 3 (P0): CLI does not force agy-pool for isolated worker
+test('Round 3 Finding 3: cli orchestrate with --isolated-worker does not force agy-pool', async () => {
+  const cli = require('../cli');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-test-'));
+  try {
+    const specsFile = path.join(tmp, 'specs.json');
+    fs.writeFileSync(specsFile, JSON.stringify([{ id: 'FEAT-CLI-01' }]));
+    const args = {
+      'isolated-worker': true,
+      goal: 'test goal',
+      specs: specsFile,
+      _: ['orchestrate', 'FEAT-CLI-01'],
+    };
+    await cli.orchestrateCommand(args, {
+      registry: { sources: [] },
+      discoveryDataDir: tmp,
+      exit: () => {},
+      log: () => {},
+      runOrchestration: async () => ({ status: 'COMPLETED', outcomes: [] }),
+    });
+    assert.equal(args['external-workers'], undefined, 'Must not force external-workers=agy-pool');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 3 Finding 6 (P1): agy-pool-runtime has no NODE_TEST_CONTEXT branch and uses config
+test('Round 3 Finding 6: agy-pool-runtime uses configured timeout and has no NODE_TEST_CONTEXT branch', () => {
+  const pool = require('../agy-pool-runtime');
+  const timeout = pool.poolTimeoutMs({
+    registry: { dispatch: { agyPoolTimeoutMs: 75000 } },
+  });
+  assert.equal(timeout, 75000, 'Must use configured timeout without 1000ms test clamp');
+});
+
+// Round 3 Finding 7 (P1): defaultGh and defaultPublishPlan have no test-mode bypass
+test('Round 3 Finding 7: defaultGh and defaultPublishPlan have no test-mode bypass', async () => {
+  const { defaultGh, defaultPublishPlan } = require('../planning-services');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-plan-test-'));
+  try {
+    // defaultGh executes real spawn (not returning mock gh)
+    const ghRes = defaultGh(tmp, ['--version']);
+    // Either exits with code 0 (if gh installed) or fails to spawn/execute, but stderr is not 'mock gh: test mode'
+    assert.doesNotMatch(ghRes.stderr, /mock gh: test mode/);
+
+    // defaultPublishPlan does not return simulated: true
+    const plan = { branch: 'feat/test', headSha: 'a'.repeat(40), workerRoot: tmp };
+    const pubRes = await defaultPublishPlan({
+      workItemId: 'FEAT-PUB-01',
+      plan,
+      rootDir: tmp,
+      git: () => ({ ok: false, stderr: 'network disabled' }),
+      gh: () => ({ ok: false, stdout: '', stderr: 'gh disabled' }),
+      base: 'main',
+    });
+    assert.equal(pubRes.simulated, undefined, 'Must not return simulated: true in test mode');
+    assert.equal(pubRes.ok, false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 3 Finding 8 (P1): ci-gate and next-runner fail closed on invalid or missing limits
+test('Round 3 Finding 8: awaitCi and next-runner fail closed on invalid or missing poll/timeout limits', async () => {
+  // awaitCi with invalid timeout fails closed
+  const res = await ciGate.awaitCi({
+    dispatch: { ciGate: { pollIntervalMs: 'invalid', timeoutMs: 0 } },
+  });
+  assert.equal(res.state, 'CONFIG_ERROR');
+  assert.match(res.reason, /INVALID_CI_GATE_CONFIG/);
+
+  // fetchFailedLog without maxLogChars throws error
+  assert.throws(() => ciGate.fetchFailedLog([], { maxLogChars: null }), /INVALID_CI_GATE_CONFIG/);
+
+  // next-runner with invalid limits throws error
+  const nextRunner = require('../next-runner');
+  await assert.rejects(
+    () =>
+      nextRunner.nextLoop(
+        {},
+        {
+          registry: { dispatch: { blockedNoRouteTimeoutMs: -1, blockedNoRoutePollIntervalMs: 0 } },
+        }
+      ),
+    /DISPATCH_CONFIG_INVALID|INVALID_DISPATCH_CONFIG/
+  );
 });

@@ -22,19 +22,16 @@ const RED = new Set([
   'ACTION_REQUIRED',
   'STARTUP_FAILURE',
   'STALE',
-  'SKIPPED',
-  'NEUTRAL',
 ]);
+const NON_PASS = new Set([...RED, 'SKIPPED', 'NEUTRAL']);
 
 function defaultGh(args, cwd) {
-  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') {
-    return {
-      exitCode: -1,
-      stdout: '',
-      stderr: 'mock gh: test mode',
-    };
-  }
-  const res = cp.spawnSync('gh', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  const res = cp.spawnSync('gh', args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 15000,
+  });
   return {
     exitCode: res.status === null ? -1 : res.status,
     stdout: res.stdout || '',
@@ -66,7 +63,7 @@ function classifyRollup(rollup, requiredChecks = []) {
       pending = true;
     } else if (RED.has(conclusion)) {
       failed.push(chk);
-    } else if (!GREEN.has(conclusion)) {
+    } else if (!GREEN.has(conclusion) && conclusion !== 'SKIPPED' && conclusion !== 'NEUTRAL') {
       pending = true;
     }
   }
@@ -87,7 +84,7 @@ function classifyRollup(rollup, requiredChecks = []) {
       const status = String(match.status || 'COMPLETED').toUpperCase();
       const conclusion = String(match.conclusion || match.state || '').toUpperCase();
       if (status !== 'COMPLETED' || conclusion !== 'SUCCESS') {
-        if (RED.has(conclusion)) {
+        if (NON_PASS.has(conclusion)) {
           return { state: 'FAIL', failed: [match] };
         }
         return { state: 'PENDING', failed: [] };
@@ -107,7 +104,10 @@ function fetchFailedLog(failed, options) {
   const o = options || {};
   const gh = o.ghRunner || defaultGh;
   const redact = createSecretRedactor(o.env || process.env);
-  const max = Number.isFinite(o.maxLogChars) && o.maxLogChars > 0 ? o.maxLogChars : 12000;
+  const max = Number(o.maxLogChars);
+  if (!Number.isFinite(max) || max <= 0) {
+    throw new Error('INVALID_CI_GATE_CONFIG: maxLogChars must be a positive number');
+  }
   const ids = Array.from(new Set(failed.map(runIdOf).filter(Boolean)));
   const parts = [];
   for (const id of ids) {
@@ -162,11 +162,19 @@ function evaluateCi(options) {
     failed: cls.failed.map((c) => c.name || c.context),
   };
   if (cls.state === 'FAIL') {
+    const maxChars = o.maxLogChars !== undefined ? Number(o.maxLogChars) : cfg.maxLogChars;
+    if (!Number.isFinite(maxChars) || maxChars <= 0) {
+      return {
+        state: 'CONFIG_ERROR',
+        sha,
+        reason: 'INVALID_CI_GATE_CONFIG: maxLogChars must be a positive number',
+      };
+    }
     out.log = fetchFailedLog(cls.failed, {
       ghRunner: gh,
       repo: o.repo,
       cwd: o.cwd,
-      maxLogChars: o.maxLogChars,
+      maxLogChars: maxChars,
       env: o.env,
     });
   }
@@ -176,11 +184,14 @@ function evaluateCi(options) {
 async function awaitCi(options) {
   const o = options || {};
   const cfg = ciGateConfig(o.dispatch);
-  const isTest = Boolean(process.env.NODE_TEST_CONTEXT);
-  const interval =
-    o.pollIntervalMs ?? (isTest ? Math.min(cfg.pollIntervalMs || 10, 10) : cfg.pollIntervalMs);
-  const timeout =
-    o.timeoutMs ?? (isTest ? Math.min(cfg.timeoutMs || 1000, 1000) : cfg.timeoutMs);
+  const interval = o.pollIntervalMs !== undefined ? Number(o.pollIntervalMs) : cfg.pollIntervalMs;
+  const timeout = o.timeoutMs !== undefined ? Number(o.timeoutMs) : cfg.timeoutMs;
+  if (!Number.isFinite(interval) || interval <= 0 || !Number.isFinite(timeout) || timeout <= 0) {
+    return {
+      state: 'CONFIG_ERROR',
+      reason: 'INVALID_CI_GATE_CONFIG: pollIntervalMs and timeoutMs must be positive numbers',
+    };
+  }
   const sleep =
     o.sleep ||
     ((ms) =>
@@ -193,7 +204,7 @@ async function awaitCi(options) {
   let last;
   for (;;) {
     last = evaluateCi(Object.assign({ maxLogChars: cfg.maxLogChars }, o));
-    if (last.state === 'PASS' || last.state === 'FAIL' || last.state === 'HEAD_MOVED') return last;
+    if (last.state !== 'PENDING') return last;
     if (now() - started >= timeout) return Object.assign({}, last, { timedOut: true });
     await sleep(interval);
   }
@@ -251,4 +262,5 @@ module.exports = {
   writeCiFailure,
   ciFindingsFor,
   fetchFailedLog,
+  defaultGh,
 };

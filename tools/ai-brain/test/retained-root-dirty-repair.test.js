@@ -56,6 +56,7 @@ function launchOpts(s) {
     verdictPath: s.verdictPath,
     getWorkerSid: () => 'SID-1',
     verifyBoundary: () => true,
+    runId: 'RUN-1',
   };
 }
 
@@ -69,7 +70,16 @@ test("dirty retained root after this item's repair turn is committed, next repai
   const s = setup('own');
   fs.writeFileSync(path.join(s.workerRoot, 'file.txt'), 'repair edit left uncommitted');
   decisions.recordDecision(
-    { stage: 'writer-launch-result', workItemId: 'FEAT-1', kind: 'host-gate-repair', exitCode: 0 },
+    {
+      stage: 'writer-launch-result',
+      workItemId: 'FEAT-1',
+      kind: 'host-gate-repair',
+      exitCode: 0,
+      workerRoot: s.workerRoot,
+      sha: s.baseSha,
+      runId: 'RUN-1',
+      at: new Date().toISOString(),
+    },
     { dir: s.decisionDir }
   );
   await getIsolatedLauncher()({ id: 'test' }, null, launchOpts(s));

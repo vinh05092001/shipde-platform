@@ -36,24 +36,56 @@ function workItemRel(workItemId) {
   return WORK_ITEMS_REL + '/' + workItemId + '.md';
 }
 
-/** Controller-side git: hooks, fsmonitor and external diff are disabled. */
+function resolveInstalledHook(cwd) {
+  try {
+    const res = spawnSync(
+      'git',
+      [
+        '-c',
+        'safe.directory=' + posix(path.resolve(cwd)),
+        'rev-parse',
+        '--path-format=absolute',
+        '--git-path',
+        'hooks',
+      ],
+      { cwd, encoding: 'utf8', windowsHide: true }
+    );
+    const hooksDir = res.status === 0 ? String(res.stdout || '').trim() : '';
+    const hook = hooksDir ? path.join(hooksDir, 'pre-commit') : '';
+    if (!hook || !fs.existsSync(hook)) {
+      return { ok: false, reason: 'installed pre-commit hook missing' };
+    }
+    const stat = fs.statSync(hook);
+    if (!stat.isFile() || (process.platform !== 'win32' && (stat.mode & 0o111) === 0)) {
+      return { ok: false, reason: 'installed pre-commit hook not executable' };
+    }
+    fs.accessSync(hook, fs.constants.X_OK);
+    return { ok: true, hooksDir, hook };
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
+/** Controller-side git: fsmonitor and external diff are disabled, installed hooks are enforced on commit. */
 function defaultGit(cwd, args) {
-  const nul = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const extra = [];
   if (process.platform === 'win32') {
     extra.push('-c', 'core.filemode=false');
     extra.push('-c', 'core.autocrlf=true');
   }
+  if (args.includes('commit') && !args.some((a) => a.startsWith('core.hooksPath='))) {
+    const hookCheck = resolveInstalledHook(cwd);
+    if (!hookCheck.ok) {
+      return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: ' + hookCheck.reason };
+    }
+    extra.push('-c', 'core.hooksPath=' + hookCheck.hooksDir);
+  }
   const res = spawnSync(
     'git',
-    [
-      '-c',
-      'safe.directory=' + posix(path.resolve(cwd)),
-      '-c',
-      'core.hooksPath=' + nul,
-      '-c',
-      'core.fsmonitor=false',
-    ].concat(extra, args),
+    ['-c', 'safe.directory=' + posix(path.resolve(cwd)), '-c', 'core.fsmonitor=false'].concat(
+      extra,
+      args
+    ),
     {
       cwd,
       encoding: 'utf8',
@@ -61,7 +93,6 @@ function defaultGit(cwd, args) {
       maxBuffer: 16 * 1024 * 1024,
       env: Object.assign({}, process.env, {
         GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: nul,
       }),
     }
   );
@@ -343,6 +374,8 @@ function createPlanningServices(ctx) {
   function commitPlannerChanges(planRoot, branch, workItemId) {
     const dirty = git(planRoot, ['status', '--porcelain']);
     if (!dirty.ok || !dirty.stdout) return null;
+    const hookCheck = resolveInstalledHook(rootDir);
+    if (!hookCheck.ok) return null;
     const ident = c.gitIdentity || {
       name: 'Ship De Controller',
       email: 'controller@shipde.invalid',
@@ -351,6 +384,8 @@ function createPlanningServices(ctx) {
     const added = git(planRoot, ['add', '-A']);
     if (!added.ok) return null;
     const done = git(planRoot, [
+      '-c',
+      'core.hooksPath=' + hookCheck.hooksDir,
       '-c',
       'user.name=' + ident.name,
       '-c',
@@ -485,11 +520,20 @@ function createPlanningServices(ctx) {
             res = { exitCode: -1, stdout: '', stderr: String((err && err.message) || err) };
           }
           if (res && res.exitCode === 0) {
-            const head =
-              (res.workerSha && SHA_40.test(res.workerSha) && res.workerSha) ||
-              commitPlannerChanges(hostWorker, branch, workItemId) ||
-              git(hostWorker, ['rev-parse', 'HEAD']).stdout ||
-              '';
+            let head = (res.workerSha && SHA_40.test(res.workerSha) && res.workerSha) || null;
+            if (!head) {
+              const dirty = git(hostWorker, ['status', '--porcelain']);
+              if (dirty.ok && dirty.stdout) {
+                head = commitPlannerChanges(hostWorker, branch, workItemId);
+                if (!head) {
+                  lastReason = 'PLANNER_COMMIT_REJECTED: pre-commit hook or commit failed';
+                  noteFailure(state, current, { exitCode: 1, stderr: lastReason });
+                  continue;
+                }
+              } else {
+                head = git(hostWorker, ['rev-parse', 'HEAD']).stdout || '';
+              }
+            }
             if (!SHA_40.test(head) || head.toLowerCase() === base.sha.toLowerCase()) {
               lastReason = 'PLANNER_NO_COMMIT: the planner produced no commit';
               noteFailure(state, current, { exitCode: 1, stderr: lastReason });
@@ -955,9 +999,6 @@ function createPlanningServices(ctx) {
 }
 
 function defaultGh(cwd, args) {
-  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') {
-    return { ok: false, stdout: '', stderr: 'mock gh: test mode' };
-  }
   const res = spawnSync('gh', args, {
     cwd,
     encoding: 'utf8',
@@ -974,9 +1015,6 @@ function defaultGh(cwd, args) {
 
 /** Push the reviewed commit and open a non-draft PR titled with the Work Item. */
 async function defaultPublishPlan({ workItemId, plan, rootDir, git, gh, repo, base }) {
-  if (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') {
-    return { ok: true, number: 1, existing: true, simulated: true };
-  }
   const run = gh || defaultGh;
   const repoArg = repo ? ['--repo', repo] : [];
   const existing = run(rootDir, [
@@ -1038,4 +1076,8 @@ module.exports = {
   newState,
   workItemRel,
   REGISTER_REL,
+  defaultGit,
+  defaultGh,
+  defaultPublishPlan,
+  resolveInstalledHook,
 };

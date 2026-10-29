@@ -36,6 +36,9 @@ function makeRepo() {
   sh(dir, 'config', 'user.email', 't@example.test');
   sh(dir, 'config', 'user.name', 't');
   sh(dir, 'config', 'commit.gpgsign', 'false');
+  const hooksDir = path.join(dir, '.git', 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.writeFileSync(path.join(hooksDir, 'pre-commit'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   fs.mkdirSync(path.join(dir, path.dirname(REGISTER)), { recursive: true });
   fs.mkdirSync(path.join(dir, 'docs/product-spec/work-items'), { recursive: true });
   fs.writeFileSync(

@@ -3888,9 +3888,6 @@ async function orchestrateCommand(args, deps = {}) {
   const readJsonArg = (value) =>
     typeof value === 'string' && value ? JSON.parse(fsx.readFileSync(value, 'utf8')) : null;
   const inputAccounts = readJsonArg(args.accounts) || (Array.isArray(d.accounts) ? d.accounts : []);
-  if (args['isolated-worker'] && args['external-workers'] === undefined) {
-    args['external-workers'] = 'agy-pool';
-  }
   const poolEnabled =
     typeof args['external-workers'] === 'string' &&
     args['external-workers']

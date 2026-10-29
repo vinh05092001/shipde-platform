@@ -823,7 +823,10 @@ async function executeIntakeForItem(item, options, deps, logOpts) {
   const opts = options || {};
   const d = deps || {};
   const runIntakeFn = d.runIntake || intakeApi.runIntake;
-  const intakeDeps = Object.assign({ root: opts.rootDir || d.root || d.rootDir }, d.intakeDeps || {});
+  const intakeDeps = Object.assign(
+    { root: opts.rootDir || d.root || d.rootDir },
+    d.intakeDeps || {}
+  );
 
   try {
     const intakeResult = await runIntakeFn(
@@ -1025,23 +1028,29 @@ async function nextLoop(options, deps) {
       sourcesApi.getDispatchConfig &&
       sourcesApi.getDispatchConfig(opts.registry || d.registry, opts)) ||
     {};
-  const isTest = Boolean(process.env.NODE_TEST_CONTEXT);
   const blockedNoRouteTimeoutMs =
     opts.blockedNoRouteTimeoutMs !== undefined
       ? Number(opts.blockedNoRouteTimeoutMs)
       : d.blockedNoRouteTimeoutMs !== undefined
         ? Number(d.blockedNoRouteTimeoutMs)
-        : isTest
-          ? Math.min(Number(dispatchConfig.blockedNoRouteTimeoutMs) || 1000, 1000)
-          : Number(dispatchConfig.blockedNoRouteTimeoutMs);
+        : Number(dispatchConfig.blockedNoRouteTimeoutMs);
   const blockedNoRoutePollIntervalMs =
     opts.blockedNoRoutePollIntervalMs !== undefined
       ? Number(opts.blockedNoRoutePollIntervalMs)
       : d.blockedNoRoutePollIntervalMs !== undefined
         ? Number(d.blockedNoRoutePollIntervalMs)
-        : isTest
-          ? Math.min(Number(dispatchConfig.blockedNoRoutePollIntervalMs) || 10, 10)
-          : Number(dispatchConfig.blockedNoRoutePollIntervalMs);
+        : Number(dispatchConfig.blockedNoRoutePollIntervalMs);
+
+  if (
+    !Number.isFinite(blockedNoRouteTimeoutMs) ||
+    blockedNoRouteTimeoutMs <= 0 ||
+    !Number.isFinite(blockedNoRoutePollIntervalMs) ||
+    blockedNoRoutePollIntervalMs <= 0
+  ) {
+    throw new Error(
+      'INVALID_DISPATCH_CONFIG: blockedNoRouteTimeoutMs and blockedNoRoutePollIntervalMs must be positive numbers'
+    );
+  }
 
   let iteration = 0;
   while (iteration < maxIterations) {
@@ -1713,7 +1722,8 @@ async function runNext(options, deps) {
 function planningDepsFor(d, opts, rootDir) {
   if (d && d.planningDeps) return d.planningDeps;
   if (d && typeof d.runPlanning === 'function') return d;
-  if (d && (d.items || d.openWritersDetailed) && !opts?.externalWorkers && !d.externalWorkers) return d;
+  if (d && (d.items || d.openWritersDetailed) && !opts?.externalWorkers && !d.externalWorkers)
+    return d;
   const planning = require('./work-item-planner');
   return planning.defaultPlanningDeps(
     rootDir,

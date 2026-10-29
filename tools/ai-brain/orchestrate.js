@@ -421,10 +421,6 @@ function runVerificationCommand(item, options) {
       ],
     };
   }
-  if (o.isolatedWorker || o.workerRoot) {
-    command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
-    command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
-  }
   const cwd = o.workerRoot || o.cwd || process.cwd();
   // Operator decision: CI is the final verification. The isolated worker has no
   // PostgreSQL/Redis/object storage, so scripts that need them (sources.json
@@ -438,12 +434,7 @@ function runVerificationCommand(item, options) {
     }
   }
   const env = { ...process.env, ...(o.env || {}) };
-  if (o.isolatedWorker || o.workerRoot) {
-    env.TURBO_ENV_MODE = 'loose';
-    env.IS_WEBPACK_TEST = '1';
-    env.pnpm_config_verify_deps_before_run = 'warn';
-  }
-  const res = spawnSync(command, {
+  const res = (o.spawnSync || spawnSync)(command, {
     cwd,
     env,
     encoding: 'utf8',

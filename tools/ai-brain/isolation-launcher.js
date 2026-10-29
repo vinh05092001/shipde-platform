@@ -275,24 +275,87 @@ function hookedControllerGit(options) {
   return controllerGit(options, true);
 }
 
+function retargetSharedDepsWorkspaceLinks(depsDir, workerRoot) {
+  const depsNodeModules = path.join(depsDir, 'node_modules');
+  const depsShipdeDirs = [
+    path.join(depsNodeModules, '.pnpm', 'node_modules', '@shipde'),
+    path.join(depsDir, 'apps', 'api', 'node_modules', '@shipde'),
+    path.join(depsDir, 'apps', 'web', 'node_modules', '@shipde'),
+    path.join(depsDir, 'apps', 'worker', 'node_modules', '@shipde'),
+    path.join(depsDir, 'packages', 'contracts', 'node_modules', '@shipde'),
+    path.join(depsDir, 'packages', 'testkit', 'node_modules', '@shipde'),
+    path.join(depsDir, 'packages', 'ui', 'node_modules', '@shipde'),
+  ];
+  for (const shipdeDir of depsShipdeDirs) {
+    if (fs.existsSync(shipdeDir)) {
+      try {
+        const pkgs = fs.readdirSync(shipdeDir, { withFileTypes: true });
+        for (const pkg of pkgs) {
+          const pkgPath = path.join(shipdeDir, pkg.name);
+          try {
+            const st = fs.lstatSync(pkgPath);
+            if (st.isSymbolicLink()) {
+              const currentTarget = fs.readlinkSync(pkgPath);
+              const absTarget = path.resolve(path.dirname(pkgPath), currentTarget);
+              const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
+              const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
+              let sub = null;
+              if (normTarget.startsWith(normDeps)) {
+                sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
+              } else {
+                const match = absTarget.match(
+                  /[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i
+                );
+                if (match) {
+                  sub = match[0].replace(/^[\\/]/, '');
+                }
+              }
+              if (sub) {
+                const newTarget = path.join(workerRoot, sub);
+                if (normTarget !== newTarget.replace(/\\/g, '/').toLowerCase()) {
+                  fs.unlinkSync(pkgPath);
+                  fs.symlinkSync(newTarget, pkgPath, 'junction');
+                }
+              }
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+}
+
 /**
  * True when the decision log shows a writer or repair turn for this work item:
  * the evidence that a dirty retained root holds this item's own output.
+ * Fail closed if required parameters, config, or record fields are missing.
  */
 function retainedRootHasOwnWriterRecord(opts, extra = {}) {
   try {
+    const o = opts || {};
     const decisions = require('./decisions');
-    const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
-    const targetRoot = extra.workerRoot || opts.workerRoot;
+    if (!o.workItemId) return false;
+    const baseId = String(o.workItemId).replace(/-(repair-\d+|review)$/, '');
+    const targetRoot = extra.workerRoot || o.workerRoot;
     const targetSha =
-      extra.retainedHeadSha || extra.retainWorkerHead || opts.retainWorkerHead || opts.baseSha;
-    const targetRun = extra.runId || opts.runId;
-    let maxAgeMs = 3600000;
+      extra.retainedHeadSha || extra.retainWorkerHead || o.retainWorkerHead || o.baseSha;
+    const targetRun = extra.runId || o.runId;
+
+    if (!baseId || !targetRoot || !targetSha || !targetRun) {
+      return false;
+    }
+
+    let maxAgeMs;
     try {
-      maxAgeMs = require('./sources').getDispatchConfig().retainedRootMaxAgeMs || 3600000;
+      const cfg = require('./sources').getDispatchConfig(o.registry, o);
+      maxAgeMs = cfg && cfg.retainedRootMaxAgeMs;
     } catch {}
+    if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) {
+      return false; // Fail closed on missing/invalid config
+    }
+
     const now = Date.now();
-    return decisions.readDecisionsSafe({ dir: opts.decisionDir || undefined }).some((rec) => {
+    return decisions.readDecisionsSafe({ dir: o.decisionDir || undefined }).some((rec) => {
       if (!rec || !rec.workItemId) return false;
       if (String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') !== baseId) return false;
       const validStage =
@@ -300,31 +363,29 @@ function retainedRootHasOwnWriterRecord(opts, extra = {}) {
         (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha);
       if (!validStage) return false;
 
-      if (targetRoot && (rec.workerRoot || rec.root)) {
-        const recRoot = rec.workerRoot || rec.root;
-        if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
-          return false;
-        }
+      const recRoot = rec.workerRoot || rec.root;
+      if (!recRoot) return false;
+      if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
+        return false;
       }
 
-      if (targetSha && (rec.sha || rec.baseSha || rec.headSha)) {
-        const recSha = String(rec.sha || rec.baseSha || rec.headSha).toLowerCase();
-        const expSha = String(targetSha).toLowerCase();
-        if (recSha !== expSha) {
-          return false;
-        }
+      const recSha = rec.sha || rec.baseSha || rec.headSha;
+      if (!recSha) return false;
+      if (String(recSha).toLowerCase() !== String(targetSha).toLowerCase()) {
+        return false;
       }
 
-      if (targetRun && rec.runId && rec.runId !== targetRun) {
+      if (!rec.runId || rec.runId !== targetRun) {
         return false;
       }
 
       const recTime = rec.at || rec.timestamp || rec.time;
-      if (recTime) {
-        const age = now - new Date(recTime).getTime();
-        if (Number.isFinite(age) && age > maxAgeMs) {
-          return false;
-        }
+      if (!recTime) return false;
+      const recTimeMs = new Date(recTime).getTime();
+      if (!Number.isFinite(recTimeMs)) return false;
+      const age = now - recTimeMs;
+      if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) {
+        return false;
       }
 
       return true;
@@ -1604,16 +1665,12 @@ function captureFailBefore(workerRoot, options) {
     }
   }
 
-  let command =
+  const command =
     (o.verification && o.verification.command) || o.exerciseCommand || `node --test ${runnerPosix}`;
-  command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
-  command = command.replace(/^pnpm\s+install(\s+--[a-z0-9-]+)*\s*&&\s*/i, '');
 
   const childEnv = Object.assign({}, process.env, o.env || {});
   delete childEnv.NODE_TEST_CONTEXT;
   delete childEnv.NODE_TEST_WORKER_ID;
-  childEnv.TURBO_ENV_MODE = 'loose';
-  childEnv.IS_WEBPACK_TEST = '1';
 
   let res;
   if (!o.verification && !o.exerciseCommand) {
@@ -2652,52 +2709,7 @@ function getIsolatedLauncher() {
           } catch {}
         }
 
-        const depsShipdeDirs = [
-          path.join(depsNodeModules, '.pnpm', 'node_modules', '@shipde'),
-          path.join(depsDir, 'apps', 'api', 'node_modules', '@shipde'),
-          path.join(depsDir, 'apps', 'web', 'node_modules', '@shipde'),
-          path.join(depsDir, 'apps', 'worker', 'node_modules', '@shipde'),
-          path.join(depsDir, 'packages', 'contracts', 'node_modules', '@shipde'),
-          path.join(depsDir, 'packages', 'testkit', 'node_modules', '@shipde'),
-          path.join(depsDir, 'packages', 'ui', 'node_modules', '@shipde'),
-        ];
-        for (const shipdeDir of depsShipdeDirs) {
-          if (fs.existsSync(shipdeDir)) {
-            try {
-              const pkgs = fs.readdirSync(shipdeDir, { withFileTypes: true });
-              for (const pkg of pkgs) {
-                const pkgPath = path.join(shipdeDir, pkg.name);
-                try {
-                  const st = fs.lstatSync(pkgPath);
-                  if (st.isSymbolicLink()) {
-                    const currentTarget = fs.readlinkSync(pkgPath);
-                    const absTarget = path.resolve(path.dirname(pkgPath), currentTarget);
-                    const normDeps = depsDir.replace(/\\/g, '/').toLowerCase();
-                    const normTarget = absTarget.replace(/\\/g, '/').toLowerCase();
-                    let sub = null;
-                    if (normTarget.startsWith(normDeps)) {
-                      sub = absTarget.slice(depsDir.length).replace(/^[\\/]/, '');
-                    } else {
-                      const match = absTarget.match(
-                        /[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)(?:[\\/].*)?$/i
-                      );
-                      if (match) {
-                        sub = match[0].replace(/^[\\/]/, '');
-                      }
-                    }
-                    if (sub) {
-                      const newTarget = path.join(workerRoot, sub);
-                      if (normTarget !== newTarget.replace(/\\/g, '/').toLowerCase()) {
-                        fs.unlinkSync(pkgPath);
-                        fs.symlinkSync(newTarget, pkgPath, 'junction');
-                      }
-                    }
-                  }
-                } catch {}
-              }
-            } catch {}
-          }
-        }
+        retargetSharedDepsWorkspaceLinks(depsDir, workerRoot);
 
         const depsConfigDir = path.join(depsDir, 'packages', 'config');
         const workerConfigDir = path.join(workerRoot, 'packages', 'config');
@@ -3529,6 +3541,8 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
 }
 
 module.exports = {
+  retainedRootHasOwnWriterRecord,
+  retargetSharedDepsWorkspaceLinks,
   provisionedHeadMatchesBase,
   commitNativeWriterChanges,
   commitWorkerMetadata,
