@@ -104,6 +104,25 @@ function setup() {
     repairer: async (_findings, sha) => ({ sha }),
     reviewerIdentity: candidateKey(reviewer),
     measureFailBefore: () => ({ command: 'test', exitCode: 1 }),
+    ghRunner: (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            headRefOid: git(['rev-parse', 'HEAD']),
+            statusCheckRollup: [
+              { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+              { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            ],
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: 'unknown gh command' };
+    },
+    ciSleep: async () => {},
+    ciPollIntervalMs: 1,
+    ciTimeoutMs: 1000,
   };
   return { ...opts, writer, reviewer, run, runOriginal: run, dir };
 }
@@ -400,7 +419,6 @@ test('CK-R03 a publication recorded in the checkpoint is returned as-is on resum
     testMode: true,
     cwd: f.cwd,
   };
-  f.ciGate = false;
   const originalWrite = cli.writeJsonFile;
   cli.writeJsonFile = (file, value) => {
     originalWrite(file, value);

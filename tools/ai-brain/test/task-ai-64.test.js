@@ -177,11 +177,16 @@ function isLiveCompletion(result, workItemId) {
 }
 
 function baseOpts(extra) {
+  const sourcesDispatch = require('../sources.json').dispatch || {};
   const options = Object.assign(
     {
       specs: [{ id: 'A', files: ['a.js'], acceptanceCriteria: ['a works'] }],
       candidates: [cand()],
-      registry: { sources: [] },
+      registry: {
+        sources: [],
+        dispatch: { maxReviewDiffChars: sourcesDispatch.maxReviewDiffChars },
+      },
+      maxReviewDiffChars: sourcesDispatch.maxReviewDiffChars,
       sha: SHA_A,
       now: NOW,
       tests: PASS_TESTS,

@@ -53,6 +53,7 @@ function launchOpts(s) {
     workerRoot: s.workerRoot,
     decisionDir: s.decisionDir,
     workItemId: 'FEAT-1',
+    allowedPaths: ['file.txt'],
     verdictPath: s.verdictPath,
     getWorkerSid: () => 'SID-1',
     verifyBoundary: () => true,

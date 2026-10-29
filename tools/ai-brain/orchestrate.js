@@ -4341,9 +4341,20 @@ async function runOrchestration(goal, opts) {
       };
       const savedStep = liveSteps[item.id];
       const rec = extractCheckpointReview(checkpointOnDisk, item.id);
-      const checkpointReviewError = validateCheckpointReceipt(rec, item, o);
+      const isAlreadyPublished = publishedBefore.has(item.id);
+      const checkpointReviewError = isAlreadyPublished
+        ? null
+        : validateCheckpointReceipt(rec, item, o);
+      const checkpointSha =
+        (rec && rec.sha) ||
+        (savedStep &&
+          savedStep.review &&
+          (savedStep.review.entry?.sha || savedStep.review.finalSha || savedStep.review.sha)) ||
+        (savedStep && savedStep.launch && savedStep.launch.workerSha) ||
+        (savedStep && savedStep.passedRef && savedStep.passedRef.split('/').pop()) ||
+        null;
       const anchoredEvidence =
-        !checkpointReviewError && rec
+        !checkpointReviewError && rec && rec.decisionLog && rec.decisionLog.dir
           ? decisionLogEvidenceFor(
               { dir: rec.decisionLog.dir, now: rec.decisionLog.now || undefined },
               item.id,
@@ -4355,17 +4366,37 @@ async function runOrchestration(goal, opts) {
 
       const reviewEntry = {
         workItemId: item.id,
-        sha: rec ? rec.sha : null,
-        reviewedSha: rec ? rec.sha : null,
-        reviewerIdentity: rec ? rec.reviewer : null,
-        reviewer: rec ? rec.reviewer : null,
-        writerCandidateKey: rec ? rec.writerCandidateKey : null,
-        workerRoot: rec ? rec.workerRoot : null,
-        publishCwd: rec ? rec.publishCwd : null,
-        branch: rec ? rec.branch : null,
-        baseSha: rec ? rec.baseSha : null,
-        draftTitle: rec ? rec.draftTitle : null,
-        tests: rec ? rec.tests : null,
+        sha: checkpointSha,
+        reviewedSha: checkpointSha,
+        reviewerIdentity: rec
+          ? rec.reviewer
+          : (savedStep && savedStep.review && savedStep.review.entry?.reviewerIdentity) || null,
+        reviewer: rec
+          ? rec.reviewer
+          : (savedStep && savedStep.review && savedStep.review.entry?.reviewer) || null,
+        writerCandidateKey: rec
+          ? rec.writerCandidateKey
+          : (savedStep && savedStep.review && savedStep.review.entry?.writerCandidateKey) || null,
+        workerRoot: rec
+          ? rec.workerRoot
+          : (savedStep && savedStep.review && savedStep.review.entry?.workerRoot) || null,
+        publishCwd: rec
+          ? rec.publishCwd
+          : (savedStep && savedStep.review && savedStep.review.entry?.publishCwd) || null,
+        branch: rec
+          ? rec.branch
+          : (savedStep && savedStep.review && savedStep.review.entry?.branch) ||
+            (savedStep && savedStep.publication && savedStep.publication.branch) ||
+            null,
+        baseSha: rec
+          ? rec.baseSha
+          : (savedStep && savedStep.review && savedStep.review.entry?.baseSha) || null,
+        draftTitle: rec
+          ? rec.draftTitle
+          : (savedStep && savedStep.review && savedStep.review.entry?.draftTitle) || null,
+        tests: rec
+          ? rec.tests
+          : (savedStep && savedStep.review && savedStep.review.entry?.tests) || null,
         reviewRounds: rec ? rec.reviewRounds : null,
         repairCount: rec ? rec.repairCount : null,
         openFindings: rec ? rec.openFindings : null,
@@ -4383,8 +4414,8 @@ async function runOrchestration(goal, opts) {
                 workerRoot: rec.workerRoot,
                 branch: rec.branch,
                 baseSha: rec.baseSha,
-                rounds: anchoredEvidence.rounds,
-                repairCount: anchoredEvidence.repairCount,
+                rounds: (anchoredEvidence && anchoredEvidence.rounds) || null,
+                repairCount: (anchoredEvidence && anchoredEvidence.repairCount) || null,
               }
             : null,
       };

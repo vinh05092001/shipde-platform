@@ -580,7 +580,9 @@ function getDispatchConfig(registry, options = {}) {
     blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
     maxReviewDiffChars:
-      options.maxReviewDiffChars !== undefined || dispatch.maxReviewDiffChars !== undefined
+      options.maxReviewDiffChars !== undefined ||
+      dispatch.maxReviewDiffChars !== undefined ||
+      (!registry?.dispatch && defaults.maxReviewDiffChars !== undefined)
         ? configuredLimit('maxReviewDiffChars')
         : undefined,
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
