@@ -210,10 +210,14 @@ function resolveLauncher(o, isolatedLauncher) {
   const { getHarness } = require('./harness');
   return (job) => {
     if (job.harness === 'agy-pool') {
-      const sourcesApi = require('./sources');
-      const reg = o.registry;
-      const agyPoolWriterAllowed = reg ? sourcesApi.isAgyPoolWriterEnabled(reg, o) : true;
-      if (!agyPoolWriterAllowed) {
+      const isAuthorized =
+        externalWorkers.includes('agy-pool') &&
+        Boolean(
+          o.allowAgyPoolWriter ||
+          o.dispatch?.agyPoolWriterEnabled ||
+          o.registry?.dispatch?.agyPoolWriterEnabled
+        );
+      if (!isAuthorized) {
         return {
           exitCode: 1,
           stdout: '',
@@ -237,8 +241,7 @@ function resolveLauncher(o, isolatedLauncher) {
       Boolean(
         o.registry?.dispatch?.agyPoolWriterEnabled ||
         o.dispatch?.agyPoolWriterEnabled ||
-        o.allowAgyPoolWriter ||
-        o.registry?.sources?.some((s) => s.id === 'agy-pool' && s.writerEnabled)
+        o.allowAgyPoolWriter
       )
     ) {
       const pool = require('./agy-pool-runtime');
@@ -933,14 +936,23 @@ function reviewLane(
                 );
               }
               const fullDiff = dRes.stdout;
+              const reg = registry || (o && o.registry);
               const dispatchCfg =
                 sourcesApi && sourcesApi.getDispatchConfig
-                  ? sourcesApi.getDispatchConfig(o.registry, o)
+                  ? sourcesApi.getDispatchConfig(reg, o)
                   : {};
-              const maxDiffChars = Number(
-                o.maxReviewDiffChars ?? dispatchCfg.maxReviewDiffChars ?? 24000
-              );
-              if (o.isolatedWorker && fullDiff.length > maxDiffChars) {
+              const rawMaxDiff =
+                o.maxReviewDiffChars ??
+                dispatchCfg.maxReviewDiffChars ??
+                reg?.dispatch?.maxReviewDiffChars ??
+                o.dispatch?.maxReviewDiffChars;
+              const maxDiffChars = Number(rawMaxDiff);
+              if (!Number.isSafeInteger(maxDiffChars) || maxDiffChars <= 0) {
+                throw new Error(
+                  'DIFF_CONFIG_INVALID: maxReviewDiffChars must be a positive integer'
+                );
+              }
+              if (fullDiff.length > maxDiffChars) {
                 const patchDir = path.join(reviewWorkerRoot, '.shipde');
                 const patchFile = path.join(patchDir, 'review-diff.patch');
                 try {
@@ -1574,8 +1586,8 @@ function getTreeStatus(cwd, options) {
         const activeWorkItemId = options && (options.workItemId || options.workItem);
         const filteredLines = lines.filter((line) => {
           if (!activeWorkItemId) return true;
-          if (line.startsWith('??')) {
-            const pathPart = line.slice(3).trim();
+          if (line.trimStart().startsWith('??')) {
+            const pathPart = line.replace(/^[A-Z? ]{1,2}\s+/, '').trim();
             if (
               pathPart.startsWith('docs/product-spec/work-items/') ||
               pathPart.startsWith('docs\\product-spec\\work-items\\')
@@ -1591,7 +1603,7 @@ function getTreeStatus(cwd, options) {
         const dirtyPaths = [
           ...new Set(
             filteredLines.map((line) => {
-              let p = line.slice(3).trim();
+              let p = line.replace(/^[A-Z? ]{1,2}\s+/, '').trim();
               if (p.includes(' -> ')) {
                 p = p.split(' -> ')[1].trim();
               }
@@ -1996,42 +2008,13 @@ function runHostBrainGate(job, options = {}) {
     };
   }
   const command = 'node --test ' + suiteFiles.join(' ');
-  if (
-    !options.spawnSync &&
-    !options.brainSuite &&
-    job &&
-    job.workerRoot &&
-    fs.existsSync(job.workerRoot)
-  ) {
-    const baseShaVal =
-      job.baseSha && /^[0-9a-f]{40}$/i.test(String(job.baseSha).trim())
-        ? String(job.baseSha).trim()
-        : null;
-    if (baseShaVal) {
-      const diffRes = run('git', ['diff', '--name-only', baseShaVal + '..HEAD'], {
-        cwd: job.workerRoot,
-        encoding: 'utf8',
-      });
-      if (diffRes && diffRes.status === 0 && !String(diffRes.stdout || '').trim()) {
-        const hostGateFailures = Object.assign([], { newFailures: [], baselineFailures: [] });
-        return {
-          pass: true,
-          command,
-          failures: [],
-          hostGateFailures,
-          newFailures: [],
-          baselineFailures: [],
-          summary: ['ℹ pass (no changes in worker diff)'],
-          cleanupErrors: [],
-          cleanupError: null,
-        };
-      }
-    }
+  const extraTestFlags = [];
+  if (options.testConcurrency) {
+    extraTestFlags.push('--test-concurrency=' + options.testConcurrency);
   }
-  const extraTestFlags =
-    !options.spawnSync && !options.brainSuite
-      ? ['--test-concurrency=6', '--test-timeout=60000']
-      : [];
+  if (options.testTimeout) {
+    extraTestFlags.push('--test-timeout=' + options.testTimeout);
+  }
   // The host checkout carries live Controller state (intake runs, goals, locks) under
   // tools/ai-brain/data, which the base run's clean worktree does not. Run the suite on
   // a clean checkout of the same HEAD so that state never shows up as a new failure.
@@ -6868,26 +6851,11 @@ async function runOrchestration(goal, opts) {
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
-    const isSimulatedOrTestMode = Boolean(
-      o.simulate ||
-      (published &&
-        published.result &&
-        (published.result.simulated ||
-          (published.result.draft && published.result.draft.status === 'simulated_draft'))) ||
-      (o.publication &&
-        (o.publication.testMode ||
-          typeof o.publication.publish === 'function' ||
-          o.publication.approvalId === 'CANARY-OFFLINE')) ||
-      typeof o.publisher === 'function' ||
-      o.testMode ||
-      process.env.NODE_TEST_CONTEXT
-    );
     if (
       published &&
       published.status === PublicationStatus.PUBLISHED_DRAFT &&
       o.ciGate !== false &&
-      ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch).enabled &&
-      (!isSimulatedOrTestMode || Boolean(o.ghRunner) || o.ciGate === true)
+      ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch).enabled
     ) {
       const draft = (published.result && (published.result.draft || published.result)) || {};
       const ci = await ciGate.awaitCi({

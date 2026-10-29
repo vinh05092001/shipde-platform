@@ -3,7 +3,7 @@
 // unsure of. Uses the anonymous ctx7 CLI (no login, no key). The library is the
 // first match in Context7's own ranking unless the caller passes --library-id.
 // Every returned snippet carries its source URL so the author can cite it.
-const { spawn } = require('node:child_process');
+const cp = require('node:child_process');
 
 const CTX7_VERSION = '0.5.9';
 
@@ -15,7 +15,7 @@ function ctx7Command(env = process.env) {
 function runCtx7(args, { env = process.env, timeoutMs = 60000 } = {}) {
   const { cmd, prefix } = ctx7Command(env);
   return new Promise((resolve) => {
-    const child = spawn(cmd, [...prefix, ...args], {
+    const child = cp.spawn(cmd, [...prefix, ...args], {
       shell: false,
       windowsHide: true,
       env: { ...env, NO_COLOR: '1' },

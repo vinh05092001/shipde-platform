@@ -71,7 +71,6 @@ test('Finding 1: resume after draft publication does not skip CI verification an
       checkpointFile,
       decisionDir: dir,
       ghRunner,
-      ciGate: true,
       ciSleep: async () => {},
       ciPollIntervalMs: 1,
       ciTimeoutMs: 100,
@@ -763,14 +762,53 @@ test('Round 3 Finding 13: isolation launcher script template uses per-launch pat
 
 // Round 3 Finding 14 (P1): context-pack and context7 use shell: false and argument vectors
 test('Round 3 Finding 14: context-pack and context7 use shell: false and array args', async () => {
-  const { createContextPack } = require('../context-pack');
+  const cp = require('node:child_process');
+  const contextPack = require('../context-pack');
+  const context7 = require('../context7');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxpack-'));
+  const origSpawnSync = cp.spawnSync;
+  const origSpawn = cp.spawn;
   try {
     fs.writeFileSync(path.join(tmp, 'file.txt'), 'hello');
-    const pack = createContextPack(['file.txt'], { rootDir: tmp });
+    let packSpawnArgs = null;
+    let packSpawnOpts = null;
+    cp.spawnSync = (cmd, args, opts) => {
+      packSpawnArgs = args;
+      packSpawnOpts = opts;
+      return { status: 1, stdout: '', stderr: 'mocked' };
+    };
+
+    const pack = contextPack.createContextPack([{ allowedPaths: ['file.txt'] }], {
+      root: tmp,
+      outputDir: tmp,
+    });
     assert.ok(pack.content);
-    assert.equal(pack.packer, 'fallback'); // repomix not installed in temp, cleanly fell back
+    assert.equal(pack.packer, 'fallback'); // repomix mock status 1, cleanly fell back
+
+    const ctx7Calls = [];
+    cp.spawn = (cmd, args, opts) => {
+      ctx7Calls.push({ cmd, args, opts });
+      const EventEmitter = require('node:events');
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {};
+      process.nextTick(() => {
+        child.stdout.emit('data', JSON.stringify([{ id: 'zod/zod', title: 'Zod' }]));
+        child.emit('close', 0);
+      });
+      return child;
+    };
+
+    await context7.lookupDocs('zod', 'schema');
+    assert.ok(ctx7Calls.length > 0, 'context7 must execute command');
+    for (const call of ctx7Calls) {
+      assert.ok(Array.isArray(call.args), 'context7 must pass arguments as an array');
+      assert.equal(call.opts.shell, false, 'context7 must specify shell: false');
+    }
   } finally {
+    cp.spawnSync = origSpawnSync;
+    cp.spawn = origSpawn;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
@@ -832,7 +870,8 @@ test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILA
       model: 'test-model',
     };
 
-    const laneFn = orchestrate.reviewLane(
+    // Case 1: Bad ref fails closed with DIFF_UNAVAILABLE
+    const badLaneFn = orchestrate.reviewLane(
       {
         cwd: repoDir,
         workerRoot: repoDir,
@@ -850,11 +889,510 @@ test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILA
       {},
       { dispatch: { maxReviewDiffChars: 20 } }
     );
+    const res1 = await badLaneFn(targetSha);
+    assert.equal(res1.verdict, 'BLOCKED');
+    assert.equal(res1.pass, false);
+    assert.ok(res1.findings.some((f) => f.id === 'DIFF_UNAVAILABLE'));
 
-    const res = await laneFn(targetSha);
-    assert.equal(res.verdict, 'BLOCKED');
-    assert.equal(res.pass, false);
-    assert.ok(res.findings.some((f) => f.id === 'DIFF_UNAVAILABLE'));
+    // Case 2: Missing/NaN maxReviewDiffChars fails closed with DIFF_UNAVAILABLE
+    const nanLaneFn = orchestrate.reviewLane(
+      {
+        cwd: repoDir,
+        workerRoot: repoDir,
+        reviewerIdentity: cand.candidateKey,
+        maxReviewDiffChars: NaN,
+      },
+      { id: 'TASK-REV-1', files: [] },
+      { candidateKey: 'writer-1', baseSha, worktree: repoDir },
+      {},
+      {},
+      async () => ({ exitCode: 0, stdout: '{"verdict":"PASS"}' }),
+      tmp,
+      Date.now(),
+      [cand],
+      {},
+      {}
+    );
+    const res2 = await nanLaneFn(targetSha);
+    assert.equal(res2.verdict, 'BLOCKED');
+    assert.equal(res2.pass, false);
+    assert.ok(res2.findings.some((f) => f.id === 'DIFF_UNAVAILABLE'));
+
+    // Case 3: Real diff exceeding cap writes .shipde/review-diff.patch without isolatedWorker
+    const capLaneFn = orchestrate.reviewLane(
+      {
+        cwd: repoDir,
+        workerRoot: repoDir,
+        reviewerIdentity: cand.candidateKey,
+        maxReviewDiffChars: 10,
+      },
+      { id: 'TASK-REV-1', files: [] },
+      { candidateKey: 'writer-1', baseSha, worktree: repoDir },
+      {},
+      {},
+      async () => ({ exitCode: 0, stdout: '{"verdict":"PASS","sha":"' + targetSha + '"}' }),
+      tmp,
+      Date.now(),
+      [cand],
+      {},
+      { dispatch: { maxReviewDiffChars: 10 } }
+    );
+    const res3 = await capLaneFn(targetSha);
+    assert.equal(res3.verdict, 'PASS');
+    const reviewWorkerRoot = repoDir + '-review';
+    const patchFile = path.join(reviewWorkerRoot, '.shipde', 'review-diff.patch');
+    assert.ok(fs.existsSync(patchFile), 'review-diff.patch must be created when diff cap exceeded');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 1 (P0): CI gate has no test-only skip branch
+test('Round 4 Finding 1: runOrchestration CI gate is not skipped under simulate or test mode', async () => {
+  const orchestrate = require('../orchestrate');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-gate-no-skip-'));
+  try {
+    const workItemId = 'FEAT-CI-GATE-01';
+    const sha = '2'.repeat(40);
+    const checkpointFile = path.join(tmp, 'checkpoint.json');
+    const checkpointData = {
+      reviews: [
+        {
+          workItemId,
+          sha,
+          reviewedSha: sha,
+          verdict: 'PASS',
+          reviewer: 'test-reviewer',
+          openFindings: 0,
+          reviewRounds: 1,
+          branch: 'feat/test-ci-gate',
+          draftTitle: 'test draft',
+        },
+      ],
+      liveSteps: {
+        [workItemId]: {
+          publication: {
+            status: orchestrate.PublicationStatus.PUBLISHED_DRAFT,
+            branch: 'feat/test-ci-gate',
+            result: { number: 99, branch: 'feat/test-ci-gate', simulated: true },
+          },
+        },
+      },
+    };
+    fs.writeFileSync(checkpointFile, JSON.stringify(checkpointData), 'utf8');
+
+    let ciEvaluated = false;
+    const ghRunner = (args) => {
+      ciEvaluated = true;
+      if (args[0] === 'pr') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            headRefOid: sha,
+            statusCheckRollup: [{ name: 'contract', status: 'COMPLETED', conclusion: 'FAILURE' }],
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: '' };
+    };
+
+    // Pass simulate: true and testMode: true without ciGate: true
+    const result = await orchestrate.runOrchestration(workItemId, {
+      specs: [{ id: workItemId }],
+      checkpointFile,
+      decisionDir: tmp,
+      ghRunner,
+      simulate: true,
+      testMode: true,
+      ciSleep: async () => {},
+      ciPollIntervalMs: 1,
+      ciTimeoutMs: 100,
+    });
+
+    assert.equal(
+      ciEvaluated,
+      true,
+      'CI gate must be evaluated even with simulate: true / testMode: true'
+    );
+    const outcome = (result.outcomes || []).find((o) => o.workItemId === workItemId);
+    assert.ok(outcome, 'Outcome must be recorded');
+    assert.equal(outcome.status, orchestrate.ItemStatus.BLOCKED);
+    assert.equal(outcome.reasonCode, 'CI_GATE_FAILED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 2 (P0): defaultGit rejects core.hooksPath override and --no-verify
+test('Round 4 Finding 2: defaultGit rejects core.hooksPath override and --no-verify bypass', () => {
+  const { defaultGit } = require('../planning-services');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'git-hooks-bypass-'));
+  try {
+    const cp = require('node:child_process');
+    cp.execSync('git init -b main', { cwd: tmp, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: tmp, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: tmp, stdio: 'ignore' });
+
+    // 1. core.hooksPath=NUL bypass attempt
+    const r1 = defaultGit(tmp, ['-c', 'core.hooksPath=NUL', 'commit', '-m', 'bypass']);
+    assert.equal(r1.ok, false);
+    assert.match(
+      r1.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 2. core.hooksPath=/dev/null bypass attempt
+    const r2 = defaultGit(tmp, ['-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'bypass']);
+    assert.equal(r2.ok, false);
+    assert.match(
+      r2.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 3. --no-verify bypass attempt
+    const r3 = defaultGit(tmp, ['commit', '--no-verify', '-m', 'bypass']);
+    assert.equal(r3.ok, false);
+    assert.match(
+      r3.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+
+    // 4. -n short form bypass attempt
+    const r4 = defaultGit(tmp, ['commit', '-n', '-m', 'bypass']);
+    assert.equal(r4.ok, false);
+    assert.match(
+      r4.stderr,
+      /HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited/
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 3 (P1): agy-pool launcher authorization requires externalWorkers and explicit permission
+test('Round 4 Finding 3: resolveLauncher refuses agy-pool without externalWorkers and explicit permission', () => {
+  const orchestrate = require('../orchestrate');
+  const mockLauncher = () => ({ exitCode: 0 });
+
+  // 1. Registry has source with writerEnabled: true, but externalWorkers is empty
+  const launcher1 = orchestrate.resolveLauncher(
+    {
+      registry: {
+        sources: [{ id: 'agy-pool', writerEnabled: true }],
+        dispatch: {},
+      },
+      externalWorkers: '',
+    },
+    mockLauncher
+  );
+  const res1 = launcher1({ harness: 'agy-pool', accountId: 'pool-acct' });
+  assert.equal(res1.exitCode, 1);
+  assert.match(res1.stderr, /LAUNCH_REFUSED: agy-pool writer is disabled by configuration/);
+
+  // 2. externalWorkers has agy-pool, but explicit permission (allowAgyPoolWriter / dispatch.agyPoolWriterEnabled) is unset
+  const launcher2 = orchestrate.resolveLauncher(
+    {
+      registry: {
+        sources: [{ id: 'agy-pool', writerEnabled: true }],
+        dispatch: {},
+      },
+      externalWorkers: 'agy-pool',
+    },
+    mockLauncher
+  );
+  const res2 = launcher2({ harness: 'agy-pool', accountId: 'pool-acct' });
+  assert.equal(res2.exitCode, 1);
+  assert.match(res2.stderr, /LAUNCH_REFUSED: agy-pool writer is disabled by configuration/);
+});
+
+// Round 4 Finding 4 (P1): dispatch does not load evidence from target workspace --root
+test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, not hostile --root', async () => {
+  const cli = require('../cli');
+  const orchestrate = require('../orchestrate');
+  const hostileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hostile-evidence-'));
+  try {
+    const plantedDir = path.join(hostileDir, 'tools', 'ai-brain', 'data', 'evidence');
+    fs.mkdirSync(plantedDir, { recursive: true });
+    fs.writeFileSync(path.join(plantedDir, 'planted.json'), '{"planted":true}', 'utf8');
+    const profileFile = path.join(hostileDir, 'test-profile.json');
+    const validProfile = orchestrate.buildTaskProfile({
+      id: 'TASK-PROFILE-TEST',
+      role: 'writer',
+    });
+    fs.writeFileSync(profileFile, JSON.stringify(validProfile), 'utf8');
+
+    let output = '';
+    const stdout = {
+      write: (msg) => {
+        output += msg;
+      },
+    };
+    await cli.dispatchProfileCommand(
+      { root: hostileDir, profile: 'test-profile.json', stdout },
+      { candidates: [], exit: () => {} }
+    );
+    assert.doesNotMatch(output, /planted/);
+  } finally {
+    fs.rmSync(hostileDir, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 5 (P1): runHostBrainGate does not short-circuit on empty diff
+test('Round 4 Finding 5: runHostBrainGate runs the test suite and does not return pass on empty diff', () => {
+  const orchestrate = require('../orchestrate');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'host-gate-diff-'));
+  try {
+    const baseSha = '3'.repeat(40);
+    let suiteExecuted = false;
+    const spawnSync = (_node, args) => {
+      suiteExecuted = true;
+      return { status: 0, stdout: 'ℹ pass 1\nℹ fail 0\n', stderr: '' };
+    };
+
+    const res = orchestrate.runHostBrainGate(
+      { baseSha, workerRoot: tmp },
+      { spawnSync, baseCache: new Map() }
+    );
+    assert.equal(
+      suiteExecuted,
+      true,
+      'Brain test suite must be executed even with clean or empty diff'
+    );
+    assert.doesNotMatch(res.summary.join('\n'), /no changes in worker diff/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 6 (P1): reviewLane diff cap fails closed on missing/NaN and applies without isolatedWorker
+test('Round 4 Finding 6: reviewLane enforces diff cap without isolatedWorker and fails closed on invalid cap', async () => {
+  const orchestrate = require('../orchestrate');
+  const cp = require('node:child_process');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'review-diff-cap-'));
+  try {
+    const repoDir = path.join(tmp, 'repo');
+    fs.mkdirSync(repoDir, { recursive: true });
+    cp.execSync('git init -b main', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git config commit.gpgsign false', { cwd: repoDir, stdio: 'ignore' });
+    fs.writeFileSync(path.join(repoDir, 'init.txt'), 'hello world\n', 'utf8');
+    cp.execSync('git add init.txt', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git commit -m "commit 1"', { cwd: repoDir, stdio: 'ignore' });
+    const baseSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+
+    fs.writeFileSync(
+      path.join(repoDir, 'init.txt'),
+      'hello world modified line\nand another line\n',
+      'utf8'
+    );
+    cp.execSync('git add init.txt', { cwd: repoDir, stdio: 'ignore' });
+    cp.execSync('git commit -m "commit 2"', { cwd: repoDir, stdio: 'ignore' });
+    const targetSha = cp.execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf8' }).trim();
+
+    const cand = {
+      candidateKey: 'codex::cli::gw-rev::up-rev::acct-rev::scope-rev::model-rev',
+      harness: 'codex',
+      provider: 'codex',
+      model: 'test-model',
+    };
+
+    // 1. Missing or undefined maxReviewDiffChars fails closed
+    const noCapLane = orchestrate.reviewLane(
+      {
+        cwd: repoDir,
+        workerRoot: repoDir,
+        reviewerIdentity: cand.candidateKey,
+      },
+      { id: 'TASK-REV-CAP', files: [] },
+      { candidateKey: 'writer-1', baseSha, worktree: repoDir },
+      {},
+      {},
+      async () => ({ exitCode: 0, stdout: '{"verdict":"PASS"}' }),
+      tmp,
+      Date.now(),
+      [cand],
+      {},
+      { dispatch: {} }
+    );
+    const resNoCap = await noCapLane(targetSha);
+    assert.equal(resNoCap.verdict, 'BLOCKED');
+    assert.ok(resNoCap.findings.some((f) => f.id === 'DIFF_UNAVAILABLE'));
+
+    // 2. Cap is enforced without isolatedWorker
+    const capLane = orchestrate.reviewLane(
+      {
+        cwd: repoDir,
+        workerRoot: repoDir,
+        reviewerIdentity: cand.candidateKey,
+        maxReviewDiffChars: 5,
+        isolatedWorker: false,
+      },
+      { id: 'TASK-REV-CAP', files: [] },
+      { candidateKey: 'writer-1', baseSha, worktree: repoDir },
+      {},
+      {},
+      async () => ({ exitCode: 0, stdout: JSON.stringify({ verdict: 'PASS', sha: targetSha }) }),
+      tmp,
+      Date.now(),
+      [cand],
+      {},
+      { dispatch: { maxReviewDiffChars: 5 } }
+    );
+    const resCap = await capLane(targetSha);
+    assert.equal(resCap.verdict, 'PASS');
+    const reviewWorkerRoot = repoDir + '-review';
+    const patchFile = path.join(reviewWorkerRoot, '.shipde', 'review-diff.patch');
+    assert.ok(fs.existsSync(patchFile), 'review-diff.patch must be written when cap exceeded');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 7 (P1): implementation review fails closed on missing or invalid Work Item
+test('Round 4 Finding 7: reviewAtSha fails closed when Work Item is missing or missing allowedPaths/criteria', async () => {
+  const { createPlanningServices } = require('../planning-services');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'impl-review-fail-closed-'));
+  try {
+    const services = createPlanningServices({
+      rootDir: tmp,
+      decisionDir: path.join(tmp, 'decisions'),
+    });
+
+    // 1. Missing Work Item file
+    const resMissing = await services.reviewAtSha({
+      workItemId: 'FEAT-NONEXISTENT',
+      sha: '4'.repeat(40),
+      baseSha: '5'.repeat(40),
+      authorKey: 'writer-key',
+      authorRoot: tmp,
+      isPlanReview: false,
+    });
+    assert.equal(resMissing.verdict, 'BLOCKED');
+    assert.match(resMissing.reason, /WORK_ITEM_NOT_FOUND/);
+
+    // 2. Work Item file with empty allowed paths
+    const itemDir = path.join(tmp, 'docs', 'product-spec', 'work-items');
+    fs.mkdirSync(itemDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(itemDir, 'FEAT-EMPTY-PATHS.md'),
+      '# Empty Paths\n\nNo paths table here.\n',
+      'utf8'
+    );
+
+    const resEmpty = await services.reviewAtSha({
+      workItemId: 'FEAT-EMPTY-PATHS',
+      sha: '4'.repeat(40),
+      baseSha: '5'.repeat(40),
+      authorKey: 'writer-key',
+      authorRoot: tmp,
+      isPlanReview: false,
+    });
+    assert.equal(resEmpty.verdict, 'BLOCKED');
+    assert.match(resEmpty.reason, /WORK_ITEM_INVALID/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// Round 4 Finding 8 (P1): retained root repair refuses to commit secrets or paths outside allowedPaths
+test('Round 4 Finding 8: retained root repair fails closed on dirty .env or dirty path outside allowedPaths', async () => {
+  const { getIsolatedLauncher, getFolderHash } = require('../isolation-launcher');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'retained-repair-secrets-'));
+  try {
+    const cp = require('node:child_process');
+    const hostCwd = path.join(tmp, 'host');
+    const workerRoot = path.join(tmp, 'worker');
+    fs.mkdirSync(hostCwd, { recursive: true });
+    fs.mkdirSync(workerRoot, { recursive: true });
+
+    // Initialize host repo
+    cp.execSync('git init -b main', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git config commit.gpgsign false', { cwd: hostCwd, stdio: 'ignore' });
+    fs.writeFileSync(path.join(hostCwd, 'init.txt'), 'init\n', 'utf8');
+    cp.execSync('git add init.txt', { cwd: hostCwd, stdio: 'ignore' });
+    cp.execSync('git commit -m "init"', { cwd: hostCwd, stdio: 'ignore' });
+    const headSha = cp.execSync('git rev-parse HEAD', { cwd: hostCwd, encoding: 'utf8' }).trim();
+
+    // Clone worker
+    cp.execSync(`git clone ${hostCwd} ${workerRoot}`, { stdio: 'ignore' });
+    cp.execSync('git config user.name "Test"', { cwd: workerRoot, stdio: 'ignore' });
+    cp.execSync('git config user.email "test@example.com"', { cwd: workerRoot, stdio: 'ignore' });
+    cp.execSync('git config commit.gpgsign false', { cwd: workerRoot, stdio: 'ignore' });
+
+    // Plant dirty secret file (.env) and dirty unauthorized file in workerRoot
+    fs.writeFileSync(path.join(workerRoot, '.env'), 'SECRET_API_KEY=leak\n', 'utf8');
+    fs.writeFileSync(path.join(workerRoot, 'unauthorized.txt'), 'illegal content\n', 'utf8');
+
+    const decisions = require('../decisions');
+    const decisionDir = path.join(tmp, 'decisions');
+    fs.mkdirSync(decisionDir, { recursive: true });
+    decisions.recordDecision(
+      {
+        stage: 'writer-launch-result',
+        workItemId: 'FEAT-RETAIN-01',
+        worktree: workerRoot,
+        sha: headSha,
+        baseSha: headSha,
+        runId: 'RUN-1',
+        at: new Date().toISOString(),
+        detail: 'writer output',
+      },
+      { dir: decisionDir }
+    );
+
+    const verdictPath = path.join(tmp, 'verdict.json');
+    const isoDir = path.join(hostCwd, 'scripts', 'ai', 'isolation');
+    fs.mkdirSync(isoDir, { recursive: true });
+    fs.writeFileSync(path.join(isoDir, 'policy.txt'), 'policy', 'utf8');
+    fs.writeFileSync(
+      verdictPath,
+      JSON.stringify({
+        worktree: hostCwd,
+        verdict: 'CLOSED',
+        timestamp: new Date().toISOString(),
+        policyHash: getFolderHash(isoDir),
+        sid: 'SID-TEST',
+        details: { Test: 'PASS' },
+      }),
+      'utf8'
+    );
+
+    const opts = {
+      baseSha: headSha,
+      retainWorkerHead: headSha,
+      cwd: hostCwd,
+      hostCwd,
+      workerRoot,
+      decisionDir,
+      workItemId: 'FEAT-RETAIN-01',
+      verdictPath,
+      getWorkerSid: () => 'SID-TEST',
+      verifyBoundary: () => true,
+      runId: 'RUN-1',
+      dispatchConfig: { retainedRootMaxAgeMs: 60000 },
+      isDocsOnly: true,
+    };
+
+    await assert.rejects(
+      () => Promise.resolve().then(() => getIsolatedLauncher()({ id: 'test' }, null, opts)),
+      /WORKER_HEAD_MISMATCH.*is dirty/
+    );
+
+    const workerHead = cp
+      .execSync('git rev-parse HEAD', { cwd: workerRoot, encoding: 'utf8' })
+      .trim();
+    assert.equal(workerHead, headSha, 'HEAD must not advance by committing secrets');
+
+    // Assert that .git/info/exclude contains .env and credential patterns
+    const excludeFile = path.join(workerRoot, '.git', 'info', 'exclude');
+    assert.ok(fs.existsSync(excludeFile));
+    const excludeText = fs.readFileSync(excludeFile, 'utf8');
+    assert.ok(excludeText.includes('.env'));
+    assert.ok(excludeText.includes('*credential*'));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

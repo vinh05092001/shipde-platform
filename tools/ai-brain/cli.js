@@ -1953,15 +1953,7 @@ async function dispatchProfileCommand(args, deps) {
     : require('./accounts').listAccounts() || [];
 
   const evidenceDir =
-    (deps && deps.evidenceDir) ||
-    args['evidence-dir'] ||
-    (args.root && fs.existsSync(path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence'))
-      ? path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence')
-      : null) ||
-    (args.root && fs.existsSync(path.join(args.root, 'evidence'))
-      ? path.join(args.root, 'evidence')
-      : null) ||
-    path.join(__dirname, 'data', 'evidence');
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
   let evidenceData;
   try {
     evidenceData = require('./evidence').loadEvidence(evidenceDir);
@@ -2265,15 +2257,7 @@ function dispatchCommand(args, deps = {}) {
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
   const evidenceDir =
-    (deps && deps.evidenceDir) ||
-    args['evidence-dir'] ||
-    (args.root && fs.existsSync(path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence'))
-      ? path.join(args.root, 'tools', 'ai-brain', 'data', 'evidence')
-      : null) ||
-    (args.root && fs.existsSync(path.join(args.root, 'evidence'))
-      ? path.join(args.root, 'evidence')
-      : null) ||
-    path.join(__dirname, 'data', 'evidence');
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
   const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
 
   // 1. Candidates from discovery + offerings

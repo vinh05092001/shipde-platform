@@ -73,12 +73,61 @@ function defaultGit(cwd, args) {
     extra.push('-c', 'core.filemode=false');
     extra.push('-c', 'core.autocrlf=true');
   }
-  if (args.includes('commit') && !args.some((a) => a.startsWith('core.hooksPath='))) {
-    const hookCheck = resolveInstalledHook(cwd);
-    if (!hookCheck.ok) {
-      return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: ' + hookCheck.reason };
+  if (args.includes('commit')) {
+    if (args.some((a) => a === '--no-verify' || a === '-n')) {
+      return {
+        ok: false,
+        stdout: '',
+        stderr: 'HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited',
+      };
     }
-    extra.push('-c', 'core.hooksPath=' + hookCheck.hooksDir);
+    const hooksArg = args.find((a) => a.startsWith('core.hooksPath='));
+    if (hooksArg) {
+      const targetPath = hooksArg.slice('core.hooksPath='.length).trim();
+      const isNull =
+        !targetPath ||
+        /^nul$/i.test(targetPath) ||
+        targetPath === '/dev/null' ||
+        targetPath === 'NUL';
+      if (isNull) {
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'HOOK_CHECK_FAILED: core.hooksPath bypass or --no-verify is prohibited',
+        };
+      }
+      const hook = path.join(targetPath, 'pre-commit');
+      if (!fs.existsSync(hook)) {
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'HOOK_CHECK_FAILED: installed pre-commit hook missing',
+        };
+      }
+      try {
+        const stat = fs.statSync(hook);
+        if (!stat.isFile() || (process.platform !== 'win32' && (stat.mode & 0o111) === 0)) {
+          return {
+            ok: false,
+            stdout: '',
+            stderr: 'HOOK_CHECK_FAILED: installed pre-commit hook not executable',
+          };
+        }
+        fs.accessSync(hook, fs.constants.X_OK);
+      } catch {
+        return {
+          ok: false,
+          stdout: '',
+          stderr: 'HOOK_CHECK_FAILED: installed pre-commit hook not executable',
+        };
+      }
+    } else {
+      const hookCheck = resolveInstalledHook(cwd);
+      if (!hookCheck.ok) {
+        return { ok: false, stdout: '', stderr: 'HOOK_CHECK_FAILED: ' + hookCheck.reason };
+      }
+      extra.push('-c', 'core.hooksPath=' + hookCheck.hooksDir);
+    }
   }
   const res = spawnSync(
     'git',
@@ -660,29 +709,25 @@ function createPlanningServices(ctx) {
       'work-items',
       workItemId + '.md'
     );
-    let allowedPaths = [];
-    let acceptanceCriteria = [];
-    if (fs.existsSync(itemPath)) {
-      try {
-        const text = fs.readFileSync(itemPath, 'utf8');
-        const intake = require('./intake');
-        allowedPaths = intake.deriveAllowedPaths(text);
-        acceptanceCriteria = intake.deriveAcceptanceCriteria(text);
-      } catch {}
+    if (!fs.existsSync(itemPath)) {
+      throw new Error('WORK_ITEM_NOT_FOUND: ' + itemPath);
+    }
+    const text = fs.readFileSync(itemPath, 'utf8');
+    const intake = require('./intake');
+    const allowedPaths = intake.deriveAllowedPaths(text);
+    const acceptanceCriteria = intake.deriveAcceptanceCriteria(text);
+    if (!Array.isArray(allowedPaths) || allowedPaths.length === 0) {
+      throw new Error('WORK_ITEM_INVALID: allowedPaths missing or empty in ' + itemPath);
+    }
+    if (!Array.isArray(acceptanceCriteria) || acceptanceCriteria.length === 0) {
+      throw new Error('WORK_ITEM_INVALID: acceptanceCriteria missing or empty in ' + itemPath);
     }
     return {
       id: workItemId,
       title: title || workItemId,
       role: 'reviewer',
-      allowedPaths:
-        allowedPaths.length > 0 ? allowedPaths : [workItemRel(workItemId), REGISTER_REL],
-      acceptanceCriteria:
-        acceptanceCriteria.length > 0
-          ? acceptanceCriteria
-          : [
-              'Implementation satisfies the Work Item requirements and acceptance criteria.',
-              'All changes are confined to the allowed paths of the Work Item.',
-            ],
+      allowedPaths,
+      acceptanceCriteria,
     };
   }
 
@@ -725,9 +770,17 @@ function createPlanningServices(ctx) {
     const pool = poolOf();
     const orch = orchestrate();
     const launcher = launcherFor(o0);
-    const item = isPlanReview
-      ? planReviewItemFor(workItemId, title)
-      : implementationReviewItemFor(workItemId, title, authorRoot || rootDir);
+    let item;
+    try {
+      item = isPlanReview
+        ? planReviewItemFor(workItemId, title)
+        : implementationReviewItemFor(workItemId, title, authorRoot || rootDir);
+    } catch (err) {
+      return {
+        verdict: 'BLOCKED',
+        reason: (err && err.message) || String(err),
+      };
+    }
     const parsedAuthor = authorKey
       ? require('./discovery/identity').parseCandidateKey(authorKey)
       : null;

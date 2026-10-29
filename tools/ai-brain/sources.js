@@ -422,6 +422,10 @@ function getDispatchConfig(registry, options = {}) {
         ? Number(options.quotaBlockTtlMs ?? dispatch.quotaBlockTtlMs)
         : configuredLimit('quotaBlockTtlMin') * 60 * 1000,
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
+    maxReviewDiffChars:
+      options.maxReviewDiffChars !== undefined || dispatch.maxReviewDiffChars !== undefined
+        ? configuredLimit('maxReviewDiffChars')
+        : undefined,
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),
     agyPoolTimeoutMs: configuredNonNegativeLimit('agyPoolTimeoutMs'),

@@ -224,7 +224,17 @@ function controllerGit(options, requireHook) {
   if (o.run) {
     return (args) => {
       const result = o.run(args);
-      if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
+      if (!result || result.status !== 0) {
+        throw new Error(
+          failure +
+            ': ' +
+            args[0] +
+            ' stderr: ' +
+            (result && result.stderr) +
+            ' stdout: ' +
+            (result && result.stdout)
+        );
+      }
       return String(result.stdout || '').trim();
     };
   }
@@ -266,7 +276,17 @@ function controllerGit(options, requireHook) {
       timeout: o.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
     });
-    if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
+    if (!result || result.status !== 0) {
+      throw new Error(
+        failure +
+          ': ' +
+          args[0] +
+          ' stderr: ' +
+          (result && result.stderr) +
+          ' stdout: ' +
+          (result && result.stdout)
+      );
+    }
     return String(result.stdout || '').trim();
   };
 }
@@ -2106,6 +2126,17 @@ function getIsolatedLauncher() {
         'AppData/',
         '.cache/',
         '.upstream-tmp/',
+        '.env',
+        '.env.*',
+        '*.env',
+        '*credential*',
+        '*credentials*',
+        '*.secret*',
+        '*secrets*',
+        '*.pem',
+        '*.key',
+        'id_rsa*',
+        'id_ed25519*',
       ]);
       if (
         retainedHeadSha &&
@@ -2120,13 +2151,67 @@ function getIsolatedLauncher() {
         })
       ) {
         try {
+          const { getTreeStatus } = require('./orchestrate');
+          const status = getTreeStatus(workerRoot);
+          const dirtyPaths = status.dirtyPaths || [];
+          const isSecretPath = (p) => {
+            const norm = String(p).replace(/\\/g, '/');
+            const base = path.basename(norm).toLowerCase();
+            return (
+              base.startsWith('.env') ||
+              base.endsWith('.env') ||
+              base.includes('credential') ||
+              base.includes('secret') ||
+              /\.(pem|key|pfx|p12|enc)$/i.test(base) ||
+              /^id_(rsa|ed25519|dsa)/i.test(base)
+            );
+          };
+          if (dirtyPaths.some(isSecretPath)) {
+            throw new Error('WORKER_COMMIT_REFUSED: dirty tree contains sensitive files');
+          }
+          let allowedPaths = opts.allowedPaths || (opts.item && opts.item.allowedPaths);
+          if (!allowedPaths && opts.workItemId) {
+            const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+            const itemPath = path.join(
+              workerRoot,
+              'docs',
+              'product-spec',
+              'work-items',
+              baseId + '.md'
+            );
+            if (fs.existsSync(itemPath)) {
+              try {
+                const text = fs.readFileSync(itemPath, 'utf8');
+                const intake = require('./intake');
+                allowedPaths = intake.deriveAllowedPaths(text);
+              } catch {}
+            }
+          }
+          if (opts.isDocsOnly || opts.isPlanReview) {
+            const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+            allowedPaths = [
+              `docs/product-spec/work-items/${baseId}.md`,
+              'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+            ];
+          }
+          if (Array.isArray(allowedPaths) && allowedPaths.length > 0) {
+            const normAllowed = new Set(allowedPaths.map((p) => String(p).replace(/\\/g, '/')));
+            for (const p of dirtyPaths) {
+              const normP = String(p).replace(/\\/g, '/');
+              if (!normAllowed.has(normP)) {
+                throw new Error(`WORKER_COMMIT_REFUSED: dirty file ${normP} outside allowed paths`);
+              }
+            }
+          }
           const checked = hookedControllerGit({
             hostRoot: hostCwd,
             workerRoot,
             failure: 'WORKER_COMMIT_FAILED',
           });
-          checked(['add', '--all']);
-          checked(['commit', '-m', 'Restore interrupted writer work']);
+          if (dirtyPaths.length > 0) {
+            checked(['add', '--', ...dirtyPaths]);
+            checked(['commit', '-m', 'Restore interrupted writer work']);
+          }
           const committed = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
           if (/^[a-f0-9]{40}$/i.test(committed) && !isTreeDirty(workerRoot)) {
             const requestedSha = retainWorkerHead;

@@ -400,6 +400,7 @@ test('CK-R03 a publication recorded in the checkpoint is returned as-is on resum
     testMode: true,
     cwd: f.cwd,
   };
+  f.ciGate = false;
   const originalWrite = cli.writeJsonFile;
   cli.writeJsonFile = (file, value) => {
     originalWrite(file, value);

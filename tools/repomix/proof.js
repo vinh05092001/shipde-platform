@@ -11,9 +11,7 @@ async function main() {
   const root = path.resolve(__dirname, '..', '..');
   const bin = resolveRepomix(root);
   if (!bin) throw new Error('REPOMIX_NOT_INSTALLED: run through tools/repomix/run.sh');
-  const version = cp
-    .execFileSync(bin, ['--version'], { encoding: 'utf8', shell: process.platform === 'win32' })
-    .trim();
+  const version = cp.execFileSync(bin, ['--version'], { encoding: 'utf8', shell: false }).trim();
   const expected = process.env.SHIPDE_REPOMIX_VERSION;
   if (expected && !version.includes(expected)) {
     throw new Error(`REPOMIX_VERSION_MISMATCH: expected ${expected}, got ${version}`);

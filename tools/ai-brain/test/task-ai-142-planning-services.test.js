@@ -53,9 +53,14 @@ function makeRepo() {
   return { dir, base: sh(dir, 'rev-parse', 'HEAD') };
 }
 
+const DEFAULT_DOC_TEXT =
+  '# ' +
+  ID +
+  '\n\nComplete.\n\n| Section | Content |\n| --- | --- |\n| Allowed paths | `docs/product-spec/**` |\n\n## Acceptance\n| Criterion | Details |\n| 1 | Plan is complete |\n';
+
 function commitDoc(dir, { register = true, extra, text } = {}) {
   fs.mkdirSync(path.dirname(path.join(dir, DOC)), { recursive: true });
-  fs.writeFileSync(path.join(dir, DOC), text || '# ' + ID + '\n\nComplete.\n');
+  fs.writeFileSync(path.join(dir, DOC), text || DEFAULT_DOC_TEXT);
   if (register) {
     const p = path.join(dir, REGISTER);
     fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace(/"BACKLOG"/, '"READY_FOR_AUTHOR"'));
@@ -221,7 +226,10 @@ test('isolated planner: a failing/exhausted candidate is skipped and the next ra
 test('external (pool) planner: gets its own provisioned root, never the shared worker root, and the Controller commits its output', async () => {
   const { dir, base } = makeRepo();
   const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'plansvc-shared-'));
-  const planRoot = path.join(os.tmpdir(), 'plansvc-own-' + Date.now());
+  const planRoot = path.join(
+    os.tmpdir(),
+    'plansvc-own-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+  );
   const provisioned = [];
   const svc = services.createPlanningServices({
     rootDir: dir,
