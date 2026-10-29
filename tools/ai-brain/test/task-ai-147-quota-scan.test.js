@@ -846,9 +846,89 @@ test('TASK-AI-147 Review R2-3: scanAllFullRoutes overwrites previously OK scope 
     undefined,
     'sourceFreshness should not advance for failed router'
   );
+
+  // Model-source discovery failure: fails closed, invalidates all model entries, does not substitute verify.model
+  const modelSrcRegistry = {
+    dispatch: {
+      maxConcurrentUpstreamProbes: 2,
+      probeRetry429Count: 0,
+      probeRetry429BackoffMs: 10,
+      maxConcurrentProbes: 4,
+    },
+    sources: [
+      {
+        id: 'broken-model-src',
+        kind: 'model-source',
+        servesModels: true,
+        endpoint: 'https://broken-model.example/v1',
+        verify: { model: 'fallback-model-should-not-be-used' },
+        credential: { env: 'K' },
+      },
+    ],
+  };
+
+  // Pre-seed an existing OK model entry
+  finalState.scopes['broken-model-src::stale-model'] = {
+    status: 200,
+    code: 'OK',
+    checkedAt: '2026-10-29T10:00:00Z',
+  };
+  fs.writeFileSync(quotaFile, JSON.stringify(finalState, null, 2), 'utf8');
+
+  const fakeFetchModelSrcFail = async (url) => {
+    if (url.endsWith('/models')) {
+      // Malformed shape
+      return {
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({}),
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      headers: new Map(),
+      text: async () => JSON.stringify({ choices: [{ message: { content: 'ok' } }] }),
+    };
+  };
+
+  const modelSrcScanRes = await scanAllFullRoutes({
+    registry: modelSrcRegistry,
+    quotaStateFile: quotaFile,
+    fetch: fakeFetchModelSrcFail,
+    env: { K: 'val' },
+    now: scanNow + 2000,
+  });
+
+  const stateAfterModelFail = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
+  assert.equal(
+    stateAfterModelFail.scopes['broken-model-src'].code,
+    'DISCOVERY_FAILED',
+    'Model source should be marked DISCOVERY_FAILED'
+  );
+  assert.equal(
+    stateAfterModelFail.scopes['broken-model-src::stale-model'].code,
+    'DISCOVERY_FAILED',
+    'Pre-existing model entry must be invalidated to DISCOVERY_FAILED'
+  );
+  assert.equal(
+    modelSrcScanRes.count,
+    0,
+    'verify.model must NOT be substituted when discovery fails'
+  );
+  assert.ok(
+    modelSrcScanRes.failedSources.includes('broken-model-src'),
+    'failedSources should include broken-model-src'
+  );
+  assert.equal(
+    stateAfterModelFail.sourceFreshness?.['broken-model-src'],
+    undefined,
+    'sourceFreshness must not advance for failed model source'
+  );
 });
 
-test('TASK-AI-147 Review R2-4: dispatchCommand and reportOutcomeCommand record execution results to route health', async (t) => {
+test('TASK-AI-147 Review R3: dispatch launch does not record execution success; confirmed outcome and launch failure record to health', async (t) => {
   const dir = fixture(t);
   const healthFile = path.join(dir, 'model-route-health.json');
   const evidenceDir = path.join(dir, 'evidence');
@@ -875,7 +955,7 @@ test('TASK-AI-147 Review R2-4: dispatchCommand and reportOutcomeCommand record e
     candA.modelId,
   ].join('\u241f');
 
-  // 1. dispatchCommand on SUCCESS
+  // 1. dispatchCommand on SUCCESS (launch only - must NOT record execution success / AVAILABLE)
   let exitCode = -1;
   dispatchCommand(
     { execute: true, item: 'TASK-TEST-HEALTH-SUCCESS' },
@@ -898,14 +978,13 @@ test('TASK-AI-147 Review R2-4: dispatchCommand and reportOutcomeCommand record e
   );
 
   assert.equal(exitCode, 0);
-  const storeAfterSuccess = loadStore(healthFile);
-  const healthRecSuccess = storeAfterSuccess.paths['m-alpha|mock-up'];
-  assert.ok(healthRecSuccess, 'route health record should exist after dispatchCommand success');
-  assert.equal(healthRecSuccess.status, 'AVAILABLE');
-  assert.equal(healthRecSuccess.elapsedMs, 150);
-  assert.equal(healthRecSuccess.concurrency, 2);
+  assert.equal(
+    fs.existsSync(healthFile),
+    false,
+    'session launch success must NOT record execution success (status: 200, ok: true) in route health'
+  );
 
-  // 2. dispatchCommand on FAILURE/TIMEOUT
+  // 2. dispatchCommand on FAILURE/TIMEOUT during launch
   let exitCodeFail = -1;
   dispatchCommand(
     { execute: true, item: 'TASK-TEST-HEALTH-FAIL' },
@@ -931,7 +1010,7 @@ test('TASK-AI-147 Review R2-4: dispatchCommand and reportOutcomeCommand record e
   assert.notEqual(healthRecFail.status, 'AVAILABLE', 'status should reflect failure');
   assert.equal(healthRecFail.concurrency, 1);
 
-  // 3. routingApi.reportDispatchOutcome
+  // 3. routingApi.reportDispatchOutcome on CONFIRMED EXECUTION SUCCESS
   const candReport = [
     'paseo',
     'http://127.0.0.1:20128/v1',
@@ -965,7 +1044,10 @@ test('TASK-AI-147 Review R2-4: dispatchCommand and reportOutcomeCommand record e
 
   const storeAfterReport = loadStore(healthFile);
   const healthRecReport = storeAfterReport.paths['m-beta|mock-gateway'];
-  assert.ok(healthRecReport, 'route health record should exist after reportDispatchOutcome');
+  assert.ok(
+    healthRecReport,
+    'confirmed outcome execution must record execution success to route health'
+  );
   assert.equal(healthRecReport.status, 'AVAILABLE');
   assert.equal(healthRecReport.elapsedMs, 220);
   assert.equal(healthRecReport.concurrency, 3);

@@ -981,23 +981,26 @@ async function scanAllQuotas(options = {}) {
         quotaState.scopes[src.id] = entry;
       }
     } else if (src.kind === 'model-source' || src.endpoint) {
-      let repModel =
-        (Array.isArray(src.models) && src.models.length > 0
-          ? selectRepresentativeModel(src.models, options)
-          : null) ||
-        src.verify?.model ||
-        null;
-
-      if (!repModel && src.servesModels === true) {
+      let repModel = null;
+      let discoveryError = null;
+      if (Array.isArray(src.models) && src.models.length > 0) {
+        repModel = selectRepresentativeModel(src.models, options);
+      } else if (src.servesModels === true) {
         try {
           const liveModels = await fetchSourceModels(src, { registry, ...options });
           if (liveModels.length > 0) {
             repModel = selectRepresentativeModel(liveModels, options);
           }
-        } catch {}
+        } catch (err) {
+          discoveryError = err;
+        }
       }
 
-      if (!repModel && options.catalogue) {
+      if (!repModel && !discoveryError && src.verify?.model) {
+        repModel = src.verify.model;
+      }
+
+      if (!repModel && !discoveryError && options.catalogue) {
         const cat = Array.isArray(options.catalogue)
           ? options.catalogue
           : options.catalogue?.candidates || [];
@@ -1014,27 +1017,39 @@ async function scanAllQuotas(options = {}) {
         }
       }
 
-      if (!repModel) {
+      if (discoveryError || !repModel) {
         const existing = quotaState.scopes[src.id] || quotaState.scopes[`${src.id}::${src.id}`];
-        if (existing && BLOCKING_CODES.has(existing.code) && isScopeBlocked(existing, now)) {
+        if (
+          !discoveryError &&
+          existing &&
+          BLOCKING_CODES.has(existing.code) &&
+          isScopeBlocked(existing, now)
+        ) {
           continue;
         }
-        const unscannableEntry = {
+        const failureCode = discoveryError
+          ? QUOTA_STATUS_CODES.DISCOVERY_FAILED
+          : QUOTA_STATUS_CODES.UNSCANNABLE;
+        const failureEntry = {
           source: src.id,
           scope: src.id,
           upstream: src.routerAlias || src.id,
           model: null,
-          code: QUOTA_STATUS_CODES.UNSCANNABLE,
-          status: null,
-          reason: 'UNSCANNABLE',
+          code: failureCode,
+          status:
+            discoveryError?.status || (failureCode === QUOTA_STATUS_CODES.UNSCANNABLE ? null : 503),
+          reason: sanitizeStatusDescription(discoveryError?.message || 'UNSCANNABLE', failureCode),
           at: new Date(now).toISOString(),
           retryAfter: null,
+          error: sanitizeStatusDescription(discoveryError?.message || 'UNSCANNABLE', failureCode),
         };
-        quotaState.scopes[`${src.id}::${src.id}`] = unscannableEntry;
-        quotaState.scopes[src.id] = unscannableEntry;
-        // No quota evidence was gathered, so the source is not marked fresh and the next due
-        // check retries it. UNSCANNABLE stays non-blocking: absence of a probe target is the
-        // same as an unscanned source, which routing already treats as unproven.
+        quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+        quotaState.scopes[src.id] = failureEntry;
+        for (const key of Object.keys(quotaState.scopes)) {
+          if (key.startsWith(`${src.id}::`)) {
+            quotaState.scopes[key] = failureEntry;
+          }
+        }
         failedSources.add(src.id);
         continue;
       }
@@ -1486,12 +1501,12 @@ async function scanAllFullRoutes(options = {}) {
           discoveryError = err;
         }
       }
-      if (modelsList.length === 0 && src.verify?.model) {
+      if (!discoveryError && modelsList.length === 0 && src.verify?.model) {
         modelsList = [src.verify.model];
       }
       sourceStats.get(src.id).listed = modelsList.length;
 
-      if (modelsList.length === 0) {
+      if (discoveryError || modelsList.length === 0) {
         failedSources.add(src.id);
         const failureCode = discoveryError
           ? QUOTA_STATUS_CODES.DISCOVERY_FAILED
@@ -1517,6 +1532,11 @@ async function scanAllFullRoutes(options = {}) {
         };
         quotaState.scopes[src.id] = failureEntry;
         quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+        for (const key of Object.keys(quotaState.scopes)) {
+          if (key.startsWith(`${src.id}::`)) {
+            quotaState.scopes[key] = failureEntry;
+          }
+        }
         continue;
       }
 
