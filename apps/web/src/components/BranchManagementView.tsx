@@ -327,6 +327,7 @@ export function BranchManagementView({
               type="button"
               onClick={onRefresh}
               data-testid="refresh-branches-button"
+              aria-label="Làm mới danh sách"
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition cursor-pointer"
               title="Làm mới danh sách"
             >
@@ -412,6 +413,8 @@ export function BranchManagementView({
               type="button"
               onClick={() => setViewError(null)}
               data-testid="dismiss-error-button"
+              aria-label="Đóng thông báo lỗi"
+              title="Đóng thông báo lỗi"
               className="p-1 text-rose-500 hover:text-rose-700 transition cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -434,6 +437,8 @@ export function BranchManagementView({
             type="button"
             onClick={() => setViewSuccess(null)}
             data-testid="dismiss-success-button"
+            aria-label="Đóng thông báo thành công"
+            title="Đóng thông báo thành công"
             className="p-1 text-emerald-600 hover:text-emerald-800 transition cursor-pointer"
           >
             <X className="w-4 h-4" />
@@ -498,6 +503,8 @@ export function BranchManagementView({
             <button
               type="button"
               onClick={() => setSearchQuery('')}
+              aria-label="Xóa từ khóa tìm kiếm"
+              title="Xóa từ khóa tìm kiếm"
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
             >
               <X className="w-3.5 h-3.5" />
@@ -703,6 +710,8 @@ export function BranchManagementView({
                 type="button"
                 onClick={handleCloseForm}
                 data-testid="close-modal-button"
+                aria-label="Đóng cửa sổ"
+                title="Đóng cửa sổ"
                 disabled={submitting}
                 className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
               >
