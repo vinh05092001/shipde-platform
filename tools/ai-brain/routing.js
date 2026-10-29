@@ -1915,7 +1915,12 @@ function reportDispatchOutcome(args, deps) {
           elapsedMs: Number(outcome.elapsedMs) || undefined,
           concurrency: Number(outcome.concurrency) || undefined,
         },
-        { now, persist: d.persistRouteHealth !== false }
+        {
+          now,
+          persist: d.persistRouteHealth !== false,
+          loadStore: d.loadStore || d.loader,
+          saveStore: d.saveStore || d.saver,
+        }
       );
     } catch (_) {}
   }

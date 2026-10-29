@@ -1059,7 +1059,8 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
   const dir = fixture(t);
   const evidenceDir = path.join(dir, 'evidence');
 
-  // 1. resolveRouteHealthFile resolves real default destination when dependencies are empty or omitted
+  // 1. resolveRouteHealthFile resolves real default destination when dependencies are empty or omitted,
+  // and honors configured destination relative to root/cwd before falling back to default.
   assert.equal(
     resolveRouteHealthFile({}, {}),
     DEFAULT_ROUTE_HEALTH_PATH,
@@ -1077,12 +1078,63 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     'DEFAULT_ROUTE_HEALTH_PATH must point to model-route-health.json'
   );
 
-  // 2. Intercept saveStore to verify production-style invocation without injected dependencies persists outcomes
-  let interceptedFile = null;
+  const customRoot = path.join(dir, 'custom-root');
+  const customConfig = {
+    registry: {
+      dispatch: {
+        routeHealthFile: path.join('config', 'custom-health.json'),
+      },
+    },
+  };
+  assert.equal(
+    resolveRouteHealthFile({ root: customRoot }, customConfig),
+    path.resolve(customRoot, 'config', 'custom-health.json'),
+    'configured destination must be resolved relative to args.root'
+  );
+  assert.equal(
+    resolveRouteHealthFile({}, { root: customRoot, ...customConfig }),
+    path.resolve(customRoot, 'config', 'custom-health.json'),
+    'configured destination must be resolved relative to deps.root'
+  );
+  assert.equal(
+    resolveRouteHealthFile({ cwd: customRoot }, customConfig),
+    path.resolve(customRoot, 'config', 'custom-health.json'),
+    'configured destination must be resolved relative to cwd'
+  );
+  const absHealthFile = path.resolve(dir, 'abs-custom-health.json');
+  assert.equal(
+    resolveRouteHealthFile(
+      { root: customRoot },
+      { registry: { dispatch: { routeHealthFile: absHealthFile } } }
+    ),
+    absHealthFile,
+    'absolute configured destination must not be modified by root'
+  );
+  assert.equal(
+    resolveRouteHealthFile({ root: customRoot }, {}),
+    path.join(customRoot, 'tools', 'ai-brain', 'data', 'model-route-health.json'),
+    'unconfigured destination with root must resolve default relative to root'
+  );
+
+  // 2. Intercept both loadStore and saveStore to verify production-style invocation without injected dependencies
+  // uses DEFAULT_ROUTE_HEALTH_PATH while ensuring the real store is never read or written, proving temp-file persistence
+  const initialRealStoreContent = fs.readFileSync(DEFAULT_ROUTE_HEALTH_PATH, 'utf8');
+  const tempHealthFile = path.join(dir, 'temp-backing-health.json');
+  fs.writeFileSync(tempHealthFile, JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2));
+
+  let interceptedLoadFile = null;
+  let interceptedSaveFile = null;
   let interceptedStore = null;
+
+  t.mock.method(routeHealthApi, 'loadStore', (file) => {
+    interceptedLoadFile = file;
+    return JSON.parse(fs.readFileSync(tempHealthFile, 'utf8'));
+  });
+
   t.mock.method(routeHealthApi, 'saveStore', (file, store) => {
-    interceptedFile = file;
+    interceptedSaveFile = file;
     interceptedStore = store;
+    fs.writeFileSync(tempHealthFile, JSON.stringify(store, null, 2));
   });
 
   const candProd = {
@@ -1127,15 +1179,26 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
 
   assert.equal(exitCode, 1);
   assert.equal(
-    interceptedFile,
+    interceptedLoadFile,
+    DEFAULT_ROUTE_HEALTH_PATH,
+    'dispatch failure must load from DEFAULT_ROUTE_HEALTH_PATH'
+  );
+  assert.equal(
+    interceptedSaveFile,
     DEFAULT_ROUTE_HEALTH_PATH,
     'dispatch failure without injected store must persist to DEFAULT_ROUTE_HEALTH_PATH'
   );
   assert.ok(interceptedStore.paths['m-prod-fail|mock-up-prod']);
   assert.notEqual(interceptedStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
 
+  // Verify temporary-file persistence
+  const persistedStore1 = JSON.parse(fs.readFileSync(tempHealthFile, 'utf8'));
+  assert.ok(persistedStore1.paths['m-prod-fail|mock-up-prod']);
+  assert.notEqual(persistedStore1.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
+
   // Outcome report without injected routeHealth / routeHealthFile / root
-  interceptedFile = null;
+  interceptedLoadFile = null;
+  interceptedSaveFile = null;
   interceptedStore = null;
   const outcomeFile = path.join(dir, 'outcome-prod.json');
   fs.writeFileSync(
@@ -1158,7 +1221,12 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
   );
 
   assert.equal(
-    interceptedFile,
+    interceptedLoadFile,
+    DEFAULT_ROUTE_HEALTH_PATH,
+    'reportDispatchOutcome must load from DEFAULT_ROUTE_HEALTH_PATH'
+  );
+  assert.equal(
+    interceptedSaveFile,
     DEFAULT_ROUTE_HEALTH_PATH,
     'reportDispatchOutcome without injected store must persist to DEFAULT_ROUTE_HEALTH_PATH'
   );
@@ -1166,6 +1234,19 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
   assert.equal(interceptedStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
   assert.equal(interceptedStore.paths['m-prod-fail|mock-up-prod'].elapsedMs, 350);
   assert.equal(interceptedStore.paths['m-prod-fail|mock-up-prod'].concurrency, 2);
+
+  // Verify updated temporary-file persistence
+  const persistedStore2 = JSON.parse(fs.readFileSync(tempHealthFile, 'utf8'));
+  assert.equal(persistedStore2.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
+  assert.equal(persistedStore2.paths['m-prod-fail|mock-up-prod'].elapsedMs, 350);
+  assert.equal(persistedStore2.paths['m-prod-fail|mock-up-prod'].concurrency, 2);
+
+  // Assert real production store was never read or modified
+  assert.equal(
+    fs.readFileSync(DEFAULT_ROUTE_HEALTH_PATH, 'utf8'),
+    initialRealStoreContent,
+    'Real production store must never be read or modified during test'
+  );
 
   // 3. Injected in-memory store object is mutated without disk file writes
   const memoryStore = { version: 1, paths: {}, events: [] };
@@ -1180,7 +1261,8 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     })
   );
 
-  interceptedFile = null;
+  interceptedLoadFile = null;
+  interceptedSaveFile = null;
   routingApi.reportDispatchOutcome(
     { 'report-outcome': memoryOutcomeFile },
     {
@@ -1191,7 +1273,8 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     }
   );
 
-  assert.equal(interceptedFile, null, 'in-memory routeHealth store must not call saveStore');
+  assert.equal(interceptedLoadFile, null, 'in-memory routeHealth store must not call loadStore');
+  assert.equal(interceptedSaveFile, null, 'in-memory routeHealth store must not call saveStore');
   assert.ok(memoryStore.paths['m-prod-fail|mock-up-prod']);
   assert.equal(memoryStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
   assert.equal(memoryStore.paths['m-prod-fail|mock-up-prod'].elapsedMs, 180);

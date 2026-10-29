@@ -3273,7 +3273,12 @@ function dispatchCommand(args, deps = {}) {
             elapsedMs: launchRes ? launchRes.elapsedMs : undefined,
             concurrency,
           },
-          { now, persist: deps && deps.persistRouteHealth !== false }
+          {
+            now,
+            persist: deps && deps.persistRouteHealth !== false,
+            loadStore: deps && (deps.loadStore || deps.loader),
+            saveStore: deps && (deps.saveStore || deps.saver),
+          }
         );
       } catch (_) {}
       const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;

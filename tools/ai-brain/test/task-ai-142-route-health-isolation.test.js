@@ -156,6 +156,20 @@ describe('TASK-AI-142: Route health isolation and default store immutability', (
       routeHealth.probeMemoryFile({ cwd: '/custom/cwd' }),
       path.join('/custom/cwd', 'tools', 'ai-brain', 'data', 'model-route-health.json')
     );
+    assert.equal(
+      routeHealth.probeMemoryFile({
+        root: '/custom/root',
+        registry: { dispatch: { routeHealthFile: 'custom/store.json' } },
+      }),
+      path.resolve('/custom/root', 'custom/store.json')
+    );
+    assert.equal(
+      routeHealth.probeMemoryFile({
+        cwd: '/custom/cwd',
+        registry: { dispatch: { routeHealthFile: 'custom/store.json' } },
+      }),
+      path.resolve('/custom/cwd', 'custom/store.json')
+    );
   });
 
   test('failure during probeRoute does not corrupt default file or leave leftover temp files', async () => {

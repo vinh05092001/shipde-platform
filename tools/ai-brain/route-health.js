@@ -263,40 +263,41 @@ function resolveRouteHealthFile(args = {}, deps = {}) {
   if (d.routeHealthFile || d['route-health']) {
     return d.routeHealthFile || d['route-health'];
   }
-  if (a.root) {
-    return path.join(a.root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  }
-  if (d.root) {
-    return path.join(d.root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  }
-  if (a.cwd || d.cwd) {
-    return path.join(a.cwd || d.cwd, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  }
+
+  const root = a.root || d.root || a.cwd || d.cwd || null;
   const reg = (d.registry && d.registry.dispatch) || (a.registry && a.registry.dispatch);
-  const cfg = reg?.routeHealthFile;
-  if (cfg) {
-    return path.isAbsolute(cfg) ? cfg : path.resolve(__dirname, '..', '..', cfg);
-  }
-  try {
-    const defaultDispatch = require('./sources.json').dispatch;
-    if (defaultDispatch?.routeHealthFile) {
-      const df = defaultDispatch.routeHealthFile;
-      return path.isAbsolute(df) ? df : path.resolve(__dirname, '..', '..', df);
+  const cfg = reg?.routeHealthFile || d.registry?.routeHealthFile || a.registry?.routeHealthFile;
+  if (typeof cfg === 'string' && cfg.trim()) {
+    const trimmedCfg = cfg.trim();
+    if (path.isAbsolute(trimmedCfg)) {
+      return trimmedCfg;
     }
-  } catch (_) {}
+    return root ? path.resolve(root, trimmedCfg) : path.resolve(__dirname, '..', '..', trimmedCfg);
+  }
+
+  if (root) {
+    return path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
   return DEFAULT_ROUTE_HEALTH_PATH;
 }
 
 function probeMemoryFile(o) {
   const opts = o || {};
-  return (
-    opts.routeHealthFile ||
-    opts['route-health'] ||
-    (opts.cwd || opts.root
-      ? path.join(opts.cwd || opts.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-      : null) ||
-    DEFAULT_ROUTE_HEALTH_PATH
-  );
+  if (opts.routeHealthFile || opts['route-health']) {
+    return opts.routeHealthFile || opts['route-health'];
+  }
+  const root = opts.root || opts.cwd || null;
+  const reg = (opts.registry && opts.registry.dispatch) || opts.dispatch;
+  const cfg = reg?.routeHealthFile || opts.registry?.routeHealthFile;
+  if (typeof cfg === 'string' && cfg.trim()) {
+    const trimmedCfg = cfg.trim();
+    if (path.isAbsolute(trimmedCfg)) return trimmedCfg;
+    return root ? path.resolve(root, trimmedCfg) : path.resolve(__dirname, '..', '..', trimmedCfg);
+  }
+  if (root) {
+    return path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
+  return DEFAULT_ROUTE_HEALTH_PATH;
 }
 function probeIdentity(c) {
   return {
@@ -712,7 +713,11 @@ function rememberProbe(candidate, result, options) {
 
 function recordExecutionResult(storeOrFile, modelId, routeId, outcome, options = {}) {
   const isFile = typeof storeOrFile === 'string';
-  const loader = (module.exports && module.exports.loadStore) || loadStore;
+  const loader =
+    options.loadStore ||
+    options.loader ||
+    (module.exports && module.exports.loadStore) ||
+    loadStore;
   const store = isFile ? loader(storeOrFile, { allowMissing: true }) : storeOrFile;
   const now = options.now ?? Date.now();
 
@@ -769,7 +774,11 @@ function recordExecutionResult(storeOrFile, modelId, routeId, outcome, options =
   }
 
   if (isFile && options.persist !== false) {
-    const saver = (module.exports && module.exports.saveStore) || saveStore;
+    const saver =
+      options.saveStore ||
+      options.saver ||
+      (module.exports && module.exports.saveStore) ||
+      saveStore;
     saver(storeOrFile, store, options);
   }
 
