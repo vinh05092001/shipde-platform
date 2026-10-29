@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { BranchesService, maskAuditValue, SENSITIVE_AUDIT_FIELDS } from './branches.service';
+import { BranchesController } from './branches.controller';
 import {
   validateCreateBranchDto,
   validateUpdateBranchDto,
@@ -73,6 +74,12 @@ function createMockPrismaService() {
       role: 'OPS_CSKH',
       store_scopes: ['*'],
     },
+    {
+      id: 'u-scoped-tb',
+      merchant_id: 'm-tenant-1',
+      role: 'OPS_CSKH',
+      store_scopes: ['HCM-TB', 'HCM-NEW-SCOPED'],
+    },
   ];
 
   const auditLogs: any[] = [];
@@ -99,6 +106,8 @@ function createMockPrismaService() {
         let count = 0;
         for (let i = 0; i < branches.length; i++) {
           if (branches[i].merchant_id === where.merchant_id) {
+            if (where.is_default !== undefined && branches[i].is_default !== where.is_default)
+              continue;
             if (!where.id || (where.id.not && branches[i].id !== where.id.not)) {
               branches[i] = { ...branches[i], ...data, updated_at: new Date() };
               count++;
@@ -132,6 +141,8 @@ function createMockPrismaService() {
         let result = branches.filter((b) => {
           if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
           if (where.status && b.status !== where.status) return false;
+          if (where.is_default !== undefined && b.is_default !== where.is_default) return false;
+          if (where.id?.not && b.id === where.id.not) return false;
           if (where.OR) {
             const matched = where.OR.some((cond: any) => {
               if (cond.id?.in?.includes(b.id)) return true;
@@ -734,6 +745,227 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
           return true;
         }
       );
+    });
+
+    it('Finding 3: createBranch rejects is_default: true when an existing default branch is outside actor scope (out-of-scope default remains unchanged)', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      // u-scoped-tb has scope on ['HCM-TB', 'HCM-NEW-SCOPED'].
+      // The current default branch is B1_ID ('HCM-Q3'), which is outside this user's scope.
+      const actor: ActorContext = {
+        userId: 'u-scoped-tb',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createBranch(
+            'm-tenant-1',
+            actor,
+            { name: 'Chi nhánh Mới', code: 'HCM-NEW-SCOPED', is_default: true },
+            '127.0.0.1',
+            'corr-create-def'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      // Verify B1_ID remains default and new branch was not created
+      const b1 = mockPrisma.branches.find((b) => b.id === B1_ID);
+      assert.strictEqual(b1?.is_default, true);
+      const newBranch = mockPrisma.branches.find((b) => b.code === 'HCM-NEW-SCOPED');
+      assert.strictEqual(newBranch, undefined);
+    });
+
+    it('Finding 3: updateBranch rejects is_default: true when an existing default branch is outside actor scope (out-of-scope default remains unchanged)', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      // u-scoped-tb has scope on ['HCM-TB', 'HCM-NEW-SCOPED'].
+      // Target B2_ID ('HCM-TB') is in scope, but current default B1_ID ('HCM-Q3') is out of scope.
+      const actor: ActorContext = {
+        userId: 'u-scoped-tb',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.updateBranch(
+            B2_ID,
+            'm-tenant-1',
+            actor,
+            { is_default: true },
+            '127.0.0.1',
+            'corr-update-def'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      // Verify B1_ID remains default and B2_ID remains non-default
+      const b1 = mockPrisma.branches.find((b) => b.id === B1_ID);
+      assert.strictEqual(b1?.is_default, true);
+      const b2 = mockPrisma.branches.find((b) => b.id === B2_ID);
+      assert.strictEqual(b2?.is_default, false);
+    });
+  });
+
+  describe('BranchesController: Read Guard & Custom Role Authorization (Finding 2)', () => {
+    it('rejects listBranches and getBranchById for custom role without code and without iam:shop_config even if named "Non-Finance" or "Finance"', async () => {
+      const mockBranchesService: any = {
+        listBranches: async () => ({ success: true, data: { branches: [], can_edit: false } }),
+        getBranchById: async () => ({ success: true, data: {} }),
+      };
+      const mockRbacService: any = {
+        actorHasPermissions: async () => false,
+      };
+      const mockPrisma: any = {
+        role: {
+          findUnique: async ({ where }: any) => {
+            if (where.id === 'role-non-finance') {
+              return { code: null, name: 'Non-Finance Auditor' };
+            }
+            if (where.id === 'role-finance-name') {
+              return { code: null, name: 'Finance Lead' };
+            }
+            return null;
+          },
+        },
+      };
+
+      const controller = new BranchesController(mockBranchesService, mockRbacService, mockPrisma);
+
+      const makeReqRes = (customRoleId: string) => {
+        const actor: ActorContext = {
+          userId: 'u-1',
+          merchantId: 'm-tenant-1',
+          role: 'ACCOUNTANT',
+          customRoleId,
+        };
+        const req: any = { actorContext: actor };
+        const res: any = {
+          status: (s: number) => ({ json: (d: any) => ({ status: s, ...d }) }),
+        };
+        return { req, res };
+      };
+
+      // 1. Non-Finance display name -> rejected 403 for listBranches and getBranchById
+      const { req: req1, res: res1 } = makeReqRes('role-non-finance');
+      await assert.rejects(
+        async () => {
+          await controller.listBranches(undefined, req1, res1);
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      await assert.rejects(
+        async () => {
+          await controller.getBranchById(B1_ID, req1, res1);
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      // 2. "Finance Lead" display name without authoritative code -> also rejected 403
+      const { req: req2, res: res2 } = makeReqRes('role-finance-name');
+      await assert.rejects(
+        async () => {
+          await controller.listBranches(undefined, req2, res2);
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+
+      await assert.rejects(
+        async () => {
+          await controller.getBranchById(B1_ID, req2, res2);
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          return true;
+        }
+      );
+    });
+
+    it('allows listBranches and getBranchById for custom role with authoritative code FINANCE or holding iam:shop_config', async () => {
+      const mockBranchesService: any = {
+        listBranches: async () => ({ success: true, data: { branches: [], can_edit: false } }),
+        getBranchById: async () => ({ success: true, data: { id: B1_ID } }),
+      };
+      const mockRbacService: any = {
+        actorHasPermissions: async (actor: any, perms: string[]) =>
+          Boolean(perms.includes('iam:shop_config') && actor.hasPerm),
+      };
+      const mockPrisma: any = {
+        role: {
+          findUnique: async ({ where }: any) => {
+            if (where.id === 'role-authoritative-finance') {
+              return { code: 'FINANCE' };
+            }
+            return null;
+          },
+        },
+      };
+
+      const controller = new BranchesController(mockBranchesService, mockRbacService, mockPrisma);
+
+      // Role with authoritative code: 'FINANCE'
+      const actorFinance: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'ACCOUNTANT',
+        customRoleId: 'role-authoritative-finance',
+      };
+      const reqFinance: any = { actorContext: actorFinance };
+      let statusSet = 0;
+      const resFinance: any = {
+        status: (s: number) => {
+          statusSet = s;
+          return { json: (d: any) => d };
+        },
+      };
+
+      await controller.listBranches(undefined, reqFinance, resFinance);
+      assert.strictEqual(statusSet, 200);
+
+      await controller.getBranchById(B1_ID, reqFinance, resFinance);
+      assert.strictEqual(statusSet, 200);
+
+      // Member holding iam:shop_config
+      const actorWithPerm: any = {
+        userId: 'u-2',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+        hasPerm: true,
+      };
+      const reqPerm: any = { actorContext: actorWithPerm };
+      await controller.listBranches(undefined, reqPerm, resFinance);
+      assert.strictEqual(statusSet, 200);
+
+      await controller.getBranchById(B1_ID, reqPerm, resFinance);
+      assert.strictEqual(statusSet, 200);
     });
   });
 });

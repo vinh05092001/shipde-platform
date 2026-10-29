@@ -488,6 +488,85 @@ async function runBranchesSupertestSuite() {
     );
 
     // ========================================================================
+    // FEAT-ORG-02 review round 2 Finding 3: createBranch/updateBranch with
+    // is_default: true must NOT clear default status on out-of-scope branches.
+    // An actor scoped to ['HCM-TB', 'HCM-NEW-SCOPED'] cannot create a branch with
+    // is_default: true when the existing default branch (HCM-Q3) is outside scope.
+    // Out-of-scope default branch must remain unchanged.
+    // ========================================================================
+    const { token: scopedOtherBranchTokenA } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OPS_CSKH,
+      'scoped_other_a',
+      ['HCM-TB', 'HCM-NEW-SCOPED'],
+      scopedConfigRoleId
+    );
+
+    // 1. Attempt createBranch with is_default: true while current default (HCM-Q3) is out-of-scope -> 403 FORBIDDEN
+    const resCreateDefaultOutOfScope = await request(app.getHttpServer())
+      .post('/api/v1/branches')
+      .set('Authorization', `Bearer ${scopedOtherBranchTokenA}`)
+      .send({
+        name: 'Chi nhánh Mới Có Default',
+        code: 'HCM-NEW-SCOPED',
+        is_default: true,
+      })
+      .expect(403);
+    assert.strictEqual(resCreateDefaultOutOfScope.body.error.code, 'FORBIDDEN');
+
+    // Verify out-of-scope default branch HCM-Q3 remains default and new branch was NOT created
+    const createdBranchCheck = await prisma.branch.findFirst({
+      where: { merchant_id: merchantIdA, code: 'HCM-NEW-SCOPED' },
+    });
+    assert.strictEqual(
+      createdBranchCheck,
+      null,
+      'Branch must not be created when out-of-scope default cannot be cleared'
+    );
+    const branch1StillDefault = await prisma.branch.findUnique({
+      where: { id: branch1Id },
+    });
+    assert.strictEqual(
+      branch1StillDefault?.is_default,
+      true,
+      'Out-of-scope default branch must remain is_default: true'
+    );
+    console.log(
+      '  PASS: createBranch with is_default=true rejected when existing default is out-of-scope (default unchanged).'
+    );
+
+    // 2. Attempt updateBranch with is_default: true on scoped branch (HCM-TB) while current default (HCM-Q3) is out-of-scope -> 403 FORBIDDEN
+    const resUpdateDefaultOutOfScope = await request(app.getHttpServer())
+      .patch(`/api/v1/branches/${branch2Id}`)
+      .set('Authorization', `Bearer ${scopedOtherBranchTokenA}`)
+      .send({
+        is_default: true,
+      })
+      .expect(403);
+    assert.strictEqual(resUpdateDefaultOutOfScope.body.error.code, 'FORBIDDEN');
+
+    // Verify branch 2 remains non-default and branch 1 remains default
+    const branch2StillNonDefault = await prisma.branch.findUnique({
+      where: { id: branch2Id },
+    });
+    assert.strictEqual(
+      branch2StillNonDefault?.is_default,
+      false,
+      'Target branch must remain non-default after rejected patch'
+    );
+    const branch1DefaultAfterPatch = await prisma.branch.findUnique({
+      where: { id: branch1Id },
+    });
+    assert.strictEqual(
+      branch1DefaultAfterPatch?.is_default,
+      true,
+      'Out-of-scope default branch must remain is_default: true'
+    );
+    console.log(
+      '  PASS: updateBranch with is_default=true rejected when existing default is out-of-scope (default unchanged).'
+    );
+
+    // ========================================================================
     // FEAT-ORG-02 review P1: GET /branches and GET /branches/:id require the
     // read guard. A WAREHOUSE role (no iam:shop_config, not in allow-list) must
     // be rejected with 403, while FINANCE (view-only allow-list) may read.
@@ -505,6 +584,49 @@ async function runBranchesSupertestSuite() {
       .expect(403);
     assert.strictEqual(resWarehouseGetDenied.body.error.code, 'FORBIDDEN');
     console.log('  PASS: WAREHOUSE role cannot read branch detail (403 read guard).');
+
+    // ========================================================================
+    // FEAT-ORG-02 review round 2 Finding 2: A custom role named "Non-Finance"
+    // (arbitrary display name containing "Finance") without code and without
+    // iam:shop_config must NOT bypass the read guard.
+    // Must be rejected with 403 for both list and detail endpoints.
+    // ========================================================================
+    const nonFinanceRoleRes = await request(app.getHttpServer())
+      .post('/api/v1/roles')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .send({
+        name: `Non-Finance Auditor ${testSuffix}`,
+        description: 'Custom role with Non-Finance in display name but no code or iam:shop_config',
+        permissions: ['order:view_create'],
+      })
+      .expect(201);
+    const nonFinanceRoleId = nonFinanceRoleRes.body.data.role.id;
+
+    const { token: nonFinanceTokenA } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.ACCOUNTANT,
+      'non_fin_a',
+      ['*'],
+      nonFinanceRoleId
+    );
+
+    const resNonFinanceListDenied = await request(app.getHttpServer())
+      .get('/api/v1/branches')
+      .set('Authorization', `Bearer ${nonFinanceTokenA}`)
+      .expect(403);
+    assert.strictEqual(resNonFinanceListDenied.body.error.code, 'FORBIDDEN');
+    console.log(
+      '  PASS: Custom role named "Non-Finance" cannot read branch list (403 read guard).'
+    );
+
+    const resNonFinanceDetailDenied = await request(app.getHttpServer())
+      .get(`/api/v1/branches/${branch1Id}`)
+      .set('Authorization', `Bearer ${nonFinanceTokenA}`)
+      .expect(403);
+    assert.strictEqual(resNonFinanceDetailDenied.body.error.code, 'FORBIDDEN');
+    console.log(
+      '  PASS: Custom role named "Non-Finance" cannot read branch detail (403 read guard).'
+    );
 
     // FINANCE role (view-only in RBAC matrix) may read the list but the server
     // must report can_edit: false (no iam:shop_config on the FINANCE system role).
@@ -640,6 +762,22 @@ async function runBranchesSupertestSuite() {
       },
     });
     await prisma.user.deleteMany({
+      where: {
+        merchant_id: {
+          in: [merchantIdA, merchantIdB],
+        },
+      },
+    });
+    await prisma.rolePermission.deleteMany({
+      where: {
+        role: {
+          merchant_id: {
+            in: [merchantIdA, merchantIdB],
+          },
+        },
+      },
+    });
+    await prisma.role.deleteMany({
       where: {
         merchant_id: {
           in: [merchantIdA, merchantIdB],

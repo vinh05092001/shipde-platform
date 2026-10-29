@@ -351,11 +351,38 @@ export class BranchesService {
 
     const isDefault = existingCount === 0 ? true : Boolean(dto.is_default);
 
+    // If making this branch default when other branches exist, any existing default
+    // branch will have its default status unset. A scoped actor must not modify an
+    // out-of-scope default branch. Authorize every affected branch before the transaction.
+    if (isDefault && existingCount > 0) {
+      const existingDefaults = await this.prisma.branch.findMany({
+        where: {
+          merchant_id: merchantId,
+          is_default: true,
+        },
+      });
+      for (const defBranch of existingDefaults) {
+        const canModify = await this.checkActorBranchScope(actor, defBranch);
+        if (!canModify) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Người dùng không có quyền thay đổi chi nhánh mặc định ngoài phạm vi được phân quyền',
+            false,
+            'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+          );
+        }
+      }
+    }
+
     try {
       const created = await this.prisma.$transaction(async (tx) => {
-        if (isDefault) {
+        if (isDefault && existingCount > 0) {
           await tx.branch.updateMany({
-            where: { merchant_id: merchantId },
+            where: {
+              merchant_id: merchantId,
+              is_default: true,
+            },
             data: { is_default: false },
           });
         }
@@ -539,6 +566,31 @@ export class BranchesService {
       );
     }
 
+    // If setting is_default to true on a branch that is not currently default,
+    // any existing default branch will have its default status unset.
+    // Authorize every affected default branch before the transaction.
+    if (dto.is_default === true && !existing.is_default) {
+      const existingDefaults = await this.prisma.branch.findMany({
+        where: {
+          merchant_id: merchantId,
+          is_default: true,
+          id: { not: branchId },
+        },
+      });
+      for (const defBranch of existingDefaults) {
+        const canModify = await this.checkActorBranchScope(actor, defBranch);
+        if (!canModify) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Người dùng không có quyền thay đổi chi nhánh mặc định ngoài phạm vi được phân quyền',
+            false,
+            'Vui lòng liên hệ quản trị viên để được phân quyền chi nhánh'
+          );
+        }
+      }
+    }
+
     const dataToUpdate: any = {};
     if (dto.name !== undefined) dataToUpdate.name = dto.name.trim();
     if (normalizedCode !== undefined) dataToUpdate.code = normalizedCode;
@@ -554,6 +606,7 @@ export class BranchesService {
           await tx.branch.updateMany({
             where: {
               merchant_id: merchantId,
+              is_default: true,
               id: { not: branchId },
             },
             data: { is_default: false },

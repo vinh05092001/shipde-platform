@@ -67,24 +67,22 @@ export class BranchesController {
    */
   private async assertCanViewBranches(actor: ActorContext): Promise<void> {
     const hasPerm = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
-    const allowedRoles = ['OWNER', 'OPS_CSKH', 'FINANCE'];
-    let roleCode = actor.role;
+    if (hasPerm) {
+      return;
+    }
+
+    const allowedRoles: readonly string[] = ['OWNER', 'OPS_CSKH', 'FINANCE'];
+    let roleCode: string | null | undefined = actor.role;
     if (actor.customRoleId) {
       const customRole = await this.prisma.role.findUnique({
         where: { id: actor.customRoleId },
-        select: { code: true, name: true },
+        select: { code: true },
       });
-      if (customRole?.code) {
-        roleCode = customRole.code;
-      } else if (
-        customRole?.name &&
-        (customRole.name.toUpperCase().includes('FINANCE') ||
-          customRole.name.toUpperCase().includes('TÀI CHÍNH'))
-      ) {
-        roleCode = 'FINANCE';
-      }
+      // Custom role takes precedence over enum role. Authorize strictly from authoritative
+      // role code; arbitrary display names must never grant access.
+      roleCode = customRole?.code ?? null;
     }
-    if (!hasPerm && (!roleCode || !allowedRoles.includes(roleCode))) {
+    if (!roleCode || !allowedRoles.includes(roleCode)) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
