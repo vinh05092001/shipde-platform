@@ -22,11 +22,13 @@ import {
   Smartphone,
   Radio,
   FileSpreadsheet,
+  User as UserIcon,
 } from 'lucide-react';
 import { AutomationBadge, Money } from './ui/OperationalComponents';
 import { PublicTrackingTab } from './PublicTrackingTab';
 import { NotificationMatrixTab } from './NotificationMatrixTab';
 import { UserManagementTab } from './UserManagementTab';
+import { ProfileSettingsTab } from './ProfileSettingsTab';
 
 interface Props {
   onBackToDashboard: () => void;
@@ -42,7 +44,13 @@ export const SettingsWorkspace: React.FC<Props> = ({
   onToggleGhnTier,
 }) => {
   const [activeSection, setActiveSection] = useState<
-    'stores' | 'team' | 'integrations' | 'notifications' | 'security' | 'tracking_portal'
+    | 'stores'
+    | 'team'
+    | 'profile'
+    | 'integrations'
+    | 'notifications'
+    | 'security'
+    | 'tracking_portal'
   >('stores');
 
   // Integrations State
@@ -176,6 +184,12 @@ export const SettingsWorkspace: React.FC<Props> = ({
                 desc: 'Quản lý thành viên & RBAC',
               },
               {
+                id: 'profile',
+                label: 'Hồ Sơ Cá Nhân',
+                icon: UserIcon,
+                desc: 'Liên hệ, múi giờ & thông báo',
+              },
+              {
                 id: 'integrations',
                 label: 'Tích Hợp Kênh & Hãng',
                 icon: Key,
@@ -283,6 +297,13 @@ export const SettingsWorkspace: React.FC<Props> = ({
           {activeSection === 'team' && (
             <div className="space-y-4">
               <UserManagementTab />
+            </div>
+          )}
+
+          {/* SECTION: PERSONAL PROFILE (FEAT-PRO-01) */}
+          {activeSection === 'profile' && (
+            <div className="space-y-4">
+              <ProfileSettingsTab />
             </div>
           )}
 
