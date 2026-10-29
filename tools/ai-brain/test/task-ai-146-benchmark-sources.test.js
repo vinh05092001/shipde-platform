@@ -465,5 +465,109 @@ describe('TASK-AI-146: Coding-agent benchmark sources and provisional weighting'
       lastOfficialIdx < firstProvIdx,
       'all official models must precede all provisional models in ranking'
     );
+
+    // 5. priorFor on base and effort candidates enforces strict precedence
+    const pOfficial = priorFor({ modelId: 'official-baseline' }, 'coding', merged);
+    const pProvBase = priorFor({ modelId: 'prov-base' }, 'coding', merged);
+    const pProvEff = priorFor({ modelId: 'prov-with-effort (high)' }, 'coding', merged);
+
+    assert.ok(pOfficial, 'official prior must exist');
+    assert.ok(pProvBase, 'provisional base prior must exist');
+    assert.ok(pProvEff, 'provisional effort prior must exist');
+    assert.equal(pProvBase.provisional, true, 'provisional base must be marked provisional');
+    assert.equal(pProvEff.provisional, true, 'provisional effort must be marked provisional');
+    assert.ok(
+      pOfficial.score > pProvBase.score,
+      `Official prior (${pOfficial.score}) must exceed provisional base prior (${pProvBase.score})`
+    );
+    assert.ok(
+      pOfficial.score > pProvEff.score,
+      `Official prior (${pOfficial.score}) must exceed provisional effort prior (${pProvEff.score})`
+    );
+  });
+
+  test('P1 Review 2: priorFor enforces provisional precedence when official candidate has fallback-only benchmark and missing aggregate score', () => {
+    // Official model has NO role-weighted benchmarks and NO row.score aggregate, only fallback benchmark
+    const priors = {
+      label: 'EXTERNAL_PRIOR',
+      roleWeights: testConfig.roleWeights,
+      ranking: [
+        {
+          canonical: 'official-fallback-only',
+          provisional: false,
+          codingTier: 'T3',
+          reviewTier: 'T3',
+          // score is deliberately undefined / missing
+          benchmarks: [{ name: 'benchlm', score: 65.0, provisional: false }],
+        },
+        {
+          canonical: 'prov-candidate',
+          provisional: true,
+          codingTier: 'T4',
+          reviewTier: 'T4',
+          // Provisional model has high role benchmark (weighted score 100)
+          benchmarks: [{ name: 'sweBenchVerified', score: 95.0, provisional: true }],
+        },
+      ],
+    };
+
+    const offPrior = priorFor({ modelId: 'official-fallback-only' }, 'coding', priors);
+    const provPrior = priorFor({ modelId: 'prov-candidate' }, 'coding', priors);
+
+    assert.ok(offPrior, 'official prior must exist');
+    assert.ok(provPrior, 'provisional prior must exist');
+    assert.ok(Number.isFinite(offPrior.score), 'official fallback score must be computed');
+    assert.ok(Number.isFinite(provPrior.score), 'provisional score must be computed');
+    assert.equal(provPrior.provisional, true, 'provisional candidate must be marked provisional');
+    assert.ok(
+      offPrior.score > provPrior.score,
+      `Official computed fallback score (${offPrior.score}) must strictly exceed provisional score (${provPrior.score})`
+    );
+    assert.equal(
+      provPrior.score,
+      Math.round((offPrior.score - 0.1) * 10) / 10,
+      'Provisional score must be capped strictly below official fallback score'
+    );
+  });
+
+  test('P1 Review 2: priorFor enforces provisional precedence on effort candidates when official candidate has missing aggregate score', () => {
+    const priors = {
+      label: 'EXTERNAL_PRIOR',
+      roleWeights: testConfig.roleWeights,
+      ranking: [
+        {
+          canonical: 'official-model',
+          provisional: false,
+          codingTier: 'T3',
+          reviewTier: 'T3',
+          // score is deliberately missing
+          benchmarks: [{ name: 'benchlm', score: 70.0, provisional: false }],
+        },
+        {
+          canonical: 'prov-model',
+          provisional: true,
+          codingTier: 'T4',
+          reviewTier: 'T4',
+          benchmarks: [{ name: 'sweBenchVerified', score: 98.0, provisional: true }],
+          efforts: {
+            high: {
+              provisional: true,
+              benchmarks: [{ name: 'sweBenchVerified', score: 99.0, provisional: true }],
+            },
+          },
+        },
+      ],
+    };
+
+    const offPrior = priorFor({ modelId: 'official-model' }, 'coding', priors);
+    const provEffPrior = priorFor({ modelId: 'prov-model (high)' }, 'coding', priors);
+
+    assert.ok(offPrior, 'official prior must exist');
+    assert.ok(provEffPrior, 'provisional effort prior must exist');
+    assert.equal(provEffPrior.provisional, true);
+    assert.ok(
+      offPrior.score > provEffPrior.score,
+      `Official score (${offPrior.score}) must strictly exceed provisional effort score (${provEffPrior.score})`
+    );
   });
 });

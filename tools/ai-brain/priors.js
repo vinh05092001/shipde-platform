@@ -418,42 +418,35 @@ function priorFor(candidate, role, priors, now) {
 
   const profile = roleBenchmarkProfile(role, priors?.roleWeights ? priors : priors?.config);
   const rankingMaxima = benchmarkMaxima(ranking, profile);
-  let weighted = weightedBenchmarkScore(match, profile, rankingMaxima);
-  if (weighted.coverage === 0) {
-    // No role-weighted benchmark for this model: use the first general benchmark it
-    // does have, normalised against the same benchmark across the ranking.
-    for (const name of FALLBACK_BENCHMARKS) {
-      const value = benchmarkValue(match, name);
-      if (value !== null && Number.isFinite(rankingMaxima[name])) {
-        const rawScore = Number.isFinite(match.score)
-          ? match.score
-          : rankingMaxima[name] <= 0
-            ? 0
-            : (100 * value) / rankingMaxima[name];
-        weighted = {
-          score: Math.round(rawScore),
-          coverage: FALLBACK_COVERAGE,
-          fallback: name,
-        };
-        break;
-      }
-    }
-  }
-  let priorScore = weighted.coverage > 0 ? weighted.score : null;
+  const weighted = resolveRoutingBenchmark(match, profile, rankingMaxima);
+  let priorScore =
+    weighted.coverage > 0
+      ? weighted.score
+      : Number.isFinite(match.score)
+        ? Math.round(Math.max(0, Math.min(100, match.score)))
+        : null;
 
   if (isMatchProvisional && Number.isFinite(priorScore)) {
     const officialRows = ranking.filter((r) => !r.provisional && r !== match);
     if (officialRows.length > 0) {
       let minOfficial = null;
       for (const offRow of officialRows) {
-        let offScore = null;
-        const offWeighted = weightedBenchmarkScore(offRow, profile, rankingMaxima);
-        if (offWeighted.coverage > 0) {
-          offScore = Math.round(Math.max(0, Math.min(100, offWeighted.score)));
-        } else if (Number.isFinite(offRow.score)) {
-          offScore = offRow.score;
+        const offScores = [];
+        const mainScore = resolveRoutingScore(offRow, profile, rankingMaxima);
+        if (mainScore !== null && Number.isFinite(mainScore)) {
+          offScores.push(mainScore);
         }
-        if (offScore !== null && Number.isFinite(offScore)) {
+        if (offRow.efforts && typeof offRow.efforts === 'object') {
+          for (const eff of Object.values(offRow.efforts)) {
+            if (eff && !eff.provisional) {
+              const effScore = resolveRoutingScore(eff, profile, rankingMaxima);
+              if (effScore !== null && Number.isFinite(effScore)) {
+                offScores.push(effScore);
+              }
+            }
+          }
+        }
+        for (const offScore of offScores) {
           if (minOfficial === null || offScore < minOfficial) {
             minOfficial = offScore;
           }
@@ -491,6 +484,7 @@ function priorFor(candidate, role, priors, now) {
   if (
     resolved.fallback ||
     match.fallback ||
+    weighted.fallback ||
     (Array.isArray(match.benchmarks) && match.benchmarks.some((b) => b.fallback))
   ) {
     result.fallback = true;
@@ -685,6 +679,43 @@ function weightedBenchmarkScore(match, weights, maxima) {
     coverage += weight;
   }
   return { score: Math.round(100 * score), coverage: Math.round(coverage * 1000) / 1000 };
+}
+
+function resolveRoutingBenchmark(row, profile, rankingMaxima) {
+  let weighted = weightedBenchmarkScore(row, profile, rankingMaxima);
+  if (weighted.coverage === 0) {
+    // No role-weighted benchmark for this model: use the first general benchmark it
+    // does have, normalised against the same benchmark across the ranking.
+    for (const name of FALLBACK_BENCHMARKS) {
+      const value = benchmarkValue(row, name);
+      if (value !== null && Number.isFinite(rankingMaxima[name])) {
+        const rawScore = Number.isFinite(row.score)
+          ? row.score
+          : rankingMaxima[name] <= 0
+            ? 0
+            : (100 * value) / rankingMaxima[name];
+        weighted = {
+          score: Math.round(rawScore),
+          coverage: FALLBACK_COVERAGE,
+          fallback: name,
+        };
+        break;
+      }
+    }
+  }
+  return weighted;
+}
+
+function resolveRoutingScore(row, profile, rankingMaxima) {
+  if (!row) return null;
+  const weighted = resolveRoutingBenchmark(row, profile, rankingMaxima);
+  if (weighted.coverage > 0) {
+    return Math.round(Math.max(0, Math.min(100, weighted.score)));
+  }
+  if (Number.isFinite(row.score)) {
+    return Math.round(Math.max(0, Math.min(100, row.score)));
+  }
+  return null;
 }
 
 function normaliseModelId(value) {
@@ -967,6 +998,7 @@ function matchModelPrior(modelId, ranking, options) {
         score: effScore,
         normalizedScore: effScore,
         rawScore,
+        provisional: Boolean(matchedEntry.provisional || (effortData && effortData.provisional)),
         codingTier: tier,
         reviewTier: tier,
         fallback: hasFallback,
@@ -1188,9 +1220,24 @@ function applyNormalizationAndTiers(rows, config, now) {
   }
 
   // 5. Provisional scores can never outrank official scores
-  const officialScores = rows
-    .filter((r) => !r.provisional && r.score !== null && Number.isFinite(r.score))
-    .map((r) => r.score);
+  const officialScores = [];
+  for (const r of rows) {
+    if (!r.provisional && r.score !== null && Number.isFinite(r.score)) {
+      officialScores.push(r.score);
+    }
+    if (!r.provisional && r.efforts && typeof r.efforts === 'object') {
+      for (const effData of Object.values(r.efforts)) {
+        if (
+          effData &&
+          !effData.provisional &&
+          effData.score !== null &&
+          Number.isFinite(effData.score)
+        ) {
+          officialScores.push(effData.score);
+        }
+      }
+    }
+  }
   const minOfficialScore = officialScores.length ? Math.min(...officialScores) : null;
   if (minOfficialScore !== null) {
     const provisionalCap = Math.round((minOfficialScore - 0.1) * 10) / 10;
@@ -1659,6 +1706,8 @@ module.exports = {
   ROLE_BENCHMARK_WEIGHTS,
   roleBenchmarkProfile,
   weightedBenchmarkScore,
+  resolveRoutingBenchmark,
+  resolveRoutingScore,
   DEFAULT_PRIORS_FILE,
   LIVE_PRIORS_FILE,
   splitModelEffort,
