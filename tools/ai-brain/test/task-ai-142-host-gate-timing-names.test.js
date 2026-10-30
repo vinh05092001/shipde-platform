@@ -38,6 +38,9 @@ test('TASK-AI-142: a new failure is still reported when only durations are strip
       if (args && args[0] === 'rev-parse') return { status: 0, stdout: baseSha + '\n', stderr: '' };
       return { status: 0, stdout: '', stderr: '' };
     }
+    if ((args || []).some((a) => String(a).startsWith('--test-name-pattern='))) {
+      return { status: 1, stdout: '✖ worker regression (3ms)\n' };
+    }
     nodeCalls++;
     return nodeCalls === 1
       ? { status: 1, stdout: '✖ old failure (12ms)\n✖ worker regression (3.5s)\n' }

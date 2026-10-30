@@ -2417,6 +2417,24 @@ async function scanAllQuotas(options = {}) {
   const quotaState = loadQuotaState(options);
   quotaState.scopes = quotaState.scopes || {};
 
+  if (options.ifDue || options['if-due'] || options.gate) {
+    const dispatchConfig =
+      registry && sourcesApi.getDispatchConfig
+        ? sourcesApi.getDispatchConfig(registry, options)
+        : {};
+    const intervalMin = Number(options.intervalMin ?? dispatchConfig.quotaScanIntervalMin) || 60;
+    const dueSource = options.source || null;
+    if (!isQuotaScanDue(quotaState, intervalMin, now, dueSource) && !options.force) {
+      return {
+        gated: true,
+        at: quotaState.updatedAt || null,
+        scopes: quotaState.scopes || {},
+        count: 0,
+        blockedCount: 0,
+      };
+    }
+  }
+
   const targets = [];
   const sources = (registry && registry.sources) || [];
 
