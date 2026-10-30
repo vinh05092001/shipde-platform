@@ -68,7 +68,11 @@ function toolsForPrompt(item, role, files, riskDomains) {
   } catch (err) {
     return { error: err };
   }
-  return { tools: (Array.isArray(matched) ? matched : []).slice(0, 8) };
+  const list = (Array.isArray(matched) ? matched : [])
+    .slice()
+    .sort((a, b) => Number(Boolean(b && b.command)) - Number(Boolean(a && a.command)))
+    .slice(0, 8);
+  return { tools: list };
 }
 
 /** The section body: tool id, purpose, and the command only when one is known. */
@@ -311,8 +315,14 @@ function compilePrompt(item, ctx) {
         const rawText = String(gateOutput).trim();
         if (rawText) {
           const isTruncated = rawText.length > maxOutputChars;
+          const summaryTail =
+            isTruncated && Array.isArray(c.hostGateSummary) && c.hostGateSummary.length > 0
+              ? '\n' + c.hostGateSummary.join('\n').slice(0, 500)
+              : '';
           const truncated = isTruncated
-            ? rawText.slice(0, maxOutputChars) + '\n... (truncated)'
+            ? rawText.slice(0, Math.max(1, maxOutputChars - summaryTail.length)) +
+              '\n... (truncated)' +
+              summaryTail
             : rawText;
           lines.push('Host gate output:');
           lines.push(truncated);
@@ -474,7 +484,8 @@ function compileReviewPrompt(item, ctx) {
   lines.push(
     'Review instructions: You are an independent reviewer operating in a separate read-only root. ' +
       'Inspect the diff and verify all acceptance criteria and exercise tests. ' +
-      'Do NOT modify any code in the writer root.'
+      'Do NOT modify any code in the writer root. ' +
+      'You are running unattended in non-interactive mode: NEVER stop to ask the user questions, and ALWAYS write the verdict JSON file before finishing.'
   );
   lines.push(
     'Verdict file requirement: Write your review verdict as a JSON file to ' +

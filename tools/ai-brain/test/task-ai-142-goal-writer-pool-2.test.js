@@ -101,7 +101,9 @@ test('TASK-AI-142 item 1: opencode-direct inherits model capabilities and contex
   });
 
   const directCand = candidates.find(
-    (c) => c.harness === 'opencode-direct' && c.modelId.includes('gpt-4o')
+    (c) =>
+      c.harness === 'opencode-direct' &&
+      (c.modelId === 'aihubmix/gpt-4o' || c.modelId.endsWith('/gpt-4o'))
   );
   assert.ok(directCand, 'opencode-direct candidate must be generated');
   assert.equal(directCand.contextWindow, 128000);

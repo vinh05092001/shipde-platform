@@ -1124,7 +1124,7 @@ async function nextLoop(options, deps) {
       const planningPromise = planning.planWorkItem(
         planningItem.work_item_id,
         { rootDir, run: true },
-        d.planningDeps || d
+        planningDepsFor(d, opts, rootDir)
       );
       const authorItem = findResult.item;
       if (authorItem && authorItem !== planningItem) {
@@ -1172,7 +1172,7 @@ async function nextLoop(options, deps) {
         const planned = await planning.planWorkItem(
           item.work_item_id,
           { rootDir, run: true, reviewExisting: fs.existsSync(workItemPath) },
-          d.planningDeps || d
+          planningDepsFor(d, opts, rootDir)
         );
         const governed =
           planned &&
@@ -1706,6 +1706,26 @@ async function runNext(options, deps) {
   };
 }
 
+/**
+ * Planning dependencies for the governed planning lane. Injected dependencies
+ * (tests, embedding callers) win; otherwise the real services are built from the
+ * Controller's own machinery so an unattended loop does not stop at the first plan.
+ */
+function planningDepsFor(d, opts, rootDir) {
+  if (d && d.planningDeps) return d.planningDeps;
+  if (d && typeof d.runPlanning === 'function') return d;
+  if (d && (d.items || d.openWritersDetailed) && !opts?.externalWorkers && !d.externalWorkers)
+    return d;
+  const planning = require('./work-item-planner');
+  return planning.defaultPlanningDeps(
+    rootDir,
+    Object.assign({}, d || {}, {
+      externalWorkers: (opts && (opts.externalWorkers || opts['external-workers'])) || undefined,
+      decisionDir: (opts && opts.decisionDir) || undefined,
+    })
+  );
+}
+
 function nextCommand(args, deps) {
   const rootDir = args.root || process.cwd();
   const registerArg = args.register || args.csv;
@@ -1757,4 +1777,5 @@ module.exports = {
   collectAllDecisionRecords,
   getOpenRuns,
   isOpenRun,
+  planningDepsFor,
 };

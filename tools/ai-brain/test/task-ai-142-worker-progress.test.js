@@ -293,3 +293,21 @@ test(
     }
   }
 );
+
+test(
+  'B4: a tool_use event whose output merely lists branch names containing 413/limit/tpm is not a REQUEST_TOO_LARGE',
+  windowsSkip,
+  () => {
+    const event =
+      '{"type":"tool_use","timestamp":1,"sessionID":"ses_x","part":{"type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"git branch -a"},"output":"* feat/x  fix/task-ai-142-probe-tpm  fix/limit-on-tpm-guard  remotes/pr/413  fix/task-ai-142-request-too-large"}}}';
+    const { hostRes, raw, dir } = runGeneratedHost({
+      workerTimeoutMs: 30000,
+      targetLines: ['$ErrorActionPreference = "Stop"', `Write-Output '${event}'`, 'exit 0'],
+    });
+    assert.equal(hostRes.status, 0, String(hostRes.stderr || hostRes.stdout || ''));
+    assert.ok(raw, 'launch result must be written');
+    assert.doesNotMatch(String(raw.failureReason || ''), /REQUEST_TOO_LARGE/);
+    assert.notEqual(raw.requestTooLarge, true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+);

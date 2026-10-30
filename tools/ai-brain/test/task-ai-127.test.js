@@ -354,7 +354,7 @@ test('WD-R01: shared deps are copied once, then reused via the ready marker', (t
     path.join(workerRoot, 'apps', 'web', 'package.json'),
     path.join(hostCwd, 'apps', 'web', 'package.json')
   );
-  // A stale real node_modules left in the worker root must become a junction.
+  // Replace a stale node_modules with the worker-owned dependency graph.
   fs.mkdirSync(path.join(workerRoot, 'node_modules'), { recursive: true });
   fs.writeFileSync(path.join(workerRoot, 'node_modules', 'stale.txt'), 'stale');
 
@@ -380,11 +380,11 @@ test('WD-R01: shared deps are copied once, then reused via the ready marker', (t
   assert.ok(fs.existsSync(path.join(depNm, 'root-dep.js')), 'root dep copied');
   assert.ok(
     !fs.existsSync(path.join(workerRoot, 'node_modules', 'stale.txt')),
-    'stale real node_modules replaced by the junction'
+    'stale real node_modules replaced by the worker-owned dependency graph'
   );
   assert.ok(
-    fs.lstatSync(path.join(workerRoot, 'node_modules')).isSymbolicLink(),
-    'root node_modules is a junction'
+    !fs.lstatSync(path.join(workerRoot, 'node_modules')).isSymbolicLink(),
+    'root node_modules is worker-owned so transitive resolution cannot escape into the cache'
   );
   assert.ok(
     fs.existsSync(path.join(workerRoot, 'apps', 'web', 'node_modules', 'web-dep.js')),
