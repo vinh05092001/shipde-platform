@@ -19,7 +19,9 @@
     "db:generate": "prisma generate",
     "version:next": "next --version",
     "test:a11y": "playwright test",
-    "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
+    "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs",
+    "storybook": "storybook dev -p 6006 --disable-telemetry",
+    "storybook:build": "storybook build --disable-telemetry -o storybook-static"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
@@ -38,16 +40,25 @@
     "@lhci/cli": "^0.15.1",
     "@playwright/test": "^1.64.1",
     "@shipde/testkit": "workspace:*",
+    "@storybook/addon-a11y": "8.6.0",
+    "@storybook/addon-essentials": "8.6.0",
+    "@storybook/addon-highlight": "8.6.0",
+    "@storybook/nextjs": "8.6.0",
+    "@storybook/react": "8.6.0",
+    "@storybook/react-vite": "8.6.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "axe-core": "4.14.0",
+    "esbuild": "0.25.12",
     "eslint": "^9.39.5",
     "eslint-config-next": "16.3.8",
     "prisma": "^6.19.2",
+    "storybook": "8.6.0",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "^8.3.5"
   }
 }

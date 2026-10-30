@@ -1,0 +1,36 @@
+diff --git a/dist/builder-manager/index.js b/dist/builder-manager/index.js
+index 3d7f9b213dae1801bda62b31db31b9113e382ccd..e2af35de2064acf9a0997c00ffa8e872820c1bcf 100644
+--- a/dist/builder-manager/index.js
++++ b/dist/builder-manager/index.js
+@@ -1983,7 +1983,30 @@ var pa = /^\/($|\?)/, G, C, xt = /* @__PURE__ */ o(async (e) => {
+         util: O.resolve("util/util.js"),
+         assert: O.resolve("browser-assert")
+       }),
+-      Z(ca),
++      {
++  name: "storybook-windows-safe-resolve",
++  setup(build) {
++    const fs = require("node:fs");
++    const path = require("node:path");
++    build.onResolve({ filter: /.*/ }, (args) => {
++      let target = args.path;
++      if (target.startsWith(".")) {
++        target = path.resolve(args.resolveDir, target);
++      }
++      if (fs.existsSync(target)) {
++        return { path: target };
++      }
++      if (
++        args.path.startsWith("storybook/") ||
++        args.path.startsWith("@storybook/") ||
++        args.path === "react" ||
++        args.path === "react-dom"
++      ) {
++        return { external: true };
++      }
++    });
++  }
++}, Z(ca),
+       (0, Pt.pnpPlugin)()
+     ],
+     banner: {

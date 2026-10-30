@@ -19,11 +19,11 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)                       | USE NOW, PIN                     | Controlled 9Router author workspace                                          | Developer preview; keep `@deepseek-ai/dsh@0.1.1-rc.2` until an upgrade is tested                                                                                                                                                                              |
 | pnpm 11 and Docker Desktop/Compose                                                        | INSTALL NOW                      | Prepare the Node 24 machine for the target monorepo and local infrastructure | Do not migrate the current npm prototype outside its Foundation Work Item                                                                                                                                                                                     |
 | [Playwright](https://github.com/microsoft/playwright)                                     | ADOPT IN `TASK-FOUND-04`         | Browser E2E, trace/video evidence and screenshot comparison                  | Golden images require human-approved baselines                                                                                                                                                                                                                |
-| [Storybook](https://github.com/storybookjs/storybook)                                     | ADOPT IN `TASK-FOUND-04`         | Visible catalog of component states and interaction/accessibility checks     | It documents approved UI; it does not invent the design                                                                                                                                                                                                       |
+| [Storybook](https://github.com/storybookjs/storybook)                                     | USE NOW, PIN                     | Visible catalog of component states and interaction/accessibility checks     | Pinned in `apps/web` (`@storybook/react-vite@8.6.0`, `@storybook/addon-a11y@8.6.0`), root scripts `storybook` / `storybook:build`, and CI gate step; it documents approved UI; it does not invent the design |
 | [axe-core](https://github.com/dequelabs/axe-core)                                         | ADOPT IN `TASK-FOUND-04`         | Automated accessibility checks in rendered UI                                | Automated checks supplement, not replace, manual UX review                                                                                                                                                                                                    |
 | [MSW](https://github.com/mswjs/msw)                                                       | ADOPT IN `TASK-FOUND-04`         | Deterministic API and carrier response states for UI/testing                 | Mock behavior is labeled and never presented as live production evidence                                                                                                                                                                                      |
 | [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci)                            | ADOPT IN `TASK-FOUND-04`         | Performance budgets for critical approved routes                             | Targeted CI only; do not consume every local iteration                                                                                                                                                                                                        |
-| [Vercel agent skills](https://github.com/vercel-labs/agent-skills)                        | AUDIT AND PIN IN `TASK-FOUND-04` | React performance and UI review guidance                                     | Only `react-best-practices` and `web-design-guidelines`; Ship Dễ UX sources remain authoritative                                                                                                                                                              |
+| [Vercel agent skills](https://github.com/vercel-labs/agent-skills)                        | USE NOW, PIN                     | React performance and UI review guidance                                     | Audited and vendored at commit `063bee94c3f4df8453406c830b0a7df0f2860278` (`react-best-practices` and `web-interface-guidelines`); Ship Dễ UX sources remain authoritative |
 
 ## External orchestration layer
 
@@ -229,6 +229,26 @@ deliberate human upgrade decision per the toolchain policy above.
 - Lighthouse budgets for a small approved set of critical routes;
 - audited, commit-pinned Vercel React and web-interface guidance shared by author and reviewer;
 - screenshots attached to the PR, not accepted as a substitute for working behavior.
+
+### Storybook and Vercel Skills Adoption (TASK-FOUND-04 Follow-up 2026-10-30)
+
+1. **Storybook adoption in `apps/web`**:
+   - Pinned framework: `@storybook/react-vite@8.6.0`, `@storybook/addon-a11y@8.6.0`, `vite@^8.3.5`.
+   - Core patch (`patches/@storybook__core@8.6.0.patch`): Injected safe esbuild module resolution plugin preventing Windows root ACL permission denial (`desktop-vi13ka6\agy07` traversal) and resolving internal core events.
+   - Scripts: Root package scripts `pnpm storybook` (development dev server) and `pnpm storybook:build` (static component build output in `apps/web/storybook-static/`).
+   - CI step: Added `Build Storybook component catalog` (`pnpm storybook:build`) in `.github/workflows/current-application.yml` directly after `pnpm build`.
+   - Component stories: `DataTable.stories.tsx` (Success with selection and pagination, Loading skeleton, Empty placeholder), `OperationalComponents.stories.tsx` (StatusBadges, EmptyStates, MoneyFormats, TrackingCodes, AutomationTiers, ConfirmDialogs).
+2. **Vercel agent skills audit and pin**:
+   - Upstream repository: `vercel-labs/agent-skills`
+   - Pinned commit SHA: `063bee94c3f4df8453406c830b0a7df0f2860278`
+   - Vendored files under `tools/ai-brain/skills/vercel/`:
+     - `react-best-practices/SKILL.md` (sha256: `71ed7794962fa6e803ee83030517b5b93a9f70fbfeb431ec4535c5480a8d8355`)
+     - `web-interface-guidelines/command.md` (sha256: `d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234` from `vercel-labs/web-interface-guidelines@434b7f91364665f2f733b310ec54809bf8f37937`)
+     - `web-interface-guidelines/LICENSE` (sha256: `6cd1609c9c12233507cdd2ce0d32e9a721e3c27494951be06b90090deeeb7af2`)
+   - Audit findings:
+     - License: MIT License (declared in upstream README/front-matter and vendored LICENSE).
+     - Advisory boundary: Guidance is strictly advisory; approved Ship Dễ UX rules, screen specifications, 4-tier money formatting, and state coverage requirements always take precedence.
+     - Admission rule: Delivered only via locked pack in `tools/ai-brain/skill-pack.js` to UI feature roles; never unpinned network fetch at review time.
 
 ## Governed Ecosystem Catalog (37 Adopted Repositories)
 
