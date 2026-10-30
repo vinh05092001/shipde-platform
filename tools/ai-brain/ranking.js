@@ -137,7 +137,168 @@ function reservationsForCandidate(candidate, reservations) {
  * Reads from real quota modules: quota.js accountHeadroom, quota-store.js
  * usableReadings, evidence.js isCandidateBlocked, and held reservations.
  */
+function quotaFreshnessMs(ctx) {
+  const config = sourcesApi.getDispatchConfig(ctx && ctx.registry, ctx || {});
+  const value = Number(ctx?.dispatchConfig?.quotaReadingMaxAgeMs ?? config.quotaReadingMaxAgeMs);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: quotaReadingMaxAgeMs must be a positive integer');
+  }
+  return value;
+}
+
+/** Only a recent live probe bound to this complete candidate can prove availability. */
+function quotaProbeEvidence(candidate, ctx, observedAt) {
+  let proof = candidate.quotaProbe;
+  if (!proof && ctx?.routeHealth) {
+    const record = require('./route-evidence').routeRecord(candidate, ctx.routeHealth);
+    if (record?.candidateKey === sevenWayKey(candidate)) {
+      proof = {
+        candidateKey: record.candidateKey,
+        ok: record.status === 'AVAILABLE',
+        httpStatus: record.probeResult?.status,
+        observedAt: record.lastCheckedAt,
+        quotaStatus: record.probeResult?.quota?.status,
+        reasonCode: record.failureReason,
+        source: 'route-health-probe',
+      };
+    }
+  }
+  if (!proof || proof.candidateKey !== sevenWayKey(candidate)) return null;
+  const stamp = Date.parse(proof.observedAt);
+  const now = ctx?.now ?? Date.now();
+  const quotaStamp = Date.parse(observedAt);
+  if (
+    !Number.isFinite(stamp) ||
+    stamp > now ||
+    now - stamp > quotaFreshnessMs(ctx) ||
+    (Number.isFinite(quotaStamp) && stamp < quotaStamp)
+  )
+    return null;
+  return {
+    candidateKey: sevenWayKey(candidate),
+    ok: proof.ok === true,
+    httpStatus: Number(proof.httpStatus) || 0,
+    observedAt: new Date(stamp).toISOString(),
+    quotaStatus: proof.quotaStatus || 'unknown',
+    reasonCode: proof.reasonCode || undefined,
+    source: proof.source || 'live-route-probe',
+  };
+}
+
+function hasLiveQuotaProbe(headroom) {
+  const proof = headroom.quotaProbe;
+  return Boolean(
+    proof?.ok === true &&
+    proof.httpStatus >= 200 &&
+    proof.httpStatus < 300 &&
+    proof.quotaStatus !== 'exhausted' &&
+    proof.quotaStatus !== 'cooling'
+  );
+}
+
+/**
+ * Keep the ranking APIs synchronous. Async dispatch performs only the uncertain
+ * candidates' bounded preflights, then records the final admission decision.
+ */
+async function rankWithQuotaProbe(candidates, context, rank = rankAndRecord) {
+  const original = context || {};
+  const ctx = { ...original, dryRun: true };
+  let decision = rank(candidates, ctx);
+  const pending = new Set(
+    (decision.needsQuotaProbe || []).map((c) => c.candidateKey || c.offeringId)
+  );
+  if (pending.size) {
+    const config = sourcesApi.getDispatchConfig(ctx.registry, ctx);
+    if (!(config.probeBudgetMs > 0) || !(config.probeTimeoutMs > 0)) {
+      throw new Error('DISPATCH_CONFIG_INVALID: positive probe budget and timeout are required');
+    }
+    const started = Date.now();
+    const deadline = started + config.probeBudgetMs;
+    const profile = ctx.taskProfile || {
+      role: String(ctx.role || '').startsWith('reviewer') ? 'reviewer' : 'writer',
+    };
+    const ordered = require('./capability-probe').orderCandidatesForProbe(
+      candidates.filter((c) => pending.has(sevenWayKey(c))),
+      profile,
+      ctx
+    );
+    const probeApi = require('./route-probe');
+    for (const candidate of ordered) {
+      let result;
+      let localReason;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        localReason = 'PROBE_BUDGET_EXHAUSTED';
+      } else {
+        let route;
+        try {
+          route =
+            typeof ctx.httpRoute === 'function'
+              ? ctx.httpRoute(candidate)
+              : require('./orchestrate/route-probe').routeProbeCandidate(
+                  candidate,
+                  { model: candidate.modelId },
+                  ctx.registry || { sources: [] },
+                  false
+                );
+        } catch {
+          localReason = 'QUOTA_PROBE_ROUTE_UNAVAILABLE';
+        }
+        if (!localReason && (!route || !/^https?:\/\//i.test(String(route.accessPath || '')))) {
+          localReason = 'QUOTA_PROBE_ROUTE_UNAVAILABLE';
+        }
+        if (
+          !localReason &&
+          typeof ctx.routeProbe !== 'function' &&
+          typeof ctx.fetch !== 'function' &&
+          ctx.allowNetwork !== true
+        )
+          localReason = 'QUOTA_PROBE_TRANSPORT_UNAVAILABLE';
+        if (!localReason) {
+          result = await probeApi.boundedProbe(
+            ctx.routeProbe || probeApi.probeRoute,
+            { ...route, maxOutputTokens: route.maxOutputTokens ?? config.fullRouteScan.maxTokens },
+            route.apiKeyEnv,
+            { ...process.env, ...ctx.env },
+            {
+              timeoutMs: Math.min(config.probeTimeoutMs, remainingMs),
+              fetch: ctx.fetch,
+              signal: ctx.signal,
+            }
+          );
+        }
+      }
+      const now = (original.now ?? started) + (Date.now() - started);
+      ctx.now = now;
+      const httpStatus = Number(result?.status) || 0;
+      const ok = result?.ok === true && httpStatus >= 200 && httpStatus < 300;
+      const reasonCode =
+        localReason ||
+        (!ok
+          ? probeApi.failureReason(
+              probeApi.classifyProbeFailure({ status: httpStatus, body: result?.body })
+            )
+          : result?.quota?.status === 'exhausted'
+            ? 'QUOTA_EXHAUSTED'
+            : undefined);
+      candidate.quotaProbe = {
+        candidateKey: sevenWayKey(candidate),
+        ok,
+        httpStatus,
+        observedAt: new Date(now).toISOString(),
+        quotaStatus: result?.quota?.status || 'unknown',
+        reasonCode,
+        source: 'live-route-probe',
+      };
+      decision = rank(candidates, ctx);
+      if (ok && !['exhausted', 'cooling'].includes(candidate.quotaProbe.quotaStatus)) break;
+    }
+  }
+  return original.dryRun === true ? decision : rank(candidates, { ...ctx, dryRun: false });
+}
+
 function resolveCandidateHeadroom(candidate, ctx) {
+  const now = ctx?.now ?? Date.now();
   if (candidate.blocked) {
     const isExhausted = candidate.blockReason === 'QUOTA_EXHAUSTED';
     return {
@@ -159,6 +320,11 @@ function resolveCandidateHeadroom(candidate, ctx) {
   if (reading === undefined && readings[key] !== undefined) {
     reading = readings[key];
   }
+  if (reading === undefined && readings.default !== undefined) {
+    const dVal = readings.default;
+    reading =
+      typeof dVal === 'string' ? { status: dVal, observedAt: new Date(now).toISOString() } : dVal;
+  }
 
   const allReservations = getActiveReservations(ctx);
   const candReservations = reservationsForCandidate(candidate, allReservations);
@@ -170,11 +336,21 @@ function resolveCandidateHeadroom(candidate, ctx) {
     );
     if (acc) {
       const events = (ctx.eventsByAccount && ctx.eventsByAccount[acc.id]) || [];
-      reading = quota.accountHeadroom(acc, events, {
-        now: (ctx && ctx.now) || Date.now(),
-        warnAt: ctx && ctx.warnAt,
-        reservations: candReservations,
-      });
+      const underlyingObservedAt =
+        acc.observedAt ||
+        acc.updatedAt ||
+        acc.cachedAt ||
+        acc.snapshotAt ||
+        (ctx.eventsObservedAt && ctx.eventsObservedAt[acc.id]) ||
+        ctx.observedAt;
+      reading = {
+        ...quota.accountHeadroom(acc, events, {
+          now,
+          warnAt: ctx && ctx.warnAt,
+          reservations: candReservations,
+        }),
+        ...(underlyingObservedAt ? { observedAt: underlyingObservedAt } : {}),
+      };
     }
   }
 
@@ -202,7 +378,31 @@ function resolveCandidateHeadroom(candidate, ctx) {
       }
     }
   }
-  const now = (ctx && ctx.now) || Date.now();
+
+  // Quota scan state for active scopes
+  if (reading === undefined && ctx && ctx.quotaState) {
+    try {
+      const quotaScan = require('./quota-scan');
+      const scopeState = quotaScan.getQuotaScopeState(candidate, ctx.quotaState, { now });
+      if (scopeState) {
+        const isBlocked = quotaScan.isScopeBlocked(scopeState, now);
+        if (isBlocked) {
+          reading = {
+            status: scopeState.code === 'QUOTA' ? 'exhausted' : 'cooling',
+            reason: scopeState.reason || scopeState.code,
+            observedAt: scopeState.at || scopeState.observedAt,
+            resetsAt: scopeState.resetsAt,
+            cooldownUntil: scopeState.cooldownUntil,
+          };
+        } else if (scopeState.code === 'OK' || scopeState.status === 200) {
+          reading = {
+            status: 'open',
+            observedAt: scopeState.at || scopeState.observedAt,
+          };
+        }
+      }
+    } catch {}
+  }
 
   // Live Codex quota source for native CLI login when no cached reading exists
   if (
@@ -266,22 +466,17 @@ function resolveCandidateHeadroom(candidate, ctx) {
     };
   }
 
-  // Native login is not quota evidence. Reuse the quota store's age policy
-  // even for normalized status readings, which otherwise bypass freshness.
-  if (candidate.binding === 'cli-login') {
-    const stamp =
-      reading &&
-      typeof reading === 'object' &&
-      Date.parse(reading.observedAt || reading.updatedAt || reading.cachedAt || '');
-    const maxAge = (reading && reading.maxAgeMs) || quotaStore.DEFAULT_MAX_AGE_MS;
-    if (!Number.isFinite(stamp) || now < stamp || now - stamp > maxAge) {
-      reading = undefined;
-    }
-  }
+  const maxAgeMs = quotaFreshnessMs(ctx);
   let status = 'unknown';
   let worstRatio = null;
-  let reason = 'chưa khai hạn mức token';
-  let cooldownUntil =
+  let reason = 'QUOTA_UNKNOWN';
+  let reasonCode = 'QUOTA_UNKNOWN';
+  const observedAt =
+    reading && typeof reading === 'object'
+      ? reading.observedAt || reading.updatedAt || reading.cachedAt
+      : undefined;
+  const stamp = Date.parse(observedAt);
+  const cooldownUntil =
     reading && typeof reading === 'object' ? reading.cooldownUntil || reading.resetsAt : undefined;
   if (typeof reading === 'string') {
     status = reading;
@@ -297,13 +492,75 @@ function resolveCandidateHeadroom(candidate, ctx) {
       reason = hr.reason;
     }
   }
-
+  const activeReset =
+    Date.parse(cooldownUntil) > now &&
+    (reading?.cooldownUntil || status === 'exhausted' || status === 'cooling');
+  const ageMs = Number.isFinite(stamp) ? now - stamp : null;
+  const readingLimit = Number(reading?.maxAgeMs);
+  const effectiveMaxAgeMs =
+    Number.isFinite(readingLimit) && readingLimit > 0 ? Math.min(maxAgeMs, readingLimit) : maxAgeMs;
+  const fresh = ageMs !== null && ageMs >= 0 && ageMs <= effectiveMaxAgeMs;
+  const explicitRefusal = !observedAt && ['exhausted', 'cooling'].includes(status);
+  if (activeReset) {
+    status = status === 'exhausted' ? 'exhausted' : 'cooling';
+    reasonCode = status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE';
+  } else if (!fresh && !explicitRefusal) {
+    status = 'unknown';
+    worstRatio = null;
+    reasonCode =
+      ageMs === null
+        ? 'QUOTA_TIMESTAMP_MISSING'
+        : ageMs < 0
+          ? 'QUOTA_TIMESTAMP_INVALID'
+          : 'QUOTA_STALE';
+    reason = reasonCode;
+  } else {
+    reasonCode =
+      status === 'exhausted'
+        ? 'QUOTA_EXHAUSTED'
+        : status === 'cooling'
+          ? 'COOLDOWN_ACTIVE'
+          : status === 'unknown'
+            ? 'QUOTA_UNKNOWN'
+            : 'QUOTA_FRESH';
+  }
+  const quotaEvidence = {
+    status,
+    observedAt: Number.isFinite(stamp) ? new Date(stamp).toISOString() : null,
+    ageMs,
+    maxAgeMs: effectiveMaxAgeMs,
+    fresh,
+    reasonCode,
+    ...(activeReset ? { cooldownUntil } : {}),
+  };
+  const quotaProbe = quotaProbeEvidence(candidate, ctx, observedAt);
+  if (!['exhausted', 'cooling'].includes(status) && quotaProbe) {
+    if (['exhausted', 'cooling'].includes(quotaProbe.quotaStatus)) {
+      status = quotaProbe.quotaStatus;
+      reasonCode = status === 'exhausted' ? 'QUOTA_EXHAUSTED' : 'COOLDOWN_ACTIVE';
+      reason = reasonCode;
+    } else if (!hasLiveQuotaProbe({ quotaProbe })) {
+      reasonCode = quotaProbe.reasonCode || 'QUOTA_PROBE_FAILED';
+      status = ['RATE_LIMITED', 'UPSTREAM_CREDIT_OR_QUOTA'].includes(reasonCode)
+        ? 'cooling'
+        : 'unknown';
+      reason = reasonCode;
+    } else if (status === 'unknown' && ['open', 'tight'].includes(quotaProbe.quotaStatus)) {
+      status = quotaProbe.quotaStatus;
+      reasonCode = 'LIVE_QUOTA_PROBE';
+      reason = reasonCode;
+    }
+  }
   return {
     status,
     worstRatio,
     reason,
+    reasonCode,
     reservationsHeld: candReservations.length,
     cooldownUntil: cooldownUntil || undefined,
+    quotaEvidence,
+    quotaProbe,
+    requiresLiveProbe: status === 'unknown' && !quotaProbe,
   };
 }
 
@@ -495,6 +752,7 @@ function rankAndRecord(candidates, context) {
 
   const rejected = [];
   const eligible = [];
+  const needsQuotaProbe = [];
 
   // ── 1. Filter ───────────────────────────────────────────────────
   for (const c of candidates) {
@@ -595,11 +853,16 @@ function rankAndRecord(candidates, context) {
     const headroom = resolveCandidateHeadroom(c, ctx);
     c.headroomStatus = headroom.status;
     c.headroomReason = headroom.reason;
+    c.quotaEvidence = headroom.quotaEvidence;
+    c.quotaProbe = headroom.quotaProbe || undefined;
 
     if (headroom.status === 'exhausted') {
       rejected.push({
         offeringId: sevenWayKey(c),
         reason: headroom.reason || 'QUOTA_EXHAUSTED',
+        reasonCode: 'QUOTA_EXHAUSTED',
+        quotaEvidence: headroom.quotaEvidence,
+        quotaProbe: headroom.quotaProbe,
         scope:
           c.accountId && c.accountId !== '*'
             ? 'account'
@@ -617,6 +880,9 @@ function rankAndRecord(candidates, context) {
       rejected.push({
         offeringId: sevenWayKey(c),
         reason: headroom.reason || 'COOLDOWN_ACTIVE',
+        reasonCode: 'COOLDOWN_ACTIVE',
+        quotaEvidence: headroom.quotaEvidence,
+        quotaProbe: headroom.quotaProbe,
         scope:
           c.accountId && c.accountId !== '*'
             ? 'account'
@@ -642,6 +908,22 @@ function rankAndRecord(candidates, context) {
       continue;
     }
 
+    if (headroom.status === 'unknown' && !hasLiveQuotaProbe(headroom)) {
+      const refusal = {
+        offeringId: sevenWayKey(c),
+        reason: headroom.quotaProbe?.reasonCode || 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE',
+        reasonCode: headroom.quotaProbe?.reasonCode || 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE',
+        scope: 'quotaScope',
+        upstream: c.upstream,
+        modelId: c.modelId,
+        accountId: c.accountId,
+        quotaEvidence: headroom.quotaEvidence,
+        quotaProbe: headroom.quotaProbe,
+      };
+      rejected.push(refusal);
+      if (headroom.requiresLiveProbe) needsQuotaProbe.push(refusal);
+      continue;
+    }
     eligible.push(c);
   }
 
@@ -717,7 +999,8 @@ function rankAndRecord(candidates, context) {
     : 'REFUSED: no candidate qualifies';
 
   const decisionEntry = {
-    stage: decisions.Stage.SELECTED,
+    stage: winner ? decisions.Stage.SELECTED : decisions.Stage.REFUSED,
+    outcome: winner ? 'SELECTED' : 'NO_ELIGIBLE_CANDIDATE',
     workItemId,
     role,
     candidates: eligible.map((c) => ({
@@ -733,9 +1016,12 @@ function rankAndRecord(candidates, context) {
       scoreBreakdown: c.scoreBreakdown,
       evidence: (c.evidence || []).length,
       headroom: c.headroomStatus || 'unknown',
+      quotaEvidence: c.quotaEvidence,
+      quotaProbe: c.quotaProbe,
       sharedQuota: c.sharedQuota || 'unknown',
     })),
     rejected,
+    needsQuotaProbe,
     chosen,
     harness: winner ? winner.harness : null,
     sessionId: null,
@@ -744,7 +1030,7 @@ function rankAndRecord(candidates, context) {
   };
 
   // Write through decisions.js — the single writer for the log.
-  if (!ctx.dryRun && chosen) {
+  if (!ctx.dryRun) {
     try {
       decisions.recordDecision(decisionEntry, ctx.decisionOpts);
     } catch (err) {
@@ -784,6 +1070,8 @@ module.exports = {
   resolveCatalogue,
   scoreCandidate,
   rankAndRecord,
+  rankWithQuotaProbe,
+  hasLiveQuotaProbe,
   extractBaseName,
   buildCatalogueSet,
   getActiveReservations,

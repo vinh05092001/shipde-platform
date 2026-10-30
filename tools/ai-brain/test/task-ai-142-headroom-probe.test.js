@@ -60,6 +60,14 @@ test('probed-OK unknown-headroom candidate with higher quality outranks lower-qu
     },
   });
 
+  candidateProbedUnknown.quotaProbe = {
+    candidateKey: candidateProbedUnknown.candidateKey,
+    ok: true,
+    httpStatus: 200,
+    observedAt: new Date().toISOString(),
+    quotaStatus: 'unknown',
+  };
+
   const candidateOpen = sampleCandidate({
     accountId: 'account-open',
     quotaScope: 'account-open',
@@ -77,7 +85,7 @@ test('probed-OK unknown-headroom candidate with higher quality outranks lower-qu
     priors: { ranking: [] },
     headrooms: {
       'account-probed-unknown': { status: 'unknown' },
-      'account-open': { status: 'open' },
+      'account-open': { status: 'open', observedAt: new Date().toISOString() },
     },
   };
 
@@ -113,7 +121,7 @@ test('probed-OK unknown-headroom candidate with higher quality outranks lower-qu
   );
 });
 
-test('unprobed unknown-headroom candidate is still penalized', () => {
+test('unprobed unknown-headroom candidate is excluded and its score remains penalized', () => {
   const candidateUnprobedUnknown = sampleCandidate({
     accountId: 'account-unprobed-unknown',
     quotaScope: 'account-unprobed-unknown',
@@ -140,7 +148,7 @@ test('unprobed unknown-headroom candidate is still penalized', () => {
     priors: { ranking: [] },
     headrooms: {
       'account-unprobed-unknown': { status: 'unknown' },
-      'account-open': { status: 'open' },
+      'account-open': { status: 'open', observedAt: new Date().toISOString() },
     },
   };
 
@@ -151,19 +159,19 @@ test('unprobed unknown-headroom candidate is still penalized', () => {
     ctx
   );
 
-  assert.equal(result.ranking.length, 2);
-  const scoredUnknown = result.ranking.find(
-    (c) => c.candidateKey === candidateUnprobedUnknown.candidateKey
+  assert.equal(result.ranking.length, 1);
+  assert.ok(
+    result.rejected.some(
+      (c) =>
+        c.candidateKey === candidateUnprobedUnknown.candidateKey &&
+        c.reasonCode === 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE'
+    )
   );
-  const scoredOpen = result.ranking.find((c) => c.candidateKey === candidateOpen.candidateKey);
-
-  assert.equal(
-    scoredUnknown.scoreBreakdown.headroomPenalty,
-    15,
-    'unprobed unknown headroom takes configured penalty'
-  );
+  const scoredOpen = result.ranking[0];
+  const scoredUnknown = routing.scoreForProfile(candidateUnprobedUnknown, assessment, ctx);
+  assert.equal(scoredUnknown.breakdown.headroomPenalty, 15);
+  assert.equal(scoredUnknown.score, 67);
   assert.equal(scoredOpen.scoreBreakdown.headroomPenalty, 0);
-  assert.equal(scoredUnknown.score, 67); // 82 - 15 = 67
   assert.equal(scoredOpen.score, 70);
   assert.equal(
     result.chosen,
@@ -194,7 +202,7 @@ test('tight headroom candidate is still penalized even if probe succeeded', () =
   const ctx = {
     priors: { ranking: [] },
     headrooms: {
-      'account-tight': { status: 'tight' },
+      'account-tight': { status: 'tight', observedAt: new Date().toISOString() },
     },
   };
 

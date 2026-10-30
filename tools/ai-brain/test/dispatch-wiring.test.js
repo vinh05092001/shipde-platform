@@ -10,6 +10,12 @@ const { dispatchCommand } = require('../cli');
 const evidence = require('../evidence');
 const quotaStore = require('../quota-store');
 const { candidateKey } = require('../candidates');
+// Ranking fixtures supply current quota independently of host login/cache state.
+function currentQuotaReadings(offered, now = Date.now()) {
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
+}
 
 describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
   let tmpDir;
@@ -79,6 +85,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       { execute: true, item: 'TASK-NO-PIN' },
       {
         candidates: [candA, candB],
+        headrooms: currentQuotaReadings([candA, candB]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
@@ -143,6 +150,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       { execute: true, item: 'TASK-COOL-FALLBACK' },
       {
         candidates: [cand1, cand2],
+        headrooms: currentQuotaReadings([cand1, cand2]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
@@ -222,6 +230,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       { execute: true, item: 'TASK-ALL-EXCLUDED' },
       {
         candidates: [cand1, cand2],
+        headrooms: currentQuotaReadings([cand1, cand2]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
@@ -260,6 +269,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         { execute: true, item: 'TASK-RES-SUCCESS' },
         {
           candidates: [candSuccess],
+          headrooms: currentQuotaReadings([candSuccess]),
           run: runSuccess,
           routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
@@ -295,6 +305,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         { execute: true, item: 'TASK-RES-FAIL' },
         {
           candidates: [candFail],
+          headrooms: currentQuotaReadings([candFail]),
           run: runFailure,
           routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
@@ -329,6 +340,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         { execute: true, item: 'TASK-RES-THROW' },
         {
           candidates: [candThrow],
+          headrooms: currentQuotaReadings([candThrow]),
           run: runThrow,
           routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
@@ -370,6 +382,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       { 'dry-run': true, item: 'TASK-DRY' },
       {
         candidates: [cand],
+        headrooms: currentQuotaReadings([cand]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
@@ -426,6 +439,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       },
       {
         candidates: [cand1, cand2],
+        headrooms: currentQuotaReadings([cand1, cand2]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
@@ -461,6 +475,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       },
       {
         candidates: [cand1, cand2],
+        headrooms: currentQuotaReadings([cand1, cand2]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
@@ -509,6 +524,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       { execute: true, item: 'TASK-PIN', model: 'kr/claude-sonnet' },
       {
         candidates: [candA, candB],
+        headrooms: currentQuotaReadings([candA, candB]),
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,

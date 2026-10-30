@@ -31,6 +31,13 @@ const path = require('node:path');
 const evidence = require('../evidence');
 const candidates = require('../candidates');
 const ranking = require('../ranking');
+// Ranking fixtures supply current quota independently of host login/cache state.
+function currentQuotaReadings(offered, now = Date.now()) {
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
+}
+
 const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 
@@ -216,6 +223,8 @@ describe('evidence store', () => {
 
     // In ranking, candB is not rejected for upstream block
     const decision = ranking.rankAndRecord(annotated, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(annotated),
       workItemId: 'TASK-XACC-01',
       role: 'author.foundation',
       dryRun: true,
@@ -386,6 +395,7 @@ describe('evidence store', () => {
     const openReading = {
       accountId: 'acc-cooling',
       status: 'open',
+      observedAt: new Date().toISOString(),
       worstRatio: 0.1,
     };
     const openScore = ranking.headroomScore(cand, { headrooms: { 'acc-cooling': openReading } });
@@ -833,6 +843,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-01',
       role: 'author.foundation',
       kind: 'author.foundation',
@@ -900,6 +912,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-02',
       role: 'author.foundation',
       dryRun: true,
@@ -938,6 +952,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-03',
       role: 'author.foundation',
       dryRun: true,
@@ -1013,6 +1029,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-05',
       role: 'author.foundation',
       dryRun: true,
@@ -1056,6 +1074,8 @@ describe('ranking', () => {
     ];
 
     ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-06',
       role: 'author.foundation',
       decisionOpts: { dir, now: Date.now() },
@@ -1112,6 +1132,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-CATALOG',
       role: 'author.foundation',
       dryRun: true,
@@ -1172,6 +1194,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-EXEMPT',
       role: 'author.foundation',
       dryRun: true,
@@ -1249,6 +1273,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-PER-PATH',
       role: 'author.foundation',
       dryRun: true,
@@ -1321,6 +1347,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-ALIAS',
       role: 'author.foundation',
       dryRun: true,
@@ -1364,6 +1392,8 @@ describe('ranking', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'TASK-TEST-CLI',
       role: 'author.foundation',
       dryRun: true,
@@ -1374,8 +1404,8 @@ describe('ranking', () => {
     const cliCandidate = decision.candidates[0];
     assert.equal(
       cliCandidate.headroom,
-      'unknown',
-      'cli candidate status marked as unknown due to missing catalogue'
+      'open',
+      'fresh quota stays open while the catalogue remains unverified'
     );
   });
 
@@ -1495,8 +1525,12 @@ describe('acceptance: seven-fix contract', () => {
     const none = mk('test-none', 'q-none');
 
     const scores = [
-      ranking.headroomScore(open, { headrooms: { 'q-open': 'open' } }),
-      ranking.headroomScore(tight, { headrooms: { 'q-tight': 'tight' } }),
+      ranking.headroomScore(open, {
+        headrooms: { 'q-open': { status: 'open', observedAt: new Date().toISOString() } },
+      }),
+      ranking.headroomScore(tight, {
+        headrooms: { 'q-tight': { status: 'tight', observedAt: new Date().toISOString() } },
+      }),
       ranking.headroomScore(exh, { headrooms: { 'q-exh': 'exhausted' } }),
       ranking.headroomScore(mystery, { headrooms: { 'q-mystery': 'mystery' } }),
       ranking.headroomScore(none, { headrooms: {} }),
@@ -1604,6 +1638,8 @@ describe('acceptance: seven-fix contract', () => {
     };
     const gate = {
       workItemId: 'TASK-7FIX-07',
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings([unproven]),
       role: 'author.foundation',
       kind: 'author.foundation',
       dryRun: true,
@@ -1721,6 +1757,8 @@ describe('acceptance: full ranking run', () => {
 
     // Rank — no catalogue validation in this layer (unit test of algorithm).
     const decision = ranking.rankAndRecord(annotated, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(annotated),
       workItemId: 'TASK-ACCEPT-01',
       role: 'author.foundation',
       registry,
@@ -1765,8 +1803,8 @@ describe('acceptance: full ranking run', () => {
     );
 
     // 4. One candidate that has never been verified, carried as unknown.
-    const unknowns = decision.candidates.filter((c) => c.headroom === 'unknown');
-    assert.ok(unknowns.length >= 1, 'has at least one unknown candidate');
+    const unverified = decision.candidates.filter((c) => c.evidence === 0);
+    assert.ok(unverified.length >= 1, 'unverified proof stays visible when quota is fresh');
 
     // 5. Stated, specific reason for the final choice.
     assert.ok(decision.reason, 'has a reason');
@@ -1861,6 +1899,8 @@ describe('acceptance: unassigned work item', () => {
     const annotated = candidates.annotateCandidates(merged, evData);
 
     const decision = ranking.rankAndRecord(annotated, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(annotated),
       workItemId: 'UNASSIGNED-01',
       role: 'author.foundation',
       registry,
@@ -1914,6 +1954,8 @@ describe('acceptance: unassigned work item', () => {
     );
 
     const decision2 = ranking.rankAndRecord(annotated2, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(annotated2),
       workItemId: 'UNASSIGNED-01-retry',
       role: 'author.foundation',
       registry,
@@ -2001,6 +2043,8 @@ describe('integration: catalogue snapshot validation', () => {
 
     // Rank WITH catalogue validation — this is the layer 2 check.
     const decision = ranking.rankAndRecord(annotated, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(annotated.filter((c) => catalogueSet.has(c.modelId))),
       workItemId: 'INTEG-SNAPSHOT-01',
       role: 'author.foundation',
       registry,
@@ -2072,6 +2116,8 @@ describe('integration: catalogue snapshot validation', () => {
     ];
 
     const decision = ranking.rankAndRecord(testCandidates, {
+      useStoredQuota: false,
+      headrooms: currentQuotaReadings(testCandidates),
       workItemId: 'INTEG-STALE-01',
       role: 'author.foundation',
       dryRun: true,
@@ -2133,7 +2179,7 @@ describe('chooser quota, cooldown, reservations and load (item 3)', () => {
       dryRun: true,
       headrooms: {
         'acc-exhausted': { status: 'exhausted', reason: 'Đã chạm hạn mức requestsPerDay' },
-        'acc-eligible': { status: 'open' },
+        'acc-eligible': { status: 'open', observedAt: new Date().toISOString() },
       },
     });
 
@@ -2191,29 +2237,19 @@ describe('chooser quota, cooldown, reservations and load (item 3)', () => {
       role: 'author.foundation',
       dryRun: true,
       accounts: [
-        { id: 'acc-known', limits: { requestsPerDay: 100 } },
+        { id: 'acc-known', limits: { requestsPerDay: 100 }, observedAt: new Date().toISOString() },
         { id: 'acc-unknown', limits: {} },
       ],
     });
 
     const knownCandidate = decision.candidates.find((c) => c.accountId === 'acc-known');
-    const unknownCandidate = decision.candidates.find((c) => c.accountId === 'acc-unknown');
     assert.ok(knownCandidate, 'known candidate present');
-    assert.ok(unknownCandidate, 'unknown candidate present');
-    assert.equal(knownCandidate.headroom, 'open', 'known account with limits has open headroom');
-    assert.equal(
-      unknownCandidate.headroom,
-      'unknown',
-      'account with no limits has unknown headroom'
-    );
-    assert.ok(
-      knownCandidate.score > unknownCandidate.score,
-      'known-available quota ranks above unknown quota'
-    );
-    assert.ok(
-      unknownCandidate.scoreBreakdown.headroom < 90,
-      'unknown quota is not unlimited (scores below open)'
-    );
+    assert.equal(knownCandidate.headroom, 'open');
+    const unknownRejection = decision.rejected.find((c) => c.accountId === 'acc-unknown');
+    assert.ok(unknownRejection, 'unknown quota requires a live probe');
+    assert.equal(unknownRejection.reasonCode, 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE');
+    assert.equal(unknownRejection.quotaEvidence.status, 'unknown');
+    assert.ok(!decision.candidates.some((c) => c.accountId === 'acc-unknown'));
     assert.equal(decision.chosen, candidates.candidateKey(cKnown));
   });
 

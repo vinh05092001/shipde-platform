@@ -588,6 +588,7 @@ function getDispatchConfig(registry, options = {}) {
     fullScanConcurrency: fullRouteScan.concurrency,
     ...(hermesOrchestrator ? { hermesOrchestrator } : {}),
     routeEvidenceMaxAgeMs,
+    quotaReadingMaxAgeMs: configuredLimit('quotaReadingMaxAgeMs'),
     ...(weightProfileByRole && typeof weightProfileByRole === 'object'
       ? { weightProfileByRole: { ...weightProfileByRole } }
       : {}),

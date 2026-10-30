@@ -9,6 +9,13 @@ const os = require('node:os');
 const priors = require('../priors');
 const routing = require('../routing');
 const ranking = require('../ranking');
+// Ranking fixtures supply current quota independently of host login/cache state.
+function currentQuotaReadings(offered, now = Date.now()) {
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
+}
+
 const cli = require('../cli');
 const { buildTaskProfile } = require('../orchestrate');
 
@@ -144,7 +151,7 @@ test('TASK-AI-142 T5: unscored model is assigned QUALITY_UNKNOWN and ordered aft
     assessment,
     {
       priors: customPriors,
-      headrooms: { default: 'open' },
+      headrooms: currentQuotaReadings([candidateRejected, candidateUnscored, candidateScored]),
     }
   );
 
@@ -220,7 +227,7 @@ test('TASK-AI-142 T5: dispatch --dry-run prints QUALITY_UNKNOWN for unscored mod
       registry: { sources: [] },
       now,
       priors: customPriors,
-      headrooms: { default: 'open' },
+      headrooms: currentQuotaReadings([candidateUnscored], now),
       evidenceDir: path.join(root, 'evidence'),
       decisionDir: path.join(root, 'decisions'),
       log: (msg) => logs.push(msg),
@@ -326,7 +333,7 @@ test('TASK-AI-142 regression: null benchmark prior does not set QUALITY_UNKNOWN 
     assessment,
     {
       priors: customPriors,
-      headrooms: { default: 'open' },
+      headrooms: currentQuotaReadings([candidateBenchmarkOnly, candidateWithEvidence]),
     }
   );
 
@@ -403,7 +410,7 @@ test('TASK-AI-142 regression: scoring does not mutate candidate qualityLabel and
   // Step 3: Rank candidate again now that evidence exists
   const result = routing.rankForProfile([candidate], profile, assessment, {
     priors: customPriors,
-    headrooms: { default: 'open' },
+    headrooms: currentQuotaReadings([candidate]),
   });
 
   assert.equal(result.ranking.length, 1);
@@ -454,6 +461,8 @@ test('TASK-AI-142 regression: rankAndRecord clears QUALITY_UNKNOWN when candidat
 
   // Step 1: Initial ranking pass when candA has undefined quality
   const decision1 = ranking.rankAndRecord([candA, candB], {
+    headrooms: currentQuotaReadings([candA, candB]),
+    useStoredQuota: false,
     workItemId: 'TASK-P1-REGRESSION',
     role: 'author.foundation',
     dryRun: true,
@@ -472,6 +481,8 @@ test('TASK-AI-142 regression: rankAndRecord clears QUALITY_UNKNOWN when candidat
 
   // Step 3: Subsequent ranking pass
   const decision2 = ranking.rankAndRecord([candA, candB], {
+    headrooms: currentQuotaReadings([candA, candB]),
+    useStoredQuota: false,
     workItemId: 'TASK-P1-REGRESSION',
     role: 'author.foundation',
     dryRun: true,
