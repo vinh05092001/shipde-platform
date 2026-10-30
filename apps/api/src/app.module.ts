@@ -15,8 +15,10 @@ import { RbacModule } from './rbac/rbac.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
+import { BranchesModule } from './branches/branches.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
 import { AttachmentsModule } from './attachments/attachments.module';
+import { SearchModule } from './search/search.module';
 
 @Module({
   imports: [
@@ -26,8 +28,10 @@ import { AttachmentsModule } from './attachments/attachments.module';
     InvitationsModule,
     UsersModule,
     ShopsModule,
+    BranchesModule,
     WarehousesModule,
     AttachmentsModule,
+    SearchModule,
   ],
   controllers: [HealthController],
   providers: [

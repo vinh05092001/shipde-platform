@@ -2,16 +2,158 @@
   "kind": "public-leaderboards",
   "endpoint": "https://artificialanalysis.ai/leaderboards/models",
   "benchlm": "https://benchlm.ai/data/models.json",
+  "normalizationMethod": "percentile",
+  "normalization": {
+    "method": "percentile"
+  },
+  "provisionalWeightMultiplier": 0.5,
+  "roleWeights": {
+    "planner": {
+      "intelligenceIndex": 0.4,
+      "liveBenchReasoning": 0.2,
+      "aaAgenticIndex": 0.15,
+      "terminalBenchAccuracy": 0.15,
+      "benchlm": 0.1
+    },
+    "coding": {
+      "aaCodingIndex": 0.25,
+      "sweBenchVerified": 0.25,
+      "terminalBenchAccuracy": 0.15,
+      "aiderPolyglot": 0.1,
+      "liveBenchCoding": 0.1,
+      "aaAgenticIndex": 0.1,
+      "benchlm": 0.05
+    },
+    "review": {
+      "intelligenceIndex": 0.25,
+      "sweBenchVerified": 0.2,
+      "aaCodingIndex": 0.2,
+      "terminalBenchAccuracy": 0.15,
+      "liveBenchReasoning": 0.1,
+      "aiderPolyglot": 0.05,
+      "benchlm": 0.05
+    }
+  },
+  "effortVariants": [
+    "high",
+    "medium",
+    "low",
+    "minimal",
+    "xhigh",
+    "thinking",
+    "agentic",
+    "none",
+    "reasoning",
+    "non-reasoning"
+  ],
+  "excludeEffortVariants": ["max"],
+  "deploymentSuffixes": ["batch", "flex", "cloud", "fast", "latest", "volc", "turbo"],
+  "deploymentSuffixPatterns": [
+    "-?\\[\\d+(?:\\.\\d+)?(?:-\\d+)?[km]\\]",
+    "-(?:\\d{4}-\\d{2}-\\d{2}|\\d{8}|\\d{6}|\\d{4})"
+  ],
+  "routerPrefixes": [
+    "gcli",
+    "cl",
+    "gh",
+    "ag",
+    "agy",
+    "provider",
+    "openai",
+    "ninerouter",
+    "9router",
+    "openrouter",
+    "nebius",
+    "xai",
+    "alims-intl",
+    "tokenrouter",
+    "ocg",
+    "ocz",
+    "bzl",
+    "gw",
+    "gateway",
+    "custom-prefix",
+    "some-prefix",
+    "recursive"
+  ],
+  "aliasRules": {
+    "stripSuffixes": [":free", "-free", ":batch", ":flex", ":cloud"],
+    "digitBoundaryHyphen": true,
+    "singleLetterPrefixes": ["o"],
+    "creatorModelRules": [
+      {
+        "creator": "Recursive",
+        "model": "Flint",
+        "routerId": "recursive/flint-v1.0:free"
+      }
+    ]
+  },
   "sources": [
     {
       "id": "artificial-analysis",
       "kind": "aa",
-      "url": "https://artificialanalysis.ai/leaderboards/models"
+      "url": "https://artificialanalysis.ai/leaderboards/models",
+      "metricNames": ["intelligenceIndex", "aaCodingIndex", "aaAgenticIndex"],
+      "roleWeights": {
+        "coding": 0.35,
+        "review": 0.4
+      },
+      "trustLevel": "primary"
+    },
+    {
+      "id": "swe-bench",
+      "kind": "swebench",
+      "url": "https://www.swebench.com",
+      "metricNames": ["sweBenchVerified"],
+      "roleWeights": {
+        "coding": 0.25,
+        "review": 0.2
+      },
+      "trustLevel": "verified"
+    },
+    {
+      "id": "terminal-bench",
+      "kind": "terminalbench",
+      "url": "https://www.tbench.ai",
+      "metricNames": ["terminalBenchAccuracy"],
+      "roleWeights": {
+        "coding": 0.15,
+        "review": 0.15
+      },
+      "trustLevel": "verified"
+    },
+    {
+      "id": "aider-polyglot",
+      "kind": "aider",
+      "url": "https://raw.githubusercontent.com/Aider-AI/aider/main/aider/website/_data/polyglot_leaderboard.yml",
+      "metricNames": ["aiderPolyglot"],
+      "roleWeights": {
+        "coding": 0.1,
+        "review": 0.1
+      },
+      "trustLevel": "verified"
+    },
+    {
+      "id": "livebench",
+      "kind": "livebench",
+      "url": "https://livebench.ai/data/20261025/table.csv",
+      "metricNames": ["liveBenchCoding", "liveBenchReasoning", "liveBenchAgentic"],
+      "roleWeights": {
+        "coding": 0.1,
+        "review": 0.1
+      },
+      "trustLevel": "verified"
     },
     {
       "id": "benchlm",
       "kind": "bench",
-      "url": "https://benchlm.ai/data/models.json"
+      "url": "https://benchlm.ai/data/models.json",
+      "metricNames": ["benchlm"],
+      "roleWeights": {
+        "coding": 0.05,
+        "review": 0.05
+      },
+      "trustLevel": "supplementary"
     }
   ]
 }

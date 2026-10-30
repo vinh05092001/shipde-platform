@@ -8,7 +8,13 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
   const opts = options || {};
   const apiKey = env && env[apiKeyEnv];
   if (!apiKey) return { ok: false, status: 0, body: 'Missing provider credential' };
-  const baseUrl = String(candidate.accessPath || candidate.endpoint || '').replace(/\/+$/, '');
+  const rawBase =
+    (/^https?:\/\//i.test(candidate.accessPath) && candidate.accessPath) ||
+    candidate.endpoint ||
+    candidate.sourceEndpoint ||
+    candidate.accessPath ||
+    '';
+  const baseUrl = String(rawBase).replace(/\/+$/, '');
   const url = /\/chat\/completions$/i.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`;
   const controller = new AbortController();
   const onAbort = () => controller.abort();

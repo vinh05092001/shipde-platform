@@ -50,6 +50,8 @@ export class PancakePosAdapter {
     const order: Order = {
       id: `ord_${merchantId.slice(0, 8)}_${orderCode}`,
       merchant_id: merchantId,
+      branch_id: (raw as any).branch_id || 'default_branch',
+      warehouse_id: (raw as any).warehouse_id || 'default_wh',
       order_code: orderCode,
       created_at: createdAt,
       cod_amount: codAmount,

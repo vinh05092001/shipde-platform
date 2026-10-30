@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "combinations": [],
+  "capabilityProbes": {
+    "direct-http::http://127.0.0.1:20128/v1::9router::upstream::acc::scope::ag/gemini-4-argon": {
+      "tools": { "ok": true }
+    }
+  }
+}
