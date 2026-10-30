@@ -18,6 +18,17 @@ export type ActiveTab =
   | 'admin_settings'
   | 'mobile_preview';
 
+export interface UIStatementBatch {
+  id: string;
+  period: string;
+  carrier: string;
+  total_rows: number;
+  total_cod: number;
+  total_freight: number;
+  matched_exact: number;
+  status: 'OPEN' | 'RECONCILED' | 'CLOSED';
+}
+
 export interface UIExceptionItem {
   id: string;
   tracking_code: string;
