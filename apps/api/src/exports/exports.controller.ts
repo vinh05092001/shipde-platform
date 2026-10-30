@@ -120,6 +120,7 @@ export class ExportsController {
 
     const result = await this.exportsService.listExportJobs(
       actor.merchantId,
+      actor,
       {
         page: validation.page,
         limit: validation.limit,
@@ -146,7 +147,12 @@ export class ExportsController {
     const actor = await this.resolveActor(req);
     this.assertTenantMembership(actor);
 
-    const result = await this.exportsService.getExportJob(actor.merchantId, id, correlationId);
+    const result = await this.exportsService.getExportJob(
+      actor.merchantId,
+      actor,
+      id,
+      correlationId
+    );
     return res.status(HttpStatus.OK).json(result);
   }
 

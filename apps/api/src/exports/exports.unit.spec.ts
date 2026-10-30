@@ -16,6 +16,15 @@ import { generateXlsx, escapeXml } from './generators/xlsx.generator';
 import { generatePdf } from './generators/pdf.generator';
 import { ExportsService } from './exports.service';
 
+const ALL_PERMISSIONS = [
+  'iam:manage_users',
+  'iam:shop_config',
+  'audit:view',
+  'reconciliation:view_contract_rates',
+  'reconciliation:run_review_audit',
+  'pii:unmask',
+];
+
 function createMockPrismaService() {
   const users: any[] = [
     {
@@ -140,6 +149,12 @@ function createMockPrismaService() {
         if (take) res = res.slice(0, take);
         return res;
       },
+      count: async ({ where }: any) => {
+        return users.filter((u) => {
+          if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
+          return true;
+        }).length;
+      },
     },
     warehouse: {
       findMany: async ({ where, take }: any) => {
@@ -149,6 +164,12 @@ function createMockPrismaService() {
         });
         if (take) res = res.slice(0, take);
         return res;
+      },
+      count: async ({ where }: any) => {
+        return warehouses.filter((w) => {
+          if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
+          return true;
+        }).length;
       },
     },
     auditLog: {
@@ -165,6 +186,44 @@ function createMockPrismaService() {
         if (take) res = res.slice(0, take);
         return res;
       },
+      count: async ({ where }: any) => {
+        return auditLogs.filter((l) => {
+          if (where.merchant_id && l.merchant_id !== where.merchant_id) return false;
+          return true;
+        }).length;
+      },
+    },
+    claim: {
+      findMany: async () => [
+        {
+          status: 'ACCEPTED',
+          recovered_amount: 500000n,
+          accepted_amount: 500000n,
+        },
+        {
+          status: 'ACCEPTED',
+          recovered_amount: 0n,
+          accepted_amount: 250000n,
+        },
+      ],
+    },
+    exceptionCase: {
+      findMany: async () => [
+        {
+          id: 'case-1',
+          status: 'RESCUED',
+          shipment: { cod_amount: 1200000n },
+        },
+      ],
+    },
+    shipment: {
+      count: async ({ where }: any) => {
+        if (where?.current_status === 'DELIVERED') return 8;
+        return 10;
+      },
+    },
+    discrepancy: {
+      count: async () => 3,
     },
     exportJob: {
       create: async ({ data }: any) => {
@@ -177,6 +236,16 @@ function createMockPrismaService() {
         if (idx === -1) throw new Error('Not found');
         exportJobs[idx] = { ...exportJobs[idx], ...data, updated_at: new Date() };
         return exportJobs[idx];
+      },
+      updateMany: async ({ where, data }: any) => {
+        let count = 0;
+        for (let idx = 0; idx < exportJobs.length; idx++) {
+          if (where.id && exportJobs[idx].id !== where.id) continue;
+          if (where.merchant_id && exportJobs[idx].merchant_id !== where.merchant_id) continue;
+          exportJobs[idx] = { ...exportJobs[idx], ...data, updated_at: new Date() };
+          count++;
+        }
+        return { count };
       },
       findFirst: async ({ where }: any) => {
         return (
@@ -208,7 +277,7 @@ function createMockPrismaService() {
   };
 }
 
-function createMockRbacService(grantedPermissions: string[] = []) {
+function createMockRbacService(grantedPermissions: string[] = ALL_PERMISSIONS) {
   return {
     actorHasPermissions: async (_actor: ActorContext, required: string[]) => {
       const set = new Set(grantedPermissions);
@@ -671,7 +740,12 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       // Other tenant queries job
       await assert.rejects(
         async () => {
-          await service.getExportJob('m-tenant-other', created.data.id, 'corr-t2');
+          await service.getExportJob(
+            'm-tenant-other',
+            otherTenantActor,
+            created.data.id,
+            'corr-t2'
+          );
         },
         (err: any) => {
           assert.strictEqual(err instanceof CanonicalApiException, true);
@@ -777,6 +851,105 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
       assert.ok(dlLog);
       assert.strictEqual(dlLog.entity_id, created.data.id);
+    });
+
+    it('Finding 3 / AC-COM-05-04: Ledgers export computes real persisted data from tenant claims, cases, and shipments', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['reconciliation:view_contract_rates']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const financeActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'FINANCE',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        financeActor,
+        { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-ledgers'
+      );
+
+      assert.strictEqual(result.data.status, ExportJobStatus.COMPLETED);
+      assert.strictEqual(result.data.resource, ExportResource.LEDGERS);
+      assert.strictEqual(result.data.total_rows, 7);
+
+      const dl = await service.downloadExport(
+        'm-tenant-1',
+        financeActor,
+        result.data.id,
+        '127.0.0.1',
+        'corr-dl-ledgers'
+      );
+      const csv = dl.fileBuffer.toString('utf-8');
+
+      // Verify Sổ 1: 500,000 VND recovered, 250,000 VND pending acceptance
+      assert.strictEqual(csv.includes('500000'), true);
+      assert.strictEqual(csv.includes('250000'), true);
+      // Verify Sổ 2: 1 rescued order, 15,000 VND return fee saved, 1,200,000 GMV
+      assert.strictEqual(csv.includes('15000'), true);
+      assert.strictEqual(csv.includes('1200000'), true);
+      // Verify Sổ 3: 80% coverage (8 delivered / 10 total), 3 discrepancies
+      assert.strictEqual(csv.includes('80%'), true);
+      assert.strictEqual(csv.includes('LEDGER3_DISCREPANCIES_DETECTED_COUNT'), true);
+      // Verify no fabricated accounting hours saved (12)
+      assert.strictEqual(csv.includes('LEDGER3_ACCOUNTING_HOURS_SAVED'), false);
+    });
+
+    it('Finding 7: EXPORT_LIMIT_EXCEEDED thrown when rows exceed maxRows without clamping', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Mock count returning 10000000 rows
+      mockPrisma.user.count = async () => 2000000;
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'ADMIN',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            actor,
+            { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
+            '127.0.0.1',
+            'corr-limit'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 400);
+          assert.strictEqual(err.code, ExportErrorCode.EXPORT_LIMIT_EXCEEDED);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 7: sync: false returns PENDING status immediately', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'ADMIN',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: false },
+        '127.0.0.1',
+        'corr-async'
+      );
+
+      assert.strictEqual(result.data.status, ExportJobStatus.PENDING);
     });
   });
 });

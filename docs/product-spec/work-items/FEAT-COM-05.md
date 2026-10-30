@@ -156,7 +156,8 @@ pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/exports/exports.
 
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
-| Round 1 | Pending | In progress | Initial implementation of exports backend vertical slice |
+| Round 1 | 32ca8ec3463c1a4cd7c5286a14d14be5a1b193a8 | CHANGES_REQUIRED | Initial implementation of exports backend vertical slice; review flagged out-of-date diff, fabricated ledger metrics, resource RBAC omission on get/list/download, OWNER role bypass, checksum mismatch, lifecycle/sync issues, PDF data dropping, and lack of HTTP integration proofs. |
+| Round 2 | Pending | In progress | Merged origin/main cleanly; replaced hardcoded ledger metrics with real persisted tenant data (claims, exception cases, shipments, discrepancies); enforced resource capability RBAC across get, list, and download; eliminated hardcoded OWNER role bypasses across RBAC, PII masking, and warehouse scoping; implemented truthful SHA-256 data payload checksum and authentic file checksum; implemented real job lifecycle with dto.sync, EXPORT_LIMIT_EXCEEDED enforcement, query filtering, and FAILED status capture; rewritten PDF generator with multi-page support, no dropped rows, preserved diacritics, and full cell widths; expanded Supertest suite covering 409 pending download, RBAC 403, PII masking, per-row FEAT-RBAC-02 scoping, and audit logs. |
 
 ## Residual limitations
 
