@@ -130,6 +130,16 @@ function loadSources(options) {
 
   for (const source of sources) {
     if (!source || !source.id) throw new Error('sources.json: an entry has no id');
+    if (typeof source.id === 'string' && source.id.startsWith('./')) {
+      source.id = source.id.slice(2);
+    }
+    if (
+      source.credential &&
+      typeof source.credential.env === 'string' &&
+      source.credential.env.startsWith('./')
+    ) {
+      source.credential.env = source.credential.env.slice(2);
+    }
     if (!KNOWN_KINDS.has(source.kind)) {
       // An unknown kind is refused rather than defaulted. Defaulting to
       // model-source is exactly the error this file exists to stop, and it
@@ -315,9 +325,11 @@ function credentialPresence(source, options) {
   if (cred.type === 'none') return { required: false, present: true, how: 'no credential needed' };
 
   if (cred.env) {
-    let value = env[cred.env];
+    const envVar =
+      typeof cred.env === 'string' && cred.env.startsWith('./') ? cred.env.slice(2) : cred.env;
+    let value = env[envVar] !== undefined ? env[envVar] : env[cred.env];
     if (value !== undefined && String(value).trim() !== '') {
-      return { required: true, present: true, how: 'env ' + cred.env };
+      return { required: true, present: true, how: 'env ' + envVar };
     }
   }
   if (cred.store && cred.store.startsWith('~/')) {
