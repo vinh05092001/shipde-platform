@@ -1104,6 +1104,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/bulk-actions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Execute permission-aware bulk actions with per-item outcomes (FEAT-COM-03) */
+    post: operations['executeBulkAction'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/carrier-accounts': {
     parameters: {
       query?: never;
@@ -2461,6 +2478,63 @@ export interface components {
         revoked_sessions_count: number;
         message: string;
       };
+      meta: components['schemas']['Meta'];
+    };
+    BulkActionRequest: {
+      /**
+       * @description Target organizational entity collection
+       * @enum {string}
+       */
+      entity_type: 'users' | 'branches' | 'warehouses';
+      /**
+       * @description Action to execute across selected records
+       * @enum {string}
+       */
+      action: 'activate' | 'deactivate' | 'assign_scopes' | 'export_csv';
+      /** @description Bounded array of entity IDs (must not exceed configured max cap) */
+      ids: string[];
+      /** @description Optional payload parameters tailored to the requested action */
+      params?: {
+        store_scopes?: string[];
+        warehouse_scopes?: string[];
+        carrier_account_scopes?: string[];
+        reason?: string;
+      };
+      /** @description Required confirmation flag for destructive actions (e.g. deactivate) */
+      confirm?: boolean;
+      /** @description Optional idempotency key (also accepted via Idempotency-Key header) */
+      idempotency_key?: string;
+    };
+    BulkActionItemResult: {
+      /** Format: uuid */
+      id: string;
+      /** @enum {string} */
+      status: 'SUCCEEDED' | 'FAILED';
+      /** @description Entity-specific output summary on success */
+      data?: Record<string, never>;
+      error?: {
+        code?: string;
+        message?: string;
+        details?: unknown;
+      };
+    };
+    BulkActionResponseData: {
+      /** Format: uuid */
+      batch_id: string;
+      entity_type: string;
+      action: string;
+      total_count: number;
+      success_count: number;
+      failure_count: number;
+      is_partial_failure: boolean;
+      results: components['schemas']['BulkActionItemResult'][];
+      succeeded_ids: string[];
+      failed_ids: string[];
+      /** @description RFC 4180 CSV content when action is export_csv */
+      export_payload?: string;
+    };
+    BulkActionResponse: {
+      data: components['schemas']['BulkActionResponseData'];
       meta: components['schemas']['Meta'];
     };
     SearchResultItem: {
@@ -4343,6 +4417,39 @@ export interface operations {
       400: components['responses']['Error'];
       401: components['responses']['Error'];
       403: components['responses']['Error'];
+    };
+  };
+  executeBulkAction: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Unique idempotency key to prevent double execution */
+        'Idempotency-Key'?: string;
+        /** @description Correlation ID for request tracing */
+        'x-correlation-id'?: string;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['BulkActionRequest'];
+      };
+    };
+    responses: {
+      /** @description Bulk action executed (returns per-item results and counts, including partial failures) */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['BulkActionResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      409: components['responses']['Error'];
     };
   };
   listCarrierAccounts: {

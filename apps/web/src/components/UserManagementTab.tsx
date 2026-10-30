@@ -31,10 +31,23 @@ import {
   Loader2,
   Clock,
   Warehouse,
+  AlertTriangle,
+  X,
 } from 'lucide-react';
 import { RoleItem, UserListItem } from '@shipde/contracts';
 import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
+import {
+  BulkEntityType,
+  BulkActionType,
+  BulkActionBar,
+  BulkConfirmModal,
+  BulkAssignScopesModal,
+  BulkResultsModal,
+  useBulkActions,
+  DEFAULT_WAREHOUSES,
+  WarehouseItem,
+} from './bulk';
 
 // Available Stores in the system
 export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
@@ -68,6 +81,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Nguyễn Văn An',
     active_orders_count: 1420,
     status: 'ACTIVE',
+    is_default: true,
   },
   {
     id: 'store_02',
@@ -78,6 +92,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Phạm Văn Kho',
     active_orders_count: 890,
     status: 'ACTIVE',
+    is_default: false,
   },
   {
     id: 'store_03',
@@ -88,6 +103,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Lê Minh Kế Toán',
     active_orders_count: 650,
     status: 'ACTIVE',
+    is_default: false,
   },
   {
     id: 'store_04',
@@ -98,6 +114,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Trần Thị Hoa',
     active_orders_count: 320,
     status: 'ACTIVE',
+    is_default: false,
   },
 ];
 
@@ -166,6 +183,7 @@ export interface StoreItem {
   manager: string;
   active_orders_count: number;
   status: 'ACTIVE' | 'INACTIVE';
+  is_default?: boolean;
 }
 
 // User with Store Scoping & Custom Overrides
@@ -246,14 +264,20 @@ export interface UserManagementTabProps {
   initialScopeLoading?: boolean;
   initialScopeErrorBody?: any;
   initialFieldErrors?: Record<string, string>;
-  initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
-  initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
+  initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations' | 'warehouses';
+  initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations' | 'warehouses';
+  initialPermissions?: string[];
+  initialBranches?: StoreItem[];
+  initialWarehouses?: WarehouseItem[];
+  initialUsersSelected?: string[];
+  initialBranchesSelected?: string[];
+  initialWarehousesSelected?: string[];
 }
 
 export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) => {
   const { token, user } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<
-    'matrix' | 'stores' | 'members' | 'devices' | 'invitations'
+    'matrix' | 'stores' | 'members' | 'devices' | 'invitations' | 'warehouses'
   >(props.initialActiveSubTab ?? props.initialSubTab ?? 'members');
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(
@@ -377,7 +401,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [userSearch, setUserSearch] = useState<string>('');
   const [userRoleFilter, setUserRoleFilter] = useState<string>('ALL');
   const [userStatusFilter, setUserStatusFilter] = useState<string>('ALL');
-  const [stores, setStores] = useState<StoreItem[]>(DEFAULT_STORES);
+  const [stores, setStores] = useState<StoreItem[]>(props.initialBranches || []);
+  const [storesLoading, setStoresLoading] = useState<boolean>(
+    props.initialLoading ?? !props.initialBranches
+  );
+  const [storesError, setStoresError] = useState<string | null>(props.initialError || null);
 
   // Modal new store state
   const [isNewStoreModalOpen, setIsNewStoreModalOpen] = useState(false);
@@ -780,11 +808,245 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   }, []);
 
   useEffect(() => {
-    if (activeSubTab === 'matrix') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial live roles fetch
-      void fetchLiveRoles();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial live roles fetch for permissions
+    void fetchLiveRoles();
+  }, [fetchLiveRoles]);
+
+  const [warehouses, setWarehouses] = useState<WarehouseItem[]>(props.initialWarehouses || []);
+  const [warehousesLoading, setWarehousesLoading] = useState<boolean>(
+    props.initialLoading ?? !props.initialWarehouses
+  );
+  const [warehousesError, setWarehousesError] = useState<string | null>(props.initialError || null);
+  const [warehouseSearch, setWarehouseSearch] = useState<string>('');
+  const [warehouseStatusFilter, setWarehouseStatusFilter] = useState<string>('ALL');
+  const [branchSearch, setBranchSearch] = useState<string>('');
+  const [branchStatusFilter, setBranchStatusFilter] = useState<string>('ALL');
+
+  // UI edit rights come strictly from permissions (Rule 9 / FEAT-RBAC-02)
+  // Unknown user means no edit rights
+  const [effectivePermissions, setEffectivePermissions] = useState<string[]>(() => {
+    if (props.initialPermissions) return props.initialPermissions;
+    if ((user as any)?.permissions) return (user as any).permissions;
+    return [];
+  });
+
+  useEffect(() => {
+    if (props.initialPermissions) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Prop change synchronization
+      setEffectivePermissions(props.initialPermissions);
+      return;
     }
-  }, [activeSubTab, fetchLiveRoles]);
+    if ((user as any)?.permissions) {
+      setEffectivePermissions((user as any).permissions);
+      return;
+    }
+    if (user?.role && liveRoles.length > 0) {
+      const matchingRole = liveRoles.find(
+        (r) => r.code === user.role || r.id === (user as any).custom_role_id
+      );
+      if (matchingRole?.permissions) {
+        setEffectivePermissions(matchingRole.permissions.map((p: any) => p.code || p));
+        return;
+      }
+    }
+    if (!user) {
+      setEffectivePermissions([]);
+    }
+  }, [user, liveRoles, props.initialPermissions]);
+
+  // Tenant-scoped live branches and warehouses fetch
+  const fetchBranches = useCallback(async () => {
+    setStoresLoading(true);
+    setStoresError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${apiBase}/api/v1/branches`, { headers });
+      if (res.ok) {
+        const json = await res.json();
+        const branchList = json?.data?.branches || (Array.isArray(json?.data) ? json.data : []);
+        setStores(
+          branchList.map((b: any) => ({
+            id: b.id,
+            code: b.code,
+            name: b.name,
+            address: b.address || '',
+            phone: b.phone || '',
+            manager: b.contact_name || b.manager || 'Quản lý',
+            active_orders_count: b.active_orders_count || 0,
+            status: (b.status || 'ACTIVE').toUpperCase(),
+            is_default: Boolean(b.is_default),
+          }))
+        );
+      } else {
+        const json = await res.json().catch(() => ({}));
+        setStores([]);
+        setStoresError(json?.error?.message || `Lỗi tải danh sách chi nhánh (${res.status})`);
+      }
+    } catch (err: any) {
+      setStores([]);
+      setStoresError(err?.message || 'Không thể kết nối đến máy chủ để tải chi nhánh');
+    } finally {
+      setStoresLoading(false);
+    }
+  }, [token]);
+
+  const fetchWarehouses = useCallback(async () => {
+    setWarehousesLoading(true);
+    setWarehousesError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${apiBase}/api/v1/warehouses`, { headers });
+      if (res.ok) {
+        const json = await res.json();
+        const whList = json?.data?.warehouses || (Array.isArray(json?.data) ? json.data : []);
+        setWarehouses(
+          whList.map((w: any) => ({
+            id: w.id,
+            code: w.code,
+            name: w.name,
+            contact_name: w.contact_name || '',
+            contact_phone: w.contact_phone || '',
+            address_line: w.address_line || '',
+            district: w.district || '',
+            city: w.city || '',
+            is_default: Boolean(w.is_default),
+            status: (w.status || 'active').toLowerCase(),
+          }))
+        );
+      } else {
+        const json = await res.json().catch(() => ({}));
+        setWarehouses([]);
+        setWarehousesError(json?.error?.message || `Lỗi tải danh sách kho hàng (${res.status})`);
+      }
+    } catch (err: any) {
+      setWarehouses([]);
+      setWarehousesError(err?.message || 'Không thể kết nối đến máy chủ để tải kho hàng');
+    } finally {
+      setWarehousesLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!props.initialBranches) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- tenant-scoped branches fetch
+      void fetchBranches();
+    }
+  }, [fetchBranches, props.initialBranches]);
+
+  useEffect(() => {
+    if (!props.initialWarehouses) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- tenant-scoped warehouses fetch
+      void fetchWarehouses();
+    }
+  }, [fetchWarehouses, props.initialWarehouses]);
+
+  // Bulk actions hooks
+  const usersBulk = useBulkActions({
+    entityType: BulkEntityType.USERS,
+    token,
+    initialSelectedIds: props.initialUsersSelected,
+    onSuccessMutation: (action, succeededIds, data) => {
+      setUsers((prev) =>
+        prev.map((u: any) => {
+          if (!succeededIds.includes(u.id)) return u;
+          if (action === BulkActionType.ACTIVATE) {
+            return { ...u, status: 'ACTIVE' };
+          }
+          if (action === BulkActionType.DEACTIVATE) {
+            return { ...u, status: 'SUSPENDED' };
+          }
+          if (action === BulkActionType.ASSIGN_SCOPES && data?.params) {
+            return {
+              ...u,
+              store_scopes: data.params.store_scopes || u.store_scopes,
+              warehouse_scopes: data.params.warehouse_scopes || u.warehouse_scopes,
+            };
+          }
+          return u;
+        })
+      );
+    },
+  });
+
+  const branchesBulk = useBulkActions({
+    entityType: BulkEntityType.BRANCHES,
+    token,
+    initialSelectedIds: props.initialBranchesSelected,
+    onSuccessMutation: (action, succeededIds) => {
+      setStores((prev) =>
+        prev.map((s) => {
+          if (!succeededIds.includes(s.id)) return s;
+          if (action === BulkActionType.ACTIVATE) {
+            return { ...s, status: 'ACTIVE' };
+          }
+          if (action === BulkActionType.DEACTIVATE) {
+            return { ...s, status: 'INACTIVE' };
+          }
+          return s;
+        })
+      );
+    },
+  });
+
+  const warehousesBulk = useBulkActions({
+    entityType: BulkEntityType.WAREHOUSES,
+    token,
+    initialSelectedIds: props.initialWarehousesSelected,
+    onSuccessMutation: (action, succeededIds) => {
+      setWarehouses((prev) =>
+        prev.map((w) => {
+          if (!succeededIds.includes(w.id)) return w;
+          if (action === BulkActionType.ACTIVATE) {
+            return { ...w, status: 'active' };
+          }
+          if (action === BulkActionType.DEACTIVATE) {
+            return { ...w, status: 'inactive' };
+          }
+          return w;
+        })
+      );
+    },
+  });
+
+  const filteredStores = stores.filter((s) => {
+    if (branchStatusFilter !== 'ALL' && s.status !== branchStatusFilter) {
+      return false;
+    }
+    if (branchSearch.trim()) {
+      const q = branchSearch.toLowerCase();
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.code.toLowerCase().includes(q) ||
+        s.address.toLowerCase().includes(q) ||
+        s.phone.includes(q)
+      );
+    }
+    return true;
+  });
+
+  const filteredWarehouses = warehouses.filter((w) => {
+    if (
+      warehouseStatusFilter !== 'ALL' &&
+      w.status.toLowerCase() !== warehouseStatusFilter.toLowerCase()
+    ) {
+      return false;
+    }
+    if (warehouseSearch.trim()) {
+      const q = warehouseSearch.toLowerCase();
+      return (
+        w.name.toLowerCase().includes(q) ||
+        w.code.toLowerCase().includes(q) ||
+        w.address_line.toLowerCase().includes(q) ||
+        w.contact_name.toLowerCase().includes(q) ||
+        w.contact_phone.includes(q)
+      );
+    }
+    return true;
+  });
 
   // Active Device Sessions
   const [deviceSessions, setDeviceSessions] = useState([
@@ -930,10 +1192,16 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
             icon: Store,
             count: stores.length,
           },
-          { id: 'matrix', label: '4. Ma Trận Quyền Nghiệp Vụ (RBAC)', icon: Sliders },
+          {
+            id: 'warehouses',
+            label: '4. Quản Lý Kho Hàng (Warehouses)',
+            icon: Warehouse,
+            count: warehouses.length,
+          },
+          { id: 'matrix', label: '5. Ma Trận Quyền Nghiệp Vụ (RBAC)', icon: Sliders },
           {
             id: 'devices',
-            label: '5. Phiên Thiết Bị & Thu Hồi Từ Xa (BR-08)',
+            label: '6. Phiên Thiết Bị & Thu Hồi Từ Xa (BR-08)',
             icon: Smartphone,
             count: deviceSessions.length,
           },
@@ -1093,6 +1361,16 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                 >
                   <thead>
                     <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
+                      <th className="py-3 px-4 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={usersBulk.isAllSelected(users.map((u: any) => u.id))}
+                          onChange={() => usersBulk.toggleSelectAll(users.map((u: any) => u.id))}
+                          aria-label="Chọn tất cả nhân sự"
+                          className="rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                          data-testid="users-select-all"
+                        />
+                      </th>
                       <th className="py-3 px-4">Nhân Viên / Email</th>
                       <th className="py-3 px-4">Vai Trò Chính</th>
                       <th className="py-3 px-4">Phạm Vi Chi Nhánh</th>
@@ -1125,13 +1403,27 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                         activeOwnersCount <= 1;
 
                       const normalizedStatus = (u.status || 'ACTIVE').toUpperCase();
+                      const isUserSelected = usersBulk.selectedIds.has(u.id);
 
                       return (
                         <tr
                           key={u.id}
-                          className="hover:bg-slate-50/80 transition"
+                          className={`hover:bg-slate-50/80 transition ${isUserSelected ? 'bg-blue-50/30' : ''}`}
                           data-testid={`user-row-${u.id}`}
                         >
+                          <td
+                            className="py-3.5 px-4 w-10 text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isUserSelected}
+                              onChange={() => usersBulk.toggleSelect(u.id)}
+                              aria-label={`Chọn tài khoản ${u.full_name || u.id}`}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                              data-testid={`user-select-row-${u.id}`}
+                            />
+                          </td>
                           <td className="py-3.5 px-4">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
@@ -1383,6 +1675,83 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               </div>
             </div>
           )}
+
+          {/* USERS BULK ACTION BAR & MODALS */}
+          {usersBulk.actionError &&
+            !usersBulk.confirmModalOpen &&
+            !usersBulk.assignScopesModalOpen &&
+            !usersBulk.resultsModalOpen && (
+              <div
+                role="alert"
+                data-testid="users-bulk-error"
+                className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-800 font-medium flex items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{usersBulk.actionError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => usersBulk.setActionError(null)}
+                  className="text-rose-500 hover:text-rose-700 p-1 rounded"
+                  aria-label="Đóng lỗi thao tác"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+          <BulkActionBar
+            entityType={BulkEntityType.USERS}
+            selectedCount={usersBulk.selectedIds.size}
+            totalCount={users.length}
+            userPermissions={effectivePermissions}
+            isUserKnown={Boolean(user || props.initialPermissions)}
+            loading={usersBulk.inProgress}
+            progressText={usersBulk.progressText}
+            actionError={usersBulk.actionError}
+            onActionClick={usersBulk.handleActionClick}
+            onClearSelection={usersBulk.clearSelection}
+            onClearError={() => usersBulk.setActionError(null)}
+          />
+
+          <BulkConfirmModal
+            isOpen={usersBulk.confirmModalOpen}
+            entityType={BulkEntityType.USERS}
+            action={usersBulk.pendingAction || ''}
+            selectedCount={usersBulk.selectedIds.size}
+            loading={usersBulk.inProgress}
+            errorMessage={usersBulk.actionError}
+            onConfirm={usersBulk.handleConfirmDestructive}
+            onCancel={() => {
+              usersBulk.setConfirmModalOpen(false);
+              usersBulk.setActionError(null);
+            }}
+          />
+
+          <BulkAssignScopesModal
+            isOpen={usersBulk.assignScopesModalOpen}
+            selectedCount={usersBulk.selectedIds.size}
+            availableStores={stores}
+            availableWarehouses={warehouses}
+            loading={usersBulk.inProgress}
+            errorMessage={usersBulk.actionError}
+            onConfirm={usersBulk.handleConfirmAssignScopes}
+            onCancel={() => {
+              usersBulk.setAssignScopesModalOpen(false);
+              usersBulk.setActionError(null);
+            }}
+          />
+
+          <BulkResultsModal
+            isOpen={usersBulk.resultsModalOpen}
+            result={usersBulk.lastResult}
+            itemLabels={Object.fromEntries(
+              users.map((u: any) => [u.id, u.full_name || u.email || u.id])
+            )}
+            onRetryFailed={usersBulk.handleRetryFailed}
+            onClose={() => usersBulk.setResultsModalOpen(false)}
+          />
         </div>
       )}
 
@@ -1682,44 +2051,566 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
       {/* SUBTAB 2: STORES / BRANCHES MANAGEMENT */}
       {activeSubTab === 'stores' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {stores.map((store) => (
-              <div
-                key={store.id}
-                className="modern-card p-5 space-y-3 flex flex-col justify-between"
-              >
-                <div className="space-y-2">
-                  <div className="flex justify-between items-start">
-                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                      {store.code}
-                    </span>
-                    <span className="badge-ok text-[10px]">Đang hoạt động</span>
-                  </div>
-                  <h4 className="font-bold text-slate-900 text-sm">{store.name}</h4>
-                  <div className="space-y-1 text-xs text-slate-500">
-                    <p className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="truncate">{store.address}</span>
-                    </p>
-                    <p className="flex items-center gap-1.5 font-mono text-[11px]">
-                      <span>Hotline: {store.phone}</span>
-                    </p>
-                    <p className="text-slate-600">
-                      Quản lý: <strong>{store.manager}</strong>
-                    </p>
-                  </div>
+        <div className="space-y-4" data-testid="branches-tab-content">
+          {/* Search, Filter and Actions Toolbar */}
+          <div className="modern-card p-4 bg-slate-50/60 space-y-3">
+            <div className="flex flex-wrap gap-3 items-center justify-between">
+              <div className="flex flex-wrap items-center gap-2 flex-1">
+                <div className="relative min-w-[220px] flex-1 max-w-sm">
+                  <input
+                    type="text"
+                    placeholder="Tìm kiếm chi nhánh theo tên, mã, hotline..."
+                    value={branchSearch}
+                    onChange={(e) => setBranchSearch(e.target.value)}
+                    className="modern-input w-full pl-8 pr-3 py-1.5 text-xs"
+                    data-testid="branch-search-input"
+                  />
+                  <Filter className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
                 </div>
 
-                <div className="pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
-                  <span className="text-slate-500">Đơn hàng active:</span>
-                  <strong className="font-mono text-slate-900 font-bold">
-                    {store.active_orders_count.toLocaleString()} đơn
-                  </strong>
-                </div>
+                <select
+                  value={branchStatusFilter}
+                  onChange={(e) => setBranchStatusFilter(e.target.value)}
+                  className="modern-input text-xs py-1.5 font-medium"
+                  data-testid="branch-status-filter"
+                >
+                  <option value="ALL">Tất cả trạng thái</option>
+                  <option value="ACTIVE">Đang hoạt động (ACTIVE)</option>
+                  <option value="INACTIVE">Tạm ngưng (INACTIVE)</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={() => setIsNewStoreModalOpen(true)}
+                  className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                  data-testid="add-branch-btn"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm Chi Nhánh</span>
+                </button>
               </div>
-            ))}
+
+              <div className="text-xs text-slate-600 font-medium">
+                Tổng số <strong data-testid="branch-count">{stores.length}</strong> chi nhánh trong
+                hệ thống
+              </div>
+            </div>
           </div>
+
+          {/* Branches Table with Multi-Select */}
+          <div className="modern-card overflow-hidden">
+            {storesLoading && (
+              <div
+                className="p-8 text-center text-slate-500 flex flex-col items-center justify-center gap-2"
+                data-testid="branches-loading"
+              >
+                <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                <span className="text-xs">Đang tải danh sách chi nhánh...</span>
+              </div>
+            )}
+
+            {storesError && (
+              <div
+                role="alert"
+                data-testid="branches-error"
+                className="p-4 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{storesError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchBranches()}
+                  className="btn-secondary text-xs py-1 px-3 bg-white hover:bg-slate-50"
+                  data-testid="branches-retry-btn"
+                >
+                  Thử lại
+                </button>
+              </div>
+            )}
+
+            {!storesLoading && !storesError && filteredStores.length === 0 && (
+              <div data-testid="branches-empty" className="p-8 text-center text-slate-500 text-xs">
+                Chưa có chi nhánh nào trong hệ thống.
+              </div>
+            )}
+
+            {!storesLoading && filteredStores.length > 0 && (
+              <div className="overflow-x-auto">
+                <table
+                  className="w-full text-left border-collapse text-xs"
+                  data-testid="branches-table"
+                >
+                  <thead>
+                    <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
+                      <th className="py-3 px-4 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={branchesBulk.isAllSelected(filteredStores.map((s) => s.id))}
+                          onChange={() =>
+                            branchesBulk.toggleSelectAll(filteredStores.map((s) => s.id))
+                          }
+                          aria-label="Chọn tất cả chi nhánh"
+                          className="rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                          data-testid="branches-select-all"
+                        />
+                      </th>
+                      <th className="py-3 px-4">Chi Nhánh / Mã</th>
+                      <th className="py-3 px-4">Địa Chỉ &amp; Hotline</th>
+                      <th className="py-3 px-4">Người Quản Lý</th>
+                      <th className="py-3 px-4 text-center">Đơn Hàng Active</th>
+                      <th className="py-3 px-4">Trạng Thái</th>
+                      <th className="py-3 px-4 text-right">Thao Tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredStores.map((store) => {
+                      const isDefault = Boolean(store.is_default);
+                      const isSelected = branchesBulk.selectedIds.has(store.id);
+
+                      return (
+                        <tr
+                          key={store.id}
+                          className={`hover:bg-slate-50/80 transition ${isSelected ? 'bg-blue-50/30' : ''}`}
+                          data-testid={`branch-row-${store.id}`}
+                        >
+                          <td
+                            className="py-3.5 px-4 w-10 text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => branchesBulk.toggleSelect(store.id)}
+                              aria-label={`Chọn chi nhánh ${store.name}`}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                              data-testid={`branch-select-row-${store.id}`}
+                            />
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 text-xs">
+                                  {store.name}
+                                </span>
+                                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+                                  {store.code}
+                                </span>
+                                {isDefault && (
+                                  <span className="badge-ok text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                                    Mặc Định
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-600">
+                            <div className="space-y-0.5">
+                              <p className="flex items-center gap-1.5 text-slate-700">
+                                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span>{store.address}</span>
+                              </p>
+                              <p className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
+                                <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                <span>Hotline: {store.phone}</span>
+                              </p>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-800 font-medium">
+                            {store.manager}
+                          </td>
+                          <td className="py-3.5 px-4 text-center font-mono font-bold text-slate-900">
+                            {store.active_orders_count?.toLocaleString()} đơn
+                          </td>
+                          <td className="py-3.5 px-4">
+                            {store.status === 'ACTIVE' ? (
+                              <span className="badge-ok text-[11px]">Đang hoạt động</span>
+                            ) : (
+                              <span className="badge-muted text-[11px] bg-rose-50 text-rose-700 border-rose-200 font-medium">
+                                Tạm ngưng
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <a
+                              href={`/settings/branches?id=${store.id}`}
+                              className="btn-secondary text-xs py-1 px-2.5 inline-block"
+                            >
+                              Chỉnh sửa
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Summary Cards Grid */}
+          {!storesLoading && filteredStores.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {stores.map((store) => (
+                <div
+                  key={store.id}
+                  className="modern-card p-5 space-y-3 flex flex-col justify-between"
+                >
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-start">
+                      <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                        {store.code}
+                      </span>
+                      <span className="badge-ok text-[10px]">Đang hoạt động</span>
+                    </div>
+                    <h4 className="font-bold text-slate-900 text-sm">{store.name}</h4>
+                    <div className="space-y-1 text-xs text-slate-500">
+                      <p className="flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate">{store.address}</span>
+                      </p>
+                      <p className="flex items-center gap-1.5 font-mono text-[11px]">
+                        <span>Hotline: {store.phone}</span>
+                      </p>
+                      <p className="text-slate-600">
+                        Quản lý: <strong>{store.manager}</strong>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
+                    <span className="text-slate-500">Đơn hàng active:</span>
+                    <strong className="font-mono text-slate-900 font-bold">
+                      {store.active_orders_count.toLocaleString()} đơn
+                    </strong>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* BRANCHES BULK ACTION BAR & MODALS */}
+          {branchesBulk.actionError &&
+            !branchesBulk.confirmModalOpen &&
+            !branchesBulk.resultsModalOpen && (
+              <div
+                role="alert"
+                data-testid="branches-bulk-error"
+                className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-800 font-medium flex items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{branchesBulk.actionError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => branchesBulk.setActionError(null)}
+                  className="text-rose-500 hover:text-rose-700 p-1 rounded"
+                  aria-label="Đóng lỗi thao tác chi nhánh"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+          <BulkActionBar
+            entityType={BulkEntityType.BRANCHES}
+            selectedCount={branchesBulk.selectedIds.size}
+            totalCount={stores.length}
+            userPermissions={effectivePermissions}
+            isUserKnown={Boolean(user || props.initialPermissions)}
+            loading={branchesBulk.inProgress}
+            progressText={branchesBulk.progressText}
+            actionError={branchesBulk.actionError}
+            onActionClick={branchesBulk.handleActionClick}
+            onClearSelection={branchesBulk.clearSelection}
+            onClearError={() => branchesBulk.setActionError(null)}
+          />
+
+          <BulkConfirmModal
+            isOpen={branchesBulk.confirmModalOpen}
+            entityType={BulkEntityType.BRANCHES}
+            action={branchesBulk.pendingAction || ''}
+            selectedCount={branchesBulk.selectedIds.size}
+            loading={branchesBulk.inProgress}
+            errorMessage={branchesBulk.actionError}
+            onConfirm={branchesBulk.handleConfirmDestructive}
+            onCancel={() => {
+              branchesBulk.setConfirmModalOpen(false);
+              branchesBulk.setActionError(null);
+            }}
+          />
+
+          <BulkResultsModal
+            isOpen={branchesBulk.resultsModalOpen}
+            result={branchesBulk.lastResult}
+            itemLabels={Object.fromEntries(stores.map((s) => [s.id, s.name]))}
+            onRetryFailed={branchesBulk.handleRetryFailed}
+            onClose={() => branchesBulk.setResultsModalOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* SUBTAB 4: WAREHOUSES MANAGEMENT */}
+      {activeSubTab === 'warehouses' && (
+        <div className="space-y-4" data-testid="warehouses-tab-content">
+          {/* Search, Filter and Actions Toolbar */}
+          <div className="modern-card p-4 bg-slate-50/60 space-y-3">
+            <div className="flex flex-wrap gap-3 items-center justify-between">
+              <div className="flex flex-wrap items-center gap-2 flex-1">
+                <div className="relative min-w-[220px] flex-1 max-w-sm">
+                  <input
+                    type="text"
+                    placeholder="Tìm kiếm kho theo tên, mã, người liên hệ..."
+                    value={warehouseSearch}
+                    onChange={(e) => setWarehouseSearch(e.target.value)}
+                    className="modern-input w-full pl-8 pr-3 py-1.5 text-xs"
+                    data-testid="warehouse-search-input"
+                  />
+                  <Filter className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5 pointer-events-none" />
+                </div>
+
+                <select
+                  value={warehouseStatusFilter}
+                  onChange={(e) => setWarehouseStatusFilter(e.target.value)}
+                  className="modern-input text-xs py-1.5 font-medium"
+                  data-testid="warehouse-status-filter"
+                >
+                  <option value="ALL">Tất cả trạng thái</option>
+                  <option value="active">Đang hoạt động (active)</option>
+                  <option value="suspended">Tạm ngưng (suspended)</option>
+                </select>
+
+                <a
+                  href="/settings/warehouses"
+                  className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                  data-testid="add-warehouse-btn"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Thêm Kho Hàng</span>
+                </a>
+              </div>
+
+              <div className="text-xs text-slate-600 font-medium">
+                Tổng số <strong data-testid="warehouse-count">{warehouses.length}</strong> kho hàng
+                trong hệ thống
+              </div>
+            </div>
+          </div>
+
+          {/* Warehouses Table with Multi-Select */}
+          <div className="modern-card overflow-hidden">
+            {warehousesLoading && (
+              <div
+                className="p-8 text-center text-slate-500 flex flex-col items-center justify-center gap-2"
+                data-testid="warehouses-loading"
+              >
+                <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+                <span className="text-xs">Đang tải danh sách kho hàng...</span>
+              </div>
+            )}
+
+            {warehousesError && (
+              <div
+                role="alert"
+                data-testid="warehouses-error"
+                className="p-4 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-3"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{warehousesError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void fetchWarehouses()}
+                  className="btn-secondary text-xs py-1 px-3 bg-white hover:bg-slate-50"
+                  data-testid="warehouses-retry-btn"
+                >
+                  Thử lại
+                </button>
+              </div>
+            )}
+
+            {!warehousesLoading && !warehousesError && filteredWarehouses.length === 0 && (
+              <div
+                data-testid="warehouses-empty"
+                className="p-8 text-center text-slate-500 text-xs"
+              >
+                Chưa có kho hàng nào trong hệ thống.
+              </div>
+            )}
+
+            {!warehousesLoading && filteredWarehouses.length > 0 && (
+              <div className="overflow-x-auto">
+                <table
+                  className="w-full text-left border-collapse text-xs"
+                  data-testid="warehouses-table"
+                >
+                  <thead>
+                    <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
+                      <th className="py-3 px-4 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={warehousesBulk.isAllSelected(
+                            filteredWarehouses.map((w) => w.id)
+                          )}
+                          onChange={() =>
+                            warehousesBulk.toggleSelectAll(filteredWarehouses.map((w) => w.id))
+                          }
+                          aria-label="Chọn tất cả kho hàng"
+                          className="rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                          data-testid="warehouses-select-all"
+                        />
+                      </th>
+                      <th className="py-3 px-4">Kho Hàng / Mã</th>
+                      <th className="py-3 px-4">Địa Chỉ Lấy Hàng &amp; Hoàn Hàng</th>
+                      <th className="py-3 px-4">Người Liên Hệ</th>
+                      <th className="py-3 px-4">Trạng Thái</th>
+                      <th className="py-3 px-4 text-right">Thao Tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredWarehouses.map((wh) => {
+                      const isSelected = warehousesBulk.selectedIds.has(wh.id);
+
+                      return (
+                        <tr
+                          key={wh.id}
+                          className={`hover:bg-slate-50/80 transition ${isSelected ? 'bg-blue-50/30' : ''}`}
+                          data-testid={`warehouse-row-${wh.id}`}
+                        >
+                          <td
+                            className="py-3.5 px-4 w-10 text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => warehousesBulk.toggleSelect(wh.id)}
+                              aria-label={`Chọn kho hàng ${wh.name}`}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                              data-testid={`warehouse-select-row-${wh.id}`}
+                            />
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 text-xs">{wh.name}</span>
+                                <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
+                                  {wh.code}
+                                </span>
+                                {wh.is_default && (
+                                  <span className="badge-ok text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                                    Kho Mặc Định
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-600">
+                            <div className="space-y-0.5">
+                              <p className="flex items-center gap-1.5 text-slate-700">
+                                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span>
+                                  {wh.address_line}, {wh.district}, {wh.city}
+                                </span>
+                              </p>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-800">
+                            <div>
+                              <span className="font-medium">{wh.contact_name}</span>
+                              <span className="font-mono text-[11px] text-slate-500 block">
+                                {wh.contact_phone}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            {String(wh.status).toLowerCase() === 'active' ? (
+                              <span className="badge-ok text-[11px]">Đang hoạt động</span>
+                            ) : (
+                              <span className="badge-muted text-[11px] bg-rose-50 text-rose-700 border-rose-200 font-medium">
+                                Tạm ngưng
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <a
+                              href={`/settings/warehouses?id=${wh.id}`}
+                              className="btn-secondary text-xs py-1 px-2.5 inline-block"
+                            >
+                              Chỉnh sửa
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* WAREHOUSES BULK ACTION BAR & MODALS */}
+          {warehousesBulk.actionError &&
+            !warehousesBulk.confirmModalOpen &&
+            !warehousesBulk.resultsModalOpen && (
+              <div
+                role="alert"
+                data-testid="warehouses-bulk-error"
+                className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-800 font-medium flex items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{warehousesBulk.actionError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => warehousesBulk.setActionError(null)}
+                  className="text-rose-500 hover:text-rose-700 p-1 rounded"
+                  aria-label="Đóng lỗi thao tác kho hàng"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+          <BulkActionBar
+            entityType={BulkEntityType.WAREHOUSES}
+            selectedCount={warehousesBulk.selectedIds.size}
+            totalCount={warehouses.length}
+            userPermissions={effectivePermissions}
+            isUserKnown={Boolean(user || props.initialPermissions)}
+            loading={warehousesBulk.inProgress}
+            progressText={warehousesBulk.progressText}
+            actionError={warehousesBulk.actionError}
+            onActionClick={warehousesBulk.handleActionClick}
+            onClearSelection={warehousesBulk.clearSelection}
+            onClearError={() => warehousesBulk.setActionError(null)}
+          />
+
+          <BulkConfirmModal
+            isOpen={warehousesBulk.confirmModalOpen}
+            entityType={BulkEntityType.WAREHOUSES}
+            action={warehousesBulk.pendingAction || ''}
+            selectedCount={warehousesBulk.selectedIds.size}
+            loading={warehousesBulk.inProgress}
+            errorMessage={warehousesBulk.actionError}
+            onConfirm={warehousesBulk.handleConfirmDestructive}
+            onCancel={() => {
+              warehousesBulk.setConfirmModalOpen(false);
+              warehousesBulk.setActionError(null);
+            }}
+          />
+
+          <BulkResultsModal
+            isOpen={warehousesBulk.resultsModalOpen}
+            result={warehousesBulk.lastResult}
+            itemLabels={Object.fromEntries(warehouses.map((w) => [w.id, w.name]))}
+            onRetryFailed={warehousesBulk.handleRetryFailed}
+            onClose={() => warehousesBulk.setResultsModalOpen(false)}
+          />
         </div>
       )}
 

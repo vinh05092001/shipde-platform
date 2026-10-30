@@ -167,6 +167,7 @@ model Merchant {
   onboarding_state  OnboardingState?
   branches          Branch[]
   warehouses        Warehouse[]
+  bulk_action_batches BulkActionBatch[]
 
   @@index([tax_code])
   @@map("merchants")
@@ -209,6 +210,31 @@ model Branch {
   @@index([merchant_id, status])
   @@map("branches")
 }
+
+model BulkActionBatch {
+  id              String    @id @default(uuid()) @db.Uuid
+  merchant_id     String    @db.Uuid
+  entity_type     String    @db.VarChar(64)
+  action          String    @db.VarChar(64)
+  idempotency_key String?   @db.VarChar(255)
+  request_hash    String?   @db.VarChar(64)
+  status          String    @default("COMPLETED") @db.VarChar(32)
+  total_count     Int
+  success_count   Int
+  failure_count   Int
+  results         Json      @db.JsonB
+  created_by      String    @db.Uuid
+  created_at      DateTime  @default(now()) @db.Timestamptz
+  updated_at      DateTime  @updatedAt @db.Timestamptz
+
+  merchant        Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@unique([merchant_id, idempotency_key])
+  @@index([merchant_id, entity_type, action])
+  @@index([merchant_id, created_at])
+  @@map("bulk_action_batches")
+}
+
 model User {
   id                String            @id @default(uuid()) @db.Uuid
   merchant_id       String?           @db.Uuid

@@ -1868,6 +1868,47 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+  /bulk-actions:
+    post:
+      tags: [Bulk]
+      summary: Execute permission-aware bulk actions with per-item outcomes (FEAT-COM-03)
+      operationId: executeBulkAction
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Unique idempotency key to prevent double execution
+        - name: x-correlation-id
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Correlation ID for request tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkActionRequest'
+      responses:
+        '200':
+          description: Bulk action executed (returns per-item results and counts, including partial failures)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkActionResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /carrier-accounts:
     get:
       tags: [Carriers]
@@ -4639,6 +4680,114 @@ components:
               type: integer
             message:
               type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    BulkActionRequest:
+      type: object
+      required: [entity_type, action, ids]
+      properties:
+        entity_type:
+          type: string
+          enum: [users, branches, warehouses]
+          description: Target organizational entity collection
+        action:
+          type: string
+          enum: [activate, deactivate, assign_scopes, export_csv]
+          description: Action to execute across selected records
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Bounded array of entity IDs (must not exceed configured max cap)
+        params:
+          type: object
+          description: Optional payload parameters tailored to the requested action
+          properties:
+            store_scopes:
+              type: array
+              items:
+                type: string
+            warehouse_scopes:
+              type: array
+              items:
+                type: string
+            carrier_account_scopes:
+              type: array
+              items:
+                type: string
+            reason:
+              type: string
+        confirm:
+          type: boolean
+          description: Required confirmation flag for destructive actions (e.g. deactivate)
+        idempotency_key:
+          type: string
+          description: Optional idempotency key (also accepted via Idempotency-Key header)
+    BulkActionItemResult:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [SUCCEEDED, FAILED]
+        data:
+          type: object
+          description: Entity-specific output summary on success
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              nullable: true
+    BulkActionResponseData:
+      type: object
+      required: [batch_id, entity_type, action, total_count, success_count, failure_count, is_partial_failure, results, succeeded_ids, failed_ids]
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+        action:
+          type: string
+        total_count:
+          type: integer
+        success_count:
+          type: integer
+        failure_count:
+          type: integer
+        is_partial_failure:
+          type: boolean
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/BulkActionItemResult'
+        succeeded_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        failed_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        export_payload:
+          type: string
+          description: RFC 4180 CSV content when action is export_csv
+    BulkActionResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/BulkActionResponseData'
         meta:
           $ref: '#/components/schemas/Meta'
     SearchResultItem:
