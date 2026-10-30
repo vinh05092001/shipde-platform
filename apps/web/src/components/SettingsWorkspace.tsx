@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import {
   Store,
   Users,
@@ -23,6 +24,7 @@ import {
   Radio,
   FileSpreadsheet,
   User as UserIcon,
+  PackageCheck,
 } from 'lucide-react';
 import { AutomationBadge, Money } from './ui/OperationalComponents';
 import { PublicTrackingTab } from './PublicTrackingTab';
@@ -237,6 +239,24 @@ export const SettingsWorkspace: React.FC<Props> = ({
                 </button>
               );
             })}
+
+            <div className="pt-2 border-t border-slate-100">
+              <Link
+                href="/onboarding"
+                className="w-full text-left px-3.5 py-3 rounded-xl transition flex items-center gap-3 text-slate-700 hover:bg-slate-50 font-medium"
+              >
+                <PackageCheck className="w-5 h-5 shrink-0 text-[#c23807]" />
+                <div className="flex-1">
+                  <div className="text-sm leading-tight font-bold text-slate-900">
+                    Thiết Lập Ban Đầu
+                  </div>
+                  <div className="text-xs text-slate-400 font-normal mt-0.5">
+                    Quy trình onboarding 6 bước (SCR-ONB-01)
+                  </div>
+                </div>
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+              </Link>
+            </div>
           </nav>
         </div>
 
