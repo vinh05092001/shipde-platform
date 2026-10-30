@@ -22,59 +22,9 @@ import {
 import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
 import { type BranchFormState, validateBranchForm, isValidBranchCode } from '@shipde/contracts';
 import { PaginationControls } from './common/SharedListControls';
+import { useSharedListState, paginateInMemory } from '@/hooks/useSharedListState';
 
 export type BranchItem = Branch;
-
-export const DEFAULT_BRANCHES: Branch[] = [
-  {
-    id: 'store_01',
-    merchant_id: 'm-default',
-    code: 'HCM-Q3',
-    name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
-    address: '128 Nguyễn Trãi, P.3, Q.5, TP. Hồ Chí Minh',
-    phone: '0901234567',
-    status: 'ACTIVE',
-    is_default: true,
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
-  },
-  {
-    id: 'store_02',
-    merchant_id: 'm-default',
-    code: 'HCM-TB',
-    name: 'Kho Vận & Cửa Hàng Tân Bình',
-    address: '123 Cộng Hòa, P.12, Q. Tân Bình, TP. Hồ Chí Minh',
-    phone: '0909876543',
-    status: 'ACTIVE',
-    is_default: false,
-    created_at: '2026-01-10T00:00:00Z',
-    updated_at: '2026-01-10T00:00:00Z',
-  },
-  {
-    id: 'store_03',
-    merchant_id: 'm-default',
-    code: 'HN-CG',
-    name: 'Chi Nhánh Hà Nội (Cầu Giấy)',
-    address: '45 Trần Thái Tông, Cầu Giấy, Hà Nội',
-    phone: '0903334444',
-    status: 'ACTIVE',
-    is_default: false,
-    created_at: '2026-01-15T00:00:00Z',
-    updated_at: '2026-01-15T00:00:00Z',
-  },
-  {
-    id: 'store_04',
-    merchant_id: 'm-default',
-    code: 'DN-HC',
-    name: 'Chi Nhánh Đà Nẵng (Hải Châu)',
-    address: '88 Nguyễn Văn Linh, Hải Châu, Đà Nẵng',
-    phone: '0905556666',
-    status: 'ACTIVE',
-    is_default: false,
-    created_at: '2026-02-01T00:00:00Z',
-    updated_at: '2026-02-01T00:00:00Z',
-  },
-];
 
 export interface BranchManagementViewProps {
   branches?: Branch[];
@@ -121,15 +71,32 @@ export function BranchManagementView({
   onActivate,
   onDeactivate,
 }: BranchManagementViewProps) {
-  // Filter & Search states
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Filter & Search & Pagination & Sort states via shared hook (FEAT-COM-02)
+  const listState = useSharedListState({
+    defaultPage: initialPage,
+    defaultPageSize: initialPageSize,
+    defaultSortBy: initialSortBy,
+    defaultSortOrder: initialSortOrder,
+    defaultSearch: '',
+    defaultFilters: { status: 'ALL' },
+    syncUrl: true,
+  });
 
-  // Pagination & Sort states
-  const [page, setPage] = useState<number>(initialPage);
-  const [pageSize, setPageSize] = useState<number>(initialPageSize);
-  const [sortBy, setSortBy] = useState<string>(initialSortBy);
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(initialSortOrder);
+  const page = listState.page;
+  const pageSize = listState.pageSize;
+  const sortBy = listState.sortBy;
+  const sortOrder = listState.sortOrder;
+  const searchQuery = listState.search;
+  const statusFilter = listState.filters.status as 'ALL' | 'ACTIVE' | 'INACTIVE';
+  const setPage = listState.setPage;
+  const setPageSize = listState.setPageSize;
+  const setSort = listState.setSort;
+  const setSortBy = listState.setSortBy;
+  const setSortOrder = listState.setSortOrder;
+  const setSearchQuery = listState.setSearch;
+  const setStatusFilter = (val: 'ALL' | 'ACTIVE' | 'INACTIVE') =>
+    listState.setFilter('status', val);
+  const resetFilters = listState.resetFilters;
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -158,49 +125,47 @@ export function BranchManagementView({
   const setViewError = (val: string | null) => setLocalError(val);
   const setViewSuccess = (val: string | null) => setLocalSuccess(val);
 
-  // Derived filtered branches
-  const filteredBranches = useMemo(() => {
-    return branches.filter((branch) => {
-      // Status filter
-      if (statusFilter !== 'ALL' && branch.status !== statusFilter) {
-        return false;
-      }
-      // Search query
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase().trim();
-        const matchName = branch.name.toLowerCase().includes(query);
-        const matchCode = branch.code.toLowerCase().includes(query);
-        const matchAddress = branch.address ? branch.address.toLowerCase().includes(query) : false;
-        const matchPhone = branch.phone ? branch.phone.includes(query) : false;
-        return matchName || matchCode || matchAddress || matchPhone;
-      }
-      return true;
+  // Filter, sort, and paginate using shared in-memory helper (FEAT-COM-02)
+  const {
+    pagedItems: pagedBranches,
+    total,
+    totalPages,
+  } = useMemo(() => {
+    return paginateInMemory({
+      items: branches,
+      page,
+      pageSize,
+      filterFn: (branch) => {
+        if (statusFilter !== 'ALL' && branch.status !== statusFilter) {
+          return false;
+        }
+        if (searchQuery.trim()) {
+          const query = searchQuery.toLowerCase().trim();
+          const matchName = branch.name.toLowerCase().includes(query);
+          const matchCode = branch.code.toLowerCase().includes(query);
+          const matchAddress = branch.address
+            ? branch.address.toLowerCase().includes(query)
+            : false;
+          const matchPhone = branch.phone ? branch.phone.includes(query) : false;
+          return matchName || matchCode || matchAddress || matchPhone;
+        }
+        return true;
+      },
+      sortFn: (a, b) => {
+        let cmp = 0;
+        if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
+        else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
+        else if (sortBy === 'created_at') {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+          cmp = dateA - dateB;
+        }
+        return sortOrder === 'asc' ? cmp : -cmp;
+      },
     });
-  }, [branches, statusFilter, searchQuery]);
+  }, [branches, page, pageSize, statusFilter, searchQuery, sortBy, sortOrder]);
 
-  // Sorted branches
-  const sortedBranches = useMemo(() => {
-    return [...filteredBranches].sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
-      else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
-      else if (sortBy === 'created_at') {
-        const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
-        const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
-        cmp = dateA - dateB;
-      }
-      return sortOrder === 'asc' ? cmp : -cmp;
-    });
-  }, [filteredBranches, sortBy, sortOrder]);
-
-  // Pagination calculation
-  const total = sortedBranches.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
-  const pagedBranches = useMemo(() => {
-    const start = (safePage - 1) * pageSize;
-    return sortedBranches.slice(start, start + pageSize);
-  }, [sortedBranches, safePage, pageSize]);
 
   const activeCount = useMemo(
     () => branches.filter((b) => b.status === 'ACTIVE').length,
@@ -668,7 +633,7 @@ export function BranchManagementView({
           </div>
 
           {/* Branch List or Empty State */}
-          {filteredBranches.length === 0 ? (
+          {total === 0 ? (
             <div
               className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-xs space-y-4"
               data-testid="branch-empty-state"
@@ -824,8 +789,15 @@ export function BranchManagementView({
                                   ? `deactivate-branch-button-${branch.id}`
                                   : `activate-branch-button-${branch.id}`
                               }
-                              disabled={isOperating}
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-50 ${
+                              disabled={isOperating || (isActive && isDefault)}
+                              title={
+                                isActive && isDefault
+                                  ? 'Chi nhánh mặc định không thể tạm ngưng hoạt động'
+                                  : isActive
+                                    ? 'Tạm ngưng hoạt động'
+                                    : 'Kích hoạt lại'
+                              }
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                                 isActive
                                   ? 'text-slate-600 hover:text-rose-700 hover:bg-rose-50'
                                   : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'

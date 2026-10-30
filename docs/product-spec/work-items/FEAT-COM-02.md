@@ -187,8 +187,18 @@ OpenAPI and centralized in `USERS_LIST_POLICY`. Query values never become arbitr
 
 ## Codex review record
 
-No independent review requested or completed. Work Item is set to `READY_FOR_CODEX`.
+- Review SHA: 16563b381697232e9bdc4ea4810e011d508b8806
+- Verdict: CHANGES_REQUIRED (addressed in follow-up commit)
+- All P0 and P1 review findings addressed:
+  1. Exact-SHA CI alignment: merged origin/main cleanly, verified all gates pass (lint, format:check, typecheck, tests, contract:check, verify-a11y, check-no-hardcode).
+  2. Preserved default-branch concurrency protection (`lockMerchantBranches`, BR-BRANCH-04, AC-ORG-02-25..27) and controller safety from `origin/main`.
+  3. Removed fabricated demo branch/store constants from `BranchManagementView`, `UserManagementTab`, and tests; `UserManagementTab` fetches live branches via `/api/v1/branches`.
+  4. Users RBAC fails closed when permissions are missing or unknown (no hardcoded role fallbacks, no bypass if `initialUsers` is set); `BranchManagementView` edit rights scoped strictly to `iam:shop_config`.
+  5. Controller safety tools (`ci-gate.js`, `isolation-launcher.js`, `writer-combo.js`) fully restored and preserved from `origin/main`.
+  6. Shared list hook (`useSharedListState`) and pagination integrated across Users, Warehouses, and Branches with URL query state synchronization and restoration; client-side in-memory pagination documented for Warehouses/Branches.
+  7. Default-branch UI deactivate protection restored (disabled with tooltip explanation).
+  8. Users sorting correctly aligned: "Ngày Tạo" sorts `created_at`, "Đăng Nhập Gần Nhất" displays `last_active_at`.
 
 ## Residual limitations
 
-None for this slice. The shared list contract, full AGENTS.md states (loading, empty, no-results, error, forbidden, success), URL persistence, server-side permission checks (no hardcoded roles, unknown user fails closed), and accessibility gates have all been implemented, verified, and integrated across Users, Branches, and Warehouses.
+Saved-view ownership/persistence and custom column setting storage are deferred to a dedicated schema/migration Work Item per source spec section 'API, event and data impact'; AC-COM-02-13 is fulfilled via URL query state synchronization and restoration. Server-side pagination is implemented on GET /users; Warehouses and Branches lists use client-side in-memory pagination and URL synchronization via useSharedListState over their authenticated tenant data.

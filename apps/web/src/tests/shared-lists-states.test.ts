@@ -7,17 +7,13 @@ import {
   USERS_FORBIDDEN_TEXT,
 } from '@/components/UserManagementTab';
 import { WarehouseManagementView } from '@/components/WarehouseManagementView';
-import {
-  BranchManagementView,
-  DEFAULT_BRANCHES,
-  BranchItem,
-} from '@/components/BranchManagementView';
+import { BranchManagementView, BranchItem } from '@/components/BranchManagementView';
 import BranchesSettingsPage from '@/app/settings/branches/page';
 import { AuthProvider } from '@/context/AuthContext';
 import { paginateInMemory } from '@/hooks/useSharedListState';
 import { parseListQuery } from '@shipde/contracts';
 import { USERS_LIST_POLICY, WAREHOUSES_LIST_POLICY, BRANCHES_LIST_POLICY } from '@shipde/config';
-import type { Warehouse, UserListItem } from '@shipde/contracts';
+import type { Warehouse, UserListItem, Branch } from '@shipde/contracts';
 
 /**
  * FEAT-COM-02: Shared List Behaviour Proving Test Suite
@@ -157,6 +153,57 @@ async function runSharedListsTestSuite() {
       printer_config: null,
       created_at: '2026-01-10T00:00:00Z',
       updated_at: '2026-01-10T00:00:00Z',
+    },
+  ];
+
+  const mockBranches: Branch[] = [
+    {
+      id: 'store_01',
+      merchant_id: 'tenant-test-1',
+      code: 'HCM-Q3',
+      name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
+      address: '128 Nguyễn Trãi, P.3, Q.5, TP. Hồ Chí Minh',
+      phone: '0901234567',
+      status: 'ACTIVE',
+      is_default: true,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    },
+    {
+      id: 'store_02',
+      merchant_id: 'tenant-test-1',
+      code: 'HCM-TB',
+      name: 'Kho Vận & Cửa Hàng Tân Bình',
+      address: '123 Cộng Hòa, P.12, Q. Tân Bình, TP. Hồ Chí Minh',
+      phone: '0909876543',
+      status: 'ACTIVE',
+      is_default: false,
+      created_at: '2026-01-10T00:00:00Z',
+      updated_at: '2026-01-10T00:00:00Z',
+    },
+    {
+      id: 'store_03',
+      merchant_id: 'tenant-test-1',
+      code: 'HN-CG',
+      name: 'Chi Nhánh Hà Nội (Cầu Giấy)',
+      address: '45 Trần Thái Tông, Cầu Giấy, Hà Nội',
+      phone: '0903334444',
+      status: 'ACTIVE',
+      is_default: false,
+      created_at: '2026-01-15T00:00:00Z',
+      updated_at: '2026-01-15T00:00:00Z',
+    },
+    {
+      id: 'store_04',
+      merchant_id: 'tenant-test-1',
+      code: 'DN-HC',
+      name: 'Chi Nhánh Đà Nẵng (Hải Châu)',
+      address: '88 Nguyễn Văn Linh, Hải Châu, Đà Nẵng',
+      phone: '0905556666',
+      status: 'ACTIVE',
+      is_default: false,
+      created_at: '2026-02-01T00:00:00Z',
+      updated_at: '2026-02-01T00:00:00Z',
     },
   ];
 
@@ -322,11 +369,27 @@ async function runSharedListsTestSuite() {
     assert.ok(populatedHtml.includes('data-testid="users-table"'));
     assert.ok(populatedHtml.includes('data-testid="sort-header-user-fullname"'));
     assert.ok(populatedHtml.includes('data-testid="sort-header-user-created"'));
+    assert.ok(populatedHtml.includes('Ngày Tạo'));
+    assert.ok(populatedHtml.includes('Đăng Nhập Gần Nhất'));
     assert.ok(populatedHtml.includes('data-testid="users-pagination-controls"'));
     assert.ok(populatedHtml.includes('data-testid="users-pagination-prev-btn"'));
     assert.ok(populatedHtml.includes('data-testid="users-pagination-next-btn"'));
     assert.ok(populatedHtml.includes('data-testid="users-pagination-info"'));
     assert.ok(populatedHtml.includes('Sắp xếp theo Nhân Viên / Email (tăng dần)'));
+
+    // F. User RBAC fail-closed when user has unauthorized permissions
+    const forbiddenUserHtml = renderToStaticMarkup(
+      React.createElement(
+        AuthProvider,
+        null,
+        React.createElement(UserManagementTab, {
+          initialForbidden: true,
+          initialUsers: mockUsers,
+        })
+      )
+    );
+    assert.ok(forbiddenUserHtml.includes(USERS_FORBIDDEN_TEXT));
+    assert.ok(!forbiddenUserHtml.includes('data-testid="users-table"'));
 
     console.log('  PASS: Users list shared contract states verified.');
   }
@@ -433,7 +496,7 @@ async function runSharedListsTestSuite() {
     const forbiddenHtml = renderToStaticMarkup(
       React.createElement(BranchManagementView, {
         isForbidden: true,
-        branches: DEFAULT_BRANCHES,
+        branches: mockBranches,
       })
     );
     assert.ok(forbiddenHtml.includes('data-testid="branch-forbidden-banner"'));
@@ -444,7 +507,7 @@ async function runSharedListsTestSuite() {
     const populatedHtml = renderToStaticMarkup(
       React.createElement(BranchManagementView, {
         loading: false,
-        branches: DEFAULT_BRANCHES,
+        branches: mockBranches,
         canEdit: true,
         initialPage: 1,
         initialPageSize: 2,
@@ -470,7 +533,7 @@ async function runSharedListsTestSuite() {
         AuthProvider,
         null,
         React.createElement(BranchesSettingsPage, {
-          initialBranches: DEFAULT_BRANCHES,
+          initialBranches: mockBranches,
         })
       )
     );
@@ -479,6 +542,23 @@ async function runSharedListsTestSuite() {
     assert.ok(pageHtml.includes('href="/settings/warehouses"'));
     assert.ok(pageHtml.includes('href="/settings/users"'));
     assert.ok(pageHtml.includes('href="/settings/roles"'));
+
+    // G. Default-branch deactivate protection (P1 finding 7)
+    const defaultBranchDeactivateHtml = renderToStaticMarkup(
+      React.createElement(BranchManagementView, {
+        loading: false,
+        branches: mockBranches,
+        canEdit: true,
+      })
+    );
+    assert.ok(
+      defaultBranchDeactivateHtml.includes('Chi nhánh mặc định không thể tạm ngưng hoạt động'),
+      'Default branch must disable deactivate button with explanation'
+    );
+    assert.ok(
+      defaultBranchDeactivateHtml.includes('disabled'),
+      'Default branch deactivate button must have disabled attribute'
+    );
 
     console.log('  PASS: Branches list shared contract states verified.');
   }
@@ -494,7 +574,7 @@ async function runSharedListsTestSuite() {
         AuthProvider,
         null,
         React.createElement(BranchesSettingsPage, {
-          initialBranches: DEFAULT_BRANCHES,
+          initialBranches: mockBranches,
         })
       )
     );
@@ -513,7 +593,7 @@ async function runSharedListsTestSuite() {
         AuthProvider,
         null,
         React.createElement(BranchesSettingsPage, {
-          initialBranches: DEFAULT_BRANCHES,
+          initialBranches: mockBranches,
           initialCanEdit: true,
         })
       )

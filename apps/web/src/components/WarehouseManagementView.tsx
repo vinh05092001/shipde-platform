@@ -35,6 +35,7 @@ import {
   ALLOWED_WAREHOUSE_DPIS,
 } from '@shipde/contracts';
 import { PaginationControls } from './common/SharedListControls';
+import { useSharedListState, paginateInMemory } from '@/hooks/useSharedListState';
 
 export interface WarehouseManagementViewProps {
   warehouses?: Warehouse[];
@@ -83,107 +84,31 @@ export function WarehouseManagementView({
   initialSortBy = 'created_at',
   initialSortOrder = 'desc',
 }: WarehouseManagementViewProps) {
-  // Filter & Search & Pagination & Sort states (FEAT-COM-02 shared list contract)
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'inactive'>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const s = new URLSearchParams(window.location.search).get('status');
-        if (s === 'active' || s === 'inactive' || s === 'ALL') return s;
-      } catch {
-        // Fallback
-      }
-    }
-    return 'ALL';
+  // Filter & Search & Pagination & Sort states via shared hook (FEAT-COM-02)
+  const listState = useSharedListState({
+    defaultPage: initialPage,
+    defaultPageSize: initialPageSize,
+    defaultSortBy: initialSortBy,
+    defaultSortOrder: initialSortOrder,
+    defaultSearch: '',
+    defaultFilters: { status: 'ALL' },
+    syncUrl: true,
   });
 
-  const [searchQuery, setSearchQuery] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const q =
-          new URLSearchParams(window.location.search).get('search') ||
-          new URLSearchParams(window.location.search).get('q');
-        if (q) return q;
-      } catch {
-        // Fallback
-      }
-    }
-    return '';
-  });
-
-  const [page, setPage] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const p = new URLSearchParams(window.location.search).get('page');
-        if (p && /^\d+$/.test(p) && Number(p) > 0) return Number(p);
-      } catch {
-        // Fallback
-      }
-    }
-    return initialPage;
-  });
-
-  const [pageSize, setPageSize] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const l = new URLSearchParams(window.location.search).get('limit');
-        if (l && /^\d+$/.test(l) && Number(l) > 0) return Number(l);
-      } catch {
-        // Fallback
-      }
-    }
-    return initialPageSize;
-  });
-
-  const [sortBy, setSortBy] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const sb = new URLSearchParams(window.location.search).get('sort_by');
-        if (sb) return sb;
-      } catch {
-        // Fallback
-      }
-    }
-    return initialSortBy;
-  });
-
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const so = new URLSearchParams(window.location.search).get('sort_order');
-        if (so === 'asc' || so === 'desc') return so;
-      } catch {
-        // Fallback
-      }
-    }
-    return initialSortOrder;
-  });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      if (page > 1) params.set('page', String(page));
-      else params.delete('page');
-      if (pageSize !== 10) params.set('limit', String(pageSize));
-      else params.delete('limit');
-      if (statusFilter !== 'ALL') params.set('status', statusFilter);
-      else params.delete('status');
-      if (searchQuery.trim()) params.set('search', searchQuery.trim());
-      else {
-        params.delete('search');
-        params.delete('q');
-      }
-      if (sortBy !== 'created_at') params.set('sort_by', sortBy);
-      else params.delete('sort_by');
-      if (sortOrder !== 'desc') params.set('sort_order', sortOrder);
-      else params.delete('sort_order');
-      const qs = params.toString();
-      const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
-      window.history.replaceState(null, '', newUrl);
-    } catch {
-      // Ignore URL history errors
-    }
-  }, [page, pageSize, statusFilter, searchQuery, sortBy, sortOrder]);
+  const page = listState.page;
+  const pageSize = listState.pageSize;
+  const sortBy = listState.sortBy;
+  const sortOrder = listState.sortOrder;
+  const searchQuery = listState.search;
+  const statusFilter = listState.filters.status as 'ALL' | 'active' | 'inactive';
+  const setPage = listState.setPage;
+  const setPageSize = listState.setPageSize;
+  const setSort = listState.setSort;
+  const setSortBy = listState.setSortBy;
+  const setSortOrder = listState.setSortOrder;
+  const setSearchQuery = listState.setSearch;
+  const setStatusFilter = (st: 'ALL' | 'active' | 'inactive') => listState.setFilter('status', st);
+  const resetFilters = listState.resetFilters;
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -253,34 +178,55 @@ export function WarehouseManagementView({
   const setViewError = (val: string | null) => setLocalError(val);
   const setViewSuccess = (val: string | null) => setLocalSuccess(val);
 
-  // Filtered warehouses
-  const filteredWarehouses = useMemo(() => {
-    return warehouses.filter((wh) => {
-      if (statusFilter !== 'ALL' && wh.status !== statusFilter) {
-        return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchName = wh.name.toLowerCase().includes(q);
-        const matchCode = wh.code.toLowerCase().includes(q);
-        const matchContact = wh.contact_name.toLowerCase().includes(q);
-        const matchPhone = wh.contact_phone.includes(q);
-        const matchCity = wh.city.toLowerCase().includes(q);
-        const matchDistrict = wh.district.toLowerCase().includes(q);
-        const matchAddress = wh.address_line.toLowerCase().includes(q);
-        return (
-          matchName ||
-          matchCode ||
-          matchContact ||
-          matchPhone ||
-          matchCity ||
-          matchDistrict ||
-          matchAddress
-        );
-      }
-      return true;
+  // Filter, sort, and paginate using shared in-memory helper (FEAT-COM-02)
+  const {
+    pagedItems: pagedWarehouses,
+    total,
+    totalPages,
+  } = useMemo(() => {
+    return paginateInMemory({
+      items: warehouses,
+      page,
+      pageSize,
+      filterFn: (wh) => {
+        if (statusFilter !== 'ALL' && wh.status !== statusFilter) {
+          return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const matchName = wh.name.toLowerCase().includes(q);
+          const matchCode = wh.code.toLowerCase().includes(q);
+          const matchContact = wh.contact_name ? wh.contact_name.toLowerCase().includes(q) : false;
+          const matchPhone = wh.contact_phone ? wh.contact_phone.includes(q) : false;
+          const matchCity = wh.city ? wh.city.toLowerCase().includes(q) : false;
+          const matchDistrict = wh.district ? wh.district.toLowerCase().includes(q) : false;
+          const matchAddress = wh.address_line ? wh.address_line.toLowerCase().includes(q) : false;
+          return (
+            matchName ||
+            matchCode ||
+            matchContact ||
+            matchPhone ||
+            matchCity ||
+            matchDistrict ||
+            matchAddress
+          );
+        }
+        return true;
+      },
+      sortFn: (a, b) => {
+        let cmp = 0;
+        if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
+        else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
+        else if (sortBy === 'created_at')
+          cmp = (a.created_at || '').localeCompare(b.created_at || '');
+        else cmp = (a.created_at || '').localeCompare(b.created_at || '');
+        if (cmp === 0) cmp = a.id.localeCompare(b.id);
+        return sortOrder === 'asc' ? cmp : -cmp;
+      },
     });
-  }, [warehouses, statusFilter, searchQuery]);
+  }, [warehouses, page, pageSize, statusFilter, searchQuery, sortBy, sortOrder]);
+
+  const safePage = Math.min(Math.max(1, page), totalPages);
 
   const activeCount = useMemo(
     () => warehouses.filter((w) => w.status === 'active').length,
@@ -290,30 +236,6 @@ export function WarehouseManagementView({
     () => warehouses.filter((w) => w.status === 'inactive').length,
     [warehouses]
   );
-
-  // Sorted warehouses (FEAT-COM-02 shared list contract)
-  const sortedWarehouses = useMemo(() => {
-    const list = [...filteredWarehouses];
-    list.sort((a, b) => {
-      let cmp = 0;
-      if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
-      else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
-      else if (sortBy === 'created_at')
-        cmp = (a.created_at || '').localeCompare(b.created_at || '');
-      else cmp = (a.created_at || '').localeCompare(b.created_at || '');
-      if (cmp === 0) cmp = a.id.localeCompare(b.id);
-      return sortOrder === 'asc' ? cmp : -cmp;
-    });
-    return list;
-  }, [filteredWarehouses, sortBy, sortOrder]);
-
-  const total = sortedWarehouses.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-  const pagedWarehouses = useMemo(() => {
-    const skip = (safePage - 1) * pageSize;
-    return sortedWarehouses.slice(skip, skip + pageSize);
-  }, [sortedWarehouses, safePage, pageSize]);
 
   const isRestrictedScope = useMemo(() => {
     return (
@@ -838,7 +760,7 @@ export function WarehouseManagementView({
       )}
 
       {/* Empty State */}
-      {!loading && filteredWarehouses.length === 0 && (
+      {!loading && total === 0 && (
         <div
           data-testid="warehouse-empty-state"
           className="p-12 bg-white border border-dashed border-slate-300 rounded-2xl text-center space-y-4"
@@ -896,7 +818,7 @@ export function WarehouseManagementView({
       )}
 
       {/* List / Grid Cards */}
-      {!loading && filteredWarehouses.length > 0 && (
+      {!loading && total > 0 && (
         <div className="space-y-4">
           <div data-testid="warehouse-list-state" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {pagedWarehouses.map((wh) => {

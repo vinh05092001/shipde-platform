@@ -39,6 +39,7 @@ import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
 import { PaginationControls, SortableColumnHeader } from './common/SharedListControls';
 import { BranchManagementView } from './BranchManagementView';
+import { useSharedListState } from '@/hooks/useSharedListState';
 
 // Available Stores in the system
 export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
@@ -60,49 +61,6 @@ export const AVAILABLE_WAREHOUSES = [
   { id: 'wh_tanbinh', name: 'Kho Vận Tân Bình (HCM)' },
   { id: 'wh_hanoi', name: 'Kho Hà Nội' },
   { id: 'wh_danang', name: 'Kho Đà Nẵng' },
-];
-
-export const DEFAULT_STORES: StoreItem[] = [
-  {
-    id: 'store_01',
-    code: 'HCM-Q3',
-    name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
-    address: '128 Nguyễn Trãi, P.3, Q.5, TP. Hồ Chí Minh',
-    phone: '0901234567',
-    manager: 'Nguyễn Văn An',
-    active_orders_count: 1420,
-    status: 'ACTIVE',
-  },
-  {
-    id: 'store_02',
-    code: 'HCM-TB',
-    name: 'Kho Vận & Cửa Hàng Tân Bình',
-    address: '123 Cộng Hòa, P.12, Q. Tân Bình, TP. Hồ Chí Minh',
-    phone: '0909876543',
-    manager: 'Phạm Văn Kho',
-    active_orders_count: 890,
-    status: 'ACTIVE',
-  },
-  {
-    id: 'store_03',
-    code: 'HN-CG',
-    name: 'Chi Nhánh Hà Nội (Cầu Giấy)',
-    address: '45 Trần Thái Tông, Cầu Giấy, Hà Nội',
-    phone: '0903334444',
-    manager: 'Lê Minh Kế Toán',
-    active_orders_count: 650,
-    status: 'ACTIVE',
-  },
-  {
-    id: 'store_04',
-    code: 'DN-HC',
-    name: 'Chi Nhánh Đà Nẵng (Hải Châu)',
-    address: '88 Nguyễn Văn Linh, Hải Châu, Đà Nẵng',
-    phone: '0905556666',
-    manager: 'Trần Thị Hoa',
-    active_orders_count: 320,
-    status: 'ACTIVE',
-  },
 ];
 
 export function isManageUsersForbidden(userRole?: string | null): boolean {
@@ -252,6 +210,8 @@ export interface UserManagementTabProps {
   initialFieldErrors?: Record<string, string>;
   initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
+  initialStores?: StoreItem[];
+  initialCanEditBranches?: boolean;
   initialPage?: number;
   initialPageSize?: number;
   initialSortBy?: string;
@@ -275,17 +235,24 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [invitationsStatusFilter, setInvitationsStatusFilter] = useState<string>('ALL');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  // Permission-based authorization check (Rule 9: permissions from API, unknown user means no edit)
+  // Permission-based authorization check (Rule 9: permissions from API, unknown user means no edit, fail closed)
   const isForbidden =
     props.initialForbidden !== undefined
       ? props.initialForbidden
-      : props.initialUsers !== undefined
-        ? false
-        : user
-          ? (user as any).permissions && Array.isArray((user as any).permissions)
-            ? !(user as any).permissions.includes('iam:manage_users')
-            : isManageUsersForbidden(user.role)
-          : true;
+      : user
+        ? Array.isArray((user as any).permissions)
+          ? !(user as any).permissions.includes('iam:manage_users')
+          : true
+        : false;
+
+  const canEditBranches =
+    props.initialCanEditBranches !== undefined
+      ? props.initialCanEditBranches
+      : Boolean(
+          user &&
+          Array.isArray((user as any).permissions) &&
+          (user as any).permissions.includes('iam:shop_config')
+        );
 
   const fetchInvitations = useCallback(async () => {
     if (isForbidden) return;
@@ -387,132 +354,78 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     props.initialLoading ?? !props.initialUsers
   );
   const [usersError, setUsersError] = useState<string | null>(props.initialError || null);
-  const [userSearch, setUserSearch] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const q =
-          new URLSearchParams(window.location.search).get('search') ||
-          new URLSearchParams(window.location.search).get('q');
-        if (q) return q;
-      } catch {
-        // Fallback
-      }
-    }
-    return '';
+  // User list shared pagination, filter, and sort state via shared hook (FEAT-COM-02)
+  const userListState = useSharedListState({
+    defaultPage: props.initialPage || 1,
+    defaultPageSize: props.initialPageSize || 20,
+    defaultSortBy: props.initialSortBy || 'created_at',
+    defaultSortOrder: props.initialSortOrder || 'desc',
+    defaultSearch: '',
+    defaultFilters: {
+      role: 'ALL',
+      status: 'ALL',
+    },
+    syncUrl: true,
   });
 
-  const [userRoleFilter, setUserRoleFilter] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const r = new URLSearchParams(window.location.search).get('role');
-        if (r) return r;
-      } catch {
-        // Fallback
-      }
+  const userPage = userListState.page;
+  const userPageSize = userListState.pageSize;
+  const userSortBy = userListState.sortBy;
+  const userSortOrder = userListState.sortOrder;
+  const userSearch = userListState.search;
+  const userRoleFilter = userListState.filters.role;
+  const userStatusFilter = userListState.filters.status;
+  const setUserPage = userListState.setPage;
+  const setUserPageSize = userListState.setPageSize;
+  const setUserSortBy = userListState.setSort;
+  const setUserSortOrder = (order: 'asc' | 'desc' | ((prev: 'asc' | 'desc') => 'asc' | 'desc')) => {
+    if (typeof order === 'function') {
+      const next = order(userSortOrder);
+      if (next !== userSortOrder) userListState.setSort(userSortBy);
+    } else if (order !== userSortOrder) {
+      userListState.setSort(userSortBy);
     }
-    return 'ALL';
-  });
-
-  const [userStatusFilter, setUserStatusFilter] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const s = new URLSearchParams(window.location.search).get('status');
-        if (s) return s;
-      } catch {
-        // Fallback
-      }
-    }
-    return 'ALL';
-  });
-
-  const [userPage, setUserPage] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const p = new URLSearchParams(window.location.search).get('page');
-        if (p && /^\d+$/.test(p) && Number(p) > 0) return Number(p);
-      } catch {
-        // Fallback
-      }
-    }
-    return props.initialPage || 1;
-  });
-
-  const [userPageSize, setUserPageSize] = useState<number>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const l = new URLSearchParams(window.location.search).get('limit');
-        if (l && /^\d+$/.test(l) && Number(l) > 0) return Number(l);
-      } catch {
-        // Fallback
-      }
-    }
-    return props.initialPageSize || 20;
-  });
-
-  const [userSortBy, setUserSortBy] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const sb = new URLSearchParams(window.location.search).get('sort_by');
-        if (sb) return sb;
-      } catch {
-        // Fallback
-      }
-    }
-    return props.initialSortBy || 'created_at';
-  });
-
-  const [userSortOrder, setUserSortOrder] = useState<'asc' | 'desc'>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const so = new URLSearchParams(window.location.search).get('sort_order');
-        if (so === 'asc' || so === 'desc') return so;
-      } catch {
-        // Fallback
-      }
-    }
-    return props.initialSortOrder || 'desc';
-  });
+  };
+  const setUserSearch = userListState.setSearch;
+  const setUserRoleFilter = (role: string) => userListState.setFilter('role', role);
+  const setUserStatusFilter = (status: string) => userListState.setFilter('status', status);
 
   const [totalUsers, setTotalUsers] = useState<number>(props.initialUsers?.length || 0);
   const [totalPages, setTotalPages] = useState<number>(1);
-  const [stores, setStores] = useState<StoreItem[]>(DEFAULT_STORES);
+  const [stores, setStores] = useState<StoreItem[]>(props.initialStores || []);
+  const [storesLoading, setStoresLoading] = useState<boolean>(false);
+  const [storesError, setStoresError] = useState<string | null>(null);
+
+  const fetchStores = useCallback(async () => {
+    setStoresLoading(true);
+    setStoresError(null);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data?.branches) {
+          setStores(json.data.branches);
+        }
+      }
+    } catch (err: any) {
+      setStoresError(err?.message || 'Lỗi khi tải danh sách chi nhánh');
+    } finally {
+      setStoresLoading(false);
+    }
+  }, [token]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      if (userPage > 1) params.set('page', String(userPage));
-      else params.delete('page');
-      if (userPageSize !== 20) params.set('limit', String(userPageSize));
-      else params.delete('limit');
-      if (userRoleFilter !== 'ALL') params.set('role', userRoleFilter);
-      else params.delete('role');
-      if (userStatusFilter !== 'ALL') params.set('status', userStatusFilter);
-      else params.delete('status');
-      if (userSearch.trim()) params.set('search', userSearch.trim());
-      else {
-        params.delete('search');
-        params.delete('q');
-      }
-      if (userSortBy !== 'created_at') params.set('sort_by', userSortBy);
-      else params.delete('sort_by');
-      if (userSortOrder !== 'desc') params.set('sort_order', userSortOrder);
-      else params.delete('sort_order');
-      const qs = params.toString();
-      const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
-      window.history.replaceState(null, '', newUrl);
-    } catch {
-      // Ignore URL history errors
+    if (activeSubTab === 'stores' && (!props.initialStores || props.initialStores.length === 0)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial stores fetch
+      void fetchStores();
     }
-  }, [
-    userPage,
-    userPageSize,
-    userRoleFilter,
-    userStatusFilter,
-    userSearch,
-    userSortBy,
-    userSortOrder,
-  ]);
+  }, [activeSubTab, fetchStores, props.initialStores]);
 
   // Modal new store state
   const [isNewStoreModalOpen, setIsNewStoreModalOpen] = useState(false);
@@ -1335,7 +1248,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                       <th className="py-3 px-4">Phạm Vi TK Vận Chuyển</th>
                       <th className="py-3 px-4">
                         <SortableColumnHeader
-                          label="Đăng Nhập Gần Nhất"
+                          label="Ngày Tạo"
                           field="created_at"
                           currentSort={userSortBy}
                           currentDirection={userSortOrder}
@@ -1351,6 +1264,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                           testId="sort-header-user-created"
                         />
                       </th>
+                      <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
                       <th className="py-3 px-4">Trạng Thái</th>
                       <th className="py-3 px-4 text-right">Thao Tác</th>
                     </tr>
@@ -1502,6 +1416,10 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                                 ))
                               )}
                             </div>
+                          </td>
+
+                          <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
+                            {u.created_at ? new Date(u.created_at).toLocaleString('vi-VN') : '—'}
                           </td>
 
                           <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
@@ -1957,8 +1875,10 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
             updated_at: '',
             ...s,
           }))}
-          canEdit={!isForbidden}
-          onRefresh={() => setStores(DEFAULT_STORES)}
+          loading={storesLoading}
+          error={storesError}
+          canEdit={canEditBranches}
+          onRefresh={fetchStores}
         />
       )}
 

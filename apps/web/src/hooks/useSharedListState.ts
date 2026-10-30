@@ -22,7 +22,9 @@ export interface SharedListState<TFilters extends Record<string, string>> {
   hasActiveFilters: boolean;
   setPage: (newPage: number) => void;
   setPageSize: (newPageSize: number) => void;
-  setSort: (field: string) => void;
+  setSort: (field: string, direction?: 'asc' | 'desc') => void;
+  setSortBy: (field: string) => void;
+  setSortOrder: (order: 'asc' | 'desc' | ((prev: 'asc' | 'desc') => 'asc' | 'desc')) => void;
   setSearch: (query: string) => void;
   setFilter: <K extends keyof TFilters>(key: K, value: TFilters[K]) => void;
   resetFilters: () => void;
@@ -188,9 +190,11 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     setPageState(1);
   }, []);
 
-  const setSort = useCallback((field: string) => {
+  const setSort = useCallback((field: string, direction?: 'asc' | 'desc') => {
     setSortBy((prevSort) => {
-      if (prevSort === field) {
+      if (direction) {
+        setSortOrder(direction);
+      } else if (prevSort === field) {
         setSortOrder((prevOrder) => (prevOrder === 'asc' ? 'desc' : 'asc'));
       } else {
         setSortOrder('asc');
@@ -199,6 +203,19 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     });
     setPageState(1);
   }, []);
+
+  const setSortByDirect = useCallback((field: string) => {
+    setSortBy(field);
+    setPageState(1);
+  }, []);
+
+  const setSortOrderDirect = useCallback(
+    (order: 'asc' | 'desc' | ((prev: 'asc' | 'desc') => 'asc' | 'desc')) => {
+      setSortOrder(order);
+      setPageState(1);
+    },
+    []
+  );
 
   const setSearch = useCallback((query: string) => {
     setSearchState(query);
@@ -240,6 +257,8 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     setPage,
     setPageSize,
     setSort,
+    setSortBy: setSortByDirect,
+    setSortOrder: setSortOrderDirect,
     setSearch,
     setFilter,
     resetFilters,
