@@ -38,6 +38,7 @@ tools/ai-brain/data/quota-state.json
 tools/ai-brain/data/sources.json
 lhci-report/
 .lighthouseci/
+storybook-static/
 k6-summary.json
 k6-api.log
 

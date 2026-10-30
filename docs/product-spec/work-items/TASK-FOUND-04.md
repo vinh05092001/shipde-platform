@@ -76,3 +76,54 @@ Establish the shared OpenAPI type generation, contract drift validation, testing
 - `pnpm build`: PASS (Prisma generate + Turbopack Next.js build).
 - `pnpm test:baseline`: PASS (10/10 preservation smoke surfaces).
 - `pnpm security:secrets`: PASS (Gitleaks scan clean, 0 secrets).
+
+## Follow-up (2026-10-30): Adoption Gaps Closure — Storybook & Vercel Skills
+
+### 1. Context & Motivation
+
+Audit on 2026-10-30 identified adoption gaps from the original foundation delivery:
+1. `Storybook` was classified as `ADOPT IN TASK-FOUND-04` in `AI-TOOLCHAIN-DECISIONS.md` and `PENDING` in `tools/ecosystem-manifest.json`, but lacked dependency pinning, stories, and a CI build step in `apps/web`.
+2. `Vercel agent skills` was classified as `AUDIT AND PIN IN TASK-FOUND-04`, but required formal audit verification, commit pinning, checksum registration, and specification boundary documentation.
+
+### 2. Implementation & Resolution
+
+#### A. Storybook Component Catalog & Quality Gate
+- **Dependencies & Workspace**:
+  - Pinned in `apps/web`: `@storybook/react-vite@8.6.0`, `@storybook/addon-a11y@8.6.0`, `vite@^8.3.5`, `storybook@8.6.0`, `@storybook/react@8.6.0`, `@storybook/addon-highlight@8.6.0`.
+  - Applied patch `patches/@storybook__core@8.6.0.patch` via `pnpm patch` to prevent Windows sandboxed ACL traversal (`desktop-vi13ka6\agy07` boundary) and resolve internal core modules.
+- **Root Package Scripts (AGENTS.md compliance)**:
+  - `pnpm storybook`: Starts local development server on port 6006 with telemetry disabled.
+  - `pnpm storybook:build`: Compiles static visual catalog into `apps/web/storybook-static/` with telemetry disabled.
+- **Shared Component Stories (`apps/web/src/components/ui/`)**:
+  - `DataTable.stories.tsx`: Covers `Success` (with interactive selection and pagination), `Loading` skeleton, and `Empty` placeholder states.
+  - `OperationalComponents.stories.tsx`:
+    - `StatusBadges`: Success (`DELIVERED`), In-Transit (`IN_TRANSIT`), Warning (`ATTENTION_REQUIRED`), Error (`DISCREPANCY_DETECTED`).
+    - `EmptyStates`: Default empty, Filtered empty, Error with recovery action.
+    - `MoneyFormats`: Confirmed positive/negative, Pending, Estimated (four-tier money rule compliance).
+    - `TrackingCodes`: Single code, multi-package list with clipboard actions.
+    - `AutomationTiers`: L2 Full Automation, L1 Semi-Automation, L0 Manual.
+    - `Dialogs`: Confirm, Danger, and Reason Required operational modal dialogs.
+- **CI Pipeline Step**:
+  - Added `- name: Build Storybook component catalog` (`run: pnpm storybook:build`) in `.github/workflows/current-application.yml` directly after `pnpm build`.
+- **Ecosystem Manifest Promotion**:
+  - Promoted `storybook` and `storybook-addon-a11y` in `tools/ecosystem-manifest.json` from `PENDING`/`DEFERRED` to `ADOPTED`.
+
+#### B. Vercel Agent Skills Audit & Pinning
+- **Upstream Source**: `vercel-labs/agent-skills`
+- **Pinned Commit SHA**: `063bee94c3f4df8453406c830b0a7df0f2860278`
+- **Vendored Location**: `tools/ai-brain/skills/vercel/`
+- **Vendored Assets & Integrity Hashes**:
+  - `react-best-practices/SKILL.md`: sha256 `71ed7794962fa6e803ee83030517b5b93a9f70fbfeb431ec4535c5480a8d8355`
+  - `web-interface-guidelines/command.md`: sha256 `d246b026f4f29b5823a9cc857f9edf3d2507002e055e32040cadeaf3b38e0234` (from `vercel-labs/web-interface-guidelines@434b7f91364665f2f733b310ec54809bf8f37937`)
+  - `web-interface-guidelines/LICENSE`: sha256 `6cd1609c9c12233507cdd2ce0d32e9a721e3c27494951be06b90090deeeb7af2`
+- **Audit Findings & Policy Boundaries**:
+  - License: MIT License confirmed.
+  - Advisory Authority Boundary: Advisory guidance only. Ship Dễ domain models, state coverage, VN currency arithmetic, and `DESIGN-SYSTEM-UX-RULES.md` remain authoritative.
+  - Delivery Boundary: Injection only through locked pack in `tools/ai-brain/skill-pack.js` to UI feature roles; no unpinned external network calls permitted during review or execution.
+
+### 3. Verification
+- `pnpm storybook:build`: PASS (Exit code 0, 11 component entries indexed into static catalog in ~4.8s).
+- `pnpm --filter @shipde/web typecheck`: PASS.
+- `pnpm --filter @shipde/web lint`: PASS.
+- `pnpm --filter @shipde/web test`: PASS.
+- `node tools/ai-brain/manifest-audit.js`: PASS (Zero errors/warnings for storybook).

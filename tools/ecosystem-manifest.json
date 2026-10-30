@@ -381,11 +381,11 @@
       "owner": "storybookjs",
       "kind": "cli",
       "role": "Isolated UI component development, visual documentation, and interaction testing.",
-      "source_of_truth_boundary": "Component state catalog authority deferred until UI component documentation adoption; absent from workspace dependencies.",
+      "source_of_truth_boundary": "Visual documentation and state coverage catalog for UI components under apps/web/.storybook; verified via pnpm storybook:build in CI.",
       "install_method": "npm-dev",
       "pinned_version_or_commit": "8.6.0",
       "platform": "any",
-      "lifecycle_state": "PENDING",
+      "lifecycle_state": "ADOPTED",
       "default_enabled": false,
       "blocking_policy": "NON_BLOCKING",
       "permissions": "localhost-dev-server",
@@ -1224,7 +1224,7 @@
       "role": "Live accessibility testing within Storybook component catalog.",
       "install_method": "pnpm-workspace",
       "pinned_version_or_commit": "8.6.0",
-      "lifecycle_state": "DEFERRED",
+      "lifecycle_state": "ADOPTED",
       "foundation_item": "TASK-FOUND-04"
     },
     {

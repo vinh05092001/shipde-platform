@@ -39,6 +39,7 @@ allowBuilds:
   '@turbo/linux-64': false
   '@turbo/linux-arm64': false
   '@turbo/windows-arm64': false
+  core-js-pure: false
   # 3. Native binary installer required by tsx for script execution and Turborepo builds
   esbuild: true
   fsevents: false
@@ -69,3 +70,6 @@ overrides:
   proxy-addr: ^2.0.8
   sharp: ^0.35.5
   source-map-js: ^1.2.2
+
+patchedDependencies:
+  '@storybook/core@8.6.0': patches/@storybook__core@8.6.0.patch

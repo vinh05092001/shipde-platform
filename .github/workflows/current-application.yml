@@ -153,6 +153,8 @@ jobs:
             exit 1
           fi
       - run: pnpm build
+      - name: Build Storybook component catalog
+        run: pnpm storybook:build
       - name: Install Playwright Chromium for accessibility gate
         run: pnpm --filter @shipde/web exec playwright install --with-deps chromium
       - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
