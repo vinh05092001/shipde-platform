@@ -519,6 +519,80 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
       );
     });
 
+    it('Reject deleting default branch with 400 CANNOT_DELETE_DEFAULT_BRANCH', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-owner-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.deleteBranch(B1_ID, 'm-tenant-1', actor, '127.0.0.1', 'corr-delete-def');
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 400);
+          assert.strictEqual(err.code, 'CANNOT_DELETE_DEFAULT_BRANCH');
+          return true;
+        }
+      );
+    });
+
+    it('Owner successfully deactivates non-default branch and records audit log', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-owner-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const res = await service.deactivateBranch(
+        B2_ID,
+        'm-tenant-1',
+        actor,
+        '127.0.0.1',
+        'corr-deact-success'
+      );
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.data.status, 'INACTIVE');
+      assert.strictEqual(mockPrisma.branches.find((b) => b.id === B2_ID)!.status, 'INACTIVE');
+      assert.ok(
+        mockPrisma.auditLogs.some((a) => a.action === 'BRANCH_DEACTIVATED' && a.entity_id === B2_ID)
+      );
+    });
+
+    it('Owner successfully deletes non-default branch and records audit log', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      const actor: ActorContext = {
+        userId: 'u-owner-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const res = await service.deleteBranch(
+        B2_ID,
+        'm-tenant-1',
+        actor,
+        '127.0.0.1',
+        'corr-delete-success'
+      );
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(
+        mockPrisma.branches.some((b) => b.id === B2_ID),
+        false
+      );
+      assert.ok(
+        mockPrisma.auditLogs.some((a) => a.action === 'BRANCH_DELETED' && a.entity_id === B2_ID)
+      );
+    });
+
     it('AC-ORG-02-11: Scoped user attempting to access out-of-scope branch receives 403 FORBIDDEN', async () => {
       const mockPrisma = createMockPrismaService();
       const service = new BranchesService(mockPrisma as any);
@@ -892,6 +966,142 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
         assert.strictEqual(db.branches[1].is_default, false);
         assert.strictEqual(db.branches.length, 4, 'no branch was created');
         assert.strictEqual(db.auditLogs.length, 0, 'denied mutation must not write an audit');
+      });
+    }
+  });
+
+  describe('Default branch atomic invariant on deactivate/delete', () => {
+    for (const operation of ['deactivate', 'delete'] as const) {
+      it(`${operation} takes tenant lock and re-reads default status inside transaction`, async () => {
+        const db = createMockPrismaService();
+        let locked = false;
+        let readInsideLock = false;
+        const originalTx = db.$transaction;
+        db.$transaction = async (cb: any) => {
+          return originalTx(async (tx: any) => {
+            tx.$queryRaw = async (sql: TemplateStringsArray, ...values: unknown[]) => {
+              assert.match(sql.join('?'), /merchants[\s\S]*FOR NO KEY UPDATE/);
+              assert.deepStrictEqual(values, ['m-tenant-1']);
+              locked = true;
+              return [{ id: 'm-tenant-1' }];
+            };
+            const findFirst = tx.branch.findFirst;
+            tx.branch.findFirst = async (args: any) => {
+              assert.ok(locked, 'branch must be re-read after acquiring the tenant lock');
+              readInsideLock = true;
+              return findFirst(args);
+            };
+            return cb(tx);
+          });
+        };
+
+        const service = new BranchesService(db as any);
+        const actor: ActorContext = {
+          userId: 'u-owner-1',
+          merchantId: 'm-tenant-1',
+          role: 'OWNER',
+        };
+
+        if (operation === 'deactivate') {
+          const res = await service.deactivateBranch(
+            B2_ID,
+            actor.merchantId,
+            actor,
+            '127.0.0.1',
+            'test-deact-lock'
+          );
+          assert.strictEqual(res.success, true);
+          assert.strictEqual(res.data.status, 'INACTIVE');
+        } else {
+          const res = await service.deleteBranch(
+            B2_ID,
+            actor.merchantId,
+            actor,
+            '127.0.0.1',
+            'test-del-lock'
+          );
+          assert.strictEqual(res.success, true);
+        }
+
+        assert.ok(locked, 'tenant lock must have been acquired');
+        assert.ok(readInsideLock, 'branch must have been queried inside locked transaction');
+      });
+
+      it(`${operation} rejects a target branch concurrently made default before the transaction lock`, async () => {
+        const db = createMockPrismaService();
+        // B2_ID is initially non-default (is_default = false).
+        assert.strictEqual(db.branches.find((b) => b.id === B2_ID)!.is_default, false);
+
+        const originalTx = db.$transaction;
+        let locked = false;
+        db.$transaction = async (cb: any) => {
+          // Simulate concurrent transaction committing B2_ID as default before this transaction's lock
+          const target = db.branches.find((b) => b.id === B2_ID)!;
+          const oldDefault = db.branches.find((b) => b.id === B1_ID)!;
+          oldDefault.is_default = false;
+          target.is_default = true;
+
+          return originalTx(async (tx: any) => {
+            tx.$queryRaw = async (sql: TemplateStringsArray, ...values: unknown[]) => {
+              assert.match(sql.join('?'), /merchants[\s\S]*FOR NO KEY UPDATE/);
+              locked = true;
+              return [{ id: 'm-tenant-1' }];
+            };
+            const findFirst = tx.branch.findFirst;
+            tx.branch.findFirst = async (args: any) => {
+              assert.ok(locked, 're-read must occur after acquiring the tenant lock');
+              return findFirst(args);
+            };
+            return cb(tx);
+          });
+        };
+
+        const service = new BranchesService(db as any);
+        const actor: ActorContext = {
+          userId: 'u-owner-1',
+          merchantId: 'm-tenant-1',
+          role: 'OWNER',
+        };
+
+        const expectedCode =
+          operation === 'deactivate'
+            ? 'CANNOT_DEACTIVATE_DEFAULT_BRANCH'
+            : 'CANNOT_DELETE_DEFAULT_BRANCH';
+
+        await assert.rejects(
+          () =>
+            operation === 'deactivate'
+              ? service.deactivateBranch(
+                  B2_ID,
+                  actor.merchantId,
+                  actor,
+                  '127.0.0.1',
+                  'concurrent-deact'
+                )
+              : service.deleteBranch(
+                  B2_ID,
+                  actor.merchantId,
+                  actor,
+                  '127.0.0.1',
+                  'concurrent-delete'
+                ),
+          (err: any) => err.getStatus() === 400 && err.code === expectedCode
+        );
+
+        assert.ok(locked, 'must have acquired lock');
+        const finalBranch = db.branches.find((b) => b.id === B2_ID)!;
+        assert.ok(finalBranch, 'branch must not be deleted');
+        assert.strictEqual(finalBranch.is_default, true, 'branch remains default');
+        assert.strictEqual(finalBranch.status, 'ACTIVE', 'default branch must remain active');
+        assert.strictEqual(
+          db.auditLogs.filter((a) =>
+            a.reason?.includes(
+              operation === 'deactivate' ? 'concurrent-deact' : 'concurrent-delete'
+            )
+          ).length,
+          0,
+          'rejected operation must not write audit log'
+        );
       });
     }
   });

@@ -104,7 +104,9 @@ function commitPatchId(repoCwd, commit) {
 /** A 7-part candidate key (harness::access::gateway::upstream::account::scope::model). */
 function candidateKeyParts(key) {
   const parts = String(key === undefined || key === null ? '' : key).split('::');
-  return parts.length === 7 && parts.every((p) => text(p)) ? parts : null;
+  // The gateway segment is empty when the route has no gateway (a pool or CLI
+  // harness talking to its own upstream); every other segment must name something.
+  return parts.length === 7 && parts.every((p, i) => i === 2 || text(p)) ? parts : null;
 }
 
 /**

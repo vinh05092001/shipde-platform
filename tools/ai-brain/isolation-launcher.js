@@ -221,10 +221,18 @@ function resolveInstalledHook(hostRoot, env, failure) {
 function controllerGit(options, requireHook) {
   const o = options || {};
   const failure = o.failure || 'NATIVE_WRITER_COMMIT_FAILED';
+  const decisions = require('./decisions');
   if (o.run) {
     return (args) => {
       const result = o.run(args);
-      if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
+      if (!result || result.status !== 0) {
+        const redact = decisions.createSecretRedactor(process.env);
+        const safeStderr = redact(String((result && result.stderr) || ''));
+        const safeStdout = redact(String((result && result.stdout) || ''));
+        throw new Error(
+          failure + ': ' + args[0] + ' stderr: ' + safeStderr + ' stdout: ' + safeStdout
+        );
+      }
       return String(result.stdout || '').trim();
     };
   }
@@ -266,13 +274,198 @@ function controllerGit(options, requireHook) {
       timeout: o.timeoutMs || DEFAULT_WORKER_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
     });
-    if (!result || result.status !== 0) throw new Error(failure + ': ' + args[0]);
+    if (!result || result.status !== 0) {
+      const redact = decisions.createSecretRedactor(env || process.env);
+      const safeStderr = redact(String((result && result.stderr) || ''));
+      const safeStdout = redact(String((result && result.stdout) || ''));
+      throw new Error(
+        failure + ': ' + args[0] + ' stderr: ' + safeStderr + ' stdout: ' + safeStdout
+      );
+    }
     return String(result.stdout || '').trim();
   };
 }
 
 function hookedControllerGit(options) {
   return controllerGit(options, true);
+}
+
+/** Materialise the dependency graph locally, including pnpm's virtual store.
+ * Linking a package directory to the cache would make Node resolve its peers
+ * and workspace dependencies there, bypassing worker-local @shipde links.
+ * Only symlinks are recreated; ordinary files are copied, never hard-linked.
+ */
+function retargetSharedDepsWorkspaceLinks(depsDir, workerRoot) {
+  const cacheRoot = path.resolve(depsDir);
+  const checkout = path.resolve(workerRoot);
+  const relativeInside = (root, target) => {
+    const rel = path.relative(root, target);
+    return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel) ? rel : null;
+  };
+  if (
+    relativeInside(cacheRoot, checkout) !== null ||
+    relativeInside(checkout, cacheRoot) !== null
+  ) {
+    throw new Error('WORKER_DEPS_INVALID: cache and checkout must be separate trees');
+  }
+
+  const mapTarget = (target) => {
+    const rel = relativeInside(cacheRoot, target);
+    if (rel !== null) return path.join(checkout, rel);
+    const staged = relativeInside(path.dirname(cacheRoot), target);
+    if (staged !== null) {
+      const [root, ...parts] = staged.split(path.sep);
+      if (root.startsWith(path.basename(cacheRoot) + '.staging-')) {
+        return path.join(checkout, ...parts);
+      }
+    }
+    // Older caches can contain absolute workspace junctions to the staging
+    // tree or host checkout. Resolve them against this worker's workspaces.
+    const workspace = target.match(/[\\/](packages[\\/][^\\/]+|apps[\\/][^\\/]+)([\\/].*)?$/i);
+    if (workspace) {
+      const local = path.join(checkout, workspace[1], workspace[2] || '');
+      if (!fs.existsSync(local)) throw new Error('WORKER_DEPS_WORKSPACE_MISSING');
+      return local;
+    }
+    throw new Error('WORKER_DEPS_LINK_OUTSIDE_CACHE');
+  };
+
+  const copyEntry = (src, dst) => {
+    const stat = fs.lstatSync(src);
+    if (stat.isSymbolicLink()) {
+      const target = path.resolve(path.dirname(src), fs.readlinkSync(src));
+      const localTarget = mapTarget(target);
+      let targetStat;
+      try {
+        targetStat = fs.statSync(src);
+      } catch (err) {
+        // pnpm can leave absolute workspace junctions to the now-renamed
+        // staging directory. The worker checkout supplies their target type.
+        if (err.code !== 'ENOENT') throw err;
+        try {
+          targetStat = fs.statSync(path.join(cacheRoot, path.relative(checkout, localTarget)));
+        } catch (cacheErr) {
+          if (cacheErr.code !== 'ENOENT') throw cacheErr;
+          targetStat = fs.statSync(localTarget);
+        }
+      }
+      const linkType = targetStat.isDirectory()
+        ? process.platform === 'win32'
+          ? 'junction'
+          : 'dir'
+        : 'file';
+      fs.symlinkSync(localTarget, dst, linkType);
+    } else if (stat.isDirectory()) {
+      fs.mkdirSync(dst, { recursive: true });
+      for (const name of fs.readdirSync(src)) copyEntry(path.join(src, name), path.join(dst, name));
+    } else if (stat.isFile()) {
+      fs.copyFileSync(src, dst);
+    } else {
+      throw new Error('WORKER_DEPS_ENTRY_UNSUPPORTED');
+    }
+  };
+
+  const candidates = ['node_modules'];
+  for (const ws of ['apps', 'packages']) {
+    const wsDir = path.join(cacheRoot, ws);
+    if (!fs.existsSync(wsDir)) continue;
+    for (const item of fs.readdirSync(wsDir, { withFileTypes: true })) {
+      if (item.isDirectory()) candidates.push(path.join(ws, item.name, 'node_modules'));
+    }
+  }
+  const excluded = [];
+  for (const rel of candidates) {
+    const src = path.join(cacheRoot, rel);
+    if (!fs.existsSync(src)) continue;
+    const dst = path.join(checkout, rel);
+    // Check parent directories before removing anything: a retained worker
+    // may still have a junction from the former shared-dependency layout.
+    let parent = checkout;
+    for (const part of path.dirname(rel).split(path.sep)) {
+      if (part === '.') continue;
+      parent = path.join(parent, part);
+      if (fs.existsSync(parent) && fs.lstatSync(parent).isSymbolicLink()) {
+        throw new Error('WORKER_DEPS_PARENT_LINK');
+      }
+    }
+    fs.rmSync(dst, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    // node_modules itself may be a link; materialise its directory contents
+    // rather than recreating a junction over a worker-owned directory.
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(src)) copyEntry(path.join(src, name), path.join(dst, name));
+    excluded.push((rel + '/').split(path.sep).join('/'));
+  }
+  return excluded;
+}
+
+/**
+ * True when the decision log shows a writer or repair turn for this work item:
+ * the evidence that a dirty retained root holds this item's own output.
+ * Fail closed if required parameters, config, or record fields are missing.
+ */
+function retainedRootHasOwnWriterRecord(opts, extra = {}) {
+  try {
+    const o = opts || {};
+    const decisions = require('./decisions');
+    if (!o.workItemId) return false;
+    const baseId = String(o.workItemId).replace(/-(repair-\d+|review)$/, '');
+    const targetRoot = extra.workerRoot || o.workerRoot;
+    const targetSha = extra.retainedHeadSha || extra.retainWorkerHead || o.retainWorkerHead;
+    const targetRun = extra.runId || o.runId;
+
+    if (!baseId || !targetRoot || !targetSha || !targetRun) {
+      return false;
+    }
+
+    let maxAgeMs;
+    try {
+      const cfg = require('./sources').getDispatchConfig(o.registry, o);
+      maxAgeMs = cfg && cfg.retainedRootMaxAgeMs;
+    } catch {}
+    if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) {
+      return false; // Fail closed on missing/invalid config
+    }
+
+    const now = Date.now();
+    return decisions.readDecisionsSafe({ dir: o.decisionDir || undefined }).some((rec) => {
+      if (!rec || !rec.workItemId) return false;
+      if (String(rec.workItemId).replace(/-(repair-\d+|review)$/, '') !== baseId) return false;
+      const validStage =
+        rec.stage === 'writer-launch-result' ||
+        (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha);
+      if (!validStage) return false;
+
+      const recRoot = rec.workerRoot || rec.root;
+      if (!recRoot) return false;
+      if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
+        return false;
+      }
+
+      const recSha = rec.sha || rec.headSha;
+      if (!recSha) return false;
+      if (String(recSha).toLowerCase() !== String(targetSha).toLowerCase()) {
+        return false;
+      }
+
+      if (!rec.runId || rec.runId !== targetRun) {
+        return false;
+      }
+
+      const recTime = rec.at || rec.timestamp || rec.time;
+      if (!recTime) return false;
+      const recTimeMs = new Date(recTime).getTime();
+      if (!Number.isFinite(recTimeMs)) return false;
+      const age = now - recTimeMs;
+      if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) {
+        return false;
+      }
+
+      return true;
+    });
+  } catch {
+    return false;
+  }
 }
 
 function commitNativeWriterChanges(options) {
@@ -664,6 +857,25 @@ if (\`$LASTEXITCODE -ne 0) {
 `
     : '';
 
+  const configuredNpmDir = options.workerNpmDir || options.npmDir || null;
+  const workerNpmSnippet = configuredNpmDir
+    ? `\`$workerNpm = "${configuredNpmDir.replace(/\\/g, '\\\\')}"
+if (Test-Path \`$workerNpm) {
+  \`$env:PATH = "\`$workerNpm;" + \`$env:PATH
+}`
+    : '';
+  const psiNpmSnippet = configuredNpmDir
+    ? `if (Test-Path "${configuredNpmDir.replace(/\\/g, '\\\\')}") {
+    $psi.EnvironmentVariables["PATH"] = "${configuredNpmDir.replace(/\\/g, '\\\\')};" + $psi.EnvironmentVariables["PATH"]
+}`
+    : '';
+  const configuredCodexHome = options.codexHome || `${workerRoot}\\.codex`;
+  const codexHomeSnippet = configuredCodexHome
+    ? `\`$workerCodexHome = "${configuredCodexHome.replace(/\\/g, '\\\\')}"
+if (-not (Test-Path \`$workerCodexHome)) { New-Item -ItemType Directory -Path \`$workerCodexHome | Out-Null }
+\`$env:CODEX_HOME = \`$workerCodexHome`
+    : '';
+
   const envAllowed = [
     'PATH',
     'SystemRoot',
@@ -678,6 +890,7 @@ if (\`$LASTEXITCODE -ne 0) {
     'CommonProgramFiles(x86)',
     'PUBLIC',
     'PATHEXT',
+    'pnpm_config_verify_deps_before_run',
   ];
   // DS-R04: add only the selected source's credential env to the allowlist
   if (options.adapterId === 'opencode-direct') {
@@ -699,6 +912,7 @@ $env:SHIPDE_ISOLATION_VERDICT = [Text.Encoding]::UTF8.GetString($verdictBytes)
 $markerPath = "${markerPath}"
 $completionNonce = "${completionNonce}"
 $usageLogPath = '${String(usageLogPath).replace(/'/g, "''")}'
+$workerRoot = "${workerRoot}"
 $env:HOME = "${workerRoot}"
 $env:USERPROFILE = "${workerRoot}"
 $wrapperPid = 0
@@ -715,6 +929,9 @@ $wrapperStartTime = Get-Date
 \`$env:TEMP = "${workerRoot}\\temp"
 \`$env:TMP = "${workerRoot}\\temp"
 if (-not \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX) { \`$env:OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = "4096" }
+\`$env:pnpm_config_verify_deps_before_run = "warn"
+${workerNpmSnippet}
+${codexHomeSnippet}
 if (-not (Test-Path "${workerRoot}\\temp")) { New-Item -ItemType Directory -Path "${workerRoot}\\temp" | Out-Null }
 if (-not (Test-Path "${workerRoot}\\.shipde")) { New-Item -ItemType Directory -Path "${workerRoot}\\.shipde" | Out-Null }
 Set-Location -Path "${workerRoot}"
@@ -751,6 +968,7 @@ foreach ($key in $allowed) {
         $psi.EnvironmentVariables[$key] = [Environment]::GetEnvironmentVariable($key)
     }
 }
+${psiNpmSnippet}
 ${rtkPathPrepend ? `$psi.EnvironmentVariables["PATH"] = "${rtkPathPrepend.replace(/\\/g, '\\\\')}" + ";" + $psi.EnvironmentVariables["PATH"]` : ''}
 
 $process = [System.Diagnostics.Process]::Start($psi)
@@ -849,10 +1067,11 @@ function Stop-WorkerTree {
 # it look like one.
 function Get-DescendantProcessIds {
     param([int]$AncestorPid, [datetime]$NotBefore)
-    $rows = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate -ErrorAction SilentlyContinue)
+    $rows = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate, Name -ErrorAction SilentlyContinue)
     $children = @{}
     $created = @{}
     foreach ($row in $rows) {
+        if ($row.Name -ieq "conhost.exe") { continue }
         $rowPid = [int]$row.ProcessId
         $created[$rowPid] = $row.CreationDate
         $rowParent = [int]$row.ParentProcessId
@@ -944,6 +1163,7 @@ function Update-SessionProgress {
             if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
             $is413 = $false
             $matchText = ""
+            $skipRaw413 = $false
             if ($trimmed.StartsWith('{') -and $trimmed.EndsWith('}')) {
                 try {
                     $ev = $trimmed | ConvertFrom-Json
@@ -957,6 +1177,9 @@ function Update-SessionProgress {
                         $err = $null
                         if ($ev.type -eq "error" -and $null -ne $ev.error) { $err = $ev.error }
                         elseif ($null -ne $ev.error) { $err = $ev.error }
+                        # A structured event without an error field is worker content (tool input/output,
+                        # model text); a branch name or log line inside it must not read as an HTTP 413.
+                        if ($null -eq $err -and $ev.type -ne "error") { $skipRaw413 = $true }
                         if ($null -ne $err) {
                             $code = $null
                             if ($null -ne $err.data -and $null -ne $err.data.statusCode) { $code = [int]$err.data.statusCode }
@@ -998,7 +1221,7 @@ function Update-SessionProgress {
                     }
                 } catch {}
             }
-            if (-not $is413) {
+            if (-not $is413 -and -not $skipRaw413) {
                 if ($trimmed -match '(?i)\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM') {
                     $is413 = $true
                     $matchText = $trimmed
@@ -1131,7 +1354,11 @@ if ($stderrTask.Wait(15000)) { $stderr = $stderrTask.Result } else { $stderr = "
 if (-not $script:requestTooLarge) {
     Update-SessionProgress
     if (-not $script:requestTooLarge) {
-        $combined = $stdout + [Environment]::NewLine + $stderr
+        # Structured JSON events (tool calls, model text) are worker content, not transport errors.
+        $combinedLines = @([regex]::Split(($stdout + [Environment]::NewLine + $stderr), '\\r?\\n') | Where-Object {
+            -not ($_.TrimStart().StartsWith('{"type":"') -and -not $_.TrimStart().StartsWith('{"type":"error"'))
+        })
+        $combined = $combinedLines -join [Environment]::NewLine
         if ($combined -match '(?i)\b413\b.*(?:request|payload|entity|too\s+large|tpm)|(?:request|payload|entity)\s+(?:is\s+)?too\s+large|\b413\s+Request|\b413\s+Payload|rate\s+limit.*tokens?\s+per\s+minute|\bTPM\b.*limit|limit.*on.*TPM') {
             $script:requestTooLarge = $true
             $script:requestTooLargeDetail = "worker output indicated 413 / request too large / TPM limit"
@@ -1936,6 +2163,158 @@ function getIsolatedLauncher() {
       }
 
       const { isTreeDirty } = require('./orchestrate');
+      // A repair turn that edited the retained root but left it uncommitted is
+      // this item's own output: keep it as a commit (the same restore commit the
+      // carry-over uses) so the next repair or gate runs on a clean HEAD. A dirty
+      // tree with no writer/repair record for this item stays dirty and fails
+      // closed below.
+      appendGitInfoExclude(workerRoot, [
+        '.shipde/',
+        'run-target.ps1',
+        'run-target.complete.json',
+        'temp/',
+        '.config/',
+        '.local/',
+        'Microsoft/',
+        'AppData/',
+        '.cache/',
+        '.upstream-tmp/',
+        '.env',
+        '.env.*',
+        '*.env',
+        '*credential*',
+        '*credentials*',
+        '*.secret*',
+        '*secrets*',
+        '*.pem',
+        '*.key',
+        'id_rsa*',
+        'id_ed25519*',
+      ]);
+      let commitRefusalReason = null;
+      if (
+        retainedHeadSha &&
+        retainedHeadSha.toLowerCase() === retainWorkerHead.toLowerCase() &&
+        opts.workItemId &&
+        isTreeDirty(workerRoot) &&
+        retainedRootHasOwnWriterRecord(opts, {
+          workerRoot,
+          retainedHeadSha,
+          retainWorkerHead,
+          runId: opts.runId,
+        })
+      ) {
+        try {
+          const { getTreeStatus } = require('./orchestrate');
+          const status = getTreeStatus(workerRoot, { untracked: 'all' });
+          const dirtyPaths = status.dirtyPaths || [];
+          const isSecretPath = (p) => {
+            const norm = String(p).replace(/\\/g, '/');
+            const base = path.basename(norm).toLowerCase();
+            return (
+              base.startsWith('.env') ||
+              base.endsWith('.env') ||
+              base.includes('credential') ||
+              base.includes('secret') ||
+              /\.(pem|key|pfx|p12|enc)$/i.test(base) ||
+              /^id_(rsa|ed25519|dsa)/i.test(base)
+            );
+          };
+          if (dirtyPaths.some(isSecretPath)) {
+            throw new Error('WORKER_COMMIT_REFUSED: dirty tree contains sensitive files');
+          }
+          let allowedPaths = opts.allowedPaths || (opts.item && opts.item.allowedPaths);
+          if (!allowedPaths && opts.workItemId) {
+            const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+            const itemPath = path.join(
+              workerRoot,
+              'docs',
+              'product-spec',
+              'work-items',
+              baseId + '.md'
+            );
+            if (fs.existsSync(itemPath)) {
+              try {
+                const text = fs.readFileSync(itemPath, 'utf8');
+                const intake = require('./intake');
+                allowedPaths = intake.deriveAllowedPaths(text);
+              } catch (err) {
+                throw new Error(
+                  'WORKER_COMMIT_REFUSED: failed to read allowed paths from ' +
+                    itemPath +
+                    ': ' +
+                    err.message
+                );
+              }
+            }
+          }
+          if (opts.isDocsOnly || opts.isPlanReview) {
+            const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+            allowedPaths = [
+              `docs/product-spec/work-items/${baseId}.md`,
+              'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv',
+            ];
+          }
+          if (dirtyPaths.length > 0) {
+            if (!Array.isArray(allowedPaths) || allowedPaths.length === 0) {
+              throw new Error('WORKER_COMMIT_REFUSED: allowed paths contract missing or empty');
+            }
+            const { matchGlobs } = require('./scope-gate');
+            const normAllowed = allowedPaths.map((p) =>
+              String(p).replace(/\\/g, '/').replace(/^\.\//, '')
+            );
+            for (const p of dirtyPaths) {
+              const normP = String(p).replace(/\\/g, '/').replace(/^\.\//, '');
+              const isAllowed = normAllowed.includes(normP) || matchGlobs(normAllowed, normP);
+              if (!isAllowed) {
+                throw new Error(`WORKER_COMMIT_REFUSED: dirty file ${normP} outside allowed paths`);
+              }
+            }
+          }
+          const checked = hookedControllerGit({
+            hostRoot: hostCwd,
+            workerRoot,
+            failure: 'WORKER_COMMIT_FAILED',
+          });
+          if (dirtyPaths.length > 0) {
+            checked(['add', '--', ...dirtyPaths]);
+            checked(['commit', '-m', 'Restore interrupted writer work']);
+          }
+          const committed = checked(['rev-parse', '--verify', 'HEAD^{commit}']);
+          if (/^[a-f0-9]{40}$/i.test(committed) && !isTreeDirty(workerRoot)) {
+            const requestedSha = retainWorkerHead;
+            retainedHeadSha = committed;
+            retainWorkerHead = committed;
+            const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
+            if (opts.checkpoint) {
+              const cli = require('./cli');
+              const onDisk = cli.readCheckpoint(opts.checkpoint);
+              const step = onDisk && onDisk.liveSteps && onDisk.liveSteps[baseId];
+              if (step) {
+                if (step.launch) step.launch.workerSha = committed;
+                if (step.repair) step.repair.sha = committed;
+                cli.writeJsonFile(opts.checkpoint, onDisk);
+              }
+            }
+            require('./decisions').recordDecision(
+              {
+                stage: 'adopted_repair_head',
+                workItemId: opts.workItemId,
+                branch: opts.branch || null,
+                worktree: workerRoot,
+                detail: 'committed uncommitted repair output',
+                requestedSha,
+                adoptedSha: committed,
+              },
+              { dir: opts.decisionDir || undefined }
+            );
+          }
+        } catch (err) {
+          commitRefusalReason = (err && err.message) || String(err);
+          // Fail closed: the dirty tree is reported as WORKER_HEAD_MISMATCH below.
+        }
+      }
+
       if (
         !retainedHeadSha ||
         retainedHeadSha.toLowerCase() !== retainWorkerHead.toLowerCase() ||
@@ -2076,11 +2455,17 @@ function getIsolatedLauncher() {
             isTreeDirty(workerRoot)
           ) {
             errMsg =
-              'WORKER_HEAD_MISMATCH: retained worker root HEAD (' + retainedHeadSha + ') is dirty';
+              'WORKER_HEAD_MISMATCH: retained worker root HEAD (' +
+              retainedHeadSha +
+              ') is dirty' +
+              (commitRefusalReason ? ': ' + commitRefusalReason : '');
           }
 
           const err = new Error(errMsg);
           err.code = 'WORKER_HEAD_MISMATCH';
+          if (commitRefusalReason) {
+            err.refusalReason = commitRefusalReason;
+          }
           throw err;
         }
       }
@@ -2338,15 +2723,15 @@ function getIsolatedLauncher() {
         // rename it into place. pnpm creates Windows junctions/hard links
         // without requiring the symlink privilege needed by recursive copies.
         if (!cacheReady()) {
-          const stagingDir =
+          const targetDir =
             depsDir + '.staging-' + process.pid + '-' + Math.random().toString(36).slice(2, 8);
-          fs.mkdirSync(stagingDir, { recursive: true });
+          fs.mkdirSync(targetDir, { recursive: true });
           let failedPath = 'pnpm-lock.yaml';
           try {
             for (const entry of hashEntries) {
               failedPath = entry.rel;
               const hostManifest = path.join(hostCwd, entry.rel);
-              const stagedManifest = path.join(stagingDir, entry.rel);
+              const stagedManifest = path.join(targetDir, entry.rel);
               if (!fs.existsSync(hostManifest)) {
                 const missing = new Error('host workspace manifest is missing');
                 missing.code = 'WORKER_DEPS_SOURCE_MISSING';
@@ -2358,7 +2743,7 @@ function getIsolatedLauncher() {
             const hostWorkspaceFile = path.join(hostCwd, 'pnpm-workspace.yaml');
             if (fs.existsSync(hostWorkspaceFile)) {
               failedPath = 'pnpm-workspace.yaml';
-              fs.copyFileSync(hostWorkspaceFile, path.join(stagingDir, 'pnpm-workspace.yaml'));
+              fs.copyFileSync(hostWorkspaceFile, path.join(targetDir, 'pnpm-workspace.yaml'));
             }
 
             failedPath = 'node_modules';
@@ -2367,7 +2752,7 @@ function getIsolatedLauncher() {
               if (offline) args.push('--offline');
               const pnpmExecutable = resolvePnpmCommand();
               const result = cp.spawnSync(pnpmExecutable, args, {
-                cwd: stagingDir,
+                cwd: targetDir,
                 encoding: 'utf8',
                 windowsHide: true,
                 timeout: 600000,
@@ -2392,79 +2777,37 @@ function getIsolatedLauncher() {
               runPnpmInstall(false);
             }
 
-            if (!fs.existsSync(path.join(stagingDir, 'node_modules'))) {
+            if (!fs.existsSync(path.join(targetDir, 'node_modules'))) {
               const error = new Error('pnpm install completed without node_modules');
               error.code = 'WORKER_DEPS_SOURCE_MISSING';
               throw error;
             }
-            fs.writeFileSync(path.join(stagingDir, '.shipde-deps-ready'), 'ready', 'utf8');
+            fs.writeFileSync(path.join(targetDir, '.shipde-deps-ready'), 'ready', 'utf8');
             try {
               if (fs.existsSync(depsDir)) {
                 fs.rmSync(depsDir, { recursive: true, force: true });
               }
-              fs.renameSync(stagingDir, depsDir);
+              fs.renameSync(targetDir, depsDir);
             } catch (renameErr) {
               // A concurrent launch finished first: its complete tree wins.
-              fs.rmSync(stagingDir, { recursive: true, force: true });
+              fs.rmSync(targetDir, { recursive: true, force: true });
               if (!cacheReady()) throw renameErr;
             }
           } catch (provisionError) {
             provisionError.relativePath = failedPath.split(path.sep).join('/');
-            fs.rmSync(stagingDir, { recursive: true, force: true });
+            fs.rmSync(targetDir, { recursive: true, force: true });
             throw provisionError;
           }
         }
 
-        // WD-R02 junctions: the worker root must point at the shared tree. An
-        // existing path that is not that junction (a real directory left
-        // behind) is replaced, never silently kept without a warning.
-        const setupJunction = (relPath) => {
-          const depsNm = path.join(depsDir, relPath);
-          const workerNm = path.join(workerRoot, relPath);
-          if (!fs.existsSync(depsNm)) return null;
-          let linked = false;
-          if (fs.existsSync(workerNm)) {
-            try {
-              const st = fs.lstatSync(workerNm);
-              const target = st.isSymbolicLink() ? fs.readlinkSync(workerNm) : null;
-              linked =
-                target !== null &&
-                path.resolve(target).toLowerCase() === path.resolve(depsNm).toLowerCase();
-            } catch {
-              linked = false;
-            }
-            if (!linked) {
-              fs.rmSync(workerNm, { recursive: true, force: true });
-            }
-          }
-          if (!linked) {
-            fs.mkdirSync(path.dirname(workerNm), { recursive: true });
-            fs.symlinkSync(depsNm, workerNm, 'junction');
-          }
-          return relPath + '/';
-        };
+        // Provision the entire graph into this checkout. No worker path may
+        // resolve through shared pnpm workspace links or mutable cache files.
+        const excluded = retargetSharedDepsWorkspaceLinks(depsDir, workerRoot);
+        if (excluded.length > 0) appendGitInfoExclude(workerRoot, excluded);
 
-        const excluded = [];
-        const rootExcl = setupJunction('node_modules');
-        if (rootExcl) excluded.push(rootExcl);
-
-        const workspaces = ['apps', 'packages'];
-        for (const ws of workspaces) {
-          const workerWsPath = path.join(workerRoot, ws);
-          if (fs.existsSync(workerWsPath)) {
-            const pkgs = fs.readdirSync(workerWsPath, { withFileTypes: true });
-            for (const pkg of pkgs) {
-              if (pkg.isDirectory()) {
-                const excl = setupJunction(path.join(ws, pkg.name, 'node_modules'));
-                if (excl) excluded.push(excl.replace(/\\/g, '/'));
-              }
-            }
-          }
-        }
-
-        if (excluded.length > 0) {
-          appendGitInfoExclude(workerRoot, excluded);
-        }
+        try {
+          fs.rmSync(path.join(workerRoot, '.local'), { recursive: true, force: true });
+        } catch {}
       } catch (err) {
         recordWorkerDepsUnavailable(opts, workerRoot, err);
       }
@@ -2600,7 +2943,17 @@ function getIsolatedLauncher() {
           endpoint.startsWith('http://127.0.0.1') ||
           endpoint.startsWith('http://localhost'));
 
-      if (!isHttpsOrLocalhost || (!credentialEnv && !isKeyless)) {
+      // OpenCode's built-in provider (Zen free tier) needs neither a key nor a
+      // provider block: opencode resolves `opencode/<model>` itself.
+      const builtin = isKeyless;
+      if (builtin) {
+        const builtinProvider = selectedSource.opencodeProvider;
+        if (pinnedModel && !pinnedModel.startsWith(builtinProvider + '/')) {
+          directModelRewrite = builtinProvider + '/' + pinnedModel;
+        }
+      }
+
+      if (!builtin && (!isHttpsOrLocalhost || !credentialEnv)) {
         const err = new Error(
           `OPENCODE_DIRECT_SOURCE_UNSUPPORTED: source '${sourceId}' does not have a valid https endpoint (or http://127.0.0.1 / localhost) and credential.env`
         );
@@ -2611,7 +2964,7 @@ function getIsolatedLauncher() {
       const isRouter = selectedSource.kind === 'router' || Boolean(selectedSource.modelPrefix);
 
       // DS-R04: verify that the credential is available in the host environment before spawning (direct sources only; router never checked)
-      if (!isRouter && !isKeyless && !process.env[credentialEnv]) {
+      if (!builtin && !isRouter && !process.env[credentialEnv]) {
         const err = new Error(
           `OPENCODE_DIRECT_CREDENTIAL_MISSING: environment variable ${credentialEnv} is not set`
         );
@@ -2620,7 +2973,7 @@ function getIsolatedLauncher() {
       }
 
       // Store for later use in buildWorkerLaunchScript
-      selectedCredentialEnv = credentialEnv || null;
+      selectedCredentialEnv = builtin ? null : credentialEnv;
 
       // DS-R03: for direct sources, provider id must be the source id, not the model name
       const providerId =
@@ -2697,12 +3050,18 @@ function getIsolatedLauncher() {
         delete providerOptions.apiKey;
       }
 
-      // Permission scoping: strictly worker root and report dir; no whole-machine wildcard
+      // Permission scoping: strictly worker root, shared deps and report dir; no whole-machine wildcard
       const normWorker = path.resolve(workerRoot).replace(/\\/g, '/');
       const workerPattern = normWorker.endsWith('/') ? normWorker + '**' : normWorker + '/**';
       const extDirPerms = {
         [workerPattern]: 'allow',
       };
+      const depsBase = path.join(path.dirname(workerRoot), 'deps');
+      if (fs.existsSync(depsBase)) {
+        const normDeps = path.resolve(depsBase).replace(/\\/g, '/');
+        const depsPattern = normDeps.endsWith('/') ? normDeps + '**' : normDeps + '/**';
+        extDirPerms[depsPattern] = 'allow';
+      }
       if (opts && opts.usageDir) {
         const normUsage = path.resolve(opts.usageDir).replace(/\\/g, '/');
         const usagePattern = normUsage.endsWith('/') ? normUsage + '**' : normUsage + '/**';
@@ -2732,6 +3091,28 @@ function getIsolatedLauncher() {
       });
       fs.writeFileSync(configPath, configData, 'utf8');
       appendGitInfoExclude(workerRoot, ['opencode.json']);
+      const hostRg = path.join(os.homedir(), '.cache', 'opencode', 'bin', 'rg.exe');
+      if (fs.existsSync(hostRg)) {
+        try {
+          const workerRgDir = path.join(workerRoot, '.cache', 'opencode', 'bin');
+          fs.mkdirSync(workerRgDir, { recursive: true });
+          const workerRg = path.join(workerRgDir, 'rg.exe');
+          if (!fs.existsSync(workerRg)) fs.copyFileSync(hostRg, workerRg);
+          appendGitInfoExclude(workerRoot, ['.cache/']);
+        } catch {}
+      }
+      if (builtin) {
+        // opencode resolves its built-in provider from the public models.dev catalogue
+        // cached at ~/.cache/opencode/models.json; without it (the worker's USERPROFILE is
+        // the worker root and cannot fetch it) every Zen call is "Unexpected server error".
+        const hostCatalogue = path.join(os.homedir(), '.cache', 'opencode', 'models.json');
+        const workerCache = path.join(workerRoot, '.cache', 'opencode');
+        if (fs.existsSync(hostCatalogue)) {
+          fs.mkdirSync(workerCache, { recursive: true });
+          fs.copyFileSync(hostCatalogue, path.join(workerCache, 'models.json'));
+          appendGitInfoExclude(workerRoot, ['.cache/']);
+        }
+      }
     }
 
     let exerciseResult = null;
@@ -2934,6 +3315,9 @@ function getIsolatedLauncher() {
       '.config/',
       '.local/',
       'Microsoft/',
+      'AppData/',
+      '.cache/',
+      '.upstream-tmp/',
     ]);
     const payloadArgsPath = path.join(payloadDir, 'launch-args-' + completionNonce + '.json');
 
@@ -2997,10 +3381,7 @@ function getIsolatedLauncher() {
       usageFile: opts.usageFile || null,
     });
 
-    const tempScript = path.join(
-      process.env.TEMP || 'C:\\temp',
-      'isolated-launch-' + Date.now() + '.ps1'
-    );
+    const tempScript = path.join(os.tmpdir(), 'isolated-launch-' + Date.now() + '.ps1');
     fs.writeFileSync(tempScript, scriptContent, 'utf8');
 
     const hostRes = cp.spawnSync(
@@ -3138,6 +3519,26 @@ function getIsolatedLauncher() {
  * timed-out or unproven result is a failed launch (exitCode -1), and only a
  * completed job carrying THIS launch's nonce returns the job's own exit code.
  */
+function opencodeErrorFromStdout(stdout) {
+  const found = [];
+  for (const line of String(stdout || '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text.startsWith('{')) continue;
+    let ev;
+    try {
+      ev = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (!ev || ev.type !== 'error' || !ev.error) continue;
+    const data = ev.error.data || {};
+    const msg = data.message || ev.error.message || ev.error.name || 'error';
+    const status = data.statusCode ? ' (HTTP ' + data.statusCode + ')' : '';
+    found.push('OPENCODE_ERROR: ' + String(msg).slice(0, 500) + status);
+  }
+  return found.slice(-3).join('\n');
+}
+
 function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   const hostFailure = (reason) => ({
     exitCode: -1,
@@ -3194,7 +3595,15 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   return {
     exitCode: resJson.localFailure ? 1 : jobExit,
     stdout: String(resJson.stdout || ''),
-    stderr: [String(resJson.localFailure || ''), String(resJson.stderr || '')]
+    stderr: [
+      String(resJson.localFailure || ''),
+      String(resJson.stderr || ''),
+      // opencode reports API errors as JSON events on stdout and leaves stderr
+      // empty; keep the real message so a failed launch is never only a budget note.
+      (resJson.localFailure ? 1 : jobExit) !== 0 && !String(resJson.stderr || '').trim()
+        ? opencodeErrorFromStdout(resJson.stdout)
+        : '',
+    ]
       .filter(Boolean)
       .join('\n'),
     localFailure: resJson.localFailure ? String(resJson.localFailure) : null,
@@ -3212,6 +3621,8 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
 }
 
 module.exports = {
+  retainedRootHasOwnWriterRecord,
+  retargetSharedDepsWorkspaceLinks,
   provisionedHeadMatchesBase,
   commitNativeWriterChanges,
   commitWorkerMetadata,
@@ -3237,4 +3648,6 @@ module.exports = {
   DEFAULT_WORKER_TIMEOUT_MS,
   enforceTokenBudget,
   ensureGoalRegistrationInWorker,
+  controllerGit,
+  hookedControllerGit,
 };

@@ -60,7 +60,11 @@ function validate(text, schema) {
   const eventText = opencodeEventText(text);
   if (eventText !== null) text = eventText;
   try {
-    value = JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
+    value = JSON.parse(
+      String(text || '')
+        .replace(/^\uFEFF/, '')
+        .trim()
+    );
   } catch {
     return { ok: false, reason: 'WRITER_RESULT_INVALID_JSON' };
   }
@@ -91,9 +95,13 @@ function poolResultText(text) {
   // Antigravity CLI wraps the final answer in response; the pool result.json
   // is only process telemetry (state, exitCode, startedAt, finishedAt).
   try {
-    const envelope = JSON.parse(String(text || '').replace(/^\uFEFF/, ''));
+    const envelope = JSON.parse(
+      String(text || '')
+        .replace(/^\uFEFF/, '')
+        .trim()
+    );
     if (typeof envelope.response === 'string') {
-      return envelope.response;
+      return envelope.response.trim();
     }
   } catch {}
   return text;

@@ -3,6 +3,11 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { GlobalSearchModal, GlobalSearchContent } from '@/components/GlobalSearchModal';
 import SearchPage, { SearchPageContent } from '@/app/search/page';
+import { ShipmentListTab } from '@/components/ShipmentListTab';
+import { ExceptionWorkboxTab } from '@/components/ExceptionWorkboxTab';
+import { ReconciliationTab } from '@/components/ReconciliationTab';
+import { ClaimCasesTab } from '@/components/ClaimCasesTab';
+import { handleSearchResultActivation } from '@/app/page';
 import type { SearchResultItem } from '@shipde/contracts';
 
 /**
@@ -434,8 +439,677 @@ async function runGlobalSearchTestSuite() {
   );
   console.log('   ✅ Entity category filter tabs verified');
 
+  // 13. RESULT ACTIVATION & RECORD SELECTION (Finding 2 / Real Outcome)
+  console.log('🧪 13. Testing RESULT ACTIVATION & RECORD SELECTION (Finding 2)...');
+
+  // 13a. ORDER activation: selects real order in ShipmentListTab; rejects fabricated records on missing
+  const realOrderTabHtml = renderToStaticMarkup(
+    React.createElement(ShipmentListTab, {
+      onOpenTrackingModal: () => {},
+      selectedOrderId: 'shp_001',
+      selectedOrderCode: 'ORD_ANAN_1042',
+    })
+  );
+  assert.ok(
+    realOrderTabHtml.includes('data-selected="true"'),
+    'ShipmentListTab must flag real activated order with data-selected="true"'
+  );
+  assert.ok(
+    realOrderTabHtml.includes('data-testid="selected-order-ORD_ANAN_1042"'),
+    'ShipmentListTab must render data-testid for the real selected order'
+  );
+  assert.ok(
+    realOrderTabHtml.includes('Nguyễn Văn Hùng'),
+    'ShipmentListTab must render actual recipient name from real record'
+  );
+  assert.ok(
+    !realOrderTabHtml.includes('ord-shim-'),
+    'ShipmentListTab must NEVER fabricate dummy order IDs'
+  );
+  assert.ok(
+    !realOrderTabHtml.includes('data-testid="activated-order-not-found"'),
+    'ShipmentListTab must not show not-found alert for existing order'
+  );
+
+  // Missing order: must show real not-found state with recovery, never invent DELIVERED record
+  const missingOrderTabHtml = renderToStaticMarkup(
+    React.createElement(ShipmentListTab, {
+      onOpenTrackingModal: () => {},
+      selectedOrderId: 'ord-missing-9999',
+      selectedOrderCode: 'ORD-NONEXISTENT',
+    })
+  );
+  assert.ok(
+    missingOrderTabHtml.includes('data-testid="activated-order-not-found"'),
+    'ShipmentListTab must render activated-order-not-found when order does not exist'
+  );
+  assert.ok(
+    missingOrderTabHtml.includes('ORD-NONEXISTENT'),
+    'ShipmentListTab not-found banner must display missing order code'
+  );
+  assert.ok(
+    missingOrderTabHtml.includes('Quay lại danh sách'),
+    'ShipmentListTab not-found banner must offer recovery action'
+  );
+  assert.ok(
+    missingOrderTabHtml.includes('Thử lại'),
+    'ShipmentListTab not-found banner must offer retry action'
+  );
+  assert.ok(
+    !missingOrderTabHtml.includes('data-selected="true"'),
+    'ShipmentListTab must never fabricate a selected row for missing order'
+  );
+
+  // Recovery: clearing selected order restores authorized shipment list
+  const recoveredOrderTabHtml = renderToStaticMarkup(
+    React.createElement(ShipmentListTab, {
+      onOpenTrackingModal: () => {},
+      selectedOrderId: null,
+      selectedOrderCode: null,
+    })
+  );
+  assert.ok(
+    !recoveredOrderTabHtml.includes('data-testid="activated-order-not-found"'),
+    'ShipmentListTab must not show not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredOrderTabHtml.includes('ORD_ANAN_1042'),
+    'ShipmentListTab must restore authorized shipment list after recovery'
+  );
+  console.log('   ✅ Order activation & missing-order recovery verified');
+
+  // 13b. EXCEPTION CASE activation: renders real case in drawer; rejects fabricated records on missing
+  const realExceptionTabHtml = renderToStaticMarkup(
+    React.createElement(ExceptionWorkboxTab, {
+      selectedCaseId: 'exc_001',
+    })
+  );
+  assert.ok(
+    realExceptionTabHtml.includes('data-testid="selected-exception-drawer"'),
+    'ExceptionWorkboxTab must render action drawer for real activated case'
+  );
+  assert.ok(
+    realExceptionTabHtml.includes('data-selected-case-id="exc_001"'),
+    'ExceptionWorkboxTab drawer must bind to real case ID'
+  );
+  assert.ok(
+    realExceptionTabHtml.includes('GHN88291042'),
+    'ExceptionWorkboxTab drawer must display real tracking code'
+  );
+  assert.ok(
+    !realExceptionTabHtml.includes('data-testid="activated-case-not-found"'),
+    'ExceptionWorkboxTab must not show not-found alert for existing case'
+  );
+
+  // Missing exception: must show real not-found state with recovery, never invent exception details
+  const missingExceptionTabHtml = renderToStaticMarkup(
+    React.createElement(ExceptionWorkboxTab, {
+      selectedCaseId: 'case-missing-8888',
+    })
+  );
+  assert.ok(
+    missingExceptionTabHtml.includes('data-testid="activated-case-not-found"'),
+    'ExceptionWorkboxTab must render activated-case-not-found when case does not exist'
+  );
+  assert.ok(
+    missingExceptionTabHtml.includes('case-missing-8888'),
+    'ExceptionWorkboxTab not-found banner must display missing case ID'
+  );
+  assert.ok(
+    missingExceptionTabHtml.includes('Quay lại danh sách sự cố'),
+    'ExceptionWorkboxTab not-found banner must offer recovery to list'
+  );
+  assert.ok(
+    missingExceptionTabHtml.includes('Xem sự cố ưu tiên'),
+    'ExceptionWorkboxTab not-found drawer must offer recovery to priority case'
+  );
+  assert.ok(
+    !missingExceptionTabHtml.includes('data-selected-case-id="case-missing-8888"'),
+    'ExceptionWorkboxTab must not bind drawer to missing case ID'
+  );
+  assert.ok(
+    !missingExceptionTabHtml.includes('TRA-CUU-TIM-KIEM'),
+    'ExceptionWorkboxTab must never invent fabricated case records'
+  );
+
+  // Recovery: clearing selected case restores operational drawer for priority case
+  const recoveredExceptionTabHtml = renderToStaticMarkup(
+    React.createElement(ExceptionWorkboxTab, {
+      selectedCaseId: null,
+    })
+  );
+  assert.ok(
+    !recoveredExceptionTabHtml.includes('data-testid="activated-case-not-found"'),
+    'ExceptionWorkboxTab must not show not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredExceptionTabHtml.includes('data-testid="selected-exception-drawer"'),
+    'ExceptionWorkboxTab must restore operational drawer for priority case after recovery'
+  );
+  console.log('   ✅ Exception case activation & missing-case recovery verified');
+
+  // 13c. CLAIM CASE activation: routes to claims tab and selects real claim; rejects fabricated records on missing
+  const realClaimTabHtml = renderToStaticMarkup(
+    React.createElement(ClaimCasesTab, {
+      claims: [
+        {
+          id: 'clm_001',
+          tracking_code: 'GHTK77129002',
+          claim_type: 'DAMAGED',
+          requested_amount: 480000,
+          accepted_amount: 0,
+          recovered_amount: 0,
+          status: 'SUBMITTED',
+          deadline_at: '19/08/2026 08:35',
+          hours_left: 48,
+          carrier_ticket: 'TKT_GHTK_99182',
+          evidence_count: 3,
+        },
+      ],
+      onUpdateClaim: () => {},
+      selectedClaimId: 'clm_001',
+      selectedClaimCode: 'GHTK77129002',
+    })
+  );
+  assert.ok(
+    realClaimTabHtml.includes('data-selected="true"'),
+    'ClaimCasesTab must flag the real activated claim with data-selected="true"'
+  );
+  assert.ok(
+    realClaimTabHtml.includes('data-testid="selected-claim-clm_001"'),
+    'ClaimCasesTab must render data-testid for the real selected claim'
+  );
+  assert.ok(
+    realClaimTabHtml.includes('GHTK77129002'),
+    'ClaimCasesTab must display actual tracking code'
+  );
+  assert.ok(
+    !realClaimTabHtml.includes('data-testid="activated-claim-not-found"'),
+    'ClaimCasesTab must not show not-found alert for existing claim'
+  );
+
+  // Missing claim: must show real not-found state with recovery, never invent 150,000 đ claim
+  const missingClaimTabHtml = renderToStaticMarkup(
+    React.createElement(ClaimCasesTab, {
+      claims: [],
+      onUpdateClaim: () => {},
+      selectedClaimId: 'clm-missing-4444',
+      selectedClaimCode: 'CLM-NONEXISTENT',
+    })
+  );
+  assert.ok(
+    missingClaimTabHtml.includes('data-testid="activated-claim-not-found"'),
+    'ClaimCasesTab must render activated-claim-not-found when claim does not exist'
+  );
+  assert.ok(
+    missingClaimTabHtml.includes('CLM-NONEXISTENT'),
+    'ClaimCasesTab not-found banner must display missing claim code'
+  );
+  assert.ok(
+    missingClaimTabHtml.includes('Quay lại danh sách'),
+    'ClaimCasesTab not-found banner must offer recovery action'
+  );
+  assert.ok(
+    !missingClaimTabHtml.includes('data-selected="true"'),
+    'ClaimCasesTab must never fabricate a selected row for missing claim'
+  );
+  assert.ok(
+    !missingClaimTabHtml.includes('CLM-SEARCH-RECORD'),
+    'ClaimCasesTab must never invent fabricated claim records'
+  );
+
+  // Recovery: clearing selected claim restores authorized claim records
+  const recoveredClaimTabHtml = renderToStaticMarkup(
+    React.createElement(ClaimCasesTab, {
+      claims: [
+        {
+          id: 'clm_001',
+          tracking_code: 'GHTK77129002',
+          claim_type: 'DAMAGED',
+          requested_amount: 480000,
+          accepted_amount: 0,
+          recovered_amount: 0,
+          status: 'SUBMITTED',
+          deadline_at: '19/08/2026 08:35',
+          hours_left: 48,
+          carrier_ticket: 'TKT_GHTK_99182',
+          evidence_count: 3,
+        },
+      ],
+      onUpdateClaim: () => {},
+      selectedClaimId: null,
+      selectedClaimCode: null,
+    })
+  );
+  assert.ok(
+    !recoveredClaimTabHtml.includes('data-testid="activated-claim-not-found"'),
+    'ClaimCasesTab must not show not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredClaimTabHtml.includes('GHTK77129002'),
+    'ClaimCasesTab must restore authorized claim records after recovery'
+  );
+  console.log('   ✅ Claim case activation & missing-claim recovery verified');
+
+  // 13d. BATCH activation: selects real batch and renders actual batch details; rejects decoration on missing
+  const realBatchTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: 'stmt-5555-6666',
+    })
+  );
+  assert.ok(
+    realBatchTabHtml.includes('data-selected-batch="true"'),
+    'ReconciliationTab must flag statement card with data-selected-batch="true"'
+  );
+  assert.ok(
+    realBatchTabHtml.includes('data-testid="selected-batch-stmt-5555-6666"'),
+    'ReconciliationTab must render data-testid for the selected batch'
+  );
+  assert.ok(
+    realBatchTabHtml.includes('Kỳ Đối Soát Tháng 08/2026 (GHN)'),
+    'ReconciliationTab must display real batch period details'
+  );
+  assert.ok(
+    realBatchTabHtml.includes('GHN Express'),
+    'ReconciliationTab must display real carrier for selected batch'
+  );
+  assert.ok(
+    !realBatchTabHtml.includes('data-testid="activated-batch-not-found"'),
+    'ReconciliationTab must not show not-found alert for existing batch'
+  );
+
+  // Missing batch: must show real not-found state with recovery, never decorate summary card
+  const missingBatchTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: 'stmt-missing-9999',
+    })
+  );
+  assert.ok(
+    missingBatchTabHtml.includes('data-testid="activated-batch-not-found"'),
+    'ReconciliationTab must render activated-batch-not-found when batch does not exist'
+  );
+  assert.ok(
+    missingBatchTabHtml.includes('stmt-missing-9999'),
+    'ReconciliationTab not-found banner must display missing batch ID'
+  );
+  assert.ok(
+    missingBatchTabHtml.includes('Quay lại kỳ gần nhất'),
+    'ReconciliationTab not-found banner must offer recovery action to return to latest period'
+  );
+  assert.ok(
+    !missingBatchTabHtml.includes('data-selected-batch="true"'),
+    'ReconciliationTab must not decorate card for missing batch'
+  );
+
+  // Recovery: clearing selected batch restores statement summary card
+  const recoveredBatchTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: null,
+    })
+  );
+  assert.ok(
+    !recoveredBatchTabHtml.includes('data-testid="activated-batch-not-found"'),
+    'ReconciliationTab must not show batch not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredBatchTabHtml.includes('Đối Soát COD'),
+    'ReconciliationTab must restore statement summary card after recovery'
+  );
+  console.log('   ✅ Batch activation & missing-batch recovery verified');
+
+  // 13e. TRANSACTION activation: selects real discrepancy in ReconciliationTab; rejects fabricated on missing
+  const realTxTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedDiscrepancyId: 'disc_001',
+    })
+  );
+  assert.ok(
+    realTxTabHtml.includes('data-selected="true"'),
+    'ReconciliationTab must flag real activated discrepancy with data-selected="true"'
+  );
+  assert.ok(
+    realTxTabHtml.includes('data-testid="selected-discrepancy-disc_001"'),
+    'ReconciliationTab must render data-testid for real selected discrepancy'
+  );
+  assert.ok(
+    realTxTabHtml.includes('GHN88291042'),
+    'ReconciliationTab must display real tracking code for selected discrepancy'
+  );
+  assert.ok(
+    !realTxTabHtml.includes('data-testid="activated-discrepancy-not-found"'),
+    'ReconciliationTab must not show not-found alert for existing discrepancy'
+  );
+
+  // Missing transaction: must show real not-found state, never invent 15,000 đ discrepancy
+  const missingTxTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedDiscrepancyId: 'disc-missing-7777',
+    })
+  );
+  assert.ok(
+    missingTxTabHtml.includes('data-testid="activated-discrepancy-not-found"'),
+    'ReconciliationTab must render activated-discrepancy-not-found when discrepancy does not exist'
+  );
+  assert.ok(
+    missingTxTabHtml.includes('disc-missing-7777'),
+    'ReconciliationTab not-found banner must display missing discrepancy ID'
+  );
+  assert.ok(
+    missingTxTabHtml.includes('Quay lại danh sách sai lệch'),
+    'ReconciliationTab not-found banner must offer discrepancy recovery action'
+  );
+  assert.ok(
+    !missingTxTabHtml.includes('data-selected="true"'),
+    'ReconciliationTab must never flag missing discrepancy as selected'
+  );
+  assert.ok(
+    !missingTxTabHtml.includes('ORD-DISC-01'),
+    'ReconciliationTab must never invent dummy discrepancy records'
+  );
+
+  // Recovery: clearing selected discrepancy restores all open discrepancies
+  const recoveredTxTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedDiscrepancyId: null,
+    })
+  );
+  assert.ok(
+    !recoveredTxTabHtml.includes('data-testid="activated-discrepancy-not-found"'),
+    'ReconciliationTab must not show discrepancy not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredTxTabHtml.includes('Danh Sách Khoản Lệch Cần Xử Lý'),
+    'ReconciliationTab must restore discrepancies list after recovery'
+  );
+  console.log('   ✅ Transaction activation & missing-discrepancy recovery verified');
+
+  // 13f. Production activation handler (handleSearchResultActivation from page.tsx):
+  // Proves genuine routing, state updates, history pushes, consecutive activations, and ZERO fake toasts
+  const activationState = {
+    activeTab: 'dashboard',
+    selectedGlobalTracking: null as string | null,
+    selectedOrderId: null as string | null,
+    selectedOrderCode: null as string | null,
+    selectedBatchId: null as string | null,
+    selectedCaseId: null as string | null,
+    selectedClaimId: null as string | null,
+    selectedClaimCode: null as string | null,
+    selectedDiscrepancyId: null as string | null,
+    pushedUrls: [] as string[],
+    spiedToasts: [] as string[],
+  };
+
+  const actions = {
+    setActiveTab: (tab: string) => {
+      activationState.activeTab = tab;
+    },
+    setSelectedGlobalTracking: (code: string | null) => {
+      activationState.selectedGlobalTracking = code;
+    },
+    setSelectedOrderId: (id: string | null) => {
+      activationState.selectedOrderId = id;
+    },
+    setSelectedOrderCode: (code: string | null) => {
+      activationState.selectedOrderCode = code;
+    },
+    setSelectedBatchId: (id: string | null) => {
+      activationState.selectedBatchId = id;
+    },
+    setSelectedCaseId: (id: string | null) => {
+      activationState.selectedCaseId = id;
+    },
+    setSelectedClaimId: (id: string | null) => {
+      activationState.selectedClaimId = id;
+    },
+    setSelectedClaimCode: (code: string | null) => {
+      activationState.selectedClaimCode = code;
+    },
+    setSelectedDiscrepancyId: (id: string | null) => {
+      activationState.selectedDiscrepancyId = id;
+    },
+    pushUrl: (url: string) => {
+      activationState.pushedUrls.push(url);
+    },
+    showToast: (msg: string) => {
+      activationState.spiedToasts.push(msg);
+    },
+  };
+
+  // 1. WAYBILL activation: opens tracking modal, pushes URL
+  const waybillItem: SearchResultItem = {
+    id: 'shp_001',
+    type: 'WAYBILL',
+    title: 'Vận đơn GHN88291042',
+    subtitle: 'Đơn: ORD_ANAN_1042',
+    code: 'GHN88291042',
+    status: 'DELIVERED',
+    url: '/shipments/shp_001',
+  };
+  handleSearchResultActivation(waybillItem, actions);
+  assert.strictEqual(
+    activationState.selectedGlobalTracking,
+    'GHN88291042',
+    'Waybill item code must be set for tracking modal'
+  );
+
+  // 2. ORDER activation: switches to shipments, sets order ID and code
+  const orderItem: SearchResultItem = {
+    id: 'shp_001',
+    type: 'ORDER',
+    title: 'Đơn hàng ORD_ANAN_1042',
+    subtitle: 'Khách hàng: Nguyễn Văn Hùng',
+    code: 'ORD_ANAN_1042',
+    status: 'DELIVERED',
+    url: '/orders/shp_001',
+  };
+  handleSearchResultActivation(orderItem, actions);
+  assert.strictEqual(
+    activationState.activeTab,
+    'shipments',
+    'Order activation must switch activeTab to shipments'
+  );
+  assert.strictEqual(activationState.selectedOrderId, 'shp_001', 'Order item ID must be selected');
+  assert.strictEqual(
+    activationState.selectedOrderCode,
+    'ORD_ANAN_1042',
+    'Order code must be selected'
+  );
+
+  // 3. CLAIM CASE activation: must route to claims (NOT exceptions)
+  const claimItem: SearchResultItem = {
+    id: 'clm_001',
+    type: 'CASE',
+    title: 'Hồ sơ bồi thường hư hỏng (DAMAGED)',
+    subtitle: 'Vận đơn: GHTK77129002',
+    code: 'GHTK77129002',
+    status: 'SUBMITTED',
+    url: '/claims/clm_001',
+    metadata: { claim_type: 'DAMAGED' },
+  };
+  handleSearchResultActivation(claimItem, actions);
+  assert.strictEqual(
+    activationState.activeTab,
+    'claims',
+    'Claim case activation must route to claims tab'
+  );
+  assert.strictEqual(activationState.selectedClaimId, 'clm_001', 'Claim ID must be selected');
+  assert.strictEqual(
+    activationState.selectedClaimCode,
+    'GHTK77129002',
+    'Claim code must be selected'
+  );
+
+  // 4. EXCEPTION CASE activation: must route to exceptions (NOT claims)
+  const exceptionItem: SearchResultItem = {
+    id: 'exc_001',
+    type: 'CASE',
+    title: 'Sự cố giao không thành công',
+    subtitle: 'Vận đơn: GHN88291042',
+    code: 'GHN88291042',
+    status: 'OPEN',
+    url: '/exceptions/exc_001',
+  };
+  handleSearchResultActivation(exceptionItem, actions);
+  assert.strictEqual(
+    activationState.activeTab,
+    'exceptions',
+    'Exception case activation must route to exceptions tab'
+  );
+  assert.strictEqual(
+    activationState.selectedCaseId,
+    'exc_001',
+    'Exception case ID must be selected'
+  );
+
+  // 5. BATCH activation: must route to reconciliation and select batch
+  const batchItem: SearchResultItem = {
+    id: 'stmt-5555-6666',
+    type: 'BATCH',
+    title: 'Bảng kê đối soát Tháng 08/2026',
+    subtitle: 'Kỳ: 2026-08-01 - 2026-08-31',
+    code: 'stmt-5555-6666',
+    status: 'OPEN',
+    url: '/reconciliation/statements/stmt-5555-6666',
+  };
+  handleSearchResultActivation(batchItem, actions);
+  assert.strictEqual(
+    activationState.activeTab,
+    'reconciliation',
+    'Batch activation must route to reconciliation tab'
+  );
+  assert.strictEqual(
+    activationState.selectedBatchId,
+    'stmt-5555-6666',
+    'Batch ID must be selected'
+  );
+  assert.strictEqual(
+    activationState.selectedDiscrepancyId,
+    null,
+    'Selecting batch must clear prior discrepancy selection'
+  );
+
+  // 6. TRANSACTION activation: selects discrepancy on reconciliation while clearing batch focus
+  const txItem: SearchResultItem = {
+    id: 'disc_001',
+    type: 'TRANSACTION',
+    title: 'Lệch cân (D1_WEIGHT)',
+    subtitle: 'Vận đơn: GHN88291042 | Chênh lệch: 7,000 ₫',
+    code: 'disc_001',
+    status: 'OPEN',
+    url: '/reconciliation/discrepancies/disc_001',
+  };
+  handleSearchResultActivation(txItem, actions);
+  assert.strictEqual(
+    activationState.activeTab,
+    'reconciliation',
+    'Transaction activation must route to reconciliation tab'
+  );
+  assert.strictEqual(
+    activationState.selectedDiscrepancyId,
+    'disc_001',
+    'Transaction discrepancy ID must be selected'
+  );
+  assert.strictEqual(
+    activationState.selectedBatchId,
+    null,
+    'Selecting transaction must clear prior batch selection'
+  );
+
+  // 7. CONSECUTIVE ACTIVATION TEST (Batch -> Transaction -> Batch):
+  // Proves mounted reconciliation tab reacts cleanly without lingering previous record
+  handleSearchResultActivation(batchItem, actions);
+  assert.strictEqual(
+    activationState.selectedBatchId,
+    'stmt-5555-6666',
+    'Consecutive: batch is selected again'
+  );
+  assert.strictEqual(
+    activationState.selectedDiscrepancyId,
+    null,
+    'Consecutive: discrepancy ID is cleanly cleared'
+  );
+
+  const consecutiveBatchHtml1 = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: activationState.selectedBatchId,
+      selectedDiscrepancyId: activationState.selectedDiscrepancyId,
+    })
+  );
+  assert.ok(
+    consecutiveBatchHtml1.includes('data-selected-batch="true"'),
+    'Consecutive: batch 1 is decorated on mounted ReconciliationTab'
+  );
+  assert.ok(
+    !consecutiveBatchHtml1.includes('data-selected="true"'),
+    'Consecutive: discrepancy is not highlighted during batch activation'
+  );
+
+  handleSearchResultActivation(txItem, actions);
+  assert.strictEqual(
+    activationState.selectedDiscrepancyId,
+    'disc_001',
+    'Consecutive: discrepancy is selected again'
+  );
+  assert.strictEqual(
+    activationState.selectedBatchId,
+    null,
+    'Consecutive: batch ID is cleanly cleared'
+  );
+
+  const consecutiveTxHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: activationState.selectedBatchId,
+      selectedDiscrepancyId: activationState.selectedDiscrepancyId,
+    })
+  );
+  assert.ok(
+    !consecutiveTxHtml.includes('data-selected-batch="true"'),
+    'Consecutive: batch is no longer decorated during transaction activation'
+  );
+  assert.ok(
+    consecutiveTxHtml.includes('data-selected="true"'),
+    'Consecutive: discrepancy disc_001 is highlighted on mounted ReconciliationTab'
+  );
+  assert.ok(
+    consecutiveTxHtml.includes('selected-discrepancy-disc_001'),
+    'Consecutive: discrepancy testid is present'
+  );
+
+  handleSearchResultActivation(batchItem, actions);
+  const consecutiveBatchHtml2 = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: activationState.selectedBatchId,
+      selectedDiscrepancyId: activationState.selectedDiscrepancyId,
+    })
+  );
+  assert.ok(
+    consecutiveBatchHtml2.includes('data-selected-batch="true"'),
+    'Consecutive: batch is decorated again on mounted ReconciliationTab'
+  );
+  assert.ok(
+    !consecutiveBatchHtml2.includes('data-selected="true"'),
+    'Consecutive: discrepancy is cleanly cleared on mounted ReconciliationTab'
+  );
+
+  // Verify all 9 activation URLs were pushed to history
+  assert.strictEqual(
+    activationState.pushedUrls.length,
+    9,
+    'Every activated item URL must be pushed to history'
+  );
+
+  // Verify ZERO fake toasts were emitted during production activation
+  assert.strictEqual(
+    activationState.spiedToasts.length,
+    0,
+    'Production activation must emit zero fake success toasts without real committed outcome'
+  );
+  console.log(
+    '   ✅ Production activation handler, consecutive selections & zero fake toasts verified'
+  );
+
   console.log('\n================================================================');
-  console.log('🎉 ALL 12 GLOBAL SEARCH UI & STATE SCENARIOS PASSED WITH ZERO ERRORS');
+  console.log('🎉 ALL 13 GLOBAL SEARCH UI & STATE SCENARIOS PASSED WITH ZERO ERRORS');
   console.log('================================================================');
 }
 
