@@ -13,7 +13,7 @@
 | Allowed paths | `apps/api/src/` relevant bulk and action modules and tests; `apps/web/src/` relevant components, pages and tests; `apps/web/package.json`; `packages/contracts/src/`; `packages/config/src/`; `prisma/schema.prisma` and migrations; `docs/product-spec/contracts/openapi.yaml`; this Work Item and its register row |
 | Reviewer | Codex — fresh independent task |
 | Branch | `feat/feat-com-03` |
-| Pull Request | Pending |
+| Pull Request | #468 |
 
 ## Business outcome and sources
 
@@ -152,7 +152,8 @@ pnpm --filter @shipde/web test
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
 | Round 1 | 9d15ae6 | PASS (Backend) | Initial implementation of bulk framework, DB model, migration, RBAC scope enforcement and first actions |
-| Round 2 | Current | READY_FOR_CODEX | Complete Step 2 Web UI for users, branches, warehouses lists: multi-select, action bar, confirm step for destructive actions, per-item results with retry of failed items only, progress and partial-failure states, API permission derivation without role hardcodes, and web tests per state |
+| Round 2 | da6a04b | READY_FOR_CODEX | Complete Step 2 Web UI for users, branches, warehouses lists: multi-select, action bar, confirm step for destructive actions, per-item results with retry of failed items only, progress and partial-failure states, API permission derivation without role hardcodes, and web tests per state |
+| Round 3 | Current | READY_FOR_CODEX | Merge origin/main, resolve schema/package conflicts preserving both sides, fix secret scanner false positive in bulk.unit.spec.ts and DASHBOARD.html, format and typecheck clean |
 
 ## Residual limitations
 

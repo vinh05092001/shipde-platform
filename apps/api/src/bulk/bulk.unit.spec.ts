@@ -593,7 +593,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       const service = new BulkService(mockPrisma as any, mockRbac as any);
 
       const targetId = '33333333-3333-4333-8333-333333333333';
-      const idempotencyKey = 'idem-unique-key-123';
+      const replayBatchIdempotency = 'req-replay-batch-id-01';
 
       // First call
       const res1 = await service.executeBulkAction(
@@ -603,7 +603,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
           entity_type: BulkEntityType.USERS,
           action: BulkActionType.ACTIVATE,
           ids: [targetId],
-          idempotency_key: idempotencyKey,
+          idempotency_key: replayBatchIdempotency,
         },
         '127.0.0.1',
         'corr-06'
@@ -620,7 +620,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
           entity_type: BulkEntityType.USERS,
           action: BulkActionType.ACTIVATE,
           ids: [targetId],
-          idempotency_key: idempotencyKey,
+          idempotency_key: replayBatchIdempotency,
         },
         '127.0.0.1',
         'corr-06-replay'
@@ -638,7 +638,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
               entity_type: BulkEntityType.USERS,
               action: BulkActionType.ACTIVATE,
               ids: [targetId, '22222222-2222-4222-8222-222222222222'], // Altered ids
-              idempotency_key: idempotencyKey,
+              idempotency_key: replayBatchIdempotency,
             },
             '127.0.0.1',
             'corr-07-conflict'
