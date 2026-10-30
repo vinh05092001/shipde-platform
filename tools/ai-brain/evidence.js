@@ -483,7 +483,7 @@ function isCandidateBlocked(data, candidate, opts) {
     const quotaScan = require('./quota-scan');
     const quotaState = Object.prototype.hasOwnProperty.call(opts || {}, 'quotaState')
       ? opts.quotaState
-      : opts?.loadQuotaState === false
+      : opts?.loadQuotaState === false || opts?.useStoredQuota === false
         ? null
         : quotaScan.loadQuotaState(opts || {});
     if (quotaState) {

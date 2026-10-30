@@ -71,6 +71,8 @@ export async function POST(req: NextRequest) {
       const newClaim: Claim = {
         id: `clm_${Date.now()}`,
         merchant_id: db.merchant.id,
+        branch_id: ship?.branch_id || 'default_branch',
+        warehouse_id: ship?.warehouse_id || 'default_wh',
         shipment_id: ship?.id || `ship_${normCode}`,
         claim_type,
         carrier_ticket: `${normCode.startsWith('GHN') ? 'GHN' : 'GHTK'}_TCK_${Math.floor(Math.random() * 89999) + 10000}`,

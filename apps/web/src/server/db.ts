@@ -488,6 +488,29 @@ class ShipDeDatabase {
 
   public digestWindowMinutes = 15;
 
+  constructor() {
+    for (const o of this.orders) {
+      o.branch_id = o.branch_id || 'default_branch';
+      o.warehouse_id = o.warehouse_id || 'default_wh';
+    }
+    for (const s of this.shipments) {
+      s.branch_id = s.branch_id || 'default_branch';
+      s.warehouse_id = s.warehouse_id || 'default_wh';
+    }
+    for (const e of this.exceptionCases) {
+      e.branch_id = e.branch_id || 'default_branch';
+      e.warehouse_id = e.warehouse_id || 'default_wh';
+    }
+    for (const d of this.discrepancies) {
+      d.branch_id = d.branch_id || 'default_branch';
+      d.warehouse_id = d.warehouse_id || 'default_wh';
+    }
+    for (const cl of this.claims) {
+      cl.branch_id = cl.branch_id || 'default_branch';
+      cl.warehouse_id = cl.warehouse_id || 'default_wh';
+    }
+  }
+
   public static getInstance(): ShipDeDatabase {
     if (!ShipDeDatabase.instance) {
       ShipDeDatabase.instance = new ShipDeDatabase();

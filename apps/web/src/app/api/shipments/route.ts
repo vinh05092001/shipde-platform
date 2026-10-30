@@ -75,6 +75,8 @@ export async function POST(req: NextRequest) {
         createdShipment = {
           id: `ship_${Date.now()}`,
           merchant_id: db.merchant.id,
+          branch_id: normalized.order.branch_id || 'default_branch',
+          warehouse_id: normalized.order.warehouse_id || 'default_wh',
           order_id: normalized.order.id,
           order_code: normalized.order.order_code,
           carrier_code: 'GHN' as any,

@@ -1,0 +1,4 @@
+model,coding,reasoning,long_agentic,browser,data_analysis,research,design
+claude-fable-5.1,97.7,91.7,77.9,89.8,80.3,82.0,83.4
+gpt-6.1-sol,96.0,92.6,68.7,93.3,82.7,83.5,82.1
+gemini-3.8-flash,82.2,89.3,16.5,45.1,54.0,79.1,72.7
