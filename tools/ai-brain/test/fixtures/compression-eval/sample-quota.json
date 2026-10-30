@@ -1,0 +1,10 @@
+{
+  "status": "SUCCESS",
+  "remaining": 85,
+  "window": "weekly",
+  "resetTime": "2026-11-01T00:00:00Z",
+  "data": {
+    "units": 1000,
+    "consumed": 150
+  }
+}

@@ -1,0 +1,8 @@
+##[group]Run test suite
+$ node --test "test/*.test.js"
+▶ test suite execution
+  ✔ test case 1 passes (1.2ms)
+  ✔ test case 2 passes (0.8ms)
+✔ test suite execution (2.0ms)
+##[endgroup]
+Exit code: 0
