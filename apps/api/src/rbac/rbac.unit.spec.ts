@@ -581,7 +581,9 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
   test('AC-RBAC-01-01: List canonical platform permissions catalog grouped by category', async () => {
     const res = await service.getPermissions('corr-01');
     assert.strictEqual(res.meta.correlation_id, 'corr-01');
-    assert.strictEqual(res.data.permissions.length, 20);
+    assert.strictEqual(res.data.permissions.length, PLATFORM_PERMISSIONS.length);
+    assert.ok(res.data.permissions.some((p: any) => p.code === 'search:tenant_wide'));
+    assert.ok(res.data.permissions.some((p: any) => p.code === 'iam:shop_view'));
     assert.deepStrictEqual(
       [...res.data.categories].sort(),
       ['AUDIT', 'CLAIMS', 'IAM', 'ORDERS', 'RECONCILIATION', 'SHIPMENTS'].sort()
@@ -590,6 +592,38 @@ describe('FEAT-RBAC-01 — Roles and Permissions Unit Test Suite', () => {
     const piiPerm = res.data.permissions.find((p: any) => p.code === 'pii:unmask');
     assert.ok(piiPerm);
     assert.strictEqual(piiPerm.category, 'AUDIT');
+  });
+
+  // AC-RBAC-01-02
+  test('FEAT-ORG-02: shop view is resolved from registry grants and revocation takes effect', async () => {
+    for (const role of ['OWNER', 'OPS_CSKH', 'FINANCE'] as const) {
+      const userId = `branch-view-${role}`;
+      mockPrisma.users.push({
+        id: userId,
+        merchant_id: MERCHANT_A,
+        role,
+        status: 'ACTIVE',
+      });
+      const actor = { userId, merchantId: MERCHANT_A, role };
+      assert.strictEqual(await service.actorHasPermissions(actor, ['iam:shop_view']), true);
+      assert.strictEqual(
+        await service.actorHasPermissions(actor, ['iam:shop_config']),
+        role === 'OWNER',
+        'view permission must not grant configuration writes'
+      );
+    }
+    const viewPermission = mockPrisma.permissions.find((p) => p.code === 'iam:shop_view')!;
+    mockPrisma.rolePermissions = mockPrisma.rolePermissions.filter(
+      (grant) => grant.permission_id !== viewPermission.id
+    );
+    assert.strictEqual(
+      await service.actorHasPermissions(
+        { userId: 'branch-view-FINANCE', merchantId: MERCHANT_A, role: 'FINANCE' },
+        ['iam:shop_view']
+      ),
+      false,
+      'role identity must not bypass a revoked view grant'
+    );
   });
 
   // AC-RBAC-01-02
