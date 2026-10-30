@@ -375,6 +375,7 @@ export type MfaAuditEvent = (typeof MfaAuditEvent)[keyof typeof MfaAuditEvent];
 // --- Roles & Permissions (RBAC) Contracts (FEAT-RBAC-01) ---
 export const CanonicalPermissionCode = {
   IAM_SHOP_CONFIG: 'iam:shop_config',
+  IAM_SHOP_VIEW: 'iam:shop_view',
   IAM_MANAGE_USERS: 'iam:manage_users',
   IAM_CONNECT_OBSERVE_TOKEN: 'iam:connect_observe_token',
   IAM_GRANT_ACTION_PERMISSION: 'iam:grant_action_permission',
@@ -727,6 +728,92 @@ export type ActivateUserResponse = components['schemas']['ActivateUserResponse']
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
 
+// --- Guided Onboarding Contracts (FEAT-ONB-01) ---
+export const OnboardingStepId = {
+  SHOP_PROFILE: 'SHOP_PROFILE',
+  WAREHOUSE: 'WAREHOUSE',
+  INVITE_USERS: 'INVITE_USERS',
+  CARRIER_ACCOUNT: 'CARRIER_ACCOUNT',
+  OPERATING_DEFAULTS: 'OPERATING_DEFAULTS',
+  TEST_ORDER: 'TEST_ORDER',
+} as const;
+
+export type OnboardingStepId = (typeof OnboardingStepId)[keyof typeof OnboardingStepId];
+
+export const OnboardingStepStatus = {
+  PENDING: 'PENDING',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  SKIPPED: 'SKIPPED',
+  BLOCKED: 'BLOCKED',
+} as const;
+
+export type OnboardingStepStatus = (typeof OnboardingStepStatus)[keyof typeof OnboardingStepStatus];
+
+export const OnboardingOverallStatus = {
+  NOT_STARTED: 'NOT_STARTED',
+  IN_PROGRESS: 'IN_PROGRESS',
+  COMPLETED: 'COMPLETED',
+  DISMISSED: 'DISMISSED',
+} as const;
+
+export type OnboardingOverallStatus =
+  (typeof OnboardingOverallStatus)[keyof typeof OnboardingOverallStatus];
+
+export const OnboardingAuditEvent = {
+  ONBOARDING_INITIALIZED: 'ONBOARDING_INITIALIZED',
+  ONBOARDING_STEP_COMPLETED: 'ONBOARDING_STEP_COMPLETED',
+  ONBOARDING_STEP_SKIPPED: 'ONBOARDING_STEP_SKIPPED',
+  ONBOARDING_RESET: 'ONBOARDING_RESET',
+  ONBOARDING_DISMISSED: 'ONBOARDING_DISMISSED',
+} as const;
+
+export type OnboardingAuditEvent = (typeof OnboardingAuditEvent)[keyof typeof OnboardingAuditEvent];
+
+export const OnboardingErrorCode = {
+  ONBOARDING_NOT_FOUND: 'ONBOARDING_NOT_FOUND',
+  STEP_NOT_FOUND: 'STEP_NOT_FOUND',
+  STEP_BLOCKED: 'STEP_BLOCKED',
+  CANNOT_SKIP_REQUIRED_STEP: 'CANNOT_SKIP_REQUIRED_STEP',
+  ONBOARDING_INCOMPLETE: 'ONBOARDING_INCOMPLETE',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+
+export type OnboardingErrorCode = (typeof OnboardingErrorCode)[keyof typeof OnboardingErrorCode];
+
+export interface OnboardingStepDto {
+  id: OnboardingStepId;
+  order: number;
+  title: string;
+  description: string;
+  required: boolean;
+  status: OnboardingStepStatus;
+  is_blocking: boolean;
+  blocking_reasons: string[];
+  completed_at: string | null;
+  updated_at?: string;
+  data?: Record<string, any> | null;
+}
+
+export interface OnboardingStateResponseDto {
+  merchant_id: string;
+  status: OnboardingOverallStatus;
+  current_step: OnboardingStepId;
+  progress_percentage: number;
+  completed_count: number;
+  total_required_steps: number;
+  completed_required_steps: number;
+  steps: OnboardingStepDto[];
+  completed_at: string | null;
+  updated_at: string;
+  can_edit?: boolean;
+}
+
+export interface CompleteStepDto {
+  data?: Record<string, any>;
+}
+
 // --- Branch Contracts (FEAT-ORG-02) ---
 export const BranchAuditEvent = {
   BRANCH_CREATED: 'BRANCH_CREATED',
@@ -839,5 +926,6 @@ export type SearchErrorCode = (typeof SearchErrorCode)[keyof typeof SearchErrorC
 export type SearchResultItem = components['schemas']['SearchResultItem'];
 export type SearchResponseData = components['schemas']['SearchResponseData'];
 export type SearchResponse = components['schemas']['SearchResponse'];
+
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';
