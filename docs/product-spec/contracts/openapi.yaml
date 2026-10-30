@@ -1806,6 +1806,258 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+  /imports:
+    get:
+      tags: [Imports]
+      summary: List imports for tenant (FEAT-COM-04)
+      description: Returns paginated list of import revisions for the authenticated tenant. Requires iam:shop_config.
+      operationId: listImports
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: template_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [branches, warehouses]
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of imports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListImportsResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /imports/templates/{templateType}:
+    get:
+      tags: [Imports]
+      summary: Download import template (CSV or XLSX) (FEAT-COM-04)
+      description: Returns pre-formatted template with headers and field guidelines for branches or warehouses. Requires iam:shop_config.
+      operationId: downloadImportTemplate
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: templateType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [branches, warehouses]
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [csv, xlsx]
+            default: csv
+      responses:
+        '200':
+          description: Template file
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /imports/upload:
+    post:
+      tags: [Imports]
+      summary: Upload and process an import file (FEAT-COM-04)
+      description: Ingests CSV or XLSX file, verifies size, MIME, extension and malware limits from config, commits a durable import record (UPLOADED) with private storage, then starts asynchronous validation. Durable per-row outcomes and the final status (STAGED/BLOCKED/FAILED) are persisted after processing; poll GET /imports/{id} for the result. Identical checksum returns the existing import (200). Conflicting idempotency key returns 409. Requires iam:shop_config.
+      operationId: uploadImport
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadImportInput'
+          multipart/form-data:
+            schema:
+              type: object
+              required: [template_type, file]
+              properties:
+                template_type:
+                  type: string
+                  enum: [branches, warehouses]
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Existing duplicate import retrieved via checksum deduplication
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportDetailResponse'
+        '201':
+          description: Import successfully created and processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportDetailResponse'
+        '202':
+          description: Import record durably created; validation processing started asynchronously
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportDetailResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /imports/{id}:
+    get:
+      tags: [Imports]
+      summary: Get import details, preview and control totals (FEAT-COM-04)
+      description: Returns import summary, control totals, preview rows and issues. Requires iam:shop_config.
+      operationId: getImportDetail
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Import detail with preview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportDetailResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /imports/{id}/rows:
+    get:
+      tags: [Imports]
+      summary: Get paginated rows for an import (FEAT-COM-04)
+      description: Returns rows for an import with filtering by validation status. Requires iam:shop_config.
+      operationId: listImportRows
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [VALID, ERROR, WARNING]
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Paginated import rows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListImportRowsResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /imports/{id}/issues/export:
+    get:
+      tags: [Imports]
+      summary: Export issues report as CSV (FEAT-COM-04)
+      description: Exports CSV report containing all invalid and warning rows with issue details. Requires iam:shop_config.
+      operationId: exportImportIssues
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: CSV issues report
+          content:
+            text/csv:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /imports/{id}/promote:
+    post:
+      tags: [Imports]
+      summary: Promote staged import revision into domain entities (FEAT-COM-04)
+      description: Explicitly promotes all rows of the latest STAGED revision into target entities (branches or warehouses). Verifies actor's FEAT-RBAC-02 scope for every affected row. Supersedes earlier revisions and records audit log. Requires iam:shop_config.
+      operationId: promoteImport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Import successfully promoted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromoteImportResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /admin/shops:
     get:
       tags: [Admin]
@@ -3289,6 +3541,265 @@ components:
               type: string
             total:
               type: integer
+    UploadImportInput:
+      type: object
+      required: [template_type]
+      properties:
+        template_type:
+          type: string
+          enum: [branches, warehouses]
+        file_name:
+          type: string
+        content:
+          type: string
+          description: CSV string or Base64-encoded file content
+        file_base64:
+          type: string
+          description: Base64-encoded binary content (e.g. for XLSX)
+    ImportControlTotals:
+      type: object
+      properties:
+        total_rows:
+          type: integer
+        valid_rows:
+          type: integer
+        error_rows:
+          type: integer
+        warning_rows:
+          type: integer
+        error_code:
+          type: string
+          nullable: true
+          description: Processing failure code recorded when the import transitioned to FAILED outside the rolled-back processing transaction
+        error_message:
+          type: string
+          nullable: true
+          description: Human-readable processing failure reason (no PII)
+    ImportColumnMapping:
+      type: object
+      required: [field]
+      properties:
+        source_header:
+          type: string
+          nullable: true
+          description: The exact header text present in the uploaded file (null when the template column is absent from the file)
+        field:
+          type: string
+          description: Canonical template field key
+        header:
+          type: string
+          nullable: true
+          description: Canonical display header from the template definition
+        recognized:
+          type: boolean
+          description: True when the source header matched a template alias or key
+        required:
+          type: boolean
+        rule:
+          type: string
+        description:
+          type: string
+    ImportRowIssue:
+      type: object
+      required: [code, message, severity]
+      properties:
+        field:
+          type: string
+          nullable: true
+        code:
+          type: string
+        message:
+          type: string
+        severity:
+          type: string
+          enum: [BLOCKING, WARNING]
+    ImportSummary:
+      type: object
+      required: [id, merchant_id, template_type, file_name, file_size, file_hash, mime_type, status, revision, total_rows, valid_rows, error_rows, warning_rows, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+        template_type:
+          type: string
+        file_name:
+          type: string
+        file_size:
+          type: integer
+        file_hash:
+          type: string
+        mime_type:
+          type: string
+        storage_path:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [UPLOADED, VALIDATING, STAGED, BLOCKED, PROMOTED, SUPERSEDED, FAILED]
+        revision:
+          type: integer
+        idempotency_key:
+          type: string
+          nullable: true
+        total_rows:
+          type: integer
+        valid_rows:
+          type: integer
+        error_rows:
+          type: integer
+        warning_rows:
+          type: integer
+        control_totals:
+          $ref: '#/components/schemas/ImportControlTotals'
+        header_mapping:
+          type: array
+          nullable: true
+          description: Actual source-header to canonical-field mapping captured from the uploaded file during parsing
+          items:
+            $ref: '#/components/schemas/ImportColumnMapping'
+        created_by_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        promoted_by_user_id:
+          type: string
+          format: uuid
+          nullable: true
+        promoted_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ImportRow:
+      type: object
+      required: [id, import_id, row_number, raw_data, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        import_id:
+          type: string
+          format: uuid
+        row_number:
+          type: integer
+        raw_data:
+          type: object
+          additionalProperties: true
+        normalized_data:
+          type: object
+          nullable: true
+          additionalProperties: true
+        status:
+          type: string
+          enum: [VALID, ERROR, WARNING]
+        scope_identifier:
+          type: string
+          nullable: true
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportRowIssue'
+        issues_json:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportRowIssue'
+        created_at:
+          type: string
+          format: date-time
+    ImportDetailResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required: [import, preview_rows]
+          properties:
+            import:
+              $ref: '#/components/schemas/ImportSummary'
+            preview_rows:
+              type: array
+              items:
+                $ref: '#/components/schemas/ImportRow'
+            revisions:
+              type: array
+              items:
+                $ref: '#/components/schemas/ImportSummary'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListImportsResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportSummary'
+        meta:
+          type: object
+          required: [correlation_id, total]
+          properties:
+            correlation_id:
+              type: string
+            total:
+              type: integer
+    ListImportRowsResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportRow'
+        meta:
+          type: object
+          required: [correlation_id, total, page, limit]
+          properties:
+            correlation_id:
+              type: string
+            total:
+              type: integer
+            page:
+              type: integer
+            limit:
+              type: integer
+    PromoteImportResponse:
+      type: object
+      required: [success, data, meta]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required: [id, status, promoted_rows_count, promoted_at]
+          properties:
+            id:
+              type: string
+              format: uuid
+            status:
+              type: string
+            promoted_rows_count:
+              type: integer
+            promoted_at:
+              type: string
+              format: date-time
+            superseded_revisions_count:
+              type: integer
+        meta:
+          $ref: '#/components/schemas/Meta'
     CarrierAccountInput:
       type: object
       required: [carrier_code, alias, permission_profile, credential]

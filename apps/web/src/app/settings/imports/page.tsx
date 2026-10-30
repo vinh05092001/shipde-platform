@@ -1,0 +1,365 @@
+'use client';
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
+import { ArrowLeft, Layers, Shield } from 'lucide-react';
+import { ImportManagementView } from '@/components/ImportManagementView';
+import { useAuth } from '@/context/AuthContext';
+import type { ImportSummary, ImportRow } from '@shipde/contracts';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+export interface ImportsSettingsPageProps {
+  initialImports?: ImportSummary[] | null;
+  initialSelectedImport?: ImportSummary | null;
+  initialSelectedRows?: ImportRow[] | null;
+  initialLoading?: boolean;
+  initialCanEdit?: boolean;
+  initialError?: string | null;
+}
+
+export default function ImportsSettingsPage({
+  initialImports = null,
+  initialSelectedImport = null,
+  initialSelectedRows = null,
+  initialLoading,
+  initialCanEdit,
+  initialError = null,
+}: ImportsSettingsPageProps) {
+  const { user } = useAuth();
+  const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
+
+  // Edit rights are derived server-side from iam:shop_config. Unknown user means no edit. (Finding 10)
+  const canEdit =
+    initialCanEdit !== undefined
+      ? initialCanEdit
+      : Boolean(user?.permissions?.includes('iam:shop_config'));
+
+  const [imports, setImports] = useState<ImportSummary[]>(initialImports || []);
+  const [totalImports, setTotalImports] = useState<number>(initialImports?.length || 0);
+  const [historyPage, setHistoryPage] = useState<number>(1);
+  const [selectedImport, setSelectedImport] = useState<ImportSummary | null>(initialSelectedImport);
+  const [selectedRows, setSelectedRows] = useState<ImportRow[]>(initialSelectedRows || []);
+  const [revisions, setRevisions] = useState<ImportSummary[]>([]);
+  const [loading, setLoading] = useState<boolean>(initialLoading ?? initialImports === null);
+  const [error, setError] = useState<string | null>(initialError);
+
+  const activeDetailIdRef = useRef<string | null>(null);
+
+  const fetchImports = useCallback(
+    async (page: number = 1) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const limit = 20;
+        const offset = Math.max(page - 1, 0) * limit;
+        const res = await fetch(`${API_BASE}/api/v1/imports?limit=${limit}&offset=${offset}`, {
+          headers,
+        });
+        if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error('Bạn không có quyền truy cập dữ liệu nhập khẩu.');
+          }
+          if (res.status === 401) {
+            throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+          }
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.error?.message || 'Không thể tải danh sách lượt nhập');
+        }
+
+        const json = await res.json();
+        if (json.success) {
+          // Handle both json.data as array and json.data.items for flexibility (Finding 1)
+          const items = Array.isArray(json.data) ? json.data : json.data?.items || [];
+          setImports(items);
+          setTotalImports(typeof json.meta?.total === 'number' ? json.meta.total : items.length);
+          setHistoryPage(page);
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý nhập liệu');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [token]
+  );
+
+  const fetchImportDetail = useCallback(
+    async (importId: string) => {
+      // Key detail state and track active request identity to eliminate races (Finding 15)
+      activeDetailIdRef.current = importId;
+      setSelectedImport(null);
+      setSelectedRows([]);
+      setRevisions([]);
+      setError(null);
+
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const [detailRes, rowsRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/imports/${importId}`, { headers }),
+          fetch(`${API_BASE}/api/v1/imports/${importId}/rows?limit=100`, { headers }),
+        ]);
+
+        // Discard responses if user selected another import in the meantime (Finding 15)
+        if (activeDetailIdRef.current !== importId) {
+          return;
+        }
+
+        // Expose partial or complete failure instead of leaving stale/misleading data
+        if (!detailRes.ok || !rowsRes.ok) {
+          if (activeDetailIdRef.current !== importId) {
+            return;
+          }
+          const failStatus = !detailRes.ok ? detailRes.status : rowsRes.status;
+          setSelectedImport(null);
+          setSelectedRows([]);
+          setRevisions([]);
+          setError(
+            `Không thể tải đầy đủ chi tiết hoặc các dòng dữ liệu của lượt nhập (Mã lỗi HTTP: ${failStatus}). Vui lòng thử lại.`
+          );
+          return;
+        }
+
+        const [detailJson, rowsJson] = await Promise.all([
+          detailRes.json().catch(() => null),
+          rowsRes.json().catch(() => null),
+        ]);
+
+        // Recheck identity immediately before every response-driven state update (Finding 15)
+        if (activeDetailIdRef.current !== importId) {
+          return;
+        }
+
+        if (!detailJson?.success || !rowsJson?.success) {
+          if (activeDetailIdRef.current !== importId) {
+            return;
+          }
+          setSelectedImport(null);
+          setSelectedRows([]);
+          setRevisions([]);
+          setError('Dữ liệu chi tiết lượt nhập không hợp lệ hoặc bị lỗi định dạng từ máy chủ.');
+          return;
+        }
+
+        const imp = detailJson.data?.import || detailJson.data;
+        const rowItems = Array.isArray(rowsJson.data) ? rowsJson.data : rowsJson.data?.items || [];
+
+        // Final identity recheck immediately before committing detail, revisions and rows state
+        if (activeDetailIdRef.current !== importId) {
+          return;
+        }
+        setSelectedImport(imp);
+        setRevisions(detailJson.data?.revisions || []);
+        setSelectedRows(rowItems);
+      } catch (err: any) {
+        if (activeDetailIdRef.current === importId) {
+          setSelectedImport(null);
+          setSelectedRows([]);
+          setRevisions([]);
+          setError(err?.message || 'Lỗi khi tải chi tiết lượt nhập');
+        }
+      }
+    },
+    [token]
+  );
+
+  useEffect(() => {
+    if (!initialImports) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial imports fetch
+      void fetchImports();
+    }
+  }, [initialImports, fetchImports]);
+
+  const handleDownloadTemplate = async (
+    templateType: 'branches' | 'warehouses',
+    format: 'csv' | 'xlsx'
+  ) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(
+        `${API_BASE}/api/v1/imports/templates/${templateType}?format=${format}`,
+        { headers }
+      );
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải mẫu nhập liệu');
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition');
+      let filename = `template_${templateType}.${format}`;
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        if (match && match[1]) filename = match[1];
+      }
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setError(err?.message || 'Lỗi khi tải mẫu nhập liệu');
+    }
+  };
+
+  const handleUpload = async (templateType: 'branches' | 'warehouses', file: File) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    // Convert file to base64
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const b64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(b64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    const res = await fetch(`${API_BASE}/api/v1/imports/upload`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        template_type: templateType,
+        file_name: file.name,
+        file_base64: base64,
+      }),
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || 'Tải lên tệp tin thất bại');
+    }
+
+    const json = await res.json();
+    await fetchImports();
+    if (json.data?.import?.id) {
+      await fetchImportDetail(json.data.import.id);
+    }
+  };
+
+  const handlePromote = async (id: string) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/imports/${id}/promote`, {
+      method: 'POST',
+      headers,
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || 'Áp dụng dữ liệu nhập thất bại');
+    }
+
+    await fetchImports();
+    await fetchImportDetail(id);
+  };
+
+  const handleExportIssues = async (id: string) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(`${API_BASE}/api/v1/imports/${id}/issues/export`, {
+        headers,
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải báo cáo lỗi');
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition');
+      let filename = `import_${id}_issues.csv`;
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        if (match && match[1]) filename = match[1];
+      }
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setError(err?.message || 'Lỗi khi tải báo cáo lỗi');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link
+              href="/"
+              className="inline-flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Quay lại Bảng điều khiển
+            </Link>
+            <div className="h-4 w-px bg-gray-200" />
+            <div className="flex items-center gap-2 text-sm text-gray-700">
+              <span className="text-gray-400">Cấu hình</span>
+              <span>/</span>
+              <span className="font-semibold text-gray-900">Nhập dữ liệu</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <ImportManagementView
+          imports={imports}
+          totalImports={totalImports}
+          historyPage={historyPage}
+          historyLimit={20}
+          onHistoryPageChange={(p) => void fetchImports(p)}
+          selectedImport={selectedImport}
+          selectedImportRows={selectedRows}
+          revisions={revisions}
+          loading={loading}
+          canEdit={canEdit}
+          error={error}
+          onRefresh={() => void fetchImports(historyPage)}
+          onSelectImport={fetchImportDetail}
+          onDownloadTemplate={handleDownloadTemplate}
+          onUpload={handleUpload}
+          onPromote={handlePromote}
+          onExportIssues={handleExportIssues}
+        />
+      </main>
+    </div>
+  );
+}

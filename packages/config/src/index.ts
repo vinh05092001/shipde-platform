@@ -58,6 +58,12 @@ export interface AppConfig {
   RBAC_SEED_MAX_ATTEMPTS?: number;
   /** Backoff multiplier for RBAC platform seed */
   RBAC_SEED_BACKOFF_FACTOR?: number;
+  /** Maximum import file size in bytes (FEAT-COM-04) */
+  MAX_IMPORT_FILE_SIZE_BYTES: number;
+  /** Allowed MIME types for uploaded imports (FEAT-COM-04) */
+  ALLOWED_IMPORT_MIME_TYPES: string[];
+  /** Whether the malware scanner verification is enabled (FEAT-COM-04) */
+  MALWARE_SCANNER_ENABLED: boolean;
 }
 
 export class ConfigValidationError extends Error {
@@ -342,6 +348,52 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  const maxImportSizeRaw = rawEnv.MAX_IMPORT_FILE_SIZE_BYTES;
+  let MAX_IMPORT_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB default
+  if (maxImportSizeRaw !== undefined && maxImportSizeRaw !== '') {
+    if (!/^\d+$/.test(maxImportSizeRaw)) {
+      invalidFields.push('MAX_IMPORT_FILE_SIZE_BYTES (must be a positive integer)');
+    } else {
+      const parsed = Number(maxImportSizeRaw);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        invalidFields.push('MAX_IMPORT_FILE_SIZE_BYTES (must be a positive integer)');
+      } else {
+        MAX_IMPORT_FILE_SIZE_BYTES = parsed;
+      }
+    }
+  }
+
+  const allowedMimeTypesRaw = rawEnv.ALLOWED_IMPORT_MIME_TYPES;
+  let ALLOWED_IMPORT_MIME_TYPES = [
+    'text/csv',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/plain',
+  ];
+  if (allowedMimeTypesRaw !== undefined && allowedMimeTypesRaw !== '') {
+    const list = allowedMimeTypesRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (list.length === 0) {
+      invalidFields.push('ALLOWED_IMPORT_MIME_TYPES (must contain at least one valid MIME type)');
+    } else {
+      ALLOWED_IMPORT_MIME_TYPES = list;
+    }
+  }
+
+  const malwareScannerEnabledRaw = rawEnv.MALWARE_SCANNER_ENABLED;
+  let MALWARE_SCANNER_ENABLED = true;
+  if (malwareScannerEnabledRaw !== undefined && malwareScannerEnabledRaw !== '') {
+    if (malwareScannerEnabledRaw === 'false' || malwareScannerEnabledRaw === '0') {
+      MALWARE_SCANNER_ENABLED = false;
+    } else if (malwareScannerEnabledRaw === 'true' || malwareScannerEnabledRaw === '1') {
+      MALWARE_SCANNER_ENABLED = true;
+    } else {
+      invalidFields.push('MALWARE_SCANNER_ENABLED (must be boolean true or false)');
+    }
+  }
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -373,6 +425,9 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     RBAC_SEED_RETRY_INTERVAL_MS,
     RBAC_SEED_MAX_ATTEMPTS,
     RBAC_SEED_BACKOFF_FACTOR,
+    MAX_IMPORT_FILE_SIZE_BYTES,
+    ALLOWED_IMPORT_MIME_TYPES,
+    MALWARE_SCANNER_ENABLED,
   };
 }
 

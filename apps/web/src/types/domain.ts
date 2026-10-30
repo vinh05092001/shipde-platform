@@ -55,6 +55,7 @@ export interface User {
   role: UserRole;
   store_scopes?: string[];
   warehouse_scopes?: string[];
+  permissions?: string[];
   status?: 'active' | 'suspended' | 'ACTIVE';
   avatar_url?: string | null;
   language?: string;

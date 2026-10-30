@@ -1,3 +1,6 @@
 # Fake test fixtures removed in ef4a5d60 (FEAT-USR-01)
 0d9ac26fb7b6c8f6cde982ac6a04233f9e986749:apps/api/src/invitations/invitations.supertest.spec.ts:generic-api-key:92
 0d9ac26fb7b6c8f6cde982ac6a04233f9e986749:apps/api/src/invitations/invitations.unit.spec.ts:generic-api-key:508
+# Fake test fixtures removed in 78e052f5 (FEAT-COM-04)
+332663f79670117a9f50339175dfff8edf931e0d:apps/api/src/imports/imports.supertest.spec.ts:generic-api-key:258
+332663f79670117a9f50339175dfff8edf931e0d:apps/api/src/imports/imports.supertest.spec.ts:generic-api-key:271
