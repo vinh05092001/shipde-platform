@@ -1950,7 +1950,13 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       {/* SUBTAB 2: STORES / BRANCHES MANAGEMENT (FEAT-COM-02 shared list contract) */}
       {activeSubTab === 'stores' && (
         <BranchManagementView
-          branches={stores}
+          branches={stores.map((s) => ({
+            merchant_id: '',
+            is_default: false,
+            created_at: '',
+            updated_at: '',
+            ...s,
+          }))}
           canEdit={!isForbidden}
           onRefresh={() => setStores(DEFAULT_STORES)}
         />

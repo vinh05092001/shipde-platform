@@ -14,7 +14,7 @@
 | Allowed paths   | `packages/contracts/src/`, relevant `apps/api/src/` list consumers and tests, `packages/config/src/`, `docs/product-spec/contracts/openapi.yaml`, this Work Item and its register row |
 | Reviewer        | Codex — fresh independent task; implementation author cannot approve                                                                                                                  |
 | Branch          | `feat/feat-com-02`                                                                                                                                                                    |
-| Pull Request    | None; push and commit prohibited for this run                                                                                                                                         |
+| Pull Request    | `467`                                                                                                                                                                                 |
 
 ## Business outcome
 
@@ -157,14 +157,14 @@ new shared-contract and HTTP fixture coverage. Add changed source files to the f
 Redirect area-suite output to a file and inspect summary/failures. Do not claim completion until
 required checks pass.
 
-Verification on 2026-10-29, branch `feat/feat-com-02`, step 2 frontend and integration completion:
+Verification on 2026-10-30, branch `feat/feat-com-02`, step 2 frontend and integration completion with origin/main merged:
 
 - A11y gate: `pnpm exec tsx scripts/verify-a11y.ts` passed with **0 violations** across all components.
-- Web tests: `pnpm --filter @shipde/web test` passed with **10 passing suites** (including `shared-lists-states.test.ts`, `warehouses-page-states.test.ts`, `users-page-states.test.ts`).
+- Web tests: `pnpm --filter @shipde/web test` passed with **12 passing suites** (including `branches-page-states.test.ts`, `global-search-states.test.ts`, `shared-lists-states.test.ts`, `warehouses-page-states.test.ts`, `users-page-states.test.ts`).
 - Narrow API unit tests: `pnpm exec tsx --tsconfig apps/api/tsconfig.json --test apps/api/src/users/users.unit.spec.ts apps/api/src/users/users.scopes.unit.spec.ts` passed **44/44 tests**.
 - Package typechecks: `pnpm --filter @shipde/config --filter @shipde/contracts --filter @shipde/api --filter @shipde/web typecheck` all exit 0.
 - Package linters: `pnpm --filter @shipde/web lint` and `pnpm --filter @shipde/config --filter @shipde/contracts --filter @shipde/api lint` exit 0 (0 errors, 0 warnings).
-- Contract drift check: `pnpm contract:check` passed with **61 endpoints** in sync.
+- Contract drift check: `pnpm contract:check` passed with **66 endpoints** in sync.
 - Hardcode gate: `node scripts/ai/check-no-hardcode.mjs` exits 0 (no uncommitted hardcoded additions).
 - Formatting: `pnpm exec prettier --check` clean on all touched packages and source files.
 

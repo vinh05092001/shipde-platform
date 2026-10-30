@@ -2,7 +2,14 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Store, GitBranch, Warehouse as WarehouseIcon, Users, Shield } from 'lucide-react';
+import {
+  ArrowLeft,
+  Store,
+  GitBranch,
+  Warehouse as WarehouseIcon,
+  Users,
+  Shield,
+} from 'lucide-react';
 import { BranchManagementView } from '@/components/BranchManagementView';
 import { useAuth } from '@/context/AuthContext';
 import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
@@ -200,8 +207,9 @@ export default function BranchesSettingsPage({
             </Link>
             <span className="text-slate-300">/</span>
             <span className="text-xs font-bold text-slate-700">
-              Cửa hàng &amp; Chi nhánh — Điểm gửi hàng (SCR-WH-01 / FEAT-ORG-02)
+              Chi nhánh &amp; Điểm gửi hàng (SCR-WH-01 / FEAT-ORG-02)
             </span>
+            <span className="sr-only">Cửa hàng &amp; Chi nhánh</span>
           </div>
 
           {/* Quick Settings Switcher Tabs */}

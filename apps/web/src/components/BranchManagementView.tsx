@@ -703,10 +703,10 @@ export function BranchManagementView({
               )}
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-6" data-testid="branch-grid-container">
               <div
                 className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-                data-testid="branch-grid-container"
+                data-testid="branch-list-grid"
               >
                 {pagedBranches.map((branch) => {
                   const isDefault = branch.is_default;
@@ -766,7 +766,10 @@ export function BranchManagementView({
                                 aria-label={`Chỉnh sửa chi nhánh ${branch.name}`}
                               >
                                 <Edit3 className="w-4 h-4" />
-                                <span className="sr-only" data-testid={`edit-branch-btn-${branch.id}`}>
+                                <span
+                                  className="sr-only"
+                                  data-testid={`edit-branch-btn-${branch.id}`}
+                                >
                                   Chỉnh sửa
                                 </span>
                               </button>
@@ -801,7 +804,8 @@ export function BranchManagementView({
                               <button
                                 type="button"
                                 onClick={() => handleSetDefault(branch)}
-                                data-testid={`set-default-branch-button-${branch.id}`}
+                                data-testid={`set-default-button-${branch.id}`}
+                                aria-label={`Đặt chi nhánh ${branch.name} làm mặc định`}
                                 disabled={isOperating}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition cursor-pointer disabled:opacity-50"
                               >
@@ -860,20 +864,32 @@ export function BranchManagementView({
       {/* Create / Edit Branch Modal Dialog */}
       {isFormOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150"
+          data-testid="branch-form-modal"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="branch-modal-title"
+          aria-labelledby="modal-title"
         >
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center">
-                  <GitBranch className="w-4 h-4" />
+                  <Building2 className="w-4 h-4" />
                 </div>
-                <h3 id="branch-modal-title" className="text-sm font-bold text-slate-900">
-                  {editingBranch ? 'Chỉnh sửa chi nhánh' : 'Tạo mới chi nhánh / kho gửi hàng'}
-                </h3>
+                <div>
+                  <h3
+                    id="modal-title"
+                    data-testid="modal-title"
+                    className="text-sm font-bold text-slate-900"
+                  >
+                    {editingBranch ? 'Chỉnh sửa thông tin chi nhánh' : 'Thêm chi nhánh mới'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {editingBranch
+                      ? `Cập nhật thông tin chi nhánh ${editingBranch.name}`
+                      : 'Thiết lập địa điểm kho bãi hoặc điểm bán hàng trực tiếp'}
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
@@ -881,7 +897,8 @@ export function BranchManagementView({
                 data-testid="close-branch-modal"
                 aria-label="Đóng biểu mẫu"
                 title="Đóng biểu mẫu"
-                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition"
+                disabled={submitting}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -889,14 +906,15 @@ export function BranchManagementView({
 
             {modalError && (
               <div
-                className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-700 font-medium"
-                data-testid="branch-modal-error"
+                className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 text-rose-800 text-xs font-medium"
+                data-testid="modal-error-banner"
               >
-                {modalError}
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{modalError}</span>
               </div>
             )}
 
-            <form onSubmit={handleFormSubmit} className="space-y-4">
+            <form onSubmit={handleFormSubmit} className="space-y-4" data-testid="branch-form">
               {/* Branch Name */}
               <div>
                 <label
