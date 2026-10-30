@@ -73,6 +73,10 @@ test('public ingestion and merging retain distinct effort leaderboard entries', 
     { name: 'Model 4', intelligenceIndex: 42 },
   ];
   const docs = await publicDocuments({
+    descriptor: {
+      endpoint: 'https://artificialanalysis.ai/leaderboards/models',
+      benchlm: 'https://benchlm.ai/data/models.json',
+    },
     fetch: async () => ({
       ok: true,
       text: async () => `<script id="__NEXT_DATA__">${JSON.stringify(rows)}</script>`,

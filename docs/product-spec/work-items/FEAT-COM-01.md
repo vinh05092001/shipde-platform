@@ -140,9 +140,9 @@ Any authenticated merchant user can perform unified global search across primary
 - `pnpm format:check` — PASSED (all changed files 100% compliant)
 - `pnpm typecheck` — PASSED (0 errors across api and web)
 - `pnpm test:a11y` — PASSED (0 accessibility errors, aria-pressed added to category filters)
-- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/search/search.unit.spec.ts` — PASSED (all 28 unit tests passed)
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/search/search.unit.spec.ts` — PASSED (all 32 unit tests passed including fail-closed audit log test)
 - `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/search/search.supertest.spec.ts` — PASSED (all 19 supertest acceptance criteria passed)
-- `pnpm --filter @shipde/web exec tsx src/tests/global-search-states.test.ts` — PASSED (all 12 UI states & accessibility scenarios passed)
+- `pnpm --filter @shipde/web exec tsx src/tests/global-search-states.test.ts` — PASSED (all 13 UI states & activation scenarios passed)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
 
 ## Codex review record
@@ -150,7 +150,8 @@ Any authenticated merchant user can perform unified global search across primary
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `abd4d62d` | CHANGES_REQUIRED | Initial implementation of FEAT-COM-01 vertical slice |
-| 2 | Pending | Pending | Fixed P1 #1 (FEAT-RBAC-02 branch and warehouse scoping on all searched entities with resolveActorScopes and buildScopePredicate), P1 #2 (supertest cleanup of all created tenant rows in finally, suffixed unique tax_codes), P2 #3 (formatted phone number & email PII masking), P2 #4 (audit actor fallback), P2 #5 (accurate total result count & partial derivation), and P2 #6 (aria-pressed on category filter buttons). |
+| 2 | `25bc4a04` | CHANGES_REQUIRED | Fixed P1 #1 (FEAT-RBAC-02 branch and warehouse scoping on all searched entities with resolveActorScopes and buildScopePredicate), P1 #2 (supertest cleanup of all created tenant rows in finally, suffixed unique tax_codes), P2 #3 (formatted phone number & email PII masking), P2 #4 (audit actor fallback), P2 #5 (accurate total result count & partial derivation), and P2 #6 (aria-pressed on category filter buttons). |
+| 3 | Pending | Pending | Fixed P1 #1 (audit write failures fail closed with canonical 500 error instead of being swallowed) and P1 #2 (result activation actually opens records by ID, routes claims to claims tab rather than exceptions, pushes deep link URL, and removes fake success toasts). |
 
 ## Residual limitations
 

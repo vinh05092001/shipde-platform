@@ -592,6 +592,54 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
       assert.strictEqual(log.new_value.total_results, 1);
     });
 
+    it('AC-COM-01-13 / Finding 1: should fail closed with canonical 500 when audit write fails', async () => {
+      const mock = createMockPrismaService({
+        orders: [
+          {
+            id: 'ord-audit-fail',
+            merchant_id: TENANT_A,
+            order_code: 'ORD-AUDIT-FAIL',
+            recipient_name: 'Khách Test',
+            recipient_phone: '0901234567',
+            source_type: 'pancake',
+          },
+        ],
+      });
+      mock.prisma.auditLog.create = async () => {
+        throw new Error('Database disk full or constraint violation');
+      };
+
+      const rbac = createMockRbacService(['search:tenant_wide', 'order:view_create']);
+      const service = new SearchService(mock.prisma, rbac);
+
+      await assert.rejects(
+        async () => {
+          await service.search(
+            ACTOR_OWNER_A,
+            { q: 'ORD-AUDIT', type: 'ORDER' },
+            '192.168.1.1',
+            'corr-fail'
+          );
+        },
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException, 'Must throw CanonicalApiException');
+          assert.strictEqual(err.getStatus(), 500, 'Must return HTTP 500');
+          assert.strictEqual(
+            err.code,
+            'INTERNAL_SERVER_ERROR',
+            'Must return canonical error code INTERNAL_SERVER_ERROR'
+          );
+          assert.strictEqual(err.retryable, true, 'Must indicate retryable');
+          assert.doesNotMatch(
+            err.message || '',
+            /disk|constraint|database/i,
+            'Must not leak raw driver errors'
+          );
+          return true;
+        }
+      );
+    });
+
     it('AC-COM-01-27: should apply branch scope predicate when user has store_scopes', async () => {
       const mock = createMockPrismaService({
         users: [

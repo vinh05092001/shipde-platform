@@ -241,12 +241,7 @@ function resolveCandidateHeadroom(candidate, ctx) {
       const block = evidence.isCandidateBlocked(ctx.evidenceData, candidate, {
         now,
         quotaStateFile: ctx.quotaStateFile,
-        quotaState:
-          ctx.quotaState !== undefined
-            ? ctx.quotaState
-            : ctx.useStoredQuota === false
-              ? null
-              : undefined,
+        ...(ctx.quotaState !== undefined ? { quotaState: ctx.quotaState } : {}),
         useStoredQuota: ctx.useStoredQuota,
         loadQuotaState: ctx.loadQuotaState,
       });

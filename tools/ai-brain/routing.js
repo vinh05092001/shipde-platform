@@ -293,12 +293,35 @@ async function adviseModelChoice(result, profile, options) {
       : undefined,
   });
   const eligible = new Set(top.map((candidate) => candidate.candidateKey));
-  const chosen =
+  let chosen = result.chosen;
+  if (
     advised.handledBy === 'jev' &&
     advised.outcome === jev.Outcome.DECIDED &&
     eligible.has(advised.choice)
-      ? advised.choice
-      : result.chosen;
+  ) {
+    chosen = advised.choice;
+  } else if (advised.outcome === jev.Outcome.UNDECIDED || advised.outcome === 'UNDECIDED') {
+    // TASK-AI-147: When Jev is UNDECIDED, Controller deterministically selects the highest-scoring candidate among alive/unblocked routes
+    const ranking = (result && result.ranking) || [];
+    const aliveCandidates = ranking.filter(
+      (c) =>
+        c &&
+        c.isAlive === true &&
+        !c.blocked &&
+        c.status !== 'blocked' &&
+        c.headroomStatus !== 'exhausted' &&
+        c.headroomStatus !== 'cooling'
+    );
+    if (aliveCandidates.length > 0) {
+      aliveCandidates.sort((a, b) => {
+        const sA = Number(a.score) || 0;
+        const sB = Number(b.score) || 0;
+        if (sB !== sA) return sB - sA;
+        return String(a.candidateKey).localeCompare(String(b.candidateKey));
+      });
+      chosen = aliveCandidates[0].candidateKey;
+    }
+  }
   const providerFailure = advised.handledBy !== 'jev' && jev.isProviderFailure(advised.reason);
   return {
     chosen,
@@ -1903,36 +1926,69 @@ function reportDispatchOutcome(args, deps) {
   const stall = stallAssessment(outcome, now);
   const evidenceDir = d.evidenceDir || path.join(__dirname, 'data', 'evidence');
 
-  if (terminal) {
-    evidence.recordOutcome(evidenceDir, candidate, {
-      status: failed ? 'failed' : 'passed',
-      exitCode: failed ? 1 : 0,
-      body: typeof outcome.reason === 'string' ? outcome.reason : null,
-      stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
-      cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
-      httpStatus: Number.isFinite(Number(outcome.httpStatus))
-        ? Number(outcome.httpStatus)
-        : undefined,
-      // The reporter observed when this budget clears. Passing it through is what
-      // keeps "quota exhausted until 01:55" from decaying into a five-minute
-      // cooldown the classifier scraped out of a message.
-      cooldownUntil:
-        failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
-      level: evidence.Level.API,
-      source: 'report-outcome',
-    });
+  if (terminal || stall.stalled) {
+    if (terminal) {
+      evidence.recordOutcome(evidenceDir, candidate, {
+        status: failed ? 'failed' : 'passed',
+        exitCode: failed ? 1 : 0,
+        body: typeof outcome.reason === 'string' ? outcome.reason : null,
+        stderr: typeof outcome.reason === 'string' ? outcome.reason : null,
+        cause: typeof outcome.errorClass === 'string' ? outcome.errorClass : null,
+        httpStatus: Number.isFinite(Number(outcome.httpStatus))
+          ? Number(outcome.httpStatus)
+          : undefined,
+        // The reporter observed when this budget clears. Passing it through is what
+        // keeps "quota exhausted until 01:55" from decaying into a five-minute
+        // cooldown the classifier scraped out of a message.
+        cooldownUntil:
+          failed && outcome.cooldownUntil !== undefined ? outcome.cooldownUntil : undefined,
+        level: evidence.Level.API,
+        source: 'report-outcome',
+      });
 
-    const quotaStore = require('./quota-store');
-    const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
-    quotaStore.releaseReservation(
-      outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME',
-      outcome.candidateKey,
-      {
-        home: d.home,
-        path: targetPath,
-        now,
-      }
-    );
+      const quotaStore = require('./quota-store');
+      const targetPath = quotaStore.storePath({ home: d.home, path: d.storePath });
+      quotaStore.releaseReservation(
+        outcome.taskId || outcome.workItemId || 'TASK-REPORT-OUTCOME',
+        outcome.candidateKey,
+        {
+          home: d.home,
+          path: targetPath,
+          now,
+        }
+      );
+    }
+
+    try {
+      const routeHealthApi = require('./route-health');
+      const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, d);
+      const modelId = candidate.modelId || candidate.model;
+      const routeId = candidate.upstream || candidate.gateway || candidate.accessPath;
+      const isTimeout =
+        stall.stalled ||
+        String(outcome.status).toLowerCase() === 'timeout' ||
+        outcome.timedOut === true ||
+        /timeout|stall|hang/i.test(String(outcome.reason || outcome.errorClass || ''));
+      routeHealthApi.recordExecutionResult(
+        storeOrPath,
+        modelId,
+        routeId,
+        {
+          status: passed ? 200 : isTimeout ? 408 : Number(outcome.httpStatus) || 500,
+          ok: passed,
+          timedOut: Boolean(isTimeout),
+          reason: typeof outcome.reason === 'string' ? outcome.reason : outcome.errorClass,
+          elapsedMs: Number(outcome.elapsedMs) || undefined,
+          concurrency: Number(outcome.concurrency) || undefined,
+        },
+        {
+          now,
+          persist: d.persistRouteHealth !== false,
+          loadStore: d.loadStore || d.loader,
+          saveStore: d.saveStore || d.saver,
+        }
+      );
+    } catch (_) {}
   }
 
   const recorded = {
@@ -2533,6 +2589,7 @@ module.exports = {
   isIndependentReviewerCandidate,
   findIndependentReviewerCandidate,
   jevModelChoiceQuestion,
+  adviseModelChoice,
   adviseRankedModelChoice,
   candidateKey,
   formatTopEntry,
