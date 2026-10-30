@@ -298,6 +298,31 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.ok(fail.missingChangedLines.includes('--- a/x'));
     });
 
+    test('losslessCheckDiff preserves changed lines following context lines that resemble hunk headers', () => {
+      // Regression case for Review Finding 2:
+      // Context lines like " @@ -0,0 +0,0 @@" must not be trimmed into false hunk headers
+      const orig = ['@@ -1,2 +1,3 @@', ' @@ -0,0 +0,0 @@', '+checked();', ' tail'].join('\n');
+
+      const { hunks, changedLines } = extractDiffHunksAndChangedLines(orig);
+      assert.equal(hunks.length, 1);
+      assert.equal(hunks[0], '@@ -1,2 +1,3 @@');
+      assert.deepEqual(changedLines, ['+checked();']);
+
+      // Preserved diff passes
+      const compPreserved = orig;
+      const passRes = losslessCheckDiff(orig, compPreserved);
+      assert.equal(passRes.passed, true);
+      assert.equal(passRes.totalChangedLines, 1);
+      assert.equal(passRes.missingChangedLines.length, 0);
+
+      // Dropping +checked(); MUST fail lossless verification
+      const compDropped = ['@@ -1,2 +1,3 @@', ' @@ -0,0 +0,0 @@', ' tail'].join('\n');
+      const failRes = losslessCheckDiff(orig, compDropped);
+      assert.equal(failRes.passed, false);
+      assert.equal(failRes.missingChangedLines.length, 1);
+      assert.equal(failRes.missingChangedLines[0], '+checked();');
+    });
+
     test('losslessCheckJson passes when compressed text parses and retains deep structure', () => {
       const orig = JSON.stringify(
         {
@@ -450,11 +475,12 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.equal(loopbackUnreachable.status, ENGINE_STATUS.NOT_INSTALLED);
       assert.ok(
         loopbackUnreachable.reason.includes('not responding') ||
+          loopbackUnreachable.reason.includes('failed capability check') ||
           loopbackUnreachable.reason.includes('probe error')
       );
     });
 
-    test('probeHeadroom refuses loopback endpoint redirecting to a remote host', async () => {
+    test('probeHeadroom verifies engine-specific capability, refusing remote redirects and unrelated 200 servers', async () => {
       const { spawn } = await import('child_process');
       // Run mock HTTP server in a separate process so its event loop is not blocked by spawnSync
       const serverProcess = spawn(process.execPath, [
@@ -469,8 +495,14 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
             res.writeHead(302, { Location: '/health' });
             res.end();
           } else if (req.url === '/health') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok', service: 'headroom' }));
+          } else if (req.url === '/unrelated-plain') {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
             res.end('ok');
+          } else if (req.url === '/unrelated-json') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok', service: 'other-service' }));
           } else {
             res.writeHead(404);
             res.end();
@@ -499,13 +531,45 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
             remoteRedirect.reason.includes('remote-attacker.example.com')
         );
 
-        // 2. Loopback redirecting to another loopback endpoint is permitted
+        // 2. Unrelated 200 server returning plain-text 'ok' MUST be rejected
+        const unrelatedPlain = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/unrelated-plain`,
+          optIn: true,
+        });
+        assert.equal(unrelatedPlain.installed, false);
+        assert.equal(unrelatedPlain.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(
+          unrelatedPlain.reason.includes('missing Headroom identifier') ||
+            unrelatedPlain.reason.includes('failed capability check')
+        );
+
+        // 3. Unrelated 200 server returning JSON without Headroom identifier MUST be rejected
+        const unrelatedJson = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/unrelated-json`,
+          optIn: true,
+        });
+        assert.equal(unrelatedJson.installed, false);
+        assert.equal(unrelatedJson.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(
+          unrelatedJson.reason.includes('missing Headroom identifier') ||
+            unrelatedJson.reason.includes('failed capability check')
+        );
+
+        // 4. Loopback redirecting to /health with verified Headroom response is permitted
         const loopbackRedirect = probeHeadroom({
           headroomUrl: `http://127.0.0.1:${port}/redirect-loopback`,
           optIn: true,
         });
         assert.equal(loopbackRedirect.installed, true);
         assert.equal(loopbackRedirect.status, ENGINE_STATUS.INSTALLED);
+
+        // 5. Direct base URL automatically targeting /health with verified Headroom response succeeds
+        const directBase = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}`,
+          optIn: true,
+        });
+        assert.equal(directBase.installed, true);
+        assert.equal(directBase.status, ENGINE_STATUS.INSTALLED);
       } finally {
         serverProcess.kill();
       }

@@ -141,8 +141,8 @@ Neither Headroom nor LLMLingua-2 is installed in the local environment. Per AGEN
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | 9924fee64599504ada10f86ea2e500e21a487113 | CHANGES_REQUIRED | Explicit opt-in and loopback restrictions, failed compressor status and aggregate exclusion, exact diff file header vs hunk changed lines verification, demonstrated review guard skip in runner test |
-| 2 | 953fb226e2c27484b5e286f4f4b78c6d05474b25 | CHANGES_REQUIRED | Gated probing with manual redirect loopback enforcement, hunk-count diff line tracking |
-| 3 | pending | READY_FOR_CODEX | Redirects off loopback refused via redirect: manual; hunk line counts tracked from @@ headers so +++ b/x and --- a/x inside hunks are verified changes |
+| 2 | 3182511342797d6750b0d38fff8c950c733aae32 | CHANGES_REQUIRED | Gated probing with manual redirect loopback enforcement, hunk-count diff line tracking |
+| 3 | pending | READY_FOR_CODEX | Verified Headroom capability detection (expected endpoint + response shape/identifier, rejecting unrelated 200 servers); raw-line column-0 hunk parsing outside hunks preserving header-like context lines |
 
 ## Residual limitations
 

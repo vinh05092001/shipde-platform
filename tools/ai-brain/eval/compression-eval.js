@@ -190,27 +190,32 @@ function extractDiffHunksAndChangedLines(diffText) {
   let remNew = 0;
 
   const hunkHeaderRegex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/;
-  const fileHeaderRegex = /^(?:---|\+\+\+)\s+(?:[ab]\/|\/dev\/null)/;
 
   for (const line of lines) {
+    if (!inHunk) {
+      if (line.startsWith('diff --git')) {
+        continue;
+      }
+      if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+        continue;
+      }
+      const hunkMatch = line.match(hunkHeaderRegex);
+      if (hunkMatch) {
+        hunks.push(line.trim());
+        remOld = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
+        remNew = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
+        inHunk = remOld > 0 || remNew > 0;
+        continue;
+      }
+      continue;
+    }
+
+    // Inside a hunk:
+    // Only detect diff --git at column 0 to force-reset if hunk was somehow truncated
     if (line.startsWith('diff --git')) {
       inHunk = false;
       remOld = 0;
       remNew = 0;
-      continue;
-    }
-
-    const hunkMatch = line.trim().match(hunkHeaderRegex);
-    if (hunkMatch) {
-      hunks.push(line.trim());
-      remOld = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
-      remNew = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
-      inHunk = remOld > 0 || remNew > 0;
-      continue;
-    }
-
-    // Treat lines as file headers ONLY when not inside a hunk (remaining old/new counts are zero)
-    if (!inHunk) {
       continue;
     }
 
@@ -531,6 +536,15 @@ function probeHeadroom(options = {}) {
       };
     }
 
+    let initialProbeUrl = proxyUrl;
+    try {
+      const p = new URL(proxyUrl);
+      if (p.pathname === '' || p.pathname === '/') {
+        p.pathname = '/health';
+        initialProbeUrl = p.href;
+      }
+    } catch (_) {}
+
     try {
       const probeScript = `
         function isLoopback(u) {
@@ -580,8 +594,49 @@ function probeHeadroom(options = {}) {
             }
 
             if (res.ok || (res.status >= 200 && res.status < 300)) {
-              process.exitCode = 0;
-              return;
+              let pathname = '/';
+              try {
+                pathname = new URL(curr).pathname;
+              } catch (_) {}
+              const isExpectedEndpoint = pathname === '/health' || pathname === '/status';
+              if (!isExpectedEndpoint) {
+                process.stderr.write('Endpoint ' + curr + ' is not an expected Headroom capability endpoint (/health)');
+                process.exitCode = 1;
+                return;
+              }
+
+              const xService = (res.headers.get('x-service') || '').toLowerCase();
+              const xPoweredBy = (res.headers.get('x-powered-by') || '').toLowerCase();
+              let isHeadroom = xService === 'headroom' || xPoweredBy.includes('headroom');
+
+              if (!isHeadroom) {
+                try {
+                  const text = await res.text();
+                  const data = JSON.parse(text);
+                  if (
+                    data &&
+                    typeof data === 'object' &&
+                    (data.service === 'headroom' ||
+                     data.engine === 'headroom' ||
+                     data.name === 'headroom' ||
+                     data.headroom === true ||
+                     (data.status === 'ok' && data.service === 'headroom'))
+                  ) {
+                    isHeadroom = true;
+                  }
+                } catch (_) {
+                  // Not valid JSON or parse failed
+                }
+              }
+
+              if (isHeadroom) {
+                process.exitCode = 0;
+                return;
+              } else {
+                process.stderr.write('Server at ' + curr + ' is not a Headroom instance (missing Headroom identifier)');
+                process.exitCode = 1;
+                return;
+              }
             } else {
               process.stderr.write('HTTP ' + res.status);
               process.exitCode = 1;
@@ -593,7 +648,7 @@ function probeHeadroom(options = {}) {
           process.exitCode = 1;
         }
 
-        probe(${JSON.stringify(proxyUrl)}).catch(err => {
+        probe(${JSON.stringify(initialProbeUrl)}).catch(err => {
           process.stderr.write(err.message || 'fetch failed');
           process.exitCode = 1;
         });
@@ -613,7 +668,7 @@ function probeHeadroom(options = {}) {
       return {
         installed: false,
         status: ENGINE_STATUS.NOT_INSTALLED,
-        reason: `Headroom proxy at ${proxyUrl} is not responding with 2xx (${probe.stderr || 'connection refused'})`,
+        reason: `Headroom proxy at ${proxyUrl} is not responding or failed capability check (${probe.stderr.trim() || 'connection refused'})`,
       };
     } catch (err) {
       return {
