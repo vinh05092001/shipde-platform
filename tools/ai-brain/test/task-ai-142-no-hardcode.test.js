@@ -260,16 +260,25 @@ function withGuardRepo(run) {
     fs.writeFileSync(target, content);
   };
   const baseline = 'scripts/ai/hardcode-baseline.json';
+  const aiModules = path.join(path.dirname(CHECKER_PATH), 'node_modules');
+  let junctionCreated = false;
   try {
     write('scripts/ai/check-no-hardcode.mjs', fs.readFileSync(CHECKER_PATH));
     write('scripts/ai/hardcode-allowlist.json', '[]');
     write(baseline, JSON.stringify({ total: 0, violations: [] }));
     git('init');
+    write('.git/info/exclude', 'node_modules\n');
     git('config', 'user.email', 'guard-test@example.invalid');
     git('config', 'user.name', 'Guard test');
     git('add', '.');
     git('-c', 'core.hooksPath=disabled-hooks', 'commit', '-m', 'fixture');
     git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    if (fs.existsSync(aiModules)) {
+      try {
+        fs.symlinkSync(aiModules, path.join(root, 'scripts', 'ai', 'node_modules'), 'junction');
+        junctionCreated = true;
+      } catch {}
+    }
     const cli = (args = [], env = {}) =>
       spawnSync(process.execPath, [path.join(root, 'scripts/ai/check-no-hardcode.mjs'), ...args], {
         cwd: root,
@@ -278,6 +287,11 @@ function withGuardRepo(run) {
       });
     run({ root, git, write, cli, baseline });
   } finally {
+    if (junctionCreated) {
+      try {
+        fs.unlinkSync(path.join(root, 'scripts', 'ai', 'node_modules'));
+      } catch {}
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 }

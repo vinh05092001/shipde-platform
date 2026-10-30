@@ -12,7 +12,7 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `tenant isolation`, `database ownership`, `auth`, `audit` |
-| Allowed paths   | `docs/product-spec/work-items/FEAT-ORG-02.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/branches/*`, `apps/web/src/components/BranchManagementView.tsx`, `apps/web/src/app/settings/branches/page.tsx`, `apps/web/src/tests/branches-page-states.test.ts`, `apps/web/package.json` |
+| Allowed paths   | `docs/product-spec/work-items/FEAT-ORG-02.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/package.json`, `apps/api/src/app.module.ts`, `apps/api/src/branches/*`, `apps/web/src/components/BranchManagementView.tsx`, `apps/web/src/app/settings/branches/page.tsx`, `apps/web/src/tests/branches-page-states.test.ts`, `apps/web/package.json` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-org-02-branches` |
 | Pull Request    | Pending |
@@ -91,7 +91,7 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 - `BR-BRANCH-02 — Unique Branch Code`: Branch `code` must be unique within each merchant tenant (case-insensitive). Duplicate code returns 409 `BRANCH_CODE_EXISTS`.
 - `BR-BRANCH-03 — Default Branch Invariant`: At most one branch per merchant can have `is_default = true`. When a branch is set to `is_default = true`, all other branches in that merchant are atomically updated to `is_default = false`.
 - Concurrent create/update requests lock the merchant row before reading the branch count, target branch or affected defaults. Scope checks and default mutations execute inside that same transaction, so a concurrent default change cannot introduce an unauthorized affected branch.
-- `BR-BRANCH-04 — Default Branch Protection`: A default branch cannot be deactivated or deleted. Attempting to deactivate a default branch returns 400 `CANNOT_DEACTIVATE_DEFAULT_BRANCH`.
+- `BR-BRANCH-04 — Default Branch Protection`: A default branch cannot be deactivated or deleted. Attempting to deactivate a default branch returns 400 `CANNOT_DEACTIVATE_DEFAULT_BRANCH`. Attempting to delete a default branch returns 400 `CANNOT_DELETE_DEFAULT_BRANCH`. Deactivate and delete operations acquire `lockMerchantBranches` and re-read the target branch inside the locked transaction, ensuring concurrent promotion to default cannot bypass default protection.
 - `BR-BRANCH-05 — User Store Scoping`: Users with non-wildcard `store_scopes` (e.g. `['HCM-Q3']`) can only view and interact with branches whose ID or code is in their `store_scopes`. Attempting to access an unassigned branch returns 403 `FORBIDDEN`.
 - `BR-BRANCH-06 — RBAC Authority`: Branch mutations require `iam:shop_config`. Users lacking this capability are rejected with 403 `FORBIDDEN`.
 - `BR-BRANCH-07 — Immutable Audit Trail`: All branch lifecycle events (`BRANCH_CREATED`, `BRANCH_UPDATED`, `BRANCH_ACTIVATED`, `BRANCH_DEACTIVATED`, `BRANCH_DELETED`) generate immutable audit logs with masked sensitive fields (phone).
@@ -125,6 +125,53 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 | `AC-ORG-02-22` | Scoped store banner displayed for users with restricted `store_scopes` | Explanatory banner displayed listing assigned store scopes | PASS — Verified in `branches-page-states.test.ts` (scoped store notification verified) |
 | `AC-ORG-02-23` | Success notification banner displayed upon create/update/activate/deactivate | Alert banner displayed with descriptive success text | PASS — Verified in `branches-page-states.test.ts` (success notification verified) |
 | `AC-ORG-02-24` | Full page container and breadcrumb navigation at `/settings/branches` | Page container renders breadcrumbs, sibling settings tabs, and branch management view | PASS — Verified in `branches-page-states.test.ts` (full page container verified) |
+| `AC-ORG-02-25` | Attempt to deactivate branch concurrently promoted to default before transaction lock (`POST /api/v1/branches/:id/deactivate`) | 400 `CANNOT_DEACTIVATE_DEFAULT_BRANCH` canonical error; status remains ACTIVE; zero audit logs recorded | PASS — Verified in `branches.unit.spec.ts` & `branches.supertest.spec.ts` (tenant lock acquired, inside-tx re-read rejects with 400) |
+| `AC-ORG-02-26` | Attempt to delete branch concurrently promoted to default before transaction lock (`DELETE /api/v1/branches/:id`) | 400 `CANNOT_DELETE_DEFAULT_BRANCH` canonical error; branch remains intact in DB; zero audit logs recorded | PASS — Verified in `branches.unit.spec.ts` & `branches.supertest.spec.ts` (tenant lock acquired, inside-tx re-read rejects with 400) |
+| `AC-ORG-02-27` | API test gate integration for branch test suites (`apps/api/package.json`) | `pnpm --filter @shipde/api test` executes branch unit and supertest test suites | PASS — Verified in `apps/api/package.json` (unit and supertest wired to test script) |
+
+## Follow-up entry (2026-10-30) — API Test Gate & Atomic Default-Branch Invariant
+
+### Context and Objectives
+
+Follow-up fix in branch `fix/feat-org-02-gate-atomic` (PR #474) addressing two operational and concurrency guarantees:
+1. **API Test Gate integration**: wire branch unit and supertest specifications to `apps/api/package.json` so CI test gates continuously execute branch test suites.
+2. **Atomic Default-Branch Protection (`BR-BRANCH-04`)**: refactor `deactivateBranch` and `deleteBranch` in `BranchesService` to acquire tenant row locks and re-read the target branch inside the transaction to eliminate race conditions under concurrent default designation.
+
+### Implementation Details
+
+1. **API Test Gate Wiring (`apps/api/package.json`)**:
+   - Added `tsx --tsconfig tsconfig.json --test src/branches/branches.unit.spec.ts && tsx --tsconfig tsconfig.json src/branches/branches.supertest.spec.ts` to `apps/api/package.json` `scripts.test`.
+   - Guarantees that continuous integration runs the branch unit and supertest test suites automatically on the API test gate.
+
+2. **Atomic Default-Branch Protection on Deactivate and Delete (`apps/api/src/branches/branches.service.ts`)**:
+   - Refactored `deactivateBranch`: tenant row locking (`await this.lockMerchantBranches(tx, merchantId)`), target branch querying (`await tx.branch.findFirst(...)`), default-branch check (`if (existing.is_default) throw 400 CANNOT_DEACTIVATE_DEFAULT_BRANCH`), actor scope validation (`await this.checkActorBranchScope(...)`), status mutation (`status: 'INACTIVE'`), and audit logging (`BRANCH_DEACTIVATED`) execute inside a single atomic database transaction (`prisma.$transaction`).
+   - Refactored `deleteBranch`: tenant row locking (`await this.lockMerchantBranches(tx, merchantId)`), target branch querying (`await tx.branch.findFirst(...)`), default-branch check (`if (existing.is_default) throw 400 CANNOT_DELETE_DEFAULT_BRANCH`), actor scope validation (`await this.checkActorBranchScope(...)`), record deletion, and audit logging (`BRANCH_DELETED`) execute inside a single atomic database transaction (`prisma.$transaction`).
+   - Concurrency safety: if another transaction promotes the target branch to default before this transaction's lock is acquired, the inside-lock re-read detects `is_default: true` and aborts with canonical 400 (`CANNOT_DEACTIVATE_DEFAULT_BRANCH` or `CANNOT_DELETE_DEFAULT_BRANCH`), ensuring no invariant violation, partial database mutation, or spurious audit log occurs.
+
+### Tests Added
+
+1. **Unit Tests (`apps/api/src/branches/branches.unit.spec.ts`)**:
+   - Added suite `Default branch atomic invariant on deactivate/delete`:
+     - `deactivate takes tenant lock and re-reads default status inside transaction`: verifies `lockMerchantBranches` acquires `merchants ... FOR NO KEY UPDATE` and `findFirst` is executed inside the locked transaction.
+     - `deactivate rejects a target branch concurrently made default before the transaction lock`: simulates concurrent promotion to default; asserts rejection with 400 `CANNOT_DEACTIVATE_DEFAULT_BRANCH`, target branch remains default and ACTIVE, and zero audit logs are created.
+     - `delete takes tenant lock and re-reads default status inside transaction`: verifies `lockMerchantBranches` acquires tenant lock and `findFirst` is executed inside the locked transaction.
+     - `delete rejects a target branch concurrently made default before the transaction lock`: simulates concurrent promotion to default; asserts rejection with 400 `CANNOT_DELETE_DEFAULT_BRANCH`, target branch remains intact, and zero audit logs are created.
+
+2. **Integration / Concurrency Supertest Specs (`apps/api/src/branches/branches.supertest.spec.ts`)**:
+   - Added real overlapping transaction specifications for `deactivate` and `delete` against database:
+     - Sets up tenant with target non-default branch.
+     - Simulates overlapping transaction that holds tenant lock and concurrently promotes target branch to default.
+     - Executes pending `service.deactivateBranch` or `service.deleteBranch`.
+     - Verifies pending call awaits lock, re-reads inside transaction, detects default designation, and rejects with 400 `CANNOT_DEACTIVATE_DEFAULT_BRANCH` or `CANNOT_DELETE_DEFAULT_BRANCH`.
+     - Confirms target branch remains persisted in database with `is_default: true` and `status: 'ACTIVE'`, and zero audit logs are written for the rejected call.
+
+### Acceptance Evidence
+
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/branches/branches.unit.spec.ts` — PASSED (43/43 tests, 8 suites).
+- `pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/branches/branches.supertest.spec.ts` — PASSED (concurrency checks verified; safe offline skip when local Postgres offline).
+- `pnpm --filter @shipde/web exec tsx src/tests/branches-page-states.test.ts` — PASSED (14/14 UI states verified).
+- `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new).
+- `pnpm format:check` — PASSED.
 
 ## Verification commands
 
@@ -144,7 +191,8 @@ A shop owner (`OWNER`) or authorized administrator (holding the `iam:shop_config
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Pending | Initial implementation of Branches API, persistence, and Web UI settings screen |
+| 1 | `9daaeaec` | PASS | Initial implementation of Branches API, persistence, migrations, tenant & store scopes, RBAC guards, audit logs, and Web UI settings screen (`SCR-WH-01` / `/settings/branches`) |
+| 2 (Follow-up) | `86bd8ad5` | READY_FOR_CODEX | Wire branch unit & supertest suites to `apps/api/package.json` test gate; enforce atomic tenant locking (`lockMerchantBranches`) and inside-tx re-read in `deactivateBranch` and `deleteBranch` to protect `BR-BRANCH-04` default-branch invariant against concurrent promotion races |
 
 ## Residual limitations
 
