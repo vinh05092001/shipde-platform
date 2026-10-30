@@ -588,8 +588,7 @@ export class ImportsService {
           await tx.importRow.deleteMany({ where: { import_id: imp.id } });
         }
 
-        // Durable per-row outcomes with per-item failure independence: each row insert runs
-        // in its own savepoint so one failed row cannot roll back the other rows.
+        // Persist per-row outcomes durably for the imported batch.
         const rowData = validatedRows.map((vr) => ({
           import_id: imp.id,
           row_number: vr.rowNumber,
@@ -599,25 +598,11 @@ export class ImportsService {
           scope_identifier: vr.scopeIdentifier,
           issues_json: vr.issues.length > 0 ? (vr.issues as any) : Prisma.JsonNull,
         }));
-        for (let i = 0; i < rowData.length; i++) {
-          const rowDatum = rowData[i];
-          const spName = `row_sp_${i}`;
-          try {
-            if (typeof tx.$executeRawUnsafe === 'function') {
-              await tx.$executeRawUnsafe(`SAVEPOINT ${spName}`);
-            }
+        if (typeof tx.importRow?.createMany === 'function') {
+          await tx.importRow.createMany({ data: rowData });
+        } else if (typeof tx.importRow?.create === 'function') {
+          for (const rowDatum of rowData) {
             await tx.importRow.create({ data: rowDatum });
-            if (typeof tx.$executeRawUnsafe === 'function') {
-              await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${spName}`);
-            }
-          } catch (rowErr) {
-            if (typeof tx.$executeRawUnsafe === 'function') {
-              await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${spName}`);
-            }
-            console.error(
-              `[ImportsService] Failed to persist import row ${rowDatum.row_number}:`,
-              rowErr
-            );
           }
         }
 
