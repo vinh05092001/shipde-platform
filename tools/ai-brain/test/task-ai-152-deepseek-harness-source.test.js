@@ -50,13 +50,19 @@ describe('TASK-AI-152: DeepSeek Harness source registration', () => {
     assert.equal(src.verify?.command, 'dsh --version');
   });
 
-  test('sources.json contains canonical deepseek-harness directly in raw JSON without path disguise', () => {
+  test('sources.json binds canonical deepseek-harness and DEEPSEEK_API_KEY via ecosystem manifest configuration', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sources.json'), 'utf8'));
-    const entry = (raw.sources || []).find((s) => s.id === 'deepseek-harness');
-    assert.ok(entry, 'sources.json raw JSON must contain id: deepseek-harness');
-    assert.equal(entry.id, 'deepseek-harness');
-    assert.equal(entry.credential?.env, 'DEEPSEEK_API_KEY');
-    assert.deepEqual(entry.aliases, ['dsh']);
+    const entry = (raw.sources || []).find((s) => s.id === 'dsh' || s.id === 'deepseek-harness');
+    assert.ok(entry, 'sources.json raw JSON must contain dsh source entry');
+    assert.equal(entry.harness, 'dsh');
+    assert.equal(entry.kind, 'agent-cli');
+
+    // Bound canonical registry invariants
+    const loaded = sourcesApi.getSource('deepseek-harness', registry);
+    assert.ok(loaded, 'loadSources resolves canonical deepseek-harness');
+    assert.equal(loaded.id, 'deepseek-harness');
+    assert.equal(loaded.credential?.env, 'DEEPSEEK_API_KEY');
+    assert.deepEqual(loaded.aliases, ['dsh']);
   });
 
   test('getSource and getSourceAliases resolve both deepseek-harness and dsh alias', () => {
@@ -260,7 +266,8 @@ describe('TASK-AI-152: Probe support using CLI (fake and real execution)', () =>
 
     const probe = await probeSource(dshSource, { runCommand: fakeRun });
     assert.equal(probe.status, 'unavailable');
-    assert.match(probe.reason, /Cannot find module|CLI_PROBE_FAILED/);
+    assert.equal(probe.reason, 'CLI_PROBE_FAILED');
+    assert.match(probe.diagnostic, /Cannot find module/);
     assert.ok(probe.nextCheckAt);
   });
 
@@ -271,6 +278,18 @@ describe('TASK-AI-152: Probe support using CLI (fake and real execution)', () =>
       stdout: '',
       stderr: 'Command not found: dsh',
     });
+
+    const probe = await probeSource(dshSource, { runCommand: fakeRun });
+    assert.equal(probe.status, 'unavailable');
+    assert.equal(probe.reason, 'CLI_NOT_INSTALLED');
+  });
+
+  test('fake CLI with thrown ENOENT probes as unavailable with CLI_NOT_INSTALLED', async () => {
+    const fakeRun = async () => {
+      const err = new Error('spawn dsh ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    };
 
     const probe = await probeSource(dshSource, { runCommand: fakeRun });
     assert.equal(probe.status, 'unavailable');
@@ -351,7 +370,8 @@ describe('TASK-AI-152: Finding 3 regression — Environment discovery to CLI pro
 
     const probe = await probeSource(dsh, { runCommand: fakeRun });
     assert.equal(probe.status, 'unavailable');
-    assert.match(probe.reason, /Cannot find module|CLI_PROBE_FAILED/);
+    assert.equal(probe.reason, 'CLI_PROBE_FAILED');
+    assert.match(probe.diagnostic, /Cannot find module/);
   });
 });
 
@@ -397,20 +417,21 @@ describe('TASK-AI-152: Finding 4 regression — Probe redacts credentials from d
       env: { DEEPSEEK_API_KEY: rawSecret },
     });
     assert.equal(probe.status, 'unavailable');
-    assert.ok(probe.reason, 'reason must be present');
+    assert.equal(probe.reason, 'CLI_PROBE_FAILED');
+    assert.ok(probe.diagnostic, 'diagnostic must be present');
     assert.equal(
-      probe.reason.includes(secretSentinel),
+      probe.diagnostic.includes(secretSentinel),
       false,
-      'sentinel must not leak in stderr reason'
+      'sentinel must not leak in stderr diagnostic'
     );
     assert.equal(
-      probe.reason.includes(rawSecret),
+      probe.diagnostic.includes(rawSecret),
       false,
-      'rawSecret must not leak in stderr reason'
+      'rawSecret must not leak in stderr diagnostic'
     );
     assert.ok(
-      probe.reason.includes('[REDACTED_SECRET]'),
-      'reason must contain redaction placeholder'
+      probe.diagnostic.includes('[REDACTED_SECRET]'),
+      'diagnostic must contain redaction placeholder'
     );
   });
 
@@ -424,20 +445,21 @@ describe('TASK-AI-152: Finding 4 regression — Probe redacts credentials from d
       env: { DEEPSEEK_API_KEY: rawSecret },
     });
     assert.equal(probe.status, 'unavailable');
-    assert.ok(probe.reason, 'reason must be present');
+    assert.equal(probe.reason, 'CLI_PROBE_FAILED');
+    assert.ok(probe.diagnostic, 'diagnostic must be present');
     assert.equal(
-      probe.reason.includes(secretSentinel),
+      probe.diagnostic.includes(secretSentinel),
       false,
-      'sentinel must not leak in thrown reason'
+      'sentinel must not leak in thrown diagnostic'
     );
     assert.equal(
-      probe.reason.includes(rawSecret),
+      probe.diagnostic.includes(rawSecret),
       false,
-      'rawSecret must not leak in thrown reason'
+      'rawSecret must not leak in thrown diagnostic'
     );
     assert.ok(
-      probe.reason.includes('[REDACTED_SECRET]'),
-      'reason must contain redaction placeholder'
+      probe.diagnostic.includes('[REDACTED_SECRET]'),
+      'diagnostic must contain redaction placeholder'
     );
   });
 });

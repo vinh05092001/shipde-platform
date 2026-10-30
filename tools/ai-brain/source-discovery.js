@@ -616,20 +616,29 @@ async function probeSource(source, options = {}) {
             version: redact((res.stdout || '').trim()) || null,
           };
         }
+        const diagnostic =
+          redact(
+            (res && res.stderr ? res.stderr.trim() : null) ||
+              (res && res.stdout ? res.stdout.trim() : null)
+          ) || null;
         return {
           ...record,
           status: 'unavailable',
-          reason:
-            res && res.enoent
-              ? 'CLI_NOT_INSTALLED'
-              : redact((res && res.stderr ? res.stderr.trim() : null) || 'CLI_PROBE_FAILED'),
+          reason: res && res.enoent ? 'CLI_NOT_INSTALLED' : 'CLI_PROBE_FAILED',
+          ...(diagnostic ? { diagnostic } : {}),
           nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
         };
       } catch (err) {
+        const isEnoent = Boolean(
+          err &&
+          (err.code === 'ENOENT' || err.enoent || (err.message && err.message.includes('ENOENT')))
+        );
+        const diagnostic = redact(String((err && err.message) || '')) || null;
         return {
           ...record,
           status: 'unavailable',
-          reason: redact(String((err && err.message) || 'CLI_PROBE_FAILED')),
+          reason: isEnoent ? 'CLI_NOT_INSTALLED' : 'CLI_PROBE_FAILED',
+          ...(diagnostic ? { diagnostic } : {}),
           nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
         };
       }
@@ -647,20 +656,29 @@ async function probeSource(source, options = {}) {
           version: redact((res.stdout || '').trim()) || null,
         };
       }
+      const diagnostic =
+        redact(
+          (res && res.stderr ? res.stderr.trim() : null) ||
+            (res && res.stdout ? res.stdout.trim() : null)
+        ) || null;
       return {
         ...record,
         status: 'unavailable',
-        reason:
-          res && res.enoent
-            ? 'CLI_NOT_INSTALLED'
-            : redact((res && res.stderr ? res.stderr.trim() : null) || 'CLI_PROBE_FAILED'),
+        reason: res && res.enoent ? 'CLI_NOT_INSTALLED' : 'CLI_PROBE_FAILED',
+        ...(diagnostic ? { diagnostic } : {}),
         nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
       };
     } catch (err) {
+      const isEnoent = Boolean(
+        err &&
+        (err.code === 'ENOENT' || err.enoent || (err.message && err.message.includes('ENOENT')))
+      );
+      const diagnostic = redact(String((err && err.message) || '')) || null;
       return {
         ...record,
         status: 'unavailable',
-        reason: redact(String((err && err.message) || 'CLI_EXEC_FAILED')),
+        reason: isEnoent ? 'CLI_NOT_INSTALLED' : 'CLI_PROBE_FAILED',
+        ...(diagnostic ? { diagnostic } : {}),
         nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
       };
     }
