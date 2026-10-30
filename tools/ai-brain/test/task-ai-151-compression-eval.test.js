@@ -7,9 +7,12 @@ const path = require('node:path');
 const {
   CATEGORIES,
   ENGINE_STATUS,
+  isOptedIn,
+  isLoopbackUrl,
   countTokens,
   isCompressionForbidden,
   detectCategory,
+  extractDiffHunksAndChangedLines,
   losslessCheckDiff,
   deepCompareJson,
   losslessCheckJson,
@@ -120,6 +123,72 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.equal(result.passed, false);
       assert.equal(result.missingChangedLines.length, 1);
       assert.equal(result.missingChangedLines[0], '+  const b = 2;');
+    });
+
+    test('losslessCheckDiff distinguishes real file headers from hunk code changes like +++counter and ---decrement', () => {
+      const orig = [
+        'diff --git a/src/counter.js b/src/counter.js',
+        '--- a/src/counter.js',
+        '+++ b/src/counter.js',
+        '@@ -1,5 +1,7 @@',
+        ' function mutate() {',
+        '+++counter;',
+        '---decrement;',
+        '-  const oldVal = 1;',
+        '+  const newVal = 2;',
+        ' }',
+      ].join('\n');
+
+      // 1. Fully preserved diff passes lossless check
+      const compPreserved = [
+        'diff --git a/src/counter.js b/src/counter.js',
+        '@@ -1,5 +1,7 @@',
+        ' function mutate() {',
+        '+++counter;',
+        '---decrement;',
+        '-  const oldVal = 1;',
+        '+  const newVal = 2;',
+        ' }',
+      ].join('\n');
+      const passResult = losslessCheckDiff(orig, compPreserved);
+      assert.equal(passResult.passed, true);
+      assert.equal(passResult.totalChangedLines, 4);
+      assert.equal(passResult.missingChangedLines.length, 0);
+
+      // 2. Dropping +++counter; inside hunk MUST fail lossless check
+      const compDroppedPlus = [
+        '@@ -1,5 +1,7 @@',
+        ' function mutate() {',
+        '---decrement;',
+        '-  const oldVal = 1;',
+        '+  const newVal = 2;',
+        ' }',
+      ].join('\n');
+      const failPlusResult = losslessCheckDiff(orig, compDroppedPlus);
+      assert.equal(failPlusResult.passed, false);
+      assert.equal(failPlusResult.missingChangedLines.length, 1);
+      assert.equal(failPlusResult.missingChangedLines[0], '+++counter;');
+
+      // 3. Dropping ---decrement; inside hunk MUST fail lossless check
+      const compDroppedMinus = [
+        '@@ -1,5 +1,7 @@',
+        ' function mutate() {',
+        '+++counter;',
+        '-  const oldVal = 1;',
+        '+  const newVal = 2;',
+        ' }',
+      ].join('\n');
+      const failMinusResult = losslessCheckDiff(orig, compDroppedMinus);
+      assert.equal(failMinusResult.passed, false);
+      assert.equal(failMinusResult.missingChangedLines.length, 1);
+      assert.equal(failMinusResult.missingChangedLines[0], '---decrement;');
+
+      // 4. File headers outside hunks are not treated as changed lines
+      const { changedLines } = extractDiffHunksAndChangedLines(orig);
+      assert.equal(changedLines.includes('--- a/src/counter.js'), false);
+      assert.equal(changedLines.includes('+++ b/src/counter.js'), false);
+      assert.equal(changedLines.includes('+++counter;'), true);
+      assert.equal(changedLines.includes('---decrement;'), true);
     });
 
     test('losslessCheckJson passes when compressed text parses and retains deep structure', () => {
@@ -240,24 +309,53 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
   });
 
   describe('Offline probing and evaluation runner', () => {
-    test('probeHeadroom rejects unreachable proxy URL and reports NOT_INSTALLED', () => {
-      const hrUnreachable = probeHeadroom({ headroomUrl: 'http://127.0.0.1:59999' });
-      assert.equal(hrUnreachable.installed, false);
-      assert.equal(hrUnreachable.status, ENGINE_STATUS.NOT_INSTALLED);
+    test('probeHeadroom and probeLlmLingua default to NOT_ENABLED without opt-in and run nothing', () => {
+      // By default without opt-in, probing does not contact network or run binaries
+      const hr = probeHeadroom({ headroomUrl: 'http://127.0.0.1:8787' });
+      assert.equal(hr.installed, false);
+      assert.equal(hr.status, ENGINE_STATUS.NOT_ENABLED);
+      assert.ok(hr.reason.includes('opt-in required'));
+
+      const llm = probeLlmLingua();
+      assert.equal(llm.installed, false);
+      assert.equal(llm.status, ENGINE_STATUS.NOT_ENABLED);
+      assert.ok(llm.reason.includes('opt-in required'));
+    });
+
+    test('probeHeadroom strictly enforces loopback restriction for HEADROOM_URL when opted in', () => {
+      // Non-loopback URL must be rejected without making any external network connection
+      const remote = probeHeadroom({ headroomUrl: 'http://remote-server.com:8787', optIn: true });
+      assert.equal(remote.installed, false);
+      assert.equal(remote.status, ENGINE_STATUS.NOT_INSTALLED);
+      assert.ok(remote.reason.includes('restricted to loopback'));
+
+      const publicIp = probeHeadroom({ headroomUrl: 'http://93.184.216.34:8787', optIn: true });
+      assert.equal(publicIp.installed, false);
+      assert.equal(publicIp.status, ENGINE_STATUS.NOT_INSTALLED);
+      assert.ok(publicIp.reason.includes('restricted to loopback'));
+
+      // Loopback URL is checked only when opted in
+      const loopbackUnreachable = probeHeadroom({
+        headroomUrl: 'http://127.0.0.1:59999',
+        optIn: true,
+      });
+      assert.equal(loopbackUnreachable.installed, false);
+      assert.equal(loopbackUnreachable.status, ENGINE_STATUS.NOT_INSTALLED);
       assert.ok(
-        hrUnreachable.reason.includes('not reachable') ||
-          hrUnreachable.reason.includes('not responding')
+        loopbackUnreachable.reason.includes('not responding') ||
+          loopbackUnreachable.reason.includes('probe error')
       );
     });
-    test('probeHeadroom and probeLlmLingua return NOT_INSTALLED when tools absent', () => {
-      const hr = probeHeadroom({ headroomUrl: null });
+
+    test('probeHeadroom and probeLlmLingua return NOT_INSTALLED when opted in but tools absent', () => {
+      const hr = probeHeadroom({ headroomUrl: null, optIn: true });
       assert.ok(hr.status === ENGINE_STATUS.NOT_INSTALLED || hr.status === ENGINE_STATUS.INSTALLED);
       if (hr.status === ENGINE_STATUS.NOT_INSTALLED) {
         assert.equal(hr.installed, false);
         assert.ok(hr.reason);
       }
 
-      const llm = probeLlmLingua();
+      const llm = probeLlmLingua({ optIn: true });
       assert.ok(
         llm.status === ENGINE_STATUS.NOT_INSTALLED || llm.status === ENGINE_STATUS.INSTALLED
       );
@@ -267,7 +365,7 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       }
     });
 
-    test('runCompressionEval on fixtures returns truthful NOT_INSTALLED status', () => {
+    test('runCompressionEval on fixtures defaults to truthful NOT_ENABLED status when not opted in', () => {
       const result = runCompressionEval({ inputsDir: FIXTURES_DIR });
 
       assert.ok(result.summary.totalFiles >= 4);
@@ -283,18 +381,81 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.ok(jsonStats.fileCount >= 1);
       assert.ok(diffStats.fileCount >= 1);
 
+      assert.equal(specStats.engines.headroom.status, ENGINE_STATUS.NOT_ENABLED);
+      assert.equal(specStats.engines.headroom.compressedTokens, null);
+      assert.equal(specStats.engines.llmlingua2.status, ENGINE_STATUS.NOT_ENABLED);
+      assert.equal(specStats.engines.llmlingua2.compressedTokens, null);
+    });
+
+    test('runCompressionEval on fixtures returns truthful NOT_INSTALLED status when opted in', () => {
+      const result = runCompressionEval({ inputsDir: FIXTURES_DIR, optIn: true });
+
+      const specStats = result.categories[CATEGORIES.SPEC_DOCS];
       assert.equal(specStats.engines.headroom.status, ENGINE_STATUS.NOT_INSTALLED);
       assert.equal(specStats.engines.headroom.compressedTokens, null);
       assert.equal(specStats.engines.llmlingua2.status, ENGINE_STATUS.NOT_INSTALLED);
       assert.equal(specStats.engines.llmlingua2.compressedTokens, null);
     });
 
-    test('runCompressionEval with mock compressor calculates reduction and enforces review guard', () => {
-      // Mock compressor strips extra whitespace and comments
-      const mockCompressor = (text, category) => {
+    test('failed compressor is reported as FAILED with error and never counted in aggregates', () => {
+      // 1. Mock compressor returning explicit error
+      const resultWithError = runCompressionEval({
+        inputsDir: FIXTURES_DIR,
+        mockCompressor: () => ({ error: 'CCR proxy timed out' }),
+      });
+
+      const jsonStats = resultWithError.categories[CATEGORIES.JSON];
+      assert.equal(jsonStats.engines.mock.status, ENGINE_STATUS.FAILED);
+      assert.equal(jsonStats.engines.mock.error, 'CCR proxy timed out');
+      assert.equal(jsonStats.engines.mock.compressedTokens, null);
+      assert.equal(jsonStats.engines.mock.tokenReductionPercent, null);
+      assert.equal(jsonStats.engines.mock.losslessPassed, ENGINE_STATUS.FAILED);
+
+      // 2. Mock compressor throwing an exception
+      const resultWithThrow = runCompressionEval({
+        inputsDir: FIXTURES_DIR,
+        mockCompressor: () => {
+          throw new Error('Process crash');
+        },
+      });
+
+      const diffStats = resultWithThrow.categories[CATEGORIES.CODE_DIFFS];
+      assert.equal(diffStats.engines.mock.status, ENGINE_STATUS.FAILED);
+      assert.equal(diffStats.engines.mock.error, 'Process crash');
+      assert.equal(diffStats.engines.mock.compressedTokens, null);
+
+      // 3. Headroom failed execution marks headroom as FAILED with unavailable metrics
+      const resultWithFailedHeadroom = runCompressionEval({
+        inputsDir: FIXTURES_DIR,
+        optIn: true,
+        headroomProbe: {
+          installed: true,
+          status: ENGINE_STATUS.INSTALLED,
+          mode: 'cli',
+        },
+      });
+      const hrStats = resultWithFailedHeadroom.categories[CATEGORIES.CODE_DIFFS].engines.headroom;
+      assert.equal(hrStats.status, ENGINE_STATUS.FAILED);
+      assert.equal(hrStats.compressedTokens, null);
+      assert.equal(hrStats.tokenReductionPercent, null);
+      assert.equal(hrStats.losslessPassed, ENGINE_STATUS.FAILED);
+      assert.ok(hrStats.error);
+    });
+
+    test('runCompressionEval with mock compressor calculates reduction and demonstrates skipped compressor calls on review guard', () => {
+      const invokedCalls = [];
+
+      const mockCompressor = (text, category, sample) => {
+        const filePath = sample ? sample.relativePath || sample.filePath : 'unknown';
+        invokedCalls.push({
+          category,
+          filePath,
+          text,
+        });
+
         if (category === CATEGORIES.JSON) {
           try {
-            return JSON.stringify(JSON.parse(text)); // minified JSON
+            return JSON.stringify(JSON.parse(text));
           } catch (_) {
             return text;
           }
@@ -307,11 +468,49 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
         mockCompressor,
       });
 
+      // 1. Assert non-review JSON compression works and calculates reduction
       const jsonStats = result.categories[CATEGORIES.JSON];
       assert.ok(jsonStats.engines.mock);
       assert.equal(jsonStats.engines.mock.status, ENGINE_STATUS.INSTALLED);
       assert.ok(jsonStats.engines.mock.compressedTokens <= jsonStats.originalTokens);
       assert.equal(jsonStats.engines.mock.losslessPassed, true);
+
+      // 2. Demonstrate that compressor calls were invoked for normal files
+      const nonReviewCalls = invokedCalls.filter(
+        (c) => !c.filePath.toLowerCase().includes('review')
+      );
+      assert.ok(nonReviewCalls.length >= 3);
+      assert.ok(invokedCalls.some((c) => c.filePath.includes('sample-quota.json')));
+      assert.ok(invokedCalls.some((c) => c.filePath.includes('sample-code.diff')));
+      assert.ok(invokedCalls.some((c) => c.filePath.includes('sample-ci.txt')));
+      assert.ok(invokedCalls.some((c) => c.filePath.includes('sample-spec.md')));
+
+      // 3. Finding 5 demonstration: prove mock compressor was NEVER called for sample-review.md
+      const reviewCalls = invokedCalls.filter((c) => c.filePath.toLowerCase().includes('review'));
+      assert.equal(
+        reviewCalls.length,
+        0,
+        'Expected zero compressor calls for review/diagnosis files under FIXTURES_DIR'
+      );
+
+      // 4. Verify compressWithHeadroom and compressWithLlmLingua return skipped: true on review context
+      const hrReview = compressWithHeadroom(
+        '# Review verdict',
+        { role: 'reviewer', filePath: 'sample-review.md' },
+        { installed: true },
+        { optIn: true }
+      );
+      assert.equal(hrReview.skipped, true);
+      assert.equal(hrReview.compressedText, '# Review verdict');
+
+      const llmReview = compressWithLlmLingua(
+        '# Review verdict',
+        { role: 'reviewer', filePath: 'sample-review.md' },
+        { installed: true, pythonPath: 'python' },
+        { optIn: true }
+      );
+      assert.equal(llmReview.skipped, true);
+      assert.equal(llmReview.compressedText, '# Review verdict');
     });
 
     test('formatReportMarkdown outputs valid markdown table and recommendation', () => {

@@ -14,7 +14,46 @@ const CATEGORIES = {
 const ENGINE_STATUS = {
   INSTALLED: 'INSTALLED',
   NOT_INSTALLED: 'NOT_INSTALLED',
+  NOT_ENABLED: 'NOT_ENABLED',
+  FAILED: 'FAILED',
 };
+
+/**
+ * Check whether compression engines are explicitly opted in.
+ * Default is false (offline, disabled, reporting NOT_ENABLED).
+ *
+ * @param {object} [options]
+ * @returns {boolean}
+ */
+function isOptedIn(options = {}) {
+  if (options.optIn === true || options.enableCompression === true) {
+    return true;
+  }
+  const envVal = String(process.env.ENABLE_COMPRESSION || process.env.COMPRESSION_OPT_IN || '')
+    .trim()
+    .toLowerCase();
+  return envVal === '1' || envVal === 'true';
+}
+
+/**
+ * Validate that a proxy URL strictly points to loopback (127.0.0.1 or localhost)
+ * to prevent remote network access per BR-COMP-05.
+ *
+ * @param {string} urlStr
+ * @returns {boolean}
+ */
+function isLoopbackUrl(urlStr) {
+  try {
+    const parsed = new URL(urlStr);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+  } catch (_) {
+    return false;
+  }
+}
 
 /**
  * Deterministic token estimation for code, diffs, JSON, logs, and markdown.
@@ -131,6 +170,55 @@ function detectCategory(filePath, content = '') {
 }
 
 /**
+ * Extract diff hunk headers and changed lines (+ and -).
+ * Strictly skips file headers (lines immediately after 'diff --git' or before the first '@@'),
+ * while preserving changed lines inside hunks even if they begin with '+++' (e.g. '+++counter;')
+ * or '---' (e.g. '---decrement;').
+ *
+ * @param {string} diffText
+ * @returns {{ hunks: string[], changedLines: string[] }}
+ */
+function extractDiffHunksAndChangedLines(diffText) {
+  if (typeof diffText !== 'string') return { hunks: [], changedLines: [] };
+
+  const lines = diffText.split(/\r?\n/);
+  const hunks = [];
+  const changedLines = [];
+  let inHunk = false;
+
+  const hunkHeaderRegex = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/;
+  const fileHeaderRegex = /^(?:---|\+\+\+)\s+(?:[ab]\/|\/dev\/null)/;
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git')) {
+      inHunk = false;
+      continue;
+    }
+
+    if (hunkHeaderRegex.test(line.trim())) {
+      inHunk = true;
+      hunks.push(line.trim());
+      continue;
+    }
+
+    if (!inHunk) {
+      continue;
+    }
+
+    if (fileHeaderRegex.test(line.trim())) {
+      inHunk = false;
+      continue;
+    }
+
+    if (line.startsWith('+') || line.startsWith('-')) {
+      changedLines.push(line);
+    }
+  }
+
+  return { hunks, changedLines };
+}
+
+/**
  * Lossless check for code diffs:
  * Line-faithfully verifies that EVERY diff hunk header (@@ ... @@) and EVERY changed line (+ or -)
  * in the original diff remains present in the compressed output without substring false positives.
@@ -150,32 +238,9 @@ function losslessCheckDiff(originalDiff, compressedDiff) {
     };
   }
 
-  const origHunks = [];
-  const hunkHeaderRegex = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@.*$/gm;
-  let match;
-  while ((match = hunkHeaderRegex.exec(originalDiff)) !== null) {
-    origHunks.push(match[0].trim());
-  }
-
-  const origLines = originalDiff.split(/\r?\n/);
-  const changedLines = [];
-  for (const line of origLines) {
-    if (
-      (line.startsWith('+') && !line.startsWith('+++')) ||
-      (line.startsWith('-') && !line.startsWith('---'))
-    ) {
-      changedLines.push(line);
-    }
-  }
-
-  const compLines = compressedDiff.split(/\r?\n/);
-  const compHunkLines = compLines.filter((l) =>
-    /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(l.trim())
-  );
-  const compChangedLines = compLines.filter(
-    (l) =>
-      (l.startsWith('+') && !l.startsWith('+++')) || (l.startsWith('-') && !l.startsWith('---'))
-  );
+  const { hunks: origHunks, changedLines } = extractDiffHunksAndChangedLines(originalDiff);
+  const { hunks: compHunkLines, changedLines: compChangedLines } =
+    extractDiffHunksAndChangedLines(compressedDiff);
 
   const compHunkPool = [...compHunkLines];
   const missingHunks = [];
@@ -421,21 +486,50 @@ function verifyLossless(category, originalText, compressedText) {
 /**
  * Probe Headroom availability.
  * Honestly verifies CLI binary (runs --version), npm package, or reachable local running proxy.
+ * Must run ONLY with explicit opt-in; otherwise reports NOT_ENABLED without contacting network.
+ * HEADROOM_URL must be restricted to loopback (127.0.0.1 or localhost).
  *
  * @param {object} [options]
  * @returns {{ installed: boolean, status: string, mode?: string, version?: string, url?: string, reason?: string }}
  */
 function probeHeadroom(options = {}) {
+  if (!isOptedIn(options)) {
+    return {
+      installed: false,
+      status: ENGINE_STATUS.NOT_ENABLED,
+      reason:
+        'Compression engines disabled by default (opt-in required via --enable-compression or ENABLE_COMPRESSION=1)',
+    };
+  }
+
   const proxyUrl = options.headroomUrl || process.env.HEADROOM_URL || null;
   if (proxyUrl) {
+    if (!isLoopbackUrl(proxyUrl)) {
+      return {
+        installed: false,
+        status: ENGINE_STATUS.NOT_INSTALLED,
+        reason: `HEADROOM_URL (${proxyUrl}) must be restricted to loopback (127.0.0.1 or localhost)`,
+      };
+    }
+
     try {
       const probe = spawnSync(
         process.execPath,
         [
           '-e',
           `fetch(${JSON.stringify(proxyUrl)}, { signal: AbortSignal.timeout(1000) })
-            .then(r => process.exit(0))
-            .catch(() => process.exit(1))`,
+            .then(r => {
+              if (r.ok || (r.status >= 200 && r.status < 300)) {
+                process.exit(0);
+              } else {
+                process.stderr.write('HTTP ' + r.status);
+                process.exit(1);
+              }
+            })
+            .catch(err => {
+              process.stderr.write(err.message || 'fetch failed');
+              process.exit(1);
+            })`,
         ],
         { timeout: 2000, encoding: 'utf8' }
       );
@@ -447,14 +541,18 @@ function probeHeadroom(options = {}) {
           url: proxyUrl,
         };
       }
-    } catch (_) {
-      // unreachable proxy
+      return {
+        installed: false,
+        status: ENGINE_STATUS.NOT_INSTALLED,
+        reason: `Headroom proxy at ${proxyUrl} is not responding with 2xx (${probe.stderr || 'connection refused'})`,
+      };
+    } catch (err) {
+      return {
+        installed: false,
+        status: ENGINE_STATUS.NOT_INSTALLED,
+        reason: `Headroom proxy probe error: ${err.message}`,
+      };
     }
-    return {
-      installed: false,
-      status: ENGINE_STATUS.NOT_INSTALLED,
-      reason: `Headroom proxy at ${proxyUrl} is not reachable or not responding`,
-    };
   }
 
   try {
@@ -503,11 +601,21 @@ function probeHeadroom(options = {}) {
 /**
  * Probe LLMLingua-2 availability.
  * Checks Python runtime and llmlingua module import.
+ * Must run ONLY with explicit opt-in; otherwise reports NOT_ENABLED.
  *
  * @param {object} [options]
  * @returns {{ installed: boolean, status: string, pythonPath?: string, reason?: string }}
  */
 function probeLlmLingua(options = {}) {
+  if (!isOptedIn(options)) {
+    return {
+      installed: false,
+      status: ENGINE_STATUS.NOT_ENABLED,
+      reason:
+        'Compression engines disabled by default (opt-in required via --enable-compression or ENABLE_COMPRESSION=1)',
+    };
+  }
+
   const pythonCmds =
     process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
 
@@ -538,21 +646,36 @@ function probeLlmLingua(options = {}) {
 
 /**
  * Invoke Headroom compression if installed and not forbidden.
+ * Requires explicit opt-in; proxy URL must be loopback only.
  *
  * @param {string} text
  * @param {object} context
  * @param {object} headroomInfo
- * @returns {{ compressedText: string, error?: string }}
+ * @param {object} [options]
+ * @returns {{ compressedText: string, skipped?: boolean, error?: string }}
  */
-function compressWithHeadroom(text, context = {}, headroomInfo = {}) {
+function compressWithHeadroom(text, context = {}, headroomInfo = {}, options = {}) {
   if (isCompressionForbidden(context)) {
-    return { compressedText: text };
+    return {
+      compressedText: text,
+      skipped: true,
+      reason: 'Compression forbidden on review/diagnosis/triage context',
+    };
+  }
+  if (!isOptedIn(options)) {
+    return { compressedText: text, error: 'Compression engines disabled (opt-in required)' };
   }
   if (!headroomInfo.installed) {
     return { compressedText: text, error: 'Headroom is not installed' };
   }
 
   if (headroomInfo.mode === 'proxy' && headroomInfo.url) {
+    if (!isLoopbackUrl(headroomInfo.url)) {
+      return {
+        compressedText: text,
+        error: `Headroom proxy URL (${headroomInfo.url}) must be restricted to loopback (127.0.0.1 or localhost)`,
+      };
+    }
     try {
       const script = `
         const url = ${JSON.stringify(headroomInfo.url)};
@@ -563,10 +686,22 @@ function compressWithHeadroom(text, context = {}, headroomInfo = {}) {
           body: JSON.stringify({ text }),
           signal: AbortSignal.timeout(5000),
         })
-        .then(r => r.json())
+        .then(r => {
+          if (!r.ok) {
+            throw new Error('HTTP ' + r.status + ': ' + r.statusText);
+          }
+          return r.json();
+        })
         .then(data => {
-          process.stdout.write(data.compressedText || data.text || text);
-          process.exit(0);
+          if (data && typeof data.compressedText === 'string') {
+            process.stdout.write(data.compressedText);
+            process.exit(0);
+          } else if (data && typeof data.text === 'string' && data.text !== text) {
+            process.stdout.write(data.text);
+            process.exit(0);
+          } else {
+            throw new Error('Invalid or uncompressed response from Headroom proxy');
+          }
         })
         .catch(err => {
           process.stderr.write(err.message);
@@ -608,27 +743,39 @@ function compressWithHeadroom(text, context = {}, headroomInfo = {}) {
       const compressFn = typeof mod === 'function' ? mod : mod.compress;
       if (typeof compressFn === 'function') {
         const out = compressFn(text);
-        return { compressedText: typeof out === 'string' ? out : text };
+        if (typeof out === 'string') {
+          return { compressedText: out };
+        }
       }
+      return { compressedText: text, error: 'Headroom module did not return compressed string' };
     } catch (err) {
       return { compressedText: text, error: err.message };
     }
   }
 
-  return { compressedText: text };
+  return { compressedText: text, error: 'Headroom mode not supported or failed' };
 }
 
 /**
  * Invoke LLMLingua compression if installed and not forbidden.
+ * Requires explicit opt-in.
  *
  * @param {string} text
  * @param {object} context
  * @param {object} llmLinguaInfo
- * @returns {{ compressedText: string, error?: string }}
+ * @param {object} [options]
+ * @returns {{ compressedText: string, skipped?: boolean, error?: string }}
  */
-function compressWithLlmLingua(text, context = {}, llmLinguaInfo = {}) {
+function compressWithLlmLingua(text, context = {}, llmLinguaInfo = {}, options = {}) {
   if (isCompressionForbidden(context)) {
-    return { compressedText: text };
+    return {
+      compressedText: text,
+      skipped: true,
+      reason: 'Compression forbidden on review/diagnosis/triage context',
+    };
+  }
+  if (!isOptedIn(options)) {
+    return { compressedText: text, error: 'Compression engines disabled (opt-in required)' };
   }
   if (!llmLinguaInfo.installed || !llmLinguaInfo.pythonPath) {
     return { compressedText: text, error: 'LLMLingua-2 is not installed' };
@@ -783,11 +930,14 @@ function scanInputFiles(dirPath, options = {}) {
  * @param {Function} [options.mockCompressor]
  * @param {object} [options.headroomProbe]
  * @param {object} [options.llmLinguaProbe]
+ * @param {boolean} [options.optIn]
+ * @param {boolean} [options.enableCompression]
  * @returns {object}
  */
 function runCompressionEval(options = {}) {
   const inputsDir =
     options.inputsDir || path.resolve(__dirname, '..', '..', '..', '.worktrees', 'logs', 'night');
+  const optedIn = isOptedIn(options);
   const headroomInfo = options.headroomProbe || probeHeadroom(options);
   const llmLinguaInfo = options.llmLinguaProbe || probeLlmLingua(options);
 
@@ -822,6 +972,9 @@ function runCompressionEval(options = {}) {
     CATEGORIES.CODE_DIFFS,
   ];
 
+  const hrStatus = optedIn ? headroomInfo.status : ENGINE_STATUS.NOT_ENABLED;
+  const llmStatus = optedIn ? llmLinguaInfo.status : ENGINE_STATUS.NOT_ENABLED;
+
   const categoryStats = {};
   for (const cat of categoriesList) {
     categoryStats[cat] = {
@@ -830,18 +983,26 @@ function runCompressionEval(options = {}) {
       originalTokens: 0,
       engines: {
         headroom: {
-          status: headroomInfo.status,
+          status: hrStatus,
           compressedTokens: null,
           tokenReductionPercent: null,
-          losslessPassed: headroomInfo.installed ? null : ENGINE_STATUS.NOT_INSTALLED,
-          details: headroomInfo.installed ? null : headroomInfo.reason,
+          losslessPassed: optedIn && headroomInfo.installed ? null : hrStatus,
+          details: optedIn
+            ? headroomInfo.installed
+              ? null
+              : headroomInfo.reason
+            : 'Compression engines disabled by default (opt-in required)',
         },
         llmlingua2: {
-          status: llmLinguaInfo.status,
+          status: llmStatus,
           compressedTokens: null,
           tokenReductionPercent: null,
-          losslessPassed: llmLinguaInfo.installed ? null : ENGINE_STATUS.NOT_INSTALLED,
-          details: llmLinguaInfo.installed ? null : llmLinguaInfo.reason,
+          losslessPassed: optedIn && llmLinguaInfo.installed ? null : llmStatus,
+          details: optedIn
+            ? llmLinguaInfo.installed
+              ? null
+              : llmLinguaInfo.reason
+            : 'Compression engines disabled by default (opt-in required)',
         },
       },
     };
@@ -875,73 +1036,147 @@ function runCompressionEval(options = {}) {
       taskType: sample.taskType,
     });
 
-    // Aggregate engines if installed
-    if (headroomInfo.installed) {
-      if (categoryStats[cat].engines.headroom.compressedTokens === null) {
-        categoryStats[cat].engines.headroom.compressedTokens = 0;
-        categoryStats[cat].engines.headroom.losslessPassed = true;
-        categoryStats[cat].engines.headroom.losslessFailures = 0;
-      }
-      const res = compressWithHeadroom(
-        sample.text,
-        {
-          category: sample.category,
-          filePath: sample.filePath || sample.relativePath,
-          role: sample.role,
-          taskType: sample.taskType,
-        },
-        headroomInfo
-      );
-      const compTokens = countTokens(res.compressedText);
-      categoryStats[cat].engines.headroom.compressedTokens += compTokens;
-      const lossless = verifyLossless(sample.category, sample.text, res.compressedText);
-      if (!lossless.passed) {
-        categoryStats[cat].engines.headroom.losslessPassed = false;
-        categoryStats[cat].engines.headroom.losslessFailures =
-          (categoryStats[cat].engines.headroom.losslessFailures || 0) + 1;
+    // Aggregate headroom engine if opted in and installed
+    if (optedIn && headroomInfo.installed) {
+      if (!categoryStats[cat].engines.headroom.failed) {
+        const res = compressWithHeadroom(
+          sample.text,
+          {
+            category: sample.category,
+            filePath: sample.filePath || sample.relativePath,
+            role: sample.role,
+            taskType: sample.taskType,
+          },
+          headroomInfo,
+          options
+        );
+
+        if (res.skipped) {
+          // Review guard skipped compression: do not compress
+          if (categoryStats[cat].engines.headroom.compressedTokens === null) {
+            categoryStats[cat].engines.headroom.compressedTokens = 0;
+            categoryStats[cat].engines.headroom.losslessPassed = true;
+            categoryStats[cat].engines.headroom.losslessFailures = 0;
+          }
+          categoryStats[cat].engines.headroom.compressedTokens += tokens;
+        } else if (res.error) {
+          // A failed compressor must be reported as FAILED and never counted in aggregates
+          categoryStats[cat].engines.headroom.status = ENGINE_STATUS.FAILED;
+          categoryStats[cat].engines.headroom.error = res.error;
+          categoryStats[cat].engines.headroom.details = res.error;
+          categoryStats[cat].engines.headroom.compressedTokens = null;
+          categoryStats[cat].engines.headroom.tokenReductionPercent = null;
+          categoryStats[cat].engines.headroom.losslessPassed = ENGINE_STATUS.FAILED;
+          categoryStats[cat].engines.headroom.failed = true;
+        } else {
+          if (categoryStats[cat].engines.headroom.compressedTokens === null) {
+            categoryStats[cat].engines.headroom.compressedTokens = 0;
+            categoryStats[cat].engines.headroom.losslessPassed = true;
+            categoryStats[cat].engines.headroom.losslessFailures = 0;
+          }
+          const compTokens = countTokens(res.compressedText);
+          categoryStats[cat].engines.headroom.compressedTokens += compTokens;
+          const lossless = verifyLossless(sample.category, sample.text, res.compressedText);
+          if (!lossless.passed) {
+            categoryStats[cat].engines.headroom.losslessPassed = false;
+            categoryStats[cat].engines.headroom.losslessFailures =
+              (categoryStats[cat].engines.headroom.losslessFailures || 0) + 1;
+          }
+        }
       }
     }
 
-    if (llmLinguaInfo.installed) {
-      if (categoryStats[cat].engines.llmlingua2.compressedTokens === null) {
-        categoryStats[cat].engines.llmlingua2.compressedTokens = 0;
-        categoryStats[cat].engines.llmlingua2.losslessPassed = true;
-        categoryStats[cat].engines.llmlingua2.losslessFailures = 0;
-      }
-      const res = compressWithLlmLingua(
-        sample.text,
-        {
-          category: sample.category,
-          filePath: sample.filePath || sample.relativePath,
-          role: sample.role,
-          taskType: sample.taskType,
-        },
-        llmLinguaInfo
-      );
-      const compTokens = countTokens(res.compressedText);
-      categoryStats[cat].engines.llmlingua2.compressedTokens += compTokens;
-      const lossless = verifyLossless(sample.category, sample.text, res.compressedText);
-      if (!lossless.passed) {
-        categoryStats[cat].engines.llmlingua2.losslessPassed = false;
-        categoryStats[cat].engines.llmlingua2.losslessFailures =
-          (categoryStats[cat].engines.llmlingua2.losslessFailures || 0) + 1;
+    // Aggregate llmlingua2 engine if opted in and installed
+    if (optedIn && llmLinguaInfo.installed) {
+      if (!categoryStats[cat].engines.llmlingua2.failed) {
+        const res = compressWithLlmLingua(
+          sample.text,
+          {
+            category: sample.category,
+            filePath: sample.filePath || sample.relativePath,
+            role: sample.role,
+            taskType: sample.taskType,
+          },
+          llmLinguaInfo,
+          options
+        );
+
+        if (res.skipped) {
+          // Review guard skipped compression: do not compress
+          if (categoryStats[cat].engines.llmlingua2.compressedTokens === null) {
+            categoryStats[cat].engines.llmlingua2.compressedTokens = 0;
+            categoryStats[cat].engines.llmlingua2.losslessPassed = true;
+            categoryStats[cat].engines.llmlingua2.losslessFailures = 0;
+          }
+          categoryStats[cat].engines.llmlingua2.compressedTokens += tokens;
+        } else if (res.error) {
+          // A failed compressor must be reported as FAILED and never counted in aggregates
+          categoryStats[cat].engines.llmlingua2.status = ENGINE_STATUS.FAILED;
+          categoryStats[cat].engines.llmlingua2.error = res.error;
+          categoryStats[cat].engines.llmlingua2.details = res.error;
+          categoryStats[cat].engines.llmlingua2.compressedTokens = null;
+          categoryStats[cat].engines.llmlingua2.tokenReductionPercent = null;
+          categoryStats[cat].engines.llmlingua2.losslessPassed = ENGINE_STATUS.FAILED;
+          categoryStats[cat].engines.llmlingua2.failed = true;
+        } else {
+          if (categoryStats[cat].engines.llmlingua2.compressedTokens === null) {
+            categoryStats[cat].engines.llmlingua2.compressedTokens = 0;
+            categoryStats[cat].engines.llmlingua2.losslessPassed = true;
+            categoryStats[cat].engines.llmlingua2.losslessFailures = 0;
+          }
+          const compTokens = countTokens(res.compressedText);
+          categoryStats[cat].engines.llmlingua2.compressedTokens += compTokens;
+          const lossless = verifyLossless(sample.category, sample.text, res.compressedText);
+          if (!lossless.passed) {
+            categoryStats[cat].engines.llmlingua2.losslessPassed = false;
+            categoryStats[cat].engines.llmlingua2.losslessFailures =
+              (categoryStats[cat].engines.llmlingua2.losslessFailures || 0) + 1;
+          }
+        }
       }
     }
 
     // Run mock compressor if provided for tests/verification
     if (options.mockCompressor && categoryStats[cat].engines.mock) {
-      let compressedText = sample.text;
-      if (!forbidden) {
-        compressedText = options.mockCompressor(sample.text, sample.category);
-      }
-      const compTokens = countTokens(compressedText);
-      categoryStats[cat].engines.mock.compressedTokens += compTokens;
+      if (!categoryStats[cat].engines.mock.failed) {
+        if (forbidden) {
+          // Review guard: compressor must NOT be called for review/diagnosis/triage context
+          categoryStats[cat].engines.mock.compressedTokens += tokens;
+        } else {
+          try {
+            const mockResult = options.mockCompressor(sample.text, sample.category, sample);
+            const isObj = typeof mockResult === 'object' && mockResult !== null;
+            const compText = isObj ? mockResult.compressedText : mockResult;
+            const mockErr = isObj ? mockResult.error : null;
 
-      const losslessResult = verifyLossless(sample.category, sample.text, compressedText);
-      if (!losslessResult.passed) {
-        categoryStats[cat].engines.mock.losslessPassed = false;
-        categoryStats[cat].engines.mock.losslessFailures =
-          (categoryStats[cat].engines.mock.losslessFailures || 0) + 1;
+            if (mockErr) {
+              categoryStats[cat].engines.mock.status = ENGINE_STATUS.FAILED;
+              categoryStats[cat].engines.mock.error = mockErr;
+              categoryStats[cat].engines.mock.details = mockErr;
+              categoryStats[cat].engines.mock.compressedTokens = null;
+              categoryStats[cat].engines.mock.tokenReductionPercent = null;
+              categoryStats[cat].engines.mock.losslessPassed = ENGINE_STATUS.FAILED;
+              categoryStats[cat].engines.mock.failed = true;
+            } else {
+              const compTokens = countTokens(compText);
+              categoryStats[cat].engines.mock.compressedTokens += compTokens;
+              const losslessResult = verifyLossless(sample.category, sample.text, compText);
+              if (!losslessResult.passed) {
+                categoryStats[cat].engines.mock.losslessPassed = false;
+                categoryStats[cat].engines.mock.losslessFailures =
+                  (categoryStats[cat].engines.mock.losslessFailures || 0) + 1;
+              }
+            }
+          } catch (err) {
+            categoryStats[cat].engines.mock.status = ENGINE_STATUS.FAILED;
+            categoryStats[cat].engines.mock.error = err.message;
+            categoryStats[cat].engines.mock.details = err.message;
+            categoryStats[cat].engines.mock.compressedTokens = null;
+            categoryStats[cat].engines.mock.tokenReductionPercent = null;
+            categoryStats[cat].engines.mock.losslessPassed = ENGINE_STATUS.FAILED;
+            categoryStats[cat].engines.mock.failed = true;
+          }
+        }
       }
     }
   }
@@ -951,7 +1186,12 @@ function runCompressionEval(options = {}) {
     const stats = categoryStats[cat];
     for (const engKey of ['headroom', 'llmlingua2', 'mock']) {
       const eng = stats.engines[engKey];
-      if (eng && typeof eng.compressedTokens === 'number' && stats.originalTokens > 0) {
+      if (
+        eng &&
+        !eng.failed &&
+        typeof eng.compressedTokens === 'number' &&
+        stats.originalTokens > 0
+      ) {
         const orig = stats.originalTokens;
         const comp = eng.compressedTokens;
         const diff = orig - comp;
@@ -972,6 +1212,7 @@ function runCompressionEval(options = {}) {
     environment: {
       platform: process.platform,
       inputsDir,
+      optedIn,
       headroom: headroomInfo,
       llmlingua2: llmLinguaInfo,
     },
@@ -1008,17 +1249,26 @@ function formatReportMarkdown(evalResult) {
   lines.push('|---|---|---|---|---|---|');
 
   for (const [catName, data] of Object.entries(categories)) {
-    const hrStatus = data.engines.headroom.status;
-    const llmStatus = data.engines.llmlingua2.status;
+    const hrSt = data.engines.headroom.status;
+    const llmSt = data.engines.llmlingua2.status;
     let lossless = 'N/A';
-    if (hrStatus === ENGINE_STATUS.NOT_INSTALLED && llmStatus === ENGINE_STATUS.NOT_INSTALLED) {
+    if (hrSt === ENGINE_STATUS.NOT_INSTALLED && llmSt === ENGINE_STATUS.NOT_INSTALLED) {
       lossless = 'NOT_INSTALLED';
+    } else if (hrSt === ENGINE_STATUS.NOT_ENABLED && llmSt === ENGINE_STATUS.NOT_ENABLED) {
+      lossless = 'NOT_ENABLED';
+    } else if (hrSt === ENGINE_STATUS.FAILED || llmSt === ENGINE_STATUS.FAILED) {
+      lossless = 'FAILED';
     } else if (data.engines.mock) {
-      lossless = data.engines.mock.losslessPassed ? 'PASS' : 'FAIL';
+      lossless =
+        data.engines.mock.status === ENGINE_STATUS.FAILED
+          ? 'FAILED'
+          : data.engines.mock.losslessPassed
+            ? 'PASS'
+            : 'FAIL';
     }
 
     lines.push(
-      `| ${catName} | ${data.fileCount} | ${data.originalTokens.toLocaleString()} | ${hrStatus} | ${llmStatus} | ${lossless} |`
+      `| ${catName} | ${data.fileCount} | ${data.originalTokens.toLocaleString()} | ${hrSt} | ${llmSt} | ${lossless} |`
     );
   }
 
@@ -1041,20 +1291,42 @@ function formatReportMarkdown(evalResult) {
   lines.push('pip install llmlingua==0.2.2');
   lines.push('```');
   lines.push('');
+
   let anyInstalled = false;
+  let anyFailed = false;
+  let anyOptedIn = environment.optedIn === true;
   for (const data of Object.values(categories)) {
+    if (
+      data.engines.headroom.status === ENGINE_STATUS.FAILED ||
+      data.engines.llmlingua2.status === ENGINE_STATUS.FAILED ||
+      (data.engines.mock && data.engines.mock.status === ENGINE_STATUS.FAILED)
+    ) {
+      anyFailed = true;
+    }
     if (
       data.engines.headroom.status === ENGINE_STATUS.INSTALLED ||
       data.engines.llmlingua2.status === ENGINE_STATUS.INSTALLED
     ) {
       anyInstalled = true;
-      break;
     }
   }
 
   lines.push('## Recommendation');
   lines.push('');
-  if (!anyInstalled) {
+  if (anyFailed) {
+    lines.push(
+      'Compression evaluation encountered execution failure(s). ' +
+        'Failed compressors are reported as FAILED with unavailable metrics. ' +
+        'AI-TOOLCHAIN-DECISIONS.md "Headroom semantic compression: DEFER" must REMAIN DEFERRED.'
+    );
+  } else if (!anyOptedIn) {
+    lines.push(
+      'Compression engines are disabled by default (opt-in required via --enable-compression or ENABLE_COMPRESSION=1). ' +
+        'Evaluation ran in offline zero-effect mode. ' +
+        'AI-TOOLCHAIN-DECISIONS.md "Headroom semantic compression: DEFER" should REMAIN DEFERRED ' +
+        'until dependencies are installed, opted in, and proven lossless on code diffs and JSON payloads.'
+    );
+  } else if (!anyInstalled) {
     lines.push(
       'Neither Headroom nor LLMLingua-2 is currently installed in this execution environment. ' +
         'Per AGENTS.md rule 3, synthetic or faked metrics are forbidden. ' +
@@ -1075,6 +1347,7 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   let inputsDir = null;
   let asJson = false;
+  let optIn = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--inputs-dir' && args[i + 1]) {
@@ -1084,10 +1357,12 @@ if (require.main === module) {
       inputsDir = path.join(__dirname, '..', 'test', 'fixtures', 'compression-eval');
     } else if (args[i] === '--json') {
       asJson = true;
+    } else if (args[i] === '--enable-compression' || args[i] === '--opt-in') {
+      optIn = true;
     }
   }
 
-  const result = runCompressionEval({ inputsDir });
+  const result = runCompressionEval({ inputsDir, optIn });
   if (asJson) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -1098,9 +1373,12 @@ if (require.main === module) {
 module.exports = {
   CATEGORIES,
   ENGINE_STATUS,
+  isOptedIn,
+  isLoopbackUrl,
   countTokens,
   isCompressionForbidden,
   detectCategory,
+  extractDiffHunksAndChangedLines,
   losslessCheckDiff,
   deepCompareJson,
   losslessCheckJson,

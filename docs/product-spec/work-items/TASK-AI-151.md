@@ -140,7 +140,8 @@ Neither Headroom nor LLMLingua-2 is installed in the local environment. Per AGEN
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | pending | READY_FOR_CODEX | Initial implementation |
+| 1 | 9924fee64599504ada10f86ea2e500e21a487113 | CHANGES_REQUIRED | Explicit opt-in and loopback restrictions, failed compressor status and aggregate exclusion, exact diff file header vs hunk changed lines verification, demonstrated review guard skip in runner test |
+| 2 | pending | READY_FOR_CODEX | Resolved all review round 1 P1 findings |
 
 ## Residual limitations
 
