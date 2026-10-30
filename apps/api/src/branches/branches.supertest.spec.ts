@@ -852,6 +852,107 @@ async function runBranchesSupertestSuite() {
       );
     }
 
+    // Real overlapping transactions for deactivate and delete:
+    // A target non-default branch is being deactivated or deleted. While entering the transaction,
+    // another transaction holding the tenant lock commits the target branch as default.
+    // The pending deactivate/delete must re-read the target branch inside the locked transaction,
+    // detect that it is now default, and reject with 400 (CANNOT_DEACTIVATE_DEFAULT_BRANCH / CANNOT_DELETE_DEFAULT_BRANCH).
+    for (const operation of ['deactivate', 'delete'] as const) {
+      const prefix = `RACE-${operation.toUpperCase()}`;
+      const [current, target] = await Promise.all(
+        ['CURRENT', 'TARGET'].map((suffix) =>
+          prisma.branch.create({
+            data: {
+              merchant_id: merchantIdA,
+              code: `${prefix}-${suffix}-${testSuffix}`,
+              name: suffix,
+              is_default: false,
+            },
+          })
+        )
+      );
+      await prisma.branch.updateMany({
+        where: { merchant_id: merchantIdA },
+        data: { is_default: false },
+      });
+      await prisma.branch.update({ where: { id: current.id }, data: { is_default: true } });
+      const { userId } = await setupUserSession(
+        merchantIdA,
+        RoleEnum.OWNER,
+        `race_${operation}_${testSuffix}`,
+        ['*']
+      );
+      const actor = { userId, merchantId: merchantIdA, role: RoleEnum.OWNER };
+      let entered!: () => void;
+      const transactionEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const db = new Proxy(prisma, {
+        get(client, key) {
+          if (key === '$transaction') {
+            return (cb: any) =>
+              client.$transaction(async (tx) => {
+                entered();
+                return cb(tx);
+              });
+          }
+          return Reflect.get(client, key);
+        },
+      });
+      const service = new BranchesService(db, app.get(RbacService));
+      const correlationId = `race-${operation}-${testSuffix}`;
+      const expectedCode =
+        operation === 'deactivate'
+          ? 'CANNOT_DEACTIVATE_DEFAULT_BRANCH'
+          : 'CANNOT_DELETE_DEFAULT_BRANCH';
+      let result!: Promise<unknown>;
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantIdA}::uuid FOR NO KEY UPDATE`;
+        // Concurrent transaction promotes target to default
+        await tx.branch.update({ where: { id: current.id }, data: { is_default: false } });
+        await tx.branch.update({ where: { id: target.id }, data: { is_default: true } });
+        const pending =
+          operation === 'deactivate'
+            ? service.deactivateBranch(target.id, merchantIdA, actor, '127.0.0.1', correlationId)
+            : service.deleteBranch(target.id, merchantIdA, actor, '127.0.0.1', correlationId);
+        result = assert.rejects(
+          pending,
+          (err: any) => err.getStatus() === 400 && err.code === expectedCode
+        );
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            transactionEntered,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error(`${operation} transaction did not start`)),
+                3000
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+      await result;
+      const targetAfter = await prisma.branch.findUnique({
+        where: { id: target.id },
+      });
+      assert.ok(targetAfter, `Target branch must still exist after rejected ${operation}`);
+      assert.strictEqual(targetAfter.is_default, true, 'Target branch must remain default');
+      assert.strictEqual(targetAfter.status, 'ACTIVE', 'Target branch status must remain ACTIVE');
+      assert.strictEqual(
+        await prisma.auditLog.count({
+          where: { merchant_id: merchantIdA, reason: `correlation_id:${correlationId}` },
+        }),
+        0,
+        `Rejected ${operation} must not produce audit logs`
+      );
+      console.log(
+        `  PASS: Concurrent ${operation} on default branch rejected with ${expectedCode}.`
+      );
+    }
+
     console.log('================================================================');
     console.log('🎉 ALL FEAT-ORG-02 SUPERTEST CHECKS PASSED (AC-01..16)!');
     console.log('================================================================');
