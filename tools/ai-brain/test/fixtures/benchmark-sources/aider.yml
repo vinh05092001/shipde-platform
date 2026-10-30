@@ -1,0 +1,13 @@
+- dirname: 2025-02-25-20-23-07--gemini-pro
+  model: Gemini 2.0 Pro exp-02-05
+  pass_rate_2: 35.6
+  pass_rate_1: 20.4
+  date: 2025-02-25
+  command: aider --model gemini/gemini-2.0-pro-exp-02-05
+
+- dirname: 2024-12-21-18-41-18--polyglot-gpt-4o-mini
+  model: gpt-4o-mini-2024-07-18
+  pass_rate_2: 3.6
+  pass_rate_1: 0.9
+  date: 2024-12-21
+  command: aider --model gpt-4o-mini-2024-07-18
