@@ -642,25 +642,18 @@ function defaultPlanningDeps(rootDir, overrides) {
   const d = Object.assign({}, overrides || {});
   const root = path.resolve(rootDir || process.cwd());
   if (!d.rankPlanner) {
-    d.rankPlanner = async ({ workItemId, role }) => {
-      const sources = require('./sources');
-      const evidence = require('./evidence');
-      const candidatesApi = require('./candidates');
+    d.rankPlanner = async ({ workItemId, role, failedKeys, failedAccounts }) => {
       const routing = require('./routing');
-      const { readDiscoveryCatalogue } = require('./discovery/read');
-      const registry = sources.loadSources();
-      const accounts = require('./accounts').listAccounts() || [];
-      let discovery = { candidates: [] };
-      try {
-        discovery = readDiscoveryCatalogue({ dataDir: path.join(__dirname, 'data', 'discovery') });
-      } catch {}
-      const evidenceData = evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
-      const candidates = require('./cli').assembleForDispatch(discovery, accounts, registry, {
-        evidenceData,
-      });
-      const annotated = candidatesApi.annotateCandidates(candidates, evidenceData, {
-        now: Date.now(),
-      });
+      const services = require('./planning-services');
+      const pool = services.loadPool(root, d);
+      const evidenceData = pool.evidenceData;
+      const accounts = pool.accounts;
+      const state = {
+        failedKeys: failedKeys instanceof Set ? failedKeys : new Set(failedKeys || []),
+        failedAccounts:
+          failedAccounts instanceof Set ? failedAccounts : new Set(failedAccounts || []),
+      };
+      const annotated = pool.annotated.filter((candidate) => !services.excluded(state, candidate));
       const profile = {
         taskId: workItemId,
         role,
@@ -695,33 +688,54 @@ function defaultPlanningDeps(rootDir, overrides) {
           };
     };
   }
+  const services =
+    d.planningServices === false
+      ? null
+      : require('./planning-services').createPlanningServices(
+          Object.assign(
+            { rootDir: root, rankPlanner: d.rankPlanner },
+            d.servicesContext || {},
+            ['externalWorkers', 'decisionDir', 'base'].reduce(
+              (acc, key) => (d[key] === undefined ? acc : Object.assign(acc, { [key]: d[key] })),
+              {}
+            )
+          )
+        );
   if (!d.runIsolatedPlanner) {
-    d.runIsolatedPlanner = async ({ workItemId, candidate }) => {
-      if (typeof d.launchPlanner !== 'function') {
+    d.runIsolatedPlanner = async ({ workItemId, candidate, draft }) => {
+      if (typeof d.launchPlanner === 'function') {
+        return d.launchPlanner({
+          rootDir: root,
+          workItemId,
+          candidate,
+          draft,
+          role: 'planner.default',
+          docsOnly: true,
+          isolationLauncher: require('./isolation-launcher').getIsolatedLauncher(),
+        });
+      }
+      if (!services) {
         return { success: false, reason: 'No isolated planner launcher is configured.' };
       }
-      return d.launchPlanner({
-        rootDir: root,
-        workItemId,
-        candidate,
-        role: 'planner.default',
-        docsOnly: true,
-        isolationLauncher: require('./isolation-launcher').getIsolatedLauncher(),
-      });
+      return services.launchPlanner({ workItemId, candidate, draft });
     };
   }
   d.reviewPlan =
     d.reviewPlan ||
-    (async () => ({
-      verdict: 'BLOCKED',
-      reason: 'Independent planner review service is not configured.',
-    }));
+    (services
+      ? services.reviewPlan
+      : async () => ({
+          verdict: 'BLOCKED',
+          reason: 'Independent planner review service is not configured.',
+        }));
   d.mergePlan =
     d.mergePlan ||
-    (async () => ({
-      merged: false,
-      reason: 'Governed docs-only merge service is not configured.',
-    }));
+    (services
+      ? services.mergePlan
+      : async () => ({
+          merged: false,
+          reason: 'Governed docs-only merge service is not configured.',
+        }));
   d.runPlanning =
     d.runPlanning ||
     (async (context) => {

@@ -639,6 +639,7 @@ const exp = {
   isValidAccountId,
   parseCliModels,
   readLastRunElapsedMs,
+  poolTimeoutMs,
 };
 
 module.exports = exp;
