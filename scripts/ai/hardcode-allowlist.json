@@ -23,10 +23,5 @@
     "file": "tools/ai-brain/sources.json",
     "pattern": "^(qualityFloor|maxProbes): \\d+$",
     "reason": "Operator configurable Hermes orchestrator profile and probe limits in sources.json dispatch configuration (TASK-AI-142)"
-  },
-  {
-    "file": "tools/ai-brain/sources.json",
-    "pattern": "^(deepseek-harness|DEEPSEEK_API_KEY)$",
-    "reason": "TASK-AI-152: canonical agent-cli source id and credential env var name mandated by AC-AI-152-01/13 (Codex review P1 round 3). Identifiers, not model ids/scores/caps; MODEL_FAMILY_RE false positive on the 'deepseek' substring. Anchored to exactly these two strings in this file only."
   }
 ]
