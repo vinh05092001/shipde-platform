@@ -261,19 +261,23 @@ function agentCliAdapter() {
     if (banned) {
       return { status: 'not-permitted', reason: banned, catalogs: [] };
     }
+    const harness =
+      source.verify && source.verify.command
+        ? source.verify.command.split(/\s+/)[0]
+        : source.harness || source.id;
+    const presence = ctx.resolveCommand ? ctx.resolveCommand(harness) : null;
     if (source.servesModels === false) {
       return {
         status: 'no-models',
         reason:
           'harness carries no models of its own; every model arrives through a configured gateway',
         catalogs: [],
+        ...(presence ? { presence } : {}),
       };
     }
     // servesModels: true but no catalogue endpoint. Enumerating would require
     // a model call, or (agy) reading another Windows user's credential — both
     // outside this slice's remit. Presence is recorded from the resolver only.
-    const harness = source.harness || source.id;
-    const presence = ctx.resolveCommand ? ctx.resolveCommand(harness) : null;
     return {
       status: 'unknown',
       reason:

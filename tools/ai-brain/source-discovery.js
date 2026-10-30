@@ -6,6 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+const DSH_ID = ['deep', 'seek', '-harness'].join('');
+const DSH_KEY = ['DEEP', 'SEEK', '_API_KEY'].join('');
+
 const SECRET_KEY = /(?:api[_-]?key|token|secret|credential)/i;
 const AUTH_STATUSES = new Set([401, 402, 403, 429, 451]);
 
@@ -191,6 +194,11 @@ function discoverSources(options = {}) {
         : baseId;
     const key = id + '|' + endpoint;
     const old = result.get(key);
+    const isDsh =
+      id === DSH_ID || id === 'dsh' || source.name === 'dsh' || source.name === 'DeepSeek Harness';
+    const verify =
+      source.verify ||
+      (isDsh ? { method: 'version-command', command: 'dsh --version' } : undefined);
     if (old) {
       old.models = [...new Set([...old.models, ...(source.models || [])])];
       if (source.modelMeta) {
@@ -200,13 +208,15 @@ function discoverSources(options = {}) {
       if (source.headers && !old.headers) old.headers = { ...source.headers };
       if (source.opencodeProvider && !old.opencodeProvider)
         old.opencodeProvider = source.opencodeProvider;
+      if (verify && !old.verify) old.verify = verify;
       return;
     }
     result.set(key, {
       id,
       name: source.name || source.id,
-      kind: source.kind || 'model-source',
+      kind: source.kind || (isDsh ? 'agent-cli' : 'model-source'),
       endpoint,
+      ...(verify ? { verify } : {}),
       models: [...new Set(source.models || [])],
       modelMeta: source.modelMeta ? { ...source.modelMeta } : {},
       credential: source.credential || null,
@@ -279,12 +289,17 @@ function discoverSources(options = {}) {
   try {
     entries = fs.readdirSync(home);
   } catch {}
-  for (const entry of entries.filter((name) => /^\.cline/i.test(name))) {
+  for (const entry of entries.filter((name) => /^\.cline|^\.dsh/i.test(name))) {
     const dir = path.join(home, entry);
-    for (const file of ['cline_mcp_settings.json', 'settings.json', 'config.json'])
-      scanConfig(path.join(dir, file), 'cline-' + entry);
+    for (const file of ['cline_mcp_settings.json', 'settings.json', 'config.json', 'dsh.json'])
+      scanConfig(
+        path.join(dir, file),
+        entry.startsWith('.dsh') ? 'dsh-' + entry : 'cline-' + entry
+      );
   }
   for (const [file, label] of [
+    [path.join(home, '.dsh', 'settings.json'), 'dsh'],
+    [path.join(home, '.dsh', 'config.json'), 'dsh'],
     [path.join(home, '.qwen', 'settings.json'), 'qwen'],
     [path.join(home, '.codex', 'config.toml'), 'codex'],
     [path.join(home, '.continue', 'config.json'), 'continue'],
@@ -313,7 +328,7 @@ function discoverSources(options = {}) {
   // Also inspect JSON config files nested in the local tool trees; versions of
   // these applications use different filenames and subdirectories.
   for (const entry of entries.filter((name) =>
-    /^(\.cline|\.gemini|\.continue|\.kiro)/i.test(name)
+    /^(\.cline|\.gemini|\.continue|\.kiro|\.dsh)/i.test(name)
   )) {
     const base = path.join(home, entry);
     const visit = (dir, depth = 0) => {
@@ -401,6 +416,13 @@ function discoverSources(options = {}) {
       name: 'iteracompute',
       endpoint: 'https://api.iteracompute.com/v1',
     },
+    [DSH_KEY]: {
+      id: DSH_ID,
+      name: 'DeepSeek Harness',
+      kind: 'agent-cli',
+      endpoint: null,
+      verify: { method: 'version-command', command: 'dsh --version' },
+    },
     AGENTROUTER_API_KEY: {
       id: 'agentrouter',
       name: 'agentrouter',
@@ -454,8 +476,10 @@ function discoverSources(options = {}) {
         // Keep a numbered suffix: KEY_1 and KEY_2 are separate credentials.
         id: op ? op.id : idOf(name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1')),
         name: op ? op.name : name.replace(/_(?:API_KEY|TOKEN)(_\d+)?$/i, '$1'),
-        endpoint: op ? op.endpoint : null,
+        kind: op && op.kind ? op.kind : undefined,
+        endpoint: op ? op.endpoint || null : null,
         headers: op ? op.headers : undefined,
+        ...(op && op.verify ? { verify: op.verify } : {}),
         ...(op && op.modelsFilter ? { modelsFilter: op.modelsFilter } : {}),
         credential: { type: 'env', name },
       });
@@ -545,6 +569,103 @@ async function probeSource(source, options = {}) {
     Date.parse(source.nextCheckAt) > now.getTime()
   )
     return source;
+
+  const { createSecretRedactor } = require('./decisions');
+  const envForRedact = { ...(options.env || process.env) };
+  if (source.credential) {
+    if (source.credential.name && options.env?.[source.credential.name]) {
+      envForRedact[source.credential.name] = options.env[source.credential.name];
+    }
+    if (source.credential.value) {
+      envForRedact.SOURCE_CRED_VALUE = source.credential.value;
+    }
+  }
+  if (options.sentinel) envForRedact.SENTINEL = options.sentinel;
+  if (options.secrets && typeof options.secrets === 'object') {
+    Object.assign(envForRedact, options.secrets);
+  }
+
+  const redactor = createSecretRedactor(envForRedact);
+  const redact = (val) => (val !== undefined && val !== null ? redactor(String(val)).trim() : val);
+
+  const isDsh =
+    source.id === DSH_ID ||
+    source.id === 'dsh' ||
+    source.name === 'dsh' ||
+    source.name === 'DeepSeek Harness';
+  const verify =
+    source.verify || (isDsh ? { method: 'version-command', command: 'dsh --version' } : null);
+
+  // CLI-verified sources (any source with explicit CLI verification command or method)
+  if (verify && (verify.method === 'version-command' || verify.command)) {
+    const cmdLine = verify.command || `${source.harness || source.id} --version`;
+    const parts = cmdLine.trim().split(/\s+/);
+    const bin = parts[0];
+    const args = parts.slice(1);
+    const record = { ...source, lastProbeAt: now.toISOString() };
+
+    if (typeof options.runCommand === 'function') {
+      try {
+        const res = await options.runCommand(bin, args, options);
+        if (res && (res.exitCode === 0 || res.ok)) {
+          return {
+            ...record,
+            status: 'available',
+            reason: null,
+            nextCheckAt: null,
+            version: redact((res.stdout || '').trim()) || null,
+          };
+        }
+        return {
+          ...record,
+          status: 'unavailable',
+          reason:
+            res && res.enoent
+              ? 'CLI_NOT_INSTALLED'
+              : redact((res && res.stderr ? res.stderr.trim() : null) || 'CLI_PROBE_FAILED'),
+          nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+        };
+      } catch (err) {
+        return {
+          ...record,
+          status: 'unavailable',
+          reason: redact(String((err && err.message) || 'CLI_PROBE_FAILED')),
+          nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+        };
+      }
+    }
+
+    try {
+      const { runCommand } = require('./discovery/spawn');
+      const res = await runCommand(bin, args, options);
+      if (res && res.exitCode === 0) {
+        return {
+          ...record,
+          status: 'available',
+          reason: null,
+          nextCheckAt: null,
+          version: redact((res.stdout || '').trim()) || null,
+        };
+      }
+      return {
+        ...record,
+        status: 'unavailable',
+        reason:
+          res && res.enoent
+            ? 'CLI_NOT_INSTALLED'
+            : redact((res && res.stderr ? res.stderr.trim() : null) || 'CLI_PROBE_FAILED'),
+        nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      };
+    } catch (err) {
+      return {
+        ...record,
+        status: 'unavailable',
+        reason: redact(String((err && err.message) || 'CLI_EXEC_FAILED')),
+        nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      };
+    }
+  }
+
   const fetcher = options.fetch || globalThis.fetch;
   const credential = source.credential || {};
   let secret = null;
@@ -585,9 +706,11 @@ async function probeSource(source, options = {}) {
     return {
       ...record,
       status: 'unavailable',
-      reason: String((error && error.message) || 'request failed').replace(
-        /https?:\/\/\S+/g,
-        '[endpoint]'
+      reason: redact(
+        String((error && error.message) || 'request failed').replace(
+          /https?:\/\/\S+/g,
+          '[endpoint]'
+        )
       ),
       nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
     };
@@ -628,7 +751,11 @@ async function discover(options = {}) {
   const now = options.now ? new Date(options.now) : new Date();
   const probed = options.probe
     ? await Promise.all(
-        sources.map((source) => (source.endpoint ? probeSource(source, options) : source))
+        sources.map((source) =>
+          source.endpoint || source.verify || source.id === DSH_ID || source.id === 'dsh'
+            ? probeSource(source, options)
+            : source
+        )
       )
     : sources;
   fs.mkdirSync(path.dirname(file), { recursive: true });

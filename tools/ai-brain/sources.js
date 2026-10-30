@@ -130,6 +130,16 @@ function loadSources(options) {
 
   for (const source of sources) {
     if (!source || !source.id) throw new Error('sources.json: an entry has no id');
+    if (typeof source.id === 'string' && source.id.startsWith('./')) {
+      source.id = source.id.slice(2);
+    }
+    if (
+      source.credential &&
+      typeof source.credential.env === 'string' &&
+      source.credential.env.startsWith('./')
+    ) {
+      source.credential.env = source.credential.env.slice(2);
+    }
     if (!KNOWN_KINDS.has(source.kind)) {
       // An unknown kind is refused rather than defaulted. Defaulting to
       // model-source is exactly the error this file exists to stop, and it
@@ -146,7 +156,16 @@ function loadSources(options) {
 function bySource(registry) {
   const map = new Map();
   if (!registry || !Array.isArray(registry.sources)) return map;
-  for (const source of registry.sources) map.set(source.id, source);
+  for (const source of registry.sources) {
+    if (source && source.id) {
+      map.set(source.id, source);
+      if (Array.isArray(source.aliases)) {
+        for (const alias of source.aliases) {
+          if (!map.has(alias)) map.set(alias, source);
+        }
+      }
+    }
+  }
   return map;
 }
 
@@ -306,9 +325,11 @@ function credentialPresence(source, options) {
   if (cred.type === 'none') return { required: false, present: true, how: 'no credential needed' };
 
   if (cred.env) {
-    const value = env[cred.env];
+    const envVar =
+      typeof cred.env === 'string' && cred.env.startsWith('./') ? cred.env.slice(2) : cred.env;
+    let value = env[envVar] !== undefined ? env[envVar] : env[cred.env];
     if (value !== undefined && String(value).trim() !== '') {
-      return { required: true, present: true, how: 'env ' + cred.env };
+      return { required: true, present: true, how: 'env ' + envVar };
     }
   }
   if (cred.store && cred.store.startsWith('~/')) {
@@ -383,7 +404,18 @@ function describeAll(options) {
 function dispatchRoute(provider, registry) {
   const reg = registry || loadSources();
   const table = ((reg && reg.dispatch) || {}).providers || {};
-  const route = table[String(provider || '').toLowerCase()];
+  const rawKey = String(provider || '').toLowerCase();
+  let route = table[rawKey];
+  if (!route) {
+    const src = bySource(reg).get(rawKey);
+    if (src) {
+      route =
+        table[src.id] ||
+        (Array.isArray(src.aliases)
+          ? src.aliases.map((a) => table[String(a).toLowerCase()]).find(Boolean)
+          : null);
+    }
+  }
   if (!route) return null;
   return {
     harness: route.harness,
