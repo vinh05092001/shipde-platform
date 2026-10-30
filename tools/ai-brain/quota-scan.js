@@ -567,6 +567,9 @@ function getQuotaScopeState(candidate, quotaState, options = {}) {
     let activeModelEntry = null;
     for (const a of aliases) {
       const modelKeys = [
+        candidate.accountId && cleanModelId
+          ? `${a}::${candidate.accountId}::${cleanModelId}`
+          : null,
         cleanModelId ? `${a}::${cleanModelId}` : null,
         bareModelId ? `${a}::${bareModelId}` : null,
       ].filter(Boolean);
@@ -705,6 +708,23 @@ function requireConfiguredLimit(value, key) {
     throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a positive number');
   }
   return n;
+}
+
+function requireConfiguredNonNegative(value, key) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error('DISPATCH_CONFIG_INVALID: ' + key + ' must be a non-negative number');
+  }
+  return n;
+}
+
+function getSourcePrefixes(source) {
+  if (!source) return [];
+  const aliases = Array.isArray(source.aliases) ? source.aliases : [];
+  const modelPrefix = source.modelPrefix ? source.modelPrefix.replace(/\/+$/, '') : null;
+  return [source.id, ...aliases, source.routerAlias, modelPrefix]
+    .filter(Boolean)
+    .map((p) => `${p}/`);
 }
 
 function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
@@ -951,13 +971,63 @@ async function scanScope(target, options = {}) {
   return result;
 }
 
-async function discover9RouterScopes(source, options = {}) {
+function selectRepresentativeModel(models, options = {}) {
+  if (!Array.isArray(models) || models.length === 0) return null;
+  if (models.length === 1) return models[0];
+
+  let priors = options.priors;
+  if (!priors) {
+    try {
+      const priorsApi = require('./priors');
+      priors = priorsApi.loadPriors(options.priorsFile);
+    } catch {}
+  }
+
+  let priorsApi;
+  try {
+    priorsApi = require('./priors');
+  } catch {}
+
+  const scored = models.map((m) => {
+    let score = -1;
+    if (priorsApi && priors) {
+      try {
+        const slashIdx = typeof m === 'string' ? m.indexOf('/') : -1;
+        const pfx = slashIdx > 0 ? m.slice(0, slashIdx) : undefined;
+        const candidateObj = {
+          modelId: m,
+          upstream: pfx || options.upstream || options.source?.id || options.sourceId,
+        };
+        const prior = priorsApi.priorFor(candidateObj, 'writer', priors, options.now);
+        if (prior && typeof prior.score === 'number') {
+          score = prior.score;
+        }
+      } catch {}
+    }
+    return { model: m, score };
+  });
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return a.model.localeCompare(b.model);
+  });
+
+  return scored[0].model;
+}
+
+async function fetchSourceModels(source, options = {}) {
+  if (!source || !source.endpoint || source.servesModels === false) {
+    return Array.isArray(source?.models) ? source.models : [];
+  }
   const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
   const apiKey = (options.env || process.env)[source.credential?.env] || '';
   const endpoint = String(source.endpoint || '').replace(/\/+$/, '');
   const url = `${endpoint}/models`;
 
-  const headers = {};
+  const headers = {
+    ...(source.headers || {}),
+    ...(options.headers || {}),
+  };
   if (apiKey) headers.authorization = `Bearer ${apiKey}`;
 
   const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
@@ -970,27 +1040,64 @@ async function discover9RouterScopes(source, options = {}) {
 
   const controller = new AbortController();
   let timer;
-  let modelsList = [];
 
   try {
     const fetchPromise = (async () => {
       const res = await fetchFn(url, { method: 'GET', headers, signal: controller.signal });
-      if (res.ok) {
-        let data;
-        if (typeof res.json === 'function') {
-          data = await res.json();
-        } else {
-          const raw = await res.text();
-          data = JSON.parse(raw);
-        }
-        if (controller.signal.aborted) {
-          throw new Error('Request timed out');
-        }
-        if (Array.isArray(data?.data)) {
-          return data.data.map((m) => m.id || m.model || m).filter(Boolean);
-        }
+      if (!res.ok) {
+        const err = new Error(
+          `FETCH_MODELS_FAILED: source ${source.id} endpoint answered HTTP ${res.status}`
+        );
+        err.status = res.status;
+        err.source = source.id;
+        throw err;
       }
-      return [];
+      let data;
+      if (typeof res.json === 'function') {
+        data = await res.json();
+      } else {
+        const raw = await res.text();
+        data = JSON.parse(raw);
+      }
+      if (controller.signal.aborted) {
+        const abortErr = new Error('Request timed out');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+      let rawList;
+      if (Array.isArray(data?.data)) {
+        rawList = data.data;
+      } else if (Array.isArray(data?.models)) {
+        rawList = data.models;
+      } else if (Array.isArray(data)) {
+        rawList = data;
+      } else {
+        const shapeErr = new Error(
+          `MALFORMED_MODELS_RESPONSE: source ${source.id} returned invalid payload shape (expected array at data, models, or root)`
+        );
+        shapeErr.source = source.id;
+        throw shapeErr;
+      }
+
+      const list = rawList.map((m, idx) => {
+        let id = null;
+        if (typeof m === 'string') {
+          id = m.trim();
+        } else if (m && typeof m === 'object') {
+          if (typeof m.id === 'string') id = m.id.trim();
+          else if (typeof m.model === 'string') id = m.model.trim();
+        }
+        if (!id) {
+          const entryErr = new Error(
+            `MALFORMED_MODELS_RESPONSE: source ${source.id} entry at index ${idx} is not a valid model identifier`
+          );
+          entryErr.source = source.id;
+          throw entryErr;
+        }
+        return id;
+      });
+
+      return list;
     })();
 
     const timeoutPromise = new Promise((_, reject) => {
@@ -1002,18 +1109,23 @@ async function discover9RouterScopes(source, options = {}) {
       }, timeoutMs);
     });
 
-    modelsList = await Promise.race([fetchPromise, timeoutPromise]);
-  } catch {
-    // Timeout or fetch error falls through to live catalogue fallback
+    return await Promise.race([fetchPromise, timeoutPromise]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function discover9RouterScopes(source, options = {}) {
+  let modelsList = [];
+  try {
+    modelsList = await fetchSourceModels(source, options);
+  } catch {
+    // Timeout, network failure, or malformed response falls through to live catalogue fallback
+  }
 
   const parsePrefixedGroups = (list) => {
-    const map = new Map();
-    const ownPrefixes = [source.id, source.routerAlias, 'ninerouter', '9router']
-      .filter(Boolean)
-      .map((p) => `${p}/`);
+    const prefixMap = new Map();
+    const ownPrefixes = getSourcePrefixes(source);
     for (const mId of list) {
       const raw = String(mId);
       const own = ownPrefixes.find((p) => raw.startsWith(p));
@@ -1021,9 +1133,16 @@ async function discover9RouterScopes(source, options = {}) {
       const prefixMatch = cleanId.match(/^([A-Za-z0-9_-]+)\//);
       if (!prefixMatch) continue;
       const prefix = prefixMatch[1];
-      if (!map.has(prefix)) {
-        map.set(prefix, cleanId);
+      if (!prefixMap.has(prefix)) {
+        prefixMap.set(prefix, []);
       }
+      prefixMap.get(prefix).push(cleanId);
+    }
+
+    const map = new Map();
+    for (const [prefix, pModels] of prefixMap.entries()) {
+      const rep = selectRepresentativeModel(pModels, options);
+      if (rep) map.set(prefix, rep);
     }
     return map;
   };
@@ -1046,7 +1165,7 @@ async function discover9RouterScopes(source, options = {}) {
       : Array.isArray(catalogue?.candidates)
         ? catalogue.candidates
         : [];
-    const sourceId = source.id || '9router';
+    const sourceId = source.id;
     const matching = candidates.filter((c) => {
       if (typeof c === 'string') return true;
       if (!c) return false;
@@ -1054,7 +1173,7 @@ async function discover9RouterScopes(source, options = {}) {
       if (c.gateway === sourceId || c.accessPath === sourceId) return true;
       return false;
     });
-    const candidatePool = matching.length > 0 ? matching : sourceId === '9router' ? candidates : [];
+    const candidatePool = matching;
     const catModels = candidatePool
       .map((c) => (typeof c === 'string' ? c : c.modelId || c.model || c.id))
       .filter(Boolean);
@@ -1088,6 +1207,9 @@ async function discover9RouterScopes(source, options = {}) {
   return targets;
 }
 
+const defaultSharedActivePerUpstream = new Map();
+const defaultSharedUpstreamWaiters = new Map();
+
 async function scanAllFullRoutes(options = {}) {
   const now = options.now ?? Date.now();
   const fetchFn = options.fetchFn || options.fetch || globalThis.fetch;
@@ -1099,8 +1221,12 @@ async function scanAllFullRoutes(options = {}) {
   const tsStr = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
 
   const logsDir = path.resolve(__dirname, '..', '..', '..', 'logs', 'night');
-  if (!fs.existsSync(logsDir)) {
-    fs.mkdirSync(logsDir, { recursive: true });
+  if (options.jsonlFile || options.mdFile) {
+    if (!fs.existsSync(logsDir)) {
+      try {
+        fs.mkdirSync(logsDir, { recursive: true });
+      } catch {}
+    }
   }
 
   const uniqueRunId = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
@@ -1108,7 +1234,12 @@ async function scanAllFullRoutes(options = {}) {
     options.jsonlFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.jsonl`);
   const mdFile = options.mdFile || path.join(logsDir, `route-scan-${tsStr}-${uniqueRunId}.md`);
 
-  fs.writeFileSync(jsonlFile, '', 'utf8');
+  if (options.jsonlFile) {
+    try {
+      fs.mkdirSync(path.dirname(jsonlFile), { recursive: true });
+      fs.writeFileSync(jsonlFile, '', 'utf8');
+    } catch {}
+  }
 
   const registry =
     options.registry ||
@@ -1116,17 +1247,76 @@ async function scanAllFullRoutes(options = {}) {
   const dispatchConfig =
     registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry, options) : {};
   const fullScanLimits = dispatchConfig.fullRouteScan || {};
+  const defaultDispatch = require('./sources.json').dispatch || {};
+  const rawDispatch = (registry && registry.dispatch) || {};
+
+  const upstreamConcurrencyCap = requireConfiguredLimit(
+    options.maxConcurrentUpstreamProbes ??
+      options.upstreamConcurrency ??
+      rawDispatch.maxConcurrentUpstreamProbes ??
+      dispatchConfig.maxConcurrentUpstreamProbes ??
+      rawDispatch.maxConcurrentProbes ??
+      dispatchConfig.maxConcurrentProbes ??
+      defaultDispatch.maxConcurrentUpstreamProbes ??
+      fullScanLimits.nineRouterConcurrency ??
+      2,
+    'maxConcurrentUpstreamProbes'
+  );
+  const retryCount429 = requireConfiguredNonNegative(
+    options.probeRetry429Count ??
+      rawDispatch.probeRetry429Count ??
+      dispatchConfig.probeRetry429Count ??
+      defaultDispatch.probeRetry429Count ??
+      0,
+    'probeRetry429Count'
+  );
+  const backoffMs429 = requireConfiguredLimit(
+    options.probeRetry429BackoffMs ??
+      rawDispatch.probeRetry429BackoffMs ??
+      dispatchConfig.probeRetry429BackoffMs ??
+      defaultDispatch.probeRetry429BackoffMs ??
+      1000,
+    'probeRetry429BackoffMs'
+  );
+  const maxRetryWaitMs =
+    options.maxRetryWaitMs ??
+    rawDispatch.maxRetryWaitMs ??
+    dispatchConfig.rateLimitCooldownMs ??
+    defaultDispatch.rateLimitCooldownMs ??
+    backoffMs429 * Math.max(1, retryCount429);
+
+  const activePerUpstream =
+    options.upstreamLimiter?.active || options.activePerUpstream || defaultSharedActivePerUpstream;
+  const upstreamWaiters =
+    options.upstreamLimiter?.waiters || options.upstreamWaiters || defaultSharedUpstreamWaiters;
+
+  async function acquireUpstream(upstreamKey) {
+    const active = activePerUpstream.get(upstreamKey) || 0;
+    if (active < upstreamConcurrencyCap) {
+      activePerUpstream.set(upstreamKey, active + 1);
+      return;
+    }
+    return new Promise((resolve) => {
+      if (!upstreamWaiters.has(upstreamKey)) upstreamWaiters.set(upstreamKey, []);
+      upstreamWaiters.get(upstreamKey).push(resolve);
+    });
+  }
+
+  function releaseUpstream(upstreamKey) {
+    const waiters = upstreamWaiters.get(upstreamKey);
+    if (waiters && waiters.length > 0) {
+      const next = waiters.shift();
+      next();
+    } else {
+      const active = activePerUpstream.get(upstreamKey) || 1;
+      activePerUpstream.set(upstreamKey, Math.max(0, active - 1));
+    }
+  }
 
   const allRegSources = Array.isArray(registry?.sources) ? registry.sources : [];
-  const nrSrc = allRegSources.find(
-    (s) => s.id === '9router' || (Array.isArray(s.aliases) && s.aliases.includes('9router'))
-  );
-  const gwSrc = allRegSources.find(
-    (s) => s.id === 'agy-gateway' || (Array.isArray(s.aliases) && s.aliases.includes('agy-gateway'))
-  );
-
-  const allItems = [];
   const sourceStats = new Map();
+  const failedSources = new Set();
+  const scannedSources = new Set();
 
   function initStats(sourceId) {
     if (!sourceStats.has(sourceId)) {
@@ -1147,37 +1337,7 @@ async function scanAllFullRoutes(options = {}) {
     return sourceStats.get(sourceId);
   }
 
-  const concurrency =
-    options.concurrency || dispatchConfig.fullScanConcurrency || fullScanLimits.concurrency;
-
-  const semaphores = new Map();
-  function getSemaphore(sourceId) {
-    if (!semaphores.has(sourceId)) {
-      const maxConcurrent =
-        sourceId === '9router' ? fullScanLimits.nineRouterConcurrency : concurrency;
-      let active = 0;
-      const waitQueue = [];
-      semaphores.set(sourceId, {
-        async acquire() {
-          if (active < maxConcurrent) {
-            active++;
-            return;
-          }
-          await new Promise((resolve) => waitQueue.push(resolve));
-          active++;
-        },
-        release() {
-          active--;
-          if (waitQueue.length > 0) {
-            const next = waitQueue.shift();
-            next();
-          }
-        },
-      });
-    }
-    return semaphores.get(sourceId);
-  }
-
+  const allItems = [];
   const aliveRows = [];
   const rescanPath = options.rescanFile;
   const isRescanMode = Boolean(rescanPath && fs.existsSync(rescanPath));
@@ -1217,7 +1377,11 @@ async function scanAllFullRoutes(options = {}) {
           ...r,
           evidence: ev,
         };
-        fs.appendFileSync(jsonlFile, JSON.stringify(preservedRow) + '\n', 'utf8');
+        if (options.jsonlFile) {
+          try {
+            fs.appendFileSync(jsonlFile, JSON.stringify(preservedRow) + '\n', 'utf8');
+          } catch {}
+        }
 
         const stats = initStats(r.sourceId);
         stats.listed++;
@@ -1241,10 +1405,15 @@ async function scanAllFullRoutes(options = {}) {
           stats.other++;
         }
 
-        const modelKey = `${r.sourceId}::${r.modelId}`;
+        const isPoolRow = ev === 'QUOTA_READING' && Boolean(r.accountId);
+        const modelKey = isPoolRow
+          ? `${r.sourceId}::${r.accountId}::${r.modelId}`
+          : `${r.sourceId}::${r.modelId}`;
+        if (isPoolRow) delete quotaState.scopes[`${r.sourceId}::${r.modelId}`];
         quotaState.scopes[modelKey] = {
           source: r.sourceId,
-          scope: r.modelId,
+          ...(isPoolRow ? { accountId: r.accountId } : {}),
+          scope: isPoolRow ? r.accountId : r.modelId,
           upstream: r.modelId.includes('/') ? r.modelId.split('/')[0] : r.sourceId,
           model: r.modelId,
           code: r.code || r.reason,
@@ -1255,413 +1424,590 @@ async function scanAllFullRoutes(options = {}) {
           elapsedMs: r.elapsedMs,
           evidence: ev,
         };
-      } else if (nrSrc?.endpoint) {
-        const nrStats = initStats(nrSrc.id || '9router');
-        nrStats.listed++;
-        allItems.push({
-          type: 'http',
-          sourceId: nrSrc.id || '9router',
-          accountId: r.accountId,
-          modelId: r.modelId,
-          endpoint: nrSrc.endpoint,
-          apiKeyEnv: nrSrc.credential?.env || null,
-        });
+      } else {
+        const nrSrc = allRegSources.find(
+          (s) => s.id === '9router' || (Array.isArray(s.aliases) && s.aliases.includes('9router'))
+        );
+        if (nrSrc?.endpoint) {
+          const nrStats = initStats(nrSrc.id || '9router');
+          nrStats.listed++;
+          allItems.push({
+            type: 'http',
+            sourceId: nrSrc.id || '9router',
+            accountId: r.accountId,
+            scope: r.modelId.includes('/') ? r.modelId.split('/')[0] : nrSrc.id || '9router',
+            upstream: r.modelId.includes('/') ? r.modelId.split('/')[0] : nrSrc.id || '9router',
+            modelId: r.modelId,
+            endpoint: nrSrc.endpoint,
+            apiKeyEnv: nrSrc.credential?.env || null,
+            headers: nrSrc.headers,
+          });
+        }
       }
     }
   } else {
-    // 1. 9router models
-    if (
-      (!options.source || options.source === '9router' || options.source === nrSrc?.id) &&
-      nrSrc?.endpoint
-    ) {
-      const nrStats = initStats(nrSrc.id || '9router');
-      const nrEnv = nrSrc.credential?.env;
-      const nrKey = nrEnv ? (options.env || process.env)[nrEnv] || '' : '';
-      const timeoutMs = requireConfiguredLimit(
-        options.nineRouterModelsTimeoutMs ||
-          fullScanLimits.nineRouterModelsTimeoutMs ||
-          dispatchConfig.nineRouterModelsTimeoutMs ||
-          dispatchConfig.modelsTimeoutMs,
-        'nineRouterModelsTimeoutMs'
-      );
-      let nrModels = [];
-      try {
-        const nrModelsUrl = nrSrc.endpoint.replace(/\/+$/, '') + (nrSrc.verify?.path || '/models');
-        const res = await fetchFn(nrModelsUrl, {
-          headers: nrKey ? { authorization: 'Bearer ' + nrKey } : {},
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (res.ok) {
-          const d = await res.json();
-          nrModels = d.data || [];
-        }
-      } catch {}
-      for (const m of nrModels) {
-        const modelId = typeof m === 'string' ? m : m.id;
-        const prefix = modelId.split('/')[0];
-        const accountId = m.owned_by || prefix || nrSrc.id || '9router';
-        nrStats.listed++;
-        allItems.push({
-          type: 'http',
-          sourceId: nrSrc.id || '9router',
-          accountId,
-          modelId,
-          endpoint: nrSrc.endpoint,
-          apiKeyEnv: nrSrc.credential?.env || null,
-        });
-      }
-    }
-
-    // 2. agy-gateway models
-    if (
-      (!options.source || options.source === 'agy-gateway' || options.source === gwSrc?.id) &&
-      gwSrc?.endpoint
-    ) {
-      const gwStats = initStats(gwSrc.id || 'agy-gateway');
-      const gwEnv = gwSrc.credential?.env;
-      const gwKey = gwEnv ? (options.env || process.env)[gwEnv] || '' : '';
-      const timeoutMs = requireConfiguredLimit(
-        options.gatewayModelsTimeoutMs ||
-          fullScanLimits.gatewayModelsTimeoutMs ||
-          dispatchConfig.gatewayModelsTimeoutMs ||
-          dispatchConfig.modelsTimeoutMs,
-        'gatewayModelsTimeoutMs'
-      );
-      let gwModels = [];
-      try {
-        const gwModelsUrl = gwSrc.endpoint.replace(/\/+$/, '') + (gwSrc.verify?.path || '/models');
-        const res = await fetchFn(gwModelsUrl, {
-          headers: gwKey ? { authorization: 'Bearer ' + gwKey } : {},
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (res.ok) {
-          const d = await res.json();
-          gwModels = (d.data || []).map((m) => m.id);
-        }
-      } catch {}
-      if (gwModels.length === 0) {
-        let poolRt = null;
-        try {
-          poolRt = require('./agy-pool-runtime');
-        } catch {}
-        gwModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
-      }
-      for (const modelId of gwModels) {
-        if (typeof modelId === 'string' && modelId.includes('/')) continue;
-        gwStats.listed++;
-        allItems.push({
-          type: 'http',
-          sourceId: gwSrc.id || 'agy-gateway',
-          accountId: gwSrc.id || 'agy-gateway',
-          modelId,
-          endpoint: gwSrc.endpoint,
-          apiKeyEnv: gwSrc.credential?.env || null,
-        });
-      }
-    }
-
-    // 3. External sources enumerated from registry
-    const externalSources = [];
-    const knownSourceIds = new Set();
-
+    // Collect routes from registry sources
     for (const src of allRegSources) {
-      if (!src || !src.id || knownSourceIds.has(src.id)) continue;
-      knownSourceIds.add(src.id);
-      if (src.id === '9router' || src.id === 'agy-gateway' || src.id === 'agy-pool') continue;
       if (
         src.servesModels === false ||
-        src.disposition === 'retired' ||
-        src.disposition === 'deferred'
-      )
+        (sourcesApi.isRetired && sourcesApi.isRetired(src.id, registry)) ||
+        (sourcesApi.isDeferred && sourcesApi.isDeferred(src.id, registry))
+      ) {
         continue;
-      if (!src.endpoint) continue;
-
-      const envName = src.credential?.env || src.apiKeyEnv;
-      if (src.credential?.keyDirs && Array.isArray(src.credential.keyDirs)) {
-        for (let i = 0; i < src.credential.keyDirs.length; i++) {
-          const kd = src.credential.keyDirs[i];
-          const envSuffix = i === 0 ? envName : `${envName}_${i + 1}`;
-          externalSources.push({
-            id: kd,
-            sourceId: src.id,
-            endpoint: src.endpoint,
-            env: envSuffix,
-          });
-        }
-      } else {
-        externalSources.push({
-          id: src.id,
-          sourceId: src.id,
-          endpoint: src.endpoint,
-          env: envName,
-        });
       }
-    }
+      if (
+        options.source &&
+        src.id !== options.source &&
+        !(src.aliases && src.aliases.includes(options.source))
+      ) {
+        continue;
+      }
 
-    for (const src of externalSources) {
-      if (options.source && options.source !== src.id && options.source !== src.sourceId) continue;
-      const stats = initStats(src.id);
-      const modelSet = new Set();
-      for (const entry of allRegSources) {
-        if (entry.id === src.id || entry.id === src.sourceId || entry.credential?.env === src.env) {
-          for (const m of entry.models || []) modelSet.add(m);
-          if (entry.verify?.model) modelSet.add(entry.verify.model);
-          if (entry.modelMeta) {
-            for (const m of Object.keys(entry.modelMeta)) modelSet.add(m);
+      if (src.kind === 'agent-cli' && src.id !== 'agy-pool') {
+        await scanCliLanes(quotaState, { ...options, registry, now, source: src.id });
+        const cliStats = initStats(src.id);
+        const entries = Object.entries(quotaState.scopes)
+          .filter(([key, entry]) => key.startsWith(`${src.id}::`) && entry.source === src.id)
+          .map(([, entry]) => entry);
+        cliStats.listed = entries.length;
+        cliStats.scanned = entries.length;
+        for (const entry of entries) {
+          if (entry.code === QUOTA_STATUS_CODES.OK) cliStats.alive++;
+          else if (entry.code === QUOTA_STATUS_CODES.QUOTA) cliStats.quota++;
+          else if (entry.code === QUOTA_STATUS_CODES.AUTH) cliStats.auth++;
+          else cliStats.other++;
+        }
+        scannedSources.add(src.id);
+        continue;
+      }
+
+      if (src.id === 'agy-pool') {
+        const poolStats = initStats(src.id);
+        let poolRt = options.poolRuntime || null;
+        if (!poolRt) {
+          try {
+            poolRt = require('./agy-pool-runtime');
+          } catch {}
+        }
+        const poolModels =
+          poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels(options) : [];
+        const poolAccounts =
+          options.poolAccounts ||
+          (poolRt && poolRt.discoverAccounts
+            ? poolRt.discoverAccounts(options)
+            : Array.isArray(src.accounts)
+              ? src.accounts
+              : []);
+        await scanCliLanes(quotaState, {
+          ...options,
+          registry,
+          now,
+          source: src.id,
+          poolRuntime: poolRt,
+          poolAccounts,
+        });
+        for (const modelId of poolModels) {
+          // Remove legacy account-collapsed observations before recording individual accounts.
+          delete quotaState.scopes[`${src.id}::${modelId}`];
+        }
+        for (const acc of poolAccounts) {
+          for (const modelId of poolModels) {
+            poolStats.listed++;
+            allItems.push({
+              type: 'pool',
+              sourceId: src.id,
+              accountId: acc,
+              scope: acc,
+              upstream: src.id,
+              modelId,
+              poolRuntime: poolRt,
+            });
           }
         }
+        continue;
       }
 
-      const key = (options.env || process.env)[src.env] || '';
-      if (key && src.endpoint) {
+      const stats = initStats(src.id);
+
+      if (src.kind === 'router') {
+        let modelsList = [];
+        let discoveryError = null;
         try {
-          const res = await fetchFn(src.endpoint.replace(/\/+$/, '') + '/models', {
-            headers: { authorization: 'Bearer ' + key },
-            signal: AbortSignal.timeout(fullScanLimits.externalModelsTimeoutMs),
+          modelsList = await fetchSourceModels(src, {
+            registry,
+            ...options,
+            fetch: fetchFn,
+            fetchFn,
+          });
+        } catch (err) {
+          discoveryError = err;
+        }
+        stats.listed = modelsList.length;
+
+        if (discoveryError || modelsList.length === 0) {
+          failedSources.add(src.id);
+          const failureCode = QUOTA_STATUS_CODES.DISCOVERY_FAILED;
+          const failureEntry = {
+            source: src.id,
+            scope: src.id,
+            upstream: src.id,
+            model: null,
+            code: failureCode,
+            status: discoveryError?.status || 503,
+            reason: sanitizeStatusDescription(
+              discoveryError?.message || 'NO_MODELS_DISCOVERED',
+              'DISCOVERY_FAILED'
+            ),
+            at: new Date(now).toISOString(),
+            retryAfter: null,
+            error: sanitizeStatusDescription(
+              discoveryError?.message || 'NO_MODELS_DISCOVERED',
+              'DISCOVERY_FAILED'
+            ),
+          };
+          quotaState.scopes[src.id] = failureEntry;
+          quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+          for (const key of Object.keys(quotaState.scopes)) {
+            if (key.startsWith(`${src.id}::`)) {
+              quotaState.scopes[key] = failureEntry;
+            }
+          }
+          continue;
+        }
+
+        scannedSources.add(src.id);
+        for (const key of [src.id, `${src.id}::${src.id}`]) {
+          if (quotaState.scopes[key]?.code === QUOTA_STATUS_CODES.DISCOVERY_FAILED) {
+            delete quotaState.scopes[key];
+          }
+        }
+        const ownPrefixes = getSourcePrefixes(src);
+
+        for (const mId of modelsList) {
+          const raw = String(mId);
+          const own = ownPrefixes.find((p) => raw.startsWith(p));
+          const cleanId = own ? raw.slice(own.length) : raw;
+          const prefixMatch = cleanId.match(/^([A-Za-z0-9_-]+)\//);
+          const prefix = prefixMatch ? prefixMatch[1] : src.id;
+
+          allItems.push({
+            type: 'http',
+            sourceId: src.id,
+            accountId: prefix,
+            scope: prefix,
+            upstream: prefix,
+            modelId: cleanId,
+            endpoint: src.endpoint,
+            apiKeyEnv: src.credential?.env,
+            headers: src.headers,
+          });
+        }
+      } else if (
+        src.id === 'agy-gateway' ||
+        (Array.isArray(src.aliases) && src.aliases.includes('agy-gateway'))
+      ) {
+        const gwStats = stats;
+        const gwEnv = src.credential?.env;
+        const gwKey = gwEnv ? (options.env || process.env)[gwEnv] || '' : '';
+        const timeoutMs = Number(
+          options.gatewayModelsTimeoutMs ||
+            fullScanLimits.gatewayModelsTimeoutMs ||
+            dispatchConfig.gatewayModelsTimeoutMs ||
+            dispatchConfig.modelsTimeoutMs ||
+            2000
+        );
+        let gwModels = [];
+        try {
+          const gwModelsUrl = src.endpoint.replace(/\/+$/, '') + (src.verify?.path || '/models');
+          const res = await fetchFn(gwModelsUrl, {
+            headers: gwKey ? { authorization: 'Bearer ' + gwKey } : {},
+            signal: AbortSignal.timeout(timeoutMs),
           });
           if (res.ok) {
             const d = await res.json();
-            for (const m of d.data || d.models || []) {
-              const id = typeof m === 'string' ? m : m.id || m.model;
-              if (id) modelSet.add(id);
-            }
+            gwModels = (d.data || []).map((m) => m.id);
           }
         } catch {}
-      }
-
-      for (const modelId of modelSet) {
-        stats.listed++;
-        allItems.push({
-          type: 'http',
-          sourceId: src.id,
-          accountId: src.id,
-          modelId,
-          endpoint: src.endpoint,
-          apiKeyEnv: src.env,
-        });
-      }
-    }
-
-    // 4. agy-pool accounts
-    if (!options.source || options.source === 'agy-pool') {
-      const poolStats = initStats('agy-pool');
-      let poolRt = null;
-      try {
-        poolRt = require('./agy-pool-runtime');
-      } catch {}
-      const poolModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
-      const poolSource = allRegSources.find((s) => s.id === 'agy-pool');
-      const poolAccounts =
-        poolRt && poolRt.discoverAccounts
-          ? poolRt.discoverAccounts()
-          : poolSource && Array.isArray(poolSource.accounts)
-            ? poolSource.accounts
-            : [];
-      for (const acc of poolAccounts) {
-        for (const modelId of poolModels) {
-          poolStats.listed++;
+        if (gwModels.length === 0) {
+          let poolRt = null;
+          try {
+            poolRt = require('./agy-pool-runtime');
+          } catch {}
+          gwModels = poolRt && poolRt.discoverPoolModels ? poolRt.discoverPoolModels() : [];
+        }
+        for (const modelId of gwModels) {
+          if (typeof modelId === 'string' && modelId.includes('/')) continue;
+          gwStats.listed++;
           allItems.push({
-            type: 'pool',
-            sourceId: 'agy-pool',
-            accountId: acc,
+            type: 'http',
+            sourceId: src.id,
+            accountId: src.id,
+            scope: src.id,
+            upstream: src.id,
             modelId,
+            endpoint: src.endpoint,
+            apiKeyEnv: src.credential?.env || null,
+            headers: src.headers,
+          });
+        }
+      } else if (src.kind === 'model-source' || src.endpoint) {
+        let modelsList = [];
+        let discoveryError = null;
+        if (Array.isArray(src.models) && src.models.length > 0) {
+          modelsList = src.models;
+        } else {
+          try {
+            modelsList = await fetchSourceModels(src, {
+              registry,
+              ...options,
+              fetch: fetchFn,
+              fetchFn,
+            });
+          } catch (err) {
+            discoveryError = err;
+          }
+        }
+        if (!discoveryError && modelsList.length === 0 && src.verify?.model) {
+          modelsList = [src.verify.model];
+        }
+        stats.listed = modelsList.length;
+
+        if (discoveryError || modelsList.length === 0) {
+          failedSources.add(src.id);
+          const failureCode = discoveryError
+            ? QUOTA_STATUS_CODES.DISCOVERY_FAILED
+            : QUOTA_STATUS_CODES.UNSCANNABLE;
+          const failureEntry = {
+            source: src.id,
+            scope: src.id,
+            upstream: src.routerAlias || src.id,
+            model: null,
+            code: failureCode,
+            status:
+              discoveryError?.status || (failureCode === QUOTA_STATUS_CODES.UNSCANNABLE ? 0 : 503),
+            reason: sanitizeStatusDescription(
+              discoveryError?.message || 'NO_MODELS_CONFIGURED',
+              failureCode
+            ),
+            at: new Date(now).toISOString(),
+            retryAfter: null,
+            error: sanitizeStatusDescription(
+              discoveryError?.message || 'NO_MODELS_CONFIGURED',
+              failureCode
+            ),
+          };
+          quotaState.scopes[src.id] = failureEntry;
+          quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+          for (const key of Object.keys(quotaState.scopes)) {
+            if (key.startsWith(`${src.id}::`)) {
+              quotaState.scopes[key] = failureEntry;
+            }
+          }
+          continue;
+        }
+
+        scannedSources.add(src.id);
+        for (const mId of modelsList) {
+          allItems.push({
+            type: 'http',
+            sourceId: src.id,
+            accountId: src.id,
+            scope: src.id,
+            upstream: src.routerAlias || src.id,
+            modelId: mId,
+            endpoint: src.endpoint,
+            apiKeyEnv: src.credential?.env,
+            headers: src.headers,
           });
         }
       }
     }
   }
 
-  console.log(
-    `[FULL ROUTE SCAN] Beginning scan of ${allItems.length} callable routes across ${sourceStats.size} sources with concurrency ${concurrency}...`
-  );
+  const scopeResults = new Map();
+  const sourceResults = new Map();
 
   async function processItem(item) {
-    const sem = getSemaphore(item.sourceId);
-    await sem.acquire();
-    try {
-      const itemAt = new Date().toISOString();
+    if (item.type === 'pool') {
+      const itemAt = new Date(now).toISOString();
+      const poolRt = item.poolRuntime;
+      const reading = poolRt ? poolRt.quotaReading(item.accountId, options) : null;
       let result = null;
-
-      if (item.type === 'pool') {
-        let poolRt = null;
-        try {
-          poolRt = require('./agy-pool-runtime');
-        } catch {}
-        const reading = poolRt ? poolRt.quotaReading(item.accountId) : null;
-        if (!reading || reading.available === false) {
-          const isAuth =
-            reading?.reason === 'AUTH_FAILED' ||
-            reading?.reason === 'AUTH_NEEDED' ||
-            reading?.reason === 'login-required';
+      if (!reading || reading.available === false) {
+        const isAuth =
+          reading?.reason === 'AUTH_FAILED' ||
+          reading?.reason === 'AUTH_NEEDED' ||
+          reading?.reason === 'login-required';
+        result = {
+          at: itemAt,
+          sourceId: item.sourceId,
+          accountId: item.accountId,
+          modelId: item.modelId,
+          httpStatus: isAuth ? 401 : 500,
+          reason: isAuth ? 'AUTH' : 'ERROR',
+          code: isAuth ? 'AUTH' : 'ERROR',
+          elapsedMs: 0,
+          evidence: 'QUOTA_READING',
+          errorSnippet: sanitizeErrorSnippet(
+            reading?.reason || 'pool account unavailable',
+            200,
+            options.env
+          ),
+        };
+      } else {
+        const { familyOf } = require('./agy-quota');
+        const fam = familyOf(item.modelId);
+        const row = (reading.rows || []).find((r) => (fam ? r.family === fam : true));
+        const ok = row && row.remainingPercent > 0 && !row.disabled;
+        if (ok) {
           result = {
             at: itemAt,
             sourceId: item.sourceId,
             accountId: item.accountId,
             modelId: item.modelId,
-            httpStatus: isAuth ? 401 : 500,
-            reason: isAuth ? 'AUTH' : 'ERROR',
-            code: isAuth ? 'AUTH' : 'ERROR',
+            httpStatus: 200,
+            reason: 'OK',
+            code: 'OK',
             elapsedMs: 0,
             evidence: 'QUOTA_READING',
-            errorSnippet: sanitizeErrorSnippet(
-              reading?.reason || 'pool account unavailable',
-              200,
-              options.env
-            ),
+            errorSnippet: '',
           };
         } else {
-          const { familyOf } = require('./agy-quota');
-          const fam = familyOf(item.modelId);
-          const row = (reading.rows || []).find((r) => (fam ? r.family === fam : true));
-          const ok = row && row.remainingPercent > 0 && !row.disabled;
-          if (ok) {
-            result = {
-              at: itemAt,
-              sourceId: item.sourceId,
-              accountId: item.accountId,
-              modelId: item.modelId,
-              httpStatus: 200,
-              reason: 'OK',
-              code: 'OK',
-              elapsedMs: 0,
-              evidence: 'QUOTA_READING',
-              errorSnippet: '',
-            };
-          } else {
-            result = {
-              at: itemAt,
-              sourceId: item.sourceId,
-              accountId: item.accountId,
-              modelId: item.modelId,
-              httpStatus: 402,
-              reason: 'QUOTA',
-              code: 'QUOTA',
-              elapsedMs: 0,
-              evidence: 'QUOTA_READING',
-              errorSnippet: `${fam || row?.family || 'pool'} quota exhausted (${row?.remainingPercent ?? 0}%)`,
-            };
-          }
+          result = {
+            at: itemAt,
+            sourceId: item.sourceId,
+            accountId: item.accountId,
+            modelId: item.modelId,
+            httpStatus: 402,
+            reason: 'QUOTA',
+            code: 'QUOTA',
+            elapsedMs: 0,
+            evidence: 'QUOTA_READING',
+            errorSnippet: `${fam || row?.family || 'pool'} quota exhausted (${row?.remainingPercent ?? 0}%)`,
+          };
         }
-      } else {
-        const scopeTarget = {
-          source: item.sourceId,
-          scope: item.modelId,
-          upstream: item.modelId.includes('/') ? item.modelId.split('/')[0] : item.sourceId,
-          model: item.modelId,
-          endpoint: item.endpoint,
-          apiKeyEnv: item.apiKeyEnv,
-        };
-        const scopeRes = await scanScope(scopeTarget, {
-          ...options,
-          timeoutMs:
-            options.timeoutMs || dispatchConfig.fullScanTimeoutMs || fullScanLimits.timeoutMs,
-          quotaScanMaxTokens:
-            options.quotaScanMaxTokens ||
-            dispatchConfig.fullScanMaxTokens ||
-            fullScanLimits.maxTokens,
-          full: true,
-        });
-        result = {
-          at: scopeRes.at || itemAt,
-          sourceId: item.sourceId,
-          accountId: item.accountId,
-          modelId: item.modelId,
-          httpStatus: scopeRes.status,
-          reason: scopeRes.reason,
-          code: scopeRes.code,
-          elapsedMs: scopeRes.elapsedMs,
-          evidence: 'COMPLETION',
-          errorSnippet: scopeRes.errorSnippet || '',
-        };
       }
-
-      const jsonlRow = {
-        at: result.at,
-        sourceId: result.sourceId,
-        accountId: result.accountId,
-        modelId: result.modelId,
-        httpStatus: result.httpStatus,
-        reason: result.reason,
-        elapsedMs: result.elapsedMs,
-        evidence: result.evidence,
-        errorSnippet: result.errorSnippet,
-      };
-      fs.appendFileSync(jsonlFile, JSON.stringify(jsonlRow) + '\n', 'utf8');
 
       const stats = sourceStats.get(result.sourceId);
       if (stats) {
         stats.scanned++;
-        if (result.code === 'OK' || result.reason === 'OK') {
+        if (result.code === 'OK') {
           stats.alive++;
-          aliveRows.push(result);
-        } else if (result.code === 'QUOTA' || result.reason === 'QUOTA') {
-          stats.quota++;
-        } else if (
-          result.code === 'AUTH' ||
-          result.reason === 'AUTH' ||
-          result.reason === 'AUTH_NEEDED'
-        ) {
-          stats.auth++;
-        } else if (result.code === 'REGION' || result.reason === 'REGION') {
-          stats.region++;
-        } else if (result.code === 'NO_CHANNEL' || result.reason === 'NO_CHANNEL') {
-          stats.no_channel++;
-        } else if (result.code === 'TIMEOUT' || result.reason === 'TIMEOUT') {
-          stats.timeout++;
-        } else if (
-          result.code === 'RATE' ||
-          result.reason === 'RATE' ||
-          result.httpStatus === 429
-        ) {
-          stats.rate++;
-        } else {
-          stats.other++;
-        }
+          aliveRows.push({
+            ...result,
+            model: item.modelId,
+            scope: item.scope,
+            upstream: item.upstream,
+            status: 'OK',
+          });
+        } else if (result.code === 'QUOTA') stats.quota++;
+        else if (result.code === 'AUTH') stats.auth++;
+        else stats.other++;
       }
 
-      const modelKey = `${result.sourceId}::${result.modelId}`;
+      const modelKey = `${result.sourceId}::${result.accountId}::${result.modelId}`;
       quotaState.scopes[modelKey] = {
         source: result.sourceId,
-        scope: result.modelId,
-        upstream: result.modelId.includes('/') ? result.modelId.split('/')[0] : result.sourceId,
+        accountId: result.accountId,
+        scope: item.scope,
+        upstream: item.upstream,
         model: result.modelId,
         code: result.code,
         status: result.httpStatus,
         reason: result.reason,
         at: result.at,
-        retryAfter: result.retryAfter || null,
-        elapsedMs: result.elapsedMs,
+        retryAfter: null,
+        elapsedMs: 0,
         evidence: result.evidence,
       };
+      if (options.jsonlFile) {
+        fs.appendFileSync(jsonlFile, JSON.stringify(result) + '\n', 'utf8');
+      }
+      return;
+    }
 
-      return result;
+    // HTTP probe
+    const upstreamKey = `${item.sourceId}::${item.upstream}`;
+    await acquireUpstream(upstreamKey);
+
+    const target = {
+      source: item.sourceId,
+      scope: item.scope,
+      upstream: item.upstream,
+      model: item.modelId,
+      endpoint: item.endpoint,
+      apiKeyEnv: item.apiKeyEnv,
+      headers: item.headers,
+    };
+
+    let result;
+    try {
+      let attempt = 0;
+      while (attempt <= retryCount429) {
+        result = await scanScope(target, {
+          registry,
+          ...options,
+          full: true,
+          fetchFn,
+          fetch: fetchFn,
+        });
+        if (result.code === QUOTA_STATUS_CODES.RATE || result.status === 429) {
+          if (attempt < retryCount429) {
+            attempt++;
+            const retryDelay =
+              result.retryAfter && result.retryAfter > Date.now()
+                ? Math.min(result.retryAfter - Date.now(), maxRetryWaitMs)
+                : backoffMs429 * attempt;
+            if (typeof options.sleep === 'function') {
+              await options.sleep(retryDelay);
+            } else {
+              await new Promise((r) => setTimeout(r, retryDelay));
+            }
+            continue;
+          }
+        }
+        break;
+      }
     } finally {
-      sem.release();
+      releaseUpstream(upstreamKey);
+    }
+
+    const st = sourceStats.get(item.sourceId);
+    if (st) {
+      st.scanned++;
+      if (result.code === QUOTA_STATUS_CODES.OK) st.alive++;
+      else if (result.code === QUOTA_STATUS_CODES.QUOTA) st.quota++;
+      else if (result.code === QUOTA_STATUS_CODES.AUTH) st.auth++;
+      else if (result.code === QUOTA_STATUS_CODES.REGION) st.region++;
+      else if (result.code === QUOTA_STATUS_CODES.NO_CHANNEL) st.no_channel++;
+      else if (result.code === QUOTA_STATUS_CODES.TIMEOUT) st.timeout++;
+      else if (result.code === QUOTA_STATUS_CODES.RATE || result.status === 429) st.rate++;
+      else st.other++;
+    }
+
+    const modelKey = `${item.sourceId}::${item.modelId}`;
+    if (result.code === QUOTA_STATUS_CODES.NO_CHANNEL) {
+      result = { ...result, scope: item.modelId };
+    }
+    quotaState.scopes[modelKey] = result;
+
+    const scopeKey = `${item.sourceId}::${item.scope}`;
+    if (!scopeResults.has(scopeKey)) scopeResults.set(scopeKey, []);
+    scopeResults.get(scopeKey).push({ target, result });
+
+    if (!sourceResults.has(item.sourceId)) sourceResults.set(item.sourceId, []);
+    sourceResults.get(item.sourceId).push({ target, result });
+
+    if (result.code === QUOTA_STATUS_CODES.OK) {
+      aliveRows.push({
+        sourceId: item.sourceId,
+        accountId: item.accountId,
+        scope: item.scope,
+        upstream: item.upstream,
+        model: item.modelId,
+        modelId: item.modelId,
+        endpoint: item.endpoint,
+        elapsedMs: result.elapsedMs || 0,
+        status: 'OK',
+        evidence: 'COMPLETION',
+      });
+    }
+
+    if (options.jsonlFile) {
+      const jsonlRow = {
+        at: result.at,
+        sourceId: item.sourceId,
+        accountId: item.accountId,
+        modelId: item.modelId,
+        httpStatus: result.status,
+        reason: result.reason,
+        elapsedMs: result.elapsedMs,
+        evidence: 'COMPLETION',
+        errorSnippet: result.errorSnippet,
+      };
+      try {
+        fs.appendFileSync(jsonlFile, JSON.stringify(jsonlRow) + '\n', 'utf8');
+      } catch {}
     }
   }
 
-  let completedCount = 0;
+  const overallConcurrency = requireConfiguredLimit(
+    options.concurrency ??
+      rawDispatch.maxConcurrentProbes ??
+      dispatchConfig.maxConcurrentProbes ??
+      4,
+    'maxConcurrentProbes'
+  );
   let nextIdx = 0;
-  const workers = Array.from({ length: Math.min(concurrency, allItems.length) }, async () => {
-    while (nextIdx < allItems.length) {
-      const cur = allItems[nextIdx++];
-      await processItem(cur);
-      completedCount++;
-      if (completedCount % 50 === 0 || completedCount === allItems.length) {
-        process.stdout.write(
-          `\rProgress: ${completedCount}/${allItems.length} (${Math.round((completedCount / allItems.length) * 100)}%) | Alive: ${aliveRows.length}`
-        );
+  const workers = Array.from(
+    { length: Math.min(overallConcurrency, Math.max(1, allItems.length)) },
+    async () => {
+      while (nextIdx < allItems.length) {
+        const cur = allItems[nextIdx++];
+        await processItem(cur);
       }
     }
-  });
+  );
   await Promise.all(workers);
-  console.log(`\nScan finished. Total: ${allItems.length}, Alive: ${aliveRows.length}`);
+
+  function aggregateScopeOutcome(items, existing, modelScopedOnly = false) {
+    if (modelScopedOnly) {
+      items = items.filter((it) => it.result.code !== QUOTA_STATUS_CODES.NO_CHANNEL);
+      if (items.length === 0) {
+        return existing?.code === QUOTA_STATUS_CODES.DISCOVERY_FAILED ? null : existing || null;
+      }
+    }
+    if (!items || items.length === 0) return null;
+    const okItem = items.find((it) => it.result.code === QUOTA_STATUS_CODES.OK);
+    if (okItem) return okItem.result;
+
+    const priority = [
+      QUOTA_STATUS_CODES.AUTH,
+      QUOTA_STATUS_CODES.REGION,
+      QUOTA_STATUS_CODES.QUOTA,
+      QUOTA_STATUS_CODES.TIMEOUT,
+      QUOTA_STATUS_CODES.NO_CHANNEL,
+      QUOTA_STATUS_CODES.RATE,
+    ];
+    for (const code of priority) {
+      const match = items.find((it) => it.result.code === code);
+      if (match) return match.result;
+    }
+    return items[0].result;
+  }
+
+  for (const [scopeKey, items] of scopeResults.entries()) {
+    const firstTarget = items[0]?.target;
+    const srcObj = (registry?.sources || []).find((s) => s.id === firstTarget?.source);
+    const agg = aggregateScopeOutcome(
+      items,
+      quotaState.scopes[scopeKey],
+      srcObj?.kind === 'router'
+    );
+    if (agg) quotaState.scopes[scopeKey] = agg;
+    else delete quotaState.scopes[scopeKey];
+  }
+
+  for (const [srcId, items] of sourceResults.entries()) {
+    const srcObj = (registry?.sources || []).find((s) => s.id === srcId);
+    const agg = aggregateScopeOutcome(items, quotaState.scopes[srcId], srcObj?.kind === 'router');
+    if (!agg) continue;
+    quotaState.scopes[srcId] = agg;
+    if (
+      quotaState.scopes[`${srcId}::${srcId}`] === undefined ||
+      !items.some((it) => it.target.scope === srcId)
+    ) {
+      quotaState.scopes[`${srcId}::${srcId}`] = agg;
+    }
+  }
 
   quotaState.sourceFreshness = quotaState.sourceFreshness || {};
-  for (const sId of sourceStats.keys()) {
-    quotaState.sourceFreshness[sId] = new Date().toISOString();
+  for (const srcId of scannedSources) {
+    if (!failedSources.has(srcId)) {
+      quotaState.sourceFreshness[srcId] = new Date(now).toISOString();
+    }
   }
-  quotaState.updatedAt = new Date().toISOString();
+  quotaState.updatedAt = new Date(now).toISOString();
 
   if (options.persist !== false) {
     saveQuotaState(quotaState, options);
@@ -1671,21 +2017,28 @@ async function scanAllFullRoutes(options = {}) {
   let livePriors = null;
   try {
     priorsApi = require('./priors');
-    livePriors = priorsApi.loadPriors(priorsApi.LIVE_PRIORS_FILE);
+    livePriors = priorsApi.loadPriors(options.priorsFile || priorsApi.LIVE_PRIORS_FILE);
   } catch {}
 
   const rankedAlive = aliveRows.map((r) => {
-    const prior =
+    const mId = r.model || r.modelId;
+    const wPrior =
       priorsApi && livePriors
-        ? priorsApi.priorFor({ modelId: r.modelId }, 'writer', livePriors)
+        ? priorsApi.priorFor({ modelId: mId }, 'writer', livePriors, now)
         : null;
-    const score = prior && typeof prior.score === 'number' ? prior.score : null;
-    const tier = prior && prior.tier ? prior.tier : '—';
+    const revPrior =
+      priorsApi && livePriors
+        ? priorsApi.priorFor({ modelId: mId }, 'reviewer', livePriors, now)
+        : null;
+    const wScore = wPrior && typeof wPrior.score === 'number' ? wPrior.score : null;
+    const revScore = revPrior && typeof revPrior.score === 'number' ? revPrior.score : null;
     return {
       ...r,
-      writerPrior: score,
-      tier,
-      evidence: r.evidence || prior?.evidence || '—',
+      writerPrior: wScore,
+      reviewerPrior: revScore,
+      tier: wPrior?.tier || '—',
+      evidence: r.evidence || wPrior?.evidence || '—',
+      candidateKey: [r.sourceId, r.scope, mId].join('\u241f'),
     };
   });
 
@@ -1693,10 +2046,9 @@ async function scanAllFullRoutes(options = {}) {
     const sA = a.writerPrior !== null ? a.writerPrior : -1;
     const sB = b.writerPrior !== null ? b.writerPrior : -1;
     if (sB !== sA) return sB - sA;
-    return a.elapsedMs - b.elapsedMs;
+    return (a.elapsedMs || 0) - (b.elapsedMs || 0);
   });
 
-  const totalItemsCount = Array.from(sourceStats.values()).reduce((sum, st) => sum + st.listed, 0);
   const nrStats = sourceStats.get('9router');
   const afterRateCount = nrStats ? nrStats.rate : 0;
   const writerComboName =
@@ -1704,52 +2056,54 @@ async function scanAllFullRoutes(options = {}) {
     dispatchConfig.nineRouterWriterCombo ||
     options.writerCombo ||
     options.nineRouterWriterCombo;
-  const writerRow = writerComboName ? aliveRows.find((r) => r.modelId === writerComboName) : null;
+  const writerRow = writerComboName
+    ? aliveRows.find((r) => (r.modelId || r.model) === writerComboName)
+    : null;
 
-  let md = `# Route Scan Summary Report\n\n`;
-  md += `- **Scan Timestamp**: ${new Date(now).toISOString()}\n`;
-  md += `- **Log File**: \`${jsonlFile}\`\n`;
-  md += `- **Total Routes Scanned**: ${totalItemsCount}\n`;
-  md += `- **Total Alive (OK)**: ${aliveRows.length}\n`;
-  md += `- **9router RATE rows**: ${beforeRateCount} before -> ${afterRateCount} after\n`;
-  if (writerComboName) {
-    md += `- **${writerComboName} combo status**: ${writerRow ? `${writerRow.reason} (HTTP ${writerRow.httpStatus})` : 'NOT_FOUND'}\n\n`;
+  if (options.mdFile) {
+    let md = `# Route Scan Summary Report\n\n`;
+    md += `- **Scan Timestamp**: ${new Date(now).toISOString()}\n`;
+    md += `- **Log File**: \`${jsonlFile}\`\n`;
+    md += `- **Total Routes Scanned**: ${allItems.length}\n`;
+    md += `- **Total Alive (OK)**: ${aliveRows.length}\n`;
+    md += `- **9router RATE rows**: ${beforeRateCount} before -> ${afterRateCount} after\n`;
+    if (writerComboName) {
+      md += `- **${writerComboName} combo status**: ${writerRow ? `${writerRow.reason} (HTTP ${writerRow.httpStatus})` : 'NOT_FOUND'}\n\n`;
+    }
+    md += `\n## 1. Per-Source Counts\n\n`;
+    md += `| Source | Listed | Scanned | Alive (OK) | Quota | Auth | Region | No Channel | Timeout | Rate | Other |\n`;
+    md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
+    for (const st of sourceStats.values()) {
+      md += `| ${st.sourceId} | ${st.listed} | ${st.scanned} | ${st.alive} | ${st.quota} | ${st.auth} | ${st.region} | ${st.no_channel} | ${st.timeout} | ${st.rate || 0} | ${st.other} |\n`;
+    }
+    md += `\n## 2. ALIVE Models Ranked by Writer Prior\n\n`;
+    md += `| Rank | Model ID | Source | Account | Writer Prior Score | Tier | Evidence | Latency (ms) |\n`;
+    md += `| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: |\n`;
+    rankedAlive.forEach((r, idx) => {
+      const scoreStr = r.writerPrior !== null ? r.writerPrior : '—';
+      md += `| ${idx + 1} | \`${r.model || r.modelId}\` | ${r.sourceId} | ${r.accountId || '—'} | **${scoreStr}** | ${r.tier || '—'} | ${r.evidence || '—'} | ${r.elapsedMs || 0} |\n`;
+    });
+    try {
+      fs.mkdirSync(path.dirname(mdFile), { recursive: true });
+      fs.writeFileSync(mdFile, md, 'utf8');
+    } catch {}
   }
-
-  md += `> [!NOTE]\n`;
-  md += `> Pool accounts (agy01-agy07) are evaluated from live quota readings (\`QUOTA_READING\`). Direct execution via Windows Task Scheduler (\`schtasks\`) invokes full agy CLI cycles (~22s each) and is reserved for production task execution rather than lightweight probing.\n\n`;
-
-  md += `## 1. Per-Source Counts\n\n`;
-  md += `| Source | Listed | Scanned | Alive (OK) | Quota | Auth | Region | No Channel | Timeout | Rate | Other |\n`;
-  md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
-  for (const st of sourceStats.values()) {
-    md += `| ${st.sourceId} | ${st.listed} | ${st.scanned} | ${st.alive} | ${st.quota} | ${st.auth} | ${st.region} | ${st.no_channel} | ${st.timeout} | ${st.rate} | ${st.other} |\n`;
-  }
-  md += `\n`;
-
-  md += `## 2. ALIVE Models Ranked by Writer Prior\n\n`;
-  md += `| Rank | Model ID | Source | Account | Writer Prior Score | Tier | Evidence | Latency (ms) |\n`;
-  md += `| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: |\n`;
-  rankedAlive.forEach((r, idx) => {
-    const scoreStr = r.writerPrior !== null ? r.writerPrior : '—';
-    md += `| ${idx + 1} | \`${r.modelId}\` | ${r.sourceId} | ${r.accountId} | **${scoreStr}** | ${r.tier} | ${r.evidence} | ${r.elapsedMs} |\n`;
-  });
-
-  fs.writeFileSync(mdFile, md, 'utf8');
 
   return {
     at: quotaState.updatedAt,
     jsonlFile,
     mdFile,
-    count: totalItemsCount,
+    count: allItems.length,
     aliveCount: aliveRows.length,
-    blockedCount: totalItemsCount - aliveRows.length,
+    blockedCount: allItems.length - aliveRows.length,
     beforeRateCount,
     afterRateCount,
     writerComboStatus: writerRow ? writerRow.reason : 'NOT_FOUND',
     shipdeWriterStatus: writerRow ? writerRow.reason : 'NOT_FOUND',
     sourceStats: Array.from(sourceStats.values()),
     rankedAlive,
+    scopes: quotaState.scopes,
+    failedSources: Array.from(failedSources),
   };
 }
 
@@ -1762,18 +2116,19 @@ async function scanCliLanes(quotaState, options = {}) {
 
   // 1. Scan agy-pool accounts if available
   let poolRt = options.poolRuntime || null;
-  if (!poolRt) {
+  const scanPool = !options.source || options.source === 'agy-pool';
+  if (scanPool && !poolRt) {
     try {
       poolRt = require('./agy-pool-runtime');
     } catch {}
   }
   const poolAccounts =
-    options.poolAccounts ||
-    (poolRt && typeof poolRt.discoverAccounts === 'function'
+    (scanPool && options.poolAccounts) ||
+    (scanPool && poolRt && typeof poolRt.discoverAccounts === 'function'
       ? poolRt.discoverAccounts(options)
       : []);
 
-  if (poolRt && typeof poolRt.quotaReading === 'function') {
+  if (scanPool && poolRt && typeof poolRt.quotaReading === 'function') {
     let poolHasAnyQuota = false;
     for (const accId of poolAccounts) {
       const reading = poolRt.quotaReading(accId, options);
@@ -1786,6 +2141,7 @@ async function scanCliLanes(quotaState, options = {}) {
       ) {
         const entry = {
           source: 'agy-pool',
+          accountId: accId,
           scope: accId,
           upstream: 'agy-pool',
           model: null,
@@ -1811,6 +2167,8 @@ async function scanCliLanes(quotaState, options = {}) {
           const famScope = `${accId}:${row.family}`;
           const famEntry = {
             source: 'agy-pool',
+            accountId: accId,
+            family: row.family,
             scope: famScope,
             upstream: row.family,
             model: null,
@@ -1827,6 +2185,7 @@ async function scanCliLanes(quotaState, options = {}) {
         const accCode = allFamiliesExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK;
         const accEntry = {
           source: 'agy-pool',
+          accountId: accId,
           scope: accId,
           upstream: 'agy-pool',
           model: null,
@@ -1844,6 +2203,7 @@ async function scanCliLanes(quotaState, options = {}) {
           reading.reason === 'AUTH_FAILED' ? QUOTA_STATUS_CODES.AUTH : QUOTA_STATUS_CODES.ERROR;
         const entry = {
           source: 'agy-pool',
+          accountId: accId,
           scope: accId,
           upstream: 'agy-pool',
           model: null,
@@ -1857,21 +2217,21 @@ async function scanCliLanes(quotaState, options = {}) {
         quotaState.scopes[`agy-pool::${accId}`] = entry;
       }
     }
-    if (!quotaState.scopes['agy-pool']) {
-      quotaState.scopes['agy-pool'] = {
-        source: 'agy-pool',
-        scope: 'agy-pool',
-        upstream: 'agy-pool',
-        model: null,
-        code: poolHasAnyQuota ? QUOTA_STATUS_CODES.OK : QUOTA_STATUS_CODES.QUOTA,
-        status: poolHasAnyQuota ? 200 : 429,
-        reason: poolHasAnyQuota ? 'OK' : 'QUOTA_EXHAUSTED',
-        at: new Date(now).toISOString(),
-        retryAfter: null,
-        evidence: 'QUOTA_READING',
-      };
-    }
+    quotaState.scopes['agy-pool'] = {
+      source: 'agy-pool',
+      scope: 'agy-pool',
+      upstream: 'agy-pool',
+      model: null,
+      code: poolHasAnyQuota ? QUOTA_STATUS_CODES.OK : QUOTA_STATUS_CODES.QUOTA,
+      status: poolHasAnyQuota ? 200 : 429,
+      reason: poolHasAnyQuota ? 'OK' : 'QUOTA_EXHAUSTED',
+      at: new Date(now).toISOString(),
+      retryAfter: null,
+      evidence: 'QUOTA_READING',
+    };
   }
+
+  if (options.source === 'agy-pool') return;
 
   // 2. Discover CLI accounts from options.accounts, accounts.listAccounts(), or intake
   let accounts = [];
@@ -1930,6 +2290,7 @@ async function scanCliLanes(quotaState, options = {}) {
     if (!isCli) continue;
 
     const pName = acc.provider || acc.sourceId || provider;
+    if (options.source && pName !== options.source) continue;
     const isClaudeCli =
       dispatchProviders[pName]?.provider === 'claude' ||
       dispatchProviders[provider]?.provider === 'claude' ||
@@ -2021,7 +2382,14 @@ async function scanCliLanes(quotaState, options = {}) {
     }
   }
 
-  for (const [pId, pCfg] of Object.entries(dispatchProviders)) {
+  const cliProviders = { ...dispatchProviders };
+  for (const src of registry?.sources || []) {
+    if (src.kind === 'agent-cli' && src.id !== 'agy-pool') {
+      cliProviders[src.id] = cliProviders[src.id] || {};
+    }
+  }
+  for (const [pId, pCfg] of Object.entries(cliProviders)) {
+    if (options.source && pId !== options.source) continue;
     if (!quotaState.scopes[pId]) {
       quotaState.scopes[pId] = {
         source: pId,
@@ -2060,7 +2428,7 @@ async function scanAllQuotas(options = {}) {
     if (options.source && src.id !== options.source) continue;
     processedSources.add(src.id);
 
-    if (src.kind === 'router' || src.id === '9router') {
+    if (src.kind === 'router') {
       try {
         const routerTargets = await discover9RouterScopes(src, {
           registry,
@@ -2097,12 +2465,30 @@ async function scanAllQuotas(options = {}) {
         quotaState.scopes[src.id] = entry;
       }
     } else if (src.kind === 'model-source' || src.endpoint) {
-      let repModel =
-        (Array.isArray(src.models) && src.models[0]) ||
-        src.verify?.model ||
-        (src.modelMeta && Object.keys(src.modelMeta)[0]) ||
-        null;
-      if (!repModel && options.catalogue) {
+      let repModel = null;
+      let discoveryError = null;
+      if (Array.isArray(src.models) && src.models.length > 0) {
+        repModel = selectRepresentativeModel(src.models, options);
+      } else if (src.servesModels === true) {
+        try {
+          const liveModels = await fetchSourceModels(src, { registry, ...options });
+          if (liveModels.length > 0) {
+            repModel = selectRepresentativeModel(liveModels, options);
+          }
+        } catch (err) {
+          discoveryError = err;
+        }
+      }
+
+      if (!repModel && !discoveryError && src.verify?.model) {
+        repModel = src.verify.model;
+      }
+
+      if (!repModel && !discoveryError && src.modelMeta && Object.keys(src.modelMeta).length > 0) {
+        repModel = Object.keys(src.modelMeta)[0];
+      }
+
+      if (!repModel && !discoveryError && options.catalogue) {
         const cat = Array.isArray(options.catalogue)
           ? options.catalogue
           : options.catalogue?.candidates || [];
@@ -2119,7 +2505,7 @@ async function scanAllQuotas(options = {}) {
         }
       }
 
-      if (!repModel && src.endpoint && src.verify?.method === 'models-list') {
+      if (!repModel && !discoveryError && src.endpoint && src.verify?.method === 'models-list') {
         const apiKey = (options.env || process.env)[src.credential?.env] || '';
         const discoveryTimeoutMs = Number(
           src.verify?.timeoutMs ||
@@ -2153,27 +2539,39 @@ async function scanAllQuotas(options = {}) {
         } catch {}
       }
 
-      if (!repModel) {
+      if (discoveryError || !repModel) {
         const existing = quotaState.scopes[src.id] || quotaState.scopes[`${src.id}::${src.id}`];
-        if (existing && BLOCKING_CODES.has(existing.code) && isScopeBlocked(existing, now)) {
+        if (
+          !discoveryError &&
+          existing &&
+          BLOCKING_CODES.has(existing.code) &&
+          isScopeBlocked(existing, now)
+        ) {
           continue;
         }
-        const unscannableEntry = {
+        const failureCode = discoveryError
+          ? QUOTA_STATUS_CODES.DISCOVERY_FAILED
+          : QUOTA_STATUS_CODES.UNSCANNABLE;
+        const failureEntry = {
           source: src.id,
           scope: src.id,
           upstream: src.routerAlias || src.id,
           model: null,
-          code: QUOTA_STATUS_CODES.UNSCANNABLE,
-          status: null,
-          reason: 'UNSCANNABLE',
+          code: failureCode,
+          status:
+            discoveryError?.status || (failureCode === QUOTA_STATUS_CODES.UNSCANNABLE ? null : 503),
+          reason: sanitizeStatusDescription(discoveryError?.message || 'UNSCANNABLE', failureCode),
           at: new Date(now).toISOString(),
           retryAfter: null,
+          error: sanitizeStatusDescription(discoveryError?.message || 'UNSCANNABLE', failureCode),
         };
-        quotaState.scopes[`${src.id}::${src.id}`] = unscannableEntry;
-        quotaState.scopes[src.id] = unscannableEntry;
-        // No quota evidence was gathered, so the source is not marked fresh and the next due
-        // check retries it. UNSCANNABLE stays non-blocking: absence of a probe target is the
-        // same as an unscanned source, which routing already treats as unproven.
+        quotaState.scopes[`${src.id}::${src.id}`] = failureEntry;
+        quotaState.scopes[src.id] = failureEntry;
+        for (const key of Object.keys(quotaState.scopes)) {
+          if (key.startsWith(`${src.id}::`)) {
+            quotaState.scopes[key] = failureEntry;
+          }
+        }
         failedSources.add(src.id);
         continue;
       }
@@ -2293,38 +2691,70 @@ function schedulePeriodicQuotaScan(options = {}) {
   const registry = options.registry || sourcesApi.loadSources(options.sourceOpts);
   const dispatchConfig =
     registry && sourcesApi.getDispatchConfig ? sourcesApi.getDispatchConfig(registry) : {};
-  const intervalMin = requireConfiguredLimit(
-    options.intervalMin ?? dispatchConfig.quotaScanIntervalMin,
-    'quotaScanIntervalMin'
-  );
-  const intervalMs = intervalMin * 60 * 1000;
+  let intervalMin;
+  let intervalMs;
+  if (typeof options.intervalMs === 'number' && options.intervalMs > 0) {
+    intervalMs = options.intervalMs;
+    intervalMin = intervalMs / (60 * 1000);
+  } else {
+    intervalMin = requireConfiguredLimit(
+      options.intervalMin ?? dispatchConfig.quotaScanIntervalMin,
+      'quotaScanIntervalMin'
+    );
+    intervalMs = intervalMin * 60 * 1000;
+  }
+
+  const upstreamLimiter = options.upstreamLimiter || {
+    active: defaultSharedActivePerUpstream,
+    waiters: defaultSharedUpstreamWaiters,
+  };
+
+  let inFlight = null;
+  const scanFn = (opts) => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      try {
+        if (typeof options.scanFn === 'function') {
+          return await options.scanFn({ ...options, ...opts, upstreamLimiter });
+        }
+        return await scanAllFullRoutes({ ...options, ...opts, upstreamLimiter });
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
+  };
 
   let initialPromise = null;
   if (options.initialScan !== false) {
     initialPromise = (async () => {
       try {
-        return await scanAllQuotas(options);
+        return await scanFn(options);
       } catch (err) {
         if (typeof options.onError === 'function') options.onError(err);
       }
     })();
   }
 
-  const timer = setInterval(async () => {
+  const setIntervalFn = options.setInterval || setInterval;
+  const clearIntervalFn = options.clearInterval || clearInterval;
+
+  const timer = setIntervalFn(async () => {
     try {
-      await scanAllQuotas(options);
+      await scanFn(options);
     } catch (err) {
       if (typeof options.onError === 'function') options.onError(err);
     }
   }, intervalMs);
 
-  if (options.unref && timer.unref) timer.unref();
+  if (options.unref && timer && timer.unref) timer.unref();
   return {
     timer,
     intervalMin,
     intervalMs,
     initialPromise,
-    stop: () => clearInterval(timer),
+    scanNow: (opts) => scanFn(opts),
+    stop: () => clearIntervalFn(timer),
   };
 }
 
@@ -2376,8 +2806,10 @@ function validateCompletion(bodyText) {
   const choice = Array.isArray(body.choices) ? body.choices[0] : null;
   const message = choice && choice.message;
   const content = message && message.content;
+  const reasoning = message && (message.reasoning_content || message.reasoning);
   const hasText =
     (typeof content === 'string' && content.trim().length > 0) ||
+    (typeof reasoning === 'string' && reasoning.trim().length > 0) ||
     (Array.isArray(content) &&
       content.some((part) => part && typeof part.text === 'string' && part.text.trim().length > 0));
   const hasToolCall = Array.isArray(message?.tool_calls) && message.tool_calls.length > 0;
@@ -2390,14 +2822,27 @@ function validateCompletion(bodyText) {
 
 async function scanTargetsForSource(src, options = {}) {
   if (!src || src.servesModels === false) return [];
-  if (src.kind === 'router' || src.id === '9router') {
+  if (src.kind === 'router') {
     return discover9RouterScopes(src, options);
   }
   if (src.kind !== 'model-source' && !src.endpoint) return [];
-  const repModel =
-    (Array.isArray(src.models) && src.models.find((m) => typeof m === 'string' && m)) ||
-    src.verify?.model;
-  // A source with no configured or verified model has nothing honest to scan.
+  let repModel =
+    (Array.isArray(src.models) && src.models.length > 0
+      ? selectRepresentativeModel(src.models, options)
+      : null) || src.verify?.model;
+
+  if (!repModel && src.servesModels === true) {
+    try {
+      const liveModels = await fetchSourceModels(src, options);
+      if (liveModels.length > 0) {
+        repModel = selectRepresentativeModel(liveModels, options);
+      }
+    } catch {
+      // Source cannot be scanned if live models fetch fails
+    }
+  }
+
+  // A source with no configured, verified or live model has nothing honest to scan.
   if (!repModel) return [];
   return [
     {
@@ -2407,6 +2852,7 @@ async function scanTargetsForSource(src, options = {}) {
       model: repModel,
       endpoint: src.endpoint,
       apiKeyEnv: src.credential?.env,
+      headers: src.headers,
     },
   ];
 }
@@ -2461,6 +2907,85 @@ async function scanSourceQuotas(src, options = {}) {
   return results.map((r) => r.result);
 }
 
+async function syncNinerouterModelsToOpenCode(options = {}) {
+  const fetchFn = options.fetch || globalThis.fetch;
+  const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
+  const routerSource =
+    (registry?.sources || []).find((s) => s.kind === 'router') ||
+    (registry?.sources || []).find((s) => s.routerAlias);
+  if (!routerSource) {
+    throw new Error('SYNC_FAILED: no router source found in registry');
+  }
+  const source = routerSource;
+  const providerKey =
+    source.aliases?.[0] ||
+    (source.modelPrefix ? source.modelPrefix.replace(/\/+$/, '') : source.id);
+
+  const modelsList = await fetchSourceModels(source, options);
+  if (!Array.isArray(modelsList) || modelsList.length === 0) {
+    throw new Error(`SYNC_FAILED: router ${source.id} /models returned no models`);
+  }
+
+  const defaultOcPath = path.join(
+    options.env?.USERPROFILE ||
+      process.env.USERPROFILE ||
+      options.env?.HOME ||
+      process.env.HOME ||
+      '',
+    '.config',
+    'opencode',
+    'opencode.json'
+  );
+  const ocPath = options.opencodePath || defaultOcPath;
+  if (!fs.existsSync(ocPath)) {
+    throw new Error(`SYNC_FAILED: opencode.json not found at ${ocPath}`);
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = options.backupPath || `${ocPath}.bak-${timestamp}`;
+  fs.copyFileSync(ocPath, backupPath);
+
+  const raw = fs.readFileSync(ocPath, 'utf8').replace(/^\uFEFF/, '');
+  const ocConfig = JSON.parse(raw);
+
+  if (!ocConfig.provider || typeof ocConfig.provider !== 'object') {
+    ocConfig.provider = {};
+  }
+  if (!ocConfig.provider[providerKey] || typeof ocConfig.provider[providerKey] !== 'object') {
+    ocConfig.provider[providerKey] = {
+      name: source.label || source.id,
+      npm: '@ai-sdk/openai-compatible',
+      options: {
+        baseURL: source.endpoint,
+        apiKey: `{env:${source.credential?.env}}`,
+      },
+      models: {},
+    };
+  }
+
+  const ownPrefixes = getSourcePrefixes(source);
+
+  const newModels = {};
+  for (const mId of modelsList) {
+    const raw = String(mId);
+    const own = ownPrefixes.find((p) => raw.startsWith(p));
+    const cleanId = own ? raw.slice(own.length) : raw;
+    newModels[cleanId] = { name: cleanId, id: cleanId };
+  }
+  ocConfig.provider[providerKey].models = newModels;
+
+  const tempPath = `${ocPath}.tmp-${Date.now()}-${process.pid}`;
+  fs.writeFileSync(tempPath, JSON.stringify(ocConfig, null, 2) + '\n', 'utf8');
+  fs.renameSync(tempPath, ocPath);
+
+  return {
+    success: true,
+    modelCount: modelsList.length,
+    backupPath,
+    opencodePath: ocPath,
+  };
+}
+
 module.exports = {
   DEFAULT_QUOTA_STATE_FILE,
   QUOTA_STATUS_CODES,
@@ -2476,13 +3001,16 @@ module.exports = {
   scanScope,
   discover9RouterScopes,
   scanAllQuotas,
+  scanAllFullRoutes,
   scanSourceQuotas,
   scanTargetsForSource,
   scanCliLanes,
   validateCompletion,
   withinSignal,
   sanitizeErrorSnippet,
-  scanAllFullRoutes,
   isCompletionBody,
   parseSseBody,
+  fetchSourceModels,
+  selectRepresentativeModel,
+  syncNinerouterModelsToOpenCode,
 };
