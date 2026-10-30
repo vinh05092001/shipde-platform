@@ -3,8 +3,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CanonicalApiException } from '../auth/auth.service';
+import { RbacService, isUserActiveStatus } from '../rbac/rbac.service';
 import type { ActorContext } from '../rbac/rbac.dto';
-import { AppConfig } from '@shipde/config';
+import { AppConfig, sanitizeErrorMessage } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import {
   UploadAttachmentDto,
@@ -26,7 +27,8 @@ export class AttachmentsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(StorageService) private readonly storage: StorageService,
-    @Inject(APP_CONFIG) private readonly config: AppConfig
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
+    @Inject(RbacService) private readonly rbacService: RbacService
   ) {}
 
   public hashIp(ip: string): string {
@@ -61,46 +63,48 @@ export class AttachmentsService {
   }
 
   /**
-   * Fetches the actor's live warehouse and branch/store scopes from the database.
-   * If actor is OWNER, scopes include wildcard '*'.
+   * Fetches the actor's live warehouse and branch/store scopes and permissions.
+   * Resolves effective scopes and permissions through the database/registry without hardcoding role bypasses.
    */
   public async getActorScopes(
     actor: ActorContext
-  ): Promise<{ warehouseScopes: string[]; storeScopes: string[]; isOwner: boolean }> {
+  ): Promise<{ warehouseScopes: string[]; storeScopes: string[]; permissions: Set<string> }> {
     if (!actor.userId) {
-      return { warehouseScopes: [], storeScopes: [], isOwner: false };
+      return { warehouseScopes: [], storeScopes: [], permissions: new Set() };
     }
     const user = await this.prisma.user.findFirst({
       where: { id: actor.userId, merchant_id: actor.merchantId },
-      select: { role: true, warehouse_scopes: true, store_scopes: true },
+      select: {
+        id: true,
+        role: true,
+        custom_role_id: true,
+        status: true,
+        warehouse_scopes: true,
+        store_scopes: true,
+      },
     });
 
-    const isOwner = user?.role === 'OWNER' || actor.role === 'OWNER';
-    const warehouseScopes = isOwner
-      ? ['*']
-      : user?.warehouse_scopes && user.warehouse_scopes.length > 0
-        ? user.warehouse_scopes
-        : [];
-    const storeScopes = isOwner
-      ? ['*']
-      : user?.store_scopes && user.store_scopes.length > 0
-        ? user.store_scopes
-        : [];
+    if (!user || !isUserActiveStatus(user.status)) {
+      return { warehouseScopes: [], storeScopes: [], permissions: new Set() };
+    }
 
-    return { warehouseScopes, storeScopes, isOwner };
+    const warehouseScopes = Array.isArray(user.warehouse_scopes) ? user.warehouse_scopes : [];
+    const storeScopes = Array.isArray(user.store_scopes) ? user.store_scopes : [];
+
+    const actorPerms = await this.rbacService.getActorPermissions(actor);
+    const permissions = new Set(actorPerms);
+
+    return { warehouseScopes, storeScopes, permissions };
   }
 
   /**
    * Evaluates if the actor is permitted to access an attachment per FEAT-RBAC-02.
+   * Enforces server-side warehouse and branch scopes; rejects unscoped access for non-wildcard actors.
    */
   public checkAttachmentScope(
     attachment: { warehouse_id?: string | null; branch_id?: string | null },
-    scopes: { warehouseScopes: string[]; storeScopes: string[]; isOwner: boolean }
+    scopes: { warehouseScopes: string[]; storeScopes: string[]; permissions: Set<string> }
   ): boolean {
-    if (scopes.isOwner) {
-      return true;
-    }
-
     if (attachment.warehouse_id) {
       const hasAccess =
         scopes.warehouseScopes.includes('*') ||
@@ -114,7 +118,117 @@ export class AttachmentsService {
       if (!hasAccess) return false;
     }
 
+    // Unscoped attachment (no warehouse_id and no branch_id)
+    // Finding 3: Omitting scope fields must not create an unscoped record accessible to anyone.
+    // Unscoped attachments require wildcard scope ('*') OR tenant-wide access permission.
+    if (!attachment.warehouse_id && !attachment.branch_id) {
+      const hasWildcardScope =
+        scopes.warehouseScopes.includes('*') || scopes.storeScopes.includes('*');
+      const hasTenantWidePermission =
+        scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
+      if (!hasWildcardScope && !hasTenantWidePermission) {
+        return false;
+      }
+    }
+
     return true;
+  }
+
+  /**
+   * Validates actor capabilities against the requested attachment action and entity type.
+   */
+  public verifyAttachmentCapabilities(
+    scopes: { permissions: Set<string> },
+    entityType?: string
+  ): void {
+    const ATTACHMENT_CAPABILITIES = [
+      'iam:shop_config',
+      'order:view_create',
+      'shipment:receive_return',
+      'claim:verify_submit',
+      'reconciliation:import_settlement_bank',
+      'reconciliation:run_review_audit',
+      'shipment:create_update',
+      'shipment:track_exceptions',
+      'iam:shop_view',
+    ];
+
+    const hasAnyCapability = ATTACHMENT_CAPABILITIES.some((cap) => scopes.permissions.has(cap));
+    if (!hasAnyCapability) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Bạn không có quyền thao tác trên tệp đính kèm trong hệ thống.'
+      );
+    }
+
+    if (!entityType) return;
+    const normalizedType = entityType.trim().toUpperCase();
+
+    if (scopes.permissions.has('iam:shop_config')) {
+      return;
+    }
+
+    switch (normalizedType) {
+      case 'RETURN':
+        if (!scopes.permissions.has('shipment:receive_return')) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            "Bạn không có quyền 'shipment:receive_return' để đính kèm bằng chứng hàng hoàn."
+          );
+        }
+        break;
+      case 'CLAIM':
+        if (!scopes.permissions.has('claim:verify_submit')) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            "Bạn không có quyền 'claim:verify_submit' để đính kèm chứng từ khiếu nại."
+          );
+        }
+        break;
+      case 'STATEMENT':
+        if (!scopes.permissions.has('reconciliation:import_settlement_bank')) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            "Bạn không có quyền 'reconciliation:import_settlement_bank' để đính kèm sao kê/bảng kê."
+          );
+        }
+        break;
+      case 'DISCREPANCY':
+        if (!scopes.permissions.has('reconciliation:run_review_audit')) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            "Bạn không có quyền 'reconciliation:run_review_audit' để đính kèm chứng từ sai lệch."
+          );
+        }
+        break;
+      case 'ORDER':
+        if (!scopes.permissions.has('order:view_create')) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            "Bạn không có quyền 'order:view_create' để đính kèm tệp cho đơn hàng."
+          );
+        }
+        break;
+      case 'SHIPMENT':
+        if (
+          !scopes.permissions.has('shipment:create_update') &&
+          !scopes.permissions.has('shipment:track_exceptions') &&
+          !scopes.permissions.has('order:view_create')
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            'FORBIDDEN',
+            'Bạn không có quyền xử lý vận đơn để đính kèm tệp cho vận đơn.'
+          );
+        }
+        break;
+    }
   }
 
   /**
@@ -129,28 +243,210 @@ export class AttachmentsService {
   ): Promise<FormattedAttachment> {
     const scopes = await this.getActorScopes(actor);
 
-    // Verify actor is authorized to upload to specified warehouse/branch
-    if (
-      dto.warehouse_id &&
-      !scopes.warehouseScopes.includes('*') &&
-      !scopes.warehouseScopes.includes(dto.warehouse_id)
-    ) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'SCOPE_FORBIDDEN',
-        `Bạn không có quyền tải tệp đính kèm lên kho '${dto.warehouse_id}'.`
-      );
+    // Finding 2: Check registry permissions for actor and entity type
+    this.verifyAttachmentCapabilities(scopes, dto.entity_type);
+
+    let resolvedWarehouseId: string | null = null;
+    let resolvedBranchId: string | null = null;
+
+    // Finding 3: Validate and resolve referenced warehouse ownership server-side
+    if (dto.warehouse_id) {
+      const wh = await this.prisma.warehouse.findFirst({
+        where: {
+          merchant_id: actor.merchantId,
+          OR: [{ id: dto.warehouse_id }, { code: dto.warehouse_id }],
+        },
+      });
+      if (!wh) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          `Kho '${dto.warehouse_id}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+        );
+      }
+      if (
+        !scopes.warehouseScopes.includes('*') &&
+        !scopes.warehouseScopes.includes(wh.id) &&
+        !scopes.warehouseScopes.includes(wh.code)
+      ) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'SCOPE_FORBIDDEN',
+          `Bạn không có quyền tải tệp đính kèm lên kho '${dto.warehouse_id}'.`
+        );
+      }
+      resolvedWarehouseId = wh.id;
     }
-    if (
-      dto.branch_id &&
-      !scopes.storeScopes.includes('*') &&
-      !scopes.storeScopes.includes(dto.branch_id)
-    ) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'SCOPE_FORBIDDEN',
-        `Bạn không có quyền tải tệp đính kèm lên chi nhánh '${dto.branch_id}'.`
-      );
+
+    // Finding 3: Validate and resolve referenced branch ownership server-side
+    if (dto.branch_id) {
+      const br = await this.prisma.branch.findFirst({
+        where: {
+          merchant_id: actor.merchantId,
+          OR: [{ id: dto.branch_id }, { code: dto.branch_id }],
+        },
+      });
+      if (!br) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'VALIDATION_ERROR',
+          `Chi nhánh '${dto.branch_id}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+        );
+      }
+      if (
+        !scopes.storeScopes.includes('*') &&
+        !scopes.storeScopes.includes(br.id) &&
+        !scopes.storeScopes.includes(br.code)
+      ) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'SCOPE_FORBIDDEN',
+          `Bạn không có quyền tải tệp đính kèm lên chi nhánh '${dto.branch_id}'.`
+        );
+      }
+      resolvedBranchId = br.id;
+    }
+
+    // Finding 3: Validate referenced entity and derive/verify attachment scopes
+    if (dto.entity_id) {
+      const entityId = dto.entity_id.trim();
+      const entityType = (dto.entity_type || 'GENERAL').trim().toUpperCase();
+
+      if (entityType === 'ORDER') {
+        const order = await this.prisma.order.findFirst({
+          where: { id: entityId, merchant_id: actor.merchantId },
+        });
+        if (!order) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            `Đơn hàng '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+          );
+        }
+        if (order.branch_id) {
+          if (resolvedBranchId && resolvedBranchId !== order.branch_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Chi nhánh không khớp với đơn hàng '${entityId}'.`
+            );
+          }
+          resolvedBranchId = order.branch_id;
+        }
+      } else if (entityType === 'SHIPMENT') {
+        const shipment = await this.prisma.shipment.findFirst({
+          where: { id: entityId, merchant_id: actor.merchantId },
+        });
+        if (!shipment) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            `Vận đơn '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+          );
+        }
+        if (shipment.warehouse_id) {
+          if (resolvedWarehouseId && resolvedWarehouseId !== shipment.warehouse_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Kho không khớp với vận đơn '${entityId}'.`
+            );
+          }
+          resolvedWarehouseId = shipment.warehouse_id;
+        }
+      } else if (entityType === 'RETURN') {
+        const returnRecord = await this.prisma.returnRecord.findFirst({
+          where: {
+            merchant_id: actor.merchantId,
+            OR: [...(isValidUuid(entityId) ? [{ id: entityId }] : []), { tracking_code: entityId }],
+          },
+        });
+        if (!returnRecord) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            `Hồ sơ hàng hoàn '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+          );
+        }
+        if (returnRecord.return_warehouse_id) {
+          if (resolvedWarehouseId && resolvedWarehouseId !== returnRecord.return_warehouse_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Kho không khớp với hồ sơ hàng hoàn '${entityId}'.`
+            );
+          }
+          resolvedWarehouseId = returnRecord.return_warehouse_id;
+        }
+      } else if (entityType === 'CLAIM') {
+        const claim = await this.prisma.claim.findFirst({
+          where: { id: entityId, merchant_id: actor.merchantId },
+        });
+        if (!claim) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            `Hồ sơ khiếu nại '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+          );
+        }
+        if (claim.warehouse_id) {
+          if (resolvedWarehouseId && resolvedWarehouseId !== claim.warehouse_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Kho không khớp với hồ sơ khiếu nại '${entityId}'.`
+            );
+          }
+          resolvedWarehouseId = claim.warehouse_id;
+        }
+      } else if (entityType === 'DISCREPANCY') {
+        const discrepancy = await this.prisma.discrepancy.findFirst({
+          where: { id: entityId, merchant_id: actor.merchantId },
+        });
+        if (!discrepancy) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            `Hồ sơ sai lệch '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+          );
+        }
+        if (discrepancy.warehouse_id) {
+          if (resolvedWarehouseId && resolvedWarehouseId !== discrepancy.warehouse_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Kho không khớp với hồ sơ sai lệch '${entityId}'.`
+            );
+          }
+          resolvedWarehouseId = discrepancy.warehouse_id;
+        }
+      } else if (entityType === 'STATEMENT') {
+        const statement = await this.prisma.carrierStatement.findFirst({
+          where: { id: entityId, merchant_id: actor.merchantId },
+        });
+        if (!statement) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'VALIDATION_ERROR',
+            `Bảng kê '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
+          );
+        }
+      }
+    }
+
+    // Unscoped validation: scoped actors (non-wildcard) cannot create unscoped records
+    if (!resolvedWarehouseId && !resolvedBranchId) {
+      const hasWildcardScope =
+        scopes.warehouseScopes.includes('*') || scopes.storeScopes.includes('*');
+      const hasTenantWidePermission =
+        scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
+      if (!hasWildcardScope && !hasTenantWidePermission) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'SCOPE_FORBIDDEN',
+          'Người dùng với phạm vi giới hạn phải liên kết tệp đính kèm với kho hoặc chi nhánh được cấp quyền.'
+        );
+      }
     }
 
     // Cryptographic SHA-256 calculation
@@ -189,54 +485,77 @@ export class AttachmentsService {
     const retentionDays = dto.retention_days ?? this.config.ATTACHMENT_DEFAULT_RETENTION_DAYS;
     const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000);
 
-    const attachment = await this.prisma.attachment.create({
-      data: {
-        id: attachmentId,
-        merchant_id: actor.merchantId,
-        file_name: sanitizedName,
-        file_size: BigInt(buffer.length),
-        mime_type: dto.mime_type.toLowerCase(),
-        checksum_sha256: computedSha256,
-        storage_key: storageKey,
-        storage_bucket: storageBucket,
-        entity_type: dto.entity_type ? dto.entity_type.trim().toUpperCase() : 'GENERAL',
-        entity_id: dto.entity_id?.trim() || null,
-        branch_id: dto.branch_id?.trim() || null,
-        warehouse_id: dto.warehouse_id?.trim() || null,
-        uploaded_by: actor.userId || 'system',
-        status: 'ACTIVE',
-        retention_days: retentionDays,
-        expires_at: expiresAt,
-        metadata: dto.metadata ? (maskAttachmentAuditObject(dto.metadata) as any) : undefined,
-      },
-    });
-
-    // Immutable Audit Log
+    // Finding 5 & 6: Transactional database + audit log creation with compensation
+    let attachment: any;
     try {
-      await this.prisma.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          actor: actor.userId,
-          action: AttachmentAuditEvent.ATTACHMENT_UPLOADED,
-          entity_type: 'ATTACHMENT',
-          entity_id: attachment.id,
-          new_value: {
+      attachment = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.attachment.create({
+          data: {
+            id: attachmentId,
+            merchant_id: actor.merchantId,
             file_name: sanitizedName,
-            file_size: buffer.length,
+            file_size: BigInt(buffer.length),
             mime_type: dto.mime_type.toLowerCase(),
             checksum_sha256: computedSha256,
-            entity_type: attachment.entity_type,
-            warehouse_id: attachment.warehouse_id,
-            branch_id: attachment.branch_id,
+            storage_key: storageKey,
+            storage_bucket: storageBucket,
+            entity_type: dto.entity_type ? dto.entity_type.trim().toUpperCase() : 'GENERAL',
+            entity_id: dto.entity_id?.trim() || null,
+            branch_id: resolvedBranchId,
+            warehouse_id: resolvedWarehouseId,
+            uploaded_by: actor.userId || 'system',
+            status: 'ACTIVE',
             retention_days: retentionDays,
+            expires_at: expiresAt,
+            metadata: dto.metadata ? (maskAttachmentAuditObject(dto.metadata) as any) : undefined,
           },
-          ip_address: this.hashIp(ipAddress),
-          reason: `Uploaded attachment ${sanitizedName} (${buffer.length} bytes)`,
-        },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            actor: actor.userId,
+            action: AttachmentAuditEvent.ATTACHMENT_UPLOADED,
+            entity_type: 'ATTACHMENT',
+            entity_id: created.id,
+            new_value: {
+              file_name: sanitizedName,
+              file_size: buffer.length,
+              mime_type: dto.mime_type.toLowerCase(),
+              checksum_sha256: computedSha256,
+              entity_type: created.entity_type,
+              warehouse_id: created.warehouse_id,
+              branch_id: created.branch_id,
+              retention_days: retentionDays,
+              correlation_id: correlationId,
+            },
+            ip_address: this.hashIp(ipAddress),
+            reason: correlationId
+              ? `correlation_id:${correlationId}`
+              : `Uploaded attachment ${sanitizedName} (${buffer.length} bytes)`,
+          },
+        });
+
+        return created;
       });
-    } catch (auditErr: any) {
-      console.warn(`[AttachmentsService] Audit logging failed: ${auditErr.message}`);
+    } catch (dbErr: any) {
+      // Finding 6: Compensation - remove orphaned S3 object if database transaction fails
+      try {
+        await this.storage.deleteObject(storageKey);
+      } catch (cleanupErr: any) {
+        console.warn(
+          `[AttachmentsService] Failed to clean up orphaned S3 object ${storageKey}:`,
+          cleanupErr
+        );
+      }
+      if (dbErr instanceof CanonicalApiException) throw dbErr;
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'UPLOAD_FAILED',
+        'Không thể lưu thông tin tệp đính kèm và nhật ký kiểm toán. Vui lòng thử lại.',
+        true
+      );
     }
 
     return this.formatAttachment(attachment);
@@ -261,8 +580,18 @@ export class AttachmentsService {
 
     const scopes = await this.getActorScopes(actor);
 
-    // Fail closed if actor is non-owner and has empty scopes
-    if (!scopes.isOwner && scopes.warehouseScopes.length === 0 && scopes.storeScopes.length === 0) {
+    // Fail closed if actor has empty scopes and no wildcard/tenant-wide access
+    const hasWildcardScope =
+      scopes.warehouseScopes.includes('*') || scopes.storeScopes.includes('*');
+    const hasTenantWide =
+      scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
+
+    if (
+      !hasWildcardScope &&
+      !hasTenantWide &&
+      scopes.warehouseScopes.length === 0 &&
+      scopes.storeScopes.length === 0
+    ) {
       return {
         success: true,
         data: [],
@@ -295,20 +624,17 @@ export class AttachmentsService {
     }
 
     // Scope conditions
-    const scopeConditions: any[] = [];
-    if (!scopes.warehouseScopes.includes('*')) {
-      scopeConditions.push({
-        OR: [{ warehouse_id: null }, { warehouse_id: { in: scopes.warehouseScopes } }],
-      });
-    }
-    if (!scopes.storeScopes.includes('*')) {
-      scopeConditions.push({
-        OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }],
-      });
-    }
-
-    if (scopeConditions.length > 0) {
-      where.AND = scopeConditions;
+    if (!hasWildcardScope && !hasTenantWide) {
+      const orClauses: any[] = [];
+      if (scopes.warehouseScopes.length > 0) {
+        orClauses.push({ warehouse_id: { in: scopes.warehouseScopes } });
+      }
+      if (scopes.storeScopes.length > 0) {
+        orClauses.push({ branch_id: { in: scopes.storeScopes } });
+      }
+      if (orClauses.length > 0) {
+        where.AND = [{ OR: orClauses }];
+      }
     }
 
     const [total, rows] = await Promise.all([
@@ -400,15 +726,31 @@ export class AttachmentsService {
       where: {
         id,
         merchant_id: actor.merchantId,
-        status: { not: 'DELETED' },
       },
     });
 
-    if (!attachment) {
+    if (!attachment || attachment.status === 'DELETED') {
       throw new CanonicalApiException(
         HttpStatus.NOT_FOUND,
         'ATTACHMENT_NOT_FOUND',
         `Không tìm thấy tệp đính kèm với mã '${id}'.`
+      );
+    }
+
+    // Finding 1: Quarantine/safety status gate
+    if (attachment.status === 'QUARANTINED') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'ATTACHMENT_QUARANTINED',
+        'Tệp đính kèm đã bị cách ly do nghi ngờ mã độc hoặc vi phạm chính sách an toàn.'
+      );
+    }
+
+    if (attachment.status !== 'ACTIVE') {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'ATTACHMENT_UNAVAILABLE',
+        'Tệp đính kèm hiện không ở trạng thái sẵn sàng để tải xuống.'
       );
     }
 
@@ -433,7 +775,7 @@ export class AttachmentsService {
       );
     }
 
-    // Immutable Access Audit Log
+    // Finding 5: Durable access audit log must be persisted before acknowledging success or releasing content
     try {
       await this.prisma.auditLog.create({
         data: {
@@ -448,13 +790,21 @@ export class AttachmentsService {
             file_size: Number(attachment.file_size),
             mime_type: attachment.mime_type,
             storage_key: attachment.storage_key,
+            correlation_id: correlationId,
           },
           ip_address: this.hashIp(ipAddress),
-          reason: `Downloaded attachment ${attachment.file_name} (${attachment.file_size} bytes)`,
+          reason: correlationId
+            ? `correlation_id:${correlationId}`
+            : `Downloaded attachment ${attachment.file_name} (${attachment.file_size} bytes)`,
         },
       });
     } catch (auditErr: any) {
-      console.warn(`[AttachmentsService] Access audit logging failed: ${auditErr.message}`);
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'AUDIT_LOG_FAILED',
+        'Không thể ghi nhật ký kiểm toán truy cập tệp. Yêu cầu tải tệp bị hủy vì lý do an toàn.',
+        true
+      );
     }
 
     return {
@@ -517,25 +867,29 @@ export class AttachmentsService {
       );
     }
 
-    // Soft delete in database
-    await this.prisma.attachment.update({
-      where: { id },
-      data: {
-        status: 'DELETED',
-        deleted_at: new Date(),
-      },
-    });
-
-    // Remove from S3
+    // Finding 6: S3 deletion first; if S3 fails, DB row remains ACTIVE so deletion is retryable
     try {
       await this.storage.deleteObject(attachment.storage_key);
-    } catch (s3Err: any) {
-      console.warn(`[AttachmentsService] S3 object removal warning: ${s3Err.message}`);
+    } catch {
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'STORAGE_UNAVAILABLE',
+        'Không thể xóa tệp khỏi hệ thống lưu trữ S3. Vui lòng thử lại sau.',
+        true
+      );
     }
 
-    // Immutable Deletion Audit Log
-    try {
-      await this.prisma.auditLog.create({
+    // Finding 5: Transactional DB update and immutable deletion audit log
+    await this.prisma.$transaction(async (tx) => {
+      await tx.attachment.update({
+        where: { id },
+        data: {
+          status: 'DELETED',
+          deleted_at: new Date(),
+        },
+      });
+
+      await tx.auditLog.create({
         data: {
           merchant_id: actor.merchantId,
           user_id: actor.userId,
@@ -550,14 +904,15 @@ export class AttachmentsService {
           },
           new_value: {
             status: 'DELETED',
+            correlation_id: correlationId,
           },
           ip_address: this.hashIp(ipAddress),
-          reason: `Deleted attachment ${attachment.file_name}`,
+          reason: correlationId
+            ? `correlation_id:${correlationId}`
+            : `Deleted attachment ${attachment.file_name}`,
         },
       });
-    } catch (auditErr: any) {
-      console.warn(`[AttachmentsService] Delete audit logging failed: ${auditErr.message}`);
-    }
+    });
 
     return {
       success: true,
@@ -567,7 +922,7 @@ export class AttachmentsService {
   }
 
   /**
-   * Asynchronous retention purge job processing expired items with per-row results.
+   * Asynchronous retention purge job processing expired items with per-row results and scope verification.
    */
   async purgeExpiredRetention(
     actor: ActorContext,
@@ -575,6 +930,17 @@ export class AttachmentsService {
     ipAddress: string,
     correlationId: string
   ): Promise<AttachmentBulkActionResult> {
+    const scopes = await this.getActorScopes(actor);
+
+    // Finding 4: Enforce registry permission for retention purge
+    if (!scopes.permissions.has('iam:shop_config')) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        "Bạn không có quyền 'iam:shop_config' để dọn dẹp tệp đính kèm hết hạn."
+      );
+    }
+
     const isDryRun = dto.dry_run === true;
     const now = new Date();
 
@@ -586,6 +952,23 @@ export class AttachmentsService {
 
     if (dto.entity_type) {
       where.entity_type = dto.entity_type.trim().toUpperCase();
+    }
+
+    // Finding 4: Scope conditions during discovery
+    const scopeConditions: any[] = [];
+    if (!scopes.warehouseScopes.includes('*')) {
+      scopeConditions.push({
+        OR: [{ warehouse_id: null }, { warehouse_id: { in: scopes.warehouseScopes } }],
+      });
+    }
+    if (!scopes.storeScopes.includes('*')) {
+      scopeConditions.push({
+        OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }],
+      });
+    }
+
+    if (scopeConditions.length > 0) {
+      where.AND = scopeConditions;
     }
 
     const expiredAttachments = await this.prisma.attachment.findMany({
@@ -603,15 +986,41 @@ export class AttachmentsService {
     const failed_ids: string[] = [];
 
     for (const att of expiredAttachments) {
+      // Per-row scope check
+      if (!this.checkAttachmentScope(att, scopes)) {
+        continue;
+      }
+
+      if (isDryRun) {
+        succeeded_ids.push(att.id);
+        results.push({ id: att.id, status: 'SUCCEEDED' });
+        continue;
+      }
+
       try {
-        if (!isDryRun) {
-          await this.prisma.attachment.update({
+        // Finding 6: Storage deletion first; if S3 fails, DB row remains ACTIVE
+        try {
+          await this.storage.deleteObject(att.storage_key);
+        } catch {
+          failed_ids.push(att.id);
+          results.push({
+            id: att.id,
+            status: 'FAILED',
+            code: 'STORAGE_UNAVAILABLE',
+            message:
+              'Không thể xóa tệp khỏi hệ thống lưu trữ S3. Thao tác dọn dẹp có thể thử lại sau.',
+          });
+          continue;
+        }
+
+        // Transactional DB update and audit log
+        await this.prisma.$transaction(async (tx) => {
+          await tx.attachment.update({
             where: { id: att.id },
             data: { status: 'DELETED', deleted_at: new Date() },
           });
-          await this.storage.deleteObject(att.storage_key);
 
-          await this.prisma.auditLog.create({
+          await tx.auditLog.create({
             data: {
               merchant_id: actor.merchantId,
               user_id: actor.userId,
@@ -619,21 +1028,31 @@ export class AttachmentsService {
               action: AttachmentAuditEvent.ATTACHMENT_PURGED,
               entity_type: 'ATTACHMENT',
               entity_id: att.id,
-              new_value: { status: 'DELETED', reason: 'RETENTION_EXPIRED' },
+              new_value: {
+                status: 'DELETED',
+                reason: 'RETENTION_EXPIRED',
+                correlation_id: correlationId,
+              },
               ip_address: this.hashIp(ipAddress),
-              reason: `Retention expired after ${att.retention_days} days`,
+              reason: correlationId
+                ? `correlation_id:${correlationId}`
+                : `Retention expired after ${att.retention_days} days`,
             },
           });
-        }
+        });
+
         succeeded_ids.push(att.id);
         results.push({ id: att.id, status: 'SUCCEEDED' });
       } catch (err: any) {
+        // Finding 7: Never serialize raw unredacted exception messages
         failed_ids.push(att.id);
         results.push({
           id: att.id,
           status: 'FAILED',
           code: 'PURGE_FAILED',
-          message: err.message || 'Lỗi khi xóa tệp hết hạn',
+          message: sanitizeErrorMessage(
+            err?.message || 'Lỗi khi cập nhật cơ sở dữ liệu sau khi xóa tệp.'
+          ),
         });
       }
     }
@@ -719,36 +1138,55 @@ export class AttachmentsService {
         continue;
       }
 
+      // Finding 6: Storage deletion first
       try {
-        await this.prisma.attachment.update({
-          where: { id },
-          data: { status: 'DELETED', deleted_at: new Date() },
-        });
         await this.storage.deleteObject(attachment.storage_key);
+      } catch {
+        failed_ids.push(id);
+        results.push({
+          id,
+          status: 'FAILED',
+          code: 'STORAGE_UNAVAILABLE',
+          message: 'Không thể xóa tệp khỏi hệ thống lưu trữ S3. Thao tác có thể thử lại sau.',
+        });
+        continue;
+      }
 
-        await this.prisma.auditLog.create({
-          data: {
-            merchant_id: actor.merchantId,
-            user_id: actor.userId,
-            actor: actor.userId,
-            action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
-            entity_type: 'ATTACHMENT',
-            entity_id: id,
-            new_value: { status: 'DELETED' },
-            ip_address: this.hashIp(ipAddress),
-            reason: `Bulk deleted attachment ${attachment.file_name}`,
-          },
+      try {
+        // Finding 5: Transactional DB update and audit log
+        await this.prisma.$transaction(async (tx) => {
+          await tx.attachment.update({
+            where: { id },
+            data: { status: 'DELETED', deleted_at: new Date() },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              actor: actor.userId,
+              action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
+              entity_type: 'ATTACHMENT',
+              entity_id: id,
+              new_value: { status: 'DELETED', correlation_id: correlationId },
+              ip_address: this.hashIp(ipAddress),
+              reason: correlationId
+                ? `correlation_id:${correlationId}`
+                : `Bulk deleted attachment ${attachment.file_name}`,
+            },
+          });
         });
 
         succeeded_ids.push(id);
         results.push({ id, status: 'SUCCEEDED' });
       } catch (err: any) {
+        // Finding 7: Never serialize raw unredacted exception messages
         failed_ids.push(id);
         results.push({
           id,
           status: 'FAILED',
           code: 'DELETE_ERROR',
-          message: err.message || 'Lỗi khi xóa tệp.',
+          message: sanitizeErrorMessage(err?.message || 'Lỗi khi cập nhật trạng thái xóa tệp.'),
         });
       }
     }

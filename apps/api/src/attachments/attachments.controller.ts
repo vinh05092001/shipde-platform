@@ -25,7 +25,7 @@ import {
   validateBulkDeleteDto,
 } from './attachments.dto';
 import { SessionGuard } from '../session/session.guard';
-import { RbacSeedGuard, PermissionsGuard } from '../rbac/rbac.guard';
+import { RbacSeedGuard, PermissionsGuard, RequirePermissions } from '../rbac/rbac.guard';
 import { CanonicalExceptionFilter } from '../auth/canonical-exception.filter';
 import { RbacService } from '../rbac/rbac.service';
 import type { ActorContext } from '../rbac/rbac.dto';
@@ -119,6 +119,7 @@ export class AttachmentsController {
    * POST /api/v1/attachments/retention-purge (AC-COM-06-19)
    */
   @Post('retention-purge')
+  @RequirePermissions('iam:shop_config')
   async purgeRetention(
     @Req() req: Request,
     @Res() res: Response,

@@ -83,6 +83,164 @@ export function getFileExtension(name: string): string {
   return dotIndex !== -1 ? sanitized.substring(dotIndex).toLowerCase() : '';
 }
 
+export interface DetectedContentTypeResult {
+  detectedMime: string | null;
+  isExecutable: boolean;
+  isSuspicious: boolean;
+  reason?: string;
+}
+
+export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResult {
+  if (!buffer || buffer.length === 0) {
+    return { detectedMime: null, isExecutable: false, isSuspicious: false };
+  }
+
+  // 1. DOS/PE executable header ("MZ" = 0x4D, 0x5A)
+  if (buffer.length >= 2 && buffer[0] === 0x4d && buffer[1] === 0x5a) {
+    return {
+      detectedMime: 'application/x-msdownload',
+      isExecutable: true,
+      isSuspicious: true,
+      reason: 'DOS/PE executable signature detected.',
+    };
+  }
+
+  // 2. Linux ELF binary ("\x7fELF" = 0x7F, 0x45, 0x4C, 0x46)
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x7f &&
+    buffer[1] === 0x45 &&
+    buffer[2] === 0x4c &&
+    buffer[3] === 0x46
+  ) {
+    return {
+      detectedMime: 'application/x-elf',
+      isExecutable: true,
+      isSuspicious: true,
+      reason: 'Linux ELF binary signature detected.',
+    };
+  }
+
+  // 3. Shell script shebang ("#!" = 0x23, 0x21)
+  if (buffer.length >= 2 && buffer[0] === 0x23 && buffer[1] === 0x21) {
+    return {
+      detectedMime: 'application/x-sh',
+      isExecutable: true,
+      isSuspicious: true,
+      reason: 'Shell script shebang detected.',
+    };
+  }
+
+  // 4. Java Class file (0xCA, 0xFE, 0xBA, 0xBE)
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0xca &&
+    buffer[1] === 0xfe &&
+    buffer[2] === 0xba &&
+    buffer[3] === 0xbe
+  ) {
+    return {
+      detectedMime: 'application/java-vm',
+      isExecutable: true,
+      isSuspicious: true,
+      reason: 'Java bytecode signature detected.',
+    };
+  }
+
+  // 5. PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return { detectedMime: 'image/png', isExecutable: false, isSuspicious: false };
+  }
+
+  // 6. JPEG: FF D8 FF
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { detectedMime: 'image/jpeg', isExecutable: false, isSuspicious: false };
+  }
+
+  // 7. PDF: %PDF- (0x25, 0x50, 0x44, 0x46, 0x2D)
+  if (
+    buffer.length >= 5 &&
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46 &&
+    buffer[4] === 0x2d
+  ) {
+    return { detectedMime: 'application/pdf', isExecutable: false, isSuspicious: false };
+  }
+
+  // 8. WebP: RIFF (bytes 0..3) ... WEBP (bytes 8..11)
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return { detectedMime: 'image/webp', isExecutable: false, isSuspicious: false };
+  }
+
+  // 9. XLSX / Zip: PK\x03\x04 (0x50, 0x4B, 0x03, 0x04)
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x50 &&
+    buffer[1] === 0x4b &&
+    buffer[2] === 0x03 &&
+    buffer[3] === 0x04
+  ) {
+    return {
+      detectedMime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      isExecutable: false,
+      isSuspicious: false,
+    };
+  }
+
+  // 10. Text / CSV inspection: check if buffer is plain text without binary null bytes
+  const previewLen = Math.min(buffer.length, 1024);
+  let hasNull = false;
+  for (let i = 0; i < previewLen; i++) {
+    if (buffer[i] === 0x00) {
+      hasNull = true;
+      break;
+    }
+  }
+
+  if (!hasNull) {
+    const textPreview = buffer.slice(0, previewLen).toString('utf8').toLowerCase();
+    // Check for suspicious script or HTML tags disguised as text/csv
+    if (
+      textPreview.includes('<script') ||
+      textPreview.includes('<?php') ||
+      textPreview.includes('<html') ||
+      textPreview.includes('<svg')
+    ) {
+      return {
+        detectedMime: 'text/html',
+        isExecutable: true,
+        isSuspicious: true,
+        reason: 'Embedded script or HTML tag detected in text payload.',
+      };
+    }
+    return { detectedMime: 'text/csv', isExecutable: false, isSuspicious: false };
+  }
+
+  return { detectedMime: null, isExecutable: false, isSuspicious: false };
+}
+
 export function validateUploadAttachmentDto(
   body: any,
   maxSizeBytes: number
@@ -208,6 +366,54 @@ export function validateUploadAttachmentDto(
           field: 'content_base64',
           code: 'MAX_SIZE_EXCEEDED',
           message: `File size exceeds ${maxSizeBytes} bytes limit.`,
+        },
+      ],
+    };
+  }
+
+  // Content inspection & malware verification (Finding 1)
+  const detection = detectBufferContentType(buffer);
+  if (detection.isExecutable || detection.isSuspicious) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_FILE_TYPE',
+      message: 'Nội dung tệp chứa mã độc hoặc tệp thực thi bị cấm.',
+      fields: [
+        {
+          field: 'content_base64',
+          code: 'MALWARE_SIGNATURE_DETECTED',
+          message: detection.reason || 'Dangerous executable or script signature detected.',
+        },
+      ],
+    };
+  }
+
+  const requestedMime = body.mime_type.trim().toLowerCase();
+  if (detection.detectedMime && detection.detectedMime !== requestedMime) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_FILE_TYPE',
+      message: `Nội dung tệp thực tế (${detection.detectedMime}) không khớp với loại MIME '${body.mime_type}' được khai báo.`,
+      fields: [
+        {
+          field: 'mime_type',
+          code: 'MIME_CONTENT_MISMATCH',
+          message: `Detected content type '${detection.detectedMime}' does not match claimed '${body.mime_type}'.`,
+        },
+      ],
+    };
+  }
+
+  if (requestedMime !== 'text/csv' && !detection.detectedMime) {
+    return {
+      valid: false,
+      errorCode: 'INVALID_FILE_TYPE',
+      message: `Nội dung tệp không hợp lệ đối với định dạng '${body.mime_type}'.`,
+      fields: [
+        {
+          field: 'content_base64',
+          code: 'CORRUPTED_OR_INVALID_CONTENT',
+          message: `File content does not conform to valid '${body.mime_type}' binary format.`,
         },
       ],
     };

@@ -8,6 +8,7 @@ import {
   maskAttachmentAuditValue,
   maskAttachmentAuditObject,
   sanitizeFileName,
+  detectBufferContentType,
 } from './attachments.dto';
 import { AttachmentsService } from './attachments.service';
 import { CanonicalApiException } from '../auth/auth.service';
@@ -36,12 +37,22 @@ function createMockAppConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return { ...base, ...overrides };
 }
 
+// Canonical valid binary buffers for tests
+const validPngBuffer = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+  0x89,
+]);
+const validPdfBuffer = Buffer.from('%PDF-1.4 test document content');
+const validJpegBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+const validCsvBuffer = Buffer.from('id,name,value\n1,box,100\n');
+
 describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
   const maxSizeBytes = 10 * 1024 * 1024; // 10MB
 
   describe('DTO Validation: validateUploadAttachmentDto', () => {
     it('should validate valid image upload payload', () => {
-      const content = Buffer.from('fake image content').toString('base64');
+      const content = validPngBuffer.toString('base64');
       const res = validateUploadAttachmentDto(
         {
           file_name: 'damaged_box.png',
@@ -53,11 +64,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       );
       assert.strictEqual(res.valid, true);
       assert.ok(res.buffer);
-      assert.strictEqual(res.buffer.toString(), 'fake image content');
+      assert.strictEqual(res.buffer.length, validPngBuffer.length);
     });
 
     it('should validate valid PDF document upload payload', () => {
-      const content = Buffer.from('%PDF-1.4 test document').toString('base64');
+      const content = validPdfBuffer.toString('base64');
       const res = validateUploadAttachmentDto(
         {
           file_name: 'carrier_claim.pdf',
@@ -74,7 +85,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
     it('should reject disallowed file extensions (.exe, .html, .svg) with INVALID_FILE_TYPE', () => {
       const dangerousFiles = ['malware.exe', 'script.html', 'vector.svg', 'payload.sh'];
       for (const fileName of dangerousFiles) {
-        const content = Buffer.from('dangerous content').toString('base64');
+        const content = validPngBuffer.toString('base64');
         const res = validateUploadAttachmentDto(
           {
             file_name: fileName,
@@ -120,7 +131,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       const oversizedContent = Buffer.alloc(100, 'x').toString('base64');
       const res = validateUploadAttachmentDto(
         {
-          file_name: 'big.png',
+          file_name: 'large.png',
           mime_type: 'image/png',
           content_base64: oversizedContent,
         },
@@ -131,18 +142,60 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
     });
 
     it('should reject invalid entity_type with VALIDATION_ERROR', () => {
-      const content = Buffer.from('valid content').toString('base64');
+      const content = validPngBuffer.toString('base64');
       const res = validateUploadAttachmentDto(
         {
-          file_name: 'evidence.png',
+          file_name: 'valid.png',
           mime_type: 'image/png',
           content_base64: content,
-          entity_type: 'UNKNOWN_ENTITY',
+          entity_type: 'MALICIOUS_TYPE',
         },
         maxSizeBytes
       );
       assert.strictEqual(res.valid, false);
       assert.strictEqual(res.errorCode, 'VALIDATION_ERROR');
+    });
+
+    it('Finding 1: should detect and reject executable (MZ) disguised as image', () => {
+      const disguisedExe = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00]);
+      const res = validateUploadAttachmentDto(
+        {
+          file_name: 'innocent.png',
+          mime_type: 'image/png',
+          content_base64: disguisedExe.toString('base64'),
+        },
+        maxSizeBytes
+      );
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(res.errorCode, 'INVALID_FILE_TYPE');
+    });
+
+    it('Finding 1: should detect and reject script payload disguised as text/csv', () => {
+      const maliciousScript = Buffer.from('<script>alert("xss")</script>');
+      const res = validateUploadAttachmentDto(
+        {
+          file_name: 'statement.csv',
+          mime_type: 'text/csv',
+          content_base64: maliciousScript.toString('base64'),
+        },
+        maxSizeBytes
+      );
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(res.errorCode, 'INVALID_FILE_TYPE');
+    });
+
+    it('Finding 1: should reject MIME type mismatch where buffer does not match declared type', () => {
+      // PDF buffer sent with image/png MIME type
+      const res = validateUploadAttachmentDto(
+        {
+          file_name: 'fake_image.png',
+          mime_type: 'image/png',
+          content_base64: validPdfBuffer.toString('base64'),
+        },
+        maxSizeBytes
+      );
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(res.errorCode, 'INVALID_FILE_TYPE');
     });
   });
 
@@ -159,27 +212,19 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
     });
 
     it('validateBulkDeleteDto rejects without confirm', () => {
-      const res = validateBulkDeleteDto({
-        ids: ['11111111-1111-1111-1111-111111111111'],
-      });
+      const res = validateBulkDeleteDto({ ids: ['11111111-1111-1111-1111-111111111111'] });
       assert.strictEqual(res.valid, false);
       assert.strictEqual(res.errorCode, 'CONFIRMATION_REQUIRED');
     });
 
     it('validateBulkDeleteDto rejects empty ids array', () => {
-      const res = validateBulkDeleteDto({
-        ids: [],
-        confirm: true,
-      });
+      const res = validateBulkDeleteDto({ ids: [], confirm: true });
       assert.strictEqual(res.valid, false);
       assert.strictEqual(res.errorCode, 'VALIDATION_ERROR');
     });
 
     it('validateBulkDeleteDto rejects invalid UUID format in ids', () => {
-      const res = validateBulkDeleteDto({
-        ids: ['not-a-valid-uuid'],
-        confirm: true,
-      });
+      const res = validateBulkDeleteDto({ ids: ['not-a-valid-uuid'], confirm: true });
       assert.strictEqual(res.valid, false);
       assert.strictEqual(res.errorCode, 'VALIDATION_ERROR');
     });
@@ -189,9 +234,10 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
     it('masks sensitive fields including phone and email', () => {
       assert.strictEqual(maskAttachmentAuditValue('phone', '0901234567'), '090****567');
       assert.strictEqual(
-        maskAttachmentAuditValue('contact_email', 'ops@shipde.vn'),
-        'o*s@shipde.vn'
+        maskAttachmentAuditValue('email', 'admin@example.com'),
+        'a***n@example.com'
       );
+      assert.strictEqual(maskAttachmentAuditValue('contact_phone', '0912345678'), '091****678');
     });
 
     it('recursively masks sensitive fields in metadata object', () => {
@@ -221,22 +267,32 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         {
           id: 'u-owner-1',
           role: 'OWNER',
+          status: 'active',
           store_scopes: ['*'],
           warehouse_scopes: ['*'],
         },
         {
           id: 'u-scoped-hcm',
           role: 'WAREHOUSE',
+          status: 'active',
           store_scopes: ['branch-hcm'],
           warehouse_scopes: ['wh-hcm-01'],
         },
         {
           id: 'u-empty-scopes',
           role: 'WAREHOUSE',
+          status: 'active',
           store_scopes: [],
           warehouse_scopes: [],
         },
       ];
+
+      const mockWarehouses = [
+        { id: 'wh-hcm-01', code: 'wh-hcm-01', merchant_id: 'm-tenant-1' },
+        { id: 'wh-danang', code: 'wh-danang', merchant_id: 'm-tenant-1' },
+      ];
+
+      const mockBranches = [{ id: 'branch-hcm', code: 'branch-hcm', merchant_id: 'm-tenant-1' }];
 
       const mockPrisma: any = {
         attachment: {
@@ -314,6 +370,63 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
             return mockUsers.find((u) => u.id === where.id) || null;
           },
         },
+        warehouse: {
+          findFirst: async ({ where }: any) => {
+            return (
+              mockWarehouses.find((w) => {
+                if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
+                if (where.OR) {
+                  return where.OR.some(
+                    (orClause: any) => orClause.id === w.id || orClause.code === w.code
+                  );
+                }
+                return true;
+              }) || null
+            );
+          },
+        },
+        branch: {
+          findFirst: async ({ where }: any) => {
+            return (
+              mockBranches.find((b) => {
+                if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
+                if (where.OR) {
+                  return where.OR.some(
+                    (orClause: any) => orClause.id === b.id || orClause.code === b.code
+                  );
+                }
+                return true;
+              }) || null
+            );
+          },
+        },
+        returnRecord: {
+          findFirst: async ({ where }: any) => {
+            if (where.merchant_id === 'm-tenant-1') {
+              return {
+                id: '11111111-1111-1111-1111-111111111111',
+                tracking_code: 'ret-12345',
+                return_warehouse_id: 'wh-hcm-01',
+              };
+            }
+            return null;
+          },
+        },
+        order: {
+          findFirst: async ({ where }: any) => null,
+        },
+        shipment: {
+          findFirst: async ({ where }: any) => null,
+        },
+        claim: {
+          findFirst: async ({ where }: any) => null,
+        },
+        discrepancy: {
+          findFirst: async ({ where }: any) => null,
+        },
+        carrierStatement: {
+          findFirst: async ({ where }: any) => null,
+        },
         auditLog: {
           create: async ({ data }: any) => {
             const row = { id: `audit-${Date.now()}`, ...data, created_at: new Date() };
@@ -321,6 +434,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
             return row;
           },
         },
+        $transaction: async (fn: any) => fn(mockPrisma),
       };
 
       const mockStorage: any = {
@@ -348,10 +462,36 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         },
       };
 
-      const config = createMockAppConfig();
-      const service = new AttachmentsService(mockPrisma, mockStorage, config);
+      const mockRbac: any = {
+        getActorPermissions: async (actor: ActorContext) => {
+          if (actor.role === 'OWNER') {
+            return [
+              'iam:shop_config',
+              'order:view_create',
+              'shipment:receive_return',
+              'claim:verify_submit',
+              'reconciliation:import_settlement_bank',
+              'reconciliation:run_review_audit',
+              'shipment:create_update',
+              'shipment:track_exceptions',
+              'iam:shop_view',
+            ];
+          }
+          if (actor.role === 'WAREHOUSE') {
+            return ['order:view_create', 'shipment:receive_return', 'shipment:track_exceptions'];
+          }
+          return [];
+        },
+        actorHasPermissions: async (actor: ActorContext, perms: string[]) => {
+          const held = await mockRbac.getActorPermissions(actor);
+          return perms.every((p: string) => held.includes(p));
+        },
+      };
 
-      return { service, mockPrisma, mockStorage, attachmentsTable, auditLogs, s3Storage };
+      const config = createMockAppConfig();
+      const service = new AttachmentsService(mockPrisma, mockStorage, config, mockRbac);
+
+      return { service, mockPrisma, mockStorage, mockRbac, attachmentsTable, auditLogs, s3Storage };
     }
 
     const ownerActor: ActorContext = {
@@ -380,7 +520,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-01: Uploads valid attachment, stores in S3 and writes audit log', async () => {
       const { service, auditLogs, s3Storage } = setupService();
-      const buffer = Buffer.from('valid png image bytes');
+      const buffer = validPngBuffer;
       const result = await service.uploadAttachment(
         ownerActor,
         {
@@ -405,15 +545,16 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       // Verify S3 storage
       assert.strictEqual(s3Storage.has(result.storage_key), true);
 
-      // Verify audit log
+      // Verify audit log includes correlation_id
       const audit = auditLogs.find((a) => a.action === 'ATTACHMENT_UPLOADED');
       assert.ok(audit);
       assert.strictEqual(audit.entity_id, result.id);
+      assert.ok(audit.reason.includes('corr-01'));
     });
 
     it('AC-COM-06-02: Upload with valid matching client checksum succeeds', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('verified package photo');
+      const buffer = validJpegBuffer;
       const expectedChecksum = createHash('sha256').update(buffer).digest('hex');
 
       const result = await service.uploadAttachment(
@@ -434,7 +575,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-03: Upload with mismatched client checksum throws 400 CHECKSUM_MISMATCH', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('some data');
+      const buffer = validJpegBuffer;
       const mismatchedChecksum = '0000000000000000000000000000000000000000000000000000000000000000';
 
       await assert.rejects(
@@ -462,8 +603,15 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
     });
 
     it('AC-COM-06-04: Upload to unauthorized warehouse outside actor scope throws 403 SCOPE_FORBIDDEN', async () => {
-      const { service } = setupService();
-      const buffer = Buffer.from('warehouse item');
+      const { service, mockPrisma } = setupService();
+      // Add warehouse to mock
+      mockPrisma.warehouse.findFirst = async () => ({
+        id: 'wh-danang-02',
+        code: 'wh-danang-02',
+        merchant_id: 'm-tenant-1',
+      });
+
+      const buffer = validPngBuffer;
 
       await assert.rejects(
         async () => {
@@ -491,7 +639,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-05: Upload to authorized warehouse inside actor scope succeeds', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('hcm warehouse item');
+      const buffer = validPngBuffer;
 
       const result = await service.uploadAttachment(
         scopedActor,
@@ -511,7 +659,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-07: List attachments returns paginated results', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('sample');
+      const buffer = validPngBuffer;
       await service.uploadAttachment(
         ownerActor,
         { file_name: 'f1.png', mime_type: 'image/png', content_base64: buffer.toString('base64') },
@@ -535,7 +683,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-08: List attachments with FEAT-RBAC-02 warehouse scope filters out unauthorized items', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('data');
+      const buffer = validPngBuffer;
 
       // Attachment for wh-hcm-01
       await service.uploadAttachment(
@@ -573,7 +721,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-09: Actor with empty scopes receives empty list (fail-closed)', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('data');
+      const buffer = validPngBuffer;
       await service.uploadAttachment(
         ownerActor,
         {
@@ -593,7 +741,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-11: Cross-tenant getAttachment throws 404 ATTACHMENT_NOT_FOUND', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('tenant 1 file');
+      const buffer = validPngBuffer;
       const att = await service.uploadAttachment(
         ownerActor,
         { file_name: 't1.png', mime_type: 'image/png', content_base64: buffer.toString('base64') },
@@ -616,7 +764,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-12: Get attachment outside warehouse scope throws 403 SCOPE_FORBIDDEN', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('danang file');
+      const buffer = validPngBuffer;
       const att = await service.uploadAttachment(
         ownerActor,
         {
@@ -644,7 +792,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-13: Download attachment returns buffer and creates ATTACHMENT_ACCESSED audit log', async () => {
       const { service, auditLogs } = setupService();
-      const buffer = Buffer.from('binary download content');
+      const buffer = validPdfBuffer;
       const att = await service.uploadAttachment(
         ownerActor,
         {
@@ -660,17 +808,83 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       const dl = await service.downloadAttachment(ownerActor, att.id, '10.0.0.1', 'corr-dl');
       assert.strictEqual(dl.fileName, 'doc.pdf');
       assert.strictEqual(dl.mimeType, 'application/pdf');
-      assert.strictEqual(dl.buffer.toString(), 'binary download content');
+      assert.strictEqual(dl.buffer.toString(), validPdfBuffer.toString());
 
       // Verify access audit
       const audit = auditLogs.find((a) => a.action === 'ATTACHMENT_ACCESSED');
       assert.ok(audit);
       assert.strictEqual(audit.entity_id, att.id);
+      assert.ok(audit.reason.includes('corr-dl'));
+    });
+
+    it('Finding 1: Download rejects QUARANTINED attachment with 403 ATTACHMENT_QUARANTINED', async () => {
+      const { service, mockPrisma } = setupService();
+      const buffer = validPdfBuffer;
+      const att = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'quarantined.pdf',
+          mime_type: 'application/pdf',
+          content_base64: buffer.toString('base64'),
+        },
+        buffer,
+        '127.0.0.1',
+        'c'
+      );
+
+      // Simulate safety scanner putting attachment into QUARANTINED status
+      await mockPrisma.attachment.update({
+        where: { id: att.id },
+        data: { status: 'QUARANTINED' },
+      });
+
+      await assert.rejects(
+        async () => {
+          await service.downloadAttachment(ownerActor, att.id, '127.0.0.1', 'corr-quarantine');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'ATTACHMENT_QUARANTINED');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 5: Download fails closed and does not return content if audit logging throws', async () => {
+      const { service, mockPrisma } = setupService();
+      const buffer = validPdfBuffer;
+      const att = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'doc.pdf',
+          mime_type: 'application/pdf',
+          content_base64: buffer.toString('base64'),
+        },
+        buffer,
+        '127.0.0.1',
+        'c'
+      );
+
+      // Force auditLog.create to throw
+      mockPrisma.auditLog.create = async () => {
+        throw new Error('Database connection failed during audit write');
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.downloadAttachment(ownerActor, att.id, '127.0.0.1', 'corr-audit-fail');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'AUDIT_LOG_FAILED');
+          assert.strictEqual(err.getStatus(), 503);
+          return true;
+        }
+      );
     });
 
     it('AC-COM-06-15: Delete attachment with confirm: true marks DELETED and removes from S3', async () => {
       const { service, s3Storage, auditLogs } = setupService();
-      const buffer = Buffer.from('to delete');
+      const buffer = validPngBuffer;
       const att = await service.uploadAttachment(
         ownerActor,
         { file_name: 'del.png', mime_type: 'image/png', content_base64: buffer.toString('base64') },
@@ -694,9 +908,45 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       });
     });
 
+    it('Finding 6: Delete attachment fails closed when S3 removal fails, keeping DB row ACTIVE', async () => {
+      const { service, mockStorage, mockPrisma } = setupService();
+      const buffer = validPngBuffer;
+      const att = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'keep.png',
+          mime_type: 'image/png',
+          content_base64: buffer.toString('base64'),
+        },
+        buffer,
+        '127.0.0.1',
+        'c'
+      );
+
+      // Mock S3 failure on deletion
+      mockStorage.deleteObject = async () => {
+        throw new Error('S3 error');
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.deleteAttachment(ownerActor, att.id, true, '127.0.0.1', 'c');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'STORAGE_UNAVAILABLE');
+          assert.strictEqual(err.getStatus(), 503);
+          return true;
+        }
+      );
+
+      // Verify DB row remains ACTIVE
+      const row = await mockPrisma.attachment.findFirst({ where: { id: att.id } });
+      assert.strictEqual(row?.status, 'ACTIVE');
+    });
+
     it('AC-COM-06-16: Delete attachment without confirm: true throws 400 CONFIRMATION_REQUIRED', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('content');
+      const buffer = validPngBuffer;
       const att = await service.uploadAttachment(
         ownerActor,
         {
@@ -721,9 +971,29 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       );
     });
 
+    it('Finding 4: Retention purge requires iam:shop_config capability', async () => {
+      const { service } = setupService();
+      await assert.rejects(
+        async () => {
+          // scopedActor is WAREHOUSE and lacks iam:shop_config
+          await service.purgeExpiredRetention(
+            scopedActor,
+            { dry_run: false },
+            '127.0.0.1',
+            'corr-purge'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+    });
+
     it('AC-COM-06-19: Retention purge job processes expired items and reports truthful per-row results', async () => {
       const { service, mockPrisma, s3Storage } = setupService();
-      const buffer = Buffer.from('expired file');
+      const buffer = validPngBuffer;
 
       // Create an expired attachment directly in DB
       const expiredAtt = await mockPrisma.attachment.create({
@@ -761,7 +1031,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('AC-COM-06-20: Bulk delete attachments returns partitioned results', async () => {
       const { service } = setupService();
-      const buffer = Buffer.from('bulk item');
+      const buffer = validPngBuffer;
 
       const att1 = await service.uploadAttachment(
         ownerActor,
@@ -798,7 +1068,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       mockStorage.putObject = async () => {
         throw new Error('S3 connection timeout');
       };
-      const buffer = Buffer.from('content');
+      const buffer = validPngBuffer;
 
       await assert.rejects(
         async () => {
