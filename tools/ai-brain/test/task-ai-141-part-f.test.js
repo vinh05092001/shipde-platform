@@ -101,8 +101,9 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
   test('prior bonus breaks otherwise equal ranking scores', () => {
     const priorCandidate = candidate('prior-tie', { latencyMs: 1000, cost: 1, quality: 50 });
     const plainCandidate = candidate('plain-tie', { latencyMs: 1000, cost: 1, quality: 50 });
+    const now = Date.now();
     const result = routing.rankForProfile([plainCandidate, priorCandidate], profile(), assessment, {
-      now: Date.now(),
+      now,
       headrooms: { default: 'open' },
       priors: {
         ranking: [
@@ -110,7 +111,7 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
             canonical: 'prior-tie',
             codingTier: 'T1',
             reviewTier: 'T1',
-            retrievedAt: new Date().toISOString(),
+            retrievedAt: new Date(now).toISOString(),
           },
         ],
       },

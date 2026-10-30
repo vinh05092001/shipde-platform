@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "canonicalModelKey": "gpt-6-astra",
+      "model": "GPT-6 Astra",
+      "creator": "OpenAI",
+      "displayScore": 86.08,
+      "rankingEligible": true
+    },
+    {
+      "canonicalModelKey": "flint",
+      "model": "Flint",
+      "creator": "Recursive",
+      "displayScore": null,
+      "provisionalDisplayScore": 88.0,
+      "rankingEligible": false
+    },
+    {
+      "canonicalModelKey": "experimental-model",
+      "model": "Experimental Model",
+      "creator": "ExperimentalLab",
+      "displayScore": null,
+      "provisionalDisplayScore": 95.0,
+      "rankingEligible": false
+    }
+  ]
+}

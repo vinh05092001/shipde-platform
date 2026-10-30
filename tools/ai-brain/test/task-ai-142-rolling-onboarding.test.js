@@ -1270,4 +1270,69 @@ describe('TASK-AI-142 T8: rolling source onboarding', () => {
     ]);
     assert.equal(evidenceData.combinations[0].capabilities?.tools, undefined);
   });
+
+  test('TASK-AI-142 Finding 3: onboardSourceRolling does NOT copy route-health probe success to sibling accounts', async (t) => {
+    const dir = fixture(t);
+    const evidenceDir = path.join(dir, 'evidence');
+    const quotaFile = path.join(dir, 'quota-state.json');
+    const healthFile = path.join(dir, 'route-health.json');
+    fs.mkdirSync(evidenceDir, { recursive: true });
+
+    const src = {
+      id: 'multi-acc-source',
+      kind: 'model-source',
+      servesModels: true,
+      endpoint: 'https://multi.invalid/v1',
+      models: ['multi/model-1'],
+      credential: { env: 'ACC1_KEY' },
+    };
+
+    const acc1 = { id: 'acc1', source: 'multi-acc-source' };
+    const acc2 = { id: 'acc2', source: 'multi-acc-source' };
+
+    const evidenceData = { combinations: [] };
+    const env = { ACC1_KEY: 'key-1' };
+
+    const fakeFetch = async (url, opts) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: 'OK',
+              },
+            },
+          ],
+        }),
+    });
+
+    const result = await onboardSourceRolling(src, {
+      evidenceData,
+      accounts: [acc1, acc2],
+      evidenceDir,
+      quotaStateFile: quotaFile,
+      routeHealthFile: healthFile,
+      env,
+      fetch: fakeFetch,
+      now: 1700000000000,
+    });
+
+    assert.equal(result.ok, true);
+
+    // Read the saved route health store
+    const healthStore = JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    const paths = healthStore.paths || {};
+
+    // Sibling account acc2 was never probed; it must NOT have a success/AVAILABLE record in route-health
+    const acc2Entries = Object.entries(paths).filter(
+      ([key, rec]) => rec?.accountId === 'acc2' || key.includes('acc2')
+    );
+    assert.equal(
+      acc2Entries.length,
+      0,
+      `Sibling account acc2 must not have route-health records copied from acc1, but found: ${JSON.stringify(acc2Entries)}`
+    );
+  });
 });

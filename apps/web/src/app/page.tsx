@@ -25,6 +25,7 @@ import { SettingsWorkspace } from '@/components/SettingsWorkspace';
 import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
 import { UploadStatementModal } from '@/components/UploadStatementModal';
 import { CreateOrderModal } from '@/components/CreateOrderModal';
+import { GlobalSearchModal } from '@/components/GlobalSearchModal';
 
 import {
   Package,
@@ -47,6 +48,76 @@ import {
   Key,
 } from 'lucide-react';
 
+export interface SearchActivationActions {
+  setActiveTab: (tab: string) => void;
+  setSelectedGlobalTracking: (code: string | null) => void;
+  setSelectedOrderId: (id: string | null) => void;
+  setSelectedOrderCode: (code: string | null) => void;
+  setSelectedBatchId: (id: string | null) => void;
+  setSelectedCaseId: (id: string | null) => void;
+  setSelectedClaimId: (id: string | null) => void;
+  setSelectedClaimCode: (code: string | null) => void;
+  setSelectedDiscrepancyId: (id: string | null) => void;
+  pushUrl?: (url: string) => void;
+  showToast?: (message: string) => void;
+}
+
+export function handleSearchResultActivation(
+  item: {
+    id: string;
+    type: string;
+    code: string;
+    url?: string;
+    title?: string;
+    metadata?: Record<string, unknown>;
+  },
+  actions: SearchActivationActions
+) {
+  // Follow result URL in browser history
+  if (actions.pushUrl && item.url) {
+    actions.pushUrl(item.url);
+  } else if (typeof window !== 'undefined' && item.url) {
+    window.history.pushState(null, '', item.url);
+  }
+
+  // Clear previous selections across all entity types so consecutive activations do not leave stale selections
+  actions.setSelectedGlobalTracking(null);
+  actions.setSelectedOrderId(null);
+  actions.setSelectedOrderCode(null);
+  actions.setSelectedBatchId(null);
+  actions.setSelectedCaseId(null);
+  actions.setSelectedClaimId(null);
+  actions.setSelectedClaimCode(null);
+  actions.setSelectedDiscrepancyId(null);
+
+  if (item.type === 'WAYBILL') {
+    actions.setSelectedGlobalTracking(item.code);
+  } else if (item.type === 'ORDER') {
+    actions.setActiveTab('shipments');
+    actions.setSelectedOrderId(item.id);
+    actions.setSelectedOrderCode(item.code);
+  } else if (item.type === 'BATCH') {
+    actions.setActiveTab('reconciliation');
+    actions.setSelectedBatchId(item.id);
+  } else if (item.type === 'CASE') {
+    const isClaim =
+      item.url?.startsWith('/claims/') ||
+      Boolean(item.metadata && 'claim_type' in item.metadata) ||
+      item.title?.toLowerCase().includes('bồi thường');
+    if (isClaim) {
+      actions.setActiveTab('claims');
+      actions.setSelectedClaimId(item.id);
+      actions.setSelectedClaimCode(item.code);
+    } else {
+      actions.setActiveTab('exceptions');
+      actions.setSelectedCaseId(item.id);
+    }
+  } else if (item.type === 'TRANSACTION') {
+    actions.setActiveTab('reconciliation');
+    actions.setSelectedDiscrepancyId(item.id);
+  }
+}
+
 export default function ShipDeConsoleApp() {
   const { user, merchant, isAuthenticated, isHydrating, logout, switchRole } = useAuth();
   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
@@ -58,11 +129,19 @@ export default function ShipDeConsoleApp() {
   const [discrepancies, setDiscrepancies] = useState<UIDiscrepancyItem[]>(MASTER_DISCREPANCIES);
   const [claims, setClaims] = useState<UIClaimItem[]>(MASTER_CLAIMS);
 
+  // Deep search result selections (FEAT-COM-01)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [selectedClaimCode, setSelectedClaimCode] = useState<string | null>(null);
+  const [selectedDiscrepancyId, setSelectedDiscrepancyId] = useState<string | null>(null);
+
   // Modals
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [uploadStatementOpen, setUploadStatementOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
-  const [globalSearchCode, setGlobalSearchCode] = useState('');
   const [selectedGlobalTracking, setSelectedGlobalTracking] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [syncingPancake, setSyncingPancake] = useState(false);
@@ -95,14 +174,6 @@ export default function ShipDeConsoleApp() {
 
   const handleUpdateClaim = (updated: UIClaimItem) => {
     setClaims((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-  };
-
-  const handleGlobalSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!globalSearchCode.trim()) return;
-    setSelectedGlobalTracking(globalSearchCode.trim().toUpperCase());
-    setGlobalSearchOpen(false);
-    setGlobalSearchCode('');
   };
 
   const handleSyncPancake = async () => {
@@ -552,6 +623,12 @@ export default function ShipDeConsoleApp() {
               onNavigateToTab={(tab) => setActiveTab(tab)}
               onCreateOrder={() => setCreateOrderOpen(true)}
               userRole={user?.role || 'OWNER'}
+              selectedOrderId={selectedOrderId}
+              selectedOrderCode={selectedOrderCode}
+              onClearSelection={() => {
+                setSelectedOrderId(null);
+                setSelectedOrderCode(null);
+              }}
             />
           )}
 
@@ -560,6 +637,8 @@ export default function ShipDeConsoleApp() {
               exceptions={exceptions}
               onUpdateException={handleUpdateException}
               carrierGhnTier={carrierGhnTier}
+              selectedCaseId={selectedCaseId}
+              onClearSelection={() => setSelectedCaseId(null)}
             />
           )}
 
@@ -568,6 +647,10 @@ export default function ShipDeConsoleApp() {
               discrepancies={discrepancies}
               onUpdateDiscrepancy={handleUpdateDiscrepancy}
               role={user?.role || 'OWNER'}
+              selectedBatchId={selectedBatchId}
+              selectedDiscrepancyId={selectedDiscrepancyId}
+              onClearBatchSelection={() => setSelectedBatchId(null)}
+              onClearDiscrepancySelection={() => setSelectedDiscrepancyId(null)}
             />
           )}
 
@@ -576,7 +659,16 @@ export default function ShipDeConsoleApp() {
           {activeTab === 'returns' && <ReturnScanTab />}
 
           {activeTab === 'claims' && (
-            <ClaimCasesTab claims={claims} onUpdateClaim={handleUpdateClaim} />
+            <ClaimCasesTab
+              claims={claims}
+              onUpdateClaim={handleUpdateClaim}
+              selectedClaimId={selectedClaimId}
+              selectedClaimCode={selectedClaimCode}
+              onClearSelection={() => {
+                setSelectedClaimId(null);
+                setSelectedClaimCode(null);
+              }}
+            />
           )}
 
           {activeTab === 'settings' && (
@@ -616,44 +708,26 @@ export default function ShipDeConsoleApp() {
         </div>
       </footer>
 
-      {/* Global Quick Search Modal ⌘K */}
-      {globalSearchOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-              <div className="flex items-center gap-2 font-bold text-sm text-slate-900">
-                <Search className="w-4 h-4 text-[#c23807]" />
-                <span>Tra Cứu Mã Vận Đơn Nhanh</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setGlobalSearchOpen(false)}
-                className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleGlobalSearchSubmit} className="space-y-3">
-              <input
-                type="text"
-                value={globalSearchCode}
-                onChange={(e) => setGlobalSearchCode(e.target.value)}
-                placeholder="Nhập mã vận đơn (GHN88291042, GHTK77129031)..."
-                className="modern-input w-full font-mono uppercase font-bold text-sm"
-                autoFocus
-              />
-
-              <div className="flex justify-between items-center text-xs text-slate-500">
-                <span>Gợi ý: GHN88291042, GHTK77129031</span>
-                <button type="submit" className="btn-primary text-xs">
-                  Mở Hồ Sơ
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Global Search Modal ⌘K (FEAT-COM-01) */}
+      <GlobalSearchModal
+        isOpen={globalSearchOpen}
+        onClose={() => setGlobalSearchOpen(false)}
+        onSelectResult={(item) => {
+          setGlobalSearchOpen(false);
+          handleSearchResultActivation(item, {
+            setActiveTab,
+            setSelectedGlobalTracking,
+            setSelectedOrderId,
+            setSelectedOrderCode,
+            setSelectedBatchId,
+            setSelectedCaseId,
+            setSelectedClaimId,
+            setSelectedClaimCode,
+            setSelectedDiscrepancyId,
+            showToast,
+          });
+        }}
+      />
 
       {/* Statement Upload Modal */}
       <UploadStatementModal
