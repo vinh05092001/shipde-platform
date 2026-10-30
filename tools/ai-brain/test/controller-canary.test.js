@@ -272,6 +272,25 @@ test('Controller offline end-to-end canary', { timeout: 170000 }, async (t) => {
         writerCandidateKey: candidateKey(writer),
         reviewerIdentity: candidateKey(reviewer),
         routeProbe: async () => ({ ok: true, status: 'ok', latencyMs: 1 }),
+        ghRunner: (args) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                headRefOid: git(['rev-parse', 'HEAD']),
+                statusCheckRollup: [
+                  { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+                  { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+                ],
+              }),
+              stderr: '',
+            };
+          }
+          return { exitCode: 1, stdout: '', stderr: 'unknown gh command' };
+        },
+        ciSleep: async () => {},
+        ciPollIntervalMs: 1,
+        ciTimeoutMs: 1000,
         run: (job) => {
           const before = cp.spawnSync(process.execPath, ['--test', gateFile], {
             cwd: root,
