@@ -1,5 +1,6 @@
 import { Injectable, Inject, HttpStatus } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RbacService } from '../rbac/rbac.service';
 import type { ActorContext } from '../rbac/rbac.dto';
@@ -418,7 +419,7 @@ export class BulkService {
       const results: BulkActionItemResult[] = [];
       const exportRows: Record<string, unknown>[] = [];
       let exportCsvHeaders: string[] = [];
-      const supportsSavepoints = typeof tx.$queryRawUnsafe === 'function';
+      const supportsSavepoints = typeof tx.$executeRaw === 'function';
 
       for (let itemIndex = 0; itemIndex < uniqueIds.length; itemIndex++) {
         const targetId = uniqueIds[itemIndex];
@@ -426,7 +427,7 @@ export class BulkService {
         const savepointActive = supportsSavepoints && /^bulk_item_sp_\d+$/.test(savepointName);
         try {
           if (savepointActive) {
-            await tx.$queryRawUnsafe(`SAVEPOINT ${savepointName}`);
+            await tx.$executeRaw(Prisma.raw(`SAVEPOINT ${savepointName}`));
           }
           switch (dto.entity_type) {
             case BulkEntityType.USERS: {
@@ -493,8 +494,8 @@ export class BulkService {
         } catch (err: any) {
           if (savepointActive) {
             try {
-              await tx.$queryRawUnsafe(`ROLLBACK TO SAVEPOINT ${savepointName}`);
-              await tx.$queryRawUnsafe(`RELEASE SAVEPOINT ${savepointName}`);
+              await tx.$executeRaw(Prisma.raw(`ROLLBACK TO SAVEPOINT ${savepointName}`));
+              await tx.$executeRaw(Prisma.raw(`RELEASE SAVEPOINT ${savepointName}`));
             } catch (recoveryErr: any) {
               // Savepoint recovery failed: the shared transaction is aborted
               // beyond recovery. Fail closed so the outer transaction rolls

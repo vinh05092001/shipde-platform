@@ -8,7 +8,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
-import { RoleEnum, SessionStatusEnum } from '@prisma/client';
+import { RoleEnum, SessionStatusEnum, Prisma } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
 import { BulkItemStatus } from '@shipde/contracts';
@@ -644,8 +644,9 @@ async function runBulkSupertestSuite() {
 
     // Test-owned trigger aborts only the failing target's UPDATE; dropped right
     // after the assertions (and again in cleanup) so no untracked DB objects remain.
-    await prisma.$executeRawUnsafe(
-      `CREATE OR REPLACE FUNCTION bulk_test_item_failure_guard(target uuid) RETURNS trigger AS $fn$
+    await prisma.$executeRaw(
+      Prisma.raw(
+        `CREATE OR REPLACE FUNCTION bulk_test_item_failure_guard(target uuid) RETURNS trigger AS $fn$
        BEGIN
          IF NEW.id = target THEN
            RAISE EXCEPTION 'simulated per-item database failure';
@@ -653,9 +654,12 @@ async function runBulkSupertestSuite() {
          RETURN NEW;
        END;
        $fn$ LANGUAGE plpgsql`
+      )
     );
-    await prisma.$executeRawUnsafe(
-      `CREATE TRIGGER bulk_test_item_fail_trg BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION bulk_test_item_failure_guard('${savepointFailUserId}')`
+    await prisma.$executeRaw(
+      Prisma.raw(
+        `CREATE TRIGGER bulk_test_item_fail_trg BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION bulk_test_item_failure_guard('${savepointFailUserId}')`
+      )
     );
 
     const savepointKey = `idemp-bulk-savepoint-${Date.now()}`;
@@ -724,8 +728,10 @@ async function runBulkSupertestSuite() {
     assert.strictEqual(spBatch?.failure_count, 1);
 
     // Release the test-owned trigger objects immediately
-    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`);
-    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`);
+    await prisma.$executeRaw(Prisma.raw(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`));
+    await prisma.$executeRaw(
+      Prisma.raw(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`)
+    );
     console.log('  PASS: Per-item savepoint isolation verified against real PostgreSQL.');
 
     // ========================================================================
@@ -843,9 +849,11 @@ async function runBulkSupertestSuite() {
     try {
       if (merchantIdA && merchantIdB) {
         // Guaranteed teardown of the test-owned trigger/function (idempotent)
-        await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`);
-        await prisma.$executeRawUnsafe(
-          `DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`
+        await prisma.$executeRaw(
+          Prisma.raw(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`)
+        );
+        await prisma.$executeRaw(
+          Prisma.raw(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`)
         );
         await prisma.bulkActionBatch.deleteMany({
           where: { merchant_id: { in: [merchantIdA, merchantIdB] } },

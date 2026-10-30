@@ -243,8 +243,12 @@ function createMockPrismaService() {
 
   const mockTx = {
     $queryRaw: async () => [],
-    $queryRawUnsafe: async (sql: string) => {
-      rawSqlLog.push(sql);
+    $executeRaw: async (rawSql: any) => {
+      const sqlStr =
+        typeof rawSql === 'string'
+          ? rawSql
+          : rawSql?.sql || rawSql?.text || rawSql?.strings?.[0] || String(rawSql);
+      rawSqlLog.push(sqlStr);
       return 1;
     },
     user: userModel,
@@ -716,7 +720,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
 
       const targetNorth = '22222222-2222-4222-8222-222222222222'; // branch-north, wh-north
       const targetSouth = '33333333-3333-4333-8333-333333333333'; // branch-south, wh-south
-      const replayKey = 'req-replay-scope-check-01';
+      const testScopeReplayId = 'test-not-a-secret-scope-replay';
 
       // 1. Owner executes export CSV for both north and south users -> cached batch includes both
       const ownerRes = await service.executeBulkAction(
@@ -726,7 +730,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
           entity_type: BulkEntityType.USERS,
           action: BulkActionType.EXPORT_CSV,
           ids: [targetNorth, targetSouth],
-          idempotency_key: replayKey,
+          idempotency_key: testScopeReplayId,
         },
         '127.0.0.1',
         'corr-export-owner'
@@ -743,7 +747,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
           entity_type: BulkEntityType.USERS,
           action: BulkActionType.EXPORT_CSV,
           ids: [targetNorth, targetSouth],
-          idempotency_key: replayKey,
+          idempotency_key: testScopeReplayId,
         },
         '127.0.0.1',
         'corr-export-replay'
@@ -773,7 +777,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
 
       const northId = '22222222-2222-4222-8222-222222222222'; // branch-north scope -> allowed
       const southId = '33333333-3333-4333-8333-333333333333'; // branch-south scope -> forbidden
-      const replayKey = 'req-replay-multiline-csv-01';
+      const replayKey = 'test-not-a-secret-multiline-csv';
       const secretFragment = 'CONFIDENTIAL-SOUTH-FRAGMENT';
 
       // Cached export whose forbidden row carries a quoted multiline field:
@@ -864,7 +868,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
 
       const failingId = '33333333-3333-4333-8333-333333333333'; // suspended -> activate mutates + audits
       const healthyId = '22222222-2222-4222-8222-222222222222'; // active -> ALREADY_ACTIVE success
-      const isolationKey = 'req-savepoint-isolation-01';
+      const isolationKey = 'test-not-a-secret-batch-isolation';
 
       // Simulate a PostgreSQL statement failure inside the first item's audit
       // insert: without a savepoint this would abort the whole transaction.
@@ -928,7 +932,7 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       const service = new BulkService(mockPrisma as any, mockRbac as any);
 
       const targetId = '33333333-3333-4333-8333-333333333333';
-      const recoveryKey = 'req-crashed-recovery-key-01';
+      const recoveryKey = 'test-not-a-secret-recovery-batch';
 
       // Simulate a prior crashed run that left batch in IN_PROGRESS state
       mockPrisma.batches.push({
