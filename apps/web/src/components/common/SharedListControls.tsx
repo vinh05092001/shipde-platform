@@ -11,7 +11,13 @@ import {
   FilterX,
   AlertCircle,
   ShieldAlert,
+  Bookmark,
+  Columns,
+  Trash2,
+  Check,
+  X,
 } from 'lucide-react';
+import type { SavedView, ColumnSettings } from '@/hooks/useSharedListState';
 
 export interface PaginationControlsProps {
   page: number;
@@ -312,6 +318,205 @@ export function ListForbiddenCallout({
         <span>{message}</span>
       </div>
       <p className="text-xs text-amber-700 max-w-md mx-auto">{explanation}</p>
+    </div>
+  );
+}
+
+export interface ColumnOption {
+  id: string;
+  label: string;
+}
+
+export interface SavedViewsAndColumnsControlsProps<TFilters extends Record<string, string>> {
+  savedViews: SavedView<TFilters>[];
+  columnSettings: ColumnSettings;
+  availableColumns: ColumnOption[];
+  onSaveCurrentView: (name: string) => void;
+  onApplySavedView: (viewId: string) => void;
+  onDeleteSavedView: (viewId: string) => void;
+  onUpdateColumnSettings: (settings: Partial<ColumnSettings>) => void;
+  testIdPrefix?: string;
+  initialSelectedViewId?: string;
+}
+
+export function SavedViewsAndColumnsControls<TFilters extends Record<string, string>>({
+  savedViews,
+  columnSettings,
+  availableColumns,
+  onSaveCurrentView,
+  onApplySavedView,
+  onDeleteSavedView,
+  onUpdateColumnSettings,
+  testIdPrefix = 'list',
+  initialSelectedViewId = '',
+}: SavedViewsAndColumnsControlsProps<TFilters>) {
+  const [isSaving, setIsSaving] = React.useState(false);
+  const [viewNameInput, setViewNameInput] = React.useState('');
+  const [isColumnsOpen, setIsColumnsOpen] = React.useState(false);
+  const [selectedViewId, setSelectedViewId] = React.useState<string>(initialSelectedViewId);
+
+  const handleSave = () => {
+    if (viewNameInput.trim()) {
+      onSaveCurrentView(viewNameInput.trim());
+      setViewNameInput('');
+      setIsSaving(false);
+    }
+  };
+
+  const handleToggleColumn = (colId: string) => {
+    const current = columnSettings.visibleColumns || availableColumns.map((c) => c.id);
+    let next: string[];
+    if (current.includes(colId)) {
+      if (current.length <= 1) return; // Keep at least one column
+      next = current.filter((id) => id !== colId);
+    } else {
+      next = [...current, colId];
+    }
+    onUpdateColumnSettings({ visibleColumns: next });
+  };
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2"
+      data-testid={`${testIdPrefix}-saved-views-columns-container`}
+    >
+      {/* Saved views dropdown */}
+      {savedViews.length > 0 && (
+        <div
+          className="flex items-center gap-1.5"
+          data-testid={`${testIdPrefix}-saved-views-group`}
+        >
+          <select
+            value={selectedViewId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setSelectedViewId(id);
+              if (id) {
+                onApplySavedView(id);
+              }
+            }}
+            className="py-1 px-2.5 border border-slate-200 rounded-lg text-xs bg-white text-slate-700 font-medium cursor-pointer"
+            aria-label="Chọn chế độ xem đã lưu"
+            data-testid={`${testIdPrefix}-saved-views-select`}
+          >
+            <option value="">-- Chế độ xem đã lưu ({savedViews.length}) --</option>
+            {savedViews.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+          {selectedViewId && (
+            <button
+              type="button"
+              onClick={() => {
+                onDeleteSavedView(selectedViewId);
+                setSelectedViewId('');
+              }}
+              className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+              aria-label="Xóa chế độ xem đang chọn"
+              title="Xóa chế độ xem"
+              data-testid={`${testIdPrefix}-delete-saved-view-btn`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Save view button / inline input */}
+      {isSaving ? (
+        <div
+          className="inline-flex items-center gap-1 bg-white border border-blue-300 rounded-lg p-0.5 shadow-sm"
+          data-testid={`${testIdPrefix}-save-view-form`}
+        >
+          <input
+            type="text"
+            value={viewNameInput}
+            onChange={(e) => setViewNameInput(e.target.value)}
+            placeholder="Tên chế độ xem..."
+            className="py-0.5 px-2 text-xs outline-none w-32 text-slate-800"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSave();
+              if (e.key === 'Escape') setIsSaving(false);
+            }}
+            data-testid={`${testIdPrefix}-view-name-input`}
+          />
+          <button
+            type="button"
+            onClick={handleSave}
+            className="p-1 text-blue-600 hover:bg-blue-50 rounded"
+            aria-label="Xác nhận lưu chế độ xem"
+            data-testid={`${testIdPrefix}-confirm-save-view-btn`}
+          >
+            <Check className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsSaving(false)}
+            className="p-1 text-slate-400 hover:bg-slate-100 rounded"
+            aria-label="Hủy lưu chế độ xem"
+            data-testid={`${testIdPrefix}-cancel-save-view-btn`}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsSaving(true)}
+          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition cursor-pointer"
+          data-testid={`${testIdPrefix}-save-view-btn`}
+        >
+          <Bookmark className="w-3.5 h-3.5 text-slate-500" />
+          <span>Lưu chế độ xem</span>
+        </button>
+      )}
+
+      {/* Columns customization toggle */}
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setIsColumnsOpen((prev) => !prev)}
+          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition cursor-pointer"
+          aria-expanded={isColumnsOpen}
+          aria-label="Tùy chỉnh cột hiển thị"
+          data-testid={`${testIdPrefix}-column-settings-btn`}
+        >
+          <Columns className="w-3.5 h-3.5 text-slate-500" />
+          <span>Tùy chỉnh cột</span>
+        </button>
+
+        {isColumnsOpen && (
+          <div
+            className="absolute right-0 top-full mt-1.5 w-48 bg-white border border-slate-200 rounded-xl shadow-lg p-2.5 z-30 space-y-1.5"
+            data-testid={`${testIdPrefix}-column-settings-dropdown`}
+          >
+            <div className="text-[11px] font-bold text-slate-500 uppercase px-1 pb-1 border-b border-slate-100">
+              Cột hiển thị
+            </div>
+            {availableColumns.map((col) => {
+              const isVisible = (columnSettings.visibleColumns || []).includes(col.id);
+              return (
+                <label
+                  key={col.id}
+                  className="flex items-center gap-2 px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50 rounded cursor-pointer select-none"
+                  data-testid={`${testIdPrefix}-col-toggle-${col.id}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isVisible}
+                    onChange={() => handleToggleColumn(col.id)}
+                    className="rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                  <span>{col.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

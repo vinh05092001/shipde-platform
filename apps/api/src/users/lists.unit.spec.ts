@@ -12,10 +12,12 @@ import {
 } from '../../../../packages/config/src/list-policies';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { BranchesService } from '../branches/branches.service';
+import { WarehousesService } from '../warehouses/warehouses.service';
 import { SessionGuard } from '../session/session.guard';
 import { PermissionsGuard } from '../rbac/rbac.guard';
 import { parseCanonicalListQuery, requireListTenant } from './list-scope';
-import { CanonicalApiException } from '../auth/auth.service';
+import { CanonicalApiException, type ActorContext } from '../auth/auth.service';
 
 test('missing policy and authorized tenant fail closed with canonical errors', () => {
   assert.throws(
@@ -316,5 +318,212 @@ test('Branches and Warehouses list policy contracts: defaults, clamping, validat
   assert.throws(
     () => parseListQuery({ page: '0' }, WAREHOUSES_LIST_POLICY),
     (e: unknown) => e instanceof ListContractError && e.code === 'VALIDATION_ERROR'
+  );
+});
+
+test('BranchesService.listBranches scoped database reads, counts, pagination, and tenant isolation', async () => {
+  const branches = [
+    {
+      id: '00000000-0000-0000-0000-000000000001',
+      merchant_id: 'tenant-a',
+      name: 'Chi Nhanh A1',
+      code: 'CN-A1',
+      address: '123 Le Loi',
+      phone: '0901234567',
+      is_default: true,
+      status: 'ACTIVE',
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000002',
+      merchant_id: 'tenant-a',
+      name: 'Chi Nhanh A2',
+      code: 'CN-A2',
+      address: '456 Tran Hung Dao',
+      phone: '0901234568',
+      is_default: false,
+      status: 'INACTIVE',
+      created_at: new Date('2026-01-02'),
+      updated_at: new Date('2026-01-02'),
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000003',
+      merchant_id: 'tenant-b',
+      name: 'Chi Nhanh B1',
+      code: 'CN-B1',
+      address: '789 Nguyen Hue',
+      phone: '0901234569',
+      is_default: true,
+      status: 'ACTIVE',
+      created_at: new Date('2026-01-03'),
+      updated_at: new Date('2026-01-03'),
+    },
+  ];
+
+  let countCalls = 0;
+  let findManyCalls = 0;
+  let lastWhereClause: any = null;
+
+  const prisma: any = {
+    branch: {
+      count: async ({ where }: any) => {
+        countCalls++;
+        lastWhereClause = where;
+        assert.equal(where.merchant_id, 'tenant-a');
+        return branches.filter(
+          (b) => b.merchant_id === where.merchant_id && (!where.status || b.status === where.status)
+        ).length;
+      },
+      findMany: async ({ where, skip, take, orderBy }: any) => {
+        findManyCalls++;
+        assert.equal(where.merchant_id, 'tenant-a');
+        const filtered = branches.filter(
+          (b) => b.merchant_id === where.merchant_id && (!where.status || b.status === where.status)
+        );
+        return filtered.slice(skip, skip + take);
+      },
+    },
+    user: {
+      findUnique: async () => ({ role: 'OWNER', store_scopes: ['*'] }),
+    },
+  };
+
+  const rbacService: any = {
+    actorHasPermissions: async () => true,
+  };
+
+  const service = new BranchesService(prisma, rbacService);
+  const actor: ActorContext = {
+    userId: 'u1',
+    merchantId: 'tenant-a',
+    role: 'OWNER',
+    email: 'owner@tenant-a.com',
+  };
+
+  // 1. Scoped query with pagination
+  const res = await service.listBranches('tenant-a', actor, { page: '1', limit: '1' }, 'corr-1');
+  assert.equal(res.success, true);
+  assert.equal(res.data.branches.length, 1);
+  assert.equal(res.data.branches[0].id, '00000000-0000-0000-0000-000000000001');
+  assert.equal(res.meta.total, 2);
+  assert.equal(res.meta.total_pages, 2);
+  assert.equal(countCalls, 1);
+  assert.equal(findManyCalls, 1);
+  assert.equal(lastWhereClause.merchant_id, 'tenant-a');
+
+  // 2. Status filter
+  const resFiltered = await service.listBranches('tenant-a', actor, { status: 'ACTIVE' }, 'corr-2');
+  assert.equal(resFiltered.meta.total, 1);
+  assert.equal(resFiltered.data.branches[0].code, 'CN-A1');
+
+  // 3. Missing merchantId fails closed
+  await assert.rejects(
+    () => service.listBranches('', actor, {}, 'corr-3'),
+    (err: any) => err instanceof CanonicalApiException && err.getStatus() === 403
+  );
+});
+
+test('WarehousesService.listWarehouses scoped database reads, counts, pagination, and tenant isolation', async () => {
+  const warehouses = [
+    {
+      id: '00000000-0000-0000-0000-000000000001',
+      merchant_id: 'tenant-a',
+      name: 'Kho Tong A1',
+      code: 'WH-A1',
+      address_line: '123 Duong A',
+      city: 'TP.HCM',
+      status: 'active',
+      is_default: true,
+      created_at: new Date('2026-01-01'),
+      updated_at: new Date('2026-01-01'),
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000002',
+      merchant_id: 'tenant-a',
+      name: 'Kho Phu A2',
+      code: 'WH-A2',
+      address_line: '456 Duong B',
+      city: 'Ha Noi',
+      status: 'inactive',
+      is_default: false,
+      created_at: new Date('2026-01-02'),
+      updated_at: new Date('2026-01-02'),
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000003',
+      merchant_id: 'tenant-b',
+      name: 'Kho B1',
+      code: 'WH-B1',
+      address_line: '789 Duong C',
+      city: 'Da Nang',
+      status: 'active',
+      is_default: true,
+      created_at: new Date('2026-01-03'),
+      updated_at: new Date('2026-01-03'),
+    },
+  ];
+
+  let countCalls = 0;
+  let findManyCalls = 0;
+  let lastWhereClause: any = null;
+
+  const prisma: any = {
+    warehouse: {
+      count: async ({ where }: any) => {
+        countCalls++;
+        lastWhereClause = where;
+        assert.equal(where.merchant_id, 'tenant-a');
+        return warehouses.filter(
+          (w) => w.merchant_id === where.merchant_id && (!where.status || w.status === where.status)
+        ).length;
+      },
+      findMany: async ({ where, skip, take, orderBy }: any) => {
+        findManyCalls++;
+        assert.equal(where.merchant_id, 'tenant-a');
+        const filtered = warehouses.filter(
+          (w) => w.merchant_id === where.merchant_id && (!where.status || w.status === where.status)
+        );
+        return filtered.slice(skip, skip + take);
+      },
+    },
+    user: {
+      findFirst: async () => ({ role: 'OWNER', warehouse_scopes: ['*'] }),
+    },
+  };
+
+  const service = new WarehousesService(prisma);
+  const actor: ActorContext = {
+    userId: 'u1',
+    merchantId: 'tenant-a',
+    role: 'OWNER',
+    email: 'owner@tenant-a.com',
+  };
+
+  // 1. Scoped query with pagination
+  const res = await service.listWarehouses('tenant-a', actor, true, 'corr-1', {
+    page: '1',
+    limit: '1',
+  });
+  assert.equal(res.success, true);
+  assert.equal(res.data.length, 1);
+  assert.equal(res.data[0].id, '00000000-0000-0000-0000-000000000001');
+  assert.equal(res.meta.total, 2);
+  assert.equal(res.meta.total_pages, 2);
+  assert.equal(countCalls, 1);
+  assert.equal(findManyCalls, 1);
+  assert.equal(lastWhereClause.merchant_id, 'tenant-a');
+
+  // 2. Status filter
+  const resFiltered = await service.listWarehouses('tenant-a', actor, true, 'corr-2', {
+    status: 'active',
+  });
+  assert.equal(resFiltered.meta.total, 1);
+  assert.equal(resFiltered.data[0].code, 'WH-A1');
+
+  // 3. Missing merchantId fails closed
+  await assert.rejects(
+    () => service.listWarehouses('', actor, true, 'corr-3', {}),
+    (err: any) => err instanceof CanonicalApiException && err.getStatus() === 403
   );
 });

@@ -48,44 +48,71 @@ export default function WarehousesSettingsPage({
     initialScopedWarehouses !== null ? initialScopedWarehouses : user?.warehouse_scopes || null;
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>(initialWarehouses || []);
+  const [total, setTotal] = useState<number>(initialWarehouses ? initialWarehouses.length : 0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [queryParams, setQueryParams] = useState<any>({
+    page: 1,
+    limit: 10,
+    search: '',
+    status: 'ALL',
+    sortBy: 'name',
+    sortOrder: 'asc',
+  });
   const [loading, setLoading] = useState<boolean>(
     initialWarehouses ? false : (initialLoading ?? true)
   );
   const [error, setError] = useState<string | null>(initialError);
 
-  const fetchWarehouses = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const res = await fetch(`${API_BASE}/api/v1/warehouses`, { headers });
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error('Bạn không có quyền truy cập danh sách kho hàng.');
+  const fetchWarehouses = useCallback(
+    async (paramsOverride?: any) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
         }
-        if (res.status === 401) {
-          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách kho hàng');
-      }
 
-      const json = await res.json();
-      if (json.success && json.data) {
-        setWarehouses(json.data);
+        const p = paramsOverride || queryParams;
+        const url = new URL(`${API_BASE}/api/v1/warehouses`);
+        if (p.page) url.searchParams.set('page', String(p.page));
+        if (p.limit) url.searchParams.set('limit', String(p.limit));
+        if (p.search && p.search.trim().length > 0) url.searchParams.set('search', p.search.trim());
+        if (p.status && p.status !== 'ALL') url.searchParams.set('status', p.status);
+        if (p.sortBy) url.searchParams.set('sort_by', p.sortBy);
+        if (p.sortOrder) url.searchParams.set('sort_order', p.sortOrder);
+
+        const res = await fetch(url.toString(), { headers });
+        if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error('Bạn không có quyền truy cập danh sách kho hàng.');
+          }
+          if (res.status === 401) {
+            throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+          }
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.error?.message || 'Không thể tải danh sách kho hàng');
+        }
+
+        const json = await res.json();
+        if (json.success && json.data) {
+          setWarehouses(json.data);
+          const meta = json.meta;
+          if (meta) {
+            if (meta.total !== undefined) setTotal(meta.total);
+            if (meta.total_pages !== undefined) setTotalPages(meta.total_pages);
+          }
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý kho hàng');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý kho hàng');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
+    },
+    [token, queryParams]
+  );
 
   useEffect(() => {
     if (!initialWarehouses) {
@@ -270,12 +297,20 @@ export default function WarehousesSettingsPage({
           canEdit={derivedCanEdit}
           scopedWarehouses={derivedScopedWarehouses}
           error={error}
-          onRefresh={fetchWarehouses}
+          onRefresh={() => fetchWarehouses()}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
           onSetDefault={handleSetDefault}
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
+          serverTotal={total}
+          serverTotalPages={totalPages}
+          onQueryChange={(newP) => {
+            setQueryParams(newP);
+            void fetchWarehouses(newP);
+          }}
+          tenantId={user?.merchant_id}
+          userId={user?.id}
         />
       </div>
     </div>

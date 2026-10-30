@@ -187,18 +187,16 @@ OpenAPI and centralized in `USERS_LIST_POLICY`. Query values never become arbitr
 
 ## Codex review record
 
-- Review SHA: dfc01324986b486e63e27a6bed9259d53a567684
-- Verdict: CHANGES_REQUIRED (addressed in follow-up commit)
+- Review SHA: d29f7ab2e3253e0da36055bb4093bd95364ea560
+- Verdict: CHANGES_REQUIRED (addressed in Round 3 review fixes)
 - All P0 and P1 review findings addressed:
-  1. Exact-SHA CI alignment & Turbopack build failure: Removed `.js` extensions from relative exports in `packages/contracts/src/index.ts` and `packages/config/src/index.ts`, ensuring Next.js Turbopack build and CI checks (`application-gate`, `current-application`) pass.
-  2. Fail-closed UI authorization: In `UserManagementTab`, distinguished unauthenticated hydration (`isHydrating`) from unresolved session (`!user`), failing closed (`isForbidden = true`) when session/user is null or unauthenticated instead of failing open.
-  3. Server list-contract integration for Branches and Warehouses: Implemented `parseCanonicalListQuery` and list policies (`BRANCHES_LIST_POLICY`, `WAREHOUSES_LIST_POLICY`) with server-side pagination (`skip`, `take`), multi-field search, status filtering, and total count calculation in `branches.service.ts` and `warehouses.service.ts`, verified by unit tests in `lists.unit.spec.ts`.
-  4. Saved views and column settings persistence (`AC-COM-02-13`): Implemented persistence in `useSharedListState` backed by `localStorage` (`saveCurrentView`, `applySavedView`, `deleteSavedView`, `updateColumnSettings`) with behavioral unit tests in `apps/web/src/tests/shared-lists-states.test.ts`.
-  5. Atomic sort column and direction updates: Refactored sort trigger in `UserManagementTab` to use atomic `setSort(field)` from `useSharedListState`, eliminating state-race condition where separate state updates reverted newly selected sort columns back to `created_at`.
-  6. Live branches subtab mutation controls: Wired `onCreate`, `onUpdate`, `onActivate`, and `onDeactivate` in `UserManagementTab` to real API handlers calling `/api/v1/branches`, eliminating dead mutation props.
-  7. Robust branch HTTP error handling: Explicitly handled 401, 403, and 500 status codes and malformed envelopes in `UserManagementTab.fetchStores`, surfacing error banners instead of silent error swallowing.
-  8. List URL parameter namespacing & isolation: Added `namespace` support to `useSharedListState` (`user_`, `branch_`, `warehouse_`) so embedded subtabs do not collide or overwrite each other's query parameters in URL search params.
-  9. Retained pagination controls on out-of-range pages: Rendered persistent pagination controls and recovery banner (`users-out-of-range-state`) with recovery buttons when `page > totalPages` instead of hiding pagination entirely.
+  1. Exact-SHA CI alignment: Resolved ESLint react-hooks warning and fixed JSX nesting and API test mock runner.
+  2. Connected server pagination: Wired `serverTotal`, `serverTotalPages`, and `onQueryChange` into `BranchManagementView` and `WarehouseManagementView` so server pagination and totals directly reach user-facing screens.
+  3. Live branches list truncation fix: Replaced bare branch endpoint fetch with parameterized query handling in `UserManagementTab` forwarding page, limit, search, status, and sorting, extracting server total counts.
+  4. Saved views and column settings user flow: Completed full interactive user flows with `SavedViewsAndColumnsControls` toolbar for view saving, applying, deleting, and column visibility toggling, with conditional table header/cell rendering.
+  5. Multi-tenant preference scoping: Scoped localStorage storage keys strictly to `tenantId` and `userId` (`shipde_pref_${tenant}_${user}_${listKey}`) ensuring complete cross-tenant and cross-user isolation.
+  6. Behavioral acceptance and scoped database tests: Added `BranchesService.listBranches` and `WarehousesService.listWarehouses` unit tests proving scoped database reads/counts and fail-closed tenant validation, plus web tests proving tenant isolation, column customization, and exact out-of-range recovery navigation.
+  7. Fail-closed hydration loading skeleton gate: Gated initial unauthenticated hydration in `UserManagementTab` behind loading skeleton, failing closed on unauthenticated session and preventing premature empty/content exposure.
 
 ## Residual limitations
 

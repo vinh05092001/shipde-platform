@@ -43,6 +43,18 @@ export interface BranchManagementViewProps {
   initialSortBy?: string;
   initialSortOrder?: 'asc' | 'desc';
   namespace?: string;
+  serverTotal?: number;
+  serverTotalPages?: number;
+  onQueryChange?: (params: {
+    page: number;
+    limit: number;
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+    search: string;
+    status: string;
+  }) => void;
+  tenantId?: string;
+  userId?: string;
   onRefresh?: () => void;
   onCreate?: (input: CreateBranchInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateBranchInput) => Promise<void>;
@@ -67,6 +79,11 @@ export function BranchManagementView({
   initialSortBy = 'name',
   initialSortOrder = 'asc',
   namespace,
+  serverTotal,
+  serverTotalPages,
+  onQueryChange,
+  tenantId,
+  userId,
   onRefresh,
   onCreate,
   onUpdate,
@@ -84,6 +101,8 @@ export function BranchManagementView({
     syncUrl: true,
     namespace,
     listKey: 'branches',
+    tenantId,
+    userId,
   });
 
   const page = listState.page;
@@ -101,6 +120,20 @@ export function BranchManagementView({
   const setStatusFilter = (val: 'ALL' | 'ACTIVE' | 'INACTIVE') =>
     listState.setFilter('status', val);
   const resetFilters = listState.resetFilters;
+
+  // Notify server pagination consumer when query changes
+  useEffect(() => {
+    if (onQueryChange) {
+      onQueryChange({
+        page,
+        limit: pageSize,
+        sortBy,
+        sortOrder,
+        search: searchQuery,
+        status: statusFilter,
+      });
+    }
+  }, [page, pageSize, sortBy, sortOrder, searchQuery, statusFilter, onQueryChange]);
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -129,12 +162,17 @@ export function BranchManagementView({
   const setViewError = (val: string | null) => setLocalError(val);
   const setViewSuccess = (val: string | null) => setLocalSuccess(val);
 
-  // Filter, sort, and paginate using shared in-memory helper (FEAT-COM-02)
-  const {
-    pagedItems: pagedBranches,
-    total,
-    totalPages,
-  } = useMemo(() => {
+  // Filter, sort, and paginate using server metadata when provided or in-memory helper (FEAT-COM-02)
+  const isServerPaged = serverTotal !== undefined;
+  const paginationResult = useMemo(() => {
+    if (isServerPaged) {
+      const calcTotalPages = serverTotalPages ?? Math.max(1, Math.ceil(serverTotal / pageSize));
+      return {
+        pagedItems: branches,
+        total: serverTotal,
+        totalPages: calcTotalPages,
+      };
+    }
     return paginateInMemory({
       items: branches,
       page,
@@ -167,7 +205,22 @@ export function BranchManagementView({
         return sortOrder === 'asc' ? cmp : -cmp;
       },
     });
-  }, [branches, page, pageSize, statusFilter, searchQuery, sortBy, sortOrder]);
+  }, [
+    isServerPaged,
+    branches,
+    serverTotal,
+    serverTotalPages,
+    page,
+    pageSize,
+    statusFilter,
+    searchQuery,
+    sortBy,
+    sortOrder,
+  ]);
+
+  const pagedBranches = paginationResult.pagedItems;
+  const total = paginationResult.total;
+  const totalPages = paginationResult.totalPages;
 
   const safePage = Math.min(Math.max(1, page), totalPages);
 

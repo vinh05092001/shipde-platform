@@ -6,11 +6,12 @@ import {
   USERS_EMPTY_STATE_TEXT,
   USERS_FORBIDDEN_TEXT,
 } from '@/components/UserManagementTab';
+import { SavedViewsAndColumnsControls } from '@/components/common/SharedListControls';
 import { WarehouseManagementView } from '@/components/WarehouseManagementView';
 import { BranchManagementView, BranchItem } from '@/components/BranchManagementView';
 import BranchesSettingsPage from '@/app/settings/branches/page';
 import { AuthProvider } from '@/context/AuthContext';
-import { paginateInMemory } from '@/hooks/useSharedListState';
+import { paginateInMemory, type SavedView } from '@/hooks/useSharedListState';
 import { parseListQuery } from '@shipde/contracts';
 import { USERS_LIST_POLICY, WAREHOUSES_LIST_POLICY, BRANCHES_LIST_POLICY } from '@shipde/config';
 import type { Warehouse, UserListItem, Branch } from '@shipde/contracts';
@@ -679,26 +680,11 @@ async function runSharedListsTestSuite() {
   }
 
   // ================================================================
-  // 8. Out-of-Range Users Page Recovery (Finding 9)
+  // 8. Out-of-Range Users Page Recovery (Finding 9, Round 3)
   // ================================================================
   console.log('🧪 8. Testing Out-of-Range Users Page Recovery (Finding 9)...');
   {
-    // Simulating page=99 with positive totalUsers
-    const outOfRangeHtml = renderToStaticMarkup(
-      React.createElement(
-        AuthProvider,
-        null,
-        React.createElement(UserManagementTab, {
-          initialForbidden: false,
-          initialUsers: [],
-          initialPage: 99,
-          initialPageSize: 10,
-        })
-      )
-    );
-
-    // In initial render without data, users-empty-state is shown. But when totalUsers > 0 and page > totalPages:
-    // UserManagementTab includes out-of-range recovery testId
+    // Simulating page=99 with positive totalUsers (50 users across 5 pages)
     const outOfRangeWithTotalHtml = renderToStaticMarkup(
       React.createElement(
         AuthProvider,
@@ -708,19 +694,29 @@ async function runSharedListsTestSuite() {
           initialUsers: [],
           initialPage: 99,
           initialPageSize: 10,
+          initialTotalUsers: 50,
+          initialTotalPages: 5,
         })
       )
     );
     assert.ok(
-      outOfRangeWithTotalHtml.includes('users-') || outOfRangeWithTotalHtml.includes('table'),
-      'Out of range handling renders gracefully'
+      outOfRangeWithTotalHtml.includes('data-testid="users-out-of-range-state"'),
+      'Out of range state must render users-out-of-range-state container'
+    );
+    assert.ok(
+      outOfRangeWithTotalHtml.includes('Trang 99 không có dữ liệu'),
+      'Out of range state must render message indicating current invalid page'
+    );
+    assert.ok(
+      outOfRangeWithTotalHtml.includes('data-testid="users-nav-last-page-btn"'),
+      'Out of range state must render navigation button to return to valid last page'
     );
 
     console.log('  PASS: Out-of-range users page recovery verified.');
   }
 
   // ================================================================
-  // 9. Saved Views & Column Settings LocalStorage Persistence (AC-COM-02-13)
+  // 9. Saved Views & Column Settings LocalStorage Persistence (AC-COM-02-13, Finding 4 & 5)
   // ================================================================
   console.log('🧪 9. Testing Saved Views & Column Settings Persistence (AC-COM-02-13)...');
   {
@@ -733,6 +729,9 @@ async function runSharedListsTestSuite() {
       removeItem: (k: string) => {
         delete mockStorage[k];
       },
+      clear: () => {
+        for (const k of Object.keys(mockStorage)) delete mockStorage[k];
+      },
     };
 
     const originalWindow = global.window;
@@ -743,12 +742,19 @@ async function runSharedListsTestSuite() {
         localStorage: fakeLocalStorage,
       };
 
-      // Test saved view storage key
-      const key = 'shipde_pref_users_views';
-      const initialViews = [
+      // A. Tenant & User Identity Scoping (Finding 5)
+      const tenantA = 'tenant_merch_001';
+      const userA = 'usr_001';
+      const tenantB = 'tenant_merch_002';
+      const userB = 'usr_002';
+
+      const keyTenantA = `shipde_pref_${tenantA}_${userA}_users_views`;
+      const keyTenantB = `shipde_pref_${tenantB}_${userB}_users_views`;
+
+      const viewsTenantA: SavedView<Record<string, string>>[] = [
         {
           id: 'v1',
-          name: 'Chỉ nhân viên Active',
+          name: 'Chỉ nhân viên Active (Tenant A)',
           page: 1,
           pageSize: 20,
           sortBy: 'full_name',
@@ -757,20 +763,103 @@ async function runSharedListsTestSuite() {
           createdAt: new Date().toISOString(),
         },
       ];
-      fakeLocalStorage.setItem(key, JSON.stringify(initialViews));
-      const loaded = JSON.parse(fakeLocalStorage.getItem(key)!);
-      assert.strictEqual(loaded.length, 1);
-      assert.strictEqual(loaded[0].name, 'Chỉ nhân viên Active');
+      fakeLocalStorage.setItem(keyTenantA, JSON.stringify(viewsTenantA));
 
-      // Test column settings storage
-      const colKey = 'shipde_pref_users_columns';
-      const colSettings = {
+      // Tenant A reads their views
+      const loadedTenantA = JSON.parse(fakeLocalStorage.getItem(keyTenantA)!);
+      assert.strictEqual(loadedTenantA.length, 1);
+      assert.strictEqual(loadedTenantA[0].name, 'Chỉ nhân viên Active (Tenant A)');
+
+      // Tenant B reads their own key - must be completely isolated (null / empty)
+      const loadedTenantB = fakeLocalStorage.getItem(keyTenantB);
+      assert.strictEqual(loadedTenantB, null, 'Tenant B must not see Tenant A saved views');
+
+      // B. Column Settings Persistence & Scoping (Finding 5)
+      const colKeyTenantA = `shipde_pref_${tenantA}_${userA}_users_columns`;
+      const colKeyTenantB = `shipde_pref_${tenantB}_${userB}_users_columns`;
+
+      const colSettingsTenantA = {
         visibleColumns: ['full_name', 'role', 'store_scopes'],
         columnOrder: ['full_name', 'role', 'store_scopes'],
       };
-      fakeLocalStorage.setItem(colKey, JSON.stringify(colSettings));
-      const loadedCols = JSON.parse(fakeLocalStorage.getItem(colKey)!);
-      assert.deepStrictEqual(loadedCols.visibleColumns, ['full_name', 'role', 'store_scopes']);
+      fakeLocalStorage.setItem(colKeyTenantA, JSON.stringify(colSettingsTenantA));
+      assert.deepStrictEqual(JSON.parse(fakeLocalStorage.getItem(colKeyTenantA)!).visibleColumns, [
+        'full_name',
+        'role',
+        'store_scopes',
+      ]);
+      assert.strictEqual(fakeLocalStorage.getItem(colKeyTenantB), null);
+
+      // C. SavedViewsAndColumnsControls User Flow & Controls (Finding 4)
+      const controlsHtml = renderToStaticMarkup(
+        React.createElement(SavedViewsAndColumnsControls, {
+          savedViews: viewsTenantA,
+          columnSettings: colSettingsTenantA,
+          availableColumns: [
+            { id: 'full_name', label: 'Họ và tên' },
+            { id: 'role', label: 'Vai trò' },
+            { id: 'store_scopes', label: 'Chi nhánh' },
+          ],
+          onSaveCurrentView: () => {},
+          onApplySavedView: () => {},
+          onDeleteSavedView: () => {},
+          onUpdateColumnSettings: () => {},
+          testIdPrefix: 'users',
+          initialSelectedViewId: 'v1',
+        })
+      );
+
+      assert.ok(
+        controlsHtml.includes('data-testid="users-saved-views-columns-container"'),
+        'Controls must render container'
+      );
+      assert.ok(
+        controlsHtml.includes('data-testid="users-saved-views-select"'),
+        'Controls must render saved views dropdown selector'
+      );
+      assert.ok(
+        controlsHtml.includes('Chỉ nhân viên Active (Tenant A)'),
+        'Controls must list saved view names in dropdown'
+      );
+      assert.ok(
+        controlsHtml.includes('data-testid="users-delete-saved-view-btn"'),
+        'Controls must render delete saved view button'
+      );
+      assert.ok(
+        controlsHtml.includes('data-testid="users-save-view-btn"'),
+        'Controls must render save view trigger button'
+      );
+      assert.ok(
+        controlsHtml.includes('data-testid="users-column-settings-btn"'),
+        'Controls must render column settings toggle button'
+      );
+
+      // D. UserManagementTab integration of controls and column visibility
+      const tabWithControlsHtml = renderToStaticMarkup(
+        React.createElement(
+          AuthProvider,
+          null,
+          React.createElement(UserManagementTab, {
+            initialForbidden: false,
+            initialUsers: mockUsers,
+            initialPage: 1,
+            initialPageSize: 10,
+          })
+        )
+      );
+
+      assert.ok(
+        tabWithControlsHtml.includes('data-testid="users-saved-views-columns-container"'),
+        'UserManagementTab toolbar must embed SavedViewsAndColumnsControls'
+      );
+      assert.ok(
+        tabWithControlsHtml.includes('data-testid="users-save-view-btn"'),
+        'UserManagementTab must expose save view button'
+      );
+      assert.ok(
+        tabWithControlsHtml.includes('data-testid="users-column-settings-btn"'),
+        'UserManagementTab must expose column settings button'
+      );
     } finally {
       (global as any).window = originalWindow;
     }

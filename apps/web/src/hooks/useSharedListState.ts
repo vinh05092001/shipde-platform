@@ -30,6 +30,8 @@ export interface SharedListStateOptions<TFilters extends Record<string, string>>
   namespace?: string;
   listKey?: string;
   initialColumns?: string[];
+  tenantId?: string;
+  userId?: string;
 }
 
 export interface SharedListState<TFilters extends Record<string, string>> {
@@ -76,6 +78,34 @@ function getInitialParam(key: string, namespace?: string): string | null {
   }
 }
 
+function getStorageItemSafe(key: string): string | null {
+  try {
+    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      return window.localStorage.getItem(key);
+    }
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem(key);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function setStorageItemSafe(key: string, value: string): void {
+  try {
+    if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+      window.localStorage.setItem(key, value);
+      return;
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(key, value);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export function useSharedListState<TFilters extends Record<string, string>>(
   options: SharedListStateOptions<TFilters>
 ): SharedListState<TFilters> {
@@ -90,7 +120,17 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     namespace,
     listKey,
     initialColumns = [],
+    tenantId,
+    userId,
   } = options;
+
+  // Persisted saved views and column settings in localStorage (AC-COM-02-13, Finding 5)
+  // Scoped strictly to tenant and user identity to prevent cross-account leakage.
+  const effectiveTenant =
+    tenantId?.trim() || getStorageItemSafe('shipde_active_tenant')?.trim() || 'default';
+  const effectiveUser =
+    userId?.trim() || getStorageItemSafe('shipde_active_user')?.trim() || 'default';
+  const prefStorageKey = `shipde_pref_${effectiveTenant}_${effectiveUser}_${listKey || namespace || 'default'}`;
 
   // Initialize from URL or default
   const [page, setPageState] = useState<number>(() => {
@@ -142,13 +182,9 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     return initial as TFilters;
   });
 
-  // Persisted saved views and column settings in localStorage (AC-COM-02-13)
-  const prefStorageKey = `shipde_pref_${listKey || namespace || 'default'}`;
-
   const [savedViews, setSavedViews] = useState<SavedView<TFilters>[]>(() => {
-    if (typeof window === 'undefined') return [];
     try {
-      const raw = localStorage.getItem(`${prefStorageKey}_views`);
+      const raw = getStorageItemSafe(`${prefStorageKey}_views`);
       return raw ? JSON.parse(raw) : [];
     } catch {
       return [];
@@ -156,14 +192,31 @@ export function useSharedListState<TFilters extends Record<string, string>>(
   });
 
   const [columnSettings, setColumnSettings] = useState<ColumnSettings>(() => {
-    if (typeof window === 'undefined') return { visibleColumns: initialColumns };
     try {
-      const raw = localStorage.getItem(`${prefStorageKey}_columns`);
+      const raw = getStorageItemSafe(`${prefStorageKey}_columns`);
       return raw ? JSON.parse(raw) : { visibleColumns: initialColumns };
     } catch {
       return { visibleColumns: initialColumns };
     }
   });
+
+  // Re-sync preferences on identity or tenant change
+  const initialColumnsJson = JSON.stringify(initialColumns);
+  useEffect(() => {
+    try {
+      const rawViews = getStorageItemSafe(`${prefStorageKey}_views`);
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Identity/tenant switch preference resynchronization
+      setSavedViews(rawViews ? JSON.parse(rawViews) : []);
+      const rawCols = getStorageItemSafe(`${prefStorageKey}_columns`);
+      const defaultCols = initialColumnsJson ? JSON.parse(initialColumnsJson) : [];
+      setColumnSettings(rawCols ? JSON.parse(rawCols) : { visibleColumns: defaultCols });
+    } catch {
+      setSavedViews([]);
+      setColumnSettings({
+        visibleColumns: initialColumnsJson ? JSON.parse(initialColumnsJson) : [],
+      });
+    }
+  }, [prefStorageKey, initialColumnsJson]);
 
   const hasActiveFilters = useMemo(() => {
     if (search.trim().length > 0) return true;
@@ -341,13 +394,7 @@ export function useSharedListState<TFilters extends Record<string, string>>(
       };
       setSavedViews((prev) => {
         const next = [newView, ...prev.filter((v) => v.name !== newView.name)];
-        try {
-          if (typeof window !== 'undefined') {
-            localStorage.setItem(`${prefStorageKey}_views`, JSON.stringify(next));
-          }
-        } catch {
-          // ignore storage quota errors
-        }
+        setStorageItemSafe(`${prefStorageKey}_views`, JSON.stringify(next));
         return next;
       });
       return newView;
@@ -374,13 +421,7 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     (viewId: string): boolean => {
       setSavedViews((prev) => {
         const next = prev.filter((v) => v.id !== viewId);
-        try {
-          if (typeof window !== 'undefined') {
-            localStorage.setItem(`${prefStorageKey}_views`, JSON.stringify(next));
-          }
-        } catch {
-          // ignore
-        }
+        setStorageItemSafe(`${prefStorageKey}_views`, JSON.stringify(next));
         return next;
       });
       return true;
@@ -395,13 +436,7 @@ export function useSharedListState<TFilters extends Record<string, string>>(
           visibleColumns: newSettings.visibleColumns || prev.visibleColumns,
           columnOrder: newSettings.columnOrder || prev.columnOrder,
         };
-        try {
-          if (typeof window !== 'undefined') {
-            localStorage.setItem(`${prefStorageKey}_columns`, JSON.stringify(next));
-          }
-        } catch {
-          // ignore
-        }
+        setStorageItemSafe(`${prefStorageKey}_columns`, JSON.stringify(next));
         return next;
       });
     },

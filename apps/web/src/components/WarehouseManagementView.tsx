@@ -54,6 +54,18 @@ export interface WarehouseManagementViewProps {
   initialSortBy?: string;
   initialSortOrder?: 'asc' | 'desc';
   namespace?: string;
+  serverTotal?: number;
+  serverTotalPages?: number;
+  onQueryChange?: (params: {
+    page: number;
+    limit: number;
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+    search: string;
+    status: string;
+  }) => void;
+  tenantId?: string;
+  userId?: string;
   onRefresh?: () => void;
   onCreate?: (input: CreateWarehouseInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateWarehouseInput) => Promise<void>;
@@ -75,6 +87,11 @@ export function WarehouseManagementView({
   initialValidationErrors = {},
   initialActiveTab = 'pickup',
   namespace,
+  serverTotal,
+  serverTotalPages,
+  onQueryChange,
+  tenantId,
+  userId,
   onRefresh,
   onCreate,
   onUpdate,
@@ -97,6 +114,8 @@ export function WarehouseManagementView({
     syncUrl: true,
     namespace,
     listKey: 'warehouses',
+    tenantId,
+    userId,
   });
 
   const page = listState.page;
@@ -113,6 +132,20 @@ export function WarehouseManagementView({
   const setSearchQuery = listState.setSearch;
   const setStatusFilter = (st: 'ALL' | 'active' | 'inactive') => listState.setFilter('status', st);
   const resetFilters = listState.resetFilters;
+
+  // Notify server pagination consumer when query changes
+  useEffect(() => {
+    if (onQueryChange) {
+      onQueryChange({
+        page,
+        limit: pageSize,
+        sortBy,
+        sortOrder,
+        search: searchQuery,
+        status: statusFilter,
+      });
+    }
+  }, [page, pageSize, sortBy, sortOrder, searchQuery, statusFilter, onQueryChange]);
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -182,12 +215,17 @@ export function WarehouseManagementView({
   const setViewError = (val: string | null) => setLocalError(val);
   const setViewSuccess = (val: string | null) => setLocalSuccess(val);
 
-  // Filter, sort, and paginate using shared in-memory helper (FEAT-COM-02)
-  const {
-    pagedItems: pagedWarehouses,
-    total,
-    totalPages,
-  } = useMemo(() => {
+  // Filter, sort, and paginate using server metadata when provided or in-memory helper (FEAT-COM-02)
+  const isServerPaged = serverTotal !== undefined;
+  const paginationResult = useMemo(() => {
+    if (isServerPaged) {
+      const calcTotalPages = serverTotalPages ?? Math.max(1, Math.ceil(serverTotal / pageSize));
+      return {
+        pagedItems: warehouses,
+        total: serverTotal,
+        totalPages: calcTotalPages,
+      };
+    }
     return paginateInMemory({
       items: warehouses,
       page,
@@ -228,7 +266,22 @@ export function WarehouseManagementView({
         return sortOrder === 'asc' ? cmp : -cmp;
       },
     });
-  }, [warehouses, page, pageSize, statusFilter, searchQuery, sortBy, sortOrder]);
+  }, [
+    isServerPaged,
+    warehouses,
+    serverTotal,
+    serverTotalPages,
+    page,
+    pageSize,
+    statusFilter,
+    searchQuery,
+    sortBy,
+    sortOrder,
+  ]);
+
+  const pagedWarehouses = paginationResult.pagedItems;
+  const total = paginationResult.total;
+  const totalPages = paginationResult.totalPages;
 
   const safePage = Math.min(Math.max(1, page), totalPages);
 
