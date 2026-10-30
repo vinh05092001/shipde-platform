@@ -242,7 +242,6 @@ describe('TASK-AI-146: Coding-agent benchmark sources and provisional weighting'
     };
 
     const docs = await publicDocuments({
-      descriptor: testConfig,
       fetch: mockFetch,
       now: Date.parse('2026-10-29T00:00:00Z'),
     });
@@ -568,6 +567,213 @@ describe('TASK-AI-146: Coding-agent benchmark sources and provisional weighting'
     assert.ok(
       offPrior.score > provEffPrior.score,
       `Official score (${offPrior.score}) must strictly exceed provisional effort score (${provEffPrior.score})`
+    );
+  });
+
+  test('P1 Review 3: Default publicDocuments ingestion (no descriptor) ingests every configured benchmark source', async () => {
+    const sweHtml = fs.readFileSync(path.join(FIXTURES_DIR, 'swebench.html'), 'utf8');
+    const tbenchHtml = fs.readFileSync(path.join(FIXTURES_DIR, 'terminalbench.html'), 'utf8');
+    const aiderYaml = fs.readFileSync(path.join(FIXTURES_DIR, 'aider.yml'), 'utf8');
+    const liveCsv = fs.readFileSync(path.join(FIXTURES_DIR, 'livebench.csv'), 'utf8');
+    const benchJson = JSON.parse(fs.readFileSync(path.join(FIXTURES_DIR, 'benchlm.json'), 'utf8'));
+
+    const calledUrls = [];
+    const mockFetch = async (url) => {
+      calledUrls.push(url);
+      if (url.includes('swebench')) return { ok: true, text: async () => sweHtml };
+      if (url.includes('tbench')) return { ok: true, text: async () => tbenchHtml };
+      if (url.includes('aider')) return { ok: true, text: async () => aiderYaml };
+      if (url.includes('livebench')) return { ok: true, text: async () => liveCsv };
+      if (url.includes('benchlm')) return { ok: true, json: async () => benchJson };
+      if (url.includes('artificialanalysis')) {
+        const aaHtml = `<script>self.__next_f.push(${JSON.stringify([
+          1,
+          '1:' +
+            JSON.stringify({ models: [{ name: 'GPT-6 Astra', intelligenceIndex: 90.5 }] }) +
+            '\n',
+        ])})</script>`;
+        return { ok: true, text: async () => aaHtml };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    };
+
+    const docs = await publicDocuments({
+      fetch: mockFetch,
+      now: Date.parse('2026-10-29T00:00:00Z'),
+    });
+
+    assert.equal(
+      docs.length,
+      testConfig.sources.length,
+      'must ingest all configured sources by default'
+    );
+    assert.deepEqual(
+      docs.map((d) => d.sources[0].id),
+      testConfig.sources.map((s) => s.id),
+      'must preserve configured order of source IDs'
+    );
+  });
+
+  test('P1 Review 4: One provisional source does not poison whole model; official scores are tracked per-source and never capped below weakest official', () => {
+    const now = Date.parse('2026-10-29T00:00:00Z');
+    const docAA = {
+      sources: [
+        { id: 'artificial-analysis', url: 'https://artificialanalysis.ai/leaderboards/models' },
+      ],
+      models: [
+        {
+          modelId: 'canonical-alpha',
+          benchmarks: { intelligenceIndex: 90.0 },
+          source: {
+            id: 'artificial-analysis',
+            url: 'https://artificialanalysis.ai/leaderboards/models',
+          },
+        },
+        {
+          modelId: 'canonical-beta',
+          benchmarks: { intelligenceIndex: 40.0 },
+          source: {
+            id: 'artificial-analysis',
+            url: 'https://artificialanalysis.ai/leaderboards/models',
+          },
+        },
+      ],
+    };
+    const docSWE = {
+      sources: [{ id: 'swe-bench', url: 'https://www.swebench.com' }],
+      models: [
+        {
+          modelId: 'canonical-alpha',
+          benchmarks: { sweBenchVerified: 85.0 },
+          source: { id: 'swe-bench', url: 'https://www.swebench.com' },
+        },
+        {
+          modelId: 'canonical-beta',
+          benchmarks: { sweBenchVerified: 45.0 },
+          source: { id: 'swe-bench', url: 'https://www.swebench.com' },
+        },
+      ],
+    };
+    // BenchLM provides a provisional score for canonical-alpha along with non-provisional aaCodingIndex,
+    // plus a purely provisional model canonical-gamma.
+    const docBenchLM = {
+      sources: [{ id: 'benchlm', url: 'https://benchlm.ai/data/models.json' }],
+      models: [
+        {
+          modelId: 'canonical-alpha',
+          provisional: true,
+          benchmarks: {
+            benchlm: { score: 70.0, provisional: true },
+            aaCodingIndex: 88.0,
+          },
+          source: { id: 'benchlm', url: 'https://benchlm.ai/data/models.json' },
+        },
+        {
+          modelId: 'canonical-gamma',
+          provisional: true,
+          benchmarks: {
+            benchlm: { score: 95.0, provisional: true },
+          },
+          source: { id: 'benchlm', url: 'https://benchlm.ai/data/models.json' },
+        },
+      ],
+    };
+
+    const merged = mergePriorDocuments([docAA, docSWE, docBenchLM], now, {
+      config: testConfig,
+    });
+
+    const alpha = merged.ranking.find((r) => r.canonical === 'canonical-alpha');
+    const beta = merged.ranking.find((r) => r.canonical === 'canonical-beta');
+    const gamma = merged.ranking.find((r) => r.canonical === 'canonical-gamma');
+
+    assert.ok(alpha, 'alpha must exist in ranking');
+    assert.ok(beta, 'beta must exist in ranking');
+    assert.ok(gamma, 'gamma must exist in ranking');
+
+    // Model alpha carries official AA and SWE benchmarks, so it must NOT be marked provisional
+    assert.equal(
+      alpha.provisional,
+      false,
+      'Model with official metrics must not be marked provisional overall'
+    );
+    assert.equal(beta.provisional, false, 'Official model beta must not be provisional');
+    assert.equal(
+      gamma.provisional,
+      true,
+      'Pure provisional model gamma must be marked provisional'
+    );
+
+    // Official metrics on alpha must not be capped below beta's weakest official aggregate
+    const alphaSwe = alpha.benchmarks.find((b) => b.name === 'sweBenchVerified');
+    const alphaIntel = alpha.benchmarks.find((b) => b.name === 'intelligenceIndex');
+    const alphaCoding = alpha.benchmarks.find((b) => b.name === 'aaCodingIndex');
+    const alphaBench = alpha.benchmarks.find((b) => b.name === 'benchlm');
+
+    assert.ok(alphaSwe, 'sweBenchVerified benchmark must exist on alpha');
+    assert.equal(alphaSwe.provisional, undefined, 'official SWE benchmark must not be provisional');
+    assert.ok(
+      alphaSwe.score > beta.score,
+      `Official SWE score (${alphaSwe.score}) must exceed beta score (${beta.score})`
+    );
+
+    assert.ok(alphaIntel, 'intelligenceIndex benchmark must exist on alpha');
+    assert.equal(
+      alphaIntel.provisional,
+      undefined,
+      'official intelligenceIndex benchmark must not be provisional'
+    );
+    assert.ok(
+      alphaIntel.score > beta.score,
+      `Official intelligenceIndex (${alphaIntel.score}) must exceed beta score (${beta.score})`
+    );
+
+    assert.ok(alphaCoding, 'aaCodingIndex benchmark must exist on alpha');
+    assert.equal(
+      alphaCoding.provisional,
+      undefined,
+      'non-provisional aaCodingIndex must not be provisional'
+    );
+    assert.ok(
+      alphaCoding.score > beta.score,
+      `Official aaCodingIndex (${alphaCoding.score}) must exceed beta score (${beta.score})`
+    );
+
+    // Alpha's provisional benchmark IS tracked as provisional
+    assert.ok(alphaBench, 'benchlm benchmark must exist on alpha');
+    assert.equal(alphaBench.provisional, true, 'provisional benchlm must be marked provisional');
+
+    // Alpha's overall score must reflect official strength and not be capped below beta
+    assert.ok(
+      alpha.score > beta.score,
+      `Alpha overall score (${alpha.score}) must strictly exceed beta score (${beta.score})`
+    );
+
+    // Ranking ordering: alpha > beta > gamma
+    const idxAlpha = merged.ranking.indexOf(alpha);
+    const idxBeta = merged.ranking.indexOf(beta);
+    const idxGamma = merged.ranking.indexOf(gamma);
+
+    assert.ok(idxAlpha < idxBeta, `Alpha (index ${idxAlpha}) must outrank beta (index ${idxBeta})`);
+    assert.ok(
+      idxBeta < idxGamma,
+      `Official beta (index ${idxBeta}) must outrank pure provisional gamma (index ${idxGamma})`
+    );
+
+    // priorFor verification
+    const priorAlpha = priorFor({ modelId: 'canonical-alpha' }, 'coding', merged);
+    const priorBeta = priorFor({ modelId: 'canonical-beta' }, 'coding', merged);
+    const priorGamma = priorFor({ modelId: 'canonical-gamma' }, 'coding', merged);
+
+    assert.equal(priorAlpha.provisional, undefined, 'priorFor alpha must not be provisional');
+    assert.equal(priorGamma.provisional, true, 'priorFor gamma must be provisional');
+    assert.ok(
+      priorAlpha.score > priorBeta.score,
+      `priorFor alpha (${priorAlpha.score}) must exceed beta (${priorBeta.score})`
+    );
+    assert.ok(
+      priorBeta.score > priorGamma.score,
+      `priorFor beta (${priorBeta.score}) must exceed provisional gamma (${priorGamma.score})`
     );
   });
 });

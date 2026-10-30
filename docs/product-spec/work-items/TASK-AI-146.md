@@ -7,11 +7,11 @@
 | Work Item ID | `TASK-AI-146` |
 | Feature ID | `N/A — controller priors coding-agent benchmark sources and provisional weighting` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `266` |
+| Delivery order | `267` |
 | Dependencies | `TASK-AI-144` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `tools/ai-brain/priors.js`; `tools/ai-brain/priors-public.js`; `tools/ai-brain/priors-sources/public.json`; `tools/ai-brain/test/task-ai-146*.test.js`; `tools/ai-brain/test/fixtures/benchmark-sources/*`; `docs/product-spec/work-items/TASK-AI-146.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/priors.js`; `tools/ai-brain/priors-public.js`; `tools/ai-brain/priors-sources/public.json`; `tools/ai-brain/test/task-ai-146*.test.js`; `tools/ai-brain/test/task-ai-141-part-f.test.js`; `tools/ai-brain/test/priors-public.test.js`; `tools/ai-brain/test/priors-variants.test.js`; `tools/ai-brain/test/task-ai-142-priors-source-id.test.js`; `tools/ai-brain/test/fixtures/benchmark-sources/*`; `docs/product-spec/work-items/TASK-AI-146.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `fix/task-ai-146-benchmark-sources` |
 | Pull Request | `N/A — local authoring stage` |
@@ -89,6 +89,8 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 | `AC-AI-146-06` | Ingest provisional score (e.g. benchlm provisionalDisplayScore with rankingEligible: false) | Marked `provisional: true`, down-weighted by config multiplier, and capped strictly below official models | Unit test in `task-ai-146-benchmark-sources.test.js` |
 | `AC-AI-146-07` | Creator + model name mapping via config rules | Maps creator "Recursive" + model "Flint" to `recursive/flint-v1.0:free`; unknown stays unmatched | Unit test in `task-ai-146-benchmark-sources.test.js` |
 | `AC-AI-146-08` | Verify no hardcoded literals | `node scripts/ai/check-no-hardcode.mjs` exits with code 0 | Terminal output |
+| `AC-AI-146-09` | Default ingestion without descriptor | Default `publicDocuments()` ingests every configured benchmark source from `priors-sources/public.json` | Unit test in `task-ai-146-benchmark-sources.test.js` |
+| `AC-AI-146-10` | Per-source provisional score tracking | Provisional tracked per source/score; official metrics on model never poisoned or capped below weakest official | Unit test in `task-ai-146-benchmark-sources.test.js` |
 
 ## Verification commands
 
@@ -100,7 +102,8 @@ N/A — Controller brain routing and priors logic; no user interface is modified
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `TBD` | `TBD` | Initial authoring |
+| 1 | `4d7b2ffc` | `CHANGES_REQUIRED` | Initial authoring review findings |
+| 2 | `da5be518` | `CHANGES_REQUIRED` | Resolved P1.1 (default ingestion skipping sources) and P1.2 (per-source provisional tracking without poisoning official metrics) |
 
 ## Residual limitations
 

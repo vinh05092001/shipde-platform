@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { publicDocuments, aaRows } = require('../priors-public');
@@ -8,6 +8,10 @@ test('public fetch parses Flight JSON and BenchLM numbers without coercing missi
   const html = `<script>self.__next_f.push(${JSON.stringify([1, '1:' + JSON.stringify({ models: [row] }) + '\n'])})</script>`;
   const calls = [];
   const docs = await publicDocuments({
+    descriptor: {
+      endpoint: 'https://artificialanalysis.ai/leaderboards/models',
+      benchlm: 'https://benchlm.ai/data/models.json',
+    },
     now: 1000,
     fetch: async (url) => {
       calls.push(url);

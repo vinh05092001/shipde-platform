@@ -994,7 +994,11 @@ function matchModelPrior(modelId, ranking, options) {
         score: effScore,
         normalizedScore: effScore,
         rawScore,
-        provisional: Boolean(matchedEntry.provisional || (effortData && effortData.provisional)),
+        provisional: Boolean(
+          effortData && effortData.benchmarks && effortData.benchmarks.length > 0
+            ? effortData.provisional
+            : matchedEntry.provisional
+        ),
         codingTier: tier,
         reviewTier: tier,
         fallback: hasFallback,
@@ -1102,15 +1106,13 @@ function applyNormalizationAndTiers(rows, config, now) {
   for (const row of rows) {
     row.benchmarks = dedupeBenchmarks(row.benchmarks);
     const nonFallback = (row.benchmarks || []).filter((b) => !b.fallback);
-    if (nonFallback.length > 0 && nonFallback.every((b) => b.provisional)) {
-      row.provisional = true;
-    }
+    row.provisional = Boolean(nonFallback.length > 0 && nonFallback.every((b) => b.provisional));
     for (const effData of Object.values(row.efforts || {})) {
       effData.benchmarks = dedupeBenchmarks(effData.benchmarks);
       const effNonFallback = (effData.benchmarks || []).filter((b) => !b.fallback);
-      if (effNonFallback.length > 0 && effNonFallback.every((b) => b.provisional)) {
-        effData.provisional = true;
-      }
+      effData.provisional = Boolean(
+        effNonFallback.length > 0 && effNonFallback.every((b) => b.provisional)
+      );
     }
   }
 
@@ -1141,7 +1143,7 @@ function applyNormalizationAndTiers(rows, config, now) {
   for (const row of rows) {
     const isRowProv = Boolean(row.provisional);
     for (const b of row.benchmarks || []) {
-      const isProv = Boolean(b.provisional || isRowProv);
+      const isProv = b.provisional !== undefined ? Boolean(b.provisional) : isRowProv;
       const key = getBenchmarkStreamKey(b);
       const pool = streamScores.get(key) || [b.score];
       const norm = normalizeScore(b.score, pool, method);
@@ -1157,9 +1159,9 @@ function applyNormalizationAndTiers(rows, config, now) {
       b.normalizedScore = nScore;
     }
     for (const effData of Object.values(row.efforts || {})) {
-      const isEffProv = Boolean(effData.provisional || isRowProv);
+      const isEffProv = Boolean(effData.provisional);
       for (const eb of effData.benchmarks || []) {
-        const isProv = Boolean(eb.provisional || isEffProv);
+        const isProv = eb.provisional !== undefined ? Boolean(eb.provisional) : isEffProv;
         const key = getBenchmarkStreamKey(eb);
         const pool = streamScores.get(key) || [eb.score];
         const norm = normalizeScore(eb.score, pool, method);
@@ -1248,7 +1250,7 @@ function applyNormalizationAndTiers(rows, config, now) {
         }
       }
       for (const b of row.benchmarks || []) {
-        if (b.provisional || row.provisional) {
+        if (b.provisional) {
           if (Number.isFinite(b.score) && b.score >= minOfficialScore) {
             b.score = provisionalCap;
           }
@@ -1258,7 +1260,7 @@ function applyNormalizationAndTiers(rows, config, now) {
         }
       }
       for (const effData of Object.values(row.efforts || {})) {
-        if (effData.provisional || row.provisional) {
+        if (effData.provisional) {
           if (effData.score !== null && effData.score >= minOfficialScore) {
             effData.score = provisionalCap;
             effData.normalizedScore = provisionalCap;
@@ -1268,7 +1270,7 @@ function applyNormalizationAndTiers(rows, config, now) {
           }
         }
         for (const eb of effData.benchmarks || []) {
-          if (eb.provisional || effData.provisional || row.provisional) {
+          if (eb.provisional) {
             if (Number.isFinite(eb.score) && eb.score >= minOfficialScore) {
               eb.score = provisionalCap;
             }
@@ -1312,9 +1314,6 @@ function mergePriorDocuments(documents, now, options) {
           sources: [],
         };
       }
-      if (item.provisional) {
-        row.provisional = true;
-      }
       if (Array.isArray(item.aliases) && item.aliases.length) {
         row.aliases = Array.from(new Set([...(row.aliases || []), ...item.aliases]));
       }
@@ -1354,7 +1353,11 @@ function mergePriorDocuments(documents, now, options) {
             }
           : null;
         const isProvisional = Boolean(
-          (value && typeof value === 'object' && value.provisional) || item.provisional
+          value && typeof value === 'object' && value.provisional !== undefined
+            ? value.provisional
+            : name.startsWith('aa')
+              ? false
+              : item.provisional
         );
         const benchEntry = {
           name,
@@ -1388,14 +1391,12 @@ function mergePriorDocuments(documents, now, options) {
           name: 'aggregate',
           score: directScore,
           source: directSource,
+          ...(item.provisional ? { provisional: true } : {}),
         });
       }
 
       if (effort) {
         row.efforts[effort] = row.efforts[effort] || { benchmarks: [] };
-        if (item.provisional) {
-          row.efforts[effort].provisional = true;
-        }
         row.efforts[effort].benchmarks.push(...targetBenchmarks);
       } else {
         row.benchmarks = targetBenchmarks;

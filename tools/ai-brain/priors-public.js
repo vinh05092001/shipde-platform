@@ -382,7 +382,7 @@ function benchlmRows(json, config) {
             ? Number(rawAg)
             : null;
       if (ag !== null && Number.isFinite(ag) && ag >= 0 && ag <= 100)
-        benchmarks.aaAgenticIndex = Math.round(ag * 10) / 10;
+        benchmarks.aaAgenticIndex = { score: Math.round(ag * 10) / 10, provisional: false };
       const rawCd = item.benchmarks.coding?.aaCodingIndex;
       const cd =
         typeof rawCd === 'number'
@@ -391,13 +391,16 @@ function benchlmRows(json, config) {
             ? Number(rawCd)
             : null;
       if (cd !== null && Number.isFinite(cd) && cd >= 0 && cd <= 100)
-        benchmarks.aaCodingIndex = Math.round(cd * 10) / 10;
+        benchmarks.aaCodingIndex = { score: Math.round(cd * 10) / 10, provisional: false };
     }
 
     if (!Object.keys(benchmarks).length) continue;
     const rawId = alias || item.canonicalModelKey || item.slug || item.model;
     if (!rawId || typeof rawId !== 'string') continue;
-    const isRowProvisional = Boolean(benchmarks.benchlm && benchmarks.benchlm.provisional);
+    const isRowProvisional =
+      Boolean(benchmarks.benchlm && benchmarks.benchlm.provisional) &&
+      !benchmarks.aaAgenticIndex &&
+      !benchmarks.aaCodingIndex;
 
     rows.push({
       modelId: rawId,
@@ -412,8 +415,8 @@ function benchlmRows(json, config) {
   return rows;
 }
 
-function resolveDescriptorSources(config, isExplicit = true) {
-  if (isExplicit && Array.isArray(config && config.sources) && config.sources.length) {
+function resolveDescriptorSources(config) {
+  if (Array.isArray(config && config.sources) && config.sources.length) {
     return config.sources
       .map((s) => {
         if (!s) return null;
@@ -465,12 +468,11 @@ function resolveDescriptorSources(config, isExplicit = true) {
 }
 
 async function publicDocuments(options = {}) {
-  const isExplicit = Boolean(options.descriptor);
   const config = options.descriptor || descriptor;
   const fetcher = options.fetch || globalThis.fetch;
   const retrievedAt = new Date(options.now || Date.now()).toISOString();
   const documents = [];
-  const entries = resolveDescriptorSources(config, isExplicit);
+  const entries = resolveDescriptorSources(config);
 
   for (const entry of entries) {
     const { kind, url, id } = entry;
