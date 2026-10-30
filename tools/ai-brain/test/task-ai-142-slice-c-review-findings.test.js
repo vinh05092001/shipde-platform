@@ -422,6 +422,7 @@ test('Finding 7: generic PR reviewer receives actual Work Item requirements, not
     let receivedItem = null;
     const services = createPlanningServices({
       rootDir: dir,
+      decisionDir: path.join(dir, 'decisions'),
       selectCandidate: async () => ({ chosen: 'test-reviewer' }),
       reviewLane: (o, item) => {
         receivedItem = item;
@@ -945,7 +946,7 @@ test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILA
       { id: 'TASK-REV-1', files: [] },
       { candidateKey: 'writer-1', baseSha: '0'.repeat(40), worktree: repoDir },
       {},
-      {},
+      { dir: path.join(tmp, 'decisions') },
       async () => ({ exitCode: 0, stdout: '{"verdict":"PASS"}' }),
       tmp,
       Date.now(),
@@ -969,7 +970,7 @@ test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILA
       { id: 'TASK-REV-1', files: [] },
       { candidateKey: 'writer-1', baseSha, worktree: repoDir },
       {},
-      {},
+      { dir: path.join(tmp, 'decisions') },
       async () => ({ exitCode: 0, stdout: '{"verdict":"PASS"}' }),
       tmp,
       Date.now(),
@@ -993,7 +994,7 @@ test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILA
       { id: 'TASK-REV-1', files: [] },
       { candidateKey: 'writer-1', baseSha, worktree: repoDir },
       {},
-      {},
+      { dir: path.join(tmp, 'decisions') },
       async () => ({ exitCode: 0, stdout: '{"verdict":"PASS","sha":"' + targetSha + '"}' }),
       tmp,
       Date.now(),
@@ -1389,7 +1390,7 @@ test('Round 4 Finding 4: dispatch evidenceDir is loaded from controller store, n
     };
     await cli.dispatchProfileCommand(
       { root: hostileDir, profile: 'test-profile.json', stdout },
-      { candidates: [], exit: () => {} }
+      { candidates: [], decisionDir: path.join(hostileDir, 'decisions'), exit: () => {} }
     );
     assert.ok(observedEvidenceDir, 'loadEvidence must be called');
     assert.ok(
@@ -1484,7 +1485,7 @@ test('Round 4 Finding 6: reviewLane enforces diff cap without isolatedWorker and
       { id: 'TASK-REV-CAP', files: [] },
       { candidateKey: 'writer-1', baseSha, worktree: repoDir },
       {},
-      {},
+      { dir: path.join(tmp, 'decisions') },
       async () => ({ exitCode: 0, stdout: '{"verdict":"PASS"}' }),
       tmp,
       Date.now(),
@@ -1508,7 +1509,7 @@ test('Round 4 Finding 6: reviewLane enforces diff cap without isolatedWorker and
       { id: 'TASK-REV-CAP', files: [] },
       { candidateKey: 'writer-1', baseSha, worktree: repoDir },
       {},
-      {},
+      { dir: path.join(tmp, 'decisions') },
       async () => ({ exitCode: 0, stdout: JSON.stringify({ verdict: 'PASS', sha: targetSha }) }),
       tmp,
       Date.now(),

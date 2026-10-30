@@ -176,6 +176,26 @@ function isLiveCompletion(result, workItemId) {
   return !result.refusal && completedItems(result).includes(workItemId);
 }
 
+function greenCiAt(sha) {
+  return (args) => {
+    assert.deepStrictEqual(args.slice(0, 2), ['pr', 'view']);
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        headRefOid: sha,
+        statusCheckRollup: require('../ci-gate')
+          .ciGateConfig()
+          .requiredChecks.map((name) => ({
+            name,
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS',
+          })),
+      }),
+      stderr: '',
+    };
+  };
+}
+
 function baseOpts(extra) {
   const sourcesDispatch = require('../sources.json').dispatch || {};
   const options = Object.assign(
@@ -6429,6 +6449,7 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         const dirDecisionsResume = tmpDir('task-ai-64-u-dec-resume-');
         const opts2 = baseOpts({
           decisionDir: dirDecisionsResume,
+          ghRunner: greenCiAt(workerHead),
           checkpointFile,
           checkpoint: checkpointFile,
           workerRoot: repo.dir,
@@ -6466,6 +6487,8 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         const res2 = await safeRun(opts2);
         assert.ok(res2.log, 'resumed orchestration must succeed: ' + res2.refusal);
         assert.strictEqual(res2.log.outcomes[0].status, 'completed');
+        assert.strictEqual(res2.log.reviews[0].ci.state, 'PASS');
+        assert.strictEqual(res2.log.reviews[0].ci.sha, workerHead);
         assert.strictEqual(res2.log.outcomes[0].reason, 'CHECKPOINT_COMPLETED');
         assert.strictEqual(workerRunCount, 1, 'worker must not be re-run');
         assert.strictEqual(reviewRunCount, 1, 'reviewer must not be re-run');
@@ -7121,6 +7144,7 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
 
         const opts2 = baseOpts({
           decisionDir: tmpDir('task-ai-64-u-f17-resume-dec-'),
+          ghRunner: greenCiAt(reviewedSha),
           checkpointFile,
           checkpoint: checkpointFile,
           workerRoot: repo.dir,
@@ -7151,6 +7175,8 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
 
         const res2 = await safeRun(opts2);
         assert.ok(res2.log, 'a repaired receipt must publish on resume: ' + res2.refusal);
+        assert.strictEqual(res2.log.reviews[0].ci.state, 'PASS');
+        assert.strictEqual(res2.log.reviews[0].ci.sha, reviewedSha);
         assert.strictEqual(workerRunCount, 1, 'worker must not be re-run');
         assert.strictEqual(res2.log.status, 'PUBLISHED_DRAFT');
         assert.strictEqual(res2.log.publication.status, 'PUBLISHED_DRAFT');
@@ -7314,6 +7340,7 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
           }
           const opts = baseOpts({
             decisionDir: tmpDir('task-ai-64-u-f19-resume-dec-'),
+            ghRunner: greenCiAt(reviewedSha),
             checkpointFile: target,
             checkpoint: target,
             workerRoot: workerRepo.dir,
@@ -7351,6 +7378,8 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         // runs in the operator-side ref, never in the worker root.
         const rebuilt = await resume(null);
         assert.ok(rebuilt.log, 'rebuilt cwd resume must not be refused: ' + rebuilt.refusal);
+        assert.strictEqual(rebuilt.log.reviews[0].ci.state, 'PASS');
+        assert.strictEqual(rebuilt.log.reviews[0].ci.sha, reviewedSha);
         assert.strictEqual(rebuilt.log.status, 'PUBLISHED_DRAFT');
         assert.strictEqual(rebuilt.log.publication.status, 'PUBLISHED_DRAFT');
         assert.strictEqual(rebuilt.log.publication.result.sha, reviewedSha);
@@ -7472,6 +7501,7 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
         const resumeDir = tmpDir('task-ai-64-x-resume-dec-');
         const opts2 = baseOpts({
           decisionDir: resumeDir,
+          ghRunner: greenCiAt(reviewedSha),
           checkpointFile,
           checkpoint: checkpointFile,
           workerRoot: workerRepo.dir,
@@ -7517,6 +7547,8 @@ describe('TASK-AI-64 clean-tree prompt and repair dirty path listing (Defect R)'
 
         const res2 = await safeRun(opts2);
         assert.ok(res2.log, 'resume publish must succeed: ' + res2.refusal);
+        assert.strictEqual(res2.log.reviews[0].ci.state, 'PASS');
+        assert.strictEqual(res2.log.reviews[0].ci.sha, reviewedSha);
         assert.strictEqual(publisherCalled, true);
         assert.strictEqual(res2.log.status, 'PUBLISHED_DRAFT');
         assert.strictEqual(res2.log.publication.status, 'PUBLISHED_DRAFT');

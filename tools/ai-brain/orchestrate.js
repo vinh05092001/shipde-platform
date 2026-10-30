@@ -6983,20 +6983,7 @@ async function runOrchestration(goal, opts) {
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
-    const draft =
-      (published && published.result && (published.result.draft || published.result)) || {};
-    const isMockPublisherWithoutPr =
-      !publishedBefore.has(entry.workItemId) &&
-      (typeof o.publisher === 'function' || typeof o.publication?.publish === 'function') &&
-      draft.number == null &&
-      !o.ghRunner &&
-      o.ciGate !== true;
-    if (
-      published &&
-      published.status === PublicationStatus.PUBLISHED_DRAFT &&
-      (!completedBefore.has(entry.workItemId) || publishedBefore.has(entry.workItemId)) &&
-      !isMockPublisherWithoutPr
-    ) {
+    if (published && published.status === PublicationStatus.PUBLISHED_DRAFT) {
       const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
       const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
       if (isCiDisabled) {
@@ -9763,7 +9750,16 @@ function finish(log, statusOf, ctx) {
   }
 
   const prior = ctx.checkpointOnDisk || {};
-  const allCompleted = unique((prior.completed || []).concat(completed));
+  const ciBlocked = new Set(
+    log.outcomes
+      .filter(
+        (entry) => entry.reasonCode === 'CI_GATE_FAILED' || entry.reasonCode === 'CI_GATE_DISABLED'
+      )
+      .map((entry) => entry.workItemId)
+  );
+  const allCompleted = unique((prior.completed || []).concat(completed)).filter(
+    (id) => !ciBlocked.has(id)
+  );
   const checkpointReviews = buildCheckpointReviews(log, prior, allCompleted, ctx.logOpts || {});
   const next = Object.assign({}, prior, {
     schemaVersion: 1,
