@@ -409,6 +409,7 @@
       "externalModelsTimeoutMs": 4000
     },
     "routeEvidenceMaxAgeMs": 86400000,
+    "quotaReadingMaxAgeMs": 1800000,
     "maxWriterSelectionRounds": 12,
     "maxLocalWriterFallbacks": 3,
     "maxItemDurationMs": 3600000,

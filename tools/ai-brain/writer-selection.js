@@ -97,6 +97,14 @@ function applyProbe(candidate, result) {
     status: result?.status || 0,
   };
   candidate.probeQuota = quota;
+  candidate.quotaProbe = {
+    candidateKey: candidateKey(candidate),
+    ok: result?.ok === true,
+    httpStatus: result?.status || 0,
+    observedAt: quota.observedAt || new Date().toISOString(),
+    quotaStatus: quota.status,
+    source: 'live-route-probe',
+  };
   if (quota.status === 'exhausted') {
     candidate.blocked = true;
     candidate.blockReason = 'QUOTA_EXHAUSTED: route probe';

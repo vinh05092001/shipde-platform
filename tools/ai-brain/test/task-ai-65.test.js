@@ -31,6 +31,14 @@ const evidence = require('../evidence');
 const { candidateKey } = require('../candidates');
 
 const NOW = Date.parse('2026-09-30T00:00:00.000Z');
+// Ranking fixtures supply current quota independently of host login/cache state.
+function currentQuotaReadings(offered, now = Date.now()) {
+  return Object.fromEntries(offered.map((c) => [
+    c.accountId,
+    { status: 'open', observedAt: new Date(now).toISOString() },
+  ]));
+}
+
 const DAY = '2026-09-30';
 
 /** A fixed clock so every time-sensitive assertion is machine-independent. */
@@ -123,7 +131,7 @@ async function runDispatch(p, candidates, dirs, over) {
       storePath: dirs.storePath,
       now: NOW,
       reservations: [],
-      headrooms: {},
+      headrooms: currentQuotaReadings(candidates, NOW),
       log: (s) => lines.push(String(s)),
       error: (s) => lines.push('ERR ' + String(s)),
       exit: (c) => {
@@ -132,6 +140,14 @@ async function runDispatch(p, candidates, dirs, over) {
     },
     over || {}
   );
+  if (over?.headrooms) {
+    deps.headrooms = {
+      ...currentQuotaReadings(candidates, NOW),
+      ...Object.fromEntries(Object.entries(over.headrooms).map(([id, value]) => [
+        id, { observedAt: iso(NOW), ...value },
+      ])),
+    };
+  }
   const result = await dispatchCommand(
     {
       profile: profileFile,
@@ -934,20 +950,22 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
     assert.equal(outExit, 0, 'outcome with BOM is parsed successfully');
   });
 
-  test('65-17: unknown headroom applies 15-point penalty', async () => {
+  test('65-17: unknown headroom cannot rank without a live probe', async () => {
     const cOpen = cand({ accountId: 'open', modelId: 'up/m1' });
     const cUnknown = cand({ accountId: 'unknown', modelId: 'up/m2' });
 
     const p = profile({});
     const r = await runDispatch(p, [cOpen, cUnknown], dirs, {
-      headrooms: { open: { status: 'open' } },
+      headrooms: { open: { status: 'open' }, unknown: { status: 'unknown' } },
     });
 
     const openEntry = r.result.ranking.find((c) => c.candidateKey === candidateKey(cOpen));
-    const unknownEntry = r.result.ranking.find((c) => c.candidateKey === candidateKey(cUnknown));
+    const unknownEntry = r.result.rejected.find((c) => c.candidateKey === candidateKey(cUnknown));
 
     assert.ok(openEntry.scoreBreakdown.headroomPenalty === 0);
-    assert.equal(unknownEntry.scoreBreakdown.headroomPenalty, 15);
+    assert.ok(unknownEntry);
+    assert.equal(unknownEntry.quotaEvidence.status, 'unknown');
+    assert.ok(!r.result.ranking.some((c) => c.candidateKey === candidateKey(cUnknown)));
   });
 
   test('65-18: execute reservation uses 100000 tokens', async () => {

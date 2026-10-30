@@ -2505,13 +2505,29 @@ function dispatchCommand(args, deps = {}) {
       weightProfile: fallbackProfile,
       weights: routing.WEIGHT_PROFILES[fallbackProfile],
     };
-    const rankDryRun = (offered) => {
-      const result = routing.rankForProfile(offered, profile, assessment, {
+    // A preflight can require I/O; fresh-quota dispatch retains its synchronous result.
+    const quotaContext = {
+        ...deps,
         ...rankingContext,
         ...(deps.ranking || {}),
+        taskProfile: profile,
         priors: deps.priors === undefined ? deps.ranking?.priors : deps.priors,
         useStoredQuota: true,
+      };
+    const quotaInspection = routing.rankForProfile(annotated, profile, assessment, quotaContext);
+    if (!deps.quotaPreflightComplete && quotaInspection.needsQuotaProbe?.length) {
+      return ranking.rankWithQuotaProbe(annotated, quotaContext,
+        (offered, context) => routing.rankForProfile(offered, profile, assessment, context)
+      ).then(() => {
+        const probeNow = annotated.reduce(
+          (latest, c) => Math.max(latest, Date.parse(c.quotaProbe?.observedAt) || latest), now
+        );
+        annotated.excludedRoutes = candidateList.excludedRoutes || [];
+        return dispatchCommand(args, { ...deps, candidates: annotated, now: probeNow, quotaPreflightComplete: true });
       });
+    }
+    const rankDryRun = (offered) => {
+      const result = routing.rankForProfile(offered, profile, assessment, quotaContext);
       if (deps.isolatedWorker && profile.role !== 'reviewer') {
         require('./probe-order').preferKnownGood(result, offered, {
           ...deps,
@@ -2553,7 +2569,7 @@ function dispatchCommand(args, deps = {}) {
       checkpoint &&
       checkpoint.step === 'fallback_selected' &&
       checkpoint.fallbackCandidate &&
-      annotated.some((c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate)
+      decision.candidates.some((c) => c.offeringId === checkpoint.fallbackCandidate)
     ) {
       const resumedCandidate = annotated.find(
         (c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate
@@ -2876,6 +2892,17 @@ function dispatchCommand(args, deps = {}) {
         ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
       };
 
+      const quotaInspection = ranking.rankAndRecord(annotated, { ...rankingContext, dryRun: true });
+      if (!deps.quotaPreflightComplete && quotaInspection.needsQuotaProbe?.length) {
+        return ranking.rankWithQuotaProbe(annotated, { ...deps, ...rankingContext, dryRun: true })
+          .then(() => {
+            const probeNow = annotated.reduce(
+              (latest, c) => Math.max(latest, Date.parse(c.quotaProbe?.observedAt) || latest), now
+            );
+            annotated.excludedRoutes = candidateList.excludedRoutes || [];
+            return dispatchCommand(args, { ...deps, candidates: annotated, now: probeNow, quotaPreflightComplete: true });
+          });
+      }
       const decision = ranking.rankAndRecord(annotated, rankingContext);
       lastDecision = decision;
 

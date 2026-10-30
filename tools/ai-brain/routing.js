@@ -1300,7 +1300,9 @@ function scoreForProfile(candidate, assessment, ctx) {
   const agePenalty = evidenceAgePenalty(candidate, now);
   const dispatchConfig =
     (ctx && ctx.dispatchConfig) || sourceRegistry.getDispatchConfig(ctx && ctx.registry, ctx || {});
-  const probeSucceeded = candidate && candidate.routeEvidence?.probeSucceeded === true;
+  const probeSucceeded = candidate && ranking.hasLiveQuotaProbe(
+    ranking.resolveCandidateHeadroom(candidate, ctx)
+  );
   const headroomStatus =
     candidate.headroomStatus ??
     (ctx && ctx.headrooms ? ranking.resolveCandidateHeadroom(candidate, ctx).status : undefined);
@@ -1400,6 +1402,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
   const ranked = [];
   const rejected = [];
   const needsCapabilityProbe = [];
+  const needsQuotaProbe = [];
   const probationKeys =
     (ctx && ctx.probationCandidateKeys) || (context && context.probationCandidateKeys) || [];
   const probation = new Set(probationKeys.filter((key) => typeof key === 'string'));
@@ -1430,6 +1433,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         upstream: c.upstream,
         modelId: c.modelId,
         accountId: c.accountId || '*',
+        quotaEvidence: c.quotaEvidence,
+        quotaProbe: c.quotaProbe,
       });
 
     if (c.blocked) {
@@ -1530,6 +1535,8 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
     const headroom = ranking.resolveCandidateHeadroom(c, context);
     c.headroomStatus = headroom.status;
+    c.quotaEvidence = headroom.quotaEvidence;
+    c.quotaProbe = headroom.quotaProbe || undefined;
     if (
       profile.role === 'writer' &&
       c.binding === 'cli-login' &&
@@ -1636,6 +1643,11 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
 
     if (headroom.status === 'unknown') {
+      if (!ranking.hasLiveQuotaProbe(headroom)) {
+        reject(headroom.quotaProbe?.reasonCode || 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE', 'quotaScope');
+        if (headroom.requiresLiveProbe) needsQuotaProbe.push(rejected[rejected.length - 1]);
+        continue;
+      }
       if (context.enforceKnownQuota === true && quotaUnknownAdmitted >= explorationBudget) {
         reject('QUOTA_UNKNOWN_NO_EXPLORATION_BUDGET', 'quotaScope');
         continue;
@@ -1743,7 +1755,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     top3,
     ranking: ranked,
     needsCapabilityProbe,
+    needsQuotaProbe,
     rejected,
+    outcome: chosen ? 'SELECTED' : 'NO_ELIGIBLE_CANDIDATE',
     refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
     reasonCode,
     reason,
@@ -2126,7 +2140,10 @@ async function runProfileDispatch(args, deps) {
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
     independentReviewerCandidates,
   };
-  const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  const result = await ranking.rankWithQuotaProbe(
+    annotated, { ...d, ...rankCtx, taskProfile: profile, dryRun: true },
+    (offered, context) => rankForProfile(offered, profile, assessment, context)
+  );
   if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {
     result.rejected.push(...d.candidates.excludedRoutes);
   }
