@@ -48,6 +48,76 @@ import {
   Key,
 } from 'lucide-react';
 
+export interface SearchActivationActions {
+  setActiveTab: (tab: string) => void;
+  setSelectedGlobalTracking: (code: string | null) => void;
+  setSelectedOrderId: (id: string | null) => void;
+  setSelectedOrderCode: (code: string | null) => void;
+  setSelectedBatchId: (id: string | null) => void;
+  setSelectedCaseId: (id: string | null) => void;
+  setSelectedClaimId: (id: string | null) => void;
+  setSelectedClaimCode: (code: string | null) => void;
+  setSelectedDiscrepancyId: (id: string | null) => void;
+  pushUrl?: (url: string) => void;
+  showToast?: (message: string) => void;
+}
+
+export function handleSearchResultActivation(
+  item: {
+    id: string;
+    type: string;
+    code: string;
+    url?: string;
+    title?: string;
+    metadata?: Record<string, unknown>;
+  },
+  actions: SearchActivationActions
+) {
+  // Follow result URL in browser history
+  if (actions.pushUrl && item.url) {
+    actions.pushUrl(item.url);
+  } else if (typeof window !== 'undefined' && item.url) {
+    window.history.pushState(null, '', item.url);
+  }
+
+  // Clear previous selections across all entity types so consecutive activations do not leave stale selections
+  actions.setSelectedGlobalTracking(null);
+  actions.setSelectedOrderId(null);
+  actions.setSelectedOrderCode(null);
+  actions.setSelectedBatchId(null);
+  actions.setSelectedCaseId(null);
+  actions.setSelectedClaimId(null);
+  actions.setSelectedClaimCode(null);
+  actions.setSelectedDiscrepancyId(null);
+
+  if (item.type === 'WAYBILL') {
+    actions.setSelectedGlobalTracking(item.code);
+  } else if (item.type === 'ORDER') {
+    actions.setActiveTab('shipments');
+    actions.setSelectedOrderId(item.id);
+    actions.setSelectedOrderCode(item.code);
+  } else if (item.type === 'BATCH') {
+    actions.setActiveTab('reconciliation');
+    actions.setSelectedBatchId(item.id);
+  } else if (item.type === 'CASE') {
+    const isClaim =
+      item.url?.startsWith('/claims/') ||
+      Boolean(item.metadata && 'claim_type' in item.metadata) ||
+      item.title?.toLowerCase().includes('bồi thường');
+    if (isClaim) {
+      actions.setActiveTab('claims');
+      actions.setSelectedClaimId(item.id);
+      actions.setSelectedClaimCode(item.code);
+    } else {
+      actions.setActiveTab('exceptions');
+      actions.setSelectedCaseId(item.id);
+    }
+  } else if (item.type === 'TRANSACTION') {
+    actions.setActiveTab('reconciliation');
+    actions.setSelectedDiscrepancyId(item.id);
+  }
+}
+
 export default function ShipDeConsoleApp() {
   const { user, merchant, isAuthenticated, isHydrating, logout, switchRole } = useAuth();
   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
@@ -58,6 +128,15 @@ export default function ShipDeConsoleApp() {
   const [exceptions, setExceptions] = useState<UIExceptionItem[]>(MASTER_EXCEPTIONS);
   const [discrepancies, setDiscrepancies] = useState<UIDiscrepancyItem[]>(MASTER_DISCREPANCIES);
   const [claims, setClaims] = useState<UIClaimItem[]>(MASTER_CLAIMS);
+
+  // Deep search result selections (FEAT-COM-01)
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [selectedClaimCode, setSelectedClaimCode] = useState<string | null>(null);
+  const [selectedDiscrepancyId, setSelectedDiscrepancyId] = useState<string | null>(null);
 
   // Modals
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
@@ -544,6 +623,12 @@ export default function ShipDeConsoleApp() {
               onNavigateToTab={(tab) => setActiveTab(tab)}
               onCreateOrder={() => setCreateOrderOpen(true)}
               userRole={user?.role || 'OWNER'}
+              selectedOrderId={selectedOrderId}
+              selectedOrderCode={selectedOrderCode}
+              onClearSelection={() => {
+                setSelectedOrderId(null);
+                setSelectedOrderCode(null);
+              }}
             />
           )}
 
@@ -552,6 +637,8 @@ export default function ShipDeConsoleApp() {
               exceptions={exceptions}
               onUpdateException={handleUpdateException}
               carrierGhnTier={carrierGhnTier}
+              selectedCaseId={selectedCaseId}
+              onClearSelection={() => setSelectedCaseId(null)}
             />
           )}
 
@@ -560,6 +647,10 @@ export default function ShipDeConsoleApp() {
               discrepancies={discrepancies}
               onUpdateDiscrepancy={handleUpdateDiscrepancy}
               role={user?.role || 'OWNER'}
+              selectedBatchId={selectedBatchId}
+              selectedDiscrepancyId={selectedDiscrepancyId}
+              onClearBatchSelection={() => setSelectedBatchId(null)}
+              onClearDiscrepancySelection={() => setSelectedDiscrepancyId(null)}
             />
           )}
 
@@ -568,7 +659,16 @@ export default function ShipDeConsoleApp() {
           {activeTab === 'returns' && <ReturnScanTab />}
 
           {activeTab === 'claims' && (
-            <ClaimCasesTab claims={claims} onUpdateClaim={handleUpdateClaim} />
+            <ClaimCasesTab
+              claims={claims}
+              onUpdateClaim={handleUpdateClaim}
+              selectedClaimId={selectedClaimId}
+              selectedClaimCode={selectedClaimCode}
+              onClearSelection={() => {
+                setSelectedClaimId(null);
+                setSelectedClaimCode(null);
+              }}
+            />
           )}
 
           {activeTab === 'settings' && (
@@ -614,21 +714,18 @@ export default function ShipDeConsoleApp() {
         onClose={() => setGlobalSearchOpen(false)}
         onSelectResult={(item) => {
           setGlobalSearchOpen(false);
-          if (item.type === 'WAYBILL') {
-            setSelectedGlobalTracking(item.code);
-          } else if (item.type === 'ORDER') {
-            setActiveTab('shipments');
-            showToast(`Đã mở đơn hàng ${item.code}`);
-          } else if (item.type === 'BATCH') {
-            setActiveTab('reconciliation');
-            showToast(`Đã mở bảng kê ${item.code}`);
-          } else if (item.type === 'CASE') {
-            setActiveTab('exceptions');
-            showToast(`Đã mở ngoại lệ ${item.code}`);
-          } else if (item.type === 'TRANSACTION') {
-            setActiveTab('reconciliation');
-            showToast(`Đã mở giao dịch ${item.code}`);
-          }
+          handleSearchResultActivation(item, {
+            setActiveTab,
+            setSelectedGlobalTracking,
+            setSelectedOrderId,
+            setSelectedOrderCode,
+            setSelectedBatchId,
+            setSelectedCaseId,
+            setSelectedClaimId,
+            setSelectedClaimCode,
+            setSelectedDiscrepancyId,
+            showToast,
+          });
         }}
       />
 

@@ -18,10 +18,32 @@ import {
 interface Props {
   claims: UIClaimItem[];
   onUpdateClaim: (updated: UIClaimItem) => void;
+  selectedClaimId?: string | null;
+  selectedClaimCode?: string | null;
+  onClearSelection?: () => void;
 }
 
-export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+export const ClaimCasesTab: React.FC<Props> = ({
+  claims,
+  onUpdateClaim,
+  selectedClaimId,
+  selectedClaimCode,
+  onClearSelection,
+}) => {
+  const [dismissedClaim, setDismissedClaim] = useState(false);
+  const [prevSelectedClaimCode, setPrevSelectedClaimCode] = useState(selectedClaimCode);
+  const [prevSelectedClaimId, setPrevSelectedClaimId] = useState(selectedClaimId);
+
+  if (prevSelectedClaimCode !== selectedClaimCode || prevSelectedClaimId !== selectedClaimId) {
+    setPrevSelectedClaimCode(selectedClaimCode);
+    setPrevSelectedClaimId(selectedClaimId);
+    setDismissedClaim(false);
+  }
+
+  const activeClaimId = dismissedClaim ? null : selectedClaimId;
+  const activeClaimCode = dismissedClaim ? null : selectedClaimCode;
+
+  const [userSearchQuery, setUserSearchQuery] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const handleDownloadProofZip = (claim: UIClaimItem) => {
@@ -44,10 +66,31 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const filteredClaims = claims.filter(
+  const allClaims = [...claims];
+  const isClaimActivated = Boolean(activeClaimId || activeClaimCode);
+  const matchedClaim = isClaimActivated
+    ? allClaims.find(
+        (c) =>
+          (activeClaimId && c.id === activeClaimId) ||
+          (activeClaimCode &&
+            (c.tracking_code === activeClaimCode || c.carrier_ticket === activeClaimCode))
+      )
+    : null;
+  const isClaimNotFound = isClaimActivated && !matchedClaim;
+
+  const effectiveQuery = userSearchQuery ?? (activeClaimCode || '');
+  const setSearchQuery = (term: string) => setUserSearchQuery(term);
+
+  const handleClearClaimSelection = () => {
+    setDismissedClaim(true);
+    setUserSearchQuery('');
+    onClearSelection?.();
+  };
+
+  const filteredClaims = allClaims.filter(
     (c) =>
-      c.tracking_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (c.carrier_ticket && c.carrier_ticket.toLowerCase().includes(searchQuery.toLowerCase()))
+      c.tracking_code.toLowerCase().includes(effectiveQuery.toLowerCase()) ||
+      (c.carrier_ticket && c.carrier_ticket.toLowerCase().includes(effectiveQuery.toLowerCase()))
   );
 
   return (
@@ -58,6 +101,37 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
           <button type="button" onClick={() => setToastMessage(null)} className="font-bold">
             ✕
           </button>
+        </div>
+      )}
+
+      {/* Activated Claim Not Found Alert (Real Not-Found State with Recovery) */}
+      {isClaimNotFound && (
+        <div
+          data-testid="activated-claim-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy hồ sơ khiếu nại{' '}
+                <span className="font-mono underline">{selectedClaimCode || selectedClaimId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Hồ sơ không tồn tại trong danh sách khiếu nại hiện tại hoặc nằm ngoài phạm vi truy
+                cập của bạn.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleClearClaimSelection}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại danh sách
+            </button>
+          </div>
         </div>
       )}
 
@@ -81,7 +155,7 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            value={searchQuery}
+            value={effectiveQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Tìm theo mã vận đơn hoặc ticket..."
             className="modern-input pl-9 w-full text-xs"
@@ -108,8 +182,23 @@ export const ClaimCasesTab: React.FC<Props> = ({ claims, onUpdateClaim }) => {
             <tbody>
               {filteredClaims.map((c) => {
                 const isUrgent = c.hours_left <= 48 && c.status !== 'CLOSED';
+                const isSelected = Boolean(
+                  matchedClaim &&
+                  ((activeClaimId && c.id === activeClaimId) ||
+                    (activeClaimCode &&
+                      (c.tracking_code === activeClaimCode ||
+                        c.carrier_ticket === activeClaimCode)))
+                );
+                const selectedKey = activeClaimId || activeClaimCode;
                 return (
-                  <tr key={c.id}>
+                  <tr
+                    key={c.id}
+                    data-selected={isSelected ? 'true' : undefined}
+                    data-testid={isSelected ? `selected-claim-${selectedKey}` : undefined}
+                    className={
+                      isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+                    }
+                  >
                     <td>
                       <TrackingCode code={c.tracking_code} />
                     </td>
