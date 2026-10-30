@@ -791,40 +791,42 @@ export class BranchesService {
       );
     }
 
-    const existing = await this.prisma.branch.findFirst({
-      where: { id: branchId, merchant_id: merchantId },
-    });
-
-    if (!existing) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'BRANCH_NOT_FOUND',
-        'Không tìm thấy thông tin chi nhánh',
-        false
-      );
-    }
-
-    if (existing.is_default) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
-        'Không thể vô hiệu hóa chi nhánh mặc định',
-        false,
-        'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi vô hiệu hóa chi nhánh này'
-      );
-    }
-
-    const hasScope = await this.checkActorBranchScope(actor, existing);
-    if (!hasScope) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Người dùng không có quyền vô hiệu hóa chi nhánh được yêu cầu',
-        false
-      );
-    }
-
     const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lockMerchantBranches(tx, merchantId);
+
+      const existing = await tx.branch.findFirst({
+        where: { id: branchId, merchant_id: merchantId },
+      });
+
+      if (!existing) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'BRANCH_NOT_FOUND',
+          'Không tìm thấy thông tin chi nhánh',
+          false
+        );
+      }
+
+      if (existing.is_default) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+          'Không thể vô hiệu hóa chi nhánh mặc định',
+          false,
+          'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi vô hiệu hóa chi nhánh này'
+        );
+      }
+
+      const hasScope = await this.checkActorBranchScope(actor, existing);
+      if (!hasScope) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền vô hiệu hóa chi nhánh được yêu cầu',
+          false
+        );
+      }
+
       const result = await tx.branch.update({
         where: { id: branchId },
         data: { status: 'INACTIVE' },
@@ -878,40 +880,42 @@ export class BranchesService {
       );
     }
 
-    const existing = await this.prisma.branch.findFirst({
-      where: { id: branchId, merchant_id: merchantId },
-    });
-
-    if (!existing) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'BRANCH_NOT_FOUND',
-        'Không tìm thấy thông tin chi nhánh',
-        false
-      );
-    }
-
-    if (existing.is_default) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'CANNOT_DELETE_DEFAULT_BRANCH',
-        'Không thể xóa chi nhánh mặc định',
-        false,
-        'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi xóa chi nhánh này'
-      );
-    }
-
-    const hasScope = await this.checkActorBranchScope(actor, existing);
-    if (!hasScope) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'FORBIDDEN',
-        'Người dùng không có quyền xóa chi nhánh được yêu cầu',
-        false
-      );
-    }
-
     await this.prisma.$transaction(async (tx) => {
+      await this.lockMerchantBranches(tx, merchantId);
+
+      const existing = await tx.branch.findFirst({
+        where: { id: branchId, merchant_id: merchantId },
+      });
+
+      if (!existing) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'BRANCH_NOT_FOUND',
+          'Không tìm thấy thông tin chi nhánh',
+          false
+        );
+      }
+
+      if (existing.is_default) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'CANNOT_DELETE_DEFAULT_BRANCH',
+          'Không thể xóa chi nhánh mặc định',
+          false,
+          'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi xóa chi nhánh này'
+        );
+      }
+
+      const hasScope = await this.checkActorBranchScope(actor, existing);
+      if (!hasScope) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'FORBIDDEN',
+          'Người dùng không có quyền xóa chi nhánh được yêu cầu',
+          false
+        );
+      }
+
       await tx.branch.delete({
         where: { id: branchId },
       });

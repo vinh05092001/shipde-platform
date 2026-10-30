@@ -405,7 +405,7 @@ export class SearchService {
     // Truncate combined items to overall requested limit
     const finalItems = items.slice(0, limit);
 
-    // Audit logging (BR-COM-05: query text masked for PII)
+    // Audit logging (BR-COM-05: query text masked for PII, FEAT-COM-01: immutable audit trail fail-closed)
     try {
       await this.prisma.auditLog.create({
         data: {
@@ -426,8 +426,17 @@ export class SearchService {
           ip_address: this.hashIp(clientIp),
         },
       });
-    } catch {
-      // Non-blocking fallback for audit write in read-heavy flows
+    } catch (auditErr: any) {
+      if (auditErr instanceof CanonicalApiException) {
+        throw auditErr;
+      }
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'INTERNAL_SERVER_ERROR',
+        'Không thể lưu nhật ký kiểm toán cho truy vấn tìm kiếm',
+        true,
+        'Vui lòng thử lại sau giây lát'
+      );
     }
 
     return {

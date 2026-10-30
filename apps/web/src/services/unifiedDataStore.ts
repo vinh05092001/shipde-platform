@@ -9,6 +9,7 @@ import {
   UIClaimItem,
   UIReturnScanItem,
   UITimelineEvent,
+  UIStatementBatch,
 } from '@/components/types';
 import { ShipmentStatus, CarrierCode } from '@/types/domain';
 
@@ -696,6 +697,42 @@ export const MASTER_CLAIMS: UIClaimItem[] = [
     hours_left: 0,
     carrier_ticket: 'TKT_GHN_44812',
     evidence_count: 2,
+  },
+];
+
+// ----------------------------------------------------------------------------
+// UNIFIED STATEMENTS LIST (Carrier Statement Batches)
+// ----------------------------------------------------------------------------
+export const MASTER_STATEMENTS: UIStatementBatch[] = [
+  {
+    id: 'stmt_2026_w33',
+    period: 'Kỳ Đối Soát Tuần 33 (10/08/2026 – 16/08/2026)',
+    carrier: 'GHN Express & GHTK',
+    total_rows: 50,
+    total_cod: 14250000,
+    total_freight: 1240000,
+    matched_exact: 48,
+    status: 'OPEN',
+  },
+  {
+    id: 'stmt-5555-6666',
+    period: 'Kỳ Đối Soát Tháng 08/2026 (GHN)',
+    carrier: 'GHN Express',
+    total_rows: 42,
+    total_cod: 11200000,
+    total_freight: 980000,
+    matched_exact: 40,
+    status: 'OPEN',
+  },
+  {
+    id: 'stmt_001',
+    period: 'Kỳ Đối Soát Tuần 32 (03/08/2026 – 09/08/2026)',
+    carrier: 'GHTK',
+    total_rows: 35,
+    total_cod: 8900000,
+    total_freight: 750000,
+    matched_exact: 35,
+    status: 'CLOSED',
   },
 ];
 
