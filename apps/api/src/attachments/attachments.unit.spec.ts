@@ -344,6 +344,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
                     });
                     if (!matchOr) return false;
                   }
+                  if (cond.NOT) {
+                    if (cond.NOT.warehouse_id === null && cond.NOT.branch_id === null) {
+                      if (a.warehouse_id === null && a.branch_id === null) return false;
+                    }
+                  }
                 }
               }
               return true;
@@ -832,11 +837,13 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         'c'
       );
 
-      // Simulate safety scanner putting attachment into QUARANTINED status
-      await mockPrisma.attachment.update({
-        where: { id: att.id },
-        data: { status: 'QUARANTINED' },
-      });
+      // Finding 1: Exercise quarantine lifecycle method
+      await service.quarantineAttachment(
+        ownerActor,
+        att.id,
+        'Malware suspected by safety scanner',
+        'corr-quar'
+      );
 
       await assert.rejects(
         async () => {
@@ -908,8 +915,8 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       });
     });
 
-    it('Finding 6: Delete attachment fails closed when S3 removal fails, keeping DB row ACTIVE', async () => {
-      const { service, mockStorage, mockPrisma } = setupService();
+    it('Finding 5 & 6: Delete attachment persists deletion intent and audit before S3; leaves PENDING_DELETION on S3 failure', async () => {
+      const { service, mockStorage, mockPrisma, auditLogs } = setupService();
       const buffer = validPngBuffer;
       const att = await service.uploadAttachment(
         ownerActor,
@@ -939,9 +946,36 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         }
       );
 
-      // Verify DB row remains ACTIVE
+      // Verify DB row was updated to PENDING_DELETION and durable audit log was written
       const row = await mockPrisma.attachment.findFirst({ where: { id: att.id } });
-      assert.strictEqual(row?.status, 'ACTIVE');
+      assert.strictEqual(row?.status, 'PENDING_DELETION');
+
+      const audit = auditLogs.find((a) => a.action === 'ATTACHMENT_DELETED');
+      assert.ok(audit, 'Durable deletion audit log must be persisted');
+
+      // Verify cannot download pending deletion attachment
+      await assert.rejects(
+        async () => {
+          await service.downloadAttachment(ownerActor, att.id, '127.0.0.1', 'c');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'ATTACHMENT_UNAVAILABLE');
+          return true;
+        }
+      );
+
+      // Verify retry with working S3 completes deletion
+      mockStorage.deleteObject = async () => {};
+      const retryDel = await service.deleteAttachment(
+        ownerActor,
+        att.id,
+        true,
+        '127.0.0.1',
+        'c-retry'
+      );
+      assert.strictEqual(retryDel.success, true);
+      const finalizedRow = await mockPrisma.attachment.findFirst({ where: { id: att.id } });
+      assert.strictEqual(finalizedRow?.status, 'DELETED');
     });
 
     it('AC-COM-06-16: Delete attachment without confirm: true throws 400 CONFIRMATION_REQUIRED', async () => {
@@ -1090,6 +1124,120 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           return true;
         }
       );
+    });
+
+    it('Finding 3: Upload with derived entity scope outside actor warehouse scope throws 403 SCOPE_FORBIDDEN', async () => {
+      const { service, mockPrisma } = setupService();
+      // Configure shipment to belong to Da Nang warehouse
+      mockPrisma.shipment.findFirst = async () => ({
+        id: 'shipment-danang-1',
+        merchant_id: 'm-tenant-1',
+        warehouse_id: 'wh-danang-02',
+        branch_id: null,
+      });
+
+      const buffer = validPngBuffer;
+
+      // scopedActor only has wh-hcm-01 scope
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            scopedActor,
+            {
+              file_name: 'evidence.png',
+              mime_type: 'image/png',
+              content_base64: buffer.toString('base64'),
+              entity_type: 'SHIPMENT',
+              entity_id: 'shipment-danang-1',
+              // Note: warehouse_id is omitted by caller to try bypassing scope check
+            },
+            buffer,
+            '127.0.0.1',
+            'corr-scope-derive'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 10: List attachments filters per-dimension and excludes rows in forbidden branch despite authorized warehouse', async () => {
+      const { service, attachmentsTable } = setupService();
+
+      // Row 1: Authorized warehouse AND authorized branch
+      attachmentsTable.push({
+        id: 'att-both-ok',
+        merchant_id: 'm-tenant-1',
+        file_name: 'ok.png',
+        file_size: BigInt(100),
+        mime_type: 'image/png',
+        checksum_sha256: 'hash-ok',
+        storage_key: 'merchants/m-tenant-1/attachments/att-both-ok/ok.png',
+        storage_bucket: 'test-bucket',
+        entity_type: 'GENERAL',
+        warehouse_id: 'wh-hcm-01', // in scopedActor warehouse_scopes
+        branch_id: 'branch-hcm', // in scopedActor store_scopes
+        status: 'ACTIVE',
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+
+      // Row 2: Authorized warehouse BUT forbidden branch
+      attachmentsTable.push({
+        id: 'att-wh-ok-branch-forbidden',
+        merchant_id: 'm-tenant-1',
+        file_name: 'bad_branch.png',
+        file_size: BigInt(100),
+        mime_type: 'image/png',
+        checksum_sha256: 'hash-bad',
+        storage_key: 'merchants/m-tenant-1/attachments/att-bad/bad.png',
+        storage_bucket: 'test-bucket',
+        entity_type: 'GENERAL',
+        warehouse_id: 'wh-hcm-01', // in warehouse scope
+        branch_id: 'br-hanoi-forbidden', // NOT in store scope!
+        status: 'ACTIVE',
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+
+      const listRes = await service.listAttachments(scopedActor, {}, 'corr-list-dim');
+      assert.strictEqual(listRes.data.length, 1);
+      assert.strictEqual(listRes.data[0].id, 'att-both-ok');
+    });
+
+    it('Finding 6: reconcilePendingDeletions retries S3 removal and cleans up pending deletion records', async () => {
+      const { service, attachmentsTable, s3Storage } = setupService();
+
+      const key = 'merchants/m-tenant-1/attachments/att-pending/del.png';
+      s3Storage.set(key, { body: validPngBuffer, contentType: 'image/png' });
+
+      attachmentsTable.push({
+        id: 'att-pending',
+        merchant_id: 'm-tenant-1',
+        file_name: 'del.png',
+        file_size: BigInt(100),
+        mime_type: 'image/png',
+        checksum_sha256: 'hash-p',
+        storage_key: key,
+        storage_bucket: 'test-bucket',
+        entity_type: 'GENERAL',
+        warehouse_id: null,
+        branch_id: null,
+        status: 'PENDING_DELETION',
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+
+      const reconcileRes = await service.reconcilePendingDeletions(ownerActor, 'corr-rec');
+      assert.strictEqual(reconcileRes.reconciled, 1);
+      assert.strictEqual(reconcileRes.failed, 0);
+
+      const updated = attachmentsTable.find((a) => a.id === 'att-pending');
+      assert.strictEqual(updated?.status, 'DELETED');
+      assert.strictEqual(s3Storage.has(key), false);
     });
   });
 });

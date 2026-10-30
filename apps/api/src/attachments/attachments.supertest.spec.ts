@@ -163,7 +163,8 @@ async function runAttachmentsSupertestSuite() {
         id: carrierAccountId,
         merchant_id: merchantIdA,
         carrier_code: 'GHN',
-        account_name: `Test GHN ${testSuffix}`,
+        label: `Test GHN ${testSuffix}`,
+        encrypted_credentials: 'mock_encrypted_credentials',
         status: 'active',
       },
     });
@@ -294,6 +295,10 @@ async function runAttachmentsSupertestSuite() {
         entity_id: 'ret-scan-99',
       });
 
+    if (uploadRes.body?.data?.storage_key) {
+      uploadedS3Keys.push(uploadRes.body.data.storage_key);
+    }
+
     assert.strictEqual(uploadRes.status, 201);
     assert.strictEqual(uploadRes.body.success, true);
     assert.strictEqual(uploadRes.body.data.file_name, `damaged_box_${testSuffix}.png`);
@@ -301,7 +306,6 @@ async function runAttachmentsSupertestSuite() {
     assert.strictEqual(uploadRes.body.data.status, 'ACTIVE');
     assert.ok(uploadRes.body.data.id);
     const createdAttachmentId = uploadRes.body.data.id;
-    uploadedS3Keys.push(uploadRes.body.data.storage_key);
 
     // Finding 9: Real storage verification
     const headCheck = await storage.headObject(uploadRes.body.data.storage_key);
@@ -402,9 +406,11 @@ async function runAttachmentsSupertestSuite() {
         content_base64: fileBytes.toString('base64'),
         warehouse_id: whId2, // Da Nang warehouse (not in scopedUserA scope)
       });
+    if (danangRes.body?.data?.storage_key) {
+      uploadedS3Keys.push(danangRes.body.data.storage_key);
+    }
     assert.strictEqual(danangRes.status, 201);
     const danangAttId = danangRes.body.data.id;
-    uploadedS3Keys.push(danangRes.body.data.storage_key);
 
     // scopedUserA cannot download Da Nang attachment
     const deniedDlRes = await request(app.getHttpServer())
@@ -558,14 +564,14 @@ async function runAttachmentsSupertestSuite() {
       }
     }
 
+    await app.close();
+
+    // Finding 9: Cleanup verification fails test when cleanup is incomplete
     if (cleanupErrors.length > 0) {
-      console.warn(
-        'Supertest cleanup encountered errors:',
-        cleanupErrors.map((e) => e.message)
+      throw new Error(
+        `Supertest cleanup failed with ${cleanupErrors.length} error(s). Test suite must not leave tenant rows or objects behind.`
       );
     }
-
-    await app.close();
   }
 }
 

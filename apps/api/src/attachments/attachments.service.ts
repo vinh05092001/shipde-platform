@@ -434,10 +434,36 @@ export class AttachmentsService {
       }
     }
 
+    // Finding 3: Validate and authorize resolved/derived scopes BEFORE uploading bytes
+    if (resolvedWarehouseId) {
+      const hasWhAccess =
+        scopes.warehouseScopes.includes('*') ||
+        scopes.warehouseScopes.includes(resolvedWarehouseId);
+      if (!hasWhAccess) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'SCOPE_FORBIDDEN',
+          `Bạn không có quyền tải tệp đính kèm lên kho '${resolvedWarehouseId}'.`
+        );
+      }
+    }
+
+    if (resolvedBranchId) {
+      const hasBranchAccess =
+        scopes.storeScopes.includes('*') || scopes.storeScopes.includes(resolvedBranchId);
+      if (!hasBranchAccess) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          'SCOPE_FORBIDDEN',
+          `Bạn không có quyền tải tệp đính kèm lên chi nhánh '${resolvedBranchId}'.`
+        );
+      }
+    }
+
     // Unscoped validation: scoped actors (non-wildcard) cannot create unscoped records
     if (!resolvedWarehouseId && !resolvedBranchId) {
       const hasWildcardScope =
-        scopes.warehouseScopes.includes('*') || scopes.storeScopes.includes('*');
+        scopes.warehouseScopes.includes('*') && scopes.storeScopes.includes('*');
       const hasTenantWidePermission =
         scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
       if (!hasWildcardScope && !hasTenantWidePermission) {
@@ -507,7 +533,12 @@ export class AttachmentsService {
             status: 'ACTIVE',
             retention_days: retentionDays,
             expires_at: expiresAt,
-            metadata: dto.metadata ? (maskAttachmentAuditObject(dto.metadata) as any) : undefined,
+            metadata: {
+              ...(dto.metadata ? maskAttachmentAuditObject(dto.metadata) : {}),
+              scan_status: 'CLEAN',
+              scanned_at: new Date().toISOString(),
+              scanner: 'shipde-content-gate',
+            } as any,
           },
         });
 
@@ -544,9 +575,9 @@ export class AttachmentsService {
       try {
         await this.storage.deleteObject(storageKey);
       } catch (cleanupErr: any) {
+        // Finding 7: Redact raw exception details
         console.warn(
-          `[AttachmentsService] Failed to clean up orphaned S3 object ${storageKey}:`,
-          cleanupErr
+          `[AttachmentsService] Failed to clean up orphaned S3 object ${storageKey} (code: ${cleanupErr?.name || 'STORAGE_ERROR'})`
         );
       }
       if (dbErr instanceof CanonicalApiException) throw dbErr;
@@ -580,15 +611,19 @@ export class AttachmentsService {
 
     const scopes = await this.getActorScopes(actor);
 
-    // Fail closed if actor has empty scopes and no wildcard/tenant-wide access
-    const hasWildcardScope =
-      scopes.warehouseScopes.includes('*') || scopes.storeScopes.includes('*');
+    // Finding 2: Verify caller possesses general attachment capability
+    this.verifyAttachmentCapabilities(scopes);
+
+    const hasWarehouseWildcard = scopes.warehouseScopes.includes('*');
+    const hasStoreWildcard = scopes.storeScopes.includes('*');
     const hasTenantWide =
       scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
 
+    // Fail closed if actor has empty scopes and no wildcard/tenant-wide access
     if (
-      !hasWildcardScope &&
       !hasTenantWide &&
+      !hasWarehouseWildcard &&
+      !hasStoreWildcard &&
       scopes.warehouseScopes.length === 0 &&
       scopes.storeScopes.length === 0
     ) {
@@ -623,18 +658,34 @@ export class AttachmentsService {
       where.branch_id = query.branch_id.trim();
     }
 
-    // Scope conditions
-    if (!hasWildcardScope && !hasTenantWide) {
-      const orClauses: any[] = [];
-      if (scopes.warehouseScopes.length > 0) {
-        orClauses.push({ warehouse_id: { in: scopes.warehouseScopes } });
-      }
-      if (scopes.storeScopes.length > 0) {
-        orClauses.push({ branch_id: { in: scopes.storeScopes } });
-      }
-      if (orClauses.length > 0) {
-        where.AND = [{ OR: orClauses }];
-      }
+    // Finding 10: Apply per-dimension authorization semantics with AND (never OR across dimensions)
+    const andConditions: any[] = [];
+
+    if (!hasWarehouseWildcard) {
+      andConditions.push({
+        OR: [{ warehouse_id: null }, { warehouse_id: { in: scopes.warehouseScopes } }],
+      });
+    }
+
+    if (!hasStoreWildcard) {
+      andConditions.push({
+        OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }],
+      });
+    }
+
+    // Unscoped items (warehouse_id == null && branch_id == null) require tenant-wide permission
+    // OR wildcard in both dimensions
+    if (!hasTenantWide && (!hasWarehouseWildcard || !hasStoreWildcard)) {
+      andConditions.push({
+        NOT: {
+          warehouse_id: null,
+          branch_id: null,
+        },
+      });
+    }
+
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
     }
 
     const [total, rows] = await Promise.all([
@@ -702,6 +753,9 @@ export class AttachmentsService {
       );
     }
 
+    // Finding 2: Verify capability for entity type
+    this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+
     return this.formatAttachment(attachment);
   }
 
@@ -763,6 +817,9 @@ export class AttachmentsService {
         'Bạn không có quyền tải xuống tệp đính kèm thuộc kho hoặc chi nhánh này.'
       );
     }
+
+    // Finding 2: Verify capability for entity type
+    this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
 
     let s3Obj;
     try {
@@ -867,51 +924,64 @@ export class AttachmentsService {
       );
     }
 
-    // Finding 6: S3 deletion first; if S3 fails, DB row remains ACTIVE so deletion is retryable
+    // Finding 2: Capability check for deletion
+    this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+
+    // Finding 5: Persist durable deletion intent and audit log in DB FIRST before external effect
+    if (attachment.status !== 'PENDING_DELETION') {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.attachment.update({
+          where: { id },
+          data: {
+            status: 'PENDING_DELETION',
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            actor: actor.userId,
+            action: AttachmentAuditEvent.ATTACHMENT_DELETED,
+            entity_type: 'ATTACHMENT',
+            entity_id: attachment.id,
+            old_value: {
+              status: attachment.status,
+              file_name: attachment.file_name,
+              file_size: Number(attachment.file_size),
+            },
+            new_value: {
+              status: 'PENDING_DELETION',
+              correlation_id: correlationId,
+            },
+            ip_address: this.hashIp(ipAddress),
+            reason: correlationId
+              ? `correlation_id:${correlationId}`
+              : `Requested deletion of attachment ${attachment.file_name}`,
+          },
+        });
+      });
+    }
+
+    // Finding 6: Execute external S3 storage removal; if S3 fails, row remains PENDING_DELETION (retryable)
     try {
       await this.storage.deleteObject(attachment.storage_key);
     } catch {
       throw new CanonicalApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'STORAGE_UNAVAILABLE',
-        'Không thể xóa tệp khỏi hệ thống lưu trữ S3. Vui lòng thử lại sau.',
+        'Không thể xóa tệp khỏi hệ thống lưu trữ S3. Thao tác xóa đang chờ xử lý và có thể thử lại sau.',
         true
       );
     }
 
-    // Finding 5: Transactional DB update and immutable deletion audit log
-    await this.prisma.$transaction(async (tx) => {
-      await tx.attachment.update({
-        where: { id },
-        data: {
-          status: 'DELETED',
-          deleted_at: new Date(),
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          merchant_id: actor.merchantId,
-          user_id: actor.userId,
-          actor: actor.userId,
-          action: AttachmentAuditEvent.ATTACHMENT_DELETED,
-          entity_type: 'ATTACHMENT',
-          entity_id: attachment.id,
-          old_value: {
-            status: attachment.status,
-            file_name: attachment.file_name,
-            file_size: Number(attachment.file_size),
-          },
-          new_value: {
-            status: 'DELETED',
-            correlation_id: correlationId,
-          },
-          ip_address: this.hashIp(ipAddress),
-          reason: correlationId
-            ? `correlation_id:${correlationId}`
-            : `Deleted attachment ${attachment.file_name}`,
-        },
-      });
+    // Finalize database record to DELETED after successful storage removal
+    await this.prisma.attachment.update({
+      where: { id },
+      data: {
+        status: 'DELETED',
+        deleted_at: new Date(),
+      },
     });
 
     return {
@@ -998,7 +1068,35 @@ export class AttachmentsService {
       }
 
       try {
-        // Finding 6: Storage deletion first; if S3 fails, DB row remains ACTIVE
+        // Finding 5: Persist durable deletion intent and audit log in DB FIRST
+        await this.prisma.$transaction(async (tx) => {
+          await tx.attachment.update({
+            where: { id: att.id },
+            data: { status: 'PENDING_DELETION' },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              actor: actor.userId,
+              action: AttachmentAuditEvent.ATTACHMENT_PURGED,
+              entity_type: 'ATTACHMENT',
+              entity_id: att.id,
+              new_value: {
+                status: 'PENDING_DELETION',
+                reason: 'RETENTION_EXPIRED',
+                correlation_id: correlationId,
+              },
+              ip_address: this.hashIp(ipAddress),
+              reason: correlationId
+                ? `correlation_id:${correlationId}`
+                : `Retention expired after ${att.retention_days} days`,
+            },
+          });
+        });
+
+        // Finding 6: Execute external S3 storage removal
         try {
           await this.storage.deleteObject(att.storage_key);
         } catch {
@@ -1013,32 +1111,10 @@ export class AttachmentsService {
           continue;
         }
 
-        // Transactional DB update and audit log
-        await this.prisma.$transaction(async (tx) => {
-          await tx.attachment.update({
-            where: { id: att.id },
-            data: { status: 'DELETED', deleted_at: new Date() },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              merchant_id: actor.merchantId,
-              user_id: actor.userId,
-              actor: actor.userId,
-              action: AttachmentAuditEvent.ATTACHMENT_PURGED,
-              entity_type: 'ATTACHMENT',
-              entity_id: att.id,
-              new_value: {
-                status: 'DELETED',
-                reason: 'RETENTION_EXPIRED',
-                correlation_id: correlationId,
-              },
-              ip_address: this.hashIp(ipAddress),
-              reason: correlationId
-                ? `correlation_id:${correlationId}`
-                : `Retention expired after ${att.retention_days} days`,
-            },
-          });
+        // Finalize DB record to DELETED
+        await this.prisma.attachment.update({
+          where: { id: att.id },
+          data: { status: 'DELETED', deleted_at: new Date() },
         });
 
         succeeded_ids.push(att.id);
@@ -1138,7 +1214,56 @@ export class AttachmentsService {
         continue;
       }
 
-      // Finding 6: Storage deletion first
+      // Finding 2: Capability check for attachment entity
+      try {
+        this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+      } catch {
+        failed_ids.push(id);
+        results.push({
+          id,
+          status: 'FAILED',
+          code: 'FORBIDDEN',
+          message: 'Bạn không có quyền thao tác trên loại tệp đính kèm này.',
+        });
+        continue;
+      }
+
+      // Finding 5: Persist durable deletion intent and audit log in DB FIRST
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.attachment.update({
+            where: { id },
+            data: { status: 'PENDING_DELETION' },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              merchant_id: actor.merchantId,
+              user_id: actor.userId,
+              actor: actor.userId,
+              action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
+              entity_type: 'ATTACHMENT',
+              entity_id: id,
+              new_value: { status: 'PENDING_DELETION', correlation_id: correlationId },
+              ip_address: this.hashIp(ipAddress),
+              reason: correlationId
+                ? `correlation_id:${correlationId}`
+                : `Bulk deleted attachment ${attachment.file_name}`,
+            },
+          });
+        });
+      } catch (err: any) {
+        failed_ids.push(id);
+        results.push({
+          id,
+          status: 'FAILED',
+          code: 'DELETE_ERROR',
+          message: sanitizeErrorMessage(err?.message || 'Lỗi khi ghi nhận yêu cầu xóa tệp.'),
+        });
+        continue;
+      }
+
+      // Finding 6: Execute external S3 storage removal
       try {
         await this.storage.deleteObject(attachment.storage_key);
       } catch {
@@ -1152,29 +1277,11 @@ export class AttachmentsService {
         continue;
       }
 
+      // Finalize DB record to DELETED
       try {
-        // Finding 5: Transactional DB update and audit log
-        await this.prisma.$transaction(async (tx) => {
-          await tx.attachment.update({
-            where: { id },
-            data: { status: 'DELETED', deleted_at: new Date() },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              merchant_id: actor.merchantId,
-              user_id: actor.userId,
-              actor: actor.userId,
-              action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
-              entity_type: 'ATTACHMENT',
-              entity_id: id,
-              new_value: { status: 'DELETED', correlation_id: correlationId },
-              ip_address: this.hashIp(ipAddress),
-              reason: correlationId
-                ? `correlation_id:${correlationId}`
-                : `Bulk deleted attachment ${attachment.file_name}`,
-            },
-          });
+        await this.prisma.attachment.update({
+          where: { id },
+          data: { status: 'DELETED', deleted_at: new Date() },
         });
 
         succeeded_ids.push(id);
@@ -1200,5 +1307,120 @@ export class AttachmentsService {
       failed_ids,
       results,
     };
+  }
+
+  /**
+   * Quarantines an attachment due to safety policy or malware detection (Finding 1).
+   */
+  async quarantineAttachment(
+    actor: ActorContext,
+    id: string,
+    reason: string,
+    correlationId: string
+  ): Promise<FormattedAttachment> {
+    if (!isValidUuid(id)) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'VALIDATION_ERROR',
+        `Mã tệp '${id}' không đúng định dạng UUID.`
+      );
+    }
+
+    const attachment = await this.prisma.attachment.findFirst({
+      where: {
+        id,
+        merchant_id: actor.merchantId,
+        status: { not: 'DELETED' },
+      },
+    });
+
+    if (!attachment) {
+      throw new CanonicalApiException(
+        HttpStatus.NOT_FOUND,
+        'ATTACHMENT_NOT_FOUND',
+        `Không tìm thấy tệp đính kèm với mã '${id}'.`
+      );
+    }
+
+    const scopes = await this.getActorScopes(actor);
+    const hasScopeAccess = this.checkAttachmentScope(attachment, scopes);
+    if (!hasScopeAccess) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'SCOPE_FORBIDDEN',
+        'Bạn không có quyền cách ly tệp đính kèm này.'
+      );
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const res = await tx.attachment.update({
+        where: { id },
+        data: {
+          status: 'QUARANTINED',
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          merchant_id: actor.merchantId,
+          user_id: actor.userId,
+          actor: actor.userId,
+          action: 'ATTACHMENT_QUARANTINED',
+          entity_type: 'ATTACHMENT',
+          entity_id: id,
+          old_value: { status: attachment.status },
+          new_value: { status: 'QUARANTINED', reason, correlation_id: correlationId },
+          ip_address: this.hashIp('127.0.0.1'),
+          reason: correlationId
+            ? `correlation_id:${correlationId}`
+            : `Quarantined attachment ${attachment.file_name}: ${reason}`,
+        },
+      });
+
+      return res;
+    });
+
+    return this.formatAttachment(updated);
+  }
+
+  /**
+   * Reconciles attachments stuck in PENDING_DELETION status (Finding 6).
+   * Retries S3 storage deletion and transitions to DELETED upon success.
+   */
+  async reconcilePendingDeletions(
+    actor: ActorContext,
+    correlationId: string
+  ): Promise<{ reconciled: number; failed: number }> {
+    const scopes = await this.getActorScopes(actor);
+    this.verifyAttachmentCapabilities(scopes);
+
+    const pending = await this.prisma.attachment.findMany({
+      where: {
+        merchant_id: actor.merchantId,
+        status: 'PENDING_DELETION',
+      },
+      take: 50,
+    });
+
+    let reconciled = 0;
+    let failed = 0;
+
+    for (const att of pending) {
+      try {
+        await this.storage.deleteObject(att.storage_key);
+        await this.prisma.attachment.update({
+          where: { id: att.id },
+          data: {
+            status: 'DELETED',
+            deleted_at: new Date(),
+          },
+        });
+        reconciled++;
+      } catch {
+        failed++;
+      }
+    }
+
+    return { reconciled, failed };
   }
 }

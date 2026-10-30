@@ -90,6 +90,171 @@ export interface DetectedContentTypeResult {
   reason?: string;
 }
 
+/**
+ * Inspects a ZIP archive to ensure it is a valid Office OpenXML document and does not contain executables/macros.
+ */
+function scanZipArchiveEntries(buffer: Buffer): {
+  isExecutable: boolean;
+  isSuspicious: boolean;
+  hasOpenXmlParts: boolean;
+  reason?: string;
+} {
+  const FORBIDDEN_EXTENSIONS = [
+    '.exe',
+    '.dll',
+    '.bat',
+    '.cmd',
+    '.vbs',
+    '.sh',
+    '.bin',
+    '.js',
+    '.scr',
+    '.pif',
+    '.com',
+    '.jar',
+    '.vbe',
+    '.jse',
+    '.wsf',
+    '.wsh',
+    '.ps1',
+  ];
+  let hasOpenXmlParts = false;
+
+  // Scan local file headers: signature 0x50, 0x4B, 0x03, 0x04
+  for (let i = 0; i <= buffer.length - 30; i++) {
+    if (
+      buffer[i] === 0x50 &&
+      buffer[i + 1] === 0x4b &&
+      buffer[i + 2] === 0x03 &&
+      buffer[i + 3] === 0x04
+    ) {
+      const fileNameLen = buffer.readUInt16LE(i + 26);
+      if (fileNameLen > 0 && i + 30 + fileNameLen <= buffer.length) {
+        const fileName = buffer
+          .slice(i + 30, i + 30 + fileNameLen)
+          .toString('utf8')
+          .toLowerCase();
+        if (
+          fileName === '[content_types].xml' ||
+          fileName.startsWith('xl/') ||
+          fileName.startsWith('docprops/')
+        ) {
+          hasOpenXmlParts = true;
+        }
+        if (fileName.includes('vbaproject.bin')) {
+          return {
+            isExecutable: true,
+            isSuspicious: true,
+            hasOpenXmlParts: true,
+            reason: 'Archive contains macro executable (vbaProject.bin).',
+          };
+        }
+        for (const ext of FORBIDDEN_EXTENSIONS) {
+          if (fileName.endsWith(ext)) {
+            return {
+              isExecutable: true,
+              isSuspicious: true,
+              hasOpenXmlParts: false,
+              reason: `Archive contains forbidden executable entry '${fileName}'.`,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // Scan central directory headers: signature 0x50, 0x4B, 0x01, 0x02
+  for (let i = 0; i <= buffer.length - 46; i++) {
+    if (
+      buffer[i] === 0x50 &&
+      buffer[i + 1] === 0x4b &&
+      buffer[i + 2] === 0x01 &&
+      buffer[i + 3] === 0x02
+    ) {
+      const fileNameLen = buffer.readUInt16LE(i + 28);
+      if (fileNameLen > 0 && i + 46 + fileNameLen <= buffer.length) {
+        const fileName = buffer
+          .slice(i + 46, i + 46 + fileNameLen)
+          .toString('utf8')
+          .toLowerCase();
+        if (
+          fileName === '[content_types].xml' ||
+          fileName.startsWith('xl/') ||
+          fileName.startsWith('docprops/')
+        ) {
+          hasOpenXmlParts = true;
+        }
+        if (fileName.includes('vbaproject.bin')) {
+          return {
+            isExecutable: true,
+            isSuspicious: true,
+            hasOpenXmlParts: true,
+            reason: 'Archive contains macro executable (vbaProject.bin).',
+          };
+        }
+        for (const ext of FORBIDDEN_EXTENSIONS) {
+          if (fileName.endsWith(ext)) {
+            return {
+              isExecutable: true,
+              isSuspicious: true,
+              hasOpenXmlParts: false,
+              reason: `Archive contains forbidden executable entry '${fileName}'.`,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return { isExecutable: false, isSuspicious: false, hasOpenXmlParts };
+}
+
+/**
+ * Scans buffer for polyglot malware signatures or script injections appended after headers.
+ */
+function scanPolyglotMalware(buffer: Buffer): { isSuspicious: boolean; reason?: string } {
+  const scanLen = Math.min(buffer.length, 65536);
+  const contentStr = buffer.slice(0, scanLen).toString('latin1').toLowerCase();
+
+  const DANGEROUS_PATTERNS = [
+    { pattern: '<?php', reason: 'Embedded PHP script tag detected.' },
+    { pattern: '<script', reason: 'Embedded HTML script tag detected.' },
+    { pattern: 'javascript:', reason: 'Embedded JavaScript protocol detected.' },
+    { pattern: '<iframe', reason: 'Embedded iframe element detected.' },
+    { pattern: '/bin/sh', reason: 'Embedded shell interpreter command detected.' },
+    { pattern: '/bin/bash', reason: 'Embedded bash interpreter command detected.' },
+    { pattern: 'powershell.exe', reason: 'Embedded PowerShell command detected.' },
+  ];
+
+  for (const item of DANGEROUS_PATTERNS) {
+    if (contentStr.includes(item.pattern)) {
+      return { isSuspicious: true, reason: item.reason };
+    }
+  }
+
+  // Check for true embedded PE header (MZ with valid PE pointer)
+  for (let i = 1; i <= Math.min(buffer.length - 64, 4096); i++) {
+    if (buffer[i] === 0x4d && buffer[i + 1] === 0x5a) {
+      const peOffset = buffer.readUInt32LE(i + 0x3c);
+      if (
+        peOffset > 0 &&
+        i + peOffset + 4 <= buffer.length &&
+        buffer[i + peOffset] === 0x50 &&
+        buffer[i + peOffset + 1] === 0x45 &&
+        buffer[i + peOffset + 2] === 0x00 &&
+        buffer[i + peOffset + 3] === 0x00
+      ) {
+        return {
+          isSuspicious: true,
+          reason: 'Embedded DOS/PE executable binary detected inside file.',
+        };
+      }
+    }
+  }
+
+  return { isSuspicious: false };
+}
+
 export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResult {
   if (!buffer || buffer.length === 0) {
     return { detectedMime: null, isExecutable: false, isSuspicious: false };
@@ -144,6 +309,17 @@ export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResu
       isExecutable: true,
       isSuspicious: true,
       reason: 'Java bytecode signature detected.',
+    };
+  }
+
+  // Deep inspection for polyglot malware inside any file payload
+  const polyglotCheck = scanPolyglotMalware(buffer);
+  if (polyglotCheck.isSuspicious) {
+    return {
+      detectedMime: null,
+      isExecutable: true,
+      isSuspicious: true,
+      reason: polyglotCheck.reason || 'Polyglot malicious signature detected.',
     };
   }
 
@@ -202,6 +378,16 @@ export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResu
     buffer[2] === 0x03 &&
     buffer[3] === 0x04
   ) {
+    // Finding 1: Archive inspection - check entries for forbidden executables and OpenXML parts
+    const archiveScan = scanZipArchiveEntries(buffer);
+    if (archiveScan.isExecutable || archiveScan.isSuspicious) {
+      return {
+        detectedMime: 'application/zip',
+        isExecutable: true,
+        isSuspicious: true,
+        reason: archiveScan.reason || 'Archive contains unsafe or forbidden file entries.',
+      };
+    }
     return {
       detectedMime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       isExecutable: false,

@@ -270,4 +270,50 @@ export class AttachmentsController {
       meta: { correlation_id: correlationId },
     });
   }
+
+  /**
+   * POST /api/v1/attachments/:id/quarantine (Finding 1: Quarantine lifecycle)
+   */
+  @Post(':id/quarantine')
+  @RequirePermissions('iam:shop_config')
+  async quarantineAttachment(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Param('id') id: string,
+    @Body('reason') reason?: string
+  ): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const actor = await this.resolveActor(req);
+
+    const result = await this.attachmentsService.quarantineAttachment(
+      actor,
+      id,
+      reason || 'Quarantined by safety policy',
+      correlationId
+    );
+
+    return res.status(HttpStatus.OK).json({
+      success: true,
+      data: result,
+      meta: { correlation_id: correlationId },
+    });
+  }
+
+  /**
+   * POST /api/v1/attachments/reconcile-pending (Finding 6: Reconcile pending deletions)
+   */
+  @Post('reconcile-pending')
+  @RequirePermissions('iam:shop_config')
+  async reconcilePending(@Req() req: Request, @Res() res: Response): Promise<Response> {
+    const correlationId = (req as any).correlationId || normalizeCorrelationId();
+    const actor = await this.resolveActor(req);
+
+    const result = await this.attachmentsService.reconcilePendingDeletions(actor, correlationId);
+
+    return res.status(HttpStatus.OK).json({
+      success: true,
+      data: result,
+      meta: { correlation_id: correlationId },
+    });
+  }
 }

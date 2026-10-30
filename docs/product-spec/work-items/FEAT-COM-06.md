@@ -65,12 +65,15 @@ Merchant operators, warehouse supervisors, and CS staff can securely upload, lin
    - FEAT-RBAC-02 scope enforcement per row: If an attachment has `warehouse_id`, actor must possess wildcard `*` or include `warehouse_id` in `warehouse_scopes`. If scoped to `branch_id`, actor must possess wildcard `*` or include `branch_id` in `store_scopes`.
    - Zero plaintext PII or secrets leaked in errors, audit logs, or S3 metadata.
    - Immutable audit logging on upload, access/download, delete, and retention purge.
+5. **Web Management Interface & UI State Coverage**:
+   - `apps/web/src/components/AttachmentManagementView.tsx`: Complete vertical attachment management interface with search, status filtering (ACTIVE, QUARANTINED, PENDING_DELETION, DELETED), entity filtering, upload modal, deletion confirmation modal, bulk deletion, retention purge with dry-run toggle, quarantine action, and full accessibility compliance (WCAG/A11y verified).
+   - `apps/web/src/app/settings/attachments/page.tsx`: Settings page integrating `AttachmentManagementView` with server-derived edit capabilities.
+   - `apps/web/src/tests/attachments-page-states.test.ts`: Complete UI states test suite verifying loading, empty, validation error, server error with retry, forbidden, success feedback, and list grid rendering.
 
 ## Out of scope
 
 - Direct browser-to-S3 presigned multipart upload for multi-gigabyte files (deferred to bulk import engine FEAT-COM-04).
-- Antivirus daemon sidecar installation (ClamAV daemon process container orchestration is an infrastructure ops task; backend provides validation gate and quarantine status).
-- End-user React upload UI components (scheduled for subsequent frontend run).
+- Antivirus daemon sidecar installation (ClamAV daemon process container orchestration is an infrastructure ops task; backend provides deep polyglot content inspection and quarantine status).
 
 ## Business rules and edge cases
 
@@ -128,12 +131,17 @@ pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-06.md docs/prod
 pnpm --filter @shipde/config build
 pnpm --filter @shipde/contracts build
 pnpm --filter @shipde/api typecheck
+pnpm --filter @shipde/web typecheck
 
-# Linting
+# Linting & Accessibility
 pnpm --filter @shipde/api lint
+pnpm test:a11y
 
 # Unit tests
 pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/attachments/attachments.unit.spec.ts
+
+# Web UI States tests
+pnpm --filter @shipde/web exec tsx src/tests/attachments-page-states.test.ts
 
 # Supertest HTTP integration tests
 pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/attachments/attachments.supertest.spec.ts
@@ -141,5 +149,5 @@ pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/attachments/atta
 
 ## Residual limitations
 
-- Web UI attachment upload dropzone, image gallery thumbnail preview, and progress bar are deferred to next UI run.
-- Antivirus sidecar integration uses bounded MIME and file validation; asynchronous ICAP / ClamAV scanning daemon can be attached to the storage event stream without schema change.
+- Direct browser-to-S3 presigned multipart upload for multi-gigabyte files remains deferred to FEAT-COM-04.
+- Antivirus sidecar daemon container orchestration (ClamAV) is managed via infrastructure deployment; application provides deep polyglot content inspection and quarantine status.
