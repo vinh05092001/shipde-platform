@@ -932,5 +932,289 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
       assert.strictEqual(updatedData.address_line, undefined);
       assert.strictEqual(updatedData.is_default, undefined);
     });
+
+    it('should reject promotion when deactivating current default warehouse and designating existing inactive warehouse as default with omitted status (DEFAULT_WAREHOUSE_MUST_BE_ACTIVE)', async () => {
+      const mockPrisma: any = {
+        import: {
+          findFirst: async (args: any) => {
+            if (args.where?.id === 'imp-wh-inactive-def') {
+              return {
+                id: 'imp-wh-inactive-def',
+                merchant_id: 'tenant-1',
+                template_type: 'warehouses',
+                file_name: 'test.csv',
+                file_hash: 'hash-wh',
+                status: ImportStatus.STAGED,
+                revision: 1,
+              };
+            }
+            if (args.orderBy?.revision === 'desc') {
+              return { revision: 1 };
+            }
+            return null;
+          },
+        },
+        importRow: {
+          findMany: async () => [
+            {
+              row_number: 1,
+              status: 'VALID',
+              scope_identifier: 'WH-A',
+              normalized_data: { name: 'Kho A', status: 'inactive' },
+            },
+            {
+              row_number: 2,
+              status: 'VALID',
+              scope_identifier: 'WH-B',
+              normalized_data: { name: 'Kho B', is_default: true },
+            },
+          ],
+        },
+        user: {
+          findFirst: async () => ({
+            role: 'OWNER',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        $transaction: async (cb: any) => {
+          const tx = {
+            ...mockPrisma,
+            warehouse: {
+              findMany: async () => [
+                { id: 'wh-1', code: 'WH-A', status: 'active', is_default: true },
+                { id: 'wh-2', code: 'WH-B', status: 'inactive', is_default: false },
+              ],
+            },
+          };
+          return cb(tx);
+        },
+      };
+
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+
+      await assert.rejects(
+        async () => {
+          await service.promoteImport('imp-wh-inactive-def', 'tenant-1', {
+            userId: 'u1',
+            merchantId: 'tenant-1',
+            role: 'OWNER',
+          } as any);
+        },
+        (err: any) => {
+          assert.strictEqual(err.status, HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'DEFAULT_WAREHOUSE_MUST_BE_ACTIVE');
+          return true;
+        }
+      );
+    });
+
+    it('should reject promotion when deactivating current default branch and designating existing inactive branch as default with omitted status (DEFAULT_BRANCH_MUST_BE_ACTIVE)', async () => {
+      const mockPrisma: any = {
+        import: {
+          findFirst: async (args: any) => {
+            if (args.where?.id === 'imp-br-inactive-def') {
+              return {
+                id: 'imp-br-inactive-def',
+                merchant_id: 'tenant-1',
+                template_type: 'branches',
+                file_name: 'test.csv',
+                file_hash: 'hash-br',
+                status: ImportStatus.STAGED,
+                revision: 1,
+              };
+            }
+            if (args.orderBy?.revision === 'desc') {
+              return { revision: 1 };
+            }
+            return null;
+          },
+        },
+        importRow: {
+          findMany: async () => [
+            {
+              row_number: 1,
+              status: 'VALID',
+              scope_identifier: 'BR-A',
+              normalized_data: { name: 'Chi Nhanh A', status: 'INACTIVE' },
+            },
+            {
+              row_number: 2,
+              status: 'VALID',
+              scope_identifier: 'BR-B',
+              normalized_data: { name: 'Chi Nhanh B', is_default: true },
+            },
+          ],
+        },
+        user: {
+          findFirst: async () => ({
+            role: 'OWNER',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        $transaction: async (cb: any) => {
+          const tx = {
+            ...mockPrisma,
+            branch: {
+              findMany: async () => [
+                { id: 'br-1', code: 'BR-A', status: 'ACTIVE', is_default: true },
+                { id: 'br-2', code: 'BR-B', status: 'INACTIVE', is_default: false },
+              ],
+            },
+          };
+          return cb(tx);
+        },
+      };
+
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+
+      await assert.rejects(
+        async () => {
+          await service.promoteImport('imp-br-inactive-def', 'tenant-1', {
+            userId: 'u1',
+            merchantId: 'tenant-1',
+            role: 'OWNER',
+          } as any);
+        },
+        (err: any) => {
+          assert.strictEqual(err.status, HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'DEFAULT_BRANCH_MUST_BE_ACTIVE');
+          return true;
+        }
+      );
+    });
+
+    it('should reject promotion when deactivating current default warehouse without replacement (CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE)', async () => {
+      const mockPrisma: any = {
+        import: {
+          findFirst: async (args: any) => {
+            if (args.where?.id === 'imp-wh-deact') {
+              return {
+                id: 'imp-wh-deact',
+                merchant_id: 'tenant-1',
+                template_type: 'warehouses',
+                file_name: 'test.csv',
+                status: ImportStatus.STAGED,
+                revision: 1,
+              };
+            }
+            if (args.orderBy?.revision === 'desc') return { revision: 1 };
+            return null;
+          },
+        },
+        importRow: {
+          findMany: async () => [
+            {
+              row_number: 1,
+              status: 'VALID',
+              scope_identifier: 'WH-A',
+              normalized_data: { name: 'Kho A', status: 'inactive', is_default: false },
+            },
+          ],
+        },
+        user: {
+          findFirst: async () => ({
+            role: 'OWNER',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        $transaction: async (cb: any) => {
+          const tx = {
+            ...mockPrisma,
+            warehouse: {
+              findMany: async () => [
+                { id: 'wh-1', code: 'WH-A', status: 'active', is_default: true },
+              ],
+            },
+          };
+          return cb(tx);
+        },
+      };
+
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+
+      await assert.rejects(
+        async () => {
+          await service.promoteImport('imp-wh-deact', 'tenant-1', {
+            userId: 'u1',
+            merchantId: 'tenant-1',
+            role: 'OWNER',
+          } as any);
+        },
+        (err: any) => {
+          assert.strictEqual(err.status, HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE');
+          return true;
+        }
+      );
+    });
+
+    it('should reject promotion when removing default status without replacement (CANNOT_REMOVE_DEFAULT_STATUS)', async () => {
+      const mockPrisma: any = {
+        import: {
+          findFirst: async (args: any) => {
+            if (args.where?.id === 'imp-wh-rm-def') {
+              return {
+                id: 'imp-wh-rm-def',
+                merchant_id: 'tenant-1',
+                template_type: 'warehouses',
+                file_name: 'test.csv',
+                status: ImportStatus.STAGED,
+                revision: 1,
+              };
+            }
+            if (args.orderBy?.revision === 'desc') return { revision: 1 };
+            return null;
+          },
+        },
+        importRow: {
+          findMany: async () => [
+            {
+              row_number: 1,
+              status: 'VALID',
+              scope_identifier: 'WH-A',
+              normalized_data: { name: 'Kho A', is_default: false },
+            },
+          ],
+        },
+        user: {
+          findFirst: async () => ({
+            role: 'OWNER',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        $transaction: async (cb: any) => {
+          const tx = {
+            ...mockPrisma,
+            warehouse: {
+              findMany: async () => [
+                { id: 'wh-1', code: 'WH-A', status: 'active', is_default: true },
+              ],
+            },
+          };
+          return cb(tx);
+        },
+      };
+
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+
+      await assert.rejects(
+        async () => {
+          await service.promoteImport('imp-wh-rm-def', 'tenant-1', {
+            userId: 'u1',
+            merchantId: 'tenant-1',
+            role: 'OWNER',
+          } as any);
+        },
+        (err: any) => {
+          assert.strictEqual(err.status, HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'CANNOT_REMOVE_DEFAULT_STATUS');
+          return true;
+        }
+      );
+    });
   });
 });

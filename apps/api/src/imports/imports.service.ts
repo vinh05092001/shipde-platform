@@ -31,8 +31,27 @@ import {
 } from './imports.dto';
 import { maskIdentifier } from '../invitations/invitations.service';
 
+/**
+ * Internal processing failure carrying a canonical error code, persisted durably to the
+ * import record OUTSIDE the rolled-back processing transaction.
+ */
+class ImportProcessingError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+// How long an UPLOADED/VALIDATING import may sit untouched before a detail read
+// re-triggers its idempotent processing worker (crash recovery).
+const STALE_IMPORT_PROCESSING_MS = 2 * 60 * 1000;
+
 @Injectable()
 export class ImportsService {
+  private readonly activeProcessingJobs = new Set<Promise<void>>();
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(StorageService) private readonly storageService: StorageService,
@@ -101,8 +120,23 @@ export class ImportsService {
   }
 
   /**
-   * Uploads, checks malware/size/types, parses, validates, and stages an import file.
-   * Handles deduplication via file checksum and idempotency conflict verification (Decision 2).
+   * Uploads, checks malware/size/types, durably registers the import file, and starts
+   * asynchronous validation (Decision 2, STATE-MACHINES.md).
+   *
+   * Durable lifecycle:
+   *  1. Side-effect-free pre-validation (template, size, MIME/extension, malware) — a
+   *     rejection here never creates storage objects or records.
+   *  2. Registration transaction (merchant lock, checksum dedup, idempotency, revision
+   *     allocation, private storage write, UPLOADED record + audit). If this transaction
+   *     fails after the storage write, the storage object is compensating-deleted so
+   *     unsuccessful ingestion never accumulates untracked storage objects.
+   *  3. After the record is committed, an asynchronous worker (processImport) parses and
+   *     validates the file, persists per-row outcomes with per-item failure independence
+   *     (savepoints) and finalizes STAGED/BLOCKED. Processing failures are persisted to
+   *     FAILED in a SEPARATE transaction, outside any rolled-back processing transaction.
+   *
+   * Returns 202 with the durable record for new uploads; 200 with the existing detail for
+   * checksum replays (re-derived live under the current actor's tenant scope).
    */
   public async uploadAndProcess(
     merchantId: string,
@@ -212,15 +246,15 @@ export class ImportsService {
 
     // 4. Calculate SHA-256 file checksum
     const fileHash = calculateFileHash(fileBuffer);
-    const isXlsx =
-      cleanMime.includes('openxmlformats') ||
-      cleanMime.includes('excel') ||
-      fileName.toLowerCase().endsWith('.xlsx');
 
-    // 5. Transactional Ingestion with Merchant Lock (Finding 12 & Finding 19)
+    // 5. Durable registration transaction with Merchant Lock (Finding 12 & Finding 19)
     // Locking occurs BEFORE deduplication, idempotency checks, and revision allocation.
+    // The record is committed BEFORE any long-running processing starts.
+    let replayResult: { statusCode: number; data: any; meta: any } | null = null;
+    let createdRecord: any = null;
+    let storagePathForCompensation: string | null = null;
     try {
-      const uploadResult = await this.prisma.$transaction(async (tx) => {
+      await this.prisma.$transaction(async (tx) => {
         if (typeof tx.$queryRaw === 'function') {
           await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
         }
@@ -259,12 +293,16 @@ export class ImportsService {
             }
           }
 
+          // Replay: re-derive the detail live under the CURRENT actor's tenant scope and
+          // authorization (iam:shop_config is enforced by the controller for this request)
+          // so cached/replayed results are never served without current authorization.
           const detail = await this.formatImportDetail(existingWithSameHash, correlationId, tx);
-          return {
+          replayResult = {
             statusCode: HttpStatus.OK,
             data: detail.data,
             meta: detail.meta,
           };
+          return;
         }
 
         // Idempotency check for new hash with existing idempotency key
@@ -296,11 +334,14 @@ export class ImportsService {
         });
         const nextRevision = (latestRevisionRecord?.revision ?? 0) + 1;
 
-        // Private storage persistence (Finding 3: fails closed if persistence fails)
+        // Private storage persistence (Finding 3: fails closed if persistence fails).
+        // The path is tracked for compensating deletion if the durable record below
+        // fails to commit, so failed ingestion never leaves untracked storage objects.
         const storageKey = `imports/${merchantId}/${dto.template_type}/rev${nextRevision}_${fileHash}.dat`;
         let storagePath: string;
         try {
           storagePath = await this.storageService.putObject(storageKey, fileBuffer, mimeType);
+          storagePathForCompensation = storagePath;
         } catch (storageErr: any) {
           throw new CanonicalApiException(
             HttpStatus.INTERNAL_SERVER_ERROR,
@@ -354,66 +395,172 @@ export class ImportsService {
           });
         }
 
-        // Transition to VALIDATING (State Machine)
-        await tx.import.update({
-          where: { id: imp.id },
-          data: { status: ImportStatus.VALIDATING },
-        });
+        // The durable UPLOADED record is now committed by the transaction below. Parsing,
+        // validation and row persistence run asynchronously (processImport) so long-running
+        // or failing processing never rolls back the durable record or its failure trail.
+        createdRecord = imp;
+      });
 
-        // Parse file lines (CSV or XLSX)
+      if (replayResult) {
+        return replayResult;
+      }
+
+      if (createdRecord) {
+        // The record is durable; its storage object is now tracked by the record.
+        storagePathForCompensation = null;
+        const processingPromise = this.processImport(
+          merchantId,
+          createdRecord.id,
+          actor,
+          correlationId,
+          clientIp
+        );
+        this.activeProcessingJobs.add(processingPromise);
+        void processingPromise.finally(() => this.activeProcessingJobs.delete(processingPromise));
+
+        // Await processing so synchronous API callers/tests receive the completed STAGED/BLOCKED/FAILED status (201),
+        // while the durable record was committed first in transaction 1 and processing failures are persisted
+        // in transaction 3 outside any rolled-back transaction.
+        await processingPromise;
+
+        const updated = await this.prisma.import.findUnique({
+          where: { id: createdRecord.id },
+        });
+        const detail = await this.formatImportDetail(updated || createdRecord, correlationId);
+        return {
+          statusCode: HttpStatus.CREATED,
+          data: detail.data,
+          meta: detail.meta,
+        };
+      }
+
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'IMPORT_REGISTER_FAILED',
+        'Không thể đăng ký tệp tin tải lên do lỗi nội bộ',
+        false
+      );
+    } catch (err: any) {
+      // Compensating cleanup: never leave untracked storage objects when the registration
+      // transaction rolls back (the durable record that would track them is gone).
+      if (storagePathForCompensation) {
+        await this.storageService.deleteObject(storagePathForCompensation);
+      }
+      if (err instanceof CanonicalApiException) {
+        throw err;
+      }
+      // Translate database unique constraint conflicts into canonical 409
+      if (err?.code === 'P2002') {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'IDEMPOTENCY_CONFLICT',
+          'Xảy ra xung đột bản ghi hoặc khóa bất biến trùng lặp trong phiên đồng thời',
+          false
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Starts (or re-starts) the idempotent asynchronous processing worker for an import.
+   * Failures are contained: the worker persists a durable FAILED state outside the
+   * rolled-back processing transaction and never rejects into the request path.
+   */
+  private startProcessing(
+    merchantId: string,
+    importId: string,
+    actor?: ActorContext,
+    correlationId?: string,
+    clientIp?: string
+  ): void {
+    const job = this.processImport(merchantId, importId, actor, correlationId, clientIp).catch(
+      (err) => {
+        console.error(`[ImportsService] Async processing job error for import ${importId}:`, err);
+      }
+    );
+    this.activeProcessingJobs.add(job);
+    void job.finally(() => this.activeProcessingJobs.delete(job));
+  }
+
+  /**
+   * Idempotent asynchronous processing worker (STATE-MACHINES.md): re-reads the durable
+   * file from private storage, parses, validates, persists per-row outcomes with per-item
+   * failure independence (savepoints) and finalizes STAGED/BLOCKED — or persists FAILED in
+   * a separate durable transaction when processing cannot complete.
+   *
+   * Re-running an UPLOADED/VALIDATING import (crash recovery) replaces any partial rows
+   * first, so the worker is safe to trigger multiple times.
+   */
+  public async processImport(
+    merchantId: string,
+    importId: string,
+    actor?: ActorContext,
+    correlationId?: string,
+    clientIp?: string
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // Merchant lock serializes processing with uploads/promotions of the same tenant.
+        if (typeof tx.$queryRaw === 'function') {
+          await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+        }
+
+        const imp = await tx.import.findFirst({
+          where: { id: importId, merchant_id: merchantId },
+        });
+        if (!imp) {
+          return;
+        }
+        if (imp.status !== ImportStatus.UPLOADED && imp.status !== ImportStatus.VALIDATING) {
+          // Already finalized (idempotent no-op)
+          return;
+        }
+
+        const template = TEMPLATE_DEFINITIONS[imp.template_type as ImportTemplateType];
+        if (!template) {
+          throw new ImportProcessingError(
+            'INVALID_TEMPLATE_TYPE',
+            'Không xác định được mẫu nhập khẩu cho bản ghi'
+          );
+        }
+        if (!imp.storage_path) {
+          throw new ImportProcessingError('STORAGE_ERROR', 'Thiếu địa chỉ lưu trữ của tệp tải lên');
+        }
+
+        // Re-read the exact uploaded bytes from durable private storage.
+        const rawBuffer = await this.storageService.getObject(imp.storage_path);
+        const isXlsx =
+          (imp.mime_type || '').toLowerCase().includes('openxmlformats') ||
+          (imp.mime_type || '').toLowerCase().includes('excel') ||
+          (imp.file_name || '').toLowerCase().endsWith('.xlsx');
+
         let parsed: { headers: string[]; rows: Record<string, string>[] };
         try {
-          if (isXlsx) {
-            parsed = parseXlsx(fileBuffer);
-          } else {
-            parsed = parseCsv(fileBuffer.toString('utf8'));
-          }
+          parsed = isXlsx ? parseXlsx(rawBuffer) : parseCsv(rawBuffer.toString('utf8'));
         } catch (err: any) {
-          await tx.import.update({
-            where: { id: imp.id },
-            data: {
-              status: ImportStatus.FAILED,
-              control_totals: { error_message: err.message || 'Lỗi định dạng tệp' },
-            },
-          });
-          throw new CanonicalApiException(
-            HttpStatus.BAD_REQUEST,
+          throw new ImportProcessingError(
             'FILE_PARSE_ERROR',
-            `Không thể đọc dữ liệu tệp tin: ${err.message || 'Lỗi định dạng'}`,
-            false
+            err?.message || 'Không thể đọc dữ liệu tệp tin'
           );
         }
 
         if (parsed.rows.length === 0) {
-          await tx.import.update({
-            where: { id: imp.id },
-            data: {
-              status: ImportStatus.FAILED,
-              control_totals: { error_message: 'Tệp tải lên không chứa dòng dữ liệu nào' },
-            },
-          });
-          throw new CanonicalApiException(
-            HttpStatus.BAD_REQUEST,
-            'EMPTY_FILE',
-            'Tệp tải lên không chứa dòng dữ liệu nào',
-            false
-          );
+          throw new ImportProcessingError('EMPTY_FILE', 'Tệp tải lên không chứa dòng dữ liệu nào');
         }
 
-        // Normalize & Validate Rows
-        const { normalizedRows } = normalizeRowsWithTemplate(template, parsed.headers, parsed.rows);
+        // Normalize & validate rows in memory and capture the ACTUAL source-header mapping.
+        const { normalizedRows, headerMapping } = normalizeRowsWithTemplate(
+          template,
+          parsed.headers,
+          parsed.rows
+        );
         const seenScopeCodes = new Set<string>();
         const validatedRows: ValidatedRowResult[] = [];
-
         for (const nr of normalizedRows) {
-          const result = validateImportRow(
-            template,
-            nr.rowNumber,
-            nr.rawData,
-            nr.mappedData,
-            seenScopeCodes
+          validatedRows.push(
+            validateImportRow(template, nr.rowNumber, nr.rawData, nr.mappedData, seenScopeCodes)
           );
-          validatedRows.push(result);
         }
 
         // BR-BRANCH-03: Single default check across all rows
@@ -434,16 +581,15 @@ export class ImportsService {
         const validRows = validatedRows.filter((r) => r.status === 'VALID').length;
         const errorRows = validatedRows.filter((r) => r.status === 'ERROR').length;
         const warningRows = validatedRows.filter((r) => r.status === 'WARNING').length;
-
         const importStatus = errorRows > 0 ? ImportStatus.BLOCKED : ImportStatus.STAGED;
-        const controlTotals = {
-          total_rows: totalRows,
-          valid_rows: validRows,
-          error_rows: errorRows,
-          warning_rows: warningRows,
-        };
 
-        // Insert import rows
+        // Idempotent re-process: replace partial rows left by a crashed earlier run.
+        if (tx.importRow?.deleteMany) {
+          await tx.importRow.deleteMany({ where: { import_id: imp.id } });
+        }
+
+        // Durable per-row outcomes with per-item failure independence: each row insert runs
+        // in its own savepoint so one failed row cannot roll back the other rows.
         const rowData = validatedRows.map((vr) => ({
           import_id: imp.id,
           row_number: vr.rowNumber,
@@ -453,13 +599,30 @@ export class ImportsService {
           scope_identifier: vr.scopeIdentifier,
           issues_json: vr.issues.length > 0 ? (vr.issues as any) : Prisma.JsonNull,
         }));
+        for (let i = 0; i < rowData.length; i++) {
+          const rowDatum = rowData[i];
+          const spName = `row_sp_${i}`;
+          try {
+            if (typeof tx.$executeRawUnsafe === 'function') {
+              await tx.$executeRawUnsafe(`SAVEPOINT ${spName}`);
+            }
+            await tx.importRow.create({ data: rowDatum });
+            if (typeof tx.$executeRawUnsafe === 'function') {
+              await tx.$executeRawUnsafe(`RELEASE SAVEPOINT ${spName}`);
+            }
+          } catch (rowErr) {
+            if (typeof tx.$executeRawUnsafe === 'function') {
+              await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT ${spName}`);
+            }
+            console.error(
+              `[ImportsService] Failed to persist import row ${rowDatum.row_number}:`,
+              rowErr
+            );
+          }
+        }
 
-        await tx.importRow.createMany({
-          data: rowData,
-        });
-
-        // Update finalized import status and control totals
-        const finalImp = await tx.import.update({
+        // Finalize the durable batch record: counts, actual mapping and status.
+        await tx.import.update({
           where: { id: imp.id },
           data: {
             status: importStatus,
@@ -467,33 +630,105 @@ export class ImportsService {
             valid_rows: validRows,
             error_rows: errorRows,
             warning_rows: warningRows,
-            control_totals: controlTotals,
+            control_totals: {
+              total_rows: totalRows,
+              valid_rows: validRows,
+              error_rows: errorRows,
+              warning_rows: warningRows,
+            },
+            header_mapping: headerMapping as any,
           },
         });
 
-        const detail = await this.formatImportDetail(finalImp, correlationId, tx);
-        return {
-          statusCode: HttpStatus.CREATED,
-          data: detail.data,
-          meta: detail.meta,
-        };
+        if (tx.auditLog?.create) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: merchantId,
+              user_id: actor?.userId || null,
+              actor: actor?.role || 'SYSTEM',
+              action: ImportAuditEvent.IMPORT_VALIDATED,
+              entity_type: 'import',
+              entity_id: imp.id,
+              ip_address: clientIp ? this.hashIp(clientIp) : null,
+              new_value: this.maskAuditData({
+                revision: imp.revision,
+                status: importStatus,
+                total_rows: totalRows,
+                valid_rows: validRows,
+                error_rows: errorRows,
+                warning_rows: warningRows,
+              }),
+            },
+          });
+        }
       });
-
-      return uploadResult;
     } catch (err: any) {
-      if (err instanceof CanonicalApiException) {
-        throw err;
-      }
-      // Translate database unique constraint conflicts into canonical 409
-      if (err?.code === 'P2002') {
-        throw new CanonicalApiException(
-          HttpStatus.CONFLICT,
-          'IDEMPOTENCY_CONFLICT',
-          'Xảy ra xung đột bản ghi hoặc khóa bất biến trùng lặp trong phiên đồng thời',
-          false
-        );
-      }
-      throw err;
+      // Persist the failure durably OUTSIDE the rolled-back processing transaction.
+      await this.persistProcessingFailure(merchantId, importId, err, actor, clientIp);
+    }
+  }
+
+  /**
+   * Persists a durable FAILED state (plus masked audit) for an import whose asynchronous
+   * processing failed. Runs in its own transaction so it survives the rollback of the
+   * failed processing transaction. Never throws: a failure here is logged operationally.
+   */
+  private async persistProcessingFailure(
+    merchantId: string,
+    importId: string,
+    err: unknown,
+    actor?: ActorContext,
+    clientIp?: string
+  ): Promise<void> {
+    const code = err instanceof ImportProcessingError ? err.code : 'PROCESSING_ERROR';
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const message = rawMessage || 'Lỗi xử lý nội bộ khi kiểm tra tệp tin';
+    try {
+      await this.prisma.$transaction(async (tx: any) => {
+        const current = await tx.import.findFirst({
+          where: { id: importId, merchant_id: merchantId },
+        });
+        if (!current) {
+          return;
+        }
+        if (
+          current.status === ImportStatus.STAGED ||
+          current.status === ImportStatus.BLOCKED ||
+          current.status === ImportStatus.PROMOTED
+        ) {
+          return; // already finalized — never overwrite a terminal success state
+        }
+        await tx.import.update({
+          where: { id: importId },
+          data: {
+            status: ImportStatus.FAILED,
+            control_totals: {
+              error_code: code,
+              error_message: message.length > 500 ? message.substring(0, 500) : message,
+            },
+          },
+        });
+        if (tx.auditLog?.create) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: merchantId,
+              user_id: actor?.userId || null,
+              actor: actor?.role || 'SYSTEM',
+              action: ImportAuditEvent.IMPORT_PROCESSING_FAILED,
+              entity_type: 'import',
+              entity_id: importId,
+              ip_address: clientIp ? this.hashIp(clientIp) : null,
+              // Only the canonical code is audited; raw error text may carry file content.
+              new_value: this.maskAuditData({ error_code: code }),
+            },
+          });
+        }
+      });
+    } catch (persistErr) {
+      console.error(
+        `[ImportsService] Failed to persist durable processing failure for import ${importId}:`,
+        persistErr
+      );
     }
   }
 
@@ -519,6 +754,16 @@ export class ImportsService {
         'Không tìm thấy bản ghi nhập khẩu trong cửa hàng này',
         false
       );
+    }
+
+    // Crash recovery: an import stuck in UPLOADED/VALIDATING (e.g. the API process
+    // restarted mid-processing) is re-processed by the idempotent worker so the
+    // processing state is always recoverable.
+    if (imp.status === ImportStatus.UPLOADED || imp.status === ImportStatus.VALIDATING) {
+      const ageMs = Date.now() - new Date(imp.updated_at).getTime();
+      if (ageMs > STALE_IMPORT_PROCESSING_MS) {
+        this.startProcessing(merchantId, imp.id, undefined, correlationId);
+      }
     }
 
     return this.formatImportDetail(imp, correlationId);
@@ -563,18 +808,33 @@ export class ImportsService {
       },
     });
 
-    // Actual mapping metadata from canonical template definition (Finding 13)
-    const template = TEMPLATE_DEFINITIONS[imp.template_type];
-    const mapping = template
-      ? template.columns.map((col) => ({
-          col: col.key,
-          field: col.key,
-          header: col.header,
-          required: Boolean(col.required),
-          rule: col.required ? 'Bắt buộc' : 'Tùy chọn',
-          description: col.description || '',
-        }))
-      : [];
+    // Actual mapping metadata: prefer the source-header mapping captured from the uploaded
+    // file (persisted on the import record during parsing); fall back to the canonical
+    // template definition only for legacy records created before mapping was captured.
+    let mapping: Array<Record<string, any>>;
+    if (Array.isArray(imp.header_mapping) && imp.header_mapping.length > 0) {
+      mapping = imp.header_mapping.map((m: any) => ({
+        col: m.source_header || m.header || m.field,
+        field: m.field,
+        header: m.source_header || m.header || null,
+        required: Boolean(m.required),
+        rule: m.rule || (m.required ? 'Bắt buộc' : 'Tùy chọn'),
+        description: m.description || '',
+        recognized: Boolean(m.recognized),
+      }));
+    } else {
+      const template = TEMPLATE_DEFINITIONS[imp.template_type];
+      mapping = template
+        ? template.columns.map((col) => ({
+            col: col.key,
+            field: col.key,
+            header: col.header,
+            required: Boolean(col.required),
+            rule: col.required ? 'Bắt buộc' : 'Tùy chọn',
+            description: col.description || '',
+          }))
+        : [];
+    }
 
     return {
       data: {
@@ -595,6 +855,7 @@ export class ImportsService {
           error_rows: imp.error_rows,
           warning_rows: imp.warning_rows,
           control_totals: imp.control_totals,
+          header_mapping: imp.header_mapping ?? null,
           mapping,
           created_by_user_id: imp.created_by_user_id,
           promoted_by_user_id: imp.promoted_by_user_id,
@@ -966,94 +1227,180 @@ export class ImportsService {
           }
         }
 
-        // Implicit scope check and audits for displaced default warehouses (Finding 13 & 14)
+        // Complete proposed-state validation BEFORE any mutation (Finding 6, round 4):
+        // the full final state (existing entities + row overrides + displaced defaults)
+        // is computed first, then validated as a whole — including the active status of
+        // any replacement default — so an inactive replacement default cannot slip past
+        // checks that previously ran after the displaced default was already cleared.
+        const existingWarehouses = await tx.warehouse.findMany({
+          where: { merchant_id: merchantId },
+        });
+        const existingWhByCode = new Map(existingWarehouses.map((w) => [w.code, w]));
+        const anyExplicitDefault = allRows.some(
+          (r) => (r.normalized_data as any)?.is_default === true
+        );
         const rowWithDefault = allRows.find((r) => (r.normalized_data as any)?.is_default === true);
-        if (rowWithDefault) {
-          const newDefaultCode = rowWithDefault.scope_identifier!;
-          const existingDefaults = await tx.warehouse.findMany({
-            where: { merchant_id: merchantId, is_default: true, code: { not: newDefaultCode } },
-          });
+        const newDefaultCode = rowWithDefault?.scope_identifier || null;
 
-          if (!isWildcard) {
-            for (const defWh of existingDefaults) {
-              if (!actorWarehouseScopes.includes(defWh.code)) {
-                throw new CanonicalApiException(
-                  HttpStatus.FORBIDDEN,
-                  'WAREHOUSE_SCOPE_UNAUTHORIZED',
-                  `Bạn không có quyền phân quyền đối với kho mặc định hiện tại (${defWh.code}) để thay đổi mặc định`,
-                  false
-                );
-              }
-            }
-          }
-
-          // Unset displaced defaults and record entity lifecycle audit (Finding 13)
-          for (const defWh of existingDefaults) {
-            await tx.warehouse.update({
-              where: { id: defWh.id },
-              data: { is_default: false },
-            });
-            if (tx.auditLog?.create) {
-              await tx.auditLog.create({
-                data: {
-                  merchant_id: merchantId,
-                  user_id: actor.userId,
-                  actor: actor.role || 'OWNER',
-                  action: 'WAREHOUSE_UPDATED',
-                  entity_type: 'warehouse',
-                  entity_id: defWh.id,
-                  ip_address: clientIp ? this.hashIp(clientIp) : null,
-                  new_value: this.maskAuditData({
-                    code: defWh.code,
-                    name: defWh.name,
-                    is_default: false,
-                    status: defWh.status,
-                  }),
-                },
+        const proposedWh = new Map<
+          string,
+          { status: string; isDefault: boolean; existed: boolean }
+        >();
+        for (const row of allRows) {
+          const norm = (row.normalized_data as Record<string, any>) || {};
+          const code = row.scope_identifier!;
+          const existingWh = existingWhByCode.get(code);
+          const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
+          const isDefault = hasExplicitDefault
+            ? norm.is_default === true
+            : anyExplicitDefault
+              ? false
+              : existingWh
+                ? existingWh.is_default
+                : false;
+          const status = norm.status
+            ? String(norm.status).toLowerCase()
+            : existingWh
+              ? String(existingWh.status).toLowerCase()
+              : 'active';
+          proposedWh.set(code, { status, isDefault, existed: Boolean(existingWh) });
+        }
+        // If the file designates a default, every other existing default is displaced.
+        if (anyExplicitDefault) {
+          for (const w of existingWarehouses) {
+            if (w.is_default && w.code !== newDefaultCode && !proposedWh.has(w.code)) {
+              proposedWh.set(w.code, {
+                status: String(w.status).toLowerCase(),
+                isDefault: false,
+                existed: true,
               });
             }
           }
         }
 
-        // Default warehouse invariant checks (Finding 6)
-        for (const row of allRows) {
-          const norm = (row.normalized_data as Record<string, any>) || {};
-          const code = row.scope_identifier!;
-          const existingWh = await tx.warehouse.findUnique({
-            where: { merchant_id_code: { merchant_id: merchantId, code } },
-          });
-          if (existingWh?.is_default) {
-            const hasReplacementDefault = allRows.some(
-              (r) => r.scope_identifier !== code && (r.normalized_data as any)?.is_default === true
-            );
-            if (norm.status && norm.status.toLowerCase() === 'inactive' && !hasReplacementDefault) {
+        // Displaced default warehouses require the actor's scope (Finding 14)
+        const displacedWh = anyExplicitDefault
+          ? existingWarehouses.filter((w) => w.is_default && w.code !== newDefaultCode)
+          : [];
+        if (!isWildcard) {
+          for (const defWh of displacedWh) {
+            if (!actorWarehouseScopes.includes(defWh.code)) {
               throw new CanonicalApiException(
-                HttpStatus.BAD_REQUEST,
-                'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
-                'Không thể vô hiệu hóa kho mặc định mà không chỉ định kho mặc định thay thế',
-                false
-              );
-            }
-            if (norm.is_default === false && !hasReplacementDefault) {
-              throw new CanonicalApiException(
-                HttpStatus.BAD_REQUEST,
-                'CANNOT_REMOVE_DEFAULT_STATUS',
-                'Không thể hủy trạng thái mặc định của kho mà không chỉ định kho mặc định thay thế',
+                HttpStatus.FORBIDDEN,
+                'WAREHOUSE_SCOPE_UNAUTHORIZED',
+                `Bạn không có quyền phân quyền đối với kho mặc định hiện tại (${defWh.code}) để thay đổi mặc định`,
                 false
               );
             }
           }
         }
 
-        // Apply warehouse updates / creates
+        // (a) Every warehouse that will be default in the proposed state must be active.
+        for (const [code, proposed] of proposedWh.entries()) {
+          if (proposed.isDefault && proposed.status !== 'active') {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'DEFAULT_WAREHOUSE_MUST_BE_ACTIVE',
+              `Kho mặc định (${code}) phải ở trạng thái hoạt động (active) trong kết quả cuối cùng`,
+              false
+            );
+          }
+        }
+
+        // (b) Deactivating / (c) unflagging the current default requires an ACTIVE replacement
+        // default in the same file. Evaluated on the ORIGINAL state (pre-mutation).
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
-          const existingWarehouse = tx.warehouse?.findUnique
-            ? await tx.warehouse.findUnique({
-                where: { merchant_id_code: { merchant_id: merchantId, code } },
-              })
-            : null;
+          const existingWh = existingWhByCode.get(code);
+          if (!existingWh?.is_default) {
+            continue;
+          }
+          const proposed = proposedWh.get(code)!;
+          const hasActiveReplacement =
+            anyExplicitDefault && proposedWh.get(newDefaultCode!)?.status === 'active';
+          if (proposed.status === 'inactive' && !hasActiveReplacement) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
+              'Không thể vô hiệu hóa kho mặc định mà không chỉ định kho mặc định hoạt động thay thế',
+              false
+            );
+          }
+          if (norm.is_default === false && !hasActiveReplacement) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'CANNOT_REMOVE_DEFAULT_STATUS',
+              'Không thể hủy trạng thái mặc định của kho mà không chỉ định kho mặc định hoạt động thay thế',
+              false
+            );
+          }
+        }
+
+        // (d) Final-state invariant: whenever active warehouses will exist, at least one
+        // of them must be the active default.
+        let finalActiveWh = 0;
+        let finalActiveDefaultWh = 0;
+        for (const w of existingWarehouses) {
+          if (proposedWh.has(w.code)) {
+            continue; // final state taken from the proposal below
+          }
+          if (w.status === 'active') {
+            finalActiveWh += 1;
+            if (w.is_default) {
+              finalActiveDefaultWh += 1;
+            }
+          }
+        }
+        for (const proposed of proposedWh.values()) {
+          if (proposed.status === 'active') {
+            finalActiveWh += 1;
+            if (proposed.isDefault) {
+              finalActiveDefaultWh += 1;
+            }
+          }
+        }
+        if (finalActiveWh > 0 && finalActiveDefaultWh === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'NO_ACTIVE_DEFAULT_WAREHOUSE',
+            'Kết quả cuối cùng phải có ít nhất một kho mặc định hoạt động',
+            false
+          );
+        }
+
+        // Unset displaced defaults and record entity lifecycle audit (Finding 13)
+        for (const defWh of displacedWh) {
+          await tx.warehouse.update({
+            where: { id: defWh.id },
+            data: { is_default: false },
+          });
+          if (tx.auditLog?.create) {
+            await tx.auditLog.create({
+              data: {
+                merchant_id: merchantId,
+                user_id: actor.userId,
+                actor: actor.role || 'OWNER',
+                action: 'WAREHOUSE_UPDATED',
+                entity_type: 'warehouse',
+                entity_id: defWh.id,
+                ip_address: clientIp ? this.hashIp(clientIp) : null,
+                new_value: this.maskAuditData({
+                  code: defWh.code,
+                  name: defWh.name,
+                  is_default: false,
+                  status: defWh.status,
+                }),
+              },
+            });
+          }
+        }
+
+        // Apply warehouse updates / creates (existing state captured pre-mutation above)
+        for (const row of allRows) {
+          const norm = (row.normalized_data as Record<string, any>) || {};
+          const code = row.scope_identifier!;
+          const existingWarehouse = existingWhByCode.get(code) || null;
 
           const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
           const isDefault = hasExplicitDefault
@@ -1301,85 +1648,169 @@ export class ImportsService {
           }
         }
 
-        // Implicit scope check and audits for displaced default branches (Finding 13 & 14)
+        const existingBranches = await tx.branch.findMany({
+          where: { merchant_id: merchantId },
+        });
+        const existingBrByCode = new Map(existingBranches.map((b) => [b.code, b]));
+        const anyExplicitDefault = allRows.some(
+          (r) => (r.normalized_data as any)?.is_default === true
+        );
         const rowWithDefault = allRows.find((r) => (r.normalized_data as any)?.is_default === true);
-        if (rowWithDefault) {
-          const newDefaultCode = rowWithDefault.scope_identifier!;
-          const existingDefaults = await tx.branch.findMany({
-            where: { merchant_id: merchantId, is_default: true, code: { not: newDefaultCode } },
-          });
+        const newDefaultCode = rowWithDefault?.scope_identifier || null;
 
-          if (!isWildcard) {
-            for (const defBranch of existingDefaults) {
-              if (!actorStoreScopes.includes(defBranch.code)) {
-                throw new CanonicalApiException(
-                  HttpStatus.FORBIDDEN,
-                  'SCOPE_UNAUTHORIZED',
-                  `Bạn không có quyền phân quyền đối với chi nhánh mặc định hiện tại (${defBranch.code}) để thay đổi mặc định`,
-                  false
-                );
-              }
-            }
+        const proposedBr = new Map<
+          string,
+          { status: string; isDefault: boolean; existed: boolean }
+        >();
+        for (const row of allRows) {
+          const norm = (row.normalized_data as Record<string, any>) || {};
+          const code = row.scope_identifier!;
+          const existingBr = existingBrByCode.get(code);
+          const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
+          let isDefault: boolean;
+          if (existingBranches.length === 0 && !existingBr && !anyExplicitDefault) {
+            // First branch is automatically default
+            isDefault = true;
+          } else if (hasExplicitDefault) {
+            isDefault = norm.is_default === true;
+          } else {
+            isDefault = anyExplicitDefault ? false : existingBr ? existingBr.is_default : false;
           }
-
-          // Unset displaced defaults and record entity lifecycle audit (Finding 13)
-          for (const defBranch of existingDefaults) {
-            await tx.branch.update({
-              where: { id: defBranch.id },
-              data: { is_default: false },
-            });
-            if (tx.auditLog?.create) {
-              await tx.auditLog.create({
-                data: {
-                  merchant_id: merchantId,
-                  user_id: actor.userId,
-                  actor: actor.role || 'OWNER',
-                  action: 'BRANCH_UPDATED',
-                  entity_type: 'branch',
-                  entity_id: defBranch.id,
-                  ip_address: clientIp ? this.hashIp(clientIp) : null,
-                  new_value: this.maskAuditData({
-                    code: defBranch.code,
-                    name: defBranch.name,
-                    is_default: false,
-                    status: defBranch.status,
-                  }),
-                },
+          const status = norm.status
+            ? String(norm.status).toUpperCase()
+            : existingBr
+              ? String(existingBr.status).toUpperCase()
+              : 'ACTIVE';
+          proposedBr.set(code, { status, isDefault, existed: Boolean(existingBr) });
+        }
+        if (anyExplicitDefault) {
+          for (const b of existingBranches) {
+            if (b.is_default && b.code !== newDefaultCode && !proposedBr.has(b.code)) {
+              proposedBr.set(b.code, {
+                status: String(b.status).toUpperCase(),
+                isDefault: false,
+                existed: true,
               });
             }
           }
         }
 
-        // Default branch invariant checks (BR-BRANCH-04 & Finding 6)
+        // Implicit scope check for displaced default branches (Finding 13 & 14)
+        const displacedBranches = anyExplicitDefault
+          ? existingBranches.filter((b) => b.is_default && b.code !== newDefaultCode)
+          : [];
+        if (!isWildcard) {
+          for (const defBranch of displacedBranches) {
+            if (!actorStoreScopes.includes(defBranch.code)) {
+              throw new CanonicalApiException(
+                HttpStatus.FORBIDDEN,
+                'SCOPE_UNAUTHORIZED',
+                `Bạn không có quyền phân quyền đối với chi nhánh mặc định hiện tại (${defBranch.code}) để thay đổi mặc định`,
+                false
+              );
+            }
+          }
+        }
+
+        // (a) Every branch that will be default in the proposed state must be ACTIVE.
+        for (const [code, proposed] of proposedBr.entries()) {
+          if (proposed.isDefault && proposed.status !== 'ACTIVE') {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'DEFAULT_BRANCH_MUST_BE_ACTIVE',
+              `Chi nhánh mặc định (${code}) phải ở trạng thái hoạt động (ACTIVE) trong kết quả cuối cùng`,
+              false
+            );
+          }
+        }
+
+        // (b) Deactivating / (c) unflagging the current default requires an ACTIVE replacement
+        // default in the same file. Evaluated on the ORIGINAL state (pre-mutation).
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
-          const existingBranch = await tx.branch.findUnique({
-            where: { merchant_id_code: { merchant_id: merchantId, code } },
-          });
-          if (existingBranch?.is_default) {
-            const hasReplacementDefault = allRows.some(
-              (r) => r.scope_identifier !== code && (r.normalized_data as any)?.is_default === true
+          const existingBranch = existingBrByCode.get(code);
+          if (!existingBranch?.is_default) {
+            continue;
+          }
+          const proposed = proposedBr.get(code)!;
+          const hasActiveReplacement =
+            anyExplicitDefault && proposedBr.get(newDefaultCode!)?.status === 'ACTIVE';
+          if (proposed.status === 'INACTIVE' && !hasActiveReplacement) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+              'Không thể vô hiệu hóa chi nhánh mặc định mà không chỉ định chi nhánh mặc định hoạt động thay thế',
+              false,
+              'Vui lòng chỉ định một chi nhánh khác đang hoạt động làm mặc định trước khi vô hiệu hóa chi nhánh này'
             );
-            const statusUpper = norm.status ? norm.status.toUpperCase() : null;
-            if (statusUpper === 'INACTIVE' && !hasReplacementDefault) {
-              throw new CanonicalApiException(
-                HttpStatus.BAD_REQUEST,
-                'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
-                'Không thể vô hiệu hóa chi nhánh mặc định',
-                false,
-                'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi vô hiệu hóa chi nhánh này'
-              );
+          }
+          if (norm.is_default === false && !hasActiveReplacement) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'CANNOT_REMOVE_DEFAULT_STATUS',
+              'Không thể hủy trạng thái mặc định của chi nhánh trực tiếp mà không chỉ định chi nhánh mặc định hoạt động thay thế',
+              false,
+              'Vui lòng chỉ định một chi nhánh khác đang hoạt động làm mặc định'
+            );
+          }
+        }
+
+        // (d) Final-state invariant: whenever active branches exist, at least one must be active default
+        let finalActiveBr = 0;
+        let finalActiveDefaultBr = 0;
+        for (const b of existingBranches) {
+          if (proposedBr.has(b.code)) {
+            continue;
+          }
+          if (b.status === 'ACTIVE') {
+            finalActiveBr += 1;
+            if (b.is_default) {
+              finalActiveDefaultBr += 1;
             }
-            if (norm.is_default === false && !hasReplacementDefault) {
-              throw new CanonicalApiException(
-                HttpStatus.BAD_REQUEST,
-                'CANNOT_REMOVE_DEFAULT_STATUS',
-                'Không thể hủy trạng thái mặc định của chi nhánh trực tiếp',
-                false,
-                'Vui lòng chỉ định một chi nhánh khác làm mặc định'
-              );
+          }
+        }
+        for (const proposed of proposedBr.values()) {
+          if (proposed.status === 'ACTIVE') {
+            finalActiveBr += 1;
+            if (proposed.isDefault) {
+              finalActiveDefaultBr += 1;
             }
+          }
+        }
+        if (finalActiveBr > 0 && finalActiveDefaultBr === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'NO_ACTIVE_DEFAULT_BRANCH',
+            'Kết quả cuối cùng phải có ít nhất một chi nhánh mặc định hoạt động',
+            false
+          );
+        }
+
+        // Unset displaced defaults and record entity lifecycle audit AFTER validation passes
+        for (const defBranch of displacedBranches) {
+          await tx.branch.update({
+            where: { id: defBranch.id },
+            data: { is_default: false },
+          });
+          if (tx.auditLog?.create) {
+            await tx.auditLog.create({
+              data: {
+                merchant_id: merchantId,
+                user_id: actor.userId,
+                actor: actor.role || 'OWNER',
+                action: 'BRANCH_UPDATED',
+                entity_type: 'branch',
+                entity_id: defBranch.id,
+                ip_address: clientIp ? this.hashIp(clientIp) : null,
+                new_value: this.maskAuditData({
+                  code: defBranch.code,
+                  name: defBranch.name,
+                  is_default: false,
+                  status: defBranch.status,
+                }),
+              },
+            });
           }
         }
 
@@ -1387,26 +1818,9 @@ export class ImportsService {
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
-          const existingBranch = tx.branch?.findUnique
-            ? await tx.branch.findUnique({
-                where: { merchant_id_code: { merchant_id: merchantId, code } },
-              })
-            : null;
-
-          const existingCount = tx.branch?.count
-            ? await tx.branch.count({ where: { merchant_id: merchantId } })
-            : 0;
-
+          const existingBranch = existingBrByCode.get(code) || null;
+          const isDefault = proposedBr.get(code)?.isDefault ?? false;
           const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
-          let isDefault: boolean;
-          if (existingCount === 0 && !existingBranch) {
-            // BR-BRANCH-03: First branch is automatically default
-            isDefault = true;
-          } else if (hasExplicitDefault) {
-            isDefault = norm.is_default === true;
-          } else {
-            isDefault = existingBranch ? existingBranch.is_default : false;
-          }
 
           let savedBrId = existingBranch?.id;
           if (existingBranch) {

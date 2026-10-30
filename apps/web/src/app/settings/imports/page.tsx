@@ -36,6 +36,8 @@ export default function ImportsSettingsPage({
       : Boolean(user?.permissions?.includes('iam:shop_config'));
 
   const [imports, setImports] = useState<ImportSummary[]>(initialImports || []);
+  const [totalImports, setTotalImports] = useState<number>(initialImports?.length || 0);
+  const [historyPage, setHistoryPage] = useState<number>(1);
   const [selectedImport, setSelectedImport] = useState<ImportSummary | null>(initialSelectedImport);
   const [selectedRows, setSelectedRows] = useState<ImportRow[]>(initialSelectedRows || []);
   const [revisions, setRevisions] = useState<ImportSummary[]>([]);
@@ -44,44 +46,50 @@ export default function ImportsSettingsPage({
 
   const activeDetailIdRef = useRef<string | null>(null);
 
-  const fetchImports = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+  const fetchImports = useCallback(
+    async (page: number = 1) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
 
-      const res = await fetch(`${API_BASE}/api/v1/imports`, { headers });
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error('Bạn không có quyền truy cập dữ liệu nhập khẩu.');
+        const limit = 20;
+        const offset = Math.max(page - 1, 0) * limit;
+        const res = await fetch(`${API_BASE}/api/v1/imports?limit=${limit}&offset=${offset}`, {
+          headers,
+        });
+        if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error('Bạn không có quyền truy cập dữ liệu nhập khẩu.');
+          }
+          if (res.status === 401) {
+            throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+          }
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.error?.message || 'Không thể tải danh sách lượt nhập');
         }
-        if (res.status === 401) {
-          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách lượt nhập');
-      }
 
-      const json = await res.json();
-      if (json.success) {
-        // Handle both json.data as array and json.data.items for flexibility (Finding 1)
-        const items = Array.isArray(json.data) ? json.data : json.data?.items || [];
-        setImports(items);
-        if (initialCanEdit === undefined) {
-          setCanEdit(Boolean(user?.permissions?.includes('iam:shop_config')));
+        const json = await res.json();
+        if (json.success) {
+          // Handle both json.data as array and json.data.items for flexibility (Finding 1)
+          const items = Array.isArray(json.data) ? json.data : json.data?.items || [];
+          setImports(items);
+          setTotalImports(typeof json.meta?.total === 'number' ? json.meta.total : items.length);
+          setHistoryPage(page);
         }
+      } catch (err: any) {
+        setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý nhập liệu');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý nhập liệu');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, user, initialCanEdit]);
+    },
+    [token]
+  );
 
   const fetchImportDetail = useCallback(
     async (importId: string) => {
@@ -112,6 +120,9 @@ export default function ImportsSettingsPage({
 
         // Expose partial or complete failure instead of leaving stale/misleading data
         if (!detailRes.ok || !rowsRes.ok) {
+          if (activeDetailIdRef.current !== importId) {
+            return;
+          }
           const failStatus = !detailRes.ok ? detailRes.status : rowsRes.status;
           setSelectedImport(null);
           setSelectedRows([]);
@@ -122,10 +133,20 @@ export default function ImportsSettingsPage({
           return;
         }
 
-        const detailJson = await detailRes.json();
-        const rowsJson = await rowsRes.json();
+        const [detailJson, rowsJson] = await Promise.all([
+          detailRes.json().catch(() => null),
+          rowsRes.json().catch(() => null),
+        ]);
 
-        if (!detailJson.success || !rowsJson.success) {
+        // Recheck identity immediately before every response-driven state update (Finding 15)
+        if (activeDetailIdRef.current !== importId) {
+          return;
+        }
+
+        if (!detailJson?.success || !rowsJson?.success) {
+          if (activeDetailIdRef.current !== importId) {
+            return;
+          }
           setSelectedImport(null);
           setSelectedRows([]);
           setRevisions([]);
@@ -136,6 +157,10 @@ export default function ImportsSettingsPage({
         const imp = detailJson.data?.import || detailJson.data;
         const rowItems = Array.isArray(rowsJson.data) ? rowsJson.data : rowsJson.data?.items || [];
 
+        // Final identity recheck immediately before committing detail, revisions and rows state
+        if (activeDetailIdRef.current !== importId) {
+          return;
+        }
         setSelectedImport(imp);
         setRevisions(detailJson.data?.revisions || []);
         setSelectedRows(rowItems);
@@ -317,13 +342,17 @@ export default function ImportsSettingsPage({
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <ImportManagementView
           imports={imports}
+          totalImports={totalImports}
+          historyPage={historyPage}
+          historyLimit={20}
+          onHistoryPageChange={(p) => void fetchImports(p)}
           selectedImport={selectedImport}
           selectedImportRows={selectedRows}
           revisions={revisions}
           loading={loading}
           canEdit={canEdit}
           error={error}
-          onRefresh={fetchImports}
+          onRefresh={() => void fetchImports(historyPage)}
           onSelectImport={fetchImportDetail}
           onDownloadTemplate={handleDownloadTemplate}
           onUpload={handleUpload}

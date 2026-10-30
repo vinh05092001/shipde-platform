@@ -28,7 +28,12 @@ import type {
 import { ImportStatus, ImportRowStatus, ImportIssueSeverity } from '@shipde/contracts';
 
 export interface ImportManagementViewProps {
+  initialTab?: 'rows' | 'mapping' | 'revisions';
   imports?: ImportSummary[];
+  totalImports?: number;
+  historyPage?: number;
+  historyLimit?: number;
+  onHistoryPageChange?: (page: number) => void;
   selectedImport?: ImportSummary | null;
   selectedImportRows?: ImportRow[];
   revisions?: ImportSummary[];
@@ -45,7 +50,12 @@ export interface ImportManagementViewProps {
 }
 
 export function ImportManagementView({
+  initialTab,
   imports = [],
+  totalImports,
+  historyPage = 1,
+  historyLimit = 20,
+  onHistoryPageChange,
   selectedImport = null,
   selectedImportRows = [],
   revisions = [],
@@ -60,7 +70,9 @@ export function ImportManagementView({
   onPromote,
   onExportIssues,
 }: ImportManagementViewProps) {
-  const [activeTab, setActiveTab] = useState<'rows' | 'mapping' | 'revisions'>('rows');
+  const [activeTab, setActiveTab] = useState<'rows' | 'mapping' | 'revisions'>(
+    initialTab ?? 'rows'
+  );
   const [templateFilter, setTemplateFilter] = useState<'ALL' | 'branches' | 'warehouses'>('ALL');
   const [rowStatusFilter, setRowStatusFilter] = useState<'ALL' | 'VALID' | 'ERROR' | 'WARNING'>(
     'ALL'
@@ -449,6 +461,47 @@ export function ImportManagementView({
                 })}
               </div>
             )}
+
+            {/* History Pagination & Truncation Disclosure */}
+            {totalImports !== undefined && totalImports > 0 && (
+              <div
+                className="pt-2 border-t border-gray-100 flex flex-col gap-1 text-xs text-gray-500"
+                data-testid="import-history-pagination"
+              >
+                <div className="flex items-center justify-between">
+                  <span>
+                    {totalImports > imports.length
+                      ? `Đang hiển thị ${filteredImports.length} trên tổng số ${totalImports} lượt nhập`
+                      : `Tổng cộng ${totalImports} lượt nhập`}
+                  </span>
+                  {onHistoryPageChange && totalImports > historyLimit && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={historyPage <= 1}
+                        onClick={() => onHistoryPageChange(historyPage - 1)}
+                        className="px-2 py-0.5 border border-gray-300 rounded text-xs disabled:opacity-40 hover:bg-gray-50"
+                        aria-label="Trang trước"
+                      >
+                        Trước
+                      </button>
+                      <span className="px-1 text-[11px] text-gray-600">
+                        {historyPage} / {Math.ceil(totalImports / historyLimit)}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={historyPage >= Math.ceil(totalImports / historyLimit)}
+                        onClick={() => onHistoryPageChange(historyPage + 1)}
+                        className="px-2 py-0.5 border border-gray-300 rounded text-xs disabled:opacity-40 hover:bg-gray-50"
+                        aria-label="Trang sau"
+                      >
+                        Sau
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right Column: Detail of Selected Import */}
@@ -597,14 +650,28 @@ export function ImportManagementView({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {((selectedImport as any)?.mapping &&
-                          Array.isArray((selectedImport as any).mapping)
-                            ? (selectedImport as any).mapping.map((m: any) => ({
-                                col: m.header || m.col || m.field,
+                          {(((selectedImport as any)?.header_mapping &&
+                            Array.isArray((selectedImport as any).header_mapping) &&
+                            (selectedImport as any).header_mapping.length > 0) ||
+                          ((selectedImport as any)?.mapping &&
+                            Array.isArray((selectedImport as any).mapping))
+                            ? (
+                                ((selectedImport as any)?.header_mapping &&
+                                Array.isArray((selectedImport as any).header_mapping) &&
+                                (selectedImport as any).header_mapping.length > 0
+                                  ? (selectedImport as any).header_mapping
+                                  : (selectedImport as any).mapping) as any[]
+                              ).map((m: any) => ({
+                                col:
+                                  m.source_header !== undefined && m.source_header !== null
+                                    ? m.source_header
+                                    : m.header || m.col || m.field,
                                 field: m.field || m.col,
-                                rule: m.required ? 'Bắt buộc' : m.rule || 'Tùy chọn',
+                                rule: m.rule || (m.required ? 'Bắt buộc' : 'Tùy chọn'),
                                 description: m.description,
                                 sample:
+                                  (m.source_header &&
+                                    selectedImportRows[0]?.raw_data?.[m.source_header]) ??
                                   selectedImportRows[0]?.raw_data?.[m.header] ??
                                   selectedImportRows[0]?.raw_data?.[m.col] ??
                                   selectedImportRows[0]?.raw_data?.[m.field] ??

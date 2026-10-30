@@ -582,6 +582,7 @@ model Import {
   error_rows                  Int       @default(0)
   warning_rows                Int       @default(0)
   control_totals              Json?     @db.JsonB
+  header_mapping              Json?     @db.JsonB
   created_by_user_id          String?   @db.Uuid
   promoted_by_user_id         String?   @db.Uuid
   promoted_at                 DateTime? @db.Timestamptz

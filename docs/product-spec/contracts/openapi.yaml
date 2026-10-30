@@ -1892,7 +1892,7 @@ paths:
     post:
       tags: [Imports]
       summary: Upload and process an import file (FEAT-COM-04)
-      description: Ingests CSV or XLSX file, verifies malware and size limits, stages rows, validates per-row constraints and creates an immutable revision. Identical checksum returns existing import. Conflicting idempotency key returns 409. Requires iam:shop_config.
+      description: Ingests CSV or XLSX file, verifies size, MIME, extension and malware limits from config, commits a durable import record (UPLOADED) with private storage, then starts asynchronous validation. Durable per-row outcomes and the final status (STAGED/BLOCKED/FAILED) are persisted after processing; poll GET /imports/{id} for the result. Identical checksum returns the existing import (200). Conflicting idempotency key returns 409. Requires iam:shop_config.
       operationId: uploadImport
       security:
         - bearerAuth: []
@@ -1928,6 +1928,12 @@ paths:
                 $ref: '#/components/schemas/ImportDetailResponse'
         '201':
           description: Import successfully created and processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportDetailResponse'
+        '202':
+          description: Import record durably created; validation processing started asynchronously
           content:
             application/json:
               schema:
@@ -3552,7 +3558,6 @@ components:
           description: Base64-encoded binary content (e.g. for XLSX)
     ImportControlTotals:
       type: object
-      required: [total_rows, valid_rows, error_rows, warning_rows]
       properties:
         total_rows:
           type: integer
@@ -3562,6 +3567,38 @@ components:
           type: integer
         warning_rows:
           type: integer
+        error_code:
+          type: string
+          nullable: true
+          description: Processing failure code recorded when the import transitioned to FAILED outside the rolled-back processing transaction
+        error_message:
+          type: string
+          nullable: true
+          description: Human-readable processing failure reason (no PII)
+    ImportColumnMapping:
+      type: object
+      required: [field]
+      properties:
+        source_header:
+          type: string
+          nullable: true
+          description: The exact header text present in the uploaded file (null when the template column is absent from the file)
+        field:
+          type: string
+          description: Canonical template field key
+        header:
+          type: string
+          nullable: true
+          description: Canonical display header from the template definition
+        recognized:
+          type: boolean
+          description: True when the source header matched a template alias or key
+        required:
+          type: boolean
+        rule:
+          type: string
+        description:
+          type: string
     ImportRowIssue:
       type: object
       required: [code, message, severity]
@@ -3617,6 +3654,12 @@ components:
           type: integer
         control_totals:
           $ref: '#/components/schemas/ImportControlTotals'
+        header_mapping:
+          type: array
+          nullable: true
+          description: Actual source-header to canonical-field mapping captured from the uploaded file during parsing
+          items:
+            $ref: '#/components/schemas/ImportColumnMapping'
         created_by_user_id:
           type: string
           format: uuid

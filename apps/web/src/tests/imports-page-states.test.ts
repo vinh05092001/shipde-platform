@@ -380,6 +380,74 @@ async function runImportsWebTestSuite() {
     );
   }
 
+  // -------------------------------------------------------------------------
+  // TEST 12: History pagination and truncation disclosure (Finding 16 & Review 7)
+  // -------------------------------------------------------------------------
+  {
+    const html = renderToStaticMarkup(
+      React.createElement(ImportManagementView, {
+        loading: false,
+        imports: [mockImportBlocked],
+        totalImports: 45,
+        historyPage: 1,
+        historyLimit: 20,
+        onHistoryPageChange: () => {},
+        canEdit: true,
+      })
+    );
+
+    assert.ok(
+      html.includes('data-testid="import-history-pagination"'),
+      'Must render history pagination banner'
+    );
+    assert.ok(
+      html.includes('Đang hiển thị 1 trên tổng số 45 lượt nhập'),
+      'Must disclose history truncation count'
+    );
+    assert.ok(html.includes('aria-label="Trang trước"'), 'Must have accessible previous button');
+    assert.ok(html.includes('aria-label="Trang sau"'), 'Must have accessible next button');
+    console.log(
+      'PASS: TEST 12 - History pagination and truncation disclosure rendered with accessible controls'
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 13: Mapping preview displays actual source headers (Finding 13 & Review 6)
+  // -------------------------------------------------------------------------
+  {
+    const mockWithHeaderMapping: any = {
+      ...mockImportStaged,
+      header_mapping: [
+        {
+          source_header: 'Mã số kho riêng',
+          field: 'code',
+          header: 'Mã kho hàng',
+          recognized: true,
+          required: true,
+          rule: 'Bắt buộc',
+          description: 'Mã định danh kho',
+        },
+      ],
+    };
+
+    const html = renderToStaticMarkup(
+      React.createElement(ImportManagementView, {
+        initialTab: 'mapping',
+        loading: false,
+        imports: [mockWithHeaderMapping],
+        selectedImport: mockWithHeaderMapping,
+        selectedImportRows: mockImportRows,
+        canEdit: true,
+      })
+    );
+
+    assert.ok(
+      html.includes('Mã số kho riêng'),
+      'Mapping preview must display actual source header from uploaded file, not just template'
+    );
+    console.log('PASS: TEST 13 - Mapping preview displays actual source header from uploaded file');
+  }
+
   console.log('================================================================');
   console.log('ALL WEB IMPORTS UI STATES TESTS PASSED (100%)');
   console.log('================================================================');

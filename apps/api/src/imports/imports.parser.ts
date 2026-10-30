@@ -465,8 +465,24 @@ export function parseXlsx(buf: Buffer): { headers: string[]; rows: Record<string
 }
 
 /**
+ * A single entry describing how one actual source header from the uploaded file
+ * maps to a canonical template field (or that it was not part of the template).
+ */
+export interface HeaderMappingEntry {
+  source_header: string | null;
+  field: string;
+  header: string | null;
+  recognized: boolean;
+  required: boolean;
+  rule: string;
+  description: string;
+}
+
+/**
  * Normalizes input rows against the canonical template column keys.
  * Handles both Vietnamese human-readable headers and English keys.
+ * Also returns the ACTUAL source-header mapping captured from the uploaded file
+ * so detail responses describe what was uploaded, not just the template.
  */
 export function normalizeRowsWithTemplate(
   template: TemplateDefinition,
@@ -478,6 +494,7 @@ export function normalizeRowsWithTemplate(
     rawData: Record<string, string>;
     mappedData: Record<string, string>;
   }>;
+  headerMapping: HeaderMappingEntry[];
 } {
   // Build header mapping: lowercased header -> canonical column key
   const headerMap = new Map<string, string>();
@@ -503,7 +520,61 @@ export function normalizeRowsWithTemplate(
     };
   });
 
-  return { normalizedRows };
+  // Capture the actual source-header mapping: for every template column, record which
+  // real header (if any) supplied its values, plus any extra headers the file carried.
+  const seenSourceHeaders = new Set<string>();
+  const headerMapping: HeaderMappingEntry[] = [];
+  for (const col of template.columns) {
+    let matchedSource: string | null = null;
+    for (const rawHeader of rawHeaders) {
+      const cleanKey = rawHeader.trim().toLowerCase();
+      if (!cleanKey) continue;
+      if (
+        headerMap.get(cleanKey) === col.key ||
+        headerMap.get(stripDiacritics(cleanKey)) === col.key
+      ) {
+        matchedSource = rawHeader;
+        break;
+      }
+    }
+    if (matchedSource !== null) {
+      seenSourceHeaders.add(matchedSource.trim().toLowerCase());
+    }
+    headerMapping.push({
+      source_header: matchedSource,
+      field: col.key,
+      header: col.header,
+      recognized: matchedSource !== null,
+      required: Boolean(col.required),
+      rule: col.required ? 'Bắt buộc' : 'Tùy chọn',
+      description: col.description || '',
+    });
+  }
+  const templateKeys = new Set(template.columns.map((c) => c.key));
+  for (const rawHeader of rawHeaders) {
+    const cleanKey = rawHeader.trim();
+    if (!cleanKey) continue;
+    if (seenSourceHeaders.has(cleanKey.toLowerCase())) continue;
+    seenSourceHeaders.add(cleanKey.toLowerCase());
+    const canonicalKey =
+      headerMap.get(cleanKey.toLowerCase()) ||
+      headerMap.get(stripDiacritics(cleanKey.toLowerCase())) ||
+      cleanKey.toLowerCase();
+    const mapsToTemplate = templateKeys.has(canonicalKey);
+    headerMapping.push({
+      source_header: rawHeader,
+      field: canonicalKey,
+      header: null,
+      recognized: mapsToTemplate,
+      required: false,
+      rule: mapsToTemplate ? 'Trùng lặp (chỉ dùng cột đầu tiên)' : 'Bỏ qua (không thuộc mẫu)',
+      description: mapsToTemplate
+        ? 'Cột trùng lặp với một cột mẫu khác; giá trị không được sử dụng'
+        : 'Cột trong tệp không thuộc mẫu chuẩn nên không được xử lý',
+    });
+  }
+
+  return { normalizedRows, headerMapping };
 }
 
 /**

@@ -1,5 +1,11 @@
 import { Injectable, Inject, OnModuleDestroy } from '@nestjs/common';
-import { S3Client, HeadBucketCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  HeadBucketCommand,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AppConfig } from '@shipde/config';
@@ -97,6 +103,81 @@ export class StorageService implements OnModuleDestroy {
           `Storage persistence failed: S3 error: ${(s3Err as Error).message}; local error: ${(localErr as Error).message}`
         );
       }
+    }
+  }
+
+  private localBaseDir(): string {
+    return process.env.LOCAL_STORAGE_DIR || path.join(process.cwd(), '.storage');
+  }
+
+  private parseStoragePath(storagePath: string): {
+    kind: 's3' | 'local';
+    bucket?: string;
+    key: string;
+  } {
+    if (storagePath.startsWith('s3://')) {
+      const rest = storagePath.slice('s3://'.length);
+      const idx = rest.indexOf('/');
+      if (idx <= 0) {
+        throw new Error(`Invalid S3 storage path: ${storagePath}`);
+      }
+      return { kind: 's3', bucket: rest.slice(0, idx), key: rest.slice(idx + 1) };
+    }
+    if (storagePath.startsWith('local://')) {
+      return { kind: 'local', key: storagePath.slice('local://'.length) };
+    }
+    throw new Error(`Unsupported storage path scheme: ${storagePath}`);
+  }
+
+  /**
+   * Reads an object back from private storage (FEAT-COM-04 async processing).
+   * The durable import record references the storage path, so asynchronous workers can
+   * re-read the exact uploaded bytes without relying on in-memory buffers.
+   */
+  async getObject(storagePath: string): Promise<Buffer> {
+    const parsed = this.parseStoragePath(storagePath);
+    if (parsed.kind === 's3') {
+      const res = await this.getClient().send(
+        new GetObjectCommand({ Bucket: parsed.bucket, Key: parsed.key })
+      );
+      if (!res.Body) {
+        throw new Error(`S3 GetObject returned empty body for key ${parsed.key}`);
+      }
+      const bytes = await res.Body.transformToByteArray();
+      return Buffer.from(bytes);
+    }
+    const targetPath = path.join(this.localBaseDir(), parsed.key);
+    return fs.promises.readFile(targetPath);
+  }
+
+  /**
+   * Best-effort compensating delete for storage objects written before a failed
+   * durable record commit, so unsuccessful ingestion never accumulates untracked
+   * storage objects. Returns true when nothing needed to be deleted or deletion succeeded.
+   */
+  async deleteObject(storagePath: string | null | undefined): Promise<boolean> {
+    if (!storagePath) {
+      return true;
+    }
+    try {
+      const parsed = this.parseStoragePath(storagePath);
+      if (parsed.kind === 's3') {
+        await this.getClient().send(
+          new DeleteObjectCommand({ Bucket: parsed.bucket, Key: parsed.key })
+        );
+        return true;
+      }
+      const targetPath = path.join(this.localBaseDir(), parsed.key);
+      await fs.promises.rm(targetPath, { force: true });
+      return true;
+    } catch (err) {
+      // Best-effort compensation: log the leaked key for operational cleanup, never throw.
+      console.error(
+        `[StorageService] Failed to compensate-delete storage object ${storagePath}: ${
+          (err as Error)?.message || 'unknown error'
+        }`
+      );
+      return false;
     }
   }
 }

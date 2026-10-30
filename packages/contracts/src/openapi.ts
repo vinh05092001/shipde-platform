@@ -1134,7 +1134,7 @@ export interface paths {
     put?: never;
     /**
      * Upload and process an import file (FEAT-COM-04)
-     * @description Ingests CSV or XLSX file, verifies malware and size limits, stages rows, validates per-row constraints and creates an immutable revision. Identical checksum returns existing import. Conflicting idempotency key returns 409. Requires iam:shop_config.
+     * @description Ingests CSV or XLSX file, verifies size, MIME, extension and malware limits from config, commits a durable import record (UPLOADED) with private storage, then starts asynchronous validation. Durable per-row outcomes and the final status (STAGED/BLOCKED/FAILED) are persisted after processing; poll GET /imports/{id} for the result. Identical checksum returns the existing import (200). Conflicting idempotency key returns 409. Requires iam:shop_config.
      */
     post: operations['uploadImport'];
     delete?: never;
@@ -1963,10 +1963,27 @@ export interface components {
       file_base64?: string;
     };
     ImportControlTotals: {
-      total_rows: number;
-      valid_rows: number;
-      error_rows: number;
-      warning_rows: number;
+      total_rows?: number;
+      valid_rows?: number;
+      error_rows?: number;
+      warning_rows?: number;
+      /** @description Processing failure code recorded when the import transitioned to FAILED outside the rolled-back processing transaction */
+      error_code?: string | null;
+      /** @description Human-readable processing failure reason (no PII) */
+      error_message?: string | null;
+    };
+    ImportColumnMapping: {
+      /** @description The exact header text present in the uploaded file (null when the template column is absent from the file) */
+      source_header?: string | null;
+      /** @description Canonical template field key */
+      field: string;
+      /** @description Canonical display header from the template definition */
+      header?: string | null;
+      /** @description True when the source header matched a template alias or key */
+      recognized?: boolean;
+      required?: boolean;
+      rule?: string;
+      description?: string;
     };
     ImportRowIssue: {
       field?: string | null;
@@ -1996,6 +2013,8 @@ export interface components {
       error_rows: number;
       warning_rows: number;
       control_totals?: components['schemas']['ImportControlTotals'];
+      /** @description Actual source-header to canonical-field mapping captured from the uploaded file during parsing */
+      header_mapping?: components['schemas']['ImportColumnMapping'][] | null;
       /** Format: uuid */
       created_by_user_id?: string | null;
       /** Format: uuid */
@@ -4633,6 +4652,15 @@ export interface operations {
       };
       /** @description Import successfully created and processed */
       201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ImportDetailResponse'];
+        };
+      };
+      /** @description Import record durably created; validation processing started asynchronously */
+      202: {
         headers: {
           [name: string]: unknown;
         };
