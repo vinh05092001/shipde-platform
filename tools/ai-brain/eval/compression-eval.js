@@ -598,42 +598,39 @@ function probeHeadroom(options = {}) {
               try {
                 pathname = new URL(curr).pathname;
               } catch (_) {}
-              const isExpectedEndpoint = pathname === '/health' || pathname === '/status';
+              // Only Headroom's documented health endpoint is a valid probe target.
+              const isExpectedEndpoint = pathname === '/health';
               if (!isExpectedEndpoint) {
-                process.stderr.write('Endpoint ' + curr + ' is not an expected Headroom capability endpoint (/health)');
+                process.stderr.write(
+                  'Endpoint ' + curr + ' is not the documented Headroom health endpoint (/health)'
+                );
                 process.exitCode = 1;
                 return;
               }
 
-              const xService = (res.headers.get('x-service') || '').toLowerCase();
-              const xPoweredBy = (res.headers.get('x-powered-by') || '').toLowerCase();
-              let isHeadroom = xService === 'headroom' || xPoweredBy.includes('headroom');
-
-              if (!isHeadroom) {
-                try {
-                  const text = await res.text();
-                  const data = JSON.parse(text);
-                  if (
-                    data &&
-                    typeof data === 'object' &&
-                    (data.service === 'headroom' ||
-                     data.engine === 'headroom' ||
-                     data.name === 'headroom' ||
-                     data.headroom === true ||
-                     (data.status === 'ok' && data.service === 'headroom'))
-                  ) {
-                    isHeadroom = true;
-                  }
-                } catch (_) {
-                  // Not valid JSON or parse failed
+              // Identity is taken only from the documented /health response shape:
+              // JSON with Headroom's exact product identifier. Response headers
+              // (X-Powered-By, X-Service, ...) are spoofable and are never trusted.
+              let isHeadroom = false;
+              try {
+                const text = await res.text();
+                const data = JSON.parse(text);
+                if (data && typeof data === 'object' && data.service === 'headroom-proxy') {
+                  isHeadroom = true;
                 }
+              } catch (_) {
+                // Not valid JSON or missing the documented product identifier
               }
 
               if (isHeadroom) {
                 process.exitCode = 0;
                 return;
               } else {
-                process.stderr.write('Server at ' + curr + ' is not a Headroom instance (missing Headroom identifier)');
+                process.stderr.write(
+                  'Server at ' +
+                    curr +
+                    ' is not a Headroom instance (documented /health response shape with product identifier not found)'
+                );
                 process.exitCode = 1;
                 return;
               }

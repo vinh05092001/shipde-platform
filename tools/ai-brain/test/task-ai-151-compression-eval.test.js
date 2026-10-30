@@ -487,6 +487,19 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
         '-e',
         `
         const http = require('http');
+        // Documented Headroom proxy GET /health response shape:
+        // JSON body carrying Headroom's exact product identifier.
+        const healthBody = JSON.stringify({
+          service: 'headroom-proxy',
+          status: 'healthy',
+          ready: true,
+          version: '0.0.0-test',
+          timestamp: '2026-01-01T00:00:00Z',
+          uptime_seconds: 1,
+          checks: {},
+          runtime: {},
+          rust_core: 'loaded',
+        });
         const server = http.createServer((req, res) => {
           if (req.url === '/redirect-remote') {
             res.writeHead(302, { Location: 'http://remote-attacker.example.com/exploit' });
@@ -494,9 +507,41 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
           } else if (req.url === '/redirect-loopback') {
             res.writeHead(302, { Location: '/health' });
             res.end();
-          } else if (req.url === '/health') {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'ok', service: 'headroom' }));
+          } else if (req.url === '/health' || req.url.startsWith('/health?')) {
+            // Query string keeps the documented endpoint pathname (/health)
+            // while selecting what the (unrelated) server answers with.
+            const query = req.url.split('?')[1] || '';
+            if (query.includes('mode=plain')) {
+              // Unrelated server answering the allowed endpoint with plain text
+              res.writeHead(200, { 'Content-Type': 'text/plain' });
+              res.end('ok');
+            } else if (query.includes('mode=unrelated-json')) {
+              // Unrelated server answering the allowed endpoint with foreign JSON
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'ok', service: 'other-service' }));
+            } else if (query.includes('mode=spoofed-powered-by')) {
+              // Unrelated 200 server with a spoofed X-Powered-By containing 'headroom'
+              res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'X-Powered-By': 'not-headroom',
+              });
+              res.end(JSON.stringify({ status: 'ok', service: 'other-service' }));
+            } else if (query.includes('mode=spoofed-x-service')) {
+              // Unrelated 200 server with a spoofed X-Service header
+              res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'X-Service': 'headroom',
+              });
+              res.end(JSON.stringify({ status: 'ok', service: 'other-service' }));
+            } else if (query.includes('mode=wrong-identifier')) {
+              // Close-but-wrong product identifier in the documented shape
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'ok', service: 'headroom' }));
+            } else {
+              // Verified Headroom: documented endpoint + documented response shape
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(healthBody);
+            }
           } else if (req.url === '/unrelated-plain') {
             res.writeHead(200, { 'Content-Type': 'text/plain' });
             res.end('ok');
@@ -531,31 +576,77 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
             remoteRedirect.reason.includes('remote-attacker.example.com')
         );
 
-        // 2. Unrelated 200 server returning plain-text 'ok' MUST be rejected
+        // 2. 200 server on a non-documented endpoint (plain text) MUST be rejected
         const unrelatedPlain = probeHeadroom({
           headroomUrl: `http://127.0.0.1:${port}/unrelated-plain`,
           optIn: true,
         });
         assert.equal(unrelatedPlain.installed, false);
         assert.equal(unrelatedPlain.status, ENGINE_STATUS.NOT_INSTALLED);
-        assert.ok(
-          unrelatedPlain.reason.includes('missing Headroom identifier') ||
-            unrelatedPlain.reason.includes('failed capability check')
-        );
+        assert.ok(unrelatedPlain.reason.includes('not the documented Headroom health endpoint'));
 
-        // 3. Unrelated 200 server returning JSON without Headroom identifier MUST be rejected
+        // 3. 200 server on a non-documented endpoint (JSON) MUST be rejected
         const unrelatedJson = probeHeadroom({
           headroomUrl: `http://127.0.0.1:${port}/unrelated-json`,
           optIn: true,
         });
         assert.equal(unrelatedJson.installed, false);
         assert.equal(unrelatedJson.status, ENGINE_STATUS.NOT_INSTALLED);
-        assert.ok(
-          unrelatedJson.reason.includes('missing Headroom identifier') ||
-            unrelatedJson.reason.includes('failed capability check')
-        );
+        assert.ok(unrelatedJson.reason.includes('not the documented Headroom health endpoint'));
 
-        // 4. Loopback redirecting to /health with verified Headroom response is permitted
+        // 4. Unrelated 200 server answering the allowed endpoint with plain text
+        //    MUST be rejected (identity, not endpoint, fails)
+        const plainAtHealth = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/health?mode=plain`,
+          optIn: true,
+        });
+        assert.equal(plainAtHealth.installed, false);
+        assert.equal(plainAtHealth.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(plainAtHealth.reason.includes('product identifier not found'));
+
+        // 5. Unrelated 200 server answering the allowed endpoint with foreign JSON
+        //    MUST be rejected
+        const foreignJsonAtHealth = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/health?mode=unrelated-json`,
+          optIn: true,
+        });
+        assert.equal(foreignJsonAtHealth.installed, false);
+        assert.equal(foreignJsonAtHealth.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(foreignJsonAtHealth.reason.includes('product identifier not found'));
+
+        // 6. Unrelated 200 server with a spoofed X-Powered-By containing
+        //    'headroom' (e.g. 'not-headroom') MUST be rejected: response
+        //    headers are never trusted for identity
+        const spoofedPoweredBy = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/health?mode=spoofed-powered-by`,
+          optIn: true,
+        });
+        assert.equal(spoofedPoweredBy.installed, false);
+        assert.equal(spoofedPoweredBy.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(spoofedPoweredBy.reason.includes('product identifier not found'));
+
+        // 7. Unrelated 200 server with a spoofed X-Service: headroom header
+        //    MUST be rejected for the same reason
+        const spoofedXService = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/health?mode=spoofed-x-service`,
+          optIn: true,
+        });
+        assert.equal(spoofedXService.installed, false);
+        assert.equal(spoofedXService.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(spoofedXService.reason.includes('product identifier not found'));
+
+        // 8. Documented shape with a close-but-wrong product identifier
+        //    (service: 'headroom' instead of the exact documented identifier)
+        //    MUST be rejected
+        const wrongIdentifier = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/health?mode=wrong-identifier`,
+          optIn: true,
+        });
+        assert.equal(wrongIdentifier.installed, false);
+        assert.equal(wrongIdentifier.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(wrongIdentifier.reason.includes('product identifier not found'));
+
+        // 9. Loopback redirecting to /health with verified Headroom response is permitted
         const loopbackRedirect = probeHeadroom({
           headroomUrl: `http://127.0.0.1:${port}/redirect-loopback`,
           optIn: true,
@@ -563,7 +654,7 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
         assert.equal(loopbackRedirect.installed, true);
         assert.equal(loopbackRedirect.status, ENGINE_STATUS.INSTALLED);
 
-        // 5. Direct base URL automatically targeting /health with verified Headroom response succeeds
+        // 10. Direct base URL automatically targeting /health with verified Headroom response succeeds
         const directBase = probeHeadroom({
           headroomUrl: `http://127.0.0.1:${port}`,
           optIn: true,
