@@ -6,7 +6,7 @@
 | --------------- | ----- |
 | Work Item ID    | `FEAT-COM-05` |
 | Feature ID      | `FEAT-COM-05` |
-| Status          | `IN_PROGRESS` |
+| Status          | `READY_FOR_CODEX` |
 | Delivery order  | 24 |
 | Dependencies    | `TASK-FOUND-04` (merged), `FEAT-AUTH-01` (merged), `FEAT-AUTH-06` (merged), `FEAT-RBAC-01` (merged), `FEAT-RBAC-02` (merged), `FEAT-ORG-01` (merged), `FEAT-WH-01` (merged) |
 | Assigned author | `GEMINI` |
@@ -15,7 +15,7 @@
 | Allowed paths   | `docs/product-spec/work-items/FEAT-COM-05.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `packages/config/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/exports/*` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-com-05` |
-| Pull Request    | Pending |
+| Pull Request    | #470 |
 
 ## Business outcome
 
@@ -114,7 +114,7 @@ Key business capabilities delivered:
 
 ## Acceptance matrix
 
-| AC / Test ID | Scenario | Expected result | Evidence required |
+| AC/Test ID | Scenario | Expected result | Evidence required |
 | --- | --- | --- | --- |
 | `AC-COM-05-01` | Create export job with valid parameters | 201 Created; job created with `status: completed` (or pending); metadata populated; total_rows accurate | Unit & Supertest tests |
 | `AC-COM-05-02` | Export users to CSV (RFC 4180) | 200 OK; valid CSV formatted with UTF-8 BOM; metadata banner; properly escaped fields; PII masked if no `pii:unmask` | Unit CSV generator test |
