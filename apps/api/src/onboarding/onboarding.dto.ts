@@ -110,8 +110,12 @@ export function validateStepData(
   if (!data) return fields;
 
   if (stepId === OnboardingStepId.WAREHOUSE) {
-    if (data.name !== undefined) {
-      if (typeof data.name !== 'string' || data.name.trim().length < 2) {
+    const wh =
+      data.warehouse && typeof data.warehouse === 'object'
+        ? (data.warehouse as Record<string, any>)
+        : data;
+    if (wh.name !== undefined) {
+      if (typeof wh.name !== 'string' || wh.name.trim().length < 2) {
         fields.push({
           field: 'name',
           code: 'INVALID_NAME',
@@ -119,8 +123,8 @@ export function validateStepData(
         });
       }
     }
-    if (data.phone !== undefined) {
-      if (typeof data.phone !== 'string' || !PHONE_REGEX.test(data.phone.trim())) {
+    if (wh.phone !== undefined) {
+      if (typeof wh.phone !== 'string' || !PHONE_REGEX.test(wh.phone.trim())) {
         fields.push({
           field: 'phone',
           code: 'INVALID_PHONE_FORMAT',
@@ -128,8 +132,8 @@ export function validateStepData(
         });
       }
     }
-    if (data.address !== undefined) {
-      if (typeof data.address !== 'string' || data.address.trim().length < 3) {
+    if (wh.address !== undefined) {
+      if (typeof wh.address !== 'string' || wh.address.trim().length < 3) {
         fields.push({
           field: 'address',
           code: 'INVALID_ADDRESS',

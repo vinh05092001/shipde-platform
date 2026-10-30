@@ -373,6 +373,7 @@ export type MfaAuditEvent = (typeof MfaAuditEvent)[keyof typeof MfaAuditEvent];
 // --- Roles & Permissions (RBAC) Contracts (FEAT-RBAC-01) ---
 export const CanonicalPermissionCode = {
   IAM_SHOP_CONFIG: 'iam:shop_config',
+  IAM_SHOP_VIEW: 'iam:shop_view',
   IAM_MANAGE_USERS: 'iam:manage_users',
   IAM_CONNECT_OBSERVE_TOKEN: 'iam:connect_observe_token',
   IAM_GRANT_ACTION_PERMISSION: 'iam:grant_action_permission',

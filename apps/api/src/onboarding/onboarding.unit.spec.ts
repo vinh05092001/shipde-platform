@@ -52,6 +52,13 @@ function createMockPrismaService() {
 
   const mockTx = {
     onboardingState: {
+      findUnique: async ({ where }: any) => {
+        return (
+          onboardingStates.find((s) =>
+            where.id ? s.id === where.id : s.merchant_id === where.merchant_id
+          ) || null
+        );
+      },
       update: async ({ where, data }: any) => {
         const idx = onboardingStates.findIndex((s) => s.id === where.id);
         if (idx === -1) throw new Error('OnboardingState not found');
@@ -84,7 +91,11 @@ function createMockPrismaService() {
     },
     onboardingState: {
       findUnique: async ({ where }: any) => {
-        return onboardingStates.find((s) => s.merchant_id === where.merchant_id) || null;
+        return (
+          onboardingStates.find((s) =>
+            where.id ? s.id === where.id : s.merchant_id === where.merchant_id
+          ) || null
+        );
       },
       create: async ({ data }: any) => {
         const record = {
@@ -159,6 +170,26 @@ describe('FEAT-ONB-01 Guided Onboarding Unit Tests', () => {
         address: '456 Cau Giay, Ha Noi',
       });
       assert.strictEqual(validPlus84.length, 0);
+
+      // Nested warehouse payload
+      const validNested = validateStepData(OnboardingStepId.WAREHOUSE, {
+        warehouse: {
+          name: 'Kho Ha Noi',
+          phone: '0987654321',
+          address: '456 Cau Giay, Ha Noi',
+        },
+      });
+      assert.strictEqual(validNested.length, 0);
+
+      const invalidNested = validateStepData(OnboardingStepId.WAREHOUSE, {
+        warehouse: {
+          name: 'Kho Ha Noi',
+          phone: 'invalid-phone',
+          address: '456 Cau Giay, Ha Noi',
+        },
+      });
+      assert.strictEqual(invalidNested.length, 1);
+      assert.strictEqual(invalidNested[0].field, 'phone');
     });
 
     it('validates operating defaults payload: checks enum values and timezone', () => {

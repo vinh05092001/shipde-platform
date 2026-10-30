@@ -61,6 +61,9 @@ export function validateWarehouseInput(input: WarehouseFormData): {
 }
 
 export interface OnboardingFlowProps {
+  state?: OnboardingStateResponseDto | null;
+  loading?: boolean;
+  error?: string | null;
   initialState?: OnboardingStateResponseDto | null;
   initialLoading?: boolean;
   initialError?: string | null;
@@ -76,6 +79,9 @@ export interface OnboardingFlowProps {
 }
 
 export function OnboardingFlow({
+  state: propState,
+  loading: propLoading,
+  error: propError,
   initialState = null,
   initialLoading = false,
   initialError = null,
@@ -89,12 +95,30 @@ export function OnboardingFlow({
   onReset,
   onDismiss,
 }: OnboardingFlowProps) {
-  const [state, setState] = useState<OnboardingStateResponseDto | null>(initialState);
-  const [loading, setLoading] = useState<boolean>(initialLoading);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [submittingStep, setSubmittingStep] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<boolean>(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(initialError);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [errorDismissed, setErrorDismissed] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(initialSuccess);
+
+  // Directly derive live server state, loading and error from props
+  const state = propState !== undefined ? propState : initialState;
+  const loading = (propLoading !== undefined ? propLoading : initialLoading) || refreshing;
+
+  const rawError =
+    localError !== null ? localError : propError !== undefined ? propError : initialError;
+  const errorMessage = errorDismissed ? null : rawError;
+
+  const setErrorMessage = (msg: string | null) => {
+    setLocalError(msg);
+    setErrorDismissed(false);
+  };
+
+  const dismissErrorMessage = () => {
+    setErrorDismissed(true);
+    setLocalError(null);
+  };
 
   // Edit rights: server-authoritative boolean from API response or prop.
   // Unknown or undefined user/state fails closed to false (no edit).
@@ -168,14 +192,14 @@ export function OnboardingFlow({
 
   const handleRefresh = async () => {
     if (onRefresh) {
-      setLoading(true);
+      setRefreshing(true);
       setErrorMessage(null);
       try {
         await onRefresh();
       } catch (err: any) {
         setErrorMessage(err?.message || 'Lỗi khi tải lại dữ liệu thiết lập ban đầu');
       } finally {
-        setLoading(false);
+        setRefreshing(false);
       }
     }
   };
@@ -215,7 +239,7 @@ export function OnboardingFlow({
       return;
     }
     setWarehouseFieldErrors({});
-    await handleComplete(OnboardingStepId.WAREHOUSE, { warehouse: warehouseData });
+    await handleComplete(OnboardingStepId.WAREHOUSE, warehouseData);
   };
 
   const handleSkip = async (stepId: OnboardingStepId) => {

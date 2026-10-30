@@ -22,7 +22,6 @@ import type { ActorContext } from '../rbac/rbac.dto';
 import { normalizeCorrelationId } from '@shipde/config';
 import { extractClientIp } from '../utils/ip.util';
 import { CanonicalApiException } from '../auth/auth.service';
-import { PrismaService } from '../prisma/prisma.service';
 
 @Controller(['api/v1/onboarding', 'onboarding'])
 @UseGuards(RbacSeedGuard, SessionGuard, PermissionsGuard)
@@ -30,8 +29,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class OnboardingController {
   constructor(
     @Inject(OnboardingService) private readonly onboardingService: OnboardingService,
-    @Inject(RbacService) private readonly rbacService: RbacService,
-    @Inject(PrismaService) private readonly prisma: PrismaService
+    @Inject(RbacService) private readonly rbacService: RbacService
   ) {}
 
   private async resolveActor(req: any): Promise<ActorContext> {
@@ -43,38 +41,41 @@ export class OnboardingController {
     return actor;
   }
 
-  private async assertCanViewOnboarding(actor: ActorContext): Promise<void> {
-    const hasPerm = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
-    const allowedRoles = ['OWNER', 'OPS_CSKH', 'FINANCE', 'ACCOUNTANT'];
-    let roleCode = actor.role;
-    if (actor.customRoleId) {
-      const customRole = await this.prisma.role.findUnique({
-        where: { id: actor.customRoleId },
-        select: { code: true, name: true },
-      });
-      if (customRole?.code) {
-        if (customRole.code.toUpperCase().includes('FINANCE')) {
-          roleCode = 'FINANCE';
-        } else {
-          roleCode = customRole.code;
-        }
-      } else if (
-        customRole?.name &&
-        (customRole.name.toUpperCase().includes('FINANCE') ||
-          customRole.name.toUpperCase().includes('TÀI CHÍNH'))
-      ) {
-        roleCode = 'FINANCE';
-      }
-    }
-    if (!hasPerm && (!roleCode || !allowedRoles.includes(roleCode))) {
+  /**
+   * Helper to ensure actor belongs to the merchant tenant.
+   */
+  private assertTenantMembership(actor: ActorContext): void {
+    if (!actor.merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
-        'Bạn không có quyền xem thông tin thiết lập ban đầu của cửa hàng',
+        'Yêu cầu không xác định được danh tính cửa hàng',
         false,
-        'Vui lòng liên hệ Chủ Shop để được cấp quyền'
+        'Vui lòng đăng nhập lại'
       );
     }
+  }
+
+  /**
+   * Resolve view capabilities through the authoritative RBAC registry.
+   * Role codes and display names never grant onboarding access directly.
+   */
+  private async assertCanViewOnboarding(actor: ActorContext): Promise<void> {
+    const hasConfig = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
+    if (hasConfig) {
+      return;
+    }
+    const hasView = await this.rbacService.actorHasPermissions(actor, ['iam:shop_view']);
+    if (hasView) {
+      return;
+    }
+    throw new CanonicalApiException(
+      HttpStatus.FORBIDDEN,
+      'FORBIDDEN',
+      'Bạn không có quyền xem thông tin thiết lập ban đầu của cửa hàng',
+      false,
+      'Vui lòng liên hệ Chủ Shop để được cấp quyền'
+    );
   }
 
   /**
@@ -85,6 +86,7 @@ export class OnboardingController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
+    this.assertTenantMembership(actor);
     await this.assertCanViewOnboarding(actor);
     const canEdit = await this.rbacService.actorHasPermissions(actor, ['iam:shop_config']);
 
@@ -111,6 +113,7 @@ export class OnboardingController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
+    this.assertTenantMembership(actor);
 
     const result = await this.onboardingService.completeStep(
       actor.merchantId,
@@ -136,6 +139,7 @@ export class OnboardingController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
+    this.assertTenantMembership(actor);
 
     const result = await this.onboardingService.skipStep(
       actor.merchantId,
@@ -156,6 +160,7 @@ export class OnboardingController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
+    this.assertTenantMembership(actor);
 
     const result = await this.onboardingService.resetOnboarding(
       actor.merchantId,
@@ -175,6 +180,7 @@ export class OnboardingController {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const clientIp = extractClientIp(req);
     const actor = await this.resolveActor(req);
+    this.assertTenantMembership(actor);
 
     const result = await this.onboardingService.dismissOnboarding(
       actor.merchantId,

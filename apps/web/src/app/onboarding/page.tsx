@@ -202,6 +202,9 @@ export default function OnboardingPage({
 
         {/* Main Flow Component */}
         <OnboardingFlow
+          state={state}
+          loading={loading}
+          error={error}
           initialState={state}
           initialLoading={loading}
           initialError={error}

@@ -26,12 +26,13 @@ function nextLoopDeps(overrides) {
     writerFor: () => null,
     isOpenRun: () => false,
     log: () => {},
+    runIntake: async () => ({ status: 'completed' }),
     ...(overrides || {}),
   };
 }
 
 function fixtureRoot(name) {
-  const root = fs.mkdtempSync(path.join(__dirname, name));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), name));
   const files = {
     [path.join(
       'docs',

@@ -80,13 +80,18 @@ async function runOnboardingSupertestSuite() {
 
   const testSuffix = Date.now().toString().slice(-6);
 
+  let merchantIdA: string | undefined;
+  let merchantIdB: string | undefined;
+  let financeRoleId: string | undefined;
+  let noPermRoleId: string | undefined;
+
   try {
     const tokenSecret = 'test-token-secret-for-onboarding-supertest-32-chars';
     process.env.AUTH_TOKEN_SECRET = tokenSecret;
 
     // 1. Fixture: Merchant A & Merchant B
-    const merchantIdA = randomUUID();
-    const merchantIdB = randomUUID();
+    merchantIdA = randomUUID();
+    merchantIdB = randomUUID();
 
     await prisma.merchant.createMany({
       data: [
@@ -162,8 +167,14 @@ async function runOnboardingSupertestSuite() {
     const warehouseUserA = await setupUserSession(merchantIdA, RoleEnum.WAREHOUSE, 'wh_a');
     const ownerB = await setupUserSession(merchantIdB, RoleEnum.OWNER, 'owner_b');
 
-    // Create custom Finance role for Merchant A
-    const financeRoleId = randomUUID();
+    // Retrieve canonical iam:shop_view permission from RBAC seed
+    const shopViewPerm = await prisma.permission.findUnique({
+      where: { code: 'iam:shop_view' },
+    });
+    assert.ok(shopViewPerm, 'iam:shop_view permission must exist in DB');
+
+    // Create custom Finance role for Merchant A WITH iam:shop_view attached
+    financeRoleId = randomUUID();
     await prisma.role.create({
       data: {
         id: financeRoleId,
@@ -174,11 +185,36 @@ async function runOnboardingSupertestSuite() {
         is_system: false,
       },
     });
+    await prisma.rolePermission.create({
+      data: {
+        role_id: financeRoleId,
+        permission_id: shopViewPerm.id,
+      },
+    });
     const financeUserA = await setupUserSession(
       merchantIdA,
       RoleEnum.ACCOUNTANT,
       'fin_a',
       financeRoleId
+    );
+
+    // Create unprivileged custom role with "FINANCE" name/code but ZERO registry permissions
+    noPermRoleId = randomUUID();
+    await prisma.role.create({
+      data: {
+        id: noPermRoleId,
+        merchant_id: merchantIdA,
+        code: `FINANCE_UNPRIVILEGED_${testSuffix}`,
+        name: 'Nhân viên Tài chính Chưa Cấp Quyền',
+        description: 'Role with finance substring but zero registry permissions',
+        is_system: false,
+      },
+    });
+    const unprivilegedFinanceUserA = await setupUserSession(
+      merchantIdA,
+      RoleEnum.ACCOUNTANT,
+      'fin_unprivileged_a',
+      noPermRoleId
     );
 
     const server = app.getHttpServer();
@@ -380,7 +416,16 @@ async function runOnboardingSupertestSuite() {
 
     assert.strictEqual(resReset.body.data.status, OnboardingOverallStatus.IN_PROGRESS);
     assert.strictEqual(resReset.body.data.progress_percentage, 0);
-    console.log('✓ AC-ONB-01-10 passed');
+
+    // Verify reset sticks on immediate subsequent GET
+    const resGetAfterReset = await request(server)
+      .get('/api/v1/onboarding')
+      .set('Authorization', `Bearer ${ownerA.token}`)
+      .expect(200);
+
+    assert.strictEqual(resGetAfterReset.body.data.status, OnboardingOverallStatus.IN_PROGRESS);
+    assert.strictEqual(resGetAfterReset.body.data.progress_percentage, 0);
+    console.log('✓ AC-ONB-01-10 passed (reset persisted and verified on subsequent GET)');
 
     // ------------------------------------------------------------------------
     // AC-ONB-01-11: User lacking iam:shop_config rejected with 403 FORBIDDEN
@@ -405,7 +450,7 @@ async function runOnboardingSupertestSuite() {
     // ------------------------------------------------------------------------
     // AC-ONB-01-13: Cross-tenant isolation (Merchant B is isolated from A)
     // ------------------------------------------------------------------------
-    console.log('Testing AC-ONB-01-13: Strict tenant scoping...');
+    console.log('Testing AC-ONB-01-13: Strict tenant scoping & mutation isolation...');
     const resMerchantB = await request(server)
       .get('/api/v1/onboarding')
       .set('Authorization', `Bearer ${ownerB.token}`)
@@ -413,19 +458,41 @@ async function runOnboardingSupertestSuite() {
 
     assert.strictEqual(resMerchantB.body.data.merchant_id, merchantIdB);
     assert.notStrictEqual(resMerchantB.body.data.merchant_id, merchantIdA);
+
+    // Tenant B mutates its own step
+    const resMutateB = await request(server)
+      .post('/api/v1/onboarding/steps/SHOP_PROFILE/complete')
+      .set('Authorization', `Bearer ${ownerB.token}`)
+      .send({})
+      .expect(200);
+
+    assert.strictEqual(resMutateB.body.data.merchant_id, merchantIdB);
+    assert.strictEqual(resMutateB.body.data.completed_required_steps, 1);
+
+    // Tenant A's state is completely unaffected by Tenant B's mutation
+    const resCheckA = await request(server)
+      .get('/api/v1/onboarding')
+      .set('Authorization', `Bearer ${ownerA.token}`)
+      .expect(200);
+
+    assert.strictEqual(resCheckA.body.data.merchant_id, merchantIdA);
+    assert.strictEqual(resCheckA.body.data.progress_percentage, 0);
     console.log('✓ AC-ONB-01-13 passed');
 
     // ------------------------------------------------------------------------
-    // AC-ONB-01-15: FINANCE user view-only access
+    // AC-ONB-01-15: RBAC registry authorization (iam:shop_view view-only, unprivileged role denied)
     // ------------------------------------------------------------------------
-    console.log('Testing AC-ONB-01-15: FINANCE role GET allowed, mutation 403...');
+    console.log('Testing AC-ONB-01-15: RBAC registry permissions guard (view-only vs denied)...');
+    // 1. Role with iam:shop_view can GET view-only
     const resFinGet = await request(server)
       .get('/api/v1/onboarding')
       .set('Authorization', `Bearer ${financeUserA.token}`)
       .expect(200);
 
     assert.strictEqual(resFinGet.body.success, true);
+    assert.strictEqual(resFinGet.body.data.can_edit, false);
 
+    // 2. Role with iam:shop_view cannot mutate
     const resFinMutate = await request(server)
       .post('/api/v1/onboarding/steps/SHOP_PROFILE/complete')
       .set('Authorization', `Bearer ${financeUserA.token}`)
@@ -433,12 +500,58 @@ async function runOnboardingSupertestSuite() {
       .expect(403);
 
     assert.strictEqual(resFinMutate.body.error.code, 'FORBIDDEN');
-    console.log('✓ AC-ONB-01-15 passed');
+
+    // 3. Unprivileged role (even with "FINANCE" in name/code) without iam:shop_view is denied with 403
+    const resUnprivGet = await request(server)
+      .get('/api/v1/onboarding')
+      .set('Authorization', `Bearer ${unprivilegedFinanceUserA.token}`)
+      .expect(403);
+
+    assert.strictEqual(resUnprivGet.body.error.code, 'FORBIDDEN');
+    console.log(
+      '✓ AC-ONB-01-15 passed (RBAC registry permissions strictly enforced; name/code substrings ignored)'
+    );
 
     console.log('================================================================');
     console.log('ALL 15 GUIDED ONBOARDING SUPERTEST ACCEPTANCE CRITERIA PASSED!');
     console.log('================================================================');
   } finally {
+    if (prisma) {
+      const createdMerchantIds = [merchantIdA, merchantIdB].filter(
+        (id): id is string => typeof id === 'string'
+      );
+      const createdRoleIds = [financeRoleId, noPermRoleId].filter(
+        (id): id is string => typeof id === 'string'
+      );
+
+      if (createdMerchantIds.length > 0) {
+        await prisma.auditLog.deleteMany({
+          where: { merchant_id: { in: createdMerchantIds } },
+        });
+        await prisma.onboardingState.deleteMany({
+          where: { merchant_id: { in: createdMerchantIds } },
+        });
+        await prisma.deviceSession.deleteMany({
+          where: { merchant_id: { in: createdMerchantIds } },
+        });
+        await prisma.user.deleteMany({
+          where: { merchant_id: { in: createdMerchantIds } },
+        });
+      }
+      if (createdRoleIds.length > 0) {
+        await prisma.rolePermission.deleteMany({
+          where: { role_id: { in: createdRoleIds } },
+        });
+        await prisma.role.deleteMany({
+          where: { id: { in: createdRoleIds } },
+        });
+      }
+      if (createdMerchantIds.length > 0) {
+        await prisma.merchant.deleteMany({
+          where: { id: { in: createdMerchantIds } },
+        });
+      }
+    }
     await app.close();
   }
 }

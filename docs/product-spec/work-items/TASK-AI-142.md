@@ -1,5 +1,34 @@
 # TASK-AI-142 — Hermes chat brain wired to the Controller
 
+## Slice (C): Governed planner, PR reviewer, docs-only merge executor and CI-gated completion (2026-10-28)
+
+Implementation of split slice (C) delivers:
+- Governed planning services (`tools/ai-brain/planning-services.js`) providing isolated planner execution, docs-only diff verification, unattended planning dependencies for `next-runner.js`, and integration with `work-item-planner.js`.
+- Independent PR reviewer (`review pr --pr <n> --sha <40-hex>`) verifying exact head SHAs in isolated review roots with structured verdict output.
+- Docs-only merge executor and preflight wiring for safe autonomous loop progression.
+- CI-gated completion (`tools/ai-brain/ci-gate.js`, `tools/ai-brain/verification-split.js`) deferring infrastructure-dependent test suites to GitHub Actions and feeding failing job logs to the repair loop.
+- Supporting tooling and utilities: Context7 library docs retrieval (`tools/ai-brain/context7.js`), task-scoped Repomix packaging (`tools/ai-brain/context-pack.js`, `tools/repomix/`), output parsing in `writer-schema.js`, dirty retained root repair in `isolation-launcher.js`, and tool catalog entries in `data/tool-manifest.json`.
+
+Allowed paths for Slice (C):
+- `tools/ai-brain/planning-services.js`
+- `tools/ai-brain/work-item-planner.js`
+- `tools/ai-brain/next-runner.js`
+- `tools/ai-brain/ci-gate.js`
+- `tools/ai-brain/verification-split.js`
+- `tools/ai-brain/orchestrate.js`
+- `tools/ai-brain/isolation-launcher.js`
+- `tools/ai-brain/cli.js`
+- `tools/ai-brain/context7.js`
+- `tools/ai-brain/context-pack.js`
+- `tools/ai-brain/prompt-compiler.js`
+- `tools/ai-brain/writer-schema.js`
+- `tools/repomix/*`
+- `tools/ai-brain/data/tool-manifest.json`
+- `tools/ai-brain/sources.json`
+- `tools/ai-brain/ninerouter-combo.js`
+- `docs/product-spec/work-items/TASK-AI-142.md`
+- and slice (C) test suites under `tools/ai-brain/test/`.
+
 ## Quota scanner and route ranking slice (2026-10-28)
 
 Slice (A) implements the live quota scanner and quota-aware route ranking subsystem. It delivers periodic quota scanning across upstream scopes and agent CLI lanes, dynamic model discovery and source alias resolution (including iteracompute and llm7 free tier), the benchmark-ordered 9Router writer combo candidate filter, coverage shrinkage and fallback benchmark evaluation for model priors, and fresh route evidence prioritization.
@@ -225,7 +254,6 @@ Evidence output:
 ## AGY lane model gating and 9router isolation fix (2026-10-28)
 
 Gates agy lane models by each account's `models-out.txt` and isolates agy lanes from 9router model IDs (`prefix/model`). An agy lane may only be probed or dispatched with models advertised by that account's CLI discovery (`models-out.txt`), returning 404 `model_not_found` when no account supports the model. Requests containing 9router model prefixes are rejected early from reaching agy lanes. Allowed paths for this fix: `tools/ai-brain/agy-gateway.js`, `tools/ai-brain/agy-pool-runtime.js`, `tools/ai-brain/candidates.js`, `tools/ai-brain/hermes-session.js`, `tools/ai-brain/test/task-ai-142-agy-gateway.test.js`, and `docs/product-spec/work-items/TASK-AI-142.md`.
-
 ## Orchestrate module split, steps 1-2 (2026-10-28)
 
 Steps 1-2 of the orchestrate module split extract `route-probe` and `decisions-log` helpers verbatim from `tools/ai-brain/orchestrate.js` into dedicated modules: `tools/ai-brain/orchestrate/route-probe.js` and `tools/ai-brain/orchestrate/decisions-log.js`.
@@ -1661,7 +1689,6 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
     - `onboardSourceRolling` executes forced tool call probe, sets `combo.capabilities.tools = true`, and stores `capabilityProbes` with matching binding.
     - `dispatch --dry-run` with writer role requiring tools admits onboarded model without `CAPABILITY_UNVERIFIED:tools`.
     - Failed tool probe fails closed without granting tools capability.
-
 ### H3 live: Hermes orchestrator model selection from live routes (2026-10-28)
 
 - Outcome: Split slice (B) Hermes orchestrator model selection:
@@ -1692,3 +1719,17 @@ Aggregator gateways like 9router failed rolling onboarding entirely when an init
   - `tools/ai-brain/test/task-ai-142-jev-weights.test.js` (verified pass against baseline)
 - Verification:
   - All 148 tests passing across all theme test suites (`node --test`).
+
+### Review repair: Slice (C) planner and CI gate review findings addressed (2026-10-28)
+
+- Fixed 9 independent review findings for slice C:
+  1. Orchestrate resume path: execute CI verification instead of skipping when publication draft exists in checkpoint.
+  2. CI gate checks: require all configured requiredChecks ('contract', 'application-gate') to report and succeed; reject SKIPPED/NEUTRAL checks.
+  3. Shared dependencies link rewriting: dynamically match packages/apps subpaths so two workers sharing cache link to their own roots.
+  4. Review author verification: fail closed with AUTHOR_UNKNOWN when author is missing or unknown.
+  5. Diagnostics & log sanitization: redact credentials and synthetic bearer tokens in planner diagnostics and CI failure logs using createSecretRedactor.
+  6. Historical writer events: check workerRoot, head SHA, runId, and freshness against retainedRootMaxAgeMs in retainedRootHasOwnWriterRecord.
+  7. PR review contracts: load actual Work Item requirements via intake for implementation reviews and reserve doc-only criteria for plan reviews.
+  8. Configurable no-route limits: expose blockedNoRouteTimeoutMs and blockedNoRoutePollIntervalMs via getDispatchConfig without hardcoded fallbacks.
+  9. Quota-scan freshness: implement ifDue directly in scanAllQuotas to prevent unnecessary provider scanning.
+- Regression tests added in `tools/ai-brain/test/task-ai-142-slice-c-review-findings.test.js` and updated in `tools/ai-brain/test/ci-final-verification.test.js`.

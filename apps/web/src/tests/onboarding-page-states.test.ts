@@ -353,10 +353,52 @@ async function runOnboardingWebTestSuite() {
     'Must render page header & breadcrumb'
   );
   assert.ok(pageHtml.includes('Quay lại Bảng Điều Khiển'), 'Must provide navigation back link');
-  console.log('  PASS: OnboardingPage integration verified');
+  assert.ok(pageHtml.includes('Hồ sơ Cửa hàng'), 'Must render initial checklist steps');
+
+  // Page Loading State
+  const pageLoadingHtml = renderPage({
+    initialLoading: true,
+    initialState: null,
+  });
+  assert.ok(pageLoadingHtml.includes('role="status"'), 'Page loading must render status role');
+  assert.ok(pageLoadingHtml.includes('animate-pulse'), 'Page loading must render pulse skeleton');
+
+  // Page Error State
+  const pageErrorHtml = renderPage({
+    initialLoading: false,
+    initialError: 'Lỗi kết nối máy chủ thiết lập',
+    initialState: null,
+  });
+  assert.ok(
+    pageErrorHtml.includes('Lỗi kết nối máy chủ thiết lập'),
+    'Page must render error alert'
+  );
+
+  // --- 12. Controlled State and Live Prop Sync ---
+  console.log('🧪 12. Testing OnboardingFlow Live Controlled State & Prop Synchronization...');
+  const controlledFlowHtml = renderFlow({
+    state: mockInitialState,
+    loading: false,
+    error: null,
+  });
+  assert.ok(
+    controlledFlowHtml.includes('Tiến độ hoàn thành:'),
+    'Controlled state must render live state progress'
+  );
+
+  const updatedControlledFlowHtml = renderFlow({
+    state: completedState,
+    loading: false,
+    error: null,
+  });
+  assert.ok(
+    updatedControlledFlowHtml.includes('Chúc Mừng! Cửa Hàng Đã Sẵn Sàng Vận Hành'),
+    'Controlled state update must reflect 100% completion'
+  );
+  console.log('  PASS: OnboardingPage integration and live prop synchronization verified');
 
   console.log('\n================================================================');
-  console.log('🎉 ALL 11 FEAT-ONB-01 WEB UI STATE TESTS PASSED 100%!');
+  console.log('🎉 ALL 12 FEAT-ONB-01 WEB UI STATE TESTS PASSED 100%!');
   console.log('================================================================\n');
 }
 

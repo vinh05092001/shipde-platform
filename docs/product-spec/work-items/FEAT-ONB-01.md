@@ -160,7 +160,7 @@ The onboarding checklist is resumable, strictly tenant-isolated, RBAC-protected 
 - `pnpm typecheck` — PASSED (12/12 packages clean)
 - `npx tsx --tsconfig apps/api/tsconfig.json --test apps/api/src/onboarding/onboarding.unit.spec.ts` — PASSED (16/16 unit tests passed)
 - `npx tsx --tsconfig apps/api/tsconfig.json apps/api/src/onboarding/onboarding.supertest.spec.ts` — PASSED (15/15 supertest acceptance criteria passed)
-- `npx tsx apps/web/src/tests/onboarding-page-states.test.ts` — PASSED (11/11 web UI state tests passed)
+- `npx tsx apps/web/src/tests/onboarding-page-states.test.ts` — PASSED (12/12 web UI state tests passed)
 - `pnpm --filter @shipde/web test` — PASSED (all web test suites passed)
 - `npx tsx scripts/verify-a11y.ts` — PASSED (Accessibility / A11y gate clean)
 - `node scripts/ai/check-no-hardcode.mjs` — PASSED (0 raw instances, 0 new)
@@ -169,7 +169,8 @@ The onboarding checklist is resumable, strictly tenant-isolated, RBAC-protected 
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Pending | Initial implementation |
+| 1 | `66b072bfc2bfe5e5e2917a1b6e43510e6a163e73` | `CHANGES_REQUIRED` | Initial submission |
+| 2 | Pending | Pending | Resolved all 6 review findings: 1. RBAC registry permissions authorization (`iam:shop_view` / `iam:shop_config`) without role/substring checks; 2. Live server state reactive prop sync in UI; 3. Clean origin/main merge preserving branches, search, and tools; 4. Supertest tenant cleanup in finally and cross-tenant mutation isolation; 5. Concurrency-safe progress persistence and evaluateLiveCompleteness on reset; 6. Warehouse contract alignment between UI and server |
 
 ## Residual limitations
 

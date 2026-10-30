@@ -64,34 +64,54 @@ export class OnboardingService {
     correlationId?: string,
     clientIp?: string
   ): Promise<any> {
+    if (!merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false,
+        'Vui lòng đăng nhập lại'
+      );
+    }
+
     let state = await this.prisma.onboardingState.findUnique({
       where: { merchant_id: merchantId },
     });
 
     if (!state) {
-      state = await this.prisma.onboardingState.create({
-        data: {
-          merchant_id: merchantId,
-          status: OnboardingOverallStatus.IN_PROGRESS,
-          current_step: OnboardingStepId.SHOP_PROFILE,
-          completed_steps: [],
-          skipped_steps: [],
-        },
-      });
-
-      if (correlationId) {
-        await this.prisma.auditLog.create({
+      try {
+        state = await this.prisma.onboardingState.create({
           data: {
             merchant_id: merchantId,
-            user_id: null,
-            actor: 'SYSTEM',
-            action: 'ONBOARDING_INITIALIZED',
-            entity_type: 'onboarding',
-            entity_id: state.id,
-            reason: `correlation_id:${correlationId}`,
-            ip_address: clientIp ? this.hashIp(clientIp) : null,
+            status: OnboardingOverallStatus.IN_PROGRESS,
+            current_step: OnboardingStepId.SHOP_PROFILE,
+            completed_steps: [],
+            skipped_steps: [],
           },
         });
+
+        if (correlationId) {
+          await this.prisma.auditLog.create({
+            data: {
+              merchant_id: merchantId,
+              user_id: null,
+              actor: 'SYSTEM',
+              action: 'ONBOARDING_INITIALIZED',
+              entity_type: 'onboarding',
+              entity_id: state.id,
+              reason: `correlation_id:${correlationId}`,
+              ip_address: clientIp ? this.hashIp(clientIp) : null,
+            },
+          });
+        }
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          state = await this.prisma.onboardingState.findUnique({
+            where: { merchant_id: merchantId },
+          });
+        } else {
+          throw err;
+        }
       }
     }
 
@@ -102,13 +122,14 @@ export class OnboardingService {
    * Evaluate live aggregate completeness from database records
    */
   private async evaluateLiveCompleteness(merchantId: string, state: any): Promise<Set<string>> {
-    const satisfied = new Set<string>(state.completed_steps || []);
-    const skippedSet = new Set<string>(state.skipped_steps || []);
+    const satisfied = new Set<string>(state?.completed_steps || []);
+    const skippedSet = new Set<string>(state?.skipped_steps || []);
 
     const merchant = await this.prisma.merchant.findUnique({
       where: { id: merchantId },
       include: {
         carrier_accounts: { select: { id: true }, take: 1 },
+        warehouses: { select: { id: true }, take: 1 },
         users: { select: { id: true }, take: 2 },
         invitations: { select: { id: true }, take: 1 },
         orders: { select: { id: true }, take: 1 },
@@ -122,9 +143,11 @@ export class OnboardingService {
         satisfied.add(OnboardingStepId.SHOP_PROFILE);
       }
 
-      // Step 2: WAREHOUSE is satisfied if warehouse payload is stored in step_data or marked completed
-      const stepData = (state.step_data as Record<string, any>) || {};
-      if (stepData.warehouse && stepData.warehouse.address) {
+      // Step 2: WAREHOUSE is satisfied if warehouse payload is stored in step_data or warehouse row exists
+      const stepData = (state?.step_data as Record<string, any>) || {};
+      const whData = stepData.warehouse;
+      const whAddress = whData?.address || whData?.warehouse?.address;
+      if (whAddress || (merchant.warehouses && merchant.warehouses.length > 0)) {
         satisfied.add(OnboardingStepId.WAREHOUSE);
       }
 
@@ -311,6 +334,16 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
+    if (!merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false,
+        'Vui lòng đăng nhập lại'
+      );
+    }
+
     if (!VALID_STEP_IDS.includes(stepId)) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -337,11 +370,11 @@ export class OnboardingService {
     }
 
     const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
-    const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, state);
+    const liveSatisfiedPre = await this.evaluateLiveCompleteness(merchantId, state);
 
     // Assert prerequisites are satisfied
     for (const prereqId of stepDef.prerequisites) {
-      if (!liveSatisfied.has(prereqId)) {
+      if (!liveSatisfiedPre.has(prereqId)) {
         const prereqDef = ONBOARDING_STEPS_CATALOG.find((s) => s.id === prereqId);
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
@@ -360,24 +393,48 @@ export class OnboardingService {
       }
     }
 
-    // Update state
-    const currentCompleted = new Set<string>(state.completed_steps || []);
-    currentCompleted.add(stepDef.id);
-    const currentSkipped = new Set<string>(state.skipped_steps || []);
-    currentSkipped.delete(stepDef.id);
+    // Normalize warehouse payload if nested
+    const normalizedData =
+      dto?.data && dto.data.warehouse && typeof dto.data.warehouse === 'object'
+        ? (dto.data.warehouse as Record<string, any>)
+        : dto?.data;
 
-    const stepData = (state.step_data as Record<string, any>) || {};
-    if (dto?.data) {
-      stepData[stepDef.id.toLowerCase()] = dto.data;
-    }
-
-    liveSatisfied.add(stepDef.id);
-    const requiredSteps = ONBOARDING_STEPS_CATALOG.filter((s) => s.required);
-    const allRequiredCompleted = requiredSteps.every((s) => liveSatisfied.has(s.id));
-
-    const updatedState = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.onboardingState.update({
+    const { updatedState, liveSatisfied } = await this.prisma.$transaction(async (tx) => {
+      const currentState = await tx.onboardingState.findUnique({
         where: { id: state.id },
+      });
+      if (!currentState) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'ONBOARDING_NOT_FOUND',
+          'Không tìm thấy dữ liệu thiết lập ban đầu'
+        );
+      }
+
+      const currentCompleted = new Set<string>(currentState.completed_steps || []);
+      currentCompleted.add(stepDef.id);
+      const currentSkipped = new Set<string>(currentState.skipped_steps || []);
+      currentSkipped.delete(stepDef.id);
+
+      const stepData = (currentState.step_data as Record<string, any>) || {};
+      if (normalizedData) {
+        stepData[stepDef.id.toLowerCase()] = normalizedData;
+      }
+
+      const tempState = {
+        ...currentState,
+        completed_steps: Array.from(currentCompleted),
+        skipped_steps: Array.from(currentSkipped),
+        step_data: stepData,
+      };
+
+      const evaluatedLive = await this.evaluateLiveCompleteness(merchantId, tempState);
+      evaluatedLive.add(stepDef.id);
+      const requiredSteps = ONBOARDING_STEPS_CATALOG.filter((s) => s.required);
+      const allRequiredCompleted = requiredSteps.every((s) => evaluatedLive.has(s.id));
+
+      const updated = await tx.onboardingState.update({
+        where: { id: currentState.id },
         data: {
           completed_steps: Array.from(currentCompleted),
           skipped_steps: Array.from(currentSkipped),
@@ -386,8 +443,8 @@ export class OnboardingService {
             ? OnboardingOverallStatus.COMPLETED
             : OnboardingOverallStatus.IN_PROGRESS,
           completed_at: allRequiredCompleted
-            ? state.completed_at || new Date()
-            : state.completed_at,
+            ? currentState.completed_at || new Date()
+            : currentState.completed_at,
         },
       });
 
@@ -398,17 +455,17 @@ export class OnboardingService {
           actor: actor.role || 'OWNER',
           action: 'ONBOARDING_STEP_COMPLETED',
           entity_type: 'onboarding',
-          entity_id: state.id,
+          entity_id: currentState.id,
           new_value: {
             step_id: stepDef.id,
-            data: maskAuditPayload(dto?.data),
+            data: maskAuditPayload(normalizedData),
           },
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
       });
 
-      return updated;
+      return { updatedState: updated, liveSatisfied: evaluatedLive };
     });
 
     const responseDto = this.buildResponse(updatedState, liveSatisfied);
@@ -433,6 +490,16 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
+    if (!merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false,
+        'Vui lòng đăng nhập lại'
+      );
+    }
+
     if (!VALID_STEP_IDS.includes(stepId)) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
@@ -456,17 +523,26 @@ export class OnboardingService {
     }
 
     const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
-    const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, state);
 
-    const currentCompleted = new Set<string>(state.completed_steps || []);
-    currentCompleted.delete(stepDef.id);
-    const currentSkipped = new Set<string>(state.skipped_steps || []);
-    currentSkipped.add(stepDef.id);
-    liveSatisfied.delete(stepDef.id);
-
-    const updatedState = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.onboardingState.update({
+    const { updatedState, liveSatisfied } = await this.prisma.$transaction(async (tx) => {
+      const currentState = await tx.onboardingState.findUnique({
         where: { id: state.id },
+      });
+      if (!currentState) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'ONBOARDING_NOT_FOUND',
+          'Không tìm thấy dữ liệu thiết lập ban đầu'
+        );
+      }
+
+      const currentCompleted = new Set<string>(currentState.completed_steps || []);
+      currentCompleted.delete(stepDef.id);
+      const currentSkipped = new Set<string>(currentState.skipped_steps || []);
+      currentSkipped.add(stepDef.id);
+
+      const updated = await tx.onboardingState.update({
+        where: { id: currentState.id },
         data: {
           completed_steps: Array.from(currentCompleted),
           skipped_steps: Array.from(currentSkipped),
@@ -480,14 +556,16 @@ export class OnboardingService {
           actor: actor.role || 'OWNER',
           action: 'ONBOARDING_STEP_SKIPPED',
           entity_type: 'onboarding',
-          entity_id: state.id,
+          entity_id: currentState.id,
           new_value: { step_id: stepDef.id },
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
       });
 
-      return updated;
+      const evaluatedLive = await this.evaluateLiveCompleteness(merchantId, updated);
+      evaluatedLive.delete(stepDef.id);
+      return { updatedState: updated, liveSatisfied: evaluatedLive };
     });
 
     const responseDto = this.buildResponse(updatedState, liveSatisfied);
@@ -511,11 +589,32 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
+    if (!merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false,
+        'Vui lòng đăng nhập lại'
+      );
+    }
+
     const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
 
     const updatedState = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.onboardingState.update({
+      const currentState = await tx.onboardingState.findUnique({
         where: { id: state.id },
+      });
+      if (!currentState) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'ONBOARDING_NOT_FOUND',
+          'Không tìm thấy dữ liệu thiết lập ban đầu'
+        );
+      }
+
+      const updated = await tx.onboardingState.update({
+        where: { id: currentState.id },
         data: {
           completed_steps: [],
           skipped_steps: [],
@@ -533,7 +632,7 @@ export class OnboardingService {
           actor: actor.role || 'OWNER',
           action: 'ONBOARDING_RESET',
           entity_type: 'onboarding',
-          entity_id: state.id,
+          entity_id: currentState.id,
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
@@ -542,7 +641,7 @@ export class OnboardingService {
       return updated;
     });
 
-    const liveSatisfied = new Set<string>();
+    const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, updatedState);
     const responseDto = this.buildResponse(updatedState, liveSatisfied);
     return {
       success: true,
@@ -564,6 +663,16 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
+    if (!merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false,
+        'Vui lòng đăng nhập lại'
+      );
+    }
+
     const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
     const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, state);
 
@@ -586,8 +695,19 @@ export class OnboardingService {
     }
 
     const updatedState = await this.prisma.$transaction(async (tx) => {
-      const updated = await tx.onboardingState.update({
+      const currentState = await tx.onboardingState.findUnique({
         where: { id: state.id },
+      });
+      if (!currentState) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'ONBOARDING_NOT_FOUND',
+          'Không tìm thấy dữ liệu thiết lập ban đầu'
+        );
+      }
+
+      const updated = await tx.onboardingState.update({
+        where: { id: currentState.id },
         data: {
           status: OnboardingOverallStatus.DISMISSED,
         },
@@ -600,7 +720,7 @@ export class OnboardingService {
           actor: actor.role || 'OWNER',
           action: 'ONBOARDING_DISMISSED',
           entity_type: 'onboarding',
-          entity_id: state.id,
+          entity_id: currentState.id,
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
