@@ -104,6 +104,25 @@ function setup() {
     repairer: async (_findings, sha) => ({ sha }),
     reviewerIdentity: candidateKey(reviewer),
     measureFailBefore: () => ({ command: 'test', exitCode: 1 }),
+    ghRunner: (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            headRefOid: git(['rev-parse', 'HEAD']),
+            statusCheckRollup: [
+              { name: 'contract', status: 'COMPLETED', conclusion: 'SUCCESS' },
+              { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            ],
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: 'unknown gh command' };
+    },
+    ciSleep: async () => {},
+    ciPollIntervalMs: 1,
+    ciTimeoutMs: 1000,
   };
   return { ...opts, writer, reviewer, run, runOriginal: run, dir };
 }
@@ -175,6 +194,139 @@ test('CK-R02/03 resumes a reviewed-and-published item without another launch, re
     JSON.parse(fs.readFileSync(f.checkpointFile, 'utf8')).publication,
     before.publication
   );
+});
+
+test('TASK-AI-142: first publish of a completed item requires exact-SHA CI without a PR number', async (t) => {
+  for (const state of ['PASS', 'FAIL', 'HEAD_MOVED', 'MISSING']) {
+    await t.test(state, async () => {
+      const f = setup();
+      t.after(() => fs.rmSync(f.dir, { recursive: true, force: true }));
+      f.candidates.push(f.reviewer);
+      f.reviewer = async (sha) => ({
+        pass: true,
+        sha,
+        verdict: 'PASS',
+        reviewer: REVIEWER,
+        findings: [],
+      });
+      const workItemId = f.specs[0].id;
+      const first = await runOrchestration('complete before publication', f);
+      assert.equal(first.outcomes[0].status, 'completed', JSON.stringify(first.outcomes));
+      const before = JSON.parse(fs.readFileSync(f.checkpointFile, 'utf8'));
+      assert.ok(before.completed.includes(workItemId));
+      assert.equal(before.liveSteps[workItemId].publication.status, 'NOT_REQUESTED');
+      const sha = before.reviews[0].sha;
+      let publishes = 0;
+      f.publication = {
+        publish: (request) => {
+          publishes += 1;
+          assert.equal(request.reviewedSha, sha);
+          return { draft: {} };
+        },
+        approvalId: 'AP-' + workItemId,
+        remoteUrl: 'https://github.com/example/repository.git',
+        branch: f.branch,
+        testMode: true,
+        cwd: f.cwd,
+      };
+      f.run = () => assert.fail('a completed item must not launch another worker');
+      f.reviewer = () => assert.fail('a completed item must not be reviewed again');
+      const queries = [];
+      f.ghRunner = (args) => {
+        queries.push(args);
+        assert.deepEqual(args, ['pr', 'view', f.branch, '--json', 'headRefOid,statusCheckRollup']);
+        if (state === 'MISSING') {
+          return { exitCode: 1, stdout: '', stderr: 'no PR for the published branch' };
+        }
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            headRefOid: state === 'HEAD_MOVED' ? '0'.repeat(40) : sha,
+            statusCheckRollup: [
+              {
+                name: 'contract',
+                status: 'COMPLETED',
+                conclusion: state === 'FAIL' ? 'FAILURE' : 'SUCCESS',
+              },
+              { name: 'application-gate', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            ],
+          }),
+          stderr: '',
+        };
+      };
+
+      const result = await runOrchestration('first publication of completed item', f);
+      assert.equal(publishes, 1);
+      assert.equal(result.publication.status, 'PUBLISHED_DRAFT');
+      assert.equal(queries.length, 1, 'every published draft must resolve and check its PR');
+      assert.equal(result.reviews[0].ci.state, state);
+      assert.equal(result.reviews[0].ci.sha, sha);
+      const outcome = result.outcomes.find((entry) => entry.workItemId === workItemId);
+      const checkpoint = JSON.parse(fs.readFileSync(f.checkpointFile, 'utf8'));
+      if (state === 'PASS') {
+        assert.equal(result.status, 'PUBLISHED_DRAFT');
+        assert.equal(outcome.status, 'completed');
+        assert.ok(result.reconciliation.completed.includes(workItemId));
+        assert.ok(checkpoint.completed.includes(workItemId));
+        assert.equal(checkpoint.liveSteps[workItemId].stage, 'ci_gate_passed');
+      } else {
+        assert.equal(result.status, 'BLOCKED');
+        assert.equal(outcome.status, 'blocked');
+        assert.equal(outcome.reasonCode, 'CI_GATE_FAILED');
+        assert.ok(!result.reconciliation.completed.includes(workItemId));
+        assert.ok(!checkpoint.completed.includes(workItemId));
+        assert.equal(checkpoint.liveSteps[workItemId].stage, 'ci_gate_failed');
+      }
+    });
+  }
+});
+
+test('TASK-AI-142: a new draft without PR metadata or a ghRunner blocks instead of skipping CI', async (t) => {
+  const ciGate = require('../ci-gate');
+  const f = setup();
+  t.after(() => fs.rmSync(f.dir, { recursive: true, force: true }));
+  f.candidates.push(f.reviewer);
+  f.reviewer = async (sha) => ({
+    pass: true,
+    sha,
+    verdict: 'PASS',
+    reviewer: REVIEWER,
+    findings: [],
+  });
+  delete f.ghRunner;
+  const workItemId = f.specs[0].id;
+  let publishedSha;
+  f.publication = {
+    publish: (request) => {
+      publishedSha = request.reviewedSha;
+      return {};
+    },
+    approvalId: 'AP-' + workItemId,
+    remoteUrl: 'https://github.com/example/repository.git',
+    branch: f.branch,
+    testMode: true,
+    cwd: f.cwd,
+  };
+  const gate = t.mock.method(ciGate, 'awaitCi', async (options) => {
+    assert.equal(options.sha, publishedSha);
+    assert.equal(options.prNumber, undefined);
+    assert.equal(options.branch, f.branch);
+    assert.equal(options.ghRunner, undefined);
+    return { state: 'MISSING', sha: options.sha, reason: 'PR could not be resolved' };
+  });
+
+  const result = await runOrchestration('publish draft without PR metadata', f);
+  assert.equal(result.publication.status, 'PUBLISHED_DRAFT', result.publication.reason);
+  assert.equal(result.status, 'BLOCKED');
+  assert.equal(gate.mock.callCount(), 1, 'missing PR metadata must not bypass CI');
+  assert.equal(result.reviews[0].ci.state, 'MISSING');
+  const outcome = result.outcomes.find((entry) => entry.workItemId === workItemId);
+  assert.equal(outcome.status, 'blocked');
+  assert.equal(outcome.reasonCode, 'CI_GATE_FAILED');
+  assert.ok(!result.reconciliation.completed.includes(workItemId));
+  const checkpoint = JSON.parse(fs.readFileSync(f.checkpointFile, 'utf8'));
+  assert.ok(!checkpoint.completed.includes(workItemId));
+  assert.equal(checkpoint.liveSteps[workItemId].stage, 'ci_gate_failed');
 });
 
 test('CK-R04 persists failed candidate identity and failure scope when selecting a fallback', async () => {

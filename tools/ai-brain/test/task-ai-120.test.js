@@ -36,6 +36,7 @@ const cp = require('node:child_process');
 const { runOrchestration } = require('../orchestrate');
 const { importPassedCommit, hasCommit } = require('../passed-commit');
 const { candidateKey } = require('../candidates');
+const { resumeReceipt } = require('./helpers/resume-receipt');
 
 const dirs = [];
 after(() => dirs.forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })));
@@ -133,6 +134,7 @@ function commitIn(repo, name, content) {
  * interrupt window is between that persist and the passed import).
  */
 function reviewEntryFor({ workItemId, sha, workerRoot, baseSha, reviewer }) {
+  reviewer = candidateKey(cand(reviewer, 'reviewer.primary'));
   return {
     workItemId,
     sha,
@@ -141,6 +143,7 @@ function reviewEntryFor({ workItemId, sha, workerRoot, baseSha, reviewer }) {
     reviewer,
     writerCandidateKey: candidateKey(cand('writer', 'author.foundation')),
     workerRoot,
+    publishCwd: path.join(path.dirname(workerRoot), 'host'),
     branch: 'feat/' + String(workItemId).toLowerCase(),
     baseSha,
     draftTitle: 'Work item ' + workItemId,
@@ -158,6 +161,7 @@ function reviewEntryFor({ workItemId, sha, workerRoot, baseSha, reviewer }) {
 
 /** The exact checkpoint an interrupt after the review persist leaves behind. */
 function writeInterruptedReviewCheckpoint(file, entry, extra) {
+  const receipt = resumeReceipt(entry, path.join(path.dirname(file), 'decisions'), NOW);
   const review = Object.assign({ status: 'COMPLETED', entry }, (extra && extra.review) || {});
   const checkpoint = Object.assign(
     {
@@ -175,6 +179,9 @@ function writeInterruptedReviewCheckpoint(file, entry, extra) {
     },
     (extra && extra.checkpoint) || {}
   );
+  if (checkpoint.completed && checkpoint.completed.includes(entry.workItemId)) {
+    checkpoint.reviews = [receipt];
+  }
   fs.writeFileSync(file, JSON.stringify(checkpoint, null, 2));
 }
 
@@ -317,7 +324,7 @@ test('RI-R01: resume at review_completed imports the PASS SHA from the recorded 
   fs.renameSync(worker.dir, worker.dir + '-gone');
 
   const second = await runOrchestration('RI-R01 resume again', f.opts);
-  assert.equal(outcomeOf(second, 'A').status, 'completed');
+  assert.equal(outcomeOf(second, 'A').status, 'completed', JSON.stringify(outcomeOf(second, 'A')));
   const stepAfter = liveStepOf(checkpointFile, 'A');
   assert.equal(
     stepAfter.review.entry.passedRef,
@@ -325,6 +332,14 @@ test('RI-R01: resume at review_completed imports the PASS SHA from the recorded 
     'the resume reads the recorded passedRef and does not import again'
   );
   assert.ok(hasCommit(host.dir, shaA), 'the host still has the PASS commit');
+
+  // A checkpoint's ref name alone is insufficient: the host ref must still
+  // point to the reviewed commit after the original worker has been retired.
+  host.git(['update-ref', passedRef, host.base]);
+  const rejected = await runOrchestration('RI-R01 moved passed ref', f.opts);
+  assert.equal(outcomeOf(rejected, 'A').status, 'blocked');
+  assert.equal(outcomeOf(rejected, 'A').reasonCode, 'CHECKPOINT_RECEIPT_INVALID');
+  assert.match(outcomeOf(rejected, 'A').reason, /passed ref does not confirm reviewed commit/);
 });
 
 test('RI-R01: a completed checkpoint with no passedRef imports the PASS SHA on resume', async () => {
@@ -364,7 +379,7 @@ test('RI-R01: a completed checkpoint with no passedRef imports the PASS SHA on r
   });
 
   const log = await runOrchestration('RI-R01 late resume import', f.opts);
-  assert.equal(outcomeOf(log, 'A').status, 'completed');
+  assert.equal(outcomeOf(log, 'A').status, 'completed', JSON.stringify(outcomeOf(log, 'A')));
 
   const passedRef = 'refs/shipde/passed/A/' + shaA;
   assert.ok(hasCommit(host.dir, shaA), 'the host received the PASS commit');
