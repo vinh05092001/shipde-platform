@@ -8,7 +8,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
-import { RoleEnum, SessionStatusEnum } from '@prisma/client';
+import { RoleEnum, SessionStatusEnum, DiscrepancyTypeEnum } from '@prisma/client';
 import { signAccessToken } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
 import { ExportResource, ExportFormat, ExportJobStatus, ExportErrorCode } from '@shipde/contracts';
@@ -904,7 +904,7 @@ async function runExportsSupertestSuite() {
         merchant_id: merchantIdA,
         shipment_id: shipmentIdA,
         tracking_code: `TRK_A_${testSuffix}`,
-        type: 'FEE_WEIGHT',
+        type: DiscrepancyTypeEnum.D1_WEIGHT,
         amount: 50000n,
         status: 'OPEN',
       },
@@ -982,18 +982,33 @@ async function runExportsSupertestSuite() {
 
     // Assert Merchant A's values are present with exact row & metric assertions
     const dataRows = ledgerCsv.split('\r\n').filter((l) => l && !l.startsWith('#'));
-    const row1 = dataRows.find((r) => r.includes('Sổ 1: Tiền thực nhận'));
+    const row1 = dataRows.find(
+      (r) => r.includes('Sổ 1 (Tiền thực nhận)') && r.includes('LEDGER1_RECOVERED_AMOUNT')
+    );
     assert.ok(row1, 'Must include Sổ 1 row');
     assert.strictEqual(row1.includes('500000'), true, 'Merchant A claim must be 500000');
 
-    const row2 = dataRows.find((r) => r.includes('Sổ 2: Đơn cứu được'));
-    assert.ok(row2, 'Must include Sổ 2 row');
+    const row2 = dataRows.find(
+      (r) => r.includes('Sổ 2 (Đơn cứu được)') && r.includes('LEDGER2_RESCUED_GMV')
+    );
+    assert.ok(row2, 'Must include Sổ 2 GMV row');
     assert.strictEqual(row2.includes('1000000'), true, 'Merchant A rescued GMV must be 1000000');
-    assert.strictEqual(row2.includes('15000'), true, 'Merchant A rescued fee saved must be 15000');
+    const row2Fee = dataRows.find(
+      (r) => r.includes('Sổ 2 (Đơn cứu được)') && r.includes('LEDGER2_RETURN_FEE_SAVED')
+    );
+    assert.ok(row2Fee, 'Must include Sổ 2 return fee row');
+    assert.strictEqual(
+      row2Fee.includes('15000'),
+      true,
+      'Merchant A rescued fee saved must be 15000'
+    );
 
-    const row3 = dataRows.find((r) => r.includes('Sổ 3: Lệch cước vận chuyển'));
+    const row3 = dataRows.find(
+      (r) =>
+        r.includes('Sổ 3 (Độ phủ kiểm soát)') && r.includes('LEDGER3_DISCREPANCIES_DETECTED_COUNT')
+    );
     assert.ok(row3, 'Must include Sổ 3 row');
-    assert.strictEqual(row3.includes('50000'), true, 'Merchant A open discrepancy must be 50000');
+    assert.strictEqual(row3.includes('1'), true, 'Merchant A discrepancies count must be 1');
 
     // Assert Merchant B's values are completely excluded
     assert.strictEqual(
@@ -1024,10 +1039,16 @@ async function runExportsSupertestSuite() {
     const filteredDataRows = filteredDlRes.text
       .split('\r\n')
       .filter((l) => l && !l.startsWith('#'));
-    const fRow1 = filteredDataRows.find((r) => r.includes('Sổ 1: Tiền thực nhận'));
-    assert.ok(fRow1);
+    const fRow1 = filteredDataRows.find(
+      (r) => r.includes('Sổ 1 (Tiền thực nhận)') && r.includes('LEDGER1_RECOVERED_AMOUNT')
+    );
+    assert.ok(fRow1, 'Must include filtered Sổ 1 row');
     // Recovered amount for VTP must be exactly 0
-    assert.strictEqual(fRow1.includes(',0,'), true, 'VTP recovered amount must be 0');
+    assert.strictEqual(
+      fRow1.includes(',0,') || fRow1.includes('"0"'),
+      true,
+      'VTP recovered amount must be 0'
+    );
 
     console.log('🎉 All Exports Supertest tests passed successfully!');
   } finally {

@@ -40,6 +40,7 @@ export const ExportErrorCode = {
   SCOPE_FORBIDDEN: 'SCOPE_FORBIDDEN',
   FORBIDDEN: 'FORBIDDEN',
   VALIDATION_ERROR: 'VALIDATION_ERROR',
+  PROCESSING_TIMEOUT: 'PROCESSING_TIMEOUT',
 } as const;
 
 export type ExportErrorCode = (typeof ExportErrorCode)[keyof typeof ExportErrorCode];

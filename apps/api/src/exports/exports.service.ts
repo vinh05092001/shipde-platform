@@ -1,6 +1,6 @@
 import { Injectable, Inject, HttpStatus, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, CarrierCodeEnum } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RbacService } from '../rbac/rbac.service';
 import type { ActorContext } from '../rbac/rbac.dto';
@@ -725,10 +725,22 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
                 : undefined;
 
           // 4. Carrier code filter (Finding 7)
-          const carrierCodeFilter =
-            dto.filters?.carrier_code && typeof dto.filters.carrier_code === 'string'
-              ? (dto.filters.carrier_code as any)
-              : undefined;
+          let carrierCodeFilter: Prisma.EnumCarrierCodeEnumFilter | CarrierCodeEnum | undefined =
+            undefined;
+          if (dto.filters?.carrier_code && typeof dto.filters.carrier_code === 'string') {
+            const rawCode = dto.filters.carrier_code.toUpperCase();
+            if (rawCode === 'VTP' || rawCode === 'VIETTEL_POST') {
+              carrierCodeFilter = CarrierCodeEnum.VIETTEL_POST;
+            } else if (rawCode === 'GHN') {
+              carrierCodeFilter = CarrierCodeEnum.GHN;
+            } else if (rawCode === 'GHTK') {
+              carrierCodeFilter = CarrierCodeEnum.GHTK;
+            } else if (rawCode === 'JT' || rawCode === 'J&T') {
+              carrierCodeFilter = CarrierCodeEnum.JT;
+            } else {
+              carrierCodeFilter = { in: [] };
+            }
+          }
 
           // Date filters
           const fromDateRaw = (dto.filters?.from_date || dto.filters?.period_start) as
