@@ -79,14 +79,16 @@ async function runBulkSupertestSuite() {
   await app.get(RbacService).ensurePlatformSeed();
 
   const testSuffix = Date.now().toString().slice(-6);
+  let merchantIdA = '';
+  let merchantIdB = '';
 
   try {
     const tokenSecret = 'test-token-secret-for-bulk-supertest-32-chars';
     process.env.AUTH_TOKEN_SECRET = tokenSecret;
 
     // 1. Fixture: Merchant A & Merchant B
-    const merchantIdA = randomUUID();
-    const merchantIdB = randomUUID();
+    merchantIdA = randomUUID();
+    merchantIdB = randomUUID();
 
     await prisma.merchant.createMany({
       data: [
@@ -251,13 +253,9 @@ async function runBulkSupertestSuite() {
           merchant_id: merchantIdA,
           name: `Branch North ${testSuffix}`,
           code: `BN_${testSuffix}`,
-          status: 'inactive',
-          address_line1: '123 North St',
-          province_id: 'HN',
-          district_id: 'HK',
-          ward_id: '01',
-          contact_name: 'Manager North',
-          contact_phone: '0905555555',
+          status: 'INACTIVE',
+          address: '123 North St, HK, HN',
+          phone: '0905555555',
           is_default: false,
         },
         {
@@ -265,13 +263,9 @@ async function runBulkSupertestSuite() {
           merchant_id: merchantIdA,
           name: `Branch South ${testSuffix}`,
           code: `BS_${testSuffix}`,
-          status: 'active',
-          address_line1: '456 South St',
-          province_id: 'HCM',
-          district_id: 'Q1',
-          ward_id: '02',
-          contact_name: 'Manager South',
-          contact_phone: '0906666666',
+          status: 'ACTIVE',
+          address: '456 South St, Q1, HCM',
+          phone: '0906666666',
           is_default: false,
         },
       ],
@@ -286,12 +280,17 @@ async function runBulkSupertestSuite() {
         name: `Warehouse Hub ${testSuffix}`,
         code: `WH_${testSuffix}`,
         status: 'inactive',
-        address_line1: '789 Logistics Park',
-        province_id: 'BD',
-        district_id: 'TA',
-        ward_id: '03',
         contact_name: 'Logistics Lead',
         contact_phone: '0907777777',
+        contact_email: `wh_${testSuffix}@gumac.vn`,
+        address_line: '789 Logistics Park',
+        district: 'Thu An',
+        city: 'Binh Duong',
+        address_json: {
+          line: '789 Logistics Park',
+          district: 'Thu An',
+          city: 'Binh Duong',
+        },
         is_default: false,
       },
     });
@@ -466,10 +465,7 @@ async function runBulkSupertestSuite() {
       })
       .expect(409);
 
-    assert.strictEqual(
-      resIdempConflict.body.error.code,
-      'IDEMPOTENCY_KEY_REUSE_WITH_DIFFERENT_PAYLOAD'
-    );
+    assert.strictEqual(resIdempConflict.body.error.code, 'IDEMPOTENCY_CONFLICT');
     console.log('  PASS: AC-COM-03-06 & 07 idempotency replay and conflict verified.');
 
     // ========================================================================
@@ -489,7 +485,7 @@ async function runBulkSupertestSuite() {
 
     assert.strictEqual(resDeactivateBranch.body.data.success_count, 1);
     const branch2InDb = await prisma.branch.findUnique({ where: { id: branch2Id } });
-    assert.strictEqual(branch2InDb?.status, 'inactive');
+    assert.strictEqual(branch2InDb?.status, 'INACTIVE');
     console.log('  PASS: Destructive action confirmed and executed.');
 
     // ========================================================================
@@ -508,7 +504,7 @@ async function runBulkSupertestSuite() {
       .expect(200);
 
     assert.strictEqual(resSelfDeact.body.data.failure_count, 1);
-    assert.strictEqual(resSelfDeact.body.data.results[0].error.code, 'CANNOT_DEACTIVATE_SELF');
+    assert.strictEqual(resSelfDeact.body.data.results[0].error.code, 'SELF_SUSPENSION_PROHIBITED');
     console.log('  PASS: Self-deactivation blocked.');
 
     // ========================================================================
@@ -562,16 +558,15 @@ async function runBulkSupertestSuite() {
       .set('Authorization', `Bearer ${ownerTokenA}`)
       .send({
         entity_type: 'users',
-        action: 'export',
+        action: 'export_csv',
         ids: [targetUser1Id, targetUser2Id],
       })
       .expect(200);
 
     assert.strictEqual(resExport.body.data.success_count, 2);
-    const exportBase64 = resExport.body.data.export_payload;
-    assert.ok(exportBase64, 'Expected base64 export payload');
-    const csvContent = Buffer.from(exportBase64, 'base64').toString('utf8');
-    assert.ok(csvContent.includes('"id","full_name","email","phone","role","status"'));
+    const csvContent = resExport.body.data.export_payload;
+    assert.ok(typeof csvContent === 'string', 'Expected RFC 4180 CSV export payload string');
+    assert.ok(csvContent.includes('id,full_name,email,phone,role,status'));
     // Plaintext phone '0901111111' must NOT appear, masked '090****111' must appear
     assert.ok(!csvContent.includes('0901111111'), 'Plaintext phone must not appear in CSV');
     assert.ok(csvContent.includes('090****111'), 'Masked phone must appear in CSV');

@@ -153,7 +153,8 @@ pnpm --filter @shipde/web test
 | --- | --- | --- | --- |
 | Round 1 | 9d15ae6 | PASS (Backend) | Initial implementation of bulk framework, DB model, migration, RBAC scope enforcement and first actions |
 | Round 2 | da6a04b | READY_FOR_CODEX | Complete Step 2 Web UI for users, branches, warehouses lists: multi-select, action bar, confirm step for destructive actions, per-item results with retry of failed items only, progress and partial-failure states, API permission derivation without role hardcodes, and web tests per state |
-| Round 3 | Current | READY_FOR_CODEX | Merge origin/main, resolve schema/package conflicts preserving both sides, fix secret scanner false positive in bulk.unit.spec.ts and DASHBOARD.html, format and typecheck clean |
+| Round 3 | da6a04b | CHANGES_REQUIRED | Address review P0/P1 findings |
+| Round 4 | Current | READY_FOR_CODEX | Fix review findings P0/P1: restore origin/main ORG-02 atomic default branch and ci-gate; add atomic bulk idempotency reservation upfront; move last-owner count and default branch/warehouse check inside transaction with row lock; fix supertest cleanup, IDEMPOTENCY_CONFLICT, SELF_SUSPENSION_PROHIBITED, export_csv RFC 4180 format, branch/warehouse fixture schemas; remove hardcoded roles from UserManagementTab and bulk.service; fetch live tenant branches and warehouses with fallback; fix default store flag to boolean; link real settings pages for warehouse creation and branch/warehouse edit; fix scope overlap rejection on empty scopes and enforce carrier_account_scopes ceiling; fix assign scopes modal and optimistic status; remove duplicate matrix bulk bar. |
 
 ## Residual limitations
 

@@ -98,7 +98,7 @@ export interface WarehouseItem {
   district: string;
   city: string;
   is_default: boolean;
-  status: 'active' | 'suspended';
+  status: 'active' | 'inactive' | 'suspended';
 }
 
 export const DEFAULT_WAREHOUSES: WarehouseItem[] = [

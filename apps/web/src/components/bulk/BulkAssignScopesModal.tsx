@@ -47,13 +47,20 @@ export const BulkAssignScopesModal: React.FC<BulkAssignScopesModalProps> = ({
     }
   };
 
+  const hasStoreSelection = allStores || selectedStores.length > 0;
+  const hasWarehouseSelection = allWarehouses || selectedWarehouses.length > 0;
+  const hasAnySelection = hasStoreSelection || hasWarehouseSelection;
+
   const handleSubmit = () => {
-    const finalStoreScopes = allStores ? ['*'] : selectedStores;
-    const finalWhScopes = allWarehouses ? ['*'] : selectedWarehouses;
-    onConfirm({
-      store_scopes: finalStoreScopes,
-      warehouse_scopes: finalWhScopes,
-    });
+    if (!hasAnySelection) return;
+    const payload: { store_scopes?: string[]; warehouse_scopes?: string[] } = {};
+    if (hasStoreSelection) {
+      payload.store_scopes = allStores ? ['*'] : selectedStores;
+    }
+    if (hasWarehouseSelection) {
+      payload.warehouse_scopes = allWarehouses ? ['*'] : selectedWarehouses;
+    }
+    onConfirm(payload as any);
   };
 
   return (
@@ -200,8 +207,8 @@ export const BulkAssignScopesModal: React.FC<BulkAssignScopesModalProps> = ({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={loading}
-            className="btn-primary text-xs px-4 py-2 flex items-center gap-1.5 cursor-pointer"
+            disabled={loading || !hasAnySelection}
+            className="btn-primary text-xs px-4 py-2 flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="bulk-assign-scopes-submit"
           >
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}

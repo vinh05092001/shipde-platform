@@ -79,6 +79,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Nguyễn Văn An',
     active_orders_count: 1420,
     status: 'ACTIVE',
+    is_default: true,
   },
   {
     id: 'store_02',
@@ -89,6 +90,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Phạm Văn Kho',
     active_orders_count: 890,
     status: 'ACTIVE',
+    is_default: false,
   },
   {
     id: 'store_03',
@@ -99,6 +101,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Lê Minh Kế Toán',
     active_orders_count: 650,
     status: 'ACTIVE',
+    is_default: false,
   },
   {
     id: 'store_04',
@@ -109,6 +112,7 @@ export const DEFAULT_STORES: StoreItem[] = [
     manager: 'Trần Thị Hoa',
     active_orders_count: 320,
     status: 'ACTIVE',
+    is_default: false,
   },
 ];
 
@@ -177,6 +181,7 @@ export interface StoreItem {
   manager: string;
   active_orders_count: number;
   status: 'ACTIVE' | 'INACTIVE';
+  is_default?: boolean;
 }
 
 // User with Store Scoping & Custom Overrides
@@ -260,6 +265,7 @@ export interface UserManagementTabProps {
   initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations' | 'warehouses';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations' | 'warehouses';
   initialPermissions?: string[];
+  initialBranches?: StoreItem[];
   initialWarehouses?: WarehouseItem[];
   initialUsersSelected?: string[];
   initialBranchesSelected?: string[];
@@ -393,7 +399,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [userSearch, setUserSearch] = useState<string>('');
   const [userRoleFilter, setUserRoleFilter] = useState<string>('ALL');
   const [userStatusFilter, setUserStatusFilter] = useState<string>('ALL');
-  const [stores, setStores] = useState<StoreItem[]>(DEFAULT_STORES);
+  const [stores, setStores] = useState<StoreItem[]>(props.initialBranches || DEFAULT_STORES);
 
   // Modal new store state
   const [isNewStoreModalOpen, setIsNewStoreModalOpen] = useState(false);
@@ -813,8 +819,6 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [effectivePermissions, setEffectivePermissions] = useState<string[]>(() => {
     if (props.initialPermissions) return props.initialPermissions;
     if ((user as any)?.permissions) return (user as any).permissions;
-    if (user?.role === 'OWNER') return ['*'];
-    if (user?.role === 'OPS_CSKH') return ['iam:manage_users', 'iam:shop_config'];
     return [];
   });
 
@@ -841,6 +845,82 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       setEffectivePermissions([]);
     }
   }, [user, liveRoles, props.initialPermissions]);
+
+  // Tenant-scoped live branches and warehouses fetch
+  const fetchBranches = useCallback(async () => {
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${apiBase}/api/v1/branches`, { headers });
+      if (res.ok) {
+        const json = await res.json();
+        const branchList = json?.data?.branches || (Array.isArray(json?.data) ? json.data : null);
+        if (Array.isArray(branchList) && branchList.length > 0) {
+          setStores(
+            branchList.map((b: any) => ({
+              id: b.id,
+              code: b.code,
+              name: b.name,
+              address: b.address || '',
+              phone: b.phone || '',
+              manager: b.contact_name || b.manager || 'Quản lý',
+              active_orders_count: b.active_orders_count || 0,
+              status: (b.status || 'ACTIVE').toUpperCase(),
+              is_default: Boolean(b.is_default),
+            }))
+          );
+        }
+      }
+    } catch {
+      // offline/test fallback
+    }
+  }, [token]);
+
+  const fetchWarehouses = useCallback(async () => {
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${apiBase}/api/v1/warehouses`, { headers });
+      if (res.ok) {
+        const json = await res.json();
+        const whList = json?.data?.warehouses || (Array.isArray(json?.data) ? json.data : null);
+        if (Array.isArray(whList) && whList.length > 0) {
+          setWarehouses(
+            whList.map((w: any) => ({
+              id: w.id,
+              code: w.code,
+              name: w.name,
+              contact_name: w.contact_name || '',
+              contact_phone: w.contact_phone || '',
+              address_line: w.address_line || '',
+              district: w.district || '',
+              city: w.city || '',
+              is_default: Boolean(w.is_default),
+              status: (w.status || 'active').toLowerCase(),
+            }))
+          );
+        }
+      }
+    } catch {
+      // offline/test fallback
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (activeSubTab === 'stores' && !props.initialBranches) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- tenant-scoped branches fetch
+      void fetchBranches();
+    }
+  }, [activeSubTab, fetchBranches, props.initialBranches]);
+
+  useEffect(() => {
+    if (activeSubTab === 'warehouses' && !props.initialWarehouses) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- tenant-scoped warehouses fetch
+      void fetchWarehouses();
+    }
+  }, [activeSubTab, fetchWarehouses, props.initialWarehouses]);
 
   // Bulk actions hooks
   const usersBulk = useBulkActions({
@@ -902,7 +982,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
             return { ...w, status: 'active' };
           }
           if (action === BulkActionType.DEACTIVATE) {
-            return { ...w, status: 'suspended' };
+            return { ...w, status: 'inactive' };
           }
           return w;
         })
@@ -1992,7 +2072,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredStores.map((store) => {
-                    const isDefault = store.id === 'store_01';
+                    const isDefault = Boolean(store.is_default);
                     const isSelected = branchesBulk.selectedIds.has(store.id);
 
                     return (
@@ -2055,13 +2135,12 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                           )}
                         </td>
                         <td className="py-3.5 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setToastMessage(`✓ Đang chỉnh sửa ${store.name}`)}
-                            className="btn-secondary text-xs py-1 px-2.5"
+                          <a
+                            href={`/settings/branches?id=${store.id}`}
+                            className="btn-secondary text-xs py-1 px-2.5 inline-block"
                           >
                             Chỉnh sửa
-                          </button>
+                          </a>
                         </td>
                       </tr>
                     );
@@ -2116,7 +2195,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
             selectedCount={branchesBulk.selectedIds.size}
             totalCount={stores.length}
             userPermissions={effectivePermissions}
-            isUserKnown={Boolean(user)}
+            isUserKnown={Boolean(user || props.initialPermissions)}
             loading={branchesBulk.inProgress}
             progressText={branchesBulk.progressText}
             onActionClick={branchesBulk.handleActionClick}
@@ -2173,15 +2252,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   <option value="suspended">Tạm ngưng (suspended)</option>
                 </select>
 
-                <button
-                  type="button"
-                  onClick={() => setToastMessage('✓ Tính năng thêm kho vận mới')}
+                <a
+                  href="/settings/warehouses"
                   className="btn-primary text-xs py-1.5 px-3 flex items-center gap-1.5"
                   data-testid="add-warehouse-btn"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Thêm Kho Hàng</span>
-                </button>
+                </a>
               </div>
 
               <div className="text-xs text-slate-600 font-medium">
@@ -2285,13 +2363,12 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                           )}
                         </td>
                         <td className="py-3.5 px-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setToastMessage(`✓ Đang chỉnh sửa ${wh.name}`)}
-                            className="btn-secondary text-xs py-1 px-2.5"
+                          <a
+                            href={`/settings/warehouses?id=${wh.id}`}
+                            className="btn-secondary text-xs py-1 px-2.5 inline-block"
                           >
                             Chỉnh sửa
-                          </button>
+                          </a>
                         </td>
                       </tr>
                     );
@@ -2307,7 +2384,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
             selectedCount={warehousesBulk.selectedIds.size}
             totalCount={warehouses.length}
             userPermissions={effectivePermissions}
-            isUserKnown={Boolean(user)}
+            isUserKnown={Boolean(user || props.initialPermissions)}
             loading={warehousesBulk.inProgress}
             progressText={warehousesBulk.progressText}
             onActionClick={warehousesBulk.handleActionClick}
@@ -2493,49 +2570,6 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               </div>
             </div>
           )}
-
-          {/* USERS BULK ACTION BAR & MODALS */}
-          <BulkActionBar
-            entityType={BulkEntityType.USERS}
-            selectedCount={usersBulk.selectedIds.size}
-            totalCount={users.length}
-            userPermissions={effectivePermissions}
-            isUserKnown={Boolean(user || props.initialPermissions)}
-            loading={usersBulk.inProgress}
-            progressText={usersBulk.progressText}
-            onActionClick={usersBulk.handleActionClick}
-            onClearSelection={usersBulk.clearSelection}
-          />
-
-          <BulkConfirmModal
-            isOpen={usersBulk.confirmModalOpen}
-            entityType={BulkEntityType.USERS}
-            action={usersBulk.pendingAction || ''}
-            selectedCount={usersBulk.selectedIds.size}
-            loading={usersBulk.inProgress}
-            onConfirm={usersBulk.handleConfirmDestructive}
-            onCancel={() => usersBulk.setConfirmModalOpen(false)}
-          />
-
-          <BulkAssignScopesModal
-            isOpen={usersBulk.assignScopesModalOpen}
-            selectedCount={usersBulk.selectedIds.size}
-            availableStores={stores}
-            availableWarehouses={warehouses}
-            loading={usersBulk.inProgress}
-            onConfirm={usersBulk.handleConfirmAssignScopes}
-            onCancel={() => usersBulk.setAssignScopesModalOpen(false)}
-          />
-
-          <BulkResultsModal
-            isOpen={usersBulk.resultsModalOpen}
-            result={usersBulk.lastResult}
-            itemLabels={Object.fromEntries(
-              users.map((u: any) => [u.id, u.full_name || u.email || u.id])
-            )}
-            onRetryFailed={usersBulk.handleRetryFailed}
-            onClose={() => usersBulk.setResultsModalOpen(false)}
-          />
         </div>
       )}
 

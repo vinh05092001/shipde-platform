@@ -134,7 +134,17 @@ function createMockPrismaService() {
   ];
 
   const mockTx = {
+    $queryRaw: async () => [],
     user: {
+      count: async ({ where }: any) => {
+        return users.filter((u) => {
+          if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
+          if (where.role && u.role !== where.role) return false;
+          if (where.status && u.status !== where.status) return false;
+          if (where.id?.not && u.id === where.id.not) return false;
+          return true;
+        }).length;
+      },
       update: async ({ where, data }: any) => {
         const idx = users.findIndex((u) => u.id === where.id);
         if (idx === -1) throw new Error('User not found');
@@ -143,6 +153,15 @@ function createMockPrismaService() {
       },
     },
     branch: {
+      findFirst: async ({ where }: any) => {
+        return (
+          branches.find((b) => {
+            if (where.id && b.id !== where.id) return false;
+            if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
+            return true;
+          }) || null
+        );
+      },
       update: async ({ where, data }: any) => {
         const idx = branches.findIndex((b) => b.id === where.id);
         if (idx === -1) throw new Error('Branch not found');
@@ -151,6 +170,15 @@ function createMockPrismaService() {
       },
     },
     warehouse: {
+      findFirst: async ({ where }: any) => {
+        return (
+          warehouses.find((w) => {
+            if (where.id && w.id !== where.id) return false;
+            if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
+            return true;
+          }) || null
+        );
+      },
       update: async ({ where, data }: any) => {
         const idx = warehouses.findIndex((w) => w.id === where.id);
         if (idx === -1) throw new Error('Warehouse not found');
@@ -239,6 +267,14 @@ function createMockPrismaService() {
         const batch = { ...data, created_at: new Date(), updated_at: new Date() };
         batches.push(batch);
         return batch;
+      },
+      update: async ({ where, data }: any) => {
+        const idx = batches.findIndex((b) => b.id === where.id);
+        if (idx !== -1) {
+          batches[idx] = { ...batches[idx], ...data, updated_at: new Date() };
+          return batches[idx];
+        }
+        return null;
       },
     },
     $transaction: async (cb: any) => {
@@ -585,6 +621,37 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
 
       assert.strictEqual(res.data.results[0].status, BulkItemStatus.FAILED);
       assert.strictEqual(res.data.results[0].error?.code, 'SCOPE_FORBIDDEN');
+
+      // Target user with empty scopes (must also return SCOPE_FORBIDDEN for non-owner)
+      const userEmptyScopes = {
+        id: '99999999-0000-4000-8000-000000000000',
+        merchant_id: 'm-tenant-1',
+        full_name: 'No Scope User',
+        email: 'noscope@gumac.vn',
+        phone: '0909999999',
+        role: 'OPS_CSKH',
+        status: 'suspended',
+        store_scopes: [],
+        warehouse_scopes: [],
+        carrier_account_scopes: [],
+        created_at: new Date(),
+        updated_at: new Date(),
+      };
+      mockPrisma.users.push(userEmptyScopes);
+
+      const resEmpty = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOpsStaff,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.ACTIVATE,
+          ids: [userEmptyScopes.id],
+        },
+        '127.0.0.1',
+        'corr-05-empty'
+      );
+      assert.strictEqual(resEmpty.data.results[0].status, BulkItemStatus.FAILED);
+      assert.strictEqual(resEmpty.data.results[0].error?.code, 'SCOPE_FORBIDDEN');
     });
 
     it('AC-COM-03-06 & 07: enforces idempotency replay and detects conflict on altered payload', async () => {
@@ -718,6 +785,25 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
 
       assert.strictEqual(resDenied.data.results[0].status, BulkItemStatus.FAILED);
       assert.strictEqual(resDenied.data.results[0].error?.code, 'PRIVILEGE_CEILING_EXCEEDED');
+
+      // Attempting to assign unheld carrier_account_scopes must fail
+      const resCarrierDenied = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOpsStaff,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.ASSIGN_SCOPES,
+          ids: [targetStaffId],
+          params: { carrier_account_scopes: ['carrier-unheld-account'] },
+        },
+        '127.0.0.1',
+        'corr-11-carrier'
+      );
+      assert.strictEqual(resCarrierDenied.data.results[0].status, BulkItemStatus.FAILED);
+      assert.strictEqual(
+        resCarrierDenied.data.results[0].error?.code,
+        'PRIVILEGE_CEILING_EXCEEDED'
+      );
 
       // Owner (has wildcard *) assigns scopes successfully
       const resAllowed = await service.executeBulkAction(

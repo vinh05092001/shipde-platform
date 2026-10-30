@@ -66,8 +66,6 @@ export class BulkService {
     actor: ActorContext,
     entityType: BulkEntityType
   ): Promise<void> {
-    if (actor.role === 'OWNER') return;
-
     let requiredPermission: string;
     switch (entityType) {
       case BulkEntityType.USERS:
@@ -109,9 +107,14 @@ export class BulkService {
     // 1. Permission check
     await this.assertActorEntityPermission(actor, dto.entity_type);
 
-    // 2. Idempotency evaluation
+    // 2. Idempotency evaluation & reservation
     const effectiveIdempotencyKey = (dto.idempotency_key || idempotencyKeyHeader || '').trim();
     const requestHash = this.computeRequestHash(dto);
+    const batchId = randomUUID();
+    let batchReserved = false;
+
+    // Deduplicate IDs preserving order
+    const uniqueIds = Array.from(new Set(dto.ids));
 
     if (effectiveIdempotencyKey) {
       const existingBatch = await this.prisma.bulkActionBatch.findUnique({
@@ -124,17 +127,7 @@ export class BulkService {
       });
 
       if (existingBatch) {
-        if (existingBatch.request_hash === requestHash) {
-          // Idempotent replay: return cached results immediately without duplicate execution
-          const cachedData = existingBatch.results as unknown as BulkActionResponseData;
-          return {
-            data: cachedData,
-            meta: {
-              correlation_id: correlationId,
-              timestamp: new Date().toISOString(),
-            },
-          };
-        } else {
+        if (existingBatch.request_hash !== requestHash) {
           // Replay with different payload: 409 Conflict
           throw new CanonicalApiException(
             HttpStatus.CONFLICT,
@@ -144,6 +137,70 @@ export class BulkService {
             'Vui lòng tạo khóa idempotency mới cho mỗi yêu cầu thay đổi'
           );
         }
+        if (existingBatch.status === 'IN_PROGRESS') {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'IDEMPOTENCY_CONFLICT',
+            'Yêu cầu với khóa idempotency này đang được xử lý',
+            false,
+            'Vui lòng chờ yêu cầu hiện tại hoàn tất hoặc thử lại sau'
+          );
+        }
+        // Idempotent replay: return cached results immediately without duplicate execution
+        const cachedData = existingBatch.results as unknown as BulkActionResponseData;
+        return {
+          data: cachedData,
+          meta: {
+            correlation_id: correlationId,
+            timestamp: new Date().toISOString(),
+          },
+        };
+      }
+
+      // Atomically claim the idempotency key BEFORE mutating records to prevent concurrent duplicate execution
+      try {
+        await this.prisma.bulkActionBatch.create({
+          data: {
+            id: batchId,
+            merchant_id: merchantId,
+            entity_type: dto.entity_type,
+            action: dto.action,
+            idempotency_key: effectiveIdempotencyKey,
+            request_hash: requestHash,
+            status: 'IN_PROGRESS',
+            total_count: uniqueIds.length,
+            success_count: 0,
+            failure_count: 0,
+            results: {},
+            created_by: actor.userId,
+          },
+        });
+        batchReserved = true;
+      } catch (insertErr: any) {
+        const concurrent = await this.prisma.bulkActionBatch.findUnique({
+          where: {
+            merchant_id_idempotency_key: {
+              merchant_id: merchantId,
+              idempotency_key: effectiveIdempotencyKey,
+            },
+          },
+        });
+        if (concurrent && concurrent.request_hash !== requestHash) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'IDEMPOTENCY_CONFLICT',
+            'Khóa xử lý trùng lặp (Idempotency-Key) đã được sử dụng với nội dung yêu cầu khác',
+            false,
+            'Vui lòng tạo khóa idempotency mới cho mỗi yêu cầu thay đổi'
+          );
+        }
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'IDEMPOTENCY_CONFLICT',
+          'Yêu cầu với khóa idempotency này đang được xử lý',
+          false,
+          'Vui lòng chờ yêu cầu hiện tại hoàn tất hoặc thử lại sau'
+        );
       }
     }
 
@@ -159,14 +216,12 @@ export class BulkService {
     });
     const actorStoreScopes = actorUser?.store_scopes || [];
     const actorWarehouseScopes = actorUser?.warehouse_scopes || [];
+    const actorCarrierScopes = actorUser?.carrier_account_scopes || [];
 
     // 4. Process items independently
     const results: BulkActionItemResult[] = [];
     const exportRows: Record<string, unknown>[] = [];
     let exportCsvHeaders: string[] = [];
-
-    // Deduplicate IDs preserving order
-    const uniqueIds = Array.from(new Set(dto.ids));
 
     for (const targetId of uniqueIds) {
       try {
@@ -177,6 +232,7 @@ export class BulkService {
               actor,
               actorStoreScopes,
               actorWarehouseScopes,
+              actorCarrierScopes,
               targetId,
               dto.action,
               dto.params,
@@ -256,7 +312,6 @@ export class BulkService {
       exportPayload = buildCsvString(exportCsvHeaders, exportRows);
     }
 
-    const batchId = randomUUID();
     const batchStatus =
       failureCount === 0 ? 'COMPLETED' : successCount === 0 ? 'FAILED' : 'PARTIAL_FAILURE';
 
@@ -275,27 +330,34 @@ export class BulkService {
     };
 
     // 5. Persist batch record if idempotency key or completed batch
-    if (effectiveIdempotencyKey) {
-      try {
-        await this.prisma.bulkActionBatch.create({
-          data: {
-            id: batchId,
-            merchant_id: merchantId,
-            entity_type: dto.entity_type,
-            action: dto.action,
-            idempotency_key: effectiveIdempotencyKey,
-            request_hash: requestHash,
-            status: batchStatus,
-            total_count: totalCount,
-            success_count: successCount,
-            failure_count: failureCount,
-            results: responseData as any,
-            created_by: actor.userId,
-          },
-        });
-      } catch {
-        // If concurrent insert occurred, ignore conflict since operations have completed
-      }
+    if (batchReserved) {
+      await this.prisma.bulkActionBatch.update({
+        where: { id: batchId },
+        data: {
+          status: batchStatus,
+          total_count: totalCount,
+          success_count: successCount,
+          failure_count: failureCount,
+          results: responseData as any,
+        },
+      });
+    } else if (effectiveIdempotencyKey) {
+      await this.prisma.bulkActionBatch.create({
+        data: {
+          id: batchId,
+          merchant_id: merchantId,
+          entity_type: dto.entity_type,
+          action: dto.action,
+          idempotency_key: effectiveIdempotencyKey,
+          request_hash: requestHash,
+          status: batchStatus,
+          total_count: totalCount,
+          success_count: successCount,
+          failure_count: failureCount,
+          results: responseData as any,
+          created_by: actor.userId,
+        },
+      });
     }
 
     return {
@@ -315,6 +377,7 @@ export class BulkService {
     actor: ActorContext,
     actorStoreScopes: string[],
     actorWarehouseScopes: string[],
+    actorCarrierScopes: string[],
     targetUserId: string,
     action: BulkActionType,
     params?: ValidatedBulkActionDto['params'],
@@ -359,42 +422,42 @@ export class BulkService {
       const hasWildcardStore = actorStoreScopes.includes('*');
       if (!hasWildcardStore) {
         const targetStoreScopes = targetUser.store_scopes || [];
-        if (targetStoreScopes.length > 0) {
-          const overlaps = targetStoreScopes.some((s) => actorStoreScopes.includes(s));
-          if (!overlaps) {
-            return {
-              result: {
-                id: targetUserId,
-                status: BulkItemStatus.FAILED,
-                error: {
-                  code: 'SCOPE_FORBIDDEN',
-                  message:
-                    'Bạn không có quyền quản lý người dùng ngoài phạm vi chi nhánh được phân công',
-                },
+        const overlaps =
+          targetStoreScopes.length > 0 &&
+          targetStoreScopes.some((s) => actorStoreScopes.includes(s));
+        if (!overlaps) {
+          return {
+            result: {
+              id: targetUserId,
+              status: BulkItemStatus.FAILED,
+              error: {
+                code: 'SCOPE_FORBIDDEN',
+                message:
+                  'Bạn không có quyền quản lý người dùng ngoài phạm vi chi nhánh được phân công',
               },
-            };
-          }
+            },
+          };
         }
       }
 
       const hasWildcardWarehouse = actorWarehouseScopes.includes('*');
       if (!hasWildcardWarehouse) {
         const targetWarehouseScopes = targetUser.warehouse_scopes || [];
-        if (targetWarehouseScopes.length > 0) {
-          const overlaps = targetWarehouseScopes.some((w) => actorWarehouseScopes.includes(w));
-          if (!overlaps) {
-            return {
-              result: {
-                id: targetUserId,
-                status: BulkItemStatus.FAILED,
-                error: {
-                  code: 'SCOPE_FORBIDDEN',
-                  message:
-                    'Bạn không có quyền quản lý người dùng ngoài phạm vi kho hàng được phân công',
-                },
+        const overlaps =
+          targetWarehouseScopes.length > 0 &&
+          targetWarehouseScopes.some((w) => actorWarehouseScopes.includes(w));
+        if (!overlaps) {
+          return {
+            result: {
+              id: targetUserId,
+              status: BulkItemStatus.FAILED,
+              error: {
+                code: 'SCOPE_FORBIDDEN',
+                message:
+                  'Bạn không có quyền quản lý người dùng ngoài phạm vi kho hàng được phân công',
               },
-            };
-          }
+            },
+          };
         }
       }
     }
@@ -460,18 +523,69 @@ export class BulkService {
           };
         }
 
-        // Invariant: Cannot deactivate sole active owner
-        if (targetUser.role === 'OWNER') {
-          const activeOwnerCount = await this.prisma.user.count({
-            where: {
-              merchant_id: merchantId,
-              role: 'OWNER',
-              status: 'active',
-              id: { not: targetUserId },
-            },
-          });
+        try {
+          await this.prisma.$transaction(async (tx) => {
+            // Tenant serialization lock (PostgreSQL) if available
+            try {
+              if (typeof (tx as any).$queryRaw === 'function') {
+                await (tx as any)
+                  .$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+              }
+            } catch {
+              // ignore for mock/unit tests
+            }
 
-          if (activeOwnerCount === 0) {
+            // Invariant: Cannot deactivate sole active owner (checked atomically inside transaction)
+            if (targetUser.role === 'OWNER') {
+              const activeOwnerCount = await tx.user.count({
+                where: {
+                  merchant_id: merchantId,
+                  role: 'OWNER',
+                  status: 'active',
+                  id: { not: targetUserId },
+                },
+              });
+
+              if (activeOwnerCount === 0) {
+                const err: any = new Error('CANNOT_REMOVE_LAST_OWNER');
+                err.code = 'CANNOT_REMOVE_LAST_OWNER';
+                throw err;
+              }
+            }
+
+            await tx.user.update({
+              where: { id: targetUserId },
+              data: { status: 'suspended' },
+            });
+
+            // Revoke active device sessions
+            await tx.deviceSession.deleteMany({
+              where: { user_id: targetUserId },
+            });
+
+            await tx.auditLog.create({
+              data: {
+                merchant_id: merchantId,
+                user_id: actor.userId,
+                action: 'USER_SUSPENDED',
+                entity_type: 'User',
+                entity_id: targetUserId,
+                ip_address: clientIp || '127.0.0.1',
+                old_value: { status: targetUser.status },
+                new_value: {
+                  status: 'suspended',
+                  reason: params?.reason || 'Bulk deactivation',
+                  email: maskIdentifier(targetUser.email),
+                  phone: maskIdentifier(targetUser.phone),
+                },
+              },
+            });
+          });
+        } catch (txErr: any) {
+          if (
+            txErr?.code === 'CANNOT_REMOVE_LAST_OWNER' ||
+            txErr?.message === 'CANNOT_REMOVE_LAST_OWNER'
+          ) {
             return {
               result: {
                 id: targetUserId,
@@ -483,37 +597,8 @@ export class BulkService {
               },
             };
           }
+          throw txErr;
         }
-
-        await this.prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: targetUserId },
-            data: { status: 'suspended' },
-          });
-
-          // Revoke active device sessions
-          await tx.deviceSession.deleteMany({
-            where: { user_id: targetUserId },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'USER_SUSPENDED',
-              entity_type: 'User',
-              entity_id: targetUserId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: { status: targetUser.status },
-              new_value: {
-                status: 'suspended',
-                reason: params?.reason || 'Bulk deactivation',
-                email: maskIdentifier(targetUser.email),
-                phone: maskIdentifier(targetUser.phone),
-              },
-            },
-          });
-        });
 
         return {
           result: {
@@ -562,6 +647,25 @@ export class BulkService {
                     error: {
                       code: 'PRIVILEGE_CEILING_EXCEEDED',
                       message: `Vượt quá hạn mức phân quyền: Kho hàng không thuộc phạm vi quản lý (${unheldWarehouses.join(', ')})`,
+                    },
+                  },
+                };
+              }
+            }
+          }
+
+          if (targetCarrierScopes && targetCarrierScopes.length > 0) {
+            const actorCarriers = new Set(actorCarrierScopes || []);
+            if (!actorCarriers.has('*')) {
+              const unheldCarriers = targetCarrierScopes.filter((c) => !actorCarriers.has(c));
+              if (unheldCarriers.length > 0) {
+                return {
+                  result: {
+                    id: targetUserId,
+                    status: BulkItemStatus.FAILED,
+                    error: {
+                      code: 'PRIVILEGE_CEILING_EXCEEDED',
+                      message: `Vượt quá hạn mức phân quyền: Tài khoản vận chuyển không thuộc phạm vi quản lý (${unheldCarriers.join(', ')})`,
                     },
                   },
                 };
@@ -762,42 +866,67 @@ export class BulkService {
       }
 
       case BulkActionType.DEACTIVATE: {
-        if (branch.is_default) {
-          return {
-            result: {
-              id: branchId,
-              status: BulkItemStatus.FAILED,
-              error: {
-                code: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
-                message: 'Không thể vô hiệu hóa chi nhánh mặc định',
+        try {
+          await this.prisma.$transaction(async (tx) => {
+            try {
+              if (typeof (tx as any).$queryRaw === 'function') {
+                await (tx as any)
+                  .$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+              }
+            } catch {
+              // ignore in mock/unit
+            }
+
+            const freshBranch =
+              (await tx.branch.findFirst?.({
+                where: { id: branchId, merchant_id: merchantId },
+              })) || branch;
+            if (freshBranch.is_default) {
+              const err: any = new Error('CANNOT_DEACTIVATE_DEFAULT_BRANCH');
+              err.code = 'CANNOT_DEACTIVATE_DEFAULT_BRANCH';
+              throw err;
+            }
+
+            await tx.branch.update({
+              where: { id: branchId },
+              data: { status: 'INACTIVE' },
+            });
+
+            await tx.auditLog.create({
+              data: {
+                merchant_id: merchantId,
+                user_id: actor.userId,
+                action: 'BRANCH_DEACTIVATED',
+                entity_type: 'Branch',
+                entity_id: branchId,
+                ip_address: clientIp || '127.0.0.1',
+                old_value: { status: branch.status },
+                new_value: {
+                  status: 'INACTIVE',
+                  name: branch.name,
+                  code: branch.code,
+                },
               },
-            },
-          };
+            });
+          });
+        } catch (txErr: any) {
+          if (
+            txErr?.code === 'CANNOT_DEACTIVATE_DEFAULT_BRANCH' ||
+            txErr?.message === 'CANNOT_DEACTIVATE_DEFAULT_BRANCH'
+          ) {
+            return {
+              result: {
+                id: branchId,
+                status: BulkItemStatus.FAILED,
+                error: {
+                  code: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+                  message: 'Không thể vô hiệu hóa chi nhánh mặc định',
+                },
+              },
+            };
+          }
+          throw txErr;
         }
-
-        await this.prisma.$transaction(async (tx) => {
-          await tx.branch.update({
-            where: { id: branchId },
-            data: { status: 'INACTIVE' },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'BRANCH_DEACTIVATED',
-              entity_type: 'Branch',
-              entity_id: branchId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: { status: branch.status },
-              new_value: {
-                status: 'INACTIVE',
-                name: branch.name,
-                code: branch.code,
-              },
-            },
-          });
-        });
 
         return {
           result: {
@@ -939,42 +1068,67 @@ export class BulkService {
       }
 
       case BulkActionType.DEACTIVATE: {
-        if (warehouse.is_default) {
-          return {
-            result: {
-              id: warehouseId,
-              status: BulkItemStatus.FAILED,
-              error: {
-                code: 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
-                message: 'Không thể vô hiệu hóa kho hàng mặc định',
+        try {
+          await this.prisma.$transaction(async (tx) => {
+            try {
+              if (typeof (tx as any).$queryRaw === 'function') {
+                await (tx as any)
+                  .$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+              }
+            } catch {
+              // ignore in mock/unit
+            }
+
+            const freshWh =
+              (await tx.warehouse.findFirst?.({
+                where: { id: warehouseId, merchant_id: merchantId },
+              })) || warehouse;
+            if (freshWh.is_default) {
+              const err: any = new Error('CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE');
+              err.code = 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE';
+              throw err;
+            }
+
+            await tx.warehouse.update({
+              where: { id: warehouseId },
+              data: { status: 'inactive' },
+            });
+
+            await tx.auditLog.create({
+              data: {
+                merchant_id: merchantId,
+                user_id: actor.userId,
+                action: 'WAREHOUSE_DEACTIVATED',
+                entity_type: 'Warehouse',
+                entity_id: warehouseId,
+                ip_address: clientIp || '127.0.0.1',
+                old_value: { status: warehouse.status },
+                new_value: {
+                  status: 'inactive',
+                  name: warehouse.name,
+                  code: warehouse.code,
+                },
               },
-            },
-          };
+            });
+          });
+        } catch (txErr: any) {
+          if (
+            txErr?.code === 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE' ||
+            txErr?.message === 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE'
+          ) {
+            return {
+              result: {
+                id: warehouseId,
+                status: BulkItemStatus.FAILED,
+                error: {
+                  code: 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
+                  message: 'Không thể vô hiệu hóa kho hàng mặc định',
+                },
+              },
+            };
+          }
+          throw txErr;
         }
-
-        await this.prisma.$transaction(async (tx) => {
-          await tx.warehouse.update({
-            where: { id: warehouseId },
-            data: { status: 'inactive' },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'WAREHOUSE_DEACTIVATED',
-              entity_type: 'Warehouse',
-              entity_id: warehouseId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: { status: warehouse.status },
-              new_value: {
-                status: 'inactive',
-                name: warehouse.name,
-                code: warehouse.code,
-              },
-            },
-          });
-        });
 
         return {
           result: {

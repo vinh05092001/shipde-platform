@@ -147,7 +147,10 @@ export function useBulkActions({
 
         // Notify parent to mutate local state for succeeded items
         if (responseData.succeeded_ids?.length > 0 && onSuccessMutation) {
-          onSuccessMutation(action, responseData.succeeded_ids, responseData);
+          onSuccessMutation(action, responseData.succeeded_ids, {
+            ...responseData,
+            params,
+          });
         }
 
         // If all succeeded, clear selection; if partial, keep only failed items selected for retry
