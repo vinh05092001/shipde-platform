@@ -54,7 +54,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
    */
   async onModuleInit(): Promise<void> {
     try {
-      await this.runSystemMaintenance();
+      await this.runSystemMaintenance(true);
     } catch (err: any) {
       console.warn(
         formatStructuredLog({
@@ -68,7 +68,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
     // Schedule background maintenance every 60 seconds (Finding 4, Finding 11, Finding 13)
     this.maintenanceTimer = setInterval(async () => {
       try {
-        await this.runSystemMaintenance();
+        await this.runSystemMaintenance(false);
       } catch (err: any) {
         console.warn(
           formatStructuredLog({
@@ -100,14 +100,18 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Runs tenant-scoped maintenance across all active merchants (Finding 13).
+   * @param isStartup When true (system reboot/crash recovery), all pending/processing jobs are recovered.
+   *                  When false (runtime interval), only jobs exceeding stale timeout (5 minutes) are recovered.
    */
-  async runSystemMaintenance(): Promise<void> {
+  async runSystemMaintenance(isStartup = false): Promise<void> {
+    if (!this.prisma?.merchant?.findMany) return;
     const activeMerchants = await this.prisma.merchant.findMany({
       where: { status: 'active' },
       select: { id: true },
     });
+    const cutoff = isStartup ? new Date() : new Date(Date.now() - 5 * 60 * 1000);
     for (const m of activeMerchants) {
-      await this.recoverStaleJobs(m.id);
+      await this.recoverStaleJobs(m.id, cutoff);
       await this.purgeExpiredExports(m.id);
     }
   }

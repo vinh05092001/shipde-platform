@@ -512,8 +512,20 @@ async function runExportsSupertestSuite() {
     console.log(
       'Testing: Finding 4 - Scoped operator cannot download another user unrestricted export'
     );
+    // Owner creates an unrestricted warehouse export now that both wh1 and wh2 exist in the database
+    const unrestrictedWhRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(unrestrictedWhRes.status, 201);
+    const unrestrictedWhExportId = unrestrictedWhRes.body.data.id;
+
     const outOfScopeDlRes = await request(httpServer)
-      .get(`/api/v1/exports/${createdExportId}/download`)
+      .get(`/api/v1/exports/${unrestrictedWhExportId}/download`)
       .set('Authorization', `Bearer ${scopedToken}`);
 
     assert.strictEqual(outOfScopeDlRes.status, 403);
@@ -719,9 +731,64 @@ async function runExportsSupertestSuite() {
       },
     });
 
+    // Create a staff user who has iam:manage_users capability, but NO pii:unmask
+    const userMgrRoleId = randomUUID();
+    await prisma.role.create({
+      data: {
+        id: userMgrRoleId,
+        merchant_id: merchantIdA,
+        code: `ROLE_USER_MGR_${testSuffix}`,
+        name: 'User Manager No Unmask',
+        is_system: false,
+        permissions: {
+          create: [{ permission_id: manageUsersPerm.id }],
+        },
+      },
+    });
+
+    const userMgrUserId = randomUUID();
+    const userMgrSessionId = randomUUID();
+    await prisma.user.create({
+      data: {
+        id: userMgrUserId,
+        merchant_id: merchantIdA,
+        email: `usermgr_${testSuffix}@alpha.test`,
+        phone: `097${testSuffix}`,
+        full_name: 'Alpha User Manager',
+        password_hash: 'mock_password_hash',
+        role: RoleEnum.STAFF,
+        custom_role_id: userMgrRoleId,
+        warehouse_scopes: ['*'],
+        status: 'active',
+      },
+    });
+
+    await prisma.deviceSession.create({
+      data: {
+        id: userMgrSessionId,
+        user_id: userMgrUserId,
+        merchant_id: merchantIdA,
+        token_hash: 'mock_hash_usermgr',
+        status: SessionStatusEnum.ACTIVE,
+        ip_address: '127.0.0.1',
+        last_seen_at: new Date(),
+        expires_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const userMgrToken = signAccessToken(
+      {
+        sub: userMgrUserId,
+        session_id: userMgrSessionId,
+        merchant_id: merchantIdA,
+        role: 'STAFF',
+      },
+      tokenSecret
+    );
+
     const histNoUnmaskRes = await request(httpServer)
       .get(`/api/v1/exports/${historicalJobId}/download`)
-      .set('Authorization', `Bearer ${scopedToken}`);
+      .set('Authorization', `Bearer ${userMgrToken}`);
     assert.strictEqual(histNoUnmaskRes.status, 403);
     assert.strictEqual(histNoUnmaskRes.body.code, 'FORBIDDEN');
 
@@ -841,7 +908,8 @@ async function runExportsSupertestSuite() {
         id: carrierAccountIdA,
         merchant_id: merchantIdA,
         carrier_code: 'GHN',
-        account_name: `GHN Alpha ${testSuffix}`,
+        label: `GHN Alpha ${testSuffix}`,
+        encrypted_credentials: 'mock_encrypted_credentials',
         status: 'active',
       },
     });
@@ -852,8 +920,14 @@ async function runExportsSupertestSuite() {
         id: orderIdA,
         merchant_id: merchantIdA,
         order_code: `ORD_A_${testSuffix}`,
-        status: 'COMPLETED',
-        total_amount: 1500000n,
+        source_type: 'pancake',
+        created_at: new Date(),
+        cod_amount: 1000000n,
+        declared_weight_g: 500,
+        recipient_name: 'Nguyễn Văn A',
+        recipient_phone: '0901234567',
+        recipient_province: 'Hà Nội',
+        recipient_address: '123 Cầu Giấy',
       },
     });
 
@@ -917,7 +991,8 @@ async function runExportsSupertestSuite() {
         id: carrierAccountIdB,
         merchant_id: merchantIdB,
         carrier_code: 'GHN',
-        account_name: `GHN Beta ${testSuffix}`,
+        label: `GHN Beta ${testSuffix}`,
+        encrypted_credentials: 'mock_encrypted_credentials',
         status: 'active',
       },
     });
@@ -928,8 +1003,14 @@ async function runExportsSupertestSuite() {
         id: orderIdB,
         merchant_id: merchantIdB,
         order_code: `ORD_B_${testSuffix}`,
-        status: 'COMPLETED',
-        total_amount: 99000000n,
+        source_type: 'pancake',
+        created_at: new Date(),
+        cod_amount: 9999999n,
+        declared_weight_g: 500,
+        recipient_name: 'Trần Văn B',
+        recipient_phone: '0912345678',
+        recipient_province: 'TP. Hồ Chí Minh',
+        recipient_address: '456 Lê Lợi',
       },
     });
 

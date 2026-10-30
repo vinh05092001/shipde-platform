@@ -1328,5 +1328,46 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         }
       );
     });
+
+    it('Finding 14: Job creation and mandatory audit log are committed atomically via transaction', async () => {
+      let transactionCalled = false;
+      const mockPrisma = createMockPrismaService();
+      const originalTx = mockPrisma.$transaction;
+      mockPrisma.$transaction = async (fn: any) => {
+        transactionCalled = true;
+        return originalTx(fn);
+      };
+
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+      const actor: ActorContext = {
+        userId: 'u-tx-test',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const res = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        {
+          resource: ExportResource.USERS,
+          format: ExportFormat.CSV,
+          sync: false,
+        },
+        '127.0.0.1',
+        'corr-tx-test'
+      );
+
+      assert.strictEqual(
+        transactionCalled,
+        true,
+        'Must commit export job and audit log via $transaction'
+      );
+      assert.strictEqual(res.data.status, ExportJobStatus.PENDING);
+      const auditLog = mockPrisma.auditLogs.find(
+        (l: any) => l.action === 'EXPORT_REQUESTED' && l.entity_id === res.data.id
+      );
+      assert.ok(auditLog, 'Audit log EXPORT_REQUESTED must be committed in transaction');
+    });
   });
 });
