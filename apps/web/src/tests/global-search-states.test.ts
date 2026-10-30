@@ -492,8 +492,29 @@ async function runGlobalSearchTestSuite() {
     'ShipmentListTab not-found banner must offer recovery action'
   );
   assert.ok(
+    missingOrderTabHtml.includes('Thử lại'),
+    'ShipmentListTab not-found banner must offer retry action'
+  );
+  assert.ok(
     !missingOrderTabHtml.includes('data-selected="true"'),
     'ShipmentListTab must never fabricate a selected row for missing order'
+  );
+
+  // Recovery: clearing selected order restores authorized shipment list
+  const recoveredOrderTabHtml = renderToStaticMarkup(
+    React.createElement(ShipmentListTab, {
+      onOpenTrackingModal: () => {},
+      selectedOrderId: null,
+      selectedOrderCode: null,
+    })
+  );
+  assert.ok(
+    !recoveredOrderTabHtml.includes('data-testid="activated-order-not-found"'),
+    'ShipmentListTab must not show not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredOrderTabHtml.includes('ORD_ANAN_1042'),
+    'ShipmentListTab must restore authorized shipment list after recovery'
   );
   console.log('   ✅ Order activation & missing-order recovery verified');
 
@@ -535,12 +556,35 @@ async function runGlobalSearchTestSuite() {
     'ExceptionWorkboxTab not-found banner must display missing case ID'
   );
   assert.ok(
+    missingExceptionTabHtml.includes('Quay lại danh sách sự cố'),
+    'ExceptionWorkboxTab not-found banner must offer recovery to list'
+  );
+  assert.ok(
+    missingExceptionTabHtml.includes('Xem sự cố ưu tiên'),
+    'ExceptionWorkboxTab not-found drawer must offer recovery to priority case'
+  );
+  assert.ok(
     !missingExceptionTabHtml.includes('data-selected-case-id="case-missing-8888"'),
     'ExceptionWorkboxTab must not bind drawer to missing case ID'
   );
   assert.ok(
     !missingExceptionTabHtml.includes('TRA-CUU-TIM-KIEM'),
     'ExceptionWorkboxTab must never invent fabricated case records'
+  );
+
+  // Recovery: clearing selected case restores operational drawer for priority case
+  const recoveredExceptionTabHtml = renderToStaticMarkup(
+    React.createElement(ExceptionWorkboxTab, {
+      selectedCaseId: null,
+    })
+  );
+  assert.ok(
+    !recoveredExceptionTabHtml.includes('data-testid="activated-case-not-found"'),
+    'ExceptionWorkboxTab must not show not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredExceptionTabHtml.includes('data-testid="selected-exception-drawer"'),
+    'ExceptionWorkboxTab must restore operational drawer for priority case after recovery'
   );
   console.log('   ✅ Exception case activation & missing-case recovery verified');
 
@@ -602,12 +646,48 @@ async function runGlobalSearchTestSuite() {
     'ClaimCasesTab not-found banner must display missing claim code'
   );
   assert.ok(
+    missingClaimTabHtml.includes('Quay lại danh sách'),
+    'ClaimCasesTab not-found banner must offer recovery action'
+  );
+  assert.ok(
     !missingClaimTabHtml.includes('data-selected="true"'),
     'ClaimCasesTab must never fabricate a selected row for missing claim'
   );
   assert.ok(
     !missingClaimTabHtml.includes('CLM-SEARCH-RECORD'),
     'ClaimCasesTab must never invent fabricated claim records'
+  );
+
+  // Recovery: clearing selected claim restores authorized claim records
+  const recoveredClaimTabHtml = renderToStaticMarkup(
+    React.createElement(ClaimCasesTab, {
+      claims: [
+        {
+          id: 'clm_001',
+          tracking_code: 'GHTK77129002',
+          claim_type: 'DAMAGED',
+          requested_amount: 480000,
+          accepted_amount: 0,
+          recovered_amount: 0,
+          status: 'SUBMITTED',
+          deadline_at: '19/08/2026 08:35',
+          hours_left: 48,
+          carrier_ticket: 'TKT_GHTK_99182',
+          evidence_count: 3,
+        },
+      ],
+      onUpdateClaim: () => {},
+      selectedClaimId: null,
+      selectedClaimCode: null,
+    })
+  );
+  assert.ok(
+    !recoveredClaimTabHtml.includes('data-testid="activated-claim-not-found"'),
+    'ClaimCasesTab must not show not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredClaimTabHtml.includes('GHTK77129002'),
+    'ClaimCasesTab must restore authorized claim records after recovery'
   );
   console.log('   ✅ Claim case activation & missing-claim recovery verified');
 
@@ -653,8 +733,27 @@ async function runGlobalSearchTestSuite() {
     'ReconciliationTab not-found banner must display missing batch ID'
   );
   assert.ok(
+    missingBatchTabHtml.includes('Quay lại kỳ gần nhất'),
+    'ReconciliationTab not-found banner must offer recovery action to return to latest period'
+  );
+  assert.ok(
     !missingBatchTabHtml.includes('data-selected-batch="true"'),
     'ReconciliationTab must not decorate card for missing batch'
+  );
+
+  // Recovery: clearing selected batch restores statement summary card
+  const recoveredBatchTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: null,
+    })
+  );
+  assert.ok(
+    !recoveredBatchTabHtml.includes('data-testid="activated-batch-not-found"'),
+    'ReconciliationTab must not show batch not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredBatchTabHtml.includes('Đối Soát COD'),
+    'ReconciliationTab must restore statement summary card after recovery'
   );
   console.log('   ✅ Batch activation & missing-batch recovery verified');
 
@@ -696,12 +795,31 @@ async function runGlobalSearchTestSuite() {
     'ReconciliationTab not-found banner must display missing discrepancy ID'
   );
   assert.ok(
+    missingTxTabHtml.includes('Quay lại danh sách sai lệch'),
+    'ReconciliationTab not-found banner must offer discrepancy recovery action'
+  );
+  assert.ok(
     !missingTxTabHtml.includes('data-selected="true"'),
     'ReconciliationTab must never flag missing discrepancy as selected'
   );
   assert.ok(
     !missingTxTabHtml.includes('ORD-DISC-01'),
     'ReconciliationTab must never invent dummy discrepancy records'
+  );
+
+  // Recovery: clearing selected discrepancy restores all open discrepancies
+  const recoveredTxTabHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedDiscrepancyId: null,
+    })
+  );
+  assert.ok(
+    !recoveredTxTabHtml.includes('data-testid="activated-discrepancy-not-found"'),
+    'ReconciliationTab must not show discrepancy not-found alert after recovery'
+  );
+  assert.ok(
+    recoveredTxTabHtml.includes('Danh Sách Khoản Lệch Cần Xử Lý'),
+    'ReconciliationTab must restore discrepancies list after recovery'
   );
   console.log('   ✅ Transaction activation & missing-discrepancy recovery verified');
 
@@ -911,6 +1029,21 @@ async function runGlobalSearchTestSuite() {
     'Consecutive: discrepancy ID is cleanly cleared'
   );
 
+  const consecutiveBatchHtml1 = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: activationState.selectedBatchId,
+      selectedDiscrepancyId: activationState.selectedDiscrepancyId,
+    })
+  );
+  assert.ok(
+    consecutiveBatchHtml1.includes('data-selected-batch="true"'),
+    'Consecutive: batch 1 is decorated on mounted ReconciliationTab'
+  );
+  assert.ok(
+    !consecutiveBatchHtml1.includes('data-selected="true"'),
+    'Consecutive: discrepancy is not highlighted during batch activation'
+  );
+
   handleSearchResultActivation(txItem, actions);
   assert.strictEqual(
     activationState.selectedDiscrepancyId,
@@ -923,10 +1056,45 @@ async function runGlobalSearchTestSuite() {
     'Consecutive: batch ID is cleanly cleared'
   );
 
-  // Verify all 8 activation URLs were pushed to history
+  const consecutiveTxHtml = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: activationState.selectedBatchId,
+      selectedDiscrepancyId: activationState.selectedDiscrepancyId,
+    })
+  );
+  assert.ok(
+    !consecutiveTxHtml.includes('data-selected-batch="true"'),
+    'Consecutive: batch is no longer decorated during transaction activation'
+  );
+  assert.ok(
+    consecutiveTxHtml.includes('data-selected="true"'),
+    'Consecutive: discrepancy disc_001 is highlighted on mounted ReconciliationTab'
+  );
+  assert.ok(
+    consecutiveTxHtml.includes('selected-discrepancy-disc_001'),
+    'Consecutive: discrepancy testid is present'
+  );
+
+  handleSearchResultActivation(batchItem, actions);
+  const consecutiveBatchHtml2 = renderToStaticMarkup(
+    React.createElement(ReconciliationTab, {
+      selectedBatchId: activationState.selectedBatchId,
+      selectedDiscrepancyId: activationState.selectedDiscrepancyId,
+    })
+  );
+  assert.ok(
+    consecutiveBatchHtml2.includes('data-selected-batch="true"'),
+    'Consecutive: batch is decorated again on mounted ReconciliationTab'
+  );
+  assert.ok(
+    !consecutiveBatchHtml2.includes('data-selected="true"'),
+    'Consecutive: discrepancy is cleanly cleared on mounted ReconciliationTab'
+  );
+
+  // Verify all 9 activation URLs were pushed to history
   assert.strictEqual(
     activationState.pushedUrls.length,
-    8,
+    9,
     'Every activated item URL must be pushed to history'
   );
 

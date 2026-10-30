@@ -30,6 +30,7 @@ interface Props {
   onUpdateException?: (updated: UIExceptionItem) => void;
   carrierGhnTier?: 'L2' | 'L1';
   selectedCaseId?: string | null;
+  onClearSelection?: () => void;
 }
 
 export const ExceptionWorkboxTab: React.FC<Props> = ({
@@ -37,6 +38,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
   onUpdateException,
   carrierGhnTier = 'L2',
   selectedCaseId: propSelectedCaseId,
+  onClearSelection,
 }) => {
   const [prevExceptions, setPrevExceptions] = useState(exceptions);
   const [caseList, setCaseList] = useState<UIExceptionItem[]>(exceptions);
@@ -45,8 +47,19 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
     setCaseList(exceptions);
   }
 
+  const [dismissedCaseId, setDismissedCaseId] = useState<string | null>(null);
+  const [prevPropSelectedCaseId, setPrevPropSelectedCaseId] = useState(propSelectedCaseId);
+
+  if (prevPropSelectedCaseId !== propSelectedCaseId) {
+    setPrevPropSelectedCaseId(propSelectedCaseId);
+    setDismissedCaseId(null);
+  }
+
+  const effectivePropCaseId =
+    propSelectedCaseId && propSelectedCaseId !== dismissedCaseId ? propSelectedCaseId : null;
+
   const [selectedCaseId, setSelectedCaseId] = useState<string>(
-    propSelectedCaseId || caseList[0]?.id || ''
+    effectivePropCaseId || caseList[0]?.id || ''
   );
   const [filterType, setFilterType] = useState<'ALL' | 'MINE' | 'UNASSIGNED' | 'EXPIRING'>('ALL');
   const [callNote, setCallNote] = useState('');
@@ -56,12 +69,31 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
   const [toastFeedback, setToastFeedback] = useState<string | null>(null);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
-  const activeCaseId = propSelectedCaseId || selectedCaseId;
-  const isCaseActivated = Boolean(propSelectedCaseId);
-  const matchedCase = isCaseActivated ? caseList.find((e) => e.id === propSelectedCaseId) : null;
+  const isCaseActivated = Boolean(effectivePropCaseId);
+  const matchedCase = isCaseActivated ? caseList.find((e) => e.id === effectivePropCaseId) : null;
   const isCaseNotFound = isCaseActivated && !matchedCase;
-  const selectedCase =
-    matchedCase || caseList.find((e) => e.id === activeCaseId) || caseList[0] || null;
+
+  const activeCaseId = effectivePropCaseId || selectedCaseId || caseList[0]?.id || '';
+  const selectedCase = isCaseNotFound
+    ? null
+    : matchedCase || caseList.find((e) => e.id === activeCaseId) || caseList[0] || null;
+
+  const handleRecoverException = () => {
+    if (propSelectedCaseId) {
+      setDismissedCaseId(propSelectedCaseId);
+    }
+    const firstId = caseList[0]?.id || '';
+    setSelectedCaseId(firstId);
+    onClearSelection?.();
+  };
+
+  const handleSelectCase = (id: string) => {
+    if (propSelectedCaseId) {
+      setDismissedCaseId(propSelectedCaseId);
+    }
+    setSelectedCaseId(id);
+    onClearSelection?.();
+  };
 
   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
@@ -150,10 +182,10 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelectedCaseId(caseList[0]?.id || '')}
+              onClick={handleRecoverException}
               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
             >
-              Xem sự cố ưu tiên
+              Quay lại danh sách sự cố
             </button>
           </div>
         </div>
@@ -222,14 +254,14 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
 
           <div className="overflow-y-auto flex-1 divide-y divide-slate-100 max-h-[calc(100vh-250px)] custom-scrollbar">
             {filteredCases.map((c) => {
-              const isSelected = c.id === selectedCase?.id;
+              const isSelected = !isCaseNotFound && c.id === selectedCase?.id;
               const hrs = c.hours_remaining ?? 6;
               const isExpiring = hrs <= 4;
 
               return (
                 <div
                   key={c.id}
-                  onClick={() => setSelectedCaseId(c.id)}
+                  onClick={() => handleSelectCase(c.id)}
                   className={`p-4 cursor-pointer transition ${
                     isSelected ? 'bg-[#FFF5F0] border-l-4 border-l-[#c23807]' : 'hover:bg-slate-50'
                   }`}
@@ -423,7 +455,7 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
             </p>
             <button
               type="button"
-              onClick={() => setSelectedCaseId(caseList[0]?.id || '')}
+              onClick={handleRecoverException}
               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
             >
               Xem sự cố ưu tiên

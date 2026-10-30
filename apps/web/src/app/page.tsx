@@ -625,6 +625,10 @@ export default function ShipDeConsoleApp() {
               userRole={user?.role || 'OWNER'}
               selectedOrderId={selectedOrderId}
               selectedOrderCode={selectedOrderCode}
+              onClearSelection={() => {
+                setSelectedOrderId(null);
+                setSelectedOrderCode(null);
+              }}
             />
           )}
 
@@ -634,6 +638,7 @@ export default function ShipDeConsoleApp() {
               onUpdateException={handleUpdateException}
               carrierGhnTier={carrierGhnTier}
               selectedCaseId={selectedCaseId}
+              onClearSelection={() => setSelectedCaseId(null)}
             />
           )}
 
@@ -644,6 +649,8 @@ export default function ShipDeConsoleApp() {
               role={user?.role || 'OWNER'}
               selectedBatchId={selectedBatchId}
               selectedDiscrepancyId={selectedDiscrepancyId}
+              onClearBatchSelection={() => setSelectedBatchId(null)}
+              onClearDiscrepancySelection={() => setSelectedDiscrepancyId(null)}
             />
           )}
 
@@ -657,6 +664,10 @@ export default function ShipDeConsoleApp() {
               onUpdateClaim={handleUpdateClaim}
               selectedClaimId={selectedClaimId}
               selectedClaimCode={selectedClaimCode}
+              onClearSelection={() => {
+                setSelectedClaimId(null);
+                setSelectedClaimCode(null);
+              }}
             />
           )}
 

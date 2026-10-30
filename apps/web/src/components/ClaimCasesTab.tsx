@@ -20,6 +20,7 @@ interface Props {
   onUpdateClaim: (updated: UIClaimItem) => void;
   selectedClaimId?: string | null;
   selectedClaimCode?: string | null;
+  onClearSelection?: () => void;
 }
 
 export const ClaimCasesTab: React.FC<Props> = ({
@@ -27,8 +28,22 @@ export const ClaimCasesTab: React.FC<Props> = ({
   onUpdateClaim,
   selectedClaimId,
   selectedClaimCode,
+  onClearSelection,
 }) => {
-  const [searchQuery, setSearchQuery] = useState(selectedClaimCode || '');
+  const [dismissedClaim, setDismissedClaim] = useState(false);
+  const [prevSelectedClaimCode, setPrevSelectedClaimCode] = useState(selectedClaimCode);
+  const [prevSelectedClaimId, setPrevSelectedClaimId] = useState(selectedClaimId);
+
+  if (prevSelectedClaimCode !== selectedClaimCode || prevSelectedClaimId !== selectedClaimId) {
+    setPrevSelectedClaimCode(selectedClaimCode);
+    setPrevSelectedClaimId(selectedClaimId);
+    setDismissedClaim(false);
+  }
+
+  const activeClaimId = dismissedClaim ? null : selectedClaimId;
+  const activeClaimCode = dismissedClaim ? null : selectedClaimCode;
+
+  const [userSearchQuery, setUserSearchQuery] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const handleDownloadProofZip = (claim: UIClaimItem) => {
@@ -52,17 +67,26 @@ export const ClaimCasesTab: React.FC<Props> = ({
   };
 
   const allClaims = [...claims];
-  const isClaimActivated = Boolean(selectedClaimId || selectedClaimCode);
+  const isClaimActivated = Boolean(activeClaimId || activeClaimCode);
   const matchedClaim = isClaimActivated
     ? allClaims.find(
         (c) =>
-          (selectedClaimId && c.id === selectedClaimId) ||
-          (selectedClaimCode && c.tracking_code === selectedClaimCode)
+          (activeClaimId && c.id === activeClaimId) ||
+          (activeClaimCode &&
+            (c.tracking_code === activeClaimCode || c.carrier_ticket === activeClaimCode))
       )
     : null;
   const isClaimNotFound = isClaimActivated && !matchedClaim;
 
-  const effectiveQuery = searchQuery || selectedClaimCode || '';
+  const effectiveQuery = userSearchQuery ?? (activeClaimCode || '');
+  const setSearchQuery = (term: string) => setUserSearchQuery(term);
+
+  const handleClearClaimSelection = () => {
+    setDismissedClaim(true);
+    setUserSearchQuery('');
+    onClearSelection?.();
+  };
+
   const filteredClaims = allClaims.filter(
     (c) =>
       c.tracking_code.toLowerCase().includes(effectiveQuery.toLowerCase()) ||
@@ -102,7 +126,7 @@ export const ClaimCasesTab: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSearchQuery('')}
+              onClick={handleClearClaimSelection}
               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
             >
               Quay lại danh sách
@@ -131,7 +155,7 @@ export const ClaimCasesTab: React.FC<Props> = ({
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
           <input
             type="text"
-            value={searchQuery}
+            value={effectiveQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Tìm theo mã vận đơn hoặc ticket..."
             className="modern-input pl-9 w-full text-xs"
@@ -159,20 +183,18 @@ export const ClaimCasesTab: React.FC<Props> = ({
               {filteredClaims.map((c) => {
                 const isUrgent = c.hours_left <= 48 && c.status !== 'CLOSED';
                 const isSelected = Boolean(
-                  (selectedClaimId && c.id === selectedClaimId) ||
-                  (selectedClaimCode &&
-                    (c.tracking_code === selectedClaimCode ||
-                      c.carrier_ticket === selectedClaimCode))
+                  matchedClaim &&
+                  ((activeClaimId && c.id === activeClaimId) ||
+                    (activeClaimCode &&
+                      (c.tracking_code === activeClaimCode ||
+                        c.carrier_ticket === activeClaimCode)))
                 );
+                const selectedKey = activeClaimId || activeClaimCode;
                 return (
                   <tr
                     key={c.id}
                     data-selected={isSelected ? 'true' : undefined}
-                    data-testid={
-                      isSelected
-                        ? `selected-claim-${selectedClaimId || selectedClaimCode}`
-                        : undefined
-                    }
+                    data-testid={isSelected ? `selected-claim-${selectedKey}` : undefined}
                     className={
                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
                     }

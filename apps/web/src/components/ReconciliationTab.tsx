@@ -33,6 +33,8 @@ interface Props {
   selectedBatchId?: string | null;
   selectedDiscrepancyId?: string | null;
   statements?: UIStatementBatch[];
+  onClearBatchSelection?: () => void;
+  onClearDiscrepancySelection?: () => void;
 }
 
 export const ReconciliationTab: React.FC<Props> = ({
@@ -42,6 +44,8 @@ export const ReconciliationTab: React.FC<Props> = ({
   selectedBatchId,
   selectedDiscrepancyId,
   statements,
+  onClearBatchSelection,
+  onClearDiscrepancySelection,
 }) => {
   const [prevDiscrepancies, setPrevDiscrepancies] = useState(discrepancies);
   const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
@@ -62,16 +66,29 @@ export const ReconciliationTab: React.FC<Props> = ({
     setManualResolvingItem(null);
   }
 
+  const [dismissedBatchId, setDismissedBatchId] = useState<string | null>(null);
+  const [prevSelectedBatchId, setPrevSelectedBatchId] = useState(selectedBatchId);
+
+  if (prevSelectedBatchId !== selectedBatchId) {
+    setPrevSelectedBatchId(selectedBatchId);
+    setDismissedBatchId(null);
+  }
+
+  const effectiveBatchId =
+    selectedBatchId && selectedBatchId !== dismissedBatchId ? selectedBatchId : null;
+  const effectiveDiscrepancyId =
+    selectedDiscrepancyId && selectedDiscrepancyId !== dismissedDiscrepancyId
+      ? selectedDiscrepancyId
+      : null;
+
   const resolvingItem =
     manualResolvingItem ??
-    (selectedDiscrepancyId && selectedDiscrepancyId !== dismissedDiscrepancyId
-      ? items.find((d) => d.id === selectedDiscrepancyId) || null
-      : null);
+    (effectiveDiscrepancyId ? items.find((d) => d.id === effectiveDiscrepancyId) || null : null);
 
   const setResolvingItem = (item: UIDiscrepancyItem | null) => {
     setManualResolvingItem(item);
-    if (!item && selectedDiscrepancyId) {
-      setDismissedDiscrepancyId(selectedDiscrepancyId);
+    if (!item && effectiveDiscrepancyId) {
+      setDismissedDiscrepancyId(effectiveDiscrepancyId);
     }
   };
 
@@ -83,18 +100,30 @@ export const ReconciliationTab: React.FC<Props> = ({
 
   const availableStatements = statements && statements.length > 0 ? statements : MASTER_STATEMENTS;
 
-  const isBatchActivated = Boolean(selectedBatchId);
+  const isBatchActivated = Boolean(effectiveBatchId);
   const matchedBatch = isBatchActivated
-    ? availableStatements.find((s) => s.id === selectedBatchId)
+    ? availableStatements.find((s) => s.id === effectiveBatchId)
     : null;
   const isBatchNotFound = isBatchActivated && !matchedBatch;
   const activeStatement = matchedBatch || availableStatements[0];
+  const statementSummary = activeStatement;
 
-  const isDiscrepancyActivated = Boolean(selectedDiscrepancyId);
+  const isDiscrepancyActivated = Boolean(effectiveDiscrepancyId);
   const matchedDiscrepancy = isDiscrepancyActivated
-    ? items.find((d) => d.id === selectedDiscrepancyId)
+    ? items.find((d) => d.id === effectiveDiscrepancyId)
     : null;
   const isDiscrepancyNotFound = isDiscrepancyActivated && !matchedDiscrepancy;
+
+  const handleRecoverBatch = () => {
+    if (selectedBatchId) setDismissedBatchId(selectedBatchId);
+    onClearBatchSelection?.();
+  };
+
+  const handleRecoverDiscrepancy = () => {
+    if (selectedDiscrepancyId) setDismissedDiscrepancyId(selectedDiscrepancyId);
+    setSelectedDiscrepancyType('ALL');
+    onClearDiscrepancySelection?.();
+  };
 
   const openDiscrepancies = items.filter((d) => String(d.status).toUpperCase() === 'OPEN');
   const openCount = openDiscrepancies.length;
@@ -172,20 +201,29 @@ export const ReconciliationTab: React.FC<Props> = ({
               </div>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRecoverBatch}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại kỳ gần nhất
+            </button>
+          </div>
         </div>
       )}
 
       {/* Statement Summary Card */}
       {!isBatchNotFound && (
         <div
-          data-selected-batch={selectedBatchId && matchedBatch ? 'true' : undefined}
+          data-selected-batch={effectiveBatchId && matchedBatch ? 'true' : undefined}
           data-testid={
-            selectedBatchId && matchedBatch
-              ? `selected-batch-${selectedBatchId}`
-              : `batch-${activeStatement.id}`
+            effectiveBatchId && matchedBatch
+              ? `selected-batch-${effectiveBatchId}`
+              : `batch-${statementSummary.id}`
           }
           className={`modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-white border-slate-800 ${
-            selectedBatchId && matchedBatch ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
+            effectiveBatchId && matchedBatch ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
           }`}
         >
           <div className="space-y-1">
@@ -195,17 +233,17 @@ export const ReconciliationTab: React.FC<Props> = ({
                 <span>Đối Soát COD, Cước Vận Chuyển & Phụ Phí</span>
               </h1>
               <span className="badge-ok text-xs">
-                {activeStatement.status === 'OPEN' ? 'Kỳ Mở' : 'Kỳ Đã Khóa'}
+                {statementSummary.status === 'OPEN' ? 'Kỳ Mở' : 'Kỳ Đã Khóa'}
               </span>
-              {selectedBatchId && matchedBatch && (
+              {effectiveBatchId && matchedBatch && (
                 <span className="text-xs bg-[#c23807] px-2 py-0.5 rounded font-mono font-bold">
                   {matchedBatch.id}
                 </span>
               )}
             </div>
             <p className="text-xs text-slate-300">
-              {activeStatement.period} · {activeStatement.carrier} · Tổng{' '}
-              {activeStatement.total_rows} dòng sao kê
+              {statementSummary.period} · {statementSummary.carrier} · Tổng{' '}
+              {statementSummary.total_rows} dòng sao kê
             </p>
           </div>
 
@@ -214,7 +252,7 @@ export const ReconciliationTab: React.FC<Props> = ({
               <div className="text-xs text-slate-400">Tổng COD Đối Soát</div>
               <div className="text-xl font-bold font-mono text-emerald-400">
                 <Money
-                  amount={activeStatement.total_cod}
+                  amount={statementSummary.total_cod}
                   state="confirmed"
                   className="text-emerald-400 text-xl"
                 />
@@ -305,6 +343,15 @@ export const ReconciliationTab: React.FC<Props> = ({
               </div>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRecoverDiscrepancy}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại danh sách sai lệch
+            </button>
+          </div>
         </div>
       )}
 
@@ -326,14 +373,16 @@ export const ReconciliationTab: React.FC<Props> = ({
             <tbody>
               {filteredDiscrepancies.map((disc) => {
                 const isResolved = disc.status !== 'OPEN';
-                const isSelected = Boolean(matchedDiscrepancy && disc.id === selectedDiscrepancyId);
+                const isSelected = Boolean(
+                  matchedDiscrepancy && disc.id === effectiveDiscrepancyId
+                );
 
                 return (
                   <tr
                     key={disc.id}
                     data-selected={isSelected ? 'true' : undefined}
                     data-testid={
-                      isSelected ? `selected-discrepancy-${selectedDiscrepancyId}` : undefined
+                      isSelected ? `selected-discrepancy-${effectiveDiscrepancyId}` : undefined
                     }
                     className={
                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined

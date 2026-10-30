@@ -33,6 +33,7 @@ interface Props {
   userRole?: string;
   selectedOrderId?: string | null;
   selectedOrderCode?: string | null;
+  onClearSelection?: () => void;
 }
 
 export const ShipmentListTab: React.FC<Props> = ({
@@ -42,6 +43,7 @@ export const ShipmentListTab: React.FC<Props> = ({
   userRole = 'OWNER',
   selectedOrderId,
   selectedOrderCode,
+  onClearSelection,
 }) => {
   const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
   const [loading, setLoading] = useState(false);
@@ -50,17 +52,39 @@ export const ShipmentListTab: React.FC<Props> = ({
   const [cursorIndex, setCursorIndex] = useState(0);
   const [pageSize, setPageSize] = useState(20);
 
-  // Synchronize search term and reset cursor when selectedOrderCode changes
+  // Synchronize search term and reset cursor when selectedOrderCode/selectedOrderId changes
+  const [dismissedOrderId, setDismissedOrderId] = useState<string | null>(null);
+  const [dismissedOrderCode, setDismissedOrderCode] = useState<string | null>(null);
   const [prevSelectedOrderCode, setPrevSelectedOrderCode] = useState(selectedOrderCode);
+  const [prevSelectedOrderId, setPrevSelectedOrderId] = useState(selectedOrderId);
   const [userSearchTerm, setUserSearchTerm] = useState<string | null>(null);
 
-  if (prevSelectedOrderCode !== selectedOrderCode) {
+  if (prevSelectedOrderCode !== selectedOrderCode || prevSelectedOrderId !== selectedOrderId) {
     setPrevSelectedOrderCode(selectedOrderCode);
+    setPrevSelectedOrderId(selectedOrderId);
+    setDismissedOrderId(null);
+    setDismissedOrderCode(null);
     setUserSearchTerm(null);
     setCursorIndex(0);
   }
 
-  const searchTerm = userSearchTerm ?? (selectedOrderCode || '');
+  const effectiveOrderId =
+    selectedOrderId && selectedOrderId !== dismissedOrderId ? selectedOrderId : null;
+  const effectiveOrderCode =
+    selectedOrderCode && selectedOrderCode !== dismissedOrderCode ? selectedOrderCode : null;
+
+  const isOrderActivated = Boolean(effectiveOrderId || effectiveOrderCode);
+  const matchedShipment = isOrderActivated
+    ? shipments.find(
+        (s) =>
+          (effectiveOrderCode && s.order_code === effectiveOrderCode) ||
+          (effectiveOrderId &&
+            (s.id === effectiveOrderId || (s as any).order_id === effectiveOrderId))
+      )
+    : null;
+  const isOrderNotFound = isOrderActivated && !matchedShipment;
+
+  const searchTerm = userSearchTerm ?? (effectiveOrderCode || '');
   const setSearchTerm = (term: string) => setUserSearchTerm(term);
 
   // Filter Controls
@@ -147,7 +171,9 @@ export const ShipmentListTab: React.FC<Props> = ({
   };
 
   const handleResetFilters = () => {
-    setSearchTerm('');
+    if (selectedOrderId) setDismissedOrderId(selectedOrderId);
+    if (selectedOrderCode) setDismissedOrderCode(selectedOrderCode);
+    setUserSearchTerm('');
     setCarrierFilter('ALL');
     setStatusFilter('ALL');
     setWarehouseFilter('ALL');
@@ -155,6 +181,7 @@ export const ShipmentListTab: React.FC<Props> = ({
     setDateRangeFilter('30d');
     setHasOpenCaseFilter(false);
     setCursorIndex(0);
+    onClearSelection?.();
   };
 
   const hasActiveFilters =
@@ -165,16 +192,6 @@ export const ShipmentListTab: React.FC<Props> = ({
     matchStatusFilter !== 'ALL' ||
     dateRangeFilter !== '30d' ||
     hasOpenCaseFilter;
-
-  const isOrderActivated = Boolean(selectedOrderId || selectedOrderCode);
-  const matchedShipment = isOrderActivated
-    ? shipments.find(
-        (s) =>
-          (selectedOrderCode && s.order_code === selectedOrderCode) ||
-          (selectedOrderId && (s.id === selectedOrderId || (s as any).order_id === selectedOrderId))
-      )
-    : null;
-  const isOrderNotFound = isOrderActivated && !matchedShipment;
 
   return (
     <div className="w-full space-y-4">
@@ -487,21 +504,19 @@ export const ShipmentListTab: React.FC<Props> = ({
                   : rawPhone.slice(0, 3) + '***' + rawPhone.slice(-4);
 
                 const isSelected = Boolean(
-                  (selectedOrderCode && shipment.order_code === selectedOrderCode) ||
-                  (selectedOrderId &&
-                    (shipment.id === selectedOrderId ||
-                      (shipment as any).order_id === selectedOrderId))
+                  matchedShipment &&
+                  ((effectiveOrderCode && shipment.order_code === effectiveOrderCode) ||
+                    (effectiveOrderId &&
+                      (shipment.id === effectiveOrderId ||
+                        (shipment as any).order_id === effectiveOrderId)))
                 );
+                const selectedKey = effectiveOrderCode || effectiveOrderId;
 
                 return (
                   <tr
                     key={shipment.id}
                     data-selected={isSelected ? 'true' : undefined}
-                    data-testid={
-                      isSelected
-                        ? `selected-order-${selectedOrderCode || selectedOrderId}`
-                        : undefined
-                    }
+                    data-testid={isSelected ? `selected-order-${selectedKey}` : undefined}
                     className={
                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
                     }
