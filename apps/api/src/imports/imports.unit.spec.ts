@@ -411,6 +411,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
         importRow: {
           findMany: async () => [],
         },
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
 
       const service = new ImportsService(mockPrisma, {} as any, mockConfig);
@@ -444,6 +445,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
             return null;
           },
         },
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
 
       const service = new ImportsService(mockPrisma, {} as any, mockConfig);
@@ -480,6 +482,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
             revision: 1,
           }),
         },
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
       const service = new ImportsService(mockPrisma, {} as any, {} as any);
 
@@ -518,6 +521,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
             return null;
           },
         },
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
       const service = new ImportsService(mockPrisma, {} as any, {} as any);
 
@@ -579,6 +583,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
             store_scopes: [],
           }),
         },
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
       const service = new ImportsService(mockPrisma, {} as any, {} as any);
 
@@ -642,6 +647,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
             warehouse_scopes: [],
           }),
         },
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
       const service = new ImportsService(mockPrisma, {} as any, {} as any);
 
@@ -719,13 +725,18 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
         },
         $transaction: async (cb: any) => {
           const tx: any = {
+            ...mockPrisma,
             warehouse: {
+              count: async () => 1,
+              findMany: async () => [],
+              findUnique: async () => null,
               updateMany: async () => {},
               upsert: async () => {
                 upsertedCount++;
               },
             },
             import: {
+              ...mockPrisma.import,
               update: async (args: any) => {
                 importUpdated = args;
               },
@@ -806,7 +817,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
             warehouse_scopes: ['*'],
           }),
         },
-        $transaction: async (cb: any) => cb({}),
+        $transaction: async (cb: any) => cb(mockPrisma),
       };
 
       const service = new ImportsService(mockPrisma, {} as any, {} as any);
@@ -882,8 +893,10 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
         },
         $transaction: async (cb: any) => {
           const tx: any = {
+            ...mockPrisma,
             branch: {
               findUnique: async () => existingBranch,
+              findMany: async () => [existingBranch],
               count: async () => 1,
               updateMany: async () => {},
               update: async (args: any) => {
@@ -892,6 +905,7 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
               },
             },
             import: {
+              ...mockPrisma.import,
               update: async () => {},
               updateMany: async () => {},
             },

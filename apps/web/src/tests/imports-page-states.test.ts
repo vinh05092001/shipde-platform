@@ -5,7 +5,7 @@ import type { ImportSummary, ImportRow } from '@shipde/contracts';
 import { ImportStatus, ImportRowStatus, ImportIssueSeverity } from '@shipde/contracts';
 import { ImportManagementView } from '@/components/ImportManagementView';
 import ImportsSettingsPage from '@/app/settings/imports/page';
-import { AuthProvider } from '@/context/AuthContext';
+import { AuthProvider, AuthContext } from '@/context/AuthContext';
 
 async function runImportsWebTestSuite() {
   console.log('================================================================');
@@ -258,6 +258,126 @@ async function runImportsWebTestSuite() {
       'Must render Revision History tab header'
     );
     console.log('PASS: TEST 8 - SCR-IMPORT-01 Navigation tabs for mapping and revisions rendered');
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 9: Live permission derivation (Finding 10) - User WITH iam:shop_config
+  // -------------------------------------------------------------------------
+  {
+    const mockAuthWithPermission = {
+      user: {
+        id: 'u-admin-1',
+        merchant_id: 'mmmmmmmm-1111-2222-3333-444444444444',
+        email: 'admin@example.com',
+        full_name: 'Admin User',
+        phone: '0901234567',
+        role: 'STAFF',
+        permissions: ['iam:shop_config'],
+        created_at: new Date(),
+      },
+      merchant: null,
+      isAuthenticated: true,
+      isHydrating: false,
+      token: 'test-token',
+    } as any;
+
+    const html = renderToStaticMarkup(
+      React.createElement(
+        AuthContext.Provider,
+        { value: mockAuthWithPermission },
+        React.createElement(ImportsSettingsPage, {
+          initialImports: [mockImportStaged],
+          // initialCanEdit is explicitly omitted so it must derive from live user permissions
+          initialLoading: false,
+        })
+      )
+    );
+
+    assert.strictEqual(
+      html.includes('data-testid="import-forbidden-banner"'),
+      false,
+      'Must NOT render forbidden banner when user has iam:shop_config permission'
+    );
+    assert.ok(
+      html.includes('Tải lên &amp; Kiểm tra dữ liệu'),
+      'Must render upload button for user with iam:shop_config'
+    );
+    console.log(
+      'PASS: TEST 9 - Live permission derivation enables edit when user has iam:shop_config'
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 10: Live permission derivation (Finding 10) - User WITHOUT iam:shop_config
+  // -------------------------------------------------------------------------
+  {
+    const mockAuthWithoutPermission = {
+      user: {
+        id: 'u-viewer-1',
+        merchant_id: 'mmmmmmmm-1111-2222-3333-444444444444',
+        email: 'viewer@example.com',
+        full_name: 'Viewer User',
+        phone: '0901234568',
+        role: 'OWNER', // Even with OWNER role, missing iam:shop_config means cannot edit
+        permissions: ['other:permission'],
+        created_at: new Date(),
+      },
+      merchant: null,
+      isAuthenticated: true,
+      isHydrating: false,
+      token: 'test-token',
+    } as any;
+
+    const html = renderToStaticMarkup(
+      React.createElement(
+        AuthContext.Provider,
+        { value: mockAuthWithoutPermission },
+        React.createElement(ImportsSettingsPage, {
+          initialImports: [mockImportStaged],
+          // initialCanEdit is explicitly omitted so it must derive from live user permissions
+          initialLoading: false,
+        })
+      )
+    );
+
+    assert.ok(
+      html.includes('data-testid="import-forbidden-banner"'),
+      'Must render forbidden banner when user lacks iam:shop_config permission'
+    );
+    assert.ok(html.includes('iam:shop_config'), 'Forbidden banner must specify missing permission');
+    console.log(
+      'PASS: TEST 10 - Live permission derivation blocks edit when user lacks iam:shop_config'
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 11: Truncation disclosure notice (Finding 16)
+  // -------------------------------------------------------------------------
+  {
+    const html = renderToStaticMarkup(
+      React.createElement(ImportManagementView, {
+        loading: false,
+        imports: [mockImportBlocked],
+        selectedImport: {
+          ...mockImportBlocked,
+          total_rows: 250, // More rows than displayed (Finding 16)
+        },
+        selectedImportRows: mockImportRows, // Only 3 rows provided
+        canEdit: true,
+      })
+    );
+
+    assert.ok(
+      html.includes('data-testid="import-rows-truncation-notice"'),
+      'Must render truncation disclosure notice when total_rows exceeds rendered rows'
+    );
+    assert.ok(
+      html.includes('Đang hiển thị 3 trên tổng số 250 dòng'),
+      'Must explicitly disclose row count and truncation'
+    );
+    console.log(
+      'PASS: TEST 11 - Truncation disclosure notice rendered when total_rows > rows.length'
+    );
   }
 
   console.log('================================================================');

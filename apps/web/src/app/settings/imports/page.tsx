@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Layers, Shield } from 'lucide-react';
 import { ImportManagementView } from '@/components/ImportManagementView';
@@ -29,14 +29,20 @@ export default function ImportsSettingsPage({
   const { user } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
 
-  // Edit rights are derived server-side. Unknown user or missing permissions means no edit.
+  // Edit rights are derived server-side from iam:shop_config. Unknown user means no edit. (Finding 10)
+  const canEdit =
+    initialCanEdit !== undefined
+      ? initialCanEdit
+      : Boolean(user?.permissions?.includes('iam:shop_config'));
+
   const [imports, setImports] = useState<ImportSummary[]>(initialImports || []);
   const [selectedImport, setSelectedImport] = useState<ImportSummary | null>(initialSelectedImport);
   const [selectedRows, setSelectedRows] = useState<ImportRow[]>(initialSelectedRows || []);
   const [revisions, setRevisions] = useState<ImportSummary[]>([]);
-  const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
   const [loading, setLoading] = useState<boolean>(initialLoading ?? initialImports === null);
   const [error, setError] = useState<string | null>(initialError);
+
+  const activeDetailIdRef = useRef<string | null>(null);
 
   const fetchImports = useCallback(async () => {
     setLoading(true);
@@ -66,18 +72,26 @@ export default function ImportsSettingsPage({
         // Handle both json.data as array and json.data.items for flexibility (Finding 1)
         const items = Array.isArray(json.data) ? json.data : json.data?.items || [];
         setImports(items);
-        // Server-side permission check: never hardcode OWNER role (Finding 10)
-        setCanEdit(Boolean(user?.permissions?.includes('iam:shop_config')));
+        if (initialCanEdit === undefined) {
+          setCanEdit(Boolean(user?.permissions?.includes('iam:shop_config')));
+        }
       }
     } catch (err: any) {
       setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý nhập liệu');
     } finally {
       setLoading(false);
     }
-  }, [token, user]);
+  }, [token, user, initialCanEdit]);
 
   const fetchImportDetail = useCallback(
     async (importId: string) => {
+      // Key detail state and track active request identity to eliminate races (Finding 15)
+      activeDetailIdRef.current = importId;
+      setSelectedImport(null);
+      setSelectedRows([]);
+      setRevisions([]);
+      setError(null);
+
       try {
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
@@ -91,26 +105,47 @@ export default function ImportsSettingsPage({
           fetch(`${API_BASE}/api/v1/imports/${importId}/rows?limit=100`, { headers }),
         ]);
 
-        if (detailRes.ok) {
-          const detailJson = await detailRes.json();
-          if (detailJson.success) {
-            const imp = detailJson.data?.import || detailJson.data;
-            setSelectedImport(imp);
-            setRevisions(detailJson.data?.revisions || []);
-          }
+        // Discard responses if user selected another import in the meantime (Finding 15)
+        if (activeDetailIdRef.current !== importId) {
+          return;
         }
 
-        if (rowsRes.ok) {
-          const rowsJson = await rowsRes.json();
-          if (rowsJson.success) {
-            const rowItems = Array.isArray(rowsJson.data)
-              ? rowsJson.data
-              : rowsJson.data?.items || [];
-            setSelectedRows(rowItems);
-          }
+        // Expose partial or complete failure instead of leaving stale/misleading data
+        if (!detailRes.ok || !rowsRes.ok) {
+          const failStatus = !detailRes.ok ? detailRes.status : rowsRes.status;
+          setSelectedImport(null);
+          setSelectedRows([]);
+          setRevisions([]);
+          setError(
+            `Không thể tải đầy đủ chi tiết hoặc các dòng dữ liệu của lượt nhập (Mã lỗi HTTP: ${failStatus}). Vui lòng thử lại.`
+          );
+          return;
         }
+
+        const detailJson = await detailRes.json();
+        const rowsJson = await rowsRes.json();
+
+        if (!detailJson.success || !rowsJson.success) {
+          setSelectedImport(null);
+          setSelectedRows([]);
+          setRevisions([]);
+          setError('Dữ liệu chi tiết lượt nhập không hợp lệ hoặc bị lỗi định dạng từ máy chủ.');
+          return;
+        }
+
+        const imp = detailJson.data?.import || detailJson.data;
+        const rowItems = Array.isArray(rowsJson.data) ? rowsJson.data : rowsJson.data?.items || [];
+
+        setSelectedImport(imp);
+        setRevisions(detailJson.data?.revisions || []);
+        setSelectedRows(rowItems);
       } catch (err: any) {
-        setError(err?.message || 'Lỗi khi tải chi tiết lượt nhập');
+        if (activeDetailIdRef.current === importId) {
+          setSelectedImport(null);
+          setSelectedRows([]);
+          setRevisions([]);
+          setError(err?.message || 'Lỗi khi tải chi tiết lượt nhập');
+        }
       }
     },
     [token]

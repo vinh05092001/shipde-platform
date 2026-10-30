@@ -597,150 +597,235 @@ export function ImportManagementView({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {(selectedImport.template_type === 'branches'
-                            ? [
-                                {
-                                  col: 'code',
-                                  field: 'code',
-                                  rule: 'Bắt buộc (Định danh scope)',
-                                  sample: selectedImportRows[0]?.raw_data?.code,
-                                },
-                                {
-                                  col: 'name',
-                                  field: 'name',
-                                  rule: 'Bắt buộc (2-255 ký tự)',
-                                  sample: selectedImportRows[0]?.raw_data?.name,
-                                },
-                                {
-                                  col: 'contact_name',
-                                  field: 'contact_name',
-                                  rule: 'Tùy chọn',
-                                  sample: selectedImportRows[0]?.raw_data?.contact_name,
-                                },
-                                {
-                                  col: 'contact_phone',
-                                  field: 'contact_phone',
-                                  rule: 'Tùy chọn (Định dạng SĐT)',
-                                  sample: selectedImportRows[0]?.raw_data?.contact_phone,
-                                },
-                                {
-                                  col: 'address_line',
-                                  field: 'address_line',
-                                  rule: 'Tùy chọn (Địa chỉ chi tiết)',
-                                  sample: selectedImportRows[0]?.raw_data?.address_line,
-                                },
-                                {
-                                  col: 'ward',
-                                  field: 'ward',
-                                  rule: 'Tùy chọn (Phường/Xã)',
-                                  sample: selectedImportRows[0]?.raw_data?.ward,
-                                },
-                                {
-                                  col: 'district',
-                                  field: 'district',
-                                  rule: 'Tùy chọn (Quận/Huyện)',
-                                  sample: selectedImportRows[0]?.raw_data?.district,
-                                },
-                                {
-                                  col: 'city',
-                                  field: 'city',
-                                  rule: 'Tùy chọn (Tỉnh/Thành phố)',
-                                  sample: selectedImportRows[0]?.raw_data?.city,
-                                },
-                                {
-                                  col: 'is_default',
-                                  field: 'is_default',
-                                  rule: 'Tùy chọn (true/false, tối đa 1 mặc định)',
-                                  sample: selectedImportRows[0]?.raw_data?.is_default,
-                                },
-                                {
-                                  col: 'status',
-                                  field: 'status',
-                                  rule: 'Tùy chọn (ACTIVE/INACTIVE)',
-                                  sample: selectedImportRows[0]?.raw_data?.status,
-                                },
-                              ]
-                            : [
-                                {
-                                  col: 'code',
-                                  field: 'code',
-                                  rule: 'Bắt buộc (Định danh scope)',
-                                  sample: selectedImportRows[0]?.raw_data?.code,
-                                },
-                                {
-                                  col: 'name',
-                                  field: 'name',
-                                  rule: 'Bắt buộc (2-255 ký tự)',
-                                  sample: selectedImportRows[0]?.raw_data?.name,
-                                },
-                                {
-                                  col: 'contact_name',
-                                  field: 'contact_name',
-                                  rule: 'Tùy chọn',
-                                  sample: selectedImportRows[0]?.raw_data?.contact_name,
-                                },
-                                {
-                                  col: 'contact_phone',
-                                  field: 'contact_phone',
-                                  rule: 'Tùy chọn (Định dạng SĐT)',
-                                  sample: selectedImportRows[0]?.raw_data?.contact_phone,
-                                },
-                                {
-                                  col: 'contact_email',
-                                  field: 'contact_email',
-                                  rule: 'Tùy chọn (Email hợp lệ)',
-                                  sample: selectedImportRows[0]?.raw_data?.contact_email,
-                                },
-                                {
-                                  col: 'address_line',
-                                  field: 'address_line',
-                                  rule: 'Tùy chọn (Địa chỉ kho)',
-                                  sample: selectedImportRows[0]?.raw_data?.address_line,
-                                },
-                                {
-                                  col: 'ward',
-                                  field: 'ward',
-                                  rule: 'Tùy chọn (Phường/Xã)',
-                                  sample: selectedImportRows[0]?.raw_data?.ward,
-                                },
-                                {
-                                  col: 'district',
-                                  field: 'district',
-                                  rule: 'Tùy chọn (Quận/Huyện)',
-                                  sample: selectedImportRows[0]?.raw_data?.district,
-                                },
-                                {
-                                  col: 'city',
-                                  field: 'city',
-                                  rule: 'Tùy chọn (Tỉnh/Thành phố)',
-                                  sample: selectedImportRows[0]?.raw_data?.city,
-                                },
-                                {
-                                  col: 'postal_code',
-                                  field: 'postal_code',
-                                  rule: 'Tùy chọn',
-                                  sample: selectedImportRows[0]?.raw_data?.postal_code,
-                                },
-                                {
-                                  col: 'cutoff_time',
-                                  field: 'cutoff_time',
-                                  rule: 'Tùy chọn (HH:MM)',
-                                  sample: selectedImportRows[0]?.raw_data?.cutoff_time,
-                                },
-                                {
-                                  col: 'is_default',
-                                  field: 'is_default',
-                                  rule: 'Tùy chọn (true/false, tối đa 1 mặc định)',
-                                  sample: selectedImportRows[0]?.raw_data?.is_default,
-                                },
-                                {
-                                  col: 'status',
-                                  field: 'status',
-                                  rule: 'Tùy chọn (active/inactive)',
-                                  sample: selectedImportRows[0]?.raw_data?.status,
-                                },
-                              ]
-                          ).map((m, idx) => (
+                          {((selectedImport as any)?.mapping &&
+                          Array.isArray((selectedImport as any).mapping)
+                            ? (selectedImport as any).mapping.map((m: any) => ({
+                                col: m.header || m.col || m.field,
+                                field: m.field || m.col,
+                                rule: m.required ? 'Bắt buộc' : m.rule || 'Tùy chọn',
+                                description: m.description,
+                                sample:
+                                  selectedImportRows[0]?.raw_data?.[m.header] ??
+                                  selectedImportRows[0]?.raw_data?.[m.col] ??
+                                  selectedImportRows[0]?.raw_data?.[m.field] ??
+                                  (selectedImportRows[0]?.normalized_data as any)?.[m.field],
+                              }))
+                            : selectedImport.template_type === 'branches'
+                              ? [
+                                  {
+                                    col: 'Mã chi nhánh (code)',
+                                    field: 'code',
+                                    rule: 'Bắt buộc (Định danh scope)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Mã chi nhánh'] ??
+                                      selectedImportRows[0]?.raw_data?.code ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.code,
+                                  },
+                                  {
+                                    col: 'Tên chi nhánh (name)',
+                                    field: 'name',
+                                    rule: 'Bắt buộc (2-255 ký tự)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Tên chi nhánh'] ??
+                                      selectedImportRows[0]?.raw_data?.name ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.name,
+                                  },
+                                  {
+                                    col: 'Trạng thái (status)',
+                                    field: 'status',
+                                    rule: 'Tùy chọn (ACTIVE/INACTIVE)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Trạng thái'] ??
+                                      selectedImportRows[0]?.raw_data?.status ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.status,
+                                  },
+                                  {
+                                    col: 'Mặc định (is_default)',
+                                    field: 'is_default',
+                                    rule: 'Tùy chọn (true/false, tối đa 1 mặc định)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Mặc định'] ??
+                                      selectedImportRows[0]?.raw_data?.is_default ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.is_default,
+                                  },
+                                  {
+                                    col: 'Người liên hệ (contact_name)',
+                                    field: 'contact_name',
+                                    rule: 'Tùy chọn',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Người liên hệ'] ??
+                                      selectedImportRows[0]?.raw_data?.contact_name ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.contact_name,
+                                  },
+                                  {
+                                    col: 'Số điện thoại (contact_phone)',
+                                    field: 'contact_phone',
+                                    rule: 'Tùy chọn (Cảnh báo nếu thiếu)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Số điện thoại'] ??
+                                      selectedImportRows[0]?.raw_data?.contact_phone ??
+                                      (selectedImportRows[0]?.normalized_data as any)
+                                        ?.contact_phone,
+                                  },
+                                  {
+                                    col: 'Địa chỉ (address_line)',
+                                    field: 'address_line',
+                                    rule: 'Bắt buộc (Địa chỉ chi tiết)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Địa chỉ'] ??
+                                      selectedImportRows[0]?.raw_data?.address_line ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.address_line,
+                                  },
+                                  {
+                                    col: 'Phường/Xã (ward)',
+                                    field: 'ward',
+                                    rule: 'Tùy chọn (Cảnh báo nếu thiếu)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Phường/Xã'] ??
+                                      selectedImportRows[0]?.raw_data?.ward ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.ward,
+                                  },
+                                  {
+                                    col: 'Quận/Huyện (district)',
+                                    field: 'district',
+                                    rule: 'Bắt buộc (Quận hoặc Huyện)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Quận/Huyện'] ??
+                                      selectedImportRows[0]?.raw_data?.district ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.district,
+                                  },
+                                  {
+                                    col: 'Tỉnh/Thành phố (city)',
+                                    field: 'city',
+                                    rule: 'Bắt buộc (Tỉnh hoặc Thành phố)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Tỉnh/Thành phố'] ??
+                                      selectedImportRows[0]?.raw_data?.city ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.city,
+                                  },
+                                ]
+                              : [
+                                  {
+                                    col: 'Mã kho (code)',
+                                    field: 'code',
+                                    rule: 'Bắt buộc (Định danh scope)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Mã kho'] ??
+                                      selectedImportRows[0]?.raw_data?.code ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.code,
+                                  },
+                                  {
+                                    col: 'Tên kho hàng (name)',
+                                    field: 'name',
+                                    rule: 'Bắt buộc (2-255 ký tự)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Tên kho hàng'] ??
+                                      selectedImportRows[0]?.raw_data?.name ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.name,
+                                  },
+                                  {
+                                    col: 'Trạng thái (status)',
+                                    field: 'status',
+                                    rule: 'Tùy chọn (active/inactive)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Trạng thái'] ??
+                                      selectedImportRows[0]?.raw_data?.status ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.status,
+                                  },
+                                  {
+                                    col: 'Mặc định (is_default)',
+                                    field: 'is_default',
+                                    rule: 'Tùy chọn (true/false, tối đa 1 mặc định)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Mặc định'] ??
+                                      selectedImportRows[0]?.raw_data?.is_default ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.is_default,
+                                  },
+                                  {
+                                    col: 'Người liên hệ (contact_name)',
+                                    field: 'contact_name',
+                                    rule: 'Bắt buộc (Họ tên người phụ trách)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Người liên hệ'] ??
+                                      selectedImportRows[0]?.raw_data?.contact_name ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.contact_name,
+                                  },
+                                  {
+                                    col: 'Số điện thoại (contact_phone)',
+                                    field: 'contact_phone',
+                                    rule: 'Bắt buộc (Định dạng SĐT)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Số điện thoại'] ??
+                                      selectedImportRows[0]?.raw_data?.contact_phone ??
+                                      (selectedImportRows[0]?.normalized_data as any)
+                                        ?.contact_phone,
+                                  },
+                                  {
+                                    col: 'Email liên hệ (contact_email)',
+                                    field: 'contact_email',
+                                    rule: 'Tùy chọn (Email hợp lệ)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Email liên hệ'] ??
+                                      selectedImportRows[0]?.raw_data?.contact_email ??
+                                      (selectedImportRows[0]?.normalized_data as any)
+                                        ?.contact_email,
+                                  },
+                                  {
+                                    col: 'Địa chỉ lấy hàng (address_line)',
+                                    field: 'address_line',
+                                    rule: 'Bắt buộc (Địa chỉ kho chi tiết)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Địa chỉ lấy hàng'] ??
+                                      selectedImportRows[0]?.raw_data?.address_line ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.address_line,
+                                  },
+                                  {
+                                    col: 'Phường/Xã (ward)',
+                                    field: 'ward',
+                                    rule: 'Tùy chọn (Phường/Xã)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Phường/Xã'] ??
+                                      selectedImportRows[0]?.raw_data?.ward ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.ward,
+                                  },
+                                  {
+                                    col: 'Quận/Huyện (district)',
+                                    field: 'district',
+                                    rule: 'Bắt buộc (Quận hoặc Huyện)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Quận/Huyện'] ??
+                                      selectedImportRows[0]?.raw_data?.district ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.district,
+                                  },
+                                  {
+                                    col: 'Tỉnh/Thành phố (city)',
+                                    field: 'city',
+                                    rule: 'Bắt buộc (Tỉnh hoặc Thành phố)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Tỉnh/Thành phố'] ??
+                                      selectedImportRows[0]?.raw_data?.city ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.city,
+                                  },
+                                  {
+                                    col: 'Mã bưu chính (postal_code)',
+                                    field: 'postal_code',
+                                    rule: 'Tùy chọn',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Mã bưu chính'] ??
+                                      selectedImportRows[0]?.raw_data?.postal_code ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.postal_code,
+                                  },
+                                  {
+                                    col: 'Giờ chốt đơn (cutoff_time)',
+                                    field: 'cutoff_time',
+                                    rule: 'Tùy chọn (HH:MM)',
+                                    sample:
+                                      selectedImportRows[0]?.raw_data?.['Giờ chốt đơn'] ??
+                                      selectedImportRows[0]?.raw_data?.cutoff_time ??
+                                      (selectedImportRows[0]?.normalized_data as any)?.cutoff_time,
+                                  },
+                                ]
+                          ).map((m: any, idx: number) => (
                             <tr key={idx} className="hover:bg-gray-50">
                               <td className="py-2 px-3 font-mono font-medium text-gray-800">
                                 {m.col}
@@ -855,6 +940,21 @@ export function ImportManagementView({
                         <option value="WARNING">Chỉ dòng cảnh báo (WARNING)</option>
                       </select>
                     </div>
+
+                    {/* Truncation disclosure banner (Finding 16) */}
+                    {selectedImport.total_rows > selectedImportRows.length && (
+                      <div
+                        data-testid="import-rows-truncation-notice"
+                        className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center justify-between"
+                      >
+                        <span>
+                          Đang hiển thị {selectedImportRows.length} trên tổng số{' '}
+                          {selectedImport.total_rows} dòng. Để xem và khắc phục toàn bộ lỗi (bao gồm
+                          các dòng sau dòng {selectedImportRows.length}), vui lòng sử dụng nút
+                          &quot;Tải báo cáo lỗi&quot;.
+                        </span>
+                      </div>
+                    )}
 
                     {filteredRows.length === 0 ? (
                       <div className="py-6 text-center text-gray-400 text-xs">

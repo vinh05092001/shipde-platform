@@ -144,7 +144,7 @@ export class ImportsService {
       );
     }
 
-    // 2. MIME type verification from config
+    // 2. MIME type & extension verification from config (Finding 17: enforce together)
     const allowedMimeTypes = this.config.ALLOWED_IMPORT_MIME_TYPES || [
       'text/csv',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -156,21 +156,34 @@ export class ImportsService {
     const hasValidMime = allowedMimeTypes.some(
       (m) => cleanMime.includes(m.toLowerCase()) || m.toLowerCase().includes(cleanMime)
     );
-    const hasValidExtension =
-      fileName.toLowerCase().endsWith('.csv') || fileName.toLowerCase().endsWith('.xlsx');
+    const lowerName = fileName.toLowerCase();
+    const isCsvExtension = lowerName.endsWith('.csv');
+    const isXlsxExtension = lowerName.endsWith('.xlsx');
+    const hasValidExtension = isCsvExtension || isXlsxExtension;
 
-    if (!hasValidMime && !hasValidExtension) {
+    const isCsvMime =
+      cleanMime.includes('csv') ||
+      cleanMime.includes('text/plain') ||
+      cleanMime === 'application/csv';
+    const isXlsxMime =
+      cleanMime.includes('openxmlformats') ||
+      cleanMime.includes('excel') ||
+      cleanMime.includes('spreadsheetml') ||
+      cleanMime === 'application/octet-stream';
+    const isMimeCompatible = (isCsvExtension && isCsvMime) || (isXlsxExtension && isXlsxMime);
+
+    if (!hasValidExtension || !hasValidMime || !isMimeCompatible) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         'INVALID_FILE_TYPE',
-        `Định dạng tệp tin (${mimeType}) không được hỗ trợ. Chỉ hỗ trợ định dạng CSV hoặc XLSX`,
+        `Định dạng tệp tin (${fileName}, MIME: ${mimeType}) không được hỗ trợ hoặc không tương thích cấu hình`,
         false,
         undefined,
         [
           {
             field: 'mime_type',
             code: 'INVALID_FILE_TYPE',
-            message: `Cho phép: ${allowedMimeTypes.join(', ')}`,
+            message: `Cho phép: ${allowedMimeTypes.join(', ')} với đuôi tệp tương ứng (.csv, .xlsx)`,
           },
         ]
       );
@@ -199,245 +212,289 @@ export class ImportsService {
 
     // 4. Calculate SHA-256 file checksum
     const fileHash = calculateFileHash(fileBuffer);
-
-    // 5. Identity and Deduplication Check (Decision 2)
-    // An import is identified by (tenant, template type, file checksum)
-    const existingWithSameHash = await this.prisma.import.findFirst({
-      where: {
-        merchant_id: merchantId,
-        template_type: dto.template_type,
-        file_hash: fileHash,
-      },
-      include: {
-        rows: {
-          orderBy: { row_number: 'asc' },
-          take: 20,
-        },
-      },
-    });
-
-    if (existingWithSameHash) {
-      // Check idempotency conflict
-      if (idempotencyKey) {
-        const conflictingKey = await this.prisma.import.findFirst({
-          where: {
-            merchant_id: merchantId,
-            idempotency_key: idempotencyKey,
-            file_hash: { not: fileHash },
-          },
-        });
-        if (conflictingKey) {
-          throw new CanonicalApiException(
-            HttpStatus.CONFLICT,
-            'IDEMPOTENCY_CONFLICT',
-            `Khóa bất biến (Idempotency-Key: ${idempotencyKey}) đã được sử dụng với nội dung tệp khác nhau`,
-            false
-          );
-        }
-      }
-
-      const detail = await this.formatImportDetail(existingWithSameHash, correlationId);
-      return {
-        statusCode: HttpStatus.OK,
-        data: detail.data,
-        meta: detail.meta,
-      };
-    }
-
-    // 6. Idempotency check for new hash with existing idempotency key
-    if (idempotencyKey) {
-      const existingWithKey = await this.prisma.import.findFirst({
-        where: {
-          merchant_id: merchantId,
-          idempotency_key: idempotencyKey,
-        },
-      });
-      if (existingWithKey) {
-        throw new CanonicalApiException(
-          HttpStatus.CONFLICT,
-          'IDEMPOTENCY_CONFLICT',
-          `Khóa bất biến (Idempotency-Key: ${idempotencyKey}) đã được sử dụng cho một tệp khác`,
-          false
-        );
-      }
-    }
-
-    // 7. Determine Next Immutable Revision
-    const latestRevisionRecord = await this.prisma.import.findFirst({
-      where: {
-        merchant_id: merchantId,
-        template_type: dto.template_type,
-      },
-      orderBy: { revision: 'desc' },
-      select: { revision: true },
-    });
-    const nextRevision = (latestRevisionRecord?.revision ?? 0) + 1;
-
-    // 8. Parse file lines (CSV or XLSX)
-    let parsed: { headers: string[]; rows: Record<string, string>[] };
     const isXlsx =
       cleanMime.includes('openxmlformats') ||
       cleanMime.includes('excel') ||
       fileName.toLowerCase().endsWith('.xlsx');
 
+    // 5. Transactional Ingestion with Merchant Lock (Finding 12 & Finding 19)
+    // Locking occurs BEFORE deduplication, idempotency checks, and revision allocation.
     try {
-      if (isXlsx) {
-        parsed = parseXlsx(fileBuffer);
-      } else {
-        parsed = parseCsv(fileBuffer.toString('utf8'));
-      }
-    } catch (err: any) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'FILE_PARSE_ERROR',
-        `Không thể đọc dữ liệu tệp tin: ${err.message || 'Lỗi định dạng'}`,
-        false
-      );
-    }
+      const uploadResult = await this.prisma.$transaction(async (tx) => {
+        if (typeof tx.$queryRaw === 'function') {
+          await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+        }
 
-    if (parsed.rows.length === 0) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'EMPTY_FILE',
-        'Tệp tải lên không chứa dòng dữ liệu nào',
-        false
-      );
-    }
-
-    // 9. Normalize & Validate Rows
-    const { normalizedRows } = normalizeRowsWithTemplate(template, parsed.headers, parsed.rows);
-    const seenScopeCodes = new Set<string>();
-    const validatedRows: ValidatedRowResult[] = [];
-
-    for (const nr of normalizedRows) {
-      const result = validateImportRow(
-        template,
-        nr.rowNumber,
-        nr.rawData,
-        nr.mappedData,
-        seenScopeCodes
-      );
-      validatedRows.push(result);
-    }
-
-    // Control totals
-    const defaultRows = validatedRows.filter((r) => r.normalizedData?.is_default === true);
-    if (defaultRows.length > 1) {
-      for (const dr of defaultRows) {
-        dr.status = 'ERROR';
-        dr.issues.push({
-          field: 'is_default',
-          code: 'MULTIPLE_DEFAULTS',
-          message: `Dòng ${dr.rowNumber}: Tệp chứa nhiều dòng được đánh dấu là mặc định. Chỉ được phép có tối đa một mặc định theo BR-BRANCH-03.`,
-          severity: 'BLOCKING',
+        // Deduplication Check under lock (Decision 2)
+        const existingWithSameHash = await tx.import.findFirst({
+          where: {
+            merchant_id: merchantId,
+            template_type: dto.template_type,
+            file_hash: fileHash,
+          },
+          include: {
+            rows: {
+              orderBy: { row_number: 'asc' },
+              take: 20,
+            },
+          },
         });
-      }
-    }
 
-    const totalRows = validatedRows.length;
-    const validRows = validatedRows.filter((r) => r.status === 'VALID').length;
-    const errorRows = validatedRows.filter((r) => r.status === 'ERROR').length;
-    const warningRows = validatedRows.filter((r) => r.status === 'WARNING').length;
+        if (existingWithSameHash) {
+          if (idempotencyKey) {
+            const conflictingKey = await tx.import.findFirst({
+              where: {
+                merchant_id: merchantId,
+                idempotency_key: idempotencyKey,
+                file_hash: { not: fileHash },
+              },
+            });
+            if (conflictingKey) {
+              throw new CanonicalApiException(
+                HttpStatus.CONFLICT,
+                'IDEMPOTENCY_CONFLICT',
+                `Khóa bất biến (Idempotency-Key: ${idempotencyKey}) đã được sử dụng với nội dung tệp khác nhau`,
+                false
+              );
+            }
+          }
 
-    // Determine status (Decision 1 & DATA-LIFECYCLE-IMPORTS.md)
-    // Key/control error prevents promotion: if errorRows > 0 -> BLOCKED, else STAGED
-    const importStatus = errorRows > 0 ? ImportStatus.BLOCKED : ImportStatus.STAGED;
+          const detail = await this.formatImportDetail(existingWithSameHash, correlationId, tx);
+          return {
+            statusCode: HttpStatus.OK,
+            data: detail.data,
+            meta: detail.meta,
+          };
+        }
 
-    const controlTotals = {
-      total_rows: totalRows,
-      valid_rows: validRows,
-      error_rows: errorRows,
-      warning_rows: warningRows,
-    };
+        // Idempotency check for new hash with existing idempotency key
+        if (idempotencyKey) {
+          const existingWithKey = await tx.import.findFirst({
+            where: {
+              merchant_id: merchantId,
+              idempotency_key: idempotencyKey,
+            },
+          });
+          if (existingWithKey) {
+            throw new CanonicalApiException(
+              HttpStatus.CONFLICT,
+              'IDEMPOTENCY_CONFLICT',
+              `Khóa bất biến (Idempotency-Key: ${idempotencyKey}) đã được sử dụng cho một tệp khác`,
+              false
+            );
+          }
+        }
 
-    // 10. Private storage persistence (Finding 3: fails closed if persistence fails)
-    const storageKey = `imports/${merchantId}/${dto.template_type}/rev${nextRevision}_${fileHash}.dat`;
-    let storagePath: string;
-    try {
-      storagePath = await this.storageService.putObject(storageKey, fileBuffer, mimeType);
-    } catch (storageErr: any) {
-      throw new CanonicalApiException(
-        HttpStatus.INTERNAL_SERVER_ERROR,
-        'STORAGE_ERROR',
-        `Không thể lưu trữ tệp tin tải lên: ${storageErr.message || 'Lỗi lưu trữ'}`,
-        false
-      );
-    }
+        // Determine Next Immutable Revision under the lock
+        const latestRevisionRecord = await tx.import.findFirst({
+          where: {
+            merchant_id: merchantId,
+            template_type: dto.template_type,
+          },
+          orderBy: { revision: 'desc' },
+          select: { revision: true },
+        });
+        const nextRevision = (latestRevisionRecord?.revision ?? 0) + 1;
 
-    // 11. Transactional Database Ingestion
-    const createdImport = await this.prisma.$transaction(async (tx) => {
-      if (typeof tx.$queryRaw === 'function') {
-        await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
-      }
+        // Private storage persistence (Finding 3: fails closed if persistence fails)
+        const storageKey = `imports/${merchantId}/${dto.template_type}/rev${nextRevision}_${fileHash}.dat`;
+        let storagePath: string;
+        try {
+          storagePath = await this.storageService.putObject(storageKey, fileBuffer, mimeType);
+        } catch (storageErr: any) {
+          throw new CanonicalApiException(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            'STORAGE_ERROR',
+            `Không thể lưu trữ tệp tin tải lên: ${storageErr.message || 'Lỗi lưu trữ'}`,
+            false
+          );
+        }
 
-      const imp = await tx.import.create({
-        data: {
-          merchant_id: merchantId,
-          template_type: dto.template_type,
-          file_name: fileName || `import_${dto.template_type}_rev${nextRevision}.csv`,
-          file_size: fileBuffer.length,
-          file_hash: fileHash,
-          mime_type: mimeType || 'text/csv',
-          storage_path: storagePath,
-          status: importStatus,
-          revision: nextRevision,
-          idempotency_key: idempotencyKey || null,
+        // Create durable import record in UPLOADED status (Finding 19 & STATE-MACHINES.md)
+        const imp = await tx.import.create({
+          data: {
+            merchant_id: merchantId,
+            template_type: dto.template_type,
+            file_name: fileName || `import_${dto.template_type}_rev${nextRevision}.csv`,
+            file_size: fileBuffer.length,
+            file_hash: fileHash,
+            mime_type: mimeType || 'text/csv',
+            storage_path: storagePath,
+            status: ImportStatus.UPLOADED,
+            revision: nextRevision,
+            idempotency_key: idempotencyKey || null,
+            total_rows: 0,
+            valid_rows: 0,
+            error_rows: 0,
+            warning_rows: 0,
+            control_totals: {},
+            created_by_user_id: actor.userId || null,
+          },
+        });
+
+        // Audit upload
+        if (tx.auditLog?.create) {
+          await tx.auditLog.create({
+            data: {
+              merchant_id: merchantId,
+              user_id: actor.userId,
+              actor: actor.role || 'OWNER',
+              action: 'IMPORT_UPLOADED',
+              entity_type: 'import',
+              entity_id: imp.id,
+              ip_address: clientIp ? this.hashIp(clientIp) : null,
+              new_value: {
+                template_type: imp.template_type,
+                revision: imp.revision,
+                file_name: imp.file_name,
+                file_hash: imp.file_hash,
+                status: ImportStatus.UPLOADED,
+              },
+            },
+          });
+        }
+
+        // Transition to VALIDATING (State Machine)
+        await tx.import.update({
+          where: { id: imp.id },
+          data: { status: ImportStatus.VALIDATING },
+        });
+
+        // Parse file lines (CSV or XLSX)
+        let parsed: { headers: string[]; rows: Record<string, string>[] };
+        try {
+          if (isXlsx) {
+            parsed = parseXlsx(fileBuffer);
+          } else {
+            parsed = parseCsv(fileBuffer.toString('utf8'));
+          }
+        } catch (err: any) {
+          await tx.import.update({
+            where: { id: imp.id },
+            data: {
+              status: ImportStatus.FAILED,
+              control_totals: { error_message: err.message || 'Lỗi định dạng tệp' },
+            },
+          });
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'FILE_PARSE_ERROR',
+            `Không thể đọc dữ liệu tệp tin: ${err.message || 'Lỗi định dạng'}`,
+            false
+          );
+        }
+
+        if (parsed.rows.length === 0) {
+          await tx.import.update({
+            where: { id: imp.id },
+            data: {
+              status: ImportStatus.FAILED,
+              control_totals: { error_message: 'Tệp tải lên không chứa dòng dữ liệu nào' },
+            },
+          });
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'EMPTY_FILE',
+            'Tệp tải lên không chứa dòng dữ liệu nào',
+            false
+          );
+        }
+
+        // Normalize & Validate Rows
+        const { normalizedRows } = normalizeRowsWithTemplate(template, parsed.headers, parsed.rows);
+        const seenScopeCodes = new Set<string>();
+        const validatedRows: ValidatedRowResult[] = [];
+
+        for (const nr of normalizedRows) {
+          const result = validateImportRow(
+            template,
+            nr.rowNumber,
+            nr.rawData,
+            nr.mappedData,
+            seenScopeCodes
+          );
+          validatedRows.push(result);
+        }
+
+        // BR-BRANCH-03: Single default check across all rows
+        const defaultRows = validatedRows.filter((r) => r.normalizedData?.is_default === true);
+        if (defaultRows.length > 1) {
+          for (const dr of defaultRows) {
+            dr.status = 'ERROR';
+            dr.issues.push({
+              field: 'is_default',
+              code: 'MULTIPLE_DEFAULTS',
+              message: `Dòng ${dr.rowNumber}: Tệp chứa nhiều dòng được đánh dấu là mặc định. Chỉ được phép có tối đa một mặc định theo BR-BRANCH-03.`,
+              severity: 'BLOCKING',
+            });
+          }
+        }
+
+        const totalRows = validatedRows.length;
+        const validRows = validatedRows.filter((r) => r.status === 'VALID').length;
+        const errorRows = validatedRows.filter((r) => r.status === 'ERROR').length;
+        const warningRows = validatedRows.filter((r) => r.status === 'WARNING').length;
+
+        const importStatus = errorRows > 0 ? ImportStatus.BLOCKED : ImportStatus.STAGED;
+        const controlTotals = {
           total_rows: totalRows,
           valid_rows: validRows,
           error_rows: errorRows,
           warning_rows: warningRows,
-          control_totals: controlTotals,
-          created_by_user_id: actor.userId || null,
-        },
-      });
+        };
 
-      // Insert import rows
-      const rowData = validatedRows.map((vr) => ({
-        import_id: imp.id,
-        row_number: vr.rowNumber,
-        raw_data: vr.rawData,
-        normalized_data: vr.normalizedData,
-        status: vr.status,
-        scope_identifier: vr.scopeIdentifier,
-        issues_json: vr.issues.length > 0 ? (vr.issues as any) : Prisma.JsonNull,
-      }));
+        // Insert import rows
+        const rowData = validatedRows.map((vr) => ({
+          import_id: imp.id,
+          row_number: vr.rowNumber,
+          raw_data: vr.rawData,
+          normalized_data: vr.normalizedData,
+          status: vr.status,
+          scope_identifier: vr.scopeIdentifier,
+          issues_json: vr.issues.length > 0 ? (vr.issues as any) : Prisma.JsonNull,
+        }));
 
-      await tx.importRow.createMany({
-        data: rowData,
-      });
+        await tx.importRow.createMany({
+          data: rowData,
+        });
 
-      // Audit upload (Finding 13)
-      if (tx.auditLog?.create) {
-        await tx.auditLog.create({
+        // Update finalized import status and control totals
+        const finalImp = await tx.import.update({
+          where: { id: imp.id },
           data: {
-            merchant_id: merchantId,
-            user_id: actor.userId,
-            actor: actor.role || 'OWNER',
-            action: 'IMPORT_UPLOADED',
-            entity_type: 'import',
-            entity_id: imp.id,
-            ip_address: clientIp ? this.hashIp(clientIp) : null,
-            new_value: {
-              template_type: imp.template_type,
-              revision: imp.revision,
-              file_name: imp.file_name,
-              file_hash: imp.file_hash,
-              total_rows: totalRows,
-              status: importStatus,
-            },
+            status: importStatus,
+            total_rows: totalRows,
+            valid_rows: validRows,
+            error_rows: errorRows,
+            warning_rows: warningRows,
+            control_totals: controlTotals,
           },
         });
+
+        const detail = await this.formatImportDetail(finalImp, correlationId, tx);
+        return {
+          statusCode: HttpStatus.CREATED,
+          data: detail.data,
+          meta: detail.meta,
+        };
+      });
+
+      return uploadResult;
+    } catch (err: any) {
+      if (err instanceof CanonicalApiException) {
+        throw err;
       }
-
-      return imp;
-    });
-
-    const fullDetail = await this.getImportDetail(createdImport.id, merchantId, correlationId);
-    return {
-      statusCode: HttpStatus.CREATED,
-      data: fullDetail.data,
-      meta: fullDetail.meta,
-    };
+      // Translate database unique constraint conflicts into canonical 409
+      if (err?.code === 'P2002') {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'IDEMPOTENCY_CONFLICT',
+          'Xảy ra xung đột bản ghi hoặc khóa bất biến trùng lặp trong phiên đồng thời',
+          false
+        );
+      }
+      throw err;
+    }
   }
 
   /**
@@ -469,15 +526,17 @@ export class ImportsService {
 
   private async formatImportDetail(
     imp: any,
-    correlationId?: string
+    correlationId?: string,
+    txClient?: any
   ): Promise<{ data: any; meta: any }> {
-    const previewRows = await this.prisma.importRow.findMany({
+    const db = txClient || this.prisma;
+    const previewRows = await db.importRow.findMany({
       where: { import_id: imp.id },
       orderBy: { row_number: 'asc' },
       take: 20,
     });
 
-    const allRevisions = await this.prisma.import.findMany({
+    const allRevisions = await db.import.findMany({
       where: {
         merchant_id: imp.merchant_id,
         template_type: imp.template_type,
@@ -504,6 +563,19 @@ export class ImportsService {
       },
     });
 
+    // Actual mapping metadata from canonical template definition (Finding 13)
+    const template = TEMPLATE_DEFINITIONS[imp.template_type];
+    const mapping = template
+      ? template.columns.map((col) => ({
+          col: col.key,
+          field: col.key,
+          header: col.header,
+          required: Boolean(col.required),
+          rule: col.required ? 'Bắt buộc' : 'Tùy chọn',
+          description: col.description || '',
+        }))
+      : [];
+
     return {
       data: {
         import: {
@@ -523,13 +595,15 @@ export class ImportsService {
           error_rows: imp.error_rows,
           warning_rows: imp.warning_rows,
           control_totals: imp.control_totals,
+          mapping,
           created_by_user_id: imp.created_by_user_id,
           promoted_by_user_id: imp.promoted_by_user_id,
           promoted_at: imp.promoted_at ? imp.promoted_at.toISOString() : null,
           created_at: imp.created_at.toISOString(),
           updated_at: imp.updated_at.toISOString(),
         },
-        preview_rows: previewRows.map((r) => ({
+        mapping,
+        preview_rows: previewRows.map((r: any) => ({
           id: r.id,
           import_id: r.import_id,
           row_number: r.row_number,
@@ -540,7 +614,7 @@ export class ImportsService {
           issues: r.issues_json || [],
           created_at: r.created_at.toISOString(),
         })),
-        revisions: allRevisions.map((rev) => ({
+        revisions: allRevisions.map((rev: any) => ({
           ...rev,
           created_at: rev.created_at.toISOString(),
           updated_at: rev.updated_at.toISOString(),
@@ -749,8 +823,8 @@ export class ImportsService {
 
   /**
    * Promotes the latest STAGED revision into target domain entities (branches or warehouses).
-   * Enforces server-side FEAT-RBAC-02 scope for every affected row (Decision 3).
-   * Audited, explicit, all-or-nothing per revision.
+   * Enforces server-side FEAT-RBAC-02 scope for every affected row and implicitly displaced defaults (Decision 3 & Finding 14).
+   * Audited, explicit, all-or-nothing per revision within merchant locked transaction (Finding 12).
    */
   public async promoteImport(
     importId: string,
@@ -759,154 +833,93 @@ export class ImportsService {
     correlationId?: string,
     clientIp?: string
   ): Promise<{ data: any; meta: any }> {
-    const imp = await this.prisma.import.findFirst({
-      where: { id: importId, merchant_id: merchantId },
-    });
-
-    if (!imp) {
-      throw new CanonicalApiException(
-        HttpStatus.NOT_FOUND,
-        'IMPORT_NOT_FOUND',
-        'Không tìm thấy bản ghi nhập khẩu trong cửa hàng này',
-        false
-      );
-    }
-
-    // Status validation
-    if (imp.status === ImportStatus.BLOCKED) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'IMPORT_BLOCKED',
-        'Không thể áp dụng bản ghi nhập khẩu đang bị chặn do có lỗi dữ liệu hoặc thiếu định danh phạm vi',
-        false
-      );
-    }
-
-    if (imp.status === ImportStatus.PROMOTED) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'IMPORT_ALREADY_PROMOTED',
-        'Bản ghi nhập khẩu này đã được áp dụng trước đó',
-        false
-      );
-    }
-
-    if (imp.status !== ImportStatus.STAGED) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'IMPORT_NOT_ELIGIBLE',
-        `Chỉ có thể áp dụng bản ghi nhập khẩu ở trạng thái STAGED (hiện tại: ${imp.status})`,
-        false
-      );
-    }
-
-    // Verify revision is latest for this template type (Decision 2)
-    const latestRevision = await this.prisma.import.findFirst({
-      where: {
-        merchant_id: merchantId,
-        template_type: imp.template_type,
-      },
-      orderBy: { revision: 'desc' },
-      select: { revision: true },
-    });
-
-    if (latestRevision && imp.revision < latestRevision.revision) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'REVISION_NOT_LATEST',
-        `Chỉ có thể áp dụng phiên bản đã xác thực mới nhất (Phiên bản hiện tại: ${imp.revision}, mới nhất: ${latestRevision.revision})`,
-        false
-      );
-    }
-
-    // Retrieve all rows for this revision
-    const allRows = await this.prisma.importRow.findMany({
-      where: { import_id: imp.id },
-      orderBy: { row_number: 'asc' },
-    });
-
-    // Check for any blocking errors that slipped through
-    const hasErrorRows = allRows.some((r) => r.status === 'ERROR');
-    if (hasErrorRows) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'IMPORT_BLOCKED',
-        'Tệp chứa dòng dữ liệu lỗi chưa được xử lý, không thể áp dụng',
-        false
-      );
-    }
-
-    // Scope verification for every affected row (Decision 3 & FEAT-RBAC-02 - Finding 10: no OWNER hardcode)
-    const liveScopes = await this.getActorScopes(actor);
-
-    if (imp.template_type === ImportTemplateType.WAREHOUSES) {
-      const actorWarehouseScopes = liveScopes.warehouse_scopes;
-      const isWildcard = actorWarehouseScopes.includes('*');
-
-      if (!isWildcard) {
-        const unauthorizedCodes: string[] = [];
-        for (const row of allRows) {
-          const code = row.scope_identifier;
-          if (!code || !actorWarehouseScopes.includes(code)) {
-            unauthorizedCodes.push(code || `Dòng ${row.row_number}`);
-          }
-        }
-        if (unauthorizedCodes.length > 0) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'WAREHOUSE_SCOPE_UNAUTHORIZED',
-            `Bạn không có quyền phân quyền đối với mã kho: ${unauthorizedCodes.join(', ')}`,
-            false,
-            undefined,
-            [
-              {
-                field: 'scope_identifier',
-                code: 'WAREHOUSE_SCOPE_UNAUTHORIZED',
-                message: `Mã ngoài phạm vi: ${unauthorizedCodes.join(', ')}`,
-              },
-            ]
-          );
-        }
-      }
-    } else if (imp.template_type === ImportTemplateType.BRANCHES) {
-      const actorStoreScopes = liveScopes.store_scopes;
-      const isWildcard = actorStoreScopes.includes('*');
-
-      if (!isWildcard) {
-        const unauthorizedCodes: string[] = [];
-        for (const row of allRows) {
-          const code = row.scope_identifier;
-          if (!code || !actorStoreScopes.includes(code)) {
-            unauthorizedCodes.push(code || `Dòng ${row.row_number}`);
-          }
-        }
-        if (unauthorizedCodes.length > 0) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'SCOPE_UNAUTHORIZED',
-            `Bạn không có quyền phân quyền đối với mã chi nhánh: ${unauthorizedCodes.join(', ')}`,
-            false,
-            undefined,
-            [
-              {
-                field: 'scope_identifier',
-                code: 'SCOPE_UNAUTHORIZED',
-                message: `Mã ngoài phạm vi: ${unauthorizedCodes.join(', ')}`,
-              },
-            ]
-          );
-        }
-      }
-    }
-
-    // Atomic promotion transaction (Finding 6, 11, 12, 13)
     const now = new Date();
     let promotedCount = 0;
+    let templateType: string = '';
 
     await this.prisma.$transaction(async (tx) => {
-      // Merchant lock to prevent concurrent promotes or collisions
+      // 1. Merchant lock to prevent concurrent promotes, collisions, or race conditions (Finding 12)
       if (typeof tx.$queryRaw === 'function') {
         await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+      }
+
+      // Re-read import under lock
+      const imp = await tx.import.findFirst({
+        where: { id: importId, merchant_id: merchantId },
+      });
+
+      if (!imp) {
+        throw new CanonicalApiException(
+          HttpStatus.NOT_FOUND,
+          'IMPORT_NOT_FOUND',
+          'Không tìm thấy bản ghi nhập khẩu trong cửa hàng này',
+          false
+        );
+      }
+      templateType = imp.template_type;
+
+      // Status validation under lock
+      if (imp.status === ImportStatus.BLOCKED) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'IMPORT_BLOCKED',
+          'Không thể áp dụng bản ghi nhập khẩu đang bị chặn do có lỗi dữ liệu hoặc thiếu định danh phạm vi',
+          false
+        );
+      }
+
+      if (imp.status === ImportStatus.PROMOTED) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'IMPORT_ALREADY_PROMOTED',
+          'Bản ghi nhập khẩu này đã được áp dụng trước đó',
+          false
+        );
+      }
+
+      if (imp.status !== ImportStatus.STAGED) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'IMPORT_NOT_ELIGIBLE',
+          `Chỉ có thể áp dụng bản ghi nhập khẩu ở trạng thái STAGED (hiện tại: ${imp.status})`,
+          false
+        );
+      }
+
+      // Verify revision is latest for this template type under lock (Decision 2 & Finding 12)
+      const latestRevision = await tx.import.findFirst({
+        where: {
+          merchant_id: merchantId,
+          template_type: imp.template_type,
+        },
+        orderBy: { revision: 'desc' },
+        select: { revision: true },
+      });
+
+      if (latestRevision && imp.revision < latestRevision.revision) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'REVISION_NOT_LATEST',
+          `Chỉ có thể áp dụng phiên bản đã xác thực mới nhất (Phiên bản hiện tại: ${imp.revision}, mới nhất: ${latestRevision.revision})`,
+          false
+        );
+      }
+
+      // Retrieve all rows for this revision under lock
+      const allRows = await tx.importRow.findMany({
+        where: { import_id: imp.id },
+        orderBy: { row_number: 'asc' },
+      });
+
+      // Check for any blocking errors
+      const hasErrorRows = allRows.some((r) => r.status === 'ERROR');
+      if (hasErrorRows) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'IMPORT_BLOCKED',
+          'Tệp chứa dòng dữ liệu lỗi chưa được xử lý, không thể áp dụng',
+          false
+        );
       }
 
       // BR-BRANCH-03: Single default check across all rows being imported
@@ -920,8 +933,119 @@ export class ImportsService {
         );
       }
 
-      // 1. Promote to target entity tables
+      // Scope verification for uploaded rows (Decision 3 & FEAT-RBAC-02)
+      const liveScopes = await this.getActorScopes(actor);
+
       if (imp.template_type === ImportTemplateType.WAREHOUSES) {
+        const actorWarehouseScopes = liveScopes.warehouse_scopes;
+        const isWildcard = actorWarehouseScopes.includes('*');
+
+        if (!isWildcard) {
+          const unauthorizedCodes: string[] = [];
+          for (const row of allRows) {
+            const code = row.scope_identifier;
+            if (!code || !actorWarehouseScopes.includes(code)) {
+              unauthorizedCodes.push(code || `Dòng ${row.row_number}`);
+            }
+          }
+          if (unauthorizedCodes.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'WAREHOUSE_SCOPE_UNAUTHORIZED',
+              `Bạn không có quyền phân quyền đối với mã kho: ${unauthorizedCodes.join(', ')}`,
+              false,
+              undefined,
+              [
+                {
+                  field: 'scope_identifier',
+                  code: 'WAREHOUSE_SCOPE_UNAUTHORIZED',
+                  message: `Mã ngoài phạm vi: ${unauthorizedCodes.join(', ')}`,
+                },
+              ]
+            );
+          }
+        }
+
+        // Implicit scope check and audits for displaced default warehouses (Finding 13 & 14)
+        const rowWithDefault = allRows.find((r) => (r.normalized_data as any)?.is_default === true);
+        if (rowWithDefault) {
+          const newDefaultCode = rowWithDefault.scope_identifier!;
+          const existingDefaults = await tx.warehouse.findMany({
+            where: { merchant_id: merchantId, is_default: true, code: { not: newDefaultCode } },
+          });
+
+          if (!isWildcard) {
+            for (const defWh of existingDefaults) {
+              if (!actorWarehouseScopes.includes(defWh.code)) {
+                throw new CanonicalApiException(
+                  HttpStatus.FORBIDDEN,
+                  'WAREHOUSE_SCOPE_UNAUTHORIZED',
+                  `Bạn không có quyền phân quyền đối với kho mặc định hiện tại (${defWh.code}) để thay đổi mặc định`,
+                  false
+                );
+              }
+            }
+          }
+
+          // Unset displaced defaults and record entity lifecycle audit (Finding 13)
+          for (const defWh of existingDefaults) {
+            await tx.warehouse.update({
+              where: { id: defWh.id },
+              data: { is_default: false },
+            });
+            if (tx.auditLog?.create) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: merchantId,
+                  user_id: actor.userId,
+                  actor: actor.role || 'OWNER',
+                  action: 'WAREHOUSE_UPDATED',
+                  entity_type: 'warehouse',
+                  entity_id: defWh.id,
+                  ip_address: clientIp ? this.hashIp(clientIp) : null,
+                  new_value: this.maskAuditData({
+                    code: defWh.code,
+                    name: defWh.name,
+                    is_default: false,
+                    status: defWh.status,
+                  }),
+                },
+              });
+            }
+          }
+        }
+
+        // Default warehouse invariant checks (Finding 6)
+        for (const row of allRows) {
+          const norm = (row.normalized_data as Record<string, any>) || {};
+          const code = row.scope_identifier!;
+          const existingWh = await tx.warehouse.findUnique({
+            where: { merchant_id_code: { merchant_id: merchantId, code } },
+          });
+          if (existingWh?.is_default) {
+            const hasReplacementDefault = allRows.some(
+              (r) => r.scope_identifier !== code && (r.normalized_data as any)?.is_default === true
+            );
+            if (norm.status && norm.status.toLowerCase() === 'inactive' && !hasReplacementDefault) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
+                'Không thể vô hiệu hóa kho mặc định mà không chỉ định kho mặc định thay thế',
+                false
+              );
+            }
+            if (norm.is_default === false && !hasReplacementDefault) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'CANNOT_REMOVE_DEFAULT_STATUS',
+                'Không thể hủy trạng thái mặc định của kho mà không chỉ định kho mặc định thay thế',
+                false
+              );
+            }
+          }
+        }
+
+        // Apply warehouse updates / creates
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
@@ -938,17 +1062,8 @@ export class ImportsService {
               ? existingWarehouse.is_default
               : false;
 
-          if (isDefault) {
-            // Unset previous default
-            await tx.warehouse.updateMany({
-              where: { merchant_id: merchantId, is_default: true, code: { not: code } },
-              data: { is_default: false },
-            });
-          }
-
           let savedWhId = existingWarehouse?.id;
           if (existingWarehouse) {
-            // Non-destructive update: preserve existing values for omitted optional fields (Finding 6)
             const updateData: Record<string, any> = {};
             if (norm.name) updateData.name = norm.name;
             if (norm.status) updateData.status = norm.status.toLowerCase();
@@ -1140,7 +1255,135 @@ export class ImportsService {
           }
           promotedCount++;
         }
+
+        // Post-mutation invariant: ensure at least one active default if active warehouses exist
+        const totalActiveWh = await tx.warehouse.count({
+          where: { merchant_id: merchantId, status: 'active' },
+        });
+        const defaultActiveWh = await tx.warehouse.count({
+          where: { merchant_id: merchantId, status: 'active', is_default: true },
+        });
+        if (totalActiveWh > 0 && defaultActiveWh === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'NO_ACTIVE_DEFAULT_WAREHOUSE',
+            'Hệ thống phải có ít nhất một kho mặc định hoạt động',
+            false
+          );
+        }
       } else if (imp.template_type === ImportTemplateType.BRANCHES) {
+        const actorStoreScopes = liveScopes.store_scopes;
+        const isWildcard = actorStoreScopes.includes('*');
+
+        if (!isWildcard) {
+          const unauthorizedCodes: string[] = [];
+          for (const row of allRows) {
+            const code = row.scope_identifier;
+            if (!code || !actorStoreScopes.includes(code)) {
+              unauthorizedCodes.push(code || `Dòng ${row.row_number}`);
+            }
+          }
+          if (unauthorizedCodes.length > 0) {
+            throw new CanonicalApiException(
+              HttpStatus.FORBIDDEN,
+              'SCOPE_UNAUTHORIZED',
+              `Bạn không có quyền phân quyền đối với mã chi nhánh: ${unauthorizedCodes.join(', ')}`,
+              false,
+              undefined,
+              [
+                {
+                  field: 'scope_identifier',
+                  code: 'SCOPE_UNAUTHORIZED',
+                  message: `Mã ngoài phạm vi: ${unauthorizedCodes.join(', ')}`,
+                },
+              ]
+            );
+          }
+        }
+
+        // Implicit scope check and audits for displaced default branches (Finding 13 & 14)
+        const rowWithDefault = allRows.find((r) => (r.normalized_data as any)?.is_default === true);
+        if (rowWithDefault) {
+          const newDefaultCode = rowWithDefault.scope_identifier!;
+          const existingDefaults = await tx.branch.findMany({
+            where: { merchant_id: merchantId, is_default: true, code: { not: newDefaultCode } },
+          });
+
+          if (!isWildcard) {
+            for (const defBranch of existingDefaults) {
+              if (!actorStoreScopes.includes(defBranch.code)) {
+                throw new CanonicalApiException(
+                  HttpStatus.FORBIDDEN,
+                  'SCOPE_UNAUTHORIZED',
+                  `Bạn không có quyền phân quyền đối với chi nhánh mặc định hiện tại (${defBranch.code}) để thay đổi mặc định`,
+                  false
+                );
+              }
+            }
+          }
+
+          // Unset displaced defaults and record entity lifecycle audit (Finding 13)
+          for (const defBranch of existingDefaults) {
+            await tx.branch.update({
+              where: { id: defBranch.id },
+              data: { is_default: false },
+            });
+            if (tx.auditLog?.create) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: merchantId,
+                  user_id: actor.userId,
+                  actor: actor.role || 'OWNER',
+                  action: 'BRANCH_UPDATED',
+                  entity_type: 'branch',
+                  entity_id: defBranch.id,
+                  ip_address: clientIp ? this.hashIp(clientIp) : null,
+                  new_value: this.maskAuditData({
+                    code: defBranch.code,
+                    name: defBranch.name,
+                    is_default: false,
+                    status: defBranch.status,
+                  }),
+                },
+              });
+            }
+          }
+        }
+
+        // Default branch invariant checks (BR-BRANCH-04 & Finding 6)
+        for (const row of allRows) {
+          const norm = (row.normalized_data as Record<string, any>) || {};
+          const code = row.scope_identifier!;
+          const existingBranch = await tx.branch.findUnique({
+            where: { merchant_id_code: { merchant_id: merchantId, code } },
+          });
+          if (existingBranch?.is_default) {
+            const hasReplacementDefault = allRows.some(
+              (r) => r.scope_identifier !== code && (r.normalized_data as any)?.is_default === true
+            );
+            const statusUpper = norm.status ? norm.status.toUpperCase() : null;
+            if (statusUpper === 'INACTIVE' && !hasReplacementDefault) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+                'Không thể vô hiệu hóa chi nhánh mặc định',
+                false,
+                'Vui lòng chỉ định một chi nhánh khác làm mặc định trước khi vô hiệu hóa chi nhánh này'
+              );
+            }
+            if (norm.is_default === false && !hasReplacementDefault) {
+              throw new CanonicalApiException(
+                HttpStatus.BAD_REQUEST,
+                'CANNOT_REMOVE_DEFAULT_STATUS',
+                'Không thể hủy trạng thái mặc định của chi nhánh trực tiếp',
+                false,
+                'Vui lòng chỉ định một chi nhánh khác làm mặc định'
+              );
+            }
+          }
+        }
+
+        // Apply branch updates / creates
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
@@ -1165,16 +1408,8 @@ export class ImportsService {
             isDefault = existingBranch ? existingBranch.is_default : false;
           }
 
-          if (isDefault) {
-            await tx.branch.updateMany({
-              where: { merchant_id: merchantId, is_default: true, code: { not: code } },
-              data: { is_default: false },
-            });
-          }
-
           let savedBrId = existingBranch?.id;
           if (existingBranch) {
-            // Non-destructive update: preserve existing values for omitted optional fields (Finding 6)
             const updateData: Record<string, any> = {};
             if (norm.name) updateData.name = norm.name;
             if (norm.status) {
@@ -1244,7 +1479,6 @@ export class ImportsService {
               });
             }
           } else {
-            // Create branch with correct uppercase status & legacy address/phone fields (Finding 11)
             const name = norm.name || code;
             const status = norm.status
               ? norm.status === 'inactive' || norm.status === 'INACTIVE'
@@ -1331,9 +1565,25 @@ export class ImportsService {
           }
           promotedCount++;
         }
+
+        // Post-mutation invariant: ensure at least one active default if active branches exist
+        const totalActiveBr = await tx.branch.count({
+          where: { merchant_id: merchantId, status: 'ACTIVE' },
+        });
+        const defaultActiveBr = await tx.branch.count({
+          where: { merchant_id: merchantId, status: 'ACTIVE', is_default: true },
+        });
+        if (totalActiveBr > 0 && defaultActiveBr === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'NO_ACTIVE_DEFAULT_BRANCH',
+            'Hệ thống phải có ít nhất một chi nhánh mặc định hoạt động theo BR-BRANCH-03',
+            false
+          );
+        }
       }
 
-      // 2. Mark this revision as PROMOTED
+      // Mark this revision as PROMOTED
       await tx.import.update({
         where: { id: imp.id },
         data: {
@@ -1343,7 +1593,7 @@ export class ImportsService {
         },
       });
 
-      // 3. Mark prior PROMOTED revisions for this tenant and template_type as SUPERSEDED (Decision 2)
+      // Mark prior PROMOTED revisions for this tenant and template_type as SUPERSEDED (Decision 2)
       await tx.import.updateMany({
         where: {
           merchant_id: merchantId,
@@ -1356,7 +1606,7 @@ export class ImportsService {
         },
       });
 
-      // 4. Create Audit Log entry with masked values (no plaintext PII)
+      // Create Audit Log entry with masked values (no plaintext PII)
       const auditPayload = {
         import_id: imp.id,
         template_type: imp.template_type,
@@ -1384,7 +1634,7 @@ export class ImportsService {
       ? await this.prisma.import.count({
           where: {
             merchant_id: merchantId,
-            template_type: imp.template_type,
+            template_type: templateType,
             status: ImportStatus.SUPERSEDED,
           },
         })
@@ -1392,7 +1642,7 @@ export class ImportsService {
 
     return {
       data: {
-        id: imp.id,
+        id: importId,
         status: ImportStatus.PROMOTED,
         promoted_rows_count: promotedCount,
         promoted_at: now.toISOString(),

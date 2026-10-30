@@ -184,16 +184,28 @@ function createZipArchive(files: Array<{ name: string; data: Buffer | string }>)
   return Buffer.concat([...parts, cdBuf, eocd]);
 }
 
+const MAX_ZIP_ENTRIES = 100;
+const MAX_UNCOMPRESSED_ENTRY_SIZE = 10 * 1024 * 1024; // 10MB per entry
+const MAX_TOTAL_UNCOMPRESSED_SIZE = 25 * 1024 * 1024; // 25MB total across all entries
+
 /**
  * Extracts all files from a standard ZIP buffer into a dictionary.
+ * Bounds decompressed bytes, entries, and resources to prevent zip bomb attacks (Finding 18).
  */
 function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
   const entries: Record<string, Buffer> = {};
   let offset = 0;
+  let totalDecompressedBytes = 0;
+  let entryCount = 0;
 
   while (offset + 30 <= buf.length) {
     const sig = buf.readUInt32LE(offset);
     if (sig !== 0x04034b50) break;
+
+    entryCount++;
+    if (entryCount > MAX_ZIP_ENTRIES) {
+      throw new Error(`XLSX archive contains too many files (${entryCount} > ${MAX_ZIP_ENTRIES})`);
+    }
 
     const method = buf.readUInt16LE(offset + 8);
     const compSize = buf.readUInt32LE(offset + 18);
@@ -201,18 +213,37 @@ function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
     const nameLen = buf.readUInt16LE(offset + 26);
     const extraLen = buf.readUInt16LE(offset + 28);
 
+    if (uncompSize > MAX_UNCOMPRESSED_ENTRY_SIZE) {
+      throw new Error(
+        `XLSX entry size ${uncompSize} exceeds maximum allowed uncompressed size ${MAX_UNCOMPRESSED_ENTRY_SIZE}`
+      );
+    }
+
     const name = buf.toString('utf8', offset + 30, offset + 30 + nameLen);
     const dataStart = offset + 30 + nameLen + extraLen;
     const compData = buf.subarray(dataStart, dataStart + compSize);
 
     let data: Buffer;
     if (method === 8) {
-      data = zlib.inflateRawSync(compData);
+      data = zlib.inflateRawSync(compData, {
+        maxOutputLength: MAX_UNCOMPRESSED_ENTRY_SIZE,
+      });
     } else if (method === 0) {
+      if (compData.length > MAX_UNCOMPRESSED_ENTRY_SIZE) {
+        throw new Error(
+          `XLSX uncompressed entry size ${compData.length} exceeds limit ${MAX_UNCOMPRESSED_ENTRY_SIZE}`
+        );
+      }
       data = Buffer.from(compData);
     } else {
-      // Unsupported compression method
-      data = Buffer.from(compData);
+      throw new Error(`Unsupported compression method ${method} in XLSX archive`);
+    }
+
+    totalDecompressedBytes += data.length;
+    if (totalDecompressedBytes > MAX_TOTAL_UNCOMPRESSED_SIZE) {
+      throw new Error(
+        `XLSX total decompressed size ${totalDecompressedBytes} exceeds limit ${MAX_TOTAL_UNCOMPRESSED_SIZE}`
+      );
     }
 
     entries[name] = data;

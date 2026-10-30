@@ -249,40 +249,6 @@ async function runImportsSupertestSuite() {
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-06: Idempotency conflict verification (409 CONFLICT)
-    // ------------------------------------------------------------------------
-    {
-      const resIdemConflict = await request(server)
-        .post('/api/v1/imports/upload')
-        .set('Authorization', `Bearer ${ownerA.token}`)
-        .set('Idempotency-Key', 'idem-test-01')
-        .send({
-          template_type: 'warehouses',
-          file_name: 'different_content.csv',
-          content: `code,name,contact_name,contact_phone,address_line,district,city\n${whCode1},Different,Name,0901234567,123 Street,District,City`,
-        });
-
-      assert.strictEqual(resIdemConflict.status, 201);
-
-      // Now retry same key with different content
-      const resRetryDifferent = await request(server)
-        .post('/api/v1/imports/upload')
-        .set('Authorization', `Bearer ${ownerA.token}`)
-        .set('Idempotency-Key', 'idem-test-01')
-        .send({
-          template_type: 'warehouses',
-          file_name: 'yet_another.csv',
-          content: `code,name,contact_name,contact_phone,address_line,district,city\n${whCode2},Another,Name,0901234567,456 Street,District,City`,
-        });
-
-      assert.strictEqual(resRetryDifferent.status, 409);
-      assert.strictEqual(resRetryDifferent.body.error?.code, 'IDEMPOTENCY_CONFLICT');
-      console.log(
-        'PASS: COM-04-06 Same idempotency key with different content returns 409 CONFLICT'
-      );
-    }
-
-    // ------------------------------------------------------------------------
     // COM-04-07: Scope Enforcement per row (FEAT-RBAC-02 & Decision 3)
     // Must be tested while import1Id is the latest revision (Finding 8)
     // ------------------------------------------------------------------------
@@ -315,6 +281,7 @@ async function runImportsSupertestSuite() {
 
     // ------------------------------------------------------------------------
     // COM-04-08 & COM-04-09: Explicit Promotion by Owner & Audit Log verification
+    // Must be tested on latest revision (import1Id is revision 1) (Finding 8)
     // ------------------------------------------------------------------------
     {
       const resPromote = await request(server)
@@ -351,6 +318,40 @@ async function runImportsSupertestSuite() {
       assert.strictEqual(audit.user_id, ownerA.userId);
       console.log(
         'PASS: COM-04-08 & COM-04-09 Explicit promotion, persistence, and masked audit log'
+      );
+    }
+
+    // ------------------------------------------------------------------------
+    // COM-04-06: Idempotency conflict verification (409 CONFLICT)
+    // ------------------------------------------------------------------------
+    {
+      const resIdemConflict = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .set('Idempotency-Key', 'idem-test-01')
+        .send({
+          template_type: 'warehouses',
+          file_name: 'different_content.csv',
+          content: `code,name,contact_name,contact_phone,address_line,district,city\n${whCode1},Different,Name,0901234567,123 Street,District,City`,
+        });
+
+      assert.strictEqual(resIdemConflict.status, 201);
+
+      // Now retry same key with different content
+      const resRetryDifferent = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .set('Idempotency-Key', 'idem-test-01')
+        .send({
+          template_type: 'warehouses',
+          file_name: 'yet_another.csv',
+          content: `code,name,contact_name,contact_phone,address_line,district,city\n${whCode2},Another,Name,0901234567,456 Street,District,City`,
+        });
+
+      assert.strictEqual(resRetryDifferent.status, 409);
+      assert.strictEqual(resRetryDifferent.body.error?.code, 'IDEMPOTENCY_CONFLICT');
+      console.log(
+        'PASS: COM-04-06 Same idempotency key with different content returns 409 CONFLICT'
       );
     }
 
@@ -441,7 +442,7 @@ async function runImportsSupertestSuite() {
     {
       const newRevisionCsv = `code,name,status,is_default,contact_name,contact_phone,contact_email,address_line,ward,district,city\n${whCode1},Kho Tân Bình V2,active,true,Nguyễn Văn A,0901234567,tanbinh@example.com,55 Cộng Hòa Mới,Phường 13,Tân Bình,TP.HCM`;
 
-      const resRev3 = await request(server)
+      const resRev4 = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
         .send({
@@ -450,24 +451,24 @@ async function runImportsSupertestSuite() {
           content: newRevisionCsv,
         });
 
-      assert.strictEqual(resRev3.status, 201);
-      assert.strictEqual(resRev3.body.data.import.revision, 3);
-      const import3Id = resRev3.body.data.import.id;
+      assert.strictEqual(resRev4.status, 201);
+      assert.strictEqual(resRev4.body.data.import.revision, 4);
+      const import4Id = resRev4.body.data.import.id;
 
-      // Promote revision 3
-      const resPromoteRev3 = await request(server)
-        .post(`/api/v1/imports/${import3Id}/promote`)
+      // Promote revision 4
+      const resPromoteRev4 = await request(server)
+        .post(`/api/v1/imports/${import4Id}/promote`)
         .set('Authorization', `Bearer ${ownerA.token}`);
 
-      assert.strictEqual(resPromoteRev3.status, 200);
+      assert.strictEqual(resPromoteRev4.status, 200);
 
       // Verify revision 1 is now SUPERSEDED
       const dbImp1 = await prisma.import.findUnique({ where: { id: import1Id } });
       assert.strictEqual(dbImp1?.status, ImportStatus.SUPERSEDED);
 
-      // Verify revision 3 is PROMOTED
-      const dbImp3 = await prisma.import.findUnique({ where: { id: import3Id } });
-      assert.strictEqual(dbImp3?.status, ImportStatus.PROMOTED);
+      // Verify revision 4 is PROMOTED
+      const dbImp4 = await prisma.import.findUnique({ where: { id: import4Id } });
+      assert.strictEqual(dbImp4?.status, ImportStatus.PROMOTED);
       console.log('PASS: COM-04-08 New revision promotion supersedes prior revision');
     }
 
@@ -508,22 +509,26 @@ async function runImportsSupertestSuite() {
 
     console.log('🎉 ALL FEAT-COM-04 SUPERTEST INTEGRATION TESTS PASSED!');
   } finally {
-    // Clean up only our created tenant records (Rule 9 & Finding 8)
+    // Clean up only our created tenant records and uploaded storage objects (Rule 9 & Finding 8)
     const cleanupTenant = async (mId: string) => {
       if (!mId) return;
-      try {
-        await prisma.importRow.deleteMany({ where: { import: { merchant_id: mId } } });
-        await prisma.import.deleteMany({ where: { merchant_id: mId } });
-        await prisma.warehouse.deleteMany({ where: { merchant_id: mId } });
-        await prisma.branch.deleteMany({ where: { merchant_id: mId } });
-        await prisma.auditLog.deleteMany({ where: { merchant_id: mId } });
-        await prisma.deviceSession.deleteMany({ where: { merchant_id: mId } });
-        await prisma.user.deleteMany({ where: { merchant_id: mId } });
-        await prisma.merchant.delete({ where: { id: mId } });
-      } catch (cleanupErr) {
-        // Fallback for foreign key constraints or partial states
-        await prisma.merchant.delete({ where: { id: mId } }).catch(() => {});
+
+      // 1. Remove uploaded storage files on disk
+      const storageBase = process.env.LOCAL_STORAGE_DIR || path.join(process.cwd(), '.storage');
+      const merchantStorageDir = path.resolve(storageBase, 'imports', mId);
+      if (fs.existsSync(merchantStorageDir)) {
+        fs.rmSync(merchantStorageDir, { recursive: true, force: true });
       }
+
+      // 2. Database records deletion without swallowing errors
+      await prisma.importRow.deleteMany({ where: { import: { merchant_id: mId } } });
+      await prisma.import.deleteMany({ where: { merchant_id: mId } });
+      await prisma.warehouse.deleteMany({ where: { merchant_id: mId } });
+      await prisma.branch.deleteMany({ where: { merchant_id: mId } });
+      await prisma.auditLog.deleteMany({ where: { merchant_id: mId } });
+      await prisma.deviceSession.deleteMany({ where: { merchant_id: mId } });
+      await prisma.user.deleteMany({ where: { merchant_id: mId } });
+      await prisma.merchant.delete({ where: { id: mId } });
     };
 
     if (merchantIdA) {

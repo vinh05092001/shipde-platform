@@ -84,8 +84,30 @@ export class ImportsController {
     const dto = validateUploadImportDto(body);
 
     let fileBuffer: Buffer;
-    let fileName = dto.file_name || `import_${dto.template_type}.csv`;
-    let mimeType = 'text/csv';
+    const fileName = (dto.file_name || `import_${dto.template_type}.csv`).trim();
+    const lowerName = fileName.toLowerCase();
+    const isCsv = lowerName.endsWith('.csv');
+    const isXlsx = lowerName.endsWith('.xlsx');
+
+    // Finding 17: Strictly enforce supported extensions and deny unpermitted file formats
+    if (!isCsv && !isXlsx) {
+      throw new CanonicalApiException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_FILE_TYPE',
+        `Định dạng tệp tin (${fileName}) không được hỗ trợ. Chỉ hỗ trợ định dạng .csv hoặc .xlsx`,
+        false,
+        undefined,
+        [
+          {
+            field: 'file_name',
+            code: 'INVALID_FILE_TYPE',
+            message: 'Phần mở rộng tệp phải là .csv hoặc .xlsx',
+          },
+        ]
+      );
+    }
+
+    let mimeType: string;
 
     if (dto.file_base64) {
       try {
@@ -98,10 +120,18 @@ export class ImportsController {
           false
         );
       }
-      if (fileName.toLowerCase().endsWith('.xlsx')) {
-        mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      }
+      mimeType = isXlsx
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'text/csv';
     } else if (dto.content !== undefined) {
+      if (isXlsx) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'INVALID_FILE_TYPE',
+          'Định dạng XLSX là tệp nhị phân, phải gửi qua trường file_base64 thay vì content dạng chuỗi',
+          false
+        );
+      }
       fileBuffer = Buffer.from(dto.content, 'utf8');
       mimeType = 'text/csv';
     } else {
