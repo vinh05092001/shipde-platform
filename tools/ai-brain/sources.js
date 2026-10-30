@@ -130,16 +130,6 @@ function loadSources(options) {
 
   for (const source of sources) {
     if (!source || !source.id) throw new Error('sources.json: an entry has no id');
-    if (typeof source.id === 'string' && source.id.startsWith('./')) {
-      source.id = source.id.slice(2);
-    }
-    if (
-      source.credential &&
-      typeof source.credential.env === 'string' &&
-      source.credential.env.startsWith('./')
-    ) {
-      source.credential.env = source.credential.env.slice(2);
-    }
     if (!KNOWN_KINDS.has(source.kind)) {
       // An unknown kind is refused rather than defaulted. Defaulting to
       // model-source is exactly the error this file exists to stop, and it

@@ -533,7 +533,7 @@
       "comment": "Usable only from the opencode CLI: the HTTP endpoint answers FreeTierError. Models are the live opencode/* lines of `opencode models`."
     },
     {
-      "id": "./deepseek-harness",
+      "id": "deepseek-harness",
       "label": "DeepSeek Harness",
       "kind": "agent-cli",
       "servesModels": false,
@@ -541,7 +541,7 @@
       "harness": "dsh",
       "accessPath": "cli",
       "reachedVia": "9router",
-      "credential": { "type": "api-key", "env": "./DEEPSEEK_API_KEY" },
+      "credential": { "type": "api-key", "env": "DEEPSEEK_API_KEY" },
       "verify": { "method": "version-command", "command": "dsh --version" },
       "comment": "Controlled 9Router author workspace running @deepseek-ai/dsh@0.1.1-rc.2. Credential kept outside Git via environment variable."
     }
