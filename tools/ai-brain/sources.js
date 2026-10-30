@@ -136,14 +136,6 @@ function loadSources(options) {
       // would be invisible until the scheduler over-planned against it.
       throw new Error('sources.json: ' + source.id + ' has unknown kind "' + source.kind + '"');
     }
-    if (source.id === 'dsh') {
-      const longAlias = ['deep', 'seek', '-harness'].join('');
-      if (!Array.isArray(source.aliases)) {
-        source.aliases = [longAlias];
-      } else if (!source.aliases.includes(longAlias)) {
-        source.aliases.push(longAlias);
-      }
-    }
     if (!source.modelMeta || typeof source.modelMeta !== 'object') {
       source.modelMeta = {};
     }
@@ -324,13 +316,6 @@ function credentialPresence(source, options) {
 
   if (cred.env) {
     let value = env[cred.env];
-    if ((value === undefined || String(value).trim() === '') && cred.env === 'DSH_API_KEY') {
-      const fallbackEnv = ['DEEP', 'SEEK', '_API_KEY'].join('');
-      const fallbackVal = env[fallbackEnv];
-      if (fallbackVal !== undefined && String(fallbackVal).trim() !== '') {
-        return { required: true, present: true, how: 'env ' + fallbackEnv };
-      }
-    }
     if (value !== undefined && String(value).trim() !== '') {
       return { required: true, present: true, how: 'env ' + cred.env };
     }
@@ -408,9 +393,17 @@ function dispatchRoute(provider, registry) {
   const reg = registry || loadSources();
   const table = ((reg && reg.dispatch) || {}).providers || {};
   const rawKey = String(provider || '').toLowerCase();
-  const dshAlias = ['deep', 'seek', '-harness'].join('');
-  const key = rawKey === dshAlias ? 'dsh' : rawKey;
-  const route = table[key];
+  let route = table[rawKey];
+  if (!route) {
+    const src = bySource(reg).get(rawKey);
+    if (src) {
+      route =
+        table[src.id] ||
+        (Array.isArray(src.aliases)
+          ? src.aliases.map((a) => table[String(a).toLowerCase()]).find(Boolean)
+          : null);
+    }
+  }
   if (!route) return null;
   return {
     harness: route.harness,

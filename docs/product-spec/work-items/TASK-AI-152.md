@@ -103,6 +103,9 @@ N/A — Controller brain tooling and source discovery logic; no user interface m
 | AC-AI-152-10 | Candidate preflight and ranking | Candidate rejected without credential (`no credential: env DEEPSEEK_API_KEY unset`); candidate admitted and ranked with credential | Automated test in `task-ai-152-deepseek-harness-source.test.js` |
 | AC-AI-152-11 | Hardcode check | `node scripts/ai/check-no-hardcode.mjs` exits 0 with 0 new instances | CLI execution output |
 | AC-AI-152-12 | Formatting check | `pnpm exec prettier --check <files>` passes | CLI execution output |
+| AC-AI-152-13 | Strict DEEPSEEK_API_KEY preflight (Finding 2) | `DSH_API_KEY` alone does not satisfy `DEEPSEEK_API_KEY` in credential presence or ranking preflight; canonical `deepseek-harness` ID and `["dsh"]` aliases in registry | Automated test in `task-ai-152-deepseek-harness-source.test.js` |
+| AC-AI-152-14 | Discovery-to-probe CLI verification (Finding 3) | Discovered DSH records omit HTTP endpoint and preserve CLI verification; complete path verifies available, CLI_NOT_INSTALLED (ENOENT), and CLI_PROBE_FAILED | Automated test in `task-ai-152-deepseek-harness-source.test.js` |
+| AC-AI-152-15 | Secret redaction in probe results (Finding 4) | `probeSource` redacts credentials and sentinels from stdout (version), stderr (reason), and thrown exception messages (reason) | Automated test in `task-ai-152-deepseek-harness-source.test.js` |
 
 ## Verification commands
 
@@ -115,7 +118,7 @@ N/A — Controller brain tooling and source discovery logic; no user interface m
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `1cfbd85be3b0d2f3b3f6a41dd26d39b1b182b083` | `READY_FOR_CODEX` | Initial complete implementation of DeepSeek Harness source, discovery, CLI probe, harness mapping, and tests |
+| 1 | `1449e92c9532bdc091f1aead47536d3f189e26b0` | `CHANGES_REQUIRED` | Resolved all P1 review findings: (1) PR contract gate failure resolved by generating standard .oc/pr-body.md with all 10 mandatory sections, complete AC evidence, and no placeholders; (2) Credential preflight restored to canonical `deepseek-harness` with aliases `["dsh"]` in sources.json and env `DEEPSEEK_API_KEY`, removed source-specific JS alias hack, enforced strict rejection of candidates without `DEEPSEEK_API_KEY` (rejecting `DSH_API_KEY` alone per BR-DSH-04); (3) Removed HTTP endpoint from DSH environment discovery, attached CLI verification (`verify: { method: 'version-command', command: 'dsh --version' }`), preserved CLI verification across discovery-to-probe path and added full regression tests for available, ENOENT (CLI_NOT_INSTALLED), and failure (CLI_PROBE_FAILED); (4) Integrated `createSecretRedactor` into `probeSource` to redact credentials and sentinels from stdout (version), stderr (reason), and thrown errors (reason), with dedicated regression tests. |
 
 ## Residual limitations
 

@@ -99,41 +99,39 @@ describe('TASK-AI-152: DeepSeek Harness source registration', () => {
 describe('TASK-AI-152: Credential presence (env var reference only, never value)', () => {
   const dshSource = sourcesApi.getSource('deepseek-harness', registry);
 
-  test('reports present when DEEPSEEK_API_KEY or DSH_API_KEY is defined and non-empty', () => {
-    const presence1 = sourcesApi.credentialPresence(dshSource, {
+  test('reports present when DEEPSEEK_API_KEY is defined and non-empty (BR-DSH-04)', () => {
+    const presence = sourcesApi.credentialPresence(dshSource, {
       env: { DEEPSEEK_API_KEY: 'sk-dsh-test-secret-value-never-expose' },
     });
-    assert.equal(presence1.required, true);
-    assert.equal(presence1.present, true);
-    assert.match(presence1.how, /env (DEEPSEEK_API_KEY|DSH_API_KEY)/);
+    assert.equal(presence.required, true);
+    assert.equal(presence.present, true);
+    assert.equal(presence.how, 'env DEEPSEEK_API_KEY');
     // Secret value MUST NEVER appear in return object
-    assert.equal(
-      JSON.stringify(presence1).includes('sk-dsh-test-secret-value-never-expose'),
-      false
-    );
-
-    const presence2 = sourcesApi.credentialPresence(dshSource, {
-      env: { DSH_API_KEY: 'sk-dsh-test-secret-value-never-expose' },
-    });
-    assert.equal(presence2.required, true);
-    assert.equal(presence2.present, true);
-    assert.equal(presence2.how, 'env DSH_API_KEY');
-    assert.equal(
-      JSON.stringify(presence2).includes('sk-dsh-test-secret-value-never-expose'),
-      false
-    );
+    assert.equal(JSON.stringify(presence).includes('sk-dsh-test-secret-value-never-expose'), false);
   });
 
-  test('reports absent when DEEPSEEK_API_KEY is missing or empty whitespace', () => {
+  test('reports absent when DEEPSEEK_API_KEY is missing or empty whitespace, and does NOT accept DSH_API_KEY alone (BR-DSH-04)', () => {
     const missing = sourcesApi.credentialPresence(dshSource, { env: {} });
     assert.equal(missing.required, true);
     assert.equal(missing.present, false);
-    assert.match(missing.how, /env (DEEPSEEK_API_KEY|DSH_API_KEY) unset/);
+    assert.equal(missing.how, 'env DEEPSEEK_API_KEY unset');
 
     const empty = sourcesApi.credentialPresence(dshSource, { env: { DEEPSEEK_API_KEY: '   ' } });
     assert.equal(empty.required, true);
     assert.equal(empty.present, false);
-    assert.match(empty.how, /env (DEEPSEEK_API_KEY|DSH_API_KEY) unset/);
+    assert.equal(empty.how, 'env DEEPSEEK_API_KEY unset');
+
+    // Regression for Finding 2: DSH_API_KEY alone does not satisfy DEEPSEEK_API_KEY requirement
+    const dshKeyOnly = sourcesApi.credentialPresence(dshSource, {
+      env: { DSH_API_KEY: 'sk-dsh-test-secret-value-never-expose' },
+    });
+    assert.equal(dshKeyOnly.required, true);
+    assert.equal(dshKeyOnly.present, false);
+    assert.equal(dshKeyOnly.how, 'env DEEPSEEK_API_KEY unset');
+    assert.equal(
+      JSON.stringify(dshKeyOnly).includes('sk-dsh-test-secret-value-never-expose'),
+      false
+    );
   });
 });
 
@@ -202,16 +200,19 @@ describe('TASK-AI-152: Source discovery for DeepSeek Harness', () => {
     assert.equal(JSON.stringify(sources).includes('test-secret'), false, 'secret must never leak');
   });
 
-  test('discovers deepseek-harness from operator environment DEEPSEEK_API_KEY', () => {
+  test('discovers deepseek-harness from operator environment DEEPSEEK_API_KEY with canonical ID, no HTTP endpoint, and CLI verification', () => {
     const sources = discoverSources({
       home: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-env-test-')),
       env: { DEEPSEEK_API_KEY: 'test-env-key-never-store' },
     });
-    const found = sources.find((s) => s.id === 'dsh' || s.id === 'deepseek-harness');
-    assert.ok(found, 'dsh / deepseek-harness must be discovered from operator env key');
-    assert.ok(
-      found.credential?.name === 'DEEPSEEK_API_KEY' || found.credential?.name === 'DSH_API_KEY'
-    );
+    const found = sources.find((s) => s.id === 'deepseek-harness' || s.id === 'dsh');
+    assert.ok(found, 'deepseek-harness must be discovered from operator env key');
+    assert.equal(found.id, 'deepseek-harness', 'canonical ID must be deepseek-harness');
+    assert.equal(found.endpoint, null, 'DSH must not supply an HTTP endpoint');
+    assert.equal(found.credential?.name, 'DEEPSEEK_API_KEY');
+    assert.ok(found.verify, 'discovered DSH must include CLI verification');
+    assert.equal(found.verify.method, 'version-command');
+    assert.equal(found.verify.command, 'dsh --version');
     assert.equal(JSON.stringify(sources).includes('test-env-key-never-store'), false);
   });
 
@@ -283,6 +284,157 @@ describe('TASK-AI-152: Probe support using CLI (fake and real execution)', () =>
   });
 });
 
+describe('TASK-AI-152: Finding 3 regression — Environment discovery to CLI probe complete path', () => {
+  test('complete discovery-to-probe path probes available when dsh exits 0', async () => {
+    const discovered = discoverSources({
+      home: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-disc-probe-0-')),
+      env: { DEEPSEEK_API_KEY: 'test-secret-key' },
+    });
+    const dsh = discovered.find((s) => s.id === 'deepseek-harness');
+    assert.ok(dsh, 'discovered deepseek-harness must exist');
+
+    const fakeRun = async (bin, args) => ({
+      exitCode: 0,
+      stdout: '@deepseek-ai/dsh@0.1.1-rc.2\n',
+      stderr: '',
+    });
+
+    const probe = await probeSource(dsh, {
+      runCommand: fakeRun,
+      env: { DEEPSEEK_API_KEY: 'test-secret-key' },
+    });
+    assert.equal(probe.status, 'available');
+    assert.equal(probe.reason, null);
+    assert.equal(probe.version, '@deepseek-ai/dsh@0.1.1-rc.2');
+  });
+
+  test('complete discovery-to-probe path reports CLI_NOT_INSTALLED when executable is missing (ENOENT)', async () => {
+    const discovered = discoverSources({
+      home: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-disc-probe-enoent-')),
+      env: { DEEPSEEK_API_KEY: 'test-secret-key' },
+    });
+    const dsh = discovered.find((s) => s.id === 'deepseek-harness');
+    assert.ok(dsh, 'discovered deepseek-harness must exist');
+
+    const fakeRun = async () => ({
+      exitCode: -1,
+      enoent: true,
+      stdout: '',
+      stderr: 'Command not found: dsh',
+    });
+
+    const probe = await probeSource(dsh, { runCommand: fakeRun });
+    assert.equal(probe.status, 'unavailable');
+    assert.equal(probe.reason, 'CLI_NOT_INSTALLED');
+  });
+
+  test('complete discovery-to-probe path reports CLI_PROBE_FAILED when executable exits non-zero', async () => {
+    const discovered = discoverSources({
+      home: fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-disc-probe-fail-')),
+      env: { DEEPSEEK_API_KEY: 'test-secret-key' },
+    });
+    const dsh = discovered.find((s) => s.id === 'deepseek-harness');
+    assert.ok(dsh, 'discovered deepseek-harness must exist');
+
+    const fakeRun = async () => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Error: Cannot find module @deepseek-ai/dsh',
+    });
+
+    const probe = await probeSource(dsh, { runCommand: fakeRun });
+    assert.equal(probe.status, 'unavailable');
+    assert.match(probe.reason, /Cannot find module|CLI_PROBE_FAILED/);
+  });
+});
+
+describe('TASK-AI-152: Finding 4 regression — Probe redacts credentials from diagnostics', () => {
+  const dshSource = sourcesApi.getSource('deepseek-harness', registry);
+  const secretSentinel = 'sk-sentinel-secret-dsh-12345678';
+  const rawSecret = 'super-secret-auth-token-dsh';
+
+  test('redacts credential sentinels from probe stdout (version)', async () => {
+    const fakeRun = async () => ({
+      exitCode: 0,
+      stdout: `@deepseek-ai/dsh@0.1.1-rc.2 token=${secretSentinel} Bearer ${rawSecret}\n`,
+      stderr: '',
+    });
+
+    const probe = await probeSource(dshSource, {
+      runCommand: fakeRun,
+      env: { DEEPSEEK_API_KEY: rawSecret },
+    });
+    assert.equal(probe.status, 'available');
+    assert.ok(probe.version, 'version must be present');
+    assert.equal(
+      probe.version.includes(secretSentinel),
+      false,
+      'sentinel must not leak in version'
+    );
+    assert.equal(probe.version.includes(rawSecret), false, 'rawSecret must not leak in version');
+    assert.ok(
+      probe.version.includes('[REDACTED_SECRET]'),
+      'version must contain redaction placeholder'
+    );
+  });
+
+  test('redacts credential sentinels from probe stderr (reason)', async () => {
+    const fakeRun = async () => ({
+      exitCode: 1,
+      stdout: '',
+      stderr: `Authentication failure using api_key=${secretSentinel} and key: ${rawSecret}`,
+    });
+
+    const probe = await probeSource(dshSource, {
+      runCommand: fakeRun,
+      env: { DEEPSEEK_API_KEY: rawSecret },
+    });
+    assert.equal(probe.status, 'unavailable');
+    assert.ok(probe.reason, 'reason must be present');
+    assert.equal(
+      probe.reason.includes(secretSentinel),
+      false,
+      'sentinel must not leak in stderr reason'
+    );
+    assert.equal(
+      probe.reason.includes(rawSecret),
+      false,
+      'rawSecret must not leak in stderr reason'
+    );
+    assert.ok(
+      probe.reason.includes('[REDACTED_SECRET]'),
+      'reason must contain redaction placeholder'
+    );
+  });
+
+  test('redacts credential sentinels from probe thrown exception message (reason)', async () => {
+    const fakeRun = async () => {
+      throw new Error(`Process spawn failed: authorization=${secretSentinel} token: ${rawSecret}`);
+    };
+
+    const probe = await probeSource(dshSource, {
+      runCommand: fakeRun,
+      env: { DEEPSEEK_API_KEY: rawSecret },
+    });
+    assert.equal(probe.status, 'unavailable');
+    assert.ok(probe.reason, 'reason must be present');
+    assert.equal(
+      probe.reason.includes(secretSentinel),
+      false,
+      'sentinel must not leak in thrown reason'
+    );
+    assert.equal(
+      probe.reason.includes(rawSecret),
+      false,
+      'rawSecret must not leak in thrown reason'
+    );
+    assert.ok(
+      probe.reason.includes('[REDACTED_SECRET]'),
+      'reason must contain redaction placeholder'
+    );
+  });
+});
+
 describe('TASK-AI-152: Ranking candidate preflight and admission', () => {
   test('rejects candidate when source credential is absent', () => {
     const candidate = {
@@ -306,10 +458,37 @@ describe('TASK-AI-152: Ranking candidate preflight and admission', () => {
 
     assert.equal(result.candidates.length, 0, 'candidate must not be ranked without credential');
     assert.equal(result.rejected.length, 1, 'candidate must be rejected');
-    assert.match(
-      result.rejected[0].reason,
-      /no credential: env (DEEPSEEK_API_KEY|DSH_API_KEY) unset/
+    assert.equal(result.rejected[0].reason, 'no credential: env DEEPSEEK_API_KEY unset');
+    assert.equal(result.rejected[0].scope, 'source');
+  });
+
+  test('strictly rejects candidate when only DSH_API_KEY is defined (BR-DSH-04)', () => {
+    const candidate = {
+      harness: 'dsh',
+      accessPath: 'cli',
+      gateway: '9router',
+      upstream: 'deepseek',
+      accountId: 'dsh-worker',
+      quotaScope: 'dsh-worker',
+      modelId: 'deepseek-v4-flash-free',
+      source: 'deepseek-harness',
+    };
+
+    const result = rankAndRecord([candidate], {
+      registry,
+      role: 'author.mechanical',
+      dryRun: true,
+      explorationBudget: 1,
+      credentialOpts: { env: { DSH_API_KEY: 'sk-dsh-only-key' } },
+    });
+
+    assert.equal(
+      result.candidates.length,
+      0,
+      'candidate must not be ranked when DEEPSEEK_API_KEY is missing'
     );
+    assert.equal(result.rejected.length, 1, 'candidate must be rejected');
+    assert.equal(result.rejected[0].reason, 'no credential: env DEEPSEEK_API_KEY unset');
     assert.equal(result.rejected[0].scope, 'source');
   });
 
