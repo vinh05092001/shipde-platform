@@ -3,7 +3,7 @@
  * Core domain contracts, enumerations, and canonical error definitions for Ship Dễ.
  */
 
-export * from './lists';
+export * from './lists.js';
 
 // --- Canonical Roles ---
 export const UserRole = {
@@ -318,7 +318,7 @@ export interface QueueSmokePayload {
 }
 
 // --- Session Management Contracts (FEAT-AUTH-06) ---
-import { components } from './openapi';
+import { components } from './openapi.js';
 
 export const SessionStatus = {
   ACTIVE: 'ACTIVE',
@@ -928,4 +928,4 @@ export type SearchResponseData = components['schemas']['SearchResponseData'];
 export type SearchResponse = components['schemas']['SearchResponse'];
 
 // --- Generated OpenAPI Schema Types ---
-export type * from './openapi';
+export type * from './openapi.js';
