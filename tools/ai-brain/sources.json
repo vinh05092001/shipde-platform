@@ -385,6 +385,7 @@
     }
   ],
   "dispatch": {
+    "routeHealthFile": "tools/ai-brain/data/model-route-health.json",
     "hermesOrchestrator": {
       "qualityFloor": 60,
       "costCeiling": 100000,
@@ -422,7 +423,10 @@
     "quotaProbeMaxOutputTokens": 1,
     "quotaScanIntervalMin": 60,
     "quotaBlockTtlMin": 60,
-    "quotaScanMaxTokens": 1,
+    "quotaScanMaxTokens": 128,
+    "maxConcurrentUpstreamProbes": 4,
+    "probeRetry429Count": 2,
+    "probeRetry429BackoffMs": 1000,
     "blockedNoRouteTimeoutMs": 3600000,
     "blockedNoRoutePollIntervalMs": 30000,
     "maxPromptCommandOutputChars": 4000,
