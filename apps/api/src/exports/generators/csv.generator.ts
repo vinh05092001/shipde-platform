@@ -1,11 +1,24 @@
 import { ExportGenerationMetadata } from '@shipde/contracts';
 
 /**
- * Escapes a cell value strictly according to RFC 4180.
+ * Neutralizes spreadsheet formula injection (Finding 12).
+ * Values starting with =, +, -, @, tab, or carriage return are prefixed with a single quote
+ * so spreadsheet software (e.g. Microsoft Excel, LibreOffice Calc) treats them strictly as literal text.
+ */
+export function sanitizeCsvFormula(str: string): string {
+  if (/^[=+\-@\t\r]/.test(str)) {
+    return `'${str}`;
+  }
+  return str;
+}
+
+/**
+ * Escapes a cell value strictly according to RFC 4180 with spreadsheet formula neutralization (Finding 12).
  */
 export function escapeCsvCell(val: unknown): string {
   if (val === null || val === undefined) return '';
-  const str = String(val);
+  let str = String(val);
+  str = sanitizeCsvFormula(str);
   if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -13,7 +26,7 @@ export function escapeCsvCell(val: unknown): string {
 }
 
 /**
- * Generates an RFC 4180 CSV string with UTF-8 BOM and metadata header comment banner.
+ * Generates an RFC 4180 CSV string with UTF-8 BOM, metadata header banner, and formula neutralization.
  */
 export function generateCsv(
   metadata: ExportGenerationMetadata,
@@ -31,9 +44,15 @@ export function generateCsv(
     `# Total Records: ${metadata.total_rows}`,
     `# Succeeded Records: ${metadata.succeeded_rows}`,
     `# Failed Records: ${metadata.failed_rows}`,
-    `# Checksum: ${metadata.checksum_sha256}`,
-    '# --------------------------------',
+    `# Filters: ${JSON.stringify(metadata.filters || {})}`,
+    `# Data Payload Checksum (SHA-256): ${metadata.checksum_sha256}`,
   ];
+
+  if (metadata.truncation_note) {
+    metadataLines.push(`# Truncation Note: ${metadata.truncation_note}`);
+  }
+
+  metadataLines.push('# --------------------------------');
 
   const headerRow = headers.map((h) => escapeCsvCell(h.label)).join(',');
   const dataRows = rows.map((row) => headers.map((h) => escapeCsvCell(row[h.key])).join(','));

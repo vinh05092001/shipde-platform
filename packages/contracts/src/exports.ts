@@ -33,6 +33,7 @@ export const ExportErrorCode = {
   EXPORT_NOT_FOUND: 'EXPORT_NOT_FOUND',
   EXPORT_NOT_READY: 'EXPORT_NOT_READY',
   EXPORT_FAILED: 'EXPORT_FAILED',
+  EXPORT_EXPIRED: 'EXPORT_EXPIRED',
   UNSUPPORTED_RESOURCE: 'UNSUPPORTED_RESOURCE',
   UNSUPPORTED_FORMAT: 'UNSUPPORTED_FORMAT',
   EXPORT_LIMIT_EXCEEDED: 'EXPORT_LIMIT_EXCEEDED',
@@ -65,7 +66,16 @@ export interface ExportGenerationMetadata {
   total_rows: number;
   succeeded_rows: number;
   failed_rows: number;
+  /**
+   * Cryptographic SHA-256 digest of the serialized data rows payload (JSON.stringify(exportedRows)).
+   * Embedded inside the file metadata banner/worksheet/box for tamper detection of the data stream.
+   * Differs from the binary file checksum stored in ExportJobItem.checksum_sha256 and X-Export-Checksum.
+   */
   checksum_sha256: string;
+  /**
+   * Explicit truncation note required by BR-COM05-09 when clamp: true truncates rows to maxRows.
+   */
+  truncation_note?: string;
 }
 
 export interface ExportRowResult {

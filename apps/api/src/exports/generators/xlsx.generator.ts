@@ -100,9 +100,13 @@ export function generateXlsx(
     ['Total Records', String(metadata.total_rows)],
     ['Succeeded Records', String(metadata.succeeded_rows)],
     ['Failed Records', String(metadata.failed_rows)],
-    ['Filters', JSON.stringify(metadata.filters)],
-    ['Checksum (SHA-256)', metadata.checksum_sha256],
+    ['Filters', JSON.stringify(metadata.filters || {})],
+    ['Data Payload Checksum (SHA-256)', metadata.checksum_sha256],
   ];
+
+  if (metadata.truncation_note) {
+    metaEntries.push(['Truncation Note', metadata.truncation_note]);
+  }
 
   for (const [key, val] of metaEntries) {
     xmlParts.push('      <Row>');

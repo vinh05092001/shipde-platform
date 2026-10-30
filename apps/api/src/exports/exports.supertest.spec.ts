@@ -285,27 +285,28 @@ async function runExportsSupertestSuite() {
 
     // Test 7: AC-COM-05-09 - Download pending export returns 409 EXPORT_NOT_READY
     console.log('Testing: AC-COM-05-09 Download pending export');
-    const asyncJobRes = await request(httpServer)
-      .post('/api/v1/exports')
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({
+    const manualPendingId = randomUUID();
+    await prisma.exportJob.create({
+      data: {
+        id: manualPendingId,
+        merchant_id: merchantIdA,
+        user_id: userIdA,
         resource: ExportResource.WAREHOUSES,
         format: ExportFormat.CSV,
-        sync: false,
-      });
-
-    assert.strictEqual(asyncJobRes.status, 201);
-    assert.strictEqual(asyncJobRes.body.data.status, ExportJobStatus.PENDING);
-    const asyncJobId = asyncJobRes.body.data.id;
+        status: ExportJobStatus.PENDING,
+      },
+    });
 
     const notReadyRes = await request(httpServer)
-      .get(`/api/v1/exports/${asyncJobId}/download`)
+      .get(`/api/v1/exports/${manualPendingId}/download`)
       .set('Authorization', `Bearer ${tokenA}`);
 
-    // If job finished instantly in event loop, status could be completed, but if pending returns 409
-    if (notReadyRes.status === 409) {
-      assert.strictEqual(notReadyRes.body.code, 'EXPORT_NOT_READY');
-    }
+    assert.strictEqual(
+      notReadyRes.status,
+      409,
+      `Expected 409 EXPORT_NOT_READY but got ${notReadyRes.status}: ${JSON.stringify(notReadyRes.body)}`
+    );
+    assert.strictEqual(notReadyRes.body.code, 'EXPORT_NOT_READY');
 
     // Test 8: Finding 4 / AC-COM-05-06 - RBAC 403 when user lacks capability
     console.log('Testing: RBAC 403 on resource without permission');
@@ -506,11 +507,370 @@ async function runExportsSupertestSuite() {
       assert.ok(log.new_value, 'Audit log must record new_value payload');
     }
 
+    // Test 12: Finding 4 - Restricted download of another user's export containing out-of-scope rows
+    console.log(
+      'Testing: Finding 4 - Scoped operator cannot download another user unrestricted export'
+    );
+    const outOfScopeDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${createdExportId}/download`)
+      .set('Authorization', `Bearer ${scopedToken}`);
+
+    assert.strictEqual(outOfScopeDlRes.status, 403);
+    assert.strictEqual(outOfScopeDlRes.body.code, 'SCOPE_FORBIDDEN');
+
+    // Test 13: Finding 9 - HTTP assertion proving permission revocation on download
+    console.log('Testing: Finding 9 - Revoked permission rejects download with 403 FORBIDDEN');
+    const manageUsersPerm = await prisma.permission.findFirst({
+      where: { code: 'iam:manage_users' },
+    });
+    assert.ok(manageUsersPerm);
+
+    const revokableRoleId = randomUUID();
+    const rolePermRecord = await prisma.role.create({
+      data: {
+        id: revokableRoleId,
+        merchant_id: merchantIdA,
+        code: `ROLE_REVOKABLE_${testSuffix}`,
+        name: 'Revokable User Manager',
+        is_system: false,
+        permissions: {
+          create: [{ permission_id: manageUsersPerm.id }],
+        },
+      },
+    });
+
+    const revokableUserId = randomUUID();
+    const revokableSessionId = randomUUID();
+    await prisma.user.create({
+      data: {
+        id: revokableUserId,
+        merchant_id: merchantIdA,
+        email: `revokable_${testSuffix}@alpha.test`,
+        phone: `094${testSuffix}`,
+        full_name: 'Alpha Revokable Manager',
+        password_hash: 'mock_password_hash',
+        role: RoleEnum.STAFF,
+        custom_role_id: revokableRoleId,
+        warehouse_scopes: ['*'],
+        status: 'active',
+      },
+    });
+
+    await prisma.deviceSession.create({
+      data: {
+        id: revokableSessionId,
+        user_id: revokableUserId,
+        merchant_id: merchantIdA,
+        token_hash: 'mock_hash_revokable',
+        status: SessionStatusEnum.ACTIVE,
+        ip_address: '127.0.0.1',
+        last_seen_at: new Date(),
+        expires_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const revokableToken = signAccessToken(
+      {
+        sub: revokableUserId,
+        session_id: revokableSessionId,
+        merchant_id: merchantIdA,
+        role: 'STAFF',
+      },
+      tokenSecret
+    );
+
+    // Create users export while authorized
+    const usersExportRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${revokableToken}`)
+      .send({
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(usersExportRes.status, 201);
+    const usersExportId = usersExportRes.body.data.id;
+
+    // Revoke permission by deleting role permissions
+    await prisma.rolePermission.deleteMany({
+      where: { role_id: revokableRoleId },
+    });
+
+    // Attempt download after permission revocation
+    const revokedDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${usersExportId}/download`)
+      .set('Authorization', `Bearer ${revokableToken}`);
+
+    assert.strictEqual(revokedDlRes.status, 403);
+    assert.strictEqual(revokedDlRes.body.code, 'FORBIDDEN');
+
+    // Test 14: Finding 9 & AC-COM-05-13 - HTTP assertion proving unmask privilege
+    console.log('Testing: AC-COM-05-13 - Unmask privilege delivers plaintext identifiers');
+    const piiUnmaskPerm = await prisma.permission.findFirst({
+      where: { code: 'pii:unmask' },
+    });
+    assert.ok(piiUnmaskPerm);
+
+    const unmaskRoleId = randomUUID();
+    await prisma.role.create({
+      data: {
+        id: unmaskRoleId,
+        merchant_id: merchantIdA,
+        code: `ROLE_UNMASK_${testSuffix}`,
+        name: 'Warehouse Manager with Unmask',
+        is_system: false,
+        permissions: {
+          create: [{ permission_id: shopConfigPerm.id }, { permission_id: piiUnmaskPerm.id }],
+        },
+      },
+    });
+
+    const unmaskUserId = randomUUID();
+    const unmaskSessionId = randomUUID();
+    await prisma.user.create({
+      data: {
+        id: unmaskUserId,
+        merchant_id: merchantIdA,
+        email: `unmask_${testSuffix}@alpha.test`,
+        phone: `095${testSuffix}`,
+        full_name: 'Alpha Unmask Manager',
+        password_hash: 'mock_password_hash',
+        role: RoleEnum.STAFF,
+        custom_role_id: unmaskRoleId,
+        warehouse_scopes: ['*'],
+        status: 'active',
+      },
+    });
+
+    await prisma.deviceSession.create({
+      data: {
+        id: unmaskSessionId,
+        user_id: unmaskUserId,
+        merchant_id: merchantIdA,
+        token_hash: 'mock_hash_unmask',
+        status: SessionStatusEnum.ACTIVE,
+        ip_address: '127.0.0.1',
+        last_seen_at: new Date(),
+        expires_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const unmaskToken = signAccessToken(
+      {
+        sub: unmaskUserId,
+        session_id: unmaskSessionId,
+        merchant_id: merchantIdA,
+        role: 'STAFF',
+      },
+      tokenSecret
+    );
+
+    const unmaskExportRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${unmaskToken}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(unmaskExportRes.status, 201);
+
+    const unmaskDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${unmaskExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${unmaskToken}`);
+
+    assert.strictEqual(unmaskDlRes.status, 200);
+    // Must contain plaintext unmasked contact phone and email
+    assert.strictEqual(unmaskDlRes.text.includes('0901234567'), true);
+    assert.strictEqual(unmaskDlRes.text.includes('kho@alpha.test'), true);
+
+    // Test 15: Finding 9 - Ledger calculations using tenant-separated persisted fixtures
+    console.log('Testing: Finding 9 - Tenant-separated persisted ledger calculations');
+    // Seed fixtures for Merchant A
+    const carrierAccountIdA = randomUUID();
+    await prisma.carrierAccount.create({
+      data: {
+        id: carrierAccountIdA,
+        merchant_id: merchantIdA,
+        carrier_code: 'GHN',
+        account_name: `GHN Alpha ${testSuffix}`,
+        status: 'active',
+      },
+    });
+
+    const orderIdA = randomUUID();
+    await prisma.order.create({
+      data: {
+        id: orderIdA,
+        merchant_id: merchantIdA,
+        order_code: `ORD_A_${testSuffix}`,
+        status: 'COMPLETED',
+        total_amount: 1500000n,
+      },
+    });
+
+    const shipmentIdA = randomUUID();
+    await prisma.shipment.create({
+      data: {
+        id: shipmentIdA,
+        merchant_id: merchantIdA,
+        carrier_account_id: carrierAccountIdA,
+        order_id: orderIdA,
+        order_code: `ORD_A_${testSuffix}`,
+        tracking_code: `TRK_A_${testSuffix}`,
+        carrier_code: 'GHN',
+        current_status: 'DELIVERED',
+        cod_amount: 1000000n,
+      },
+    });
+
+    await prisma.claim.create({
+      data: {
+        id: randomUUID(),
+        merchant_id: merchantIdA,
+        shipment_id: shipmentIdA,
+        claim_type: 'LOST',
+        requested_amount: 500000n,
+        accepted_amount: 500000n,
+        recovered_amount: 500000n,
+        status: 'ACCEPTED',
+        deadline_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    await prisma.exceptionCase.create({
+      data: {
+        id: randomUUID(),
+        merchant_id: merchantIdA,
+        shipment_id: shipmentIdA,
+        tracking_code: `TRK_A_${testSuffix}`,
+        exception_type: 'DELIVERY_FAIL',
+        status: 'RESCUED',
+        deadline_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    await prisma.discrepancy.create({
+      data: {
+        id: randomUUID(),
+        merchant_id: merchantIdA,
+        shipment_id: shipmentIdA,
+        tracking_code: `TRK_A_${testSuffix}`,
+        type: 'FEE_WEIGHT',
+        amount: 50000n,
+        status: 'OPEN',
+      },
+    });
+
+    // Seed fixtures for Merchant B (Cross-tenant pollution guard)
+    const carrierAccountIdB = randomUUID();
+    await prisma.carrierAccount.create({
+      data: {
+        id: carrierAccountIdB,
+        merchant_id: merchantIdB,
+        carrier_code: 'GHN',
+        account_name: `GHN Beta ${testSuffix}`,
+        status: 'active',
+      },
+    });
+
+    const orderIdB = randomUUID();
+    await prisma.order.create({
+      data: {
+        id: orderIdB,
+        merchant_id: merchantIdB,
+        order_code: `ORD_B_${testSuffix}`,
+        status: 'COMPLETED',
+        total_amount: 99000000n,
+      },
+    });
+
+    const shipmentIdB = randomUUID();
+    await prisma.shipment.create({
+      data: {
+        id: shipmentIdB,
+        merchant_id: merchantIdB,
+        carrier_account_id: carrierAccountIdB,
+        order_id: orderIdB,
+        order_code: `ORD_B_${testSuffix}`,
+        tracking_code: `TRK_B_${testSuffix}`,
+        carrier_code: 'GHN',
+        current_status: 'DELIVERED',
+        cod_amount: 9999999n,
+      },
+    });
+
+    await prisma.claim.create({
+      data: {
+        id: randomUUID(),
+        merchant_id: merchantIdB,
+        shipment_id: shipmentIdB,
+        claim_type: 'LOST',
+        requested_amount: 88888888n,
+        accepted_amount: 88888888n,
+        recovered_amount: 88888888n,
+        status: 'ACCEPTED',
+        deadline_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    // Request ledgers export for Merchant A
+    const ledgerExportRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+
+    assert.strictEqual(ledgerExportRes.status, 201);
+    const ledgerDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${tokenA}`);
+
+    assert.strictEqual(ledgerDlRes.status, 200);
+    const ledgerCsv = ledgerDlRes.text;
+
+    // Assert Merchant A's values are present
+    assert.strictEqual(ledgerCsv.includes('500000'), true, 'Merchant A claim must be present');
+    assert.strictEqual(
+      ledgerCsv.includes('15000'),
+      true,
+      'Merchant A rescued fee saved must be present'
+    );
+    assert.strictEqual(
+      ledgerCsv.includes('1000000'),
+      true,
+      'Merchant A rescued GMV must be present'
+    );
+
+    // Assert Merchant B's values are completely excluded
+    assert.strictEqual(
+      ledgerCsv.includes('88888888'),
+      false,
+      'Merchant B claim must NOT be present'
+    );
+    assert.strictEqual(ledgerCsv.includes('9999999'), false, 'Merchant B GMV must NOT be present');
+
     console.log('🎉 All Exports Supertest tests passed successfully!');
   } finally {
+    // Explicitly drain background processing before cleaning up tenant rows (Finding 9)
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
     // Cleanup fixtures
     if (merchantIdA) {
       await prisma.exportJob.deleteMany({ where: { merchant_id: merchantIdA } });
+      await prisma.discrepancy.deleteMany({ where: { merchant_id: merchantIdA } });
+      await prisma.exceptionContactLog.deleteMany({
+        where: { exception_case: { merchant_id: merchantIdA } },
+      });
+      await prisma.exceptionCase.deleteMany({ where: { merchant_id: merchantIdA } });
+      await prisma.claim.deleteMany({ where: { merchant_id: merchantIdA } });
+      await prisma.shipmentEvent.deleteMany({ where: { shipment: { merchant_id: merchantIdA } } });
+      await prisma.shipment.deleteMany({ where: { merchant_id: merchantIdA } });
+      await prisma.order.deleteMany({ where: { merchant_id: merchantIdA } });
+      await prisma.carrierAccount.deleteMany({ where: { merchant_id: merchantIdA } });
       await prisma.warehouse.deleteMany({ where: { merchant_id: merchantIdA } });
       await prisma.deviceSession.deleteMany({ where: { merchant_id: merchantIdA } });
       await prisma.auditLog.deleteMany({ where: { merchant_id: merchantIdA } });
@@ -521,6 +881,10 @@ async function runExportsSupertestSuite() {
     }
     if (merchantIdB) {
       await prisma.exportJob.deleteMany({ where: { merchant_id: merchantIdB } });
+      await prisma.claim.deleteMany({ where: { merchant_id: merchantIdB } });
+      await prisma.shipment.deleteMany({ where: { merchant_id: merchantIdB } });
+      await prisma.order.deleteMany({ where: { merchant_id: merchantIdB } });
+      await prisma.carrierAccount.deleteMany({ where: { merchant_id: merchantIdB } });
       await prisma.deviceSession.deleteMany({ where: { merchant_id: merchantIdB } });
       await prisma.user.deleteMany({ where: { merchant_id: merchantIdB } });
       await prisma.merchant.deleteMany({ where: { id: merchantIdB } });

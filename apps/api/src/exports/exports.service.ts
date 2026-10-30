@@ -1,4 +1,4 @@
-import { Injectable, Inject, HttpStatus } from '@nestjs/common';
+import { Injectable, Inject, HttpStatus, OnModuleInit } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -38,11 +38,22 @@ export interface DownloadResult {
 }
 
 @Injectable()
-export class ExportsService {
+export class ExportsService implements OnModuleInit {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RbacService) private readonly rbacService: RbacService
   ) {}
+
+  /**
+   * Recovers stale pending or processing jobs on module initialization (Finding 7).
+   */
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.recoverStaleJobs();
+    } catch {
+      // Offline safe — do not block startup if database is unreachable
+    }
+  }
 
   /**
    * Hashes client IP to ensure GDPR/privacy compliance in immutable audit logs.
@@ -51,6 +62,63 @@ export class ExportsService {
     return createHash('sha256')
       .update(ip || '127.0.0.1')
       .digest('hex');
+  }
+
+  /**
+   * Sanitizes filter values to ensure no unmasked PII leaks into metadata or audit logs (Finding 13).
+   */
+  private sanitizeMetadataFilters(
+    filters?: Record<string, unknown>,
+    hasPiiUnmask = false
+  ): Record<string, unknown> {
+    if (!filters) return {};
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(filters)) {
+      if (typeof val === 'string') {
+        if (!hasPiiUnmask && (val.includes('@') || /^\+?[0-9]{8,15}$/.test(val))) {
+          sanitized[key] = maskIdentifier(val);
+        } else {
+          sanitized[key] = val;
+        }
+      } else {
+        sanitized[key] = val;
+      }
+    }
+    return sanitized;
+  }
+
+  /**
+   * Recovers stale jobs left in PENDING or PROCESSING states after a server restart (Finding 7).
+   */
+  async recoverStaleJobs(staleThresholdMs = 15 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - staleThresholdMs);
+    const result = await this.prisma.exportJob.updateMany({
+      where: {
+        status: { in: [ExportJobStatus.PENDING, ExportJobStatus.PROCESSING] },
+        created_at: { lt: cutoff },
+      },
+      data: {
+        status: ExportJobStatus.FAILED,
+        error_code: 'PROCESSING_TIMEOUT',
+        error_message:
+          'Tác vụ xuất dữ liệu bị gián đoạn do hệ thống khởi động lại, vui lòng thử lại',
+        completed_at: new Date(),
+      },
+    });
+    return result.count;
+  }
+
+  /**
+   * Purges expired export jobs and their files per the retention TTL baseline (Finding 14).
+   */
+  async purgeExpiredExports(): Promise<number> {
+    const now = new Date();
+    const result = await this.prisma.exportJob.deleteMany({
+      where: {
+        expires_at: { lt: now },
+      },
+    });
+    return result.count;
   }
 
   /**
@@ -130,6 +198,14 @@ export class ExportsService {
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
     const ruleVersion = resolveExportRuleVersion();
 
+    // Determine actor's current PII unmask capability to attach internal flag for download security (Finding 4)
+    const hasPiiUnmask = await this.rbacService.actorHasPermissions(actor, ['pii:unmask']);
+    const sanitizedFilters = this.sanitizeMetadataFilters(dto.filters, hasPiiUnmask);
+    const persistedFilters = {
+      ...(dto.filters || {}),
+      __unmasked_pii: hasPiiUnmask,
+    };
+
     // 2. Persist initial ExportJob record in database with PENDING status
     const jobRecord = await this.prisma.exportJob.create({
       data: {
@@ -139,13 +215,13 @@ export class ExportsService {
         resource: dto.resource,
         format: dto.format,
         status: ExportJobStatus.PENDING,
-        filters: (dto.filters as unknown as Prisma.InputJsonValue) || Prisma.JsonNull,
+        filters: persistedFilters as unknown as Prisma.InputJsonValue,
         rule_version: ruleVersion,
         expires_at: expiresAt,
       },
     });
 
-    // 3. Write immutable EXPORT_REQUESTED audit log
+    // 3. Write immutable EXPORT_REQUESTED audit log with sanitized PII (Finding 13)
     await this.prisma.auditLog.create({
       data: {
         merchant_id: merchantId,
@@ -159,7 +235,7 @@ export class ExportsService {
           job_id: jobRecord.id,
           resource: dto.resource,
           format: dto.format,
-          filters: dto.filters || {},
+          filters: sanitizedFilters,
           rule_version: ruleVersion,
         } as unknown as Prisma.InputJsonValue,
         reason: correlationId ? `correlation_id:${correlationId}` : null,
@@ -173,7 +249,10 @@ export class ExportsService {
       setImmediate(() => {
         this.processExportJob(merchantId, actor, jobRecord.id, dto, clientIp, correlationId).catch(
           (err) => {
-            console.error(`Async export processing failed for job ${jobRecord.id}:`, err);
+            // Log safe message without internal objects or PII (Finding 13)
+            const safeMsg =
+              err instanceof CanonicalApiException ? err.message : 'Processing failed';
+            console.error(`Async export job ${jobRecord.id} ended with status FAILED: ${safeMsg}`);
           }
         );
       });
@@ -246,6 +325,7 @@ export class ExportsService {
       let headers: { key: string; label: string }[] = [];
       const exportedRows: Record<string, unknown>[] = [];
       const rowResults: ExportRowResult[] = [];
+      let truncationNote: string | undefined = undefined;
 
       // Actor warehouse scopes for FEAT-RBAC-02 per-row scoping (no hardcoded OWNER bypass)
       const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
@@ -281,6 +361,7 @@ export class ExportsService {
                 `Số lượng bản ghi (${totalMatching}) vượt quá giới hạn xuất tối đa (${maxRows}). Vui lòng thu hẹp bộ lọc.`
               );
             }
+            truncationNote = `Kết quả xuất đã được giới hạn ở ${maxRows} bản ghi đầu tiên do vượt quá số lượng tối đa cho phép (${totalMatching} bản ghi phù hợp)`;
           }
 
           const users = await this.prisma.user.findMany({
@@ -346,6 +427,7 @@ export class ExportsService {
                 `Số lượng bản ghi (${totalMatching}) vượt quá giới hạn xuất tối đa (${maxRows}). Vui lòng thu hẹp bộ lọc.`
               );
             }
+            truncationNote = `Kết quả xuất đã được giới hạn ở ${maxRows} bản ghi đầu tiên do vượt quá số lượng tối đa cho phép (${totalMatching} bản ghi phù hợp)`;
           }
 
           const warehouses = await this.prisma.warehouse.findMany({
@@ -420,6 +502,18 @@ export class ExportsService {
           if (dto.filters?.entity_type && typeof dto.filters.entity_type === 'string') {
             logWhere.entity_type = dto.filters.entity_type;
           }
+          if (dto.filters?.from_date && typeof dto.filters.from_date === 'string') {
+            logWhere.created_at = {
+              ...(logWhere.created_at as object),
+              gte: new Date(dto.filters.from_date),
+            };
+          }
+          if (dto.filters?.to_date && typeof dto.filters.to_date === 'string') {
+            logWhere.created_at = {
+              ...(logWhere.created_at as object),
+              lte: new Date(dto.filters.to_date),
+            };
+          }
 
           const totalMatching = await this.prisma.auditLog.count({ where: logWhere });
           if (totalMatching > maxRows) {
@@ -430,6 +524,7 @@ export class ExportsService {
                 `Số lượng bản ghi (${totalMatching}) vượt quá giới hạn xuất tối đa (${maxRows}). Vui lòng thu hẹp bộ lọc.`
               );
             }
+            truncationNote = `Kết quả xuất đã được giới hạn ở ${maxRows} bản ghi đầu tiên do vượt quá số lượng tối đa cho phép (${totalMatching} bản ghi phù hợp)`;
           }
 
           const logs = await this.prisma.auditLog.findMany({
@@ -469,9 +564,62 @@ export class ExportsService {
             { key: 'rule_note', label: 'Ghi chú quy tắc' },
           ];
 
-          // 1. Sổ 1: Tiền thực nhận (Recovered Cash) from real claims in tenant (Finding 3 / P0)
+          // 1. Build common scope & date filters (Finding 7, Finding 10)
+          let scopedWarehouseFilter: Prisma.StringNullableFilter | undefined = undefined;
+          if (!hasUniversalWarehouseScope) {
+            if (actorWarehouseScopes.length === 0) {
+              scopedWarehouseFilter = { in: ['__no_access__'] };
+            } else {
+              scopedWarehouseFilter = { in: actorWarehouseScopes };
+            }
+          }
+
+          // If explicit warehouse_id filter is passed, verify against actor scopes
+          if (dto.filters?.warehouse_id && typeof dto.filters.warehouse_id === 'string') {
+            const requestedWhId = dto.filters.warehouse_id;
+            if (!hasUniversalWarehouseScope && !actorWarehouseScopes.includes(requestedWhId)) {
+              throw new CanonicalApiException(
+                HttpStatus.FORBIDDEN,
+                ExportErrorCode.SCOPE_FORBIDDEN,
+                'Kho hàng được lọc nằm ngoài phạm vi kho được phân quyền của tài khoản'
+              );
+            }
+            scopedWarehouseFilter = { equals: requestedWhId };
+          }
+
+          // Date filters
+          const fromDateRaw = (dto.filters?.from_date || dto.filters?.period_start) as
+            string | undefined;
+          const toDateRaw = (dto.filters?.to_date || dto.filters?.period_end) as string | undefined;
+          let dateFilter: Prisma.DateTimeFilter | undefined = undefined;
+          if (fromDateRaw || toDateRaw) {
+            dateFilter = {};
+            if (fromDateRaw) dateFilter.gte = new Date(fromDateRaw);
+            if (toDateRaw) dateFilter.lte = new Date(toDateRaw);
+          }
+
+          // Branch filter
+          const branchIdFilter =
+            dto.filters?.branch_id && typeof dto.filters.branch_id === 'string'
+              ? { equals: dto.filters.branch_id }
+              : undefined;
+
+          // Carrier filter for shipments
+          const carrierCodeFilter =
+            dto.filters?.carrier_code && typeof dto.filters.carrier_code === 'string'
+              ? (dto.filters.carrier_code as any)
+              : undefined;
+
+          // 1. Sổ 1: Tiền thực nhận (Recovered Cash) using BigInt lossless arithmetic (Finding 11)
+          const claimWhere: Prisma.ClaimWhereInput = {
+            merchant_id: merchantId,
+            ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
+            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(dateFilter ? { created_at: dateFilter } : {}),
+          };
+
           const claims = await this.prisma.claim.findMany({
-            where: { merchant_id: merchantId },
+            where: claimWhere,
             select: {
               status: true,
               recovered_amount: true,
@@ -479,26 +627,31 @@ export class ExportsService {
             },
           });
 
-          let totalRecovered = 0;
-          let pendingAcceptance = 0;
+          let totalRecoveredBigInt = 0n;
+          let pendingAcceptanceBigInt = 0n;
           for (const c of claims) {
             if (c.status === 'ACCEPTED' || c.status === 'CLOSED') {
-              const rec = Number(c.recovered_amount || 0);
-              const acc = Number(c.accepted_amount || 0);
-              if (rec > 0) {
-                totalRecovered += rec;
-              } else if (acc > 0) {
-                pendingAcceptance += acc;
+              const rec = c.recovered_amount ? BigInt(c.recovered_amount) : 0n;
+              const acc = c.accepted_amount ? BigInt(c.accepted_amount) : 0n;
+              if (rec > 0n) {
+                totalRecoveredBigInt += rec;
+              } else if (acc > 0n) {
+                pendingAcceptanceBigInt += acc;
               }
             }
           }
 
-          // 2. Sổ 2: Đơn cứu được (Rescued Orders) from real rescued exception cases
+          // 2. Sổ 2: Đơn cứu được (Rescued Orders) using BigInt lossless arithmetic (Finding 11)
+          const caseWhere: Prisma.ExceptionCaseWhereInput = {
+            merchant_id: merchantId,
+            status: 'RESCUED',
+            ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
+            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(dateFilter ? { created_at: dateFilter } : {}),
+          };
+
           const rescuedCases = await this.prisma.exceptionCase.findMany({
-            where: {
-              merchant_id: merchantId,
-              status: 'RESCUED',
-            },
+            where: caseWhere,
             include: {
               shipment: {
                 select: { cod_amount: true },
@@ -507,25 +660,55 @@ export class ExportsService {
           });
 
           const rescuedCount = rescuedCases.length;
-          const returnFeeSaved = rescuedCount * 15000; // BR-50: 15.000 VND / đơn
-          let rescuedGmv = 0;
+          const returnFeeSavedBigInt = BigInt(rescuedCount) * 15000n; // BR-50: 15.000 VND / đơn
+          let rescuedGmvBigInt = 0n;
           for (const rc of rescuedCases) {
-            rescuedGmv += Number(rc.shipment?.cod_amount || 0);
+            if (rc.shipment?.cod_amount) {
+              rescuedGmvBigInt += BigInt(rc.shipment.cod_amount);
+            }
           }
 
-          // 3. Sổ 3: Độ phủ kiểm soát (Control Metrics) from real shipments and discrepancies
-          const [totalShipments, deliveredCount, discrepanciesCount] = await Promise.all([
-            this.prisma.shipment.count({ where: { merchant_id: merchantId } }),
-            this.prisma.shipment.count({
-              where: { merchant_id: merchantId, current_status: 'DELIVERED' },
-            }),
-            this.prisma.discrepancy.count({ where: { merchant_id: merchantId } }),
+          // 3. Sổ 3: Độ phủ kiểm soát (Control Metrics) from qualifying evidence (Finding 3, Finding 10)
+          const shipmentWhere: Prisma.ShipmentWhereInput = {
+            merchant_id: merchantId,
+            ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
+            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(carrierCodeFilter ? { carrier_code: carrierCodeFilter } : {}),
+            ...(dateFilter ? { created_at: dateFilter } : {}),
+          };
+
+          const discrepancyWhere: Prisma.DiscrepancyWhereInput = {
+            merchant_id: merchantId,
+            ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
+            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(dateFilter ? { created_at: dateFilter } : {}),
+          };
+
+          const [totalShipments, discrepanciesCount] = await Promise.all([
+            this.prisma.shipment.count({ where: shipmentWhere }),
+            this.prisma.discrepancy.count({ where: discrepancyWhere }),
           ]);
 
-          const trackingCoveragePct =
-            totalShipments > 0
-              ? `${Math.round((deliveredCount / totalShipments) * 1000) / 10}%`
-              : 'UNAVAILABLE';
+          let trackingCoveragePct = 'UNAVAILABLE';
+          let trackingCoverageRuleNote = 'Chưa có vận đơn trong kỳ (chỉ số không khả dụng)';
+
+          if (totalShipments > 0) {
+            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const updatedWithin24hCount = await this.prisma.shipment.count({
+              where: {
+                ...shipmentWhere,
+                events: {
+                  some: {
+                    occurred_at: { gte: twentyFourHoursAgo },
+                  },
+                },
+              },
+            });
+
+            const pct = Math.round((updatedWithin24hCount / totalShipments) * 1000) / 10;
+            trackingCoveragePct = `${pct}%`;
+            trackingCoverageRuleNote = `Tỷ lệ vận đơn có sự kiện cập nhật trong 24h (${updatedWithin24hCount}/${totalShipments} đơn)`;
+          }
 
           const ledgerMetrics: Array<{
             ledger_group: string;
@@ -539,7 +722,7 @@ export class ExportsService {
               ledger_group: 'Sổ 1 (Tiền thực nhận)',
               metric_code: 'LEDGER1_RECOVERED_AMOUNT',
               metric_name: 'Tổng tiền bồi thường đã về tài khoản',
-              value: totalRecovered,
+              value: totalRecoveredBigInt.toString(),
               unit: 'VND',
               rule_note: 'Tiền thực nhận qua ngân hàng hoặc cấn trừ kỳ sau conclusive audit',
             },
@@ -547,7 +730,7 @@ export class ExportsService {
               ledger_group: 'Sổ 1 (Tiền thực nhận)',
               metric_code: 'LEDGER1_PENDING_ACCEPTANCE',
               metric_name: 'Tiền hãng đã chấp thuận (chờ đối soát)',
-              value: pendingAcceptance,
+              value: pendingAcceptanceBigInt.toString(),
               unit: 'VND',
               rule_note: 'Cột riêng không cộng dồn theo BR-MONEY-01',
             },
@@ -563,7 +746,7 @@ export class ExportsService {
               ledger_group: 'Sổ 2 (Đơn cứu được)',
               metric_code: 'LEDGER2_RETURN_FEE_SAVED',
               metric_name: 'Phí chiều hoàn tránh được',
-              value: returnFeeSaved,
+              value: returnFeeSavedBigInt.toString(),
               unit: 'VND',
               rule_note: 'BR-50: 15.000 VND / đơn không cộng cước đi',
             },
@@ -571,7 +754,7 @@ export class ExportsService {
               ledger_group: 'Sổ 2 (Đơn cứu được)',
               metric_code: 'LEDGER2_RESCUED_GMV',
               metric_name: 'Giá trị hàng hóa cứu được (GMV)',
-              value: rescuedGmv,
+              value: rescuedGmvBigInt.toString(),
               unit: 'VND',
               rule_note: 'Chỉ số theo dõi riêng, không tính vào tiền mặt thu hồi',
             },
@@ -581,10 +764,7 @@ export class ExportsService {
               metric_name: 'Tỷ lệ đơn cập nhật trong 24h',
               value: trackingCoveragePct,
               unit: '%',
-              rule_note:
-                totalShipments > 0
-                  ? 'Tỷ lệ đơn giao thành công / tổng số đơn được quản lý trong kỳ'
-                  : 'Chưa có đơn hàng trong kỳ đối soát (chỉ số không khả dụng)',
+              rule_note: trackingCoverageRuleNote,
             },
             {
               ledger_group: 'Sổ 3 (Độ phủ kiểm soát)',
@@ -619,7 +799,9 @@ export class ExportsService {
       const dataPayload = JSON.stringify(exportedRows);
       const dataChecksumSha256 = createHash('sha256').update(dataPayload).digest('hex');
 
-      // Build Generation Metadata embedding authentic data checksum
+      const cleanFilters = this.sanitizeMetadataFilters(dto.filters, hasPiiUnmask);
+
+      // Build Generation Metadata embedding authentic data checksum (Finding 6)
       const generatedAt = new Date().toISOString();
       const metadata: ExportGenerationMetadata = {
         export_id: jobId,
@@ -629,12 +811,13 @@ export class ExportsService {
         user_role: actor.role || 'MEMBER',
         resource: dto.resource,
         format: dto.format,
-        filters: dto.filters || {},
+        filters: cleanFilters,
         rule_version: ruleVersion,
         total_rows: totalRows,
         succeeded_rows: succeededRows,
         failed_rows: failedRows,
         checksum_sha256: dataChecksumSha256,
+        ...(truncationNote ? { truncation_note: truncationNote } : {}),
       };
 
       // Generate file buffer with complete authentic metadata
@@ -681,17 +864,29 @@ export class ExportsService {
 
       return this.formatExportJobItem(updatedJob, metadata);
     } catch (err: any) {
-      // Capture failure transition truthfully in database (Finding 7)
+      // Map failure to safe canonical export errors (Finding 13)
+      const isCanonical = err instanceof CanonicalApiException;
+      const safeErrorCode = isCanonical ? err.code : ExportErrorCode.EXPORT_FAILED;
+      const safeErrorMessage = isCanonical
+        ? err.message
+        : 'Lỗi xử lý tạo tệp xuất dữ liệu. Vui lòng thử lại sau.';
+
       await this.prisma.exportJob.updateMany({
         where: { id: jobId, merchant_id: merchantId },
         data: {
           status: ExportJobStatus.FAILED,
-          error_code: err.code || 'EXPORT_FAILED',
-          error_message: err.message || 'Lỗi xử lý tạo tệp xuất dữ liệu',
+          error_code: safeErrorCode,
+          error_message: safeErrorMessage,
           completed_at: new Date(),
         },
       });
-      throw err;
+      throw isCanonical
+        ? err
+        : new CanonicalApiException(
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            ExportErrorCode.EXPORT_FAILED,
+            safeErrorMessage
+          );
     }
   }
 
@@ -821,7 +1016,7 @@ export class ExportsService {
   }
 
   /**
-   * Streams and audits the download of an export file with strict resource RBAC and PII checks (Finding 4).
+   * Streams and audits the download of an export file with strict resource RBAC, scope, and PII checks (Finding 4).
    */
   async downloadExport(
     merchantId: string,
@@ -845,16 +1040,47 @@ export class ExportsService {
       );
     }
 
-    // 1. Enforce resource capability RBAC (Finding 4)
+    // 1. Enforce TTL expiration (Finding 14)
+    if (job.expires_at && new Date() > new Date(job.expires_at)) {
+      throw new CanonicalApiException(
+        HttpStatus.GONE,
+        ExportErrorCode.EXPORT_EXPIRED,
+        'Tệp xuất dữ liệu đã hết hạn lưu trữ và không còn khả dụng để tải xuống'
+      );
+    }
+
+    // 2. Enforce resource capability RBAC (Finding 4)
     await this.assertResourcePermission(actor, job.resource as ExportResource);
 
-    // 2. Enforce PII protection on download if export contains unmasked identifiers (Finding 4)
-    if (
-      (job.resource === ExportResource.USERS || job.resource === ExportResource.WAREHOUSES) &&
-      job.user_id !== actor.userId
-    ) {
+    // 3. Enforce warehouse scope authorization on download (Finding 4)
+    if (job.resource === ExportResource.WAREHOUSES || job.resource === ExportResource.LEDGERS) {
+      const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
+      const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
+
+      if (!hasUniversalWarehouseScope) {
+        // If actor has narrow warehouse scope, check if the export contains data outside actor's scope
+        const rowResults = (job.row_results as unknown as ExportRowResult[]) || [];
+        const hasOutOfScopeRows = rowResults.some(
+          (r) =>
+            r.status === 'succeeded' && r.entity_id && !actorWarehouseScopes.includes(r.entity_id)
+        );
+        if (hasOutOfScopeRows) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Tệp xuất dữ liệu chứa bản ghi kho hàng nằm ngoài phạm vi phân quyền của tài khoản'
+          );
+        }
+      }
+    }
+
+    // 4. Enforce PII protection on download if export contains unmasked identifiers (Finding 4)
+    // Any downloader (including the creator whose permission may have been revoked) must possess pii:unmask
+    const jobFilters = (job.filters as Record<string, unknown>) || {};
+    const wasUnmasked = jobFilters.__unmasked_pii === true;
+    if (wasUnmasked || job.resource === ExportResource.USERS) {
       const hasPiiUnmask = await this.rbacService.actorHasPermissions(actor, ['pii:unmask']);
-      if (!hasPiiUnmask) {
+      if (wasUnmasked && !hasPiiUnmask) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           ExportErrorCode.FORBIDDEN,
@@ -863,7 +1089,7 @@ export class ExportsService {
       }
     }
 
-    // 3. Verify job execution status
+    // 5. Verify job execution status
     if (job.status === ExportJobStatus.PENDING || job.status === ExportJobStatus.PROCESSING) {
       throw new CanonicalApiException(
         HttpStatus.CONFLICT,
@@ -892,7 +1118,7 @@ export class ExportsService {
 
     const fileBuffer = Buffer.from(job.file_data);
 
-    // Record immutable EXPORT_DOWNLOADED audit log
+    // Record immutable EXPORT_DOWNLOADED audit log with safe metadata (Finding 13)
     await this.prisma.auditLog.create({
       data: {
         merchant_id: merchantId,
@@ -926,11 +1152,37 @@ export class ExportsService {
 
   /**
    * Helper to format ExportJob database model into API contract shape.
+   * Reconstructs metadata for completed jobs so get/list reads return complete metadata (Finding 15).
    */
   private formatExportJobItem(
     job: any,
     explicitMetadata?: ExportGenerationMetadata
   ): ExportJobItem {
+    const rawFilters = (job.filters as Record<string, unknown>) || {};
+    const { __unmasked_pii, ...cleanFilters } = rawFilters;
+
+    let metadata = explicitMetadata;
+    if (!metadata && job.status === ExportJobStatus.COMPLETED) {
+      // Reconstruct metadata from persisted job fields for get/list reads (Finding 15)
+      metadata = {
+        export_id: job.id,
+        generated_at: job.completed_at
+          ? new Date(job.completed_at).toISOString()
+          : new Date(job.created_at).toISOString(),
+        merchant_id: job.merchant_id,
+        requested_by: job.user_id,
+        user_role: job.user?.role || 'MEMBER',
+        resource: job.resource as ExportResource,
+        format: job.format as ExportFormat,
+        filters: cleanFilters,
+        rule_version: job.rule_version || resolveExportRuleVersion(),
+        total_rows: job.total_rows || 0,
+        succeeded_rows: job.succeeded_rows || 0,
+        failed_rows: job.failed_rows || 0,
+        checksum_sha256: job.checksum_sha256 || '',
+      };
+    }
+
     return {
       id: job.id,
       merchant_id: job.merchant_id,
@@ -938,7 +1190,7 @@ export class ExportsService {
       resource: job.resource as ExportResource,
       format: job.format as ExportFormat,
       status: job.status as ExportJobStatus,
-      filters: (job.filters as Record<string, unknown>) || undefined,
+      filters: Object.keys(cleanFilters).length > 0 ? cleanFilters : undefined,
       total_rows: job.total_rows || 0,
       processed_rows: job.processed_rows || 0,
       succeeded_rows: job.succeeded_rows || 0,
@@ -949,7 +1201,7 @@ export class ExportsService {
       download_url: `/api/v1/exports/${job.id}/download`,
       error_code: job.error_code || undefined,
       error_message: job.error_message || undefined,
-      metadata: explicitMetadata || undefined,
+      metadata,
       row_results: (job.row_results as unknown as ExportRowResult[]) || undefined,
       rule_version: job.rule_version || undefined,
       created_at: job.created_at

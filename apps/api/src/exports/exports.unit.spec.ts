@@ -218,7 +218,7 @@ function createMockPrismaService() {
     },
     shipment: {
       count: async ({ where }: any) => {
-        if (where?.current_status === 'DELIVERED') return 8;
+        if (where?.events?.some?.occurred_at) return 8;
         return 10;
       },
     },
@@ -427,6 +427,34 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         true
       );
     });
+
+    it('Finding 13: should reject unsupported filter for resource with UNSUPPORTED_FILTER', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'users',
+        format: 'csv',
+        filters: { arbitrary_hacker_field: 'leak' },
+      });
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(
+        res.errors.some(
+          (e) => e.field === 'filters.arbitrary_hacker_field' && e.code === 'UNSUPPORTED_FILTER'
+        ),
+        true
+      );
+    });
+
+    it('Finding 13: should reject invalid date string in filter with INVALID_DATE', () => {
+      const res = validateCreateExportJobDto({
+        resource: 'ledgers',
+        format: 'csv',
+        filters: { from_date: 'not-a-valid-date' },
+      });
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(
+        res.errors.some((e) => e.field === 'filters.from_date' && e.code === 'INVALID_DATE'),
+        true
+      );
+    });
   });
 
   describe('Format Generators', () => {
@@ -469,6 +497,14 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       assert.strictEqual(escapeCsvCell(null), '');
     });
 
+    it('Finding 12: escapeCsvCell neutralizes spreadsheet formula injection prefixes', () => {
+      assert.strictEqual(escapeCsvCell('=1+1'), "'=1+1");
+      assert.strictEqual(escapeCsvCell('+SUM(A1:A10)'), "'+SUM(A1:A10)");
+      assert.strictEqual(escapeCsvCell('-2+3'), "'-2+3");
+      assert.strictEqual(escapeCsvCell('@cmd'), "'@cmd");
+      assert.strictEqual(escapeCsvCell('=cmd|"/C calc"!A0'), `"'=cmd|""/C calc""!A0"`);
+    });
+
     it('generateCsv produces valid CSV with UTF-8 BOM, metadata header, and CRLF line breaks', () => {
       const buf = generateCsv(mockMetadata, mockHeaders, mockRows);
       // Check BOM bytes (\uFEFF: 0xEF, 0xBB, 0xBF)
@@ -479,7 +515,7 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       const text = buf.subarray(3).toString('utf-8');
       assert.strictEqual(text.includes('# --- SHIP DE EXPORT METADATA ---'), true);
       assert.strictEqual(text.includes('# Export ID: exp-test-uuid-001'), true);
-      assert.strictEqual(text.includes('# Checksum: a1b2c3d4e5f6'), true);
+      assert.strictEqual(text.includes('# Data Payload Checksum (SHA-256): a1b2c3d4e5f6'), true);
       assert.strictEqual(text.includes('Tên người dùng,Email,Ghi chú'), true);
       assert.strictEqual(text.includes('"Trần ""Bão"", Cường"'), true);
     });
@@ -950,6 +986,171 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
 
       assert.strictEqual(result.data.status, ExportJobStatus.PENDING);
+    });
+
+    it('Finding 4: Scoped actor downloading warehouse export with out-of-scope rows throws 403 SCOPE_FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:shop_config', 'pii:unmask']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const ownerActor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'OWNER' };
+      const created = await service.createExportJob(
+        'm-tenant-1',
+        ownerActor,
+        { resource: ExportResource.WAREHOUSES, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-owner'
+      );
+
+      // Scoped user u-2 only has access to wh-1 (not wh-2)
+      const scopedActor: ActorContext = {
+        userId: 'u-2',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            scopedActor,
+            created.data.id,
+            '127.0.0.1',
+            'corr-scoped-dl'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 4: Actor whose pii:unmask capability was revoked throws 403 FORBIDDEN when downloading unmasked export', async () => {
+      const mockPrisma = createMockPrismaService();
+      const rbacPerms = ['iam:manage_users', 'pii:unmask'];
+      const mockRbac = createMockRbacService(rbacPerms);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'ADMIN' };
+      const created = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-unmask'
+      );
+
+      // Revoke pii:unmask permission
+      const idx = rbacPerms.indexOf('pii:unmask');
+      if (idx !== -1) rbacPerms.splice(idx, 1);
+
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            actor,
+            created.data.id,
+            '127.0.0.1',
+            'corr-revoked-dl'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.FORBIDDEN);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 14: Downloading expired export job throws 410 EXPORT_EXPIRED', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'ADMIN' };
+      const created = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-expired'
+      );
+
+      const jobIdx = mockPrisma.exportJobs.findIndex((j: any) => j.id === created.data.id);
+      mockPrisma.exportJobs[jobIdx].expires_at = new Date(Date.now() - 1000);
+
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            actor,
+            created.data.id,
+            '127.0.0.1',
+            'corr-expired-dl'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.getStatus(), 410);
+          assert.strictEqual(err.code, ExportErrorCode.EXPORT_EXPIRED);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 15: Completed export job returns complete generation metadata on subsequent reads', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'ADMIN' };
+      const created = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-meta'
+      );
+
+      const getRes = await service.getExportJob('m-tenant-1', actor, created.data.id, 'corr-get');
+      assert.ok(getRes.data.metadata);
+      assert.strictEqual(getRes.data.metadata?.export_id, created.data.id);
+      assert.strictEqual(getRes.data.metadata?.resource, ExportResource.USERS);
+      assert.ok(getRes.data.metadata?.checksum_sha256);
+
+      const listRes = await service.listExportJobs(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS },
+        'corr-list'
+      );
+      const found = listRes.data.find((j) => j.id === created.data.id);
+      assert.ok(found?.metadata);
+    });
+
+    it('Finding 7: Clamped export records explicit truncation note in metadata', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.user.count = async () => 2000000;
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'ADMIN' };
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        {
+          resource: ExportResource.USERS,
+          format: ExportFormat.CSV,
+          filters: { clamp: true },
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-clamp'
+      );
+
+      assert.strictEqual(result.data.status, ExportJobStatus.COMPLETED);
+      assert.ok(result.data.metadata?.truncation_note);
+      assert.strictEqual(result.data.metadata.truncation_note.includes('giới hạn'), true);
     });
   });
 });

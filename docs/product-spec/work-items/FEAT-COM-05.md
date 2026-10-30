@@ -12,7 +12,7 @@
 | Assigned author | `GEMINI` |
 | Risk            | `HIGH` |
 | Risk domains    | `tenant isolation`, `database ownership`, `rbac`, `audit`, `pii protection`, `async export jobs` |
-| Allowed paths   | `docs/product-spec/work-items/FEAT-COM-05.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `packages/config/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/app.module.ts`, `apps/api/src/exports/*` |
+| Allowed paths   | `docs/product-spec/work-items/FEAT-COM-05.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `packages/config/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/package.json`, `apps/api/src/app.module.ts`, `apps/api/src/exports/*` |
 | Reviewer        | Codex — fresh independent task |
 | Branch          | `feat/feat-com-05` |
 | Pull Request    | #470 |
@@ -23,7 +23,7 @@ Operators, accountants, warehouse supervisors, and shop owners can export operat
 
 Key business capabilities delivered:
 1. **Multi-Format Generation with Embedded Metadata**: Every export produces compliant CSV (with UTF-8 BOM and RFC 4180 escaping), XLSX (SpreadsheetML with dedicated Data and Metadata worksheets), or PDF (structured document with metadata header and tabular records). Every file embeds immutable generation metadata: unique Export ID, generation timestamp, tenant identifier, requesting user ID & role, applied filters, rule version, total row counts, and cryptographic SHA-256 integrity checksum.
-2. **Permission-Aware Resource Authorization**: Exporting operational entities requires the corresponding platform capability permission (e.g. `iam:manage_users` for users, `iam:shop_config` for warehouses, `audit:view` for audit logs, and `reconciliation:view_contract_rates` or `reconciliation:run_review_audit` for financial ledgers). Shop owners (`OWNER`) possess universal export rights across their tenant.
+2. **Permission-Aware Resource Authorization**: Exporting operational entities requires the corresponding platform capability permission (e.g. `iam:manage_users` for users, `iam:shop_config` for warehouses, `audit:view` for audit logs, and `reconciliation:view_contract_rates` or `reconciliation:run_review_audit` for financial ledgers). Authorization is strictly evaluated via dynamic RBAC capabilities without hardcoded role name bypasses.
 3. **FEAT-RBAC-02 Per-Row Scope Enforcement**: Scoped operators (e.g. users restricted to specific warehouse IDs or codes via `User.warehouse_scopes` without `*`) only receive data rows belonging to their authorized scopes. Out-of-scope rows are excluded from the exported file and truthfully reported in per-row execution results (`row_results`).
 4. **Automated PII Protection**: Requesters who do not hold the sensitive `pii:unmask` capability have personal identity information (phone numbers, email addresses, tax numbers) automatically masked via `maskIdentifier` before serialization into export files and audit logs.
 5. **Asynchronous Job Lifecycle & Per-Row Results**: Export jobs track clear lifecycles (`PENDING` -> `PROCESSING` -> `COMPLETED` / `FAILED`), record execution progress (`total_rows`, `processed_rows`, `succeeded_rows`, `failed_rows`), store detailed per-row outcomes, and provide secure, tenant-scoped download endpoints.
@@ -79,11 +79,11 @@ Key business capabilities delivered:
    - `GET /api/v1/exports/:id` (and `/exports/:id`): Get export job status, execution progress, metadata, and per-row results.
    - `GET /api/v1/exports/:id/download` (and `/exports/:id/download`): Download generated file with appropriate Content-Type, Content-Disposition, and checksum header.
 4. **Resource Handlers & Scoping**:
-   - Resource `users`: requires `iam:manage_users` (or OWNER).
-   - Resource `warehouses`: requires `iam:shop_config` (or OWNER). Enforces `User.warehouse_scopes` per row; out-of-scope warehouses are excluded and reported in `row_results`.
-   - Resource `audit_logs`: requires `audit:view` (or OWNER).
-   - Resource `ledgers`: requires `reconciliation:view_contract_rates` or `reconciliation:run_review_audit` (or OWNER).
-   - PII masking: If actor lacks `pii:unmask` (and is not OWNER), phone numbers, emails, and sensitive identifiers are masked via `maskIdentifier`.
+   - Resource `users`: requires `iam:manage_users`.
+   - Resource `warehouses`: requires `iam:shop_config`. Enforces `User.warehouse_scopes` per row; out-of-scope warehouses are excluded and reported in `row_results`.
+   - Resource `audit_logs`: requires `audit:view`.
+   - Resource `ledgers`: requires `reconciliation:view_contract_rates` or `reconciliation:run_review_audit`.
+   - PII masking: If actor lacks `pii:unmask`, phone numbers, emails, and sensitive identifiers are masked via `maskIdentifier`.
 5. **Audit Logging**:
    - Creates `EXPORT_REQUESTED` and `EXPORT_DOWNLOADED` entries in `audit_logs` table with actor context, client IP, resource, format, and masked metadata.
 6. **Contracts & OpenAPI**:
@@ -157,7 +157,8 @@ pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/exports/exports.
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
 | Round 1 | 32ca8ec3463c1a4cd7c5286a14d14be5a1b193a8 | CHANGES_REQUIRED | Initial implementation of exports backend vertical slice; review flagged out-of-date diff, fabricated ledger metrics, resource RBAC omission on get/list/download, OWNER role bypass, checksum mismatch, lifecycle/sync issues, PDF data dropping, and lack of HTTP integration proofs. |
-| Round 2 | Pending | In progress | Merged origin/main cleanly; replaced hardcoded ledger metrics with real persisted tenant data (claims, exception cases, shipments, discrepancies); enforced resource capability RBAC across get, list, and download; eliminated hardcoded OWNER role bypasses across RBAC, PII masking, and warehouse scoping; implemented truthful SHA-256 data payload checksum and authentic file checksum; implemented real job lifecycle with dto.sync, EXPORT_LIMIT_EXCEEDED enforcement, query filtering, and FAILED status capture; rewritten PDF generator with multi-page support, no dropped rows, preserved diacritics, and full cell widths; expanded Supertest suite covering 409 pending download, RBAC 403, PII masking, per-row FEAT-RBAC-02 scoping, and audit logs. |
+| Round 2 | bca303acacbc25a1dfadeb3e29cf05f1f059e7ce | CHANGES_REQUIRED | Merged origin/main cleanly; replaced hardcoded ledger metrics with real persisted tenant data (claims, exception cases, shipments, discrepancies); enforced resource capability RBAC across get, list, and download; eliminated hardcoded OWNER role bypasses across RBAC, PII masking, and warehouse scoping; implemented truthful SHA-256 data payload checksum and authentic file checksum; implemented real job lifecycle with dto.sync, EXPORT_LIMIT_EXCEEDED enforcement, query filtering, and FAILED status capture; rewritten PDF generator with multi-page support; expanded Supertest suite. |
+| Round 3 | Pending | In progress | Resolved all P0/P1 findings from `.oc/review.txt`: (1) derived tracking coverage in 24h from qualifying event timestamps with unavailable fallback; (2) secured stored-file download authorization against revoked PII permissions and narrow warehouse scope; (3) removed remaining OWNER documentation exceptions; (4) clearly distinguished data payload checksum vs file binary checksum; (5) implemented background stale job recovery and explicit truncation notes on clamped exports; (6) fixed PDF rendering with Vietnamese text normalization and dynamic column widths preventing cell overlap; (7) expanded Supertest suite with deterministic 409 test, permission revocation, unmask privilege, restricted file download, and tenant-separated persisted ledger calculations; (8) applied warehouse/branch/carrier scopes to financial ledger queries; (9) enforced BigInt lossless arithmetic for all VND amounts; (10) neutralized spreadsheet formula injection in CSV cells; (11) sanitized metadata filters and mapped internal failures to canonical export errors; (12) enforced export retention TTL with 410 EXPORT_EXPIRED and purge mechanism; (13) ensured completed asynchronous jobs return complete generation metadata on subsequent reads. |
 
 ## Residual limitations
 

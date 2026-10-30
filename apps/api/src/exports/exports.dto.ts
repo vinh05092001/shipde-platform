@@ -28,6 +28,23 @@ export const ALLOWED_EXPORT_RESOURCES = new Set<string>([
   ExportResource.LEDGERS,
 ]);
 
+export const ALLOWED_RESOURCE_FILTERS: Record<string, Set<string>> = {
+  [ExportResource.USERS]: new Set(['status', 'role', 'clamp']),
+  [ExportResource.WAREHOUSES]: new Set(['status', 'city', 'clamp']),
+  [ExportResource.AUDIT_LOGS]: new Set(['action', 'entity_type', 'from_date', 'to_date', 'clamp']),
+  [ExportResource.LEDGERS]: new Set([
+    'from_date',
+    'to_date',
+    'period_start',
+    'period_end',
+    'warehouse_id',
+    'branch_id',
+    'carrier_account_id',
+    'carrier_code',
+    'clamp',
+  ]),
+};
+
 export const ALLOWED_EXPORT_STATUSES = new Set<string>([
   ExportJobStatus.PENDING,
   ExportJobStatus.PROCESSING,
@@ -114,7 +131,53 @@ export function validateCreateExportJobDto(body: unknown): {
         message: 'Bộ lọc filters phải là một đối tượng key-value hợp lệ',
       });
     } else {
-      parsedFilters = raw.filters as Record<string, unknown>;
+      const filtersObj = raw.filters as Record<string, unknown>;
+      const resourceStr = typeof raw.resource === 'string' ? raw.resource : '';
+      const allowedKeys = ALLOWED_RESOURCE_FILTERS[resourceStr];
+
+      for (const [key, val] of Object.entries(filtersObj)) {
+        if (allowedKeys && !allowedKeys.has(key)) {
+          errors.push({
+            field: `filters.${key}`,
+            code: 'UNSUPPORTED_FILTER',
+            message: `Bộ lọc '${key}' không được hỗ trợ cho tài nguyên '${resourceStr}'`,
+          });
+          continue;
+        }
+
+        if (key === 'clamp') {
+          if (typeof val !== 'boolean') {
+            errors.push({
+              field: 'filters.clamp',
+              code: 'INVALID_TYPE',
+              message: 'Bộ lọc clamp phải là kiểu boolean',
+            });
+          }
+        } else if (
+          key === 'from_date' ||
+          key === 'to_date' ||
+          key === 'period_start' ||
+          key === 'period_end'
+        ) {
+          if (typeof val !== 'string' || isNaN(Date.parse(val))) {
+            errors.push({
+              field: `filters.${key}`,
+              code: 'INVALID_DATE',
+              message: `Bộ lọc ${key} phải là chuỗi thời gian hợp lệ (ISO 8601)`,
+            });
+          }
+        } else {
+          if (val !== undefined && val !== null && typeof val !== 'string') {
+            errors.push({
+              field: `filters.${key}`,
+              code: 'INVALID_TYPE',
+              message: `Bộ lọc ${key} phải là chuỗi ký tự`,
+            });
+          }
+        }
+      }
+
+      parsedFilters = filtersObj;
     }
   }
 
