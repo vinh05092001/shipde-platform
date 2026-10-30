@@ -46,6 +46,19 @@ Allowed paths and exact API, event, migration, configuration and consumer contra
 | COM-04-08 | Revision is promoted or superseded | Explicit promotion applies all-or-nothing mutations to domain entities (branches/warehouses); marks revision PROMOTED and prior revisions SUPERSEDED | Promotion and state transition tests | PASS — Verified in `imports.unit.spec.ts` & `imports.supertest.spec.ts` (all-or-nothing mutations, PROMOTED and SUPERSEDED states) |
 | COM-04-09 | Import action audited | Audit log records IMPORT_PROMOTED with masked PII and actor context; canonical errors include correlation ID | Audit and error tests | PASS — Verified in `imports.unit.spec.ts` (PII-masked audit logging, correlation ID) |
 | COM-04-10 | SCR-IMPORT-01 UI presentation | Web UI states show truthful results and usable recovery | UI acceptance tests | PASS — Verified in `imports-page-states.test.ts` (SCR-IMPORT-01 UI states: loading, empty, error, forbidden, detail, control totals, row issues) |
+| P0-Finding-1 | SCR-IMPORT-01 live data binding and row issues compatibility | UI accepts array and paginated items, binds both `issues` and `issues_json` | Web UI tests | PASS — Verified in `imports-page-states.test.ts` |
+| P0-Finding-2 | Authenticated downloads for template and issue export | Bearer token sent on fetch; no unauthenticated window.open | Web UI and API auth tests | PASS — Verified in `page.tsx` authenticated blob download |
+| P0-Finding-3 | StorageService local filesystem fallback persistence | Non-S3 uploads write raw bytes to disk storage; fails closed on error | Storage and API tests | PASS — Verified in `storage.service.ts` |
+| P0-Finding-4 | Branch migration schema alignment | DB migration includes ALTER for existing branches and legacy address/phone columns | Migration review and Prisma check | PASS — Verified in `migration.sql` |
+| P0-Finding-5 | XLSX column shifting & valid PKZIP CRC-32 | Cell references parsed by coordinates; PKZIP checksum verified | Parser tests | PASS — Verified in `imports.unit.spec.ts` |
+| P0-Finding-6 | Non-destructive branch/warehouse updates & multi-default check | Partial imports preserve existing values; rejects multiple defaults | Service unit tests | PASS — Verified in `imports.unit.spec.ts` (selective updates, MULTIPLE_DEFAULT_BRANCHES) |
+| P0-Finding-7 | FEAT-ORG-02 default-branch atomicity preserved | main branch merges cleanly with zero regressions to branches service/tests | Git diff against origin/main | PASS — Diff verified against origin/main |
+| P0-Finding-8 | Supertest revision promotion ordering & cascade cleanup | Revision sequence respects latest revision rules; tenant cascade cleanup | Supertest suite | PASS — Verified in `imports.supertest.spec.ts` |
+| P0-Finding-9 | Security gate & controller tooling preserved | ci-gate.js, orchestrate.js, isolation-launcher.js intact | Git diff against origin/main | PASS — No modified tool/gate files |
+| P1-Finding-10 | Permission checks without hardcoded OWNER role bypass | Server verifies exact FEAT-RBAC-02 scopes; UI checks iam:shop_config | RBAC tests | PASS — Verified in `imports.unit.spec.ts` and `page.tsx` |
+| P1-Finding-11 | Branch status casing and legacy contact fields | Status uppercase (ACTIVE/INACTIVE); address and phone columns filled | Service unit tests | PASS — Verified in `imports.unit.spec.ts` |
+| P1-Finding-12 | Revision calculation and promotion concurrency locking | Merchant row locking for upload revision and promotion; unique idempotency index | Concurrency and DB tests | PASS — Verified in `imports.service.ts` and `migration.sql` |
+| P1-Finding-13 | Lifecycle audit logs and SCR-IMPORT-01 UI navigation | Audit on upload and entity mutation; mapping preview & revision history UI tabs | Service and Web UI tests | PASS — Verified in `imports.unit.spec.ts` and `imports-page-states.test.ts` |
 
 ## Verification and review
 

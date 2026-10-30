@@ -283,6 +283,78 @@ async function runImportsSupertestSuite() {
     }
 
     // ------------------------------------------------------------------------
+    // COM-04-07: Scope Enforcement per row (FEAT-RBAC-02 & Decision 3)
+    // Must be tested while import1Id is the latest revision (Finding 8)
+    // ------------------------------------------------------------------------
+    {
+      // scopedUserA only has scope for whCode1 (WH-A-01-xxx), but import1Id contains whCode1 AND whCode2!
+      const resScopedPromote = await request(server)
+        .post(`/api/v1/imports/${import1Id}/promote`)
+        .set('Authorization', `Bearer ${scopedUserA.token}`);
+
+      assert.strictEqual(resScopedPromote.status, 403);
+      assert.strictEqual(resScopedPromote.body.error?.code, 'WAREHOUSE_SCOPE_UNAUTHORIZED');
+
+      // noPermUserA lacks iam:shop_config
+      const resNoPerm = await request(server)
+        .post(`/api/v1/imports/${import1Id}/promote`)
+        .set('Authorization', `Bearer ${noPermUserA.token}`);
+
+      assert.strictEqual(resNoPerm.status, 403);
+
+      // Cross-tenant: Owner B accessing Merchant A's import -> 404
+      const resCrossTenant = await request(server)
+        .get(`/api/v1/imports/${import1Id}`)
+        .set('Authorization', `Bearer ${ownerB.token}`);
+
+      assert.strictEqual(resCrossTenant.status, 404);
+      console.log(
+        'PASS: COM-04-07 Scope enforcement per row, capability check, and tenant isolation'
+      );
+    }
+
+    // ------------------------------------------------------------------------
+    // COM-04-08 & COM-04-09: Explicit Promotion by Owner & Audit Log verification
+    // ------------------------------------------------------------------------
+    {
+      const resPromote = await request(server)
+        .post(`/api/v1/imports/${import1Id}/promote`)
+        .set('Authorization', `Bearer ${ownerA.token}`);
+
+      assert.strictEqual(resPromote.status, 200);
+      assert.strictEqual(resPromote.body.data.status, ImportStatus.PROMOTED);
+      assert.strictEqual(resPromote.body.data.promoted_rows_count, 2);
+
+      // Verify warehouses were persisted in DB
+      const dbWh1 = await prisma.warehouse.findUnique({
+        where: { merchant_id_code: { merchant_id: merchantIdA, code: whCode1 } },
+      });
+      assert.ok(dbWh1);
+      assert.strictEqual(dbWh1.name, 'Kho Tân Bình');
+      assert.strictEqual(dbWh1.is_default, true);
+
+      const dbWh2 = await prisma.warehouse.findUnique({
+        where: { merchant_id_code: { merchant_id: merchantIdA, code: whCode2 } },
+      });
+      assert.ok(dbWh2);
+      assert.strictEqual(dbWh2.name, 'Kho Long Biên');
+
+      // Verify Audit Log was recorded with masked values
+      const audit = await prisma.auditLog.findFirst({
+        where: {
+          merchant_id: merchantIdA,
+          action: 'IMPORT_PROMOTED',
+          entity_id: import1Id,
+        },
+      });
+      assert.ok(audit);
+      assert.strictEqual(audit.user_id, ownerA.userId);
+      console.log(
+        'PASS: COM-04-08 & COM-04-09 Explicit promotion, persistence, and masked audit log'
+      );
+    }
+
+    // ------------------------------------------------------------------------
     // COM-04-02: Invalid file type / Malware / Missing content -> 400
     // ------------------------------------------------------------------------
     {
@@ -364,83 +436,12 @@ async function runImportsSupertestSuite() {
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-07: Scope Enforcement per row (FEAT-RBAC-02 & Decision 3)
-    // ------------------------------------------------------------------------
-    {
-      // scopedUserA only has scope for whCode1 (WH-A-01-xxx), but import1Id contains whCode1 AND whCode2!
-      const resScopedPromote = await request(server)
-        .post(`/api/v1/imports/${import1Id}/promote`)
-        .set('Authorization', `Bearer ${scopedUserA.token}`);
-
-      assert.strictEqual(resScopedPromote.status, 403);
-      assert.strictEqual(resScopedPromote.body.error?.code, 'WAREHOUSE_SCOPE_UNAUTHORIZED');
-
-      // noPermUserA lacks iam:shop_config
-      const resNoPerm = await request(server)
-        .post(`/api/v1/imports/${import1Id}/promote`)
-        .set('Authorization', `Bearer ${noPermUserA.token}`);
-
-      assert.strictEqual(resNoPerm.status, 403);
-
-      // Cross-tenant: Owner B accessing Merchant A's import -> 404
-      const resCrossTenant = await request(server)
-        .get(`/api/v1/imports/${import1Id}`)
-        .set('Authorization', `Bearer ${ownerB.token}`);
-
-      assert.strictEqual(resCrossTenant.status, 404);
-      console.log(
-        'PASS: COM-04-07 Scope enforcement per row, capability check, and tenant isolation'
-      );
-    }
-
-    // ------------------------------------------------------------------------
-    // COM-04-08 & COM-04-09: Explicit Promotion by Owner & Audit Log verification
-    // ------------------------------------------------------------------------
-    {
-      const resPromote = await request(server)
-        .post(`/api/v1/imports/${import1Id}/promote`)
-        .set('Authorization', `Bearer ${ownerA.token}`);
-
-      assert.strictEqual(resPromote.status, 200);
-      assert.strictEqual(resPromote.body.data.status, ImportStatus.PROMOTED);
-      assert.strictEqual(resPromote.body.data.promoted_rows_count, 2);
-
-      // Verify warehouses were persisted in DB
-      const dbWh1 = await prisma.warehouse.findUnique({
-        where: { merchant_id_code: { merchant_id: merchantIdA, code: whCode1 } },
-      });
-      assert.ok(dbWh1);
-      assert.strictEqual(dbWh1.name, 'Kho Tân Bình');
-      assert.strictEqual(dbWh1.is_default, true);
-
-      const dbWh2 = await prisma.warehouse.findUnique({
-        where: { merchant_id_code: { merchant_id: merchantIdA, code: whCode2 } },
-      });
-      assert.ok(dbWh2);
-      assert.strictEqual(dbWh2.name, 'Kho Long Biên');
-
-      // Verify Audit Log was recorded with masked values
-      const audit = await prisma.auditLog.findFirst({
-        where: {
-          merchant_id: merchantIdA,
-          action: 'IMPORT_PROMOTED',
-          entity_id: import1Id,
-        },
-      });
-      assert.ok(audit);
-      assert.strictEqual(audit.user_id, ownerA.userId);
-      console.log(
-        'PASS: COM-04-08 & COM-04-09 Explicit promotion, persistence, and masked audit log'
-      );
-    }
-
-    // ------------------------------------------------------------------------
     // COM-04-08: New revision supersedes prior revision (Decision 2)
     // ------------------------------------------------------------------------
     {
       const newRevisionCsv = `code,name,status,is_default,contact_name,contact_phone,contact_email,address_line,ward,district,city\n${whCode1},Kho Tân Bình V2,active,true,Nguyễn Văn A,0901234567,tanbinh@example.com,55 Cộng Hòa Mới,Phường 13,Tân Bình,TP.HCM`;
 
-      const resRev2 = await request(server)
+      const resRev3 = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
         .send({
@@ -449,24 +450,24 @@ async function runImportsSupertestSuite() {
           content: newRevisionCsv,
         });
 
-      assert.strictEqual(resRev2.status, 201);
-      assert.strictEqual(resRev2.body.data.import.revision, 2);
-      const import2Id = resRev2.body.data.import.id;
+      assert.strictEqual(resRev3.status, 201);
+      assert.strictEqual(resRev3.body.data.import.revision, 3);
+      const import3Id = resRev3.body.data.import.id;
 
-      // Promote revision 2
-      const resPromoteRev2 = await request(server)
-        .post(`/api/v1/imports/${import2Id}/promote`)
+      // Promote revision 3
+      const resPromoteRev3 = await request(server)
+        .post(`/api/v1/imports/${import3Id}/promote`)
         .set('Authorization', `Bearer ${ownerA.token}`);
 
-      assert.strictEqual(resPromoteRev2.status, 200);
+      assert.strictEqual(resPromoteRev3.status, 200);
 
       // Verify revision 1 is now SUPERSEDED
       const dbImp1 = await prisma.import.findUnique({ where: { id: import1Id } });
       assert.strictEqual(dbImp1?.status, ImportStatus.SUPERSEDED);
 
-      // Verify revision 2 is PROMOTED
-      const dbImp2 = await prisma.import.findUnique({ where: { id: import2Id } });
-      assert.strictEqual(dbImp2?.status, ImportStatus.PROMOTED);
+      // Verify revision 3 is PROMOTED
+      const dbImp3 = await prisma.import.findUnique({ where: { id: import3Id } });
+      assert.strictEqual(dbImp3?.status, ImportStatus.PROMOTED);
       console.log('PASS: COM-04-08 New revision promotion supersedes prior revision');
     }
 
@@ -507,12 +508,29 @@ async function runImportsSupertestSuite() {
 
     console.log('🎉 ALL FEAT-COM-04 SUPERTEST INTEGRATION TESTS PASSED!');
   } finally {
-    // Clean up only our created tenant records (Rule 9)
+    // Clean up only our created tenant records (Rule 9 & Finding 8)
+    const cleanupTenant = async (mId: string) => {
+      if (!mId) return;
+      try {
+        await prisma.importRow.deleteMany({ where: { import: { merchant_id: mId } } });
+        await prisma.import.deleteMany({ where: { merchant_id: mId } });
+        await prisma.warehouse.deleteMany({ where: { merchant_id: mId } });
+        await prisma.branch.deleteMany({ where: { merchant_id: mId } });
+        await prisma.auditLog.deleteMany({ where: { merchant_id: mId } });
+        await prisma.deviceSession.deleteMany({ where: { merchant_id: mId } });
+        await prisma.user.deleteMany({ where: { merchant_id: mId } });
+        await prisma.merchant.delete({ where: { id: mId } });
+      } catch (cleanupErr) {
+        // Fallback for foreign key constraints or partial states
+        await prisma.merchant.delete({ where: { id: mId } }).catch(() => {});
+      }
+    };
+
     if (merchantIdA) {
-      await prisma.merchant.delete({ where: { id: merchantIdA } }).catch(() => {});
+      await cleanupTenant(merchantIdA);
     }
     if (merchantIdB) {
-      await prisma.merchant.delete({ where: { id: merchantIdB } }).catch(() => {});
+      await cleanupTenant(merchantIdB);
     }
     await app.close();
   }

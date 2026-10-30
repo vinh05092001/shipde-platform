@@ -200,7 +200,7 @@ export function validateImportRow(
         }
         normalized[col.key] = null;
       } else {
-        validateFieldFormat(col.key, val, rowNumber, issues, normalized);
+        validateFieldFormat(col.key, val, rowNumber, issues, normalized, template.type);
       }
     }
   }
@@ -228,7 +228,8 @@ function validateFieldFormat(
   val: string,
   rowNumber: number,
   issues: ImportRowIssue[],
-  normalized: Record<string, any>
+  normalized: Record<string, any>,
+  templateType?: string
 ): void {
   switch (field) {
     case 'name':
@@ -253,7 +254,12 @@ function validateFieldFormat(
           severity: 'BLOCKING',
         });
       } else {
-        normalized[field] = s;
+        normalized[field] =
+          templateType === ImportTemplateType.BRANCHES
+            ? s === 'active'
+              ? 'ACTIVE'
+              : 'INACTIVE'
+            : s;
       }
       break;
 

@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS "branches" (
     "merchant_id" UUID NOT NULL,
     "name" VARCHAR(255) NOT NULL,
     "code" VARCHAR(64) NOT NULL,
-    "status" VARCHAR(32) NOT NULL DEFAULT 'active',
+    "address" TEXT,
+    "phone" VARCHAR(32),
+    "status" VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
     "is_default" BOOLEAN NOT NULL DEFAULT false,
     "contact_name" VARCHAR(255),
     "contact_phone" VARCHAR(32),
@@ -25,6 +27,17 @@ CREATE TABLE IF NOT EXISTS "branches" (
     CONSTRAINT "branches_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "branches_merchant_id_fkey" FOREIGN KEY ("merchant_id") REFERENCES "merchants"("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
+
+-- Ensure existing branches table gains all required columns and correct status default
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "address" TEXT;
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "phone" VARCHAR(32);
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "contact_name" VARCHAR(255);
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "contact_phone" VARCHAR(32);
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "address_line" TEXT;
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "ward" VARCHAR(128);
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "district" VARCHAR(128);
+ALTER TABLE "branches" ADD COLUMN IF NOT EXISTS "city" VARCHAR(128);
+ALTER TABLE "branches" ALTER COLUMN "status" SET DEFAULT 'ACTIVE';
 
 CREATE UNIQUE INDEX IF NOT EXISTS "branches_merchant_id_code_key" ON "branches"("merchant_id", "code");
 CREATE UNIQUE INDEX IF NOT EXISTS "branches_id_merchant_id_key" ON "branches"("id", "merchant_id");
@@ -61,6 +74,7 @@ CREATE TABLE IF NOT EXISTS "imports" (
 CREATE UNIQUE INDEX IF NOT EXISTS "imports_merchant_id_template_type_revision_key" ON "imports"("merchant_id", "template_type", "revision");
 CREATE INDEX IF NOT EXISTS "imports_merchant_id_template_type_idx" ON "imports"("merchant_id", "template_type");
 CREATE INDEX IF NOT EXISTS "imports_merchant_id_file_hash_idx" ON "imports"("merchant_id", "file_hash");
+CREATE UNIQUE INDEX IF NOT EXISTS "imports_merchant_id_idempotency_key_key" ON "imports"("merchant_id", "idempotency_key") WHERE "idempotency_key" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "imports_merchant_id_idempotency_key_idx" ON "imports"("merchant_id", "idempotency_key");
 CREATE INDEX IF NOT EXISTS "imports_merchant_id_status_idx" ON "imports"("merchant_id", "status");
 

@@ -33,6 +33,7 @@ export default function ImportsSettingsPage({
   const [imports, setImports] = useState<ImportSummary[]>(initialImports || []);
   const [selectedImport, setSelectedImport] = useState<ImportSummary | null>(initialSelectedImport);
   const [selectedRows, setSelectedRows] = useState<ImportRow[]>(initialSelectedRows || []);
+  const [revisions, setRevisions] = useState<ImportSummary[]>([]);
   const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
   const [loading, setLoading] = useState<boolean>(initialLoading ?? initialImports === null);
   const [error, setError] = useState<string | null>(initialError);
@@ -61,12 +62,12 @@ export default function ImportsSettingsPage({
       }
 
       const json = await res.json();
-      if (json.success && json.data?.items) {
-        setImports(json.data.items);
-        // User with permission iam:shop_config has canEdit
-        setCanEdit(
-          Boolean(user?.role === 'OWNER' || user?.permissions?.includes('iam:shop_config'))
-        );
+      if (json.success) {
+        // Handle both json.data as array and json.data.items for flexibility (Finding 1)
+        const items = Array.isArray(json.data) ? json.data : json.data?.items || [];
+        setImports(items);
+        // Server-side permission check: never hardcode OWNER role (Finding 10)
+        setCanEdit(Boolean(user?.permissions?.includes('iam:shop_config')));
       }
     } catch (err: any) {
       setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý nhập liệu');
@@ -92,15 +93,20 @@ export default function ImportsSettingsPage({
 
         if (detailRes.ok) {
           const detailJson = await detailRes.json();
-          if (detailJson.success && detailJson.data?.import) {
-            setSelectedImport(detailJson.data.import);
+          if (detailJson.success) {
+            const imp = detailJson.data?.import || detailJson.data;
+            setSelectedImport(imp);
+            setRevisions(detailJson.data?.revisions || []);
           }
         }
 
         if (rowsRes.ok) {
           const rowsJson = await rowsRes.json();
-          if (rowsJson.success && rowsJson.data?.items) {
-            setSelectedRows(rowsJson.data.items);
+          if (rowsJson.success) {
+            const rowItems = Array.isArray(rowsJson.data)
+              ? rowsJson.data
+              : rowsJson.data?.items || [];
+            setSelectedRows(rowItems);
           }
         }
       } catch (err: any) {
@@ -117,12 +123,41 @@ export default function ImportsSettingsPage({
     }
   }, [initialImports, fetchImports]);
 
-  const handleDownloadTemplate = (
+  const handleDownloadTemplate = async (
     templateType: 'branches' | 'warehouses',
     format: 'csv' | 'xlsx'
   ) => {
-    const url = `${API_BASE}/api/v1/imports/templates/${templateType}?format=${format}`;
-    window.open(url, '_blank');
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(
+        `${API_BASE}/api/v1/imports/templates/${templateType}?format=${format}`,
+        { headers }
+      );
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải mẫu nhập liệu');
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition');
+      let filename = `template_${templateType}.${format}`;
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        if (match && match[1]) filename = match[1];
+      }
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setError(err?.message || 'Lỗi khi tải mẫu nhập liệu');
+    }
   };
 
   const handleUpload = async (templateType: 'branches' | 'warehouses', file: File) => {
@@ -189,9 +224,37 @@ export default function ImportsSettingsPage({
     await fetchImportDetail(id);
   };
 
-  const handleExportIssues = (id: string) => {
-    const url = `${API_BASE}/api/v1/imports/${id}/issues/export`;
-    window.open(url, '_blank');
+  const handleExportIssues = async (id: string) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(`${API_BASE}/api/v1/imports/${id}/issues/export`, {
+        headers,
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải báo cáo lỗi');
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition');
+      let filename = `import_${id}_issues.csv`;
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        if (match && match[1]) filename = match[1];
+      }
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: any) {
+      setError(err?.message || 'Lỗi khi tải báo cáo lỗi');
+    }
   };
 
   return (
@@ -221,6 +284,7 @@ export default function ImportsSettingsPage({
           imports={imports}
           selectedImport={selectedImport}
           selectedImportRows={selectedRows}
+          revisions={revisions}
           loading={loading}
           canEdit={canEdit}
           error={error}

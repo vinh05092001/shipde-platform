@@ -3649,9 +3649,11 @@ components:
           type: integer
         raw_data:
           type: object
+          additionalProperties: true
         normalized_data:
           type: object
           nullable: true
+          additionalProperties: true
         status:
           type: string
           enum: [VALID, ERROR, WARNING]
@@ -3659,6 +3661,10 @@ components:
           type: string
           nullable: true
         issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ImportRowIssue'
+        issues_json:
           type: array
           items:
             $ref: '#/components/schemas/ImportRowIssue'

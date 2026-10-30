@@ -31,6 +31,7 @@ export interface ImportManagementViewProps {
   imports?: ImportSummary[];
   selectedImport?: ImportSummary | null;
   selectedImportRows?: ImportRow[];
+  revisions?: ImportSummary[];
   loading?: boolean;
   canEdit?: boolean;
   error?: string | null;
@@ -47,6 +48,7 @@ export function ImportManagementView({
   imports = [],
   selectedImport = null,
   selectedImportRows = [],
+  revisions = [],
   loading = false,
   canEdit = false,
   error = null,
@@ -58,6 +60,7 @@ export function ImportManagementView({
   onPromote,
   onExportIssues,
 }: ImportManagementViewProps) {
+  const [activeTab, setActiveTab] = useState<'rows' | 'mapping' | 'revisions'>('rows');
   const [templateFilter, setTemplateFilter] = useState<'ALL' | 'branches' | 'warehouses'>('ALL');
   const [rowStatusFilter, setRowStatusFilter] = useState<'ALL' | 'VALID' | 'ERROR' | 'WARNING'>(
     'ALL'
@@ -539,100 +542,398 @@ export function ImportManagementView({
                   </div>
                 </div>
 
-                {/* Rows Table */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-gray-800">
-                      Chi tiết dữ liệu từng dòng ({filteredRows.length})
-                    </h3>
-                    <select
-                      value={rowStatusFilter}
-                      onChange={(e) => setRowStatusFilter(e.target.value as any)}
-                      aria-label="Lọc theo trạng thái dòng"
-                      className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
-                    >
-                      <option value="ALL">Tất cả trạng thái</option>
-                      <option value="VALID">Chỉ dòng hợp lệ (VALID)</option>
-                      <option value="ERROR">Chỉ dòng lỗi (ERROR)</option>
-                      <option value="WARNING">Chỉ dòng cảnh báo (WARNING)</option>
-                    </select>
-                  </div>
+                {/* Navigation Tabs for SCR-IMPORT-01: Rows, Mapping Preview, Revision History */}
+                <div className="flex border-b border-gray-200 gap-6 text-xs font-medium">
+                  <button
+                    onClick={() => setActiveTab('rows')}
+                    className={`pb-2.5 transition-colors border-b-2 ${
+                      activeTab === 'rows'
+                        ? 'border-indigo-600 text-indigo-600 font-semibold'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Dữ liệu từng dòng ({filteredRows.length})
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('mapping')}
+                    className={`pb-2.5 transition-colors border-b-2 ${
+                      activeTab === 'mapping'
+                        ? 'border-indigo-600 text-indigo-600 font-semibold'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Xem trước ánh xạ cột (Mapping Preview)
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('revisions')}
+                    className={`pb-2.5 transition-colors border-b-2 ${
+                      activeTab === 'revisions'
+                        ? 'border-indigo-600 text-indigo-600 font-semibold'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Lịch sử phiên bản (Revision History)
+                  </button>
+                </div>
 
-                  {filteredRows.length === 0 ? (
-                    <div className="py-6 text-center text-gray-400 text-xs">
-                      Không có dòng nào phù hợp với bộ lọc đã chọn.
-                    </div>
-                  ) : (
+                {activeTab === 'mapping' ? (
+                  /* Mapping Preview Section (SCR-IMPORT-01) */
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-500">
+                      Bảng ánh xạ các cột từ tệp nguồn vào cấu trúc thực thể{' '}
+                      <strong>
+                        {selectedImport.template_type === 'branches' ? 'Chi nhánh' : 'Kho hàng'}
+                      </strong>
+                      .
+                    </p>
                     <div className="border border-gray-200 rounded-lg overflow-x-auto">
                       <table className="w-full text-left text-xs">
                         <thead className="bg-gray-50 border-b border-gray-200 text-gray-600">
                           <tr>
-                            <th className="py-2 px-3">Dòng #</th>
-                            <th className="py-2 px-3">Mã scope</th>
-                            <th className="py-2 px-3">Trạng thái</th>
-                            <th className="py-2 px-3">Chi tiết & Lỗi</th>
+                            <th className="py-2 px-3">Cột tệp tải lên</th>
+                            <th className="py-2 px-3">Trường hệ thống</th>
+                            <th className="py-2 px-3">Quy định</th>
+                            <th className="py-2 px-3">Giá trị mẫu (Dòng đầu)</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {filteredRows.map((row) => {
-                            const isError = row.status === ImportRowStatus.ERROR;
-                            const isWarning = row.status === ImportRowStatus.WARNING;
-                            const issues = (row.issues_json as any[]) || [];
-
-                            return (
-                              <tr key={row.id} className="hover:bg-gray-50">
-                                <td className="py-2 px-3 font-mono font-medium text-gray-700">
-                                  {row.row_number}
-                                </td>
-                                <td className="py-2 px-3 font-mono text-gray-900">
-                                  {row.scope_identifier || '-'}
-                                </td>
-                                <td className="py-2 px-3">
-                                  <span
-                                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                      isError
-                                        ? 'bg-rose-100 text-rose-800'
-                                        : isWarning
-                                          ? 'bg-amber-100 text-amber-800'
-                                          : 'bg-emerald-100 text-emerald-800'
-                                    }`}
-                                  >
-                                    {row.status}
-                                  </span>
-                                </td>
-                                <td className="py-2 px-3">
-                                  {issues.length === 0 ? (
-                                    <span className="text-gray-400 text-[11px]">Hợp lệ</span>
-                                  ) : (
-                                    <div className="space-y-1">
-                                      {issues.map((issue, idx) => (
-                                        <div
-                                          key={idx}
-                                          className="flex items-start gap-1 text-[11px]"
-                                        >
-                                          <span
-                                            className={`font-mono font-bold ${
-                                              issue.severity === ImportIssueSeverity.BLOCKING
-                                                ? 'text-rose-600'
-                                                : 'text-amber-600'
-                                            }`}
-                                          >
-                                            [{issue.code}]
-                                          </span>
-                                          <span className="text-gray-700">{issue.message}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
+                          {(selectedImport.template_type === 'branches'
+                            ? [
+                                {
+                                  col: 'code',
+                                  field: 'code',
+                                  rule: 'Bắt buộc (Định danh scope)',
+                                  sample: selectedImportRows[0]?.raw_data?.code,
+                                },
+                                {
+                                  col: 'name',
+                                  field: 'name',
+                                  rule: 'Bắt buộc (2-255 ký tự)',
+                                  sample: selectedImportRows[0]?.raw_data?.name,
+                                },
+                                {
+                                  col: 'contact_name',
+                                  field: 'contact_name',
+                                  rule: 'Tùy chọn',
+                                  sample: selectedImportRows[0]?.raw_data?.contact_name,
+                                },
+                                {
+                                  col: 'contact_phone',
+                                  field: 'contact_phone',
+                                  rule: 'Tùy chọn (Định dạng SĐT)',
+                                  sample: selectedImportRows[0]?.raw_data?.contact_phone,
+                                },
+                                {
+                                  col: 'address_line',
+                                  field: 'address_line',
+                                  rule: 'Tùy chọn (Địa chỉ chi tiết)',
+                                  sample: selectedImportRows[0]?.raw_data?.address_line,
+                                },
+                                {
+                                  col: 'ward',
+                                  field: 'ward',
+                                  rule: 'Tùy chọn (Phường/Xã)',
+                                  sample: selectedImportRows[0]?.raw_data?.ward,
+                                },
+                                {
+                                  col: 'district',
+                                  field: 'district',
+                                  rule: 'Tùy chọn (Quận/Huyện)',
+                                  sample: selectedImportRows[0]?.raw_data?.district,
+                                },
+                                {
+                                  col: 'city',
+                                  field: 'city',
+                                  rule: 'Tùy chọn (Tỉnh/Thành phố)',
+                                  sample: selectedImportRows[0]?.raw_data?.city,
+                                },
+                                {
+                                  col: 'is_default',
+                                  field: 'is_default',
+                                  rule: 'Tùy chọn (true/false, tối đa 1 mặc định)',
+                                  sample: selectedImportRows[0]?.raw_data?.is_default,
+                                },
+                                {
+                                  col: 'status',
+                                  field: 'status',
+                                  rule: 'Tùy chọn (ACTIVE/INACTIVE)',
+                                  sample: selectedImportRows[0]?.raw_data?.status,
+                                },
+                              ]
+                            : [
+                                {
+                                  col: 'code',
+                                  field: 'code',
+                                  rule: 'Bắt buộc (Định danh scope)',
+                                  sample: selectedImportRows[0]?.raw_data?.code,
+                                },
+                                {
+                                  col: 'name',
+                                  field: 'name',
+                                  rule: 'Bắt buộc (2-255 ký tự)',
+                                  sample: selectedImportRows[0]?.raw_data?.name,
+                                },
+                                {
+                                  col: 'contact_name',
+                                  field: 'contact_name',
+                                  rule: 'Tùy chọn',
+                                  sample: selectedImportRows[0]?.raw_data?.contact_name,
+                                },
+                                {
+                                  col: 'contact_phone',
+                                  field: 'contact_phone',
+                                  rule: 'Tùy chọn (Định dạng SĐT)',
+                                  sample: selectedImportRows[0]?.raw_data?.contact_phone,
+                                },
+                                {
+                                  col: 'contact_email',
+                                  field: 'contact_email',
+                                  rule: 'Tùy chọn (Email hợp lệ)',
+                                  sample: selectedImportRows[0]?.raw_data?.contact_email,
+                                },
+                                {
+                                  col: 'address_line',
+                                  field: 'address_line',
+                                  rule: 'Tùy chọn (Địa chỉ kho)',
+                                  sample: selectedImportRows[0]?.raw_data?.address_line,
+                                },
+                                {
+                                  col: 'ward',
+                                  field: 'ward',
+                                  rule: 'Tùy chọn (Phường/Xã)',
+                                  sample: selectedImportRows[0]?.raw_data?.ward,
+                                },
+                                {
+                                  col: 'district',
+                                  field: 'district',
+                                  rule: 'Tùy chọn (Quận/Huyện)',
+                                  sample: selectedImportRows[0]?.raw_data?.district,
+                                },
+                                {
+                                  col: 'city',
+                                  field: 'city',
+                                  rule: 'Tùy chọn (Tỉnh/Thành phố)',
+                                  sample: selectedImportRows[0]?.raw_data?.city,
+                                },
+                                {
+                                  col: 'postal_code',
+                                  field: 'postal_code',
+                                  rule: 'Tùy chọn',
+                                  sample: selectedImportRows[0]?.raw_data?.postal_code,
+                                },
+                                {
+                                  col: 'cutoff_time',
+                                  field: 'cutoff_time',
+                                  rule: 'Tùy chọn (HH:MM)',
+                                  sample: selectedImportRows[0]?.raw_data?.cutoff_time,
+                                },
+                                {
+                                  col: 'is_default',
+                                  field: 'is_default',
+                                  rule: 'Tùy chọn (true/false, tối đa 1 mặc định)',
+                                  sample: selectedImportRows[0]?.raw_data?.is_default,
+                                },
+                                {
+                                  col: 'status',
+                                  field: 'status',
+                                  rule: 'Tùy chọn (active/inactive)',
+                                  sample: selectedImportRows[0]?.raw_data?.status,
+                                },
+                              ]
+                          ).map((m, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="py-2 px-3 font-mono font-medium text-gray-800">
+                                {m.col}
+                              </td>
+                              <td className="py-2 px-3 font-mono text-indigo-600 font-medium">
+                                {m.field}
+                              </td>
+                              <td className="py-2 px-3 text-gray-600">{m.rule}</td>
+                              <td className="py-2 px-3 font-mono text-gray-700">
+                                {m.sample !== undefined && m.sample !== null ? (
+                                  String(m.sample)
+                                ) : (
+                                  <span className="text-gray-300">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
                         </tbody>
                       </table>
                     </div>
-                  )}
-                </div>
+                  </div>
+                ) : activeTab === 'revisions' ? (
+                  /* Revision History Section (SCR-IMPORT-01) */
+                  <div className="space-y-3">
+                    <p className="text-xs text-gray-500">
+                      Danh sách các phiên bản của mẫu nhập liệu{' '}
+                      <strong>{selectedImport.template_type}</strong>.
+                    </p>
+                    <div className="border border-gray-200 rounded-lg overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-gray-50 border-b border-gray-200 text-gray-600">
+                          <tr>
+                            <th className="py-2 px-3">Phiên bản</th>
+                            <th className="py-2 px-3">Tệp tin</th>
+                            <th className="py-2 px-3">Trạng thái</th>
+                            <th className="py-2 px-3">Dòng hợp lệ / lỗi</th>
+                            <th className="py-2 px-3">Thời gian tạo</th>
+                            <th className="py-2 px-3 text-right">Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {(revisions.length > 0
+                            ? revisions
+                            : imports.filter(
+                                (i) => i.template_type === selectedImport.template_type
+                              )
+                          ).map((rev) => (
+                            <tr
+                              key={rev.id}
+                              className={`hover:bg-gray-50 ${rev.id === selectedImport.id ? 'bg-indigo-50/50' : ''}`}
+                            >
+                              <td className="py-2 px-3 font-mono font-bold text-indigo-700">
+                                Rev {rev.revision}
+                              </td>
+                              <td className="py-2 px-3 font-medium text-gray-900">
+                                {rev.file_name}
+                              </td>
+                              <td className="py-2 px-3">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    rev.status === ImportStatus.PROMOTED
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : rev.status === ImportStatus.SUPERSEDED
+                                        ? 'bg-gray-100 text-gray-700'
+                                        : rev.status === ImportStatus.BLOCKED
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : 'bg-blue-100 text-blue-800'
+                                  }`}
+                                >
+                                  {rev.status}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-gray-600">
+                                {rev.valid_rows} / {rev.total_rows} ({rev.error_rows} lỗi)
+                              </td>
+                              <td className="py-2 px-3 text-gray-500">
+                                {new Date(rev.created_at).toLocaleString('vi-VN')}
+                              </td>
+                              <td className="py-2 px-3 text-right">
+                                {rev.id !== selectedImport.id && onSelectImport && (
+                                  <button
+                                    onClick={() => onSelectImport(rev.id)}
+                                    aria-label={`Xem phiên bản ${rev.revision}`}
+                                    className="px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded"
+                                  >
+                                    Xem
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  /* Rows Table */
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-gray-800">
+                        Chi tiết dữ liệu từng dòng ({filteredRows.length})
+                      </h3>
+                      <select
+                        value={rowStatusFilter}
+                        onChange={(e) => setRowStatusFilter(e.target.value as any)}
+                        aria-label="Lọc theo trạng thái dòng"
+                        className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
+                      >
+                        <option value="ALL">Tất cả trạng thái</option>
+                        <option value="VALID">Chỉ dòng hợp lệ (VALID)</option>
+                        <option value="ERROR">Chỉ dòng lỗi (ERROR)</option>
+                        <option value="WARNING">Chỉ dòng cảnh báo (WARNING)</option>
+                      </select>
+                    </div>
+
+                    {filteredRows.length === 0 ? (
+                      <div className="py-6 text-center text-gray-400 text-xs">
+                        Không có dòng nào phù hợp với bộ lọc đã chọn.
+                      </div>
+                    ) : (
+                      <div className="border border-gray-200 rounded-lg overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-gray-50 border-b border-gray-200 text-gray-600">
+                            <tr>
+                              <th className="py-2 px-3">Dòng #</th>
+                              <th className="py-2 px-3">Mã scope</th>
+                              <th className="py-2 px-3">Trạng thái</th>
+                              <th className="py-2 px-3">Chi tiết & Lỗi</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {filteredRows.map((row) => {
+                              const isError = row.status === ImportRowStatus.ERROR;
+                              const isWarning = row.status === ImportRowStatus.WARNING;
+                              // Support both issues and issues_json from API or mocks (Finding 1)
+                              const issues =
+                                (row.issues as any[]) || ((row as any).issues_json as any[]) || [];
+
+                              return (
+                                <tr key={row.id} className="hover:bg-gray-50">
+                                  <td className="py-2 px-3 font-mono font-medium text-gray-700">
+                                    {row.row_number}
+                                  </td>
+                                  <td className="py-2 px-3 font-mono text-gray-900">
+                                    {row.scope_identifier || '-'}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <span
+                                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                        isError
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : isWarning
+                                            ? 'bg-amber-100 text-amber-800'
+                                            : 'bg-emerald-100 text-emerald-800'
+                                      }`}
+                                    >
+                                      {row.status}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {issues.length === 0 ? (
+                                      <span className="text-gray-400 text-[11px]">Hợp lệ</span>
+                                    ) : (
+                                      <div className="space-y-1">
+                                        {issues.map((issue, idx) => (
+                                          <div
+                                            key={idx}
+                                            className="flex items-start gap-1 text-[11px]"
+                                          >
+                                            <span
+                                              className={`font-mono font-bold ${
+                                                issue.severity === ImportIssueSeverity.BLOCKING
+                                                  ? 'text-rose-600'
+                                                  : 'text-amber-600'
+                                              }`}
+                                            >
+                                              [{issue.code}]
+                                            </span>
+                                            <span className="text-gray-700">{issue.message}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-500 shadow-sm">

@@ -321,6 +321,19 @@ export class ImportsService {
     }
 
     // Control totals
+    const defaultRows = validatedRows.filter((r) => r.normalizedData?.is_default === true);
+    if (defaultRows.length > 1) {
+      for (const dr of defaultRows) {
+        dr.status = 'ERROR';
+        dr.issues.push({
+          field: 'is_default',
+          code: 'MULTIPLE_DEFAULTS',
+          message: `Dòng ${dr.rowNumber}: Tệp chứa nhiều dòng được đánh dấu là mặc định. Chỉ được phép có tối đa một mặc định theo BR-BRANCH-03.`,
+          severity: 'BLOCKING',
+        });
+      }
+    }
+
     const totalRows = validatedRows.length;
     const validRows = validatedRows.filter((r) => r.status === 'VALID').length;
     const errorRows = validatedRows.filter((r) => r.status === 'ERROR').length;
@@ -337,12 +350,26 @@ export class ImportsService {
       warning_rows: warningRows,
     };
 
-    // 10. Private storage persistence
+    // 10. Private storage persistence (Finding 3: fails closed if persistence fails)
     const storageKey = `imports/${merchantId}/${dto.template_type}/rev${nextRevision}_${fileHash}.dat`;
-    const storagePath = await this.storageService.putObject(storageKey, fileBuffer, mimeType);
+    let storagePath: string;
+    try {
+      storagePath = await this.storageService.putObject(storageKey, fileBuffer, mimeType);
+    } catch (storageErr: any) {
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'STORAGE_ERROR',
+        `Không thể lưu trữ tệp tin tải lên: ${storageErr.message || 'Lỗi lưu trữ'}`,
+        false
+      );
+    }
 
     // 11. Transactional Database Ingestion
     const createdImport = await this.prisma.$transaction(async (tx) => {
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+      }
+
       const imp = await tx.import.create({
         data: {
           merchant_id: merchantId,
@@ -378,6 +405,29 @@ export class ImportsService {
       await tx.importRow.createMany({
         data: rowData,
       });
+
+      // Audit upload (Finding 13)
+      if (tx.auditLog?.create) {
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            actor: actor.role || 'OWNER',
+            action: 'IMPORT_UPLOADED',
+            entity_type: 'import',
+            entity_id: imp.id,
+            ip_address: clientIp ? this.hashIp(clientIp) : null,
+            new_value: {
+              template_type: imp.template_type,
+              revision: imp.revision,
+              file_name: imp.file_name,
+              file_hash: imp.file_hash,
+              total_rows: totalRows,
+              status: importStatus,
+            },
+          },
+        });
+      }
 
       return imp;
     });
@@ -610,6 +660,7 @@ export class ImportsService {
         status: r.status,
         scope_identifier: r.scope_identifier,
         issues: r.issues_json || [],
+        issues_json: r.issues_json || [],
         created_at: r.created_at.toISOString(),
       })),
       meta: {
@@ -785,12 +836,12 @@ export class ImportsService {
       );
     }
 
-    // Scope verification for every affected row (Decision 3 & FEAT-RBAC-02)
+    // Scope verification for every affected row (Decision 3 & FEAT-RBAC-02 - Finding 10: no OWNER hardcode)
     const liveScopes = await this.getActorScopes(actor);
 
     if (imp.template_type === ImportTemplateType.WAREHOUSES) {
       const actorWarehouseScopes = liveScopes.warehouse_scopes;
-      const isWildcard = actorWarehouseScopes.includes('*') || actor.role === 'OWNER';
+      const isWildcard = actorWarehouseScopes.includes('*');
 
       if (!isWildcard) {
         const unauthorizedCodes: string[] = [];
@@ -819,7 +870,7 @@ export class ImportsService {
       }
     } else if (imp.template_type === ImportTemplateType.BRANCHES) {
       const actorStoreScopes = liveScopes.store_scopes;
-      const isWildcard = actorStoreScopes.includes('*') || actor.role === 'OWNER';
+      const isWildcard = actorStoreScopes.includes('*');
 
       if (!isWildcard) {
         const unauthorizedCodes: string[] = [];
@@ -848,140 +899,436 @@ export class ImportsService {
       }
     }
 
-    // Atomic promotion transaction
+    // Atomic promotion transaction (Finding 6, 11, 12, 13)
     const now = new Date();
     let promotedCount = 0;
 
     await this.prisma.$transaction(async (tx) => {
+      // Merchant lock to prevent concurrent promotes or collisions
+      if (typeof tx.$queryRaw === 'function') {
+        await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
+      }
+
+      // BR-BRANCH-03: Single default check across all rows being imported
+      const defaultRows = allRows.filter((r) => (r.normalized_data as any)?.is_default === true);
+      if (defaultRows.length > 1) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'MULTIPLE_DEFAULT_BRANCHES',
+          'Không thể có nhiều hơn một chi nhánh hoặc kho mặc định trong cùng một lần nhập (BR-BRANCH-03)',
+          false
+        );
+      }
+
       // 1. Promote to target entity tables
       if (imp.template_type === ImportTemplateType.WAREHOUSES) {
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
-          const name = norm.name || code;
-          const status = norm.status || 'active';
-          const isDefault = norm.is_default === true;
-          const contactName = norm.contact_name || '';
-          const contactPhone = norm.contact_phone || '';
-          const contactEmail = norm.contact_email || null;
-          const addressLine = norm.address_line || '';
-          const ward = norm.ward || null;
-          const district = norm.district || '';
-          const city = norm.city || '';
-          const postalCode = norm.postal_code || null;
-          const cutoffTime = norm.cutoff_time || null;
+          const existingWarehouse = tx.warehouse?.findUnique
+            ? await tx.warehouse.findUnique({
+                where: { merchant_id_code: { merchant_id: merchantId, code } },
+              })
+            : null;
 
-          const addressJson = {
-            line: addressLine,
-            ward,
-            district,
-            city,
-            postal_code: postalCode,
-          };
+          const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
+          const isDefault = hasExplicitDefault
+            ? norm.is_default === true
+            : existingWarehouse
+              ? existingWarehouse.is_default
+              : false;
 
           if (isDefault) {
             // Unset previous default
             await tx.warehouse.updateMany({
-              where: { merchant_id: merchantId, is_default: true },
+              where: { merchant_id: merchantId, is_default: true, code: { not: code } },
               data: { is_default: false },
             });
           }
 
-          await tx.warehouse.upsert({
-            where: {
-              merchant_id_code: {
-                merchant_id: merchantId,
-                code,
-              },
-            },
-            create: {
-              merchant_id: merchantId,
-              name,
-              code,
-              status,
-              is_default: isDefault,
-              contact_name: contactName,
-              contact_phone: contactPhone,
-              contact_email: contactEmail,
-              address_line: addressLine,
+          let savedWhId = existingWarehouse?.id;
+          if (existingWarehouse) {
+            // Non-destructive update: preserve existing values for omitted optional fields (Finding 6)
+            const updateData: Record<string, any> = {};
+            if (norm.name) updateData.name = norm.name;
+            if (norm.status) updateData.status = norm.status.toLowerCase();
+            if (hasExplicitDefault) updateData.is_default = isDefault;
+            if (
+              norm.contact_name !== undefined &&
+              norm.contact_name !== null &&
+              norm.contact_name !== ''
+            ) {
+              updateData.contact_name = norm.contact_name;
+            }
+            if (
+              norm.contact_phone !== undefined &&
+              norm.contact_phone !== null &&
+              norm.contact_phone !== ''
+            ) {
+              updateData.contact_phone = norm.contact_phone;
+            }
+            if (
+              norm.contact_email !== undefined &&
+              norm.contact_email !== null &&
+              norm.contact_email !== ''
+            ) {
+              updateData.contact_email = norm.contact_email;
+            }
+            if (
+              norm.address_line !== undefined &&
+              norm.address_line !== null &&
+              norm.address_line !== ''
+            ) {
+              updateData.address_line = norm.address_line;
+            }
+            if (norm.ward !== undefined && norm.ward !== null && norm.ward !== '') {
+              updateData.ward = norm.ward;
+            }
+            if (norm.district !== undefined && norm.district !== null && norm.district !== '') {
+              updateData.district = norm.district;
+            }
+            if (norm.city !== undefined && norm.city !== null && norm.city !== '') {
+              updateData.city = norm.city;
+            }
+            if (
+              norm.postal_code !== undefined &&
+              norm.postal_code !== null &&
+              norm.postal_code !== ''
+            ) {
+              updateData.postal_code = norm.postal_code;
+            }
+            if (
+              norm.cutoff_time !== undefined &&
+              norm.cutoff_time !== null &&
+              norm.cutoff_time !== ''
+            ) {
+              updateData.cutoff_time = norm.cutoff_time;
+            }
+
+            const addressJson = {
+              line: updateData.address_line || existingWarehouse.address_line || '',
+              ward: updateData.ward !== undefined ? updateData.ward : existingWarehouse.ward,
+              district: updateData.district || existingWarehouse.district || '',
+              city: updateData.city || existingWarehouse.city || '',
+              postal_code:
+                updateData.postal_code !== undefined
+                  ? updateData.postal_code
+                  : existingWarehouse.postal_code,
+            };
+            updateData.address_json = addressJson;
+
+            const updatedWh = await tx.warehouse.update({
+              where: { id: existingWarehouse.id },
+              data: updateData,
+            });
+            savedWhId = updatedWh?.id || existingWarehouse.id;
+
+            if (tx.auditLog?.create) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: merchantId,
+                  user_id: actor.userId,
+                  actor: actor.role || 'OWNER',
+                  action: 'WAREHOUSE_UPDATED',
+                  entity_type: 'warehouse',
+                  entity_id: savedWhId,
+                  ip_address: clientIp ? this.hashIp(clientIp) : null,
+                  new_value: this.maskAuditData({
+                    code,
+                    name: updateData.name || existingWarehouse.name,
+                    is_default:
+                      updateData.is_default !== undefined
+                        ? updateData.is_default
+                        : existingWarehouse.is_default,
+                    status: updateData.status || existingWarehouse.status,
+                  }),
+                },
+              });
+            }
+          } else {
+            const name = norm.name || code;
+            const status = norm.status ? norm.status.toLowerCase() : 'active';
+            const contactName = norm.contact_name || '';
+            const contactPhone = norm.contact_phone || '';
+            const contactEmail = norm.contact_email || null;
+            const addressLine = norm.address_line || '';
+            const ward = norm.ward || null;
+            const district = norm.district || '';
+            const city = norm.city || '';
+            const postalCode = norm.postal_code || null;
+            const cutoffTime = norm.cutoff_time || null;
+
+            const addressJson = {
+              line: addressLine,
               ward,
               district,
               city,
               postal_code: postalCode,
-              address_json: addressJson,
-              cutoff_time: cutoffTime,
-            },
-            update: {
-              name,
-              status,
-              is_default: isDefault,
-              contact_name: contactName,
-              contact_phone: contactPhone,
-              contact_email: contactEmail,
-              address_line: addressLine,
-              ward,
-              district,
-              city,
-              postal_code: postalCode,
-              address_json: addressJson,
-              cutoff_time: cutoffTime,
-            },
-          });
+            };
+
+            const createdWh = await (tx.warehouse?.upsert
+              ? tx.warehouse.upsert({
+                  where: {
+                    merchant_id_code: {
+                      merchant_id: merchantId,
+                      code,
+                    },
+                  },
+                  create: {
+                    merchant_id: merchantId,
+                    name,
+                    code,
+                    status,
+                    is_default: isDefault,
+                    contact_name: contactName,
+                    contact_phone: contactPhone,
+                    contact_email: contactEmail,
+                    address_line: addressLine,
+                    ward,
+                    district,
+                    city,
+                    postal_code: postalCode,
+                    address_json: addressJson,
+                    cutoff_time: cutoffTime,
+                  },
+                  update: {
+                    name,
+                    status,
+                    is_default: isDefault,
+                  },
+                })
+              : tx.warehouse.create({
+                  data: {
+                    merchant_id: merchantId,
+                    name,
+                    code,
+                    status,
+                    is_default: isDefault,
+                    contact_name: contactName,
+                    contact_phone: contactPhone,
+                    contact_email: contactEmail,
+                    address_line: addressLine,
+                    ward,
+                    district,
+                    city,
+                    postal_code: postalCode,
+                    address_json: addressJson,
+                    cutoff_time: cutoffTime,
+                  },
+                }));
+            savedWhId = createdWh?.id || code;
+
+            if (tx.auditLog?.create) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: merchantId,
+                  user_id: actor.userId,
+                  actor: actor.role || 'OWNER',
+                  action: 'WAREHOUSE_CREATED',
+                  entity_type: 'warehouse',
+                  entity_id: savedWhId,
+                  ip_address: clientIp ? this.hashIp(clientIp) : null,
+                  new_value: this.maskAuditData({
+                    code,
+                    name,
+                    is_default: isDefault,
+                    status,
+                  }),
+                },
+              });
+            }
+          }
           promotedCount++;
         }
       } else if (imp.template_type === ImportTemplateType.BRANCHES) {
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
-          const name = norm.name || code;
-          const status = norm.status || 'active';
-          const isDefault = norm.is_default === true;
-          const contactName = norm.contact_name || null;
-          const contactPhone = norm.contact_phone || null;
-          const addressLine = norm.address_line || null;
-          const ward = norm.ward || null;
-          const district = norm.district || null;
-          const city = norm.city || null;
+          const existingBranch = tx.branch?.findUnique
+            ? await tx.branch.findUnique({
+                where: { merchant_id_code: { merchant_id: merchantId, code } },
+              })
+            : null;
+
+          const existingCount = tx.branch?.count
+            ? await tx.branch.count({ where: { merchant_id: merchantId } })
+            : 0;
+
+          const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
+          let isDefault: boolean;
+          if (existingCount === 0 && !existingBranch) {
+            // BR-BRANCH-03: First branch is automatically default
+            isDefault = true;
+          } else if (hasExplicitDefault) {
+            isDefault = norm.is_default === true;
+          } else {
+            isDefault = existingBranch ? existingBranch.is_default : false;
+          }
 
           if (isDefault) {
             await tx.branch.updateMany({
-              where: { merchant_id: merchantId, is_default: true },
+              where: { merchant_id: merchantId, is_default: true, code: { not: code } },
               data: { is_default: false },
             });
           }
 
-          await tx.branch.upsert({
-            where: {
-              merchant_id_code: {
-                merchant_id: merchantId,
-                code,
-              },
-            },
-            create: {
-              merchant_id: merchantId,
-              name,
-              code,
-              status,
-              is_default: isDefault,
-              contact_name: contactName,
-              contact_phone: contactPhone,
-              address_line: addressLine,
-              ward,
-              district,
-              city,
-            },
-            update: {
-              name,
-              status,
-              is_default: isDefault,
-              contact_name: contactName,
-              contact_phone: contactPhone,
-              address_line: addressLine,
-              ward,
-              district,
-              city,
-            },
-          });
+          let savedBrId = existingBranch?.id;
+          if (existingBranch) {
+            // Non-destructive update: preserve existing values for omitted optional fields (Finding 6)
+            const updateData: Record<string, any> = {};
+            if (norm.name) updateData.name = norm.name;
+            if (norm.status) {
+              updateData.status =
+                norm.status === 'inactive' || norm.status === 'INACTIVE' ? 'INACTIVE' : 'ACTIVE';
+            }
+            if (hasExplicitDefault) updateData.is_default = isDefault;
+            if (
+              norm.contact_name !== undefined &&
+              norm.contact_name !== null &&
+              norm.contact_name !== ''
+            ) {
+              updateData.contact_name = norm.contact_name;
+            }
+            if (
+              norm.contact_phone !== undefined &&
+              norm.contact_phone !== null &&
+              norm.contact_phone !== ''
+            ) {
+              updateData.contact_phone = norm.contact_phone;
+              updateData.phone = norm.contact_phone;
+            }
+            if (
+              norm.address_line !== undefined &&
+              norm.address_line !== null &&
+              norm.address_line !== ''
+            ) {
+              updateData.address_line = norm.address_line;
+              updateData.address = norm.address_line;
+            }
+            if (norm.ward !== undefined && norm.ward !== null && norm.ward !== '') {
+              updateData.ward = norm.ward;
+            }
+            if (norm.district !== undefined && norm.district !== null && norm.district !== '') {
+              updateData.district = norm.district;
+            }
+            if (norm.city !== undefined && norm.city !== null && norm.city !== '') {
+              updateData.city = norm.city;
+            }
+
+            const updatedBr = await tx.branch.update({
+              where: { id: existingBranch.id },
+              data: updateData,
+            });
+            savedBrId = updatedBr?.id || existingBranch.id;
+
+            if (tx.auditLog?.create) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: merchantId,
+                  user_id: actor.userId,
+                  actor: actor.role || 'OWNER',
+                  action: 'BRANCH_UPDATED',
+                  entity_type: 'branch',
+                  entity_id: savedBrId,
+                  ip_address: clientIp ? this.hashIp(clientIp) : null,
+                  new_value: this.maskAuditData({
+                    code,
+                    name: updateData.name || existingBranch.name,
+                    is_default:
+                      updateData.is_default !== undefined
+                        ? updateData.is_default
+                        : existingBranch.is_default,
+                    status: updateData.status || existingBranch.status,
+                  }),
+                },
+              });
+            }
+          } else {
+            // Create branch with correct uppercase status & legacy address/phone fields (Finding 11)
+            const name = norm.name || code;
+            const status = norm.status
+              ? norm.status === 'inactive' || norm.status === 'INACTIVE'
+                ? 'INACTIVE'
+                : 'ACTIVE'
+              : 'ACTIVE';
+            const contactName = norm.contact_name || null;
+            const contactPhone = norm.contact_phone || null;
+            const addressLine = norm.address_line || null;
+            const ward = norm.ward || null;
+            const district = norm.district || null;
+            const city = norm.city || null;
+            const legacyAddress =
+              addressLine || [addressLine, ward, district, city].filter(Boolean).join(', ') || null;
+            const legacyPhone = contactPhone || null;
+
+            const createdBr = await (tx.branch?.upsert
+              ? tx.branch.upsert({
+                  where: {
+                    merchant_id_code: {
+                      merchant_id: merchantId,
+                      code,
+                    },
+                  },
+                  create: {
+                    merchant_id: merchantId,
+                    name,
+                    code,
+                    status,
+                    is_default: isDefault,
+                    contact_name: contactName,
+                    contact_phone: contactPhone,
+                    address_line: addressLine,
+                    ward,
+                    district,
+                    city,
+                    address: legacyAddress,
+                    phone: legacyPhone,
+                  },
+                  update: {
+                    name,
+                    status,
+                    is_default: isDefault,
+                  },
+                })
+              : tx.branch.create({
+                  data: {
+                    merchant_id: merchantId,
+                    name,
+                    code,
+                    status,
+                    is_default: isDefault,
+                    contact_name: contactName,
+                    contact_phone: contactPhone,
+                    address_line: addressLine,
+                    ward,
+                    district,
+                    city,
+                    address: legacyAddress,
+                    phone: legacyPhone,
+                  },
+                }));
+            savedBrId = createdBr?.id || code;
+
+            if (tx.auditLog?.create) {
+              await tx.auditLog.create({
+                data: {
+                  merchant_id: merchantId,
+                  user_id: actor.userId,
+                  actor: actor.role || 'OWNER',
+                  action: 'BRANCH_CREATED',
+                  entity_type: 'branch',
+                  entity_id: savedBrId,
+                  ip_address: clientIp ? this.hashIp(clientIp) : null,
+                  new_value: this.maskAuditData({
+                    code,
+                    name,
+                    is_default: isDefault,
+                    status,
+                  }),
+                },
+              });
+            }
+          }
           promotedCount++;
         }
       }
@@ -1033,13 +1380,15 @@ export class ImportsService {
       });
     });
 
-    const supersededCount = await this.prisma.import.count({
-      where: {
-        merchant_id: merchantId,
-        template_type: imp.template_type,
-        status: ImportStatus.SUPERSEDED,
-      },
-    });
+    const supersededCount = this.prisma.import?.count
+      ? await this.prisma.import.count({
+          where: {
+            merchant_id: merchantId,
+            template_type: imp.template_type,
+            status: ImportStatus.SUPERSEDED,
+          },
+        })
+      : 0;
 
     return {
       data: {

@@ -2013,12 +2013,17 @@ export interface components {
       /** Format: uuid */
       import_id: string;
       row_number: number;
-      raw_data: Record<string, never>;
-      normalized_data?: Record<string, never> | null;
+      raw_data: {
+        [key: string]: unknown;
+      };
+      normalized_data?: {
+        [key: string]: unknown;
+      } | null;
       /** @enum {string} */
       status: 'VALID' | 'ERROR' | 'WARNING';
       scope_identifier?: string | null;
       issues?: components['schemas']['ImportRowIssue'][];
+      issues_json?: components['schemas']['ImportRowIssue'][];
       /** Format: date-time */
       created_at: string;
     };

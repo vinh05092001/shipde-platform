@@ -96,6 +96,10 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
       const xlsxBuffer = generateXlsxTemplate(template);
       assert.ok(xlsxBuffer.length > 0);
 
+      // Verify PKZIP CRC-32 is not 0 (Finding 5)
+      const crc32 = xlsxBuffer.readUInt32LE(14);
+      assert.notStrictEqual(crc32, 0, 'PKZIP local header must have a valid non-zero CRC-32');
+
       const parsed = parseXlsx(xlsxBuffer);
       assert.ok(parsed.headers.length >= 8);
       assert.strictEqual(parsed.headers[0], 'code');
@@ -756,6 +760,163 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
       assert.ok(auditLogCreated);
       assert.strictEqual(auditLogCreated.data.action, 'IMPORT_PROMOTED');
       assert.strictEqual(auditLogCreated.data.merchant_id, 'tenant-1');
+    });
+
+    it('should reject promotion when multiple rows have is_default=true (BR-BRANCH-03)', async () => {
+      const mockPrisma: any = {
+        import: {
+          findFirst: async (args: any) => {
+            if (args.where?.id === 'imp-multi-default') {
+              return {
+                id: 'imp-multi-default',
+                merchant_id: 'tenant-1',
+                template_type: 'branches',
+                file_name: 'test.csv',
+                file_hash: 'hash-ok',
+                status: ImportStatus.STAGED,
+                revision: 1,
+              };
+            }
+            if (args.orderBy?.revision === 'desc') {
+              return { revision: 1 };
+            }
+            return null;
+          },
+        },
+        importRow: {
+          findMany: async () => [
+            {
+              row_number: 1,
+              status: 'VALID',
+              scope_identifier: 'BR-01',
+              normalized_data: { name: 'CN 1', is_default: true },
+            },
+            {
+              row_number: 2,
+              status: 'VALID',
+              scope_identifier: 'BR-02',
+              normalized_data: { name: 'CN 2', is_default: true },
+            },
+          ],
+        },
+        user: {
+          findFirst: async () => ({
+            role: 'OWNER',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        $transaction: async (cb: any) => cb({}),
+      };
+
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+
+      await assert.rejects(
+        async () => {
+          await service.promoteImport('imp-multi-default', 'tenant-1', {
+            userId: 'u1',
+            merchantId: 'tenant-1',
+            role: 'OWNER',
+          } as any);
+        },
+        (err: any) => {
+          assert.strictEqual(err.status, HttpStatus.BAD_REQUEST);
+          assert.strictEqual(err.code, 'MULTIPLE_DEFAULT_BRANCHES');
+          return true;
+        }
+      );
+    });
+
+    it('should preserve existing branch data on partial update without destructive null overwrites', async () => {
+      let updatedData: any = null;
+      const existingBranch = {
+        id: 'branch-1',
+        merchant_id: 'tenant-1',
+        code: 'BR-01',
+        name: 'Chi Nhánh Cũ',
+        phone: '0901234567',
+        contact_phone: '0901234567',
+        address: '123 Đường Cũ',
+        address_line: '123 Đường Cũ',
+        is_default: true,
+        status: 'ACTIVE',
+      };
+
+      const mockPrisma: any = {
+        import: {
+          findFirst: async (args: any) => {
+            if (args.where?.id === 'imp-partial') {
+              return {
+                id: 'imp-partial',
+                merchant_id: 'tenant-1',
+                template_type: 'branches',
+                file_name: 'test.csv',
+                file_hash: 'hash-ok',
+                status: ImportStatus.STAGED,
+                revision: 2,
+              };
+            }
+            if (args.orderBy?.revision === 'desc') return { revision: 2 };
+            return null;
+          },
+        },
+        importRow: {
+          findMany: async () => [
+            {
+              row_number: 1,
+              status: 'VALID',
+              scope_identifier: 'BR-01',
+              normalized_data: {
+                name: 'Chi Nhánh Mới Cập Nhật',
+                // phone, address, is_default omitted
+              },
+            },
+          ],
+        },
+        user: {
+          findFirst: async () => ({
+            role: 'OWNER',
+            store_scopes: ['*'],
+            warehouse_scopes: ['*'],
+          }),
+        },
+        $transaction: async (cb: any) => {
+          const tx: any = {
+            branch: {
+              findUnique: async () => existingBranch,
+              count: async () => 1,
+              updateMany: async () => {},
+              update: async (args: any) => {
+                updatedData = args.data;
+                return { ...existingBranch, ...args.data };
+              },
+            },
+            import: {
+              update: async () => {},
+              updateMany: async () => {},
+            },
+            auditLog: {
+              create: async () => {},
+            },
+          };
+          return cb(tx);
+        },
+      };
+
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+
+      await service.promoteImport('imp-partial', 'tenant-1', {
+        userId: 'u1',
+        merchantId: 'tenant-1',
+        role: 'OWNER',
+      } as any);
+
+      assert.ok(updatedData);
+      assert.strictEqual(updatedData.name, 'Chi Nhánh Mới Cập Nhật');
+      // Existing phone, address, and is_default must not be overwritten with null/defaults
+      assert.strictEqual(updatedData.contact_phone, undefined);
+      assert.strictEqual(updatedData.address_line, undefined);
+      assert.strictEqual(updatedData.is_default, undefined);
     });
   });
 });

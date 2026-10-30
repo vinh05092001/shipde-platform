@@ -19,6 +19,7 @@ async function runImportsWebTestSuite() {
     file_name: 'branches_upload.csv',
     file_size: 2048,
     file_hash: 'abc123def4567890abcdef1234567890abcdef1234567890abcdef1234567890',
+    mime_type: 'text/csv',
     status: ImportStatus.STAGED,
     revision: 1,
     total_rows: 10,
@@ -36,6 +37,7 @@ async function runImportsWebTestSuite() {
     file_name: 'warehouses_invalid.csv',
     file_size: 4096,
     file_hash: 'def4567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+    mime_type: 'text/csv',
     status: ImportStatus.BLOCKED,
     revision: 2,
     total_rows: 5,
@@ -51,7 +53,7 @@ async function runImportsWebTestSuite() {
       id: 'row-01',
       import_id: mockImportBlocked.id,
       row_number: 1,
-      raw_data: { code: 'WH-01', name: 'Kho Hà Nội' },
+      raw_data: { code: 'WH-01', name: 'Kho Hà Nội' } as Record<string, any>,
       status: ImportRowStatus.VALID,
       scope_identifier: 'WH-01',
       created_at: new Date('2026-01-02T00:00:00Z').toISOString(),
@@ -60,9 +62,17 @@ async function runImportsWebTestSuite() {
       id: 'row-02',
       import_id: mockImportBlocked.id,
       row_number: 2,
-      raw_data: { code: '', name: 'Kho Thiếu Mã' },
+      raw_data: { code: '', name: 'Kho Thiếu Mã' } as Record<string, any>,
       status: ImportRowStatus.ERROR,
       scope_identifier: null,
+      issues: [
+        {
+          code: 'MISSING_SCOPE_IDENTIFIER',
+          field: 'code',
+          severity: ImportIssueSeverity.BLOCKING,
+          message: 'Mã định danh kho hàng là bắt buộc',
+        },
+      ],
       issues_json: [
         {
           code: 'MISSING_SCOPE_IDENTIFIER',
@@ -77,9 +87,17 @@ async function runImportsWebTestSuite() {
       id: 'row-03',
       import_id: mockImportBlocked.id,
       row_number: 3,
-      raw_data: { code: 'WH-03', name: 'Kho Thiếu SĐT' },
+      raw_data: { code: 'WH-03', name: 'Kho Thiếu SĐT' } as Record<string, any>,
       status: ImportRowStatus.WARNING,
       scope_identifier: 'WH-03',
+      issues: [
+        {
+          code: 'DATA_INCOMPLETE',
+          field: 'contact_phone',
+          severity: ImportIssueSeverity.WARNING,
+          message: 'Chưa có số điện thoại liên hệ',
+        },
+      ],
       issues_json: [
         {
           code: 'DATA_INCOMPLETE',
@@ -216,6 +234,30 @@ async function runImportsWebTestSuite() {
     assert.ok(html.includes('Nhập Dữ Liệu Hệ Thống'), 'Page header must render');
     assert.ok(html.includes('Quay lại Bảng điều khiển'), 'Breadcrumbs must render');
     console.log('PASS: TEST 7 - ImportsSettingsPage rendered properly');
+  }
+
+  // -------------------------------------------------------------------------
+  // TEST 8: SCR-IMPORT-01 Mapping Preview & Revision History tab elements
+  // -------------------------------------------------------------------------
+  {
+    const html = renderToStaticMarkup(
+      React.createElement(ImportManagementView, {
+        loading: false,
+        imports: [mockImportStaged, mockImportBlocked],
+        selectedImport: mockImportStaged,
+        selectedImportRows: mockImportRows,
+        canEdit: true,
+      })
+    );
+    assert.ok(
+      html.includes('Xem trước ánh xạ cột (Mapping Preview)'),
+      'Must render Mapping Preview tab header'
+    );
+    assert.ok(
+      html.includes('Lịch sử phiên bản (Revision History)'),
+      'Must render Revision History tab header'
+    );
+    console.log('PASS: TEST 8 - SCR-IMPORT-01 Navigation tabs for mapping and revisions rendered');
   }
 
   console.log('================================================================');

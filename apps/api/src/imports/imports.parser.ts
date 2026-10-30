@@ -127,6 +127,7 @@ function createZipArchive(files: Array<{ name: string; data: Buffer | string }>)
     const nameBuf = Buffer.from(file.name, 'utf8');
     const dataBuf = Buffer.isBuffer(file.data) ? file.data : Buffer.from(file.data, 'utf8');
     const compBuf = zlib.deflateRawSync(dataBuf);
+    const fileCrc = zlib.crc32(dataBuf);
 
     // Local file header (30 bytes)
     const lh = Buffer.alloc(30);
@@ -136,7 +137,7 @@ function createZipArchive(files: Array<{ name: string; data: Buffer | string }>)
     lh.writeUInt16LE(8, 8); // compression method (deflate)
     lh.writeUInt16LE(0, 10); // mod time
     lh.writeUInt16LE(0, 12); // mod date
-    lh.writeUInt32LE(0, 14); // crc32 placeholder
+    lh.writeUInt32LE(fileCrc, 14); // crc-32
     lh.writeUInt32LE(compBuf.length, 18); // compressed size
     lh.writeUInt32LE(dataBuf.length, 22); // uncompressed size
     lh.writeUInt16LE(nameBuf.length, 26); // file name length
@@ -154,7 +155,7 @@ function createZipArchive(files: Array<{ name: string; data: Buffer | string }>)
     cd.writeUInt16LE(8, 10);
     cd.writeUInt16LE(0, 12);
     cd.writeUInt16LE(0, 14);
-    cd.writeUInt32LE(0, 16);
+    cd.writeUInt32LE(fileCrc, 16);
     cd.writeUInt32LE(compBuf.length, 20);
     cd.writeUInt32LE(dataBuf.length, 24);
     cd.writeUInt16LE(nameBuf.length, 28);
@@ -219,6 +220,27 @@ function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
   }
 
   return entries;
+}
+
+/**
+ * Converts column letters (A, B, ..., Z, AA, AB, etc.) to 0-based column index.
+ */
+function lettersToColumnIndex(letters: string): number {
+  let col = 0;
+  const upper = letters.toUpperCase();
+  for (let i = 0; i < upper.length; i++) {
+    col = col * 26 + (upper.charCodeAt(i) - 64);
+  }
+  return col - 1;
+}
+
+/**
+ * Parses an Excel cell reference (e.g. "B2", "AA10") into 0-based column index.
+ */
+function parseCellReference(ref: string): number {
+  const lettersMatch = ref.match(/^[A-Za-z]+/);
+  if (!lettersMatch) return -1;
+  return lettersToColumnIndex(lettersMatch[0]);
 }
 
 /**
@@ -340,27 +362,48 @@ export function parseXlsx(buf: Buffer): { headers: string[]; rows: Record<string
 
   for (const rowXml of rowMatches) {
     const rowValues: string[] = [];
-    const cellMatches = rowXml.match(/<c[^>]*>([\s\S]*?)<\/c>/g);
+    const cellMatches = rowXml.match(/<c\b[^>]*(?:\/>|>[\s\S]*?<\/c>)/g);
     if (cellMatches) {
+      let nextExpectedCol = 0;
       for (const cellXml of cellMatches) {
+        // Read cell reference 'r' attribute, e.g. r="A1", r="C2"
+        const rAttrMatch = cellXml.match(/\br="([A-Za-z0-9]+)"/);
+        let colIdx = nextExpectedCol;
+        if (rAttrMatch) {
+          const parsedCol = parseCellReference(rAttrMatch[1]);
+          if (parsedCol >= 0) {
+            colIdx = parsedCol;
+          }
+        }
+
+        // Fill any skipped empty columns before this cell
+        while (rowValues.length < colIdx) {
+          rowValues.push('');
+        }
+
+        const isSelfClosing = /\/>\s*$/.test(cellXml);
         const isShared = /t="s"/.test(cellXml);
         const isInline = /t="inlineStr"/.test(cellXml);
 
-        if (isShared) {
+        let cellVal = '';
+        if (isSelfClosing) {
+          cellVal = '';
+        } else if (isShared) {
           const vMatch = cellXml.match(/<v>(\d+)<\/v>/);
           if (vMatch) {
             const idx = parseInt(vMatch[1], 10);
-            rowValues.push(sharedStrings[idx] !== undefined ? sharedStrings[idx] : '');
-          } else {
-            rowValues.push('');
+            cellVal = sharedStrings[idx] !== undefined ? sharedStrings[idx] : '';
           }
         } else if (isInline) {
           const tMatch = cellXml.match(/<t[^>]*>([\s\S]*?)<\/t>/);
-          rowValues.push(tMatch ? unescapeXml(tMatch[1]) : '');
+          cellVal = tMatch ? unescapeXml(tMatch[1]) : '';
         } else {
           const vMatch = cellXml.match(/<v>([\s\S]*?)<\/v>/);
-          rowValues.push(vMatch ? unescapeXml(vMatch[1]) : '');
+          cellVal = vMatch ? unescapeXml(vMatch[1]) : '';
         }
+
+        rowValues[colIdx] = cellVal;
+        nextExpectedCol = colIdx + 1;
       }
     }
     matrix.push(rowValues);
