@@ -113,6 +113,7 @@ function setup(specs, options) {
   fs.writeFileSync(path.join(repo, 'README.md'), 'base\n');
   git(['add', 'README.md']);
   git(['commit', '-q', '-m', 'base']);
+  const initialBaseSha = git(['rev-parse', 'HEAD']);
 
   const writer = cand('writer', 'author.foundation', { cost: 0.1 });
   const reviewerA = cand('reviewera', 'reviewer.primary');
@@ -179,7 +180,7 @@ function setup(specs, options) {
     now: NOW,
     cwd: repo,
     workerRoot: repo,
-    baseSha: GLOBAL_BASE,
+    baseSha: initialBaseSha,
     ranking: {
       headrooms: {
         'acct-writer': { status: 'available' },

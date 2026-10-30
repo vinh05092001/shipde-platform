@@ -58,6 +58,18 @@ function resolveComboName(opts = {}) {
 
 const DEFAULT_COMBO_NAME = resolveComboName();
 const CLI_TOKEN_SALT = '9r-cli-auth';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+function assertLoopbackHost(host) {
+  const norm = String(host || '')
+    .trim()
+    .toLowerCase();
+  if (!LOOPBACK_HOSTS.has(norm)) {
+    throw new Error(
+      'NON_LOOPBACK_HOST: 9router combo sync is only permitted to loopback hosts; got ' + host
+    );
+  }
+}
 
 function get9routerDataDir() {
   if (process.env.NINEROUTER_DATA_DIR) return process.env.NINEROUTER_DATA_DIR;
@@ -196,6 +208,15 @@ function httpRequest({
     return Promise.reject(
       new Error(`INVALID_PROTOCOL: Only http: and https: are supported, got ${resolved.protocol}`)
     );
+  }
+  const hasInjectedTransport =
+    Boolean(injectedTransport) || httpTransport !== http || httpsTransport !== https;
+  if (!hasInjectedTransport) {
+    try {
+      assertLoopbackHost(resolved.host);
+    } catch (err) {
+      return Promise.reject(err);
+    }
   }
   const transport =
     injectedTransport || (resolved.protocol === 'https:' ? httpsTransport : httpTransport);
@@ -433,4 +454,5 @@ module.exports = {
   resolveComboMembers,
   resolveEndpoint,
   httpRequest,
+  assertLoopbackHost,
 };

@@ -133,6 +133,27 @@ function writeApproval(registryPath, record) {
   fs.writeFileSync(registryPath, JSON.stringify(registry, null, 2));
 }
 
+function ciForPublications(state) {
+  return (args) => {
+    assert.equal(args[0], 'pr');
+    const publication = state.publishCalls.find((call) => call.branch === args[2]);
+    assert.ok(publication, 'CI must query the branch actually published');
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        headRefOid: publication.reviewedSha,
+        statusCheckRollup: require('../sources.json').dispatch.ciGate.requiredChecks.map(
+          (name) => ({
+            name,
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS',
+          })
+        ),
+      }),
+    };
+  };
+}
+
 /**
  * The task-ai-119/120 harness with a fake publisher: one writer, one reviewer,
  * a recorded launcher that commits per work item and passes every review, and a
@@ -204,6 +225,7 @@ function setup(prefix, specs, config) {
     measureFailBefore: () => ({ command: 'test', exitCode: 1 }),
     run,
     repairer: async (_findings, sha) => ({ sha }),
+    ghRunner: ciForPublications(state),
     publisher: (pubOpts) => {
       state.publishCalls.push(pubOpts);
       return (
@@ -470,6 +492,7 @@ test('PI-R03: each published item gets its own draft PR titled from its own spec
             },
           },
           repairer: async (_findings, sha) => ({ sha }),
+          ghRunner: ciForPublications(state),
           publisher: (pubOpts) => {
             state.publishCalls.push(pubOpts);
             return { status: 'published', sha: pubOpts.reviewedSha, branch: pubOpts.branch };
