@@ -15,6 +15,8 @@ export const WORKSPACE_ENV = {
   DEFAULT_MAX_ATTACHMENT_SIZE_BYTES: 10 * 1024 * 1024,
   DEFAULT_ATTACHMENT_RETENTION_DAYS: 90,
   DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS: 300,
+  DEFAULT_ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: 512,
+  DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: 104857600,
 } as const;
 
 export type WorkspaceEnvironment = typeof WORKSPACE_ENV;
@@ -67,6 +69,10 @@ export interface AppConfig {
   ATTACHMENT_DEFAULT_RETENTION_DAYS: number;
   /** Download URL expiry / buffer TTL in seconds (FEAT-COM-06). Default 300 seconds (5 min). */
   ATTACHMENT_DOWNLOAD_TTL_SECONDS: number;
+  /** Maximum ZIP entries the attachment content gate will decompress and inspect (FEAT-COM-06). */
+  ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: number;
+  /** Maximum decompressed bytes the attachment content gate will materialize per entry (FEAT-COM-06). */
+  ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -403,6 +409,45 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  const attachmentScanMaxEntriesRaw = rawEnv.ATTACHMENT_SCAN_MAX_ZIP_ENTRIES;
+  let ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_ZIP_ENTRIES;
+  if (attachmentScanMaxEntriesRaw !== undefined && attachmentScanMaxEntriesRaw !== '') {
+    if (!/^\d+$/.test(attachmentScanMaxEntriesRaw)) {
+      invalidFields.push('ATTACHMENT_SCAN_MAX_ZIP_ENTRIES (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentScanMaxEntriesRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 10000) {
+        invalidFields.push(
+          'ATTACHMENT_SCAN_MAX_ZIP_ENTRIES (must be a positive integer between 1 and 10000)'
+        );
+      } else {
+        ATTACHMENT_SCAN_MAX_ZIP_ENTRIES = parsed;
+      }
+    }
+  }
+
+  const attachmentScanMaxDecompressedRaw = rawEnv.ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES;
+  let ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES;
+  if (
+    attachmentScanMaxDecompressedRaw !== undefined &&
+    attachmentScanMaxDecompressedRaw !== ''
+  ) {
+    if (!/^\d+$/.test(attachmentScanMaxDecompressedRaw)) {
+      invalidFields.push('ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentScanMaxDecompressedRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1073741824) {
+        invalidFields.push(
+          'ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES (must be a positive integer between 1 and 1073741824)'
+        );
+      } else {
+        ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES = parsed;
+      }
+    }
+  }
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -437,6 +482,8 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     MAX_ATTACHMENT_SIZE_BYTES,
     ATTACHMENT_DEFAULT_RETENTION_DAYS,
     ATTACHMENT_DOWNLOAD_TTL_SECONDS,
+    ATTACHMENT_SCAN_MAX_ZIP_ENTRIES,
+    ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES,
   };
 }
 

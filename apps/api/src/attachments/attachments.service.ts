@@ -5,7 +5,7 @@ import { StorageService } from '../storage/storage.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import { RbacService, isUserActiveStatus } from '../rbac/rbac.service';
 import type { ActorContext } from '../rbac/rbac.dto';
-import { AppConfig, sanitizeErrorMessage } from '@shipde/config';
+import { AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 import {
   UploadAttachmentDto,
@@ -20,7 +20,13 @@ import {
   FormattedAttachment,
   AttachmentBulkActionResult,
   AttachmentAuditEvent,
+  AttachmentScanStatus,
 } from '@shipde/contracts';
+import {
+  ATTACHMENT_ACTION_CAPABILITIES,
+  ATTACHMENT_ENTITY_REQUIREMENTS,
+  type AttachmentAction,
+} from './attachments.capabilities';
 
 @Injectable()
 export class AttachmentsService {
@@ -135,99 +141,44 @@ export class AttachmentsService {
   }
 
   /**
-   * Validates actor capabilities against the requested attachment action and entity type.
+   * Validates actor capabilities against the requested attachment action (registry
+   * mapping in attachments.capabilities.ts) and, where applicable, the entity type.
+   * Enforced server-side for every action; the controller decorator layer is a
+   * second, independent gate for maintenance endpoints.
    */
   public verifyAttachmentCapabilities(
     scopes: { permissions: Set<string> },
+    action: AttachmentAction,
     entityType?: string
   ): void {
-    const ATTACHMENT_CAPABILITIES = [
-      'iam:shop_config',
-      'order:view_create',
-      'shipment:receive_return',
-      'claim:verify_submit',
-      'reconciliation:import_settlement_bank',
-      'reconciliation:run_review_audit',
-      'shipment:create_update',
-      'shipment:track_exceptions',
-      'iam:shop_view',
-    ];
-
-    const hasAnyCapability = ATTACHMENT_CAPABILITIES.some((cap) => scopes.permissions.has(cap));
+    const actionCapabilities = ATTACHMENT_ACTION_CAPABILITIES[action];
+    const hasAnyCapability = actionCapabilities.some((cap) => scopes.permissions.has(cap));
     if (!hasAnyCapability) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
-        'Bạn không có quyền thao tác trên tệp đính kèm trong hệ thống.'
+        `Bạn không có quyền hạn phù hợp để thực hiện thao tác '${action}' trên tệp đính kèm.`
       );
     }
 
     if (!entityType) return;
     const normalizedType = entityType.trim().toUpperCase();
 
+    // Tenant configuration capability authorizes every entity type.
     if (scopes.permissions.has('iam:shop_config')) {
       return;
     }
 
-    switch (normalizedType) {
-      case 'RETURN':
-        if (!scopes.permissions.has('shipment:receive_return')) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            "Bạn không có quyền 'shipment:receive_return' để đính kèm bằng chứng hàng hoàn."
-          );
-        }
-        break;
-      case 'CLAIM':
-        if (!scopes.permissions.has('claim:verify_submit')) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            "Bạn không có quyền 'claim:verify_submit' để đính kèm chứng từ khiếu nại."
-          );
-        }
-        break;
-      case 'STATEMENT':
-        if (!scopes.permissions.has('reconciliation:import_settlement_bank')) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            "Bạn không có quyền 'reconciliation:import_settlement_bank' để đính kèm sao kê/bảng kê."
-          );
-        }
-        break;
-      case 'DISCREPANCY':
-        if (!scopes.permissions.has('reconciliation:run_review_audit')) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            "Bạn không có quyền 'reconciliation:run_review_audit' để đính kèm chứng từ sai lệch."
-          );
-        }
-        break;
-      case 'ORDER':
-        if (!scopes.permissions.has('order:view_create')) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            "Bạn không có quyền 'order:view_create' để đính kèm tệp cho đơn hàng."
-          );
-        }
-        break;
-      case 'SHIPMENT':
-        if (
-          !scopes.permissions.has('shipment:create_update') &&
-          !scopes.permissions.has('shipment:track_exceptions') &&
-          !scopes.permissions.has('order:view_create')
-        ) {
-          throw new CanonicalApiException(
-            HttpStatus.FORBIDDEN,
-            'FORBIDDEN',
-            'Bạn không có quyền xử lý vận đơn để đính kèm tệp cho vận đơn.'
-          );
-        }
-        break;
+    const entityRequirements = ATTACHMENT_ENTITY_REQUIREMENTS[normalizedType];
+    if (!entityRequirements) return;
+
+    const hasEntityCapability = entityRequirements.some((cap) => scopes.permissions.has(cap));
+    if (!hasEntityCapability) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        `Bạn không có quyền hạn phù hợp để thao tác tệp đính kèm loại '${normalizedType}'.`
+      );
     }
   }
 
@@ -244,7 +195,7 @@ export class AttachmentsService {
     const scopes = await this.getActorScopes(actor);
 
     // Finding 2: Check registry permissions for actor and entity type
-    this.verifyAttachmentCapabilities(scopes, dto.entity_type);
+    this.verifyAttachmentCapabilities(scopes, 'UPLOAD', dto.entity_type);
 
     let resolvedWarehouseId: string | null = null;
     let resolvedBranchId: string | null = null;
@@ -535,9 +486,14 @@ export class AttachmentsService {
             expires_at: expiresAt,
             metadata: {
               ...(dto.metadata ? maskAttachmentAuditObject(dto.metadata) : {}),
-              scan_status: 'CLEAN',
+              // Fail-closed scan lifecycle: the in-app gate is heuristic. Passing it
+              // records HEURISTIC_PASSED — never a CLEAN clearance claim, which is
+              // reserved for the external antivirus daemon (FEAT-COM-06).
+              scan_status: AttachmentScanStatus.HEURISTIC_PASSED,
               scanned_at: new Date().toISOString(),
               scanner: 'shipde-content-gate',
+              scan_note:
+                'Heuristic content gate passed; full AV clearance is provided by the external antivirus daemon.',
             } as any,
           },
         });
@@ -571,14 +527,34 @@ export class AttachmentsService {
         return created;
       });
     } catch (dbErr: any) {
-      // Finding 6: Compensation - remove orphaned S3 object if database transaction fails
+      // Finding 6 (round 3): Compensation - remove the S3 object if the database
+      // transaction fails. If immediate removal also fails, persist a DURABLE
+      // orphan-cleanup record so the object can never become an unrecoverable orphan;
+      // the reconcile-pending maintenance endpoint retries it to completion.
       try {
         await this.storage.deleteObject(storageKey);
-      } catch (cleanupErr: any) {
-        // Finding 7: Redact raw exception details
-        console.warn(
-          `[AttachmentsService] Failed to clean up orphaned S3 object ${storageKey} (code: ${cleanupErr?.name || 'STORAGE_ERROR'})`
-        );
+      } catch {
+        try {
+          await this.prisma.attachmentOrphanCleanup.create({
+            data: {
+              merchant_id: actor.merchantId,
+              storage_key: storageKey,
+              storage_bucket: storageBucket,
+              reason: 'UPLOAD_ROLLBACK',
+              status: 'PENDING',
+              correlation_id: correlationId ? correlationId.slice(0, 128) : null,
+            },
+          });
+          console.warn(
+            `[AttachmentsService] Stored durable orphan cleanup record for S3 object ${storageKey}.`
+          );
+        } catch {
+          // Finding 7 (round 3): fixed canonical diagnostics only — no exception-derived
+          // fields (name/message/stack) may reach the log or the client.
+          console.warn(
+            `[AttachmentsService] Upload compensation failed and no durable orphan cleanup record could be persisted (code: STORAGE_ERROR).`
+          );
+        }
       }
       if (dbErr instanceof CanonicalApiException) throw dbErr;
       throw new CanonicalApiException(
@@ -612,12 +588,17 @@ export class AttachmentsService {
     const scopes = await this.getActorScopes(actor);
 
     // Finding 2: Verify caller possesses general attachment capability
-    this.verifyAttachmentCapabilities(scopes);
+    this.verifyAttachmentCapabilities(scopes, 'LIST');
 
     const hasWarehouseWildcard = scopes.warehouseScopes.includes('*');
     const hasStoreWildcard = scopes.storeScopes.includes('*');
     const hasTenantWide =
       scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
+
+    // Server-derived edit capability for the management UI: mutation rights come from
+    // the actor's registry permissions (iam:shop_config), never from a client-supplied
+    // or role-inferred flag.
+    const canEdit = scopes.permissions.has('iam:shop_config');
 
     // Fail closed if actor has empty scopes and no wildcard/tenant-wide access
     if (
@@ -636,6 +617,7 @@ export class AttachmentsService {
           total: 0,
           total_pages: 0,
           correlation_id: correlationId,
+          can_edit: canEdit,
         },
       };
     }
@@ -707,6 +689,7 @@ export class AttachmentsService {
         total,
         total_pages: Math.ceil(total / limit) || 0,
         correlation_id: correlationId,
+        can_edit: canEdit,
       },
     };
   }
@@ -754,7 +737,7 @@ export class AttachmentsService {
     }
 
     // Finding 2: Verify capability for entity type
-    this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+    this.verifyAttachmentCapabilities(scopes, 'GET', attachment.entity_type);
 
     return this.formatAttachment(attachment);
   }
@@ -819,7 +802,7 @@ export class AttachmentsService {
     }
 
     // Finding 2: Verify capability for entity type
-    this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+    this.verifyAttachmentCapabilities(scopes, 'DOWNLOAD', attachment.entity_type);
 
     let s3Obj;
     try {
@@ -925,7 +908,7 @@ export class AttachmentsService {
     }
 
     // Finding 2: Capability check for deletion
-    this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+    this.verifyAttachmentCapabilities(scopes, 'DELETE', attachment.entity_type);
 
     // Finding 5: Persist durable deletion intent and audit log in DB FIRST before external effect
     if (attachment.status !== 'PENDING_DELETION') {
@@ -1119,16 +1102,15 @@ export class AttachmentsService {
 
         succeeded_ids.push(att.id);
         results.push({ id: att.id, status: 'SUCCEEDED' });
-      } catch (err: any) {
-        // Finding 7: Never serialize raw unredacted exception messages
+      } catch {
+        // Finding 7 (round 3): fixed canonical message only — exception-derived text
+        // (message/name/stack) must never reach the client, even sanitized.
         failed_ids.push(att.id);
         results.push({
           id: att.id,
           status: 'FAILED',
           code: 'PURGE_FAILED',
-          message: sanitizeErrorMessage(
-            err?.message || 'Lỗi khi cập nhật cơ sở dữ liệu sau khi xóa tệp.'
-          ),
+          message: 'Không thể cập nhật trạng thái tệp sau khi xóa khỏi lưu trữ. Vui lòng thử lại.',
         });
       }
     }
@@ -1216,7 +1198,7 @@ export class AttachmentsService {
 
       // Finding 2: Capability check for attachment entity
       try {
-        this.verifyAttachmentCapabilities(scopes, attachment.entity_type);
+        this.verifyAttachmentCapabilities(scopes, 'BULK_DELETE', attachment.entity_type);
       } catch {
         failed_ids.push(id);
         results.push({
@@ -1252,13 +1234,14 @@ export class AttachmentsService {
             },
           });
         });
-      } catch (err: any) {
+      } catch {
+        // Finding 7 (round 3): fixed canonical message — never echo exception-derived text.
         failed_ids.push(id);
         results.push({
           id,
           status: 'FAILED',
           code: 'DELETE_ERROR',
-          message: sanitizeErrorMessage(err?.message || 'Lỗi khi ghi nhận yêu cầu xóa tệp.'),
+          message: 'Không thể ghi nhận yêu cầu xóa tệp. Vui lòng thử lại.',
         });
         continue;
       }
@@ -1286,14 +1269,14 @@ export class AttachmentsService {
 
         succeeded_ids.push(id);
         results.push({ id, status: 'SUCCEEDED' });
-      } catch (err: any) {
-        // Finding 7: Never serialize raw unredacted exception messages
+      } catch {
+        // Finding 7 (round 3): fixed canonical message — never echo exception-derived text.
         failed_ids.push(id);
         results.push({
           id,
           status: 'FAILED',
           code: 'DELETE_ERROR',
-          message: sanitizeErrorMessage(err?.message || 'Lỗi khi cập nhật trạng thái xóa tệp.'),
+          message: 'Không thể cập nhật trạng thái xóa tệp. Vui lòng thử lại.',
         });
       }
     }
@@ -1352,6 +1335,24 @@ export class AttachmentsService {
       );
     }
 
+    // Finding 2 (round 3): quarantine is a mutation — verify the maintenance capability.
+    this.verifyAttachmentCapabilities(scopes, 'QUARANTINE', attachment.entity_type);
+
+    // State guard (round 3): only ACTIVE attachments may be quarantined. A row in
+    // PENDING_DELETION carries durable deletion intent that the reconciler must be
+    // able to finish; moving it to QUARANTINED would strand the deletion (and, after a
+    // storage failure, could leave a quarantined row referencing missing content).
+    // DELETED rows are already filtered out above.
+    if (attachment.status !== 'ACTIVE') {
+      throw new CanonicalApiException(
+        HttpStatus.CONFLICT,
+        'INVALID_STATE',
+        'Chỉ tệp đính kèm đang hoạt động mới có thể bị cách ly. Tệp đang chờ xóa hoặc đã bị cách ly không thể chuyển trạng thái này.',
+        false,
+        'Thử lại sau khi tệp quay về trạng thái Hoạt động.'
+      );
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const res = await tx.attachment.update({
         where: { id },
@@ -1365,7 +1366,7 @@ export class AttachmentsService {
           merchant_id: actor.merchantId,
           user_id: actor.userId,
           actor: actor.userId,
-          action: 'ATTACHMENT_QUARANTINED',
+          action: AttachmentAuditEvent.ATTACHMENT_QUARANTINED,
           entity_type: 'ATTACHMENT',
           entity_id: id,
           old_value: { status: attachment.status },
@@ -1392,7 +1393,10 @@ export class AttachmentsService {
     correlationId: string
   ): Promise<{ reconciled: number; failed: number }> {
     const scopes = await this.getActorScopes(actor);
-    this.verifyAttachmentCapabilities(scopes);
+    // Maintenance capability (iam:shop_config) is enforced at the endpoint and here;
+    // per-row warehouse/branch scopes and entity capabilities are enforced below so a
+    // scoped administrator can never reconcile rows outside their permitted scopes.
+    this.verifyAttachmentCapabilities(scopes, 'RECONCILE');
 
     const pending = await this.prisma.attachment.findMany({
       where: {
@@ -1404,8 +1408,19 @@ export class AttachmentsService {
 
     let reconciled = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const att of pending) {
+      if (!this.checkAttachmentScope(att, scopes)) {
+        skipped++;
+        continue;
+      }
+      try {
+        this.verifyAttachmentCapabilities(scopes, 'DELETE', att.entity_type);
+      } catch {
+        skipped++;
+        continue;
+      }
       try {
         await this.storage.deleteObject(att.storage_key);
         await this.prisma.attachment.update({
@@ -1421,6 +1436,57 @@ export class AttachmentsService {
       }
     }
 
-    return { reconciled, failed };
+    // Durable orphan-cleanup records (upload compensation outbox). These objects were
+    // never linked to an attachment row, so they carry no warehouse/branch scope; they
+    // are tenant-scoped and gated by the maintenance capability above.
+    const orphanRecords = await this.prisma.attachmentOrphanCleanup.findMany({
+      where: {
+        merchant_id: actor.merchantId,
+        status: 'PENDING',
+      },
+      take: 50,
+    });
+
+    let orphanReconciled = 0;
+    let orphanFailed = 0;
+
+    for (const record of orphanRecords) {
+      try {
+        await this.storage.deleteObject(record.storage_key);
+        await this.prisma.attachmentOrphanCleanup.update({
+          where: { id: record.id },
+          data: { status: 'DONE', attempts: record.attempts + 1 },
+        });
+        await this.prisma.auditLog.create({
+          data: {
+            merchant_id: actor.merchantId,
+            user_id: actor.userId,
+            actor: actor.userId,
+            action: AttachmentAuditEvent.ATTACHMENT_ORPHAN_CLEANED,
+            entity_type: 'ATTACHMENT_ORPHAN',
+            entity_id: record.id,
+            new_value: {
+              reason: record.reason,
+              storage_key: record.storage_key,
+              correlation_id: correlationId,
+            },
+            reason: correlationId
+              ? `correlation_id:${correlationId}`
+              : 'Reconciled durable orphan cleanup record from upload rollback.',
+          },
+        });
+        orphanReconciled++;
+      } catch {
+        orphanFailed++;
+      }
+    }
+
+    return {
+      reconciled,
+      failed,
+      skipped,
+      orphan_reconciled: orphanReconciled,
+      orphan_failed: orphanFailed,
+    };
   }
 }

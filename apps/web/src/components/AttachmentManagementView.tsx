@@ -19,7 +19,7 @@ import {
   Clock,
   Layers,
 } from 'lucide-react';
-import type { FormattedAttachment } from '@shipde/contracts';
+import type { FormattedAttachment, AttachmentBulkActionResult } from '@shipde/contracts';
 
 export interface AttachmentManagementViewProps {
   attachments?: FormattedAttachment[];
@@ -45,9 +45,11 @@ export interface AttachmentManagementViewProps {
   }) => Promise<void>;
   onDownload?: (id: string, fileName: string) => Promise<void>;
   onDelete?: (id: string, confirm: boolean) => Promise<void>;
-  onBulkDelete?: (ids: string[], confirm: boolean) => Promise<void>;
+  onBulkDelete?: (ids: string[], confirm: boolean) => Promise<AttachmentBulkActionResult | void>;
   onPurgeRetention?: (dryRun: boolean) => Promise<{ success_count: number; failure_count: number }>;
   onQuarantine?: (id: string, reason: string) => Promise<void>;
+  /** Seeds the partial-failure state (recovery view) for the bulk delete operation. */
+  initialBulkPartialFailure?: AttachmentBulkActionResult | null;
 }
 
 export function formatFileSize(bytes: number): string {
@@ -76,6 +78,7 @@ export function AttachmentManagementView({
   onBulkDelete,
   onPurgeRetention,
   onQuarantine,
+  initialBulkPartialFailure = null,
 }: AttachmentManagementViewProps) {
   // Search and filter states
   const [searchQuery, setSearchQuery] = useState(initialSearchQuery);
@@ -95,6 +98,10 @@ export function AttachmentManagementView({
   const [activeAttachment, setActiveAttachment] = useState<FormattedAttachment | null>(null);
   const [quarantineReason, setQuarantineReason] = useState('');
   const [purgeDryRun, setPurgeDryRun] = useState(true);
+  // Partial-failure recovery state for bulk deletion: an HTTP-success response may
+  // still contain failed items; they must be explained and kept selectable for retry.
+  const [bulkPartialFailure, setBulkPartialFailure] =
+    useState<AttachmentBulkActionResult | null>(initialBulkPartialFailure);
   const [purgeResult, setPurgeResult] = useState<{
     success_count: number;
     failure_count: number;
@@ -213,15 +220,55 @@ export function AttachmentManagementView({
     }
   };
 
+  const applyBulkDeleteOutcome = (
+    requestedCount: number,
+    outcome: AttachmentBulkActionResult | void
+  ) => {
+    if (outcome && outcome.failed_ids.length > 0) {
+      // Partial failure: surface the per-item results, keep the failed ids selected
+      // so the operator can retry exactly the items that were not deleted.
+      setBulkPartialFailure(outcome);
+      setSelectedIds(outcome.failed_ids);
+      setLocalSuccess(
+        `Đã xóa ${outcome.success_count} tệp; ${outcome.failure_count} tệp không thành công. Xem chi tiết và thử lại.`
+      );
+    } else {
+      setBulkPartialFailure(null);
+      setSelectedIds([]);
+      setLocalSuccess(`Đã xử lý xóa ${requestedCount} tệp đính kèm.`);
+    }
+  };
+
   const handleConfirmBulkDelete = async () => {
     if (selectedIds.length === 0 || !onBulkDelete) return;
     setActionLoading(true);
     setLocalError(null);
     try {
-      await onBulkDelete(selectedIds, true);
-      setLocalSuccess(`Đã xử lý xóa ${selectedIds.length} tệp đính kèm.`);
+      const outcome = await onBulkDelete(selectedIds, true);
+      applyBulkDeleteOutcome(selectedIds.length, outcome);
       setIsBulkDeleteModalOpen(false);
-      setSelectedIds([]);
+    } catch (err: any) {
+      setLocalError(err.message || 'Không thể xóa hàng loạt tệp.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const retryFailedBulkDelete = async () => {
+    if (!onBulkDelete) return;
+    const ids =
+      selectedIds.length > 0
+        ? selectedIds
+        : (bulkPartialFailure?.failed_ids ?? []);
+    if (ids.length === 0) {
+      setBulkPartialFailure(null);
+      return;
+    }
+    setActionLoading(true);
+    setLocalError(null);
+    try {
+      const outcome = await onBulkDelete(ids, true);
+      applyBulkDeleteOutcome(ids.length, outcome);
     } catch (err: any) {
       setLocalError(err.message || 'Không thể xóa hàng loạt tệp.');
     } finally {
@@ -355,6 +402,57 @@ export function AttachmentManagementView({
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {/* Partial-Failure Recovery State (bulk deletion with per-item failures) */}
+      {bulkPartialFailure && (
+        <div
+          data-testid="attachment-partial-failure-banner"
+          className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-start justify-between gap-3"
+          role="alert"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm space-y-1">
+              <div className="font-semibold">
+                Xóa hàng loạt hoàn thành một phần: {bulkPartialFailure.success_count} tệp thành
+                công, {bulkPartialFailure.failure_count} tệp lỗi.
+              </div>
+              <ul className="text-xs space-y-0.5 list-disc list-inside">
+                {bulkPartialFailure.results
+                  .filter((r) => r.status === 'FAILED')
+                  .map((r) => (
+                    <li key={r.id} className="font-mono">
+                      {r.id} — {r.code || 'LỖI'}
+                    </li>
+                  ))}
+              </ul>
+              <div className="text-xs text-amber-800">
+                Các tệp lỗi vẫn được giữ ở trạng thái đã chọn để bạn thử lại.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => void retryFailedBulkDelete()}
+              disabled={actionLoading}
+              aria-label="Thử lại xóa các tệp lỗi"
+              data-testid="retry-failed-bulk-delete"
+              className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 bg-amber-100 text-amber-900 rounded-lg hover:bg-amber-200 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Thử lại
+            </button>
+            <button
+              type="button"
+              onClick={() => setBulkPartialFailure(null)}
+              aria-label="Đóng thông báo lỗi một phần"
+              className="text-amber-600 hover:text-amber-900 p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       )}
 

@@ -1,4 +1,9 @@
-import { ATTACHMENT_ALLOWED_MIME_TYPES, ATTACHMENT_DISALLOWED_EXTENSIONS } from '@shipde/config';
+import {
+  ATTACHMENT_ALLOWED_MIME_TYPES,
+  ATTACHMENT_DISALLOWED_EXTENSIONS,
+  WORKSPACE_ENV,
+} from '@shipde/config';
+import { inflateRawSync } from 'node:zlib';
 import { maskIdentifier } from '../invitations/invitations.service';
 
 export const ALLOWED_ENTITY_TYPES = new Set([
@@ -90,120 +95,182 @@ export interface DetectedContentTypeResult {
   reason?: string;
 }
 
+export interface AttachmentScanLimits {
+  maxZipEntries: number;
+  maxDecompressedBytes: number;
+}
+
 /**
- * Inspects a ZIP archive to ensure it is a valid Office OpenXML document and does not contain executables/macros.
+ * Resolves content-gate inspection bounds from configuration, failing closed to
+ * workspace defaults when the value is missing or unset.
  */
-function scanZipArchiveEntries(buffer: Buffer): {
+export function resolveAttachmentScanLimits(config?: {
+  ATTACHMENT_SCAN_MAX_ZIP_ENTRIES?: number;
+  ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES?: number;
+}): AttachmentScanLimits {
+  return {
+    maxZipEntries:
+      config?.ATTACHMENT_SCAN_MAX_ZIP_ENTRIES ??
+      WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_ZIP_ENTRIES,
+    maxDecompressedBytes:
+      config?.ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES ??
+      WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES,
+  };
+}
+
+const ZIP_FORBIDDEN_EXTENSIONS = [
+  '.exe',
+  '.dll',
+  '.bat',
+  '.cmd',
+  '.vbs',
+  '.sh',
+  '.bin',
+  '.js',
+  '.scr',
+  '.pif',
+  '.com',
+  '.jar',
+  '.vbe',
+  '.jse',
+  '.wsf',
+  '.wsh',
+  '.ps1',
+];
+
+/**
+ * Inspects a single decompressed archive entry for executable or active-content signatures.
+ */
+function scanDecompressedEntryContent(decoded: Buffer): { isSuspicious: boolean; reason?: string } {
+  if (decoded.length >= 2 && decoded[0] === 0x4d && decoded[1] === 0x5a) {
+    return { isSuspicious: true, reason: 'Archive entry contains a DOS/PE executable binary.' };
+  }
+  if (
+    decoded.length >= 4 &&
+    decoded[0] === 0x7f &&
+    decoded[1] === 0x45 &&
+    decoded[2] === 0x4c &&
+    decoded[3] === 0x46
+  ) {
+    return { isSuspicious: true, reason: 'Archive entry contains a Linux ELF executable binary.' };
+  }
+  return scanPolyglotMalware(decoded);
+}
+
+/**
+ * Inspects a ZIP archive entry-by-entry: forbidden executable names/macros are rejected,
+ * and every DEFLATE-compressed entry is decompressed (within configured bounds) and its
+ * content scanned. Entries that cannot be decompressed within bounds fail closed.
+ */
+function scanZipArchiveEntries(
+  buffer: Buffer,
+  limits: AttachmentScanLimits
+): {
   isExecutable: boolean;
   isSuspicious: boolean;
   hasOpenXmlParts: boolean;
   reason?: string;
 } {
-  const FORBIDDEN_EXTENSIONS = [
-    '.exe',
-    '.dll',
-    '.bat',
-    '.cmd',
-    '.vbs',
-    '.sh',
-    '.bin',
-    '.js',
-    '.scr',
-    '.pif',
-    '.com',
-    '.jar',
-    '.vbe',
-    '.jse',
-    '.wsf',
-    '.wsh',
-    '.ps1',
-  ];
   let hasOpenXmlParts = false;
+  let inspected = 0;
+  let i = 0;
 
-  // Scan local file headers: signature 0x50, 0x4B, 0x03, 0x04
-  for (let i = 0; i <= buffer.length - 30; i++) {
-    if (
-      buffer[i] === 0x50 &&
-      buffer[i + 1] === 0x4b &&
-      buffer[i + 2] === 0x03 &&
-      buffer[i + 3] === 0x04
-    ) {
-      const fileNameLen = buffer.readUInt16LE(i + 26);
-      if (fileNameLen > 0 && i + 30 + fileNameLen <= buffer.length) {
-        const fileName = buffer
-          .slice(i + 30, i + 30 + fileNameLen)
-          .toString('utf8')
-          .toLowerCase();
-        if (
-          fileName === '[content_types].xml' ||
-          fileName.startsWith('xl/') ||
-          fileName.startsWith('docprops/')
-        ) {
-          hasOpenXmlParts = true;
-        }
-        if (fileName.includes('vbaproject.bin')) {
+  // Walk local file headers in order: signature 0x50, 0x4B, 0x03, 0x04
+  while (i + 30 <= buffer.length) {
+    const isLocalHeader =
+      buffer[i] === 0x50 && buffer[i + 1] === 0x4b && buffer[i + 2] === 0x03 && buffer[i + 3] === 0x04;
+    if (!isLocalHeader) {
+      i += 1;
+      continue;
+    }
+
+    if (inspected >= limits.maxZipEntries) {
+      return {
+        isExecutable: false,
+        isSuspicious: true,
+        hasOpenXmlParts,
+        reason: 'Archive entry count exceeds the configured inspection limit.',
+      };
+    }
+    inspected += 1;
+
+    const flags = buffer.readUInt16LE(i + 6);
+    const method = buffer.readUInt16LE(i + 8);
+    const compSize = buffer.readUInt32LE(i + 18);
+    const fileNameLen = buffer.readUInt16LE(i + 26);
+    const extraLen = buffer.readUInt16LE(i + 28);
+    const dataStart = i + 30 + fileNameLen + extraLen;
+
+    if (fileNameLen > 0 && i + 30 + fileNameLen <= buffer.length) {
+      const fileName = buffer
+        .slice(i + 30, i + 30 + fileNameLen)
+        .toString('utf8')
+        .toLowerCase();
+      if (
+        fileName === '[content_types].xml' ||
+        fileName.startsWith('xl/') ||
+        fileName.startsWith('docprops/')
+      ) {
+        hasOpenXmlParts = true;
+      }
+      if (fileName.includes('vbaproject.bin')) {
+        return {
+          isExecutable: true,
+          isSuspicious: true,
+          hasOpenXmlParts: true,
+          reason: 'Archive contains macro executable (vbaProject.bin).',
+        };
+      }
+      for (const ext of ZIP_FORBIDDEN_EXTENSIONS) {
+        if (fileName.endsWith(ext)) {
           return {
             isExecutable: true,
             isSuspicious: true,
-            hasOpenXmlParts: true,
-            reason: 'Archive contains macro executable (vbaProject.bin).',
+            hasOpenXmlParts: false,
+            reason: `Archive contains forbidden executable entry '${fileName}'.`,
           };
-        }
-        for (const ext of FORBIDDEN_EXTENSIONS) {
-          if (fileName.endsWith(ext)) {
-            return {
-              isExecutable: true,
-              isSuspicious: true,
-              hasOpenXmlParts: false,
-              reason: `Archive contains forbidden executable entry '${fileName}'.`,
-            };
-          }
         }
       }
     }
-  }
 
-  // Scan central directory headers: signature 0x50, 0x4B, 0x01, 0x02
-  for (let i = 0; i <= buffer.length - 46; i++) {
-    if (
-      buffer[i] === 0x50 &&
-      buffer[i + 1] === 0x4b &&
-      buffer[i + 2] === 0x01 &&
-      buffer[i + 3] === 0x02
-    ) {
-      const fileNameLen = buffer.readUInt16LE(i + 28);
-      if (fileNameLen > 0 && i + 46 + fileNameLen <= buffer.length) {
-        const fileName = buffer
-          .slice(i + 46, i + 46 + fileNameLen)
-          .toString('utf8')
-          .toLowerCase();
-        if (
-          fileName === '[content_types].xml' ||
-          fileName.startsWith('xl/') ||
-          fileName.startsWith('docprops/')
-        ) {
-          hasOpenXmlParts = true;
-        }
-        if (fileName.includes('vbaproject.bin')) {
-          return {
-            isExecutable: true,
-            isSuspicious: true,
-            hasOpenXmlParts: true,
-            reason: 'Archive contains macro executable (vbaProject.bin).',
-          };
-        }
-        for (const ext of FORBIDDEN_EXTENSIONS) {
-          if (fileName.endsWith(ext)) {
-            return {
-              isExecutable: true,
-              isSuspicious: true,
-              hasOpenXmlParts: false,
-              reason: `Archive contains forbidden executable entry '${fileName}'.`,
-            };
-          }
-        }
+    // Decompress and inspect entry content (fail closed when inspection is impossible)
+    const isEncrypted = (flags & 0x01) !== 0;
+    if (!isEncrypted && method === 8 && compSize > 0 && dataStart + compSize <= buffer.length) {
+      let decoded: Buffer;
+      try {
+        decoded = inflateRawSync(buffer.slice(dataStart, dataStart + compSize), {
+          maxOutputLength: limits.maxDecompressedBytes,
+        });
+      } catch {
+        return {
+          isExecutable: false,
+          isSuspicious: true,
+          hasOpenXmlParts,
+          reason:
+            'Archive contains a compressed entry that cannot be decompressed for content inspection.',
+        };
+      }
+      if (decoded.length > limits.maxDecompressedBytes) {
+        return {
+          isExecutable: false,
+          isSuspicious: true,
+          hasOpenXmlParts,
+          reason: 'Archive entry decompressed size exceeds the configured inspection limit.',
+        };
+      }
+      const contentCheck = scanDecompressedEntryContent(decoded);
+      if (contentCheck.isSuspicious) {
+        return {
+          isExecutable: true,
+          isSuspicious: true,
+          hasOpenXmlParts,
+          reason: contentCheck.reason || 'Archive entry contains active content.',
+        };
       }
     }
+
+    const next = dataStart + (compSize > 0 ? compSize : 0);
+    i = next > i ? next : i + 4;
   }
 
   return { isExecutable: false, isSuspicious: false, hasOpenXmlParts };
@@ -255,7 +322,10 @@ function scanPolyglotMalware(buffer: Buffer): { isSuspicious: boolean; reason?: 
   return { isSuspicious: false };
 }
 
-export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResult {
+export function detectBufferContentType(
+  buffer: Buffer,
+  scanLimits?: AttachmentScanLimits
+): DetectedContentTypeResult {
   if (!buffer || buffer.length === 0) {
     return { detectedMime: null, isExecutable: false, isSuspicious: false };
   }
@@ -378,8 +448,9 @@ export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResu
     buffer[2] === 0x03 &&
     buffer[3] === 0x04
   ) {
-    // Finding 1: Archive inspection - check entries for forbidden executables and OpenXML parts
-    const archiveScan = scanZipArchiveEntries(buffer);
+    // Finding 1: Archive inspection - forbidden executables, OpenXML parts, and
+    // decompressed entry content (fail closed within configured inspection bounds)
+    const archiveScan = scanZipArchiveEntries(buffer, scanLimits ?? resolveAttachmentScanLimits());
     if (archiveScan.isExecutable || archiveScan.isSuspicious) {
       return {
         detectedMime: 'application/zip',
@@ -429,7 +500,11 @@ export function detectBufferContentType(buffer: Buffer): DetectedContentTypeResu
 
 export function validateUploadAttachmentDto(
   body: any,
-  maxSizeBytes: number
+  maxSizeBytes: number,
+  scanConfig?: {
+    ATTACHMENT_SCAN_MAX_ZIP_ENTRIES?: number;
+    ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES?: number;
+  }
 ): {
   valid: boolean;
   buffer?: Buffer;
@@ -558,7 +633,7 @@ export function validateUploadAttachmentDto(
   }
 
   // Content inspection & malware verification (Finding 1)
-  const detection = detectBufferContentType(buffer);
+  const detection = detectBufferContentType(buffer, resolveAttachmentScanLimits(scanConfig));
   if (detection.isExecutable || detection.isSuspicious) {
     return {
       valid: false,

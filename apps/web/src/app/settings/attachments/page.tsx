@@ -2,10 +2,9 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, FileText, UploadCloud, Shield } from 'lucide-react';
+import { ArrowLeft, FileText } from 'lucide-react';
 import { AttachmentManagementView } from '@/components/AttachmentManagementView';
-import { useAuth } from '@/context/AuthContext';
-import type { FormattedAttachment } from '@shipde/contracts';
+import type { FormattedAttachment, AttachmentBulkActionResult } from '@shipde/contracts';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -24,12 +23,14 @@ export default function AttachmentsSettingsPage({
   initialCanEdit,
   initialError = null,
 }: AttachmentsSettingsPageProps) {
-  const { user } = useAuth();
   const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
 
   const [attachments, setAttachments] = useState<FormattedAttachment[]>(initialAttachments || []);
   const [total, setTotal] = useState<number | undefined>(initialTotal);
-  const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? user?.role === 'OWNER');
+  // Edit rights are server-authoritative: the list endpoint returns `can_edit`, derived
+  // from the actor's iam:shop_config permission. We never infer capability from hardcoded
+  // role names, and we fail closed (false) until the server resolves the actor's permissions.
+  const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
   const [loading, setLoading] = useState<boolean>(initialLoading ?? initialAttachments === null);
   const [error, setError] = useState<string | null>(initialError);
 
@@ -61,6 +62,10 @@ export default function AttachmentsSettingsPage({
         setAttachments(json.data);
         if (json.meta?.total !== undefined) {
           setTotal(json.meta.total);
+        }
+        // Server-derived edit capability (server-authoritative, never role-inferred).
+        if (typeof json.meta?.can_edit === 'boolean') {
+          setCanEdit(json.meta.can_edit);
         }
       }
     } catch (err: any) {
@@ -152,7 +157,7 @@ export default function AttachmentsSettingsPage({
     await fetchAttachments();
   };
 
-  const handleBulkDelete = async (ids: string[], confirm: boolean) => {
+  const handleBulkDelete = async (ids: string[], confirm: boolean): Promise<AttachmentBulkActionResult> => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -171,7 +176,11 @@ export default function AttachmentsSettingsPage({
       throw new Error(errJson?.error?.message || 'Không thể thực hiện xóa hàng loạt.');
     }
 
+    const json = await res.json();
     await fetchAttachments();
+    // Return truthful per-item results so the view can surface partial failures
+    // and keep failed ids selected for retry (never claim full success).
+    return json.data;
   };
 
   const handlePurgeRetention = async (dryRun: boolean) => {

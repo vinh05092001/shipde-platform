@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { FormattedAttachment } from '@shipde/contracts';
+import type { FormattedAttachment, AttachmentBulkActionResult } from '@shipde/contracts';
 import { AttachmentManagementView, formatFileSize } from '@/components/AttachmentManagementView';
 import AttachmentsSettingsPage from '@/app/settings/attachments/page';
 import { AuthProvider } from '@/context/AuthContext';
@@ -223,7 +223,47 @@ async function runAttachmentsWebTestSuite() {
   assert.ok(successMarkup.includes('Tải tệp lên thành công.'));
   console.log('  PASS: Success feedback banner verified.');
 
-  // 9. Full Settings Page integration test
+  // 9. Bulk-delete partial-failure recovery state (review round 4, Finding 12)
+  console.log('🧪 9. Testing UI State: bulk-delete partial-failure banner with retry...');
+  const partialFailure: AttachmentBulkActionResult = {
+    success: false,
+    total: 3,
+    success_count: 1,
+    failure_count: 2,
+    succeeded_ids: ['11111111-1111-1111-1111-111111111111'],
+    failed_ids: ['22222222-2222-2222-2222-222222222222', '33333333-3333-3333-3333-333333333333'],
+    results: [
+      { id: '11111111-1111-1111-1111-111111111111', status: 'SUCCEEDED' },
+      { id: '22222222-2222-2222-2222-222222222222', status: 'FAILED', code: 'DELETE_ERROR' },
+      {
+        id: '33333333-3333-3333-3333-333333333333',
+        status: 'FAILED',
+        code: 'PURGE_FAILED',
+      },
+    ],
+  };
+  const partialFailureMarkup = renderToStaticMarkup(
+    React.createElement(AttachmentManagementView, {
+      attachments: allAttachments,
+      canEdit: true,
+      initialBulkPartialFailure: partialFailure,
+      onBulkDelete: async () => {},
+    })
+  );
+  assert.ok(partialFailureMarkup.includes('data-testid="attachment-partial-failure-banner"'));
+  assert.ok(
+    partialFailureMarkup.includes('1 tệp thành công, 2 tệp lỗi')
+  );
+  assert.ok(
+    partialFailureMarkup.includes('22222222-2222-2222-2222-222222222222 — DELETE_ERROR')
+  );
+  assert.ok(
+    partialFailureMarkup.includes('33333333-3333-3333-3333-333333333333 — PURGE_FAILED')
+  );
+  assert.ok(partialFailureMarkup.includes('data-testid="retry-failed-bulk-delete"'));
+  console.log('  PASS: bulk-delete partial-failure recovery state verified.');
+
+  // 10. Full Settings Page integration test
   console.log('🧪 9. Testing UI State: Full AttachmentsSettingsPage integration...');
   const pageMarkup = renderToStaticMarkup(
     React.createElement(
