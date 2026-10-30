@@ -143,6 +143,7 @@ async function runOnboardingSupertestSuite() {
           full_name: `Test User ${customRoleId ? 'FINANCE' : role}`,
           password_hash: 'hashed',
           role,
+          warehouse_scopes: role === RoleEnum.OWNER ? ['*'] : [],
           custom_role_id: customRoleId || null,
           status: 'active',
         },
@@ -248,6 +249,8 @@ async function runOnboardingSupertestSuite() {
           name: 'Kho Tân Bình',
           phone: '0901234567',
           address: '123 Cộng Hòa, Tân Bình, TP.HCM',
+          district: 'Tan Binh',
+          city: 'Ho Chi Minh',
         },
       })
       .expect(400);
@@ -267,6 +270,8 @@ async function runOnboardingSupertestSuite() {
           name: 'A',
           phone: '12345',
           address: 'ab',
+          district: 'Tan Binh',
+          city: 'Ho Chi Minh',
         },
       })
       .expect(400);
@@ -312,6 +317,8 @@ async function runOnboardingSupertestSuite() {
           name: 'Kho Tân Bình',
           phone: '0901234567',
           address: '123 Cộng Hòa, Tân Bình, TP.HCM',
+          district: 'Tan Binh',
+          city: 'Ho Chi Minh',
         },
       })
       .expect(200);
@@ -329,7 +336,21 @@ async function runOnboardingSupertestSuite() {
       orderBy: { created_at: 'desc' },
     });
     assert.ok(auditStep2);
-    assert.strictEqual((auditStep2.new_value as any)?.data?.phone, '090****567');
+    const warehouseId = resStep2.body.data.steps.find(
+      (s: any) => s.id === OnboardingStepId.WAREHOUSE
+    ).data.warehouse_id;
+    const persistedWarehouse = await prisma.warehouse.findFirstOrThrow({
+      where: { id: warehouseId, merchant_id: merchantIdA },
+    });
+    assert.strictEqual(persistedWarehouse.address_line, '123 Cộng Hòa, Tân Bình, TP.HCM');
+    assert.strictEqual(persistedWarehouse.contact_phone, '0901234567');
+    assert.strictEqual(persistedWarehouse.is_default, true);
+    assert.strictEqual((auditStep2.new_value as any)?.data?.warehouse_id, warehouseId);
+    const warehouseAudit = await prisma.auditLog.findFirstOrThrow({
+      where: { merchant_id: merchantIdA, entity_id: warehouseId, action: 'WAREHOUSE_CREATED' },
+    });
+    assert.strictEqual((warehouseAudit.new_value as any).contact_phone, '090****567');
+    assert.ok(!JSON.stringify(auditStep2.new_value).includes('0901234567'));
     console.log('✓ AC-ONB-01-03 passed');
 
     // ------------------------------------------------------------------------
@@ -409,6 +430,14 @@ async function runOnboardingSupertestSuite() {
     // AC-ONB-01-10: Reset onboarding
     // ------------------------------------------------------------------------
     console.log('Testing AC-ONB-01-10: Reset onboarding...');
+    await prisma.merchant.update({
+      where: { id: merchantIdA },
+      data: {
+        legal_name: 'Configured merchant',
+        tax_code: testSuffix,
+        operating_notes: 'Configured defaults',
+      },
+    });
     const resReset = await request(server)
       .post('/api/v1/onboarding/reset')
       .set('Authorization', `Bearer ${ownerA.token}`)
@@ -426,6 +455,17 @@ async function runOnboardingSupertestSuite() {
     assert.strictEqual(resGetAfterReset.body.data.status, OnboardingOverallStatus.IN_PROGRESS);
     assert.strictEqual(resGetAfterReset.body.data.progress_percentage, 0);
     console.log('✓ AC-ONB-01-10 passed (reset persisted and verified on subsequent GET)');
+
+    const cleared = await prisma.onboardingState.findUniqueOrThrow({
+      where: { merchant_id: merchantIdA },
+    });
+    assert.deepStrictEqual(cleared.completed_steps, []);
+    assert.deepStrictEqual(cleared.skipped_steps, []);
+    assert.strictEqual(cleared.step_data, null);
+    assert.strictEqual(cleared.completed_at, null);
+    assert.strictEqual(cleared.current_step, OnboardingStepId.SHOP_PROFILE);
+    assert.ok(cleared.reset_at);
+    assert.strictEqual(await prisma.warehouse.count({ where: { merchant_id: merchantIdA } }), 1);
 
     // ------------------------------------------------------------------------
     // AC-ONB-01-11: User lacking iam:shop_config rejected with 403 FORBIDDEN
@@ -515,6 +555,104 @@ async function runOnboardingSupertestSuite() {
     console.log('================================================================');
     console.log('ALL 15 GUIDED ONBOARDING SUPERTEST ACCEPTANCE CRITERIA PASSED!');
     console.log('================================================================');
+    // Concurrent transactions must preserve both completions, skip and JSON data.
+    const concurrent = await Promise.all([
+      request(server)
+        .post('/api/v1/onboarding/steps/SHOP_PROFILE/complete')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .send({ data: { legal_name: 'Concurrent profile' } })
+        .expect(200),
+      request(server)
+        .post('/api/v1/onboarding/steps/OPERATING_DEFAULTS/complete')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .send({ data: { default_fee_payer: 'SHOP' } })
+        .expect(200),
+      request(server)
+        .post('/api/v1/onboarding/steps/INVITE_USERS/skip')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .expect(200),
+    ]);
+    assert.strictEqual(concurrent.length, 3);
+    const persisted = await prisma.onboardingState.findUniqueOrThrow({
+      where: { merchant_id: merchantIdB },
+    });
+    assert.ok(persisted.completed_steps.includes(OnboardingStepId.SHOP_PROFILE));
+    assert.ok(persisted.completed_steps.includes(OnboardingStepId.OPERATING_DEFAULTS));
+    assert.ok(persisted.skipped_steps.includes(OnboardingStepId.INVITE_USERS));
+    assert.strictEqual((persisted.step_data as any).operating_defaults.default_fee_payer, 'SHOP');
+    assert.strictEqual((persisted.step_data as any).shop_profile.legal_name, 'Concurrent profile');
+
+    const validWarehouse: Record<string, any> = {
+      name: 'Warehouse',
+      phone: '0901234567',
+      address: '123 Street',
+      district: 'District',
+      city: 'City',
+    };
+    for (const field of Object.keys(validWarehouse)) {
+      const partial = { ...validWarehouse };
+      delete partial[field];
+      for (const data of [partial, { warehouse: partial }]) {
+        const rejected = await request(server)
+          .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
+          .set('Authorization', `Bearer ${ownerB.token}`)
+          .send({ data })
+          .expect(400);
+        assert.strictEqual(rejected.body.error.code, 'VALIDATION_ERROR');
+        assert.ok(rejected.body.error.fields.some((error: any) => error.field === field));
+      }
+    }
+    // Shop config permission alone cannot bypass warehouse scope.
+    await prisma.user.update({ where: { id: ownerB.userId }, data: { warehouse_scopes: [] } });
+    const deniedWarehouse = await request(server)
+      .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
+      .set('Authorization', `Bearer ${ownerB.token}`)
+      .send({ data: validWarehouse })
+      .expect(403);
+    assert.strictEqual(deniedWarehouse.body.error.code, 'WAREHOUSE_SCOPE_UNAUTHORIZED');
+    assert.strictEqual(await prisma.warehouse.count({ where: { merchant_id: merchantIdB } }), 0);
+    assert.strictEqual(
+      await prisma.auditLog.count({
+        where: { merchant_id: merchantIdB, action: 'WAREHOUSE_CREATED' },
+      }),
+      0
+    );
+    const afterDenied = await prisma.onboardingState.findUniqueOrThrow({
+      where: { merchant_id: merchantIdB },
+    });
+    assert.ok(!afterDenied.completed_steps.includes(OnboardingStepId.WAREHOUSE));
+    await prisma.user.update({ where: { id: ownerB.userId }, data: { warehouse_scopes: ['*'] } });
+    const retries = await Promise.all([
+      request(server)
+        .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .send({ data: { warehouse: validWarehouse } })
+        .expect(200),
+      request(server)
+        .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .send({ data: validWarehouse })
+        .expect(200),
+    ]);
+    const warehouseIds = retries.map(
+      (response) =>
+        response.body.data.steps.find((step: any) => step.id === OnboardingStepId.WAREHOUSE).data
+          .warehouse_id
+    );
+    assert.strictEqual(warehouseIds[0], warehouseIds[1]);
+    assert.strictEqual(await prisma.warehouse.count({ where: { merchant_id: merchantIdB } }), 1);
+    assert.strictEqual(await prisma.warehouse.count({ where: { merchant_id: merchantIdA } }), 1);
+    const saved = await prisma.warehouse.findFirstOrThrow({
+      where: { id: warehouseIds[0], merchant_id: merchantIdB },
+    });
+    assert.strictEqual(saved.address_line, validWarehouse.address);
+    assert.strictEqual(saved.is_default, true);
+    assert.strictEqual(
+      await prisma.auditLog.count({
+        where: { merchant_id: merchantIdB, action: 'WAREHOUSE_CREATED' },
+      }),
+      1
+    );
   } finally {
     if (prisma) {
       const createdMerchantIds = [merchantIdA, merchantIdB].filter(
@@ -528,6 +666,7 @@ async function runOnboardingSupertestSuite() {
         await prisma.auditLog.deleteMany({
           where: { merchant_id: { in: createdMerchantIds } },
         });
+        await prisma.warehouse.deleteMany({ where: { merchant_id: { in: createdMerchantIds } } });
         await prisma.onboardingState.deleteMany({
           where: { merchant_id: { in: createdMerchantIds } },
         });

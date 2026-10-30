@@ -16,6 +16,7 @@ import {
   validateStepData,
   StepDefinition,
 } from './onboarding.dto';
+import { WarehousesService } from '../warehouses/warehouses.service';
 import { maskIdentifier } from '../invitations/invitations.service';
 
 export const SENSITIVE_ONBOARDING_FIELDS = new Set([
@@ -48,6 +49,20 @@ export function maskAuditPayload(
 @Injectable()
 export class OnboardingService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  // All progress readers/writers take the same tenant row lock. Warehouse writes
+  // and audits join this transaction rather than committing independently.
+  private async lockState(tx: Prisma.TransactionClient, merchantId: string): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM onboarding_states WHERE merchant_id = ${merchantId}::uuid FOR UPDATE`;
+  }
+
+  private warehouseService(tx: Prisma.TransactionClient): WarehousesService {
+    return new WarehousesService({
+      user: tx.user,
+      warehouse: tx.warehouse,
+      $transaction: async <T>(fn: (client: Prisma.TransactionClient) => Promise<T>) => fn(tx),
+    } as unknown as PrismaService);
+  }
 
   private hashIp(ip: string): string {
     return createHash('sha256')
@@ -121,33 +136,40 @@ export class OnboardingService {
   /**
    * Evaluate live aggregate completeness from database records
    */
-  private async evaluateLiveCompleteness(merchantId: string, state: any): Promise<Set<string>> {
+  private async evaluateLiveCompleteness(
+    merchantId: string,
+    state: any,
+    db: Prisma.TransactionClient = this.prisma
+  ): Promise<Set<string>> {
     const satisfied = new Set<string>(state?.completed_steps || []);
     const skippedSet = new Set<string>(state?.skipped_steps || []);
 
-    const merchant = await this.prisma.merchant.findUnique({
+    const sinceReset = state.reset_at ? { created_at: { gt: state.reset_at } } : {};
+    const merchant = await db.merchant.findUnique({
       where: { id: merchantId },
       include: {
-        carrier_accounts: { select: { id: true }, take: 1 },
-        warehouses: { select: { id: true }, take: 1 },
-        users: { select: { id: true }, take: 2 },
-        invitations: { select: { id: true }, take: 1 },
-        orders: { select: { id: true }, take: 1 },
-        shipments: { select: { id: true }, take: 1 },
+        carrier_accounts: { where: sinceReset, select: { id: true }, take: 1 },
+        warehouses: { where: sinceReset, select: { id: true }, take: 1 },
+        users: { where: sinceReset, select: { id: true }, take: 2 },
+        invitations: { where: sinceReset, select: { id: true }, take: 1 },
+        orders: { where: sinceReset, select: { id: true }, take: 1 },
+        shipments: { where: sinceReset, select: { id: true }, take: 1 },
       },
     });
 
     if (merchant) {
       // Step 1: SHOP_PROFILE is satisfied if merchant has legal_name and tax_code configured
-      if (merchant.legal_name && merchant.tax_code) {
+      if (
+        merchant.legal_name &&
+        merchant.tax_code &&
+        (!state.reset_at || merchant.updated_at > state.reset_at)
+      ) {
         satisfied.add(OnboardingStepId.SHOP_PROFILE);
       }
 
-      // Step 2: WAREHOUSE is satisfied if warehouse payload is stored in step_data or warehouse row exists
+      // Step 2: WAREHOUSE requires a persisted warehouse outcome
       const stepData = (state?.step_data as Record<string, any>) || {};
-      const whData = stepData.warehouse;
-      const whAddress = whData?.address || whData?.warehouse?.address;
-      if (whAddress || (merchant.warehouses && merchant.warehouses.length > 0)) {
+      if (merchant.warehouses && merchant.warehouses.length > 0) {
         satisfied.add(OnboardingStepId.WAREHOUSE);
       }
 
@@ -165,7 +187,10 @@ export class OnboardingService {
 
       // Step 5: OPERATING_DEFAULTS satisfied if operating_notes or defaults configured or step_data stored, unless skipped
       if (!skippedSet.has(OnboardingStepId.OPERATING_DEFAULTS)) {
-        if (stepData.operating_defaults || merchant.operating_notes) {
+        if (
+          stepData.operating_defaults ||
+          (merchant.operating_notes && (!state.reset_at || merchant.updated_at > state.reset_at))
+        ) {
           satisfied.add(OnboardingStepId.OPERATING_DEFAULTS);
         }
       }
@@ -294,23 +319,26 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id?: string };
   }> {
-    const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
-    const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, state);
-    const responseDto = this.buildResponse(state, liveSatisfied, canEdit);
-
-    // Persist completed status if transition occurred
-    if (
-      responseDto.status === OnboardingOverallStatus.COMPLETED &&
-      state.status === OnboardingOverallStatus.IN_PROGRESS
-    ) {
-      await this.prisma.onboardingState.update({
-        where: { id: state.id },
-        data: {
-          status: OnboardingOverallStatus.COMPLETED,
-          completed_at: new Date(),
-        },
+    await this.getOrCreateState(merchantId, correlationId, clientIp);
+    const responseDto = await this.prisma.$transaction(async (tx) => {
+      await this.lockState(tx, merchantId);
+      const current = await tx.onboardingState.findUniqueOrThrow({
+        where: { merchant_id: merchantId },
       });
-    }
+      const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, current, tx);
+      const response = this.buildResponse(current, liveSatisfied, canEdit);
+      if (
+        response.status === OnboardingOverallStatus.COMPLETED &&
+        current.status === OnboardingOverallStatus.IN_PROGRESS
+      ) {
+        const updated = await tx.onboardingState.update({
+          where: { merchant_id: merchantId },
+          data: { status: OnboardingOverallStatus.COMPLETED, completed_at: new Date() },
+        });
+        return this.buildResponse(updated, liveSatisfied, canEdit);
+      }
+      return response;
+    });
 
     return {
       success: true,
@@ -334,7 +362,7 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
-    if (!merchantId) {
+    if (!merchantId || actor.merchantId !== merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -369,30 +397,7 @@ export class OnboardingService {
       );
     }
 
-    const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
-    const liveSatisfiedPre = await this.evaluateLiveCompleteness(merchantId, state);
-
-    // Assert prerequisites are satisfied
-    for (const prereqId of stepDef.prerequisites) {
-      if (!liveSatisfiedPre.has(prereqId)) {
-        const prereqDef = ONBOARDING_STEPS_CATALOG.find((s) => s.id === prereqId);
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'STEP_BLOCKED',
-          `Bước "${stepDef.title}" đang bị khóa`,
-          false,
-          `Bạn cần hoàn thành bước "${prereqDef?.title || prereqId}" trước`,
-          [
-            {
-              field: 'stepId',
-              code: 'PREREQUISITE_NOT_MET',
-              message: `Yêu cầu hoàn thành bước ${prereqId}`,
-            },
-          ]
-        );
-      }
-    }
-
+    await this.getOrCreateState(merchantId, correlationId, clientIp);
     // Normalize warehouse payload if nested
     const normalizedData =
       dto?.data && dto.data.warehouse && typeof dto.data.warehouse === 'object'
@@ -400,8 +405,9 @@ export class OnboardingService {
         : dto?.data;
 
     const { updatedState, liveSatisfied } = await this.prisma.$transaction(async (tx) => {
+      await this.lockState(tx, merchantId);
       const currentState = await tx.onboardingState.findUnique({
-        where: { id: state.id },
+        where: { merchant_id: merchantId },
       });
       if (!currentState) {
         throw new CanonicalApiException(
@@ -411,14 +417,105 @@ export class OnboardingService {
         );
       }
 
+      const liveSatisfiedPre = await this.evaluateLiveCompleteness(merchantId, currentState, tx);
+
+      // Assert prerequisites are satisfied
+      for (const prereqId of stepDef.prerequisites) {
+        if (!liveSatisfiedPre.has(prereqId)) {
+          const prereqDef = ONBOARDING_STEPS_CATALOG.find((s) => s.id === prereqId);
+          throw new CanonicalApiException(
+            HttpStatus.BAD_REQUEST,
+            'STEP_BLOCKED',
+            `Bước "${stepDef.title}" đang bị khóa`,
+            false,
+            `Bạn cần hoàn thành bước "${prereqDef?.title || prereqId}" trước`,
+            [
+              {
+                field: 'stepId',
+                code: 'PREREQUISITE_NOT_MET',
+                message: `Yêu cầu hoàn thành bước ${prereqId}`,
+              },
+            ]
+          );
+        }
+      }
+
+      let persistedData = normalizedData;
+      if (stepDef.id === OnboardingStepId.WAREHOUSE) {
+        const warehouses = this.warehouseService(tx);
+        const previousId = (currentState.step_data as Record<string, any> | null)?.warehouse
+          ?.warehouse_id;
+        const input = normalizedData
+          ? {
+              name: normalizedData.name,
+              contact_name: normalizedData.name,
+              contact_phone: normalizedData.phone,
+              address_line: normalizedData.address,
+              city: normalizedData.city || normalizedData.province,
+              district: normalizedData.district,
+              ward: normalizedData.ward,
+              is_default: normalizedData.is_default,
+            }
+          : undefined;
+        let warehouse;
+        if (previousId) {
+          warehouse = input
+            ? (
+                await warehouses.updateWarehouse(
+                  previousId,
+                  input,
+                  merchantId,
+                  actor,
+                  correlationId,
+                  clientIp
+                )
+              ).data
+            : (
+                await warehouses.getWarehouseById(
+                  previousId,
+                  merchantId,
+                  actor,
+                  true,
+                  correlationId
+                )
+              ).data;
+        } else if (input) {
+          warehouse = (
+            await warehouses.createWarehouse(input, merchantId, actor, correlationId, clientIp)
+          ).data;
+        } else {
+          const existing = await tx.warehouse.findFirst({
+            where: { merchant_id: merchantId, status: 'active' },
+          });
+          if (!existing) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              'Vui lòng tạo kho hàng trước khi hoàn thành bước này'
+            );
+          }
+          warehouse = (
+            await warehouses.getWarehouseById(existing.id, merchantId, actor, true, correlationId)
+          ).data;
+        }
+        persistedData = {
+          warehouse_id: warehouse.id,
+          name: warehouse.name,
+          phone: warehouse.contact_phone,
+          address: warehouse.address_line,
+          city: warehouse.city,
+          district: warehouse.district,
+        };
+      }
+
       const currentCompleted = new Set<string>(currentState.completed_steps || []);
       currentCompleted.add(stepDef.id);
       const currentSkipped = new Set<string>(currentState.skipped_steps || []);
       currentSkipped.delete(stepDef.id);
 
       const stepData = (currentState.step_data as Record<string, any>) || {};
-      if (normalizedData) {
-        stepData[stepDef.id.toLowerCase()] = normalizedData;
+      if (persistedData) {
+        stepData[stepDef.id.toLowerCase()] = persistedData;
       }
 
       const tempState = {
@@ -428,7 +525,7 @@ export class OnboardingService {
         step_data: stepData,
       };
 
-      const evaluatedLive = await this.evaluateLiveCompleteness(merchantId, tempState);
+      const evaluatedLive = await this.evaluateLiveCompleteness(merchantId, tempState, tx);
       evaluatedLive.add(stepDef.id);
       const requiredSteps = ONBOARDING_STEPS_CATALOG.filter((s) => s.required);
       const allRequiredCompleted = requiredSteps.every((s) => evaluatedLive.has(s.id));
@@ -458,7 +555,10 @@ export class OnboardingService {
           entity_id: currentState.id,
           new_value: {
             step_id: stepDef.id,
-            data: maskAuditPayload(normalizedData),
+            data:
+              stepDef.id === OnboardingStepId.WAREHOUSE
+                ? { warehouse_id: persistedData?.warehouse_id }
+                : maskAuditPayload(normalizedData),
           },
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
@@ -490,7 +590,7 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
-    if (!merchantId) {
+    if (!merchantId || actor.merchantId !== merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -522,11 +622,12 @@ export class OnboardingService {
       );
     }
 
-    const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
+    await this.getOrCreateState(merchantId, correlationId, clientIp);
 
     const { updatedState, liveSatisfied } = await this.prisma.$transaction(async (tx) => {
+      await this.lockState(tx, merchantId);
       const currentState = await tx.onboardingState.findUnique({
-        where: { id: state.id },
+        where: { merchant_id: merchantId },
       });
       if (!currentState) {
         throw new CanonicalApiException(
@@ -563,7 +664,7 @@ export class OnboardingService {
         },
       });
 
-      const evaluatedLive = await this.evaluateLiveCompleteness(merchantId, updated);
+      const evaluatedLive = await this.evaluateLiveCompleteness(merchantId, updated, tx);
       evaluatedLive.delete(stepDef.id);
       return { updatedState: updated, liveSatisfied: evaluatedLive };
     });
@@ -589,7 +690,7 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
-    if (!merchantId) {
+    if (!merchantId || actor.merchantId !== merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -599,11 +700,12 @@ export class OnboardingService {
       );
     }
 
-    const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
+    await this.getOrCreateState(merchantId, correlationId, clientIp);
 
-    const updatedState = await this.prisma.$transaction(async (tx) => {
+    const { updatedState, liveSatisfied } = await this.prisma.$transaction(async (tx) => {
+      await this.lockState(tx, merchantId);
       const currentState = await tx.onboardingState.findUnique({
-        where: { id: state.id },
+        where: { merchant_id: merchantId },
       });
       if (!currentState) {
         throw new CanonicalApiException(
@@ -619,6 +721,7 @@ export class OnboardingService {
           completed_steps: [],
           skipped_steps: [],
           step_data: Prisma.DbNull,
+          reset_at: new Date(),
           status: OnboardingOverallStatus.IN_PROGRESS,
           completed_at: null,
           current_step: OnboardingStepId.SHOP_PROFILE,
@@ -638,10 +741,12 @@ export class OnboardingService {
         },
       });
 
-      return updated;
+      return {
+        updatedState: updated,
+        liveSatisfied: await this.evaluateLiveCompleteness(merchantId, updated, tx),
+      };
     });
 
-    const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, updatedState);
     const responseDto = this.buildResponse(updatedState, liveSatisfied);
     return {
       success: true,
@@ -663,7 +768,7 @@ export class OnboardingService {
     data: OnboardingStateResponseDto;
     meta: { correlation_id: string };
   }> {
-    if (!merchantId) {
+    if (!merchantId || actor.merchantId !== merchantId) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'FORBIDDEN',
@@ -673,36 +778,37 @@ export class OnboardingService {
       );
     }
 
-    const state = await this.getOrCreateState(merchantId, correlationId, clientIp);
-    const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, state);
-
-    const requiredSteps = ONBOARDING_STEPS_CATALOG.filter((s) => s.required);
-    const incompleteRequired = requiredSteps.filter((s) => !liveSatisfied.has(s.id));
-
-    if (incompleteRequired.length > 0) {
-      throw new CanonicalApiException(
-        HttpStatus.BAD_REQUEST,
-        'ONBOARDING_INCOMPLETE',
-        'Chưa thể đóng hướng dẫn thiết lập',
-        false,
-        'Bạn cần hoàn thành các bước bắt buộc trước khi đóng hướng dẫn',
-        incompleteRequired.map((s) => ({
-          field: s.id,
-          code: 'REQUIRED_STEP_INCOMPLETE',
-          message: `Bước "${s.title}" chưa được hoàn thành`,
-        }))
-      );
-    }
-
-    const updatedState = await this.prisma.$transaction(async (tx) => {
+    await this.getOrCreateState(merchantId, correlationId, clientIp);
+    const { updatedState, liveSatisfied } = await this.prisma.$transaction(async (tx) => {
+      await this.lockState(tx, merchantId);
       const currentState = await tx.onboardingState.findUnique({
-        where: { id: state.id },
+        where: { merchant_id: merchantId },
       });
       if (!currentState) {
         throw new CanonicalApiException(
           HttpStatus.NOT_FOUND,
           'ONBOARDING_NOT_FOUND',
           'Không tìm thấy dữ liệu thiết lập ban đầu'
+        );
+      }
+
+      const liveSatisfied = await this.evaluateLiveCompleteness(merchantId, currentState, tx);
+
+      const requiredSteps = ONBOARDING_STEPS_CATALOG.filter((s) => s.required);
+      const incompleteRequired = requiredSteps.filter((s) => !liveSatisfied.has(s.id));
+
+      if (incompleteRequired.length > 0) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'ONBOARDING_INCOMPLETE',
+          'Chưa thể đóng hướng dẫn thiết lập',
+          false,
+          'Bạn cần hoàn thành các bước bắt buộc trước khi đóng hướng dẫn',
+          incompleteRequired.map((s) => ({
+            field: s.id,
+            code: 'REQUIRED_STEP_INCOMPLETE',
+            message: `Bước "${s.title}" chưa được hoàn thành`,
+          }))
         );
       }
 
@@ -726,7 +832,10 @@ export class OnboardingService {
         },
       });
 
-      return updated;
+      return {
+        updatedState: updated,
+        liveSatisfied: await this.evaluateLiveCompleteness(merchantId, updated, tx),
+      };
     });
 
     const responseDto = this.buildResponse(updatedState, liveSatisfied);

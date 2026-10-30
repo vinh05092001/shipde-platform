@@ -180,6 +180,7 @@ model OnboardingState {
   completed_steps String[]          @default([])
   skipped_steps   String[]          @default([])
   step_data       Json?             @db.JsonB
+  reset_at        DateTime?         @db.Timestamptz
   completed_at    DateTime?         @db.Timestamptz
   created_at      DateTime          @default(now()) @db.Timestamptz
   updated_at      DateTime          @updatedAt @db.Timestamptz

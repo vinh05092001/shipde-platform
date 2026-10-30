@@ -31,6 +31,8 @@ async function runOnboardingWebTestSuite() {
     name: 'Kho Tân Bình',
     phone: '0901234567',
     address: '128 Nguyễn Trãi, P.3, Q.5',
+    district: 'Tan Binh',
+    city: 'Ho Chi Minh',
     city: 'Hồ Chí Minh',
   };
   const validRes = validateWarehouseInput(validWh);
@@ -56,10 +58,20 @@ async function runOnboardingWebTestSuite() {
   assert.strictEqual(validPhonePlus84.isValid, true);
 
   // Invalid warehouse address
-  const invalidAddressRes = validateWarehouseInput({ ...validWh, address: '  ' });
+  const invalidAddressRes = validateWarehouseInput({
+    ...validWh,
+    address: '  ',
+    district: 'Tan Binh',
+    city: 'Ho Chi Minh',
+  });
   assert.strictEqual(invalidAddressRes.isValid, false);
   assert.ok(invalidAddressRes.errors.address, 'Empty address must produce error');
 
+  for (const field of ['city', 'district'] as const) {
+    const result = validateWarehouseInput({ ...validWh, [field]: '' });
+    assert.strictEqual(result.isValid, false);
+    assert.ok(result.errors[field]);
+  }
   console.log('  PASS: Warehouse validation rules correctly enforced');
 
   // --- Mock Payloads for Component States ---
@@ -234,6 +246,8 @@ async function runOnboardingWebTestSuite() {
   assert.ok(whFormHtml.includes('id="wh-name"'), 'Must render warehouse name input');
   assert.ok(whFormHtml.includes('id="wh-phone"'), 'Must render warehouse phone input');
   assert.ok(whFormHtml.includes('id="wh-address"'), 'Must render warehouse address input');
+  assert.ok(whFormHtml.includes('id="wh-city"'), 'Must render city input');
+  assert.ok(whFormHtml.includes('id="wh-district"'), 'Must render district input');
   assert.ok(
     whFormHtml.includes('Lưu Kho &amp; Hoàn Thành Bước') ||
       whFormHtml.includes('Lưu Kho & Hoàn Thành Bước'),

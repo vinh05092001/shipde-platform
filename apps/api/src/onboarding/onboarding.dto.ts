@@ -96,8 +96,9 @@ export interface WarehouseStepPayload {
   name: string;
   phone: string;
   address: string;
+  city: string;
   province?: string;
-  district?: string;
+  district: string;
   ward?: string;
   is_default?: boolean;
 }
@@ -107,39 +108,57 @@ export function validateStepData(
   data?: Record<string, any>
 ): CanonicalFieldError[] {
   const fields: CanonicalFieldError[] = [];
-  if (!data) return fields;
+  if (data === undefined) return fields;
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    Array.isArray(data) ||
+    ('warehouse' in data &&
+      (!data.warehouse || typeof data.warehouse !== 'object' || Array.isArray(data.warehouse)))
+  ) {
+    return [
+      { field: 'data', code: 'INVALID_TYPE', message: 'Dữ liệu bước thiết lập phải là đối tượng' },
+    ];
+  }
 
   if (stepId === OnboardingStepId.WAREHOUSE) {
     const wh =
       data.warehouse && typeof data.warehouse === 'object'
         ? (data.warehouse as Record<string, any>)
         : data;
-    if (wh.name !== undefined) {
-      if (typeof wh.name !== 'string' || wh.name.trim().length < 2) {
-        fields.push({
-          field: 'name',
-          code: 'INVALID_NAME',
-          message: 'Tên kho hàng phải từ 2 ký tự trở lên',
-        });
-      }
-    }
-    if (wh.phone !== undefined) {
-      if (typeof wh.phone !== 'string' || !PHONE_REGEX.test(wh.phone.trim())) {
-        fields.push({
-          field: 'phone',
-          code: 'INVALID_PHONE_FORMAT',
-          message: 'Số điện thoại kho hàng không hợp lệ (định dạng 10 số di động VN)',
-        });
-      }
-    }
-    if (wh.address !== undefined) {
-      if (typeof wh.address !== 'string' || wh.address.trim().length < 3) {
-        fields.push({
-          field: 'address',
-          code: 'INVALID_ADDRESS',
-          message: 'Địa chỉ kho hàng phải từ 3 ký tự trở lên',
-        });
-      }
+    for (const [field, valid, code, message] of [
+      [
+        'name',
+        typeof wh.name === 'string' && wh.name.trim().length >= 2,
+        'INVALID_NAME',
+        'Tên kho hàng phải từ 2 ký tự trở lên',
+      ],
+      [
+        'phone',
+        typeof wh.phone === 'string' && PHONE_REGEX.test(wh.phone.trim()),
+        'INVALID_PHONE_FORMAT',
+        'Số điện thoại kho hàng không hợp lệ',
+      ],
+      [
+        'address',
+        typeof wh.address === 'string' && wh.address.trim().length >= 3,
+        'INVALID_ADDRESS',
+        'Địa chỉ kho hàng phải từ 3 ký tự trở lên',
+      ],
+      [
+        'district',
+        typeof wh.district === 'string' && wh.district.trim().length > 0,
+        'REQUIRED',
+        'Quận/huyện là bắt buộc',
+      ],
+      [
+        'city',
+        typeof (wh.city ?? wh.province) === 'string' && (wh.city ?? wh.province).trim().length > 0,
+        'REQUIRED',
+        'Tỉnh/thành phố là bắt buộc',
+      ],
+    ] as const) {
+      if (!valid) fields.push({ field, code, message });
     }
   }
 

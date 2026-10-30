@@ -36,6 +36,7 @@ export interface WarehouseFormData {
   phone: string;
   address: string;
   city: string;
+  district: string;
 }
 
 export function validateWarehouseInput(input: WarehouseFormData): {
@@ -53,6 +54,11 @@ export function validateWarehouseInput(input: WarehouseFormData): {
   }
   if (!input.address || input.address.trim().length < 3) {
     errors.address = 'Địa chỉ kho phải có ít nhất 3 ký tự';
+  }
+  for (const field of ['city', 'district'] as const) {
+    if (!input[field]?.trim())
+      errors[field] =
+        field === 'city' ? 'Vui lòng nhập tỉnh/thành phố' : 'Vui lòng nhập quận/huyện';
   }
   return {
     isValid: Object.keys(errors).length === 0,
@@ -877,6 +883,37 @@ export function OnboardingFlow({
                       )}
                     </div>
                   </div>
+
+                  {(['city', 'district'] as const).map((field) => (
+                    <div key={field} className="space-y-1">
+                      <label
+                        htmlFor={`wh-${field}`}
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        {field === 'city' ? 'Tỉnh/thành phố' : 'Quận/huyện'}{' '}
+                        <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        id={`wh-${field}`}
+                        type="text"
+                        required
+                        value={warehouseData[field]}
+                        onChange={(e) =>
+                          setWarehouseData((prev) => ({ ...prev, [field]: e.target.value }))
+                        }
+                        aria-invalid={Boolean(warehouseFieldErrors[field])}
+                        aria-describedby={
+                          warehouseFieldErrors[field] ? `wh-${field}-error` : undefined
+                        }
+                        className="w-full px-3 py-1.5 rounded-lg border text-xs border-slate-300 bg-white"
+                      />
+                      {warehouseFieldErrors[field] && (
+                        <p id={`wh-${field}-error`} className="text-[11px] text-rose-600">
+                          {warehouseFieldErrors[field]}
+                        </p>
+                      )}
+                    </div>
+                  ))}
 
                   <div className="flex items-center justify-end gap-2 pt-2">
                     <button
