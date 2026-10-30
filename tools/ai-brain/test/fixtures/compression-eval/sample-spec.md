@@ -12,6 +12,6 @@ Enable deterministic verification of compression evaluation fixtures without ext
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
+| AC/Test ID   | Scenario          | Expected result          | Evidence required   |
+| ------------ | ----------------- | ------------------------ | ------------------- |
 | AC-SAMPLE-01 | Evaluate spec doc | Tokens counted correctly | PASS in test output |
