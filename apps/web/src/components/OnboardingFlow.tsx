@@ -142,6 +142,7 @@ export function OnboardingFlow({
     phone: '',
     address: '',
     city: 'Hồ Chí Minh',
+    district: '',
   });
   const [warehouseFieldErrors, setWarehouseFieldErrors] = useState<Record<string, string>>({});
 

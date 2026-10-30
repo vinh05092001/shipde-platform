@@ -32,7 +32,6 @@ async function runOnboardingWebTestSuite() {
     phone: '0901234567',
     address: '128 Nguyễn Trãi, P.3, Q.5',
     district: 'Tan Binh',
-    city: 'Ho Chi Minh',
     city: 'Hồ Chí Minh',
   };
   const validRes = validateWarehouseInput(validWh);
