@@ -171,9 +171,10 @@ function detectCategory(filePath, content = '') {
 
 /**
  * Extract diff hunk headers and changed lines (+ and -).
- * Strictly skips file headers (lines immediately after 'diff --git' or before the first '@@'),
- * while preserving changed lines inside hunks even if they begin with '+++' (e.g. '+++counter;')
- * or '---' (e.g. '---decrement;').
+ * Strictly skips file headers (lines immediately after 'diff --git' or before the first '@@',
+ * or between hunks when remaining old/new counts are zero),
+ * while preserving changed lines inside hunks even if they match header patterns like '+++ b/x'
+ * or '--- a/x'.
  *
  * @param {string} diffText
  * @returns {{ hunks: string[], changedLines: string[] }}
@@ -185,33 +186,51 @@ function extractDiffHunksAndChangedLines(diffText) {
   const hunks = [];
   const changedLines = [];
   let inHunk = false;
+  let remOld = 0;
+  let remNew = 0;
 
-  const hunkHeaderRegex = /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/;
+  const hunkHeaderRegex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/;
   const fileHeaderRegex = /^(?:---|\+\+\+)\s+(?:[ab]\/|\/dev\/null)/;
 
   for (const line of lines) {
     if (line.startsWith('diff --git')) {
       inHunk = false;
+      remOld = 0;
+      remNew = 0;
       continue;
     }
 
-    if (hunkHeaderRegex.test(line.trim())) {
-      inHunk = true;
+    const hunkMatch = line.trim().match(hunkHeaderRegex);
+    if (hunkMatch) {
       hunks.push(line.trim());
+      remOld = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
+      remNew = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
+      inHunk = remOld > 0 || remNew > 0;
       continue;
     }
 
+    // Treat lines as file headers ONLY when not inside a hunk (remaining old/new counts are zero)
     if (!inHunk) {
       continue;
     }
 
-    if (fileHeaderRegex.test(line.trim())) {
-      inHunk = false;
-      continue;
+    // Inside a hunk (remOld > 0 || remNew > 0): lines starting with + or -
+    // (including lines like '+++ b/x' or '--- a/x') are real changes that must be verified
+    if (line.startsWith('+')) {
+      changedLines.push(line);
+      remNew = Math.max(0, remNew - 1);
+    } else if (line.startsWith('-')) {
+      changedLines.push(line);
+      remOld = Math.max(0, remOld - 1);
+    } else if (line.startsWith(' ') || line === '') {
+      remOld = Math.max(0, remOld - 1);
+      remNew = Math.max(0, remNew - 1);
+    } else if (line.startsWith('\\')) {
+      // Diff metadata marker such as "\ No newline at end of file"
     }
 
-    if (line.startsWith('+') || line.startsWith('-')) {
-      changedLines.push(line);
+    if (remOld <= 0 && remNew <= 0) {
+      inHunk = false;
     }
   }
 
@@ -513,26 +532,76 @@ function probeHeadroom(options = {}) {
     }
 
     try {
-      const probe = spawnSync(
-        process.execPath,
-        [
-          '-e',
-          `fetch(${JSON.stringify(proxyUrl)}, { signal: AbortSignal.timeout(1000) })
-            .then(r => {
-              if (r.ok || (r.status >= 200 && r.status < 300)) {
-                process.exit(0);
-              } else {
-                process.stderr.write('HTTP ' + r.status);
-                process.exit(1);
+      const probeScript = `
+        function isLoopback(u) {
+          try {
+            const p = new URL(u);
+            if (p.protocol !== 'http:' && p.protocol !== 'https:') return false;
+            const h = p.hostname.toLowerCase();
+            return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+          } catch (_) {
+            return false;
+          }
+        }
+
+        async function probe(targetUrl) {
+          let curr = targetUrl;
+          let hops = 0;
+          const maxHops = 5;
+
+          while (hops < maxHops) {
+            if (!isLoopback(curr)) {
+              process.stderr.write('Refused non-loopback redirect target: ' + curr);
+              process.exitCode = 1;
+              return;
+            }
+
+            const res = await fetch(curr, {
+              signal: AbortSignal.timeout(1000),
+              redirect: 'manual',
+            });
+
+            if (res.status >= 300 && res.status < 400) {
+              const loc = res.headers.get('location');
+              if (!loc) {
+                process.stderr.write('Redirect response missing Location header');
+                process.exitCode = 1;
+                return;
               }
-            })
-            .catch(err => {
-              process.stderr.write(err.message || 'fetch failed');
-              process.exit(1);
-            })`,
-        ],
-        { timeout: 2000, encoding: 'utf8' }
-      );
+              const nextUrl = new URL(loc, curr).href;
+              if (!isLoopback(nextUrl)) {
+                process.stderr.write('Refused non-loopback redirect target: ' + nextUrl);
+                process.exitCode = 1;
+                return;
+              }
+              curr = nextUrl;
+              hops++;
+              continue;
+            }
+
+            if (res.ok || (res.status >= 200 && res.status < 300)) {
+              process.exitCode = 0;
+              return;
+            } else {
+              process.stderr.write('HTTP ' + res.status);
+              process.exitCode = 1;
+              return;
+            }
+          }
+
+          process.stderr.write('Too many redirects');
+          process.exitCode = 1;
+        }
+
+        probe(${JSON.stringify(proxyUrl)}).catch(err => {
+          process.stderr.write(err.message || 'fetch failed');
+          process.exitCode = 1;
+        });
+      `;
+      const probe = spawnSync(process.execPath, ['-e', probeScript], {
+        timeout: 2000,
+        encoding: 'utf8',
+      });
       if (probe.status === 0) {
         return {
           installed: true,
@@ -685,6 +754,7 @@ function compressWithHeadroom(text, context = {}, headroomInfo = {}, options = {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
           signal: AbortSignal.timeout(5000),
+          redirect: 'error',
         })
         .then(r => {
           if (!r.ok) {

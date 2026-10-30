@@ -191,6 +191,113 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.equal(changedLines.includes('---decrement;'), true);
     });
 
+    test('losslessCheckDiff tracks hunk line counts and verifies changed lines shaped like +++ b/x and --- a/x inside hunks', () => {
+      // Diff with both +++ b/... and --- a/... changed lines inside hunks, plus file headers outside hunks
+      const orig = [
+        'diff --git a/src/counter.js b/src/counter.js',
+        '--- a/src/counter.js',
+        '+++ b/src/counter.js',
+        '@@ -1,3 +1,4 @@',
+        ' function mutate() {',
+        '--- a/counter;',
+        '+++ b/counter;',
+        '+checked();',
+        ' }',
+      ].join('\n');
+
+      // 1. Fully preserved diff passes lossless verification
+      const compPreserved = [
+        'diff --git a/src/counter.js b/src/counter.js',
+        '@@ -1,3 +1,4 @@',
+        ' function mutate() {',
+        '--- a/counter;',
+        '+++ b/counter;',
+        '+checked();',
+        ' }',
+      ].join('\n');
+      const passResult = losslessCheckDiff(orig, compPreserved);
+      assert.equal(passResult.passed, true);
+      assert.equal(passResult.totalChangedLines, 3);
+      assert.equal(passResult.missingChangedLines.length, 0);
+
+      // 2. Dropping +++ b/counter; inside hunk MUST fail lossless check
+      const compDroppedPlus = [
+        '@@ -1,3 +1,4 @@',
+        ' function mutate() {',
+        '--- a/counter;',
+        '+checked();',
+        ' }',
+      ].join('\n');
+      const failPlusResult = losslessCheckDiff(orig, compDroppedPlus);
+      assert.equal(failPlusResult.passed, false);
+      assert.ok(failPlusResult.missingChangedLines.includes('+++ b/counter;'));
+
+      // 3. Dropping --- a/counter; inside hunk MUST fail lossless check
+      const compDroppedMinus = [
+        '@@ -1,3 +1,4 @@',
+        ' function mutate() {',
+        '+++ b/counter;',
+        '+checked();',
+        ' }',
+      ].join('\n');
+      const failMinusResult = losslessCheckDiff(orig, compDroppedMinus);
+      assert.equal(failMinusResult.passed, false);
+      assert.ok(failMinusResult.missingChangedLines.includes('--- a/counter;'));
+
+      // 4. Dropping the following line (+checked();) must also fail
+      const compDroppedFollow = [
+        '@@ -1,3 +1,4 @@',
+        ' function mutate() {',
+        '--- a/counter;',
+        '+++ b/counter;',
+        ' }',
+      ].join('\n');
+      const failFollowResult = losslessCheckDiff(orig, compDroppedFollow);
+      assert.equal(failFollowResult.passed, false);
+      assert.ok(failFollowResult.missingChangedLines.includes('+checked();'));
+
+      // 5. File headers outside hunks are not changed lines; changes inside hunks are
+      const { changedLines } = extractDiffHunksAndChangedLines(orig);
+      assert.equal(changedLines.includes('--- a/src/counter.js'), false);
+      assert.equal(changedLines.includes('+++ b/src/counter.js'), false);
+      assert.equal(changedLines.includes('--- a/counter;'), true);
+      assert.equal(changedLines.includes('+++ b/counter;'), true);
+      assert.equal(changedLines.includes('+checked();'), true);
+    });
+
+    test('losslessCheckDiff tracks multi-file hunks and stops hunk boundary when counts reach zero', () => {
+      const multiDiff = [
+        'diff --git a/file1.txt b/file1.txt',
+        '--- a/file1.txt',
+        '+++ b/file1.txt',
+        '@@ -1,2 +1,3 @@',
+        ' ctx1',
+        '+++ b/x',
+        ' ctx2',
+        'diff --git a/file2.txt b/file2.txt',
+        '--- a/file2.txt',
+        '+++ b/file2.txt',
+        '@@ -1,3 +1,2 @@',
+        ' ctx1',
+        '--- a/x',
+        ' ctx2',
+      ].join('\n');
+
+      const { hunks, changedLines } = extractDiffHunksAndChangedLines(multiDiff);
+      assert.equal(hunks.length, 2);
+      assert.deepEqual(changedLines, ['+++ b/x', '--- a/x']);
+
+      // Preserved passes
+      const pass = losslessCheckDiff(multiDiff, multiDiff);
+      assert.equal(pass.passed, true);
+
+      // Dropping --- a/x fails
+      const dropped = multiDiff.replace('--- a/x\n', '');
+      const fail = losslessCheckDiff(multiDiff, dropped);
+      assert.equal(fail.passed, false);
+      assert.ok(fail.missingChangedLines.includes('--- a/x'));
+    });
+
     test('losslessCheckJson passes when compressed text parses and retains deep structure', () => {
       const orig = JSON.stringify(
         {
@@ -345,6 +452,63 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
         loopbackUnreachable.reason.includes('not responding') ||
           loopbackUnreachable.reason.includes('probe error')
       );
+    });
+
+    test('probeHeadroom refuses loopback endpoint redirecting to a remote host', async () => {
+      const { spawn } = await import('child_process');
+      // Run mock HTTP server in a separate process so its event loop is not blocked by spawnSync
+      const serverProcess = spawn(process.execPath, [
+        '-e',
+        `
+        const http = require('http');
+        const server = http.createServer((req, res) => {
+          if (req.url === '/redirect-remote') {
+            res.writeHead(302, { Location: 'http://remote-attacker.example.com/exploit' });
+            res.end();
+          } else if (req.url === '/redirect-loopback') {
+            res.writeHead(302, { Location: '/health' });
+            res.end();
+          } else if (req.url === '/health') {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('ok');
+          } else {
+            res.writeHead(404);
+            res.end();
+          }
+        }).listen(0, '127.0.0.1', () => {
+          process.stdout.write(String(server.address().port));
+        });
+        `,
+      ]);
+
+      const port = await new Promise((resolve, reject) => {
+        serverProcess.stdout.once('data', (d) => resolve(d.toString().trim()));
+        serverProcess.on('error', reject);
+      });
+
+      try {
+        // 1. Loopback redirecting to remote host MUST be refused
+        const remoteRedirect = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/redirect-remote`,
+          optIn: true,
+        });
+        assert.equal(remoteRedirect.installed, false);
+        assert.equal(remoteRedirect.status, ENGINE_STATUS.NOT_INSTALLED);
+        assert.ok(
+          remoteRedirect.reason.includes('Refused non-loopback redirect target') ||
+            remoteRedirect.reason.includes('remote-attacker.example.com')
+        );
+
+        // 2. Loopback redirecting to another loopback endpoint is permitted
+        const loopbackRedirect = probeHeadroom({
+          headroomUrl: `http://127.0.0.1:${port}/redirect-loopback`,
+          optIn: true,
+        });
+        assert.equal(loopbackRedirect.installed, true);
+        assert.equal(loopbackRedirect.status, ENGINE_STATUS.INSTALLED);
+      } finally {
+        serverProcess.kill();
+      }
     });
 
     test('probeHeadroom and probeLlmLingua return NOT_INSTALLED when opted in but tools absent', () => {
