@@ -178,7 +178,10 @@ function scanZipArchiveEntries(
   // Walk local file headers in order: signature 0x50, 0x4B, 0x03, 0x04
   while (i + 30 <= buffer.length) {
     const isLocalHeader =
-      buffer[i] === 0x50 && buffer[i + 1] === 0x4b && buffer[i + 2] === 0x03 && buffer[i + 3] === 0x04;
+      buffer[i] === 0x50 &&
+      buffer[i + 1] === 0x4b &&
+      buffer[i + 2] === 0x03 &&
+      buffer[i + 3] === 0x04;
     if (!isLocalHeader) {
       i += 1;
       continue;
@@ -235,30 +238,35 @@ function scanZipArchiveEntries(
 
     // Decompress and inspect entry content (fail closed when inspection is impossible)
     const isEncrypted = (flags & 0x01) !== 0;
-    if (!isEncrypted && method === 8 && compSize > 0 && dataStart + compSize <= buffer.length) {
-      let decoded: Buffer;
-      try {
-        decoded = inflateRawSync(buffer.slice(dataStart, dataStart + compSize), {
-          maxOutputLength: limits.maxDecompressedBytes,
-        });
-      } catch {
+    if (isEncrypted) {
+      return {
+        isExecutable: false,
+        isSuspicious: true,
+        hasOpenXmlParts,
+        reason: 'Archive contains encrypted entry that cannot be inspected.',
+      };
+    }
+
+    if (method === 0) {
+      // Stored (uncompressed) entry
+      if (compSize > limits.maxDecompressedBytes) {
         return {
           isExecutable: false,
           isSuspicious: true,
           hasOpenXmlParts,
-          reason:
-            'Archive contains a compressed entry that cannot be decompressed for content inspection.',
+          reason: 'Archive entry size exceeds the configured inspection limit.',
         };
       }
-      if (decoded.length > limits.maxDecompressedBytes) {
+      if (dataStart + compSize > buffer.length) {
         return {
           isExecutable: false,
           isSuspicious: true,
           hasOpenXmlParts,
-          reason: 'Archive entry decompressed size exceeds the configured inspection limit.',
+          reason: 'Archive contains truncated entry data.',
         };
       }
-      const contentCheck = scanDecompressedEntryContent(decoded);
+      const entryData = buffer.slice(dataStart, dataStart + compSize);
+      const contentCheck = scanDecompressedEntryContent(entryData);
       if (contentCheck.isSuspicious) {
         return {
           isExecutable: true,
@@ -267,6 +275,57 @@ function scanZipArchiveEntries(
           reason: contentCheck.reason || 'Archive entry contains active content.',
         };
       }
+    } else if (method === 8) {
+      // DEFLATE compressed entry
+      if (dataStart + compSize > buffer.length) {
+        return {
+          isExecutable: false,
+          isSuspicious: true,
+          hasOpenXmlParts,
+          reason: 'Archive contains truncated compressed entry data.',
+        };
+      }
+      if (compSize > 0) {
+        let decoded: Buffer;
+        try {
+          decoded = inflateRawSync(buffer.slice(dataStart, dataStart + compSize), {
+            maxOutputLength: limits.maxDecompressedBytes,
+          });
+        } catch {
+          return {
+            isExecutable: false,
+            isSuspicious: true,
+            hasOpenXmlParts,
+            reason:
+              'Archive contains a compressed entry that cannot be decompressed for content inspection.',
+          };
+        }
+        if (decoded.length > limits.maxDecompressedBytes) {
+          return {
+            isExecutable: false,
+            isSuspicious: true,
+            hasOpenXmlParts,
+            reason: 'Archive entry decompressed size exceeds the configured inspection limit.',
+          };
+        }
+        const contentCheck = scanDecompressedEntryContent(decoded);
+        if (contentCheck.isSuspicious) {
+          return {
+            isExecutable: true,
+            isSuspicious: true,
+            hasOpenXmlParts,
+            reason: contentCheck.reason || 'Archive entry contains active content.',
+          };
+        }
+      }
+    } else {
+      // Fail closed on unsupported compression methods (BZIP2, LZMA, PPMd, etc.)
+      return {
+        isExecutable: false,
+        isSuspicious: true,
+        hasOpenXmlParts,
+        reason: `Archive contains unsupported compression method (${method}) that cannot be inspected.`,
+      };
     }
 
     const next = dataStart + (compSize > 0 ? compSize : 0);
@@ -278,10 +337,10 @@ function scanZipArchiveEntries(
 
 /**
  * Scans buffer for polyglot malware signatures or script injections appended after headers.
+ * Unbounded across the full buffer to prevent evasion by appending payloads past 64 KiB.
  */
 function scanPolyglotMalware(buffer: Buffer): { isSuspicious: boolean; reason?: string } {
-  const scanLen = Math.min(buffer.length, 65536);
-  const contentStr = buffer.slice(0, scanLen).toString('latin1').toLowerCase();
+  const contentStr = buffer.toString('latin1').toLowerCase();
 
   const DANGEROUS_PATTERNS = [
     { pattern: '<?php', reason: 'Embedded PHP script tag detected.' },
@@ -299,24 +358,25 @@ function scanPolyglotMalware(buffer: Buffer): { isSuspicious: boolean; reason?: 
     }
   }
 
-  // Check for true embedded PE header (MZ with valid PE pointer)
-  for (let i = 1; i <= Math.min(buffer.length - 64, 4096); i++) {
-    if (buffer[i] === 0x4d && buffer[i + 1] === 0x5a) {
-      const peOffset = buffer.readUInt32LE(i + 0x3c);
-      if (
-        peOffset > 0 &&
-        i + peOffset + 4 <= buffer.length &&
-        buffer[i + peOffset] === 0x50 &&
-        buffer[i + peOffset + 1] === 0x45 &&
-        buffer[i + peOffset + 2] === 0x00 &&
-        buffer[i + peOffset + 3] === 0x00
-      ) {
-        return {
-          isSuspicious: true,
-          reason: 'Embedded DOS/PE executable binary detected inside file.',
-        };
-      }
+  // Check for true embedded PE header (MZ with valid PE pointer) across the full buffer
+  let mzIdx = buffer.indexOf(Buffer.from([0x4d, 0x5a]), 1);
+  while (mzIdx !== -1 && mzIdx <= buffer.length - 64) {
+    const peOffset = buffer.readUInt32LE(mzIdx + 0x3c);
+    if (
+      peOffset > 0 &&
+      peOffset < 1024 &&
+      mzIdx + peOffset + 4 <= buffer.length &&
+      buffer[mzIdx + peOffset] === 0x50 &&
+      buffer[mzIdx + peOffset + 1] === 0x45 &&
+      buffer[mzIdx + peOffset + 2] === 0x00 &&
+      buffer[mzIdx + peOffset + 3] === 0x00
+    ) {
+      return {
+        isSuspicious: true,
+        reason: 'Embedded DOS/PE executable binary detected inside file.',
+      };
     }
+    mzIdx = buffer.indexOf(Buffer.from([0x4d, 0x5a]), mzIdx + 1);
   }
 
   return { isSuspicious: false };

@@ -24,6 +24,9 @@ import type { FormattedAttachment, AttachmentBulkActionResult } from '@shipde/co
 export interface AttachmentManagementViewProps {
   attachments?: FormattedAttachment[];
   total?: number;
+  page?: number;
+  limit?: number;
+  totalPages?: number;
   loading?: boolean;
   canEdit?: boolean;
   error?: string | null;
@@ -34,6 +37,12 @@ export interface AttachmentManagementViewProps {
   initialUploadOpen?: boolean;
   initialValidationErrors?: Record<string, string>;
   onRefresh?: () => void;
+  onFilterChange?: (filters: {
+    status?: string;
+    entityType?: string;
+    page?: number;
+    limit?: number;
+  }) => void;
   onUpload?: (data: {
     file_name: string;
     mime_type: string;
@@ -62,6 +71,9 @@ export function formatFileSize(bytes: number): string {
 export function AttachmentManagementView({
   attachments = [],
   total,
+  page = 1,
+  limit = 20,
+  totalPages = 1,
   loading = false,
   canEdit = false,
   error = null,
@@ -72,6 +84,7 @@ export function AttachmentManagementView({
   initialUploadOpen = false,
   initialValidationErrors = {},
   onRefresh,
+  onFilterChange,
   onUpload,
   onDownload,
   onDelete,
@@ -100,8 +113,9 @@ export function AttachmentManagementView({
   const [purgeDryRun, setPurgeDryRun] = useState(true);
   // Partial-failure recovery state for bulk deletion: an HTTP-success response may
   // still contain failed items; they must be explained and kept selectable for retry.
-  const [bulkPartialFailure, setBulkPartialFailure] =
-    useState<AttachmentBulkActionResult | null>(initialBulkPartialFailure);
+  const [bulkPartialFailure, setBulkPartialFailure] = useState<AttachmentBulkActionResult | null>(
+    initialBulkPartialFailure
+  );
   const [purgeResult, setPurgeResult] = useState<{
     success_count: number;
     failure_count: number;
@@ -254,12 +268,28 @@ export function AttachmentManagementView({
     }
   };
 
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const handleDownloadClick = async (att: FormattedAttachment) => {
+    if (!onDownload) return;
+    setDownloadingId(att.id);
+    setLocalError(null);
+    try {
+      await onDownload(att.id, att.file_name);
+    } catch (err: any) {
+      // Finding 16: Display clear explanation and recovery state on download failure
+      setLocalError(
+        `Không thể tải xuống tệp '${att.file_name}': ${err?.message || 'Lỗi kết nối hoặc phiên đăng nhập hết hạn'}. Vui lòng thử lại.`
+      );
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   const retryFailedBulkDelete = async () => {
     if (!onBulkDelete) return;
-    const ids =
-      selectedIds.length > 0
-        ? selectedIds
-        : (bulkPartialFailure?.failed_ids ?? []);
+    // Finding 12: Restrict retry strictly to previously confirmed failed IDs, never include newly selected files
+    const ids = bulkPartialFailure?.failed_ids ?? [];
     if (ids.length === 0) {
       setBulkPartialFailure(null);
       return;
@@ -542,7 +572,11 @@ export function AttachmentManagementView({
             <span className="font-medium text-slate-500">Trạng thái:</span>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setStatusFilter(val);
+                onFilterChange?.({ status: val, entityType: entityTypeFilter, page: 1 });
+              }}
               data-testid="status-filter-select"
               className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
@@ -558,7 +592,11 @@ export function AttachmentManagementView({
             <span className="font-medium text-slate-500">Loại thực thể:</span>
             <select
               value={entityTypeFilter}
-              onChange={(e) => setEntityTypeFilter(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEntityTypeFilter(val);
+                onFilterChange?.({ status: statusFilter, entityType: val, page: 1 });
+              }}
               data-testid="entity-type-filter-select"
               className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             >
@@ -730,10 +768,11 @@ export function AttachmentManagementView({
                         {onDownload && att.status === 'ACTIVE' && (
                           <button
                             type="button"
-                            onClick={() => onDownload(att.id, att.file_name)}
+                            onClick={() => void handleDownloadClick(att)}
+                            disabled={downloadingId === att.id}
                             aria-label={`Tải xuống tệp ${att.file_name}`}
                             data-testid={`download-button-${att.id}`}
-                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50"
                           >
                             <Download className="w-4 h-4" />
                           </button>
@@ -774,6 +813,51 @@ export function AttachmentManagementView({
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Complete-list pagination navigation (Finding 11) */}
+          <div
+            data-testid="attachments-pagination-bar"
+            className="flex items-center justify-between px-4 py-3 bg-white border-t border-slate-200 text-xs text-slate-600 rounded-b-2xl"
+          >
+            <div>
+              Trang {page} / {Math.max(1, totalPages || 1)} (
+              {total !== undefined ? `${total} tệp` : `${filteredAttachments.length} tệp`})
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="prev-page-button"
+                disabled={page <= 1 || loading}
+                onClick={() =>
+                  onFilterChange?.({
+                    page: page - 1,
+                    status: statusFilter,
+                    entityType: entityTypeFilter,
+                  })
+                }
+                aria-label="Trang trước"
+                className="px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Trang trước
+              </button>
+              <button
+                type="button"
+                data-testid="next-page-button"
+                disabled={page >= (totalPages || 1) || loading}
+                onClick={() =>
+                  onFilterChange?.({
+                    page: page + 1,
+                    status: statusFilter,
+                    entityType: entityTypeFilter,
+                  })
+                }
+                aria-label="Trang tiếp"
+                className="px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Trang tiếp
+              </button>
+            </div>
           </div>
         </div>
       )}

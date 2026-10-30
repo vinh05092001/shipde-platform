@@ -430,10 +430,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
   const attachmentScanMaxDecompressedRaw = rawEnv.ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES;
   let ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: number =
     WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES;
-  if (
-    attachmentScanMaxDecompressedRaw !== undefined &&
-    attachmentScanMaxDecompressedRaw !== ''
-  ) {
+  if (attachmentScanMaxDecompressedRaw !== undefined && attachmentScanMaxDecompressedRaw !== '') {
     if (!/^\d+$/.test(attachmentScanMaxDecompressedRaw)) {
       invalidFields.push('ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES (must be a positive integer)');
     } else {

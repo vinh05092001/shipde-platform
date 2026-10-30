@@ -11,6 +11,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 export interface AttachmentsSettingsPageProps {
   initialAttachments?: FormattedAttachment[] | null;
   initialTotal?: number;
+  initialPage?: number;
+  initialLimit?: number;
   initialLoading?: boolean;
   initialCanEdit?: boolean;
   initialError?: string | null;
@@ -19,6 +21,8 @@ export interface AttachmentsSettingsPageProps {
 export default function AttachmentsSettingsPage({
   initialAttachments = null,
   initialTotal,
+  initialPage = 1,
+  initialLimit = 20,
   initialLoading,
   initialCanEdit,
   initialError = null,
@@ -27,53 +31,86 @@ export default function AttachmentsSettingsPage({
 
   const [attachments, setAttachments] = useState<FormattedAttachment[]>(initialAttachments || []);
   const [total, setTotal] = useState<number | undefined>(initialTotal);
+  const [page, setPage] = useState<number>(initialPage);
+  const [limit, setLimit] = useState<number>(initialLimit);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [entityTypeFilter, setEntityTypeFilter] = useState<string>('ALL');
+
   // Edit rights are server-authoritative: the list endpoint returns `can_edit`, derived
-  // from the actor's iam:shop_config permission. We never infer capability from hardcoded
+  // from the actor's permissions. We never infer capability from hardcoded
   // role names, and we fail closed (false) until the server resolves the actor's permissions.
   const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
   const [loading, setLoading] = useState<boolean>(initialLoading ?? initialAttachments === null);
   const [error, setError] = useState<string | null>(initialError);
 
-  const fetchAttachments = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
+  const fetchAttachments = useCallback(
+    async (overrideParams?: {
+      status?: string;
+      entityType?: string;
+      page?: number;
+      limit?: number;
+    }) => {
+      const currentStatus = overrideParams?.status ?? statusFilter;
+      const currentEntity = overrideParams?.entityType ?? entityTypeFilter;
+      const currentPage = overrideParams?.page ?? page;
+      const currentLimit = overrideParams?.limit ?? limit;
 
-      const res = await fetch(`${API_BASE}/api/v1/attachments`, { headers });
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error('Bạn không có quyền truy cập danh sách tệp đính kèm.');
+      setLoading(true);
+      setError(null);
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
         }
-        if (res.status === 401) {
-          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách tệp đính kèm.');
-      }
 
-      const json = await res.json();
-      if (json.success && Array.isArray(json.data)) {
-        setAttachments(json.data);
-        if (json.meta?.total !== undefined) {
-          setTotal(json.meta.total);
+        const queryParams = new URLSearchParams();
+        if (currentStatus) {
+          queryParams.set('status', currentStatus);
         }
-        // Server-derived edit capability (server-authoritative, never role-inferred).
-        if (typeof json.meta?.can_edit === 'boolean') {
-          setCanEdit(json.meta.can_edit);
+        if (currentEntity && currentEntity !== 'ALL') {
+          queryParams.set('entity_type', currentEntity);
         }
+        queryParams.set('page', String(currentPage));
+        queryParams.set('limit', String(currentLimit));
+
+        const res = await fetch(`${API_BASE}/api/v1/attachments?${queryParams.toString()}`, {
+          headers,
+        });
+        if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error('Bạn không có quyền truy cập danh sách tệp đính kèm.');
+          }
+          if (res.status === 401) {
+            throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+          }
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.error?.message || 'Không thể tải danh sách tệp đính kèm.');
+        }
+
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          setAttachments(json.data);
+          if (json.meta?.total !== undefined) {
+            setTotal(json.meta.total);
+          }
+          if (json.meta?.total_pages !== undefined) {
+            setTotalPages(json.meta.total_pages);
+          }
+          if (typeof json.meta?.can_edit === 'boolean') {
+            setCanEdit(json.meta.can_edit);
+          }
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý tệp đính kèm.');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý tệp đính kèm.');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
+    },
+    [token, statusFilter, entityTypeFilter, page, limit]
+  );
 
   useEffect(() => {
     if (!initialAttachments) {
@@ -157,7 +194,10 @@ export default function AttachmentsSettingsPage({
     await fetchAttachments();
   };
 
-  const handleBulkDelete = async (ids: string[], confirm: boolean): Promise<AttachmentBulkActionResult> => {
+  const handleBulkDelete = async (
+    ids: string[],
+    confirm: boolean
+  ): Promise<AttachmentBulkActionResult> => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -265,10 +305,20 @@ export default function AttachmentsSettingsPage({
         <AttachmentManagementView
           attachments={attachments}
           total={total}
+          page={page}
+          limit={limit}
+          totalPages={totalPages}
           loading={loading}
           canEdit={canEdit}
           error={error}
-          onRefresh={fetchAttachments}
+          onRefresh={() => void fetchAttachments()}
+          onFilterChange={(filters) => {
+            if (filters.status !== undefined) setStatusFilter(filters.status);
+            if (filters.entityType !== undefined) setEntityTypeFilter(filters.entityType);
+            if (filters.page !== undefined) setPage(filters.page);
+            if (filters.limit !== undefined) setLimit(filters.limit);
+            void fetchAttachments(filters);
+          }}
           onUpload={handleUpload}
           onDownload={handleDownload}
           onDelete={handleDelete}

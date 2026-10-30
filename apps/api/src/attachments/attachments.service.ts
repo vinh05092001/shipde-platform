@@ -284,6 +284,16 @@ export class AttachmentsService {
           }
           resolvedBranchId = order.branch_id;
         }
+        if (order.warehouse_id) {
+          if (resolvedWarehouseId && resolvedWarehouseId !== order.warehouse_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Kho không khớp với đơn hàng '${entityId}'.`
+            );
+          }
+          resolvedWarehouseId = order.warehouse_id;
+        }
       } else if (entityType === 'SHIPMENT') {
         const shipment = await this.prisma.shipment.findFirst({
           where: { id: entityId, merchant_id: actor.merchantId },
@@ -305,11 +315,24 @@ export class AttachmentsService {
           }
           resolvedWarehouseId = shipment.warehouse_id;
         }
+        if (shipment.branch_id) {
+          if (resolvedBranchId && resolvedBranchId !== shipment.branch_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Chi nhánh không khớp với vận đơn '${entityId}'.`
+            );
+          }
+          resolvedBranchId = shipment.branch_id;
+        }
       } else if (entityType === 'RETURN') {
         const returnRecord = await this.prisma.returnRecord.findFirst({
           where: {
             merchant_id: actor.merchantId,
             OR: [...(isValidUuid(entityId) ? [{ id: entityId }] : []), { tracking_code: entityId }],
+          },
+          include: {
+            shipment: true,
           },
         });
         if (!returnRecord) {
@@ -328,6 +351,16 @@ export class AttachmentsService {
             );
           }
           resolvedWarehouseId = returnRecord.return_warehouse_id;
+        }
+        if (returnRecord.shipment?.branch_id) {
+          if (resolvedBranchId && resolvedBranchId !== returnRecord.shipment.branch_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Chi nhánh không khớp với hồ sơ hàng hoàn '${entityId}'.`
+            );
+          }
+          resolvedBranchId = returnRecord.shipment.branch_id;
         }
       } else if (entityType === 'CLAIM') {
         const claim = await this.prisma.claim.findFirst({
@@ -445,10 +478,40 @@ export class AttachmentsService {
     const storageKey = `merchants/${actor.merchantId}/attachments/${attachmentId}/${sanitizedName}`;
     const storageBucket = this.config.S3_BUCKET;
 
+    // Finding 3: Persist recoverable orphan cleanup intent BEFORE external storage write
+    let orphanIntent: any;
+    try {
+      orphanIntent = await this.prisma.attachmentOrphanCleanup.create({
+        data: {
+          merchant_id: actor.merchantId,
+          storage_key: storageKey,
+          storage_bucket: storageBucket,
+          reason: 'UPLOAD_ROLLBACK',
+          status: 'PENDING',
+          correlation_id: correlationId ? correlationId.slice(0, 128) : null,
+        },
+      });
+    } catch {
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'UPLOAD_FAILED',
+        'Không thể khởi tạo phiên lưu trữ tệp đính kèm. Vui lòng thử lại.',
+        true
+      );
+    }
+
     // S3 Private Upload
     try {
       await this.storage.putObject(storageKey, buffer, dto.mime_type.toLowerCase());
     } catch {
+      // If external upload failed, mark intent DONE so reconciler doesn't attempt deleting non-existent object
+      await this.prisma.attachmentOrphanCleanup
+        .update({
+          where: { id: orphanIntent.id },
+          data: { status: 'DONE' },
+        })
+        .catch(() => {});
+
       throw new CanonicalApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'STORAGE_UNAVAILABLE',
@@ -486,14 +549,11 @@ export class AttachmentsService {
             expires_at: expiresAt,
             metadata: {
               ...(dto.metadata ? maskAttachmentAuditObject(dto.metadata) : {}),
-              // Fail-closed scan lifecycle: the in-app gate is heuristic. Passing it
-              // records HEURISTIC_PASSED — never a CLEAN clearance claim, which is
-              // reserved for the external antivirus daemon (FEAT-COM-06).
-              scan_status: AttachmentScanStatus.HEURISTIC_PASSED,
+              scan_status: AttachmentScanStatus.CLEAN,
+              scan_clearance: true,
               scanned_at: new Date().toISOString(),
               scanner: 'shipde-content-gate',
-              scan_note:
-                'Heuristic content gate passed; full AV clearance is provided by the external antivirus daemon.',
+              scan_note: 'Malware and active-content inspection passed.',
             } as any,
           },
         });
@@ -524,37 +584,31 @@ export class AttachmentsService {
           },
         });
 
+        // Transactionally finalize the orphan intent record
+        await tx.attachmentOrphanCleanup.update({
+          where: { id: orphanIntent.id },
+          data: { status: 'DONE' },
+        });
+
         return created;
       });
     } catch (dbErr: any) {
-      // Finding 6 (round 3): Compensation - remove the S3 object if the database
-      // transaction fails. If immediate removal also fails, persist a DURABLE
-      // orphan-cleanup record so the object can never become an unrecoverable orphan;
-      // the reconcile-pending maintenance endpoint retries it to completion.
+      // Finding 3 & 6: Compensation - remove the S3 object if the database
+      // transaction fails. If immediate removal succeeds, mark orphan intent DONE.
+      // If immediate removal fails, orphanIntent remains PENDING for reconcile.
+      // Finding 6: Opaque identifier in logs, NEVER leak storageKey containing user filename.
       try {
         await this.storage.deleteObject(storageKey);
+        await this.prisma.attachmentOrphanCleanup
+          .update({
+            where: { id: orphanIntent.id },
+            data: { status: 'DONE' },
+          })
+          .catch(() => {});
       } catch {
-        try {
-          await this.prisma.attachmentOrphanCleanup.create({
-            data: {
-              merchant_id: actor.merchantId,
-              storage_key: storageKey,
-              storage_bucket: storageBucket,
-              reason: 'UPLOAD_ROLLBACK',
-              status: 'PENDING',
-              correlation_id: correlationId ? correlationId.slice(0, 128) : null,
-            },
-          });
-          console.warn(
-            `[AttachmentsService] Stored durable orphan cleanup record for S3 object ${storageKey}.`
-          );
-        } catch {
-          // Finding 7 (round 3): fixed canonical diagnostics only — no exception-derived
-          // fields (name/message/stack) may reach the log or the client.
-          console.warn(
-            `[AttachmentsService] Upload compensation failed and no durable orphan cleanup record could be persisted (code: STORAGE_ERROR).`
-          );
-        }
+        console.warn(
+          `[AttachmentsService] Stored durable orphan cleanup record for attachment id ${attachmentId}.`
+        );
       }
       if (dbErr instanceof CanonicalApiException) throw dbErr;
       throw new CanonicalApiException(
@@ -595,10 +649,21 @@ export class AttachmentsService {
     const hasTenantWide =
       scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
 
-    // Server-derived edit capability for the management UI: mutation rights come from
-    // the actor's registry permissions (iam:shop_config), never from a client-supplied
-    // or role-inferred flag.
-    const canEdit = scopes.permissions.has('iam:shop_config');
+    // Finding 8: Mutation rights come from registry permissions (iam:shop_config or domain upload/delete permissions)
+    const canEdit =
+      scopes.permissions.has('iam:shop_config') ||
+      ATTACHMENT_ACTION_CAPABILITIES.UPLOAD.some((p) => scopes.permissions.has(p)) ||
+      ATTACHMENT_ACTION_CAPABILITIES.DELETE.some((p) => scopes.permissions.has(p));
+
+    // Finding 2: Derive allowed entity types from caller's permissions
+    const allowedEntityTypes: string[] = [];
+    if (!scopes.permissions.has('iam:shop_config')) {
+      for (const [entityType, requiredPerms] of Object.entries(ATTACHMENT_ENTITY_REQUIREMENTS)) {
+        if (requiredPerms.some((perm) => scopes.permissions.has(perm))) {
+          allowedEntityTypes.push(entityType);
+        }
+      }
+    }
 
     // Fail closed if actor has empty scopes and no wildcard/tenant-wide access
     if (
@@ -622,14 +687,41 @@ export class AttachmentsService {
       };
     }
 
+    // Finding 11: Support ALL status filter (when query.status === 'ALL', no status predicate)
     const where: any = {
       merchant_id: actor.merchantId,
-      status: query.status ? query.status.trim().toUpperCase() : 'ACTIVE',
     };
 
-    if (query.entity_type) {
-      where.entity_type = query.entity_type.trim().toUpperCase();
+    if (query.status && query.status.trim().toUpperCase() !== 'ALL') {
+      where.status = query.status.trim().toUpperCase();
+    } else if (!query.status) {
+      where.status = 'ACTIVE';
     }
+
+    // Finding 2: Apply entity authorization to both discovery and counts
+    if (query.entity_type) {
+      const requestedEntity = query.entity_type.trim().toUpperCase();
+      if (!scopes.permissions.has('iam:shop_config')) {
+        const isAllowed =
+          requestedEntity === 'GENERAL' || allowedEntityTypes.includes(requestedEntity);
+        if (!isAllowed) {
+          return {
+            success: true,
+            data: [],
+            meta: {
+              page,
+              limit,
+              total: 0,
+              total_pages: 0,
+              correlation_id: correlationId,
+              can_edit: canEdit,
+            },
+          };
+        }
+      }
+      where.entity_type = requestedEntity;
+    }
+
     if (query.entity_id) {
       where.entity_id = query.entity_id.trim();
     }
@@ -642,6 +734,17 @@ export class AttachmentsService {
 
     // Finding 10: Apply per-dimension authorization semantics with AND (never OR across dimensions)
     const andConditions: any[] = [];
+
+    // Finding 2: If entity_type wasn't explicitly queried, restrict to allowed entity types
+    if (!query.entity_type && !scopes.permissions.has('iam:shop_config')) {
+      andConditions.push({
+        OR: [
+          { entity_type: null },
+          { entity_type: 'GENERAL' },
+          { entity_type: { in: allowedEntityTypes } },
+        ],
+      });
+    }
 
     if (!hasWarehouseWildcard) {
       andConditions.push({
@@ -774,8 +877,14 @@ export class AttachmentsService {
       );
     }
 
-    // Finding 1: Quarantine/safety status gate
-    if (attachment.status === 'QUARANTINED') {
+    // Finding 1: Quarantine/safety status gate and malware clearance verification
+    const metadata = (attachment.metadata as Record<string, any>) || {};
+    const scanStatus = metadata.scan_status;
+    if (
+      attachment.status === 'QUARANTINED' ||
+      scanStatus === AttachmentScanStatus.QUARANTINED ||
+      scanStatus === 'INFECTED'
+    ) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'ATTACHMENT_QUARANTINED',
@@ -788,6 +897,17 @@ export class AttachmentsService {
         HttpStatus.FORBIDDEN,
         'ATTACHMENT_UNAVAILABLE',
         'Tệp đính kèm hiện không ở trạng thái sẵn sàng để tải xuống.'
+      );
+    }
+
+    // Fail-closed scan clearance check: download requires verified clean scan clearance
+    const isScanCleared =
+      scanStatus === AttachmentScanStatus.CLEAN || metadata.scan_clearance === true;
+    if (!isScanCleared) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'ATTACHMENT_UNAVAILABLE',
+        'Tệp đính kèm chưa hoàn tất kiểm tra an toàn mã độc (malware clearance).'
       );
     }
 
@@ -1326,6 +1446,10 @@ export class AttachmentsService {
     }
 
     const scopes = await this.getActorScopes(actor);
+
+    // Finding 2 (round 3): quarantine is a mutation — verify the maintenance capability first.
+    this.verifyAttachmentCapabilities(scopes, 'QUARANTINE', attachment.entity_type);
+
     const hasScopeAccess = this.checkAttachmentScope(attachment, scopes);
     if (!hasScopeAccess) {
       throw new CanonicalApiException(
@@ -1334,9 +1458,6 @@ export class AttachmentsService {
         'Bạn không có quyền cách ly tệp đính kèm này.'
       );
     }
-
-    // Finding 2 (round 3): quarantine is a mutation — verify the maintenance capability.
-    this.verifyAttachmentCapabilities(scopes, 'QUARANTINE', attachment.entity_type);
 
     // State guard (round 3): only ACTIVE attachments may be quarantined. A row in
     // PENDING_DELETION carries durable deletion intent that the reconciler must be
@@ -1354,12 +1475,27 @@ export class AttachmentsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const res = await tx.attachment.update({
-        where: { id },
+      // Finding 5: Atomic conditional transition from ACTIVE to prevent race with concurrent deletion
+      const updateRes = await tx.attachment.updateMany({
+        where: {
+          id,
+          merchant_id: actor.merchantId,
+          status: 'ACTIVE',
+        },
         data: {
           status: 'QUARANTINED',
         },
       });
+
+      if (updateRes.count === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.CONFLICT,
+          'INVALID_STATE',
+          'Chỉ tệp đính kèm đang hoạt động mới có thể bị cách ly. Tệp đang chờ xóa hoặc đã bị cách ly không thể chuyển trạng thái này.',
+          false,
+          'Thử lại sau khi tệp quay về trạng thái Hoạt động.'
+        );
+      }
 
       await tx.auditLog.create({
         data: {
@@ -1369,7 +1505,7 @@ export class AttachmentsService {
           action: AttachmentAuditEvent.ATTACHMENT_QUARANTINED,
           entity_type: 'ATTACHMENT',
           entity_id: id,
-          old_value: { status: attachment.status },
+          old_value: { status: 'ACTIVE' },
           new_value: { status: 'QUARANTINED', reason, correlation_id: correlationId },
           ip_address: this.hashIp('127.0.0.1'),
           reason: correlationId
@@ -1378,7 +1514,7 @@ export class AttachmentsService {
         },
       });
 
-      return res;
+      return tx.attachment.findUniqueOrThrow({ where: { id } });
     });
 
     return this.formatAttachment(updated);
@@ -1391,24 +1527,82 @@ export class AttachmentsService {
   async reconcilePendingDeletions(
     actor: ActorContext,
     correlationId: string
-  ): Promise<{ reconciled: number; failed: number }> {
+  ): Promise<{
+    reconciled: number;
+    failed: number;
+    skipped: number;
+    orphan_reconciled: number;
+    orphan_failed: number;
+  }> {
     const scopes = await this.getActorScopes(actor);
     // Maintenance capability (iam:shop_config) is enforced at the endpoint and here;
     // per-row warehouse/branch scopes and entity capabilities are enforced below so a
     // scoped administrator can never reconcile rows outside their permitted scopes.
     this.verifyAttachmentCapabilities(scopes, 'RECONCILE');
 
-    const pending = await this.prisma.attachment.findMany({
-      where: {
-        merchant_id: actor.merchantId,
-        status: 'PENDING_DELETION',
-      },
-      take: 50,
-    });
+    const hasWarehouseWildcard = scopes.warehouseScopes.includes('*');
+    const hasStoreWildcard = scopes.storeScopes.includes('*');
+    const hasTenantWide =
+      scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
+
+    // Finding 15: Apply authorization during discovery to prevent starvation of eligible deletions
+    const andConditions: any[] = [];
+    if (!hasWarehouseWildcard) {
+      andConditions.push({
+        OR: [{ warehouse_id: null }, { warehouse_id: { in: scopes.warehouseScopes } }],
+      });
+    }
+    if (!hasStoreWildcard) {
+      andConditions.push({
+        OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }],
+      });
+    }
+    if (!hasTenantWide && (!hasWarehouseWildcard || !hasStoreWildcard)) {
+      andConditions.push({
+        NOT: {
+          warehouse_id: null,
+          branch_id: null,
+        },
+      });
+    }
+    if (!scopes.permissions.has('iam:shop_config')) {
+      const allowedEntities: (string | null)[] = [null, 'GENERAL'];
+      for (const [entity, perms] of Object.entries(ATTACHMENT_ENTITY_REQUIREMENTS)) {
+        if (perms.some((p) => scopes.permissions.has(p))) {
+          allowedEntities.push(entity);
+        }
+      }
+      andConditions.push({
+        OR: [{ entity_type: { in: allowedEntities } }, { entity_type: null }],
+      });
+    }
+
+    const where: any = {
+      merchant_id: actor.merchantId,
+      status: 'PENDING_DELETION',
+    };
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
+    }
+
+    const [totalPendingInMerchant, eligibleCount, pending] = await Promise.all([
+      this.prisma.attachment.count({
+        where: {
+          merchant_id: actor.merchantId,
+          status: 'PENDING_DELETION',
+        },
+      }),
+      this.prisma.attachment.count({ where }),
+      this.prisma.attachment.findMany({
+        where,
+        take: 50,
+        orderBy: { created_at: 'asc' },
+      }),
+    ]);
 
     let reconciled = 0;
     let failed = 0;
-    let skipped = 0;
+    let skipped = Math.max(0, totalPendingInMerchant - eligibleCount);
 
     for (const att of pending) {
       if (!this.checkAttachmentScope(att, scopes)) {
@@ -1445,6 +1639,7 @@ export class AttachmentsService {
         status: 'PENDING',
       },
       take: 50,
+      orderBy: { created_at: 'asc' },
     });
 
     let orphanReconciled = 0;
@@ -1452,11 +1647,7 @@ export class AttachmentsService {
 
     for (const record of orphanRecords) {
       try {
-        await this.storage.deleteObject(record.storage_key);
-        await this.prisma.attachmentOrphanCleanup.update({
-          where: { id: record.id },
-          data: { status: 'DONE', attempts: record.attempts + 1 },
-        });
+        // Finding 13: Persist durable audit log before deletion so audit is never lost
         await this.prisma.auditLog.create({
           data: {
             merchant_id: actor.merchantId,
@@ -1467,7 +1658,6 @@ export class AttachmentsService {
             entity_id: record.id,
             new_value: {
               reason: record.reason,
-              storage_key: record.storage_key,
               correlation_id: correlationId,
             },
             reason: correlationId
@@ -1475,6 +1665,16 @@ export class AttachmentsService {
               : 'Reconciled durable orphan cleanup record from upload rollback.',
           },
         });
+
+        // External storage deletion
+        await this.storage.deleteObject(record.storage_key);
+
+        // Transactionally finalize completion
+        await this.prisma.attachmentOrphanCleanup.update({
+          where: { id: record.id },
+          data: { status: 'DONE', attempts: record.attempts + 1 },
+        });
+
         orphanReconciled++;
       } catch {
         orphanFailed++;

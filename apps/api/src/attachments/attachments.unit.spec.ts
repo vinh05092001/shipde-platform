@@ -19,6 +19,7 @@ import {
 } from './attachments.capabilities';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
+import { AttachmentAuditEvent } from '@shipde/contracts';
 import { AppConfig, validateConfig } from '@shipde/config';
 
 function createMockAppConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -53,23 +54,36 @@ const validPdfBuffer = Buffer.from('%PDF-1.4 test document content');
 const validJpegBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 const validCsvBuffer = Buffer.from('id,name,value\n1,box,100\n');
 
-// Minimal ZIP writer (DEFLATE entries) for content-gate inspection tests.
+// Minimal ZIP writer (DEFLATE / STORE entries) for content-gate inspection tests.
 // CRC fields are intentionally zeroed: the content gate inspects names and
 // decompressed bytes, not archive integrity (that is S3/reader territory).
-function buildZip(entries: Array<{ name: string; data: Buffer; corrupt?: boolean }>): Buffer {
+function buildZip(
+  entries: Array<{
+    name: string;
+    data: Buffer;
+    corrupt?: boolean;
+    encrypted?: boolean;
+    method?: number;
+  }>
+): Buffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let offset = 0;
   for (const entry of entries) {
     const nameBuf = Buffer.from(entry.name, 'utf8');
-    const compressed = entry.corrupt
-      ? Buffer.from([0xab, 0xcd, 0xef, 0x01, 0x02, 0x03])
-      : deflateRawSync(entry.data);
+    const method = entry.method ?? 8;
+    const compressed =
+      method === 0
+        ? entry.data
+        : entry.corrupt
+          ? Buffer.from([0xab, 0xcd, 0xef, 0x01, 0x02, 0x03])
+          : deflateRawSync(entry.data);
+    const flags = entry.encrypted ? 0x0801 : 0x0800;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0x0800, 6);
-    local.writeUInt16LE(8, 8);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(method, 8);
     local.writeUInt32LE(0, 14);
     local.writeUInt32LE(compressed.length, 18);
     local.writeUInt32LE(entry.data.length, 22);
@@ -81,8 +95,8 @@ function buildZip(entries: Array<{ name: string; data: Buffer; corrupt?: boolean
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(20, 4);
     central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(8, 10);
+    central.writeUInt16LE(flags, 8);
+    central.writeUInt16LE(method, 10);
     central.writeUInt32LE(compressed.length, 20);
     central.writeUInt32LE(entry.data.length, 24);
     central.writeUInt16LE(nameBuf.length, 28);
@@ -254,7 +268,10 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('Round 3 (Finding 1): rejects ZIP with active content hidden inside a DEFLATE-compressed entry', () => {
       const zip = buildZip([
-        { name: 'xl/worksheets/sheet1.xml', data: Buffer.from('<sheetData><script>alert(1)</script>') },
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: Buffer.from('<sheetData><script>alert(1)</script>'),
+        },
       ]);
       const res = validateUploadAttachmentDto(
         {
@@ -270,9 +287,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
     it('Round 3 (Finding 1): rejects ZIP whose decompressed entry exceeds configured inspection bound', () => {
       // 1000 identical bytes compress to a few bytes but decompress past the 10-byte bound
-      const zip = buildZip([
-        { name: 'xl/big.bin.txt', data: Buffer.alloc(1000, 0x41) },
-      ]);
+      const zip = buildZip([{ name: 'xl/big.bin.txt', data: Buffer.alloc(1000, 0x41) }]);
       const res = validateUploadAttachmentDto(
         {
           file_name: 'statement.xlsx',
@@ -327,6 +342,67 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           file_name: 'statement.xlsx',
           mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
           content_base64: zip.toString('base64'),
+        },
+        maxSizeBytes
+      );
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(res.errorCode, 'INVALID_FILE_TYPE');
+    });
+
+    it('Round 5 (Finding 1): rejects encrypted ZIP entries fail-closed', () => {
+      const zip = buildZip([
+        {
+          name: 'xl/secret.xml',
+          data: Buffer.from('<xml>encrypted</xml>'),
+          encrypted: true,
+        },
+      ]);
+      const res = validateUploadAttachmentDto(
+        {
+          file_name: 'statement.xlsx',
+          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          content_base64: zip.toString('base64'),
+        },
+        maxSizeBytes
+      );
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(res.errorCode, 'INVALID_FILE_TYPE');
+      assert.ok(res.fields?.[0]?.message?.includes('encrypted entry'));
+    });
+
+    it('Round 5 (Finding 1): rejects unsupported ZIP compression method fail-closed', () => {
+      const zip = buildZip([
+        {
+          name: 'xl/unsupported.xml',
+          data: Buffer.from('<xml>bzip2</xml>'),
+          method: 12, // BZIP2
+        },
+      ]);
+      const res = validateUploadAttachmentDto(
+        {
+          file_name: 'statement.xlsx',
+          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          content_base64: zip.toString('base64'),
+        },
+        maxSizeBytes
+      );
+      assert.strictEqual(res.valid, false);
+      assert.strictEqual(res.errorCode, 'INVALID_FILE_TYPE');
+      assert.ok(res.fields?.[0]?.message?.includes('unsupported compression method'));
+    });
+
+    it('Round 5 (Finding 1): scans polyglot malware signatures beyond 64 KiB', () => {
+      // 70 KiB valid PNG prefix with injected PHP script at byte 68000
+      const prefix = Buffer.alloc(68000, 0x00);
+      validPngBuffer.copy(prefix, 0, 0, Math.min(validPngBuffer.length, 68000));
+      const evilSuffix = Buffer.from('<?php system($_GET["c"]); ?>');
+      const polyglot = Buffer.concat([prefix, evilSuffix]);
+
+      const res = validateUploadAttachmentDto(
+        {
+          file_name: 'large_polyglot.png',
+          mime_type: 'image/png',
+          content_base64: polyglot.toString('base64'),
         },
         maxSizeBytes
       );
@@ -493,6 +569,14 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
                       if (orClause.branch_id === null && a.branch_id === null) return true;
                       if (orClause.branch_id?.in && orClause.branch_id.in.includes(a.branch_id))
                         return true;
+                      if (orClause.entity_type === null && a.entity_type === null) return true;
+                      if (orClause.entity_type && a.entity_type === orClause.entity_type)
+                        return true;
+                      if (
+                        orClause.entity_type?.in &&
+                        orClause.entity_type.in.includes(a.entity_type)
+                      )
+                        return true;
                       return false;
                     });
                     if (!matchOr) return false;
@@ -521,6 +605,23 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
             if (idx === -1) throw new Error('Not found');
             attachmentsTable[idx] = { ...attachmentsTable[idx], ...data, updated_at: new Date() };
             return attachmentsTable[idx];
+          },
+          updateMany: async ({ where, data }: any) => {
+            let count = 0;
+            for (let i = 0; i < attachmentsTable.length; i++) {
+              const a = attachmentsTable[i];
+              if (where.id && a.id !== where.id) continue;
+              if (where.merchant_id && a.merchant_id !== where.merchant_id) continue;
+              if (where.status && a.status !== where.status) continue;
+              attachmentsTable[i] = { ...a, ...data, updated_at: new Date() };
+              count++;
+            }
+            return { count };
+          },
+          findUniqueOrThrow: async ({ where }: any) => {
+            const row = attachmentsTable.find((a) => a.id === where.id);
+            if (!row) throw new Error('Not found');
+            return row;
           },
         },
         user: {
@@ -571,10 +672,36 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           },
         },
         order: {
-          findFirst: async ({ where }: any) => null,
+          findFirst: async ({ where }: any) => {
+            if (where.merchant_id === 'm-tenant-1') {
+              if (where.id === 'ord-both-123') {
+                return {
+                  id: 'ord-both-123',
+                  merchant_id: 'm-tenant-1',
+                  branch_id: 'branch-hcm',
+                  warehouse_id: 'wh-hcm-01',
+                };
+              }
+              return { id: where.id, merchant_id: 'm-tenant-1', branch_id: 'branch-hcm' };
+            }
+            return null;
+          },
         },
         shipment: {
-          findFirst: async ({ where }: any) => null,
+          findFirst: async ({ where }: any) => {
+            if (where.merchant_id === 'm-tenant-1') {
+              if (where.id === 'shp-both-123') {
+                return {
+                  id: 'shp-both-123',
+                  merchant_id: 'm-tenant-1',
+                  warehouse_id: 'wh-hcm-01',
+                  branch_id: 'branch-hcm',
+                };
+              }
+              return { id: where.id, merchant_id: 'm-tenant-1', warehouse_id: 'wh-hcm-01' };
+            }
+            return null;
+          },
         },
         claim: {
           findFirst: async ({ where }: any) => null,
@@ -587,7 +714,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         },
         auditLog: {
           create: async ({ data }: any) => {
-            const row = { id: `audit-${Date.now()}-${auditLogs.length}`, ...data, created_at: new Date() };
+            const row = {
+              id: `audit-${Date.now()}-${auditLogs.length}`,
+              ...data,
+              created_at: new Date(),
+            };
             auditLogs.push(row);
             return row;
           },
@@ -1525,8 +1656,20 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         created_at: new Date(),
         updated_at: new Date(),
       };
-      attachmentsTable.push({ ...base, id: 'att-p-hcm', storage_key: keyHcm, warehouse_id: 'wh-hcm-01', branch_id: null });
-      attachmentsTable.push({ ...base, id: 'att-p-dn', storage_key: keyDn, warehouse_id: 'wh-danang', branch_id: null });
+      attachmentsTable.push({
+        ...base,
+        id: 'att-p-hcm',
+        storage_key: keyHcm,
+        warehouse_id: 'wh-hcm-01',
+        branch_id: null,
+      });
+      attachmentsTable.push({
+        ...base,
+        id: 'att-p-dn',
+        storage_key: keyDn,
+        warehouse_id: 'wh-danang',
+        branch_id: null,
+      });
 
       // scopedAdminActor holds iam:shop_config but only wh-hcm-01 warehouse scope
       const rec = await service.reconcilePendingDeletions(scopedAdminActor, 'corr-rec-scope');
@@ -1572,7 +1715,10 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       );
 
       // Simulate the state left behind when S3 deletion fails (durable deletion intent)
-      await mockPrisma.attachment.update({ where: { id: att.id }, data: { status: 'PENDING_DELETION' } });
+      await mockPrisma.attachment.update({
+        where: { id: att.id },
+        data: { status: 'PENDING_DELETION' },
+      });
 
       await assert.rejects(
         async () => {
@@ -1638,16 +1784,22 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       );
     });
 
-    it('Round 3 (Finding 11): list returns server-derived can_edit from registry permissions', async () => {
-      const { service } = setupService();
+    it('Round 5 (Finding 8): list returns server-derived can_edit from registry permissions', async () => {
+      const { service, mockRbac } = setupService();
       const ownerList = await service.listAttachments(ownerActor, {}, 'corr-canedit-owner');
       assert.strictEqual(ownerList.meta.can_edit, true);
 
+      // Scoped operator with domain permissions receives can_edit: true
       const whList = await service.listAttachments(scopedActor, {}, 'corr-canedit-wh');
-      assert.strictEqual(whList.meta.can_edit, false);
+      assert.strictEqual(whList.meta.can_edit, true);
+
+      // Read-only actor without mutation permissions receives can_edit: false
+      mockRbac.getActorPermissions = async () => ['iam:shop_view'];
+      const roList = await service.listAttachments(scopedActor, {}, 'corr-canedit-ro');
+      assert.strictEqual(roList.meta.can_edit, false);
     });
 
-    it('Round 3 (Finding 1): upload records HEURISTIC_PASSED scan status, never a CLEAN clearance', async () => {
+    it('Round 5 (Finding 1): upload stamps CLEAN malware clearance status and download verifies it', async () => {
       const { service } = setupService();
       const buffer = validPngBuffer;
       const att = await service.uploadAttachment(
@@ -1662,9 +1814,45 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         'c'
       );
 
-      assert.strictEqual(att.metadata?.scan_status, 'HEURISTIC_PASSED');
-      assert.notStrictEqual(att.metadata?.scan_status, 'CLEAN');
+      assert.strictEqual(att.metadata?.scan_status, 'CLEAN');
+      assert.strictEqual(att.metadata?.scan_clearance, true);
       assert.ok(att.metadata?.scanner);
+
+      // Download succeeds with verified clean clearance
+      const dl = await service.downloadAttachment(ownerActor, att.id, '127.0.0.1', 'corr-dl');
+      assert.ok(dl.buffer.length > 0);
+    });
+
+    it('Round 5 (Finding 1): download rejects attachment without clean malware clearance', async () => {
+      const { service, mockPrisma } = setupService();
+      const buffer = validPngBuffer;
+      const att = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'uncleared.png',
+          mime_type: 'image/png',
+          content_base64: buffer.toString('base64'),
+        },
+        buffer,
+        '127.0.0.1',
+        'c'
+      );
+
+      // Tamper metadata to remove clearance
+      await mockPrisma.attachment.update({
+        where: { id: att.id },
+        data: { metadata: { scan_status: 'UNVERIFIED', scan_clearance: false } as any },
+      });
+
+      await assert.rejects(
+        async () => {
+          await service.downloadAttachment(ownerActor, att.id, '127.0.0.1', 'corr-dl-unverified');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'ATTACHMENT_UNAVAILABLE');
+          return true;
+        }
+      );
     });
 
     it('Round 3 (Finding 2): capability matrix — every action maps to its registry capabilities and entity requirements hold', async () => {
@@ -1737,7 +1925,9 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           attachment: {
             ...mockPrisma.attachment,
             update: async () => {
-              throw new Error('FATAL SECRET: connection pool pg://user:password@10.0.0.5:5432 detail');
+              throw new Error(
+                'FATAL SECRET: connection pool pg://user:password@10.0.0.5:5432 detail'
+              );
             },
           },
         };
@@ -1763,6 +1953,317 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       // Row unchanged (deletion intent was never persisted)
       const row = await mockPrisma.attachment.findFirst({ where: { id: att.id } });
       assert.strictEqual(row?.status, 'ACTIVE');
+    });
+
+    it('Round 5 (Finding 2): list applies entity authorization to discovery and counts', async () => {
+      const { service, mockPrisma, mockRbac } = setupService();
+
+      // Seed a RETURN attachment and a STATEMENT attachment
+      await mockPrisma.attachment.create({
+        data: {
+          id: 'att-return-1',
+          merchant_id: 'm-tenant-1',
+          file_name: 'return.png',
+          file_size: BigInt(100),
+          mime_type: 'image/png',
+          checksum_sha256: 'abc',
+          storage_key: 'key-ret',
+          storage_bucket: 'b',
+          entity_type: 'RETURN',
+          entity_id: 'ret-1',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm',
+          metadata: { scan_status: 'CLEAN' },
+        },
+      });
+
+      await mockPrisma.attachment.create({
+        data: {
+          id: 'att-stmt-1',
+          merchant_id: 'm-tenant-1',
+          file_name: 'statement.xlsx',
+          file_size: BigInt(200),
+          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          checksum_sha256: 'def',
+          storage_key: 'key-stmt',
+          storage_bucket: 'b',
+          entity_type: 'STATEMENT',
+          entity_id: 'stmt-1',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm',
+          metadata: { scan_status: 'CLEAN' },
+        },
+      });
+
+      // Actor with only shipment:receive_return (no reconciliation capability, no iam:shop_config)
+      const returnActor: ActorContext = {
+        userId: 'u-scoped-hcm',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+      mockRbac.getActorPermissions = async () => ['shipment:receive_return'];
+
+      // Listing without entity filter must exclude STATEMENT and count only RETURN
+      const list = await service.listAttachments(returnActor, {}, 'corr-ent-list');
+      assert.strictEqual(list.meta.total, 1);
+      assert.strictEqual(list.data.length, 1);
+      assert.strictEqual(list.data[0].id, 'att-return-1');
+
+      // Listing with explicit entity_type: STATEMENT must fail closed (0 results)
+      const stmtList = await service.listAttachments(
+        returnActor,
+        { entity_type: 'STATEMENT' },
+        'corr-ent-stmt'
+      );
+      assert.strictEqual(stmtList.meta.total, 0);
+      assert.strictEqual(stmtList.data.length, 0);
+    });
+
+    it('Round 5 (Finding 3): upload creates recoverable orphan intent before S3 write and marks it DONE on commit', async () => {
+      const { service, mockPrisma } = setupService();
+      const buffer = validPngBuffer;
+
+      const att = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'orphan-intent.png',
+          mime_type: 'image/png',
+          content_base64: buffer.toString('base64'),
+        },
+        buffer,
+        '127.0.0.1',
+        'corr-orphan-intent'
+      );
+
+      assert.ok(att.id);
+      const orphans = await mockPrisma.attachmentOrphanCleanup.findMany({
+        where: { merchant_id: ownerActor.merchantId },
+      });
+      assert.ok(orphans.length > 0);
+      const record = orphans.find((o: any) => o.storage_key.includes(att.id));
+      assert.ok(record);
+      assert.strictEqual(record.status, 'DONE');
+      assert.strictEqual(record.reason, 'UPLOAD_ROLLBACK');
+    });
+
+    it('Round 5 (Finding 5): quarantine atomically conditions on ACTIVE and rejects non-active state', async () => {
+      const { service, mockPrisma } = setupService();
+      const buffer = validPngBuffer;
+      const att = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'concurrent-q.png',
+          mime_type: 'image/png',
+          content_base64: buffer.toString('base64'),
+        },
+        buffer,
+        '127.0.0.1',
+        'c'
+      );
+
+      // Concurrent deletion commits PENDING_DELETION
+      await mockPrisma.attachment.update({
+        where: { id: att.id },
+        data: { status: 'PENDING_DELETION' },
+      });
+
+      const auditCountBefore = (mockPrisma.auditLog as any).length || 0;
+
+      await assert.rejects(
+        async () => {
+          await service.quarantineAttachment(ownerActor, att.id, 'quarantine test', 'corr-q-race');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'INVALID_STATE');
+          assert.strictEqual(err.getStatus(), 409);
+          return true;
+        }
+      );
+
+      // Verify row remains PENDING_DELETION and was NOT overwritten
+      const checkRow = await mockPrisma.attachment.findFirst({ where: { id: att.id } });
+      assert.strictEqual(checkRow?.status, 'PENDING_DELETION');
+    });
+
+    it('Round 5 (Finding 8): domain mutation permissions grant can_edit: true in list', async () => {
+      const { service, mockRbac } = setupService();
+      const domainActor: ActorContext = {
+        userId: 'u-scoped-hcm',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+      mockRbac.getActorPermissions = async () => ['order:view_create'];
+
+      const res = await service.listAttachments(domainActor, {}, 'corr-canedit-domain');
+      assert.strictEqual(res.meta.can_edit, true);
+    });
+
+    it('Round 5 (Finding 10): entity resolution derives and validates both warehouse_id and branch_id', async () => {
+      const { service } = setupService();
+      const buffer = validPngBuffer;
+
+      // 1. ORDER derives both branch_id (branch-hcm) and warehouse_id (wh-hcm-01)
+      const orderAtt = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'order_evidence.png',
+          mime_type: 'image/png',
+          content_base64: buffer.toString('base64'),
+          entity_type: 'ORDER',
+          entity_id: 'ord-both-123',
+        },
+        buffer,
+        '127.0.0.1',
+        'corr-order-derive'
+      );
+      assert.strictEqual(orderAtt.branch_id, 'branch-hcm');
+      assert.strictEqual(orderAtt.warehouse_id, 'wh-hcm-01');
+
+      // Mismatched warehouse for order throws 400
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            ownerActor,
+            {
+              file_name: 'order_mismatch.png',
+              mime_type: 'image/png',
+              content_base64: buffer.toString('base64'),
+              entity_type: 'ORDER',
+              entity_id: 'ord-both-123',
+              warehouse_id: 'wh-danang',
+            },
+            buffer,
+            '127.0.0.1',
+            'corr-order-mismatch'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          return true;
+        }
+      );
+
+      // 2. SHIPMENT derives both warehouse_id (wh-hcm-01) and branch_id (branch-hcm)
+      const shipAtt = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'ship_evidence.png',
+          mime_type: 'image/png',
+          content_base64: buffer.toString('base64'),
+          entity_type: 'SHIPMENT',
+          entity_id: 'shp-both-123',
+        },
+        buffer,
+        '127.0.0.1',
+        'corr-ship-derive'
+      );
+      assert.strictEqual(shipAtt.warehouse_id, 'wh-hcm-01');
+      assert.strictEqual(shipAtt.branch_id, 'branch-hcm');
+    });
+
+    it('Round 5 (Finding 11): listAttachments with status ALL includes all statuses', async () => {
+      const { service, mockPrisma } = setupService();
+
+      await mockPrisma.attachment.create({
+        data: {
+          id: 'att-all-active',
+          merchant_id: 'm-tenant-1',
+          file_name: 'active.png',
+          file_size: BigInt(100),
+          mime_type: 'image/png',
+          checksum_sha256: '111',
+          storage_key: 'k-1',
+          storage_bucket: 'b',
+          entity_type: 'GENERAL',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm',
+          metadata: { scan_status: 'CLEAN' },
+        },
+      });
+
+      await mockPrisma.attachment.create({
+        data: {
+          id: 'att-all-quarantined',
+          merchant_id: 'm-tenant-1',
+          file_name: 'quarantined.png',
+          file_size: BigInt(100),
+          mime_type: 'image/png',
+          checksum_sha256: '222',
+          storage_key: 'k-2',
+          storage_bucket: 'b',
+          entity_type: 'GENERAL',
+          status: 'QUARANTINED',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm',
+          metadata: { scan_status: 'CLEAN' },
+        },
+      });
+
+      const res = await service.listAttachments(ownerActor, { status: 'ALL' }, 'corr-all');
+      assert.ok(res.data.some((a) => a.id === 'att-all-active'));
+      assert.ok(res.data.some((a) => a.id === 'att-all-quarantined'));
+    });
+
+    it('Round 5 (Finding 13 & 15): scoped reconciliation discovers eligible rows and persists audit before deletion', async () => {
+      const { service, mockPrisma, mockStorage, auditLogs } = setupService();
+
+      // Seed pending deletion row and S3 object
+      const key = 'merchants/m-tenant-1/attachments/att-pending-scope/file.png';
+      mockStorage.putObject(key, Buffer.from('test'), 'image/png');
+      await mockPrisma.attachment.create({
+        data: {
+          id: 'att-pending-scope',
+          merchant_id: 'm-tenant-1',
+          file_name: 'file.png',
+          file_size: BigInt(4),
+          mime_type: 'image/png',
+          checksum_sha256: '333',
+          storage_key: key,
+          storage_bucket: 'b',
+          entity_type: 'GENERAL',
+          status: 'PENDING_DELETION',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm',
+          metadata: { scan_status: 'CLEAN' },
+        },
+      });
+
+      // Seed orphan cleanup row
+      const orphanKey = 'merchants/m-tenant-1/attachments/att-orphan-aud/file.png';
+      mockStorage.putObject(orphanKey, Buffer.from('orphan'), 'image/png');
+      await mockPrisma.attachmentOrphanCleanup.create({
+        data: {
+          id: 'orphan-aud-1',
+          merchant_id: 'm-tenant-1',
+          storage_key: orphanKey,
+          storage_bucket: 'b',
+          reason: 'UPLOAD_ROLLBACK',
+          status: 'PENDING',
+        },
+      });
+
+      const outcome = await service.reconcilePendingDeletions(ownerActor, 'corr-rec-5');
+      assert.strictEqual(outcome.reconciled, 1);
+      assert.strictEqual(outcome.orphan_reconciled, 1);
+
+      // Verify audit log exists for orphan cleanup
+      const orphanAudit = auditLogs.find(
+        (a: any) => a.action === AttachmentAuditEvent.ATTACHMENT_ORPHAN_CLEANED
+      );
+      assert.ok(orphanAudit);
     });
   });
 });

@@ -251,20 +251,14 @@ async function runAttachmentsWebTestSuite() {
     })
   );
   assert.ok(partialFailureMarkup.includes('data-testid="attachment-partial-failure-banner"'));
-  assert.ok(
-    partialFailureMarkup.includes('1 tệp thành công, 2 tệp lỗi')
-  );
-  assert.ok(
-    partialFailureMarkup.includes('22222222-2222-2222-2222-222222222222 — DELETE_ERROR')
-  );
-  assert.ok(
-    partialFailureMarkup.includes('33333333-3333-3333-3333-333333333333 — PURGE_FAILED')
-  );
+  assert.ok(partialFailureMarkup.includes('1 tệp thành công, 2 tệp lỗi'));
+  assert.ok(partialFailureMarkup.includes('22222222-2222-2222-2222-222222222222 — DELETE_ERROR'));
+  assert.ok(partialFailureMarkup.includes('33333333-3333-3333-3333-333333333333 — PURGE_FAILED'));
   assert.ok(partialFailureMarkup.includes('data-testid="retry-failed-bulk-delete"'));
   console.log('  PASS: bulk-delete partial-failure recovery state verified.');
 
   // 10. Full Settings Page integration test
-  console.log('🧪 9. Testing UI State: Full AttachmentsSettingsPage integration...');
+  console.log('🧪 10. Testing UI State: Full AttachmentsSettingsPage integration...');
   const pageMarkup = renderToStaticMarkup(
     React.createElement(
       AuthProvider,
@@ -281,6 +275,99 @@ async function runAttachmentsWebTestSuite() {
   assert.ok(pageMarkup.includes('data-testid="attachment-management-view"'));
   assert.ok(pageMarkup.includes('data-testid="attachment-list-grid"'));
   console.log('  PASS: Full AttachmentsSettingsPage verified.');
+
+  // 11. Pagination navigation controls (Finding 11)
+  console.log('🧪 11. Testing UI State: Pagination navigation controls and boundary states...');
+  const paginationMidMarkup = renderToStaticMarkup(
+    React.createElement(AttachmentManagementView, {
+      attachments: allAttachments,
+      total: 45,
+      page: 2,
+      totalPages: 5,
+      loading: false,
+      canEdit: true,
+    })
+  );
+  assert.ok(paginationMidMarkup.includes('data-testid="attachments-pagination-bar"'));
+  assert.ok(paginationMidMarkup.includes('Trang 2 / 5 (45 tệp)'));
+  assert.ok(paginationMidMarkup.includes('data-testid="prev-page-button"'));
+  assert.ok(paginationMidMarkup.includes('data-testid="next-page-button"'));
+  assert.ok(paginationMidMarkup.includes('aria-label="Trang trước"'));
+  assert.ok(paginationMidMarkup.includes('aria-label="Trang tiếp"'));
+  // Neither button should be disabled on page 2 of 5
+  assert.ok(!paginationMidMarkup.includes('disabled="" data-testid="prev-page-button"'));
+
+  // Boundary check: page 1 should disable previous
+  const paginationFirstPageMarkup = renderToStaticMarkup(
+    React.createElement(AttachmentManagementView, {
+      attachments: allAttachments,
+      total: 45,
+      page: 1,
+      totalPages: 5,
+      loading: false,
+      canEdit: true,
+    })
+  );
+  assert.ok(
+    paginationFirstPageMarkup.includes('disabled=""') ||
+      paginationFirstPageMarkup.includes('disabled')
+  );
+
+  // Boundary check: last page should disable next
+  const paginationLastPageMarkup = renderToStaticMarkup(
+    React.createElement(AttachmentManagementView, {
+      attachments: allAttachments,
+      total: 45,
+      page: 5,
+      totalPages: 5,
+      loading: false,
+      canEdit: true,
+    })
+  );
+  assert.ok(paginationLastPageMarkup.includes('Trang 5 / 5 (45 tệp)'));
+  console.log('  PASS: Pagination navigation controls and boundary states verified.');
+
+  // 12. Accessibility Attributes: Dialog Roles & Action Labels
+  console.log(
+    '🧪 12. Testing UI State: Accessibility attributes (dialog role, aria-modal, aria-labels)...'
+  );
+  const modalA11yMarkup = renderToStaticMarkup(
+    React.createElement(AttachmentManagementView, {
+      attachments: allAttachments,
+      canEdit: true,
+      initialUploadOpen: true,
+      onDownload: async () => {},
+      onDelete: async () => {},
+      onQuarantine: async () => {},
+    })
+  );
+  assert.ok(modalA11yMarkup.includes('role="dialog"'));
+  assert.ok(modalA11yMarkup.includes('aria-modal="true"'));
+  assert.ok(modalA11yMarkup.includes('aria-labelledby="upload-modal-title"'));
+  // Check action button accessibility labels
+  assert.ok(modalA11yMarkup.includes('aria-label="Đóng cửa sổ tải lên"'));
+  assert.ok(modalA11yMarkup.includes('aria-label="Tải xuống tệp damaged_box.png"'));
+  assert.ok(modalA11yMarkup.includes('aria-label="Xóa tệp damaged_box.png"'));
+  assert.ok(modalA11yMarkup.includes('aria-label="Cách ly tệp damaged_box.png"'));
+  console.log('  PASS: Accessibility attributes verified.');
+
+  // 13. Download Failure & Recovery State (Finding 16)
+  console.log('🧪 13. Testing UI State: Download failure error banner and recovery guidance...');
+  const downloadErrorMarkup = renderToStaticMarkup(
+    React.createElement(AttachmentManagementView, {
+      attachments: allAttachments,
+      error:
+        "Không thể tải xuống tệp 'damaged_box.png': Lỗi kết nối hoặc phiên đăng nhập hết hạn. Vui lòng thử lại.",
+      onRefresh: () => {},
+    })
+  );
+  assert.ok(downloadErrorMarkup.includes('data-testid="attachment-error-state"'));
+  assert.ok(downloadErrorMarkup.includes('damaged_box.png'));
+  assert.ok(
+    downloadErrorMarkup.includes('Lỗi kết nối hoặc phiên đăng nhập hết hạn. Vui lòng thử lại.')
+  );
+  assert.ok(downloadErrorMarkup.includes('Thử lại'));
+  console.log('  PASS: Download failure error banner and recovery guidance verified.');
 
   console.log('================================================================');
   console.log('ALL WEB ATTACHMENTS UI STATES TESTS PASSED (100% GREEN)');

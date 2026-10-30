@@ -67,14 +67,10 @@ export class AttachmentsController {
     const ipAddress = extractClientIp(req);
 
     // Validate DTO and payload bounds (content-gate inspection bounds from config)
-    const validation = validateUploadAttachmentDto(
-      body,
-      this.config.MAX_ATTACHMENT_SIZE_BYTES,
-      {
-        ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: this.config.ATTACHMENT_SCAN_MAX_ZIP_ENTRIES,
-        ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: this.config.ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES,
-      }
-    );
+    const validation = validateUploadAttachmentDto(body, this.config.MAX_ATTACHMENT_SIZE_BYTES, {
+      ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: this.config.ATTACHMENT_SCAN_MAX_ZIP_ENTRIES,
+      ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: this.config.ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES,
+    });
     if (!validation.valid || !validation.buffer) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
