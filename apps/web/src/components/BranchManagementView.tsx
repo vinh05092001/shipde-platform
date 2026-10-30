@@ -21,10 +21,22 @@ import {
 } from 'lucide-react';
 import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
 import { type BranchFormState, validateBranchForm, isValidBranchCode } from '@shipde/contracts';
-import { PaginationControls } from './common/SharedListControls';
+import {
+  PaginationControls,
+  SavedViewsAndColumnsControls,
+  type ColumnOption,
+} from './common/SharedListControls';
 import { useSharedListState, paginateInMemory } from '@/hooks/useSharedListState';
 
 export type BranchItem = Branch;
+
+// Branch card fields exposed as configurable display columns (AC-COM-02-13)
+export const BRANCH_AVAILABLE_COLUMNS: ColumnOption[] = [
+  { id: 'code', label: 'Mã chi nhánh' },
+  { id: 'status', label: 'Trạng thái' },
+  { id: 'address', label: 'Địa chỉ' },
+  { id: 'phone', label: 'Số điện thoại' },
+];
 
 export interface BranchManagementViewProps {
   branches?: Branch[];
@@ -103,6 +115,7 @@ export function BranchManagementView({
     listKey: 'branches',
     tenantId,
     userId,
+    initialColumns: BRANCH_AVAILABLE_COLUMNS.map((c) => c.id),
   });
 
   const page = listState.page;
@@ -120,6 +133,10 @@ export function BranchManagementView({
   const setStatusFilter = (val: 'ALL' | 'ACTIVE' | 'INACTIVE') =>
     listState.setFilter('status', val);
   const resetFilters = listState.resetFilters;
+  const isColVisible = (colId: string) => {
+    const cols = listState.columnSettings?.visibleColumns;
+    return !cols || cols.length === 0 ? true : cols.includes(colId);
+  };
 
   // Notify server pagination consumer when query changes
   useEffect(() => {
@@ -689,6 +706,20 @@ export function BranchManagementView({
             </div>
           </div>
 
+          {/* Saved views & column settings toolbar (AC-COM-02-13) */}
+          <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2">
+            <SavedViewsAndColumnsControls
+              savedViews={listState.savedViews}
+              columnSettings={listState.columnSettings}
+              availableColumns={BRANCH_AVAILABLE_COLUMNS}
+              onSaveCurrentView={listState.saveCurrentView}
+              onApplySavedView={listState.applySavedView}
+              onDeleteSavedView={listState.deleteSavedView}
+              onUpdateColumnSettings={listState.updateColumnSettings}
+              testIdPrefix="branch"
+            />
+          </div>
+
           {/* Branch List or Empty State */}
           {total === 0 ? (
             <div
@@ -748,9 +779,11 @@ export function BranchManagementView({
                       <div className="space-y-3">
                         {/* Card Header: Badges & Code */}
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-md">
-                            {branch.code}
-                          </span>
+                          {isColVisible('code') && (
+                            <span className="font-mono text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-md">
+                              {branch.code}
+                            </span>
+                          )}
                           <div className="flex items-center gap-1.5">
                             {isDefault && (
                               <span
@@ -761,16 +794,18 @@ export function BranchManagementView({
                                 Mặc định
                               </span>
                             )}
-                            <span
-                              data-testid={`status-badge-${branch.id}`}
-                              className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
-                                isActive
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : 'bg-slate-100 text-slate-600 border-slate-200'
-                              }`}
-                            >
-                              {isActive ? 'Đang hoạt động' : 'Tạm ngưng'}
-                            </span>
+                            {isColVisible('status') && (
+                              <span
+                                data-testid={`status-badge-${branch.id}`}
+                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
+                                  isActive
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}
+                              >
+                                {isActive ? 'Đang hoạt động' : 'Tạm ngưng'}
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -799,16 +834,18 @@ export function BranchManagementView({
                           </div>
 
                           <div className="space-y-1.5 mt-2.5">
-                            <div className="flex items-start gap-2 text-xs text-slate-600">
-                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                              <span className="line-clamp-2">
-                                {branch.address || (
-                                  <span className="text-slate-400 italic">Chưa có địa chỉ</span>
-                                )}
-                              </span>
-                            </div>
+                            {isColVisible('address') && (
+                              <div className="flex items-start gap-2 text-xs text-slate-600">
+                                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                                <span className="line-clamp-2">
+                                  {branch.address || (
+                                    <span className="text-slate-400 italic">Chưa có địa chỉ</span>
+                                  )}
+                                </span>
+                              </div>
+                            )}
 
-                            {branch.phone && (
+                            {isColVisible('phone') && branch.phone && (
                               <div className="flex items-center gap-2 text-xs text-slate-600">
                                 <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                 <span>{branch.phone}</span>

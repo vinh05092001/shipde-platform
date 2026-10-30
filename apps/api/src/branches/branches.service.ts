@@ -218,7 +218,14 @@ export class BranchesService {
       }
 
       if (orConditions.length > 0) {
-        whereClause.OR = orConditions;
+        if (whereClause.OR) {
+          // Combine active search conditions with the scope restriction so
+          // filters and counts keep describing the same tenant-scoped set.
+          whereClause.AND = [{ OR: whereClause.OR }, { OR: orConditions }];
+          delete whereClause.OR;
+        } else {
+          whereClause.OR = orConditions;
+        }
       } else {
         whereClause.id = '00000000-0000-0000-0000-000000000000';
       }

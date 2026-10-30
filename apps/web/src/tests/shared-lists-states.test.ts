@@ -867,6 +867,317 @@ async function runSharedListsTestSuite() {
     console.log('  PASS: Saved Views & Column Settings LocalStorage Persistence verified.');
   }
 
+  // ================================================================
+  // 10. Server Pagination & Totals Reach the Screens (Findings 2 & 3)
+  // ================================================================
+  console.log('🧪 10. Testing server pagination and totals reaching the actual screens...');
+  {
+    // Only a single server page of rows is available to the client; the
+    // pagination UI must reflect the server totals, not the client subset.
+    const branchesServerPagedHtml = renderToStaticMarkup(
+      React.createElement(BranchManagementView, {
+        loading: false,
+        branches: mockBranches.slice(0, 2),
+        canEdit: true,
+        initialPage: 1,
+        initialPageSize: 10,
+        serverTotal: 43,
+        serverTotalPages: 5,
+      })
+    );
+    assert.ok(branchesServerPagedHtml.includes('data-testid="branch-pagination-controls"'));
+    assert.ok(
+      branchesServerPagedHtml.includes('data-testid="branch-pagination-total"'),
+      'Branch pagination must expose the total counter'
+    );
+    assert.ok(
+      branchesServerPagedHtml.includes('>43<'),
+      'Branch total must come from server meta (43)'
+    );
+    assert.ok(
+      branchesServerPagedHtml.includes('Trang 1 / 5'),
+      'Branch page count must come from server total_pages (5), not the 2-row client subset'
+    );
+
+    const warehousesServerPagedHtml = renderToStaticMarkup(
+      React.createElement(WarehouseManagementView, {
+        loading: false,
+        warehouses: mockWarehouses,
+        canEdit: true,
+        initialPage: 1,
+        initialPageSize: 10,
+        serverTotal: 27,
+        serverTotalPages: 3,
+      })
+    );
+    assert.ok(warehousesServerPagedHtml.includes('data-testid="warehouse-pagination-controls"'));
+    assert.ok(
+      warehousesServerPagedHtml.includes('data-testid="warehouse-pagination-total"'),
+      'Warehouse pagination must expose the total counter'
+    );
+    assert.ok(
+      warehousesServerPagedHtml.includes('>27<'),
+      'Warehouse total must come from server meta (27)'
+    );
+    assert.ok(
+      warehousesServerPagedHtml.includes('Trang 1 / 3'),
+      'Warehouse page count must come from server total_pages (3), not the 2-row client subset'
+    );
+
+    console.log('  PASS: Server pagination and totals verified on Branch and Warehouse screens.');
+  }
+
+  // ================================================================
+  // 11. Saved Views & Column Controls Embedded on Every Shared List (Finding 4)
+  // ================================================================
+  console.log(
+    '🧪 11. Testing saved view/column controls embedded in Branch and Warehouse views...'
+  );
+  {
+    const originalWindow = global.window;
+    try {
+      (global as any).window = {
+        location: { pathname: '/settings/branches', search: '', hash: '' },
+        history: { replaceState: () => {} },
+        localStorage: {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {},
+          clear: () => {},
+        },
+      };
+
+      const branchControlsHtml = renderToStaticMarkup(
+        React.createElement(BranchManagementView, {
+          loading: false,
+          branches: mockBranches,
+          canEdit: true,
+        })
+      );
+      assert.ok(
+        branchControlsHtml.includes('data-testid="branch-saved-views-columns-container"'),
+        'BranchManagementView must embed the saved views & column settings toolbar'
+      );
+      assert.ok(
+        branchControlsHtml.includes('data-testid="branch-save-view-btn"'),
+        'BranchManagementView must expose the save-view action'
+      );
+      assert.ok(
+        branchControlsHtml.includes('data-testid="branch-column-settings-btn"'),
+        'BranchManagementView must expose the column settings action'
+      );
+
+      const warehouseControlsHtml = renderToStaticMarkup(
+        React.createElement(WarehouseManagementView, {
+          loading: false,
+          warehouses: mockWarehouses,
+          canEdit: true,
+        })
+      );
+      assert.ok(
+        warehouseControlsHtml.includes('data-testid="warehouse-saved-views-columns-container"'),
+        'WarehouseManagementView must embed the saved views & column settings toolbar'
+      );
+      assert.ok(
+        warehouseControlsHtml.includes('data-testid="warehouse-save-view-btn"'),
+        'WarehouseManagementView must expose the save-view action'
+      );
+      assert.ok(
+        warehouseControlsHtml.includes('data-testid="warehouse-column-settings-btn"'),
+        'WarehouseManagementView must expose the column settings action'
+      );
+    } finally {
+      (global as any).window = originalWindow;
+    }
+
+    console.log('  PASS: Saved view/column controls verified on Branch and Warehouse screens.');
+  }
+
+  // ================================================================
+  // 12. Tenant/User Ownership of Persisted Preferences (Finding 5, hook-driven)
+  // ================================================================
+  console.log('🧪 12. Testing tenant/user-scoped preference storage through the hook...');
+  {
+    const mockStorage: Record<string, string> = {};
+    const fakeLocalStorage = {
+      getItem: (k: string) => mockStorage[k] || null,
+      setItem: (k: string, v: string) => {
+        mockStorage[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete mockStorage[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(mockStorage)) delete mockStorage[k];
+      },
+    };
+
+    const originalWindow = global.window;
+    try {
+      (global as any).window = {
+        location: { pathname: '/settings/branches', search: '', hash: '' },
+        history: { replaceState: () => {} },
+        localStorage: fakeLocalStorage,
+      };
+
+      const tenantA = 'merch_tenant_a';
+      const userA = 'usr_owner_a';
+      const tenantB = 'merch_tenant_b';
+      const userB = 'usr_owner_b';
+
+      const tenantAViewsKey = `shipde_pref_${tenantA}_${userA}_branches_views`;
+      const tenantAColsKey = `shipde_pref_${tenantA}_${userA}_branches_columns`;
+      fakeLocalStorage.setItem(
+        tenantAViewsKey,
+        JSON.stringify([
+          {
+            id: 'view-tenant-a',
+            name: 'Chỉ xem chi nhánh hoạt động (A)',
+            page: 1,
+            pageSize: 10,
+            sortBy: 'name',
+            sortOrder: 'asc',
+            search: '',
+            filters: { status: 'ALL' },
+            createdAt: new Date().toISOString(),
+          },
+        ])
+      );
+      fakeLocalStorage.setItem(tenantAColsKey, JSON.stringify({ visibleColumns: ['code'] }));
+
+      // Tenant A / user A: hook must load their saved view and column settings
+      const tenantAHtml = renderToStaticMarkup(
+        React.createElement(BranchManagementView, {
+          loading: false,
+          branches: mockBranches,
+          canEdit: true,
+          tenantId: tenantA,
+          userId: userA,
+        })
+      );
+      assert.ok(
+        tenantAHtml.includes('data-testid="branch-saved-views-select"'),
+        'Tenant A must see their saved views dropdown'
+      );
+      assert.ok(
+        tenantAHtml.includes('Chỉ xem chi nhánh hoạt động (A)'),
+        'Tenant A saved view name must be loaded from tenant-scoped storage'
+      );
+      assert.ok(
+        !tenantAHtml.includes('128 Nguyễn Trãi'),
+        'Tenant A column settings (code only) must hide the address field'
+      );
+      assert.ok(
+        tenantAHtml.includes('HCM-Q3'),
+        'Tenant A column settings must keep the visible code field'
+      );
+
+      // Tenant B / user B sharing the same browser: no leakage, defaults restored
+      const tenantBHtml = renderToStaticMarkup(
+        React.createElement(BranchManagementView, {
+          loading: false,
+          branches: mockBranches,
+          canEdit: true,
+          tenantId: tenantB,
+          userId: userB,
+        })
+      );
+      assert.ok(
+        !tenantBHtml.includes('Chỉ xem chi nhánh hoạt động (A)'),
+        'Tenant B must NOT see Tenant A saved views'
+      );
+      assert.ok(
+        !tenantBHtml.includes('data-testid="branch-saved-views-select"'),
+        'Tenant B has no saved views of their own'
+      );
+      assert.ok(
+        tenantBHtml.includes('128 Nguyễn Trãi'),
+        'Tenant B must fall back to the default column set (address visible)'
+      );
+
+      // Same isolation on the warehouses list
+      const warehouseTenantAViewsKey = `shipde_pref_${tenantA}_${userA}_warehouses_views`;
+      fakeLocalStorage.setItem(
+        warehouseTenantAViewsKey,
+        JSON.stringify([
+          {
+            id: 'view-wh-a',
+            name: 'Xem kho (A)',
+            page: 1,
+            pageSize: 10,
+            sortBy: 'created_at',
+            sortOrder: 'desc',
+            search: '',
+            filters: { status: 'ALL' },
+            createdAt: new Date().toISOString(),
+          },
+        ])
+      );
+      const warehouseTenantBHtml = renderToStaticMarkup(
+        React.createElement(WarehouseManagementView, {
+          loading: false,
+          warehouses: mockWarehouses,
+          canEdit: true,
+          tenantId: tenantB,
+          userId: userB,
+        })
+      );
+      assert.ok(
+        !warehouseTenantBHtml.includes('Xem kho (A)'),
+        'Tenant B must NOT see Tenant A warehouse saved views'
+      );
+    } finally {
+      (global as any).window = originalWindow;
+    }
+
+    console.log('  PASS: Tenant/user-scoped preference ownership verified through the hook.');
+  }
+
+  // ================================================================
+  // 13. Hydration Fail-Closed Loading Gate (Finding 7)
+  // ================================================================
+  console.log(
+    '🧪 13. Testing hydration fail-closed loading gate (no data before auth resolves)...'
+  );
+  {
+    const originalWindow = global.window;
+    try {
+      (global as any).window = {
+        location: { pathname: '/settings/users', search: '', hash: '' },
+        history: { replaceState: () => {} },
+        localStorage: {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {},
+          clear: () => {},
+        },
+      };
+
+      // No SSR-provided initial state: the tab is uncontrolled and the auth
+      // context is still hydrating. It must render only the loading skeleton.
+      const hydratingHtml = renderToStaticMarkup(
+        React.createElement(AuthProvider, null, React.createElement(UserManagementTab, {}))
+      );
+      assert.ok(
+        hydratingHtml.includes('data-testid="users-loading-skeleton"'),
+        'During auth hydration the users tab must render the loading skeleton'
+      );
+      assert.ok(
+        !hydratingHtml.includes('data-testid="users-table"'),
+        'No users table may render before auth hydration resolves'
+      );
+      assert.ok(
+        !hydratingHtml.includes('data-testid="users-forbidden-state"'),
+        'No forbidden verdict may render before auth hydration resolves'
+      );
+      assert.ok(!hydratingHtml.includes('Nguyễn Văn An'), 'No user data may leak during hydration');
+    } finally {
+      (global as any).window = originalWindow;
+    }
+
+    console.log('  PASS: Hydration fail-closed loading gate verified.');
+  }
+
   console.log('================================================================');
   console.log('🎉 ALL FEAT-COM-02 SHARED LIST CONTRACT & STATE TESTS PASSED 100%!');
   console.log('================================================================');

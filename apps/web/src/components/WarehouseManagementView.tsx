@@ -34,8 +34,22 @@ import {
   ALLOWED_WAREHOUSE_PAPER_SIZES,
   ALLOWED_WAREHOUSE_DPIS,
 } from '@shipde/contracts';
-import { PaginationControls } from './common/SharedListControls';
+import {
+  PaginationControls,
+  SavedViewsAndColumnsControls,
+  type ColumnOption,
+} from './common/SharedListControls';
 import { useSharedListState, paginateInMemory } from '@/hooks/useSharedListState';
+
+// Warehouse card sections exposed as configurable display columns (AC-COM-02-13)
+export const WAREHOUSE_AVAILABLE_COLUMNS: ColumnOption[] = [
+  { id: 'code', label: 'Mã kho hàng' },
+  { id: 'status', label: 'Trạng thái' },
+  { id: 'pickup_address', label: 'Địa chỉ lấy hàng' },
+  { id: 'contact', label: 'Người liên hệ' },
+  { id: 'return_address', label: 'Địa chỉ nhận hoàn' },
+  { id: 'schedule_printer', label: 'Lịch & máy in' },
+];
 
 export interface WarehouseManagementViewProps {
   warehouses?: Warehouse[];
@@ -116,6 +130,7 @@ export function WarehouseManagementView({
     listKey: 'warehouses',
     tenantId,
     userId,
+    initialColumns: WAREHOUSE_AVAILABLE_COLUMNS.map((c) => c.id),
   });
 
   const page = listState.page;
@@ -132,6 +147,10 @@ export function WarehouseManagementView({
   const setSearchQuery = listState.setSearch;
   const setStatusFilter = (st: 'ALL' | 'active' | 'inactive') => listState.setFilter('status', st);
   const resetFilters = listState.resetFilters;
+  const isColVisible = (colId: string) => {
+    const cols = listState.columnSettings?.visibleColumns;
+    return !cols || cols.length === 0 ? true : cols.includes(colId);
+  };
 
   // Notify server pagination consumer when query changes
   useEffect(() => {
@@ -794,6 +813,20 @@ export function WarehouseManagementView({
         )}
       </div>
 
+      {/* Saved views & column settings toolbar (AC-COM-02-13) */}
+      <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2">
+        <SavedViewsAndColumnsControls
+          savedViews={listState.savedViews}
+          columnSettings={listState.columnSettings}
+          availableColumns={WAREHOUSE_AVAILABLE_COLUMNS}
+          onSaveCurrentView={listState.saveCurrentView}
+          onApplySavedView={listState.applySavedView}
+          onDeleteSavedView={listState.deleteSavedView}
+          onUpdateColumnSettings={listState.updateColumnSettings}
+          testIdPrefix="warehouse"
+        />
+      </div>
+
       {/* Loading Skeleton State */}
       {loading && (
         <div data-testid="warehouse-loading-state" className="space-y-4">
@@ -895,9 +928,11 @@ export function WarehouseManagementView({
                     <div className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-sm text-slate-900">{wh.name}</span>
-                        <span className="px-2 py-0.5 text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 rounded-md">
-                          {wh.code}
-                        </span>
+                        {isColVisible('code') && (
+                          <span className="px-2 py-0.5 text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 rounded-md">
+                            {wh.code}
+                          </span>
+                        )}
                         {wh.is_default && (
                           <span
                             data-testid={`badge-default-warehouse-${wh.id}`}
@@ -909,21 +944,23 @@ export function WarehouseManagementView({
                         )}
                       </div>
                       <div className="flex items-center gap-2">
-                        <span
-                          data-testid={`badge-status-warehouse-${wh.id}`}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md ${
-                            wh.status === 'active'
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                              : 'bg-slate-100 text-slate-500 border border-slate-200'
-                          }`}
-                        >
+                        {isColVisible('status') && (
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              wh.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
+                            data-testid={`badge-status-warehouse-${wh.id}`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md ${
+                              wh.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
                             }`}
-                          />
-                          <span>{wh.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}</span>
-                        </span>
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                wh.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
+                              }`}
+                            />
+                            <span>{wh.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}</span>
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -945,111 +982,123 @@ export function WarehouseManagementView({
                   </div>
 
                   {/* Pickup Address Section */}
-                  <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-orange-600" />
-                      <span>Địa chỉ lấy hàng (Pickup):</span>
-                    </div>
-                    <p className="pl-5 text-slate-700 font-medium">
-                      {wh.address_line}
-                      {wh.ward ? `, ${wh.ward}` : ''}, {wh.district}, {wh.city}
-                      {wh.postal_code ? ` (Mã bưu chính: ${wh.postal_code})` : ''}
-                    </p>
-                    <div className="pl-5 flex items-center gap-4 text-slate-500 flex-wrap">
-                      <span className="inline-flex items-center gap-1">
-                        <span className="font-medium text-slate-700">{wh.contact_name}</span>
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <Phone className="w-3 h-3 text-slate-400" />
-                        <span>{wh.contact_phone}</span>
-                      </span>
-                      {wh.contact_email && (
-                        <span className="inline-flex items-center gap-1">
-                          <Mail className="w-3 h-3 text-slate-400" />
-                          <span>{wh.contact_email}</span>
-                        </span>
+                  {(isColVisible('pickup_address') || isColVisible('contact')) && (
+                    <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                      {isColVisible('pickup_address') && (
+                        <>
+                          <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-orange-600" />
+                            <span>Địa chỉ lấy hàng (Pickup):</span>
+                          </div>
+                          <p className="pl-5 text-slate-700 font-medium">
+                            {wh.address_line}
+                            {wh.ward ? `, ${wh.ward}` : ''}, {wh.district}, {wh.city}
+                            {wh.postal_code ? ` (Mã bưu chính: ${wh.postal_code})` : ''}
+                          </p>
+                        </>
+                      )}
+                      {isColVisible('contact') && (
+                        <div className="pl-5 flex items-center gap-4 text-slate-500 flex-wrap">
+                          <span className="inline-flex items-center gap-1">
+                            <span className="font-medium text-slate-700">{wh.contact_name}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-slate-400" />
+                            <span>{wh.contact_phone}</span>
+                          </span>
+                          {wh.contact_email && (
+                            <span className="inline-flex items-center gap-1">
+                              <Mail className="w-3 h-3 text-slate-400" />
+                              <span>{wh.contact_email}</span>
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
-                  </div>
+                  )}
 
                   {/* Return Address Section */}
-                  <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                    <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                      <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Địa chỉ nhận hoàn (Return):</span>
-                    </div>
-                    {wh.use_different_return_address ? (
-                      <div className="pl-5 space-y-1">
-                        <p className="text-slate-700 font-medium">
-                          {wh.return_address_line}
-                          {wh.return_ward ? `, ${wh.return_ward}` : ''}, {wh.return_district},{' '}
-                          {wh.return_city}
-                        </p>
-                        <div className="flex items-center gap-4 text-slate-500">
-                          {wh.return_contact_name && (
-                            <span className="font-medium text-slate-700">
-                              {wh.return_contact_name}
-                            </span>
-                          )}
-                          {wh.return_contact_phone && (
-                            <span className="inline-flex items-center gap-1">
-                              <Phone className="w-3 h-3 text-slate-400" />
-                              <span>{wh.return_contact_phone}</span>
-                            </span>
-                          )}
-                        </div>
+                  {isColVisible('return_address') && (
+                    <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                      <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                        <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Địa chỉ nhận hoàn (Return):</span>
                       </div>
-                    ) : (
-                      <p className="pl-5 text-slate-500 italic">Cùng địa chỉ với điểm lấy hàng</p>
-                    )}
-                  </div>
+                      {wh.use_different_return_address ? (
+                        <div className="pl-5 space-y-1">
+                          <p className="text-slate-700 font-medium">
+                            {wh.return_address_line}
+                            {wh.return_ward ? `, ${wh.return_ward}` : ''}, {wh.return_district},{' '}
+                            {wh.return_city}
+                          </p>
+                          <div className="flex items-center gap-4 text-slate-500">
+                            {wh.return_contact_name && (
+                              <span className="font-medium text-slate-700">
+                                {wh.return_contact_name}
+                              </span>
+                            )}
+                            {wh.return_contact_phone && (
+                              <span className="inline-flex items-center gap-1">
+                                <Phone className="w-3 h-3 text-slate-400" />
+                                <span>{wh.return_contact_phone}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="pl-5 text-slate-500 italic">Cùng địa chỉ với điểm lấy hàng</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Schedule & Printer Settings Overview */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                    {/* Schedule */}
-                    <div className="space-y-1">
-                      <div className="font-semibold text-slate-700 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        <span>Lịch lấy hàng:</span>
-                      </div>
-                      <div>
-                        {wh.cutoff_time ? (
-                          <span>
-                            Giờ cắt ca lấy:{' '}
-                            <span className="font-bold text-slate-800">{wh.cutoff_time}</span>
-                          </span>
-                        ) : (
-                          <span className="italic">Chưa cài đặt giờ cắt ca</span>
-                        )}
-                      </div>
-                      {wh.schedule_notes && (
-                        <p className="text-slate-600 line-clamp-1" title={wh.schedule_notes}>
-                          Ghi chú: {wh.schedule_notes}
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Printer */}
-                    <div className="space-y-1">
-                      <div className="font-semibold text-slate-700 flex items-center gap-1">
-                        <Printer className="w-3 h-3 text-slate-400" />
-                        <span>In nhãn nhiệt:</span>
-                      </div>
-                      <div>
-                        Khổ giấy:{' '}
-                        <span className="font-bold text-slate-800">{wh.printer_paper_size}</span> (
-                        {wh.printer_dpi} DPI)
-                        {wh.printer_name && (
-                          <span className="text-slate-500 font-normal"> - {wh.printer_name}</span>
-                        )}
-                      </div>
-                      {wh.printer_auto_print && (
-                        <div className="text-emerald-600 font-semibold">
-                          Tự động in khi duyệt đơn
+                  {isColVisible('schedule_printer') && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                      {/* Schedule */}
+                      <div className="space-y-1">
+                        <div className="font-semibold text-slate-700 flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>Lịch lấy hàng:</span>
                         </div>
-                      )}
+                        <div>
+                          {wh.cutoff_time ? (
+                            <span>
+                              Giờ cắt ca lấy:{' '}
+                              <span className="font-bold text-slate-800">{wh.cutoff_time}</span>
+                            </span>
+                          ) : (
+                            <span className="italic">Chưa cài đặt giờ cắt ca</span>
+                          )}
+                        </div>
+                        {wh.schedule_notes && (
+                          <p className="text-slate-600 line-clamp-1" title={wh.schedule_notes}>
+                            Ghi chú: {wh.schedule_notes}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Printer */}
+                      <div className="space-y-1">
+                        <div className="font-semibold text-slate-700 flex items-center gap-1">
+                          <Printer className="w-3 h-3 text-slate-400" />
+                          <span>In nhãn nhiệt:</span>
+                        </div>
+                        <div>
+                          Khổ giấy:{' '}
+                          <span className="font-bold text-slate-800">{wh.printer_paper_size}</span>{' '}
+                          ({wh.printer_dpi} DPI)
+                          {wh.printer_name && (
+                            <span className="text-slate-500 font-normal"> - {wh.printer_name}</span>
+                          )}
+                        </div>
+                        {wh.printer_auto_print && (
+                          <div className="text-emerald-600 font-semibold">
+                            Tự động in khi duyệt đơn
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Card Actions Footer */}
                   {canEdit && (
