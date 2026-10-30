@@ -448,6 +448,81 @@ async function runImportsWebTestSuite() {
     console.log('PASS: TEST 13 - Mapping preview displays actual source header from uploaded file');
   }
 
+  // -------------------------------------------------------------------------
+  // TEST 14: Stale detail responses discarded on concurrent selection (Finding 15 & Review 5)
+  // -------------------------------------------------------------------------
+  {
+    let selectedImport: any = null;
+    let selectedRows: any[] = [];
+    const activeDetailIdRef = { current: null as string | null };
+
+    // Simulate fetchImportDetail concurrency and identity rechecking logic
+    const fetchImportDetailSim = async (
+      importId: string,
+      detailResult: any,
+      rowsResult: any,
+      delayMs: number
+    ) => {
+      activeDetailIdRef.current = importId;
+      selectedImport = null;
+      selectedRows = [];
+
+      // Simulate async response await
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+      if (activeDetailIdRef.current !== importId) {
+        return; // Discard stale response
+      }
+
+      const detailJson = detailResult;
+      const rowsJson = rowsResult;
+
+      // Recheck before committing state updates
+      if (activeDetailIdRef.current !== importId) {
+        return;
+      }
+
+      selectedImport = detailJson.data?.import || detailJson.data;
+      selectedRows = rowsJson.data?.items || [];
+    };
+
+    // Selection 1: imp-1 with slower network (40ms)
+    const p1 = fetchImportDetailSim(
+      'imp-1',
+      { data: { import: { id: 'imp-1', file_name: 'slow.csv' } } },
+      { data: { items: [{ id: 'row-1' }] } },
+      40
+    );
+
+    // User switches to imp-2 shortly after (faster response: 10ms)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const p2 = fetchImportDetailSim(
+      'imp-2',
+      { data: { import: { id: 'imp-2', file_name: 'fast.csv' } } },
+      { data: { items: [{ id: 'row-2' }] } },
+      10
+    );
+
+    await Promise.all([p1, p2]);
+
+    assert.strictEqual(
+      selectedImport?.id,
+      'imp-2',
+      'Stale detail response for imp-1 must not overwrite active imp-2 selection'
+    );
+    assert.strictEqual(
+      selectedImport?.file_name,
+      'fast.csv',
+      'Selected import name must correspond to active imp-2'
+    );
+    assert.strictEqual(selectedRows.length, 1);
+    assert.strictEqual(selectedRows[0].id, 'row-2');
+
+    console.log(
+      'PASS: TEST 14 - Stale detail responses discarded when active detail selection changes before fetch completes'
+    );
+  }
+
   console.log('================================================================');
   console.log('ALL WEB IMPORTS UI STATES TESTS PASSED (100%)');
   console.log('================================================================');

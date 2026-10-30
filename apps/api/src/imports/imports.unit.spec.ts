@@ -14,7 +14,7 @@ import { TEMPLATE_DEFINITIONS } from './imports.constants';
 import { validateUploadImportDto, validateImportRow } from './imports.dto';
 import { ImportsService } from './imports.service';
 import { CanonicalApiException } from '../auth/auth.service';
-import { ImportStatus } from '@shipde/contracts';
+import { ImportStatus, ImportAuditEvent } from '@shipde/contracts';
 
 describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
   describe('DTO Validation: validateUploadImportDto', () => {
@@ -1215,6 +1215,188 @@ describe('FEAT-COM-04: Imports Framework Unit Test Suite', () => {
           return true;
         }
       );
+    });
+
+    it('should delete uploaded object from storage when registration transaction fails (compensating deletion)', async () => {
+      const mockConfig: any = {
+        MAX_IMPORT_FILE_SIZE_BYTES: 10000,
+        ALLOWED_IMPORT_MIME_TYPES: ['text/csv'],
+        MALWARE_SCANNER_ENABLED: false,
+      };
+      let deletedPath: string | null = null;
+      const mockStorage: any = {
+        putObject: async () => 's3://bucket/imports/merchant-1/warehouses/rev1_test.dat',
+        deleteObject: async (p: string) => {
+          deletedPath = p;
+        },
+      };
+      const mockPrisma: any = {
+        import: {
+          findFirst: async () => null,
+          create: async () => {
+            throw new Error('Database transaction abort');
+          },
+        },
+        $transaction: async (cb: any) => cb(mockPrisma),
+      };
+
+      const service = new ImportsService(mockPrisma, mockStorage, mockConfig);
+      const csvBuffer = Buffer.from('code,name\nWH-1,Test');
+
+      await assert.rejects(
+        async () => {
+          await service.uploadAndProcess(
+            'merchant-1',
+            { userId: 'u1', merchantId: 'merchant-1', role: 'OWNER' } as any,
+            { template_type: 'warehouses' },
+            csvBuffer,
+            'test.csv',
+            'text/csv'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.message, 'Database transaction abort');
+          return true;
+        }
+      );
+
+      assert.strictEqual(
+        deletedPath,
+        's3://bucket/imports/merchant-1/warehouses/rev1_test.dat',
+        'Storage object must be deleted when registration rolls back'
+      );
+    });
+
+    it('should persist FAILED status outside the rolled-back transaction when processing encounters an empty file', async () => {
+      const mockConfig: any = {
+        MAX_IMPORT_FILE_SIZE_BYTES: 10000,
+        ALLOWED_IMPORT_MIME_TYPES: ['text/csv'],
+        MALWARE_SCANNER_ENABLED: false,
+      };
+      let persistedStatus: string | null = null;
+      let persistedErrorCode: string | null = null;
+      let auditActionLogged: string | null = null;
+
+      const importRecord = {
+        id: 'imp-empty-1',
+        merchant_id: 'merchant-1',
+        template_type: 'warehouses',
+        file_name: 'empty.csv',
+        storage_path: 'local://empty.csv',
+        status: ImportStatus.UPLOADED,
+        revision: 1,
+      };
+
+      const mockStorage: any = {
+        getObject: async () => Buffer.from(''),
+      };
+
+      const mockPrisma: any = {
+        import: {
+          findFirst: async () => importRecord,
+          update: async ({ data }: any) => {
+            persistedStatus = data.status;
+            persistedErrorCode = data.control_totals?.error_code;
+          },
+        },
+        auditLog: {
+          create: async ({ data }: any) => {
+            auditActionLogged = data.action;
+          },
+        },
+        $transaction: async (cb: any) => cb(mockPrisma),
+      };
+
+      const service = new ImportsService(mockPrisma, mockStorage, mockConfig);
+      await service.processImport('merchant-1', 'imp-empty-1', {
+        userId: 'u1',
+        merchantId: 'merchant-1',
+        role: 'OWNER',
+      } as any);
+
+      assert.strictEqual(persistedStatus, ImportStatus.FAILED);
+      assert.strictEqual(persistedErrorCode, 'EMPTY_FILE');
+      assert.strictEqual(auditActionLogged, ImportAuditEvent.IMPORT_PROCESSING_FAILED);
+    });
+
+    it('should capture actual source headers, aliases, and unmapped columns in headerMapping', () => {
+      const template = TEMPLATE_DEFINITIONS['warehouses'];
+      const rawHeaders = ['Ma kho', 'Ten kho hang', 'Cột phụ không liên quan'];
+      const rawRows = [
+        {
+          'Ma kho': 'WH-01',
+          'Ten kho hang': 'Kho Tân Bình',
+          'Cột phụ không liên quan': 'Ghi chú thêm',
+        },
+      ];
+
+      const { normalizedRows, headerMapping } = normalizeRowsWithTemplate(
+        template,
+        rawHeaders,
+        rawRows
+      );
+
+      assert.strictEqual(normalizedRows.length, 1);
+      assert.strictEqual(normalizedRows[0].mappedData['code'], 'WH-01');
+      assert.strictEqual(normalizedRows[0].mappedData['name'], 'Kho Tân Bình');
+
+      const codeMapping = headerMapping.find((m) => m.field === 'code');
+      assert.ok(codeMapping, 'Mapping for code must exist');
+      assert.strictEqual(codeMapping.source_header, 'Ma kho');
+      assert.strictEqual(codeMapping.recognized, true);
+
+      const unmappedCol = headerMapping.find((m) => m.source_header === 'Cột phụ không liên quan');
+      assert.ok(unmappedCol, 'Unmapped column must be retained in header mapping');
+      assert.strictEqual(unmappedCol.recognized, false);
+      assert.strictEqual(unmappedCol.rule, 'Bỏ qua (không thuộc mẫu)');
+    });
+
+    it('should return paginated imports with limit, offset, and total count in metadata', async () => {
+      const mockImports = [
+        {
+          id: 'imp-1',
+          merchant_id: 'merchant-1',
+          template_type: 'warehouses',
+          file_name: 'test.csv',
+          file_size: 100,
+          file_hash: 'hash1',
+          mime_type: 'text/csv',
+          status: ImportStatus.STAGED,
+          revision: 1,
+          total_rows: 5,
+          valid_rows: 5,
+          error_rows: 0,
+          warning_rows: 0,
+          control_totals: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+          promoted_at: null,
+        },
+      ];
+      let querySkip = 0;
+      let queryTake = 0;
+      const mockPrisma: any = {
+        import: {
+          findMany: async (args: any) => {
+            querySkip = args.skip;
+            queryTake = args.take;
+            return mockImports;
+          },
+          count: async () => 45,
+        },
+      };
+      const service = new ImportsService(mockPrisma, {} as any, {} as any);
+      const res = await service.listImports(
+        'merchant-1',
+        { limit: 20, offset: 20 },
+        'test-correlation-id'
+      );
+
+      assert.strictEqual(queryTake, 20);
+      assert.strictEqual(querySkip, 20);
+      assert.strictEqual(res.meta.total, 45);
+      assert.strictEqual(res.meta.correlation_id, 'test-correlation-id');
+      assert.strictEqual(res.data.length, 1);
     });
   });
 });
