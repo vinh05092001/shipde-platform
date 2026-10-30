@@ -37,6 +37,60 @@ function buildCsvString(headers: string[], rows: Record<string, unknown>[]): str
   return [headerLine, ...rowLines].join('\r\n');
 }
 
+/**
+ * Parses RFC 4180 CSV text into complete records. Each record retains its raw
+ * source span (excluding the record terminator) so authorization filtering can
+ * re-emit kept records verbatim. Quoted fields containing commas, doubled
+ * quotes and embedded line breaks stay inside a single record.
+ */
+export function parseCsvRecords(csv: string): { cells: string[]; raw: string }[] {
+  const records: { cells: string[]; raw: string }[] = [];
+  const length = csv.length;
+  let i = 0;
+  while (i < length) {
+    const recordStart = i;
+    const cells: string[] = [];
+    for (;;) {
+      let cell = '';
+      if (i < length && csv[i] === '"') {
+        i += 1;
+        while (i < length) {
+          if (csv[i] === '"') {
+            if (i + 1 < length && csv[i + 1] === '"') {
+              cell += '"';
+              i += 2;
+              continue;
+            }
+            i += 1;
+            break;
+          }
+          cell += csv[i];
+          i += 1;
+        }
+      } else {
+        while (i < length && csv[i] !== ',' && csv[i] !== '\r' && csv[i] !== '\n') {
+          cell += csv[i];
+          i += 1;
+        }
+      }
+      cells.push(cell);
+      if (i < length && csv[i] === ',') {
+        i += 1;
+        continue;
+      }
+      const recordEnd = i;
+      if (i + 1 < length && csv[i] === '\r' && csv[i + 1] === '\n') {
+        i += 2;
+      } else if (i < length && (csv[i] === '\n' || csv[i] === '\r')) {
+        i += 1;
+      }
+      records.push({ cells, raw: csv.slice(recordStart, recordEnd) });
+      break;
+    }
+  }
+  return records;
+}
+
 @Injectable()
 export class BulkService {
   constructor(
@@ -238,19 +292,20 @@ export class BulkService {
 
     let sanitizedExportPayload = cachedData.export_payload;
     if (sanitizedExportPayload && typeof sanitizedExportPayload === 'string') {
-      const lines = sanitizedExportPayload.split('\n');
-      if (lines.length > 0) {
-        const header = lines[0];
-        const filteredLines = [header];
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          if (!line.trim()) continue;
-          const firstCol = line.split(',')[0]?.replace(/"/g, '').trim();
+      // Filter at complete CSV record level (not physical lines) so a forbidden
+      // row with a quoted multiline field cannot leak continuation fragments.
+      const records = parseCsvRecords(sanitizedExportPayload);
+      if (records.length > 0) {
+        const filteredRecords = [records[0]];
+        for (let i = 1; i < records.length; i++) {
+          const record = records[i];
+          if (record.cells.length === 1 && record.cells[0].trim() === '') continue;
+          const firstCol = (record.cells[0] || '').trim();
           if (firstCol && !forbiddenIds.has(firstCol)) {
-            filteredLines.push(line);
+            filteredRecords.push(record);
           }
         }
-        sanitizedExportPayload = filteredLines.join('\n');
+        sanitizedExportPayload = filteredRecords.map((record) => record.raw).join('\r\n');
       }
     }
 
@@ -356,13 +411,23 @@ export class BulkService {
       const actorWarehouseScopes = actorUser?.warehouse_scopes || [];
       const actorCarrierScopes = actorUser?.carrier_account_scopes || [];
 
-      // 4. Process items independently
+      // 4. Process items independently. Each item runs under its own PostgreSQL
+      //    savepoint so a statement failure (constraint, audit insert, ...) aborts
+      //    only that item's mutations and the shared transaction — including batch
+      //    persistence — survives for the remaining items (BR-COM03-03).
       const results: BulkActionItemResult[] = [];
       const exportRows: Record<string, unknown>[] = [];
       let exportCsvHeaders: string[] = [];
+      const supportsSavepoints = typeof tx.$queryRawUnsafe === 'function';
 
-      for (const targetId of uniqueIds) {
+      for (let itemIndex = 0; itemIndex < uniqueIds.length; itemIndex++) {
+        const targetId = uniqueIds[itemIndex];
+        const savepointName = `bulk_item_sp_${itemIndex}`;
+        const savepointActive = supportsSavepoints && /^bulk_item_sp_\d+$/.test(savepointName);
         try {
+          if (savepointActive) {
+            await tx.$queryRawUnsafe(`SAVEPOINT ${savepointName}`);
+          }
           switch (dto.entity_type) {
             case BulkEntityType.USERS: {
               const itemOutcome = await this.executeUserItem(
@@ -426,6 +491,17 @@ export class BulkService {
             }
           }
         } catch (err: any) {
+          if (savepointActive) {
+            try {
+              await tx.$queryRawUnsafe(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+              await tx.$queryRawUnsafe(`RELEASE SAVEPOINT ${savepointName}`);
+            } catch (recoveryErr: any) {
+              // Savepoint recovery failed: the shared transaction is aborted
+              // beyond recovery. Fail closed so the outer transaction rolls
+              // back everything instead of reporting a false partial outcome.
+              throw err instanceof Error ? err : recoveryErr;
+            }
+          }
           results.push({
             id: targetId,
             status: BulkItemStatus.FAILED,

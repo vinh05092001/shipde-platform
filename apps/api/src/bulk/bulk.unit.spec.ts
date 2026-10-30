@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
-import { BulkService } from './bulk.service';
+import { BulkService, parseCsvRecords } from './bulk.service';
 import { validateBulkActionDto } from './bulk.dto';
 import { BulkEntityType, BulkActionType, BulkItemStatus } from '@shipde/contracts';
 import { CanonicalApiException } from '../auth/auth.service';
@@ -239,8 +239,14 @@ function createMockPrismaService() {
     },
   };
 
+  const rawSqlLog: string[] = [];
+
   const mockTx = {
     $queryRaw: async () => [],
+    $queryRawUnsafe: async (sql: string) => {
+      rawSqlLog.push(sql);
+      return 1;
+    },
     user: userModel,
     branch: branchModel,
     warehouse: warehouseModel,
@@ -256,6 +262,7 @@ function createMockPrismaService() {
     batches,
     auditLogs,
     deviceSessions,
+    rawSqlLog,
     user: userModel,
     branch: branchModel,
     warehouse: warehouseModel,
@@ -757,6 +764,162 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       // Export CSV payload must strip the out-of-scope targetSouth row
       assert.ok(replayRes.data.export_payload?.includes(targetNorth));
       assert.ok(!replayRes.data.export_payload?.includes(targetSouth));
+    });
+
+    it('Finding 1 (round 4): cached replay CSV with quoted multiline field discards the whole forbidden record, no continuation fragments', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(true);
+      const service = new BulkService(mockPrisma as any, mockRbac as any);
+
+      const northId = '22222222-2222-4222-8222-222222222222'; // branch-north scope -> allowed
+      const southId = '33333333-3333-4333-8333-333333333333'; // branch-south scope -> forbidden
+      const replayKey = 'req-replay-multiline-csv-01';
+      const secretFragment = 'CONFIDENTIAL-SOUTH-FRAGMENT';
+
+      // Cached export whose forbidden row carries a quoted multiline field:
+      // the second physical line of that row does NOT start with the UUID,
+      // which is exactly the fragment-leak shape of the old line-based filter.
+      const cachedExportPayload = [
+        'id,full_name,email,phone,role,status',
+        `${northId},Staff Alpha,st***a@gumac.vn,090****222,OPS_CSKH,active`,
+        `${southId},"Multi\n${secretFragment} Name",st***b@gumac.vn,090****333,OPS_CSKH,active`,
+      ].join('\r\n');
+
+      mockPrisma.batches.push({
+        id: 'batch-multiline-01',
+        merchant_id: 'm-tenant-1',
+        entity_type: BulkEntityType.USERS,
+        action: BulkActionType.EXPORT_CSV,
+        idempotency_key: replayKey,
+        request_hash: (service as any).computeRequestHash({
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.EXPORT_CSV,
+          ids: [northId, southId],
+          idempotency_key: replayKey,
+        }),
+        status: 'COMPLETED',
+        total_count: 2,
+        success_count: 2,
+        failure_count: 0,
+        results: {
+          batch_id: 'batch-multiline-01',
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.EXPORT_CSV,
+          total_count: 2,
+          success_count: 2,
+          failure_count: 0,
+          is_partial_failure: false,
+          results: [
+            {
+              id: northId,
+              status: BulkItemStatus.SUCCEEDED,
+              data: { id: northId, full_name: 'Staff Alpha' },
+            },
+            {
+              id: southId,
+              status: BulkItemStatus.SUCCEEDED,
+              data: { id: southId, full_name: 'Multi Name' },
+            },
+          ],
+          succeeded_ids: [northId, southId],
+          failed_ids: [],
+          export_payload: cachedExportPayload,
+        },
+        created_by: callerOwner.userId,
+      });
+
+      const replayRes = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOpsStaff,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.EXPORT_CSV,
+          ids: [northId, southId],
+          idempotency_key: replayKey,
+        },
+        '127.0.0.1',
+        'corr-multiline-replay'
+      );
+
+      const payload = replayRes.data.export_payload;
+      assert.ok(typeof payload === 'string', 'export_payload must be returned on replay');
+      // Authorized row survives...
+      assert.ok(payload.includes(northId));
+      // ...and the entire forbidden record is gone: UUID, multiline field and
+      // every other column of that row must not leak.
+      assert.ok(!payload.includes(southId), 'forbidden row UUID must not leak');
+      assert.ok(!payload.includes(secretFragment), 'multiline field fragment must not leak');
+      assert.ok(!payload.includes('090****333'), 'forbidden row columns must not leak');
+
+      // Filtered payload must still be well-formed RFC 4180: header + 1 record
+      const records = parseCsvRecords(payload as string);
+      assert.strictEqual(records.length, 2, 'filtered CSV must keep header and one row only');
+      assert.deepStrictEqual(records[1].cells[0], northId);
+    });
+
+    it('Finding 3 (round 4): per-item savepoints isolate a failed item so remaining items and batch persistence succeed', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(true);
+      const service = new BulkService(mockPrisma as any, mockRbac as any);
+
+      const failingId = '33333333-3333-4333-8333-333333333333'; // suspended -> activate mutates + audits
+      const healthyId = '22222222-2222-4222-8222-222222222222'; // active -> ALREADY_ACTIVE success
+      const isolationKey = 'req-savepoint-isolation-01';
+
+      // Simulate a PostgreSQL statement failure inside the first item's audit
+      // insert: without a savepoint this would abort the whole transaction.
+      const realAuditCreate = mockPrisma.auditLog.create.bind(mockPrisma.auditLog);
+      mockPrisma.auditLog.create = async ({ data }: any) => {
+        if (data.entity_id === failingId) {
+          throw new Error('simulated per-item database failure');
+        }
+        return realAuditCreate({ data });
+      };
+
+      const res = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOwner,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.ACTIVATE,
+          ids: [failingId, healthyId],
+          idempotency_key: isolationKey,
+        },
+        '127.0.0.1',
+        'corr-savepoint-isolation'
+      );
+
+      // Truthful partial outcome: the failed item does not drag down the batch
+      assert.strictEqual(res.data.total_count, 2);
+      assert.strictEqual(res.data.success_count, 1);
+      assert.strictEqual(res.data.failure_count, 1);
+      assert.strictEqual(res.data.is_partial_failure, true);
+      assert.deepStrictEqual(res.data.succeeded_ids, [healthyId]);
+      assert.deepStrictEqual(res.data.failed_ids, [failingId]);
+      const failedItem = res.data.results.find((r) => r.id === failingId);
+      assert.strictEqual(failedItem?.status, BulkItemStatus.FAILED);
+      assert.ok(failedItem?.error?.message?.includes('simulated per-item database failure'));
+
+      // Savepoint protocol: open per item, roll back + release on failure
+      const sql = (mockPrisma as any).rawSqlLog as string[];
+      const savepointIdx = sql.indexOf('SAVEPOINT bulk_item_sp_0');
+      const rollbackIdx = sql.indexOf('ROLLBACK TO SAVEPOINT bulk_item_sp_0');
+      const releaseIdx = sql.indexOf('RELEASE SAVEPOINT bulk_item_sp_0');
+      const nextSavepointIdx = sql.indexOf('SAVEPOINT bulk_item_sp_1');
+      assert.ok(savepointIdx !== -1, 'item 0 must open its own savepoint');
+      assert.ok(rollbackIdx > savepointIdx, 'failed item 0 must roll back to its savepoint');
+      assert.ok(releaseIdx > rollbackIdx, 'rolled-back savepoint must be released');
+      assert.ok(
+        nextSavepointIdx > releaseIdx,
+        'item 1 must run in the shared transaction after item 0 recovered'
+      );
+
+      // Durable batch record with the partial outcome was persisted
+      const batch = mockPrisma.batches.find((b) => b.idempotency_key === isolationKey);
+      assert.ok(batch, 'batch record must be persisted despite the item failure');
+      assert.strictEqual(batch.status, 'PARTIAL_FAILURE');
+      assert.strictEqual(batch.success_count, 1);
+      assert.strictEqual(batch.failure_count, 1);
     });
 
     it('Finding 4: safely resumes an interrupted IN_PROGRESS batch under tenant lock without permanent conflict', async () => {

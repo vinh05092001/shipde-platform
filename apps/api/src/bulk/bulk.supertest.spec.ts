@@ -454,6 +454,32 @@ async function runBulkSupertestSuite() {
     assert.strictEqual(resIdemp1.body.data.success_count, 1);
     assert.strictEqual(resIdemp2.body.data.success_count, 1);
 
+    // Finding 7: independently count mutations & audit events to prove single execution
+    const batches = await prisma.bulkActionBatch.findMany({
+      where: {
+        merchant_id: merchantIdA,
+        idempotency_key: idempotencyKey,
+      },
+    });
+    assert.strictEqual(
+      batches.length,
+      1,
+      'concurrent requests must create exactly one batch record'
+    );
+
+    const branchAuditLogs = await prisma.auditLog.findMany({
+      where: {
+        merchant_id: merchantIdA,
+        action: 'BRANCH_ACTIVATED',
+        entity_id: branch1Id,
+      },
+    });
+    assert.strictEqual(
+      branchAuditLogs.length,
+      1,
+      'concurrent requests must trigger exactly one audit mutation'
+    );
+
     // Conflict test: Send altered payload with SAME idempotency key -> must return 409
     const resIdempConflict = await request(app.getHttpServer())
       .post('/api/v1/bulk-actions')
@@ -581,6 +607,128 @@ async function runBulkSupertestSuite() {
     console.log('  PASS: Sole active owner deactivation blocked with CANNOT_REMOVE_LAST_OWNER.');
 
     // ========================================================================
+    // 8b. Per-item savepoint isolation (real PostgreSQL): one item's database
+    //     failure must not abort the shared transaction (review Finding 3)
+    // ========================================================================
+    console.log('🧪 Testing per-item savepoint isolation with a real database error...');
+    const savepointFailUserId = randomUUID();
+    const savepointHealthyUserId = randomUUID();
+    await prisma.user.createMany({
+      data: [
+        {
+          id: savepointFailUserId,
+          merchant_id: merchantIdA,
+          email: `spfail_${testSuffix}@gumac.vn`,
+          phone: '0909000001',
+          full_name: 'Savepoint Fail Target',
+          password_hash: 'hashed',
+          role: RoleEnum.OPS_CSKH,
+          status: 'suspended',
+          store_scopes: ['branch-north'],
+          warehouse_scopes: ['wh-north'],
+        },
+        {
+          id: savepointHealthyUserId,
+          merchant_id: merchantIdA,
+          email: `sphlth_${testSuffix}@gumac.vn`,
+          phone: '0909000002',
+          full_name: 'Savepoint Healthy Target',
+          password_hash: 'hashed',
+          role: RoleEnum.OPS_CSKH,
+          status: 'suspended',
+          store_scopes: ['branch-north'],
+          warehouse_scopes: ['wh-north'],
+        },
+      ],
+    });
+
+    // Test-owned trigger aborts only the failing target's UPDATE; dropped right
+    // after the assertions (and again in cleanup) so no untracked DB objects remain.
+    await prisma.$executeRawUnsafe(
+      `CREATE OR REPLACE FUNCTION bulk_test_item_failure_guard(target uuid) RETURNS trigger AS $fn$
+       BEGIN
+         IF NEW.id = target THEN
+           RAISE EXCEPTION 'simulated per-item database failure';
+         END IF;
+         RETURN NEW;
+       END;
+       $fn$ LANGUAGE plpgsql`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE TRIGGER bulk_test_item_fail_trg BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION bulk_test_item_failure_guard('${savepointFailUserId}')`
+    );
+
+    const savepointKey = `idemp-bulk-savepoint-${Date.now()}`;
+    const resSavepoint = await request(app.getHttpServer())
+      .post('/api/v1/bulk-actions')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .set('Idempotency-Key', savepointKey)
+      .send({
+        entity_type: 'users',
+        action: 'activate',
+        ids: [savepointFailUserId, savepointHealthyUserId],
+      })
+      .expect(200);
+
+    // Truthful partial outcome: the database failure of item 1 does not abort
+    // the shared transaction or the healthy item.
+    assert.strictEqual(resSavepoint.body.data.total_count, 2);
+    assert.strictEqual(resSavepoint.body.data.success_count, 1);
+    assert.strictEqual(resSavepoint.body.data.failure_count, 1);
+    assert.deepStrictEqual(resSavepoint.body.data.succeeded_ids, [savepointHealthyUserId]);
+    assert.deepStrictEqual(resSavepoint.body.data.failed_ids, [savepointFailUserId]);
+    const spFailedItem = resSavepoint.body.data.results.find(
+      (r: any) => r.id === savepointFailUserId
+    );
+    assert.ok(
+      spFailedItem?.error?.message?.includes('simulated per-item database failure'),
+      'failed item must surface the database error'
+    );
+
+    // The failed item's aborted update is rolled back; the healthy item persists
+    const spFailInDb = await prisma.user.findUnique({ where: { id: savepointFailUserId } });
+    assert.strictEqual(
+      spFailInDb?.status,
+      'suspended',
+      'failed item update must be rolled back by its savepoint'
+    );
+    const spHealthyInDb = await prisma.user.findUnique({ where: { id: savepointHealthyUserId } });
+    assert.strictEqual(
+      spHealthyInDb?.status,
+      'active',
+      'healthy item must persist despite the sibling item failure'
+    );
+
+    // Exactly one audit entry: the healthy item's (the failed item aborted first)
+    const spAudit = await prisma.auditLog.findMany({
+      where: {
+        merchant_id: merchantIdA,
+        action: 'USER_ACTIVATED',
+        entity_id: { in: [savepointFailUserId, savepointHealthyUserId] },
+      },
+    });
+    assert.strictEqual(spAudit.length, 1, 'only the healthy item may be audited');
+    assert.strictEqual(spAudit[0].entity_id, savepointHealthyUserId);
+
+    // Durable batch record with the truthful partial outcome
+    const spBatch = await prisma.bulkActionBatch.findUnique({
+      where: {
+        merchant_id_idempotency_key: {
+          merchant_id: merchantIdA,
+          idempotency_key: savepointKey,
+        },
+      },
+    });
+    assert.strictEqual(spBatch?.status, 'PARTIAL_FAILURE');
+    assert.strictEqual(spBatch?.success_count, 1);
+    assert.strictEqual(spBatch?.failure_count, 1);
+
+    // Release the test-owned trigger objects immediately
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`);
+    console.log('  PASS: Per-item savepoint isolation verified against real PostgreSQL.');
+
+    // ========================================================================
     // 9. AC-COM-03-11: Assign scopes & privilege ceiling
     // ========================================================================
     console.log('🧪 Testing AC-COM-03-11: Assign scopes by Owner (success)...');
@@ -694,6 +842,11 @@ async function runBulkSupertestSuite() {
   } finally {
     try {
       if (merchantIdA && merchantIdB) {
+        // Guaranteed teardown of the test-owned trigger/function (idempotent)
+        await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`);
+        await prisma.$executeRawUnsafe(
+          `DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`
+        );
         await prisma.bulkActionBatch.deleteMany({
           where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
         });
