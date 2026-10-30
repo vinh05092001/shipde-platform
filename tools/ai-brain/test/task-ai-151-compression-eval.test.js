@@ -11,10 +11,13 @@ const {
   isCompressionForbidden,
   detectCategory,
   losslessCheckDiff,
+  deepCompareJson,
   losslessCheckJson,
   losslessCheckSpecDoc,
   losslessCheckCiLogs,
   verifyLossless,
+  compressWithHeadroom,
+  compressWithLlmLingua,
   probeHeadroom,
   probeLlmLingua,
   scanInputFiles,
@@ -107,15 +110,73 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.equal(result.missingChangedLines[0], '-  const b = 2;');
     });
 
-    test('losslessCheckJson passes when compressed text parses and retains keys', () => {
-      const orig = JSON.stringify({ tenantId: 't-123', count: 42, active: true }, null, 2);
-      const comp = JSON.stringify({ tenantId: 't-123', count: 42, active: true }); // minified
+    test('losslessCheckDiff rejects dropped lines even if substring exists in another line', () => {
+      const orig = ['@@ -1,3 +1,3 @@', '+  const b = 2;', '+  const b = 22;'].join('\n');
+
+      // The line '+  const b = 2;' is dropped, but '+  const b = 22;' contains '+  const b = 2' as substring!
+      const comp = ['@@ -1,3 +1,3 @@', '+  const b = 22;'].join('\n');
+
+      const result = losslessCheckDiff(orig, comp);
+      assert.equal(result.passed, false);
+      assert.equal(result.missingChangedLines.length, 1);
+      assert.equal(result.missingChangedLines[0], '+  const b = 2;');
+    });
+
+    test('losslessCheckJson passes when compressed text parses and retains deep structure', () => {
+      const orig = JSON.stringify(
+        {
+          tenantId: 't-123',
+          count: 42,
+          active: true,
+          data: { units: 1000, consumed: 150, tags: ['a', 'b'] },
+        },
+        null,
+        2
+      );
+      const comp = JSON.stringify({
+        tenantId: 't-123',
+        count: 42,
+        active: true,
+        data: { units: 1000, consumed: 150, tags: ['a', 'b'] },
+      }); // minified
 
       const result = losslessCheckJson(orig, comp);
       assert.equal(result.passed, true);
     });
 
-    test('losslessCheckJson fails when compressed text is corrupt or drops keys', () => {
+    test('losslessCheckJson fails when nested key or value is dropped or modified', () => {
+      const orig = JSON.stringify({
+        tenantId: 't-123',
+        data: { units: 1000, consumed: 150 },
+      });
+
+      // Nested key dropped
+      const droppedNestedKey = JSON.stringify({
+        tenantId: 't-123',
+        data: { units: 1000 },
+      });
+      const droppedRes = losslessCheckJson(orig, droppedNestedKey);
+      assert.equal(droppedRes.passed, false);
+      assert.ok(droppedRes.error.includes("Missing keys at 'data'"));
+
+      // Nested value changed
+      const changedNestedVal = JSON.stringify({
+        tenantId: 't-123',
+        data: { units: 1000, consumed: 999 },
+      });
+      const changedRes = losslessCheckJson(orig, changedNestedVal);
+      assert.equal(changedRes.passed, false);
+      assert.ok(changedRes.error.includes("Value mismatch at 'data.consumed'"));
+
+      // Array element order or value changed
+      const origArr = JSON.stringify({ tags: ['x', 'y'] });
+      const compArr = JSON.stringify({ tags: ['y', 'x'] });
+      const arrRes = losslessCheckJson(origArr, compArr);
+      assert.equal(arrRes.passed, false);
+      assert.ok(arrRes.error.includes("Value mismatch at 'tags[0]'"));
+    });
+
+    test('losslessCheckJson fails closed on corrupt original or compressed input', () => {
       const orig = JSON.stringify({ tenantId: 't-123', count: 42 });
       const corrupt = '{ tenantId: "t-123", count: ';
       const dropped = JSON.stringify({ tenantId: 't-123' });
@@ -124,9 +185,19 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.equal(corruptRes.passed, false);
       assert.ok(corruptRes.error);
 
+      const badOrigRes = losslessCheckJson('{ bad json', JSON.stringify({ ok: true }));
+      assert.equal(badOrigRes.passed, false);
+      assert.ok(badOrigRes.error.includes('Original JSON parse failure'));
+
       const droppedRes = losslessCheckJson(orig, dropped);
       assert.equal(droppedRes.passed, false);
-      assert.ok(droppedRes.error.includes('Missing keys'));
+      assert.ok(droppedRes.error.includes("Missing keys at 'root'"));
+    });
+
+    test('verifyLossless fails closed on unknown category', () => {
+      const res = verifyLossless('unknown_category', 'some text', 'some text');
+      assert.equal(res.passed, false);
+      assert.ok(res.error.includes('Unsupported or unknown category'));
     });
 
     test('losslessCheckSpecDoc verifies markdown headings preservation', () => {
@@ -150,14 +221,17 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
     });
   });
 
-  describe('Review and diagnosis safety guard', () => {
-    test('isCompressionForbidden returns true for review and diagnosis paths', () => {
+  describe('Review, diagnosis, and triage safety guard', () => {
+    test('isCompressionForbidden returns true for review, diagnosis, and triage paths', () => {
       assert.equal(isCompressionForbidden({ role: 'reviewer' }), true);
       assert.equal(isCompressionForbidden({ role: 'independent-review' }), true);
       assert.equal(isCompressionForbidden({ taskType: 'diagnosis' }), true);
       assert.equal(isCompressionForbidden({ category: 'diagnostic-run' }), true);
       assert.equal(isCompressionForbidden({ filePath: 'logs/review-verdict.md' }), true);
       assert.equal(isCompressionForbidden({ filePath: 'watch-diag.sh' }), true);
+      assert.equal(isCompressionForbidden({ role: 'triager' }), true);
+      assert.equal(isCompressionForbidden({ taskType: 'triage' }), true);
+      assert.equal(isCompressionForbidden({ filePath: 'logs/triage.txt' }), true);
 
       // Permitted paths
       assert.equal(isCompressionForbidden({ role: 'author', taskType: 'coding' }), false);
@@ -166,6 +240,15 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
   });
 
   describe('Offline probing and evaluation runner', () => {
+    test('probeHeadroom rejects unreachable proxy URL and reports NOT_INSTALLED', () => {
+      const hrUnreachable = probeHeadroom({ headroomUrl: 'http://127.0.0.1:59999' });
+      assert.equal(hrUnreachable.installed, false);
+      assert.equal(hrUnreachable.status, ENGINE_STATUS.NOT_INSTALLED);
+      assert.ok(
+        hrUnreachable.reason.includes('not reachable') ||
+          hrUnreachable.reason.includes('not responding')
+      );
+    });
     test('probeHeadroom and probeLlmLingua return NOT_INSTALLED when tools absent', () => {
       const hr = probeHeadroom({ headroomUrl: null });
       assert.ok(hr.status === ENGINE_STATUS.NOT_INSTALLED || hr.status === ENGINE_STATUS.INSTALLED);
@@ -238,8 +321,8 @@ describe('TASK-AI-151: Context Compression Evaluation Engine', () => {
       assert.ok(md.includes('# Context Compression Evaluation Report (TASK-AI-151)'));
       assert.ok(md.includes('| Category | Files | Original Tokens |'));
       assert.ok(md.includes('REMAIN DEFERRED'));
-      assert.ok(md.includes('npm install -g headroom'));
-      assert.ok(md.includes('pip install llmlingua'));
+      assert.ok(md.includes('npm install -g headroom@0.0.1'));
+      assert.ok(md.includes('pip install llmlingua==0.2.2'));
     });
   });
 });

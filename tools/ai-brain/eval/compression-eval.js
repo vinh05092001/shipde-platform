@@ -29,8 +29,8 @@ function countTokens(text) {
 }
 
 /**
- * Strict safety guard: compression is strictly forbidden on review and diagnosis paths
- * per AGENTS.md and AI-TOOLCHAIN-DECISIONS.md.
+ * Strict safety guard: compression is strictly forbidden on review, diagnosis, and triage paths
+ * per AGENTS.md, AI-TOOLCHAIN-DECISIONS.md, and BR-COMP-02.
  *
  * @param {object} context
  * @returns {boolean}
@@ -48,11 +48,19 @@ function isCompressionForbidden(context = {}) {
     filePath.includes('review');
   const isDiagnosis =
     role.includes('diagnos') ||
+    role.includes('diag') ||
     taskType.includes('diagnos') ||
+    taskType.includes('diag') ||
     category.includes('diagnos') ||
+    category.includes('diag') ||
     filePath.includes('diag');
+  const isTriage =
+    role.includes('triage') ||
+    taskType.includes('triage') ||
+    category.includes('triage') ||
+    filePath.includes('triage');
 
-  return isReview || isDiagnosis;
+  return isReview || isDiagnosis || isTriage;
 }
 
 /**
@@ -124,8 +132,8 @@ function detectCategory(filePath, content = '') {
 
 /**
  * Lossless check for code diffs:
- * Verifies that EVERY diff hunk header (@@ ... @@) and EVERY changed line (+ or -)
- * in the original diff remains present in the compressed output.
+ * Line-faithfully verifies that EVERY diff hunk header (@@ ... @@) and EVERY changed line (+ or -)
+ * in the original diff remains present in the compressed output without substring false positives.
  *
  * @param {string} originalDiff
  * @param {string} compressedDiff
@@ -149,13 +157,6 @@ function losslessCheckDiff(originalDiff, compressedDiff) {
     origHunks.push(match[0].trim());
   }
 
-  const missingHunks = [];
-  for (const hunk of origHunks) {
-    if (!compressedDiff.includes(hunk)) {
-      missingHunks.push(hunk);
-    }
-  }
-
   const origLines = originalDiff.split(/\r?\n/);
   const changedLines = [];
   for (const line of origLines) {
@@ -163,13 +164,40 @@ function losslessCheckDiff(originalDiff, compressedDiff) {
       (line.startsWith('+') && !line.startsWith('+++')) ||
       (line.startsWith('-') && !line.startsWith('---'))
     ) {
-      changedLines.push(line.trim());
+      changedLines.push(line);
     }
   }
 
+  const compLines = compressedDiff.split(/\r?\n/);
+  const compHunkLines = compLines.filter((l) =>
+    /^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(l.trim())
+  );
+  const compChangedLines = compLines.filter(
+    (l) =>
+      (l.startsWith('+') && !l.startsWith('+++')) || (l.startsWith('-') && !l.startsWith('---'))
+  );
+
+  const compHunkPool = [...compHunkLines];
+  const missingHunks = [];
+  for (const hunk of origHunks) {
+    const idx = compHunkPool.findIndex((l) => l.trim() === hunk.trim());
+    if (idx !== -1) {
+      compHunkPool.splice(idx, 1);
+    } else {
+      missingHunks.push(hunk);
+    }
+  }
+
+  const compChangedPool = [...compChangedLines];
   const missingChangedLines = [];
   for (const changed of changedLines) {
-    if (!compressedDiff.includes(changed)) {
+    let idx = compChangedPool.indexOf(changed);
+    if (idx === -1) {
+      idx = compChangedPool.findIndex((l) => l.trim() === changed.trim());
+    }
+    if (idx !== -1) {
+      compChangedPool.splice(idx, 1);
+    } else {
       missingChangedLines.push(changed);
     }
   }
@@ -186,45 +214,124 @@ function losslessCheckDiff(originalDiff, compressedDiff) {
 }
 
 /**
+ * Deep structural comparison for JSON data structures.
+ *
+ * @param {*} orig
+ * @param {*} comp
+ * @param {string} [currentPath]
+ * @returns {{ passed: boolean, error?: string }}
+ */
+function deepCompareJson(orig, comp, currentPath = '') {
+  if (orig === comp) return { passed: true };
+
+  const pathLabel = currentPath || 'root';
+
+  if (orig === null || comp === null) {
+    return {
+      passed: false,
+      error: `Value mismatch at '${pathLabel}': expected ${JSON.stringify(orig)}, got ${JSON.stringify(comp)}`,
+    };
+  }
+
+  const origType = typeof orig;
+  const compType = typeof comp;
+  if (origType !== compType) {
+    return {
+      passed: false,
+      error: `Type mismatch at '${pathLabel}': expected ${origType}, got ${compType}`,
+    };
+  }
+
+  if (Array.isArray(orig) || Array.isArray(comp)) {
+    if (!Array.isArray(orig) || !Array.isArray(comp)) {
+      return {
+        passed: false,
+        error: `Structure mismatch at '${pathLabel}': array vs non-array`,
+      };
+    }
+    if (orig.length !== comp.length) {
+      return {
+        passed: false,
+        error: `Array length mismatch at '${pathLabel}': expected ${orig.length}, got ${comp.length}`,
+      };
+    }
+    for (let i = 0; i < orig.length; i++) {
+      const childPath = currentPath ? `${currentPath}[${i}]` : `[${i}]`;
+      const res = deepCompareJson(orig[i], comp[i], childPath);
+      if (!res.passed) return res;
+    }
+    return { passed: true };
+  }
+
+  if (origType === 'object') {
+    const origKeys = Object.keys(orig);
+    const compKeySet = new Set(Object.keys(comp));
+    const missingKeys = origKeys.filter((k) => !compKeySet.has(k));
+    if (missingKeys.length > 0) {
+      const p = currentPath ? `${currentPath}.` : '';
+      return {
+        passed: false,
+        error: `Missing keys at '${pathLabel}': ${missingKeys.map((k) => p + k).join(', ')}`,
+      };
+    }
+
+    const origKeySet = new Set(origKeys);
+    const extraKeys = Object.keys(comp).filter((k) => !origKeySet.has(k));
+    if (extraKeys.length > 0) {
+      const p = currentPath ? `${currentPath}.` : '';
+      return {
+        passed: false,
+        error: `Unexpected extra keys at '${pathLabel}': ${extraKeys.map((k) => p + k).join(', ')}`,
+      };
+    }
+
+    for (const key of origKeys) {
+      const childPath = currentPath ? `${currentPath}.${key}` : key;
+      const res = deepCompareJson(orig[key], comp[key], childPath);
+      if (!res.passed) return res;
+    }
+    return { passed: true };
+  }
+
+  return {
+    passed: false,
+    error: `Value mismatch at '${pathLabel}': expected ${JSON.stringify(orig)}, got ${JSON.stringify(comp)}`,
+  };
+}
+
+/**
  * Lossless check for JSON:
- * Verifies that the compressed text parses as valid JSON and retains structural equivalence.
+ * Verifies that the compressed text parses as valid JSON and retains deep structural equivalence
+ * (all nested keys, nested values, and arrays by position).
+ * Fails closed on invalid original or compressed JSON.
  *
  * @param {string} originalJson
  * @param {string} compressedJson
  * @returns {{ passed: boolean, error?: string }}
  */
 function losslessCheckJson(originalJson, compressedJson) {
+  if (typeof originalJson !== 'string' || originalJson.trim().length === 0) {
+    return { passed: false, error: 'Empty or invalid original JSON input' };
+  }
   if (typeof compressedJson !== 'string' || compressedJson.trim().length === 0) {
     return { passed: false, error: 'Empty compressed output' };
   }
 
+  let parsedOriginal;
   try {
-    const parsedCompressed = JSON.parse(compressedJson);
-    try {
-      const parsedOriginal = JSON.parse(originalJson);
-      if (Array.isArray(parsedOriginal) !== Array.isArray(parsedCompressed)) {
-        return { passed: false, error: 'Structure type mismatch (array vs object)' };
-      }
-      if (
-        typeof parsedOriginal === 'object' &&
-        parsedOriginal !== null &&
-        typeof parsedCompressed === 'object' &&
-        parsedCompressed !== null
-      ) {
-        const origKeys = Object.keys(parsedOriginal);
-        const compKeys = new Set(Object.keys(parsedCompressed));
-        const missingKeys = origKeys.filter((k) => !compKeys.has(k));
-        if (missingKeys.length > 0) {
-          return { passed: false, error: `Missing keys: ${missingKeys.join(', ')}` };
-        }
-      }
-    } catch (_) {
-      // original might not have been strictly parsed; compressed parsed successfully
-    }
-    return { passed: true };
+    parsedOriginal = JSON.parse(originalJson);
   } catch (err) {
-    return { passed: false, error: err.message };
+    return { passed: false, error: `Original JSON parse failure: ${err.message}` };
   }
+
+  let parsedCompressed;
+  try {
+    parsedCompressed = JSON.parse(compressedJson);
+  } catch (err) {
+    return { passed: false, error: `Compressed JSON parse failure: ${err.message}` };
+  }
+
+  return deepCompareJson(parsedOriginal, parsedCompressed);
 }
 
 /**
@@ -305,12 +412,15 @@ function verifyLossless(category, originalText, compressedText) {
   if (category === CATEGORIES.CI_LOGS) {
     return losslessCheckCiLogs(originalText, compressedText);
   }
-  return { passed: true };
+  return {
+    passed: false,
+    error: `Unsupported or unknown category '${category}' for lossless check`,
+  };
 }
 
 /**
  * Probe Headroom availability.
- * Checks CLI binary, npm package, and local running proxy.
+ * Honestly verifies CLI binary (runs --version), npm package, or reachable local running proxy.
  *
  * @param {object} [options]
  * @returns {{ installed: boolean, status: string, mode?: string, version?: string, url?: string, reason?: string }}
@@ -318,11 +428,32 @@ function verifyLossless(category, originalText, compressedText) {
 function probeHeadroom(options = {}) {
   const proxyUrl = options.headroomUrl || process.env.HEADROOM_URL || null;
   if (proxyUrl) {
+    try {
+      const probe = spawnSync(
+        process.execPath,
+        [
+          '-e',
+          `fetch(${JSON.stringify(proxyUrl)}, { signal: AbortSignal.timeout(1000) })
+            .then(r => process.exit(0))
+            .catch(() => process.exit(1))`,
+        ],
+        { timeout: 2000, encoding: 'utf8' }
+      );
+      if (probe.status === 0) {
+        return {
+          installed: true,
+          status: ENGINE_STATUS.INSTALLED,
+          mode: 'proxy',
+          url: proxyUrl,
+        };
+      }
+    } catch (_) {
+      // unreachable proxy
+    }
     return {
-      installed: true,
-      status: ENGINE_STATUS.INSTALLED,
-      mode: 'proxy',
-      url: proxyUrl,
+      installed: false,
+      status: ENGINE_STATUS.NOT_INSTALLED,
+      reason: `Headroom proxy at ${proxyUrl} is not reachable or not responding`,
     };
   }
 
@@ -331,12 +462,17 @@ function probeHeadroom(options = {}) {
     const checkCmd = isWindows ? 'where.exe' : 'which';
     const probe = spawnSync(checkCmd, ['headroom'], { encoding: 'utf8', timeout: 2000 });
     if (probe.status === 0 && probe.stdout && probe.stdout.trim().length > 0) {
-      return {
-        installed: true,
-        status: ENGINE_STATUS.INSTALLED,
-        mode: 'cli',
-        binaryPath: probe.stdout.trim().split(/\r?\n/)[0],
-      };
+      const binPath = probe.stdout.trim().split(/\r?\n/)[0];
+      const verProbe = spawnSync('headroom', ['--version'], { encoding: 'utf8', timeout: 3000 });
+      if (verProbe.status === 0) {
+        return {
+          installed: true,
+          status: ENGINE_STATUS.INSTALLED,
+          mode: 'cli',
+          binaryPath: binPath,
+          version: (verProbe.stdout || '').trim(),
+        };
+      }
     }
   } catch (_) {
     // binary check failed
@@ -344,12 +480,15 @@ function probeHeadroom(options = {}) {
 
   try {
     const resolved = require.resolve('headroom');
-    return {
-      installed: true,
-      status: ENGINE_STATUS.INSTALLED,
-      mode: 'module',
-      modulePath: resolved,
-    };
+    const mod = require(resolved);
+    if (mod && (typeof mod === 'function' || typeof mod === 'object')) {
+      return {
+        installed: true,
+        status: ENGINE_STATUS.INSTALLED,
+        mode: 'module',
+        modulePath: resolved,
+      };
+    }
   } catch (_) {
     // module not installed
   }
@@ -398,6 +537,127 @@ function probeLlmLingua(options = {}) {
 }
 
 /**
+ * Invoke Headroom compression if installed and not forbidden.
+ *
+ * @param {string} text
+ * @param {object} context
+ * @param {object} headroomInfo
+ * @returns {{ compressedText: string, error?: string }}
+ */
+function compressWithHeadroom(text, context = {}, headroomInfo = {}) {
+  if (isCompressionForbidden(context)) {
+    return { compressedText: text };
+  }
+  if (!headroomInfo.installed) {
+    return { compressedText: text, error: 'Headroom is not installed' };
+  }
+
+  if (headroomInfo.mode === 'proxy' && headroomInfo.url) {
+    try {
+      const script = `
+        const url = ${JSON.stringify(headroomInfo.url)};
+        const text = ${JSON.stringify(text)};
+        fetch(url + '/compress', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(5000),
+        })
+        .then(r => r.json())
+        .then(data => {
+          process.stdout.write(data.compressedText || data.text || text);
+          process.exit(0);
+        })
+        .catch(err => {
+          process.stderr.write(err.message);
+          process.exit(1);
+        });
+      `;
+      const res = spawnSync(process.execPath, ['-e', script], {
+        encoding: 'utf8',
+        timeout: 6000,
+      });
+      if (res.status === 0 && res.stdout) {
+        return { compressedText: res.stdout };
+      }
+      return { compressedText: text, error: res.stderr || 'Proxy compression failed' };
+    } catch (err) {
+      return { compressedText: text, error: err.message };
+    }
+  }
+
+  if (headroomInfo.mode === 'cli') {
+    try {
+      const res = spawnSync('headroom', ['compress'], {
+        input: text,
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+      if (res.status === 0 && res.stdout) {
+        return { compressedText: res.stdout };
+      }
+      return { compressedText: text, error: res.stderr || 'CLI compression failed' };
+    } catch (err) {
+      return { compressedText: text, error: err.message };
+    }
+  }
+
+  if (headroomInfo.mode === 'module' && headroomInfo.modulePath) {
+    try {
+      const mod = require(headroomInfo.modulePath);
+      const compressFn = typeof mod === 'function' ? mod : mod.compress;
+      if (typeof compressFn === 'function') {
+        const out = compressFn(text);
+        return { compressedText: typeof out === 'string' ? out : text };
+      }
+    } catch (err) {
+      return { compressedText: text, error: err.message };
+    }
+  }
+
+  return { compressedText: text };
+}
+
+/**
+ * Invoke LLMLingua compression if installed and not forbidden.
+ *
+ * @param {string} text
+ * @param {object} context
+ * @param {object} llmLinguaInfo
+ * @returns {{ compressedText: string, error?: string }}
+ */
+function compressWithLlmLingua(text, context = {}, llmLinguaInfo = {}) {
+  if (isCompressionForbidden(context)) {
+    return { compressedText: text };
+  }
+  if (!llmLinguaInfo.installed || !llmLinguaInfo.pythonPath) {
+    return { compressedText: text, error: 'LLMLingua-2 is not installed' };
+  }
+
+  try {
+    const pyScript = `
+import sys, json
+from llmlingua import PromptCompressor
+compressor = PromptCompressor()
+text = sys.stdin.read()
+result = compressor.compress_prompt(text, rate=0.5)
+sys.stdout.write(result.get('compressed_prompt', text))
+`;
+    const res = spawnSync(llmLinguaInfo.pythonPath, ['-c', pyScript], {
+      input: text,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    if (res.status === 0 && res.stdout) {
+      return { compressedText: res.stdout };
+    }
+    return { compressedText: text, error: res.stderr || 'LLMLingua compression failed' };
+  } catch (err) {
+    return { compressedText: text, error: err.message };
+  }
+}
+
+/**
  * Discover input files for evaluation from target directory.
  * Targets recorded worker inputs: job-*.txt prompts, ci-*.txt logs, quota JSON, code diffs, spec docs.
  *
@@ -420,29 +680,42 @@ function scanInputFiles(dirPath, options = {}) {
       return;
     }
 
-    const lowerName = path.basename(fullPath).toLowerCase();
+    const baseName = path.basename(fullPath).toLowerCase();
+    const relNorm = relPath.replace(/\\/g, '/').toLowerCase();
     let category = 'unknown';
 
+    // Infer role or taskType from path conventions
+    let role = '';
+    let taskType = '';
+    if (relNorm.includes('review') || baseName.includes('review')) {
+      role = 'reviewer';
+      taskType = 'review';
+    } else if (relNorm.includes('diag') || baseName.includes('diag')) {
+      taskType = 'diagnosis';
+    } else if (relNorm.includes('triage') || baseName.includes('triage')) {
+      taskType = 'triage';
+    }
+
     if (
-      lowerName.endsWith('.diff') ||
-      lowerName.endsWith('.patch') ||
-      lowerName.startsWith('diff-') ||
-      lowerName.includes('-delta')
+      baseName.endsWith('.diff') ||
+      baseName.endsWith('.patch') ||
+      baseName.startsWith('diff-') ||
+      baseName.includes('-delta')
     ) {
       category = CATEGORIES.CODE_DIFFS;
-    } else if (lowerName.endsWith('.json')) {
+    } else if (baseName.endsWith('.json')) {
       category = CATEGORIES.JSON;
     } else if (
-      lowerName.startsWith('ci-') ||
-      lowerName.includes('-ci') ||
-      lowerName.endsWith('.log') ||
-      lowerName.endsWith('.out')
+      baseName.startsWith('ci-') ||
+      baseName.includes('-ci') ||
+      baseName.endsWith('.log') ||
+      baseName.endsWith('.out')
     ) {
       category = CATEGORIES.CI_LOGS;
     } else if (
-      lowerName.startsWith('job-') ||
-      lowerName.endsWith('.md') ||
-      lowerName.includes('spec')
+      baseName.startsWith('job-') ||
+      baseName.endsWith('.md') ||
+      baseName.includes('spec')
     ) {
       category = CATEGORIES.SPEC_DOCS;
     } else {
@@ -465,6 +738,8 @@ function scanInputFiles(dirPath, options = {}) {
         relativePath: relPath.replace(/\\/g, '/'),
         category,
         sizeBytes: stat.size,
+        role,
+        taskType,
       });
     }
   }
@@ -529,6 +804,8 @@ function runCompressionEval(options = {}) {
           filePath: item.filePath,
           relativePath: item.relativePath,
           category: item.category,
+          role: item.role,
+          taskType: item.taskType,
           text,
         });
       } catch (_) {
@@ -598,6 +875,59 @@ function runCompressionEval(options = {}) {
       taskType: sample.taskType,
     });
 
+    // Aggregate engines if installed
+    if (headroomInfo.installed) {
+      if (categoryStats[cat].engines.headroom.compressedTokens === null) {
+        categoryStats[cat].engines.headroom.compressedTokens = 0;
+        categoryStats[cat].engines.headroom.losslessPassed = true;
+        categoryStats[cat].engines.headroom.losslessFailures = 0;
+      }
+      const res = compressWithHeadroom(
+        sample.text,
+        {
+          category: sample.category,
+          filePath: sample.filePath || sample.relativePath,
+          role: sample.role,
+          taskType: sample.taskType,
+        },
+        headroomInfo
+      );
+      const compTokens = countTokens(res.compressedText);
+      categoryStats[cat].engines.headroom.compressedTokens += compTokens;
+      const lossless = verifyLossless(sample.category, sample.text, res.compressedText);
+      if (!lossless.passed) {
+        categoryStats[cat].engines.headroom.losslessPassed = false;
+        categoryStats[cat].engines.headroom.losslessFailures =
+          (categoryStats[cat].engines.headroom.losslessFailures || 0) + 1;
+      }
+    }
+
+    if (llmLinguaInfo.installed) {
+      if (categoryStats[cat].engines.llmlingua2.compressedTokens === null) {
+        categoryStats[cat].engines.llmlingua2.compressedTokens = 0;
+        categoryStats[cat].engines.llmlingua2.losslessPassed = true;
+        categoryStats[cat].engines.llmlingua2.losslessFailures = 0;
+      }
+      const res = compressWithLlmLingua(
+        sample.text,
+        {
+          category: sample.category,
+          filePath: sample.filePath || sample.relativePath,
+          role: sample.role,
+          taskType: sample.taskType,
+        },
+        llmLinguaInfo
+      );
+      const compTokens = countTokens(res.compressedText);
+      categoryStats[cat].engines.llmlingua2.compressedTokens += compTokens;
+      const lossless = verifyLossless(sample.category, sample.text, res.compressedText);
+      if (!lossless.passed) {
+        categoryStats[cat].engines.llmlingua2.losslessPassed = false;
+        categoryStats[cat].engines.llmlingua2.losslessFailures =
+          (categoryStats[cat].engines.llmlingua2.losslessFailures || 0) + 1;
+      }
+    }
+
     // Run mock compressor if provided for tests/verification
     if (options.mockCompressor && categoryStats[cat].engines.mock) {
       let compressedText = sample.text;
@@ -619,11 +949,14 @@ function runCompressionEval(options = {}) {
   // Calculate final reduction percentages for active engines
   for (const cat of categoriesList) {
     const stats = categoryStats[cat];
-    if (options.mockCompressor && stats.engines.mock && stats.originalTokens > 0) {
-      const orig = stats.originalTokens;
-      const comp = stats.engines.mock.compressedTokens;
-      const diff = orig - comp;
-      stats.engines.mock.tokenReductionPercent = Math.round((diff / orig) * 1000) / 10;
+    for (const engKey of ['headroom', 'llmlingua2', 'mock']) {
+      const eng = stats.engines[engKey];
+      if (eng && typeof eng.compressedTokens === 'number' && stats.originalTokens > 0) {
+        const orig = stats.originalTokens;
+        const comp = eng.compressedTokens;
+        const diff = orig - comp;
+        eng.tokenReductionPercent = Math.round((diff / orig) * 1000) / 10;
+      }
     }
   }
 
@@ -695,8 +1028,8 @@ function formatReportMarkdown(evalResult) {
   lines.push('### Headroom (CCR Compression Proxy)');
   lines.push('```bash');
   lines.push('# Repository: https://github.com/chopratejas/headroom');
-  lines.push('# Install Headroom proxy / CLI:');
-  lines.push('npm install -g headroom');
+  lines.push('# Install Headroom proxy / CLI (pinned):');
+  lines.push('npm install -g headroom@0.0.1');
   lines.push('# Start local CCR compression proxy on port 8787:');
   lines.push('headroom proxy --port 8787');
   lines.push('```');
@@ -704,18 +1037,35 @@ function formatReportMarkdown(evalResult) {
   lines.push('### LLMLingua-2 (Microsoft Research Prompt Compressor)');
   lines.push('```bash');
   lines.push('# Repository: https://github.com/microsoft/LLMLingua');
-  lines.push('# Requires Python >= 3.9');
-  lines.push('pip install llmlingua');
+  lines.push('# Requires Python >= 3.9 (pinned):');
+  lines.push('pip install llmlingua==0.2.2');
   lines.push('```');
   lines.push('');
+  let anyInstalled = false;
+  for (const data of Object.values(categories)) {
+    if (
+      data.engines.headroom.status === ENGINE_STATUS.INSTALLED ||
+      data.engines.llmlingua2.status === ENGINE_STATUS.INSTALLED
+    ) {
+      anyInstalled = true;
+      break;
+    }
+  }
+
   lines.push('## Recommendation');
   lines.push('');
-  lines.push(
-    'Neither Headroom nor LLMLingua-2 is currently installed in this execution environment. ' +
-      'Per AGENTS.md rule 3, synthetic or faked metrics are forbidden. ' +
-      'AI-TOOLCHAIN-DECISIONS.md "Headroom semantic compression: DEFER" should REMAIN DEFERRED ' +
-      'until the external packages are installed, evaluated against real worker tasks, and proven lossless on code diffs and JSON payloads.'
-  );
+  if (!anyInstalled) {
+    lines.push(
+      'Neither Headroom nor LLMLingua-2 is currently installed in this execution environment. ' +
+        'Per AGENTS.md rule 3, synthetic or faked metrics are forbidden. ' +
+        'AI-TOOLCHAIN-DECISIONS.md "Headroom semantic compression: DEFER" should REMAIN DEFERRED ' +
+        'until the external packages are installed, evaluated against real worker tasks, and proven lossless on code diffs and JSON payloads.'
+    );
+  } else {
+    lines.push(
+      'Evaluation completed with installed compression engine(s). Review lossless check results per category.'
+    );
+  }
 
   return lines.join('\n');
 }
@@ -752,10 +1102,13 @@ module.exports = {
   isCompressionForbidden,
   detectCategory,
   losslessCheckDiff,
+  deepCompareJson,
   losslessCheckJson,
   losslessCheckSpecDoc,
   losslessCheckCiLogs,
   verifyLossless,
+  compressWithHeadroom,
+  compressWithLlmLingua,
   probeHeadroom,
   probeLlmLingua,
   scanInputFiles,

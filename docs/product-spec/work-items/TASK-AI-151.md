@@ -106,7 +106,7 @@ Evaluated across recorded worker inputs in `.worktrees/logs/night`:
 #### Headroom (CCR Compression Proxy)
 ```bash
 # Repository: https://github.com/chopratejas/headroom
-npm install -g headroom
+npm install -g headroom@0.0.1
 headroom proxy --port 8787
 ```
 
@@ -114,7 +114,7 @@ headroom proxy --port 8787
 ```bash
 # Repository: https://github.com/microsoft/LLMLingua
 # Requires Python >= 3.9
-pip install llmlingua
+pip install llmlingua==0.2.2
 ```
 
 ### Evaluation Run Command
