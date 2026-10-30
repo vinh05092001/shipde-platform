@@ -46,8 +46,18 @@ cp.spawnSync = (cmd, args, opts) => {
   spawnCalls.push({
     cmd: String(cmd),
     args: (args || []).map((a) => String(a)),
-    opts: opts || {},
+    // spawnSync inherits the current environment when none is supplied.
+    opts: { ...(opts || {}), env: (opts && opts.env) || { ...process.env } },
   });
+  if (cmd === 'schtasks') {
+    const dir = path.join(process.env.AGY_POOL_RUNS_DIR, 'agy01');
+    const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+    const resultFile = path.join(dir, 'result.json');
+    fs.writeFileSync(resultFile, JSON.stringify({ state: 'ok', exitCode: 0, jobId: job.jobId }));
+    fs.writeFileSync(path.join(dir, 'out.txt'), 'worker completed');
+    const fresh = new Date(Date.now() + 1000);
+    fs.utimesSync(resultFile, fresh, fresh);
+  }
   return { status: 0, stdout: 'ok', stderr: '' };
 };
 
@@ -521,7 +531,15 @@ describe('TASK-AI-126', () => {
     process.env.AGY_POOL_RUNS_DIR = runsDir;
 
     try {
-      const launcher = orch.resolveLauncher({ externalWorkers: 'agy-pool' }, null);
+      const launcher = orch.resolveLauncher(
+        {
+          externalWorkers: 'agy-pool',
+          dispatch: { agyPoolWriterEnabled: true },
+          allowAgyPoolWriter: true,
+          platform: 'win32',
+        },
+        null
+      );
       const res = launcher({
         harness: 'agy-pool',
         accountId: 'agy01',

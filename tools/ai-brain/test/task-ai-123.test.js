@@ -620,6 +620,17 @@ test('DT-R02: well-formatted worker file goes straight to review', async () => {
     publisher: (pubOpts) => ({ status: 'published', sha: pubOpts.reviewedSha }),
   };
 
+  opts.ghRunner = () => ({
+    exitCode: 0,
+    stdout: JSON.stringify({
+      headRefOid: state.passSha['TASK-AI-123'],
+      statusCheckRollup: require('../sources.json').dispatch.ciGate.requiredChecks.map((name) => ({
+        name,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+      })),
+    }),
+  });
   const log = await runOrchestration('DT-R02 well-formatted file', opts);
 
   // DT-R02: the format check runs for every worker commit, formatted or not

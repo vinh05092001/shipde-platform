@@ -183,12 +183,12 @@ test('WP-R01/WP-R02: manifest-only staging performs a real pnpm install and reus
   assert.ok(fs.existsSync(path.join(depsDir, 'packages', 'demo', 'package.json')));
   assert.ok(fs.existsSync(path.join(depsNodeModules, '.pnpm')));
   assert.ok(
-    fs.lstatSync(path.join(worker, 'node_modules')).isSymbolicLink(),
-    'worker root uses a junction/symlink to shared dependencies'
+    !fs.lstatSync(path.join(worker, 'node_modules')).isSymbolicLink(),
+    'worker root owns its dependency graph'
   );
   assert.ok(
-    fs.lstatSync(path.join(worker, 'packages', 'demo', 'node_modules')).isSymbolicLink(),
-    'workspace node_modules uses a junction/symlink'
+    !fs.lstatSync(path.join(worker, 'packages', 'demo', 'node_modules')).isSymbolicLink(),
+    'workspace node_modules is worker-owned'
   );
 
   const stamp = fs.statSync(path.join(depsDir, 'packages', 'demo', 'package.json')).mtimeMs;

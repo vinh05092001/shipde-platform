@@ -19,6 +19,7 @@ const { classifySession, Status } = require('../supervisor');
 const { runReviewLoop } = require('../review-loop');
 const { runOrchestration } = require('../orchestrate');
 const { candidateKey } = require('../candidates');
+const { resumeReceipt } = require('./helpers/resume-receipt');
 
 const NOW = Date.parse('2026-09-28T00:00:00Z');
 
@@ -159,14 +160,50 @@ test('21 no-progress session stalled', () => {
   assert.equal(verdict, Status.STALLED);
 });
 
-test('22 restart reads the checkpoint and does not redo completed steps', async () => {
+test('22 restart reads the checkpoint and does not redo completed steps', async (t) => {
   const calls = [];
   // TASK-AI-64: the checkpoint file is the only resume input, so the completed
   // item is on disk where a real run would read it. The assertion is unchanged.
-  const checkpoint = path.join(tmpDir(), 'checkpoint.json');
+  const dir = tmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const git = (args) => {
+    const result = require('node:child_process').spawnSync('git', args, {
+      cwd: dir,
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git(['init', '-q']);
+  git(['config', 'user.name', 'Resume fixture']);
+  git(['config', 'user.email', 'resume@shipde.test']);
+  fs.writeFileSync(path.join(dir, 'a.js'), 'before');
+  git(['add', 'a.js']);
+  git(['commit', '-qm', 'base']);
+  const baseSha = git(['rev-parse', 'HEAD']);
+  fs.writeFileSync(path.join(dir, 'a.js'), 'after');
+  git(['commit', '-qam', 'completed A']);
+  const sha = git(['rev-parse', 'HEAD']);
+  const receipt = resumeReceipt(
+    {
+      workItemId: 'A',
+      sha,
+      baseSha,
+      workerRoot: dir,
+      publishCwd: dir,
+      branch: 'feat/a',
+      draftTitle: 'Completed A',
+      writerCandidateKey: candidateKey(cand()),
+      reviewer: candidateKey(cand({ gateway: 'review', upstream: 'review', accountId: 'review' })),
+      review: { verdict: 'PASS', rounds: [{ findings: [] }], repairCount: 0 },
+    },
+    path.join(dir, 'receipt-decisions')
+  );
+  const checkpoint = path.join(dir, 'checkpoint.json');
   fs.writeFileSync(
     checkpoint,
-    JSON.stringify({ schemaVersion: 1, step: 'live_review', completed: ['A'] })
+    JSON.stringify({ schemaVersion: 1, step: 'live_review', completed: ['A'], reviews: [receipt] })
   );
   const launch = durableLaunch();
   const result = await runOrchestration('g', {
@@ -189,6 +226,25 @@ test('22 restart reads the checkpoint and does not redo completed steps', async 
   assert.deepEqual(calls, ['B']);
   assert.ok(result.reconciliation.completed.includes('A'));
   assert.ok(result.reconciliation.completed.includes('B'));
+
+  fs.writeFileSync(
+    checkpoint,
+    JSON.stringify({
+      completed: ['A'],
+      reviews: [{ ...receipt, draftTitle: 'tampered title' }],
+    })
+  );
+  const rejected = await runOrchestration('invalid completed receipt', {
+    specs: [{ id: 'A' }],
+    checkpointFile: checkpoint,
+    decisionDir: path.join(dir, 'rejected'),
+    run: () => assert.fail('an invalid completed receipt must not relaunch work'),
+  });
+  const outcome = rejected.outcomes.find((entry) => entry.workItemId === 'A');
+  assert.equal(outcome.status, 'blocked');
+  assert.equal(outcome.reasonCode, 'CHECKPOINT_RECEIPT_INVALID');
+  assert.match(outcome.reason, /receipt integrity mismatch/);
+  assert.ok(!rejected.reconciliation.completed.includes('A'));
 });
 
 test('23 old-SHA review not accepted for a new SHA', async () => {
