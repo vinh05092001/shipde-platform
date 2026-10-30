@@ -18,6 +18,7 @@ import { ShopsModule } from './shops/shops.module';
 import { BranchesModule } from './branches/branches.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
 import { ImportsModule } from './imports/imports.module';
+import { OnboardingModule } from './onboarding/onboarding.module';
 import { SearchModule } from './search/search.module';
 
 @Module({
@@ -31,6 +32,7 @@ import { SearchModule } from './search/search.module';
     BranchesModule,
     WarehousesModule,
     ImportsModule,
+    OnboardingModule,
     SearchModule,
   ],
   controllers: [HealthController],
