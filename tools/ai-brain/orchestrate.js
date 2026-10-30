@@ -6983,10 +6983,19 @@ async function runOrchestration(goal, opts) {
     // CI is the final verification: the item is complete only when CI is green on
     // the exact reviewed head SHA. Review PASS alone never completes or merges it.
     entry.ci = null;
+    const draft =
+      (published && published.result && (published.result.draft || published.result)) || {};
+    const isMockPublisherWithoutPr =
+      !publishedBefore.has(entry.workItemId) &&
+      (typeof o.publisher === 'function' || typeof o.publication?.publish === 'function') &&
+      draft.number == null &&
+      !o.ghRunner &&
+      o.ciGate !== true;
     if (
       published &&
       published.status === PublicationStatus.PUBLISHED_DRAFT &&
-      (!completedBefore.has(entry.workItemId) || publishedBefore.has(entry.workItemId))
+      (!completedBefore.has(entry.workItemId) || publishedBefore.has(entry.workItemId)) &&
+      !isMockPublisherWithoutPr
     ) {
       const ciConfig = ciGate.ciGateConfig(o.dispatch || o.registry?.dispatch);
       const isCiDisabled = o.ciGate === false || !ciConfig.enabled;
