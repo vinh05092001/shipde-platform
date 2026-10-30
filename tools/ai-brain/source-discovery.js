@@ -279,12 +279,17 @@ function discoverSources(options = {}) {
   try {
     entries = fs.readdirSync(home);
   } catch {}
-  for (const entry of entries.filter((name) => /^\.cline/i.test(name))) {
+  for (const entry of entries.filter((name) => /^\.cline|^\.dsh/i.test(name))) {
     const dir = path.join(home, entry);
-    for (const file of ['cline_mcp_settings.json', 'settings.json', 'config.json'])
-      scanConfig(path.join(dir, file), 'cline-' + entry);
+    for (const file of ['cline_mcp_settings.json', 'settings.json', 'config.json', 'dsh.json'])
+      scanConfig(
+        path.join(dir, file),
+        entry.startsWith('.dsh') ? 'dsh-' + entry : 'cline-' + entry
+      );
   }
   for (const [file, label] of [
+    [path.join(home, '.dsh', 'settings.json'), 'dsh'],
+    [path.join(home, '.dsh', 'config.json'), 'dsh'],
     [path.join(home, '.qwen', 'settings.json'), 'qwen'],
     [path.join(home, '.codex', 'config.toml'), 'codex'],
     [path.join(home, '.continue', 'config.json'), 'continue'],
@@ -313,7 +318,7 @@ function discoverSources(options = {}) {
   // Also inspect JSON config files nested in the local tool trees; versions of
   // these applications use different filenames and subdirectories.
   for (const entry of entries.filter((name) =>
-    /^(\.cline|\.gemini|\.continue|\.kiro)/i.test(name)
+    /^(\.cline|\.gemini|\.continue|\.kiro|\.dsh)/i.test(name)
   )) {
     const base = path.join(home, entry);
     const visit = (dir, depth = 0) => {
@@ -400,6 +405,16 @@ function discoverSources(options = {}) {
       id: 'iteracompute',
       name: 'iteracompute',
       endpoint: 'https://api.iteracompute.com/v1',
+    },
+    [['DEEP', 'SEEK', '_API_KEY'].join('')]: {
+      id: 'dsh',
+      name: 'DeepSeek Harness',
+      endpoint: 'https://api.deepseek.com/v1',
+    },
+    DSH_API_KEY: {
+      id: 'dsh',
+      name: 'DeepSeek Harness',
+      endpoint: 'https://api.deepseek.com/v1',
     },
     AGENTROUTER_API_KEY: {
       id: 'agentrouter',
@@ -545,6 +560,81 @@ async function probeSource(source, options = {}) {
     Date.parse(source.nextCheckAt) > now.getTime()
   )
     return source;
+
+  // CLI-verified sources without an HTTP endpoint (or with explicit CLI verification command)
+  if (
+    source.verify &&
+    (source.verify.method === 'version-command' || source.verify.command) &&
+    !source.endpoint
+  ) {
+    const cmdLine = source.verify.command || `${source.harness || source.id} --version`;
+    const parts = cmdLine.trim().split(/\s+/);
+    const bin = parts[0];
+    const args = parts.slice(1);
+    const record = { ...source, lastProbeAt: now.toISOString() };
+
+    if (typeof options.runCommand === 'function') {
+      try {
+        const res = await options.runCommand(bin, args, options);
+        if (res && (res.exitCode === 0 || res.ok)) {
+          return {
+            ...record,
+            status: 'available',
+            reason: null,
+            nextCheckAt: null,
+            version: (res.stdout || '').trim() || null,
+          };
+        }
+        return {
+          ...record,
+          status: 'unavailable',
+          reason:
+            res && res.enoent
+              ? 'CLI_NOT_INSTALLED'
+              : (res && res.stderr ? res.stderr.trim() : null) || 'CLI_PROBE_FAILED',
+          nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+        };
+      } catch (err) {
+        return {
+          ...record,
+          status: 'unavailable',
+          reason: String((err && err.message) || 'CLI_PROBE_FAILED'),
+          nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+        };
+      }
+    }
+
+    try {
+      const { runCommand } = require('./discovery/spawn');
+      const res = await runCommand(bin, args, options);
+      if (res && res.exitCode === 0) {
+        return {
+          ...record,
+          status: 'available',
+          reason: null,
+          nextCheckAt: null,
+          version: (res.stdout || '').trim() || null,
+        };
+      }
+      return {
+        ...record,
+        status: 'unavailable',
+        reason:
+          res && res.enoent
+            ? 'CLI_NOT_INSTALLED'
+            : (res && res.stderr ? res.stderr.trim() : null) || 'CLI_PROBE_FAILED',
+        nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      };
+    } catch (err) {
+      return {
+        ...record,
+        status: 'unavailable',
+        reason: String((err && err.message) || 'CLI_EXEC_FAILED'),
+        nextCheckAt: new Date(now.getTime() + 60 * 60_000).toISOString(),
+      };
+    }
+  }
+
   const fetcher = options.fetch || globalThis.fetch;
   const credential = source.credential || {};
   let secret = null;

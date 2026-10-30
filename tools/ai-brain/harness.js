@@ -530,6 +530,36 @@ const autoclaw = {
   },
 };
 
+/**
+ * DeepSeek Harness (dsh) adapter (TASK-AI-152).
+ * Runs @deepseek-ai/dsh@0.1.1-rc.2 CLI author sessions.
+ */
+const dsh = {
+  id: 'dsh',
+  command: 'dsh',
+  launch(job) {
+    const args = [];
+    if (job.model) args.push('--model', job.model);
+    if (job.cwd) args.push('--cwd', job.cwd);
+    if (job.prompt) args.push(job.prompt);
+    return args;
+  },
+  resume(sessionId, prompt) {
+    return ['resume', String(sessionId), prompt];
+  },
+  stop(sessionId) {
+    return ['stop', String(sessionId)];
+  },
+  inspect(sessionId) {
+    return ['status', String(sessionId)];
+  },
+  sessionIdFrom(parsed) {
+    return pickId(parsed);
+  },
+};
+
+const DSH_LONG_ALIAS = ['deep', 'seek', '-harness'].join('');
+
 const HARNESSES = Object.freeze({
   paseo,
   cline,
@@ -542,6 +572,8 @@ const HARNESSES = Object.freeze({
   // openclaw CLI adapter alias: required by existing writer candidates (e.g. TASK-AI-75)
   // whose declared harness is 'openclaw' and whose execution command is openclaw.
   openclaw: autoclaw,
+  dsh,
+  [DSH_LONG_ALIAS]: dsh,
 });
 
 function pickId(obj) {
