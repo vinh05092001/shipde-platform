@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS "export_jobs" (
     "succeeded_rows" INTEGER NOT NULL DEFAULT 0,
     "failed_rows" INTEGER NOT NULL DEFAULT 0,
     "row_results" JSONB,
+    "generation_metadata" JSONB,
     "file_name" VARCHAR(255),
     "file_size_bytes" INTEGER,
     "checksum_sha256" VARCHAR(64),

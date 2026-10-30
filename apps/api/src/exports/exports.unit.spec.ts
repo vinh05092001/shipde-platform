@@ -126,7 +126,7 @@ function createMockPrismaService() {
 
   const exportJobs: any[] = [];
 
-  return {
+  const mockPrisma: any = {
     users,
     warehouses,
     auditLogs,
@@ -274,7 +274,15 @@ function createMockPrismaService() {
         }).length;
       },
     },
+    $transaction: async (fn: any) => {
+      if (typeof fn === 'function') {
+        return fn(mockPrisma);
+      }
+      return Promise.all(fn);
+    },
   };
+
+  return mockPrisma;
 }
 
 function createMockRbacService(grantedPermissions: string[] = ALL_PERMISSIONS) {
@@ -1151,6 +1159,174 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       assert.strictEqual(result.data.status, ExportJobStatus.COMPLETED);
       assert.ok(result.data.metadata?.truncation_note);
       assert.strictEqual(result.data.metadata.truncation_note.includes('giới hạn'), true);
+    });
+
+    it('Finding 12: CSV metadata filters banner neutralizes formula injection and escapes properly', () => {
+      const metadataWithFormula: ExportGenerationMetadata = {
+        export_id: 'exp-test-formula',
+        generated_at: new Date().toISOString(),
+        merchant_id: 'm-tenant-1',
+        requested_by: 'u-1',
+        user_role: 'ADMIN',
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        filters: { city: '=1+1,x,y', custom_note: '=cmd|’ /C calc’!A0' },
+        rule_version: '2026.09.08',
+        total_rows: 1,
+        succeeded_rows: 1,
+        failed_rows: 0,
+        checksum_sha256: 'mock-sha',
+      };
+
+      const buf = generateCsv(metadataWithFormula, [{ key: 'id', label: 'ID' }], [{ id: 'wh-1' }]);
+      const csvStr = buf.toString('utf-8');
+
+      // Assert metadata line for Filters is properly escaped as an RFC 4180 cell so commas do not split it
+      assert.strictEqual(csvStr.includes('"# Filters:'), true);
+      // Assert formula injection prefix = was neutralized to '=
+      assert.strictEqual(csvStr.includes("'=1+1"), true);
+      assert.strictEqual(csvStr.includes("'=cmd|"), true);
+    });
+
+    it('Finding 3 / Prior 4: Historical unmarked file fails closed on download without pii:unmask', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Insert a historical job with NO __unmasked_pii marker
+      const historicalJobId = 'job-historical-unmarked';
+      mockPrisma.exportJobs.push({
+        id: historicalJobId,
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-historical',
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.COMPLETED,
+        filters: { city: 'Hà Nội' }, // No __unmasked_pii marker
+        file_data: Buffer.from('id,name,phone\n1,Alpha,0901234567'),
+        file_name: 'historical.csv',
+        checksum_sha256: 'checksum-123',
+      });
+
+      // Actor WITHOUT pii:unmask
+      const mockRbacNoUnmask = createMockRbacService(['iam:manage_users']);
+      const serviceNoUnmask = new ExportsService(mockPrisma as any, mockRbacNoUnmask as any);
+      const actorNoUnmask: ActorContext = {
+        userId: 'u-no-unmask',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+
+      await assert.rejects(
+        async () => {
+          await serviceNoUnmask.downloadExport(
+            'm-tenant-1',
+            actorNoUnmask,
+            historicalJobId,
+            '127.0.0.1',
+            'corr-hist-1'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.FORBIDDEN);
+          return true;
+        }
+      );
+
+      // Actor WITH pii:unmask can download historical unmarked file
+      const mockRbacWithUnmask = createMockRbacService(['iam:manage_users', 'pii:unmask']);
+      const serviceWithUnmask = new ExportsService(mockPrisma as any, mockRbacWithUnmask as any);
+      const actorWithUnmask: ActorContext = {
+        userId: 'u-unmask',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const res = await serviceWithUnmask.downloadExport(
+        'm-tenant-1',
+        actorWithUnmask,
+        historicalJobId,
+        '127.0.0.1',
+        'corr-hist-2'
+      );
+      assert.strictEqual(res.fileName, 'historical.csv');
+      assert.ok(res.fileBuffer);
+    });
+
+    it('Finding 13: recoverStaleJobs and purgeExpiredExports are strictly tenant-scoped', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Insert stale pending jobs for tenant A and tenant B
+      mockPrisma.exportJobs.push(
+        {
+          id: 'job-stale-tenant-a',
+          merchant_id: 'tenant-a',
+          status: ExportJobStatus.PENDING,
+          created_at: new Date(Date.now() - 3600000),
+        },
+        {
+          id: 'job-stale-tenant-b',
+          merchant_id: 'tenant-b',
+          status: ExportJobStatus.PENDING,
+          created_at: new Date(Date.now() - 3600000),
+        }
+      );
+
+      const mockRbac = createMockRbacService();
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      // Recover for tenant A only
+      const recoveredCount = await service.recoverStaleJobs('tenant-a');
+      assert.strictEqual(recoveredCount, 1);
+
+      const jobA = mockPrisma.exportJobs.find((j: any) => j.id === 'job-stale-tenant-a');
+      assert.strictEqual(jobA.status, ExportJobStatus.FAILED);
+      assert.strictEqual(jobA.error_code, 'PROCESSING_TIMEOUT');
+
+      // Tenant B job MUST remain untouched in PENDING
+      const jobB = mockPrisma.exportJobs.find((j: any) => j.id === 'job-stale-tenant-b');
+      assert.strictEqual(jobB.status, ExportJobStatus.PENDING);
+    });
+
+    it('Finding 7 / Finding 10: Actor with restricted store_scopes requesting out-of-scope branch throws SCOPE_FORBIDDEN', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Actor u-scoped has store_scopes: ['branch-hcm-01']
+      mockPrisma.users.push({
+        id: 'u-scoped-branch',
+        merchant_id: 'm-tenant-1',
+        role: 'STAFF',
+        store_scopes: ['branch-hcm-01'],
+        warehouse_scopes: ['*'],
+      });
+
+      const mockRbac = createMockRbacService(['reconciliation:view_contract_rates']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+      const actor: ActorContext = {
+        userId: 'u-scoped-branch',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            actor,
+            {
+              resource: ExportResource.LEDGERS,
+              format: ExportFormat.CSV,
+              filters: { branch_id: 'branch-hanoi-99' }, // Out-of-scope branch
+              sync: true,
+            },
+            '127.0.0.1',
+            'corr-branch-scope'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
     });
   });
 });

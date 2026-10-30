@@ -93,9 +93,22 @@ Key business capabilities delivered:
    - Unit tests (`exports.unit.spec.ts`): DTO validation, CSV/XLSX/PDF generation, checksum computation, PII masking, RBAC permissions, FEAT-RBAC-02 per-row scoping, tenant isolation, and audit logging.
    - Supertest integration tests (`exports.supertest.spec.ts`): HTTP endpoint verification, download streaming, and error envelopes.
 
+8. **Web UI Implementation & State Coverage (`apps/web/`)**:
+   - `ExportModal` (`apps/web/src/components/ExportModal.tsx`): Accessible, fully featured modal dialog supporting resource selection (`users`, `warehouses`, `audit_logs`, `ledgers`), format selection (`csv`, `xlsx`, `pdf`), date ranges, carrier filter, and row clamping.
+   - Proves all 8 required AGENTS.md states:
+     - `Idle`: Accessible form configuration with `role="dialog"`, `aria-modal="true"`.
+     - `Loading`: `aria-busy="true"` spinner and processing feedback.
+     - `Empty`: 0 records matched notification with "Điều chỉnh bộ lọc" recovery button.
+     - `Validation error`: `role="alert"` inline feedback and `aria-invalid="true"`.
+     - `Forbidden`: Clear 403 capability/scope rejection message with "Chọn tài nguyên khác" recovery button.
+     - `Partial / Clamped`: `role="alert"` warning banner displaying metadata truncation note while preserving direct download access.
+     - `Success`: Metadata summary card (records, format, SHA-256 checksum, size) and primary download trigger.
+     - `Error & Recovery`: Server/network failure notification with actionable "Thử lại" retry button.
+   - `ExportsSettingsPage` (`apps/web/src/app/settings/exports/page.tsx`): Comprehensive export history and management console with status badges, resource filter toolbar, and modal trigger.
+   - `exports-page-states.test.ts` (`apps/web/src/tests/exports-page-states.test.ts`): Automated test suite verifying all 9 UI states and accessibility invariants via `renderToStaticMarkup`.
+
 ## Out of scope
 
-- UI export dialogs and download progress notifications (scheduled for web UI slice).
 - Order and shipment export (deferred to order management features).
 - External cloud storage upload (MinIO/S3 sync) for multi-gigabyte datasets (in-database storage with TTL covers platform baseline).
 
@@ -129,6 +142,8 @@ Key business capabilities delivered:
 | `AC-COM-05-11` | DTO rejects non-string types on string fields | 400 `VALIDATION_ERROR` with `INVALID_TYPE` (never 500) | DTO type safety test |
 | `AC-COM-05-12` | Audit log recorded for export creation and download | `audit_logs` contains `EXPORT_REQUESTED` and `EXPORT_DOWNLOADED` with masked PII | Audit log test |
 | `AC-COM-05-13` | Actor with `pii:unmask` receives unmasked identifiers | Phone and email in export appear in plaintext | PII privilege test |
+| `AC-COM-05-14` | Web UI ExportModal state coverage | All 8 required AGENTS.md states (idle, loading, empty, validation, forbidden, partial, success, error) rendered and verified | `exports-page-states.test.ts` |
+| `AC-COM-05-15` | Web UI ExportsSettingsPage history and triggers | History table renders with status badges, resource filter toolbar, and launch button | `exports-page-states.test.ts` |
 
 ## Verification commands
 
@@ -137,7 +152,7 @@ Key business capabilities delivered:
 node scripts/ai/check-no-hardcode.mjs
 
 # Formatting
-pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-05.md docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv apps/api/src/exports/* packages/config/src/* packages/contracts/src/*
+pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-05.md apps/api/src/exports/* apps/web/src/components/ExportModal.tsx apps/web/src/app/settings/exports/page.tsx apps/web/src/tests/exports-page-states.test.ts packages/config/src/* packages/contracts/src/*
 
 # TypeScript compilation
 pnpm typecheck
@@ -150,6 +165,10 @@ pnpm --filter @shipde/api exec tsx --test src/exports/exports.unit.spec.ts
 
 # Supertest HTTP integration tests
 pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/exports/exports.supertest.spec.ts
+
+# Web UI states tests
+pnpm --filter @shipde/web exec tsx src/tests/exports-page-states.test.ts
+```
 ```
 
 ## Codex review record

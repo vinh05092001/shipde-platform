@@ -931,6 +931,7 @@ model ExportJob {
   succeeded_rows   Int          @default(0)
   failed_rows      Int          @default(0)
   row_results      Json?        @db.JsonB
+  generation_metadata Json?     @db.JsonB
   file_name        String?      @db.VarChar(255)
   file_size_bytes  Int?
   checksum_sha256  String?      @db.VarChar(64)

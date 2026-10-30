@@ -11,7 +11,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { signAccessToken } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
-import { ExportResource, ExportFormat, ExportJobStatus } from '@shipde/contracts';
+import { ExportResource, ExportFormat, ExportJobStatus, ExportErrorCode } from '@shipde/contracts';
+import { ExportsService } from './exports.service';
 
 async function runExportsSupertestSuite() {
   console.log('================================================================');
@@ -684,6 +685,153 @@ async function runExportsSupertestSuite() {
     assert.strictEqual(unmaskDlRes.text.includes('0901234567'), true);
     assert.strictEqual(unmaskDlRes.text.includes('kho@alpha.test'), true);
 
+    // Test 14b: Finding 9 - Creator PII revocation over HTTP
+    console.log(
+      'Testing: Finding 9 - Creator PII revocation over HTTP rejects download with 403 FORBIDDEN'
+    );
+    await prisma.rolePermission.deleteMany({
+      where: { role_id: unmaskRoleId, permission_id: piiUnmaskPerm.id },
+    });
+    const creatorRevokedDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${unmaskExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${unmaskToken}`);
+
+    assert.strictEqual(creatorRevokedDlRes.status, 403);
+    assert.strictEqual(creatorRevokedDlRes.body.code, 'FORBIDDEN');
+
+    // Test 14c: Finding 3 / Prior 4 - Historical unmarked file fails closed over HTTP
+    console.log(
+      'Testing: Finding 3 / Prior 4 - Historical unmarked file fails closed without pii:unmask'
+    );
+    const historicalJobId = randomUUID();
+    await prisma.exportJob.create({
+      data: {
+        id: historicalJobId,
+        merchant_id: merchantIdA,
+        user_id: userIdA,
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.COMPLETED,
+        filters: { city: 'Hà Nội' }, // historical: NO __unmasked_pii marker
+        file_data: Buffer.from('id,name,phone\n1,Alpha,0901234567'),
+        file_name: 'historical_users.csv',
+        checksum_sha256: 'mock_checksum_historical',
+      },
+    });
+
+    const histNoUnmaskRes = await request(httpServer)
+      .get(`/api/v1/exports/${historicalJobId}/download`)
+      .set('Authorization', `Bearer ${scopedToken}`);
+    assert.strictEqual(histNoUnmaskRes.status, 403);
+    assert.strictEqual(histNoUnmaskRes.body.code, 'FORBIDDEN');
+
+    const histWithUnmaskRes = await request(httpServer)
+      .get(`/api/v1/exports/${historicalJobId}/download`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    assert.strictEqual(histWithUnmaskRes.status, 200);
+    assert.strictEqual(histWithUnmaskRes.text.includes('0901234567'), true);
+
+    // Test 14d: Prior 7 - Restart recovery marks stranded jobs as FAILED with PROCESSING_TIMEOUT
+    console.log('Testing: Prior 7 - Restart recovery handles stranded jobs');
+    const staleJobId = randomUUID();
+    const twentyMinutesAgo = new Date(Date.now() - 20 * 60 * 1000);
+    await prisma.exportJob.create({
+      data: {
+        id: staleJobId,
+        merchant_id: merchantIdA,
+        user_id: userIdA,
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.PROCESSING,
+        filters: {},
+        created_at: twentyMinutesAgo,
+        updated_at: twentyMinutesAgo,
+      },
+    });
+
+    const exportsServiceInstance = app.get(ExportsService);
+    await exportsServiceInstance.recoverStaleJobs(merchantIdA);
+    const recoveredJob = await prisma.exportJob.findUnique({ where: { id: staleJobId } });
+    assert.ok(recoveredJob);
+    assert.strictEqual(recoveredJob.status, ExportJobStatus.FAILED);
+    assert.strictEqual(recoveredJob.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
+
+    // Test 14e: Finding 7 & Finding 10 - Branch scope authorization on ledgers export
+    console.log(
+      'Testing: Finding 7 & Finding 10 - Scoped operator cannot export ledger for out-of-scope branch'
+    );
+    const reconAuditPerm = await prisma.permission.findFirst({
+      where: { code: 'reconciliation:run_review_audit' },
+    });
+    assert.ok(reconAuditPerm);
+
+    const ledgerScopedRoleId = randomUUID();
+    await prisma.role.create({
+      data: {
+        id: ledgerScopedRoleId,
+        merchant_id: merchantIdA,
+        code: `ROLE_LEDGER_SCOPED_${testSuffix}`,
+        name: 'Ledger Scoped Auditor',
+        is_system: false,
+        permissions: {
+          create: [{ permission_id: reconAuditPerm.id }],
+        },
+      },
+    });
+
+    const ledgerScopedUserId = randomUUID();
+    const ledgerScopedSessionId = randomUUID();
+    await prisma.user.create({
+      data: {
+        id: ledgerScopedUserId,
+        merchant_id: merchantIdA,
+        email: `ledger_scoped_${testSuffix}@alpha.test`,
+        phone: `096${testSuffix}`,
+        full_name: 'Ledger Scoped Auditor',
+        password_hash: 'mock_password_hash',
+        role: RoleEnum.STAFF,
+        custom_role_id: ledgerScopedRoleId,
+        store_scopes: ['branch-allowed-1'],
+        status: 'active',
+      },
+    });
+
+    await prisma.deviceSession.create({
+      data: {
+        id: ledgerScopedSessionId,
+        user_id: ledgerScopedUserId,
+        merchant_id: merchantIdA,
+        token_hash: 'mock_hash_ledger_scoped',
+        status: SessionStatusEnum.ACTIVE,
+        ip_address: '127.0.0.1',
+        last_seen_at: new Date(),
+        expires_at: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const ledgerScopedToken = signAccessToken(
+      {
+        sub: ledgerScopedUserId,
+        session_id: ledgerScopedSessionId,
+        merchant_id: merchantIdA,
+        role: 'STAFF',
+      },
+      tokenSecret
+    );
+
+    const outOfScopeBranchRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${ledgerScopedToken}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        filters: { branch_id: 'branch-disallowed-99' },
+        sync: true,
+      });
+
+    assert.strictEqual(outOfScopeBranchRes.status, 403);
+    assert.strictEqual(outOfScopeBranchRes.body.code, 'SCOPE_FORBIDDEN');
+
     // Test 15: Finding 9 - Ledger calculations using tenant-separated persisted fixtures
     console.log('Testing: Finding 9 - Tenant-separated persisted ledger calculations');
     // Seed fixtures for Merchant A
@@ -832,18 +980,20 @@ async function runExportsSupertestSuite() {
     assert.strictEqual(ledgerDlRes.status, 200);
     const ledgerCsv = ledgerDlRes.text;
 
-    // Assert Merchant A's values are present
-    assert.strictEqual(ledgerCsv.includes('500000'), true, 'Merchant A claim must be present');
-    assert.strictEqual(
-      ledgerCsv.includes('15000'),
-      true,
-      'Merchant A rescued fee saved must be present'
-    );
-    assert.strictEqual(
-      ledgerCsv.includes('1000000'),
-      true,
-      'Merchant A rescued GMV must be present'
-    );
+    // Assert Merchant A's values are present with exact row & metric assertions
+    const dataRows = ledgerCsv.split('\r\n').filter((l) => l && !l.startsWith('#'));
+    const row1 = dataRows.find((r) => r.includes('Sổ 1: Tiền thực nhận'));
+    assert.ok(row1, 'Must include Sổ 1 row');
+    assert.strictEqual(row1.includes('500000'), true, 'Merchant A claim must be 500000');
+
+    const row2 = dataRows.find((r) => r.includes('Sổ 2: Đơn cứu được'));
+    assert.ok(row2, 'Must include Sổ 2 row');
+    assert.strictEqual(row2.includes('1000000'), true, 'Merchant A rescued GMV must be 1000000');
+    assert.strictEqual(row2.includes('15000'), true, 'Merchant A rescued fee saved must be 15000');
+
+    const row3 = dataRows.find((r) => r.includes('Sổ 3: Lệch cước vận chuyển'));
+    assert.ok(row3, 'Must include Sổ 3 row');
+    assert.strictEqual(row3.includes('50000'), true, 'Merchant A open discrepancy must be 50000');
 
     // Assert Merchant B's values are completely excluded
     assert.strictEqual(
@@ -853,9 +1003,41 @@ async function runExportsSupertestSuite() {
     );
     assert.strictEqual(ledgerCsv.includes('9999999'), false, 'Merchant B GMV must NOT be present');
 
+    // Test filtered ledger calculation (carrier_code: VTP)
+    console.log('Testing: Finding 7 & Finding 10 - Filtered ledger calculation by carrier');
+    const filteredLedgerRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        filters: { carrier_code: 'VTP' },
+        sync: true,
+      });
+
+    assert.strictEqual(filteredLedgerRes.status, 201);
+    const filteredDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${filteredLedgerRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${tokenA}`);
+
+    assert.strictEqual(filteredDlRes.status, 200);
+    const filteredDataRows = filteredDlRes.text
+      .split('\r\n')
+      .filter((l) => l && !l.startsWith('#'));
+    const fRow1 = filteredDataRows.find((r) => r.includes('Sổ 1: Tiền thực nhận'));
+    assert.ok(fRow1);
+    // Recovered amount for VTP must be exactly 0
+    assert.strictEqual(fRow1.includes(',0,'), true, 'VTP recovered amount must be 0');
+
     console.log('🎉 All Exports Supertest tests passed successfully!');
   } finally {
-    // Explicitly drain background processing before cleaning up tenant rows (Finding 9)
+    // Explicitly join on active background processing before cleaning up tenant rows (Finding 9)
+    try {
+      const exportsService = app.get(ExportsService);
+      await exportsService.drainActiveJobs();
+    } catch {
+      // safe fallback if app not initialized
+    }
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Cleanup fixtures

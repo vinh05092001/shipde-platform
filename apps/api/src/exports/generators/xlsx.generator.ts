@@ -24,7 +24,11 @@ function renderCell(val: unknown, styleId?: string): string {
   if (typeof val === 'number' && Number.isFinite(val)) {
     return `<Cell${styleAttr}><Data ss:Type="Number">${val}</Data></Cell>`;
   }
-  return `<Cell${styleAttr}><Data ss:Type="String">${escapeXml(val)}</Data></Cell>`;
+  let strVal = String(val);
+  if (/^[=+\-@\t\r]/.test(strVal)) {
+    strVal = `'${strVal}`;
+  }
+  return `<Cell${styleAttr}><Data ss:Type="String">${escapeXml(strVal)}</Data></Cell>`;
 }
 
 /**

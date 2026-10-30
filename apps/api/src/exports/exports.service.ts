@@ -1,4 +1,4 @@
-import { Injectable, Inject, HttpStatus, OnModuleInit } from '@nestjs/common';
+import { Injectable, Inject, HttpStatus, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -21,6 +21,7 @@ import {
   resolveExportMaxRows,
   resolveExportJobTtlSeconds,
   resolveExportRuleVersion,
+  formatStructuredLog,
 } from '@shipde/config';
 import { CanonicalApiException } from '../auth/auth.service';
 import { maskIdentifier } from '../invitations/invitations.service';
@@ -38,20 +39,76 @@ export interface DownloadResult {
 }
 
 @Injectable()
-export class ExportsService implements OnModuleInit {
+export class ExportsService implements OnModuleInit, OnModuleDestroy {
+  private maintenanceTimer: NodeJS.Timeout | null = null;
+  private readonly activeJobs = new Set<Promise<any>>();
+
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RbacService) private readonly rbacService: RbacService
   ) {}
 
   /**
-   * Recovers stale pending or processing jobs on module initialization (Finding 7).
+   * Recovers stale pending or processing jobs on module initialization (Finding 4, Finding 7).
+   * Iterates active tenants and starts periodic tenant-scoped maintenance.
    */
   async onModuleInit(): Promise<void> {
     try {
-      await this.recoverStaleJobs();
-    } catch {
-      // Offline safe — do not block startup if database is unreachable
+      await this.runSystemMaintenance();
+    } catch (err: any) {
+      console.warn(
+        formatStructuredLog({
+          level: 'warn',
+          service: 'api',
+          message: `Exports startup maintenance skipped or failed: ${err.message}`,
+        })
+      );
+    }
+
+    // Schedule background maintenance every 60 seconds (Finding 4, Finding 11, Finding 13)
+    this.maintenanceTimer = setInterval(async () => {
+      try {
+        await this.runSystemMaintenance();
+      } catch (err: any) {
+        console.warn(
+          formatStructuredLog({
+            level: 'warn',
+            service: 'api',
+            message: `Exports background maintenance error: ${err.message}`,
+          })
+        );
+      }
+    }, 60000);
+    if (this.maintenanceTimer.unref) {
+      this.maintenanceTimer.unref();
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
+  }
+
+  /**
+   * Drains all active background processing jobs. Essential for deterministic test cleanup (Finding 6).
+   */
+  async drainActiveJobs(): Promise<void> {
+    await Promise.all(Array.from(this.activeJobs));
+  }
+
+  /**
+   * Runs tenant-scoped maintenance across all active merchants (Finding 13).
+   */
+  async runSystemMaintenance(): Promise<void> {
+    const activeMerchants = await this.prisma.merchant.findMany({
+      where: { status: 'active' },
+      select: { id: true },
+    });
+    for (const m of activeMerchants) {
+      await this.recoverStaleJobs(m.id);
+      await this.purgeExpiredExports(m.id);
     }
   }
 
@@ -65,7 +122,7 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Sanitizes filter values to ensure no unmasked PII leaks into metadata or audit logs (Finding 13).
+   * Sanitizes filter values to ensure no unmasked PII leaks into metadata or audit logs (Finding 10, Finding 13).
    */
   private sanitizeMetadataFilters(
     filters?: Record<string, unknown>,
@@ -88,12 +145,13 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Recovers stale jobs left in PENDING or PROCESSING states after a server restart (Finding 7).
+   * Recovers stale jobs left in PENDING or PROCESSING states after a server restart (Finding 4, Finding 13).
+   * Scoped strictly by merchantId.
    */
-  async recoverStaleJobs(staleThresholdMs = 15 * 60 * 1000): Promise<number> {
-    const cutoff = new Date(Date.now() - staleThresholdMs);
+  async recoverStaleJobs(merchantId: string, cutoff: Date = new Date()): Promise<number> {
     const result = await this.prisma.exportJob.updateMany({
       where: {
+        merchant_id: merchantId,
         status: { in: [ExportJobStatus.PENDING, ExportJobStatus.PROCESSING] },
         created_at: { lt: cutoff },
       },
@@ -109,12 +167,14 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Purges expired export jobs and their files per the retention TTL baseline (Finding 14).
+   * Purges expired export jobs and their files per the retention TTL baseline (Finding 11, Finding 13).
+   * Scoped strictly by merchantId.
    */
-  async purgeExpiredExports(): Promise<number> {
+  async purgeExpiredExports(merchantId: string): Promise<number> {
     const now = new Date();
     const result = await this.prisma.exportJob.deleteMany({
       where: {
+        merchant_id: merchantId,
         expires_at: { lt: now },
       },
     });
@@ -138,43 +198,28 @@ export class ExportsService implements OnModuleInit {
         requiredPermissions = ['audit:view'];
         break;
       case ExportResource.LEDGERS:
-        requiredPermissions = [
-          'reconciliation:view_contract_rates',
-          'reconciliation:run_review_audit',
-        ];
+        requiredPermissions = ['reconciliation:view_contract_rates'];
         break;
       default:
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           ExportErrorCode.UNSUPPORTED_RESOURCE,
-          `Tài nguyên '${resource}' không được hỗ trợ để xuất dữ liệu`
+          `Tài nguyên xuất '${resource}' không được hỗ trợ (chỉ hỗ trợ: users, warehouses, audit_logs, ledgers)`
         );
     }
 
-    if (resource === ExportResource.LEDGERS) {
-      // For ledgers, having either view_contract_rates OR run_review_audit is sufficient
-      const hasViewRates = await this.rbacService.actorHasPermissions(actor, [
-        'reconciliation:view_contract_rates',
-      ]);
-      const hasRunAudit = await this.rbacService.actorHasPermissions(actor, [
-        'reconciliation:run_review_audit',
-      ]);
-      if (!hasViewRates && !hasRunAudit) {
-        throw new CanonicalApiException(
-          HttpStatus.FORBIDDEN,
-          ExportErrorCode.FORBIDDEN,
-          'Bạn không có quyền truy cập báo cáo tài chính/sổ giá trị (yêu cầu quyền reconciliation:view_contract_rates hoặc reconciliation:run_review_audit)'
-        );
+    const hasPermission = await this.rbacService.actorHasPermissions(actor, requiredPermissions);
+    if (!hasPermission) {
+      if (resource === ExportResource.LEDGERS) {
+        const hasAlternate = await this.rbacService.actorHasPermissions(actor, [
+          'reconciliation:run_review_audit',
+        ]);
+        if (hasAlternate) return;
       }
-      return;
-    }
-
-    const hasPerm = await this.rbacService.actorHasPermissions(actor, requiredPermissions);
-    if (!hasPerm) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         ExportErrorCode.FORBIDDEN,
-        `Bạn không có quyền truy cập dữ liệu tài nguyên '${resource}' (yêu cầu quyền ${requiredPermissions.join(
+        `Tài khoản không có quyền thực hiện xuất dữ liệu cho tài nguyên '${resource}' (yêu cầu quyền: ${requiredPermissions.join(
           ', '
         )})`
       );
@@ -182,7 +227,32 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Creates an export job and executes it synchronously or asynchronously according to dto.sync (Finding 7).
+   * Resolves the caller's store (branch) scopes from user record for FEAT-RBAC-02 scope enforcement.
+   */
+  async getActorStoreScopes(actor: ActorContext): Promise<string[]> {
+    if (!actor.userId) return [];
+    const user = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+      select: { store_scopes: true },
+    });
+    return user?.store_scopes || [];
+  }
+
+  /**
+   * Resolves the caller's carrier account scopes from user record for FEAT-RBAC-02 scope enforcement.
+   */
+  async getActorCarrierAccountScopes(actor: ActorContext): Promise<string[]> {
+    if (!actor.userId) return [];
+    const user = await this.prisma.user.findFirst({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+      select: { carrier_account_scopes: true },
+    });
+    return user?.carrier_account_scopes || [];
+  }
+
+  /**
+   * Creates an asynchronous or synchronous export job with atomic audit logging (Finding 14).
+   * Validates capability permissions, sanitizes PII before persistence (Finding 10), and handles sync/async.
    */
   async createExportJob(
     merchantId: string,
@@ -201,88 +271,109 @@ export class ExportsService implements OnModuleInit {
     // Determine actor's current PII unmask capability to attach internal flag for download security (Finding 4)
     const hasPiiUnmask = await this.rbacService.actorHasPermissions(actor, ['pii:unmask']);
     const sanitizedFilters = this.sanitizeMetadataFilters(dto.filters, hasPiiUnmask);
+    // If actor lacks pii:unmask, sanitize raw PII before persisting (Finding 10)
     const persistedFilters = {
-      ...(dto.filters || {}),
+      ...(hasPiiUnmask ? dto.filters || {} : sanitizedFilters),
       __unmasked_pii: hasPiiUnmask,
     };
 
-    // 2. Persist initial ExportJob record in database with PENDING status
-    const jobRecord = await this.prisma.exportJob.create({
-      data: {
-        id: randomUUID(),
-        merchant_id: merchantId,
-        user_id: actor.userId,
+    const isSync = dto.sync !== false;
+    const jobId = randomUUID();
+
+    // 2. Persist initial ExportJob record and mandatory audit atomically via transaction (Finding 14)
+    const createPayload = {
+      id: jobId,
+      merchant_id: merchantId,
+      user_id: actor.userId,
+      resource: dto.resource,
+      format: dto.format,
+      status: ExportJobStatus.PENDING,
+      filters: persistedFilters as unknown as Prisma.InputJsonValue,
+      rule_version: ruleVersion,
+      expires_at: expiresAt,
+    };
+
+    const auditPayload = {
+      merchant_id: merchantId,
+      user_id: actor.userId,
+      actor: actor.role || actor.userId || null,
+      action: ExportAuditEvent.EXPORT_REQUESTED,
+      entity_type: 'export_job',
+      entity_id: jobId,
+      old_value: Prisma.JsonNull,
+      new_value: {
+        job_id: jobId,
         resource: dto.resource,
         format: dto.format,
-        status: ExportJobStatus.PENDING,
-        filters: persistedFilters as unknown as Prisma.InputJsonValue,
+        filters: sanitizedFilters,
         rule_version: ruleVersion,
-        expires_at: expiresAt,
-      },
-    });
+        sync: isSync,
+        correlation_id: correlationId,
+      } as unknown as Prisma.InputJsonValue,
+      reason: correlationId ? `correlation_id:${correlationId}` : null,
+      ip_address: this.hashIp(clientIp),
+    };
 
-    // 3. Write immutable EXPORT_REQUESTED audit log with sanitized PII (Finding 13)
-    await this.prisma.auditLog.create({
-      data: {
-        merchant_id: merchantId,
-        user_id: actor.userId,
-        actor: actor.role || actor.userId || null,
-        action: ExportAuditEvent.EXPORT_REQUESTED,
-        entity_type: 'export_job',
-        entity_id: jobRecord.id,
-        old_value: Prisma.JsonNull,
-        new_value: {
-          job_id: jobRecord.id,
-          resource: dto.resource,
-          format: dto.format,
-          filters: sanitizedFilters,
-          rule_version: ruleVersion,
-        } as unknown as Prisma.InputJsonValue,
-        reason: correlationId ? `correlation_id:${correlationId}` : null,
-        ip_address: this.hashIp(clientIp),
-      },
-    });
-
-    // 4. Handle sync vs async lifecycle (Finding 7)
-    // If sync is explicitly false, schedule background processing and return pending job
-    if (dto.sync === false) {
-      setImmediate(() => {
-        this.processExportJob(merchantId, actor, jobRecord.id, dto, clientIp, correlationId).catch(
-          (err) => {
-            // Log safe message without internal objects or PII (Finding 13)
-            const safeMsg =
-              err instanceof CanonicalApiException ? err.message : 'Processing failed';
-            console.error(`Async export job ${jobRecord.id} ended with status FAILED: ${safeMsg}`);
-          }
-        );
+    let jobRecord: any;
+    if (typeof this.prisma.$transaction === 'function') {
+      jobRecord = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.exportJob.create({ data: createPayload });
+        await tx.auditLog.create({ data: auditPayload });
+        return created;
       });
+    } else {
+      jobRecord = await this.prisma.exportJob.create({ data: createPayload });
+      await this.prisma.auditLog.create({ data: auditPayload });
+    }
+
+    // 3. Handle sync vs async lifecycle (Finding 7)
+    if (isSync) {
+      const processedItem = await this.processExportJob(
+        merchantId,
+        actor,
+        jobRecord.id,
+        dto,
+        clientIp,
+        correlationId
+      );
+      return {
+        data: processedItem,
+        meta: {
+          correlation_id: correlationId,
+          timestamp: new Date().toISOString(),
+        },
+      };
+    } else {
+      const jobPromise = this.processExportJob(
+        merchantId,
+        actor,
+        jobRecord.id,
+        dto,
+        clientIp,
+        correlationId
+      )
+        .catch((err) => {
+          console.warn(
+            formatStructuredLog({
+              level: 'warn',
+              service: 'api',
+              message: `Async export background failure for job ${jobRecord.id}: ${err.message}`,
+            })
+          );
+        })
+        .finally(() => {
+          this.activeJobs.delete(jobPromise);
+        });
+      this.activeJobs.add(jobPromise);
 
       return {
-        data: this.formatExportJobItem(jobRecord),
+        data: this.formatExportJobItem(jobRecord, undefined, hasPiiUnmask),
         meta: {
           correlation_id: correlationId,
           timestamp: new Date().toISOString(),
         },
       };
     }
-
-    // Default: synchronous execution for immediate file availability
-    const processedItem = await this.processExportJob(
-      merchantId,
-      actor,
-      jobRecord.id,
-      dto,
-      clientIp,
-      correlationId
-    );
-
-    return {
-      data: processedItem,
-      meta: {
-        correlation_id: correlationId,
-        timestamp: new Date().toISOString(),
-      },
-    };
   }
 
   /**
@@ -327,7 +418,7 @@ export class ExportsService implements OnModuleInit {
       const rowResults: ExportRowResult[] = [];
       let truncationNote: string | undefined = undefined;
 
-      // Actor warehouse scopes for FEAT-RBAC-02 per-row scoping (no hardcoded OWNER bypass)
+      // Actor warehouse scopes for FEAT-RBAC-02 per-row scoping
       const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
       const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
 
@@ -446,7 +537,6 @@ export class ExportsService implements OnModuleInit {
               actorWarehouseScopes.includes(w.code);
 
             if (!isScopeAuthorized) {
-              // Out-of-scope row: omit from export and record truthful per-row SCOPE_FORBIDDEN
               rowResults.push({
                 row_index: i + 1,
                 entity_id: w.id,
@@ -564,7 +654,7 @@ export class ExportsService implements OnModuleInit {
             { key: 'rule_note', label: 'Ghi chú quy tắc' },
           ];
 
-          // 1. Build common scope & date filters (Finding 7, Finding 10)
+          // 1. Warehouse scope & filter
           let scopedWarehouseFilter: Prisma.StringNullableFilter | undefined = undefined;
           if (!hasUniversalWarehouseScope) {
             if (actorWarehouseScopes.length === 0) {
@@ -574,7 +664,6 @@ export class ExportsService implements OnModuleInit {
             }
           }
 
-          // If explicit warehouse_id filter is passed, verify against actor scopes
           if (dto.filters?.warehouse_id && typeof dto.filters.warehouse_id === 'string') {
             const requestedWhId = dto.filters.warehouse_id;
             if (!hasUniversalWarehouseScope && !actorWarehouseScopes.includes(requestedWhId)) {
@@ -587,6 +676,60 @@ export class ExportsService implements OnModuleInit {
             scopedWarehouseFilter = { equals: requestedWhId };
           }
 
+          // 2. Branch scope & filter authorization (Finding 7)
+          const actorStoreScopes = await this.getActorStoreScopes(actor);
+          const hasUniversalStoreScope = actorStoreScopes.includes('*');
+
+          if (dto.filters?.branch_id && typeof dto.filters.branch_id === 'string') {
+            if (!hasUniversalStoreScope && !actorStoreScopes.includes(dto.filters.branch_id)) {
+              throw new CanonicalApiException(
+                HttpStatus.FORBIDDEN,
+                ExportErrorCode.SCOPE_FORBIDDEN,
+                'Tài khoản không có quyền truy cập dữ liệu chi nhánh được yêu cầu'
+              );
+            }
+          }
+
+          const effectiveBranchFilter =
+            dto.filters?.branch_id && typeof dto.filters.branch_id === 'string'
+              ? { equals: dto.filters.branch_id }
+              : !hasUniversalStoreScope && actorStoreScopes.length > 0
+                ? { in: actorStoreScopes }
+                : undefined;
+
+          // 3. Carrier account scope & filter authorization (Finding 7)
+          const actorCarrierScopes = await this.getActorCarrierAccountScopes(actor);
+          const hasUniversalCarrierScope = actorCarrierScopes.includes('*');
+
+          if (
+            dto.filters?.carrier_account_id &&
+            typeof dto.filters.carrier_account_id === 'string'
+          ) {
+            if (
+              !hasUniversalCarrierScope &&
+              !actorCarrierScopes.includes(dto.filters.carrier_account_id)
+            ) {
+              throw new CanonicalApiException(
+                HttpStatus.FORBIDDEN,
+                ExportErrorCode.SCOPE_FORBIDDEN,
+                'Tài khoản không có quyền truy cập tài khoản vận chuyển được yêu cầu'
+              );
+            }
+          }
+
+          const effectiveCarrierAccountFilter =
+            dto.filters?.carrier_account_id && typeof dto.filters.carrier_account_id === 'string'
+              ? { equals: dto.filters.carrier_account_id }
+              : !hasUniversalCarrierScope && actorCarrierScopes.length > 0
+                ? { in: actorCarrierScopes }
+                : undefined;
+
+          // 4. Carrier code filter (Finding 7)
+          const carrierCodeFilter =
+            dto.filters?.carrier_code && typeof dto.filters.carrier_code === 'string'
+              ? (dto.filters.carrier_code as any)
+              : undefined;
+
           // Date filters
           const fromDateRaw = (dto.filters?.from_date || dto.filters?.period_start) as
             string | undefined;
@@ -598,24 +741,24 @@ export class ExportsService implements OnModuleInit {
             if (toDateRaw) dateFilter.lte = new Date(toDateRaw);
           }
 
-          // Branch filter
-          const branchIdFilter =
-            dto.filters?.branch_id && typeof dto.filters.branch_id === 'string'
-              ? { equals: dto.filters.branch_id }
+          // Shared shipment filter for relations
+          const shipmentRelationFilter =
+            carrierCodeFilter || effectiveCarrierAccountFilter
+              ? {
+                  ...(carrierCodeFilter ? { carrier_code: carrierCodeFilter } : {}),
+                  ...(effectiveCarrierAccountFilter
+                    ? { carrier_account_id: effectiveCarrierAccountFilter }
+                    : {}),
+                }
               : undefined;
 
-          // Carrier filter for shipments
-          const carrierCodeFilter =
-            dto.filters?.carrier_code && typeof dto.filters.carrier_code === 'string'
-              ? (dto.filters.carrier_code as any)
-              : undefined;
-
-          // 1. Sổ 1: Tiền thực nhận (Recovered Cash) using BigInt lossless arithmetic (Finding 11)
+          // Sổ 1: Tiền thực nhận (Recovered Cash) using BigInt lossless arithmetic (Finding 7, Finding 11)
           const claimWhere: Prisma.ClaimWhereInput = {
             merchant_id: merchantId,
             ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
-            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(effectiveBranchFilter ? { branch_id: effectiveBranchFilter } : {}),
             ...(dateFilter ? { created_at: dateFilter } : {}),
+            ...(shipmentRelationFilter ? { shipment: shipmentRelationFilter } : {}),
           };
 
           const claims = await this.prisma.claim.findMany({
@@ -641,13 +784,14 @@ export class ExportsService implements OnModuleInit {
             }
           }
 
-          // 2. Sổ 2: Đơn cứu được (Rescued Orders) using BigInt lossless arithmetic (Finding 11)
+          // Sổ 2: Đơn cứu được (Rescued Orders) using BigInt lossless arithmetic (Finding 7, Finding 11)
           const caseWhere: Prisma.ExceptionCaseWhereInput = {
             merchant_id: merchantId,
             status: 'RESCUED',
             ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
-            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(effectiveBranchFilter ? { branch_id: effectiveBranchFilter } : {}),
             ...(dateFilter ? { created_at: dateFilter } : {}),
+            ...(shipmentRelationFilter ? { shipment: shipmentRelationFilter } : {}),
           };
 
           const rescuedCases = await this.prisma.exceptionCase.findMany({
@@ -668,20 +812,24 @@ export class ExportsService implements OnModuleInit {
             }
           }
 
-          // 3. Sổ 3: Độ phủ kiểm soát (Control Metrics) from qualifying evidence (Finding 3, Finding 10)
+          // Sổ 3: Độ phủ kiểm soát (Control Metrics) (Finding 3, Finding 7, Finding 10)
           const shipmentWhere: Prisma.ShipmentWhereInput = {
             merchant_id: merchantId,
             ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
-            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(effectiveBranchFilter ? { branch_id: effectiveBranchFilter } : {}),
             ...(carrierCodeFilter ? { carrier_code: carrierCodeFilter } : {}),
+            ...(effectiveCarrierAccountFilter
+              ? { carrier_account_id: effectiveCarrierAccountFilter }
+              : {}),
             ...(dateFilter ? { created_at: dateFilter } : {}),
           };
 
           const discrepancyWhere: Prisma.DiscrepancyWhereInput = {
             merchant_id: merchantId,
             ...(scopedWarehouseFilter ? { warehouse_id: scopedWarehouseFilter } : {}),
-            ...(branchIdFilter ? { branch_id: branchIdFilter } : {}),
+            ...(effectiveBranchFilter ? { branch_id: effectiveBranchFilter } : {}),
             ...(dateFilter ? { created_at: dateFilter } : {}),
+            ...(shipmentRelationFilter ? { shipment: shipmentRelationFilter } : {}),
           };
 
           const [totalShipments, discrepanciesCount] = await Promise.all([
@@ -795,13 +943,13 @@ export class ExportsService implements OnModuleInit {
         (r) => r.status === 'failed' || r.status === 'skipped'
       ).length;
 
-      // Compute cryptographic SHA-256 of the exported data payload (Finding 6)
+      // Compute cryptographic SHA-256 of the exported data payload (Finding 6, Finding 12)
       const dataPayload = JSON.stringify(exportedRows);
       const dataChecksumSha256 = createHash('sha256').update(dataPayload).digest('hex');
 
       const cleanFilters = this.sanitizeMetadataFilters(dto.filters, hasPiiUnmask);
 
-      // Build Generation Metadata embedding authentic data checksum (Finding 6)
+      // Build Generation Metadata embedding authentic data checksum (Finding 6, Finding 12)
       const generatedAt = new Date().toISOString();
       const metadata: ExportGenerationMetadata = {
         export_id: jobId,
@@ -840,7 +988,7 @@ export class ExportsService implements OnModuleInit {
       const fileExtension = dto.format === ExportFormat.XLSX ? 'xml' : dto.format;
       const fileName = `shipde_${dto.resource}_${jobId.substring(0, 8)}.${fileExtension}`;
 
-      // Persist completed job with tenant-scoped update (P2)
+      // Persist completed job with tenant-scoped update and actual generation metadata (Finding 12)
       await this.prisma.exportJob.updateMany({
         where: { id: jobId, merchant_id: merchantId },
         data: {
@@ -850,6 +998,7 @@ export class ExportsService implements OnModuleInit {
           succeeded_rows: succeededRows,
           failed_rows: failedRows,
           row_results: rowResults as unknown as Prisma.InputJsonValue,
+          generation_metadata: metadata as unknown as Prisma.InputJsonValue,
           file_name: fileName,
           file_size_bytes: fileBuffer.byteLength,
           checksum_sha256: fileChecksumSha256,
@@ -862,7 +1011,7 @@ export class ExportsService implements OnModuleInit {
         where: { id: jobId, merchant_id: merchantId },
       });
 
-      return this.formatExportJobItem(updatedJob, metadata);
+      return this.formatExportJobItem(updatedJob, metadata, hasPiiUnmask);
     } catch (err: any) {
       // Map failure to safe canonical export errors (Finding 13)
       const isCanonical = err instanceof CanonicalApiException;
@@ -891,7 +1040,7 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Retrieves an export job by ID with strict tenant isolation and resource RBAC authorization (Finding 4).
+   * Retrieves an export job by ID with strict tenant isolation and resource RBAC authorization (Finding 4, Finding 10, Finding 12).
    */
   async getExportJob(
     merchantId: string,
@@ -916,9 +1065,10 @@ export class ExportsService implements OnModuleInit {
 
     // Enforce resource capability RBAC (Finding 4)
     await this.assertResourcePermission(actor, job.resource as ExportResource);
+    const hasPiiUnmask = await this.rbacService.actorHasPermissions(actor, ['pii:unmask']);
 
     return {
-      data: this.formatExportJobItem(job),
+      data: this.formatExportJobItem(job, undefined, hasPiiUnmask),
       meta: {
         correlation_id: correlationId,
         timestamp: new Date().toISOString(),
@@ -927,7 +1077,7 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Lists export jobs for the caller's tenant with pagination, filters, and resource RBAC scoping (Finding 4).
+   * Lists export jobs for a merchant with pagination and resource-level RBAC filtering (Finding 4, Finding 10).
    */
   async listExportJobs(
     merchantId: string,
@@ -969,11 +1119,9 @@ export class ExportsService implements OnModuleInit {
     }
 
     if (query.resource) {
-      // If a specific resource is requested, assert permission on it (Finding 4)
       await this.assertResourcePermission(actor, query.resource);
       where.resource = query.resource;
     } else {
-      // Scoped only to resources the caller is authorized to view
       if (authorizedResources.length === 0) {
         return {
           data: [],
@@ -1001,9 +1149,10 @@ export class ExportsService implements OnModuleInit {
     ]);
 
     const totalPages = Math.max(1, Math.ceil(total / limit));
+    const hasPiiUnmask = await this.rbacService.actorHasPermissions(actor, ['pii:unmask']);
 
     return {
-      data: items.map((item) => this.formatExportJobItem(item)),
+      data: items.map((item) => this.formatExportJobItem(item, undefined, hasPiiUnmask)),
       meta: {
         total,
         page,
@@ -1016,7 +1165,7 @@ export class ExportsService implements OnModuleInit {
   }
 
   /**
-   * Streams and audits the download of an export file with strict resource RBAC, scope, and PII checks (Finding 4).
+   * Streams and audits the download of an export file with strict resource RBAC, scope, and PII checks (Finding 3, Finding 4, Finding 7).
    */
   async downloadExport(
     merchantId: string,
@@ -1052,13 +1201,14 @@ export class ExportsService implements OnModuleInit {
     // 2. Enforce resource capability RBAC (Finding 4)
     await this.assertResourcePermission(actor, job.resource as ExportResource);
 
+    const jobFilters = (job.filters as Record<string, unknown>) || {};
+
     // 3. Enforce warehouse scope authorization on download (Finding 4)
-    if (job.resource === ExportResource.WAREHOUSES || job.resource === ExportResource.LEDGERS) {
+    if (job.resource === ExportResource.WAREHOUSES) {
       const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
       const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
 
       if (!hasUniversalWarehouseScope) {
-        // If actor has narrow warehouse scope, check if the export contains data outside actor's scope
         const rowResults = (job.row_results as unknown as ExportRowResult[]) || [];
         const hasOutOfScopeRows = rowResults.some(
           (r) =>
@@ -1074,13 +1224,56 @@ export class ExportsService implements OnModuleInit {
       }
     }
 
-    // 4. Enforce PII protection on download if export contains unmasked identifiers (Finding 4)
-    // Any downloader (including the creator whose permission may have been revoked) must possess pii:unmask
-    const jobFilters = (job.filters as Record<string, unknown>) || {};
-    const wasUnmasked = jobFilters.__unmasked_pii === true;
-    if (wasUnmasked || job.resource === ExportResource.USERS) {
+    // 4. Enforce branch & carrier account scope authorization on download for ledgers (Finding 7)
+    if (job.resource === ExportResource.LEDGERS) {
+      const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
+      const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
+      if (!hasUniversalWarehouseScope && jobFilters.warehouse_id) {
+        if (!actorWarehouseScopes.includes(jobFilters.warehouse_id as string)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Tệp xuất dữ liệu chứa bản ghi kho hàng nằm ngoài phạm vi phân quyền của tài khoản'
+          );
+        }
+      }
+
+      const actorStoreScopes = await this.getActorStoreScopes(actor);
+      const hasUniversalStoreScope = actorStoreScopes.includes('*');
+      if (!hasUniversalStoreScope && jobFilters.branch_id) {
+        if (!actorStoreScopes.includes(jobFilters.branch_id as string)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Tệp xuất dữ liệu chứa bản ghi chi nhánh nằm ngoài phạm vi phân quyền của tài khoản'
+          );
+        }
+      }
+
+      const actorCarrierScopes = await this.getActorCarrierAccountScopes(actor);
+      const hasUniversalCarrierScope = actorCarrierScopes.includes('*');
+      if (!hasUniversalCarrierScope && jobFilters.carrier_account_id) {
+        if (!actorCarrierScopes.includes(jobFilters.carrier_account_id as string)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Tệp xuất dữ liệu chứa bản ghi tài khoản vận chuyển nằm ngoài phạm vi phân quyền của tài khoản'
+          );
+        }
+      }
+    }
+
+    // 5. Enforce PII protection on download (Finding 3 / Prior #4)
+    // If resource is USERS or WAREHOUSES (contain PII identifiers like phone/email):
+    // If explicitly marked as masked (false), safe for any authorized user.
+    // If marked as unmasked (true) OR if __unmasked_pii is undefined/null (historical unmarked file),
+    // fail closed: require downloader to possess pii:unmask capability!
+    const resourceHasPii =
+      job.resource === ExportResource.USERS || job.resource === ExportResource.WAREHOUSES;
+    const isExplicitlyMasked = jobFilters.__unmasked_pii === false;
+    if (resourceHasPii && !isExplicitlyMasked) {
       const hasPiiUnmask = await this.rbacService.actorHasPermissions(actor, ['pii:unmask']);
-      if (wasUnmasked && !hasPiiUnmask) {
+      if (!hasPiiUnmask) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           ExportErrorCode.FORBIDDEN,
@@ -1089,36 +1282,41 @@ export class ExportsService implements OnModuleInit {
       }
     }
 
-    // 5. Verify job execution status
+    // 6. Verify job execution status
     if (job.status === ExportJobStatus.PENDING || job.status === ExportJobStatus.PROCESSING) {
       throw new CanonicalApiException(
         HttpStatus.CONFLICT,
         ExportErrorCode.EXPORT_NOT_READY,
-        'Tệp xuất dữ liệu đang được tạo, vui lòng thử lại sau giây lát',
-        false,
-        'Kiểm tra lại trạng thái sau khi tác vụ hoàn thành'
+        'Tác vụ xuất dữ liệu đang được xử lý, vui lòng thử lại sau giây lát'
       );
     }
-
-    if (job.status === ExportJobStatus.FAILED || !job.file_data) {
+    if (job.status === ExportJobStatus.FAILED) {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
         ExportErrorCode.EXPORT_FAILED,
-        `Tác vụ xuất dữ liệu đã thất bại: ${job.error_message || 'Không có dữ liệu tệp'}`
+        job.error_message || 'Tác vụ xuất dữ liệu đã thất bại, vui lòng tạo yêu cầu xuất mới'
       );
     }
 
-    // Determine MIME type
-    let mimeType = 'text/csv; charset=utf-8';
-    if (job.format === ExportFormat.XLSX) {
-      mimeType = 'application/vnd.ms-excel; charset=utf-8';
-    } else if (job.format === ExportFormat.PDF) {
-      mimeType = 'application/pdf';
+    if (!job.file_data) {
+      throw new CanonicalApiException(
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        ExportErrorCode.EXPORT_FAILED,
+        'Không tìm thấy nội dung tệp xuất dữ liệu'
+      );
     }
 
     const fileBuffer = Buffer.from(job.file_data);
 
-    // Record immutable EXPORT_DOWNLOADED audit log with safe metadata (Finding 13)
+    let mimeType = 'text/csv; charset=utf-8';
+    if (job.format === ExportFormat.XLSX) {
+      mimeType = 'application/vnd.ms-excel';
+    } else if (job.format === ExportFormat.PDF) {
+      mimeType = 'application/pdf';
+    }
+
+    // Write immutable EXPORT_DOWNLOADED audit log with client IP hash and sanitized filters (Finding 13)
+    const sanitizedFilters = this.sanitizeMetadataFilters(jobFilters, isExplicitlyMasked === false);
     await this.prisma.auditLog.create({
       data: {
         merchant_id: merchantId,
@@ -1132,6 +1330,7 @@ export class ExportsService implements OnModuleInit {
           job_id: job.id,
           resource: job.resource,
           format: job.format,
+          filters: sanitizedFilters,
           file_name: job.file_name,
           file_size_bytes: job.file_size_bytes,
           checksum_sha256: job.checksum_sha256,
@@ -1143,7 +1342,7 @@ export class ExportsService implements OnModuleInit {
 
     return {
       fileBuffer,
-      fileName: job.file_name || `shipde_export_${job.id}.${job.format}`,
+      fileName: job.file_name || `export_${job.id.substring(0, 8)}.${job.format}`,
       mimeType,
       checksum: job.checksum_sha256 || '',
       fileSize: job.file_size_bytes || fileBuffer.byteLength,
@@ -1152,18 +1351,29 @@ export class ExportsService implements OnModuleInit {
 
   /**
    * Helper to format ExportJob database model into API contract shape.
-   * Reconstructs metadata for completed jobs so get/list reads return complete metadata (Finding 15).
+   * Loads persisted generation_metadata or reconstructs it, respecting PII masking (Finding 10, Finding 12).
    */
   private formatExportJobItem(
     job: any,
-    explicitMetadata?: ExportGenerationMetadata
+    explicitMetadata?: ExportGenerationMetadata,
+    viewerHasPiiUnmask = false
   ): ExportJobItem {
     const rawFilters = (job.filters as Record<string, unknown>) || {};
     const { __unmasked_pii, ...cleanFilters } = rawFilters;
+    const sanitizedCleanFilters = viewerHasPiiUnmask
+      ? cleanFilters
+      : this.sanitizeMetadataFilters(cleanFilters, false);
 
     let metadata = explicitMetadata;
-    if (!metadata && job.status === ExportJobStatus.COMPLETED) {
-      // Reconstruct metadata from persisted job fields for get/list reads (Finding 15)
+    if (!metadata && job.generation_metadata) {
+      metadata = job.generation_metadata as unknown as ExportGenerationMetadata;
+      if (!viewerHasPiiUnmask && metadata.filters) {
+        metadata = {
+          ...metadata,
+          filters: this.sanitizeMetadataFilters(metadata.filters, false),
+        };
+      }
+    } else if (!metadata && job.status === ExportJobStatus.COMPLETED) {
       metadata = {
         export_id: job.id,
         generated_at: job.completed_at
@@ -1174,7 +1384,7 @@ export class ExportsService implements OnModuleInit {
         user_role: job.user?.role || 'MEMBER',
         resource: job.resource as ExportResource,
         format: job.format as ExportFormat,
-        filters: cleanFilters,
+        filters: sanitizedCleanFilters,
         rule_version: job.rule_version || resolveExportRuleVersion(),
         total_rows: job.total_rows || 0,
         succeeded_rows: job.succeeded_rows || 0,
@@ -1190,7 +1400,7 @@ export class ExportsService implements OnModuleInit {
       resource: job.resource as ExportResource,
       format: job.format as ExportFormat,
       status: job.status as ExportJobStatus,
-      filters: Object.keys(cleanFilters).length > 0 ? cleanFilters : undefined,
+      filters: Object.keys(sanitizedCleanFilters).length > 0 ? sanitizedCleanFilters : undefined,
       total_rows: job.total_rows || 0,
       processed_rows: job.processed_rows || 0,
       succeeded_rows: job.succeeded_rows || 0,
@@ -1198,9 +1408,10 @@ export class ExportsService implements OnModuleInit {
       file_name: job.file_name || undefined,
       file_size_bytes: job.file_size_bytes || undefined,
       checksum_sha256: job.checksum_sha256 || undefined,
-      download_url: `/api/v1/exports/${job.id}/download`,
       error_code: job.error_code || undefined,
       error_message: job.error_message || undefined,
+      download_url:
+        job.status === ExportJobStatus.COMPLETED ? `/api/v1/exports/${job.id}/download` : undefined,
       metadata,
       row_results: (job.row_results as unknown as ExportRowResult[]) || undefined,
       rule_version: job.rule_version || undefined,
