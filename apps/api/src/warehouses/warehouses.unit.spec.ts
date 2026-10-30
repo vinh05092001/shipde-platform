@@ -13,6 +13,48 @@ import {
 } from './warehouses.dto';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
+import { WAREHOUSES_LIST_POLICY } from '../../../../packages/config/src/list-policies';
+
+function warehouseOrCond(w: any, cond: any): boolean {
+  if (cond.id?.in) return cond.id.in.includes(w.id);
+  if (cond.code?.in) return cond.code.in.includes(w.code);
+  for (const field of ['name', 'code', 'address_line'] as const) {
+    const spec = cond[field];
+    if (spec && typeof spec.contains === 'string') {
+      const value = String(w[field] ?? '').toLowerCase();
+      if (value.includes(String(spec.contains).toLowerCase())) return true;
+    }
+  }
+  return false;
+}
+
+function warehouseMatchesWhere(w: any, where: any): boolean {
+  if (!where) return true;
+  if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
+  if (where.status && w.status !== where.status) return false;
+  if (where.is_default !== undefined && w.is_default !== where.is_default) return false;
+  if (where.id && typeof where.id === 'string' && w.id !== where.id) return false;
+  if (where.id?.not && w.id === where.id.not) return false;
+  if (where.OR) {
+    if (!where.OR.some((cond: any) => warehouseOrCond(w, cond))) return false;
+  }
+  if (where.AND) {
+    if (
+      !where.AND.every((grp: any) =>
+        (grp.OR ? grp.OR : [grp]).some((cond: any) => warehouseOrCond(w, cond))
+      )
+    )
+      return false;
+  }
+  return true;
+}
+
+function warehouseSortCmp(a: any, b: any, field: string): number {
+  if (field === 'created_at' || field === 'updated_at') {
+    return new Date(a[field]).getTime() - new Date(b[field]).getTime();
+  }
+  return String(a[field] ?? '').localeCompare(String(b[field] ?? ''), 'vi');
+}
 
 function createMockPrismaService() {
   const warehouses: any[] = [
@@ -180,10 +222,15 @@ function createMockPrismaService() {
     },
   };
 
+  const findManyCalls: any[] = [];
+  const countCalls: any[] = [];
+
   return {
     warehouses,
     users,
     auditLogs,
+    findManyCalls,
+    countCalls,
     warehouse: {
       findFirst: async ({ where }: any) => {
         return (
@@ -218,26 +265,24 @@ function createMockPrismaService() {
         }
         return null;
       },
-      findMany: async ({ where, orderBy }: any) => {
-        let res = warehouses.filter((w) => {
-          if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
-          if (where.OR) {
-            const matchesOr = where.OR.some((cond: any) => {
-              if (cond.id?.in && cond.id.in.includes(w.id)) return true;
-              if (cond.code?.in && cond.code.in.includes(w.code)) return true;
-              return false;
-            });
-            if (!matchesOr) return false;
-          }
-          return true;
-        });
-        return res;
+      findMany: async ({ where, skip = 0, take, orderBy }: any) => {
+        findManyCalls.push({ where, skip, take, orderBy });
+        let res = warehouses.filter((w) => warehouseMatchesWhere(w, where));
+        if (orderBy && orderBy.length > 0) {
+          res = [...res].sort((a, b) => {
+            for (const entry of orderBy) {
+              const [field, dir] = Object.entries(entry)[0];
+              const cmp = warehouseSortCmp(a, b, field);
+              if (cmp !== 0) return dir === 'desc' ? -cmp : cmp;
+            }
+            return 0;
+          });
+        }
+        return res.slice(skip, take !== undefined ? skip + take : undefined);
       },
       count: async ({ where }: any) => {
-        return warehouses.filter((w) => {
-          if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
-          return true;
-        }).length;
+        countCalls.push({ where });
+        return warehouses.filter((w) => warehouseMatchesWhere(w, where)).length;
       },
       create: mockTx.warehouse.create,
       update: mockTx.warehouse.update,
@@ -966,6 +1011,225 @@ describe('FEAT-WH-01: Warehouses Unit Test Suite', () => {
 
       const audit = mockPrisma.auditLogs.find((a) => a.action === 'WAREHOUSE_DEACTIVATED');
       assert.ok(audit, 'Expected WAREHOUSE_DEACTIVATED audit log');
+    });
+  });
+
+  describe('WarehousesService: FEAT-COM-02 server pagination and scoped reads/counts', () => {
+    const ownerActor: ActorContext = {
+      userId: 'u-owner-1',
+      merchantId: 'm-tenant-1',
+      role: 'OWNER',
+    };
+
+    function seedExtraTenantWarehouses(mockPrisma: any, count: number): void {
+      for (let i = 1; i <= count; i++) {
+        mockPrisma.warehouses.push({
+          id: `eeeeeeee-eeee-eeee-eeee-eeeeeeee00${i}`,
+          merchant_id: 'm-tenant-1',
+          name: `Kho Mẫu ${String(i).padStart(2, '0')}`,
+          code: `WH-SEED-${String(i).padStart(2, '0')}`,
+          status: 'active',
+          is_default: false,
+          contact_name: 'Liên Hệ Mẫu',
+          contact_phone: '0900000000',
+          contact_email: null,
+          address_line: `Đường Mẫu ${i}`,
+          ward: null,
+          district: 'Quận Mẫu',
+          city: 'TP. Mẫu',
+          postal_code: null,
+          address_json: {},
+          use_different_return_address: false,
+          return_contact_name: null,
+          return_contact_phone: null,
+          return_address_line: null,
+          return_ward: null,
+          return_district: null,
+          return_city: null,
+          return_address_json: null,
+          operating_hours: null,
+          cutoff_time: null,
+          schedule_notes: null,
+          contacts_json: null,
+          printer_paper_size: 'A6',
+          printer_dpi: 203,
+          printer_name: null,
+          printer_auto_print: false,
+          printer_config: null,
+          created_at: new Date(`2026-02-${String(i + 1).padStart(2, '0')}T00:00:00Z`),
+          updated_at: new Date(`2026-02-${String(i + 1).padStart(2, '0')}T00:00:00Z`),
+        });
+      }
+    }
+
+    it('FEAT-COM-02-01: default page applies the policy limit and reports tenant-scoped totals', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantWarehouses(mockPrisma, 10);
+      const service = new WarehousesService(mockPrisma as any);
+
+      const res = await service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-p1', {});
+
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.data.length, WAREHOUSES_LIST_POLICY.defaultSize);
+      assert.strictEqual(res.meta.total, 12);
+      assert.strictEqual(res.meta.total_pages, 2);
+      assert.strictEqual(res.meta.page, 1);
+      assert.strictEqual(res.meta.limit, WAREHOUSES_LIST_POLICY.defaultSize);
+
+      const findCall = mockPrisma.findManyCalls[0];
+      assert.strictEqual(findCall.skip, 0);
+      assert.strictEqual(findCall.take, WAREHOUSES_LIST_POLICY.defaultSize);
+      assert.deepStrictEqual(findCall.orderBy, [{ created_at: 'desc' }, { id: 'desc' }]);
+      assert.strictEqual(mockPrisma.countCalls.length, 1);
+      assert.strictEqual(mockPrisma.countCalls[0].where.merchant_id, 'm-tenant-1');
+    });
+
+    it('FEAT-COM-02-01: page 2 skip is derived from the policy and rows and count share one predicate', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantWarehouses(mockPrisma, 10);
+      const service = new WarehousesService(mockPrisma as any);
+
+      const page1 = await service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-p1', {});
+      const page2 = await service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-p2', {
+        page: 2,
+        limit: 10,
+      });
+
+      assert.strictEqual(mockPrisma.findManyCalls[1].skip, 10);
+      assert.strictEqual(page2.data.length, 2);
+      assert.strictEqual(page2.meta.total_pages, 2);
+
+      const allIds = [...page1.data.map((w: any) => w.id), ...page2.data.map((w: any) => w.id)];
+      assert.strictEqual(allIds.length, 12);
+      assert.strictEqual(new Set(allIds).size, 12);
+      assert.deepStrictEqual(mockPrisma.countCalls[1].where, mockPrisma.findManyCalls[1].where);
+    });
+
+    it('FEAT-COM-02-05: status filter affects rows and counts identically', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantWarehouses(mockPrisma, 10);
+      mockPrisma.warehouses[1].status = 'inactive';
+      const service = new WarehousesService(mockPrisma as any);
+
+      const page1 = await service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-f1', {
+        status: 'active',
+      });
+      const page2 = await service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-f2', {
+        status: 'active',
+        page: 2,
+      });
+
+      assert.strictEqual(page1.meta.total, 11);
+      assert.strictEqual(page1.data.length, 10);
+      assert.strictEqual(page2.data.length, 1);
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where, mockPrisma.findManyCalls[0].where);
+      assert.strictEqual(mockPrisma.countCalls[0].where.status, 'active');
+    });
+
+    it('FEAT-COM-02-08: scoped actor count and rows exclude out-of-scope warehouses', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantWarehouses(mockPrisma, 10);
+      const service = new WarehousesService(mockPrisma as any);
+      const scopedActor: ActorContext = {
+        userId: 'u-scoped-hcm',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+
+      const res = await service.listWarehouses('m-tenant-1', scopedActor, false, 'corr-s1', {});
+
+      assert.strictEqual(res.meta.total, 1);
+      assert.strictEqual(res.data.length, 1);
+      assert.strictEqual(res.data[0].id, 'wh-hcm-01');
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where.OR, [
+        { id: { in: ['wh-hcm-01'] } },
+        { code: { in: ['wh-hcm-01'] } },
+      ]);
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where, mockPrisma.findManyCalls[0].where);
+    });
+
+    it('FEAT-COM-02-08/09: empty-scope actor gets empty success without any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantWarehouses(mockPrisma, 10);
+      const service = new WarehousesService(mockPrisma as any);
+      const emptyActor: ActorContext = {
+        userId: 'u-scoped-empty',
+        merchantId: 'm-tenant-1',
+        role: 'WAREHOUSE',
+      };
+
+      const res = await service.listWarehouses('m-tenant-1', emptyActor, false, 'corr-s2', {});
+
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.data.length, 0);
+      assert.strictEqual(res.meta.total, 0);
+      assert.strictEqual(res.meta.total_pages, 1);
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-09: missing authorized tenant fails closed before any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new WarehousesService(mockPrisma as any);
+
+      await assert.rejects(
+        () => service.listWarehouses('', ownerActor, true, 'corr-none', {}),
+        (err: any) =>
+          err instanceof CanonicalApiException &&
+          err.getStatus() === 403 &&
+          err.code === 'FORBIDDEN'
+      );
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-03: malformed, fractional, negative or unsafe pagination fails before any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new WarehousesService(mockPrisma as any);
+
+      for (const query of [
+        { page: '0' },
+        { page: '1.5' },
+        { page: -3 },
+        { limit: 'abc' },
+        { page: '99999999999999999999' },
+        { limit: 0 },
+      ]) {
+        await assert.rejects(
+          () => service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-bad', query),
+          (err: any) =>
+            err instanceof CanonicalApiException &&
+            err.getStatus() === 400 &&
+            err.code === 'VALIDATION_ERROR',
+          `query ${JSON.stringify(query)}`
+        );
+      }
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-07: unsupported sort field, status value or unknown key fails before any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new WarehousesService(mockPrisma as any);
+
+      for (const query of [
+        { sort_by: 'contact_phone' },
+        { sort_order: 'sideways' },
+        { status: 'SOMETHING' },
+        { role: 'OWNER' },
+        { page: { nested: true } },
+      ]) {
+        await assert.rejects(
+          () => service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-bad2', query),
+          (err: any) =>
+            err instanceof CanonicalApiException &&
+            err.getStatus() === 400 &&
+            err.code === 'VALIDATION_ERROR',
+          `query ${JSON.stringify(query)}`
+        );
+      }
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
     });
   });
 });

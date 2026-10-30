@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Warehouse as WarehouseIcon,
   Plus,
@@ -21,6 +21,7 @@ import {
   Power,
   RotateCcw,
   FileText,
+  FilterX,
 } from 'lucide-react';
 import type {
   Warehouse,
@@ -33,6 +34,22 @@ import {
   ALLOWED_WAREHOUSE_PAPER_SIZES,
   ALLOWED_WAREHOUSE_DPIS,
 } from '@shipde/contracts';
+import {
+  PaginationControls,
+  SavedViewsAndColumnsControls,
+  type ColumnOption,
+} from './common/SharedListControls';
+import { useSharedListState, paginateInMemory } from '@/hooks/useSharedListState';
+
+// Warehouse card sections exposed as configurable display columns (AC-COM-02-13)
+export const WAREHOUSE_AVAILABLE_COLUMNS: ColumnOption[] = [
+  { id: 'code', label: 'Mã kho hàng' },
+  { id: 'status', label: 'Trạng thái' },
+  { id: 'pickup_address', label: 'Địa chỉ lấy hàng' },
+  { id: 'contact', label: 'Người liên hệ' },
+  { id: 'return_address', label: 'Địa chỉ nhận hoàn' },
+  { id: 'schedule_printer', label: 'Lịch & máy in' },
+];
 
 export interface WarehouseManagementViewProps {
   warehouses?: Warehouse[];
@@ -46,6 +63,23 @@ export interface WarehouseManagementViewProps {
   initialFormState?: Partial<WarehouseFormState>;
   initialValidationErrors?: Record<string, string>;
   initialActiveTab?: 'pickup' | 'return' | 'schedule' | 'printer';
+  initialPage?: number;
+  initialPageSize?: number;
+  initialSortBy?: string;
+  initialSortOrder?: 'asc' | 'desc';
+  namespace?: string;
+  serverTotal?: number;
+  serverTotalPages?: number;
+  onQueryChange?: (params: {
+    page: number;
+    limit: number;
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+    search: string;
+    status: string;
+  }) => void;
+  tenantId?: string;
+  userId?: string;
   onRefresh?: () => void;
   onCreate?: (input: CreateWarehouseInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateWarehouseInput) => Promise<void>;
@@ -66,16 +100,71 @@ export function WarehouseManagementView({
   initialFormState = {},
   initialValidationErrors = {},
   initialActiveTab = 'pickup',
+  namespace,
+  serverTotal,
+  serverTotalPages,
+  onQueryChange,
+  tenantId,
+  userId,
   onRefresh,
   onCreate,
   onUpdate,
   onSetDefault,
   onActivate,
   onDeactivate,
+  initialPage = 1,
+  initialPageSize = 10,
+  initialSortBy = 'created_at',
+  initialSortOrder = 'desc',
 }: WarehouseManagementViewProps) {
-  // Filter & Search states
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'inactive'>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Filter & Search & Pagination & Sort states via shared hook (FEAT-COM-02)
+  const listState = useSharedListState({
+    defaultPage: initialPage,
+    defaultPageSize: initialPageSize,
+    defaultSortBy: initialSortBy,
+    defaultSortOrder: initialSortOrder,
+    defaultSearch: '',
+    defaultFilters: { status: 'ALL' },
+    syncUrl: true,
+    namespace,
+    listKey: 'warehouses',
+    tenantId,
+    userId,
+    initialColumns: WAREHOUSE_AVAILABLE_COLUMNS.map((c) => c.id),
+  });
+
+  const page = listState.page;
+  const pageSize = listState.pageSize;
+  const sortBy = listState.sortBy;
+  const sortOrder = listState.sortOrder;
+  const searchQuery = listState.search;
+  const statusFilter = listState.filters.status as 'ALL' | 'active' | 'inactive';
+  const setPage = listState.setPage;
+  const setPageSize = listState.setPageSize;
+  const setSort = listState.setSort;
+  const setSortBy = listState.setSortBy;
+  const setSortOrder = listState.setSortOrder;
+  const setSearchQuery = listState.setSearch;
+  const setStatusFilter = (st: 'ALL' | 'active' | 'inactive') => listState.setFilter('status', st);
+  const resetFilters = listState.resetFilters;
+  const isColVisible = (colId: string) => {
+    const cols = listState.columnSettings?.visibleColumns;
+    return !cols || cols.length === 0 ? true : cols.includes(colId);
+  };
+
+  // Notify server pagination consumer when query changes
+  useEffect(() => {
+    if (onQueryChange) {
+      onQueryChange({
+        page,
+        limit: pageSize,
+        sortBy,
+        sortOrder,
+        search: searchQuery,
+        status: statusFilter,
+      });
+    }
+  }, [page, pageSize, sortBy, sortOrder, searchQuery, statusFilter, onQueryChange]);
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -145,34 +234,75 @@ export function WarehouseManagementView({
   const setViewError = (val: string | null) => setLocalError(val);
   const setViewSuccess = (val: string | null) => setLocalSuccess(val);
 
-  // Filtered warehouses
-  const filteredWarehouses = useMemo(() => {
-    return warehouses.filter((wh) => {
-      if (statusFilter !== 'ALL' && wh.status !== statusFilter) {
-        return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const matchName = wh.name.toLowerCase().includes(q);
-        const matchCode = wh.code.toLowerCase().includes(q);
-        const matchContact = wh.contact_name.toLowerCase().includes(q);
-        const matchPhone = wh.contact_phone.includes(q);
-        const matchCity = wh.city.toLowerCase().includes(q);
-        const matchDistrict = wh.district.toLowerCase().includes(q);
-        const matchAddress = wh.address_line.toLowerCase().includes(q);
-        return (
-          matchName ||
-          matchCode ||
-          matchContact ||
-          matchPhone ||
-          matchCity ||
-          matchDistrict ||
-          matchAddress
-        );
-      }
-      return true;
+  // Filter, sort, and paginate using server metadata when provided or in-memory helper (FEAT-COM-02)
+  const isServerPaged = serverTotal !== undefined;
+  const paginationResult = useMemo(() => {
+    if (isServerPaged) {
+      const calcTotalPages = serverTotalPages ?? Math.max(1, Math.ceil(serverTotal / pageSize));
+      return {
+        pagedItems: warehouses,
+        total: serverTotal,
+        totalPages: calcTotalPages,
+      };
+    }
+    return paginateInMemory({
+      items: warehouses,
+      page,
+      pageSize,
+      filterFn: (wh) => {
+        if (statusFilter !== 'ALL' && wh.status !== statusFilter) {
+          return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const matchName = wh.name.toLowerCase().includes(q);
+          const matchCode = wh.code.toLowerCase().includes(q);
+          const matchContact = wh.contact_name ? wh.contact_name.toLowerCase().includes(q) : false;
+          const matchPhone = wh.contact_phone ? wh.contact_phone.includes(q) : false;
+          const matchCity = wh.city ? wh.city.toLowerCase().includes(q) : false;
+          const matchDistrict = wh.district ? wh.district.toLowerCase().includes(q) : false;
+          const matchAddress = wh.address_line ? wh.address_line.toLowerCase().includes(q) : false;
+          return (
+            matchName ||
+            matchCode ||
+            matchContact ||
+            matchPhone ||
+            matchCity ||
+            matchDistrict ||
+            matchAddress
+          );
+        }
+        return true;
+      },
+      sortFn: (a, b) => {
+        let cmp = 0;
+        if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
+        else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
+        else if (sortBy === 'created_at')
+          cmp = (a.created_at || '').localeCompare(b.created_at || '');
+        else cmp = (a.created_at || '').localeCompare(b.created_at || '');
+        if (cmp === 0) cmp = a.id.localeCompare(b.id);
+        return sortOrder === 'asc' ? cmp : -cmp;
+      },
     });
-  }, [warehouses, statusFilter, searchQuery]);
+  }, [
+    isServerPaged,
+    warehouses,
+    serverTotal,
+    serverTotalPages,
+    page,
+    pageSize,
+    statusFilter,
+    searchQuery,
+    sortBy,
+    sortOrder,
+  ]);
+
+  const pagedWarehouses = paginationResult.pagedItems;
+  const total = paginationResult.total;
+  const totalPages = paginationResult.totalPages;
+
+  const safePage = Math.min(Math.max(1, page), totalPages);
 
   const activeCount = useMemo(
     () => warehouses.filter((w) => w.status === 'active').length,
@@ -628,15 +758,73 @@ export function WarehouseManagementView({
             id="filter-status"
             aria-label="Lọc theo trạng thái kho hàng"
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
+            onChange={(e) => {
+              setStatusFilter(e.target.value as any);
+              setPage(1);
+            }}
             data-testid="filter-status"
-            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-orange-500 transition"
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-orange-500 transition cursor-pointer"
           >
             <option value="ALL">Tất cả ({warehouses.length})</option>
             <option value="active">Đang hoạt động ({activeCount})</option>
             <option value="inactive">Tạm ngưng ({inactiveCount})</option>
           </select>
         </div>
+
+        <div className="flex items-center gap-2">
+          <label htmlFor="filter-sort" className="text-xs text-slate-500 font-medium">
+            Sắp xếp:
+          </label>
+          <select
+            id="filter-sort"
+            aria-label="Sắp xếp danh sách kho hàng"
+            value={`${sortBy}-${sortOrder}`}
+            onChange={(e) => {
+              const [f, o] = e.target.value.split('-');
+              setSortBy(f);
+              setSortOrder(o as any);
+              setPage(1);
+            }}
+            data-testid="filter-sort"
+            className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-orange-500 transition cursor-pointer"
+          >
+            <option value="created_at-desc">Mới nhất (Mặc định)</option>
+            <option value="created_at-asc">Cũ nhất</option>
+            <option value="name-asc">Tên kho (A-Z)</option>
+            <option value="name-desc">Tên kho (Z-A)</option>
+            <option value="code-asc">Mã kho (A-Z)</option>
+          </select>
+        </div>
+
+        {(searchQuery.trim() || statusFilter !== 'ALL') && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setStatusFilter('ALL');
+              setPage(1);
+            }}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-xl transition cursor-pointer"
+            data-testid="warehouse-clear-filters-btn"
+          >
+            <FilterX className="w-3.5 h-3.5" />
+            <span>Xóa lọc</span>
+          </button>
+        )}
+      </div>
+
+      {/* Saved views & column settings toolbar (AC-COM-02-13) */}
+      <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2">
+        <SavedViewsAndColumnsControls
+          savedViews={listState.savedViews}
+          columnSettings={listState.columnSettings}
+          availableColumns={WAREHOUSE_AVAILABLE_COLUMNS}
+          onSaveCurrentView={listState.saveCurrentView}
+          onApplySavedView={listState.applySavedView}
+          onDeleteSavedView={listState.deleteSavedView}
+          onUpdateColumnSettings={listState.updateColumnSettings}
+          testIdPrefix="warehouse"
+        />
       </div>
 
       {/* Loading Skeleton State */}
@@ -662,7 +850,7 @@ export function WarehouseManagementView({
       )}
 
       {/* Empty State */}
-      {!loading && filteredWarehouses.length === 0 && (
+      {!loading && total === 0 && (
         <div
           data-testid="warehouse-empty-state"
           className="p-12 bg-white border border-dashed border-slate-300 rounded-2xl text-center space-y-4"
@@ -671,7 +859,14 @@ export function WarehouseManagementView({
             <WarehouseIcon className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-sm font-bold text-slate-800">
+            <h3
+              className="text-sm font-bold text-slate-800"
+              data-testid={
+                searchQuery || statusFilter !== 'ALL'
+                  ? 'warehouse-no-results-state'
+                  : 'warehouse-clean-empty-state'
+              }
+            >
               {searchQuery || statusFilter !== 'ALL'
                 ? 'Không tìm thấy kho hàng phù hợp'
                 : 'Chưa có kho hàng nào được thiết lập'}
@@ -682,237 +877,288 @@ export function WarehouseManagementView({
                 : 'Tạo kho hàng đầu tiên để bắt đầu tạo vận đơn, thiết lập điểm lấy hàng và địa chỉ hoàn trả.'}
             </p>
           </div>
-          {canEdit && !searchQuery && statusFilter === 'ALL' && (
+          {searchQuery || statusFilter !== 'ALL' ? (
             <button
               type="button"
-              onClick={handleOpenCreate}
-              data-testid="empty-create-warehouse-button"
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
+              onClick={() => {
+                setSearchQuery('');
+                setStatusFilter('ALL');
+                setPage(1);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-xl transition cursor-pointer"
+              data-testid="warehouse-empty-clear-btn"
             >
-              <Plus className="w-4 h-4" />
-              <span>Thêm kho hàng đầu tiên</span>
+              <FilterX className="w-3.5 h-3.5" />
+              <span>Xóa bộ lọc tìm kiếm</span>
             </button>
+          ) : (
+            canEdit && (
+              <button
+                type="button"
+                onClick={handleOpenCreate}
+                data-testid="empty-create-warehouse-button"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Thêm kho hàng đầu tiên</span>
+              </button>
+            )
           )}
         </div>
       )}
 
       {/* List / Grid Cards */}
-      {!loading && filteredWarehouses.length > 0 && (
-        <div data-testid="warehouse-list-state" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {filteredWarehouses.map((wh) => {
-            const isActionBusy = actionLoadingId === wh.id;
-            return (
-              <div
-                key={wh.id}
-                data-testid={`warehouse-card-${wh.id}`}
-                className={`bg-white border rounded-2xl p-5 shadow-xs transition space-y-4 ${
-                  wh.is_default
-                    ? 'border-orange-300/80 ring-1 ring-orange-200/50'
-                    : 'border-slate-200/80 hover:border-slate-300'
-                }`}
-              >
-                {/* Card Header */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-bold text-sm text-slate-900">{wh.name}</span>
-                      <span className="px-2 py-0.5 text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 rounded-md">
-                        {wh.code}
-                      </span>
-                      {wh.is_default && (
-                        <span
-                          data-testid={`badge-default-warehouse-${wh.id}`}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-orange-100 text-orange-700 rounded-md"
-                        >
-                          <Star className="w-3 h-3 fill-orange-500 text-orange-500" />
-                          <span>Kho mặc định</span>
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        data-testid={`badge-status-warehouse-${wh.id}`}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md ${
-                          wh.status === 'active'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-slate-100 text-slate-500 border border-slate-200'
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            wh.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
-                          }`}
-                        />
-                        <span>{wh.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Top Action Buttons */}
-                  {canEdit && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEdit(wh)}
-                        data-testid={`edit-warehouse-button-${wh.id}`}
-                        className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition cursor-pointer"
-                        aria-label={`Chỉnh sửa kho ${wh.name}`}
-                        title="Chỉnh sửa kho"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Pickup Address Section */}
-                <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                  <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-orange-600" />
-                    <span>Địa chỉ lấy hàng (Pickup):</span>
-                  </div>
-                  <p className="pl-5 text-slate-700 font-medium">
-                    {wh.address_line}
-                    {wh.ward ? `, ${wh.ward}` : ''}, {wh.district}, {wh.city}
-                    {wh.postal_code ? ` (Mã bưu chính: ${wh.postal_code})` : ''}
-                  </p>
-                  <div className="pl-5 flex items-center gap-4 text-slate-500 flex-wrap">
-                    <span className="inline-flex items-center gap-1">
-                      <span className="font-medium text-slate-700">{wh.contact_name}</span>
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Phone className="w-3 h-3 text-slate-400" />
-                      <span>{wh.contact_phone}</span>
-                    </span>
-                    {wh.contact_email && (
-                      <span className="inline-flex items-center gap-1">
-                        <Mail className="w-3 h-3 text-slate-400" />
-                        <span>{wh.contact_email}</span>
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Return Address Section */}
-                <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
-                  <div className="font-semibold text-slate-800 flex items-center gap-1.5">
-                    <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Địa chỉ nhận hoàn (Return):</span>
-                  </div>
-                  {wh.use_different_return_address ? (
-                    <div className="pl-5 space-y-1">
-                      <p className="text-slate-700 font-medium">
-                        {wh.return_address_line}
-                        {wh.return_ward ? `, ${wh.return_ward}` : ''}, {wh.return_district},{' '}
-                        {wh.return_city}
-                      </p>
-                      <div className="flex items-center gap-4 text-slate-500">
-                        {wh.return_contact_name && (
-                          <span className="font-medium text-slate-700">
-                            {wh.return_contact_name}
+      {!loading && total > 0 && (
+        <div className="space-y-4">
+          <div data-testid="warehouse-list-state" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {pagedWarehouses.map((wh) => {
+              const isActionBusy = actionLoadingId === wh.id;
+              return (
+                <div
+                  key={wh.id}
+                  data-testid={`warehouse-card-${wh.id}`}
+                  className={`bg-white border rounded-2xl p-5 shadow-xs transition space-y-4 ${
+                    wh.is_default
+                      ? 'border-orange-300/80 ring-1 ring-orange-200/50'
+                      : 'border-slate-200/80 hover:border-slate-300'
+                  }`}
+                >
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-slate-900">{wh.name}</span>
+                        {isColVisible('code') && (
+                          <span className="px-2 py-0.5 text-[10px] font-mono font-semibold bg-slate-100 text-slate-600 rounded-md">
+                            {wh.code}
                           </span>
                         )}
-                        {wh.return_contact_phone && (
-                          <span className="inline-flex items-center gap-1">
-                            <Phone className="w-3 h-3 text-slate-400" />
-                            <span>{wh.return_contact_phone}</span>
+                        {wh.is_default && (
+                          <span
+                            data-testid={`badge-default-warehouse-${wh.id}`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-orange-100 text-orange-700 rounded-md"
+                          >
+                            <Star className="w-3 h-3 fill-orange-500 text-orange-500" />
+                            <span>Kho mặc định</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {isColVisible('status') && (
+                          <span
+                            data-testid={`badge-status-warehouse-${wh.id}`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md ${
+                              wh.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                wh.status === 'active' ? 'bg-emerald-500' : 'bg-slate-400'
+                              }`}
+                            />
+                            <span>{wh.status === 'active' ? 'Đang hoạt động' : 'Tạm ngưng'}</span>
                           </span>
                         )}
                       </div>
                     </div>
-                  ) : (
-                    <p className="pl-5 text-slate-500 italic">Cùng địa chỉ với điểm lấy hàng</p>
-                  )}
-                </div>
 
-                {/* Schedule & Printer Settings Overview */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
-                  {/* Schedule */}
-                  <div className="space-y-1">
-                    <div className="font-semibold text-slate-700 flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-400" />
-                      <span>Lịch lấy hàng:</span>
-                    </div>
-                    <div>
-                      {wh.cutoff_time ? (
-                        <span>
-                          Giờ cắt ca lấy:{' '}
-                          <span className="font-bold text-slate-800">{wh.cutoff_time}</span>
-                        </span>
-                      ) : (
-                        <span className="italic">Chưa cài đặt giờ cắt ca</span>
-                      )}
-                    </div>
-                    {wh.schedule_notes && (
-                      <p className="text-slate-600 line-clamp-1" title={wh.schedule_notes}>
-                        Ghi chú: {wh.schedule_notes}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Printer */}
-                  <div className="space-y-1">
-                    <div className="font-semibold text-slate-700 flex items-center gap-1">
-                      <Printer className="w-3 h-3 text-slate-400" />
-                      <span>In nhãn nhiệt:</span>
-                    </div>
-                    <div>
-                      Khổ giấy:{' '}
-                      <span className="font-bold text-slate-800">{wh.printer_paper_size}</span> (
-                      {wh.printer_dpi} DPI)
-                      {wh.printer_name && (
-                        <span className="text-slate-500 font-normal"> - {wh.printer_name}</span>
-                      )}
-                    </div>
-                    {wh.printer_auto_print && (
-                      <div className="text-emerald-600 font-semibold">Tự động in khi duyệt đơn</div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Card Actions Footer */}
-                {canEdit && (
-                  <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
-                    <div>
-                      {!wh.is_default && (
+                    {/* Top Action Buttons */}
+                    {canEdit && (
+                      <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          onClick={() => handleSetDefaultAction(wh)}
-                          data-testid={`set-default-warehouse-button-${wh.id}`}
-                          disabled={isActionBusy}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition cursor-pointer disabled:opacity-50"
+                          onClick={() => handleOpenEdit(wh)}
+                          data-testid={`edit-warehouse-button-${wh.id}`}
+                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                          aria-label={`Chỉnh sửa kho ${wh.name}`}
+                          title="Chỉnh sửa kho"
                         >
-                          <Star className="w-3.5 h-3.5" />
-                          <span>Đặt làm mặc định</span>
+                          <Edit3 className="w-4 h-4" />
                         </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pickup Address Section */}
+                  {(isColVisible('pickup_address') || isColVisible('contact')) && (
+                    <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                      {isColVisible('pickup_address') && (
+                        <>
+                          <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-orange-600" />
+                            <span>Địa chỉ lấy hàng (Pickup):</span>
+                          </div>
+                          <p className="pl-5 text-slate-700 font-medium">
+                            {wh.address_line}
+                            {wh.ward ? `, ${wh.ward}` : ''}, {wh.district}, {wh.city}
+                            {wh.postal_code ? ` (Mã bưu chính: ${wh.postal_code})` : ''}
+                          </p>
+                        </>
+                      )}
+                      {isColVisible('contact') && (
+                        <div className="pl-5 flex items-center gap-4 text-slate-500 flex-wrap">
+                          <span className="inline-flex items-center gap-1">
+                            <span className="font-medium text-slate-700">{wh.contact_name}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-slate-400" />
+                            <span>{wh.contact_phone}</span>
+                          </span>
+                          {wh.contact_email && (
+                            <span className="inline-flex items-center gap-1">
+                              <Mail className="w-3 h-3 text-slate-400" />
+                              <span>{wh.contact_email}</span>
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
+                  )}
 
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleStatusAction(wh)}
-                        data-testid={
-                          wh.status === 'active'
-                            ? `deactivate-warehouse-button-${wh.id}`
-                            : `activate-warehouse-button-${wh.id}`
-                        }
-                        disabled={isActionBusy}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-50 ${
-                          wh.status === 'active'
-                            ? 'text-slate-600 hover:text-rose-700 hover:bg-rose-50'
-                            : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
-                        }`}
-                      >
-                        <Power className="w-3.5 h-3.5" />
-                        <span>{wh.status === 'active' ? 'Tạm ngưng' : 'Kích hoạt lại'}</span>
-                      </button>
+                  {/* Return Address Section */}
+                  {isColVisible('return_address') && (
+                    <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-100">
+                      <div className="font-semibold text-slate-800 flex items-center gap-1.5">
+                        <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Địa chỉ nhận hoàn (Return):</span>
+                      </div>
+                      {wh.use_different_return_address ? (
+                        <div className="pl-5 space-y-1">
+                          <p className="text-slate-700 font-medium">
+                            {wh.return_address_line}
+                            {wh.return_ward ? `, ${wh.return_ward}` : ''}, {wh.return_district},{' '}
+                            {wh.return_city}
+                          </p>
+                          <div className="flex items-center gap-4 text-slate-500">
+                            {wh.return_contact_name && (
+                              <span className="font-medium text-slate-700">
+                                {wh.return_contact_name}
+                              </span>
+                            )}
+                            {wh.return_contact_phone && (
+                              <span className="inline-flex items-center gap-1">
+                                <Phone className="w-3 h-3 text-slate-400" />
+                                <span>{wh.return_contact_phone}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="pl-5 text-slate-500 italic">Cùng địa chỉ với điểm lấy hàng</p>
+                      )}
                     </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  )}
+
+                  {/* Schedule & Printer Settings Overview */}
+                  {isColVisible('schedule_printer') && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                      {/* Schedule */}
+                      <div className="space-y-1">
+                        <div className="font-semibold text-slate-700 flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          <span>Lịch lấy hàng:</span>
+                        </div>
+                        <div>
+                          {wh.cutoff_time ? (
+                            <span>
+                              Giờ cắt ca lấy:{' '}
+                              <span className="font-bold text-slate-800">{wh.cutoff_time}</span>
+                            </span>
+                          ) : (
+                            <span className="italic">Chưa cài đặt giờ cắt ca</span>
+                          )}
+                        </div>
+                        {wh.schedule_notes && (
+                          <p className="text-slate-600 line-clamp-1" title={wh.schedule_notes}>
+                            Ghi chú: {wh.schedule_notes}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Printer */}
+                      <div className="space-y-1">
+                        <div className="font-semibold text-slate-700 flex items-center gap-1">
+                          <Printer className="w-3 h-3 text-slate-400" />
+                          <span>In nhãn nhiệt:</span>
+                        </div>
+                        <div>
+                          Khổ giấy:{' '}
+                          <span className="font-bold text-slate-800">{wh.printer_paper_size}</span>{' '}
+                          ({wh.printer_dpi} DPI)
+                          {wh.printer_name && (
+                            <span className="text-slate-500 font-normal"> - {wh.printer_name}</span>
+                          )}
+                        </div>
+                        {wh.printer_auto_print && (
+                          <div className="text-emerald-600 font-semibold">
+                            Tự động in khi duyệt đơn
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Card Actions Footer */}
+                  {canEdit && (
+                    <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
+                      <div>
+                        {!wh.is_default && (
+                          <button
+                            type="button"
+                            onClick={() => handleSetDefaultAction(wh)}
+                            data-testid={`set-default-warehouse-button-${wh.id}`}
+                            disabled={isActionBusy}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition cursor-pointer disabled:opacity-50"
+                          >
+                            <Star className="w-3.5 h-3.5" />
+                            <span>Đặt làm mặc định</span>
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatusAction(wh)}
+                          data-testid={
+                            wh.status === 'active'
+                              ? `deactivate-warehouse-button-${wh.id}`
+                              : `activate-warehouse-button-${wh.id}`
+                          }
+                          disabled={isActionBusy}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-50 ${
+                            wh.status === 'active'
+                              ? 'text-slate-600 hover:text-rose-700 hover:bg-rose-50'
+                              : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                          }`}
+                        >
+                          <Power className="w-3.5 h-3.5" />
+                          <span>{wh.status === 'active' ? 'Tạm ngưng' : 'Kích hoạt lại'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Pagination Controls (FEAT-COM-02 shared list contract) */}
+          <PaginationControls
+            page={safePage}
+            pageSize={pageSize}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={(p) => setPage(p)}
+            onPageSizeChange={(s) => {
+              setPageSize(s);
+              setPage(1);
+            }}
+            pageSizeOptions={[2, 4, 10, 20]}
+            testIdPrefix="warehouse-pagination"
+          />
         </div>
       )}
 

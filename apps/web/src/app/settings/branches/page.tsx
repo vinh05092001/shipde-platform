@@ -2,7 +2,14 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Store, GitBranch, Users, Shield } from 'lucide-react';
+import {
+  ArrowLeft,
+  Store,
+  GitBranch,
+  Warehouse as WarehouseIcon,
+  Users,
+  Shield,
+} from 'lucide-react';
 import { BranchManagementView } from '@/components/BranchManagementView';
 import { useAuth } from '@/context/AuthContext';
 import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
@@ -13,6 +20,7 @@ export interface BranchesSettingsPageProps {
   initialBranches?: Branch[] | null;
   initialLoading?: boolean;
   initialCanEdit?: boolean;
+  initialForbidden?: boolean;
   initialError?: string | null;
   initialScopedStores?: string[] | null;
 }
@@ -21,6 +29,7 @@ export default function BranchesSettingsPage({
   initialBranches = null,
   initialLoading,
   initialCanEdit,
+  initialForbidden = false,
   initialError = null,
   initialScopedStores = null,
 }: BranchesSettingsPageProps) {
@@ -31,48 +40,86 @@ export default function BranchesSettingsPage({
   // `can_edit`, derived from the actor's `iam:shop_config` permission. We never
   // infer capability from hardcoded role names, and we fail closed (false) until
   // the server resolves the actor's permissions.
+  const derivedCanEdit =
+    initialCanEdit !== undefined
+      ? initialCanEdit
+      : Boolean(
+          user &&
+          Array.isArray((user as any).permissions) &&
+          (user as any).permissions.includes('iam:shop_config')
+        );
+
   const derivedScopedStores =
     initialScopedStores !== null ? initialScopedStores : user?.store_scopes || null;
 
   const [branches, setBranches] = useState<Branch[]>(initialBranches || []);
-  const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
+  const [total, setTotal] = useState<number>(initialBranches ? initialBranches.length : 0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [queryParams, setQueryParams] = useState<any>({
+    page: 1,
+    limit: 10,
+    search: '',
+    status: 'ALL',
+    sortBy: 'name',
+    sortOrder: 'asc',
+  });
+  const [canEdit, setCanEdit] = useState<boolean>(derivedCanEdit);
   const [loading, setLoading] = useState<boolean>(initialLoading ?? initialBranches === null);
   const [error, setError] = useState<string | null>(initialError);
 
-  const fetchBranches = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const res = await fetch(`${API_BASE}/api/v1/branches`, { headers });
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error('Bạn không có quyền truy cập danh sách chi nhánh.');
+  const fetchBranches = useCallback(
+    async (paramsOverride?: any) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
         }
-        if (res.status === 401) {
-          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách chi nhánh');
-      }
 
-      const json = await res.json();
-      if (json.success && json.data?.branches) {
-        setBranches(json.data.branches);
-        setCanEdit(Boolean(json.data.can_edit));
+        const p = paramsOverride || queryParams;
+        const url = new URL(`${API_BASE}/api/v1/branches`);
+        if (p.page) url.searchParams.set('page', String(p.page));
+        if (p.limit) url.searchParams.set('limit', String(p.limit));
+        if (p.search && p.search.trim().length > 0) url.searchParams.set('search', p.search.trim());
+        if (p.status && p.status !== 'ALL') url.searchParams.set('status', p.status);
+        if (p.sortBy) url.searchParams.set('sort_by', p.sortBy);
+        if (p.sortOrder) url.searchParams.set('sort_order', p.sortOrder);
+
+        const res = await fetch(url.toString(), { headers });
+        if (!res.ok) {
+          if (res.status === 403) {
+            throw new Error('Bạn không có quyền truy cập danh sách chi nhánh.');
+          }
+          if (res.status === 401) {
+            throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+          }
+          const errJson = await res.json().catch(() => null);
+          throw new Error(errJson?.error?.message || 'Không thể tải danh sách chi nhánh');
+        }
+
+        const json = await res.json();
+        if (json.success && json.data?.branches) {
+          setBranches(json.data.branches);
+          const meta = json.data.meta || json.meta;
+          if (meta) {
+            if (meta.total !== undefined) setTotal(meta.total);
+            if (meta.total_pages !== undefined) setTotalPages(meta.total_pages);
+          }
+          if (initialCanEdit === undefined && json.data.can_edit !== undefined) {
+            setCanEdit(Boolean(json.data.can_edit));
+          }
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý chi nhánh');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý chi nhánh');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
+    },
+    [token, initialCanEdit, queryParams]
+  );
 
   useEffect(() => {
     if (!initialBranches) {
@@ -189,6 +236,7 @@ export default function BranchesSettingsPage({
             <span className="text-xs font-bold text-slate-700">
               Chi nhánh &amp; Điểm gửi hàng (SCR-WH-01 / FEAT-ORG-02)
             </span>
+            <span className="sr-only">Cửa hàng &amp; Chi nhánh</span>
           </div>
 
           {/* Quick Settings Switcher Tabs */}
@@ -204,6 +252,13 @@ export default function BranchesSettingsPage({
               <GitBranch className="w-3.5 h-3.5 text-orange-600" />
               <span>Chi nhánh</span>
             </span>
+            <Link
+              href="/settings/warehouses"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 transition font-medium"
+            >
+              <WarehouseIcon className="w-3.5 h-3.5 text-slate-500" />
+              <span>Kho hàng</span>
+            </Link>
             <Link
               href="/settings/users"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 transition font-medium"
@@ -226,13 +281,22 @@ export default function BranchesSettingsPage({
           branches={branches}
           loading={loading}
           canEdit={canEdit}
+          isForbidden={initialForbidden}
           scopedStores={derivedScopedStores}
           error={error}
-          onRefresh={fetchBranches}
+          onRefresh={() => fetchBranches()}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
+          serverTotal={total}
+          serverTotalPages={totalPages}
+          onQueryChange={(newP) => {
+            setQueryParams(newP);
+            void fetchBranches(newP);
+          }}
+          tenantId={user?.merchant_id}
+          userId={user?.id}
         />
       </div>
     </div>

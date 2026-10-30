@@ -31,10 +31,20 @@ import {
   Loader2,
   Clock,
   Warehouse,
+  Search,
+  FilterX,
 } from 'lucide-react';
 import { RoleItem, UserListItem } from '@shipde/contracts';
 import { useAuth } from '@/context/AuthContext';
 import { InviteUserModal } from './forms/InviteUserModal';
+import {
+  PaginationControls,
+  SortableColumnHeader,
+  SavedViewsAndColumnsControls,
+  ColumnOption,
+} from './common/SharedListControls';
+import { BranchManagementView } from './BranchManagementView';
+import { useSharedListState } from '@/hooks/useSharedListState';
 
 // Available Stores in the system
 export const INVITE_SUCCESS_TOAST = 'Đã gửi lời mời thành công';
@@ -58,47 +68,15 @@ export const AVAILABLE_WAREHOUSES = [
   { id: 'wh_danang', name: 'Kho Đà Nẵng' },
 ];
 
-export const DEFAULT_STORES: StoreItem[] = [
-  {
-    id: 'store_01',
-    code: 'HCM-Q3',
-    name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
-    address: '128 Nguyễn Trãi, P.3, Q.5, TP. Hồ Chí Minh',
-    phone: '0901234567',
-    manager: 'Nguyễn Văn An',
-    active_orders_count: 1420,
-    status: 'ACTIVE',
-  },
-  {
-    id: 'store_02',
-    code: 'HCM-TB',
-    name: 'Kho Vận & Cửa Hàng Tân Bình',
-    address: '123 Cộng Hòa, P.12, Q. Tân Bình, TP. Hồ Chí Minh',
-    phone: '0909876543',
-    manager: 'Phạm Văn Kho',
-    active_orders_count: 890,
-    status: 'ACTIVE',
-  },
-  {
-    id: 'store_03',
-    code: 'HN-CG',
-    name: 'Chi Nhánh Hà Nội (Cầu Giấy)',
-    address: '45 Trần Thái Tông, Cầu Giấy, Hà Nội',
-    phone: '0903334444',
-    manager: 'Lê Minh Kế Toán',
-    active_orders_count: 650,
-    status: 'ACTIVE',
-  },
-  {
-    id: 'store_04',
-    code: 'DN-HC',
-    name: 'Chi Nhánh Đà Nẵng (Hải Châu)',
-    address: '88 Nguyễn Văn Linh, Hải Châu, Đà Nẵng',
-    phone: '0905556666',
-    manager: 'Trần Thị Hoa',
-    active_orders_count: 320,
-    status: 'ACTIVE',
-  },
+export const USER_AVAILABLE_COLUMNS: ColumnOption[] = [
+  { id: 'full_name', label: 'Họ và tên' },
+  { id: 'role', label: 'Vai trò' },
+  { id: 'store_scopes', label: 'Chi nhánh' },
+  { id: 'warehouse_scopes', label: 'Kho hàng' },
+  { id: 'carrier_scopes', label: 'Hãng vận chuyển' },
+  { id: 'created_at', label: 'Ngày tạo' },
+  { id: 'last_active_at', label: 'Đăng nhập gần nhất' },
+  { id: 'status', label: 'Trạng thái' },
 ];
 
 export function isManageUsersForbidden(userRole?: string | null): boolean {
@@ -248,10 +226,18 @@ export interface UserManagementTabProps {
   initialFieldErrors?: Record<string, string>;
   initialActiveSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
   initialSubTab?: 'matrix' | 'stores' | 'members' | 'devices' | 'invitations';
+  initialStores?: StoreItem[];
+  initialCanEditBranches?: boolean;
+  initialPage?: number;
+  initialPageSize?: number;
+  initialSortBy?: string;
+  initialSortOrder?: 'asc' | 'desc';
+  initialTotalUsers?: number;
+  initialTotalPages?: number;
 }
 
 export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) => {
-  const { token, user } = useAuth();
+  const { token, user, isHydrating } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<
     'matrix' | 'stores' | 'members' | 'devices' | 'invitations'
   >(props.initialActiveSubTab ?? props.initialSubTab ?? 'members');
@@ -267,12 +253,37 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [invitationsStatusFilter, setInvitationsStatusFilter] = useState<string>('ALL');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
+  // Permission-based authorization check (Rule 9: permissions from API, unknown user means no edit, fail closed)
+  const isControlled =
+    props.initialLoading !== undefined ||
+    props.initialUsers !== undefined ||
+    props.initialForbidden !== undefined ||
+    props.initialError !== undefined;
+
+  const isAuthLoading = !isControlled && isHydrating;
+  const isComponentLoading = Boolean(props.initialLoading);
+
   const isForbidden =
     props.initialForbidden !== undefined
       ? props.initialForbidden
-      : user
-        ? isManageUsersForbidden(user.role)
-        : false;
+      : isControlled
+        ? false
+        : isAuthLoading || isComponentLoading
+          ? false
+          : !user
+            ? true
+            : Array.isArray((user as any).permissions)
+              ? !(user as any).permissions.includes('iam:manage_users')
+              : true;
+
+  const canEditBranches =
+    props.initialCanEditBranches !== undefined
+      ? props.initialCanEditBranches
+      : Boolean(
+          user &&
+          Array.isArray((user as any).permissions) &&
+          (user as any).permissions.includes('iam:shop_config')
+        );
 
   const fetchInvitations = useCallback(async () => {
     if (isForbidden) return;
@@ -374,10 +385,211 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     props.initialLoading ?? !props.initialUsers
   );
   const [usersError, setUsersError] = useState<string | null>(props.initialError || null);
-  const [userSearch, setUserSearch] = useState<string>('');
-  const [userRoleFilter, setUserRoleFilter] = useState<string>('ALL');
-  const [userStatusFilter, setUserStatusFilter] = useState<string>('ALL');
-  const [stores, setStores] = useState<StoreItem[]>(DEFAULT_STORES);
+  // User list shared pagination, filter, and sort state via shared hook (FEAT-COM-02)
+  const userListState = useSharedListState({
+    defaultPage: props.initialPage || 1,
+    defaultPageSize: props.initialPageSize || 20,
+    defaultSortBy: props.initialSortBy || 'created_at',
+    defaultSortOrder: props.initialSortOrder || 'desc',
+    defaultSearch: '',
+    defaultFilters: {
+      role: 'ALL',
+      status: 'ALL',
+    },
+    syncUrl: true,
+    namespace: 'user',
+    listKey: 'users',
+    tenantId: user?.merchant_id,
+    userId: user?.id,
+    initialColumns: [
+      'full_name',
+      'role',
+      'store_scopes',
+      'warehouse_scopes',
+      'carrier_scopes',
+      'created_at',
+      'last_active_at',
+      'status',
+    ],
+  });
+
+  const userPage = userListState.page;
+  const userPageSize = userListState.pageSize;
+  const userSortBy = userListState.sortBy;
+  const userSortOrder = userListState.sortOrder;
+  const userSearch = userListState.search;
+  const userRoleFilter = userListState.filters.role;
+  const userStatusFilter = userListState.filters.status;
+  const setUserPage = userListState.setPage;
+  const setUserPageSize = userListState.setPageSize;
+  const setUserSort = userListState.setSort;
+  const setUserSearch = userListState.setSearch;
+  const setUserRoleFilter = (role: string) => userListState.setFilter('role', role);
+  const setUserStatusFilter = (status: string) => userListState.setFilter('status', status);
+  const isColVisible = (colId: string) =>
+    userListState.columnSettings?.visibleColumns
+      ? userListState.columnSettings.visibleColumns.includes(colId)
+      : true;
+
+  const [totalUsers, setTotalUsers] = useState<number>(
+    props.initialTotalUsers ?? props.initialUsers?.length ?? 0
+  );
+  const [totalPages, setTotalPages] = useState<number>(props.initialTotalPages ?? 1);
+  const [stores, setStores] = useState<StoreItem[]>(props.initialStores || []);
+  const [storesTotal, setStoresTotal] = useState<number>(props.initialStores?.length || 0);
+  const [storesTotalPages, setStoresTotalPages] = useState<number>(1);
+  const [storesParams, setStoresParams] = useState<any>({
+    page: 1,
+    limit: 10,
+    search: '',
+    status: 'ALL',
+    sortBy: 'name',
+    sortOrder: 'asc',
+  });
+  const [storesLoading, setStoresLoading] = useState<boolean>(false);
+  const [storesError, setStoresError] = useState<string | null>(null);
+
+  const fetchStores = useCallback(
+    async (paramsOverride?: any) => {
+      setStoresLoading(true);
+      setStoresError(null);
+      try {
+        const p = paramsOverride || storesParams;
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+        const url = new URL(`${apiBase}/api/v1/branches`);
+        if (p.page) url.searchParams.set('page', String(p.page));
+        if (p.limit) url.searchParams.set('limit', String(p.limit));
+        if (p.search && p.search.trim().length > 0) url.searchParams.set('search', p.search.trim());
+        if (p.status && p.status !== 'ALL') url.searchParams.set('status', p.status);
+        if (p.sortBy) url.searchParams.set('sort_by', p.sortBy);
+        if (p.sortOrder) url.searchParams.set('sort_order', p.sortOrder);
+
+        const res = await fetch(url.toString(), {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        });
+        if (!res.ok) {
+          setStores([]);
+          if (res.status === 403) {
+            setStoresError('Bạn không có quyền xem danh sách chi nhánh (403)');
+          } else if (res.status === 401) {
+            setStoresError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại (401)');
+          } else {
+            const errData = await res.json().catch(() => null);
+            setStoresError(
+              errData?.error?.message || `Lỗi máy chủ khi tải danh sách chi nhánh (${res.status})`
+            );
+          }
+          return;
+        }
+        const json = await res.json().catch(() => null);
+        if (!json || !json.success || !Array.isArray(json.data?.branches)) {
+          setStores([]);
+          setStoresError('Dữ liệu danh sách chi nhánh từ máy chủ không hợp lệ');
+          return;
+        }
+        setStores(json.data.branches);
+        const returnedTotal =
+          json.data?.meta?.total ?? json.meta?.total ?? json.data.branches.length;
+        const returnedTotalPages = json.data?.meta?.total_pages ?? json.meta?.total_pages ?? 1;
+        setStoresTotal(returnedTotal);
+        setStoresTotalPages(returnedTotalPages);
+      } catch (err: any) {
+        setStores([]);
+        setStoresError(err?.message || 'Lỗi kết nối khi tải danh sách chi nhánh');
+      } finally {
+        setStoresLoading(false);
+      }
+    },
+    [token, storesParams]
+  );
+
+  const handleCreateBranch = useCallback(
+    async (input: any) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tạo mới chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  const handleUpdateBranch = useCallback(
+    async (id: string, input: any) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể cập nhật chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  const handleActivateBranch = useCallback(
+    async (id: string) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches/${id}/activate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể kích hoạt chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  const handleDeactivateBranch = useCallback(
+    async (id: string) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches/${id}/deactivate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tạm ngưng chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  useEffect(() => {
+    if (activeSubTab === 'stores' && (!props.initialStores || props.initialStores.length === 0)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial stores fetch
+      void fetchStores();
+    }
+  }, [activeSubTab, fetchStores, props.initialStores]);
 
   // Modal new store state
   const [isNewStoreModalOpen, setIsNewStoreModalOpen] = useState(false);
@@ -436,7 +648,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [mutationLoading, setMutationLoading] = useState<boolean>(false);
 
   const fetchUsers = useCallback(async () => {
-    if (isForbidden) {
+    if (isAuthLoading || isForbidden) {
       setUsersLoading(false);
       return;
     }
@@ -445,6 +657,10 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
       const url = new URL(`${apiBase}/api/v1/users`);
+      url.searchParams.set('page', String(userPage));
+      url.searchParams.set('limit', String(userPageSize));
+      url.searchParams.set('sort_by', userSortBy);
+      url.searchParams.set('sort_order', userSortOrder);
       if (userRoleFilter && userRoleFilter !== 'ALL') {
         url.searchParams.set('role', userRoleFilter);
       }
@@ -464,13 +680,33 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       if (!res.ok) {
         throw new Error(data.error?.message || 'Không thể tải danh sách người dùng');
       }
+      const returnedTotal = data.meta?.total ?? (data.data || []).length;
+      const returnedTotalPages =
+        data.meta?.total_pages ?? Math.max(1, Math.ceil(returnedTotal / userPageSize));
       setUsers(data.data || []);
+      setTotalUsers(returnedTotal);
+      setTotalPages(returnedTotalPages);
+      if (returnedTotal > 0 && userPage > returnedTotalPages) {
+        setUserPage(returnedTotalPages);
+      }
     } catch (err: any) {
       setUsersError(err.message || 'Lỗi kết nối khi tải danh sách người dùng');
     } finally {
       setUsersLoading(false);
     }
-  }, [token, isForbidden, userRoleFilter, userStatusFilter, userSearch]);
+  }, [
+    token,
+    isAuthLoading,
+    isForbidden,
+    userRoleFilter,
+    userStatusFilter,
+    userSearch,
+    userPage,
+    userPageSize,
+    userSortBy,
+    userSortOrder,
+    setUserPage,
+  ]);
 
   useEffect(() => {
     if (activeSubTab === 'members' && !props.initialUsers) {
@@ -977,7 +1213,10 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                     type="text"
                     placeholder="Tìm kiếm theo tên, email, sđt..."
                     value={userSearch}
-                    onChange={(e) => setUserSearch(e.target.value)}
+                    onChange={(e) => {
+                      setUserSearch(e.target.value);
+                      setUserPage(1);
+                    }}
                     className="modern-input w-full pl-8 pr-3 py-1.5 text-xs"
                     data-testid="user-search-input"
                   />
@@ -986,9 +1225,13 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
                 <select
                   value={userRoleFilter}
-                  onChange={(e) => setUserRoleFilter(e.target.value)}
+                  onChange={(e) => {
+                    setUserRoleFilter(e.target.value);
+                    setUserPage(1);
+                  }}
                   className="modern-input text-xs py-1.5 font-medium"
                   data-testid="user-role-filter"
+                  aria-label="Lọc theo vai trò"
                 >
                   <option value="ALL">Tất cả vai trò</option>
                   <option value="OWNER">👑 Chủ Shop (Owner)</option>
@@ -1000,9 +1243,13 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
 
                 <select
                   value={userStatusFilter}
-                  onChange={(e) => setUserStatusFilter(e.target.value)}
+                  onChange={(e) => {
+                    setUserStatusFilter(e.target.value);
+                    setUserPage(1);
+                  }}
                   className="modern-input text-xs py-1.5 font-medium"
                   data-testid="user-status-filter"
+                  aria-label="Lọc theo trạng thái nhân sự"
                 >
                   <option value="ALL">Tất cả trạng thái</option>
                   <option value="ACTIVE">Hoạt động (ACTIVE)</option>
@@ -1010,11 +1257,28 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   <option value="DISABLED">Vô hiệu hóa (DISABLED)</option>
                 </select>
 
+                {(userSearch.trim() || userRoleFilter !== 'ALL' || userStatusFilter !== 'ALL') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserSearch('');
+                      setUserRoleFilter('ALL');
+                      setUserStatusFilter('ALL');
+                      setUserPage(1);
+                    }}
+                    className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1 cursor-pointer"
+                    data-testid="users-clear-filters-btn"
+                  >
+                    <FilterX className="w-3.5 h-3.5" />
+                    <span>Xóa lọc</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => void fetchUsers()}
                   disabled={usersLoading}
-                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5"
+                  className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1.5 cursor-pointer"
                   data-testid="user-refresh-btn"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${usersLoading ? 'animate-spin' : ''}`} />
@@ -1023,14 +1287,36 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               </div>
 
               <div className="text-xs text-slate-600 font-medium">
-                Tổng số <strong data-testid="user-count">{users.length}</strong> nhân sự trong hệ
-                thống
+                Tổng số{' '}
+                <strong data-testid="user-count">
+                  {totalUsers > 0 ? totalUsers : users.length}
+                </strong>{' '}
+                nhân sự trong hệ thống
               </div>
+            </div>
+
+            <div className="pt-2.5 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+              <SavedViewsAndColumnsControls
+                savedViews={userListState.savedViews}
+                columnSettings={userListState.columnSettings}
+                availableColumns={USER_AVAILABLE_COLUMNS}
+                onSaveCurrentView={userListState.saveCurrentView}
+                onApplySavedView={userListState.applySavedView}
+                onDeleteSavedView={userListState.deleteSavedView}
+                onUpdateColumnSettings={userListState.updateColumnSettings}
+                testIdPrefix="users"
+              />
             </div>
           </div>
 
-          {/* Forbidden State */}
-          {isForbidden ? (
+          {/* Hydration / Initial Loading Skeleton Gate (Finding 7) */}
+          {isAuthLoading || isComponentLoading ? (
+            <div className="modern-card p-6 space-y-3" data-testid="users-loading-skeleton">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-12 bg-slate-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : isForbidden ? (
             <div
               className="p-8 text-center bg-amber-50/60 border border-amber-200 rounded-2xl space-y-2 animate-in fade-in"
               data-testid="users-forbidden-callout"
@@ -1073,16 +1359,96 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               ))}
             </div>
           ) : users.length === 0 ? (
-            /* Empty State */
-            <div
-              className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2"
-              data-testid="users-empty-state"
-            >
-              <UserCheck className="w-8 h-8 text-slate-400 mx-auto" />
-              <p className="text-xs text-slate-600 font-medium" data-testid="users-empty-text">
-                {USERS_EMPTY_STATE_TEXT}
-              </p>
-            </div>
+            totalUsers > 0 && userPage > totalPages ? (
+              /* Out-of-range Page Recovery State (Finding 9) */
+              <div className="space-y-4">
+                <div
+                  className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-3"
+                  data-testid="users-out-of-range-state"
+                >
+                  <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Trang {userPage} không có dữ liệu
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Hiện có {totalUsers} người dùng trên {totalPages} trang. Vui lòng chuyển về
+                    trang hợp lệ.
+                  </p>
+                  <div className="flex items-center justify-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setUserPage(totalPages)}
+                      className="btn-primary text-xs py-1.5 px-3 cursor-pointer"
+                      data-testid="users-nav-last-page-btn"
+                    >
+                      Đến trang {totalPages}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUserPage(1)}
+                      className="btn-secondary text-xs py-1.5 px-3 cursor-pointer"
+                      data-testid="users-nav-first-page-btn"
+                    >
+                      Về trang 1
+                    </button>
+                  </div>
+                </div>
+
+                <PaginationControls
+                  page={userPage}
+                  pageSize={userPageSize}
+                  total={totalUsers}
+                  totalPages={totalPages}
+                  onPageChange={(p) => setUserPage(p)}
+                  onPageSizeChange={(s) => {
+                    setUserPageSize(s);
+                    setUserPage(1);
+                  }}
+                  pageSizeOptions={[10, 20, 50]}
+                  testIdPrefix="users-pagination"
+                />
+              </div>
+            ) : userSearch.trim() || userRoleFilter !== 'ALL' || userStatusFilter !== 'ALL' ? (
+              /* No Results State with active filters */
+              <div
+                className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-3"
+                data-testid="users-no-results-state"
+              >
+                <Search className="w-8 h-8 text-slate-400 mx-auto" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Không tìm thấy người dùng phù hợp với bộ lọc
+                </h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Hãy thử thay đổi từ khóa tìm kiếm hoặc điều chỉnh điều kiện lọc vai trò / trạng
+                  thái.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserSearch('');
+                    setUserRoleFilter('ALL');
+                    setUserStatusFilter('ALL');
+                    setUserPage(1);
+                  }}
+                  className="btn-secondary text-xs py-1.5 px-3 inline-flex items-center gap-1.5 cursor-pointer mx-auto"
+                  data-testid="users-clear-filters-btn"
+                >
+                  <FilterX className="w-3.5 h-3.5" />
+                  <span>Xóa bộ lọc</span>
+                </button>
+              </div>
+            ) : (
+              /* Clean Empty State */
+              <div
+                className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-2"
+                data-testid="users-empty-state"
+              >
+                <UserCheck className="w-8 h-8 text-slate-400 mx-auto" />
+                <p className="text-xs text-slate-600 font-medium" data-testid="users-empty-text">
+                  {USERS_EMPTY_STATE_TEXT}
+                </p>
+              </div>
+            )
           ) : (
             /* Populated Table State */
             <div className="modern-card overflow-hidden">
@@ -1093,13 +1459,44 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                 >
                   <thead>
                     <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase text-[11px] tracking-wider">
-                      <th className="py-3 px-4">Nhân Viên / Email</th>
-                      <th className="py-3 px-4">Vai Trò Chính</th>
-                      <th className="py-3 px-4">Phạm Vi Chi Nhánh</th>
-                      <th className="py-3 px-4">Phạm Vi Kho Hàng</th>
-                      <th className="py-3 px-4">Phạm Vi TK Vận Chuyển</th>
-                      <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
-                      <th className="py-3 px-4">Trạng Thái</th>
+                      {isColVisible('full_name') && (
+                        <th className="py-3 px-4">
+                          <SortableColumnHeader
+                            label="Nhân Viên / Email"
+                            field="full_name"
+                            currentSort={userSortBy}
+                            currentDirection={userSortOrder}
+                            onSort={(f) => setUserSort(f)}
+                            testId="sort-header-user-fullname"
+                          />
+                        </th>
+                      )}
+                      {isColVisible('role') && <th className="py-3 px-4">Vai Trò Chính</th>}
+                      {isColVisible('store_scopes') && (
+                        <th className="py-3 px-4">Phạm Vi Chi Nhánh</th>
+                      )}
+                      {isColVisible('warehouse_scopes') && (
+                        <th className="py-3 px-4">Phạm Vi Kho Hàng</th>
+                      )}
+                      {isColVisible('carrier_scopes') && (
+                        <th className="py-3 px-4">Phạm Vi TK Vận Chuyển</th>
+                      )}
+                      {isColVisible('created_at') && (
+                        <th className="py-3 px-4">
+                          <SortableColumnHeader
+                            label="Ngày Tạo"
+                            field="created_at"
+                            currentSort={userSortBy}
+                            currentDirection={userSortOrder}
+                            onSort={(f) => setUserSort(f)}
+                            testId="sort-header-user-created"
+                          />
+                        </th>
+                      )}
+                      {isColVisible('last_active_at') && (
+                        <th className="py-3 px-4">Đăng Nhập Gần Nhất</th>
+                      )}
+                      {isColVisible('status') && <th className="py-3 px-4">Trạng Thái</th>}
                       <th className="py-3 px-4 text-right">Thao Tác</th>
                     </tr>
                   </thead>
@@ -1132,163 +1529,183 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                           className="hover:bg-slate-50/80 transition"
                           data-testid={`user-row-${u.id}`}
                         >
-                          <td className="py-3.5 px-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
-                                {u.full_name ? u.full_name.charAt(0).toUpperCase() : '?'}
+                          {isColVisible('full_name') && (
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
+                                  {u.full_name ? u.full_name.charAt(0).toUpperCase() : '?'}
+                                </div>
+                                <div>
+                                  <strong className="text-slate-900 text-xs block">
+                                    {u.full_name}
+                                  </strong>
+                                  <span className="font-mono text-[11px] text-slate-500">
+                                    {u.email || u.phone || 'Chưa cập nhật'}
+                                  </span>
+                                </div>
                               </div>
-                              <div>
-                                <strong className="text-slate-900 text-xs block">
-                                  {u.full_name}
-                                </strong>
-                                <span className="font-mono text-[11px] text-slate-500">
-                                  {u.email || u.phone || 'Chưa cập nhật'}
-                                </span>
-                              </div>
-                            </div>
-                          </td>
+                            </td>
+                          )}
 
-                          <td className="py-3.5 px-4">
-                            <span
-                              className={`badge-muted text-[11px] font-bold ${
-                                String(u.role) === 'OWNER'
-                                  ? 'bg-purple-50 text-purple-700 border-purple-200'
+                          {isColVisible('role') && (
+                            <td className="py-3.5 px-4">
+                              <span
+                                className={`badge-muted text-[11px] font-bold ${
+                                  String(u.role) === 'OWNER'
+                                    ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                    : String(u.role) === 'ACCOUNTANT'
+                                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                      : String(u.role) === 'OPS_CSKH'
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                        : String(u.role) === 'STORE_MANAGER'
+                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                          : 'bg-slate-100 text-slate-700'
+                                }`}
+                              >
+                                {String(u.role) === 'OWNER'
+                                  ? '👑 Chủ Shop (Owner)'
                                   : String(u.role) === 'ACCOUNTANT'
-                                    ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                    ? '💼 Kế Toán (Maker-Checker)'
                                     : String(u.role) === 'OPS_CSKH'
-                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                      ? '🎧 CSKH / Cứu Đơn'
                                       : String(u.role) === 'STORE_MANAGER'
-                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                        : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {String(u.role) === 'OWNER'
-                                ? '👑 Chủ Shop (Owner)'
-                                : String(u.role) === 'ACCOUNTANT'
-                                  ? '💼 Kế Toán (Maker-Checker)'
-                                  : String(u.role) === 'OPS_CSKH'
-                                    ? '🎧 CSKH / Cứu Đơn'
-                                    : String(u.role) === 'STORE_MANAGER'
-                                      ? '🏢 Quản Lý Chi Nhánh'
-                                      : String(u.role) === 'WAREHOUSE'
-                                        ? '📦 Thủ Kho'
-                                        : u.role}
-                            </span>
-                          </td>
+                                        ? '🏢 Quản Lý Chi Nhánh'
+                                        : String(u.role) === 'WAREHOUSE'
+                                          ? '📦 Thủ Kho'
+                                          : u.role}
+                              </span>
+                            </td>
+                          )}
 
                           {/* Branch / Store Scopes */}
-                          <td className="py-3.5 px-4">
-                            <div className="flex flex-wrap gap-1">
-                              {isAllStores ? (
-                                <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px] flex items-center gap-1">
-                                  <Building2 className="w-3 h-3" />
-                                  <span>Toàn Hệ Thống (*)</span>
-                                </span>
-                              ) : !userStores.length ? (
-                                <span className="text-[10px] text-slate-400">
-                                  không gán phạm vi
-                                </span>
-                              ) : (
-                                userStores.map((s) => (
-                                  <span
-                                    key={s}
-                                    className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
-                                  >
-                                    <Store className="w-3 h-3 text-slate-400" />
-                                    <span>{s}</span>
+                          {isColVisible('store_scopes') && (
+                            <td className="py-3.5 px-4">
+                              <div className="flex flex-wrap gap-1">
+                                {isAllStores ? (
+                                  <span className="px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px] flex items-center gap-1">
+                                    <Building2 className="w-3 h-3" />
+                                    <span>Toàn Hệ Thống (*)</span>
                                   </span>
-                                ))
-                              )}
-                            </div>
-                          </td>
+                                ) : !userStores.length ? (
+                                  <span className="text-[10px] text-slate-400">
+                                    không gán phạm vi
+                                  </span>
+                                ) : (
+                                  userStores.map((s) => (
+                                    <span
+                                      key={s}
+                                      className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                    >
+                                      <Store className="w-3 h-3 text-slate-400" />
+                                      <span>{s}</span>
+                                    </span>
+                                  ))
+                                )}
+                              </div>
+                            </td>
+                          )}
 
                           {/* Warehouse Scopes */}
-                          <td className="py-3.5 px-4">
-                            <div className="flex flex-wrap gap-1">
-                              {isAllWarehouses ? (
-                                <span className="px-2 py-0.5 rounded-md bg-purple-50 border border-purple-200 text-purple-700 font-bold text-[10px] flex items-center gap-1">
-                                  <Warehouse className="w-3 h-3" />
-                                  <span>Tất Cả Kho (*)</span>
-                                </span>
-                              ) : !userWarehouses.length ? (
-                                <span className="text-[10px] text-slate-400">
-                                  không gán phạm vi
-                                </span>
-                              ) : (
-                                userWarehouses.map((w) => (
-                                  <span
-                                    key={w}
-                                    className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
-                                  >
-                                    <Warehouse className="w-3 h-3 text-slate-400" />
-                                    <span>{w}</span>
+                          {isColVisible('warehouse_scopes') && (
+                            <td className="py-3.5 px-4">
+                              <div className="flex flex-wrap gap-1">
+                                {isAllWarehouses ? (
+                                  <span className="px-2 py-0.5 rounded-md bg-purple-50 border border-purple-200 text-purple-700 font-bold text-[10px] flex items-center gap-1">
+                                    <Warehouse className="w-3 h-3" />
+                                    <span>Tất Cả Kho (*)</span>
                                   </span>
-                                ))
-                              )}
-                            </div>
-                          </td>
+                                ) : !userWarehouses.length ? (
+                                  <span className="text-[10px] text-slate-400">
+                                    không gán phạm vi
+                                  </span>
+                                ) : (
+                                  userWarehouses.map((w) => (
+                                    <span
+                                      key={w}
+                                      className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                    >
+                                      <Warehouse className="w-3 h-3 text-slate-400" />
+                                      <span>{w}</span>
+                                    </span>
+                                  ))
+                                )}
+                              </div>
+                            </td>
+                          )}
 
                           {/* Carrier Account Scopes */}
-                          <td className="py-3.5 px-4">
-                            <div className="flex flex-wrap gap-1">
-                              {isAllCarriers ? (
-                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold text-[10px] flex items-center gap-1">
-                                  <span>Tất Cả TK Vận Chuyển (*)</span>
+                          {isColVisible('carrier_scopes') && (
+                            <td className="py-3.5 px-4">
+                              <div className="flex flex-wrap gap-1">
+                                {isAllCarriers ? (
+                                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold text-[10px] flex items-center gap-1">
+                                    <span>Tất Cả TK Vận Chuyển (*)</span>
+                                  </span>
+                                ) : !userCarriers.length ? (
+                                  <span className="text-[10px] text-slate-400">
+                                    không gán phạm vi
+                                  </span>
+                                ) : (
+                                  userCarriers.map((c) => (
+                                    <span
+                                      key={c}
+                                      className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
+                                    >
+                                      <span>{c}</span>
+                                    </span>
+                                  ))
+                                )}
+                              </div>
+                            </td>
+                          )}
+
+                          {isColVisible('created_at') && (
+                            <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
+                              {u.created_at ? new Date(u.created_at).toLocaleString('vi-VN') : '—'}
+                            </td>
+                          )}
+
+                          {isColVisible('last_active_at') && (
+                            <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
+                              {u.last_active_at
+                                ? new Date(u.last_active_at).toLocaleString('vi-VN')
+                                : 'Chưa hoạt động'}
+                            </td>
+                          )}
+
+                          {isColVisible('status') && (
+                            <td className="py-3.5 px-4">
+                              {normalizedStatus === 'ACTIVE' ? (
+                                <span
+                                  className="badge-ok text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  data-testid={`status-badge-${u.id}`}
+                                >
+                                  Hoạt động
                                 </span>
-                              ) : !userCarriers.length ? (
-                                <span className="text-[10px] text-slate-400">
-                                  không gán phạm vi
+                              ) : normalizedStatus === 'SUSPENDED' ? (
+                                <span
+                                  className="badge-warn text-[10px] bg-amber-50 text-amber-700 border border-amber-200"
+                                  data-testid={`status-badge-${u.id}`}
+                                >
+                                  Tạm ngưng
+                                </span>
+                              ) : normalizedStatus === 'DISABLED' ? (
+                                <span
+                                  className="badge-danger text-[10px] bg-rose-50 text-rose-700 border border-rose-200"
+                                  data-testid={`status-badge-${u.id}`}
+                                >
+                                  Vô hiệu hóa
                                 </span>
                               ) : (
-                                userCarriers.map((c) => (
-                                  <span
-                                    key={c}
-                                    className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 font-medium text-[10px] flex items-center gap-1"
-                                  >
-                                    <span>{c}</span>
-                                  </span>
-                                ))
+                                <span
+                                  className="badge-muted text-[10px]"
+                                  data-testid={`status-badge-${u.id}`}
+                                >
+                                  {normalizedStatus}
+                                </span>
                               )}
-                            </div>
-                          </td>
-
-                          <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
-                            {u.last_active_at
-                              ? new Date(u.last_active_at).toLocaleString('vi-VN')
-                              : 'Chưa hoạt động'}
-                          </td>
-
-                          <td className="py-3.5 px-4">
-                            {normalizedStatus === 'ACTIVE' ? (
-                              <span
-                                className="badge-ok text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                data-testid={`status-badge-${u.id}`}
-                              >
-                                Hoạt động
-                              </span>
-                            ) : normalizedStatus === 'SUSPENDED' ? (
-                              <span
-                                className="badge-warn text-[10px] bg-amber-50 text-amber-700 border border-amber-200"
-                                data-testid={`status-badge-${u.id}`}
-                              >
-                                Tạm ngưng
-                              </span>
-                            ) : normalizedStatus === 'DISABLED' ? (
-                              <span
-                                className="badge-danger text-[10px] bg-rose-50 text-rose-700 border border-rose-200"
-                                data-testid={`status-badge-${u.id}`}
-                              >
-                                Vô hiệu hóa
-                              </span>
-                            ) : (
-                              <span
-                                className="badge-muted text-[10px]"
-                                data-testid={`status-badge-${u.id}`}
-                              >
-                                {normalizedStatus}
-                              </span>
-                            )}
-                          </td>
+                            </td>
+                          )}
 
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
@@ -1381,6 +1798,21 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination Controls (FEAT-COM-02 shared list contract) */}
+              <PaginationControls
+                page={userPage}
+                pageSize={userPageSize}
+                total={totalUsers > 0 ? totalUsers : users.length}
+                totalPages={totalPages}
+                onPageChange={(p) => setUserPage(p)}
+                onPageSizeChange={(s) => {
+                  setUserPageSize(s);
+                  setUserPage(1);
+                }}
+                pageSizeOptions={[10, 20, 50]}
+                testIdPrefix="users-pagination"
+              />
             </div>
           )}
         </div>
@@ -1680,47 +2112,34 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
         </div>
       )}
 
-      {/* SUBTAB 2: STORES / BRANCHES MANAGEMENT */}
+      {/* SUBTAB 2: STORES / BRANCHES MANAGEMENT (FEAT-COM-02 shared list contract) */}
       {activeSubTab === 'stores' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {stores.map((store) => (
-              <div
-                key={store.id}
-                className="modern-card p-5 space-y-3 flex flex-col justify-between"
-              >
-                <div className="space-y-2">
-                  <div className="flex justify-between items-start">
-                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                      {store.code}
-                    </span>
-                    <span className="badge-ok text-[10px]">Đang hoạt động</span>
-                  </div>
-                  <h4 className="font-bold text-slate-900 text-sm">{store.name}</h4>
-                  <div className="space-y-1 text-xs text-slate-500">
-                    <p className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="truncate">{store.address}</span>
-                    </p>
-                    <p className="flex items-center gap-1.5 font-mono text-[11px]">
-                      <span>Hotline: {store.phone}</span>
-                    </p>
-                    <p className="text-slate-600">
-                      Quản lý: <strong>{store.manager}</strong>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-100 flex justify-between items-center text-xs">
-                  <span className="text-slate-500">Đơn hàng active:</span>
-                  <strong className="font-mono text-slate-900 font-bold">
-                    {store.active_orders_count.toLocaleString()} đơn
-                  </strong>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        <BranchManagementView
+          branches={stores.map((s) => ({
+            merchant_id: '',
+            is_default: false,
+            created_at: '',
+            updated_at: '',
+            ...s,
+          }))}
+          loading={storesLoading}
+          error={storesError}
+          canEdit={canEditBranches}
+          onRefresh={() => fetchStores()}
+          onCreate={handleCreateBranch}
+          onUpdate={handleUpdateBranch}
+          onActivate={handleActivateBranch}
+          onDeactivate={handleDeactivateBranch}
+          namespace="branch"
+          serverTotal={storesTotal}
+          serverTotalPages={storesTotalPages}
+          onQueryChange={(newP) => {
+            setStoresParams(newP);
+            void fetchStores(newP);
+          }}
+          tenantId={user?.merchant_id}
+          userId={user?.id}
+        />
       )}
 
       {/* SUBTAB 3: RBAC MATRIX */}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   GitBranch,
   Building2,
@@ -21,6 +21,22 @@ import {
 } from 'lucide-react';
 import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
 import { type BranchFormState, validateBranchForm, isValidBranchCode } from '@shipde/contracts';
+import {
+  PaginationControls,
+  SavedViewsAndColumnsControls,
+  type ColumnOption,
+} from './common/SharedListControls';
+import { useSharedListState, paginateInMemory } from '@/hooks/useSharedListState';
+
+export type BranchItem = Branch;
+
+// Branch card fields exposed as configurable display columns (AC-COM-02-13)
+export const BRANCH_AVAILABLE_COLUMNS: ColumnOption[] = [
+  { id: 'code', label: 'Mã chi nhánh' },
+  { id: 'status', label: 'Trạng thái' },
+  { id: 'address', label: 'Địa chỉ' },
+  { id: 'phone', label: 'Số điện thoại' },
+];
 
 export interface BranchManagementViewProps {
   branches?: Branch[];
@@ -29,10 +45,28 @@ export interface BranchManagementViewProps {
   scopedStores?: string[] | null;
   error?: string | null;
   success?: string | null;
+  isForbidden?: boolean;
   initialFormOpen?: boolean;
   initialEditingBranch?: Branch | null;
   initialFormState?: Partial<BranchFormState>;
   initialValidationErrors?: Record<string, string>;
+  initialPage?: number;
+  initialPageSize?: number;
+  initialSortBy?: string;
+  initialSortOrder?: 'asc' | 'desc';
+  namespace?: string;
+  serverTotal?: number;
+  serverTotalPages?: number;
+  onQueryChange?: (params: {
+    page: number;
+    limit: number;
+    sortBy: string;
+    sortOrder: 'asc' | 'desc';
+    search: string;
+    status: string;
+  }) => void;
+  tenantId?: string;
+  userId?: string;
   onRefresh?: () => void;
   onCreate?: (input: CreateBranchInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateBranchInput) => Promise<void>;
@@ -47,19 +81,76 @@ export function BranchManagementView({
   scopedStores = null,
   error = null,
   success = null,
+  isForbidden = false,
   initialFormOpen = false,
   initialEditingBranch = null,
   initialFormState = {},
   initialValidationErrors = {},
+  initialPage = 1,
+  initialPageSize = 10,
+  initialSortBy = 'name',
+  initialSortOrder = 'asc',
+  namespace,
+  serverTotal,
+  serverTotalPages,
+  onQueryChange,
+  tenantId,
+  userId,
   onRefresh,
   onCreate,
   onUpdate,
   onActivate,
   onDeactivate,
 }: BranchManagementViewProps) {
-  // Filter & Search states
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Filter & Search & Pagination & Sort states via shared hook (FEAT-COM-02)
+  const listState = useSharedListState({
+    defaultPage: initialPage,
+    defaultPageSize: initialPageSize,
+    defaultSortBy: initialSortBy,
+    defaultSortOrder: initialSortOrder,
+    defaultSearch: '',
+    defaultFilters: { status: 'ALL' },
+    syncUrl: true,
+    namespace,
+    listKey: 'branches',
+    tenantId,
+    userId,
+    initialColumns: BRANCH_AVAILABLE_COLUMNS.map((c) => c.id),
+  });
+
+  const page = listState.page;
+  const pageSize = listState.pageSize;
+  const sortBy = listState.sortBy;
+  const sortOrder = listState.sortOrder;
+  const searchQuery = listState.search;
+  const statusFilter = listState.filters.status as 'ALL' | 'ACTIVE' | 'INACTIVE';
+  const setPage = listState.setPage;
+  const setPageSize = listState.setPageSize;
+  const setSort = listState.setSort;
+  const setSortBy = listState.setSortBy;
+  const setSortOrder = listState.setSortOrder;
+  const setSearchQuery = listState.setSearch;
+  const setStatusFilter = (val: 'ALL' | 'ACTIVE' | 'INACTIVE') =>
+    listState.setFilter('status', val);
+  const resetFilters = listState.resetFilters;
+  const isColVisible = (colId: string) => {
+    const cols = listState.columnSettings?.visibleColumns;
+    return !cols || cols.length === 0 ? true : cols.includes(colId);
+  };
+
+  // Notify server pagination consumer when query changes
+  useEffect(() => {
+    if (onQueryChange) {
+      onQueryChange({
+        page,
+        limit: pageSize,
+        sortBy,
+        sortOrder,
+        search: searchQuery,
+        status: statusFilter,
+      });
+    }
+  }, [page, pageSize, sortBy, sortOrder, searchQuery, statusFilter, onQueryChange]);
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = useState(initialFormOpen);
@@ -88,25 +179,67 @@ export function BranchManagementView({
   const setViewError = (val: string | null) => setLocalError(val);
   const setViewSuccess = (val: string | null) => setLocalSuccess(val);
 
-  // Derived filtered branches
-  const filteredBranches = useMemo(() => {
-    return branches.filter((branch) => {
-      // Status filter
-      if (statusFilter !== 'ALL' && branch.status !== statusFilter) {
-        return false;
-      }
-      // Search query
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase().trim();
-        const matchName = branch.name.toLowerCase().includes(query);
-        const matchCode = branch.code.toLowerCase().includes(query);
-        const matchAddress = branch.address ? branch.address.toLowerCase().includes(query) : false;
-        const matchPhone = branch.phone ? branch.phone.includes(query) : false;
-        return matchName || matchCode || matchAddress || matchPhone;
-      }
-      return true;
+  // Filter, sort, and paginate using server metadata when provided or in-memory helper (FEAT-COM-02)
+  const isServerPaged = serverTotal !== undefined;
+  const paginationResult = useMemo(() => {
+    if (isServerPaged) {
+      const calcTotalPages = serverTotalPages ?? Math.max(1, Math.ceil(serverTotal / pageSize));
+      return {
+        pagedItems: branches,
+        total: serverTotal,
+        totalPages: calcTotalPages,
+      };
+    }
+    return paginateInMemory({
+      items: branches,
+      page,
+      pageSize,
+      filterFn: (branch) => {
+        if (statusFilter !== 'ALL' && branch.status !== statusFilter) {
+          return false;
+        }
+        if (searchQuery.trim()) {
+          const query = searchQuery.toLowerCase().trim();
+          const matchName = branch.name.toLowerCase().includes(query);
+          const matchCode = branch.code.toLowerCase().includes(query);
+          const matchAddress = branch.address
+            ? branch.address.toLowerCase().includes(query)
+            : false;
+          const matchPhone = branch.phone ? branch.phone.includes(query) : false;
+          return matchName || matchCode || matchAddress || matchPhone;
+        }
+        return true;
+      },
+      sortFn: (a, b) => {
+        let cmp = 0;
+        if (sortBy === 'name') cmp = a.name.localeCompare(b.name, 'vi');
+        else if (sortBy === 'code') cmp = a.code.localeCompare(b.code, 'vi');
+        else if (sortBy === 'created_at') {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+          cmp = dateA - dateB;
+        }
+        return sortOrder === 'asc' ? cmp : -cmp;
+      },
     });
-  }, [branches, statusFilter, searchQuery]);
+  }, [
+    isServerPaged,
+    branches,
+    serverTotal,
+    serverTotalPages,
+    page,
+    pageSize,
+    statusFilter,
+    searchQuery,
+    sortBy,
+    sortOrder,
+  ]);
+
+  const pagedBranches = paginationResult.pagedItems;
+  const total = paginationResult.total;
+  const totalPages = paginationResult.totalPages;
+
+  const safePage = Math.min(Math.max(1, page), totalPages);
 
   const activeCount = useMemo(
     () => branches.filter((b) => b.status === 'ACTIVE').length,
@@ -282,15 +415,17 @@ export function BranchManagementView({
   if (loading) {
     return (
       <div className="space-y-6 animate-pulse" data-testid="branch-loading-state">
-        <div className="h-24 bg-slate-200 rounded-2xl w-full" />
-        <div className="h-12 bg-slate-200 rounded-xl w-72" />
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <div className="h-48 bg-slate-200 rounded-2xl" />
-          <div className="h-48 bg-slate-200 rounded-2xl" />
-          <div className="h-48 bg-slate-200 rounded-2xl" />
-        </div>
-        <div className="text-center text-xs font-semibold text-slate-400">
-          Đang tải danh sách chi nhánh...
+        <div data-testid="branch-loading-skeleton" className="animate-pulse space-y-4">
+          <div className="h-24 bg-slate-200 rounded-2xl w-full" />
+          <div className="h-12 bg-slate-200 rounded-xl w-72" />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="h-48 bg-slate-200 rounded-2xl" />
+            <div className="h-48 bg-slate-200 rounded-2xl" />
+            <div className="h-48 bg-slate-200 rounded-2xl" />
+          </div>
+          <div className="text-center text-xs font-semibold text-slate-400">
+            Đang tải danh sách chi nhánh...
+          </div>
         </div>
       </div>
     );
@@ -344,21 +479,25 @@ export function BranchManagementView({
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Thêm chi nhánh</span>
+              <span data-testid="create-branch-btn">Thêm chi nhánh</span>
             </button>
           )}
         </div>
       </div>
 
       {/* Forbidden Warning Banner */}
-      {!canEdit && (
+      {(!canEdit || isForbidden) && (
         <div
           className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3"
           data-testid="branch-forbidden-banner"
         >
           <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div>
-            <h4 className="text-xs font-bold text-amber-900">Giới hạn quyền cấu hình chi nhánh</h4>
+            <h4 className="text-xs font-bold text-amber-900">
+              {isForbidden
+                ? '403 — Không Có Quyền Quản Lý Chi Nhánh'
+                : 'Giới hạn quyền cấu hình chi nhánh'}
+            </h4>
             <p className="text-xs text-amber-700 mt-0.5">
               Tài khoản của bạn chỉ có quyền xem danh sách chi nhánh. Cần quyền cấu hình cửa hàng
               (iam:shop_config) để thêm hoặc chỉnh sửa chi nhánh.
@@ -446,245 +585,349 @@ export function BranchManagementView({
         </div>
       )}
 
-      {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
-        {/* Status Tabs */}
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-          <button
-            type="button"
-            onClick={() => setStatusFilter('ALL')}
-            data-testid="filter-tab-all"
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
-              statusFilter === 'ALL'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Tất cả ({branches.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter('ACTIVE')}
-            data-testid="filter-tab-active"
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
-              statusFilter === 'ACTIVE'
-                ? 'bg-white text-emerald-700 shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Đang hoạt động ({activeCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatusFilter('INACTIVE')}
-            data-testid="filter-tab-inactive"
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
-              statusFilter === 'INACTIVE'
-                ? 'bg-white text-slate-700 shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Tạm ngưng ({inactiveCount})
-          </button>
-        </div>
-
-        {/* Search Input */}
-        <div className="relative w-full sm:w-72">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            id="branch-search-input"
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Tìm theo tên, mã, SĐT..."
-            aria-label="Tìm kiếm chi nhánh theo tên, mã hoặc số điện thoại"
-            data-testid="branch-search-input"
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              aria-label="Xóa từ khóa tìm kiếm"
-              title="Xóa từ khóa tìm kiếm"
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+      {/* When isForbidden is true, do not render grid/list controls */}
+      {!isForbidden && (
+        <>
+          {/* Filter, Search and Sort Bar */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
+            {/* Status Tabs */}
+            <div
+              className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl"
+              data-testid="branch-status-filter"
             >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Branch List or Empty State */}
-      {filteredBranches.length === 0 ? (
-        <div
-          className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-xs space-y-4"
-          data-testid="branch-empty-state"
-        >
-          <div className="w-16 h-16 rounded-2xl bg-orange-50 text-orange-600 mx-auto flex items-center justify-center">
-            <Building2 className="w-8 h-8" />
-          </div>
-          <div className="max-w-md mx-auto">
-            <h3 className="text-sm font-bold text-slate-900">
-              {searchQuery || statusFilter !== 'ALL'
-                ? 'Không tìm thấy chi nhánh phù hợp'
-                : 'Chưa có chi nhánh nào'}
-            </h3>
-            <p className="text-xs text-slate-500 mt-1">
-              {searchQuery || statusFilter !== 'ALL'
-                ? 'Thử thay đổi bộ lọc trạng thái hoặc từ khóa tìm kiếm để tìm chi nhánh cần thiết.'
-                : 'Tạo chi nhánh đầu tiên để thiết lập điểm lấy hàng, kho lưu trữ và giới hạn quyền vận hành.'}
-            </p>
-          </div>
-          {canEdit && (
-            <div>
               <button
                 type="button"
-                onClick={handleOpenCreate}
-                data-testid="empty-create-branch-button"
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Tạo chi nhánh đầu tiên</span>
-              </button>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-          data-testid="branch-list-grid"
-        >
-          {filteredBranches.map((branch) => {
-            const isDefault = branch.is_default;
-            const isActive = branch.status === 'ACTIVE';
-            const isOperating = actionLoadingId === branch.id;
-
-            return (
-              <div
-                key={branch.id}
-                data-testid={`branch-item-${branch.id}`}
-                className={`bg-white border rounded-2xl p-5 shadow-xs transition flex flex-col justify-between ${
-                  isDefault
-                    ? 'border-orange-300 ring-1 ring-orange-400/30'
-                    : 'border-slate-200 hover:border-slate-300'
+                onClick={() => {
+                  setStatusFilter('ALL');
+                  setPage(1);
+                }}
+                data-testid="filter-tab-all"
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                  statusFilter === 'ALL'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                <div className="space-y-3">
-                  {/* Card Header: Badges & Code */}
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-md">
-                      {branch.code}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      {isDefault && (
-                        <span
-                          data-testid={`default-badge-${branch.id}`}
-                          className="inline-flex items-center gap-1 text-[11px] font-bold bg-orange-100 text-orange-800 border border-orange-200 px-2 py-0.5 rounded-md"
-                        >
-                          <Star className="w-3 h-3 fill-orange-500 text-orange-500" />
-                          Mặc định
-                        </span>
-                      )}
-                      <span
-                        data-testid={`status-badge-${branch.id}`}
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
-                          isActive
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
-                        }`}
-                      >
-                        {isActive ? 'Đang hoạt động' : 'Tạm ngưng'}
-                      </span>
-                    </div>
-                  </div>
+                Tất cả ({branches.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('ACTIVE');
+                  setPage(1);
+                }}
+                data-testid="filter-tab-active"
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                  statusFilter === 'ACTIVE'
+                    ? 'bg-white text-emerald-700 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Đang hoạt động ({activeCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('INACTIVE');
+                  setPage(1);
+                }}
+                data-testid="filter-tab-inactive"
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                  statusFilter === 'INACTIVE'
+                    ? 'bg-white text-slate-700 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Tạm ngưng ({inactiveCount})
+              </button>
+            </div>
 
-                  {/* Branch Name */}
-                  <h3 className="text-sm font-bold text-slate-900 line-clamp-1" title={branch.name}>
-                    {branch.name}
-                  </h3>
+            {/* Right: Search & Sort controls */}
+            <div className="flex flex-col sm:flex-row items-center gap-2">
+              {/* Sort Selector */}
+              <div className="flex items-center gap-1.5" data-testid="branch-sort-select">
+                <label htmlFor="branch-sort-by" className="text-xs text-slate-500 font-medium">
+                  Sắp xếp:
+                </label>
+                <select
+                  id="branch-sort-by"
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value);
+                    setPage(1);
+                  }}
+                  className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-hidden"
+                >
+                  <option value="name">Tên chi nhánh</option>
+                  <option value="code">Mã chi nhánh</option>
+                  <option value="created_at">Ngày tạo</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                  aria-label="Đổi chiều sắp xếp"
+                  className="px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100"
+                >
+                  {sortOrder === 'asc' ? '↑' : '↓'}
+                </button>
+              </div>
 
-                  {/* Details: Phone & Address */}
-                  <div className="space-y-1.5 text-xs text-slate-600">
-                    <div className="flex items-center gap-2 text-slate-500">
-                      <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="truncate">{branch.phone || 'Chưa cập nhật SĐT'}</span>
-                    </div>
-                    <div className="flex items-start gap-2 text-slate-500">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                      <span className="line-clamp-2 text-[11px] leading-relaxed">
-                        {branch.address || 'Chưa có địa chỉ chi tiết'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Card Actions Footer */}
-                {canEdit && (
-                  <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEdit(branch)}
-                        data-testid={`edit-branch-button-${branch.id}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition cursor-pointer"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                        <span>Sửa</span>
-                      </button>
-
-                      {!isDefault && isActive && (
-                        <button
-                          type="button"
-                          onClick={() => handleSetDefault(branch)}
-                          data-testid={`set-default-button-${branch.id}`}
-                          disabled={isOperating}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition cursor-pointer disabled:opacity-50"
-                        >
-                          <Star className="w-3 h-3" />
-                          <span>Đặt mặc định</span>
-                        </button>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleToggleStatus(branch)}
-                      data-testid={
-                        isActive
-                          ? `deactivate-branch-button-${branch.id}`
-                          : `activate-branch-button-${branch.id}`
-                      }
-                      disabled={isOperating || (isActive && isDefault)}
-                      title={
-                        isActive && isDefault
-                          ? 'Chi nhánh mặc định không thể tạm ngưng hoạt động'
-                          : isActive
-                            ? 'Tạm ngưng hoạt động'
-                            : 'Kích hoạt lại'
-                      }
-                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                        isActive
-                          ? 'text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200'
-                          : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
-                      }`}
-                    >
-                      {isOperating ? (
-                        <RefreshCw className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Power className="w-3 h-3" />
-                      )}
-                      <span>{isActive ? 'Ngưng' : 'Kích hoạt'}</span>
-                    </button>
-                  </div>
+              {/* Search Input */}
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  id="branch-search-input"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Tìm theo tên, mã, SĐT..."
+                  aria-label="Tìm kiếm chi nhánh theo tên, mã hoặc số điện thoại"
+                  data-testid="branch-search-input"
+                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setPage(1);
+                    }}
+                    aria-label="Xóa từ khóa tìm kiếm"
+                    title="Xóa từ khóa tìm kiếm"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          </div>
+
+          {/* Saved views & column settings toolbar (AC-COM-02-13) */}
+          <div className="pt-2.5 flex flex-wrap items-center justify-between gap-2">
+            <SavedViewsAndColumnsControls
+              savedViews={listState.savedViews}
+              columnSettings={listState.columnSettings}
+              availableColumns={BRANCH_AVAILABLE_COLUMNS}
+              onSaveCurrentView={listState.saveCurrentView}
+              onApplySavedView={listState.applySavedView}
+              onDeleteSavedView={listState.deleteSavedView}
+              onUpdateColumnSettings={listState.updateColumnSettings}
+              testIdPrefix="branch"
+            />
+          </div>
+
+          {/* Branch List or Empty State */}
+          {total === 0 ? (
+            <div
+              className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-xs space-y-4"
+              data-testid="branch-empty-state"
+            >
+              <div className="w-16 h-16 rounded-2xl bg-orange-50 text-orange-600 mx-auto flex items-center justify-center">
+                <Building2 className="w-8 h-8" />
+              </div>
+              <div className="max-w-md mx-auto">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {searchQuery || statusFilter !== 'ALL'
+                    ? 'Không tìm thấy chi nhánh phù hợp'
+                    : 'Chưa có chi nhánh nào được thiết lập'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  {searchQuery || statusFilter !== 'ALL'
+                    ? 'Thử thay đổi bộ lọc trạng thái hoặc từ khóa tìm kiếm để tìm chi nhánh cần thiết.'
+                    : 'Tạo chi nhánh đầu tiên để thiết lập điểm lấy hàng, kho lưu trữ và giới hạn quyền vận hành.'}
+                </p>
+              </div>
+              {canEdit && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleOpenCreate}
+                    data-testid="empty-create-branch-button"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-orange-600 hover:bg-orange-700 text-white rounded-xl shadow-xs transition cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span data-testid="empty-create-branch-btn">Tạo chi nhánh đầu tiên</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-6" data-testid="branch-grid-container">
+              <div
+                className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                data-testid="branch-list-grid"
+              >
+                {pagedBranches.map((branch) => {
+                  const isDefault = branch.is_default;
+                  const isActive = branch.status === 'ACTIVE';
+                  const isOperating = actionLoadingId === branch.id;
+
+                  return (
+                    <div
+                      key={branch.id}
+                      data-testid={`branch-item-${branch.id}`}
+                      className={`bg-white border rounded-2xl p-5 shadow-xs transition flex flex-col justify-between ${
+                        isDefault
+                          ? 'border-orange-300 ring-1 ring-orange-400/30'
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="space-y-3">
+                        {/* Card Header: Badges & Code */}
+                        <div className="flex items-center justify-between gap-2">
+                          {isColVisible('code') && (
+                            <span className="font-mono text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-md">
+                              {branch.code}
+                            </span>
+                          )}
+                          <div className="flex items-center gap-1.5">
+                            {isDefault && (
+                              <span
+                                data-testid={`default-badge-${branch.id}`}
+                                className="inline-flex items-center gap-1 text-[11px] font-bold bg-orange-100 text-orange-800 border border-orange-200 px-2 py-0.5 rounded-md"
+                              >
+                                <Star className="w-3 h-3 fill-orange-500 text-orange-500" />
+                                Mặc định
+                              </span>
+                            )}
+                            {isColVisible('status') && (
+                              <span
+                                data-testid={`status-badge-${branch.id}`}
+                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
+                                  isActive
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}
+                              >
+                                {isActive ? 'Đang hoạt động' : 'Tạm ngưng'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Title and Address */}
+                        <div>
+                          <div className="flex items-start justify-between gap-2">
+                            <h3 className="text-sm font-bold text-slate-900">{branch.name}</h3>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEdit(branch)}
+                                data-testid={`edit-branch-button-${branch.id}`}
+                                className="p-1.5 text-slate-500 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition cursor-pointer"
+                                title="Chỉnh sửa chi nhánh"
+                                aria-label={`Chỉnh sửa chi nhánh ${branch.name}`}
+                              >
+                                <Edit3 className="w-4 h-4" />
+                                <span
+                                  className="sr-only"
+                                  data-testid={`edit-branch-btn-${branch.id}`}
+                                >
+                                  Chỉnh sửa
+                                </span>
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="space-y-1.5 mt-2.5">
+                            {isColVisible('address') && (
+                              <div className="flex items-start gap-2 text-xs text-slate-600">
+                                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                                <span className="line-clamp-2">
+                                  {branch.address || (
+                                    <span className="text-slate-400 italic">Chưa có địa chỉ</span>
+                                  )}
+                                </span>
+                              </div>
+                            )}
+
+                            {isColVisible('phone') && branch.phone && (
+                              <div className="flex items-center gap-2 text-xs text-slate-600">
+                                <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span>{branch.phone}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card Footer Actions */}
+                      {canEdit && (
+                        <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100 mt-4">
+                          <div>
+                            {!isDefault && (
+                              <button
+                                type="button"
+                                onClick={() => handleSetDefault(branch)}
+                                data-testid={`set-default-button-${branch.id}`}
+                                aria-label={`Đặt chi nhánh ${branch.name} làm mặc định`}
+                                disabled={isOperating}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-lg transition cursor-pointer disabled:opacity-50"
+                              >
+                                <Star className="w-3.5 h-3.5" />
+                                <span>Đặt làm mặc định</span>
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStatus(branch)}
+                              data-testid={
+                                isActive
+                                  ? `deactivate-branch-button-${branch.id}`
+                                  : `activate-branch-button-${branch.id}`
+                              }
+                              disabled={isOperating || (isActive && isDefault)}
+                              title={
+                                isActive && isDefault
+                                  ? 'Chi nhánh mặc định không thể tạm ngưng hoạt động'
+                                  : isActive
+                                    ? 'Tạm ngưng hoạt động'
+                                    : 'Kích hoạt lại'
+                              }
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                                isActive
+                                  ? 'text-slate-600 hover:text-rose-700 hover:bg-rose-50'
+                                  : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'
+                              }`}
+                            >
+                              <Power className="w-3.5 h-3.5" />
+                              <span>{isActive ? 'Tạm ngưng' : 'Kích hoạt lại'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Pagination Controls */}
+              <PaginationControls
+                page={safePage}
+                pageSize={pageSize}
+                total={total}
+                totalPages={totalPages}
+                onPageChange={(p) => setPage(p)}
+                onPageSizeChange={(s) => {
+                  setPageSize(s);
+                  setPage(1);
+                }}
+                pageSizeOptions={[2, 4, 10, 20]}
+                testIdPrefix="branch-pagination"
+              />
+            </div>
+          )}
+        </>
       )}
 
-      {/* Modal / Form for Create & Edit */}
+      {/* Create / Edit Branch Modal Dialog */}
       {isFormOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150"
@@ -693,18 +936,17 @@ export function BranchManagementView({
           aria-modal="true"
           aria-labelledby="modal-title"
         >
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95 duration-150">
-            {/* Modal Header */}
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center">
                   <Building2 className="w-4 h-4" />
                 </div>
                 <div>
                   <h3
-                    className="text-sm font-bold text-slate-900"
                     id="modal-title"
                     data-testid="modal-title"
+                    className="text-sm font-bold text-slate-900"
                   >
                     {editingBranch ? 'Chỉnh sửa thông tin chi nhánh' : 'Thêm chi nhánh mới'}
                   </h3>
@@ -718,20 +960,19 @@ export function BranchManagementView({
               <button
                 type="button"
                 onClick={handleCloseForm}
-                data-testid="close-modal-button"
-                aria-label="Đóng cửa sổ"
-                title="Đóng cửa sổ"
+                data-testid="close-branch-modal"
+                aria-label="Đóng biểu mẫu"
+                title="Đóng biểu mẫu"
                 disabled={submitting}
-                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Modal Error Alert */}
             {modalError && (
               <div
-                className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 text-rose-800 text-xs"
+                className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 text-rose-800 text-xs font-medium"
                 data-testid="modal-error-banner"
               >
                 <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -739,7 +980,6 @@ export function BranchManagementView({
               </div>
             )}
 
-            {/* Modal Form */}
             <form onSubmit={handleFormSubmit} className="space-y-4" data-testid="branch-form">
               {/* Branch Name */}
               <div>
@@ -754,7 +994,7 @@ export function BranchManagementView({
                   type="text"
                   value={formState.name}
                   onChange={(e) => handleFormFieldChange('name', e.target.value)}
-                  placeholder="Ví dụ: Kho Tổng Sài Gòn"
+                  placeholder="Ví dụ: Chi nhánh Quận 3, Kho Tân Bình..."
                   data-testid="input-branch-name"
                   className={`w-full px-3 py-2 text-xs bg-white border rounded-xl focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition ${
                     validationErrors.name ? 'border-rose-400 bg-rose-50/20' : 'border-slate-300'
@@ -770,65 +1010,63 @@ export function BranchManagementView({
                 )}
               </div>
 
-              {/* Branch Code */}
-              <div>
-                <label
-                  htmlFor="input-branch-code"
-                  className="block text-xs font-bold text-slate-700 mb-1"
-                >
-                  Mã chi nhánh (Định danh duy nhất) <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  id="input-branch-code"
-                  type="text"
-                  value={formState.code}
-                  onChange={(e) => handleFormFieldChange('code', e.target.value)}
-                  placeholder="Ví dụ: HCM-KHO-01"
-                  data-testid="input-branch-code"
-                  className={`w-full px-3 py-2 text-xs font-mono bg-white border rounded-xl focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition ${
-                    validationErrors.code ? 'border-rose-400 bg-rose-50/20' : 'border-slate-300'
-                  }`}
-                />
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  Tối thiểu 2 ký tự, chỉ gồm chữ cái viết hoa, số, gạch nối (-) hoặc gạch dưới (_).
-                </p>
-                {validationErrors.code && (
-                  <p
-                    className="text-[11px] font-semibold text-rose-600 mt-1"
-                    data-testid="error-branch-code"
+              {/* Code & Phone (2 cols) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="input-branch-code"
+                    className="block text-xs font-bold text-slate-700 mb-1"
                   >
-                    {validationErrors.code}
-                  </p>
-                )}
-              </div>
+                    Mã chi nhánh <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    id="input-branch-code"
+                    type="text"
+                    value={formState.code}
+                    onChange={(e) => handleFormFieldChange('code', e.target.value)}
+                    placeholder="VD: HCM-Q3, HN-KHO-01"
+                    data-testid="input-branch-code"
+                    className={`w-full px-3 py-2 text-xs font-mono uppercase bg-white border rounded-xl focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition ${
+                      validationErrors.code ? 'border-rose-400 bg-rose-50/20' : 'border-slate-300'
+                    }`}
+                  />
+                  {validationErrors.code && (
+                    <p
+                      className="text-[11px] font-semibold text-rose-600 mt-1"
+                      data-testid="error-branch-code"
+                    >
+                      {validationErrors.code}
+                    </p>
+                  )}
+                </div>
 
-              {/* Contact Phone */}
-              <div>
-                <label
-                  htmlFor="input-branch-phone"
-                  className="block text-xs font-bold text-slate-700 mb-1"
-                >
-                  Số điện thoại liên hệ
-                </label>
-                <input
-                  id="input-branch-phone"
-                  type="text"
-                  value={formState.phone}
-                  onChange={(e) => handleFormFieldChange('phone', e.target.value)}
-                  placeholder="Ví dụ: 0901234567 hoặc +84901234567"
-                  data-testid="input-branch-phone"
-                  className={`w-full px-3 py-2 text-xs bg-white border rounded-xl focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition ${
-                    validationErrors.phone ? 'border-rose-400 bg-rose-50/20' : 'border-slate-300'
-                  }`}
-                />
-                {validationErrors.phone && (
-                  <p
-                    className="text-[11px] font-semibold text-rose-600 mt-1"
-                    data-testid="error-branch-phone"
+                <div>
+                  <label
+                    htmlFor="input-branch-phone"
+                    className="block text-xs font-bold text-slate-700 mb-1"
                   >
-                    {validationErrors.phone}
-                  </p>
-                )}
+                    Số điện thoại liên hệ
+                  </label>
+                  <input
+                    id="input-branch-phone"
+                    type="tel"
+                    value={formState.phone}
+                    onChange={(e) => handleFormFieldChange('phone', e.target.value)}
+                    placeholder="VD: 0901234567"
+                    data-testid="input-branch-phone"
+                    className={`w-full px-3 py-2 text-xs bg-white border rounded-xl focus:outline-hidden focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 transition ${
+                      validationErrors.phone ? 'border-rose-400 bg-rose-50/20' : 'border-slate-300'
+                    }`}
+                  />
+                  {validationErrors.phone && (
+                    <p
+                      className="text-[11px] font-semibold text-rose-600 mt-1"
+                      data-testid="error-branch-phone"
+                    >
+                      {validationErrors.phone}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Address */}

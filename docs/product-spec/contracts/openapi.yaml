@@ -711,6 +711,11 @@ paths:
       tags: [Users]
       summary: List merchant users (API-USR-LIST, FEAT-USR-02, FEAT-RBAC-02)
       operationId: listUsers
+      description: >-
+        Tenant comes from the authorized session. Unknown query keys and malformed,
+        repeated or nonpositive numeric inputs return VALIDATION_ERROR. Limits above
+        the maximum are clamped for compatibility. Sorting includes id as a unique
+        tie-breaker in the requested direction. Empty results retain total_pages=1.
       parameters:
         - name: page
           in: query
@@ -735,6 +740,18 @@ paths:
           schema:
             type: string
             enum: [ACTIVE, SUSPENDED, DISABLED, PENDING_VERIFICATION, INVITED]
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [created_at, full_name, id]
+            default: created_at
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
         - name: search
           in: query
           schema:
@@ -746,6 +763,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListUsersResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '403':
