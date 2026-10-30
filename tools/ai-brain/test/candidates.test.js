@@ -1963,7 +1963,7 @@ describe('integration: catalogue snapshot validation', () => {
     if (!snapshot) return; // skip if snapshot missing (caught above)
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'integ-'));
-    const registry = sourcesApi.loadSources();
+    const registry = sourcesApi.loadSources({ file: sourcesApi.DEFAULT_PATH });
 
     // Use REAL model ids from the snapshot for the catalogue.
     const catalogueModels = snapshot.models;

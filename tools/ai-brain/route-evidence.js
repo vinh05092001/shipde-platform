@@ -8,15 +8,17 @@ const sources = require('./sources');
 // Work proof is bound to the entire transport identity. Missing fields are not wildcards.
 function matchesCandidate(candidate, combination) {
   if (!candidate || !combination) return false;
+  const cand =
+    typeof candidate.candidateKey === 'string'
+      ? parseCandidateKey(candidate.candidateKey)
+      : candidate;
   const identity =
     typeof combination.candidateKey === 'string'
       ? parseCandidateKey(combination.candidateKey)
       : combination;
-  if (!identity || candidateKey(candidate) !== candidateKey(identity)) return false;
+  if (!cand || !identity || candidateKey(cand) !== candidateKey(identity)) return false;
   const source = (value) => value.sourceId || value.source || value.gateway || '';
-  return (
-    (!combination.sourceId && !combination.source) || source(candidate) === source(combination)
-  );
+  return (!combination.sourceId && !combination.source) || source(cand) === source(combination);
 }
 
 function hasPriorWorkPass(candidate, combinations) {
@@ -66,10 +68,13 @@ function recentRouteSuccess(candidate, store, options = {}) {
   )
     return false;
   const age = (options.now ?? Date.now()) - Date.parse(record?.lastCheckedAt);
+  const maxAgeMs = sources.getDispatchConfig(options.registry, options).routeEvidenceMaxAgeMs;
   if (
+    Number.isFinite(maxAgeMs) &&
+    maxAgeMs > 0 &&
     record?.status === 'AVAILABLE' &&
     age >= 0 &&
-    age <= sources.getDispatchConfig(options.registry, options).routeEvidenceMaxAgeMs
+    age <= maxAgeMs
   )
     return true;
   return (evidenceData(options).combinations || []).some(
@@ -82,8 +87,8 @@ function recentRouteSuccess(candidate, store, options = {}) {
             e.proofLevel === 'WORK_ITEM_PASS' ||
             (e.status === 'passed' && [1, 2, 3, 'API'].includes(e.level))) &&
           !e.cause &&
-          (options.now ?? Date.now()) >= Date.parse(e.observedAt || e.timestamp || e.at) &&
-          (options.now ?? Date.now()) - Date.parse(e.observedAt || e.timestamp || e.at) <=
+          (options.now ?? Date.now()) >= Date.parse(e.observedAt || e.timestamp || e.at || e.ts) &&
+          (options.now ?? Date.now()) - Date.parse(e.observedAt || e.timestamp || e.at || e.ts) <=
             sources.getDispatchConfig(options.registry, options).routeEvidenceMaxAgeMs
       )
   );
@@ -107,6 +112,109 @@ function measuredProbeCost(candidate, store, options = {}) {
   );
 }
 
+function hasFreshOkOrCompletion(candidate, quotaState, options = {}) {
+  if (!candidate) return false;
+  const now = options.now ?? Date.now();
+  const reg =
+    options.registry || (options.sources && options.sources.sources ? options.sources : undefined);
+  const dispatchConfig =
+    options.dispatchConfig ||
+    (sources && sources.getDispatchConfig ? sources.getDispatchConfig(reg, options) : {});
+  const maxAgeMs = dispatchConfig.routeEvidenceMaxAgeMs;
+  if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) return false;
+
+  // 1. Quota-state record check
+  const qs = quotaState || options.quotaState;
+  try {
+    const quotaScan = require('./quota-scan');
+    if (qs && quotaScan && typeof quotaScan.getQuotaScopeState === 'function') {
+      const scopeState = quotaScan.getQuotaScopeState(candidate, qs, {
+        ...options,
+        now,
+        registry: reg,
+      });
+      if (scopeState && scopeState.code === 'OK') {
+        const candModel = candidate.modelId || candidate.model || '';
+        const cleanCandModel = candModel.replace(/^(ninerouter\/|9router\/)/, '');
+
+        const isBlanketSource =
+          (scopeState.scope === candidate.source ||
+            scopeState.scope === candidate.sourceId ||
+            scopeState.scope === candidate.gateway) &&
+          !scopeState.model;
+
+        const configuredAliases = new Set([
+          candModel,
+          cleanCandModel,
+          ...(Array.isArray(candidate.aliases) ? candidate.aliases : []),
+          ...(Array.isArray(candidate.modelAliases) ? candidate.modelAliases : []),
+        ]);
+        if (candidate.canonicalModel) {
+          configuredAliases.add(candidate.canonicalModel);
+        }
+
+        let matchesCandidateScope = false;
+        if (candModel) {
+          const modelMatches = scopeState.model && configuredAliases.has(scopeState.model);
+          const scopeMatches =
+            !scopeState.model && scopeState.scope && configuredAliases.has(scopeState.scope);
+          matchesCandidateScope = Boolean(modelMatches || scopeMatches);
+        } else {
+          matchesCandidateScope =
+            !scopeState.model &&
+            !isBlanketSource &&
+            (scopeState.scope === candidate.quotaScope || scopeState.scope === candidate.accountId);
+        }
+
+        if (matchesCandidateScope) {
+          const atMs = Date.parse(
+            scopeState.at || scopeState.timestamp || scopeState.observedAt || ''
+          );
+          if (Number.isFinite(atMs) && now >= atMs && now - atMs <= maxAgeMs) {
+            return true;
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Completion evidence check in candidate or evidenceData
+  if (Array.isArray(candidate.evidence)) {
+    const hasCompletion = candidate.evidence.some((e) => {
+      if (!e || e.cause || (e.status !== 'passed' && e.proofLevel !== 'WORK_ITEM_PASS'))
+        return false;
+      const atMs = Date.parse(e.observedAt || e.timestamp || e.at || e.ts || '');
+      if (Number.isFinite(atMs) && now >= atMs && now - atMs <= maxAgeMs) {
+        return true;
+      }
+      return false;
+    });
+    if (hasCompletion) return true;
+  }
+
+  const evData = options.evidenceData || evidenceData(options);
+  if (evData && Array.isArray(evData.combinations)) {
+    const hasStoreCompletion = evData.combinations.some((combo) => {
+      if (!matchesCandidate(candidate, combo)) return false;
+      return (combo.evidence || []).some((e) => {
+        if (!e || e.cause) return false;
+        const isPass =
+          e.proofLevel === 'WORK_ITEM_PASS' ||
+          (e.status === 'passed' && (e.level === 2 || e.level === 3 || e.level === 'WORK_ITEM'));
+        if (!isPass) return false;
+        const atMs = Date.parse(e.observedAt || e.timestamp || e.at || e.ts || '');
+        if (Number.isFinite(atMs) && now >= atMs && now - atMs <= maxAgeMs) {
+          return true;
+        }
+        return false;
+      });
+    });
+    if (hasStoreCompletion) return true;
+  }
+
+  return false;
+}
+
 module.exports = {
   matchesCandidate,
   hasPriorWorkPass,
@@ -114,4 +222,5 @@ module.exports = {
   routeRecord,
   recentRouteSuccess,
   measuredProbeCost,
+  hasFreshOkOrCompletion,
 };

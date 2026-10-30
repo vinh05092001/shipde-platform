@@ -726,5 +726,118 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+
+// --- Branch Contracts (FEAT-ORG-02) ---
+export const BranchAuditEvent = {
+  BRANCH_CREATED: 'BRANCH_CREATED',
+  BRANCH_UPDATED: 'BRANCH_UPDATED',
+  BRANCH_ACTIVATED: 'BRANCH_ACTIVATED',
+  BRANCH_DEACTIVATED: 'BRANCH_DEACTIVATED',
+  BRANCH_DELETED: 'BRANCH_DELETED',
+} as const;
+export type BranchAuditEvent = (typeof BranchAuditEvent)[keyof typeof BranchAuditEvent];
+
+export const BranchErrorCode = {
+  BRANCH_NOT_FOUND: 'BRANCH_NOT_FOUND',
+  BRANCH_CODE_EXISTS: 'BRANCH_CODE_EXISTS',
+  CANNOT_DEACTIVATE_DEFAULT_BRANCH: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+  CANNOT_DELETE_DEFAULT_BRANCH: 'CANNOT_DELETE_DEFAULT_BRANCH',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type BranchErrorCode = (typeof BranchErrorCode)[keyof typeof BranchErrorCode];
+
+export type Branch = components['schemas']['Branch'];
+export type CreateBranchInput = components['schemas']['CreateBranchInput'];
+export type UpdateBranchInput = components['schemas']['UpdateBranchInput'];
+export type BranchResponse = components['schemas']['BranchResponse'];
+export type ListBranchesResponse = components['schemas']['ListBranchesResponse'];
+export type DeleteBranchResponse = components['schemas']['DeleteBranchResponse'];
+
+export const BRANCH_CODE_REGEX = /^[A-Za-z0-9_-]{2,64}$/;
+export const VIETNAMESE_PHONE_REGEX = /^(0|\+84)[35789][0-9]{8}$/;
+
+export function isValidBranchCode(code: unknown): boolean {
+  if (typeof code !== 'string') return false;
+  return BRANCH_CODE_REGEX.test(code.trim());
+}
+
+export function isValidBranchPhone(phone: unknown): boolean {
+  if (typeof phone !== 'string') return false;
+  const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
+  return cleanPhone.length === 0 || VIETNAMESE_PHONE_REGEX.test(cleanPhone);
+}
+
+export interface BranchFormState {
+  name: string;
+  code: string;
+  address: string;
+  phone: string;
+  is_default: boolean;
+  status: 'ACTIVE' | 'INACTIVE';
+}
+
+export function validateBranchForm(form: BranchFormState): {
+  isValid: boolean;
+  errors: Record<string, string>;
+} {
+  const errors: Record<string, string> = {};
+
+  if (!form.name || form.name.trim().length < 2) {
+    errors.name = 'Tên chi nhánh là bắt buộc và phải có ít nhất 2 ký tự';
+  } else if (form.name.trim().length > 255) {
+    errors.name = 'Tên chi nhánh không được vượt quá 255 ký tự';
+  }
+
+  if (!form.code || !isValidBranchCode(form.code)) {
+    errors.code = 'Mã chi nhánh là bắt buộc, từ 2 đến 64 ký tự (chữ, số, "-" hoặc "_")';
+  }
+
+  if (form.address && form.address.trim().length > 1000) {
+    errors.address = 'Địa chỉ chi nhánh không được vượt quá 1000 ký tự';
+  }
+
+  if (form.phone && form.phone.trim()) {
+    const cleanPhone = form.phone.trim().replace(/[\s.-]/g, '');
+    if (!VIETNAMESE_PHONE_REGEX.test(cleanPhone)) {
+      errors.phone = 'Số điện thoại không hợp lệ theo định dạng Việt Nam';
+    }
+  }
+
+  if (form.status && form.status !== 'ACTIVE' && form.status !== 'INACTIVE') {
+    errors.status = 'Trạng thái chi nhánh chỉ có thể là ACTIVE hoặc INACTIVE';
+  }
+
+  return {
+    isValid: Object.keys(errors).length === 0,
+    errors,
+  };
+}
+
+// --- Global Search Contracts (FEAT-COM-01) ---
+export const SearchEntityType = {
+  ALL: 'ALL',
+  ORDER: 'ORDER',
+  WAYBILL: 'WAYBILL',
+  BATCH: 'BATCH',
+  CASE: 'CASE',
+  TRANSACTION: 'TRANSACTION',
+} as const;
+export type SearchEntityType = (typeof SearchEntityType)[keyof typeof SearchEntityType];
+
+export const SearchAuditEvent = {
+  GLOBAL_SEARCH_QUERY: 'GLOBAL_SEARCH_QUERY',
+} as const;
+export type SearchAuditEvent = (typeof SearchAuditEvent)[keyof typeof SearchAuditEvent];
+
+export const SearchErrorCode = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  FORBIDDEN: 'FORBIDDEN',
+} as const;
+export type SearchErrorCode = (typeof SearchErrorCode)[keyof typeof SearchErrorCode];
+
+export type SearchResultItem = components['schemas']['SearchResultItem'];
+export type SearchResponseData = components['schemas']['SearchResponseData'];
+export type SearchResponse = components['schemas']['SearchResponse'];
 // --- Generated OpenAPI Schema Types ---
 export type * from './openapi';

@@ -10,6 +10,10 @@ test('public documents and merged priors carry source ids from descriptor withou
   const html = `<script>self.__next_f.push(${JSON.stringify([1, '1:' + JSON.stringify({ models: [row] }) + '\n'])})</script>`;
 
   const docs = await publicDocuments({
+    descriptor: {
+      endpoint: 'https://artificialanalysis.ai/leaderboards/models',
+      benchlm: 'https://benchlm.ai/data/models.json',
+    },
     now: 1000,
     fetch: async (url) => ({
       ok: true,

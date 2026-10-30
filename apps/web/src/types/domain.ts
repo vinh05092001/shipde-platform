@@ -119,6 +119,8 @@ export interface RateTier {
 export interface Order {
   id: string;
   merchant_id: string;
+  branch_id?: string;
+  warehouse_id?: string;
   order_code: string;
   created_at: Date;
   cod_amount: CurrencyAmount;
@@ -134,6 +136,8 @@ export interface Order {
 export interface Shipment {
   id: string;
   merchant_id: string;
+  branch_id?: string;
+  warehouse_id?: string;
   order_id: string;
   order_code: string;
   carrier_code: CarrierCode;
@@ -168,6 +172,8 @@ export interface ShipmentEvent {
 export interface ExceptionCase {
   id: string;
   merchant_id: string;
+  branch_id?: string;
+  warehouse_id?: string;
   shipment_id: string;
   tracking_code: string;
   exception_type: ExceptionType;
@@ -186,6 +192,8 @@ export interface ExceptionCase {
 export interface CarrierStatement {
   id: string;
   merchant_id: string;
+  branch_id?: string;
+  warehouse_id?: string;
   carrier_account_id: string;
   period_start: Date;
   period_end: Date;
@@ -217,6 +225,8 @@ export interface StatementRow {
 export interface Discrepancy {
   id: string;
   merchant_id: string;
+  branch_id?: string;
+  warehouse_id?: string;
   statement_row_id?: string;
   shipment_id: string;
   tracking_code: string;
@@ -235,6 +245,8 @@ export interface Discrepancy {
 export interface Claim {
   id: string;
   merchant_id: string;
+  branch_id?: string;
+  warehouse_id?: string;
   shipment_id: string;
   discrepancy_id?: string;
   claim_type: string;

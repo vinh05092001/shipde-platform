@@ -21,7 +21,55 @@ tags:
   - name: Reconciliation
   - name: Claims
   - name: Health
+  - name: Search
 paths:
+  /search:
+    get:
+      tags: [Search]
+      summary: Global search (FEAT-COM-01)
+      description: Search across orders, waybills, batches, cases and transactions with tenant scoping and RBAC enforcement.
+      operationId: globalSearch
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search keyword (minimum 2 characters)
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+        - name: type
+          in: query
+          required: false
+          description: Filter entity type
+          schema:
+            type: string
+            enum: [ALL, ORDER, WAYBILL, BATCH, CASE, TRANSACTION]
+            default: ALL
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results to return
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
   /health/live:
     servers:
       - url: /
@@ -1426,6 +1474,214 @@ paths:
           $ref: '#/components/responses/Error'
         '404':
           $ref: '#/components/responses/Error'
+  /branches:
+    get:
+      tags: [Organization]
+      summary: List branches (FEAT-ORG-02)
+      description: Returns branches for the authenticated tenant. Filtered by user store_scopes when scoped.
+      operationId: listBranches
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, INACTIVE]
+      responses:
+        '200':
+          description: List of branches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBranchesResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Organization]
+      summary: Create branch (FEAT-ORG-02)
+      description: Creates a new branch under the merchant. Requires iam:shop_config capability.
+      operationId: createBranch
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranchInput'
+      responses:
+        '201':
+          description: Created branch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /branches/{id}:
+    get:
+      tags: [Organization]
+      summary: Get branch by ID (FEAT-ORG-02)
+      description: Returns branch details by ID with tenant and store scope enforcement.
+      operationId: getBranchById
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Branch details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Organization]
+      summary: Update branch (FEAT-ORG-02)
+      description: Updates branch information. Requires iam:shop_config capability.
+      operationId: updateBranch
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBranchInput'
+      responses:
+        '200':
+          description: Updated branch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Organization]
+      summary: Delete branch (FEAT-ORG-02)
+      description: Deletes branch by ID. Requires iam:shop_config capability. Default branch cannot be deleted.
+      operationId: deleteBranch
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Deleted branch confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteBranchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /branches/{id}/activate:
+    post:
+      tags: [Organization]
+      summary: Activate branch (FEAT-ORG-02)
+      description: Sets branch status to ACTIVE. Requires iam:shop_config capability.
+      operationId: activateBranch
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Activated branch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /branches/{id}/deactivate:
+    post:
+      tags: [Organization]
+      summary: Deactivate branch (FEAT-ORG-02)
+      description: Sets branch status to INACTIVE. Default branch cannot be deactivated. Requires iam:shop_config capability.
+      operationId: deactivateBranch
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Deactivated branch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BranchResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
   /warehouses:
     get:
       tags: [Warehouse]
@@ -2573,6 +2829,139 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/ShopProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    Branch:
+      type: object
+      required:
+        - id
+        - merchant_id
+        - name
+        - code
+        - is_default
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        code:
+          type: string
+        address:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        is_default:
+          type: boolean
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateBranchInput:
+      type: object
+      required:
+        - name
+        - code
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        address:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        is_default:
+          type: boolean
+          default: false
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          default: ACTIVE
+    UpdateBranchInput:
+      type: object
+      properties:
+        name:
+          type: string
+        code:
+          type: string
+        address:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        is_default:
+          type: boolean
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    BranchResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Branch'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListBranchesResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          required:
+            - branches
+            - can_edit
+          properties:
+            branches:
+              type: array
+              items:
+                $ref: '#/components/schemas/Branch'
+            can_edit:
+              type: boolean
+              description: >-
+                Server-derived capability flag. True only when the caller holds
+                iam:shop_config. The web UI must derive edit rights from this
+                field, never from hardcoded role names.
+        meta:
+          $ref: '#/components/schemas/Meta'
+    DeleteBranchResponse:
+      type: object
+      required:
+        - success
+        - message
+        - meta
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
         meta:
           $ref: '#/components/schemas/Meta'
     Warehouse:
@@ -4271,5 +4660,63 @@ components:
               type: integer
             message:
               type: string
+        meta:
+          $ref: '#/components/schemas/Meta'
+    SearchResultItem:
+      type: object
+      required:
+        - id
+        - type
+        - title
+        - subtitle
+        - code
+        - status
+        - url
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [ORDER, WAYBILL, BATCH, CASE, TRANSACTION]
+        title:
+          type: string
+        subtitle:
+          type: string
+        code:
+          type: string
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        url:
+          type: string
+    SearchResponseData:
+      type: object
+      required:
+        - query
+        - total
+        - items
+      properties:
+        query:
+          type: string
+        total:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResultItem'
+    SearchResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/SearchResponseData'
         meta:
           $ref: '#/components/schemas/Meta'

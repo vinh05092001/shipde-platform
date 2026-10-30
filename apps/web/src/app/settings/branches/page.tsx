@@ -2,41 +2,37 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import {
-  ArrowLeft,
-  Store,
-  GitBranch,
-  Warehouse as WarehouseIcon,
-  Users,
-  Shield,
-} from 'lucide-react';
-import {
-  BranchManagementView,
-  BranchItem,
-  DEFAULT_BRANCHES,
-  BranchManagementViewProps,
-} from '@/components/BranchManagementView';
+import { ArrowLeft, Store, GitBranch, Warehouse as WarehouseIcon, Users, Shield } from 'lucide-react';
+import { BranchManagementView } from '@/components/BranchManagementView';
 import { useAuth } from '@/context/AuthContext';
+import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
 
-export interface BranchesSettingsPageProps extends Partial<BranchManagementViewProps> {
-  initialBranches?: BranchItem[] | null;
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+export interface BranchesSettingsPageProps {
+  initialBranches?: Branch[] | null;
   initialLoading?: boolean;
   initialCanEdit?: boolean;
   initialForbidden?: boolean;
   initialError?: string | null;
+  initialScopedStores?: string[] | null;
 }
 
 export default function BranchesSettingsPage({
   initialBranches = null,
-  initialLoading = false,
+  initialLoading,
   initialCanEdit,
   initialForbidden = false,
   initialError = null,
-  ...restProps
+  initialScopedStores = null,
 }: BranchesSettingsPageProps) {
   const { user } = useAuth();
+  const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
 
-  // Permission-based edit rights from API (Rule 9: never hardcoded roles, unknown user means no edit)
+  // Edit rights are server-authoritative: the branches list endpoint returns
+  // `can_edit`, derived from the actor's `iam:shop_config` permission. We never
+  // infer capability from hardcoded role names, and we fail closed (false) until
+  // the server resolves the actor's permissions.
   const derivedCanEdit =
     initialCanEdit !== undefined
       ? initialCanEdit
@@ -46,22 +42,148 @@ export default function BranchesSettingsPage({
           (user as any).permissions.includes('iam:shop_config')
         );
 
-  const [branches, setBranches] = useState<BranchItem[]>(initialBranches || DEFAULT_BRANCHES);
-  const [loading, setLoading] = useState<boolean>(initialLoading);
+  const derivedScopedStores =
+    initialScopedStores !== null ? initialScopedStores : user?.store_scopes || null;
+
+  const [branches, setBranches] = useState<Branch[]>(initialBranches || []);
+  const [canEdit, setCanEdit] = useState<boolean>(derivedCanEdit);
+  const [loading, setLoading] = useState<boolean>(initialLoading ?? initialBranches === null);
   const [error, setError] = useState<string | null>(initialError);
 
-  const handleRefresh = useCallback(() => {
+  const fetchBranches = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // Refresh branches list
-      setBranches(DEFAULT_BRANCHES);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const res = await fetch(`${API_BASE}/api/v1/branches`, { headers });
+      if (!res.ok) {
+        if (res.status === 403) {
+          throw new Error('Bạn không có quyền truy cập danh sách chi nhánh.');
+        }
+        if (res.status === 401) {
+          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        }
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tải danh sách chi nhánh');
+      }
+
+      const json = await res.json();
+      if (json.success && json.data?.branches) {
+        setBranches(json.data.branches);
+        if (initialCanEdit === undefined && json.data.can_edit !== undefined) {
+          setCanEdit(Boolean(json.data.can_edit));
+        }
+      }
     } catch (err: any) {
-      setError(err?.message || 'Lỗi khi tải danh sách chi nhánh');
+      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý chi nhánh');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token, initialCanEdit]);
+
+  useEffect(() => {
+    if (!initialBranches) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial branches fetch
+      void fetchBranches();
+    }
+  }, [initialBranches, fetchBranches]);
+
+  // Create Branch Handler
+  const handleCreate = async (input: CreateBranchInput) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/branches`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(input),
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || 'Không thể tạo mới chi nhánh');
+    }
+
+    // Refresh list to preserve single default ordering and tenant consistency
+    await fetchBranches();
+  };
+
+  // Update Branch Handler
+  const handleUpdate = async (id: string, input: UpdateBranchInput) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/branches/${id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(input),
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || 'Không thể cập nhật chi nhánh');
+    }
+
+    await fetchBranches();
+  };
+
+  // Activate Branch Handler
+  const handleActivate = async (id: string) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/branches/${id}/activate`, {
+      method: 'POST',
+      headers,
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || 'Không thể kích hoạt chi nhánh');
+    }
+
+    await fetchBranches();
+  };
+
+  // Deactivate Branch Handler
+  const handleDeactivate = async (id: string) => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_BASE}/api/v1/branches/${id}/deactivate`, {
+      method: 'POST',
+      headers,
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || 'Không thể tạm ngưng chi nhánh');
+    }
+
+    await fetchBranches();
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
@@ -78,7 +200,7 @@ export default function BranchesSettingsPage({
             </Link>
             <span className="text-slate-300">/</span>
             <span className="text-xs font-bold text-slate-700">
-              Cửa hàng &amp; Chi nhánh (SCR-WH-01 / SCR-SHOP-01)
+              Cửa hàng &amp; Chi nhánh — Điểm gửi hàng (SCR-WH-01 / FEAT-ORG-02)
             </span>
           </div>
 
@@ -91,8 +213,8 @@ export default function BranchesSettingsPage({
               <Store className="w-3.5 h-3.5 text-slate-500" />
               <span>Hồ sơ Shop</span>
             </Link>
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 font-bold">
-              <GitBranch className="w-3.5 h-3.5 text-blue-600" />
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 font-bold">
+              <GitBranch className="w-3.5 h-3.5 text-orange-600" />
               <span>Chi nhánh</span>
             </span>
             <Link
@@ -119,15 +241,19 @@ export default function BranchesSettingsPage({
           </div>
         </div>
 
-        {/* Main Branch Management View */}
+        {/* Main Branches Management View */}
         <BranchManagementView
           branches={branches}
           loading={loading}
-          canEdit={derivedCanEdit}
+          canEdit={canEdit}
           isForbidden={initialForbidden}
+          scopedStores={derivedScopedStores}
           error={error}
-          onRefresh={handleRefresh}
-          {...restProps}
+          onRefresh={fetchBranches}
+          onCreate={handleCreate}
+          onUpdate={handleUpdate}
+          onActivate={handleActivate}
+          onDeactivate={handleDeactivate}
         />
       </div>
     </div>
