@@ -103,7 +103,7 @@ export interface WarehouseItem {
 
 export const DEFAULT_WAREHOUSES: WarehouseItem[] = [
   {
-    id: 'wh-main-01',
+    id: '77777777-7777-4777-8777-777777777777',
     code: 'WH-HCM-01',
     name: 'Kho Tổng TP.HCM (Tân Bình)',
     contact_name: 'Phạm Văn Kho',
@@ -115,7 +115,7 @@ export const DEFAULT_WAREHOUSES: WarehouseItem[] = [
     status: 'active',
   },
   {
-    id: 'wh-north-02',
+    id: '88888888-8888-4888-8888-888888888888',
     code: 'WH-HN-02',
     name: 'Kho Phân Phối Hà Nội (Cầu Giấy)',
     contact_name: 'Trần Văn Bắc',
@@ -127,7 +127,7 @@ export const DEFAULT_WAREHOUSES: WarehouseItem[] = [
     status: 'active',
   },
   {
-    id: 'wh-danang-03',
+    id: '99999999-9999-4999-8999-999999999999',
     code: 'WH-DN-03',
     name: 'Kho Trung Chuyển Đà Nẵng',
     contact_name: 'Lê Văn Trung',
@@ -139,7 +139,7 @@ export const DEFAULT_WAREHOUSES: WarehouseItem[] = [
     status: 'active',
   },
   {
-    id: 'wh-cantho-04',
+    id: '11111111-2222-4333-8444-555555555555',
     code: 'WH-CT-04',
     name: 'Kho Miền Tây Cần Thơ',
     contact_name: 'Nguyễn Văn Tây',

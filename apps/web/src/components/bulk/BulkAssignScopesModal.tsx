@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Store, Warehouse, X, Loader2, Info } from 'lucide-react';
+import { Store, Warehouse, X, Loader2, Info, AlertTriangle } from 'lucide-react';
 import type { StoreItem } from '../UserManagementTab';
 import type { WarehouseItem } from './bulk-types';
 
@@ -11,6 +11,7 @@ export interface BulkAssignScopesModalProps {
   availableStores: StoreItem[];
   availableWarehouses: WarehouseItem[];
   loading?: boolean;
+  errorMessage?: string | null;
   onConfirm: (scopes: { store_scopes: string[]; warehouse_scopes: string[] }) => void;
   onCancel: () => void;
 }
@@ -21,6 +22,7 @@ export const BulkAssignScopesModal: React.FC<BulkAssignScopesModalProps> = ({
   availableStores,
   availableWarehouses,
   loading = false,
+  errorMessage = null,
   onConfirm,
   onCancel,
 }) => {
@@ -99,6 +101,20 @@ export const BulkAssignScopesModal: React.FC<BulkAssignScopesModalProps> = ({
 
         {/* Content */}
         <div className="p-6 space-y-5 max-h-[65vh] overflow-y-auto">
+          {errorMessage && (
+            <div
+              role="alert"
+              data-testid="bulk-modal-error"
+              className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-800 font-medium flex items-start gap-2"
+            >
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Không thể gán phạm vi</p>
+                <p>{errorMessage}</p>
+              </div>
+            </div>
+          )}
+
           {/* Privilege ceiling notice */}
           <div className="p-3 bg-blue-50 border border-blue-200/80 rounded-xl flex items-start gap-2.5 text-xs text-blue-800">
             <Info className="w-4 h-4 shrink-0 text-blue-600 mt-0.5" />

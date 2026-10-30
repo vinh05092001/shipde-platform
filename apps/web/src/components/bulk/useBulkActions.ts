@@ -5,6 +5,7 @@ import {
   BulkActionType,
   BulkActionResponseData,
   BulkActionResponse,
+  BulkActionRequest,
   isDestructiveBulkAction,
 } from './bulk-types';
 
@@ -34,6 +35,7 @@ export function useBulkActions({
   const [assignScopesModalOpen, setAssignScopesModalOpen] = useState<boolean>(false);
   const [resultsModalOpen, setResultsModalOpen] = useState<boolean>(false);
   const [lastResult, setLastResult] = useState<BulkActionResponseData | null>(null);
+  const [lastParams, setLastParams] = useState<BulkActionRequest['params'] | undefined>(undefined);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -97,6 +99,7 @@ export function useBulkActions({
       setInProgress(true);
       setProgressText(`Đang xử lý ${targetIds.length} mục...`);
       setActionError(null);
+      setLastParams(params);
 
       try {
         const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -144,6 +147,9 @@ export function useBulkActions({
         const responseData: BulkActionResponseData = json?.data || json;
         setLastResult(responseData);
         setResultsModalOpen(true);
+        setConfirmModalOpen(false);
+        setPendingAction(null);
+        setAssignScopesModalOpen(false);
 
         // Notify parent to mutate local state for succeeded items
         if (responseData.succeeded_ids?.length > 0 && onSuccessMutation) {
@@ -167,9 +173,6 @@ export function useBulkActions({
       } finally {
         setInProgress(false);
         setProgressText('');
-        setConfirmModalOpen(false);
-        setPendingAction(null);
-        setAssignScopesModalOpen(false);
       }
     },
     [entityType, selectedIds, token, clearSelection, onSuccessMutation]
@@ -211,10 +214,10 @@ export function useBulkActions({
       if (lastResult?.action) {
         // If the action was destructive, confirm is still needed
         const wasDestructive = isDestructiveBulkAction(lastResult.action);
-        void executeBulkAction(lastResult.action, wasDestructive, undefined, failedIds);
+        void executeBulkAction(lastResult.action, wasDestructive, lastParams, failedIds);
       }
     },
-    [lastResult, executeBulkAction]
+    [lastResult, lastParams, executeBulkAction]
   );
 
   return {
@@ -228,6 +231,8 @@ export function useBulkActions({
     inProgress,
     progressText,
     actionError,
+    setActionError,
+    lastParams,
     // Modals state & controls
     confirmModalOpen,
     setConfirmModalOpen,

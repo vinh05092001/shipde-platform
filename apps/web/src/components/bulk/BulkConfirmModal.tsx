@@ -10,6 +10,7 @@ export interface BulkConfirmModalProps {
   action: string;
   selectedCount: number;
   loading?: boolean;
+  errorMessage?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -20,6 +21,7 @@ export const BulkConfirmModal: React.FC<BulkConfirmModalProps> = ({
   action,
   selectedCount,
   loading = false,
+  errorMessage = null,
   onConfirm,
   onCancel,
 }) => {
@@ -92,6 +94,20 @@ export const BulkConfirmModal: React.FC<BulkConfirmModalProps> = ({
 
         {/* Body */}
         <div className="p-6 space-y-4">
+          {errorMessage && (
+            <div
+              role="alert"
+              data-testid="bulk-modal-error"
+              className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-800 font-medium flex items-start gap-2"
+            >
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Không thể thực thi thao tác</p>
+                <p>{errorMessage}</p>
+              </div>
+            </div>
+          )}
+
           <div className="p-3.5 bg-rose-50 border border-rose-200/80 rounded-xl space-y-1.5">
             <p className="text-xs font-bold text-rose-800">
               Bạn có chắc chắn muốn tạm ngưng {selectedCount} {getEntityLabel()} đã chọn?

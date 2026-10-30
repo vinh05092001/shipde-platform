@@ -133,76 +133,120 @@ function createMockPrismaService() {
     { id: 'sess-2', user_id: '33333333-3333-4333-8333-333333333333', token: 'tok-2' },
   ];
 
+  const userModel = {
+    findFirst: async ({ where }: any) => {
+      return (
+        users.find((u) => {
+          if (where.id && u.id !== where.id) return false;
+          if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
+          return true;
+        }) || null
+      );
+    },
+    count: async ({ where }: any) => {
+      return users.filter((u) => {
+        if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
+        if (where.role && u.role !== where.role) return false;
+        if (where.status && u.status !== where.status) return false;
+        if (where.id?.not && u.id === where.id.not) return false;
+        return true;
+      }).length;
+    },
+    update: async ({ where, data }: any) => {
+      const idx = users.findIndex((u) => u.id === where.id);
+      if (idx === -1) throw new Error('User not found');
+      users[idx] = { ...users[idx], ...data, updated_at: new Date() };
+      return users[idx];
+    },
+  };
+
+  const branchModel = {
+    findFirst: async ({ where }: any) => {
+      return (
+        branches.find((b) => {
+          if (where.id && b.id !== where.id) return false;
+          if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
+          return true;
+        }) || null
+      );
+    },
+    update: async ({ where, data }: any) => {
+      const idx = branches.findIndex((b) => b.id === where.id);
+      if (idx === -1) throw new Error('Branch not found');
+      branches[idx] = { ...branches[idx], ...data, updated_at: new Date() };
+      return branches[idx];
+    },
+  };
+
+  const warehouseModel = {
+    findFirst: async ({ where }: any) => {
+      return (
+        warehouses.find((w) => {
+          if (where.id && w.id !== where.id) return false;
+          if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
+          return true;
+        }) || null
+      );
+    },
+    update: async ({ where, data }: any) => {
+      const idx = warehouses.findIndex((w) => w.id === where.id);
+      if (idx === -1) throw new Error('Warehouse not found');
+      warehouses[idx] = { ...warehouses[idx], ...data, updated_at: new Date() };
+      return warehouses[idx];
+    },
+  };
+
+  const bulkActionBatchModel = {
+    findUnique: async ({ where }: any) => {
+      const key = where.merchant_id_idempotency_key;
+      return (
+        batches.find(
+          (b) => b.merchant_id === key.merchant_id && b.idempotency_key === key.idempotency_key
+        ) || null
+      );
+    },
+    create: async ({ data }: any) => {
+      const batch = { ...data, created_at: new Date(), updated_at: new Date() };
+      batches.push(batch);
+      return batch;
+    },
+    update: async ({ where, data }: any) => {
+      const idx = batches.findIndex((b) => b.id === where.id);
+      if (idx !== -1) {
+        batches[idx] = { ...batches[idx], ...data, updated_at: new Date() };
+        return batches[idx];
+      }
+      return null;
+    },
+  };
+
+  const deviceSessionModel = {
+    deleteMany: async ({ where }: any) => {
+      const initial = deviceSessions.length;
+      const remaining = deviceSessions.filter((s) => s.user_id !== where.user_id);
+      const deleted = initial - remaining.length;
+      deviceSessions.length = 0;
+      deviceSessions.push(...remaining);
+      return { count: deleted };
+    },
+  };
+
+  const auditLogModel = {
+    create: async ({ data }: any) => {
+      const log = { id: `audit-${Date.now()}-${Math.random()}`, ...data, created_at: new Date() };
+      auditLogs.push(log);
+      return log;
+    },
+  };
+
   const mockTx = {
     $queryRaw: async () => [],
-    user: {
-      count: async ({ where }: any) => {
-        return users.filter((u) => {
-          if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
-          if (where.role && u.role !== where.role) return false;
-          if (where.status && u.status !== where.status) return false;
-          if (where.id?.not && u.id === where.id.not) return false;
-          return true;
-        }).length;
-      },
-      update: async ({ where, data }: any) => {
-        const idx = users.findIndex((u) => u.id === where.id);
-        if (idx === -1) throw new Error('User not found');
-        users[idx] = { ...users[idx], ...data, updated_at: new Date() };
-        return users[idx];
-      },
-    },
-    branch: {
-      findFirst: async ({ where }: any) => {
-        return (
-          branches.find((b) => {
-            if (where.id && b.id !== where.id) return false;
-            if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
-            return true;
-          }) || null
-        );
-      },
-      update: async ({ where, data }: any) => {
-        const idx = branches.findIndex((b) => b.id === where.id);
-        if (idx === -1) throw new Error('Branch not found');
-        branches[idx] = { ...branches[idx], ...data, updated_at: new Date() };
-        return branches[idx];
-      },
-    },
-    warehouse: {
-      findFirst: async ({ where }: any) => {
-        return (
-          warehouses.find((w) => {
-            if (where.id && w.id !== where.id) return false;
-            if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
-            return true;
-          }) || null
-        );
-      },
-      update: async ({ where, data }: any) => {
-        const idx = warehouses.findIndex((w) => w.id === where.id);
-        if (idx === -1) throw new Error('Warehouse not found');
-        warehouses[idx] = { ...warehouses[idx], ...data, updated_at: new Date() };
-        return warehouses[idx];
-      },
-    },
-    deviceSession: {
-      deleteMany: async ({ where }: any) => {
-        const initial = deviceSessions.length;
-        const remaining = deviceSessions.filter((s) => s.user_id !== where.user_id);
-        const deleted = initial - remaining.length;
-        deviceSessions.length = 0;
-        deviceSessions.push(...remaining);
-        return { count: deleted };
-      },
-    },
-    auditLog: {
-      create: async ({ data }: any) => {
-        const log = { id: `audit-${Date.now()}-${Math.random()}`, ...data, created_at: new Date() };
-        auditLogs.push(log);
-        return log;
-      },
-    },
+    user: userModel,
+    branch: branchModel,
+    warehouse: warehouseModel,
+    bulkActionBatch: bulkActionBatchModel,
+    deviceSession: deviceSessionModel,
+    auditLog: auditLogModel,
   };
 
   return {
@@ -212,71 +256,12 @@ function createMockPrismaService() {
     batches,
     auditLogs,
     deviceSessions,
-    user: {
-      findFirst: async ({ where }: any) => {
-        return (
-          users.find((u) => {
-            if (where.id && u.id !== where.id) return false;
-            if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
-            return true;
-          }) || null
-        );
-      },
-      count: async ({ where }: any) => {
-        return users.filter((u) => {
-          if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
-          if (where.role && u.role !== where.role) return false;
-          if (where.status && u.status !== where.status) return false;
-          if (where.id?.not && u.id === where.id.not) return false;
-          return true;
-        }).length;
-      },
-    },
-    branch: {
-      findFirst: async ({ where }: any) => {
-        return (
-          branches.find((b) => {
-            if (where.id && b.id !== where.id) return false;
-            if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
-            return true;
-          }) || null
-        );
-      },
-    },
-    warehouse: {
-      findFirst: async ({ where }: any) => {
-        return (
-          warehouses.find((w) => {
-            if (where.id && w.id !== where.id) return false;
-            if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
-            return true;
-          }) || null
-        );
-      },
-    },
-    bulkActionBatch: {
-      findUnique: async ({ where }: any) => {
-        const key = where.merchant_id_idempotency_key;
-        return (
-          batches.find(
-            (b) => b.merchant_id === key.merchant_id && b.idempotency_key === key.idempotency_key
-          ) || null
-        );
-      },
-      create: async ({ data }: any) => {
-        const batch = { ...data, created_at: new Date(), updated_at: new Date() };
-        batches.push(batch);
-        return batch;
-      },
-      update: async ({ where, data }: any) => {
-        const idx = batches.findIndex((b) => b.id === where.id);
-        if (idx !== -1) {
-          batches[idx] = { ...batches[idx], ...data, updated_at: new Date() };
-          return batches[idx];
-        }
-        return null;
-      },
-    },
+    user: userModel,
+    branch: branchModel,
+    warehouse: warehouseModel,
+    bulkActionBatch: bulkActionBatchModel,
+    deviceSession: deviceSessionModel,
+    auditLog: auditLogModel,
     $transaction: async (cb: any) => {
       return cb(mockTx);
     },
@@ -717,6 +702,113 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       );
     });
 
+    it('Finding 2: cached replay revalidates current per-item resource authorization before disclosing cached item data / export CSV', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(true);
+      const service = new BulkService(mockPrisma as any, mockRbac as any);
+
+      const targetNorth = '22222222-2222-4222-8222-222222222222'; // branch-north, wh-north
+      const targetSouth = '33333333-3333-4333-8333-333333333333'; // branch-south, wh-south
+      const replayKey = 'req-replay-scope-check-01';
+
+      // 1. Owner executes export CSV for both north and south users -> cached batch includes both
+      const ownerRes = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOwner,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.EXPORT_CSV,
+          ids: [targetNorth, targetSouth],
+          idempotency_key: replayKey,
+        },
+        '127.0.0.1',
+        'corr-export-owner'
+      );
+      assert.strictEqual(ownerRes.data.success_count, 2);
+      assert.ok(ownerRes.data.export_payload?.includes(targetNorth));
+      assert.ok(ownerRes.data.export_payload?.includes(targetSouth));
+
+      // 2. Restricted staff (callerOpsStaff: only has branch-north) replays the cached request
+      const replayRes = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOpsStaff,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.EXPORT_CSV,
+          ids: [targetNorth, targetSouth],
+          idempotency_key: replayKey,
+        },
+        '127.0.0.1',
+        'corr-export-replay'
+      );
+
+      // Replay must revalidate per-item scope:
+      // targetNorth remains SUCCEEDED, targetSouth must be masked to SCOPE_FORBIDDEN
+      assert.strictEqual(replayRes.data.success_count, 1);
+      assert.strictEqual(replayRes.data.failure_count, 1);
+
+      const northItem = replayRes.data.results.find((r) => r.id === targetNorth);
+      assert.strictEqual(northItem?.status, BulkItemStatus.SUCCEEDED);
+
+      const southItem = replayRes.data.results.find((r) => r.id === targetSouth);
+      assert.strictEqual(southItem?.status, BulkItemStatus.FAILED);
+      assert.strictEqual(southItem?.error?.code, 'SCOPE_FORBIDDEN');
+
+      // Export CSV payload must strip the out-of-scope targetSouth row
+      assert.ok(replayRes.data.export_payload?.includes(targetNorth));
+      assert.ok(!replayRes.data.export_payload?.includes(targetSouth));
+    });
+
+    it('Finding 4: safely resumes an interrupted IN_PROGRESS batch under tenant lock without permanent conflict', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(true);
+      const service = new BulkService(mockPrisma as any, mockRbac as any);
+
+      const targetId = '33333333-3333-4333-8333-333333333333';
+      const recoveryKey = 'req-crashed-recovery-key-01';
+
+      // Simulate a prior crashed run that left batch in IN_PROGRESS state
+      mockPrisma.batches.push({
+        id: 'batch-crashed-01',
+        merchant_id: 'm-tenant-1',
+        entity_type: BulkEntityType.USERS,
+        action: BulkActionType.ACTIVATE,
+        idempotency_key: recoveryKey,
+        request_hash: (service as any).computeRequestHash({
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.ACTIVATE,
+          ids: [targetId],
+          idempotency_key: recoveryKey,
+        }),
+        status: 'IN_PROGRESS',
+        total_count: 1,
+        success_count: 0,
+        failure_count: 0,
+        results: {},
+        created_by: callerOwner.userId,
+      });
+
+      // Retrying with the same idempotency key safely recovers and completes the batch under lock
+      const recoveredRes = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOwner,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.ACTIVATE,
+          ids: [targetId],
+          idempotency_key: recoveryKey,
+        },
+        '127.0.0.1',
+        'corr-recovery'
+      );
+
+      assert.strictEqual(recoveredRes.data.success_count, 1);
+      assert.strictEqual(recoveredRes.data.batch_id, 'batch-crashed-01');
+
+      const batchInDb = mockPrisma.batches.find((b) => b.id === 'batch-crashed-01');
+      assert.strictEqual(batchInDb?.status, 'COMPLETED');
+    });
+
     it('AC-COM-03-10: protects sole active owner and prevents self-deactivation during bulk deactivation', async () => {
       const mockPrisma = createMockPrismaService();
       const mockRbac = createMockRbacService(true);
@@ -759,6 +851,33 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       // Device sessions for staff revoked
       const remainingSessions = mockPrisma.deviceSessions.filter((s) => s.user_id === staffId);
       assert.strictEqual(remainingSessions.length, 0);
+
+      // Non-self actor with scope (e.g. secondary owner session) attempts to deactivate sole active owner (ownerId)
+      // Must reach transaction and fail with CANNOT_REMOVE_LAST_OWNER
+      const callerOtherOwner: ActorContext = {
+        userId: '99999999-9999-4999-8999-999999999999',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const resNonSelfOwnerDeact = await service.executeBulkAction(
+        'm-tenant-1',
+        callerOtherOwner,
+        {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.DEACTIVATE,
+          ids: [ownerId],
+          confirm: true,
+          params: { reason: 'Attempting to deactivate sole active owner' },
+        },
+        '127.0.0.1',
+        'corr-10-sole-owner'
+      );
+
+      assert.strictEqual(resNonSelfOwnerDeact.data.failure_count, 1);
+      const soleOwnerResult = resNonSelfOwnerDeact.data.results.find((r) => r.id === ownerId);
+      assert.strictEqual(soleOwnerResult?.status, BulkItemStatus.FAILED);
+      assert.strictEqual(soleOwnerResult?.error?.code, 'CANNOT_REMOVE_LAST_OWNER');
     });
 
     it('AC-COM-03-11: enforces privilege ceiling when bulk assigning scopes', async () => {

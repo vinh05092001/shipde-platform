@@ -422,9 +422,11 @@ async function runBulkSupertestSuite() {
     console.log('  PASS: AC-COM-03-03 tenant isolation guaranteed.');
 
     // ========================================================================
-    // 6. AC-COM-03-06 & 07: Idempotency Replay and Conflict Detection
+    // 6. AC-COM-03-06 & 07: Concurrent Idempotency Replay and Conflict Detection
     // ========================================================================
-    console.log('🧪 Testing AC-COM-03-06 & 07: Idempotency replay and conflict detection...');
+    console.log(
+      '🧪 Testing AC-COM-03-06 & 07: Concurrent idempotency replay and conflict detection...'
+    );
     const idempotencyKey = `idemp-bulk-${Date.now()}`;
     const initialPayload = {
       entity_type: 'branches',
@@ -432,26 +434,25 @@ async function runBulkSupertestSuite() {
       ids: [branch1Id],
     };
 
-    const resIdempInitial = await request(app.getHttpServer())
-      .post('/api/v1/bulk-actions')
-      .set('Authorization', `Bearer ${ownerTokenA}`)
-      .set('Idempotency-Key', idempotencyKey)
-      .send(initialPayload)
-      .expect(200);
+    // Issue concurrent requests with identical payload & key (Finding 5)
+    const [resIdemp1, resIdemp2] = await Promise.all([
+      request(app.getHttpServer())
+        .post('/api/v1/bulk-actions')
+        .set('Authorization', `Bearer ${ownerTokenA}`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send(initialPayload),
+      request(app.getHttpServer())
+        .post('/api/v1/bulk-actions')
+        .set('Authorization', `Bearer ${ownerTokenA}`)
+        .set('Idempotency-Key', idempotencyKey)
+        .send(initialPayload),
+    ]);
 
-    assert.strictEqual(resIdempInitial.body.data.success_count, 1);
-    const initialBatchId = resIdempInitial.body.data.batch_id;
-
-    // Replay identical request with same idempotency key
-    const resIdempReplay = await request(app.getHttpServer())
-      .post('/api/v1/bulk-actions')
-      .set('Authorization', `Bearer ${ownerTokenA}`)
-      .set('Idempotency-Key', idempotencyKey)
-      .send(initialPayload)
-      .expect(200);
-
-    assert.strictEqual(resIdempReplay.body.data.batch_id, initialBatchId);
-    assert.strictEqual(resIdempReplay.body.data.success_count, 1);
+    assert.strictEqual(resIdemp1.status, 200);
+    assert.strictEqual(resIdemp2.status, 200);
+    assert.strictEqual(resIdemp1.body.data.batch_id, resIdemp2.body.data.batch_id);
+    assert.strictEqual(resIdemp1.body.data.success_count, 1);
+    assert.strictEqual(resIdemp2.body.data.success_count, 1);
 
     // Conflict test: Send altered payload with SAME idempotency key -> must return 409
     const resIdempConflict = await request(app.getHttpServer())
@@ -466,7 +467,7 @@ async function runBulkSupertestSuite() {
       .expect(409);
 
     assert.strictEqual(resIdempConflict.body.error.code, 'IDEMPOTENCY_CONFLICT');
-    console.log('  PASS: AC-COM-03-06 & 07 idempotency replay and conflict verified.');
+    console.log('  PASS: AC-COM-03-06 & 07 concurrent idempotency and conflict verified.');
 
     // ========================================================================
     // 7. AC-COM-03-09: Destructive action confirmation (confirm: true)
@@ -506,6 +507,78 @@ async function runBulkSupertestSuite() {
     assert.strictEqual(resSelfDeact.body.data.failure_count, 1);
     assert.strictEqual(resSelfDeact.body.data.results[0].error.code, 'SELF_SUSPENSION_PROHIBITED');
     console.log('  PASS: Self-deactivation blocked.');
+
+    // Sole owner protection: Distinct caller with iam:manage_users attempts to deactivate sole active owner
+    // Must reach database transaction and fail with CANNOT_REMOVE_LAST_OWNER (Finding 5)
+    console.log(
+      '🧪 Testing AC-COM-03-10: Sole active owner protection (CANNOT_REMOVE_LAST_OWNER)...'
+    );
+    const { userId: ownerA2Id, token: ownerTokenA2 } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OWNER,
+      'owner_a2'
+    );
+
+    // Deactivate ownerA2 first so ownerAId becomes the sole active owner
+    const resDeactOwner2 = await request(app.getHttpServer())
+      .post('/api/v1/bulk-actions')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .send({
+        entity_type: 'users',
+        action: 'deactivate',
+        ids: [ownerA2Id],
+        confirm: true,
+      })
+      .expect(200);
+
+    assert.strictEqual(resDeactOwner2.body.data.success_count, 1);
+
+    // Create a delegated admin user in merchantIdA holding wildcard scopes and iam:manage_users
+    const iamPerm = await prisma.permission.findUnique({ where: { code: 'iam:manage_users' } });
+    let adminCustomRoleId: string | undefined = undefined;
+    if (iamPerm) {
+      const customRole = await prisma.role.create({
+        data: {
+          merchant_id: merchantIdA,
+          name: `Delegated Admin Sole Owner Test ${testSuffix}`,
+          description: 'Custom role with iam:manage_users for sole owner testing',
+          permissions: {
+            create: [{ permission: { connect: { id: iamPerm.id } } }],
+          },
+        },
+      });
+      adminCustomRoleId = customRole.id;
+    }
+
+    const { userId: adminUserId, token: adminToken } = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OPS_CSKH,
+      'admin_user_sole_owner',
+      ['*'],
+      ['*']
+    );
+
+    if (adminCustomRoleId) {
+      await prisma.user.update({
+        where: { id: adminUserId },
+        data: { custom_role_id: adminCustomRoleId },
+      });
+    }
+
+    const resSoleOwner = await request(app.getHttpServer())
+      .post('/api/v1/bulk-actions')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        entity_type: 'users',
+        action: 'deactivate',
+        ids: [ownerAId],
+        confirm: true,
+      })
+      .expect(200);
+
+    assert.strictEqual(resSoleOwner.body.data.failure_count, 1);
+    assert.strictEqual(resSoleOwner.body.data.results[0].error.code, 'CANNOT_REMOVE_LAST_OWNER');
+    console.log('  PASS: Sole active owner deactivation blocked with CANNOT_REMOVE_LAST_OWNER.');
 
     // ========================================================================
     // 9. AC-COM-03-11: Assign scopes & privilege ceiling
@@ -619,33 +692,49 @@ async function runBulkSupertestSuite() {
     console.log('🎉 ALL FEAT-COM-03 SUPERTEST CHECKS PASSED (AC-01..13)!');
     console.log('================================================================');
   } finally {
-    // Clean up created test data
     try {
-      await prisma.bulkActionBatch.deleteMany({
-        where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
-      });
-      await prisma.auditLog.deleteMany({
-        where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
-      });
-      await prisma.deviceSession.deleteMany({
-        where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
-      });
-      await prisma.user.deleteMany({
-        where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
-      });
-      await prisma.branch.deleteMany({
-        where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
-      });
-      await prisma.warehouse.deleteMany({
-        where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
-      });
-      await prisma.merchant.deleteMany({
-        where: { id: { in: [merchantIdA, merchantIdB] } },
-      });
-    } catch (cleanupErr) {
-      console.warn('⚠️ Cleanup error in finally block (ignored):', cleanupErr);
+      if (merchantIdA && merchantIdB) {
+        await prisma.bulkActionBatch.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.auditLog.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.deviceSession.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.user.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.role.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.branch.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.warehouse.deleteMany({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        await prisma.merchant.deleteMany({
+          where: { id: { in: [merchantIdA, merchantIdB] } },
+        });
+
+        // Verify clean removal of test tenants without suppressing errors (Finding 5)
+        const remainingMerchants = await prisma.merchant.count({
+          where: { id: { in: [merchantIdA, merchantIdB] } },
+        });
+        assert.strictEqual(remainingMerchants, 0, 'Test tenants must be cleanly removed');
+
+        const remainingUsers = await prisma.user.count({
+          where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+        });
+        assert.strictEqual(remainingUsers, 0, 'Test users must be cleanly removed');
+      }
+    } finally {
+      if (app) {
+        await app.close();
+      }
     }
-    await app.close();
   }
 }
 

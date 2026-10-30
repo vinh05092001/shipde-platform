@@ -94,6 +94,179 @@ export class BulkService {
   }
 
   /**
+   * Revalidates caller's current resource authorization before disclosing cached/replayed results.
+   * Prevents unauthorized data disclosure when an actor replays a previously executed batch (Finding 2).
+   */
+  private async revalidateCachedReplay(
+    tx: any,
+    merchantId: string,
+    actor: ActorContext,
+    dto: ValidatedBulkActionDto,
+    cachedData: BulkActionResponseData
+  ): Promise<BulkActionResponseData> {
+    if (actor.role === 'OWNER') {
+      return cachedData;
+    }
+
+    const actorUser = await tx.user.findFirst({
+      where: { id: actor.userId, merchant_id: merchantId },
+      select: {
+        store_scopes: true,
+        warehouse_scopes: true,
+        carrier_account_scopes: true,
+        role: true,
+      },
+    });
+
+    const actorStoreScopes: string[] = actorUser?.store_scopes || [];
+    const actorWarehouseScopes: string[] = actorUser?.warehouse_scopes || [];
+    const hasWildcardStore = actorStoreScopes.includes('*');
+    const hasWildcardWarehouse = actorWarehouseScopes.includes('*');
+
+    const authorizedResults: BulkActionItemResult[] = [];
+    const forbiddenIds = new Set<string>();
+
+    for (const item of cachedData.results) {
+      let isAllowed = false;
+      let forbiddenMsg = 'Bạn không có quyền truy cập thực thể này';
+
+      switch (dto.entity_type) {
+        case BulkEntityType.USERS: {
+          const targetUser = await tx.user.findFirst({
+            where: { id: item.id, merchant_id: merchantId },
+            select: { store_scopes: true, warehouse_scopes: true },
+          });
+
+          if (!targetUser) {
+            isAllowed = false;
+            forbiddenMsg = 'Người dùng không tồn tại hoặc không thuộc cửa hàng của bạn';
+          } else {
+            const targetStoreScopes: string[] = targetUser.store_scopes || [];
+            const targetWarehouseScopes: string[] = targetUser.warehouse_scopes || [];
+
+            const storeOk =
+              hasWildcardStore ||
+              (targetStoreScopes.length > 0 &&
+                targetStoreScopes.some((s) => actorStoreScopes.includes(s)));
+            const warehouseOk =
+              hasWildcardWarehouse ||
+              (targetWarehouseScopes.length > 0 &&
+                targetWarehouseScopes.some((w) => actorWarehouseScopes.includes(w)));
+
+            if (!storeOk) {
+              forbiddenMsg =
+                'Bạn không có quyền quản lý người dùng ngoài phạm vi chi nhánh được phân công';
+            } else if (!warehouseOk) {
+              forbiddenMsg =
+                'Bạn không có quyền quản lý người dùng ngoài phạm vi kho hàng được phân công';
+            } else {
+              isAllowed = true;
+            }
+          }
+          break;
+        }
+
+        case BulkEntityType.BRANCHES: {
+          const branch = await tx.branch.findFirst({
+            where: { id: item.id, merchant_id: merchantId },
+            select: { id: true, code: true },
+          });
+          if (
+            branch &&
+            (hasWildcardStore ||
+              actorStoreScopes.includes(branch.id) ||
+              actorStoreScopes.includes(branch.code))
+          ) {
+            isAllowed = true;
+          } else {
+            forbiddenMsg = 'Bạn không có quyền quản trị chi nhánh này';
+          }
+          break;
+        }
+
+        case BulkEntityType.WAREHOUSES: {
+          const warehouse = await tx.warehouse.findFirst({
+            where: { id: item.id, merchant_id: merchantId },
+            select: { id: true, code: true },
+          });
+          if (
+            warehouse &&
+            (hasWildcardWarehouse ||
+              actorWarehouseScopes.includes(warehouse.id) ||
+              actorWarehouseScopes.includes(warehouse.code))
+          ) {
+            isAllowed = true;
+          } else {
+            forbiddenMsg = 'Bạn không có quyền quản trị kho hàng này';
+          }
+          break;
+        }
+
+        default:
+          isAllowed = true;
+          break;
+      }
+
+      if (isAllowed) {
+        authorizedResults.push(item);
+      } else {
+        forbiddenIds.add(item.id);
+        authorizedResults.push({
+          id: item.id,
+          status: BulkItemStatus.FAILED,
+          error: {
+            code: 'SCOPE_FORBIDDEN',
+            message: forbiddenMsg,
+          },
+        });
+      }
+    }
+
+    if (forbiddenIds.size === 0) {
+      return cachedData;
+    }
+
+    const succeededIds = authorizedResults
+      .filter((r) => r.status === BulkItemStatus.SUCCEEDED)
+      .map((r) => r.id);
+    const failedIds = authorizedResults
+      .filter((r) => r.status === BulkItemStatus.FAILED)
+      .map((r) => r.id);
+    const successCount = succeededIds.length;
+    const failureCount = failedIds.length;
+    const isPartialFailure = successCount > 0 && failureCount > 0;
+
+    let sanitizedExportPayload = cachedData.export_payload;
+    if (sanitizedExportPayload && typeof sanitizedExportPayload === 'string') {
+      const lines = sanitizedExportPayload.split('\n');
+      if (lines.length > 0) {
+        const header = lines[0];
+        const filteredLines = [header];
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i];
+          if (!line.trim()) continue;
+          const firstCol = line.split(',')[0]?.replace(/"/g, '').trim();
+          if (firstCol && !forbiddenIds.has(firstCol)) {
+            filteredLines.push(line);
+          }
+        }
+        sanitizedExportPayload = filteredLines.join('\n');
+      }
+    }
+
+    return {
+      ...cachedData,
+      success_count: successCount,
+      failure_count: failureCount,
+      is_partial_failure: isPartialFailure,
+      results: authorizedResults,
+      succeeded_ids: succeededIds,
+      failed_ids: failedIds,
+      ...(sanitizedExportPayload !== undefined ? { export_payload: sanitizedExportPayload } : {}),
+    };
+  }
+
+  /**
    * Main entrypoint for executing permission-aware bulk actions with per-item outcomes.
    */
   async executeBulkAction(
@@ -107,77 +280,26 @@ export class BulkService {
     // 1. Permission check
     await this.assertActorEntityPermission(actor, dto.entity_type);
 
-    // 2. Idempotency evaluation & reservation
+    // 2. Transaction with tenant serialization lock (PostgreSQL FOR NO KEY UPDATE)
     const effectiveIdempotencyKey = (dto.idempotency_key || idempotencyKeyHeader || '').trim();
     const requestHash = this.computeRequestHash(dto);
     const batchId = randomUUID();
-    let batchReserved = false;
-
-    // Deduplicate IDs preserving order
     const uniqueIds = Array.from(new Set(dto.ids));
 
-    if (effectiveIdempotencyKey) {
-      const existingBatch = await this.prisma.bulkActionBatch.findUnique({
-        where: {
-          merchant_id_idempotency_key: {
-            merchant_id: merchantId,
-            idempotency_key: effectiveIdempotencyKey,
-          },
-        },
-      });
-
-      if (existingBatch) {
-        if (existingBatch.request_hash !== requestHash) {
-          // Replay with different payload: 409 Conflict
-          throw new CanonicalApiException(
-            HttpStatus.CONFLICT,
-            'IDEMPOTENCY_CONFLICT',
-            'Khóa xử lý trùng lặp (Idempotency-Key) đã được sử dụng với nội dung yêu cầu khác',
-            false,
-            'Vui lòng tạo khóa idempotency mới cho mỗi yêu cầu thay đổi'
-          );
+    return await this.prisma.$transaction(async (tx: any) => {
+      try {
+        if (typeof tx.$queryRaw === 'function') {
+          await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
         }
-        if (existingBatch.status === 'IN_PROGRESS') {
-          throw new CanonicalApiException(
-            HttpStatus.CONFLICT,
-            'IDEMPOTENCY_CONFLICT',
-            'Yêu cầu với khóa idempotency này đang được xử lý',
-            false,
-            'Vui lòng chờ yêu cầu hiện tại hoàn tất hoặc thử lại sau'
-          );
-        }
-        // Idempotent replay: return cached results immediately without duplicate execution
-        const cachedData = existingBatch.results as unknown as BulkActionResponseData;
-        return {
-          data: cachedData,
-          meta: {
-            correlation_id: correlationId,
-            timestamp: new Date().toISOString(),
-          },
-        };
+      } catch {
+        // ignore for mock/unit tests
       }
 
-      // Atomically claim the idempotency key BEFORE mutating records to prevent concurrent duplicate execution
-      try {
-        await this.prisma.bulkActionBatch.create({
-          data: {
-            id: batchId,
-            merchant_id: merchantId,
-            entity_type: dto.entity_type,
-            action: dto.action,
-            idempotency_key: effectiveIdempotencyKey,
-            request_hash: requestHash,
-            status: 'IN_PROGRESS',
-            total_count: uniqueIds.length,
-            success_count: 0,
-            failure_count: 0,
-            results: {},
-            created_by: actor.userId,
-          },
-        });
-        batchReserved = true;
-      } catch (insertErr: any) {
-        const concurrent = await this.prisma.bulkActionBatch.findUnique({
+      let existingBatch: any = null;
+      let isResumingCrashedBatch = false;
+
+      if (effectiveIdempotencyKey) {
+        existingBatch = await tx.bulkActionBatch.findUnique({
           where: {
             merchant_id_idempotency_key: {
               merchant_id: merchantId,
@@ -185,194 +307,215 @@ export class BulkService {
             },
           },
         });
-        if (concurrent && concurrent.request_hash !== requestHash) {
-          throw new CanonicalApiException(
-            HttpStatus.CONFLICT,
-            'IDEMPOTENCY_CONFLICT',
-            'Khóa xử lý trùng lặp (Idempotency-Key) đã được sử dụng với nội dung yêu cầu khác',
-            false,
-            'Vui lòng tạo khóa idempotency mới cho mỗi yêu cầu thay đổi'
-          );
+
+        if (existingBatch) {
+          if (existingBatch.request_hash !== requestHash) {
+            throw new CanonicalApiException(
+              HttpStatus.CONFLICT,
+              'IDEMPOTENCY_CONFLICT',
+              'Khóa xử lý trùng lặp (Idempotency-Key) đã được sử dụng với nội dung yêu cầu khác',
+              false,
+              'Vui lòng tạo khóa idempotency mới cho mỗi yêu cầu thay đổi'
+            );
+          }
+
+          if (existingBatch.status !== 'IN_PROGRESS') {
+            const cachedData = existingBatch.results as unknown as BulkActionResponseData;
+            const authorizedData = await this.revalidateCachedReplay(
+              tx,
+              merchantId,
+              actor,
+              dto,
+              cachedData
+            );
+            return {
+              data: authorizedData,
+              meta: {
+                correlation_id: correlationId,
+                timestamp: new Date().toISOString(),
+              },
+            };
+          }
+
+          // Safe recovery under tenant exclusive lock (Finding 4)
+          isResumingCrashedBatch = true;
         }
-        throw new CanonicalApiException(
-          HttpStatus.CONFLICT,
-          'IDEMPOTENCY_CONFLICT',
-          'Yêu cầu với khóa idempotency này đang được xử lý',
-          false,
-          'Vui lòng chờ yêu cầu hiện tại hoàn tất hoặc thử lại sau'
-        );
       }
-    }
 
-    // 3. Retrieve actor's granted resource scopes for privilege checks
-    const actorUser = await this.prisma.user.findFirst({
-      where: { id: actor.userId, merchant_id: merchantId },
-      select: {
-        store_scopes: true,
-        warehouse_scopes: true,
-        carrier_account_scopes: true,
-        role: true,
-      },
-    });
-    const actorStoreScopes = actorUser?.store_scopes || [];
-    const actorWarehouseScopes = actorUser?.warehouse_scopes || [];
-    const actorCarrierScopes = actorUser?.carrier_account_scopes || [];
+      // 3. Retrieve actor's granted resource scopes for privilege checks
+      const actorUser = await tx.user.findFirst({
+        where: { id: actor.userId, merchant_id: merchantId },
+        select: {
+          store_scopes: true,
+          warehouse_scopes: true,
+          carrier_account_scopes: true,
+          role: true,
+        },
+      });
+      const actorStoreScopes = actorUser?.store_scopes || [];
+      const actorWarehouseScopes = actorUser?.warehouse_scopes || [];
+      const actorCarrierScopes = actorUser?.carrier_account_scopes || [];
 
-    // 4. Process items independently
-    const results: BulkActionItemResult[] = [];
-    const exportRows: Record<string, unknown>[] = [];
-    let exportCsvHeaders: string[] = [];
+      // 4. Process items independently
+      const results: BulkActionItemResult[] = [];
+      const exportRows: Record<string, unknown>[] = [];
+      let exportCsvHeaders: string[] = [];
 
-    for (const targetId of uniqueIds) {
-      try {
-        switch (dto.entity_type) {
-          case BulkEntityType.USERS: {
-            const itemOutcome = await this.executeUserItem(
-              merchantId,
-              actor,
-              actorStoreScopes,
-              actorWarehouseScopes,
-              actorCarrierScopes,
-              targetId,
-              dto.action,
-              dto.params,
-              clientIp
-            );
-            results.push(itemOutcome.result);
-            if (itemOutcome.exportRow) {
-              exportRows.push(itemOutcome.exportRow);
-              if (exportCsvHeaders.length === 0) {
-                exportCsvHeaders = Object.keys(itemOutcome.exportRow);
+      for (const targetId of uniqueIds) {
+        try {
+          switch (dto.entity_type) {
+            case BulkEntityType.USERS: {
+              const itemOutcome = await this.executeUserItem(
+                tx,
+                merchantId,
+                actor,
+                actorStoreScopes,
+                actorWarehouseScopes,
+                actorCarrierScopes,
+                targetId,
+                dto.action,
+                dto.params,
+                clientIp
+              );
+              results.push(itemOutcome.result);
+              if (itemOutcome.exportRow) {
+                exportRows.push(itemOutcome.exportRow);
+                if (exportCsvHeaders.length === 0) {
+                  exportCsvHeaders = Object.keys(itemOutcome.exportRow);
+                }
               }
+              break;
             }
-            break;
-          }
-          case BulkEntityType.BRANCHES: {
-            const itemOutcome = await this.executeBranchItem(
-              merchantId,
-              actor,
-              actorStoreScopes,
-              targetId,
-              dto.action,
-              clientIp
-            );
-            results.push(itemOutcome.result);
-            if (itemOutcome.exportRow) {
-              exportRows.push(itemOutcome.exportRow);
-              if (exportCsvHeaders.length === 0) {
-                exportCsvHeaders = Object.keys(itemOutcome.exportRow);
+            case BulkEntityType.BRANCHES: {
+              const itemOutcome = await this.executeBranchItem(
+                tx,
+                merchantId,
+                actor,
+                actorStoreScopes,
+                targetId,
+                dto.action,
+                clientIp
+              );
+              results.push(itemOutcome.result);
+              if (itemOutcome.exportRow) {
+                exportRows.push(itemOutcome.exportRow);
+                if (exportCsvHeaders.length === 0) {
+                  exportCsvHeaders = Object.keys(itemOutcome.exportRow);
+                }
               }
+              break;
             }
-            break;
-          }
-          case BulkEntityType.WAREHOUSES: {
-            const itemOutcome = await this.executeWarehouseItem(
-              merchantId,
-              actor,
-              actorWarehouseScopes,
-              targetId,
-              dto.action,
-              clientIp
-            );
-            results.push(itemOutcome.result);
-            if (itemOutcome.exportRow) {
-              exportRows.push(itemOutcome.exportRow);
-              if (exportCsvHeaders.length === 0) {
-                exportCsvHeaders = Object.keys(itemOutcome.exportRow);
+            case BulkEntityType.WAREHOUSES: {
+              const itemOutcome = await this.executeWarehouseItem(
+                tx,
+                merchantId,
+                actor,
+                actorWarehouseScopes,
+                targetId,
+                dto.action,
+                clientIp
+              );
+              results.push(itemOutcome.result);
+              if (itemOutcome.exportRow) {
+                exportRows.push(itemOutcome.exportRow);
+                if (exportCsvHeaders.length === 0) {
+                  exportCsvHeaders = Object.keys(itemOutcome.exportRow);
+                }
               }
+              break;
             }
-            break;
           }
+        } catch (err: any) {
+          results.push({
+            id: targetId,
+            status: BulkItemStatus.FAILED,
+            error: {
+              code: err.code || 'INTERNAL_ERROR',
+              message: err.message || 'Lỗi không xác định khi xử lý mục này',
+            },
+          });
         }
-      } catch (err: any) {
-        results.push({
-          id: targetId,
-          status: BulkItemStatus.FAILED,
-          error: {
-            code: err.code || 'INTERNAL_ERROR',
-            message: err.message || 'Lỗi không xác định khi xử lý mục này',
+      }
+
+      // 4. Compute outcome partition
+      const succeededIds = results
+        .filter((r) => r.status === BulkItemStatus.SUCCEEDED)
+        .map((r) => r.id);
+      const failedIds = results.filter((r) => r.status === BulkItemStatus.FAILED).map((r) => r.id);
+
+      const totalCount = uniqueIds.length;
+      const successCount = succeededIds.length;
+      const failureCount = failedIds.length;
+      const isPartialFailure = successCount > 0 && failureCount > 0;
+
+      let exportPayload: string | undefined = undefined;
+      if (dto.action === BulkActionType.EXPORT_CSV) {
+        exportPayload = buildCsvString(exportCsvHeaders, exportRows);
+      }
+
+      const batchStatus =
+        failureCount === 0 ? 'COMPLETED' : successCount === 0 ? 'FAILED' : 'PARTIAL_FAILURE';
+
+      const responseData: BulkActionResponseData = {
+        batch_id: existingBatch ? existingBatch.id : batchId,
+        entity_type: dto.entity_type,
+        action: dto.action,
+        total_count: totalCount,
+        success_count: successCount,
+        failure_count: failureCount,
+        is_partial_failure: isPartialFailure,
+        results,
+        succeeded_ids: succeededIds,
+        failed_ids: failedIds,
+        ...(exportPayload !== undefined ? { export_payload: exportPayload } : {}),
+      };
+
+      // 5. Persist batch record inside transaction (interruption-safe)
+      if (isResumingCrashedBatch && existingBatch) {
+        await tx.bulkActionBatch.update({
+          where: { id: existingBatch.id },
+          data: {
+            status: batchStatus,
+            total_count: totalCount,
+            success_count: successCount,
+            failure_count: failureCount,
+            results: responseData as any,
+          },
+        });
+      } else if (effectiveIdempotencyKey) {
+        await tx.bulkActionBatch.create({
+          data: {
+            id: batchId,
+            merchant_id: merchantId,
+            entity_type: dto.entity_type,
+            action: dto.action,
+            idempotency_key: effectiveIdempotencyKey,
+            request_hash: requestHash,
+            status: batchStatus,
+            total_count: totalCount,
+            success_count: successCount,
+            failure_count: failureCount,
+            results: responseData as any,
+            created_by: actor.userId,
           },
         });
       }
-    }
 
-    // 4. Compute outcome partition
-    const succeededIds = results
-      .filter((r) => r.status === BulkItemStatus.SUCCEEDED)
-      .map((r) => r.id);
-    const failedIds = results.filter((r) => r.status === BulkItemStatus.FAILED).map((r) => r.id);
-
-    const totalCount = uniqueIds.length;
-    const successCount = succeededIds.length;
-    const failureCount = failedIds.length;
-    const isPartialFailure = successCount > 0 && failureCount > 0;
-
-    let exportPayload: string | undefined = undefined;
-    if (dto.action === BulkActionType.EXPORT_CSV) {
-      exportPayload = buildCsvString(exportCsvHeaders, exportRows);
-    }
-
-    const batchStatus =
-      failureCount === 0 ? 'COMPLETED' : successCount === 0 ? 'FAILED' : 'PARTIAL_FAILURE';
-
-    const responseData: BulkActionResponseData = {
-      batch_id: batchId,
-      entity_type: dto.entity_type,
-      action: dto.action,
-      total_count: totalCount,
-      success_count: successCount,
-      failure_count: failureCount,
-      is_partial_failure: isPartialFailure,
-      results,
-      succeeded_ids: succeededIds,
-      failed_ids: failedIds,
-      ...(exportPayload !== undefined ? { export_payload: exportPayload } : {}),
-    };
-
-    // 5. Persist batch record if idempotency key or completed batch
-    if (batchReserved) {
-      await this.prisma.bulkActionBatch.update({
-        where: { id: batchId },
-        data: {
-          status: batchStatus,
-          total_count: totalCount,
-          success_count: successCount,
-          failure_count: failureCount,
-          results: responseData as any,
+      return {
+        data: responseData,
+        meta: {
+          correlation_id: correlationId,
+          timestamp: new Date().toISOString(),
         },
-      });
-    } else if (effectiveIdempotencyKey) {
-      await this.prisma.bulkActionBatch.create({
-        data: {
-          id: batchId,
-          merchant_id: merchantId,
-          entity_type: dto.entity_type,
-          action: dto.action,
-          idempotency_key: effectiveIdempotencyKey,
-          request_hash: requestHash,
-          status: batchStatus,
-          total_count: totalCount,
-          success_count: successCount,
-          failure_count: failureCount,
-          results: responseData as any,
-          created_by: actor.userId,
-        },
-      });
-    }
-
-    return {
-      data: responseData,
-      meta: {
-        correlation_id: correlationId,
-        timestamp: new Date().toISOString(),
-      },
-    };
+      };
+    });
   }
 
   // --------------------------------------------------------------------------
   // USER ITEM EXECUTION
   // --------------------------------------------------------------------------
   private async executeUserItem(
+    tx: any,
     merchantId: string,
     actor: ActorContext,
     actorStoreScopes: string[],
@@ -384,7 +527,7 @@ export class BulkService {
     clientIp?: string
   ): Promise<{ result: BulkActionItemResult; exportRow?: Record<string, unknown> }> {
     // 1. Fetch user scoped strictly to merchant (no cross-tenant oracle)
-    const targetUser = await this.prisma.user.findFirst({
+    const targetUser = await tx.user.findFirst({
       where: {
         id: targetUserId,
         merchant_id: merchantId,
@@ -421,10 +564,10 @@ export class BulkService {
     if (actor.role !== 'OWNER') {
       const hasWildcardStore = actorStoreScopes.includes('*');
       if (!hasWildcardStore) {
-        const targetStoreScopes = targetUser.store_scopes || [];
+        const targetStoreScopes: string[] = targetUser.store_scopes || [];
         const overlaps =
           targetStoreScopes.length > 0 &&
-          targetStoreScopes.some((s) => actorStoreScopes.includes(s));
+          targetStoreScopes.some((s: string) => actorStoreScopes.includes(s));
         if (!overlaps) {
           return {
             result: {
@@ -442,10 +585,10 @@ export class BulkService {
 
       const hasWildcardWarehouse = actorWarehouseScopes.includes('*');
       if (!hasWildcardWarehouse) {
-        const targetWarehouseScopes = targetUser.warehouse_scopes || [];
+        const targetWarehouseScopes: string[] = targetUser.warehouse_scopes || [];
         const overlaps =
           targetWarehouseScopes.length > 0 &&
-          targetWarehouseScopes.some((w) => actorWarehouseScopes.includes(w));
+          targetWarehouseScopes.some((w: string) => actorWarehouseScopes.includes(w));
         if (!overlaps) {
           return {
             result: {
@@ -475,28 +618,26 @@ export class BulkService {
           };
         }
 
-        await this.prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: targetUserId },
-            data: { status: 'active' },
-          });
+        await tx.user.update({
+          where: { id: targetUserId },
+          data: { status: 'active' },
+        });
 
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'USER_ACTIVATED',
-              entity_type: 'User',
-              entity_id: targetUserId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: { status: targetUser.status },
-              new_value: {
-                status: 'active',
-                email: maskIdentifier(targetUser.email),
-                phone: maskIdentifier(targetUser.phone),
-              },
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'USER_ACTIVATED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: { status: targetUser.status },
+            new_value: {
+              status: 'active',
+              email: maskIdentifier(targetUser.email),
+              phone: maskIdentifier(targetUser.phone),
             },
-          });
+          },
         });
 
         return {
@@ -523,69 +664,18 @@ export class BulkService {
           };
         }
 
-        try {
-          await this.prisma.$transaction(async (tx) => {
-            // Tenant serialization lock (PostgreSQL) if available
-            try {
-              if (typeof (tx as any).$queryRaw === 'function') {
-                await (tx as any)
-                  .$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
-              }
-            } catch {
-              // ignore for mock/unit tests
-            }
-
-            // Invariant: Cannot deactivate sole active owner (checked atomically inside transaction)
-            if (targetUser.role === 'OWNER') {
-              const activeOwnerCount = await tx.user.count({
-                where: {
-                  merchant_id: merchantId,
-                  role: 'OWNER',
-                  status: 'active',
-                  id: { not: targetUserId },
-                },
-              });
-
-              if (activeOwnerCount === 0) {
-                const err: any = new Error('CANNOT_REMOVE_LAST_OWNER');
-                err.code = 'CANNOT_REMOVE_LAST_OWNER';
-                throw err;
-              }
-            }
-
-            await tx.user.update({
-              where: { id: targetUserId },
-              data: { status: 'suspended' },
-            });
-
-            // Revoke active device sessions
-            await tx.deviceSession.deleteMany({
-              where: { user_id: targetUserId },
-            });
-
-            await tx.auditLog.create({
-              data: {
-                merchant_id: merchantId,
-                user_id: actor.userId,
-                action: 'USER_SUSPENDED',
-                entity_type: 'User',
-                entity_id: targetUserId,
-                ip_address: clientIp || '127.0.0.1',
-                old_value: { status: targetUser.status },
-                new_value: {
-                  status: 'suspended',
-                  reason: params?.reason || 'Bulk deactivation',
-                  email: maskIdentifier(targetUser.email),
-                  phone: maskIdentifier(targetUser.phone),
-                },
-              },
-            });
+        // Invariant: Cannot deactivate sole active owner
+        if (targetUser.role === 'OWNER') {
+          const activeOwnerCount = await tx.user.count({
+            where: {
+              merchant_id: merchantId,
+              role: 'OWNER',
+              status: 'active',
+              id: { not: targetUserId },
+            },
           });
-        } catch (txErr: any) {
-          if (
-            txErr?.code === 'CANNOT_REMOVE_LAST_OWNER' ||
-            txErr?.message === 'CANNOT_REMOVE_LAST_OWNER'
-          ) {
+
+          if (activeOwnerCount === 0) {
             return {
               result: {
                 id: targetUserId,
@@ -597,8 +687,35 @@ export class BulkService {
               },
             };
           }
-          throw txErr;
         }
+
+        await tx.user.update({
+          where: { id: targetUserId },
+          data: { status: 'suspended' },
+        });
+
+        // Revoke active device sessions
+        await tx.deviceSession.deleteMany({
+          where: { user_id: targetUserId },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'USER_SUSPENDED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: { status: targetUser.status },
+            new_value: {
+              status: 'suspended',
+              reason: params?.reason || 'Bulk deactivation',
+              email: maskIdentifier(targetUser.email),
+              phone: maskIdentifier(targetUser.phone),
+            },
+          },
+        });
 
         return {
           result: {
@@ -687,37 +804,35 @@ export class BulkService {
             ? Array.from(new Set(targetCarrierScopes))
             : targetUser.carrier_account_scopes;
 
-        await this.prisma.$transaction(async (tx) => {
-          await tx.user.update({
-            where: { id: targetUserId },
-            data: {
+        await tx.user.update({
+          where: { id: targetUserId },
+          data: {
+            store_scopes: newStoreScopes,
+            warehouse_scopes: newWarehouseScopes,
+            carrier_account_scopes: newCarrierScopes,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'USER_SCOPE_UPDATED',
+            entity_type: 'User',
+            entity_id: targetUserId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: {
+              store_scopes: targetUser.store_scopes,
+              warehouse_scopes: targetUser.warehouse_scopes,
+              carrier_account_scopes: targetUser.carrier_account_scopes,
+            },
+            new_value: {
               store_scopes: newStoreScopes,
               warehouse_scopes: newWarehouseScopes,
               carrier_account_scopes: newCarrierScopes,
+              email: maskIdentifier(targetUser.email),
             },
-          });
-
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'USER_SCOPE_UPDATED',
-              entity_type: 'User',
-              entity_id: targetUserId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: {
-                store_scopes: targetUser.store_scopes,
-                warehouse_scopes: targetUser.warehouse_scopes,
-                carrier_account_scopes: targetUser.carrier_account_scopes,
-              },
-              new_value: {
-                store_scopes: newStoreScopes,
-                warehouse_scopes: newWarehouseScopes,
-                carrier_account_scopes: newCarrierScopes,
-                email: maskIdentifier(targetUser.email),
-              },
-            },
-          });
+          },
         });
 
         return {
@@ -773,6 +888,7 @@ export class BulkService {
   // BRANCH ITEM EXECUTION
   // --------------------------------------------------------------------------
   private async executeBranchItem(
+    tx: any,
     merchantId: string,
     actor: ActorContext,
     actorStoreScopes: string[],
@@ -780,7 +896,7 @@ export class BulkService {
     action: BulkActionType,
     clientIp?: string
   ): Promise<{ result: BulkActionItemResult; exportRow?: Record<string, unknown> }> {
-    const branch = await this.prisma.branch.findFirst({
+    const branch = await tx.branch.findFirst({
       where: {
         id: branchId,
         merchant_id: merchantId,
@@ -832,28 +948,26 @@ export class BulkService {
           };
         }
 
-        await this.prisma.$transaction(async (tx) => {
-          await tx.branch.update({
-            where: { id: branchId },
-            data: { status: 'ACTIVE' },
-          });
+        await tx.branch.update({
+          where: { id: branchId },
+          data: { status: 'ACTIVE' },
+        });
 
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'BRANCH_ACTIVATED',
-              entity_type: 'Branch',
-              entity_id: branchId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: { status: branch.status },
-              new_value: {
-                status: 'ACTIVE',
-                name: branch.name,
-                code: branch.code,
-              },
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'BRANCH_ACTIVATED',
+            entity_type: 'Branch',
+            entity_id: branchId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: { status: branch.status },
+            new_value: {
+              status: 'ACTIVE',
+              name: branch.name,
+              code: branch.code,
             },
-          });
+          },
         });
 
         return {
@@ -866,67 +980,44 @@ export class BulkService {
       }
 
       case BulkActionType.DEACTIVATE: {
-        try {
-          await this.prisma.$transaction(async (tx) => {
-            try {
-              if (typeof (tx as any).$queryRaw === 'function') {
-                await (tx as any)
-                  .$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
-              }
-            } catch {
-              // ignore in mock/unit
-            }
-
-            const freshBranch =
-              (await tx.branch.findFirst?.({
-                where: { id: branchId, merchant_id: merchantId },
-              })) || branch;
-            if (freshBranch.is_default) {
-              const err: any = new Error('CANNOT_DEACTIVATE_DEFAULT_BRANCH');
-              err.code = 'CANNOT_DEACTIVATE_DEFAULT_BRANCH';
-              throw err;
-            }
-
-            await tx.branch.update({
-              where: { id: branchId },
-              data: { status: 'INACTIVE' },
-            });
-
-            await tx.auditLog.create({
-              data: {
-                merchant_id: merchantId,
-                user_id: actor.userId,
-                action: 'BRANCH_DEACTIVATED',
-                entity_type: 'Branch',
-                entity_id: branchId,
-                ip_address: clientIp || '127.0.0.1',
-                old_value: { status: branch.status },
-                new_value: {
-                  status: 'INACTIVE',
-                  name: branch.name,
-                  code: branch.code,
-                },
+        const freshBranch =
+          (await tx.branch.findFirst?.({
+            where: { id: branchId, merchant_id: merchantId },
+          })) || branch;
+        if (freshBranch.is_default) {
+          return {
+            result: {
+              id: branchId,
+              status: BulkItemStatus.FAILED,
+              error: {
+                code: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+                message: 'Không thể vô hiệu hóa chi nhánh mặc định',
               },
-            });
-          });
-        } catch (txErr: any) {
-          if (
-            txErr?.code === 'CANNOT_DEACTIVATE_DEFAULT_BRANCH' ||
-            txErr?.message === 'CANNOT_DEACTIVATE_DEFAULT_BRANCH'
-          ) {
-            return {
-              result: {
-                id: branchId,
-                status: BulkItemStatus.FAILED,
-                error: {
-                  code: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
-                  message: 'Không thể vô hiệu hóa chi nhánh mặc định',
-                },
-              },
-            };
-          }
-          throw txErr;
+            },
+          };
         }
+
+        await tx.branch.update({
+          where: { id: branchId },
+          data: { status: 'INACTIVE' },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'BRANCH_DEACTIVATED',
+            entity_type: 'Branch',
+            entity_id: branchId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: { status: branch.status },
+            new_value: {
+              status: 'INACTIVE',
+              name: branch.name,
+              code: branch.code,
+            },
+          },
+        });
 
         return {
           result: {
@@ -975,6 +1066,7 @@ export class BulkService {
   // WAREHOUSE ITEM EXECUTION
   // --------------------------------------------------------------------------
   private async executeWarehouseItem(
+    tx: any,
     merchantId: string,
     actor: ActorContext,
     actorWarehouseScopes: string[],
@@ -982,7 +1074,7 @@ export class BulkService {
     action: BulkActionType,
     clientIp?: string
   ): Promise<{ result: BulkActionItemResult; exportRow?: Record<string, unknown> }> {
-    const warehouse = await this.prisma.warehouse.findFirst({
+    const warehouse = await tx.warehouse.findFirst({
       where: {
         id: warehouseId,
         merchant_id: merchantId,
@@ -1034,28 +1126,26 @@ export class BulkService {
           };
         }
 
-        await this.prisma.$transaction(async (tx) => {
-          await tx.warehouse.update({
-            where: { id: warehouseId },
-            data: { status: 'active' },
-          });
+        await tx.warehouse.update({
+          where: { id: warehouseId },
+          data: { status: 'active' },
+        });
 
-          await tx.auditLog.create({
-            data: {
-              merchant_id: merchantId,
-              user_id: actor.userId,
-              action: 'WAREHOUSE_ACTIVATED',
-              entity_type: 'Warehouse',
-              entity_id: warehouseId,
-              ip_address: clientIp || '127.0.0.1',
-              old_value: { status: warehouse.status },
-              new_value: {
-                status: 'active',
-                name: warehouse.name,
-                code: warehouse.code,
-              },
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'WAREHOUSE_ACTIVATED',
+            entity_type: 'Warehouse',
+            entity_id: warehouseId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: { status: warehouse.status },
+            new_value: {
+              status: 'active',
+              name: warehouse.name,
+              code: warehouse.code,
             },
-          });
+          },
         });
 
         return {
@@ -1068,67 +1158,44 @@ export class BulkService {
       }
 
       case BulkActionType.DEACTIVATE: {
-        try {
-          await this.prisma.$transaction(async (tx) => {
-            try {
-              if (typeof (tx as any).$queryRaw === 'function') {
-                await (tx as any)
-                  .$queryRaw`SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE`;
-              }
-            } catch {
-              // ignore in mock/unit
-            }
-
-            const freshWh =
-              (await tx.warehouse.findFirst?.({
-                where: { id: warehouseId, merchant_id: merchantId },
-              })) || warehouse;
-            if (freshWh.is_default) {
-              const err: any = new Error('CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE');
-              err.code = 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE';
-              throw err;
-            }
-
-            await tx.warehouse.update({
-              where: { id: warehouseId },
-              data: { status: 'inactive' },
-            });
-
-            await tx.auditLog.create({
-              data: {
-                merchant_id: merchantId,
-                user_id: actor.userId,
-                action: 'WAREHOUSE_DEACTIVATED',
-                entity_type: 'Warehouse',
-                entity_id: warehouseId,
-                ip_address: clientIp || '127.0.0.1',
-                old_value: { status: warehouse.status },
-                new_value: {
-                  status: 'inactive',
-                  name: warehouse.name,
-                  code: warehouse.code,
-                },
+        const freshWh =
+          (await tx.warehouse.findFirst?.({
+            where: { id: warehouseId, merchant_id: merchantId },
+          })) || warehouse;
+        if (freshWh.is_default) {
+          return {
+            result: {
+              id: warehouseId,
+              status: BulkItemStatus.FAILED,
+              error: {
+                code: 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
+                message: 'Không thể vô hiệu hóa kho hàng mặc định',
               },
-            });
-          });
-        } catch (txErr: any) {
-          if (
-            txErr?.code === 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE' ||
-            txErr?.message === 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE'
-          ) {
-            return {
-              result: {
-                id: warehouseId,
-                status: BulkItemStatus.FAILED,
-                error: {
-                  code: 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
-                  message: 'Không thể vô hiệu hóa kho hàng mặc định',
-                },
-              },
-            };
-          }
-          throw txErr;
+            },
+          };
         }
+
+        await tx.warehouse.update({
+          where: { id: warehouseId },
+          data: { status: 'inactive' },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            merchant_id: merchantId,
+            user_id: actor.userId,
+            action: 'WAREHOUSE_DEACTIVATED',
+            entity_type: 'Warehouse',
+            entity_id: warehouseId,
+            ip_address: clientIp || '127.0.0.1',
+            old_value: { status: warehouse.status },
+            new_value: {
+              status: 'inactive',
+              name: warehouse.name,
+              code: warehouse.code,
+            },
+          },
+        });
 
         return {
           result: {

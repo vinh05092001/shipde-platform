@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { UserManagementTab } from '../components/UserManagementTab';
+import { UserManagementTab, DEFAULT_STORES } from '../components/UserManagementTab';
 import {
   BulkActionBar,
   BulkConfirmModal,
@@ -477,6 +477,7 @@ async function runBulkActionsStatesTest() {
   const htmlBranches = renderTab({
     initialActiveSubTab: 'stores',
     initialPermissions: ['iam:shop_config'],
+    initialBranches: DEFAULT_STORES,
     initialBranchesSelected: ['store_02'],
   });
 
@@ -516,7 +517,8 @@ async function runBulkActionsStatesTest() {
   const htmlWarehouses = renderTab({
     initialActiveSubTab: 'warehouses',
     initialPermissions: ['iam:shop_config'],
-    initialWarehousesSelected: ['wh-main-01'],
+    initialWarehouses: DEFAULT_WAREHOUSES,
+    initialWarehousesSelected: ['77777777-7777-4777-8777-777777777777'],
   });
 
   assert.ok(
@@ -532,7 +534,9 @@ async function runBulkActionsStatesTest() {
     'Warehouses table must have select all checkbox'
   );
   assert.ok(
-    htmlWarehouses.includes('data-testid="warehouse-select-row-wh-main-01"'),
+    htmlWarehouses.includes(
+      'data-testid="warehouse-select-row-77777777-7777-4777-8777-777777777777"'
+    ),
     'Warehouse 1 row checkbox must be present'
   );
   assert.ok(htmlWarehouses.includes('Kho Mặc Định'), 'Default warehouse badge must be present');
@@ -541,6 +545,162 @@ async function runBulkActionsStatesTest() {
     'Bulk action bar must be rendered for selected warehouse'
   );
   console.log('  PASS: Warehouses list multi-select and action bar verified.\n');
+
+  // --------------------------------------------------------------------------
+  // TEST 11: Empty, loading, and error states (no fabricated rows in empty tenant)
+  // --------------------------------------------------------------------------
+  console.log(
+    '🧪 Testing Scenario 11: Empty, loading, and error states for branches & warehouses...'
+  );
+
+  // 11.1: Empty tenant must show empty state and NEVER show fabricated rows
+  const htmlEmpty = renderTab({
+    initialActiveSubTab: 'stores',
+    initialPermissions: ['iam:shop_config'],
+    initialBranches: [],
+    initialWarehouses: [],
+  });
+  assert.ok(
+    htmlEmpty.includes('data-testid="branches-empty"'),
+    'Empty branches list must render branches-empty state'
+  );
+  assert.ok(
+    !htmlEmpty.includes('data-testid="branch-row-'),
+    'Empty tenant must NEVER render fabricated branch rows'
+  );
+
+  const htmlEmptyWh = renderTab({
+    initialActiveSubTab: 'warehouses',
+    initialPermissions: ['iam:shop_config'],
+    initialBranches: [],
+    initialWarehouses: [],
+  });
+  assert.ok(
+    htmlEmptyWh.includes('data-testid="warehouses-empty"'),
+    'Empty warehouses list must render warehouses-empty state'
+  );
+  assert.ok(
+    !htmlEmptyWh.includes('data-testid="warehouse-row-'),
+    'Empty tenant must NEVER render fabricated warehouse rows'
+  );
+
+  // 11.2: Loading states
+  const htmlLoadingStores = renderTab({
+    initialActiveSubTab: 'stores',
+    initialPermissions: ['iam:shop_config'],
+    initialLoading: true,
+  });
+  assert.ok(
+    htmlLoadingStores.includes('data-testid="branches-loading"'),
+    'Loading branches must render branches-loading state'
+  );
+
+  const htmlLoadingWh = renderTab({
+    initialActiveSubTab: 'warehouses',
+    initialPermissions: ['iam:shop_config'],
+    initialLoading: true,
+  });
+  assert.ok(
+    htmlLoadingWh.includes('data-testid="warehouses-loading"'),
+    'Loading warehouses must render warehouses-loading state'
+  );
+
+  // 11.3: Error states with retry button
+  const htmlErrorStores = renderTab({
+    initialActiveSubTab: 'stores',
+    initialPermissions: ['iam:shop_config'],
+    initialError: 'Lỗi nạp danh sách chi nhánh',
+  });
+  assert.ok(
+    htmlErrorStores.includes('data-testid="branches-error"'),
+    'Error loading branches must render branches-error state'
+  );
+  assert.ok(
+    htmlErrorStores.includes('data-testid="branches-retry-btn"'),
+    'Error state must offer actionable retry button'
+  );
+
+  const htmlErrorWh = renderTab({
+    initialActiveSubTab: 'warehouses',
+    initialPermissions: ['iam:shop_config'],
+    initialError: 'Lỗi nạp danh sách kho hàng',
+  });
+  assert.ok(
+    htmlErrorWh.includes('data-testid="warehouses-error"'),
+    'Error loading warehouses must render warehouses-error state'
+  );
+  assert.ok(
+    htmlErrorWh.includes('data-testid="warehouses-retry-btn"'),
+    'Error state must offer actionable retry button'
+  );
+  console.log('  PASS: Empty, loading, and error states verified (no fabricated live data).\n');
+
+  // --------------------------------------------------------------------------
+  // TEST 12: Action errors and modal failure rendering (Finding 3)
+  // --------------------------------------------------------------------------
+  console.log(
+    '🧪 Testing Scenario 12: Action error banners in action bar and modal failure states...'
+  );
+
+  const htmlActionBarError = renderToStaticMarkup(
+    React.createElement(BulkActionBar, {
+      entityType: BulkEntityType.USERS,
+      selectedCount: 2,
+      totalCount: 5,
+      userPermissions: ['iam:manage_users'],
+      isUserKnown: true,
+      actionError: '400 VALIDATION_ERROR: Tham số không hợp lệ',
+      onActionClick: () => {},
+      onClearSelection: () => {},
+      onClearError: () => {},
+    })
+  );
+  assert.ok(
+    htmlActionBarError.includes('data-testid="bulk-action-error"'),
+    'Action error must be rendered in action bar'
+  );
+  assert.ok(htmlActionBarError.includes('400 VALIDATION_ERROR'), 'Error text must be displayed');
+
+  const htmlConfirmModalError = renderToStaticMarkup(
+    React.createElement(BulkConfirmModal, {
+      isOpen: true,
+      entityType: BulkEntityType.USERS,
+      action: 'deactivate',
+      selectedCount: 1,
+      errorMessage: '409 IDEMPOTENCY_CONFLICT: Thao tác đang được xử lý',
+      onConfirm: () => {},
+      onCancel: () => {},
+    })
+  );
+  assert.ok(
+    htmlConfirmModalError.includes('data-testid="bulk-modal-error"'),
+    'Confirm modal must render error message'
+  );
+  assert.ok(
+    htmlConfirmModalError.includes('409 IDEMPOTENCY_CONFLICT'),
+    'Modal error message content must be visible'
+  );
+
+  const htmlAssignScopesModalError = renderToStaticMarkup(
+    React.createElement(BulkAssignScopesModal, {
+      isOpen: true,
+      selectedCount: 1,
+      availableStores: DEFAULT_STORES,
+      availableWarehouses: DEFAULT_WAREHOUSES,
+      errorMessage: '403 PRIVILEGE_CEILING_EXCEEDED: Vượt quá trần thẩm quyền',
+      onConfirm: () => {},
+      onCancel: () => {},
+    })
+  );
+  assert.ok(
+    htmlAssignScopesModalError.includes('data-testid="bulk-modal-error"'),
+    'Assign scopes modal must render error message'
+  );
+  assert.ok(
+    htmlAssignScopesModalError.includes('PRIVILEGE_CEILING_EXCEEDED'),
+    'Scope modal error text must be displayed'
+  );
+  console.log('  PASS: Action error and modal failure states verified.\n');
 
   console.log('================================================================');
   console.log('🎉 ALL FEAT-COM-03 BULK ACTION UI STATES & CONTROLS PASSED 100%!');
