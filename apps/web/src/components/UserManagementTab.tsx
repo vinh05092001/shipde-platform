@@ -219,7 +219,7 @@ export interface UserManagementTabProps {
 }
 
 export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) => {
-  const { token, user } = useAuth();
+  const { token, user, isHydrating } = useAuth();
   const [activeSubTab, setActiveSubTab] = useState<
     'matrix' | 'stores' | 'members' | 'devices' | 'invitations'
   >(props.initialActiveSubTab ?? props.initialSubTab ?? 'members');
@@ -236,14 +236,19 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   // Permission-based authorization check (Rule 9: permissions from API, unknown user means no edit, fail closed)
+  const isAuthLoading = isHydrating;
+  const isComponentLoading = Boolean(props.initialLoading);
+
   const isForbidden =
     props.initialForbidden !== undefined
       ? props.initialForbidden
-      : user
-        ? Array.isArray((user as any).permissions)
-          ? !(user as any).permissions.includes('iam:manage_users')
-          : true
-        : false;
+      : isAuthLoading || isComponentLoading
+        ? false
+        : !user
+          ? true
+          : Array.isArray((user as any).permissions)
+            ? !(user as any).permissions.includes('iam:manage_users')
+            : true;
 
   const canEditBranches =
     props.initialCanEditBranches !== undefined
@@ -366,6 +371,18 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       status: 'ALL',
     },
     syncUrl: true,
+    namespace: 'user',
+    listKey: 'users',
+    initialColumns: [
+      'full_name',
+      'role',
+      'store_scopes',
+      'warehouse_scopes',
+      'carrier_scopes',
+      'created_at',
+      'last_active_at',
+      'status',
+    ],
   });
 
   const userPage = userListState.page;
@@ -377,15 +394,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
   const userStatusFilter = userListState.filters.status;
   const setUserPage = userListState.setPage;
   const setUserPageSize = userListState.setPageSize;
-  const setUserSortBy = userListState.setSort;
-  const setUserSortOrder = (order: 'asc' | 'desc' | ((prev: 'asc' | 'desc') => 'asc' | 'desc')) => {
-    if (typeof order === 'function') {
-      const next = order(userSortOrder);
-      if (next !== userSortOrder) userListState.setSort(userSortBy);
-    } else if (order !== userSortOrder) {
-      userListState.setSort(userSortBy);
-    }
-  };
+  const setUserSort = userListState.setSort;
   const setUserSearch = userListState.setSearch;
   const setUserRoleFilter = (role: string) => userListState.setFilter('role', role);
   const setUserStatusFilter = (status: string) => userListState.setFilter('status', status);
@@ -407,18 +416,112 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data?.branches) {
-          setStores(json.data.branches);
+      if (!res.ok) {
+        setStores([]);
+        if (res.status === 403) {
+          setStoresError('Bạn không có quyền xem danh sách chi nhánh (403)');
+        } else if (res.status === 401) {
+          setStoresError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại (401)');
+        } else {
+          const errData = await res.json().catch(() => null);
+          setStoresError(
+            errData?.error?.message || `Lỗi máy chủ khi tải danh sách chi nhánh (${res.status})`
+          );
         }
+        return;
       }
+      const json = await res.json().catch(() => null);
+      if (!json || !json.success || !Array.isArray(json.data?.branches)) {
+        setStores([]);
+        setStoresError('Dữ liệu danh sách chi nhánh từ máy chủ không hợp lệ');
+        return;
+      }
+      setStores(json.data.branches);
     } catch (err: any) {
-      setStoresError(err?.message || 'Lỗi khi tải danh sách chi nhánh');
+      setStores([]);
+      setStoresError(err?.message || 'Lỗi kết nối khi tải danh sách chi nhánh');
     } finally {
       setStoresLoading(false);
     }
   }, [token]);
+
+  const handleCreateBranch = useCallback(
+    async (input: any) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tạo mới chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  const handleUpdateBranch = useCallback(
+    async (id: string, input: any) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches/${id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể cập nhật chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  const handleActivateBranch = useCallback(
+    async (id: string) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches/${id}/activate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể kích hoạt chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
+
+  const handleDeactivateBranch = useCallback(
+    async (id: string) => {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${apiBase}/api/v1/branches/${id}/deactivate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error?.message || 'Không thể tạm ngưng chi nhánh');
+      }
+      await fetchStores();
+    },
+    [token, fetchStores]
+  );
 
   useEffect(() => {
     if (activeSubTab === 'stores' && (!props.initialStores || props.initialStores.length === 0)) {
@@ -516,13 +619,14 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
       if (!res.ok) {
         throw new Error(data.error?.message || 'Không thể tải danh sách người dùng');
       }
+      const returnedTotal = data.meta?.total ?? (data.data || []).length;
+      const returnedTotalPages =
+        data.meta?.total_pages ?? Math.max(1, Math.ceil(returnedTotal / userPageSize));
       setUsers(data.data || []);
-      if (data.meta) {
-        setTotalUsers(data.meta.total ?? (data.data || []).length);
-        setTotalPages(data.meta.total_pages ?? 1);
-      } else {
-        setTotalUsers((data.data || []).length);
-        setTotalPages(1);
+      setTotalUsers(returnedTotal);
+      setTotalPages(returnedTotalPages);
+      if (returnedTotal > 0 && userPage > returnedTotalPages) {
+        setUserPage(returnedTotalPages);
       }
     } catch (err: any) {
       setUsersError(err.message || 'Lỗi kết nối khi tải danh sách người dùng');
@@ -539,6 +643,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
     userPageSize,
     userSortBy,
     userSortOrder,
+    setUserPage,
   ]);
 
   useEffect(() => {
@@ -1173,7 +1278,56 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
               ))}
             </div>
           ) : users.length === 0 ? (
-            userSearch.trim() || userRoleFilter !== 'ALL' || userStatusFilter !== 'ALL' ? (
+            totalUsers > 0 && userPage > totalPages ? (
+              /* Out-of-range Page Recovery State (Finding 9) */
+              <div className="space-y-4">
+                <div
+                  className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-3"
+                  data-testid="users-out-of-range-state"
+                >
+                  <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Trang {userPage} không có dữ liệu
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Hiện có {totalUsers} người dùng trên {totalPages} trang. Vui lòng chuyển về
+                    trang hợp lệ.
+                  </p>
+                  <div className="flex items-center justify-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setUserPage(totalPages)}
+                      className="btn-primary text-xs py-1.5 px-3 cursor-pointer"
+                      data-testid="users-nav-last-page-btn"
+                    >
+                      Đến trang {totalPages}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUserPage(1)}
+                      className="btn-secondary text-xs py-1.5 px-3 cursor-pointer"
+                      data-testid="users-nav-first-page-btn"
+                    >
+                      Về trang 1
+                    </button>
+                  </div>
+                </div>
+
+                <PaginationControls
+                  page={userPage}
+                  pageSize={userPageSize}
+                  total={totalUsers}
+                  totalPages={totalPages}
+                  onPageChange={(p) => setUserPage(p)}
+                  onPageSizeChange={(s) => {
+                    setUserPageSize(s);
+                    setUserPage(1);
+                  }}
+                  pageSizeOptions={[10, 20, 50]}
+                  testIdPrefix="users-pagination"
+                />
+              </div>
+            ) : userSearch.trim() || userRoleFilter !== 'ALL' || userStatusFilter !== 'ALL' ? (
               /* No Results State with active filters */
               <div
                 className="modern-card p-12 text-center bg-slate-50 border border-slate-200 rounded-xl space-y-3"
@@ -1230,15 +1384,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                           field="full_name"
                           currentSort={userSortBy}
                           currentDirection={userSortOrder}
-                          onSort={(f) => {
-                            if (userSortBy === f) {
-                              setUserSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-                            } else {
-                              setUserSortBy(f);
-                              setUserSortOrder('asc');
-                            }
-                            setUserPage(1);
-                          }}
+                          onSort={(f) => setUserSort(f)}
                           testId="sort-header-user-fullname"
                         />
                       </th>
@@ -1252,15 +1398,7 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
                           field="created_at"
                           currentSort={userSortBy}
                           currentDirection={userSortOrder}
-                          onSort={(f) => {
-                            if (userSortBy === f) {
-                              setUserSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-                            } else {
-                              setUserSortBy(f);
-                              setUserSortOrder('asc');
-                            }
-                            setUserPage(1);
-                          }}
+                          onSort={(f) => setUserSort(f)}
                           testId="sort-header-user-created"
                         />
                       </th>
@@ -1879,6 +2017,11 @@ export const UserManagementTab: React.FC<UserManagementTabProps> = (props = {}) 
           error={storesError}
           canEdit={canEditBranches}
           onRefresh={fetchStores}
+          onCreate={handleCreateBranch}
+          onUpdate={handleUpdateBranch}
+          onActivate={handleActivateBranch}
+          onDeactivate={handleDeactivateBranch}
+          namespace="branch"
         />
       )}
 

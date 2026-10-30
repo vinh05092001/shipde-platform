@@ -53,6 +53,7 @@ export interface WarehouseManagementViewProps {
   initialPageSize?: number;
   initialSortBy?: string;
   initialSortOrder?: 'asc' | 'desc';
+  namespace?: string;
   onRefresh?: () => void;
   onCreate?: (input: CreateWarehouseInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateWarehouseInput) => Promise<void>;
@@ -73,6 +74,7 @@ export function WarehouseManagementView({
   initialFormState = {},
   initialValidationErrors = {},
   initialActiveTab = 'pickup',
+  namespace,
   onRefresh,
   onCreate,
   onUpdate,
@@ -93,6 +95,8 @@ export function WarehouseManagementView({
     defaultSearch: '',
     defaultFilters: { status: 'ALL' },
     syncUrl: true,
+    namespace,
+    listKey: 'warehouses',
   });
 
   const page = listState.page;

@@ -5,7 +5,11 @@ import { TestingModule, Test } from '@nestjs/testing';
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import request from 'supertest';
 import { ListContractError, parseListQuery } from '../../../../packages/contracts/src/lists';
-import { USERS_LIST_POLICY } from '../../../../packages/config/src/list-policies';
+import {
+  USERS_LIST_POLICY,
+  BRANCHES_LIST_POLICY,
+  WAREHOUSES_LIST_POLICY,
+} from '../../../../packages/config/src/list-policies';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { SessionGuard } from '../session/session.guard';
@@ -264,4 +268,53 @@ test('HTTP list effects: filters, counts, deterministic pages, isolation, canoni
   } finally {
     await app.close();
   }
+});
+
+test('Branches and Warehouses list policy contracts: defaults, clamping, validation', () => {
+  // Branches policy
+  assert.equal(parseListQuery({}, BRANCHES_LIST_POLICY).limit, 10);
+  assert.equal(parseListQuery({ limit: '101' }, BRANCHES_LIST_POLICY).limit, 100);
+  assert.deepEqual(
+    parseListQuery(
+      { page: '2', limit: '5', sort_by: 'code', sort_order: 'desc' },
+      BRANCHES_LIST_POLICY
+    ),
+    {
+      page: 2,
+      limit: 5,
+      skip: 5,
+      filters: {},
+      orderBy: [{ code: 'desc' }, { id: 'desc' }],
+    }
+  );
+  assert.throws(
+    () => parseListQuery({ status: 'INVALID_STATUS' }, BRANCHES_LIST_POLICY),
+    (e: unknown) => e instanceof ListContractError && e.code === 'VALIDATION_ERROR'
+  );
+  assert.throws(
+    () => parseListQuery({ unknown_prop: 'injected' }, BRANCHES_LIST_POLICY),
+    (e: unknown) => e instanceof ListContractError && e.code === 'VALIDATION_ERROR'
+  );
+
+  // Warehouses policy
+  assert.equal(parseListQuery({}, WAREHOUSES_LIST_POLICY).limit, 10);
+  assert.equal(parseListQuery({ limit: '150' }, WAREHOUSES_LIST_POLICY).limit, 100);
+  assert.deepEqual(
+    parseListQuery({ page: '3', limit: '10', status: 'active' }, WAREHOUSES_LIST_POLICY),
+    {
+      page: 3,
+      limit: 10,
+      skip: 20,
+      filters: { status: 'active' },
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+    }
+  );
+  assert.throws(
+    () => parseListQuery({ status: 'DELETED' }, WAREHOUSES_LIST_POLICY),
+    (e: unknown) => e instanceof ListContractError && e.code === 'VALIDATION_ERROR'
+  );
+  assert.throws(
+    () => parseListQuery({ page: '0' }, WAREHOUSES_LIST_POLICY),
+    (e: unknown) => e instanceof ListContractError && e.code === 'VALIDATION_ERROR'
+  );
 });

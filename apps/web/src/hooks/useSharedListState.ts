@@ -2,6 +2,23 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 
+export interface SavedView<TFilters extends Record<string, string>> {
+  id: string;
+  name: string;
+  page?: number;
+  pageSize?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  search?: string;
+  filters: TFilters;
+  createdAt: string;
+}
+
+export interface ColumnSettings {
+  visibleColumns: string[];
+  columnOrder?: string[];
+}
+
 export interface SharedListStateOptions<TFilters extends Record<string, string>> {
   defaultPage?: number;
   defaultPageSize?: number;
@@ -10,6 +27,9 @@ export interface SharedListStateOptions<TFilters extends Record<string, string>>
   defaultSearch?: string;
   defaultFilters: TFilters;
   syncUrl?: boolean;
+  namespace?: string;
+  listKey?: string;
+  initialColumns?: string[];
 }
 
 export interface SharedListState<TFilters extends Record<string, string>> {
@@ -20,6 +40,8 @@ export interface SharedListState<TFilters extends Record<string, string>> {
   search: string;
   filters: TFilters;
   hasActiveFilters: boolean;
+  savedViews: SavedView<TFilters>[];
+  columnSettings: ColumnSettings;
   setPage: (newPage: number) => void;
   setPageSize: (newPageSize: number) => void;
   setSort: (field: string, direction?: 'asc' | 'desc') => void;
@@ -29,15 +51,25 @@ export interface SharedListState<TFilters extends Record<string, string>> {
   setFilter: <K extends keyof TFilters>(key: K, value: TFilters[K]) => void;
   resetFilters: () => void;
   getUrlSearchParams: () => URLSearchParams;
+  saveCurrentView: (name: string) => SavedView<TFilters>;
+  applySavedView: (viewId: string) => boolean;
+  deleteSavedView: (viewId: string) => boolean;
+  updateColumnSettings: (settings: Partial<ColumnSettings>) => void;
 }
 
 /**
  * Safely reads a search param from window.location.search if in browser.
+ * When namespace is provided, only matches namespaced param (e.g. branch_page).
  */
-function getInitialParam(key: string): string | null {
+function getInitialParam(key: string, namespace?: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
     const params = new URLSearchParams(window.location.search);
+    if (namespace) {
+      const nsVal = params.get(`${namespace}_${key}`);
+      if (nsVal !== null) return nsVal;
+      return null;
+    }
     return params.get(key);
   } catch {
     return null;
@@ -55,32 +87,40 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     defaultSearch = '',
     defaultFilters,
     syncUrl = true,
+    namespace,
+    listKey,
+    initialColumns = [],
   } = options;
 
   // Initialize from URL or default
   const [page, setPageState] = useState<number>(() => {
-    const p = getInitialParam('page');
+    const p = getInitialParam('page', namespace);
     if (p && /^\d+$/.test(p) && Number(p) > 0) return Number(p);
     return defaultPage;
   });
 
   const [pageSize, setPageSizeState] = useState<number>(() => {
-    const s = getInitialParam('limit') || getInitialParam('pageSize');
+    const s =
+      getInitialParam('limit', namespace) ||
+      getInitialParam('pageSize', namespace) ||
+      getInitialParam('size', namespace);
     if (s && /^\d+$/.test(s) && Number(s) > 0) return Number(s);
     return defaultPageSize;
   });
 
   const [sortBy, setSortBy] = useState<string>(() => {
-    return getInitialParam('sort_by') || getInitialParam('sortBy') || defaultSortBy;
+    return (
+      getInitialParam('sort_by', namespace) || getInitialParam('sortBy', namespace) || defaultSortBy
+    );
   });
 
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() => {
-    const o = getInitialParam('sort_order') || getInitialParam('sortOrder');
+    const o = getInitialParam('sort_order', namespace) || getInitialParam('sortOrder', namespace);
     return o === 'asc' || o === 'desc' ? o : defaultSortOrder;
   });
 
   const [search, setSearchState] = useState<string>(() => {
-    return getInitialParam('search') || getInitialParam('q') || defaultSearch;
+    return getInitialParam('search', namespace) || getInitialParam('q', namespace) || defaultSearch;
   });
 
   const [filters, setFiltersState] = useState<TFilters>(() => {
@@ -89,7 +129,8 @@ export function useSharedListState<TFilters extends Record<string, string>>(
       try {
         const params = new URLSearchParams(window.location.search);
         for (const key of Object.keys(defaultFilters)) {
-          const val = params.get(key);
+          const paramKey = namespace ? `${namespace}_${key}` : key;
+          const val = params.get(paramKey);
           if (val !== null) {
             initial[key] = val;
           }
@@ -99,6 +140,29 @@ export function useSharedListState<TFilters extends Record<string, string>>(
       }
     }
     return initial as TFilters;
+  });
+
+  // Persisted saved views and column settings in localStorage (AC-COM-02-13)
+  const prefStorageKey = `shipde_pref_${listKey || namespace || 'default'}`;
+
+  const [savedViews, setSavedViews] = useState<SavedView<TFilters>[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = localStorage.getItem(`${prefStorageKey}_views`);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [columnSettings, setColumnSettings] = useState<ColumnSettings>(() => {
+    if (typeof window === 'undefined') return { visibleColumns: initialColumns };
+    try {
+      const raw = localStorage.getItem(`${prefStorageKey}_columns`);
+      return raw ? JSON.parse(raw) : { visibleColumns: initialColumns };
+    } catch {
+      return { visibleColumns: initialColumns };
+    }
   });
 
   const hasActiveFilters = useMemo(() => {
@@ -112,52 +176,59 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     return false;
   }, [search, filters, defaultFilters]);
 
-  // Sync state to URL if enabled
+  // Sync state to URL if enabled, strictly respecting namespace
   useEffect(() => {
     if (!syncUrl || typeof window === 'undefined') return;
     try {
       const params = new URLSearchParams(window.location.search);
+      const pageKey = namespace ? `${namespace}_page` : 'page';
+      const limitKey = namespace ? `${namespace}_limit` : 'limit';
+      const sortByKey = namespace ? `${namespace}_sort_by` : 'sort_by';
+      const sortOrderKey = namespace ? `${namespace}_sort_order` : 'sort_order';
+      const searchKey = namespace ? `${namespace}_search` : 'search';
+
       // Page
       if (page > 1) {
-        params.set('page', String(page));
+        params.set(pageKey, String(page));
       } else {
-        params.delete('page');
+        params.delete(pageKey);
       }
 
       // Page size
       if (pageSize !== defaultPageSize) {
-        params.set('limit', String(pageSize));
+        params.set(limitKey, String(pageSize));
       } else {
-        params.delete('limit');
+        params.delete(limitKey);
       }
 
       // Sort
       if (sortBy !== defaultSortBy) {
-        params.set('sort_by', sortBy);
+        params.set(sortByKey, sortBy);
       } else {
-        params.delete('sort_by');
+        params.delete(sortByKey);
       }
       if (sortOrder !== defaultSortOrder) {
-        params.set('sort_order', sortOrder);
+        params.set(sortOrderKey, sortOrder);
       } else {
-        params.delete('sort_order');
+        params.delete(sortOrderKey);
       }
 
       // Search
       if (search.trim().length > 0) {
-        params.set('search', search.trim());
+        params.set(searchKey, search.trim());
       } else {
-        params.delete('search');
-        params.delete('q');
+        params.delete(searchKey);
+        if (!namespace) params.delete('q');
       }
 
       // Filters
       for (const [key, val] of Object.entries(filters)) {
+        const filterKey = namespace ? `${namespace}_${key}` : key;
         const def = defaultFilters[key];
         if (val && val !== def && val !== 'ALL') {
-          params.set(key, val);
+          params.set(filterKey, val);
         } else {
-          params.delete(key);
+          params.delete(filterKey);
         }
       }
 
@@ -175,6 +246,7 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     search,
     filters,
     syncUrl,
+    namespace,
     defaultPageSize,
     defaultSortBy,
     defaultSortOrder,
@@ -190,6 +262,7 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     setPageState(1);
   }, []);
 
+  // Atomic sort update: updates field and direction atomically, resetting page to 1
   const setSort = useCallback((field: string, direction?: 'asc' | 'desc') => {
     setSortBy((prevSort) => {
       if (direction) {
@@ -235,16 +308,105 @@ export function useSharedListState<TFilters extends Record<string, string>>(
 
   const getUrlSearchParams = useCallback(() => {
     const p = new URLSearchParams();
-    if (page > 1) p.set('page', String(page));
-    p.set('limit', String(pageSize));
-    p.set('sort_by', sortBy);
-    p.set('sort_order', sortOrder);
-    if (search.trim()) p.set('search', search.trim());
+    const pageKey = namespace ? `${namespace}_page` : 'page';
+    const limitKey = namespace ? `${namespace}_limit` : 'limit';
+    const sortByKey = namespace ? `${namespace}_sort_by` : 'sort_by';
+    const sortOrderKey = namespace ? `${namespace}_sort_order` : 'sort_order';
+    const searchKey = namespace ? `${namespace}_search` : 'search';
+
+    if (page > 1) p.set(pageKey, String(page));
+    p.set(limitKey, String(pageSize));
+    p.set(sortByKey, sortBy);
+    p.set(sortOrderKey, sortOrder);
+    if (search.trim()) p.set(searchKey, search.trim());
     for (const [k, v] of Object.entries(filters)) {
-      if (v && v !== 'ALL') p.set(k, v);
+      const fKey = namespace ? `${namespace}_${k}` : k;
+      if (v && v !== 'ALL') p.set(fKey, v);
     }
     return p;
-  }, [page, pageSize, sortBy, sortOrder, search, filters]);
+  }, [page, pageSize, sortBy, sortOrder, search, filters, namespace]);
+
+  const saveCurrentView = useCallback(
+    (name: string): SavedView<TFilters> => {
+      const newView: SavedView<TFilters> = {
+        id: `view_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: name.trim() || 'Chế độ xem',
+        page,
+        pageSize,
+        sortBy,
+        sortOrder,
+        search,
+        filters: { ...filters },
+        createdAt: new Date().toISOString(),
+      };
+      setSavedViews((prev) => {
+        const next = [newView, ...prev.filter((v) => v.name !== newView.name)];
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`${prefStorageKey}_views`, JSON.stringify(next));
+          }
+        } catch {
+          // ignore storage quota errors
+        }
+        return next;
+      });
+      return newView;
+    },
+    [page, pageSize, sortBy, sortOrder, search, filters, prefStorageKey]
+  );
+
+  const applySavedView = useCallback(
+    (viewId: string): boolean => {
+      const target = savedViews.find((v) => v.id === viewId);
+      if (!target) return false;
+      setPageState(target.page || 1);
+      setPageSizeState(target.pageSize || defaultPageSize);
+      setSortBy(target.sortBy || defaultSortBy);
+      setSortOrder(target.sortOrder || defaultSortOrder);
+      setSearchState(target.search || '');
+      setFiltersState(target.filters);
+      return true;
+    },
+    [savedViews, defaultPageSize, defaultSortBy, defaultSortOrder]
+  );
+
+  const deleteSavedView = useCallback(
+    (viewId: string): boolean => {
+      setSavedViews((prev) => {
+        const next = prev.filter((v) => v.id !== viewId);
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`${prefStorageKey}_views`, JSON.stringify(next));
+          }
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+      return true;
+    },
+    [prefStorageKey]
+  );
+
+  const updateColumnSettings = useCallback(
+    (newSettings: Partial<ColumnSettings>) => {
+      setColumnSettings((prev) => {
+        const next: ColumnSettings = {
+          visibleColumns: newSettings.visibleColumns || prev.visibleColumns,
+          columnOrder: newSettings.columnOrder || prev.columnOrder,
+        };
+        try {
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`${prefStorageKey}_columns`, JSON.stringify(next));
+          }
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    [prefStorageKey]
+  );
 
   return {
     page,
@@ -254,6 +416,8 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     search,
     filters,
     hasActiveFilters,
+    savedViews,
+    columnSettings,
     setPage,
     setPageSize,
     setSort,
@@ -263,6 +427,10 @@ export function useSharedListState<TFilters extends Record<string, string>>(
     setFilter,
     resetFilters,
     getUrlSearchParams,
+    saveCurrentView,
+    applySavedView,
+    deleteSavedView,
+    updateColumnSettings,
   };
 }
 

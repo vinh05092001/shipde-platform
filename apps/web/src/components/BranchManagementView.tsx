@@ -42,6 +42,7 @@ export interface BranchManagementViewProps {
   initialPageSize?: number;
   initialSortBy?: string;
   initialSortOrder?: 'asc' | 'desc';
+  namespace?: string;
   onRefresh?: () => void;
   onCreate?: (input: CreateBranchInput) => Promise<void>;
   onUpdate?: (id: string, input: UpdateBranchInput) => Promise<void>;
@@ -65,6 +66,7 @@ export function BranchManagementView({
   initialPageSize = 10,
   initialSortBy = 'name',
   initialSortOrder = 'asc',
+  namespace,
   onRefresh,
   onCreate,
   onUpdate,
@@ -80,6 +82,8 @@ export function BranchManagementView({
     defaultSearch: '',
     defaultFilters: { status: 'ALL' },
     syncUrl: true,
+    namespace,
+    listKey: 'branches',
   });
 
   const page = listState.page;
