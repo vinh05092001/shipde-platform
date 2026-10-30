@@ -1344,6 +1344,70 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/exports': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List export jobs (FEAT-COM-05)
+     * @description Returns paginated history of export jobs for the authenticated tenant.
+     */
+    get: operations['listExports'];
+    put?: never;
+    /**
+     * Create export job (FEAT-COM-05)
+     * @description Initiates a permission-aware export job for operational/financial data.
+     */
+    post: operations['createExport'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/exports/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get export job by ID (FEAT-COM-05)
+     * @description Returns status, progress, row counts, and per-row results of an export job.
+     */
+    get: operations['getExportById'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/exports/{id}/download': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Download export file (FEAT-COM-05)
+     * @description Streams completed export file (CSV, XLSX, or PDF) with checksum and audit logging.
+     */
+    get: operations['downloadExport'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2462,6 +2526,93 @@ export interface components {
         message: string;
       };
       meta: components['schemas']['Meta'];
+    };
+    /** @enum {string} */
+    ExportResource: 'users' | 'warehouses' | 'audit_logs' | 'ledgers';
+    /** @enum {string} */
+    ExportFormat: 'csv' | 'xlsx' | 'pdf';
+    /** @enum {string} */
+    ExportJobStatus: 'pending' | 'processing' | 'completed' | 'failed';
+    ExportRowResult: {
+      row_index: number;
+      entity_id?: string;
+      /** @enum {string} */
+      status: 'succeeded' | 'failed' | 'skipped';
+      error_code?: string;
+      error_message?: string;
+    };
+    ExportGenerationMetadata: {
+      /** Format: uuid */
+      export_id: string;
+      /** Format: date-time */
+      generated_at: string;
+      /** Format: uuid */
+      merchant_id: string;
+      /** Format: uuid */
+      requested_by: string;
+      user_role?: string;
+      resource: components['schemas']['ExportResource'];
+      format: components['schemas']['ExportFormat'];
+      filters?: Record<string, never>;
+      rule_version?: string;
+      total_rows: number;
+      succeeded_rows?: number;
+      failed_rows?: number;
+      checksum_sha256: string;
+    };
+    ExportJobItem: {
+      /** Format: uuid */
+      id: string;
+      /** Format: uuid */
+      merchant_id: string;
+      /** Format: uuid */
+      user_id: string;
+      resource: components['schemas']['ExportResource'];
+      format: components['schemas']['ExportFormat'];
+      status: components['schemas']['ExportJobStatus'];
+      filters?: Record<string, never>;
+      total_rows: number;
+      processed_rows?: number;
+      succeeded_rows?: number;
+      failed_rows?: number;
+      file_name?: string;
+      file_size_bytes?: number;
+      checksum_sha256?: string;
+      download_url?: string;
+      error_code?: string;
+      error_message?: string;
+      metadata?: components['schemas']['ExportGenerationMetadata'];
+      row_results?: components['schemas']['ExportRowResult'][];
+      rule_version?: string;
+      /** Format: date-time */
+      created_at: string;
+      /** Format: date-time */
+      completed_at?: string;
+    };
+    CreateExportJobRequest: {
+      resource: components['schemas']['ExportResource'];
+      format: components['schemas']['ExportFormat'];
+      filters?: Record<string, never>;
+      /** @default true */
+      sync: boolean;
+    };
+    CreateExportJobResponse: {
+      data: components['schemas']['ExportJobItem'];
+      meta: components['schemas']['Meta'];
+    };
+    ExportJobResponse: {
+      data: components['schemas']['ExportJobItem'];
+      meta: components['schemas']['Meta'];
+    };
+    ListExportJobsResponse: {
+      data: components['schemas']['ExportJobItem'][];
+      meta: {
+        total: number;
+        page: number;
+        limit: number;
+        total_pages: number;
+        correlation_id: string;
+      };
     };
     SearchResultItem: {
       /** Format: uuid */
@@ -4706,6 +4857,116 @@ export interface operations {
         content?: never;
       };
       409: components['responses']['Error'];
+    };
+  };
+  listExports: {
+    parameters: {
+      query?: {
+        page?: number;
+        limit?: number;
+        status?: 'pending' | 'processing' | 'completed' | 'failed';
+        resource?: 'users' | 'warehouses' | 'audit_logs' | 'ledgers';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description List of export jobs */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ListExportJobsResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  createExport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CreateExportJobRequest'];
+      };
+    };
+    responses: {
+      /** @description Export job created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CreateExportJobResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  getExportById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Export job details */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ExportJobResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  downloadExport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: components['parameters']['Id'];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Export file binary content */
+      200: {
+        headers: {
+          'X-Export-Checksum'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'text/csv': string;
+          'application/vnd.ms-excel': string;
+          'application/pdf': string;
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+      409: components['responses']['Error'];
+      410: components['responses']['Error'];
     };
   };
 }

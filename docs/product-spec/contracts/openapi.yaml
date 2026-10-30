@@ -2102,6 +2102,141 @@ paths:
           description: Case transition recorded
         '409':
           $ref: '#/components/responses/Error'
+  /exports:
+    get:
+      tags: [Exports]
+      summary: List export jobs (FEAT-COM-05)
+      description: Returns paginated history of export jobs for the authenticated tenant.
+      operationId: listExports
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, processing, completed, failed]
+        - name: resource
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [users, warehouses, audit_logs, ledgers]
+      responses:
+        '200':
+          description: List of export jobs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListExportJobsResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Exports]
+      summary: Create export job (FEAT-COM-05)
+      description: Initiates a permission-aware export job for operational/financial data.
+      operationId: createExport
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExportJobRequest'
+      responses:
+        '201':
+          description: Export job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateExportJobResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /exports/{id}:
+    get:
+      tags: [Exports]
+      summary: Get export job by ID (FEAT-COM-05)
+      description: Returns status, progress, row counts, and per-row results of an export job.
+      operationId: getExportById
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Export job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportJobResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /exports/{id}/download:
+    get:
+      tags: [Exports]
+      summary: Download export file (FEAT-COM-05)
+      description: Streams completed export file (CSV, XLSX, or PDF) with checksum and audit logging.
+      operationId: downloadExport
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: Export file binary content
+          headers:
+            X-Export-Checksum:
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.ms-excel:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '410':
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -4641,6 +4776,170 @@ components:
               type: string
         meta:
           $ref: '#/components/schemas/Meta'
+    ExportResource:
+      type: string
+      enum: [users, warehouses, audit_logs, ledgers]
+    ExportFormat:
+      type: string
+      enum: [csv, xlsx, pdf]
+    ExportJobStatus:
+      type: string
+      enum: [pending, processing, completed, failed]
+    ExportRowResult:
+      type: object
+      required: [row_index, status]
+      properties:
+        row_index:
+          type: integer
+        entity_id:
+          type: string
+        status:
+          type: string
+          enum: [succeeded, failed, skipped]
+        error_code:
+          type: string
+        error_message:
+          type: string
+    ExportGenerationMetadata:
+      type: object
+      required: [export_id, generated_at, merchant_id, requested_by, resource, format, total_rows, checksum_sha256]
+      properties:
+        export_id:
+          type: string
+          format: uuid
+        generated_at:
+          type: string
+          format: date-time
+        merchant_id:
+          type: string
+          format: uuid
+        requested_by:
+          type: string
+          format: uuid
+        user_role:
+          type: string
+        resource:
+          $ref: '#/components/schemas/ExportResource'
+        format:
+          $ref: '#/components/schemas/ExportFormat'
+        filters:
+          type: object
+        rule_version:
+          type: string
+        total_rows:
+          type: integer
+        succeeded_rows:
+          type: integer
+        failed_rows:
+          type: integer
+        checksum_sha256:
+          type: string
+    ExportJobItem:
+      type: object
+      required: [id, merchant_id, user_id, resource, format, status, total_rows, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        resource:
+          $ref: '#/components/schemas/ExportResource'
+        format:
+          $ref: '#/components/schemas/ExportFormat'
+        status:
+          $ref: '#/components/schemas/ExportJobStatus'
+        filters:
+          type: object
+        total_rows:
+          type: integer
+        processed_rows:
+          type: integer
+        succeeded_rows:
+          type: integer
+        failed_rows:
+          type: integer
+        file_name:
+          type: string
+        file_size_bytes:
+          type: integer
+        checksum_sha256:
+          type: string
+        download_url:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/ExportGenerationMetadata'
+        row_results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportRowResult'
+        rule_version:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    CreateExportJobRequest:
+      type: object
+      required: [resource, format]
+      properties:
+        resource:
+          $ref: '#/components/schemas/ExportResource'
+        format:
+          $ref: '#/components/schemas/ExportFormat'
+        filters:
+          type: object
+        sync:
+          type: boolean
+          default: true
+    CreateExportJobResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ExportJobItem'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ExportJobResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          $ref: '#/components/schemas/ExportJobItem'
+        meta:
+          $ref: '#/components/schemas/Meta'
+    ListExportJobsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportJobItem'
+        meta:
+          type: object
+          required: [total, page, limit, total_pages, correlation_id]
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            limit:
+              type: integer
+            total_pages:
+              type: integer
+            correlation_id:
+              type: string
     SearchResultItem:
       type: object
       required:
