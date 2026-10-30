@@ -12,12 +12,10 @@ const quotaStore = require('../quota-store');
 const { candidateKey } = require('../candidates');
 // Ranking fixtures supply current quota independently of host login/cache state.
 function currentQuotaReadings(offered, now = Date.now()) {
-  return Object.fromEntries(offered.map((c) => [
-    c.accountId,
-    { status: 'open', observedAt: new Date(now).toISOString() },
-  ]));
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
 }
-
 
 describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
   let tmpDir;

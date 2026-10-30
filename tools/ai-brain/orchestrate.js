@@ -3767,7 +3767,8 @@ async function selectCandidateForProfile(
     o.capabilityProbeDurationMs = Date.now() - o.capabilityProbeStartedAt;
   }
   const result = await require('./ranking').rankWithQuotaProbe(
-    candidates, { ...o, ...rankCtx, registry, taskProfile: profile, dryRun: true },
+    candidates,
+    { ...o, ...rankCtx, registry, taskProfile: profile, dryRun: true },
     (offered, context) => routing.rankForProfile(offered, profile, assessment, context)
   );
   if (o.isolatedWorker && profile.role !== 'reviewer') {

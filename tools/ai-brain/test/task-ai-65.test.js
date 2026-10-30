@@ -33,10 +33,9 @@ const { candidateKey } = require('../candidates');
 const NOW = Date.parse('2026-09-30T00:00:00.000Z');
 // Ranking fixtures supply current quota independently of host login/cache state.
 function currentQuotaReadings(offered, now = Date.now()) {
-  return Object.fromEntries(offered.map((c) => [
-    c.accountId,
-    { status: 'open', observedAt: new Date(now).toISOString() },
-  ]));
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
 }
 
 const DAY = '2026-09-30';
@@ -143,9 +142,12 @@ async function runDispatch(p, candidates, dirs, over) {
   if (over?.headrooms) {
     deps.headrooms = {
       ...currentQuotaReadings(candidates, NOW),
-      ...Object.fromEntries(Object.entries(over.headrooms).map(([id, value]) => [
-        id, { observedAt: iso(NOW), ...value },
-      ])),
+      ...Object.fromEntries(
+        Object.entries(over.headrooms).map(([id, value]) => [
+          id,
+          { observedAt: iso(NOW), ...value },
+        ])
+      ),
     };
   }
   const result = await dispatchCommand(
@@ -897,6 +899,10 @@ describe('TASK-AI-65: live routing (profile -> JEV -> ranking -> pinned executio
       },
       {
         candidates: [cand({ accountId: 'acct-65-bom', modelId: 'up-65-a/model-65-bom' })],
+        headrooms: currentQuotaReadings(
+          [cand({ accountId: 'acct-65-bom', modelId: 'up-65-a/model-65-bom' })],
+          NOW
+        ),
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,

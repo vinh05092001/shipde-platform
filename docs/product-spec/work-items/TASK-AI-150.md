@@ -6,7 +6,7 @@
 | --- | --- |
 | Work Item ID | `TASK-AI-150` |
 | Feature ID | N/A — Controller infrastructure |
-| Status | `IN_PROGRESS` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | 268 |
 | Dependencies | `TASK-AI-58`, `TASK-AI-65`, `TASK-AI-73`; ranking and route probe modules are present at baseline `9d63d9f4c1a0953c1c6f7bb06604f3bc3c42b2c7` |
 | Assigned author | Codex — implementation explicitly assigned by the task owner in `p-ai-150` |
@@ -14,7 +14,7 @@
 | Allowed paths | `tools/ai-brain/ranking.js`, `tools/ai-brain/routing.js`, `tools/ai-brain/cli.js`, `tools/ai-brain/orchestrate.js`, `tools/ai-brain/writer-selection.js`, `tools/ai-brain/sources.js`, `tools/ai-brain/sources.json`, focused ranking/dispatch tests under `tools/ai-brain/test/`, this Work Item, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | Codex — fresh independent task |
 | Branch | `feat/task-ai-150-exclude-exhausted` |
-| Pull Request | None — local changes are to remain uncommitted; the task owner will publish the handoff |
+| Pull Request | PR #478 (`feat/task-ai-150-exclude-exhausted`) |
 
 ## Business outcome
 
@@ -91,8 +91,9 @@ Run changed/failing AI-brain test files with `node --test --test-concurrency=1 -
 
 | Review round | Commit | Verdict | Findings resolved |
 | --- | --- | --- | --- |
-| None | No implementation commit exists; working baseline is `9d63d9f4c1a0953c1c6f7bb06604f3bc3c42b2c7` | Independent review has not run | None |
+| 1 | `0eed5fd47e4f1dae86059105c36cb95292c95f47` | CHANGES_REQUIRED | Resolved: preserve underlying observation timestamp in accountHeadroom calculations; require validated live probe (hasLiveQuotaProbe) before quota promotion; fix Prettier formatting across changed files; fix negative probe assertions to start from valid proof and invalidate one field per case |
+| 2 | Current HEAD | READY_FOR_CODEX | Resolves all round 1 P1/P2 review findings with regression tests; CI formatting and ai-brain test suites green |
 
 ## Residual limitations
 
-The task owner must publish the uncommitted changes before remote CI and independent review can run. Real provider-backed acceptance is not claimed by deterministic transport tests. Native sources without fresh quota and without a supported live probe remain unavailable until the operator refreshes evidence.
+Native sources without fresh quota and without a supported live probe remain unavailable until the operator refreshes evidence. Deterministic tests mock route probes and do not touch external network.

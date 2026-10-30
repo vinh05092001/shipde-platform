@@ -160,10 +160,13 @@ test('unprobed unknown-headroom candidate is excluded and its score remains pena
   );
 
   assert.equal(result.ranking.length, 1);
-  assert.ok(result.rejected.some((c) =>
-    c.candidateKey === candidateUnprobedUnknown.candidateKey &&
-    c.reasonCode === 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE'
-  ));
+  assert.ok(
+    result.rejected.some(
+      (c) =>
+        c.candidateKey === candidateUnprobedUnknown.candidateKey &&
+        c.reasonCode === 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE'
+    )
+  );
   const scoredOpen = result.ranking[0];
   const scoredUnknown = routing.scoreForProfile(candidateUnprobedUnknown, assessment, ctx);
   assert.equal(scoredUnknown.breakdown.headroomPenalty, 15);

@@ -11,10 +11,9 @@ const routing = require('../routing');
 const ranking = require('../ranking');
 // Ranking fixtures supply current quota independently of host login/cache state.
 function currentQuotaReadings(offered, now = Date.now()) {
-  return Object.fromEntries(offered.map((c) => [
-    c.accountId,
-    { status: 'open', observedAt: new Date(now).toISOString() },
-  ]));
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
 }
 
 const cli = require('../cli');

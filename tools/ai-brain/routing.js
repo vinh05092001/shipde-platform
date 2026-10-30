@@ -1300,9 +1300,8 @@ function scoreForProfile(candidate, assessment, ctx) {
   const agePenalty = evidenceAgePenalty(candidate, now);
   const dispatchConfig =
     (ctx && ctx.dispatchConfig) || sourceRegistry.getDispatchConfig(ctx && ctx.registry, ctx || {});
-  const probeSucceeded = candidate && ranking.hasLiveQuotaProbe(
-    ranking.resolveCandidateHeadroom(candidate, ctx)
-  );
+  const probeSucceeded =
+    candidate && ranking.hasLiveQuotaProbe(ranking.resolveCandidateHeadroom(candidate, ctx));
   const headroomStatus =
     candidate.headroomStatus ??
     (ctx && ctx.headrooms ? ranking.resolveCandidateHeadroom(candidate, ctx).status : undefined);
@@ -1644,7 +1643,10 @@ function rankForProfile(candidates, profile, assessment, ctx) {
 
     if (headroom.status === 'unknown') {
       if (!ranking.hasLiveQuotaProbe(headroom)) {
-        reject(headroom.quotaProbe?.reasonCode || 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE', 'quotaScope');
+        reject(
+          headroom.quotaProbe?.reasonCode || 'QUOTA_UNKNOWN_REQUIRES_LIVE_PROBE',
+          'quotaScope'
+        );
         if (headroom.requiresLiveProbe) needsQuotaProbe.push(rejected[rejected.length - 1]);
         continue;
       }
@@ -2139,9 +2141,14 @@ async function runProfileDispatch(args, deps) {
           : 0,
     enforceKnownQuota: args.execute === true && hasQuotaAccountReadings(d.home, d.storePath),
     independentReviewerCandidates,
+    allowNetwork:
+      d.allowNetwork !== undefined
+        ? d.allowNetwork
+        : args.execute === true && d.quotaProbeAllowNetwork === true,
   };
   const result = await ranking.rankWithQuotaProbe(
-    annotated, { ...d, ...rankCtx, taskProfile: profile, dryRun: true },
+    annotated,
+    { ...d, ...rankCtx, taskProfile: profile, dryRun: true },
     (offered, context) => rankForProfile(offered, profile, assessment, context)
   );
   if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {

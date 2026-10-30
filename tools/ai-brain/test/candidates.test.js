@@ -33,10 +33,9 @@ const candidates = require('../candidates');
 const ranking = require('../ranking');
 // Ranking fixtures supply current quota independently of host login/cache state.
 function currentQuotaReadings(offered, now = Date.now()) {
-  return Object.fromEntries(offered.map((c) => [
-    c.accountId,
-    { status: 'open', observedAt: new Date(now).toISOString() },
-  ]));
+  return Object.fromEntries(
+    offered.map((c) => [c.accountId, { status: 'open', observedAt: new Date(now).toISOString() }])
+  );
 }
 
 const decisions = require('../decisions');
@@ -1526,8 +1525,12 @@ describe('acceptance: seven-fix contract', () => {
     const none = mk('test-none', 'q-none');
 
     const scores = [
-      ranking.headroomScore(open, { headrooms: { 'q-open': { status: 'open', observedAt: new Date().toISOString() } } }),
-      ranking.headroomScore(tight, { headrooms: { 'q-tight': { status: 'tight', observedAt: new Date().toISOString() } } }),
+      ranking.headroomScore(open, {
+        headrooms: { 'q-open': { status: 'open', observedAt: new Date().toISOString() } },
+      }),
+      ranking.headroomScore(tight, {
+        headrooms: { 'q-tight': { status: 'tight', observedAt: new Date().toISOString() } },
+      }),
       ranking.headroomScore(exh, { headrooms: { 'q-exh': 'exhausted' } }),
       ranking.headroomScore(mystery, { headrooms: { 'q-mystery': 'mystery' } }),
       ranking.headroomScore(none, { headrooms: {} }),
@@ -2234,7 +2237,7 @@ describe('chooser quota, cooldown, reservations and load (item 3)', () => {
       role: 'author.foundation',
       dryRun: true,
       accounts: [
-        { id: 'acc-known', limits: { requestsPerDay: 100 } },
+        { id: 'acc-known', limits: { requestsPerDay: 100 }, observedAt: new Date().toISOString() },
         { id: 'acc-unknown', limits: {} },
       ],
     });
