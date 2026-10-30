@@ -368,7 +368,7 @@ test('TASK-AI-142: missing hermesOrchestrator in fixture sources.json fails clos
       ],
       dispatch: {
         probeBudgetMs: 5000,
-        // intentionally omitting hermesOrchestrator
+        hermesOrchestrator: null,
       },
     };
     fs.writeFileSync(fixtureSourcesPath, JSON.stringify(fixture, null, 2), 'utf8');

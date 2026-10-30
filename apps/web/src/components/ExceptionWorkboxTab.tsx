@@ -29,15 +29,38 @@ interface Props {
   exceptions?: UIExceptionItem[];
   onUpdateException?: (updated: UIExceptionItem) => void;
   carrierGhnTier?: 'L2' | 'L1';
+  selectedCaseId?: string | null;
+  onClearSelection?: () => void;
 }
 
 export const ExceptionWorkboxTab: React.FC<Props> = ({
   exceptions = MASTER_EXCEPTIONS,
   onUpdateException,
   carrierGhnTier = 'L2',
+  selectedCaseId: propSelectedCaseId,
+  onClearSelection,
 }) => {
+  const [prevExceptions, setPrevExceptions] = useState(exceptions);
   const [caseList, setCaseList] = useState<UIExceptionItem[]>(exceptions);
-  const [selectedCaseId, setSelectedCaseId] = useState<string>(caseList[0]?.id || '');
+  if (prevExceptions !== exceptions) {
+    setPrevExceptions(exceptions);
+    setCaseList(exceptions);
+  }
+
+  const [dismissedCaseId, setDismissedCaseId] = useState<string | null>(null);
+  const [prevPropSelectedCaseId, setPrevPropSelectedCaseId] = useState(propSelectedCaseId);
+
+  if (prevPropSelectedCaseId !== propSelectedCaseId) {
+    setPrevPropSelectedCaseId(propSelectedCaseId);
+    setDismissedCaseId(null);
+  }
+
+  const effectivePropCaseId =
+    propSelectedCaseId && propSelectedCaseId !== dismissedCaseId ? propSelectedCaseId : null;
+
+  const [selectedCaseId, setSelectedCaseId] = useState<string>(
+    effectivePropCaseId || caseList[0]?.id || ''
+  );
   const [filterType, setFilterType] = useState<'ALL' | 'MINE' | 'UNASSIGNED' | 'EXPIRING'>('ALL');
   const [callNote, setCallNote] = useState('');
   const [newPhone, setNewPhone] = useState('');
@@ -46,7 +69,31 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
   const [toastFeedback, setToastFeedback] = useState<string | null>(null);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
-  const selectedCase = caseList.find((e) => e.id === selectedCaseId) || caseList[0];
+  const isCaseActivated = Boolean(effectivePropCaseId);
+  const matchedCase = isCaseActivated ? caseList.find((e) => e.id === effectivePropCaseId) : null;
+  const isCaseNotFound = isCaseActivated && !matchedCase;
+
+  const activeCaseId = effectivePropCaseId || selectedCaseId || caseList[0]?.id || '';
+  const selectedCase = isCaseNotFound
+    ? null
+    : matchedCase || caseList.find((e) => e.id === activeCaseId) || caseList[0] || null;
+
+  const handleRecoverException = () => {
+    if (propSelectedCaseId) {
+      setDismissedCaseId(propSelectedCaseId);
+    }
+    const firstId = caseList[0]?.id || '';
+    setSelectedCaseId(firstId);
+    onClearSelection?.();
+  };
+
+  const handleSelectCase = (id: string) => {
+    if (propSelectedCaseId) {
+      setDismissedCaseId(propSelectedCaseId);
+    }
+    setSelectedCaseId(id);
+    onClearSelection?.();
+  };
 
   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
@@ -114,6 +161,36 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
         </div>
       )}
 
+      {/* Activated Case Not Found Alert (Real Not-Found State with Recovery) */}
+      {isCaseNotFound && (
+        <div
+          data-testid="activated-case-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy sự cố vận hành{' '}
+                <span className="font-mono underline">{propSelectedCaseId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Sự cố không tồn tại trong danh sách ca chờ xử lý hoặc đã được xử lý xong.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRecoverException}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại danh sách sự cố
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 3-Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Left Column (3 cols): Filter Navigation */}
@@ -177,14 +254,14 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
 
           <div className="overflow-y-auto flex-1 divide-y divide-slate-100 max-h-[calc(100vh-250px)] custom-scrollbar">
             {filteredCases.map((c) => {
-              const isSelected = c.id === selectedCase?.id;
+              const isSelected = !isCaseNotFound && c.id === selectedCase?.id;
               const hrs = c.hours_remaining ?? 6;
               const isExpiring = hrs <= 4;
 
               return (
                 <div
                   key={c.id}
-                  onClick={() => setSelectedCaseId(c.id)}
+                  onClick={() => handleSelectCase(c.id)}
                   className={`p-4 cursor-pointer transition ${
                     isSelected ? 'bg-[#FFF5F0] border-l-4 border-l-[#c23807]' : 'hover:bg-slate-50'
                   }`}
@@ -228,8 +305,12 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
         </div>
 
         {/* Right Column (5 cols): Operational Action Drawer */}
-        {selectedCase && (
-          <div className="lg:col-span-5 modern-card p-5 space-y-5 overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar text-xs">
+        {selectedCase && !isCaseNotFound && (
+          <div
+            data-testid="selected-exception-drawer"
+            data-selected-case-id={selectedCase.id}
+            className="lg:col-span-5 modern-card p-5 space-y-5 overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar text-xs"
+          >
             {/* Header */}
             <div className="border-b border-slate-100 pb-3 flex justify-between items-start">
               <div>
@@ -358,6 +439,27 @@ export const ExceptionWorkboxTab: React.FC<Props> = ({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {isCaseNotFound && (
+          <div
+            data-testid="selected-exception-drawer-not-found"
+            className="lg:col-span-5 modern-card p-6 flex flex-col items-center justify-center text-center space-y-3 text-slate-500 min-h-[300px]"
+          >
+            <AlertTriangle className="w-10 h-10 text-amber-500" />
+            <div className="font-bold text-slate-800">Không tìm thấy ca sự cố</div>
+            <p className="text-xs max-w-xs text-slate-600">
+              Mã sự cố <span className="font-mono font-semibold">{propSelectedCaseId}</span> không
+              có trong hệ thống hoặc đã được xử lý xong.
+            </p>
+            <button
+              type="button"
+              onClick={handleRecoverException}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Xem sự cố ưu tiên
+            </button>
           </div>
         )}
       </div>

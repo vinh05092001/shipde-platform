@@ -5,13 +5,13 @@
 | Field | Value |
 | --- | --- |
 | Work Item / Feature | `FEAT-COM-04` |
-| Status | `IN_PROGRESS` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | 23 |
 | Assigned author | `GEMINI` |
 | Risk | HIGH — tenant data, permissions and potentially financial records |
 | Branch | `feat/feat-com-04` |
 | Reviewer | Codex — fresh independent task |
-| Pull Request | None |
+| Pull Request | `#469` |
 
 ## Business outcome and sources
 
@@ -36,16 +36,16 @@ Allowed paths and exact API, event, migration, configuration and consumer contra
 
 | AC | Scenario | Expected result | Evidence required | Status |
 | --- | --- | --- | --- | --- |
-| COM-04-01 | Authorized user obtains a template and uploads a supported file (branches/warehouses) | Approved version and format are used; private storage, hash and malware check recorded; staging created | API and unit/integration tests | IN_PROGRESS |
-| COM-04-02 | Invalid file format, size exceeds config limit, or malware scanner detects threat | Canonical failure (400/422); no unsafe staging or promotion | Negative validation tests | IN_PROGRESS |
-| COM-04-03 | File has valid rows and invalid keys, missing scopes, or invalid formats | Preview and issue report identify each excluded row with severity; status set to BLOCKED; promotion blocked | Row-level and control-total tests | IN_PROGRESS |
-| COM-04-04 | Optional data is missing | Nonblocking issue marked WARNING; dependent data marked incomplete; staging succeeds | Validation and preview tests | IN_PROGRESS |
-| COM-04-05 | Summary stats and durable row results | Control totals (total, valid, error, warning) match row breakdown; durable rows queryable with pagination | Row results and report tests | IN_PROGRESS |
-| COM-04-06 | Idempotency and checksum deduplication | Same checksum returns existing import without re-processing; same idempotency key with different content returns 409 CONFLICT | Idempotency and dedupe tests | IN_PROGRESS |
-| COM-04-07 | User lacks permission or row scope, or accesses another tenant | Server denies access (403/404); promotion strictly verifies FEAT-RBAC-02 scope for every affected row; missing or unscoped row blocks promotion | Permission and per-row scope tests | IN_PROGRESS |
-| COM-04-08 | Revision is promoted or superseded | Explicit promotion applies all-or-nothing mutations to domain entities (branches/warehouses); marks revision PROMOTED and prior revisions SUPERSEDED | Promotion and state transition tests | IN_PROGRESS |
-| COM-04-09 | Import action audited | Audit log records IMPORT_PROMOTED with masked PII and actor context; canonical errors include correlation ID | Audit and error tests | IN_PROGRESS |
-| COM-04-10 | SCR-IMPORT-01 UI presentation | Web UI states show truthful results and usable recovery | UI acceptance tests (next run) | PENDING_UI |
+| COM-04-01 | Authorized user obtains a template and uploads a supported file (branches/warehouses) | Approved version and format are used; private storage, hash and malware check recorded; staging created | API and unit/integration tests | PASS — Verified in `imports.unit.spec.ts` & `imports.supertest.spec.ts` |
+| COM-04-02 | Invalid file format, size exceeds config limit, or malware scanner detects threat | Canonical failure (400/422); no unsafe staging or promotion | Negative validation tests | PASS — Verified in `imports.unit.spec.ts` (malware, size, MIME type check) |
+| COM-04-03 | File has valid rows and invalid keys, missing scopes, or invalid formats | Preview and issue report identify each excluded row with severity; status set to BLOCKED; promotion blocked | Row-level and control-total tests | PASS — Verified in `imports.unit.spec.ts` (missing scopes, duplicate keys, BLOCKED status) |
+| COM-04-04 | Optional data is missing | Nonblocking issue marked WARNING; dependent data marked incomplete; staging succeeds | Validation and preview tests | PASS — Verified in `imports.unit.spec.ts` (WARNING severity, DATA_INCOMPLETE) |
+| COM-04-05 | Summary stats and durable row results | Control totals (total, valid, error, warning) match row breakdown; durable rows queryable with pagination | Row results and report tests | PASS — Verified in `imports.unit.spec.ts` (control totals, paginated rows) |
+| COM-04-06 | Idempotency and checksum deduplication | Same checksum returns existing import without re-processing; same idempotency key with different content returns 409 CONFLICT | Idempotency and dedupe tests | PASS — Verified in `imports.unit.spec.ts` & `imports.supertest.spec.ts` (checksum dedupe, 409 IDEMPOTENCY_CONFLICT) |
+| COM-04-07 | User lacks permission or row scope, or accesses another tenant | Server denies access (403/404); promotion strictly verifies FEAT-RBAC-02 scope for every affected row; missing or unscoped row blocks promotion | Permission and per-row scope tests | PASS — Verified in `imports.unit.spec.ts` (FEAT-RBAC-02 per-row scope checks, 403 SCOPE_UNAUTHORIZED) |
+| COM-04-08 | Revision is promoted or superseded | Explicit promotion applies all-or-nothing mutations to domain entities (branches/warehouses); marks revision PROMOTED and prior revisions SUPERSEDED | Promotion and state transition tests | PASS — Verified in `imports.unit.spec.ts` & `imports.supertest.spec.ts` (all-or-nothing mutations, PROMOTED and SUPERSEDED states) |
+| COM-04-09 | Import action audited | Audit log records IMPORT_PROMOTED with masked PII and actor context; canonical errors include correlation ID | Audit and error tests | PASS — Verified in `imports.unit.spec.ts` (PII-masked audit logging, correlation ID) |
+| COM-04-10 | SCR-IMPORT-01 UI presentation | Web UI states show truthful results and usable recovery | UI acceptance tests | PASS — Verified in `imports-page-states.test.ts` (SCR-IMPORT-01 UI states: loading, empty, error, forbidden, detail, control totals, row issues) |
 
 ## Verification and review
 
@@ -53,4 +53,4 @@ Run the API unit and supertest test suites, `node scripts/ai/check-no-hardcode.m
 
 ## Residual limitations
 
-Backend import framework and branch/warehouse templates implemented in this run. Web UI presentation (SCR-IMPORT-01) scheduled for subsequent run per instructions. Order, shipment, carrier statement, COD and financial imports remain in backlog for FEAT-IMP-*.
+None. Shared backend import framework and Web UI (SCR-IMPORT-01) for branches and warehouses are complete. Financial imports (order, shipment, carrier statement, COD) remain in separate backlog items (FEAT-IMP-*).

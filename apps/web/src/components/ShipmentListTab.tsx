@@ -31,6 +31,9 @@ interface Props {
   onNavigateToTab?: (tabId: string) => void;
   onCreateOrder?: () => void;
   userRole?: string;
+  selectedOrderId?: string | null;
+  selectedOrderCode?: string | null;
+  onClearSelection?: () => void;
 }
 
 export const ShipmentListTab: React.FC<Props> = ({
@@ -38,10 +41,51 @@ export const ShipmentListTab: React.FC<Props> = ({
   onNavigateToTab,
   onCreateOrder,
   userRole = 'OWNER',
+  selectedOrderId,
+  selectedOrderCode,
+  onClearSelection,
 }) => {
   const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
   const [loading, setLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
+
+  // Cursor Pagination State
+  const [cursorIndex, setCursorIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Synchronize search term and reset cursor when selectedOrderCode/selectedOrderId changes
+  const [dismissedOrderId, setDismissedOrderId] = useState<string | null>(null);
+  const [dismissedOrderCode, setDismissedOrderCode] = useState<string | null>(null);
+  const [prevSelectedOrderCode, setPrevSelectedOrderCode] = useState(selectedOrderCode);
+  const [prevSelectedOrderId, setPrevSelectedOrderId] = useState(selectedOrderId);
+  const [userSearchTerm, setUserSearchTerm] = useState<string | null>(null);
+
+  if (prevSelectedOrderCode !== selectedOrderCode || prevSelectedOrderId !== selectedOrderId) {
+    setPrevSelectedOrderCode(selectedOrderCode);
+    setPrevSelectedOrderId(selectedOrderId);
+    setDismissedOrderId(null);
+    setDismissedOrderCode(null);
+    setUserSearchTerm(null);
+    setCursorIndex(0);
+  }
+
+  const effectiveOrderId =
+    selectedOrderId && selectedOrderId !== dismissedOrderId ? selectedOrderId : null;
+  const effectiveOrderCode =
+    selectedOrderCode && selectedOrderCode !== dismissedOrderCode ? selectedOrderCode : null;
+
+  const isOrderActivated = Boolean(effectiveOrderId || effectiveOrderCode);
+  const matchedShipment = isOrderActivated
+    ? shipments.find(
+        (s) =>
+          (effectiveOrderCode && s.order_code === effectiveOrderCode) ||
+          (effectiveOrderId &&
+            (s.id === effectiveOrderId || (s as any).order_id === effectiveOrderId))
+      )
+    : null;
+  const isOrderNotFound = isOrderActivated && !matchedShipment;
+
+  const searchTerm = userSearchTerm ?? (effectiveOrderCode || '');
+  const setSearchTerm = (term: string) => setUserSearchTerm(term);
 
   // Filter Controls
   const [carrierFilter, setCarrierFilter] = useState('ALL');
@@ -55,10 +99,6 @@ export const ShipmentListTab: React.FC<Props> = ({
   // PII Masking State
   const [unmaskedRows, setUnmaskedRows] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
-
-  // Cursor Pagination State
-  const [cursorIndex, setCursorIndex] = useState(0);
-  const [pageSize, setPageSize] = useState(20);
 
   const fetchShipments = async () => {
     setLoading(true);
@@ -131,7 +171,9 @@ export const ShipmentListTab: React.FC<Props> = ({
   };
 
   const handleResetFilters = () => {
-    setSearchTerm('');
+    if (selectedOrderId) setDismissedOrderId(selectedOrderId);
+    if (selectedOrderCode) setDismissedOrderCode(selectedOrderCode);
+    setUserSearchTerm('');
     setCarrierFilter('ALL');
     setStatusFilter('ALL');
     setWarehouseFilter('ALL');
@@ -139,6 +181,7 @@ export const ShipmentListTab: React.FC<Props> = ({
     setDateRangeFilter('30d');
     setHasOpenCaseFilter(false);
     setCursorIndex(0);
+    onClearSelection?.();
   };
 
   const hasActiveFilters =
@@ -152,6 +195,44 @@ export const ShipmentListTab: React.FC<Props> = ({
 
   return (
     <div className="w-full space-y-4">
+      {/* Activated Order Not Found Alert (Real Not-Found State with Recovery) */}
+      {isOrderNotFound && (
+        <div
+          data-testid="activated-order-not-found"
+          className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+        >
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <div className="font-bold text-xs sm:text-sm">
+                Không tìm thấy đơn hàng{' '}
+                <span className="font-mono underline">{selectedOrderCode || selectedOrderId}</span>
+              </div>
+              <div className="text-xs text-amber-700">
+                Bản ghi không tồn tại trong danh sách vận đơn hiện tại hoặc nằm ngoài phạm vi truy
+                cập của bạn.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+            >
+              Quay lại danh sách
+            </button>
+            <button
+              type="button"
+              onClick={fetchShipments}
+              className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700 transition"
+            >
+              Thử lại
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {toast && (
         <div className="p-3 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
@@ -422,8 +503,24 @@ export const ShipmentListTab: React.FC<Props> = ({
                   ? rawPhone
                   : rawPhone.slice(0, 3) + '***' + rawPhone.slice(-4);
 
+                const isSelected = Boolean(
+                  matchedShipment &&
+                  ((effectiveOrderCode && shipment.order_code === effectiveOrderCode) ||
+                    (effectiveOrderId &&
+                      (shipment.id === effectiveOrderId ||
+                        (shipment as any).order_id === effectiveOrderId)))
+                );
+                const selectedKey = effectiveOrderCode || effectiveOrderId;
+
                 return (
-                  <tr key={shipment.id}>
+                  <tr
+                    key={shipment.id}
+                    data-selected={isSelected ? 'true' : undefined}
+                    data-testid={isSelected ? `selected-order-${selectedKey}` : undefined}
+                    className={
+                      isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+                    }
+                  >
                     {/* Column 1: Tracking & Order Code */}
                     <td>
                       <TrackingCode

@@ -160,6 +160,9 @@ function recordResult(store, modelId, routeId, result, now, options) {
   const key = healthKey(modelId, routeId);
   const previous = store.paths[key] || { failures: 0 };
   const lastCheckedAt = new Date(now).toISOString();
+  if (previous.probeCause === 'WRITER_NOT_AUTONOMOUS') {
+    return { key, eligible: false };
+  }
   if (result && result.ok) {
     store.paths[key] = {
       modelId: String(modelId),
@@ -249,16 +252,55 @@ function recordResult(store, modelId, routeId, result, now, options) {
   return { key, eligible: false, reason };
 }
 
+const DEFAULT_ROUTE_HEALTH_PATH = path.join(__dirname, 'data', 'model-route-health.json');
+
+function resolveRouteHealthFile(args = {}, deps = {}) {
+  const a = args || {};
+  const d = deps || {};
+  if (a['route-health'] || a.routeHealthFile) {
+    return a['route-health'] || a.routeHealthFile;
+  }
+  if (d.routeHealth) {
+    return d.routeHealth;
+  }
+  if (d.routeHealthFile || d['route-health']) {
+    return d.routeHealthFile || d['route-health'];
+  }
+
+  const root = a.root || d.root || a.cwd || d.cwd || null;
+  const reg = (d.registry && d.registry.dispatch) || (a.registry && a.registry.dispatch);
+  const cfg = reg?.routeHealthFile || d.registry?.routeHealthFile || a.registry?.routeHealthFile;
+  if (typeof cfg === 'string' && cfg.trim()) {
+    const trimmedCfg = cfg.trim();
+    if (path.isAbsolute(trimmedCfg)) {
+      return trimmedCfg;
+    }
+    return root ? path.resolve(root, trimmedCfg) : path.resolve(__dirname, '..', '..', trimmedCfg);
+  }
+
+  if (root) {
+    return path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
+  return DEFAULT_ROUTE_HEALTH_PATH;
+}
+
 function probeMemoryFile(o) {
   const opts = o || {};
-  return (
-    opts.routeHealthFile ||
-    opts['route-health'] ||
-    (opts.cwd || opts.root
-      ? path.join(opts.cwd || opts.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-      : null) ||
-    path.join(__dirname, 'data', 'model-route-health.json')
-  );
+  if (opts.routeHealthFile || opts['route-health']) {
+    return opts.routeHealthFile || opts['route-health'];
+  }
+  const root = opts.root || opts.cwd || null;
+  const reg = (opts.registry && opts.registry.dispatch) || opts.dispatch;
+  const cfg = reg?.routeHealthFile || opts.registry?.routeHealthFile;
+  if (typeof cfg === 'string' && cfg.trim()) {
+    const trimmedCfg = cfg.trim();
+    if (path.isAbsolute(trimmedCfg)) return trimmedCfg;
+    return root ? path.resolve(root, trimmedCfg) : path.resolve(__dirname, '..', '..', trimmedCfg);
+  }
+  if (root) {
+    return path.join(root, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  }
+  return DEFAULT_ROUTE_HEALTH_PATH;
 }
 function probeIdentity(c) {
   return {
@@ -400,7 +442,12 @@ function extractAccountKey(candidate, options) {
       ) {
         const src = options.registry.sources.find((s) => s.id === fields[2] || s.id === fields[3]);
         if (src && (src.endpoint || src.accessPath)) {
-          base = (src.accessPath || src.endpoint).replace(/\/+$/, '');
+          base = (
+            (/^https?:\/\//i.test(src.accessPath) && src.accessPath) ||
+            src.endpoint ||
+            src.accessPath ||
+            ''
+          ).replace(/\/+$/, '');
         }
       }
       if (base === 'http://127.0.0.1:20128/v1' && fields[4]) {
@@ -409,7 +456,13 @@ function extractAccountKey(candidate, options) {
       return `${fields[2]}::${fields[3]}`;
     }
   }
-  const base = (candidate.accessPath || candidate.endpoint || '').replace(/\/+$/, '');
+  const base = (
+    (/^https?:\/\//i.test(candidate.accessPath) && candidate.accessPath) ||
+    candidate.endpoint ||
+    candidate.sourceEndpoint ||
+    candidate.accessPath ||
+    ''
+  ).replace(/\/+$/, '');
   const gw = candidate.gateway || candidate.sourceId || candidate.source || '';
   const up = candidate.upstream || '';
   const acc = candidate.account !== undefined ? candidate.account : candidate.accountId || '';
@@ -479,7 +532,16 @@ function probeCooldown(candidate, options) {
   const account = extractAccountKey(candidate, o);
   if (account && store.accounts && store.accounts[account]) {
     const accountRecord = store.accounts[account];
-    if (accountRecord && accountRecord.nextCheckAt && Date.parse(accountRecord.nextCheckAt) > now) {
+    // A paid model's credit/billing refusal says nothing about the gateway's free tier,
+    // which the gateway itself marks in the model id (":free", "-free", "cline-free/").
+    const billingCause = /credit|quota|auth/i.test(String(accountRecord.probeCause || ''));
+    const freeTier = /(^|[/:-])free($|[/:-])/i.test(String(identity.model || ''));
+    if (
+      !(billingCause && freeTier) &&
+      accountRecord &&
+      accountRecord.nextCheckAt &&
+      Date.parse(accountRecord.nextCheckAt) > now
+    ) {
       return `PROBE_COOLDOWN_ACCOUNT: ${account} until ${accountRecord.nextCheckAt}`;
     }
   }
@@ -670,6 +732,80 @@ function rememberProbe(candidate, result, options) {
 
   if (o.persistRouteHealth !== false) saveStore(file, store, o);
   return record;
+}
+
+function recordExecutionResult(storeOrFile, modelId, routeId, outcome, options = {}) {
+  const isFile = typeof storeOrFile === 'string';
+  const loader =
+    options.loadStore ||
+    options.loader ||
+    (module.exports && module.exports.loadStore) ||
+    loadStore;
+  const store = isFile ? loader(storeOrFile, { allowMissing: true }) : storeOrFile;
+  const now = options.now ?? Date.now();
+
+  let probeResult;
+  const isSuccess =
+    outcome === 'success' ||
+    outcome?.ok === true ||
+    outcome?.status === 200 ||
+    outcome?.success === true;
+  const isTimeout =
+    outcome === 'timeout' ||
+    outcome === 'stalled' ||
+    outcome === 'hang' ||
+    outcome?.timedOut === true ||
+    outcome?.status === 408 ||
+    /timeout|stall|hang/i.test(String(outcome?.reason || outcome?.message || ''));
+
+  if (isSuccess) {
+    probeResult = {
+      ok: true,
+      status: 200,
+      elapsedMs: typeof outcome === 'object' ? outcome.elapsedMs : undefined,
+    };
+  } else if (isTimeout) {
+    probeResult = {
+      ok: false,
+      status: 408,
+      message:
+        (typeof outcome === 'object' && (outcome.message || outcome.reason)) ||
+        'EXECUTION_TIMEOUT_OR_STALL',
+      elapsedMs: typeof outcome === 'object' ? outcome.elapsedMs : undefined,
+    };
+  } else {
+    probeResult = {
+      ok: false,
+      status: (typeof outcome === 'object' && outcome.status) || 500,
+      message:
+        (typeof outcome === 'object' && (outcome.message || outcome.reason)) || 'EXECUTION_FAILED',
+      elapsedMs: typeof outcome === 'object' ? outcome.elapsedMs : undefined,
+    };
+  }
+
+  const recorded = recordResult(store, modelId, routeId, probeResult, now, options);
+  const key = recorded.key;
+  if (store.paths && store.paths[key]) {
+    if (typeof outcome === 'object' && outcome !== null) {
+      if (Number.isFinite(outcome.concurrency)) {
+        store.paths[key].concurrency = outcome.concurrency;
+      }
+      if (outcome.executionOutcome) {
+        store.paths[key].executionOutcome = outcome.executionOutcome;
+      }
+    }
+  }
+
+  if (isFile && options.persist !== false) {
+    const saver =
+      options.saveStore ||
+      options.saver ||
+      (module.exports && module.exports.saveStore) ||
+      saveStore;
+    saver(storeOrFile, store, options);
+  }
+
+  return { store, recorded, key };
 }
 
 function healthKey(modelId, routeId) {
@@ -1097,6 +1233,7 @@ async function refreshCatalogueRoutes(catalogue, registry, accounts, store, prob
     const key = healthKey(modelId, routeId);
     if (seen.has(key) || (o.skipKeys && o.skipKeys.has(key))) continue;
     const record = store.paths[key] || getPathRecord(store, modelId, routeId);
+    if (record && record.probeCause === 'WRITER_NOT_AUTONOMOUS') continue;
     if (record && record.status === 'AVAILABLE') continue;
     if (record && !isDue(store, modelId, routeId, now)) continue;
     if (record && record.status !== 'AVAILABLE' && !isDue(store, modelId, routeId, now)) continue;
@@ -1121,7 +1258,10 @@ async function recheckDue(store, probe, options) {
   const now = Number(o.now) || Date.now();
   const cap = Math.max(0, Number(o.cap ?? 20));
   const due = Object.values(store.paths)
-    .filter((row) => unverifiedRecord(row) || dueAt(row, now))
+    .filter(
+      (row) =>
+        (unverifiedRecord(row) || dueAt(row, now)) && row.probeCause !== 'WRITER_NOT_AUTONOMOUS'
+    )
     .slice(0, cap);
   const checkedKeys = due.map((row) => healthKey(row.modelId, row.routeId));
   const restored = [];
@@ -1342,7 +1482,10 @@ async function runDueCli(options) {
 }
 
 module.exports = {
+  unverifiedRecord,
   atomicRenameSync,
+  DEFAULT_ROUTE_HEALTH_PATH,
+  resolveRouteHealthFile,
   probeCooldown,
   probeMemoryFile,
   rememberProbe,
@@ -1358,6 +1501,7 @@ module.exports = {
   loadStore,
   saveStore,
   recordResult,
+  recordExecutionResult,
   healthKey,
   getPathRecord,
   isEligible,

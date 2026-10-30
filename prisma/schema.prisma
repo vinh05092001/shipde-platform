@@ -164,12 +164,41 @@ model Merchant {
   mfa_admin_reset_idempotency MfaAdminResetIdempotency[]
   invitations       Invitation[]
   roles             Role[]
-  warehouses        Warehouse[]
   branches          Branch[]
+  warehouses        Warehouse[]
   imports           Import[]
 
   @@index([tax_code])
   @@map("merchants")
+}
+
+model Branch {
+  id            String   @id @default(uuid()) @db.Uuid
+  merchant_id   String   @db.Uuid
+  name          String   @db.VarChar(255)
+  code          String   @db.VarChar(64)
+  address       String?  @db.Text
+  phone         String?  @db.VarChar(32)
+  is_default    Boolean  @default(false)
+  status        String   @default("ACTIVE") @db.VarChar(32)
+
+  // Extended address and contact columns from template import
+  contact_name  String?  @db.VarChar(255)
+  contact_phone String?  @db.VarChar(32)
+  address_line  String?  @db.Text
+  ward          String?  @db.VarChar(128)
+  district      String?  @db.VarChar(128)
+  city          String?  @db.VarChar(128)
+
+  created_at    DateTime @default(now()) @db.Timestamptz
+  updated_at    DateTime @updatedAt @db.Timestamptz
+
+  merchant      Merchant @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+
+  @@unique([merchant_id, code])
+  @@unique([id, merchant_id])
+  @@index([merchant_id, status])
+  @@map("branches")
 }
 
 model User {
@@ -513,35 +542,8 @@ model Warehouse {
 }
 
 // ----------------------------------------------------------------------------
-// FEAT-COM-04: Branches & Imports Data Models
+// FEAT-COM-04: Imports Data Models
 // ----------------------------------------------------------------------------
-
-model Branch {
-  id                          String    @id @default(uuid()) @db.Uuid
-  merchant_id                 String    @db.Uuid
-  name                        String    @db.VarChar(255)
-  code                        String    @db.VarChar(64)
-  status                      String    @default("active") @db.VarChar(32)
-  is_default                  Boolean   @default(false)
-
-  // Contact & Address
-  contact_name                String?   @db.VarChar(255)
-  contact_phone               String?   @db.VarChar(32)
-  address_line                String?   @db.Text
-  ward                        String?   @db.VarChar(128)
-  district                    String?   @db.VarChar(128)
-  city                        String?   @db.VarChar(128)
-
-  created_at                  DateTime  @default(now()) @db.Timestamptz
-  updated_at                  DateTime  @updatedAt @db.Timestamptz
-
-  merchant                    Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
-
-  @@unique([merchant_id, code])
-  @@unique([id, merchant_id])
-  @@index([merchant_id, status])
-  @@map("branches")
-}
 
 model Import {
   id                          String    @id @default(uuid()) @db.Uuid
@@ -663,6 +665,8 @@ model RateTier {
 model Order {
   id                   String         @id @default(uuid()) @db.Uuid
   merchant_id          String         @db.Uuid
+  branch_id            String?        @db.VarChar(128)
+  warehouse_id         String?        @db.VarChar(128)
   source_type          String         @default("pancake") @db.VarChar(32)
   order_code           String         @db.VarChar(128)
   created_at           DateTime       @db.Timestamptz
@@ -686,6 +690,8 @@ model Order {
 model Shipment {
   id                   String             @id @default(uuid()) @db.Uuid
   merchant_id          String             @db.Uuid
+  branch_id            String?            @db.VarChar(128)
+  warehouse_id         String?            @db.VarChar(128)
   order_id             String             @db.Uuid
   order_code           String             @db.VarChar(128)
   carrier_code         CarrierCodeEnum
@@ -744,6 +750,8 @@ model ShipmentEvent {
 model ExceptionCase {
   id                   String                  @id @default(uuid()) @db.Uuid
   merchant_id          String                  @db.Uuid
+  branch_id            String?                 @db.VarChar(128)
+  warehouse_id         String?                 @db.VarChar(128)
   shipment_id          String                  @db.Uuid
   tracking_code        String                  @db.VarChar(128)
   exception_type       ExceptionTypeEnum
@@ -816,6 +824,8 @@ model ReturnRecord {
 model CarrierStatement {
   id                   String            @id @default(uuid()) @db.Uuid
   merchant_id          String            @db.Uuid
+  branch_id            String?           @db.VarChar(128)
+  warehouse_id         String?           @db.VarChar(128)
   carrier_account_id   String            @db.Uuid
   period_start         DateTime          @db.Date
   period_end           DateTime          @db.Date
@@ -863,6 +873,8 @@ model StatementRow {
 model Discrepancy {
   id                   String                @id @default(uuid()) @db.Uuid
   merchant_id          String                @db.Uuid
+  branch_id            String?               @db.VarChar(128)
+  warehouse_id         String?               @db.VarChar(128)
   statement_row_id     String?               @db.Uuid
   shipment_id          String                @db.Uuid
   tracking_code        String                @db.VarChar(128)
@@ -892,6 +904,8 @@ model Discrepancy {
 model Claim {
   id                   String            @id @default(uuid()) @db.Uuid
   merchant_id          String            @db.Uuid
+  branch_id            String?           @db.VarChar(128)
+  warehouse_id         String?           @db.VarChar(128)
   shipment_id          String            @db.Uuid
   discrepancy_id       String?           @db.Uuid
   claim_type           String            @db.VarChar(32) // LOST, DAMAGED, FEE, COD

@@ -255,7 +255,7 @@ async function runImportsSupertestSuite() {
       const resIdemConflict = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
-        .set('Idempotency-Key', 'unique-idempotency-key-01')
+        .set('Idempotency-Key', 'idem-test-01')
         .send({
           template_type: 'warehouses',
           file_name: 'different_content.csv',
@@ -268,7 +268,7 @@ async function runImportsSupertestSuite() {
       const resRetryDifferent = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
-        .set('Idempotency-Key', 'unique-idempotency-key-01')
+        .set('Idempotency-Key', 'idem-test-01')
         .send({
           template_type: 'warehouses',
           file_name: 'yet_another.csv',
