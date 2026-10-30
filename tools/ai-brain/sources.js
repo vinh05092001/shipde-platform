@@ -615,9 +615,22 @@ function getDispatchConfig(registry, options = {}) {
     blockedNoRouteTimeoutMs: configuredLimit('blockedNoRouteTimeoutMs'),
     blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
     maxPromptCommandOutputChars: configuredLimit('maxPromptCommandOutputChars'),
+    maxReviewDiffChars:
+      options.maxReviewDiffChars !== undefined ||
+      dispatch.maxReviewDiffChars !== undefined ||
+      (!registry?.dispatch && defaults.maxReviewDiffChars !== undefined)
+        ? configuredLimit('maxReviewDiffChars')
+        : undefined,
     maxHostGateSummaryChars: configuredLimit('maxHostGateSummaryChars'),
     rateLimitCooldownMs: configuredLimit('rateLimitCooldownMs'),
     agyPoolTimeoutMs: configuredNonNegativeLimit('agyPoolTimeoutMs'),
+    blockedNoRouteTimeoutMs: configuredLimit('blockedNoRouteTimeoutMs'),
+    blockedNoRoutePollIntervalMs: configuredLimit('blockedNoRoutePollIntervalMs'),
+    retainedRootMaxAgeMs: configuredLimit('retainedRootMaxAgeMs'),
+    ciRequiredChecks: options.ciRequiredChecks ??
+      options.requiredChecks ??
+      dispatch.ciGate?.requiredChecks ??
+      defaults.ciGate?.requiredChecks ?? ['contract', 'application-gate'],
     headroomUnknownPenalty: configuredNonNegativeLimit(
       'headroomUnknownPenalty',
       'unknownHeadroomPenalty'

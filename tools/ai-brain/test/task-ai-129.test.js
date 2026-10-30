@@ -177,6 +177,25 @@ function setupGateRun(prefix, spec, gateResult) {
       return cp.spawnSync(cmd, args, spawnOpts);
     },
     publisher: (pubOpts) => ({ status: 'published', sha: pubOpts.reviewedSha }),
+    ghRunner: (args) => {
+      if (args[0] !== 'pr' || args[1] !== 'view') {
+        return { exitCode: 1, stdout: '', stderr: 'unexpected gh command' };
+      }
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          headRefOid: repo.git(['rev-parse', 'HEAD']),
+          statusCheckRollup: require('../ci-gate')
+            .ciGateConfig()
+            .requiredChecks.map((name) => ({
+              name,
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+            })),
+        }),
+        stderr: '',
+      };
+    },
     publication: {
       approvalIds: ['AP-129'],
       registryPath,
@@ -364,6 +383,8 @@ test('TM-R05: a gate with no command gives TOOL_GATE_UNAVAILABLE and is not a pa
   assert.ok(outcome, 'outcome exists');
   assert.notEqual(outcome.status, 'refused', 'an unavailable gate does not block');
   assert.equal(outcome.status, 'completed', 'the item completes: ' + outcome.status);
+  assert.equal(log.reviews[0].ci.state, 'PASS', 'completion has exact-SHA green CI');
+  assert.equal(log.reviews[0].ci.sha, log.reviews[0].sha);
 
   const records = decisions.readDecisions({ dir: f.opts.decisionDir, now: NOW });
   const unavailable = records.find(
