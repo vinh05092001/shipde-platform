@@ -6,16 +6,16 @@
 | --- | --- |
 | Work Item ID | `FEAT-COM-06` |
 | Feature ID | `FEAT-COM-06` |
-| Status | `IN_PROGRESS` |
+| Status | `READY_FOR_CODEX` |
 | Delivery order | 25 |
 | Dependencies | `TASK-FOUND-04`, `FEAT-AUTH-01`, `FEAT-AUTH-06`, `FEAT-RBAC-01`, `FEAT-RBAC-02`, `FEAT-ORG-01` |
 | Assigned author | `GEMINI` |
 | Risk | HIGH |
 | Risk domains | `tenant isolation`, `rbac`, `FEAT-RBAC-02 scopes`, `s3 private storage`, `tamper-proof sha256`, `access audit`, `retention lifecycle`, `malware/mime validation` |
-| Allowed paths | `docs/product-spec/work-items/FEAT-COM-06.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `packages/config/src/*`, `packages/contracts/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/attachments/*`, `apps/api/src/app.module.ts`, `apps/api/src/storage/storage.service.ts` |
+| Allowed paths | `docs/product-spec/work-items/FEAT-COM-06.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `packages/config/src/*`, `packages/contracts/src/*`, `packages/testkit/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/attachments/*`, `apps/api/src/app.module.ts`, `apps/api/src/storage/storage.service.ts` |
 | Reviewer | Codex — fresh independent task |
 | Branch | `feat/feat-com-06` |
-| Pull Request | Pending |
+| Pull Request | #471 |
 
 ## Business outcome
 

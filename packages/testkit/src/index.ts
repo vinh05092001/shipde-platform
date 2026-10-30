@@ -42,7 +42,7 @@ export function assertValidMonorepoPackage(pkgName: string, fromUrl?: string): b
 }
 
 import type { LivenessResponse, ReadinessResponse } from '@shipde/contracts';
-import type { AppConfig } from '@shipde/config';
+import { WORKSPACE_ENV, type AppConfig } from '@shipde/config';
 
 /**
  * Asserts that the given response conforms strictly to the LivenessResponse contract.
@@ -186,6 +186,9 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     RBAC_SEED_RETRY_INTERVAL_MS: 1000,
     RBAC_SEED_MAX_ATTEMPTS: 10,
     RBAC_SEED_BACKOFF_FACTOR: 1.5,
+    MAX_ATTACHMENT_SIZE_BYTES: WORKSPACE_ENV.DEFAULT_MAX_ATTACHMENT_SIZE_BYTES,
+    ATTACHMENT_DEFAULT_RETENTION_DAYS: WORKSPACE_ENV.DEFAULT_ATTACHMENT_RETENTION_DAYS,
+    ATTACHMENT_DOWNLOAD_TTL_SECONDS: WORKSPACE_ENV.DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS,
     ...overrides,
   };
 }
