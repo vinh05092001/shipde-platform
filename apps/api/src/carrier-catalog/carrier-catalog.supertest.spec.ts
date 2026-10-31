@@ -165,6 +165,8 @@ async function seedCatalogIfMissing(prisma: PrismaService) {
 /**
  * Redacts database connection strings to eliminate password or sensitive query parameter leakage
  * in CI errors, warnings, or diagnostic logs (P1 review finding).
+ * Fail-closed: any URL that cannot be fully parsed is replaced wholesale with the redaction
+ * marker, because a partial regex replacement cannot guarantee query-parameter sanitization.
  */
 export function redactDatabaseUrl(rawUrl?: string): string {
   if (!rawUrl) {
@@ -189,7 +191,7 @@ export function redactDatabaseUrl(rawUrl?: string): string {
     }
     return parsed.toString();
   } catch {
-    return rawUrl.replace(/(:\/\/[^:]+:)[^@]+(@)/, '$1***$2');
+    return '[REDACTED_DATABASE_URL]';
   }
 }
 
@@ -630,8 +632,75 @@ async function runCarrierCatalogSupertestSuite() {
       false,
       'Local warning message must NEVER leak sensitive query parameters'
     );
+
+    // Malformed URL (opaque host containing a colon): new URL() throws, exercising the
+    // fail-closed branch. A partial regex fallback would retain query secrets like token=...
+    const malformedPassword = 'malformed_pg_password_000';
+    const malformedToken = 'malformed_query_secret_111';
+    const malformedDbUrl = `postgresql://u:${malformedPassword}@db:bad/db?token=${malformedToken}`;
+
+    let malformedUrlParsed = true;
+    try {
+      new URL(malformedDbUrl);
+    } catch {
+      malformedUrlParsed = false;
+    }
+    assert.strictEqual(
+      malformedUrlParsed,
+      false,
+      'Test precondition: malformed URL must not parse with new URL()'
+    );
+
+    const malformedRedacted = redactDatabaseUrl(malformedDbUrl);
+    assert.strictEqual(
+      malformedRedacted,
+      '[REDACTED_DATABASE_URL]',
+      'Unparseable database URL must be replaced wholesale with the redaction marker'
+    );
+    assert.strictEqual(
+      malformedRedacted.includes(malformedPassword),
+      false,
+      'Malformed-URL diagnostic must NEVER contain database password'
+    );
+    assert.strictEqual(
+      malformedRedacted.includes(malformedToken),
+      false,
+      'Malformed-URL diagnostic must NEVER contain sensitive query parameters'
+    );
+
+    const malformedCiMsg = buildDatabaseReadinessFailureMessage(malformedDbUrl, true);
+    assert.strictEqual(
+      malformedCiMsg.includes(malformedPassword),
+      false,
+      'CI error message must NEVER leak credentials from an unparseable database URL'
+    );
+    assert.strictEqual(
+      malformedCiMsg.includes(malformedToken),
+      false,
+      'CI error message must NEVER leak sensitive query parameters from an unparseable database URL'
+    );
+    assert.ok(
+      malformedCiMsg.includes('[REDACTED_DATABASE_URL]'),
+      'CI error message must show the redaction marker for an unparseable database URL'
+    );
+
+    const malformedWarnMsg = buildDatabaseReadinessFailureMessage(malformedDbUrl, false);
+    assert.strictEqual(
+      malformedWarnMsg.includes(malformedPassword),
+      false,
+      'Local warning message must NEVER leak credentials from an unparseable database URL'
+    );
+    assert.strictEqual(
+      malformedWarnMsg.includes(malformedToken),
+      false,
+      'Local warning message must NEVER leak sensitive query parameters from an unparseable database URL'
+    );
+    assert.ok(
+      malformedWarnMsg.includes('[REDACTED_DATABASE_URL]'),
+      'Local warning message must show the redaction marker for an unparseable database URL'
+    );
     console.log(
-      '  ✔ P1 Finding: Failure-path assertions prove credentials never appear in diagnostics'
+      '  ✔ P1 Finding: Failure-path assertions prove credentials never appear in diagnostics (valid + malformed URLs)'
     );
 
     // --------------------------------------------------------------------------

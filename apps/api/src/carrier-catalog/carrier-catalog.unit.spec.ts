@@ -507,5 +507,41 @@ describe('FEAT-CAR-01 Carrier Catalog Unit Test Suite', () => {
         )
       );
     });
+
+    it('fails closed to the redaction marker for unparseable URLs (no partial-regex fallback leak)', () => {
+      const secretPass = 'malformed_pg_password_000';
+      const secretToken = 'malformed_query_secret_111';
+      // Opaque host containing a colon is rejected by new URL() for the postgresql scheme,
+      // forcing the parse-failure branch that previously fell back to a password-only regex
+      // and leaked query secrets such as token=...
+      const malformedUrl = `postgresql://u:${secretPass}@db:bad/db?token=${secretToken}`;
+
+      let parsed = true;
+      try {
+        new URL(malformedUrl);
+      } catch {
+        parsed = false;
+      }
+      assert.strictEqual(parsed, false, 'Precondition: malformed URL must not parse');
+
+      const redacted = redactDatabaseUrl(malformedUrl);
+      assert.strictEqual(
+        redacted,
+        '[REDACTED_DATABASE_URL]',
+        'Unparseable URL must be replaced wholesale with the redaction marker'
+      );
+      assert.strictEqual(redacted.includes(secretPass), false);
+      assert.strictEqual(redacted.includes(secretToken), false);
+
+      const ciError = buildDatabaseReadinessFailureMessage(malformedUrl, true);
+      assert.strictEqual(ciError.includes(secretPass), false);
+      assert.strictEqual(ciError.includes(secretToken), false);
+      assert.ok(ciError.includes('[REDACTED_DATABASE_URL]'));
+
+      const warnMsg = buildDatabaseReadinessFailureMessage(malformedUrl, false);
+      assert.strictEqual(warnMsg.includes(secretPass), false);
+      assert.strictEqual(warnMsg.includes(secretToken), false);
+      assert.ok(warnMsg.includes('[REDACTED_DATABASE_URL]'));
+    });
   });
 });
