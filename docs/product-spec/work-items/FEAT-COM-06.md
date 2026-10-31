@@ -14,8 +14,53 @@
 | Risk domains | `tenant isolation`, `rbac`, `FEAT-RBAC-02 scopes`, `s3 private storage`, `tamper-proof sha256`, `access audit`, `retention lifecycle`, `malware/mime validation` |
 | Allowed paths | `docs/product-spec/work-items/FEAT-COM-06.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `packages/config/src/*`, `packages/contracts/src/*`, `packages/testkit/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/src/attachments/*`, `apps/api/src/app.module.ts`, `apps/api/src/storage/storage.service.ts` |
 | Reviewer | Codex — fresh independent task |
-| Branch | `feat/feat-com-06` |
-| Pull Request | #471 |
+| Branch | `feat/feat-com-06-api` |
+| Pull Request | #483 |
+
+## Slice A (API)
+
+- **Delivery Slice**: Slice A carries the API and Server-Side Foundation in isolation (PR #483) under an operator-approved split.
+- **Scope for Slice A**:
+  - `prisma/schema.prisma` (`Attachment` and `AttachmentOrphanCleanup` models) and migrations (`20261029010000_feat_com_06_attachments`, `20261030010000_feat_com_06_orphan_cleanup`).
+  - `@shipde/config` (`MAX_ATTACHMENT_SIZE_BYTES`, `ATTACHMENT_DEFAULT_RETENTION_DAYS`, `ATTACHMENT_DOWNLOAD_TTL_SECONDS`, `ATTACHMENT_SCAN_MAX_ZIP_ENTRIES`, `ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES`, `ATTACHMENT_DISALLOWED_EXTENSIONS`).
+  - `@shipde/contracts` (`AttachmentAuditEvent`, `AttachmentScanStatus`, `AttachmentErrorCode`, `FormattedAttachment`, `AttachmentPerItemResult`, `AttachmentBulkActionResult`).
+  - `@shipde/testkit` (test environment and configuration helpers).
+  - `apps/api/src/storage/storage.service.ts` (S3 object storage operations: putObject, getObject, deleteObject, headObject).
+  - `apps/api/src/attachments/*` (`attachments.module.ts`, `attachments.controller.ts`, `attachments.service.ts`, `attachments.dto.ts`, `attachments.capabilities.ts`, `attachments.unit.spec.ts`, `attachments.supertest.spec.ts`).
+  - `apps/api/src/app.module.ts` and `apps/api/package.json`.
+  - `docs/product-spec/work-items/FEAT-COM-06.md`.
+- **Acceptance IDs Covered in Slice A**:
+  - `AC-COM-06-01`: Upload valid attachment (PNG image, valid size, valid entity, S3 object stored, SHA-256 computed, status ACTIVE).
+  - `AC-COM-06-02`: Upload file with matching client checksum verified.
+  - `AC-COM-06-03`: Upload file with mismatched checksum rejected with 400 `CHECKSUM_MISMATCH`.
+  - `AC-COM-06-04`: Upload file with disallowed MIME type or extension (.exe, .html, .svg) rejected with 400 `INVALID_FILE_TYPE`.
+  - `AC-COM-06-05`: Upload file exceeding configured size limit rejected with 400 `FILE_TOO_LARGE`.
+  - `AC-COM-06-06`: Upload empty file (0 bytes) rejected with 400 `EMPTY_FILE`.
+  - `AC-COM-06-07`: List attachments with pagination, total count, and entity filter.
+  - `AC-COM-06-08`: List attachments with FEAT-RBAC-02 warehouse scope filtering.
+  - `AC-COM-06-09`: Actor with empty scopes receives empty list (fail-closed).
+  - `AC-COM-06-10`: Get attachment metadata by ID within same tenant without exposing S3 secret credentials.
+  - `AC-COM-06-11`: Cross-tenant access attempt rejected with 404 `ATTACHMENT_NOT_FOUND` (zero cross-tenant leakage).
+  - `AC-COM-06-12`: Access outside warehouse scope rejected with 403 `SCOPE_FORBIDDEN`.
+  - `AC-COM-06-13`: Download attachment content with binary stream, content headers, and immutable `ATTACHMENT_ACCESSED` audit log.
+  - `AC-COM-06-14`: Download attachment outside warehouse scope rejected with 403 `SCOPE_FORBIDDEN`.
+  - `AC-COM-06-15`: Delete attachment with `confirm: true` marks `DELETED`, removes S3 object, creates `ATTACHMENT_DELETED` audit log.
+  - `AC-COM-06-16`: Delete attachment without `confirm: true` rejected with 400 `CONFIRMATION_REQUIRED`.
+  - `AC-COM-06-17`: Delete attachment belonging to another tenant rejected with 404 `ATTACHMENT_NOT_FOUND`.
+  - `AC-COM-06-18`: Delete attachment outside actor's warehouse scope rejected with 403 `SCOPE_FORBIDDEN`.
+  - `AC-COM-06-19`: Run retention purge job for expired attachments with truthful per-row results (`succeeded_ids`, `failed_ids`).
+  - `AC-COM-06-20`: Bulk delete attachments with partial valid and invalid IDs returning partitioned results.
+  - `AC-COM-06-21`: Bulk delete without `confirm: true` rejected with 400 `CONFIRMATION_REQUIRED`.
+  - `AC-COM-06-22`: Audit trail verification across upload, access, download, delete, and retention purge.
+  - `AC-COM-06-23`: Negative test: Invalid UUID formats return canonical 400 `VALIDATION_ERROR`.
+  - `AC-COM-06-24`: S3 storage error resilience: S3 failure returns 503 `STORAGE_UNAVAILABLE` without leaking internals.
+  - `AC-COM-06-25`: Test tenant isolation and cleanup: Tests create and clean their own tenant rows in finally blocks.
+- **What Remains for Slice B (UI)**:
+  - `apps/web/src/components/AttachmentManagementView.tsx`: Interactive web management interface with data grid, filter bar, upload dialog, delete confirmation modal, bulk actions, quarantine modal, and retention purge modal.
+  - `apps/web/src/app/settings/attachments/page.tsx`: Settings workspace page wiring `AttachmentManagementView` with server-derived capability flags.
+  - `apps/web/src/tests/attachments-page-states.test.ts`: Web UI state tests covering loading, empty, validation error, server error with retry, forbidden, and success feedback.
+  - WCAG 2.1 A/AA accessibility verification on icon buttons and navigation elements.
+  - Web UI slice remains on `feat/feat-com-06` (PR #471) and merges after Slice A.
 
 ## Business outcome
 
@@ -65,7 +110,7 @@ Merchant operators, warehouse supervisors, and CS staff can securely upload, lin
    - FEAT-RBAC-02 scope enforcement per row: If an attachment has `warehouse_id`, actor must possess wildcard `*` or include `warehouse_id` in `warehouse_scopes`. If scoped to `branch_id`, actor must possess wildcard `*` or include `branch_id` in `store_scopes`.
    - Zero plaintext PII or secrets leaked in errors, audit logs, or S3 metadata.
    - Immutable audit logging on upload, access/download, delete, and retention purge.
-5. **Web Management Interface & UI State Coverage**:
+5. **Web Management Interface & UI State Coverage (Delivered in Slice B — PR #471)**:
    - `apps/web/src/components/AttachmentManagementView.tsx`: Complete vertical attachment management interface with search, status filtering (ACTIVE, QUARANTINED, PENDING_DELETION, DELETED), entity filtering, upload modal, deletion confirmation modal, bulk deletion, retention purge with dry-run toggle, quarantine action, and full accessibility compliance (WCAG/A11y verified).
    - `apps/web/src/app/settings/attachments/page.tsx`: Settings page integrating `AttachmentManagementView` with server-derived edit capabilities.
    - `apps/web/src/tests/attachments-page-states.test.ts`: Complete UI states test suite verifying loading, empty, validation error, server error with retry, forbidden, success feedback, and list grid rendering.
@@ -125,26 +170,30 @@ Merchant operators, warehouse supervisors, and CS staff can securely upload, lin
 node scripts/ai/check-no-hardcode.mjs
 
 # Formatting
-pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-06.md docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv apps/api/src/attachments/* packages/config/src/* packages/contracts/src/*
+pnpm exec prettier --check docs/product-spec/work-items/FEAT-COM-06.md apps/api/src/attachments/* packages/config/src/* packages/contracts/src/* packages/testkit/src/*
 
-# TypeScript compilation
+# TypeScript compilation (Slice A packages & apps)
 pnpm --filter @shipde/config build
 pnpm --filter @shipde/contracts build
+pnpm --filter @shipde/testkit build
 pnpm --filter @shipde/api typecheck
 pnpm --filter @shipde/web typecheck
 
-# Linting & Accessibility
+# Linting
 pnpm --filter @shipde/api lint
 pnpm test:a11y
 
-# Unit tests
+# Slice A Unit tests
 pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json --test src/attachments/attachments.unit.spec.ts
 
-# Web UI States tests
-pnpm --filter @shipde/web exec tsx src/tests/attachments-page-states.test.ts
-
-# Supertest HTTP integration tests
+# Slice A Supertest HTTP integration tests
 pnpm --filter @shipde/api exec tsx --tsconfig tsconfig.json src/attachments/attachments.supertest.spec.ts
+
+# OpenAPI contract check
+pnpm contract:check
+
+# Slice B Web UI States tests (preserved on feat/feat-com-06)
+pnpm --filter @shipde/web exec tsx src/tests/attachments-page-states.test.ts
 ```
 
 ## Residual limitations
