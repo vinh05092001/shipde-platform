@@ -116,7 +116,8 @@ async function runImportsSupertestSuite() {
       role: RoleEnum,
       emailSuffix: string,
       warehouseScopes: string[] = role === RoleEnum.OWNER ? ['*'] : [],
-      storeScopes: string[] = role === RoleEnum.OWNER ? ['*'] : []
+      storeScopes: string[] = role === RoleEnum.OWNER ? ['*'] : [],
+      customRoleId?: string | null
     ): Promise<{ token: string; userId: string; sessionId: string }> => {
       const userId = randomUUID();
       const sessionId = randomUUID();
@@ -141,6 +142,7 @@ async function runImportsSupertestSuite() {
           full_name: `User ${emailSuffix}`,
           password_hash: 'mock_hash',
           role,
+          custom_role_id: customRoleId ?? null,
           status: 'active',
           warehouse_scopes: warehouseScopes,
           store_scopes: storeScopes,
@@ -162,15 +164,46 @@ async function runImportsSupertestSuite() {
       return { token, userId, sessionId };
     };
 
+    // Custom role carrying exactly iam:shop_config (permission resolved from the seeded
+    // registry, never hardcoded): lets the scoped user pass the permission gate while the
+    // FEAT-RBAC-02 row scope is still enforced per row.
+    const scopedRoleA = await prisma.role.create({
+      data: {
+        merchant_id: merchantIdA,
+        name: `Scoped Import Operator ${testSuffix}`,
+        name_lower: `scoped import operator ${testSuffix}`.toLowerCase(),
+        description: 'Test fixture: iam:shop_config with restricted warehouse/store scopes',
+        is_system: false,
+      },
+    });
+    const shopConfigPermission = await prisma.permission.findUnique({
+      where: { code: 'iam:shop_config' },
+    });
+    assert.ok(shopConfigPermission, 'iam:shop_config permission must exist after platform seed');
+    await prisma.rolePermission.create({
+      data: {
+        role_id: scopedRoleA.id,
+        permission_id: shopConfigPermission.id,
+      },
+    });
+
     const ownerA = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'owner-a');
     const scopedUserA = await setupUserSession(
       merchantIdA,
       RoleEnum.OPS_CSKH,
       'scoped-a',
       [`WH-A-01-${testSuffix}`],
-      [`BR-A-01-${testSuffix}`]
+      [`BR-A-01-${testSuffix}`],
+      scopedRoleA.id
     );
-    const noPermUserA = await setupUserSession(merchantIdA, RoleEnum.VIEWER, 'viewer-a', [], []);
+    // ACCOUNTANT holds no iam:shop_config in the canonical registry, so the guard denies it.
+    const noPermUserA = await setupUserSession(
+      merchantIdA,
+      RoleEnum.ACCOUNTANT,
+      'viewer-a',
+      [],
+      []
+    );
     const ownerB = await setupUserSession(merchantIdB, RoleEnum.OWNER, 'owner-b');
 
     const server = app.getHttpServer();
@@ -528,6 +561,8 @@ async function runImportsSupertestSuite() {
       await prisma.auditLog.deleteMany({ where: { merchant_id: mId } });
       await prisma.deviceSession.deleteMany({ where: { merchant_id: mId } });
       await prisma.user.deleteMany({ where: { merchant_id: mId } });
+      await prisma.rolePermission.deleteMany({ where: { role: { merchant_id: mId } } });
+      await prisma.role.deleteMany({ where: { merchant_id: mId, is_system: false } });
       await prisma.merchant.delete({ where: { id: mId } });
     };
 

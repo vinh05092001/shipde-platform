@@ -9,9 +9,43 @@
 | Delivery order | 23 |
 | Assigned author | `GEMINI` |
 | Risk | HIGH — tenant data, permissions and potentially financial records |
-| Branch | `feat/feat-com-04` |
+| Branch | `feat/feat-com-04-api` (Slice A); `feat/feat-com-04` (Slice B) |
 | Reviewer | Codex — fresh independent task |
-| Pull Request | `#469` |
+| Pull Request | `#481` (Slice A); `#469` (Slice B) |
+
+## Slice A (API)
+
+- **Scope**: Server-side imports framework and entity templates (branches and warehouses). Includes private file upload (`StorageService` with local disk fallback), malware scanning, bounded ZIP/XLSX and CSV parsing (`imports.parser.ts`), row-level validation (`imports.service.ts`), durable database staging, control totals calculation, idempotency enforcement with partial unique index, SHA-256 checksum deduplication, atomic revision sequencing with merchant-level concurrency locking (`SELECT id FROM merchants WHERE id = $1 FOR NO KEY UPDATE`), per-row FEAT-RBAC-02 scope enforcement without role bypasses, all-or-nothing promotion with displaced default validation, and PII-masked audit logging with correlation IDs.
+- **Allowed paths**: `apps/api/`, `prisma/`, `packages/contracts/`, `packages/config/`, `packages/testkit/`, and this Work Item. Excludes `apps/web` and `docs/product-spec/contracts/openapi.yaml` (deferred to Slice B).
+- **Acceptance IDs covered**:
+  - `COM-04-01`: Template generation and private upload staging.
+  - `COM-04-02`: Malware scanning, file size limit, and MIME type restrictions.
+  - `COM-04-03`: Row error detection, duplicate scope, missing scope, BLOCKED status.
+  - `COM-04-04`: Optional field handling, WARNING severity, DATA_INCOMPLETE status.
+  - `COM-04-05`: Control totals calculation and paginated durable rows.
+  - `COM-04-06`: Checksum deduplication and 409 IDEMPOTENCY_CONFLICT.
+  - `COM-04-07`: Server-side tenant isolation and FEAT-RBAC-02 per-row scope checks (403 SCOPE_UNAUTHORIZED).
+  - `COM-04-08`: All-or-nothing entity promotion with merchant row locking, PROMOTED and SUPERSEDED states.
+  - `COM-04-09`: PII-masked audit logging (`IMPORT_UPLOADED`, `IMPORT_PROMOTED`, entity mutations) with correlation IDs.
+  - `P0-Finding-3`: Local storage fallback persistence.
+  - `P0-Finding-4`: Branch schema migration alignment.
+  - `P0-Finding-5`: XLSX coordinate parsing and PKZIP CRC-32 checksums.
+  - `P0-Finding-6`: Non-destructive entity updates and single default branch enforcement.
+  - `P0-Finding-7`: Default-branch atomicity preserved without regressions.
+  - `P0-Finding-8`: Supertest revision promotion ordering and fixture-scoped cleanup.
+  - `P1-Finding-10`: Permission checks without hardcoded OWNER role bypass.
+  - `P1-Finding-11`: Uppercase status casing and legacy contact column alignment.
+  - `P1-Finding-12`: Concurrency locking on merchant row and unique idempotency index.
+  - `P1-Finding-14`: Scoped actor authorization including displaced default entities.
+  - `P1-Finding-17`: Strict file extension and MIME type restrictions.
+  - `P1-Finding-18`: Bounded ZIP extraction against zip-bombs.
+  - `P1-Finding-19`: Multi-phase durable staging and compensating storage deletion.
+- **What remains for Slice B (UI)**:
+  - SCR-IMPORT-01 Web UI implementation in `apps/web/src/app/settings/imports/page.tsx` and `apps/web/src/components/ImportManagementView.tsx`.
+  - All AGENTS.md UI states (loading, empty, forbidden, error banner with retry recovery, mapping preview, control totals, row issues table, and revision history).
+  - Authenticated blob download handlers for template and issue export (`P0-Finding-2`, `P1-Finding-15`, `P1-Finding-16`).
+  - Web acceptance test suite (`apps/web/src/tests/imports-page-states.test.ts`, `COM-04-10`, `P0-Finding-1`, `P1-Finding-13`).
+  - OpenAPI specification update in `docs/product-spec/contracts/openapi.yaml`.
 
 ## Business outcome and sources
 

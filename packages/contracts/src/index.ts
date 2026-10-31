@@ -791,15 +791,18 @@ export const ImportErrorCode = {
 } as const;
 export type ImportErrorCode = (typeof ImportErrorCode)[keyof typeof ImportErrorCode];
 
-export type UploadImportInput = components['schemas']['UploadImportInput'];
-export type ImportControlTotals = components['schemas']['ImportControlTotals'];
-export type ImportRowIssue = components['schemas']['ImportRowIssue'];
-export type ImportSummary = components['schemas']['ImportSummary'];
-export type ImportRow = components['schemas']['ImportRow'];
-export type ImportDetailResponse = components['schemas']['ImportDetailResponse'];
-export type ListImportsResponse = components['schemas']['ListImportsResponse'];
-export type ListImportRowsResponse = components['schemas']['ListImportRowsResponse'];
-export type PromoteImportResponse = components['schemas']['PromoteImportResponse'];
+export type {
+  UploadImportInput,
+  ImportControlTotals,
+  ImportColumnMapping,
+  ImportRowIssue,
+  ImportSummary,
+  ImportRow,
+  ImportDetailResponse,
+  ListImportsResponse,
+  ListImportRowsResponse,
+  PromoteImportResponse,
+} from './imports';
 
 // --- Guided Onboarding Contracts (FEAT-ONB-01) ---
 export const OnboardingStepId = {
