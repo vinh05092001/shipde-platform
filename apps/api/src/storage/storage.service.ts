@@ -1,5 +1,12 @@
 import { Injectable, Inject, OnModuleDestroy } from '@nestjs/common';
-import { S3Client, HeadBucketCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  HeadBucketCommand,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+} from '@aws-sdk/client-s3';
 import { AppConfig } from '@shipde/config';
 import { APP_CONFIG } from '../config.token';
 
@@ -54,6 +61,89 @@ export class StorageService implements OnModuleDestroy {
       return 'up';
     } catch {
       return 'down';
+    }
+  }
+
+  /**
+   * Store object in private S3 bucket.
+   */
+  async putObject(
+    key: string,
+    body: Buffer,
+    contentType: string,
+    metadata?: Record<string, string>
+  ): Promise<void> {
+    const s3 = this.getClient();
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: this.config.S3_BUCKET,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        Metadata: metadata,
+      })
+    );
+  }
+
+  /**
+   * Retrieve object from private S3 bucket.
+   */
+  async getObject(
+    key: string
+  ): Promise<{ body: Buffer; contentType?: string; contentLength?: number }> {
+    const s3 = this.getClient();
+    const res = await s3.send(
+      new GetObjectCommand({
+        Bucket: this.config.S3_BUCKET,
+        Key: key,
+      })
+    );
+    const byteArray = await res.Body?.transformToByteArray();
+    const body = byteArray ? Buffer.from(byteArray) : Buffer.alloc(0);
+    return {
+      body,
+      contentType: res.ContentType,
+      contentLength: res.ContentLength ?? body.length,
+    };
+  }
+
+  /**
+   * Delete object from private S3 bucket.
+   */
+  async deleteObject(key: string): Promise<void> {
+    const s3 = this.getClient();
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: this.config.S3_BUCKET,
+        Key: key,
+      })
+    );
+  }
+
+  /**
+   * Check if object exists in S3.
+   */
+  async headObject(
+    key: string
+  ): Promise<{ exists: boolean; contentLength?: number; contentType?: string }> {
+    try {
+      const s3 = this.getClient();
+      const res = await s3.send(
+        new HeadObjectCommand({
+          Bucket: this.config.S3_BUCKET,
+          Key: key,
+        })
+      );
+      return {
+        exists: true,
+        contentLength: res.ContentLength,
+        contentType: res.ContentType,
+      };
+    } catch (err: any) {
+      if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
+        return { exists: false };
+      }
+      throw err;
     }
   }
 }
