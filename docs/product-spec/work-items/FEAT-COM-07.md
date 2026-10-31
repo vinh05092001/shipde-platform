@@ -105,8 +105,8 @@ Links resolve relative to this Work Item:
 
 ## Business rules and edge cases
 
-- `BR-COM-07-01 — Tenant Scoping & Isolation`: Every activity query must be scoped server-side to the authenticated session's `merchant_id`. If an entity belongs to another tenant, the API must return 404 `NOT_FOUND` (fail closed) without disclosing the entity's existence or activity count.
-- `BR-COM-07-02 — Entity-Permission Access Control`: Viewing an entity's activity timeline requires the caller to hold read permissions for that specific entity type plus server-side tenant matching (`entity.merchant_id === session.merchantId`). Blanket administrative `audit:view` capability is NOT required for contextual entity activity. Access is governed by the exhaustive mapping table below with explicit AND/OR semantics:
+- `BR-COM-07-01 — Tenant Scoping, Isolation & Historical Entity Resolution`: Every activity query must be scoped server-side to the authenticated session's `merchant_id`. If an entity does not exist in the primary table (e.g. it was physically deleted), the service performs an authorized historical lookup against retained `AuditLog` records for `(entity_type, entity_id)` (`ORDER BY created_at DESC LIMIT 1`). If no audit log record exists, or if the entity/audit record belongs to another tenant (`merchant_id !== session.merchantId`), the API must return 404 `NOT_FOUND` (fail closed) without disclosing the entity's existence or activity count.
+- `BR-COM-07-02 — Entity-Permission Access Control`: Viewing an entity's activity timeline requires the caller to hold read permissions for that specific entity type plus server-side tenant matching (`entity.merchant_id === session.merchantId`, evaluated against live entity or historical tombstone record). Blanket administrative `audit:view` capability is NOT required for contextual entity activity. Access is governed by the exhaustive mapping table below with explicit AND/OR semantics:
   - `TenantMatch` (Mandatory `AND`): `entity.merchant_id === session.merchantId`. If false, fail closed with 404 `NOT_FOUND`.
   - `CapabilityMatch` (`OR` condition within entity type): Caller must hold at least one of the listed capabilities:
     - `SHOP`: `shop:read` OR `organization:view`
@@ -118,12 +118,17 @@ Links resolve relative to this Work Item:
     - `EXCEPTION_CASE`: `exception:read` OR `shipment:track_exceptions`
     - `CLAIM`: `claim:view` OR `claim:read`
   - If `CapabilityMatch` is false, reject with canonical 403 `FORBIDDEN`.
-- `BR-COM-07-03 — Resource Scope Enforcement (FEAT-RBAC-02)`: When an entity is associated with a branch or warehouse, the caller's active session must possess that store/warehouse scope:
+- `BR-COM-07-03 — Resource Scope Enforcement (FEAT-RBAC-02)`: When an entity is associated with a branch or warehouse, the caller's active session must possess that store/warehouse scope (evaluated against live entity or historical tombstone snapshot):
   - If caller role has tenant-wide scope (`is_scoped = false`), resource scope check unconditionally passes.
   - If caller role has scoped access (`is_scoped = true`):
-    - For `BRANCH`: `session.branchIds` must contain `entity.id`.
-    - For `WAREHOUSE`: `session.warehouseIds` must contain `entity.id`.
-    - For `ORDER`, `SHIPMENT`, `EXCEPTION_CASE`: if the entity has an associated `branch_id` or `warehouse_id`, caller's `session.branchIds` or `session.warehouseIds` must include that identifier.
+    - For `BRANCH`: `session.branchIds` must contain `entity.id` (or deleted branch `id`).
+    - For `WAREHOUSE`: `session.warehouseIds` must contain `entity.id` (or deleted warehouse `id`).
+    - For `ORDER`, `SHIPMENT`, `EXCEPTION_CASE`: Evaluated against assigned `branch_id` and `warehouse_id`:
+      - *Both associations populated (`branch_id != null && warehouse_id != null`):* Evaluated using **Disjunctive OR** (`session.branchIds.includes(entity.branch_id) || session.warehouseIds.includes(entity.warehouse_id)`). A caller whose branch matches (`session.branchIds` contains `entity.branch_id`) but whose warehouse does NOT match (`session.warehouseIds` does not contain `entity.warehouse_id`) is **GRANTED** access (HTTP 200). Likewise, a caller whose warehouse matches but branch does not match is **GRANTED** access. Access is **DENIED** (HTTP 403 `FORBIDDEN`) if and only if neither dimension matches.
+      - *Only `branch_id` populated (`warehouse_id == null`):* Caller's `session.branchIds` must contain `entity.branch_id`. Mismatch returns 403 `FORBIDDEN`.
+      - *Only `warehouse_id` populated (`branch_id == null`):* Caller's `session.warehouseIds` must contain `entity.warehouse_id`. Mismatch returns 403 `FORBIDDEN`.
+      - *Neither populated (`branch_id == null && warehouse_id == null`):* Scoped callers cannot establish resource affinity and are **DENIED** (HTTP 403 `FORBIDDEN`); only unscoped tenant-wide roles may view unassigned records.
+    - For `SHOP`, `USER`, `CLAIM`: Tenant global scope (USER additionally permits self-inspection `session.userId === entity_id`).
   - If resource scope check fails, reject with canonical 403 `FORBIDDEN`.
 - `BR-COM-07-04 — Secrets & Credential Redaction`: Password hashes, session tokens, OTP codes, recovery keys, webhook secrets, and private keys must NEVER be returned in activity diffs or stored in UI logs. They must be unconditionally replaced with `"[REDACTED]"`.
 - `BR-COM-07-05 — PII & Confidential Data Masking`: Recipient phone numbers and email addresses in before/after snapshots must be masked (e.g. `0901****567`) unless the caller possesses the `pii:unmask` capability. Raw client IP addresses stored in `AuditLog` are stripped from timeline responses.
@@ -133,11 +138,15 @@ Links resolve relative to this Work Item:
 - `BR-COM-07-09 — Keyset Pagination Stability`: Timeline results must be deterministically ordered by `created_at DESC, id DESC`. Keyset pagination cursors encode both timestamp and ID to prevent dropped or duplicate records when multiple events share identical millisecond timestamps.
 - `BR-COM-07-10 — Read-Only Idempotency`: Querying or retrying an activity timeline is strictly read-only and idempotent. It must never trigger external carrier commands, re-run business logic, or mutate database state.
 - `BR-COM-07-11 — Execution Status Semantics`: Every activity item includes a top-level `status` property with enum values `['SUCCESS', 'FAILED']`. Committed business transactions recorded in `AuditLog` default to `'SUCCESS'`. Logged execution failures, rejected commands, or failed remote dispatches recorded for compliance are marked `'FAILED'`.
-- `BR-COM-07-12 — Snapshot Preservation & Diff Computation`: Field-level diff computation must preserve available evidence across all event lifecycle states:
-  - *Creation Events (`old_value == null && new_value != null`):* All properties in `new_value` are projected into `changes` with `old_value = null` and `new_value = <value>`, capturing initial state.
-  - *Deletion Events (`old_value != null && new_value == null`):* All properties in `old_value` are projected into `changes` with `old_value = <value>` and `new_value = null`, capturing terminal state before deletion.
-  - *Update Events (`old_value != null && new_value != null`):* Project only fields where `old_value[k] !== new_value[k]`.
-  - *Unavailable Snapshot Events (`old_value == null && new_value == null`):* Return `changes: []` with `is_partial: true`. The API returns HTTP 200 OK with complete event metadata (actor, timestamp, correlation ID, action). This distinguishes unavailable historical snapshots from an absent entity (which fails closed with 404 `NOT_FOUND`).
+- `BR-COM-07-12 — Lifecycle Classification, Snapshot Preservation & Partial Diff Handling`: Field-level diff computation must classify event lifecycle using the `action` and preserve available evidence across all event states:
+  - *Action-Based Lifecycle Classification:*
+    - **Creation Actions** (actions indicating entity initialization, e.g. ending in `_CREATED`, `_REGISTERED`, `_INVITED`, `_INITIALIZED`, or verb prefixes `CREATE_`, `REGISTER_`): When `old_value == null && new_value != null`, this is an initial creation event. Prior state is *known absent*. All properties in `new_value` are projected into `changes` with `old_value = null` and `new_value = <value>`. Item is marked with `is_partial = false`.
+    - **Deletion Actions** (actions indicating terminal removal, e.g. ending in `_DELETED`, `_REMOVED`, `_PURGED`, `_CANCELLED`, or verb prefixes `DELETE_`, `REMOVE_`): When `old_value != null && new_value == null`, this is an entity deletion event. Succeeding state is *known absent*. All properties in `old_value` are projected into `changes` with `old_value = <value>` and `new_value = null`. Item is marked with `is_partial = false`.
+    - **Update / Mutation Actions** (all other actions, e.g. ending in `_UPDATED`, `_MODIFIED`, `_ACTIVATED`, `_DEACTIVATED`, `_STATUS_CHANGED`, `_ASSIGNED`, etc.):
+      - *Complete Update (`old_value != null && new_value != null`):* Project only fields where `old_value[k] !== new_value[k]`, with `old_value: old_value[k]`, `new_value: new_value[k]`. Item is marked with `is_partial = false`.
+      - *Partial Update with Missing `old_value` (`old_value == null && new_value != null`):* Previous state was unrecorded by legacy producer and is **unavailable** (NOT absent). Project all properties of `new_value` into `changes` with `old_value = null` and `new_value = <value>`, and set `is_partial = true` on the item. This explicitly distinguishes an unavailable previous state (`is_partial = true`) from a known absent initial creation state (`is_partial = false`).
+      - *Partial Update with Missing `new_value` (`old_value != null && new_value == null`):* Subsequent state was unrecorded by legacy producer and is **unavailable** (the entity was NOT deleted). Project all properties of `old_value` into `changes` with `old_value = <value>` and `new_value = null`, and set `is_partial = true` on the item. This explicitly distinguishes an unavailable next state (`is_partial = true`) from a known absent terminal deletion state (`is_partial = false`).
+  - *Unavailable Snapshot Events across any action (`old_value == null && new_value == null`):* Return `changes: []` and set `is_partial = true`. The API returns HTTP 200 OK with complete event metadata (actor, timestamp, correlation ID, action, status). This distinguishes unavailable historical telemetry from an absent entity (which fails closed with 404 `NOT_FOUND`).
   - Sensitive field redaction (BR-COM-07-04), PII masking (BR-COM-07-05), and financial masking (BR-COM-07-06) apply to all projected fields.
 
 ## Approved product decisions (formerly blocking gaps G1–G4)
@@ -161,18 +170,29 @@ On 2026-10-31, the product owner (operator) formally APPROVED all recommended de
 | Target `entity_type` | Required Capability (`OR` condition within cell) | Tenant Scope (Mandatory `AND`) | Resource Scope (FEAT-RBAC-02) (Mandatory `AND` if scoped) | Behavior on Failure |
 |---|---|---|---|---|
 | `SHOP` | `shop:read` OR `organization:view` | `session.merchantId === entity.id` | Tenant global | Tenant mismatch: 404 `NOT_FOUND`. Missing capability: 403 `FORBIDDEN`. |
-| `BRANCH` | `branch:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.branchIds` contains `entity.id`. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
-| `WAREHOUSE` | `warehouse:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.warehouseIds` contains `entity.id`. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `BRANCH` | `branch:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.branchIds` contains `entity.id` (or deleted branch `id`). Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `WAREHOUSE` | `warehouse:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.warehouseIds` contains `entity.id` (or deleted warehouse `id`). Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
 | `USER` | `user:read` OR caller querying own user activity (`session.userId === entity_id`) | `session.merchantId === entity.merchant_id` | Tenant global | Tenant mismatch: 404 `NOT_FOUND`. Missing capability and not self: 403 `FORBIDDEN`. |
-| `ORDER` | `order:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.branchIds` contains `order.branch_id` (if assigned). Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
-| `SHIPMENT` | `shipment:read` OR `shipment:track_exceptions` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch/warehouse scope. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
-| `EXCEPTION_CASE` | `exception:read` OR `shipment:track_exceptions` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch/warehouse scope. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `ORDER` | `order:read` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch or warehouse scope via **Disjunctive OR** (`session.branchIds` contains `order.branch_id` OR `session.warehouseIds` contains `order.warehouse_id`). Caller with matching branch but unassigned/mismatched warehouse is granted. If single association exists, matching scope required. If neither assigned, scoped denied. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `SHIPMENT` | `shipment:read` OR `shipment:track_exceptions` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch or warehouse scope via **Disjunctive OR** (`session.branchIds` contains `shipment.branch_id` OR `session.warehouseIds` contains `shipment.warehouse_id`). Caller with matching branch but unassigned/mismatched warehouse is granted. If single association exists, matching scope required. If neither assigned, scoped denied. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `EXCEPTION_CASE` | `exception:read` OR `shipment:track_exceptions` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch or warehouse scope via **Disjunctive OR** (`session.branchIds` contains `exception_case.branch_id` OR `session.warehouseIds` contains `exception_case.warehouse_id`). Caller with matching branch but unassigned/mismatched warehouse is granted. If single association exists, matching scope required. If neither assigned, scoped denied. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
 | `CLAIM` | `claim:view` OR `claim:read` | `session.merchantId === entity.merchant_id` | Tenant global | Tenant mismatch: 404 `NOT_FOUND`. Missing capability: 403 `FORBIDDEN`. |
 
   3. *Explicit Evaluation Logic:*
-     - Step 1 (Tenant Isolation — Mandatory `AND`): `entity.merchant_id === session.merchantId`. If mismatch, fail closed with 404 `NOT_FOUND` (never 403, preventing entity enumeration).
+     - Step 1 (Parent Existence, Retained Tombstone Resolution & Tenant Isolation — Mandatory `AND`):
+       - Step 1a: Attempt to locate target entity in primary live database table (`prisma[entityType].findUnique({ where: { id: entity_id } })`).
+       - Step 1b (Authorized Historical Tombstone Lookup for Deleted Entities): If not found in primary table (entity physically deleted), query `AuditLog` table: `SELECT merchant_id, old_value, new_value, action FROM audit_logs WHERE entity_type = :entity_type AND entity_id = :entity_id ORDER BY created_at DESC LIMIT 1`. If no audit log record exists, fail closed with 404 `NOT_FOUND`. If found, resolve entity context from the historical record (`merchant_id` and terminal snapshot in `old_value`).
+       - Step 1c (Tenant Isolation): Check `resolved_merchant_id === session.merchantId`. If mismatch, fail closed with 404 `NOT_FOUND` (never 403, preventing entity enumeration across tenants).
      - Step 2 (Entity Capability — `OR` within entity type): Caller must hold at least one capability in the entity's allowed set. If none held, return 403 `FORBIDDEN`.
-     - Step 3 (Resource Scope — Mandatory `AND` if scoped): If caller has a role constrained by branch or warehouse (`is_scoped = true` per `FEAT-RBAC-02`), caller session must possess matching scope. Unscoped roles pass. Mismatch returns 403 `FORBIDDEN`.
+     - Step 3 (Resource Scope — Mandatory `AND` if scoped): If caller has a role constrained by branch or warehouse (`is_scoped = true` per `FEAT-RBAC-02`):
+       - For `BRANCH`: `session.branchIds` must contain `entity.id` (or deleted branch `id`).
+       - For `WAREHOUSE`: `session.warehouseIds` must contain `entity.id` (or deleted warehouse `id`).
+       - For `ORDER`, `SHIPMENT`, `EXCEPTION_CASE`: Evaluated using **Disjunctive OR** when both associations exist (`session.branchIds.includes(entity.branch_id) || session.warehouseIds.includes(entity.warehouse_id)`).
+         - *Mixed-Scope Concrete Decision:* A caller whose branch matches (`session.branchIds` contains `entity.branch_id`) but whose warehouse does NOT match (`session.warehouseIds` does not contain `entity.warehouse_id`) is **GRANTED** access (HTTP 200). Likewise, a caller whose warehouse matches but whose branch does not match is **GRANTED** access. Access is **DENIED** with HTTP 403 `FORBIDDEN` if and only if neither branch nor warehouse matches.
+         - If only `branch_id` is populated, caller's `session.branchIds` must contain `entity.branch_id`.
+         - If only `warehouse_id` is populated, caller's `session.warehouseIds` must contain `entity.warehouse_id`.
+         - If neither is populated, scoped caller is DENIED with 403 `FORBIDDEN`.
+       - Unscoped roles pass. Mismatch returns 403 `FORBIDDEN`.
   4. *Field-Level Privacy & Redaction:*
      - Secrets, tokens, hashes, and OTPs are unconditionally replaced with `"[REDACTED]"`.
      - Recipient PII (phone number, address) is masked (`0901****567`) unless caller holds `pii:unmask`.
@@ -198,18 +218,21 @@ On 2026-10-31, the product owner (operator) formally APPROVED all recommended de
      - 400 `VALIDATION_ERROR`: Invalid parameters, out-of-bounds limit, malformed cursor.
      - 401 `UNAUTHORIZED`: Missing or invalid session token.
      - 403 `FORBIDDEN`: Lacking read capability for target entity or out-of-scope resource.
-     - 404 `NOT_FOUND`: Entity does not exist or belongs to another tenant (fail closed).
+     - 404 `NOT_FOUND`: Entity does not exist and has no historical audit records, or belongs to another tenant (fail closed). Physically deleted entities with existing audit records remain queryable to authorized callers via historical tombstone lookup.
 
 ### Decision G4 (DEC-COM07-04): Persistence Model, Additive Schema, Correlation ID, Legacy Rows & Attribution
 - **Gap context (G4):** Conceptual `audit_events` requires correlation; `AuditLog` has none and stores free-text reasons. Shop writer embeds correlation in reason; profile writer omits it and persists personal snapshots/raw client IP. No approved legacy, field projection or attribution policy exists.
 - **Approved Decision (Operator approval 2026-10-31):**
   1. *Additive Schema:* Add nullable column `correlation_id String?` to Prisma model `AuditLog` with compound indexes `@@index([merchant_id, entity_type, entity_id])` and `@@index([merchant_id, created_at])`. No destructive table rewrites or column drops.
-  2. *Legacy Row Compatibility & Snapshot Evidence Preservation:*
+  2. *Legacy Row Compatibility, Lifecycle Classification & Snapshot Evidence Preservation:*
      - *Correlation parsing:* If `correlation_id` column is null, parse `reason` for `correlation_id:([a-zA-Z0-9_-]+)`. If matched, extract as `correlation_id`. If absent, return `null`. Never invent synthetic correlation IDs or substitute the query request's correlation ID.
-     - *Creation Events (`old_value == null && new_value != null`):* Preserve all attributes in `new_value`. Project each property into `changes` with `old_value: null` and `new_value: <value>`.
-     - *Deletion Events (`old_value != null && new_value == null`):* Preserve all attributes in `old_value`. Project each property into `changes` with `old_value: <value>` and `new_value: null`.
-     - *Update Events (`old_value != null && new_value != null`):* Project only modified fields where `old_value[key] !== new_value[key]`.
-     - *Unavailable Snapshot Events (`old_value == null && new_value == null`):* Return `changes: []` and set `is_partial: true`. Event metadata (id, actor, timestamp, action, correlation_id) is returned with HTTP 200 OK. This distinguishes unavailable historical diffs from an absent entity (which returns 404 `NOT_FOUND`).
+     - *Action-Based Lifecycle Classification & Snapshot Preservation:*
+       - *Creation Events (`is_creation_action && old_value == null && new_value != null`):* Initial creation event. Prior state is *known absent*. Preserve all attributes in `new_value`. Project each property into `changes` with `old_value: null` and `new_value: <value>`. Item is marked with `is_partial: false`.
+       - *Deletion Events (`is_deletion_action && old_value != null && new_value == null`):* Entity deletion event. Succeeding state is *known absent*. Preserve all attributes in `old_value`. Project each property into `changes` with `old_value: <value>` and `new_value: null`. Item is marked with `is_partial: false`.
+       - *Complete Update Events (`!is_creation_action && !is_deletion_action && old_value != null && new_value != null`):* Project only modified fields where `old_value[key] !== new_value[key]`. Item is marked with `is_partial: false`.
+       - *Partial Update Events with Missing `old_value` (`!is_creation_action && old_value == null && new_value != null`):* Prior state was unrecorded by legacy producer and is **unavailable** (NOT absent). Project all properties of `new_value` into `changes` with `old_value: null` and `new_value: <value>`, and set `is_partial: true` on the item. This explicitly distinguishes unavailable previous state (`is_partial: true`) from known absent initial creation state (`is_partial: false`).
+       - *Partial Update Events with Missing `new_value` (`!is_deletion_action && old_value != null && new_value == null`):* Subsequent state was unrecorded by legacy producer and is **unavailable** (the entity was NOT deleted). Project all properties of `old_value` into `changes` with `old_value: <value>` and `new_value: null`, and set `is_partial: true` on the item. This explicitly distinguishes unavailable next state (`is_partial: true`) from known absent terminal deletion state (`is_partial: false`).
+       - *Unavailable Snapshot Events across any action (`old_value == null && new_value == null`):* Return `changes: []` and set `is_partial: true`. Event metadata (id, actor, timestamp, action, correlation_id) is returned with HTTP 200 OK. This distinguishes unavailable historical diffs from an absent entity (which returns 404 `NOT_FOUND`).
      - *Field Masking & Redaction:* Unconditionally redact secrets to `"[REDACTED]"`; mask recipient PII unless caller holds `pii:unmask`; mask financial figures unless caller holds reconciliation capabilities. Strip raw client IP addresses.
   3. *Actor Attribution Policy:*
      - Human actor: Resolved to current or snapshot display name; deleted users render as `"[Người dùng đã xóa]"`.
@@ -336,10 +359,10 @@ components:
           description: Name of the property that changed
         old_value:
           nullable: true
-          description: Value before the change, or null for creation events
+          description: Value before the change, or null for creation events or partial updates lacking recorded prior state
         new_value:
           nullable: true
-          description: Value after the change, or null for deletion events
+          description: Value after the change, or null for deletion events or partial updates lacking recorded subsequent state
         is_sensitive:
           type: boolean
           description: Whether this field contained sensitive data requiring masking or redaction
@@ -373,7 +396,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ActivityChangeItem'
-          description: Field-level before/after diffs; preserves all fields for creation/deletion, empty array for unavailable historical snapshots
+          description: Field-level before/after diffs; preserves all fields for creation/deletion, modified fields for full updates, populated side for partial updates, empty array for unavailable historical snapshots
         reason:
           type: string
           nullable: true
@@ -382,7 +405,7 @@ components:
           $ref: '#/components/schemas/ActivityStatus'
         is_partial:
           type: boolean
-          description: True if this is a historical legacy event lacking complete correlation or snapshot data
+          description: True if this event has missing snapshot data (e.g. partial update missing unrecorded old_value or new_value, or both snapshots null) or legacy unparsed correlation, distinguishing unavailable telemetry from known-absent creation/deletion states
 ```
 
 ### Database Schema Migration (`prisma/schema.prisma`)
@@ -431,8 +454,11 @@ model AuditLog {
 | AC-COM-07-11 / TEST-COM-07-A11Y | Keyboard user navigates timeline cards, expands diffs, and copies correlation ID. | Focus outline visible; all icon buttons have `aria-label`; axe accessibility scanner reports 0 violations; mobile responsive layout verified. | `verify-a11y.ts` script run, Playwright axe test, and viewport checks. |
 | AC-COM-07-12 / TEST-COM-07-COMPAT | Apply additive migration to PostgreSQL and verify existing profile/shop/RBAC writers. | Additive schema migration executes cleanly; existing audit writers function without regressions; `pnpm contract:check` passes with updated OpenAPI. | Migration status, contract check, and existing suite regression runs. |
 | AC-COM-07-13 / TEST-COM-07-SNAPSHOT-CREATION | Entity creation event with `old_value == null` and populated `new_value`. | API preserves all populated initial fields in `changes` array with `old_value: null` and `new_value: <value>`; sensitive fields properly masked/redacted. | Supertest API assertion asserting non-empty `changes` with null `old_value`. |
-| AC-COM-07-14 / TEST-COM-07-SNAPSHOT-DELETION | Entity deletion event with populated `old_value` and `new_value == null`. | API preserves all terminal fields in `changes` array with `old_value: <value>` and `new_value: null`; sensitive fields properly masked/redacted. | Supertest API assertion asserting non-empty `changes` with null `new_value`. |
+| AC-COM-07-14 / TEST-COM-07-SNAPSHOT-DELETION | Real delete-then-query test: entity (e.g. Branch) created, updated, and physically deleted via management API (`DELETE /api/v1/branches/:id`). Authorized caller queries `GET /api/v1/activity?entity_type=BRANCH&entity_id=<deleted_id>`. | API performs authorized historical tombstone lookup against retained audit logs; verifies `merchant_id` and scope; returns HTTP 200 OK with complete history including terminal deletion event (`action: 'BRANCH_DELETED'`) where `old_value` preserves terminal fields, `new_value: null`, `is_partial: false`, and sensitive fields are masked. Foreign tenant receives 404 `NOT_FOUND`, unprivileged role receives 403 `FORBIDDEN`, and non-existent ID receives 404 `NOT_FOUND`. | Real delete-then-query Supertest integration test verifying physical row deletion followed by historical activity timeline retrieval. |
 | AC-COM-07-15 / TEST-COM-07-SNAPSHOT-UNAVAILABLE | Historical legacy event with both `old_value == null` and `new_value == null`. | API returns HTTP 200 OK with `changes: []`, `is_partial: true`, preserving actor, timestamp, action, and correlation ID (distinguished from 404 entity not found). | Supertest API assertion comparing 200 OK partial event vs 404 nonexistent entity. |
+| AC-COM-07-16 / TEST-COM-07-SNAPSHOT-PARTIAL-UPDATE-NO-OLD | Update action (e.g. `SHOP_UPDATED`) where legacy producer provided `new_value` but `old_value == null`. | API returns HTTP 200 OK; projects `new_value` fields into `changes` array with `old_value: null` and `new_value: <value>`; marks item `is_partial: true` to indicate unavailable historical prior state (distinguished from creation `is_partial: false`). | Supertest API assertion asserting `is_partial === true` on update action with null `old_value`. |
+| AC-COM-07-17 / TEST-COM-07-SNAPSHOT-PARTIAL-UPDATE-NO-NEW | Update action (e.g. `BRANCH_UPDATED`) where legacy producer provided `old_value` but `new_value == null`. | API returns HTTP 200 OK; projects `old_value` fields into `changes` array with `old_value: <value>` and `new_value: null`; marks item `is_partial: true` to indicate unavailable historical next state (distinguished from deletion `is_partial: false`). | Supertest API assertion asserting `is_partial === true` on update action with null `new_value`. |
+| AC-COM-07-18 / TEST-COM-07-SCOPE-MIXED | Caller session has branch scope `['B1']` and warehouse scope `['W1']`. Queries: (1) Order with `branch_id = 'B1'`, `warehouse_id = 'W2'` (branch match, warehouse mismatch); (2) Shipment with `branch_id = 'B2'`, `warehouse_id = 'W1'` (branch mismatch, warehouse match); (3) ExceptionCase with `branch_id = 'B2'`, `warehouse_id = 'W2'` (neither matches); (4) Order with null branch and null warehouse. | Scenarios (1) and (2) return HTTP 200 OK under Disjunctive OR scope evaluation. Scenario (3) returns HTTP 403 `FORBIDDEN`. Scenario (4) returns HTTP 403 `FORBIDDEN` for scoped caller (allowed only for tenant-wide unconstrained caller). | Multi-scenario scoped Supertest authorization tests covering all four mixed-scope conditions. |
 
 ## Verification commands
 
@@ -459,9 +485,10 @@ pnpm build
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | Planning readiness, 2026-10-30 | Initial planning draft | BLOCKED | G1–G4 unresolved; awaiting operator decisions. |
-| Planning finalisation, 2026-10-31 | `0867b611` | CHANGES_REQUIRED | Resolved P1-G1 (domain screens explicitly deferred to vertical items; completion boundary strictly limited to Shop, Branch, Warehouse); P1-G2 (exhaustive 8-entity RBAC capability & resource-scope mapping with explicit AND/OR logic); P2-G3 (OpenAPI ActivityTimelineItem schema defined, status enum semantics SUCCESS/FAILED); NEW P1-G4 (preserved one-sided creation/deletion snapshots, distinguished unavailable history from 404 absent entity, added acceptance cases AC-COM-07-13 to 15); governance records aligned. |
-| Review reconciliation, 2026-10-31 | Current review fix commit | READY_FOR_AUTHOR | Work Item fully resolved, contracts concrete, unblocked and ready for author dispatch. |
+| Planning review 1, 2026-10-31 | `0867b611` | CHANGES_REQUIRED | Resolved P1-G1 (domain screens explicitly deferred to vertical items; completion boundary strictly limited to Shop, Branch, Warehouse); P1-G2 (exhaustive 8-entity RBAC capability & resource-scope mapping with explicit AND/OR logic); P2-G3 (OpenAPI ActivityTimelineItem schema defined, status enum semantics SUCCESS/FAILED); NEW P1-G4 (preserved one-sided creation/deletion snapshots, distinguished unavailable history from 404 absent entity, added acceptance cases AC-COM-07-13 to 15); governance records aligned. |
+| Planning review 2, 2026-10-31 | `49847397` | CHANGES_REQUIRED | Findings on mixed-scope resource authorization (P1-G2), partial update snapshot preservation (P1-G4), carrier planning artifact preservation (NEW P1), and deletion acceptance vs parent-existence authorization (NEW P1). |
+| Review reconciliation, 2026-10-31 | Current review fix commit | READY_FOR_CODEX | Resolved all review findings: P1-G2 (defined concrete Disjunctive OR mixed-scope resolution across ORDER/SHIPMENT/EXCEPTION_CASE where branch match + warehouse mismatch yields 200 OK, added mixed-scope AC-COM-07-18); P1-G4 (defined action-based lifecycle classification, partial update snapshot handling with is_partial: true distinguishing unavailable telemetry from known-absent states, added AC-COM-07-16/17); NEW P1 Carrier Planning (merged origin/main cleanly, preserved FEAT-CAR-01 artifacts); NEW P1 Deletion vs Parent Existence (specified authorized historical lookup via retained audit tombstones resolving tenant and scope for deleted entities, updated 404 definition, and required real delete-then-query integration test AC-COM-07-14). |
 
 ## Residual limitations
 
-None. All review findings (P1-G1, P1-G2, P2-G3, NEW P1-G4, governance alignment) are resolved with concrete decisions, exhaustive capability mappings, OpenAPI component schemas, and snapshot preservation rules. Work Item is unblocked, complete, and ready for author dispatch.
+None. All review findings (P1-G1, P1-G2, P2-G3, P1-G4, NEW P1 Carrier planning, NEW P1 Deletion vs Parent Existence, governance alignment) are resolved with concrete decisions, exhaustive capability mappings, OpenAPI component schemas, and snapshot preservation rules. Work Item is unblocked, complete, and ready for author dispatch.
