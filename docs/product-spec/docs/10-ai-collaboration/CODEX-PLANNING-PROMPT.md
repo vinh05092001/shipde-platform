@@ -25,6 +25,6 @@ Planning and later review must use separate Codex tasks. Review starts from the 
 
 Verify before setting `READY_FOR_AUTHOR`:
 - [ ] **Ambiguity check**: Tag open questions or unverified assumptions with `[NEEDS CLARIFICATION]`. If any remain unresolved, mark `BLOCKED`; never leave the author to guess.
-- [ ] **Constitution check**: Enforce non-negotiables (tenant scope, RBAC, audit masking, VND integer math, carrier reconciliation, tests-first per acceptance row).
-- [ ] **Task breakdown**: Decompose work into numbered tasks with test-first ordering and `[P]` markers for parallel-safe independent tasks.
-- [ ] **Slice sizing**: Keep Work Item bounded (~400 changed lines, separate API slice then UI slice) to cut review rounds.
+- [ ] **Constitution check**: Enforce non-negotiables (tenant scope, RBAC, audit masking, VND integer math, carrier reconciliation, tests at the lowest useful level with test-first ordering for executable acceptance rows and `test not applicable: <justification>` for non-executable rows).
+- [ ] **Task breakdown**: Decompose work into numbered tasks ordered API/backend before UI, test-first for executable acceptance rows, with `[P]` markers for parallel-safe independent tasks.
+- [ ] **Slice sizing**: Keep the Work Item a single vertical Pull Request bounded to ~400 changed lines (API/backend before UI inside the same PR). If it cannot fit while staying vertical, split it into independently scoped prerequisite Work Items (own file, register row, branch, PR and acceptance matrix each, linked via register `dependencies`); set `READY_FOR_AUTHOR` on the prerequisites, and record that the feature completes only when the terminal item merges.

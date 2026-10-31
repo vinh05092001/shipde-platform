@@ -6,8 +6,8 @@
 |---|---|
 | Work Item ID | `TASK-AI-157` |
 | Feature ID | `N/A — docs-only workflow improvement adopting spec-kit checklists` |
-| Status | `IN_PROGRESS` |
-| Delivery order | `269` |
+| Status | `READY_FOR_CODEX` |
+| Delivery order | `270` |
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
@@ -18,7 +18,7 @@
 
 ## Business outcome
 
-Adopt proven specification-driven development patterns from GitHub Spec Kit (MIT) into Ship Dễ's Work Item workflow as documentation-only standards. This cuts review rounds and prevents AI hallucination/guessing by introducing explicit ambiguity markers (`[NEEDS CLARIFICATION]`), a pre-implementation Constitution check (tenant scope, RBAC, audit masking, VND integer math, carrier reconciliation, tests-first per acceptance row), a numbered task breakdown with test-first ordering and `[P]` parallel markers, and a slice size rule (~400 changed lines, API slice then UI slice), without installing external tooling or altering the repository status flow.
+Adopt proven specification-driven development patterns from GitHub Spec Kit (MIT) into Ship Dễ's Work Item workflow as documentation-only standards. This cuts review rounds and prevents AI hallucination/guessing by introducing explicit ambiguity markers (`[NEEDS CLARIFICATION]`), a pre-implementation Constitution check (tenant scope, RBAC, audit masking, VND integer math, carrier reconciliation, tests at the lowest useful level with test-first ordering for executable acceptance rows and justified non-applicability for non-executable rows), a numbered task breakdown ordered API/backend before UI, test-first for executable rows, with `[P]` parallel markers, and a slice sizing rule (each Work Item Pull Request is a single vertical delivery of ~400 changed lines with API/backend before UI inside the PR; over-budget work is split at planning into independently scoped prerequisite Work Items), without installing external tooling or altering the repository status flow.
 
 ## Source references
 
@@ -52,9 +52,9 @@ Docs-only slice strictly under 400 changed lines across collaboration prompts, t
 ## In scope
 
 - Add Ambiguity / `[NEEDS CLARIFICATION]` rule to `WORK-ITEM-TEMPLATE.md`.
-- Add Constitution check to `WORK-ITEM-TEMPLATE.md`.
-- Add Numbered task breakdown with test-first ordering and `[P]` parallel markers to `WORK-ITEM-TEMPLATE.md`.
-- Add Slice size rule (~400 changed lines, API then UI slice) to `WORK-ITEM-TEMPLATE.md`.
+- Add Constitution check (tests at the lowest useful level, test-first where executable, `test not applicable: <justification>` for non-executable rows) to `WORK-ITEM-TEMPLATE.md`.
+- Add Numbered task breakdown ordered API/backend before UI, test-first for executable rows, with `[P]` parallel markers to `WORK-ITEM-TEMPLATE.md`.
+- Add Slice sizing rule (single vertical Pull Request, ~400 changed lines, API/backend before UI inside the PR, planner split into independently scoped prerequisite Work Items when over budget) to `WORK-ITEM-TEMPLATE.md`.
 - Add matching pre-authoring specification checklist to `CODEX-PLANNING-PROMPT.md`.
 - Add matching pre-implementation checklist to `GEMINI-START-PROMPT.md` and `NINEROUTER-START-PROMPT.md`.
 - Credit `github/spec-kit` (MIT) in `AI-TOOLCHAIN-DECISIONS.md`.
@@ -70,8 +70,8 @@ Docs-only slice strictly under 400 changed lines across collaboration prompts, t
 ## Business rules and edge cases
 
 - `BR-SPEC-01`: Authors must never guess or invent behavior when `[NEEDS CLARIFICATION]` is present; must stop with `BLOCKED`.
-- `BR-SPEC-02`: Constitution check items are non-negotiable invariants (tenant isolation, RBAC, audit masking, VND integer math, carrier reconciliation, tests-first).
-- `BR-SPEC-03`: Slices target ~400 changed lines, prioritizing API/backend slice before UI slice.
+- `BR-SPEC-02`: Constitution check items are non-negotiable invariants (tenant isolation, RBAC, audit masking, VND integer math, carrier reconciliation, tests at the lowest useful level with test-first ordering for executable acceptance rows and `test not applicable: <justification>` for non-executable rows).
+- `BR-SPEC-03`: Each Work Item Pull Request is a single vertical delivery targeting ~400 changed lines with API/backend implemented before UI inside the same PR. Work that cannot fit while remaining vertical is split at planning into independently scoped prerequisite Work Items (own file, register row, branch, PR and acceptance matrix each; register `dependencies` links successors to prerequisites), and the feature is complete only when the terminal dependent item is `MERGED`. One Work Item is never split into horizontal backend/UI Pull Requests.
 - `BR-SPEC-04`: Docs-only adoption: no external tooling or runtime package is installed.
 
 ## Constitution check
@@ -81,7 +81,7 @@ Docs-only slice strictly under 400 changed lines across collaboration prompts, t
 - [x] **Audit & sensitive data**: Preserved; no secrets or tokens handled.
 - [x] **VND integer arithmetic**: Preserved; no currency logic modified.
 - [x] **Carrier reconciliation**: Preserved; no carrier operations modified.
-- [x] **Tests-first per acceptance row**: Verified; documentation validation, formatting, and no-hardcode checks pass.
+- [x] **Tests at the lowest useful level, test-first where executable**: All five acceptance rows are documentation-only (`docs-inspection`), each recorded as `test not applicable: docs-only change; verified by file content inspection, format check and no-hardcode scan`; no executable test rows exist in this Work Item.
 
 ## UI states
 
@@ -95,11 +95,11 @@ N/A — no database models, migrations, or HTTP endpoints modified.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| AC-AI-157-01 | Ambiguity rule in WORK-ITEM-TEMPLATE.md | Author stop-and-block rule on `[NEEDS CLARIFICATION]` is documented | File content inspection |
-| AC-AI-157-02 | Constitution check in template and prompts | Pre-implementation check covers tenant scope, RBAC, audit masking, VND integer, carrier reconcile, tests-first | File content inspection |
-| AC-AI-157-03 | Numbered task breakdown with [P] markers | Template and prompts include numbered tasks with test-first order and parallel markers | File content inspection |
-| AC-AI-157-04 | Slice sizing rule documented | Bounded vertical increments (~400 changed lines, API then UI) documented in template and prompts | File content inspection |
-| AC-AI-157-05 | Spec-kit MIT credit | GitHub Spec Kit (MIT License) credited in AI-TOOLCHAIN-DECISIONS.md without installing tooling | File content inspection |
+| AC-AI-157-01 | Ambiguity rule in WORK-ITEM-TEMPLATE.md | Author stop-and-block rule on `[NEEDS CLARIFICATION]` is documented | docs-inspection; test not applicable: docs-only change |
+| AC-AI-157-02 | Constitution check in template and prompts | Pre-implementation check covers tenant scope, RBAC, audit masking, VND integer, carrier reconcile, tests at the lowest useful level (test-first where executable, justified non-applicability for non-executable rows) | docs-inspection; test not applicable: docs-only change |
+| AC-AI-157-03 | Numbered task breakdown with [P] markers | Template and prompts include numbered tasks ordered API/backend before UI, test-first for executable rows, with parallel markers | docs-inspection; test not applicable: docs-only change |
+| AC-AI-157-04 | Slice sizing rule documented | Single vertical PR of ~400 changed lines, API/backend before UI inside the PR, planner split into prerequisite Work Items when over budget — documented in template and prompts | docs-inspection; test not applicable: docs-only change |
+| AC-AI-157-05 | Spec-kit MIT credit | GitHub Spec Kit (MIT License) credited in AI-TOOLCHAIN-DECISIONS.md without installing tooling | docs-inspection; test not applicable: docs-only change |
 
 ## Task breakdown
 
@@ -121,7 +121,8 @@ N/A — no database models, migrations, or HTTP endpoints modified.
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | pending | READY_FOR_CODEX | Initial submission |
+| 1 | 038ee8e7064de5a93cd490683f38a8f39eec5898 | CHANGES_REQUIRED | F1 (P1) horizontal slice rule conflicting with the vertical-feature / one-Work-Item-per-PR contract; F2 (P1) universal failing unit-plus-integration test gate exceeding the lowest-useful-level rule; F3 (process) prior-review closure not verifiable from the packet. Findings text: `.oc/review.txt` |
+| 2 | the `[TASK-AI-157] Address review` commit following the `origin/main` merge (exact SHA recorded in `.oc/pr-body.md`) | READY_FOR_CODEX | F1: slice rule now requires a single vertical PR with API/backend before UI as in-PR ordering and a planner-level split into independently scoped prerequisite Work Items when over budget; F2: tests at the lowest useful level, test-first where executable, `test not applicable: <justification>` for non-executable rows, no universal gate; F3: packet is self-contained — both rounds with commits, verdicts and per-finding resolutions are listed here and in `.oc/pr-body.md`, and no review outside this packet is claimed or referenced |
 
 ## Residual limitations
 
