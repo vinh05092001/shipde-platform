@@ -22,6 +22,25 @@ Shop users can filter, sort and page operational lists consistently within their
 Saved views and column settings preserve useful working layouts. This is one complete feature;
 the backend requested for this run is a technical slice, not proof of feature completion.
 
+## Slice A (API)
+
+- **Scope**: Server-side contracts, endpoint list policies, and API implementations in `packages/contracts`, `packages/config`, and `apps/api`. Implements canonical pagination, filtering, sorting, deterministic tie-breakers, and strict multi-tenant scoping server-side for `GET /users`, `GET /branches`, and `GET /warehouses`. All queries derive tenant ownership directly from the authenticated session, scoping both data rows and count queries identically, without relying on or permitting client-supplied tenant overrides.
+- **Acceptance IDs covered**:
+  - `AC-COM-02-01`: Valid configured page and size parameters; correct database offset/limit and compatible metadata.
+  - `AC-COM-02-02`: Omitted page parameters apply defaults from endpoint policy (`USERS_LIST_POLICY`, `BRANCHES_LIST_POLICY`, `WAREHOUSES_LIST_POLICY`).
+  - `AC-COM-02-03`: Malformed, fractional, negative, unsafe or repeated numeric input returns canonical `VALIDATION_ERROR` with zero database queries.
+  - `AC-COM-02-04`: Missing or malformed endpoint policy fails closed without fallback caps or queries.
+  - `AC-COM-02-05`: Supported filters combined with pagination ensure row data and total count queries share identical predicates.
+  - `AC-COM-02-06`: Supported ascending/descending sorts apply deterministic unique tie-breakers across page boundaries.
+  - `AC-COM-02-07`: Unsupported sort fields, invalid filter values, or unknown query parameters return canonical `VALIDATION_ERROR`.
+  - `AC-COM-02-08`: Strict multi-tenant boundary isolation; tenant A requests never expose tenant B records, counts, or lookups.
+  - `AC-COM-02-09`: Missing session, missing permission, or unauthorized tenant fails closed with canonical auth errors.
+  - `AC-COM-02-10`: Empty data results in successful empty list response (`data: []`), distinct from recoverable server failure.
+  - `AC-COM-02-11`: Wire contracts and OpenAPI synchronization verified without contract drift.
+- **What remains for Slice B (UI)**:
+  - `AC-COM-02-12`: Full-feature filter/sort/page UI interaction across all shared screen states (loading skeleton, empty data, no results with reset action, recoverable error banner with retry, and out-of-range recovery), safe URL query string synchronization/restoration, and accessibility standards across Users, Branches, and Warehouses tabs (tracked in PR #467).
+  - `AC-COM-02-13`: Client-side persistence for saved views and column settings in `useSharedListState` backed by `localStorage` (`saveCurrentView`, `applySavedView`, `deleteSavedView`, `updateColumnSettings`) namespaced per list and authorized user context (tracked in PR #467).
+
 ## Source references
 
 - [Baseline and Decisions](../docs/00-control/BASELINE-AND-DECISIONS.md), “Product decisions”
