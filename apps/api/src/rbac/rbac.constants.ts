@@ -154,6 +154,12 @@ export const PLATFORM_PERMISSIONS: CanonicalPermissionDefinition[] = [
     description: 'Xem thông tin cấu hình cửa hàng và chi nhánh trong phạm vi được phân quyền',
     category: 'IAM',
   },
+  {
+    code: 'iam:carrier_catalog:read',
+    name: 'Xem danh mục hãng vận chuyển',
+    description: 'Tra cứu danh mục hãng, dịch vụ, trạng thái chuẩn hóa và thành phần phí',
+    category: 'IAM',
+  },
 ];
 
 export interface SystemRoleDefinition {
@@ -177,6 +183,7 @@ export const SYSTEM_ROLES: SystemRoleDefinition[] = [
     description: 'Tiếp nhận đơn hàng, tra cứu giá, cứu đơn và mở che SĐT khách khi xử lý sự cố',
     permissions: [
       'iam:shop_view',
+      'iam:carrier_catalog:read',
       'order:view_create',
       'shipment:quote_carrier',
       'shipment:create_update',
@@ -219,6 +226,7 @@ export const SYSTEM_ROLES: SystemRoleDefinition[] = [
       'Phê duyệt chính sách bảng giá, duyệt giải tỏa sai lệch tài chính và kiểm tra dòng tiền (Checker)',
     permissions: [
       'iam:shop_view',
+      'iam:carrier_catalog:read',
       'reconciliation:view_contract_rates',
       'reconciliation:approve_rate_policy',
       'reconciliation:import_settlement_bank',

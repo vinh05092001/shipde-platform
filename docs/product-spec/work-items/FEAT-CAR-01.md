@@ -6,14 +6,14 @@
 |---|---|
 | Work Item ID | `FEAT-CAR-01` |
 | Feature ID | `FEAT-CAR-01` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `IN_PROGRESS` |
 | Delivery order | `30`, slice `S02`, epic `EPIC-CAR` |
 | Dependencies | `TASK-FOUND-04` MERGED; `FEAT-AUTH-01` MERGED; `FEAT-AUTH-06` MERGED; `FEAT-RBAC-01` MERGED; `FEAT-RBAC-02` MERGED; `FEAT-ORG-01` MERGED |
 | Assigned author | `GEMINI` |
 | Risk | `HIGH` — shared taxonomy affects tenant boundaries, shipment state and financial interpretation |
 | Allowed paths | `docs/product-spec/work-items/FEAT-CAR-01.md`, `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`, `docs/product-spec/docs/00-control/TRACEABILITY.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `prisma/schema.prisma`, `prisma/migrations/**`, `infra/docker/seed.ts`, `packages/testkit/src/carriers/catalog/**`, `apps/api/src/app.module.ts`, `apps/api/src/rbac/rbac.constants.ts`, `apps/api/src/carrier-catalog/**`, `apps/api/package.json`, `apps/web/src/app/settings/carriers/**`, `apps/web/src/features/carriers/**`, `apps/web/src/tests/carrier-catalog*.test.ts`, `apps/web/e2e/carrier-catalog*.spec.ts`, `apps/web/package.json`, `docs/product-spec/evidence/FEAT-CAR-01/**` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/feat-car-01` |
+| Branch | `feat/feat-car-01-impl` |
 | Pull Request | Pending |
 
 ## Business outcome
