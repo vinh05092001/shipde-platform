@@ -13,6 +13,9 @@ import {
 } from './warehouses.dto';
 import { maskIdentifier } from '../invitations/invitations.service';
 import { WarehouseAuditEvent } from '@shipde/contracts';
+import { WAREHOUSES_LIST_POLICY } from '@shipde/config';
+import { parseCanonicalListQuery } from '../users/list-scope';
+import type { ListQuery } from '@shipde/contracts';
 
 export const SENSITIVE_WAREHOUSE_AUDIT_FIELDS = new Set([
   'contact_phone',
@@ -125,14 +128,29 @@ export class WarehousesService {
   }
 
   /**
-   * List authorized warehouses for merchant (AC-WH-01-01, AC-WH-01-02)
+   * List authorized warehouses for merchant (AC-WH-01-01, AC-WH-01-02, FEAT-COM-02)
    */
   async listWarehouses(
     merchantId: string,
     actor: ActorContext,
     hasConfigPermission: boolean,
-    correlationId: string
+    correlationId: string,
+    query: ListQuery = {}
   ) {
+    if (!merchantId) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false
+      );
+    }
+
+    const { page, limit, skip, filters, orderBy } = parseCanonicalListQuery(
+      query,
+      WAREHOUSES_LIST_POLICY
+    );
+
     const scopes = await this.getActorWarehouseScopes(actor);
     const hasUniversalAccess = scopes.includes('*');
 
@@ -140,24 +158,51 @@ export class WarehousesService {
       merchant_id: merchantId,
     };
 
+    if (filters.status) {
+      whereClause.status = filters.status;
+    }
+
+    if (filters.search && filters.search.trim().length > 0) {
+      const search = filters.search.trim();
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { code: { contains: search, mode: 'insensitive' } },
+        { address_line: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
     if (!hasUniversalAccess) {
       if (scopes.length === 0) {
         return {
           success: true,
           data: [],
-          meta: { correlation_id: correlationId, total: 0 },
+          meta: {
+            correlation_id: correlationId,
+            total: 0,
+            page,
+            limit,
+            total_pages: 1,
+          },
         };
       }
-      whereClause = {
-        merchant_id: merchantId,
-        OR: [{ id: { in: scopes } }, { code: { in: scopes } }],
-      };
+      const scopeConditions = [{ id: { in: scopes } }, { code: { in: scopes } }];
+      if (whereClause.OR) {
+        whereClause.AND = [{ OR: whereClause.OR }, { OR: scopeConditions }];
+        delete whereClause.OR;
+      } else {
+        whereClause.OR = scopeConditions;
+      }
     }
 
-    const warehouses = await this.prisma.warehouse.findMany({
-      where: whereClause,
-      orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }],
-    });
+    const [total, warehouses] = await Promise.all([
+      this.prisma.warehouse.count({ where: whereClause }),
+      this.prisma.warehouse.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        orderBy,
+      }),
+    ]);
 
     const formatted = warehouses.map((w) => this.formatWarehouse(w));
     return {
@@ -165,7 +210,10 @@ export class WarehousesService {
       data: formatted,
       meta: {
         correlation_id: correlationId,
-        total: formatted.length,
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit) || 1,
       },
     };
   }

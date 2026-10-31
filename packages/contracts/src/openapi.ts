@@ -546,7 +546,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List merchant users (API-USR-LIST, FEAT-USR-02, FEAT-RBAC-02) */
+    /**
+     * List merchant users (API-USR-LIST, FEAT-USR-02, FEAT-RBAC-02)
+     * @description Tenant comes from the authorized session. Unknown query keys and malformed, repeated or nonpositive numeric inputs return VALIDATION_ERROR. Limits above the maximum are clamped for compatibility. Sorting includes id as a unique tie-breaker in the requested direction. Empty results retain total_pages=1.
+     */
     get: operations['listUsers'];
     put?: never;
     post?: never;
@@ -3190,6 +3193,8 @@ export interface operations {
         limit?: number;
         role?: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
         status?: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'PENDING_VERIFICATION' | 'INVITED';
+        sort_by?: 'created_at' | 'full_name' | 'id';
+        sort_order?: 'asc' | 'desc';
         search?: string;
       };
       header?: never;
@@ -3207,8 +3212,10 @@ export interface operations {
           'application/json': components['schemas']['ListUsersResponse'];
         };
       };
+      400: components['responses']['Error'];
       401: components['responses']['Error'];
       403: components['responses']['Error'];
+      503: components['responses']['Error'];
     };
   };
   getUser: {
