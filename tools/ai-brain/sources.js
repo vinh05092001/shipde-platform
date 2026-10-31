@@ -128,41 +128,8 @@ function loadSources(options) {
     // Discovery is optional; the reviewed static registry remains usable.
   }
 
-  let ecoServices = [];
-  try {
-    const ecoManifestPath = path.resolve(__dirname, '..', 'ecosystem-manifest.json');
-    if (fs.existsSync(ecoManifestPath)) {
-      const eco = readJson(ecoManifestPath);
-      if (Array.isArray(eco.services)) ecoServices = eco.services;
-    }
-  } catch (_) {}
-
   for (const source of sources) {
     if (!source || !source.id) throw new Error('sources.json: an entry has no id');
-    if (source.id === 'dsh' || source.ecosystemService === 'dsh' || source.harness === 'dsh') {
-      const svc = ecoServices.find(
-        (s) =>
-          (s.rollback && s.rollback.includes('dsh')) ||
-          (s.id && s.id.includes('harness')) ||
-          s.id === 'dsh'
-      );
-      if (svc && svc.id) {
-        source.id = svc.id;
-        const ownerName = svc.owner || '';
-        const envPrefix = ownerName
-          ? ownerName
-              .replace(/-ai$/i, '')
-              .toUpperCase()
-              .replace(/[^A-Z0-9]/g, '_')
-          : ['DEEP', 'SEEK'].join('');
-        source.credential = { type: 'api-key', env: `${envPrefix}_API_KEY` };
-      } else {
-        source.id = ['deep', 'seek', '-harness'].join('');
-        source.credential = { type: 'api-key', env: ['DEEP', 'SEEK', '_API_KEY'].join('') };
-      }
-      if (!Array.isArray(source.aliases)) source.aliases = [];
-      if (!source.aliases.includes('dsh')) source.aliases.push('dsh');
-    }
     if (!KNOWN_KINDS.has(source.kind)) {
       // An unknown kind is refused rather than defaulted. Defaulting to
       // model-source is exactly the error this file exists to stop, and it
@@ -347,18 +314,12 @@ function credentialPresence(source, options) {
 
   if (cred.type === 'none') return { required: false, present: true, how: 'no credential needed' };
 
-  const targetEnv =
-    cred.env ||
-    (source && (source.id === 'dsh' || source.harness === 'dsh')
-      ? ['DEEP', 'SEEK', '_API_KEY'].join('')
-      : null);
+  const targetEnv = cred.env || null;
 
   if (targetEnv) {
-    const envVar =
-      typeof targetEnv === 'string' && targetEnv.startsWith('./') ? targetEnv.slice(2) : targetEnv;
-    let value = env[envVar] !== undefined ? env[envVar] : env[targetEnv];
+    const value = env[targetEnv];
     if (value !== undefined && String(value).trim() !== '') {
-      return { required: true, present: true, how: 'env ' + envVar };
+      return { required: true, present: true, how: 'env ' + targetEnv };
     }
   }
   if (cred.store && cred.store.startsWith('~/')) {

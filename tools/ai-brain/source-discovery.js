@@ -6,8 +6,21 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const DSH_ID = ['deep', 'seek', '-harness'].join('');
-const DSH_KEY = ['DEEP', 'SEEK', '_API_KEY'].join('');
+function getDshConfig() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'sources.json'), 'utf8'));
+    const entry = (raw.sources || []).find((s) => s.harness === 'dsh');
+    if (entry) {
+      return {
+        id: entry.id || 'dsh',
+        credentialEnv: (entry.credential && entry.credential.env) || null,
+      };
+    }
+  } catch (_) {}
+  return { id: 'dsh', credentialEnv: null };
+}
+
+const { id: DSH_ID, credentialEnv: DSH_KEY } = getDshConfig();
 
 const SECRET_KEY = /(?:api[_-]?key|token|secret|credential)/i;
 const AUTH_STATUSES = new Set([401, 402, 403, 429, 451]);
@@ -567,8 +580,14 @@ async function probeSource(source, options = {}) {
     source.status === 'parked' &&
     source.nextCheckAt &&
     Date.parse(source.nextCheckAt) > now.getTime()
-  )
-    return source;
+  ) {
+    const sanitizedParked = { ...source };
+    if (sanitizedParked.credential && typeof sanitizedParked.credential === 'object') {
+      const { value, ...cleanCred } = sanitizedParked.credential;
+      sanitizedParked.credential = cleanCred;
+    }
+    return sanitizedParked;
+  }
 
   const { createSecretRedactor } = require('./decisions');
   const envForRedact = { ...(options.env || process.env) };
@@ -588,6 +607,13 @@ async function probeSource(source, options = {}) {
   const redactor = createSecretRedactor(envForRedact);
   const redact = (val) => (val !== undefined && val !== null ? redactor(String(val)).trim() : val);
 
+  // BR-DSH-01: Strip literal credentials from returned probe records
+  const sanitizedSource = { ...source };
+  if (sanitizedSource.credential && typeof sanitizedSource.credential === 'object') {
+    const { value, ...cleanCred } = sanitizedSource.credential;
+    sanitizedSource.credential = cleanCred;
+  }
+
   const isDsh =
     source.id === DSH_ID ||
     source.id === 'dsh' ||
@@ -602,7 +628,7 @@ async function probeSource(source, options = {}) {
     const parts = cmdLine.trim().split(/\s+/);
     const bin = parts[0];
     const args = parts.slice(1);
-    const record = { ...source, lastProbeAt: now.toISOString() };
+    const record = { ...sanitizedSource, lastProbeAt: now.toISOString() };
 
     if (typeof options.runCommand === 'function') {
       try {
@@ -690,7 +716,7 @@ async function probeSource(source, options = {}) {
   if (credential.type === 'env') secret = (options.env || process.env)[credential.name] || null;
   // File-backed values are inventory-only. Reading arbitrary config fields
   // as bearer tokens can leak credentials to unrelated endpoints.
-  const record = { ...source, lastProbeAt: now.toISOString() };
+  const record = { ...sanitizedSource, lastProbeAt: now.toISOString() };
   if (!fetcher)
     return { ...record, status: 'unavailable', reason: 'fetch unavailable', nextCheckAt: null };
   const targetEndpoint = (source.endpoint && sanitizeEndpoint(source.endpoint)) || source.endpoint;

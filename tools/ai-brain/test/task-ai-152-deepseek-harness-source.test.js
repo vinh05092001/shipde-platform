@@ -50,19 +50,13 @@ describe('TASK-AI-152: DeepSeek Harness source registration', () => {
     assert.equal(src.verify?.command, 'dsh --version');
   });
 
-  test('sources.json binds canonical deepseek-harness and DEEPSEEK_API_KEY via ecosystem manifest configuration', () => {
+  test('sources.json contains canonical deepseek-harness directly in raw JSON without path disguise', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sources.json'), 'utf8'));
-    const entry = (raw.sources || []).find((s) => s.id === 'dsh' || s.id === 'deepseek-harness');
-    assert.ok(entry, 'sources.json raw JSON must contain dsh source entry');
-    assert.equal(entry.harness, 'dsh');
-    assert.equal(entry.kind, 'agent-cli');
-
-    // Bound canonical registry invariants
-    const loaded = sourcesApi.getSource('deepseek-harness', registry);
-    assert.ok(loaded, 'loadSources resolves canonical deepseek-harness');
-    assert.equal(loaded.id, 'deepseek-harness');
-    assert.equal(loaded.credential?.env, 'DEEPSEEK_API_KEY');
-    assert.deepEqual(loaded.aliases, ['dsh']);
+    const entry = (raw.sources || []).find((s) => s.id === 'deepseek-harness');
+    assert.ok(entry, 'sources.json raw JSON must contain id: deepseek-harness');
+    assert.equal(entry.id, 'deepseek-harness');
+    assert.equal(entry.credential?.env, 'DEEPSEEK_API_KEY');
+    assert.deepEqual(entry.aliases, ['dsh']);
   });
 
   test('getSource and getSourceAliases resolve both deepseek-harness and dsh alias', () => {
@@ -461,6 +455,21 @@ describe('TASK-AI-152: Finding 4 regression — Probe redacts credentials from d
       probe.diagnostic.includes('[REDACTED_SECRET]'),
       'diagnostic must contain redaction placeholder'
     );
+  });
+
+  test('probeSource strips literal credential values from returned record (Finding 4 / BR-DSH-01)', async () => {
+    const srcWithLiteralSecret = {
+      ...dshSource,
+      credential: { type: 'api-key', value: 'test-not-a-secret-literal-val' },
+    };
+    const fakeRun = async () => ({
+      exitCode: 0,
+      stdout: '@deepseek-ai/dsh@0.1.1-rc.2\n',
+      stderr: '',
+    });
+    const probe = await probeSource(srcWithLiteralSecret, { runCommand: fakeRun });
+    assert.equal(probe.status, 'available');
+    assert.equal(probe.credential?.value, undefined, 'literal credential value must be stripped');
   });
 });
 

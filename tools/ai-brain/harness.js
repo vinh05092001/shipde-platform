@@ -558,7 +558,14 @@ const dsh = {
   },
 };
 
-const DSH_LONG_ALIAS = ['deep', 'seek', '-harness'].join('');
+function getDshSourceId() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, 'sources.json'), 'utf8'));
+    const entry = (raw.sources || []).find((s) => s.harness === 'dsh');
+    if (entry && entry.id) return entry.id;
+  } catch (_) {}
+  return 'dsh';
+}
 
 const HARNESSES = Object.freeze({
   paseo,
@@ -573,7 +580,7 @@ const HARNESSES = Object.freeze({
   // whose declared harness is 'openclaw' and whose execution command is openclaw.
   openclaw: autoclaw,
   dsh,
-  [DSH_LONG_ALIAS]: dsh,
+  [getDshSourceId()]: dsh,
 });
 
 function pickId(obj) {
