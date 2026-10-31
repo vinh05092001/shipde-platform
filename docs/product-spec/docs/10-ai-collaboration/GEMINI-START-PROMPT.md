@@ -28,6 +28,14 @@ Final response:
 - assumptions, limitations or blockers
 ```
 
+## Pre-implementation checklist (spec-kit)
+
+Verify before writing code:
+- [ ] **Ambiguity check**: If any `[NEEDS CLARIFICATION]` marker or missing specification exists, stop and mark `BLOCKED` with evidence; never guess or assume behavior.
+- [ ] **Constitution check**: Verify tenant scope, RBAC, audit masking, VND integer arithmetic, carrier reconciliation, and tests-first per acceptance row.
+- [ ] **Task breakdown**: Execute tasks in numbered test-first order, running independent `[P]` tasks in parallel where applicable.
+- [ ] **Slice sizing**: Keep total diff bounded to ~400 lines (API slice then UI slice) to ensure fast review turnaround.
+
 ## Review-fix prompt
 
 ```text

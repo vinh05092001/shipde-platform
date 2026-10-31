@@ -20,3 +20,11 @@ Prepare the next dependency-ready Ship Dễ Work Item. Do not implement producti
 ```
 
 Planning and later review must use separate Codex tasks. Review starts from the Pull Request evidence, not the planning conversation.
+
+## Pre-authoring specification checklist (spec-kit)
+
+Verify before setting `READY_FOR_AUTHOR`:
+- [ ] **Ambiguity check**: Tag open questions or unverified assumptions with `[NEEDS CLARIFICATION]`. If any remain unresolved, mark `BLOCKED`; never leave the author to guess.
+- [ ] **Constitution check**: Enforce non-negotiables (tenant scope, RBAC, audit masking, VND integer math, carrier reconciliation, tests-first per acceptance row).
+- [ ] **Task breakdown**: Decompose work into numbered tasks with test-first ordering and `[P]` markers for parallel-safe independent tasks.
+- [ ] **Slice sizing**: Keep Work Item bounded (~400 changed lines, separate API slice then UI slice) to cut review rounds.
