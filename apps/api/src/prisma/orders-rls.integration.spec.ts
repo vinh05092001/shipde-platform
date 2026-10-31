@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { runWithTenant } from './tenant-context';
 import { tenantRlsExtension } from './tenant-rls.extension';
 
@@ -137,34 +137,48 @@ async function main(): Promise<void> {
   // Create a non-superuser role subject to RLS (no BYPASSRLS, not the table
   // owner). Privileges are limited to the two tables the test needs.
   const probePassword = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
-  const dbRows = await admin.$queryRawUnsafe<Array<{ current_database: string }>>(
-    'SELECT current_database()'
-  );
+  const dbRows = await admin.$queryRaw<Array<{ current_database: string }>>`
+    SELECT current_database()
+  `;
   const currentDb = dbRows[0]?.current_database || 'shipde_dev';
 
   await admin
-    .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`)
+    .$executeRaw(
+      Prisma.raw(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`)
+    )
     .catch(() => {});
   await admin
-    .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`)
+    .$executeRaw(
+      Prisma.raw(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`)
+    )
     .catch(() => {});
   await admin
-    .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`)
+    .$executeRaw(Prisma.raw(`REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`))
     .catch(() => {});
   await admin
-    .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
+    .$executeRaw(
+      Prisma.raw(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
+    )
     .catch(() => {});
-  await admin.$executeRawUnsafe(`DROP ROLE IF EXISTS ${PROBE_ROLE}`).catch(() => {});
+  await admin
+    .$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`))
+    .catch(() => {});
 
-  await admin.$executeRawUnsafe(
-    `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+  await admin.$executeRaw(
+    Prisma.raw(
+      `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+    )
   );
-  await admin.$executeRawUnsafe(`GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`);
-  await admin.$executeRawUnsafe(`GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`);
-  await admin.$executeRawUnsafe(
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE orders, merchants TO ${PROBE_ROLE}`
+  await admin.$executeRaw(
+    Prisma.raw(`GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`)
   );
-  await admin.$executeRawUnsafe(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`);
+  await admin.$executeRaw(Prisma.raw(`GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`));
+  await admin.$executeRaw(
+    Prisma.raw(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE orders, merchants TO ${PROBE_ROLE}`)
+  );
+  await admin.$executeRaw(
+    Prisma.raw(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`)
+  );
 
   const probeUrl = new URL(databaseUrl);
   probeUrl.username = PROBE_ROLE;
@@ -271,6 +285,35 @@ async function main(): Promise<void> {
     );
     console.log('PASS: interactive transaction applies the tenant policy');
 
+    // 7b. Finding 1 regression: root-client service helper called inside interactive transaction callback.
+    // Inside extended.$transaction(async () => extended.order.findMany()), the root-client query
+    // runs on a separate pooled connection and must NOT inherit an ambient bypass flag. RLS must
+    // still enforce tenant isolation on that root-client query.
+    async function rootClientListOrders(
+      client: typeof extended,
+      candidateIds: string[]
+    ): Promise<Array<{ id: string }>> {
+      // Intentionally omits service-level merchant_id filter to verify RLS defense-in-depth
+      return client.order.findMany({
+        where: { id: { in: candidateIds } },
+        select: { id: true },
+      });
+    }
+
+    await runWithTenant(merchantA, async () => {
+      await extended.$transaction(async (_tx) => {
+        const rootOrders = await rootClientListOrders(extended, [orderA.id, orderB.id]);
+        assert.deepEqual(
+          rootOrders.map((r) => r.id),
+          [orderA.id],
+          'root-client helper invoked inside transaction callback must establish tenant setting and exclude cross-tenant rows'
+        );
+      });
+    });
+    console.log(
+      'PASS: root-client service helper inside transaction callback denied cross-tenant reads by RLS'
+    );
+
     // 8. A malformed tenant value fails closed (the policy cast errors).
     await assert.rejects(
       runWithTenant('not-a-uuid', async () => {
@@ -296,6 +339,7 @@ async function main(): Promise<void> {
         'raw query must establish app.tenant_id and deny reading tenant B rows'
       );
 
+      // nosemgrep: shipde-no-unsafe-raw-sql
       const rawUnsafeRows = await extended.$queryRawUnsafe<Array<{ id: string }>>(
         'SELECT id FROM orders WHERE id = $1::uuid',
         orderB.id
@@ -399,10 +443,7 @@ async function main(): Promise<void> {
     await admin.order
       .deleteMany({
         where: {
-          OR: [
-            { merchant_id: { in: [merchantA, merchantB] } },
-            { order_code: { startsWith: `RLS-BATCH-` } },
-          ],
+          merchant_id: { in: [merchantA, merchantB] },
         },
       })
       .catch(() => {});
@@ -410,20 +451,26 @@ async function main(): Promise<void> {
       .deleteMany({ where: { id: { in: [merchantA, merchantB] } } })
       .catch(() => {});
     await admin
-      .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`)
-      .catch(() => {});
-    await admin
-      .$executeRawUnsafe(
-        `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`
+      .$executeRaw(
+        Prisma.raw(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`)
       )
       .catch(() => {});
     await admin
-      .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`)
+      .$executeRaw(
+        Prisma.raw(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`)
+      )
       .catch(() => {});
     await admin
-      .$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
+      .$executeRaw(Prisma.raw(`REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`))
       .catch(() => {});
-    await admin.$executeRawUnsafe(`DROP ROLE IF EXISTS ${PROBE_ROLE}`).catch(() => {});
+    await admin
+      .$executeRaw(
+        Prisma.raw(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
+      )
+      .catch(() => {});
+    await admin
+      .$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`))
+      .catch(() => {});
     await admin.$disconnect().catch(() => {});
     await probe.$disconnect().catch(() => {});
   }

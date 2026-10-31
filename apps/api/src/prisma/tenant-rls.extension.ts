@@ -21,7 +21,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { getTenantId, TENANT_SETTING } from './tenant-context';
 
-const inTransactionStorage = new AsyncLocalStorage<boolean>();
+const inBatchTransactionStorage = new AsyncLocalStorage<boolean>();
 
 /**
  * Tenant RLS Prisma client extension (TASK-AI-154 pilot).
@@ -59,46 +59,53 @@ export function tenantRlsExtension(base: PrismaClient) {
         if (!tenantId) {
           return baseTransaction(...args);
         }
-        return inTransactionStorage.run(true, async () => {
-          if (!Array.isArray(first)) {
-            return baseTransaction(async (tx: Prisma.TransactionClient) => {
-              await tx.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
-              return (first as (txClient: Prisma.TransactionClient) => Promise<unknown>)(tx);
-            }, options);
-          }
+        if (!Array.isArray(first)) {
+          return baseTransaction(async (tx: Prisma.TransactionClient) => {
+            await tx.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
+            return (first as (txClient: Prisma.TransactionClient) => Promise<unknown>)(tx);
+          }, options);
+        }
 
-          // Array form: preserve ONE single transaction for the whole batch.
-          // Establish the tenant setting first so all batch operations run
-          // with RLS active and roll back atomically if any operation rejects.
-          const setConfigPromise = base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
-          const batch = [setConfigPromise, ...(first as unknown[])];
-          const results = (await (baseTransaction as any)(batch, options)) as unknown[];
-          return results.slice(1);
-        });
+        // Array form: preserve ONE single transaction for the whole batch.
+        // Establish the tenant setting first so all batch operations run
+        // with RLS active and roll back atomically if any operation rejects.
+        const setConfigPromise = base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
+        const batch = [setConfigPromise, ...(first as unknown[])];
+        const results = (await inBatchTransactionStorage.run(true, async () =>
+          (baseTransaction as any)(batch, options)
+        )) as unknown[];
+        return results.slice(1);
       },
     },
     query: {
-      async $allOperations({
-        args,
-        query,
-      }: {
+      async $allOperations(payload: {
         model?: string;
         operation: string;
         args: unknown;
         query: (args: unknown) => Promise<unknown>;
+        __internalParams?: {
+          transaction?: { kind: string; id?: string | number };
+        };
       }): Promise<unknown> {
+        const { args, query, __internalParams } = payload;
         const tenantId = getTenantId();
-        const inTx = inTransactionStorage.getStore();
-        if (!tenantId || inTx) {
+        // Bind bypass decisions strictly to actual transaction contexts:
+        // - Queries executing on a transaction client have `__internalParams.transaction`
+        //   (e.g. `kind: 'itx'` or `kind: 'batch'`).
+        // - Batch array transactions run with `inBatchTransactionStorage`.
+        // Root client queries called from within an interactive transaction callback
+        // checkout a separate pooled connection without `__internalParams.transaction`,
+        // so they must NOT bypass tenant setup.
+        const hasTxClient = Boolean(__internalParams?.transaction);
+        const inBatch = inBatchTransactionStorage.getStore() === true;
+        if (!tenantId || hasTxClient || inBatch) {
           return query(args);
         }
-        return inTransactionStorage.run(true, async () => {
-          const [, result] = (await (base.$transaction as any)([
-            base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`,
-            query(args),
-          ])) as [number, unknown];
-          return result;
-        });
+        const [, result] = (await (base.$transaction as any)([
+          base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`,
+          query(args),
+        ])) as [number, unknown];
+        return result;
       },
     },
   });

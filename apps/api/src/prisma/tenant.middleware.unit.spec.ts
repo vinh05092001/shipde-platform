@@ -107,4 +107,20 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
     const tenant = await runMiddleware(`Bearer ${emptyMidToken}`);
     assert.equal(tenant, undefined, 'empty mid must not establish tenant context');
   });
+
+  it('does not establish tenant context for empty scope claims', async () => {
+    const emptyScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, '');
+    const tenant = await runMiddleware(`Bearer ${emptyScopeToken}`);
+    assert.equal(tenant, undefined, 'empty scope must not establish merchant tenant context');
+  });
+
+  it('does not establish tenant context for whitespace-only scope claims', async () => {
+    const whitespaceScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, '   ');
+    const tenant = await runMiddleware(`Bearer ${whitespaceScopeToken}`);
+    assert.equal(
+      tenant,
+      undefined,
+      'whitespace-only scope must not establish merchant tenant context'
+    );
+  });
 });
