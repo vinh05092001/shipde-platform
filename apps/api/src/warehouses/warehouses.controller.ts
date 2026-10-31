@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   Req,
   Res,
   HttpStatus,
@@ -43,10 +44,14 @@ export class WarehousesController {
   }
 
   /**
-   * GET /api/v1/warehouses (AC-WH-01-01, AC-WH-01-02)
+   * GET /api/v1/warehouses (AC-WH-01-01, AC-WH-01-02, FEAT-COM-02)
    */
   @Get()
-  async listWarehouses(@Req() req: Request, @Res() res: Response): Promise<Response> {
+  async listWarehouses(
+    @Query() query: any,
+    @Req() req: Request,
+    @Res() res: Response
+  ): Promise<Response> {
     const correlationId = (req as any).correlationId || normalizeCorrelationId();
     const actor = await this.resolveActor(req);
     const hasConfigPermission = await this.rbacService.actorHasPermissions(actor, [
@@ -56,7 +61,8 @@ export class WarehousesController {
       actor.merchantId,
       actor,
       hasConfigPermission,
-      correlationId
+      correlationId,
+      query || {}
     );
     return res.status(HttpStatus.OK).json(result);
   }

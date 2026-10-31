@@ -10,10 +10,52 @@ import {
 } from './branches.dto';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
+import { BRANCHES_LIST_POLICY } from '../../../../packages/config/src/list-policies';
 
 const B1_ID = '11111111-1111-1111-1111-111111111111';
 const B2_ID = '22222222-2222-2222-2222-222222222222';
 const B_FOREIGN_ID = '99999999-9999-9999-9999-999999999999';
+
+function branchOrCond(b: any, cond: any): boolean {
+  if (cond.id?.in) return cond.id.in.includes(b.id);
+  if (cond.code?.in) return cond.code.in.includes(b.code);
+  for (const field of ['name', 'code', 'address', 'phone'] as const) {
+    const spec = cond[field];
+    if (spec && typeof spec.contains === 'string') {
+      const value = String(b[field] ?? '').toLowerCase();
+      if (value.includes(String(spec.contains).toLowerCase())) return true;
+    }
+  }
+  return false;
+}
+
+function branchMatchesWhere(b: any, where: any): boolean {
+  if (!where) return true;
+  if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
+  if (where.status && b.status !== where.status) return false;
+  if (where.is_default !== undefined && b.is_default !== where.is_default) return false;
+  if (where.id?.not && b.id === where.id.not) return false;
+  if (where.id && typeof where.id === 'string' && b.id !== where.id) return false;
+  if (where.OR) {
+    if (!where.OR.some((cond: any) => branchOrCond(b, cond))) return false;
+  }
+  if (where.AND) {
+    if (
+      !where.AND.every((grp: any) =>
+        (grp.OR ? grp.OR : [grp]).some((cond: any) => branchOrCond(b, cond))
+      )
+    )
+      return false;
+  }
+  return true;
+}
+
+function branchSortCmp(a: any, b: any, field: string): number {
+  if (field === 'created_at' || field === 'updated_at') {
+    return new Date(a[field]).getTime() - new Date(b[field]).getTime();
+  }
+  return String(a[field] ?? '').localeCompare(String(b[field] ?? ''), 'vi');
+}
 
 function createMockPrismaService() {
   const branches: any[] = [
@@ -83,6 +125,8 @@ function createMockPrismaService() {
   ];
 
   const auditLogs: any[] = [];
+  const findManyCalls: any[] = [];
+  const countCalls: any[] = [];
 
   const mockTx = {
     branch: {
@@ -136,24 +180,23 @@ function createMockPrismaService() {
     branches,
     users,
     auditLogs,
+    findManyCalls,
+    countCalls,
     branch: {
-      findMany: async ({ where, orderBy }: any) => {
-        let result = branches.filter((b) => {
-          if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
-          if (where.status && b.status !== where.status) return false;
-          if (where.is_default !== undefined && b.is_default !== where.is_default) return false;
-          if (where.id?.not && b.id === where.id.not) return false;
-          if (where.OR) {
-            const matched = where.OR.some((cond: any) => {
-              if (cond.id?.in?.includes(b.id)) return true;
-              if (cond.code?.in?.includes(b.code)) return true;
-              return false;
-            });
-            if (!matched) return false;
-          }
-          return true;
-        });
-        return result;
+      findMany: async ({ where, skip = 0, take, orderBy }: any) => {
+        findManyCalls.push({ where, skip, take, orderBy });
+        let result = branches.filter((b) => branchMatchesWhere(b, where));
+        if (orderBy && orderBy.length > 0) {
+          result = [...result].sort((a, b) => {
+            for (const entry of orderBy) {
+              const [field, dir] = Object.entries(entry)[0];
+              const cmp = branchSortCmp(a, b, field);
+              if (cmp !== 0) return dir === 'desc' ? -cmp : cmp;
+            }
+            return 0;
+          });
+        }
+        return result.slice(skip, take !== undefined ? skip + take : undefined);
       },
       findFirst: async ({ where }: any) => {
         return (
@@ -167,7 +210,8 @@ function createMockPrismaService() {
         );
       },
       count: async ({ where }: any) => {
-        return branches.filter((b) => b.merchant_id === where.merchant_id).length;
+        countCalls.push({ where });
+        return branches.filter((b) => branchMatchesWhere(b, where)).length;
       },
       create: mockTx.branch.create,
       update: mockTx.branch.update,
@@ -1255,6 +1299,276 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
 
       await controller.getBranchById(B1_ID, reqPerm, resFinance);
       assert.strictEqual(statusSet, 200);
+    });
+  });
+
+  describe('BranchesService: FEAT-COM-02 server pagination and scoped reads/counts', () => {
+    const ownerActor: ActorContext = {
+      userId: 'u-owner-1',
+      merchantId: 'm-tenant-1',
+      role: 'OWNER',
+    };
+
+    function seedExtraTenantBranches(mockPrisma: any, count: number): void {
+      for (let i = 1; i <= count; i++) {
+        mockPrisma.branches.push({
+          id: `bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb00${i}`,
+          merchant_id: 'm-tenant-1',
+          name: `Chi Nhánh Số ${String(i).padStart(2, '0')}`,
+          code: `SEED-${String(i).padStart(2, '0')}`,
+          address: 'Địa chỉ mẫu 1',
+          phone: null,
+          is_default: false,
+          status: 'ACTIVE',
+          created_at: new Date(`2026-02-${String(i + 1).padStart(2, '0')}T00:00:00Z`),
+          updated_at: new Date(`2026-02-${String(i + 1).padStart(2, '0')}T00:00:00Z`),
+        });
+      }
+    }
+
+    it('FEAT-COM-02-01: default page applies the policy limit and reports tenant-scoped totals', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantBranches(mockPrisma, 10);
+      const service = new BranchesService(mockPrisma as any);
+
+      const result = await service.listBranches('m-tenant-1', ownerActor, {}, 'corr-p1');
+
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.data.branches.length, BRANCHES_LIST_POLICY.defaultSize);
+      assert.strictEqual(result.meta.total, 12);
+      assert.strictEqual(result.meta.total_pages, 2);
+      assert.strictEqual(result.meta.page, 1);
+      assert.strictEqual(result.meta.limit, BRANCHES_LIST_POLICY.defaultSize);
+      assert.strictEqual(result.meta.correlation_id, 'corr-p1');
+
+      const findCall = mockPrisma.findManyCalls[0];
+      assert.strictEqual(findCall.skip, 0);
+      assert.strictEqual(findCall.take, BRANCHES_LIST_POLICY.defaultSize);
+      assert.deepStrictEqual(findCall.orderBy, [{ name: 'asc' }, { id: 'asc' }]);
+      assert.strictEqual(mockPrisma.countCalls.length, 1);
+      assert.strictEqual(mockPrisma.countCalls[0].where.merchant_id, 'm-tenant-1');
+    });
+
+    it('FEAT-COM-02-01: page 2 skip is derived from the policy and rows and count share one predicate', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantBranches(mockPrisma, 10);
+      const service = new BranchesService(mockPrisma as any);
+
+      const page1 = await service.listBranches('m-tenant-1', ownerActor, {}, 'corr-p1');
+      const page2 = await service.listBranches(
+        'm-tenant-1',
+        ownerActor,
+        { page: 2, limit: 10 },
+        'corr-p2'
+      );
+
+      assert.strictEqual(mockPrisma.findManyCalls[1].skip, 10);
+      assert.strictEqual(page2.data.branches.length, 2);
+      assert.strictEqual(page2.meta.total_pages, 2);
+
+      const allIds = [
+        ...page1.data.branches.map((b: any) => b.id),
+        ...page2.data.branches.map((b: any) => b.id),
+      ];
+      assert.strictEqual(allIds.length, 12);
+      assert.strictEqual(new Set(allIds).size, 12);
+
+      // The count predicate must be identical to the row predicate for the same query
+      assert.deepStrictEqual(mockPrisma.countCalls[1].where, mockPrisma.findManyCalls[1].where);
+    });
+
+    it('FEAT-COM-02-05: status filter affects rows and counts identically', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantBranches(mockPrisma, 10);
+      mockPrisma.branches[1].status = 'INACTIVE';
+      const service = new BranchesService(mockPrisma as any);
+
+      const page1 = await service.listBranches(
+        'm-tenant-1',
+        ownerActor,
+        { status: 'ACTIVE' },
+        'corr-f1'
+      );
+      const page2 = await service.listBranches(
+        'm-tenant-1',
+        ownerActor,
+        { status: 'ACTIVE', page: 2 },
+        'corr-f2'
+      );
+
+      assert.strictEqual(page1.meta.total, 11);
+      assert.strictEqual(page1.data.branches.length, 10);
+      assert.strictEqual(page2.data.branches.length, 1);
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where, mockPrisma.findManyCalls[0].where);
+      assert.strictEqual(mockPrisma.countCalls[0].where.status, 'ACTIVE');
+    });
+
+    it('FEAT-COM-02-08: scoped actor count and rows exclude out-of-scope branches', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantBranches(mockPrisma, 10);
+      const service = new BranchesService(mockPrisma as any);
+
+      const scopedActor: ActorContext = {
+        userId: 'u-scoped-1',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      const result = await service.listBranches('m-tenant-1', scopedActor, {}, 'corr-s1');
+
+      assert.strictEqual(result.meta.total, 1);
+      assert.strictEqual(result.data.branches.length, 1);
+      assert.strictEqual(result.data.branches[0].code, 'HCM-Q3');
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where.OR, [{ code: { in: ['HCM-Q3'] } }]);
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where, mockPrisma.findManyCalls[0].where);
+    });
+
+    it('FEAT-COM-02-05/08: scoped search keeps scope and search combined on rows and counts', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.branches.push({
+        id: 'cccccccc-cccc-cccc-cccc-cccccccccc01',
+        merchant_id: 'm-tenant-1',
+        name: 'Kho Vận Tân Bình Bắc',
+        code: 'HCM-NEW-SCOPED',
+        address: '55 CMT8 Bắc, Tân Bình, TP. HCM',
+        phone: null,
+        is_default: false,
+        status: 'ACTIVE',
+        created_at: new Date('2026-03-01T00:00:00Z'),
+        updated_at: new Date('2026-03-01T00:00:00Z'),
+      });
+      const service = new BranchesService(mockPrisma as any);
+
+      const scopedActor: ActorContext = {
+        userId: 'u-scoped-tb',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      const result = await service.listBranches(
+        'm-tenant-1',
+        scopedActor,
+        { search: 'Bắc' },
+        'corr-s2'
+      );
+
+      assert.strictEqual(result.meta.total, 1);
+      assert.strictEqual(result.data.branches.length, 1);
+      assert.strictEqual(result.data.branches[0].code, 'HCM-NEW-SCOPED');
+      assert.ok(mockPrisma.countCalls[0].where.AND, 'scoped search must AND scope with search');
+      assert.deepStrictEqual(mockPrisma.countCalls[0].where, mockPrisma.findManyCalls[0].where);
+    });
+
+    it('FEAT-COM-02-09: missing authorized tenant fails closed before any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      await assert.rejects(
+        () => service.listBranches('', ownerActor, {}, 'corr-none'),
+        (err: any) =>
+          err instanceof CanonicalApiException &&
+          err.getStatus() === 403 &&
+          err.code === 'FORBIDDEN'
+      );
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-03: malformed, fractional, negative or unsafe pagination fails before any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      for (const query of [
+        { page: '0' },
+        { page: '1.5' },
+        { page: -3 },
+        { limit: 'abc' },
+        { page: '99999999999999999999' },
+        { page: '2', limit: '0' },
+      ]) {
+        await assert.rejects(
+          () => service.listBranches('m-tenant-1', ownerActor, query, 'corr-bad'),
+          (err: any) =>
+            err instanceof CanonicalApiException &&
+            err.getStatus() === 400 &&
+            err.code === 'VALIDATION_ERROR',
+          `query ${JSON.stringify(query)}`
+        );
+      }
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-07: unsupported sort field, status value or unknown key fails before any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BranchesService(mockPrisma as any);
+
+      for (const query of [
+        { sort_by: 'address' },
+        { sort_order: 'sideways' },
+        { status: 'SOMETHING' },
+        { role: 'OWNER' },
+        { page: { nested: true } },
+      ]) {
+        await assert.rejects(
+          () => service.listBranches('m-tenant-1', ownerActor, query, 'corr-bad2'),
+          (err: any) =>
+            err instanceof CanonicalApiException &&
+            err.getStatus() === 400 &&
+            err.code === 'VALIDATION_ERROR',
+          `query ${JSON.stringify(query)}`
+        );
+      }
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-06: equal sort values fall back to the deterministic id tie-breaker', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.branches.push(
+        {
+          id: 'dddddddd-dddd-dddd-dddd-dddddddddd01',
+          merchant_id: 'm-tenant-1',
+          name: 'Chi Nhánh Trùng Tên',
+          code: 'TIE-A',
+          address: 'A1',
+          phone: null,
+          is_default: false,
+          status: 'ACTIVE',
+          created_at: new Date('2026-03-02T00:00:00Z'),
+          updated_at: new Date('2026-03-02T00:00:00Z'),
+        },
+        {
+          id: 'dddddddd-dddd-dddd-dddd-dddddddddd02',
+          merchant_id: 'm-tenant-1',
+          name: 'Chi Nhánh Trùng Tên',
+          code: 'TIE-B',
+          address: 'A2',
+          phone: null,
+          is_default: false,
+          status: 'ACTIVE',
+          created_at: new Date('2026-03-03T00:00:00Z'),
+          updated_at: new Date('2026-03-03T00:00:00Z'),
+        }
+      );
+      const service = new BranchesService(mockPrisma as any);
+
+      const result = await service.listBranches(
+        'm-tenant-1',
+        ownerActor,
+        { sort_by: 'name', sort_order: 'asc', limit: 100 },
+        'corr-tie'
+      );
+
+      const tied = result.data.branches.filter(
+        (b: any) => b.code === 'TIE-A' || b.code === 'TIE-B'
+      );
+      assert.deepStrictEqual(
+        tied.map((b: any) => b.code),
+        ['TIE-A', 'TIE-B'],
+        'tied names must be ordered by the id tie-breaker, not insertion order'
+      );
+      assert.deepStrictEqual(mockPrisma.findManyCalls[0].orderBy, [{ name: 'asc' }, { id: 'asc' }]);
     });
   });
 });

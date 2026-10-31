@@ -13,6 +13,9 @@ import {
   validateUpdateBranchDto,
 } from './branches.dto';
 import { maskIdentifier } from '../invitations/invitations.service';
+import { BRANCHES_LIST_POLICY } from '@shipde/config';
+import { parseCanonicalListQuery } from '../users/list-scope';
+import type { ListQuery } from '@shipde/contracts';
 
 export const SENSITIVE_AUDIT_FIELDS = ['phone'];
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -143,12 +146,28 @@ export class BranchesService {
   async listBranches(
     merchantId: string,
     actor: ActorContext,
-    query: { status?: 'ACTIVE' | 'INACTIVE' },
+    query: ListQuery = {},
     correlationId: string
   ): Promise<{
     success: boolean;
-    data: { branches: FormattedBranch[]; can_edit: boolean };
-    meta: { correlation_id: string };
+    data: {
+      branches: FormattedBranch[];
+      can_edit: boolean;
+      meta?: {
+        page: number;
+        limit: number;
+        total: number;
+        total_pages: number;
+        correlation_id: string;
+      };
+    };
+    meta: {
+      correlation_id: string;
+      page: number;
+      limit: number;
+      total: number;
+      total_pages: number;
+    };
   }> {
     if (!merchantId) {
       throw new CanonicalApiException(
@@ -159,30 +178,29 @@ export class BranchesService {
       );
     }
 
+    const { page, limit, skip, filters, orderBy } = parseCanonicalListQuery(
+      query,
+      BRANCHES_LIST_POLICY
+    );
+
     const scopedIdentifiers = await this.getActorStoreScopes(actor);
 
     const whereClause: any = {
       merchant_id: merchantId,
     };
 
-    if (query?.status) {
-      if (query.status !== 'ACTIVE' && query.status !== 'INACTIVE') {
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'VALIDATION_ERROR',
-          'Trạng thái chi nhánh không hợp lệ. Chỉ chấp nhận ACTIVE hoặc INACTIVE',
-          false,
-          'Vui lòng chỉ định trạng thái ACTIVE hoặc INACTIVE',
-          [
-            {
-              field: 'status',
-              code: 'INVALID_VALUE',
-              message: 'Trạng thái chi nhánh chỉ có thể là ACTIVE hoặc INACTIVE',
-            },
-          ]
-        );
-      }
-      whereClause.status = query.status;
+    if (filters.status) {
+      whereClause.status = filters.status;
+    }
+
+    if (filters.search && filters.search.trim().length > 0) {
+      const search = filters.search.trim();
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { code: { contains: search, mode: 'insensitive' } },
+        { address: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+      ];
     }
 
     if (scopedIdentifiers !== null) {
@@ -200,26 +218,47 @@ export class BranchesService {
       }
 
       if (orConditions.length > 0) {
-        whereClause.OR = orConditions;
+        if (whereClause.OR) {
+          // Combine active search conditions with the scope restriction so
+          // filters and counts keep describing the same tenant-scoped set.
+          whereClause.AND = [{ OR: whereClause.OR }, { OR: orConditions }];
+          delete whereClause.OR;
+        } else {
+          whereClause.OR = orConditions;
+        }
       } else {
         whereClause.id = '00000000-0000-0000-0000-000000000000';
       }
     }
 
-    const branches = await this.prisma.branch.findMany({
-      where: whereClause,
-      orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }],
-    });
+    const [total, branches] = await Promise.all([
+      this.prisma.branch.count({ where: whereClause }),
+      this.prisma.branch.findMany({
+        where: whereClause,
+        skip,
+        take: limit,
+        orderBy,
+      }),
+    ]);
 
     const canEdit = await this.canActorEditBranches(actor);
+
+    const meta = {
+      correlation_id: correlationId,
+      page,
+      limit,
+      total,
+      total_pages: Math.ceil(total / limit) || 1,
+    };
 
     return {
       success: true,
       data: {
         branches: branches.map((b) => this.formatBranch(b)),
         can_edit: canEdit,
+        meta,
       },
-      meta: { correlation_id: correlationId },
+      meta,
     };
   }
 
