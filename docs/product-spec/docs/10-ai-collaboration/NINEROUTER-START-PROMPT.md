@@ -27,6 +27,14 @@ Final response:
 - blocker/escalation reason, if any
 ```
 
+## Pre-implementation checklist (spec-kit)
+
+Verify before writing code:
+- [ ] **Ambiguity check**: If any `[NEEDS CLARIFICATION]` marker or unspecified behavior exists, stop with `BLOCKED_FOR_GEMINI`; never guess.
+- [ ] **Constitution check**: Confirm scope does not touch prohibited domains (tenant isolation, RBAC, money/COD, carrier side effects).
+- [ ] **Task breakdown**: Follow the numbered task breakdown (API/backend before UI, tests first for executable rows); run independent `[P]` tasks within allowed paths.
+- [ ] **Slice sizing**: Keep changes strictly bounded within allowed paths and ~400 lines inside the single vertical Work Item Pull Request.
+
 ## Review-fix prompt
 
 ```text
