@@ -31,6 +31,7 @@ import {
   parseSortParam,
   formatSortParam,
   useDataTable,
+  isInteractiveControl,
 } from '../components/data-table';
 import {
   DashboardHeader,
@@ -39,6 +40,7 @@ import {
   PageHeader,
   Heading,
   DEFAULT_NAV_SECTIONS,
+  createGlobalShortcutHandler,
 } from '../components/dashboard';
 import { FIXTURE_SHIPMENTS, FixtureShipment } from '../app/storybook/fixtures';
 
@@ -159,147 +161,287 @@ async function runTestSuite() {
   );
 
   // Test row keyboard interaction & descendant control isolation (Finding 6)
-  // When focus is on descendant controls (such as selection checkbox), pressing Space must NOT invoke row action
-  let testActivatedRow: FixtureShipment | null = null;
-  let testCheckboxToggled = false;
-  let defaultPrevented = false;
+  // Exercises the real production isInteractiveControl function and real DataTable VDOM elements.
+  const activatedRef: { current: FixtureShipment | null } = { current: null };
+  const getActivated = (): FixtureShipment | null => activatedRef.current;
+  let toggledId: string | null = null;
   const sampleItem = FIXTURE_SHIPMENTS[0];
 
-  function simulateRowEvent({
-    eventType,
-    key,
-    targetType,
-  }: {
-    eventType: 'keydown' | 'click';
-    key?: string;
-    targetType: 'row' | 'row-action' | 'checkbox' | 'button';
-  }) {
-    const fakeCurrentTarget = { tagName: 'TR', closest: () => null };
-    const fakeTarget =
-      targetType === 'row'
-        ? fakeCurrentTarget
-        : targetType === 'checkbox'
-          ? {
-              tagName: 'INPUT',
-              type: 'checkbox',
-              closest: (sel: string) => (sel.includes('input') ? true : null),
-            }
-          : targetType === 'row-action'
-            ? {
-                tagName: 'BUTTON',
-                getAttribute: (attr: string) => (attr === 'data-row-action' ? 'true' : null),
-                closest: (sel: string) => (sel.includes('button') ? true : null),
-              }
-            : {
-                tagName: 'BUTTON',
-                closest: (sel: string) => (sel.includes('button') ? true : null),
-              };
+  // 1. Direct unit verification of production isInteractiveControl logic
+  const fakeCurrentTr = { tagName: 'TR', closest: () => null };
+  const fakeInputDescendant = {
+    tagName: 'INPUT',
+    type: 'checkbox',
+    closest: (sel: string) => (sel.includes('input') ? true : null),
+  };
+  const fakeButtonDescendant = {
+    tagName: 'BUTTON',
+    closest: (sel: string) => (sel.includes('button') ? true : null),
+  };
+  const fakeLinkDescendant = {
+    tagName: 'A',
+    closest: (sel: string) => (sel.includes('a') ? true : null),
+  };
+  const fakeRoleCheckboxDescendant = {
+    tagName: 'DIV',
+    closest: (sel: string) => (sel.includes('[role="checkbox"]') ? true : null),
+  };
+  const fakePlainSpan = { tagName: 'SPAN', closest: () => null };
 
-    // Mirrors isInteractiveControl in DataTable.tsx
-    const isInteractive =
-      fakeTarget !== fakeCurrentTarget &&
-      Boolean(
-        fakeTarget.closest?.(
-          'button, a, input, select, textarea, [role="button"], [role="checkbox"]'
-        )
-      );
+  assert.strictEqual(
+    isInteractiveControl(fakeInputDescendant as any, fakeCurrentTr as any),
+    true,
+    'isInteractiveControl must detect input descendants'
+  );
+  assert.strictEqual(
+    isInteractiveControl(fakeButtonDescendant as any, fakeCurrentTr as any),
+    true,
+    'isInteractiveControl must detect button descendants'
+  );
+  assert.strictEqual(
+    isInteractiveControl(fakeLinkDescendant as any, fakeCurrentTr as any),
+    true,
+    'isInteractiveControl must detect link descendants'
+  );
+  assert.strictEqual(
+    isInteractiveControl(fakeRoleCheckboxDescendant as any, fakeCurrentTr as any),
+    true,
+    'isInteractiveControl must detect [role="checkbox"] descendants'
+  );
+  assert.strictEqual(
+    isInteractiveControl(fakeCurrentTr as any, fakeCurrentTr as any),
+    false,
+    'Negative test: current target row itself is NOT a descendant control'
+  );
+  assert.strictEqual(
+    isInteractiveControl(fakePlainSpan as any, fakeCurrentTr as any),
+    false,
+    'Negative test: plain span text is NOT an interactive control'
+  );
 
-    if (eventType === 'click') {
-      if (!isInteractive) {
-        testActivatedRow = sampleItem;
+  // 2. Direct interaction verification against production DataTable component elements
+  function findElement(node: any, predicate: (el: any) => boolean): any {
+    if (!node) return null;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const found = findElement(item, predicate);
+        if (found) return found;
       }
-    } else if (eventType === 'keydown') {
-      if (isInteractive) {
-        // Event originated on descendant control (e.g. selection checkbox)
-        if (targetType === 'checkbox' && key === ' ') {
-          // Native checkbox toggles without being hijacked
-          testCheckboxToggled = true;
-        }
-        // Excluded from row activation: do NOT invoke row action and do NOT preventDefault
-        return;
-      }
-      if (fakeTarget === fakeCurrentTarget && (key === 'Enter' || key === ' ')) {
-        defaultPrevented = true;
-        testActivatedRow = sampleItem;
-      }
+      return null;
     }
+    if (typeof node !== 'object') return null;
+    if (predicate(node)) return node;
+    const children = node.props?.children;
+    if (children) {
+      return findElement(children, predicate);
+    }
+    return null;
   }
 
-  // Negative test: Space on selection checkbox must NOT invoke row action and must toggle checkbox natively
-  testActivatedRow = null;
-  testCheckboxToggled = false;
-  defaultPrevented = false;
-  simulateRowEvent({ eventType: 'keydown', key: ' ', targetType: 'checkbox' });
+  const tableVNode = DataTable<FixtureShipment>({
+    data: FIXTURE_SHIPMENTS.slice(0, 2),
+    columns: testColumns,
+    keyExtractor: (item: FixtureShipment) => item.id,
+    loading: false,
+    sort: null,
+    selectedIds: new Set<string>(),
+    onRowClick: (item: FixtureShipment) => {
+      activatedRef.current = item;
+    },
+    onToggleSelect: (id: string) => {
+      toggledId = id;
+    },
+    onSelectAll: () => {},
+  });
+
+  // Extract table body row from rendered VDOM
+  const tbody = findElement(tableVNode, (n) => n.type === 'tbody');
+  assert.ok(tbody, 'Table tbody must be rendered');
+  const rows = Array.isArray(tbody.props.children) ? tbody.props.children : [tbody.props.children];
+  const row0 = rows[0];
+
+  assert.ok(row0, 'First data row must be rendered in tbody');
+  assert.strictEqual(row0.props.role, 'row');
+
+  // Extract selection checkbox and semantic row action button from row 0
+  const checkboxInput = findElement(
+    row0,
+    (n) => n.type === 'input' && n.props?.type === 'checkbox'
+  );
+  assert.ok(checkboxInput, 'Selection checkbox must be rendered in row 0');
+
+  const semanticRowActionBtn = findElement(
+    row0,
+    (n) => n.type === 'button' && n.props?.['data-row-action'] === 'true'
+  );
+  assert.ok(semanticRowActionBtn, 'Semantic row-action button must be rendered in row 0');
+
   assert.strictEqual(
-    testActivatedRow,
-    null,
-    'Negative test: Space key on selection checkbox must NOT invoke row action'
+    semanticRowActionBtn.props['data-row-action'],
+    'true',
+    'Row cell must render semantic button with data-row-action="true"'
   );
   assert.strictEqual(
-    testCheckboxToggled,
+    semanticRowActionBtn.props['aria-label'],
+    `Xem chi tiết ${sampleItem.id}`,
+    'Row action button must declare accessible aria-label'
+  );
+
+  // Test semantic row-action button activation
+  activatedRef.current = null;
+  semanticRowActionBtn.props.onClick({ stopPropagation: () => {} });
+  assert.strictEqual(
+    getActivated()?.id,
+    sampleItem.id,
+    'Clicking semantic row-action button must invoke onRowClick'
+  );
+
+  // Test checkbox keyboard isolation: Space key on checkbox stops propagation and does NOT invoke row action
+  activatedRef.current = null;
+  let checkboxPropagationStopped = false;
+  checkboxInput.props.onKeyDown({
+    key: ' ',
+    stopPropagation: () => {
+      checkboxPropagationStopped = true;
+    },
+  });
+  assert.strictEqual(
+    checkboxPropagationStopped,
     true,
-    'Space key on selection checkbox must toggle checkbox selection natively'
+    'Space key on checkbox must call stopPropagation to prevent bubbling to row'
   );
   assert.strictEqual(
-    defaultPrevented,
+    activatedRef.current,
+    null,
+    'Negative test: Space key on checkbox must NOT invoke row action'
+  );
+
+  // Test checkbox click isolation: Click on checkbox stops propagation and toggles selection
+  activatedRef.current = null;
+  let checkboxClickStopped = false;
+  checkboxInput.props.onClick({
+    stopPropagation: () => {
+      checkboxClickStopped = true;
+    },
+  });
+  assert.strictEqual(checkboxClickStopped, true, 'Click on checkbox must call stopPropagation');
+  assert.strictEqual(
+    activatedRef.current,
+    null,
+    'Negative test: Click on checkbox must NOT invoke row action'
+  );
+
+  toggledId = null;
+  checkboxInput.props.onChange({ nativeEvent: { shiftKey: false } });
+  assert.strictEqual(
+    toggledId,
+    sampleItem.id,
+    'Checkbox onChange must invoke onToggleSelect with item ID'
+  );
+
+  // Test row onKeyDown with bubbling event from child control: excluded from row activation
+  activatedRef.current = null;
+  let prevented = false;
+  row0.props.onKeyDown({
+    key: ' ',
+    target: fakeInputDescendant,
+    currentTarget: fakeCurrentTr,
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
+  assert.strictEqual(
+    activatedRef.current,
+    null,
+    'Negative test: Bubbling Space from descendant input must NOT invoke row action'
+  );
+  assert.strictEqual(
+    prevented,
     false,
-    'Negative test: Space key on selection checkbox must NOT preventDefault'
+    'Negative test: Bubbling Space from descendant input must NOT preventDefault'
   );
 
-  // Negative test: Click on descendant button or checkbox must NOT invoke row action
-  testActivatedRow = null;
-  simulateRowEvent({ eventType: 'click', targetType: 'checkbox' });
+  // Test row onKeyDown directly on row element: Enter and Space invoke row action
+  activatedRef.current = null;
+  prevented = false;
+  row0.props.onKeyDown({
+    key: 'Enter',
+    target: fakeCurrentTr,
+    currentTarget: fakeCurrentTr,
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
   assert.strictEqual(
-    testActivatedRow,
-    null,
-    'Negative test: Click on selection checkbox must NOT invoke row action'
-  );
-
-  testActivatedRow = null;
-  simulateRowEvent({ eventType: 'click', targetType: 'button' });
-  assert.strictEqual(
-    testActivatedRow,
-    null,
-    'Negative test: Click on descendant cell button must NOT invoke row action'
-  );
-
-  // Positive: Click on row body invokes row action
-  testActivatedRow = null;
-  simulateRowEvent({ eventType: 'click', targetType: 'row' });
-  assert.strictEqual(
-    (testActivatedRow as FixtureShipment | null)?.id,
+    getActivated()?.id,
     sampleItem.id,
-    'Click on row body must invoke onRowClick'
+    'Enter key directly on row element must invoke onRowClick'
   );
+  assert.strictEqual(prevented, true, 'Enter key on row must call preventDefault');
 
-  // Positive: Enter key on row target invokes row action
-  testActivatedRow = null;
-  simulateRowEvent({ eventType: 'keydown', key: 'Enter', targetType: 'row' });
+  activatedRef.current = null;
+  prevented = false;
+  row0.props.onKeyDown({
+    key: ' ',
+    target: fakeCurrentTr,
+    currentTarget: fakeCurrentTr,
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
   assert.strictEqual(
-    (testActivatedRow as FixtureShipment | null)?.id,
+    getActivated()?.id,
     sampleItem.id,
-    'Enter key on row must invoke onRowClick'
+    'Space key directly on row element must invoke onRowClick'
   );
+  assert.strictEqual(prevented, true, 'Space key on row must call preventDefault');
 
-  // Positive: Space key on row target invokes row action
-  testActivatedRow = null;
-  simulateRowEvent({ eventType: 'keydown', key: ' ', targetType: 'row' });
-  assert.strictEqual(
-    (testActivatedRow as FixtureShipment | null)?.id,
-    sampleItem.id,
-    'Space key on row must invoke onRowClick'
-  );
-
-  // Negative test: other keys (Tab, Escape, ArrowDown) must NOT activate row action
-  testActivatedRow = null;
+  // Negative test: non-activating keys (Tab, Escape, ArrowDown) must NOT invoke row action
   for (const nonActivatingKey of ['Tab', 'Escape', 'ArrowDown', 'ArrowUp', 'Shift']) {
-    simulateRowEvent({ eventType: 'keydown', key: nonActivatingKey, targetType: 'row' });
+    activatedRef.current = null;
+    prevented = false;
+    row0.props.onKeyDown({
+      key: nonActivatingKey,
+      target: fakeCurrentTr,
+      currentTarget: fakeCurrentTr,
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
     assert.strictEqual(
-      testActivatedRow,
+      activatedRef.current,
       null,
       `Negative test: key "${nonActivatingKey}" must NOT trigger row click`
     );
+    assert.strictEqual(
+      prevented,
+      false,
+      `Negative test: key "${nonActivatingKey}" must NOT preventDefault`
+    );
   }
+
+  // Test row onClick with descendant target vs direct row target
+  activatedRef.current = null;
+  row0.props.onClick({
+    target: fakeButtonDescendant,
+    currentTarget: fakeCurrentTr,
+  });
+  assert.strictEqual(
+    activatedRef.current,
+    null,
+    'Negative test: Row onClick must NOT activate when clicking descendant button'
+  );
+
+  activatedRef.current = null;
+  row0.props.onClick({
+    target: fakeCurrentTr,
+    currentTarget: fakeCurrentTr,
+  });
+  assert.strictEqual(
+    getActivated()?.id,
+    sampleItem.id,
+    'Direct click on row element must invoke onRowClick'
+  );
 
   console.log(
     '   ✅ Normal loaded state, <th> sort semantics, and row keyboard accessibility verified'
@@ -719,123 +861,154 @@ async function runTestSuite() {
     'Negative test: background must NOT receive inert attribute when drawer is closed'
   );
 
-  // Test keyboard shortcut listener via real window event dispatcher (Finding 5 & 6)
+  // Test keyboard shortcut listener via production createGlobalShortcutHandler (Finding 5)
   let headerSearchInvoked = false;
-  const windowListeners: Record<string, ((e: any) => void)[]> = {};
-  const mockWindow = {
-    addEventListener: (event: string, fn: (e: any) => void) => {
-      windowListeners[event] = windowListeners[event] || [];
-      windowListeners[event].push(fn);
+  let shortcutPrevented = false;
+  const shortcutHandler = createGlobalShortcutHandler({
+    showSearch: true,
+    onTrigger: () => {
+      headerSearchInvoked = true;
     },
-    removeEventListener: (event: string, fn: (e: any) => void) => {
-      if (windowListeners[event]) {
-        windowListeners[event] = windowListeners[event].filter((cb) => cb !== fn);
-      }
-    },
-    dispatchEvent: (event: { type: string; [k: string]: any }) => {
-      const handlers = windowListeners[event.type] || [];
-      handlers.forEach((h) => h(event));
-    },
-  };
+  });
 
-  // Attach shortcut handler logic matching DashboardHeader.tsx handleGlobalKeyDown
-  const registeredShortcutHandler = (event: {
-    ctrlKey: boolean;
-    metaKey: boolean;
-    key: string;
-    preventDefault: () => void;
-    target: {
-      tagName: string;
-      isContentEditable?: boolean;
-      getAttribute?: (attr: string) => string | null;
-    };
-  }) => {
-    if ((event.ctrlKey || event.metaKey) && (event.key === 'k' || event.key === 'K')) {
-      const target = event.target;
-      const isEditable =
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable ||
-          target.getAttribute?.('contenteditable') === 'true');
-      if (!isEditable) {
-        event.preventDefault();
-        headerSearchInvoked = true;
-      }
-    }
-  };
-  mockWindow.addEventListener('keydown', registeredShortcutHandler);
+  const fakeBody = { tagName: 'BODY', getAttribute: () => null };
+  const fakeInput = { tagName: 'INPUT', getAttribute: () => null };
+  const fakeTextarea = { tagName: 'TEXTAREA', getAttribute: () => null };
+  const fakeEditable = { tagName: 'DIV', isContentEditable: true, getAttribute: () => 'true' };
 
   // Positive: Ctrl + K outside input invokes search
   headerSearchInvoked = false;
-  mockWindow.dispatchEvent({
-    type: 'keydown',
+  shortcutPrevented = false;
+  shortcutHandler({
     ctrlKey: true,
     metaKey: false,
     key: 'k',
-    preventDefault: () => {},
-    target: { tagName: 'BUTTON' },
+    preventDefault: () => {
+      shortcutPrevented = true;
+    },
+    target: fakeBody,
   });
   assert.strictEqual(headerSearchInvoked, true, 'Ctrl+K outside input must trigger search');
+  assert.strictEqual(shortcutPrevented, true, 'Ctrl+K must prevent default browser behavior');
 
-  // Positive: Cmd + K outside input invokes search
+  // Positive: Cmd + K (metaKey) outside input invokes search
   headerSearchInvoked = false;
-  mockWindow.dispatchEvent({
-    type: 'keydown',
+  shortcutPrevented = false;
+  shortcutHandler({
     ctrlKey: false,
     metaKey: true,
     key: 'K',
-    preventDefault: () => {},
-    target: { tagName: 'DIV' },
+    preventDefault: () => {
+      shortcutPrevented = true;
+    },
+    target: fakeBody,
   });
   assert.strictEqual(headerSearchInvoked, true, 'Cmd+K outside input must trigger search');
+  assert.strictEqual(shortcutPrevented, true, 'Cmd+K must prevent default');
 
   // Negative test: Ctrl+K while typing inside <input> must NOT trigger search
   headerSearchInvoked = false;
-  mockWindow.dispatchEvent({
-    type: 'keydown',
+  shortcutPrevented = false;
+  shortcutHandler({
     ctrlKey: true,
     metaKey: false,
     key: 'k',
-    preventDefault: () => {},
-    target: { tagName: 'INPUT' },
+    preventDefault: () => {
+      shortcutPrevented = true;
+    },
+    target: fakeInput,
   });
   assert.strictEqual(
     headerSearchInvoked,
     false,
     'Negative test: Ctrl+K inside an <input> must NOT trigger search'
   );
+  assert.strictEqual(
+    shortcutPrevented,
+    false,
+    'Negative test: Ctrl+K inside an <input> must NOT preventDefault'
+  );
 
   // Negative test: Ctrl+K inside <textarea> must NOT trigger search
   headerSearchInvoked = false;
-  mockWindow.dispatchEvent({
-    type: 'keydown',
+  shortcutPrevented = false;
+  shortcutHandler({
     ctrlKey: true,
     metaKey: false,
     key: 'k',
-    preventDefault: () => {},
-    target: { tagName: 'TEXTAREA' },
+    preventDefault: () => {
+      shortcutPrevented = true;
+    },
+    target: fakeTextarea,
   });
   assert.strictEqual(
     headerSearchInvoked,
     false,
     'Negative test: Ctrl+K inside a <textarea> must NOT trigger search'
   );
+  assert.strictEqual(
+    shortcutPrevented,
+    false,
+    'Negative test: Ctrl+K inside a <textarea> must NOT preventDefault'
+  );
+
+  // Negative test: Ctrl+K inside contenteditable element must NOT trigger search
+  headerSearchInvoked = false;
+  shortcutPrevented = false;
+  shortcutHandler({
+    ctrlKey: true,
+    metaKey: false,
+    key: 'k',
+    preventDefault: () => {
+      shortcutPrevented = true;
+    },
+    target: fakeEditable,
+  });
+  assert.strictEqual(
+    headerSearchInvoked,
+    false,
+    'Negative test: Ctrl+K inside contenteditable must NOT trigger search'
+  );
+  assert.strictEqual(
+    shortcutPrevented,
+    false,
+    'Negative test: Ctrl+K inside contenteditable must NOT preventDefault'
+  );
 
   // Negative test: key "k" without Ctrl/Cmd modifier must NOT trigger search
   headerSearchInvoked = false;
-  mockWindow.dispatchEvent({
-    type: 'keydown',
+  shortcutHandler({
     ctrlKey: false,
     metaKey: false,
     key: 'k',
     preventDefault: () => {},
-    target: { tagName: 'BODY' },
+    target: fakeBody,
   });
   assert.strictEqual(
     headerSearchInvoked,
     false,
     'Negative test: key "k" without Ctrl/Cmd modifier must NOT trigger search'
+  );
+
+  // Negative test: when showSearch = false, shortcut must NOT trigger search
+  const disabledShortcutHandler = createGlobalShortcutHandler({
+    showSearch: false,
+    onTrigger: () => {
+      headerSearchInvoked = true;
+    },
+  });
+  headerSearchInvoked = false;
+  disabledShortcutHandler({
+    ctrlKey: true,
+    metaKey: false,
+    key: 'k',
+    preventDefault: () => {},
+    target: fakeBody,
+  });
+  assert.strictEqual(
+    headerSearchInvoked,
+    false,
+    'Negative test: Ctrl+K must NOT trigger search when showSearch=false'
   );
 
   console.log(
@@ -880,6 +1053,9 @@ async function runTestSuite() {
     }
     const mockRouter = {
       push: (url: string) => {
+        if (tableProps.browserHistory) {
+          tableProps.browserHistory.push(url);
+        }
         if (tableProps.onNavigate) {
           tableProps.onNavigate(url);
         }
@@ -1100,6 +1276,41 @@ async function runTestSuite() {
     historyHookForwardTo2.searchValue,
     'GHTK',
     'History forward must restore search "GHTK"'
+  );
+
+  // Step 6: Hook-driven navigation directly pushing to browser history and restoring on back
+  const dynamicHistory = new StatefulBrowserHistory();
+  let dynamicHook = renderHookHarness({
+    searchParams: dynamicHistory.getCurrentSearchParams(),
+    browserHistory: dynamicHistory,
+    defaultPageSize: 10,
+  });
+  assert.strictEqual(dynamicHook.pageIndex, 1);
+
+  // Hook triggers page change to 4
+  dynamicHook.setPagination(4);
+  dynamicHook = renderHookHarness({
+    searchParams: dynamicHistory.getCurrentSearchParams(),
+    browserHistory: dynamicHistory,
+    defaultPageSize: 10,
+  });
+  assert.strictEqual(
+    dynamicHook.pageIndex,
+    4,
+    'Hook setPagination(4) must push to history and render page 4'
+  );
+
+  // Browser back restores page 1
+  dynamicHistory.back();
+  dynamicHook = renderHookHarness({
+    searchParams: dynamicHistory.getCurrentSearchParams(),
+    browserHistory: dynamicHistory,
+    defaultPageSize: 10,
+  });
+  assert.strictEqual(
+    dynamicHook.pageIndex,
+    1,
+    'Browser back must restore page 1 after hook setPagination navigation'
   );
 
   // 10.5 Negative tests on URL parameters (malformed inputs fail-safe)

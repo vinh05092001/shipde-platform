@@ -197,9 +197,13 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
         return;
       }
       if (router) {
-        startTransition(() => {
+        try {
+          startTransition(() => {
+            router.push(targetUrl);
+          });
+        } catch {
           router.push(targetUrl);
-        });
+        }
       }
     },
     [onNavigate, pathname, router]

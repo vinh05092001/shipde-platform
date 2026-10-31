@@ -228,7 +228,7 @@ export function DashboardLayout({
       <div
         className="hidden lg:block shrink-0 sticky top-0 h-screen z-30"
         aria-hidden={isMobileOpen ? 'true' : undefined}
-        inert={isMobileOpen || undefined}
+        inert={isMobileOpen}
       >
         <DashboardSidebar
           navSections={navSections}
@@ -269,7 +269,7 @@ export function DashboardLayout({
       <div
         className="flex-1 flex flex-col min-w-0"
         aria-hidden={isMobileOpen ? 'true' : undefined}
-        inert={isMobileOpen || undefined}
+        inert={isMobileOpen}
       >
         {/* Header */}
         <DashboardHeader

@@ -50,6 +50,48 @@ export interface DashboardHeaderProps {
   showSearch?: boolean;
 }
 
+export interface GlobalShortcutOptions {
+  showSearch?: boolean;
+  onTrigger: () => void;
+}
+
+export interface ShortcutKeyEvent {
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  key: string;
+  preventDefault: () => void;
+  target?:
+    | EventTarget
+    | {
+        tagName?: string;
+        isContentEditable?: boolean;
+        getAttribute?: (name: string) => string | null;
+      }
+    | null;
+}
+
+export function createGlobalShortcutHandler({
+  showSearch = true,
+  onTrigger,
+}: GlobalShortcutOptions) {
+  return function handleGlobalKeyDown(event: KeyboardEvent | ShortcutKeyEvent) {
+    if (showSearch === false) return;
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'k' || event.key === 'K')) {
+      const target = event.target as any;
+      const isEditable =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable ||
+          target.getAttribute?.('contenteditable') === 'true');
+      if (!isEditable) {
+        event.preventDefault();
+        onTrigger();
+      }
+    }
+  };
+}
+
 export function DashboardHeader({
   currentUser,
   shopName = 'Ship Dễ Store',
@@ -78,21 +120,10 @@ export function DashboardHeader({
   // Global Ctrl + K / Cmd + K shortcut
   useEffect(() => {
     if (showSearch === false) return;
-    function handleGlobalKeyDown(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && (event.key === 'k' || event.key === 'K')) {
-        const target = event.target as HTMLElement | null;
-        const isEditable =
-          target &&
-          (target.tagName === 'INPUT' ||
-            target.tagName === 'TEXTAREA' ||
-            target.isContentEditable ||
-            target.getAttribute('contenteditable') === 'true');
-        if (!isEditable) {
-          event.preventDefault();
-          handleSearchActivation();
-        }
-      }
-    }
+    const handleGlobalKeyDown = createGlobalShortcutHandler({
+      showSearch,
+      onTrigger: handleSearchActivation,
+    });
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [handleSearchActivation, showSearch]);

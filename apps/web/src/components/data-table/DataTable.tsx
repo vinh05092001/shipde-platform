@@ -34,7 +34,7 @@ import React from 'react';
 import { AlertCircle, FileQuestion, RefreshCw } from 'lucide-react';
 import { DataTableProps } from './types';
 
-function isInteractiveControl(
+export function isInteractiveControl(
   target: EventTarget | null,
   currentTarget: EventTarget | null
 ): boolean {
