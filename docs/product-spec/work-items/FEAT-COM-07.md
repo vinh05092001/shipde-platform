@@ -70,10 +70,11 @@ Links resolve relative to this Work Item:
 - **Shared Component:** Create `apps/web/src/components/activity/ActivityTimeline.tsx` and `ActivityTimelineDrawer.tsx` (reusable across all business entity screens).
 - **Visual Presentation:** Chronological timeline cards with actor badge, action summary, relative/UTC time, expandable before/after field changes with color diffs, and copyable correlation ID pill with toast notification.
 - **Full 10 UI States:** Accessible loading skeleton (`aria-busy`), empty state card, validation errors, server error banner with retry button, 403 forbidden banner, 404 not found, partial legacy indicator, success list with keyset "Load more" button, recovery, and keyboard/ARIA accessibility (`role="feed"` / `role="article"`, focus outlines, `aria-label`).
-- **Host Screen Integrations:**
+- **Host Screen Integrations (FEAT-COM-07 Completion Boundary):**
   - `apps/web/src/app/settings/shop/page.tsx` — Shop profile activity drawer/tab.
   - `apps/web/src/components/BranchManagementView.tsx` — Branch history drawer.
   - `apps/web/src/components/WarehouseManagementView.tsx` — Warehouse history drawer.
+  - *Domain Screens Deferral:* Direct embedding into domain screens (`SCR-SHIP-01` Shipment details, `SCR-EXC-01` Exception details, `SCR-CASE-01` Claim details) is explicitly deferred to subsequent vertical feature Work Items (`FEAT-SHP-01`, `FEAT-EXC-01`, `FEAT-CLM-01`). The shared component is authored as an exportable, standalone component accepting standard props (`entityType`, `entityId`).
 - **Automated Tests:** Frontend component state tests (`apps/web/src/tests/activity-timeline-states.test.ts`) and Playwright E2E tests (`apps/web/e2e/activity.spec.ts`).
 
 ## In scope
@@ -81,18 +82,19 @@ Links resolve relative to this Work Item:
 1. **Durable Activity Retrieval:** Query immutable `AuditLog` events matching `merchant_id`, `entity_type`, and `entity_id`.
 2. **Actor Attribution:** Disclose who acted (User name, System, Carrier, Unknown) with resilience against deleted/deactivated users.
 3. **Temporal Accuracy:** Render exact UTC timestamps formatted to merchant local display time and relative intervals ("X phút trước").
-4. **Before/After Changes:** Render field-level diffs (`old_value` vs `new_value`) for audited mutations with sensitive field redaction.
+4. **Before/After Changes:** Render field-level diffs (`old_value` vs `new_value`) for audited mutations with sensitive field redaction, including one-sided creation and deletion preservation.
 5. **Correlation ID Tracing:** Surface original action correlation ID with one-click copy button, preserving correlation through to API requests.
 6. **Multi-tenant Server Isolation:** Strict enforcement of `merchant_id` filter in database queries; cross-tenant requests fail closed (404/403).
 7. **Resource Scope & RBAC:** Enforce parent entity read permissions and branch/warehouse resource scopes; non-permitted users receive canonical 403 `FORBIDDEN`.
 8. **PII and Financial Masking:** Field-level masking for recipient phone/email (`0901****567`) and financial rates/amounts based on caller capabilities.
 9. **Keyset Pagination:** Stable descending keyset pagination using base64 cursors (`created_at`, `id`) supporting high-volume histories.
 10. **Legacy Row Support:** Backward compatibility for historical rows lacking explicit correlation or before/after snapshots without fabricating data.
-11. **Shared Component & Screen Integration:** Deliver reusable UI timeline component integrated into Shop, Branch, and Warehouse management screens.
+11. **Shared Component & Host Screen Integration:** Deliver reusable UI timeline component integrated into Shop, Branch, and Warehouse management screens (domain screens explicitly deferred to domain work items).
 12. **Full State Coverage & A11y:** Complete coverage of all 10 shared UI states with WCAG AA compliance and screen reader support.
 
 ## Out of scope
 
+- Direct integration into domain screens (`SCR-SHIP-01`, `SCR-EXC-01`, `SCR-CASE-01`), which is explicitly deferred to subsequent vertical feature Work Items (`FEAT-SHP-01`, `FEAT-EXC-01`, `FEAT-CLM-01`).
 - Global administrative audit log browsing (`FEAT-ADM-03` / `/admin/audit`).
 - Carrier real-time tracking ingestion and checkpoint calculation (`FEAT-TRK-04`).
 - Recipient-facing public tracking timeline (channel-neutral public view).
@@ -104,8 +106,25 @@ Links resolve relative to this Work Item:
 ## Business rules and edge cases
 
 - `BR-COM-07-01 — Tenant Scoping & Isolation`: Every activity query must be scoped server-side to the authenticated session's `merchant_id`. If an entity belongs to another tenant, the API must return 404 `NOT_FOUND` (fail closed) without disclosing the entity's existence or activity count.
-- `BR-COM-07-02 — Entity-Permission Access Control`: Viewing an entity's activity timeline requires the caller to hold read permissions for that specific entity type (e.g. `shop:read` / `organization:view` for Shop, `branch:read` for Branch, `warehouse:read` for Warehouse, `shipment:track_exceptions` for Shipment, `claim:view` for Claim). Global `audit:view` capability is NOT required for contextual entity activity.
-- `BR-COM-07-03 — Resource Scope Enforcement (FEAT-RBAC-02)`: When an entity is associated with a specific branch or warehouse, the caller's active session must possess access to that store/warehouse scope. If scope is revoked during a session, subsequent activity queries must return 403 `FORBIDDEN`.
+- `BR-COM-07-02 — Entity-Permission Access Control`: Viewing an entity's activity timeline requires the caller to hold read permissions for that specific entity type plus server-side tenant matching (`entity.merchant_id === session.merchantId`). Blanket administrative `audit:view` capability is NOT required for contextual entity activity. Access is governed by the exhaustive mapping table below with explicit AND/OR semantics:
+  - `TenantMatch` (Mandatory `AND`): `entity.merchant_id === session.merchantId`. If false, fail closed with 404 `NOT_FOUND`.
+  - `CapabilityMatch` (`OR` condition within entity type): Caller must hold at least one of the listed capabilities:
+    - `SHOP`: `shop:read` OR `organization:view`
+    - `BRANCH`: `branch:read`
+    - `WAREHOUSE`: `warehouse:read`
+    - `USER`: `user:read` OR self-inspection (`session.userId === entity_id`)
+    - `ORDER`: `order:read`
+    - `SHIPMENT`: `shipment:read` OR `shipment:track_exceptions`
+    - `EXCEPTION_CASE`: `exception:read` OR `shipment:track_exceptions`
+    - `CLAIM`: `claim:view` OR `claim:read`
+  - If `CapabilityMatch` is false, reject with canonical 403 `FORBIDDEN`.
+- `BR-COM-07-03 — Resource Scope Enforcement (FEAT-RBAC-02)`: When an entity is associated with a branch or warehouse, the caller's active session must possess that store/warehouse scope:
+  - If caller role has tenant-wide scope (`is_scoped = false`), resource scope check unconditionally passes.
+  - If caller role has scoped access (`is_scoped = true`):
+    - For `BRANCH`: `session.branchIds` must contain `entity.id`.
+    - For `WAREHOUSE`: `session.warehouseIds` must contain `entity.id`.
+    - For `ORDER`, `SHIPMENT`, `EXCEPTION_CASE`: if the entity has an associated `branch_id` or `warehouse_id`, caller's `session.branchIds` or `session.warehouseIds` must include that identifier.
+  - If resource scope check fails, reject with canonical 403 `FORBIDDEN`.
 - `BR-COM-07-04 — Secrets & Credential Redaction`: Password hashes, session tokens, OTP codes, recovery keys, webhook secrets, and private keys must NEVER be returned in activity diffs or stored in UI logs. They must be unconditionally replaced with `"[REDACTED]"`.
 - `BR-COM-07-05 — PII & Confidential Data Masking`: Recipient phone numbers and email addresses in before/after snapshots must be masked (e.g. `0901****567`) unless the caller possesses the `pii:unmask` capability. Raw client IP addresses stored in `AuditLog` are stripped from timeline responses.
 - `BR-COM-07-06 — Financial Figure Masking`: Sensitive monetary values (carrier contract rates, COD collected amounts, discrepancy settlement values) in diffs must be masked unless the caller holds reconciliation permissions (`reconciliation:view_contract_rates` or `reconciliation:run_review_audit`) or the Owner role.
@@ -113,6 +132,13 @@ Links resolve relative to this Work Item:
 - `BR-COM-07-08 — Actor Attribution Resilience`: If the user who performed an action has been deleted or suspended, the timeline displays their last recorded name or `"[Người dùng đã xóa]"` (`actor.type = 'USER'`). System actions are attributed to `"Hệ thống"` (`actor.type = 'SYSTEM'`), and carrier webhook events to the carrier code (`actor.type = 'CARRIER'`). If unknown, return `"Không xác định"` (`actor.type = 'UNKNOWN'`).
 - `BR-COM-07-09 — Keyset Pagination Stability`: Timeline results must be deterministically ordered by `created_at DESC, id DESC`. Keyset pagination cursors encode both timestamp and ID to prevent dropped or duplicate records when multiple events share identical millisecond timestamps.
 - `BR-COM-07-10 — Read-Only Idempotency`: Querying or retrying an activity timeline is strictly read-only and idempotent. It must never trigger external carrier commands, re-run business logic, or mutate database state.
+- `BR-COM-07-11 — Execution Status Semantics`: Every activity item includes a top-level `status` property with enum values `['SUCCESS', 'FAILED']`. Committed business transactions recorded in `AuditLog` default to `'SUCCESS'`. Logged execution failures, rejected commands, or failed remote dispatches recorded for compliance are marked `'FAILED'`.
+- `BR-COM-07-12 — Snapshot Preservation & Diff Computation`: Field-level diff computation must preserve available evidence across all event lifecycle states:
+  - *Creation Events (`old_value == null && new_value != null`):* All properties in `new_value` are projected into `changes` with `old_value = null` and `new_value = <value>`, capturing initial state.
+  - *Deletion Events (`old_value != null && new_value == null`):* All properties in `old_value` are projected into `changes` with `old_value = <value>` and `new_value = null`, capturing terminal state before deletion.
+  - *Update Events (`old_value != null && new_value != null`):* Project only fields where `old_value[k] !== new_value[k]`.
+  - *Unavailable Snapshot Events (`old_value == null && new_value == null`):* Return `changes: []` with `is_partial: true`. The API returns HTTP 200 OK with complete event metadata (actor, timestamp, correlation ID, action). This distinguishes unavailable historical snapshots from an absent entity (which fails closed with 404 `NOT_FOUND`).
+  - Sensitive field redaction (BR-COM-07-04), PII masking (BR-COM-07-05), and financial masking (BR-COM-07-06) apply to all projected fields.
 
 ## Approved product decisions (formerly blocking gaps G1–G4)
 
@@ -123,20 +149,36 @@ On 2026-10-31, the product owner (operator) formally APPROVED all recommended de
 - **Approved Decision (Operator approval 2026-10-31):**
   1. *Entity Coverage:* FEAT-COM-07 covers primary operational and configuration entities: `Shop` (`SHOP`), `Branch` (`BRANCH`), `Warehouse` (`WAREHOUSE`), `User` (`USER`), `Order` (`ORDER`), `Shipment` (`SHIPMENT`), `ExceptionCase` (`EXCEPTION_CASE`), and `Claim` (`CLAIM`).
   2. *Minimum Vertical Acceptance Path:* Author implementation must deliver end-to-end vertical integration on `Shop` (`apps/web/src/app/settings/shop/page.tsx`), `Branch` (`BranchManagementView.tsx`), and `Warehouse` (`WarehouseManagementView.tsx`), where real mutations (updates, activations, deactivations) produce durable audit records that are queried and displayed in the live activity timeline.
-  3. *Domain Screen Integration:* Domain screens (`SCR-SHIP-01`, `SCR-EXC-01`, `SCR-CASE-01`) will consume the shared `ActivityTimeline` component via standard props (`entityType`, `entityId`).
+  3. *Domain Screen Integration Deferral:* Direct integration into domain screens (`SCR-SHIP-01` Shipment details, `SCR-EXC-01` Exception details, `SCR-CASE-01` Claim details) is explicitly deferred to subsequent vertical feature Work Items (`FEAT-SHP-01`, `FEAT-EXC-01`, `FEAT-CLM-01`). The host screen completion boundary for FEAT-COM-07 is strictly limited to Shop (`apps/web/src/app/settings/shop/page.tsx`), Branch (`BranchManagementView.tsx`), and Warehouse (`WarehouseManagementView.tsx`). The shared `ActivityTimeline` component is authored with a clean, decoupled prop contract (`entityType`, `entityId`) for seamless adoption by subsequent domain Work Items without modifying activity module code.
   4. *Mock Prohibition:* Substituting the mock `UnifiedTrackingModal.tsx` for live activity is strictly prohibited; all timelines must query durable backend records from `GET /api/v1/activity`.
 
 ### Decision G2 (DEC-COM07-02): Access Control, Entity Permissions, Resource Scopes & Data Visibility
 - **Gap context (G2):** `View immutable audit log` denies operational roles that otherwise view shipments/exceptions; global activity capability has no permission mapping. Existing `audit:view` proves a capability exists, not that every entity timeline must use it.
 - **Approved Decision (Operator approval 2026-10-31):**
-  1. *Entity-Permission Governed:* Viewing an entity's timeline requires read permission for the underlying entity (`shop:read` / `organization:view`, `branch:read`, `warehouse:read`, `shipment:track_exceptions`, `claim:view`) plus tenant isolation. The global administrative capability `audit:view` is NOT required for contextual entity activity (it remains reserved for admin-wide audit browsing in `FEAT-ADM-03`).
-  2. *Resource Scopes (FEAT-RBAC-02):* For entities assigned to branches or warehouses, the user's active session must possess the matching store/warehouse scope. Denied scopes return 403 `FORBIDDEN`.
-  3. *Field-Level Privacy & Redaction:*
+  1. *Entity-Permission Governed:* Viewing an entity's timeline requires read permission for the underlying entity plus tenant isolation. The global administrative capability `audit:view` is NOT required for contextual entity activity (it remains reserved for admin-wide audit browsing in `FEAT-ADM-03`).
+  2. *Exhaustive Entity-to-Capability and Resource Scope Mapping:*
+
+| Target `entity_type` | Required Capability (`OR` condition within cell) | Tenant Scope (Mandatory `AND`) | Resource Scope (FEAT-RBAC-02) (Mandatory `AND` if scoped) | Behavior on Failure |
+|---|---|---|---|---|
+| `SHOP` | `shop:read` OR `organization:view` | `session.merchantId === entity.id` | Tenant global | Tenant mismatch: 404 `NOT_FOUND`. Missing capability: 403 `FORBIDDEN`. |
+| `BRANCH` | `branch:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.branchIds` contains `entity.id`. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `WAREHOUSE` | `warehouse:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.warehouseIds` contains `entity.id`. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `USER` | `user:read` OR caller querying own user activity (`session.userId === entity_id`) | `session.merchantId === entity.merchant_id` | Tenant global | Tenant mismatch: 404 `NOT_FOUND`. Missing capability and not self: 403 `FORBIDDEN`. |
+| `ORDER` | `order:read` | `session.merchantId === entity.merchant_id` | Scoped role: `session.branchIds` contains `order.branch_id` (if assigned). Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `SHIPMENT` | `shipment:read` OR `shipment:track_exceptions` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch/warehouse scope. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `EXCEPTION_CASE` | `exception:read` OR `shipment:track_exceptions` | `session.merchantId === entity.merchant_id` | Scoped role: matching branch/warehouse scope. Tenant-wide: allowed. | Tenant mismatch: 404 `NOT_FOUND`. Missing capability or scope: 403 `FORBIDDEN`. |
+| `CLAIM` | `claim:view` OR `claim:read` | `session.merchantId === entity.merchant_id` | Tenant global | Tenant mismatch: 404 `NOT_FOUND`. Missing capability: 403 `FORBIDDEN`. |
+
+  3. *Explicit Evaluation Logic:*
+     - Step 1 (Tenant Isolation — Mandatory `AND`): `entity.merchant_id === session.merchantId`. If mismatch, fail closed with 404 `NOT_FOUND` (never 403, preventing entity enumeration).
+     - Step 2 (Entity Capability — `OR` within entity type): Caller must hold at least one capability in the entity's allowed set. If none held, return 403 `FORBIDDEN`.
+     - Step 3 (Resource Scope — Mandatory `AND` if scoped): If caller has a role constrained by branch or warehouse (`is_scoped = true` per `FEAT-RBAC-02`), caller session must possess matching scope. Unscoped roles pass. Mismatch returns 403 `FORBIDDEN`.
+  4. *Field-Level Privacy & Redaction:*
      - Secrets, tokens, hashes, and OTPs are unconditionally replaced with `"[REDACTED]"`.
      - Recipient PII (phone number, address) is masked (`0901****567`) unless caller holds `pii:unmask`.
      - Financial values (rates, COD, bank accounts) are masked unless caller holds reconciliation capabilities or Owner role.
      - Raw client IP addresses are stripped from timeline responses.
-  4. *Platform Support:* Support staff have no permanent browsing rights; access requires an explicit, active, time-bound delegated session (`FEAT-SUP-01`).
+  5. *Platform Support:* Support staff have no permanent browsing rights; access requires an explicit, active, time-bound delegated session (`FEAT-SUP-01`).
 
 ### Decision G3 (DEC-COM07-03): API Contract, Query Semantics, Keyset Pagination & Canonical Errors
 - **Gap context (G3):** Machine contract contains no activity endpoint/schema; tracking GET only describes canonical/raw-safe timeline. No approved timeline filter/order/page contract or activity screen contract.
@@ -148,7 +190,10 @@ On 2026-10-31, the product owner (operator) formally APPROVED all recommended de
      - `limit` (integer, optional, default 20, min 1, max 100).
      - `cursor` (string, optional): Base64-encoded cursor containing `created_at` timestamp and `id` for deterministic keyset pagination.
   3. *Ordering & Pagination:* Strictly ordered by `created_at DESC, id DESC`. Keyset pagination returns `items`, `next_cursor`, and `has_more`.
-  4. *Item Envelope:* `{ id, entity_type, entity_id, action, actor: { id, name, type }, timestamp, correlation_id, changes: [{ field, old_value, new_value, is_sensitive }], reason, status }`.
+  4. *Item Envelope & Status Semantics:*
+     - Envelope: `{ id, entity_type, entity_id, action, actor: { id, name, type }, timestamp, correlation_id, changes: [{ field, old_value, new_value, is_sensitive }], reason, status, is_partial }`.
+     - `status` Definition: Enum `['SUCCESS', 'FAILED']`. Indicates execution outcome of the logged activity. Committed transactions in `AuditLog` default to `'SUCCESS'`. Logged execution failures, rejected commands, or failed remote operations recorded for compliance are marked `'FAILED'`.
+     - Complete item and envelope schema definitions are formalized in the OpenAPI contract below (`ActivityTimelineItem`, `ActivityChangeItem`, `ActivityActor`, `ActivityActorType`, `ActivityStatus`, `ActivityEntityType`).
   5. *Canonical Error Handling:*
      - 400 `VALIDATION_ERROR`: Invalid parameters, out-of-bounds limit, malformed cursor.
      - 401 `UNAUTHORIZED`: Missing or invalid session token.
@@ -159,10 +204,13 @@ On 2026-10-31, the product owner (operator) formally APPROVED all recommended de
 - **Gap context (G4):** Conceptual `audit_events` requires correlation; `AuditLog` has none and stores free-text reasons. Shop writer embeds correlation in reason; profile writer omits it and persists personal snapshots/raw client IP. No approved legacy, field projection or attribution policy exists.
 - **Approved Decision (Operator approval 2026-10-31):**
   1. *Additive Schema:* Add nullable column `correlation_id String?` to Prisma model `AuditLog` with compound indexes `@@index([merchant_id, entity_type, entity_id])` and `@@index([merchant_id, created_at])`. No destructive table rewrites or column drops.
-  2. *Legacy Row Compatibility:*
-     - If `correlation_id` column is null, parse `reason` for `correlation_id:([a-zA-Z0-9_-]+)`. If matched, extract as `correlation_id`.
-     - If no correlation is present, return `null`. Never invent synthetic correlation IDs or substitute the query request's correlation ID.
-     - If `old_value` or `new_value` are null, return empty `changes: []` without throwing errors.
+  2. *Legacy Row Compatibility & Snapshot Evidence Preservation:*
+     - *Correlation parsing:* If `correlation_id` column is null, parse `reason` for `correlation_id:([a-zA-Z0-9_-]+)`. If matched, extract as `correlation_id`. If absent, return `null`. Never invent synthetic correlation IDs or substitute the query request's correlation ID.
+     - *Creation Events (`old_value == null && new_value != null`):* Preserve all attributes in `new_value`. Project each property into `changes` with `old_value: null` and `new_value: <value>`.
+     - *Deletion Events (`old_value != null && new_value == null`):* Preserve all attributes in `old_value`. Project each property into `changes` with `old_value: <value>` and `new_value: null`.
+     - *Update Events (`old_value != null && new_value != null`):* Project only modified fields where `old_value[key] !== new_value[key]`.
+     - *Unavailable Snapshot Events (`old_value == null && new_value == null`):* Return `changes: []` and set `is_partial: true`. Event metadata (id, actor, timestamp, action, correlation_id) is returned with HTTP 200 OK. This distinguishes unavailable historical diffs from an absent entity (which returns 404 `NOT_FOUND`).
+     - *Field Masking & Redaction:* Unconditionally redact secrets to `"[REDACTED]"`; mask recipient PII unless caller holds `pii:unmask`; mask financial figures unless caller holds reconciliation capabilities. Strip raw client IP addresses.
   3. *Actor Attribution Policy:*
      - Human actor: Resolved to current or snapshot display name; deleted users render as `"[Người dùng đã xóa]"`.
      - System actor: Render as `"Hệ thống"` (`actor.type = 'SYSTEM'`).
@@ -251,6 +299,90 @@ The shared `ActivityTimeline` component implements the full 10-state contract fr
         $ref: '#/components/responses/ForbiddenError'
       404:
         $ref: '#/components/responses/NotFoundError'
+
+components:
+  schemas:
+    ActivityEntityType:
+      type: string
+      enum: [SHOP, BRANCH, WAREHOUSE, USER, ORDER, SHIPMENT, EXCEPTION_CASE, CLAIM]
+      description: Target business entity type
+    ActivityStatus:
+      type: string
+      enum: [SUCCESS, FAILED]
+      description: Execution outcome of the audited activity (SUCCESS for committed operations, FAILED for rejected or error operations)
+    ActivityActorType:
+      type: string
+      enum: [USER, SYSTEM, CARRIER, UNKNOWN]
+      description: Category of the actor performing the activity
+    ActivityActor:
+      type: object
+      required: [name, type]
+      properties:
+        id:
+          type: string
+          nullable: true
+          description: Actor unique identifier if user, or null if system or carrier
+        name:
+          type: string
+          description: Display name of the actor (user display name, "Hệ thống", carrier code, or "[Người dùng đã xóa]")
+        type:
+          $ref: '#/components/schemas/ActivityActorType'
+    ActivityChangeItem:
+      type: object
+      required: [field, is_sensitive]
+      properties:
+        field:
+          type: string
+          description: Name of the property that changed
+        old_value:
+          nullable: true
+          description: Value before the change, or null for creation events
+        new_value:
+          nullable: true
+          description: Value after the change, or null for deletion events
+        is_sensitive:
+          type: boolean
+          description: Whether this field contained sensitive data requiring masking or redaction
+    ActivityTimelineItem:
+      type: object
+      required: [id, entity_type, entity_id, action, actor, timestamp, changes, status, is_partial]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique audit event identifier
+        entity_type:
+          $ref: '#/components/schemas/ActivityEntityType'
+        entity_id:
+          type: string
+          description: Target entity identifier
+        action:
+          type: string
+          description: Specific action code (e.g. SHOP_UPDATED, BRANCH_ACTIVATED, USER_INVITED)
+        actor:
+          $ref: '#/components/schemas/ActivityActor'
+        timestamp:
+          type: string
+          format: date-time
+          description: Exact UTC timestamp when the event was recorded
+        correlation_id:
+          type: string
+          nullable: true
+          description: Original execution/request correlation ID connecting the action to its execution context
+        changes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityChangeItem'
+          description: Field-level before/after diffs; preserves all fields for creation/deletion, empty array for unavailable historical snapshots
+        reason:
+          type: string
+          nullable: true
+          description: Human-readable note, business reason, or failure cause
+        status:
+          $ref: '#/components/schemas/ActivityStatus'
+        is_partial:
+          type: boolean
+          description: True if this is a historical legacy event lacking complete correlation or snapshot data
 ```
 
 ### Database Schema Migration (`prisma/schema.prisma`)
@@ -286,11 +418,11 @@ model AuditLog {
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| AC-COM-07-01 / TEST-COM-07-READY | Planning completeness verification. | G1–G4 approved decisions recorded; Slice A and Slice B bounded; paths and contracts defined; status READY_FOR_AUTHOR. | Source diff and Work Item review. |
-| AC-COM-07-02 / TEST-COM-07-VERTICAL | Authorized user mutates Shop/Branch/Warehouse and opens Activity Timeline. | Live timeline displays new event with exact actor, timestamp, field-level before/after diffs, and original correlation ID matching database record. | Real Supertest integration + Playwright browser journey with screenshot. |
+| AC-COM-07-01 / TEST-COM-07-READY | Planning completeness verification. | G1–G4 approved decisions recorded; delivery boundary strictly bounded to Shop/Branch/Warehouse host screens with domain screens deferred; exhaustive 8-entity RBAC mapping; OpenAPI ActivityTimelineItem schema with status enum; one-sided snapshot preservation for creations and deletions; status READY_FOR_AUTHOR. | Source diff and Work Item review. |
+| AC-COM-07-02 / TEST-COM-07-VERTICAL | Authorized user mutates Shop/Branch/Warehouse and opens Activity Timeline in respective host screens (`settings/shop`, `BranchManagementView`, `WarehouseManagementView`). | Live timeline displays new event with exact actor, timestamp, field-level before/after diffs, and original correlation ID matching database record. Direct domain screen integrations (`SCR-SHIP-01`, `SCR-EXC-01`, `SCR-CASE-01`) explicitly deferred. | Real Supertest integration + Playwright browser journey with screenshot. |
 | AC-COM-07-03 / TEST-COM-07-TENANT | Tenant A requests activity of Tenant B's entity or manipulates merchant headers. | Server rejects request with 404 `NOT_FOUND` (fail closed); zero foreign event, actor, count, or correlation leakage (E2E-10). | Two-tenant Supertest test suite. |
 | AC-COM-07-04 / TEST-COM-07-SCOPE | Permitted user lacks access to entity's assigned branch or warehouse scope. | Server denies request with 403 `FORBIDDEN`. Access granted immediately when matching scope is active in session. | Scoped Supertest integration test across role permissions. |
-| AC-COM-07-05 / TEST-COM-07-RBAC | Roles with entity read permission (Owner, Ops Manager, Staff) vs unprivileged roles (Rate viewer). | Privileged roles view timeline without requiring `audit:view`; unprivileged roles receive canonical 403 `FORBIDDEN`. | Table-driven RBAC capability unit and integration tests. |
+| AC-COM-07-05 / TEST-COM-07-RBAC | Roles with entity read permission (Owner, Ops Manager, Staff) vs unprivileged roles across all 8 entity types (SHOP, BRANCH, WAREHOUSE, USER, ORDER, SHIPMENT, EXCEPTION_CASE, CLAIM). | Privileged roles view timeline without requiring `audit:view`; self-query (`session.userId === entity_id`) succeeds for USER; unprivileged roles receive canonical 403 `FORBIDDEN`. | Table-driven RBAC capability unit and integration tests across all 8 entity types. |
 | AC-COM-07-06 / TEST-COM-07-PRIVACY | Activity diff contains synthetic passwords, OTPs, phone numbers, and financial rates. | Passwords/OTPs unconditionally replaced with `"[REDACTED]"`; phone/address masked unless caller holds `pii:unmask`; rates masked unless caller holds reconciliation capabilities. | Privacy projection unit tests and API response assertions. |
 | AC-COM-07-07 / TEST-COM-07-LEGACY | Querying historical audit records with null `correlation_id` or legacy `reason: "correlation_id:xyz"`. | Service extracts correlation from reason when present; returns null when absent; never replaces event correlation with query request correlation. | Unit tests using legacy database fixtures. |
 | AC-COM-07-08 / TEST-COM-07-READONLY | Repeated timeline queries, retries after network drop, or rapid page refreshes. | Query is strictly read-only; no modified database state, no duplicate domain events, zero carrier side-effects. | Before/after database state assertions and carrier spy checks. |
@@ -298,6 +430,9 @@ model AuditLog {
 | AC-COM-07-10 / TEST-COM-07-STATES | Render all 10 UI states: loading, empty, validation, server error, 403, 404, partial, success, recovery, a11y. | All 10 states render cleanly matching design system rules; interactive retry button functional; correlation copy toast functional. | Component tests (`activity-timeline-states.test.ts`) and Playwright visual screenshots. |
 | AC-COM-07-11 / TEST-COM-07-A11Y | Keyboard user navigates timeline cards, expands diffs, and copies correlation ID. | Focus outline visible; all icon buttons have `aria-label`; axe accessibility scanner reports 0 violations; mobile responsive layout verified. | `verify-a11y.ts` script run, Playwright axe test, and viewport checks. |
 | AC-COM-07-12 / TEST-COM-07-COMPAT | Apply additive migration to PostgreSQL and verify existing profile/shop/RBAC writers. | Additive schema migration executes cleanly; existing audit writers function without regressions; `pnpm contract:check` passes with updated OpenAPI. | Migration status, contract check, and existing suite regression runs. |
+| AC-COM-07-13 / TEST-COM-07-SNAPSHOT-CREATION | Entity creation event with `old_value == null` and populated `new_value`. | API preserves all populated initial fields in `changes` array with `old_value: null` and `new_value: <value>`; sensitive fields properly masked/redacted. | Supertest API assertion asserting non-empty `changes` with null `old_value`. |
+| AC-COM-07-14 / TEST-COM-07-SNAPSHOT-DELETION | Entity deletion event with populated `old_value` and `new_value == null`. | API preserves all terminal fields in `changes` array with `old_value: <value>` and `new_value: null`; sensitive fields properly masked/redacted. | Supertest API assertion asserting non-empty `changes` with null `new_value`. |
+| AC-COM-07-15 / TEST-COM-07-SNAPSHOT-UNAVAILABLE | Historical legacy event with both `old_value == null` and `new_value == null`. | API returns HTTP 200 OK with `changes: []`, `is_partial: true`, preserving actor, timestamp, action, and correlation ID (distinguished from 404 entity not found). | Supertest API assertion comparing 200 OK partial event vs 404 nonexistent entity. |
 
 ## Verification commands
 
@@ -324,8 +459,9 @@ pnpm build
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | Planning readiness, 2026-10-30 | Initial planning draft | BLOCKED | G1–G4 unresolved; awaiting operator decisions. |
-| Planning finalisation, 2026-10-31 | Current planning commit | READY_FOR_AUTHOR | G1–G4 formally approved by operator on 2026-10-31 (`HUMAN-DECISION-COM07-ACTIVITY-TIMELINE-2026-10-31`); Work Item complete, implementable, and split into Slice A (API/data) and Slice B (UI). |
+| Planning finalisation, 2026-10-31 | `0867b611` | CHANGES_REQUIRED | Resolved P1-G1 (domain screens explicitly deferred to vertical items; completion boundary strictly limited to Shop, Branch, Warehouse); P1-G2 (exhaustive 8-entity RBAC capability & resource-scope mapping with explicit AND/OR logic); P2-G3 (OpenAPI ActivityTimelineItem schema defined, status enum semantics SUCCESS/FAILED); NEW P1-G4 (preserved one-sided creation/deletion snapshots, distinguished unavailable history from 404 absent entity, added acceptance cases AC-COM-07-13 to 15); governance records aligned. |
+| Review reconciliation, 2026-10-31 | Current review fix commit | READY_FOR_AUTHOR | Work Item fully resolved, contracts concrete, unblocked and ready for author dispatch. |
 
 ## Residual limitations
 
-None. All blocking gaps G1–G4 have been approved and recorded under governed decision `HUMAN-DECISION-COM07-ACTIVITY-TIMELINE-2026-10-31`. Work Item is unblocked, complete, and ready for author dispatch.
+None. All review findings (P1-G1, P1-G2, P2-G3, NEW P1-G4, governance alignment) are resolved with concrete decisions, exhaustive capability mappings, OpenAPI component schemas, and snapshot preservation rules. Work Item is unblocked, complete, and ready for author dispatch.
