@@ -1868,6 +1868,137 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+  /carrier-catalog/carriers:
+    get:
+      tags: [Carrier Catalog]
+      operationId: listCarriers
+      summary: Danh mục hãng vận chuyển
+      description: Returns list of canonical carriers registered in the platform catalog.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: is_active
+          in: query
+          required: false
+          description: Filter by active status. If omitted, returns all carriers.
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Carrier catalog list response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarrierListResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /carrier-catalog/carriers/{code}:
+    get:
+      tags: [Carrier Catalog]
+      operationId: getCarrierDetail
+      summary: Chi tiết hãng vận chuyển và danh sách dịch vụ
+      description: Returns carrier details and associated services for a canonical code or supported alias.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: Canonical carrier code (GHN, GHTK, VIETTEL_POST, JT) or boundary alias (VTP, JT_EXPRESS). Case-sensitive.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Carrier detail response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarrierDetailResponseEnvelope'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+  /carrier-catalog/statuses:
+    get:
+      tags: [Carrier Catalog]
+      operationId: listCanonicalStatuses
+      summary: Danh mục trạng thái chuẩn hóa
+      description: Returns canonical shipment statuses distinguishing command execution from operational lifecycle.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Canonical statuses response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CanonicalStatusListResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /carrier-catalog/fee-components:
+    get:
+      tags: [Carrier Catalog]
+      operationId: listFeeComponents
+      summary: Danh mục thành phần phí chuẩn hóa
+      description: Returns canonical fee component definitions with category, VAT applicability, and refundability flags.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Fee components response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeeComponentListResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /carrier-catalog/compatibility:
+    get:
+      tags: [Carrier Catalog]
+      operationId: listCompatibilityMappings
+      summary: Danh mục ánh xạ tương thích raw-to-canonical
+      description: Returns raw-to-canonical compatibility mappings for carrier aliases, status codes, and fee keys.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: domain
+          in: query
+          required: false
+          description: Mapping domain (CARRIER_ALIAS, STATUS, FEE)
+          schema:
+            type: string
+            enum: [CARRIER_ALIAS, STATUS, FEE]
+        - name: carrier_code
+          in: query
+          required: false
+          description: Carrier code filter (canonical code or legacy alias)
+          schema:
+            type: string
+        - name: raw_key
+          in: query
+          required: false
+          description: Exact raw string key from provider
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Compatibility mappings response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompatibilityMappingListResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
   /carrier-accounts:
     get:
       tags: [Carriers]
@@ -3289,13 +3420,223 @@ components:
               type: string
             total:
               type: integer
+    CarrierCode:
+      type: string
+      enum: [GHN, GHTK, VIETTEL_POST, JT]
+      description: Canonical carrier code. Legacy aliases VTP (VIETTEL_POST) and JT_EXPRESS (JT) are normalized at API boundaries.
+    CarrierResponse:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - logo_url
+        - is_active
+        - evidence_level
+        - description
+        - catalog_revision
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          $ref: '#/components/schemas/CarrierCode'
+        name:
+          type: string
+        logo_url:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+        evidence_level:
+          type: string
+        description:
+          type: string
+          nullable: true
+        catalog_revision:
+          type: string
+    CarrierServiceResponse:
+      type: object
+      required:
+        - id
+        - code
+        - name
+        - service_type
+        - description
+        - is_active
+        - evidence_level
+        - source_revision
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        service_type:
+          type: string
+          enum: [STANDARD, FAST]
+        description:
+          type: string
+        is_active:
+          type: boolean
+        evidence_level:
+          type: string
+        source_revision:
+          type: string
+    CarrierDetailResponse:
+      allOf:
+        - $ref: '#/components/schemas/CarrierResponse'
+        - type: object
+          required:
+            - services
+          properties:
+            services:
+              type: array
+              items:
+                $ref: '#/components/schemas/CarrierServiceResponse'
+    CarrierListResponse:
+      type: object
+      required:
+        - catalog_revision
+        - data
+      properties:
+        catalog_revision:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CarrierResponse'
+    CarrierDetailResponseEnvelope:
+      type: object
+      required:
+        - catalog_revision
+        - data
+      properties:
+        catalog_revision:
+          type: string
+        data:
+          $ref: '#/components/schemas/CarrierDetailResponse'
+    CanonicalStatusResponse:
+      type: object
+      required:
+        - code
+        - category
+        - label
+        - description
+        - stage_order
+        - catalog_revision
+      properties:
+        code:
+          type: string
+        category:
+          type: string
+          enum: [COMMAND, OPERATIONAL_PRE_TRANSIT, OPERATIONAL_IN_TRANSIT, OPERATIONAL_TERMINAL]
+        label:
+          type: string
+        description:
+          type: string
+        stage_order:
+          type: integer
+        catalog_revision:
+          type: string
+    CanonicalStatusListResponse:
+      type: object
+      required:
+        - catalog_revision
+        - data
+      properties:
+        catalog_revision:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CanonicalStatusResponse'
+    FeeComponentResponse:
+      type: object
+      required:
+        - code
+        - name
+        - category
+        - description
+        - is_refundable
+        - vat_applicable
+        - catalog_revision
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+          enum: [BASE, SURCHARGE, COD, INSURANCE, RETURN, VAT]
+        description:
+          type: string
+        is_refundable:
+          type: boolean
+        vat_applicable:
+          type: boolean
+        catalog_revision:
+          type: string
+    FeeComponentListResponse:
+      type: object
+      required:
+        - catalog_revision
+        - data
+      properties:
+        catalog_revision:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeeComponentResponse'
+    CompatibilityMappingResponse:
+      type: object
+      required:
+        - catalog_revision
+        - carrier_code
+        - domain
+        - raw_key
+        - canonical_code
+        - disposition
+      properties:
+        catalog_revision:
+          type: string
+        carrier_code:
+          type: string
+          nullable: true
+        domain:
+          type: string
+          enum: [CARRIER_ALIAS, STATUS, FEE]
+        raw_key:
+          type: string
+        canonical_code:
+          type: string
+          nullable: true
+        disposition:
+          type: string
+          enum: [MAPPED, UNMAPPED]
+    CompatibilityMappingListResponse:
+      type: object
+      required:
+        - catalog_revision
+        - data
+      properties:
+        catalog_revision:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompatibilityMappingResponse'
     CarrierAccountInput:
       type: object
       required: [carrier_code, alias, permission_profile, credential]
       properties:
         carrier_code:
           type: string
-          enum: [GHN, GHTK, VIETTEL_POST, JT_EXPRESS]
+          enum: [GHN, GHTK, VIETTEL_POST, JT]
+          description: Canonical carrier code. Legacy aliases VTP and JT_EXPRESS are normalized at API boundaries.
         alias:
           type: string
         permission_profile:
