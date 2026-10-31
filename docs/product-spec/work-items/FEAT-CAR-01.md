@@ -29,11 +29,11 @@ Due to the cross-layer scope of this feature spanning database schema, shared co
 ### Slice A — Core Carrier Catalog API, Data Model, Contracts, Seeding & Taxonomy Reference
 
 1. **Database Schema & Migrations (`prisma/schema.prisma`, `prisma/migrations/**`)**:
-    - `Carrier`: Platform-owned carrier reference (`id` UUID, `code` string/enum matching `CarrierCodeEnum`, `name` string, `logo_url` string optional, `is_active` boolean default true, `evidence_level` string, `catalog_revision` string, `description` string optional, `created_at` timestamptz, `updated_at` timestamptz).
-    - `CarrierService`: Supported carrier service catalog (`id` UUID, `carrier_code` foreign reference, `code` string, `name` string, `service_type` string exactly `STANDARD` or `FAST`, `description` string, `is_active` boolean default true, `evidence_level` string inherited from the parent carrier and stored denormalized, `source_revision` string, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[carrier_code, code]`.
-    - `CanonicalStatusReference`: Canonical shipment status taxonomy (`code` string primary key, `category` string exactly one of `COMMAND` / `OPERATIONAL_PRE_TRANSIT` / `OPERATIONAL_IN_TRANSIT` / `OPERATIONAL_TERMINAL`, `label` string, `description` string, `stage_order` integer).
-    - `FeeComponentReference`: Canonical fee component definitions (`code` string primary key, `name` string, `category` string exactly one of `BASE` / `SURCHARGE` / `COD` / `INSURANCE` / `RETURN` / `VAT`, `description` string, `is_refundable` boolean, `vat_applicable` boolean). `VAT` is the tax line itself and is never itself VAT-applicable.
-    - `CatalogCompatibilityMapping`: Versioned raw-to-canonical rows (`id` UUID, `catalog_revision` string, `carrier_code` nullable, `domain` string exactly `CARRIER_ALIAS` / `STATUS` / `FEE`, `raw_key` string, `canonical_code` string nullable, `disposition` string exactly `MAPPED` or `UNMAPPED`). Unique constraint on `[catalog_revision, carrier_code, domain, raw_key]`. A null `canonical_code` is legal only when `disposition` is `UNMAPPED`.
+    - `Carrier`: Platform-owned carrier reference (`id` UUID primary key, `catalog_revision` string, `code` enum `CarrierCodeEnum`, `name` string, `logo_url` string optional, `is_active` boolean default true, `evidence_level` string, `description` string optional, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[catalog_revision, code]` and index on `catalog_revision`. Carrier codes are unique per revision (not globally unique across the table), enabling immutable multi-revision publication.
+    - `CarrierService`: Supported carrier service catalog (`id` UUID primary key, `carrier_id` UUID foreign key referencing `Carrier.id` with onDelete Cascade, `catalog_revision` string, `carrier_code` enum `CarrierCodeEnum`, `code` string, `name` string, `service_type` string exactly `STANDARD` or `FAST`, `description` string, `is_active` boolean default true, `evidence_level` string inherited from parent carrier and stored denormalized, `source_revision` string, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[catalog_revision, carrier_code, code]`, with indices on `carrier_id` and `[catalog_revision, carrier_code]`.
+    - `CanonicalStatusReference`: Canonical shipment status taxonomy (`id` UUID primary key, `catalog_revision` string, `code` string, `category` string exactly one of `COMMAND` / `OPERATIONAL_PRE_TRANSIT` / `OPERATIONAL_IN_TRANSIT` / `OPERATIONAL_TERMINAL`, `label` string, `description` string, `stage_order` integer, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[catalog_revision, code]` and index on `catalog_revision`.
+    - `FeeComponentReference`: Canonical fee component definitions (`id` UUID primary key, `catalog_revision` string, `code` string, `name` string, `category` string exactly one of `BASE` / `SURCHARGE` / `COD` / `INSURANCE` / `RETURN` / `VAT`, `description` string, `is_refundable` boolean, `vat_applicable` boolean, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[catalog_revision, code]` and index on `catalog_revision`. `VAT` is the tax line itself and is never itself VAT-applicable.
+    - `CatalogCompatibilityMapping`: Versioned raw-to-canonical rows (`id` UUID primary key, `catalog_revision` string, `carrier_code` nullable enum `CarrierCodeEnum`, `domain` string exactly `CARRIER_ALIAS` / `STATUS` / `FEE`, `raw_key` string, `canonical_code` string nullable, `disposition` string exactly `MAPPED` or `UNMAPPED`, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[catalog_revision, carrier_code, domain, raw_key]` and index on `[catalog_revision, domain]`. A null `canonical_code` is legal only when `disposition` is `UNMAPPED`.
  2. **Deterministic Seed Data (`infra/docker/seed.ts`, `packages/testkit/src/carriers/catalog/**`)**:
     - Seed catalog revision `CATALOG-2026-10-31` only. The exact carrier, service, status, fee and mapping rows are the pinned dataset in "Approved catalog revision `CATALOG-2026-10-31`" below. Do not invent additional codes.
 3. **Contracts & OpenAPI (`docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`)**:
@@ -157,7 +157,7 @@ The author must respect the following constraints:
 
 | Rule ID | Name | Required observable behavior |
 |---|---|---|
-| `BR-CAR-01` | Platform-Owned Reference Catalog | The carrier catalog is a global, platform-owned reference repository. Tenants have read-only access. Tenant-specific overrides or private catalog overlays are prohibited. Every read response includes `catalog_revision`. The only approved revision is `CATALOG-2026-10-31`. A later revision is a new immutable row set published by `FEAT-ADM-01`; this Work Item never updates a published revision in place. |
+| `BR-CAR-01` | Platform-Owned Reference Catalog | The carrier catalog is a global, platform-owned reference repository. Tenants have read-only access. Tenant-specific overrides or private catalog overlays are prohibited. Every read response includes `catalog_revision`. The only approved revision is `CATALOG-2026-10-31`. A later revision is a new immutable row set published by `FEAT-ADM-01`; this Work Item never updates a published revision in place. All reference tables enforce revision-scoped uniqueness (`@@unique([catalogRevision, code])`), guaranteeing that multiple revisions can coexist without primary key collisions or overwrites. |
 | `BR-CAR-02` | Canonical Carrier Codes & Boundary Aliases | Authoritative carrier codes are strictly `GHN`, `GHTK`, `VIETTEL_POST`, and `JT`. Boundary adapters and query parameters transparently map legacy aliases `VTP` -> `VIETTEL_POST` and `JT_EXPRESS` -> `JT`. Unknown carrier codes return 404 `RESOURCE_NOT_FOUND`. |
 | `BR-CAR-03` | Catalog Separation from Account & Capability | Catalog membership does not create a merchant carrier account, grant operational capabilities, or mark routes available. Browsing the catalog triggers zero third-party carrier API calls. |
 | `BR-CAR-04` | Decoupled Command vs Operational Statuses | Pre-transit shipment command execution states (`CREATING`, `CREATED`, `CREATE_FAILED`, `CREATE_OUTCOME_UNKNOWN`) are strictly separated from post-creation operational shipment lifecycle states (`DRAFT`, `READY_TO_PICK`, `PICKING`, `PICKED`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `DELIVERY_FAILED`, `RETURNING`, `RETURNED`, `CANCELLED`, `LOST`, `DAMAGED`). |
@@ -212,56 +212,74 @@ Every successful catalog response is an object `{ "catalog_revision": "CATALOG-2
 ```prisma
 model Carrier {
   id              String           @id @default(uuid()) @db.Uuid
-  code            CarrierCodeEnum  @unique
+  catalogRevision String           @map("catalog_revision") @db.VarChar(40)
+  code            CarrierCodeEnum
   name            String           @db.VarChar(100)
   logoUrl         String?          @map("logo_url") @db.VarChar(500)
   isActive        Boolean          @default(true) @map("is_active")
   evidenceLevel   String           @map("evidence_level") @db.VarChar(50)
-  catalogRevision String           @map("catalog_revision") @db.VarChar(40)
   description     String?          @db.Text
   createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
   services        CarrierService[]
 
+  @@unique([catalogRevision, code])
+  @@index([catalogRevision])
   @@map("carriers")
 }
 
 model CarrierService {
-  id             String          @id @default(uuid()) @db.Uuid
-  carrierCode    CarrierCodeEnum @map("carrier_code")
-  code           String          @db.VarChar(100)
-  name           String          @db.VarChar(150)
-  serviceType    String          @map("service_type") @db.VarChar(50)
-  description    String          @db.Text
-  isActive       Boolean         @default(true) @map("is_active")
-  evidenceLevel  String          @map("evidence_level") @db.VarChar(50)
-  sourceRevision String          @map("source_revision") @db.VarChar(80)
-  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
-  carrier        Carrier         @relation(fields: [carrierCode], references: [code], onDelete: Cascade)
+  id              String          @id @default(uuid()) @db.Uuid
+  carrierId       String          @map("carrier_id") @db.Uuid
+  catalogRevision String          @map("catalog_revision") @db.VarChar(40)
+  carrierCode     CarrierCodeEnum @map("carrier_code")
+  code            String          @db.VarChar(100)
+  name            String          @db.VarChar(150)
+  serviceType     String          @map("service_type") @db.VarChar(50)
+  description     String          @db.Text
+  isActive        Boolean         @default(true) @map("is_active")
+  evidenceLevel   String          @map("evidence_level") @db.VarChar(50)
+  sourceRevision  String          @map("source_revision") @db.VarChar(80)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  carrier         Carrier         @relation(fields: [carrierId], references: [id], onDelete: Cascade)
 
-  @@unique([carrierCode, code])
+  @@unique([catalogRevision, carrierCode, code])
+  @@index([carrierId])
+  @@index([catalogRevision, carrierCode])
   @@map("carrier_services")
 }
 
 model CanonicalStatusReference {
-  code        String @id @db.VarChar(50)
-  category    String @db.VarChar(50)
-  label       String @db.VarChar(100)
-  description String @db.Text
-  stageOrder  Int    @map("stage_order")
+  id              String   @id @default(uuid()) @db.Uuid
+  catalogRevision String   @map("catalog_revision") @db.VarChar(40)
+  code            String   @db.VarChar(50)
+  category        String   @db.VarChar(50)
+  label           String   @db.VarChar(100)
+  description     String   @db.Text
+  stageOrder      Int      @map("stage_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  @@unique([catalogRevision, code])
+  @@index([catalogRevision])
   @@map("canonical_status_references")
 }
 
 model FeeComponentReference {
-  code          String  @id @db.VarChar(50)
-  name          String  @db.VarChar(100)
-  category      String  @db.VarChar(50)
-  description   String  @db.Text
-  isRefundable  Boolean @default(false) @map("is_refundable")
-  vatApplicable Boolean @default(true) @map("vat_applicable")
+  id              String   @id @default(uuid()) @db.Uuid
+  catalogRevision String   @map("catalog_revision") @db.VarChar(40)
+  code            String   @db.VarChar(50)
+  name            String   @db.VarChar(100)
+  category        String   @db.VarChar(50)
+  description     String   @db.Text
+  isRefundable    Boolean  @default(false) @map("is_refundable")
+  vatApplicable   Boolean  @default(true) @map("vat_applicable")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  @@unique([catalogRevision, code])
+  @@index([catalogRevision])
   @@map("fee_component_references")
 }
 
@@ -273,8 +291,11 @@ model CatalogCompatibilityMapping {
   rawKey          String           @map("raw_key") @db.VarChar(100)
   canonicalCode   String?          @map("canonical_code") @db.VarChar(50)
   disposition     String           @db.VarChar(20)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@unique([catalogRevision, carrierCode, domain, rawKey])
+  @@index([catalogRevision, domain])
   @@map("catalog_compatibility_mappings")
 }
 ```
@@ -283,13 +304,13 @@ model CatalogCompatibilityMapping {
 
 ## Approved catalog revision `CATALOG-2026-10-31`
 
-Owner of this revision: platform catalog, published read-only by FEAT-CAR-01. Mutation owner remains `FEAT-ADM-01`. Provenance is the `catalog_revision` column plus `source_revision` on each service. Responses echo `catalog_revision` so a client can detect which published set it read. This Work Item does not add an update endpoint.
+Owner of this revision: platform catalog, published read-only by FEAT-CAR-01. Mutation owner remains `FEAT-ADM-01`. Provenance is the `catalog_revision` column across all reference models (`Carrier`, `CarrierService`, `CanonicalStatusReference`, `FeeComponentReference`, `CatalogCompatibilityMapping`) plus `source_revision` on each service. Revision identity is scoped per table via composite unique constraints `[catalog_revision, code]` and UUID primary keys, allowing subsequent revisions published by `FEAT-ADM-01` to coexist immutably as distinct row sets without overwriting or schema migrations. Carrier services link directly to their parent carrier via `carrier_id` foreign key with cascade deletion. Responses echo `catalog_revision` so a client can detect which published set it read. This Work Item does not add an update endpoint.
 
 ### Carriers
 
 | code | name | evidence_level | is_active | description |
 |---|---|---|---|---|
-| `GHN` | Giao Zara Ahmed | `VERIFIED_OFFICIAL` | true | Official public API surface recorded in `docs/product-spec/docs/05-api-integrations/GHN.md`. Catalog membership is not an account grant. |
+| `GHN` | Giao Hàng Nhanh | `VERIFIED_OFFICIAL` | true | Official public API surface recorded in `docs/product-spec/docs/05-api-integrations/GHN.md`. Catalog membership is not an account grant. |
 | `GHTK` | Giao Hàng Tiết Kiệm | `VERIFIED_OFFICIAL` | true | Official public OpenAPI surface recorded in `docs/product-spec/docs/05-api-integrations/GHTK.md`. Catalog membership is not an account grant. |
 | `VIETTEL_POST` | Viettel Post | `CONFIRMATION_REQUIRED` | true | Partner confirmation required (`OI-001`). Reference identity only. |
 | `JT` | J&T Express Vietnam | `CONFIRMATION_REQUIRED` | true | Partner confirmation required (`OI-002`). Reference identity only. |
@@ -396,7 +417,7 @@ Carrier-alias rows use `carrier_code` null because the raw token is the carrier 
 | `GHTK` | `STATUS` | `11` | `RETURNING` | `MAPPED` |
 | `GHTK` | `STATUS` | `12` | `IN_TRANSIT` | `MAPPED` |
 | `GHTK` | `STATUS` | `13` | `DAMAGED` | `MAPPED` |
-| `GHTK` | `STATUS` | `20` | `LOST` | `MAPPED` |
+| `GHTK` | `STATUS` | `20` | `RETURNING` | `MAPPED` |
 | `GHTK` | `STATUS` | `21` | `RETURNED` | `MAPPED` |
 | `GHTK` | `STATUS` | `-1` | `CANCELLED` | `MAPPED` |
 | null | `FEE` | `BASE_FREIGHT` | `BASE_FREIGHT` | `MAPPED` |
@@ -416,12 +437,13 @@ Golden lookup cases the author must assert, in addition to every `MAPPED` row ab
 | `GHN` | `STATUS` | `some_weird_unknown_status_xyz` | null | `UNMAPPED` | Must not fall back to `IN_TRANSIT`. |
 | `GHTK` | `STATUS` | `9999` | null | `UNMAPPED` | Must not fall back to `IN_TRANSIT`. |
 | `GHTK` | `STATUS` | `9` | `DELIVERY_FAILED` | `MAPPED` | Undeliverable is not yet `RETURNING`. |
+| `GHTK` | `STATUS` | `20` | `RETURNING` | `MAPPED` | GHTK status 20 is 'Đang trả hàng' (return in progress, per official GHTK docs https://docs.giaohangtietkiem.vn/), must not map to LOST. |
 | null | `FEE` | `mystery_fee` | null | `UNMAPPED` | Must not become `BASE_FREIGHT` or amount `0`. |
 | null | `FEE` | `VAT` | `VAT` | `MAPPED` | Identity mapping of the tax line. |
 | null | `CARRIER_ALIAS` | `VTP` | `VIETTEL_POST` | `MAPPED` | Boundary alias. |
 | null | `CARRIER_ALIAS` | `vtp` | null | `UNMAPPED` | Alias match is case-sensitive. |
 
-No Viettel Post or J&T raw status is mapped in this revision. Their raw statuses resolve `UNMAPPED` until partner evidence names them. Adapter code that still defaults unknown GHN/GHTK statuses to `IN_TRANSIT` is a `FEAT-TRK-01` defect. This catalog's lookup result is the contract those adapters must later follow. FEAT-CAR-01 does not edit adapter runtime code.
+No Viettel Post or J&T raw status is mapped in this revision. Their raw statuses resolve `UNMAPPED` until partner evidence names them. GHTK status crosswalk evidence is verified against official GHTK OpenAPI documentation (`https://docs.giaohangtietkiem.vn/`): status `10` ('Delay trả hàng'), status `11` ('Đã duyệt hoàn'), and status `20` ('Đang trả hàng' / return in progress) map to canonical `RETURNING`; status `21` ('Đã trả hàng') maps to canonical `RETURNED`; status `13` ('Đơn hàng bồi thường') maps to canonical `DAMAGED`. Raw status `20` must never map to `LOST`. Adapter code that still defaults unknown GHN/GHTK statuses to `IN_TRANSIT` is a `FEAT-TRK-01` defect. This catalog's lookup result is the contract those adapters must later follow. FEAT-CAR-01 does not edit adapter runtime code.
 
 ## Recorded product decisions (formerly blocking gaps CAR-GAP-01 through CAR-GAP-07)
 
@@ -429,11 +451,11 @@ On 2026-10-31, the product owner (operator) formally approved all recommended de
 
 | Gap ID & Title | Gap Context & Previous Dilemma | Recorded Decision & Authority |
 |---|---|---|
-| **CAR-GAP-01** — Ownership and lifecycle | Master catalog FEAT-CAR-01 promises taxonomy; FEAT-ADM-01 separately promises reference/config management. Domain model names Carrier/CarrierService but dictionary and DBML define neither, and do not say whether catalog data is platform-wide or tenant-owned, editable or seeded. | **DECIDED**: Platform-owned, versioned, read-only reference catalog for FEAT-CAR-01. Mutation UI is deferred to FEAT-ADM-01; tenant-private overlays are strictly prohibited. Initial carrier/service dataset is defined with platform ownership in schema. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
+| **CAR-GAP-01** — Ownership and lifecycle | Master catalog FEAT-CAR-01 promises taxonomy; FEAT-ADM-01 separately promises reference/config management. Domain model names Carrier/CarrierService but dictionary and DBML define neither, and do not say whether catalog data is platform-wide or tenant-owned, editable or seeded. | **DECIDED**: Platform-owned, versioned, read-only reference catalog for FEAT-CAR-01. Mutation UI is deferred to FEAT-ADM-01; tenant-private overlays are strictly prohibited. Multi-revision coexistence without in-place mutation or table collisions is guaranteed by schema design: every reference entity (`Carrier`, `CarrierService`, `CanonicalStatusReference`, `FeeComponentReference`, `CatalogCompatibilityMapping`) has UUID primary key `id` and explicit `catalog_revision` column. Revision-scoped uniqueness is enforced: `Carrier` uses `@@unique([catalogRevision, code])` (carrier codes are unique per revision, NOT globally unique across revisions); `CarrierService` links to `Carrier.id` via `carrier_id` UUID with `onDelete: Cascade` and enforces `@@unique([catalogRevision, carrierCode, code])`; `CanonicalStatusReference` and `FeeComponentReference` enforce `@@unique([catalogRevision, code])`; `CatalogCompatibilityMapping` enforces `@@unique([catalogRevision, carrierCode, domain, rawKey])`. This ensures subsequent catalog revisions published by `FEAT-ADM-01` coexist immutably as distinct row sets without overwriting or schema migrations. Read queries in FEAT-CAR-01 filter by active revision `CATALOG-2026-10-31`. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
 | **CAR-GAP-02** — Actor journey and screen | SCREEN-SPECIFICATIONS SCR-CAR-01 and route `/settings/carriers` cover accounts, health, tokens and connect/test/rotate actions. There is no catalog screen/use case/AC/traceability row. Existing ORG-01/02, WH-01 and ONB-01 Work Items incorrectly attribute account linking/OAuth to FEAT-CAR-01, contrary to master FEAT-CAR-02/04. | **DECIDED**: FEAT-CAR-01 is confirmed strictly catalog-only. A dedicated read-only catalog tab at `/settings/carriers` (`SCR-CAR-01` tab "Carrier Catalog" / "Danh mục đơn vị vận chuyển") is approved, presenting carriers, services, canonical status taxonomy, and fee component definitions. Account linking/testing actions remain in FEAT-CAR-02 and FEAT-CAR-04. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
 | **CAR-GAP-03** — RBAC, tenant and audit | RBAC matrix has shop configuration, quote and rate access but no catalog read or platform catalog write capability. SYSTEM_ADMIN has no default tenant browsing; merged permissions have no catalog-specific code. Global-master versus tenant audit scope is unspecified. | **DECIDED**: Approved explicit canonical read permission `iam:carrier_catalog:read` with default grants to `OWNER`, `OPS_MANAGER`, `ORDER_OPERATOR`, and `FINANCE`. Denied for unauthenticated callers, recipients, or public traffic; no implicit support tenant access without consent. Tenant isolation is strictly enforced (catalog is global platform reference, but tenant session is verified server-side; tenant reads never join unscoped private accounts). Platform catalog writes are reserved for administrative permission in FEAT-ADM-01 with immutable platform-scoped audit (`PLATFORM_CARRIER_CATALOG_UPDATED`). Catalog read access is logged under standard security audit policies for denials/access violations. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
 | **CAR-GAP-04** — Carrier identity mismatch | Dictionary CarrierAccount.carrier_code says GHN/GHTK/VTP/JT/custom; OpenAPI CarrierAccountInput says GHN/GHTK/VIETTEL_POST/JT_EXPRESS; shared CarrierCode and Prisma say GHN/GHTK/VIETTEL_POST/JT and exclude custom. | **DECIDED**: Approved canonical persisted carrier codes: `GHN`, `GHTK`, `VIETTEL_POST`, `JT` (matching existing Prisma enum `CarrierCodeEnum` and `@shipde/contracts` `CarrierCode`). Custom providers are deferred. Documented legacy/external aliases `VTP` (maps to `VIETTEL_POST`) and `JT_EXPRESS` (maps to `JT`) are explicitly normalized at API/adapter boundaries. OpenAPI and dictionary are updated to match canonical codes with documented boundary aliases. No silent rename of persisted database rows. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
-| **CAR-GAP-05** — API and executable taxonomy | INTERNAL-API/OpenAPI have only account APIs, no catalog query/response/errors. Shipment state machine includes CREATING, CREATED, CREATE_FAILED, CREATE_OUTCOME_UNKNOWN, READY_TO_PICK, PICKED, DELIVERY_FAILED absent from merged enums, which additionally have PICKING/OUT_FOR_DELIVERY/LOST/DAMAGED. No exhaustive canonical fee keys, VAT semantics, service identifiers or raw-to-canonical version contract exist; statement schema accepts arbitrary fee keys. | **DECIDED**: Approved dedicated catalog REST API under `/api/v1/carrier-catalog` with 4 reference schemas: (1) `Carriers`, (2) `CarrierServices`, (3) `CanonicalShipmentStatuses`, (4) `FeeComponents`. Decouple command states (`CREATING`, `CREATED`, `CREATE_FAILED`, `CREATE_OUTCOME_UNKNOWN`) from operational shipment lifecycle states (`DRAFT`, `READY_TO_PICK`, `PICKING`, `PICKED`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `DELIVERY_FAILED`, `RETURNING`, `RETURNED`, `CANCELLED`, `LOST`, `DAMAGED`). Publish explicit compatibility mappings; preserve unmapped keys and raw provider statuses as unmapped without coercion or silent fallback. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
+| **CAR-GAP-05** — API and executable taxonomy | INTERNAL-API/OpenAPI have only account APIs, no catalog query/response/errors. Shipment state machine includes CREATING, CREATED, CREATE_FAILED, CREATE_OUTCOME_UNKNOWN, READY_TO_PICK, PICKED, DELIVERY_FAILED absent from merged enums, which additionally have PICKING/OUT_FOR_DELIVERY/LOST/DAMAGED. No exhaustive canonical fee keys, VAT semantics, service identifiers or raw-to-canonical version contract exist; statement schema accepts arbitrary fee keys. | **DECIDED**: Approved dedicated catalog REST API under `/api/v1/carrier-catalog` with 4 reference schemas: (1) `Carriers`, (2) `CarrierServices`, (3) `CanonicalShipmentStatuses`, (4) `FeeComponents`. Decouple command states (`CREATING`, `CREATED`, `CREATE_FAILED`, `CREATE_OUTCOME_UNKNOWN`) from operational shipment lifecycle states (`DRAFT`, `READY_TO_PICK`, `PICKING`, `PICKED`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `DELIVERY_FAILED`, `RETURNING`, `RETURNED`, `CANCELLED`, `LOST`, `DAMAGED`). Entities and schemas are revision-scoped with UUID primary keys and composite natural unique keys (`[catalogRevision, code]`), preserving immutable multi-revision publication. Crosswalk mapping pins provider evidence from official carrier docs: GHN name is 'Giao Hàng Nhanh' (`VERIFIED_OFFICIAL`, `docs/product-spec/docs/05-api-integrations/GHN.md`); GHTK status `20` maps to canonical `RETURNING` ('Đang trả hàng' / return in progress per official GHTK docs `https://docs.giaohangtietkiem.vn/`), not `LOST`; unknown raw statuses resolve to `UNMAPPED` / `null` without defaulting to `IN_TRANSIT`. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
 | **CAR-GAP-06** — Merged mapping conflict | GHN and GHTK normalizeStatus default unknown input to IN_TRANSIT, conflicting with BR-TRK-03, UC-TRK-01, nullable TrackingEvent.canonical_status and AC-TRK-01. GHN delivery_fail maps to RETURNING despite separate DELIVERY_FAILED in the approved state machine. | **DECIDED**: Preserving raw status and returning an explicit `null`/unmapped canonical status is affirmed. The catalog establishes the canonical taxonomy and golden reference mapping. Adapter runtime fixes for existing web prototype adapters (`ghn.adapter.ts`, `ghtk.adapter.ts`) are scheduled under governed adapter repair / tracking Work Item (FEAT-TRK-01); catalog reference contracts explicitly enforce that unknown raw statuses resolve to `UNMAPPED` / `null`, never defaulted to `IN_TRANSIT`, and `delivery_fail` maps to canonical `DELIVERY_FAILED`. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
 | **CAR-GAP-07** — Service dataset/evidence | GHN/GHTK source docs identify available-service surfaces but supply no pinned service-code/label dataset; VTP/J&T require partner confirmation (OI-001/002); capability matrix is dated 2026-08-24 and proves no account grants. No production catalog fixture/source revision is approved. | **DECIDED**: Approved initial baseline catalog dataset for the 4 canonical carriers: `GHN` (`VERIFIED_OFFICIAL`), `GHTK` (`VERIFIED_OFFICIAL`), `VIETTEL_POST` (`CONFIRMATION_REQUIRED`), `JT` (`CONFIRMATION_REQUIRED`). Production capabilities remain gated per partner evidence under OI-001/002; reference catalog clearly flags evidence levels (`VERIFIED_OFFICIAL` vs `CONFIRMATION_REQUIRED`). Synthetic test fixtures remain test-scoped. *Authority: Operator approval 2026-10-31 (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`).* |
 
@@ -496,7 +518,7 @@ pnpm build
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | Planning round 1 (2026-10-30) | `b52f3af7` | BLOCKED | Identified CAR-GAP-01 through CAR-GAP-07 requiring product owner decisions |
-| Planning round 2 (2026-10-31) | Current | READY_FOR_AUTHOR | All gap recommendations formally approved by operator (`HUMAN-DECISION-FEAT-CAR-01-2026-10-31`); Work Item complete with Slice A/B |
+| Planning round 2 (2026-10-31) | `9a9b6437` | CHANGES_REQUIRED | Resolved: (1) Corrected GHN carrier name to "Giao Hàng Nhanh" (VERIFIED_OFFICIAL, citing GHN.md and public API docs); (2) Corrected GHTK raw status 20 mapping to canonical RETURNING ("Đang trả hàng" / return in progress per official GHTK docs https://docs.giaohangtietkiem.vn/) with provider evidence and golden assert; (3) Resolved schema revision identity and relationships for immutable multi-revision publication: UUID PKs across all models, explicit catalog_revision, Carrier @@unique([catalogRevision, code]), CarrierService @@unique([catalogRevision, carrierCode, code]) with carrier_id UUID FK (onDelete: Cascade), CanonicalStatusReference and FeeComponentReference @@unique([catalogRevision, code]), CatalogCompatibilityMapping @@unique([catalogRevision, carrierCode, domain, rawKey]). |
 
 ## Residual limitations
 
