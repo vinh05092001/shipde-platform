@@ -531,6 +531,22 @@
       "credential": { "type": "none" },
       "verify": { "method": "version-command", "command": "opencode --version" },
       "comment": "Usable only from the opencode CLI: the HTTP endpoint answers FreeTierError. Models are the live opencode/* lines of `opencode models`."
+    },
+    {
+      "id": "deepseek-harness",
+      "label": "DeepSeek Harness",
+      "kind": "agent-cli",
+      "servesModels": false,
+      "aliases": ["dsh"],
+      "harness": "dsh",
+      "accessPath": "cli",
+      "reachedVia": "9router",
+      "credential": {
+        "type": "api-key",
+        "env": "DEEPSEEK_API_KEY"
+      },
+      "verify": { "method": "version-command", "command": "dsh --version" },
+      "comment": "Controlled 9Router author workspace running @deepseek-ai/dsh@0.1.1-rc.2. Credential kept outside Git via environment variable."
     }
   ],
   "dispatch": {
@@ -612,33 +628,13 @@
         "provider": "opencode",
         "modelPrefix": "ninerouter/ag/"
       },
-      "gemini": {
-        "harness": "paseo",
-        "provider": "opencode",
-        "modelPrefix": "ninerouter/ag/"
-      },
-      "oc": {
-        "harness": "paseo",
-        "provider": "opencode",
-        "modelPrefix": "ninerouter/"
-      },
-      "9router": {
-        "harness": "paseo",
-        "provider": "opencode",
-        "modelPrefix": "ninerouter/"
-      },
-      "codex": {
-        "harness": "paseo",
-        "provider": "codex"
-      },
-      "copilot": {
-        "harness": "paseo",
-        "provider": "copilot"
-      },
-      "hermes": {
-        "harness": "hermes",
-        "provider": "hermes"
-      }
+      "gemini": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/ag/" },
+      "oc": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/" },
+      "9router": { "harness": "paseo", "provider": "opencode", "modelPrefix": "ninerouter/" },
+      "codex": { "harness": "paseo", "provider": "codex" },
+      "copilot": { "harness": "paseo", "provider": "copilot" },
+      "hermes": { "harness": "hermes", "provider": "hermes" },
+      "dsh": { "harness": "dsh", "provider": "dsh" }
     },
     "maxReviewDiffChars": 24000
   },

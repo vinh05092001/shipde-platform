@@ -146,7 +146,16 @@ function loadSources(options) {
 function bySource(registry) {
   const map = new Map();
   if (!registry || !Array.isArray(registry.sources)) return map;
-  for (const source of registry.sources) map.set(source.id, source);
+  for (const source of registry.sources) {
+    if (source && source.id) {
+      map.set(source.id, source);
+      if (Array.isArray(source.aliases)) {
+        for (const alias of source.aliases) {
+          if (!map.has(alias)) map.set(alias, source);
+        }
+      }
+    }
+  }
   return map;
 }
 
@@ -305,10 +314,12 @@ function credentialPresence(source, options) {
 
   if (cred.type === 'none') return { required: false, present: true, how: 'no credential needed' };
 
-  if (cred.env) {
-    const value = env[cred.env];
+  const targetEnv = cred.env || null;
+
+  if (targetEnv) {
+    const value = env[targetEnv];
     if (value !== undefined && String(value).trim() !== '') {
-      return { required: true, present: true, how: 'env ' + cred.env };
+      return { required: true, present: true, how: 'env ' + targetEnv };
     }
   }
   if (cred.store && cred.store.startsWith('~/')) {
@@ -346,7 +357,7 @@ function credentialPresence(source, options) {
   return {
     required: true,
     present: false,
-    how: cred.env ? 'env ' + cred.env + ' unset' : 'no credential found',
+    how: targetEnv ? 'env ' + targetEnv + ' unset' : 'no credential found',
   };
 }
 
@@ -383,7 +394,18 @@ function describeAll(options) {
 function dispatchRoute(provider, registry) {
   const reg = registry || loadSources();
   const table = ((reg && reg.dispatch) || {}).providers || {};
-  const route = table[String(provider || '').toLowerCase()];
+  const rawKey = String(provider || '').toLowerCase();
+  let route = table[rawKey];
+  if (!route) {
+    const src = bySource(reg).get(rawKey);
+    if (src) {
+      route =
+        table[src.id] ||
+        (Array.isArray(src.aliases)
+          ? src.aliases.map((a) => table[String(a).toLowerCase()]).find(Boolean)
+          : null);
+    }
+  }
   if (!route) return null;
   return {
     harness: route.harness,
