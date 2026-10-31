@@ -15,6 +15,7 @@ import { RbacModule } from './rbac/rbac.module';
 import { InvitationsModule } from './invitations/invitations.module';
 import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
+import { BulkModule } from './bulk/bulk.module';
 import { BranchesModule } from './branches/branches.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
@@ -28,6 +29,7 @@ import { SearchModule } from './search/search.module';
     InvitationsModule,
     UsersModule,
     ShopsModule,
+    BulkModule,
     BranchesModule,
     WarehousesModule,
     OnboardingModule,
