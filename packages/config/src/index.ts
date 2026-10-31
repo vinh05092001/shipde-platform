@@ -58,6 +58,12 @@ export interface AppConfig {
   RBAC_SEED_MAX_ATTEMPTS?: number;
   /** Backoff multiplier for RBAC platform seed */
   RBAC_SEED_BACKOFF_FACTOR?: number;
+  /** Maximum number of records permitted in a single export file (FEAT-COM-05). Default 10000, bounded 1..1000000. */
+  EXPORT_MAX_ROWS?: number;
+  /** Time-to-live for generated export files in seconds (FEAT-COM-05). Default 86400 (24h). */
+  EXPORT_JOB_TTL_SECONDS?: number;
+  /** Current business/data rule version embedded in export metadata (FEAT-COM-05). Default 'RULES_V1_2026'. */
+  EXPORT_RULE_VERSION?: string;
 }
 
 export class ConfigValidationError extends Error {
@@ -342,6 +348,28 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  let EXPORT_MAX_ROWS = 10000;
+  if (rawEnv.EXPORT_MAX_ROWS !== undefined && rawEnv.EXPORT_MAX_ROWS !== '') {
+    const parsed = Number(rawEnv.EXPORT_MAX_ROWS);
+    if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1000000) {
+      invalidFields.push('EXPORT_MAX_ROWS (must be an integer between 1 and 1000000)');
+    } else {
+      EXPORT_MAX_ROWS = parsed;
+    }
+  }
+
+  let EXPORT_JOB_TTL_SECONDS = 86400;
+  if (rawEnv.EXPORT_JOB_TTL_SECONDS !== undefined && rawEnv.EXPORT_JOB_TTL_SECONDS !== '') {
+    const parsed = Number(rawEnv.EXPORT_JOB_TTL_SECONDS);
+    if (!Number.isSafeInteger(parsed) || parsed < 300 || parsed > 2592000) {
+      invalidFields.push('EXPORT_JOB_TTL_SECONDS (must be an integer between 300 and 2592000)');
+    } else {
+      EXPORT_JOB_TTL_SECONDS = parsed;
+    }
+  }
+
+  const EXPORT_RULE_VERSION = (rawEnv.EXPORT_RULE_VERSION || 'RULES_V1_2026').trim();
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -373,6 +401,9 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     RBAC_SEED_RETRY_INTERVAL_MS,
     RBAC_SEED_MAX_ATTEMPTS,
     RBAC_SEED_BACKOFF_FACTOR,
+    EXPORT_MAX_ROWS,
+    EXPORT_JOB_TTL_SECONDS,
+    EXPORT_RULE_VERSION,
   };
 }
 
@@ -536,4 +567,48 @@ export function resolveMfaEncryptionKey(configuredKey?: string): string {
     ephemeralMfaKey = 'shipde_dev_mfa_encryption_key_32bytes_aes256gcm_secret!';
   }
   return ephemeralMfaKey;
+}
+
+export function resolveExportMaxRows(configuredMax?: number): number {
+  if (
+    typeof configuredMax === 'number' &&
+    Number.isSafeInteger(configuredMax) &&
+    configuredMax >= 1 &&
+    configuredMax <= 1000000
+  ) {
+    return configuredMax;
+  }
+  const envVal = process.env.EXPORT_MAX_ROWS ? Number(process.env.EXPORT_MAX_ROWS) : NaN;
+  if (Number.isSafeInteger(envVal) && envVal >= 1 && envVal <= 1000000) {
+    return envVal;
+  }
+  return 10000;
+}
+
+export function resolveExportJobTtlSeconds(configuredTtl?: number): number {
+  if (
+    typeof configuredTtl === 'number' &&
+    Number.isSafeInteger(configuredTtl) &&
+    configuredTtl >= 300 &&
+    configuredTtl <= 2592000
+  ) {
+    return configuredTtl;
+  }
+  const envVal = process.env.EXPORT_JOB_TTL_SECONDS
+    ? Number(process.env.EXPORT_JOB_TTL_SECONDS)
+    : NaN;
+  if (Number.isSafeInteger(envVal) && envVal >= 300 && envVal <= 2592000) {
+    return envVal;
+  }
+  return 86400;
+}
+
+export function resolveExportRuleVersion(configuredVersion?: string): string {
+  if (configuredVersion && configuredVersion.trim().length > 0) {
+    return configuredVersion.trim();
+  }
+  if (process.env.EXPORT_RULE_VERSION && process.env.EXPORT_RULE_VERSION.trim().length > 0) {
+    return process.env.EXPORT_RULE_VERSION.trim();
+  }
+  return 'RULES_V1_2026';
 }
