@@ -1,6 +1,6 @@
 import { Injectable, HttpStatus, Inject } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService, ExtendedPrismaClient } from '../prisma/prisma.service';
 import { RbacService } from '../rbac/rbac.service';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
@@ -39,10 +39,18 @@ export function formatVnd(amount: bigint | number | null | undefined): string {
 
 @Injectable()
 export class SearchService {
+  private readonly prisma: ExtendedPrismaClient;
+  private readonly rbacService: RbacService;
+
   constructor(
-    @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(RbacService) private readonly rbacService: RbacService
-  ) {}
+    @Inject(PrismaService) prismaService: PrismaService,
+    @Inject(RbacService) rbacService: RbacService
+  ) {
+    // TASK-AI-154: order reads go through the tenant RLS extended client so
+    // the Postgres policy backstops the merchant_id filters below.
+    this.prisma = prismaService.extended;
+    this.rbacService = rbacService;
+  }
 
   private hashIp(ip: string): string {
     return createHash('sha256')

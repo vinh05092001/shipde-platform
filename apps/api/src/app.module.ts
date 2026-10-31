@@ -6,6 +6,7 @@ import { RedisService } from './redis/redis.service';
 import { StorageService } from './storage/storage.service';
 import { OutboxService } from './outbox/outbox.service';
 import { CorrelationMiddleware } from './correlation/correlation.middleware';
+import { TenantMiddleware } from './prisma/tenant.middleware';
 import { validateConfig, AppConfig } from '@shipde/config';
 import { APP_CONFIG } from './config.token';
 
@@ -49,6 +50,6 @@ import { SearchModule } from './search/search.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(CorrelationMiddleware).forRoutes('*');
+    consumer.apply(CorrelationMiddleware, TenantMiddleware).forRoutes('*');
   }
 }
