@@ -60,7 +60,7 @@ Assign `GEMINI` for all foundation migrations, complete product features, cross-
 - Branch: `feat/<lowercase-work-item-id>-<short-slug>` or `fix/<lowercase-work-item-id>-<short-slug>`.
 - Pull Request title: `[<WORK_ITEM_ID>] <business outcome>`.
 - Do not combine unrelated cleanup, refactoring or another feature.
-- Keep each PR under ~400 changed lines excluding lockfiles and generated files. Split an API slice and a UI slice into separate Pull Requests.
+- Keep each PR under ~400 changed lines as an advisory target excluding lockfiles and generated files. Keep API-before-UI as implementation ordering inside one vertical Work Item; do not require separate API/UI Pull Requests.
 - Keep one active implementation Work Item until the workflow is proven stable.
 
 Required status flow:

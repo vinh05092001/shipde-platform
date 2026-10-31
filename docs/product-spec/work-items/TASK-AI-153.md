@@ -18,7 +18,7 @@
 
 ## Business outcome
 
-AI and human authors working in `apps/api` or `apps/web` see the mandatory checklists in the same directory they edit, so the P1 findings that recur across Codex review rounds — missing server-side tenant scoping, empty scope arrays, missing auth/RBAC guards, unmasked audit metadata, missing cross-tenant negative tests, stale OpenAPI contracts, and incomplete UI state coverage — are caught while authoring instead of in review. The root contract additionally caps PR size and forces API/UI slice separation, keeping each review unit small. Expected effect: fewer `CHANGES_REQUIRED` rounds per Pull Request.
+AI and human authors working in `apps/api` or `apps/web` see the mandatory checklists in the same directory they edit, so the P1 findings that recur across Codex review rounds — missing server-side tenant scoping, empty scope arrays, missing auth/RBAC guards, unmasked audit metadata, missing cross-tenant negative tests, stale OpenAPI contracts, and incomplete UI state coverage — are caught while authoring instead of in review. The root contract additionally provides an advisory ~400-line PR size target and preserves vertical delivery by keeping API-before-UI as implementation ordering inside one vertical Work Item without requiring separate API/UI Pull Requests. Expected effect: fewer `CHANGES_REQUIRED` rounds per Pull Request.
 
 ## Source references
 
@@ -42,7 +42,7 @@ AI and human authors working in `apps/api` or `apps/web` see the mandatory check
 
 - `apps/api/AGENTS.md`: mandatory author checklist with the Review P1 gates (tenant-owned queries scoped server-side by `merchantId`; empty scope arrays deny; every endpoint has an auth guard plus RBAC guard; audit metadata always masked; each new endpoint has a cross-tenant negative supertest; OpenAPI contract updated in the same change) and condensed NestJS plus Prisma rules with CC0 source attribution.
 - `apps/web/AGENTS.md`: mandatory author checklist with the UI state gates (loading, empty, error, forbidden and success covered; validation, partial and recovery when the screen spec requires them; forbidden is a dedicated state; no fake primary actions or placeholder-as-live data; data comes from the API) and condensed Next.js rules with CC0 source attribution.
-- Root `AGENTS.md`: one added bullet in Unit of delivery — keep each PR under ~400 changed lines excluding lockfiles and generated files; split an API slice and a UI slice into separate Pull Requests. No other change to the file, no command changes.
+- Root `AGENTS.md`: one added bullet in Unit of delivery — keep each PR under ~400 changed lines as an advisory target excluding lockfiles and generated files; keep API-before-UI as implementation ordering inside one vertical Work Item without requiring separate API/UI Pull Requests. No other change to the file, no command changes.
 - This Work Item file and exactly one register row for `TASK-AI-153` with status `IN_PROGRESS`.
 - Local handoff `.oc/pr-body.md` with the ten template sections and `Review status: READY_FOR_CODEX`.
 
@@ -57,7 +57,7 @@ AI and human authors working in `apps/api` or `apps/web` see the mandatory check
 
 - `BR-AI-153-01`: The app-level files are mandatory checklists, not optional advice; each required P1 gate appears verbatim in the file for its app, and the root `AGENTS.md` still wins on conflict.
 - `BR-AI-153-02`: Third-party rules are condensed, not copied; the source repository and CC0-1.0 license notice are retained in each condensed section. No code is copied from non-MIT/Apache/CC0 sources.
-- `BR-AI-153-03`: The root `AGENTS.md` diff contains exactly one added bullet in the Unit of delivery section and nothing else; no command or gate text changes.
+- `BR-AI-153-03`: The root `AGENTS.md` diff contains exactly one added bullet in the Unit of delivery section (advisory ~400-line PR size target and API-before-UI implementation ordering without requiring separate API/UI Pull Requests) and nothing else; no command or gate text changes.
 - `BR-AI-153-04`: Exactly one register row exists for `TASK-AI-153`; its status is `IN_PROGRESS`, its work item path and branch match this Work Item, and no other row is added or reordered.
 - `BR-AI-153-05`: Every file added or modified in this Work Item uses LF line endings and passes `git diff --check origin/main...HEAD`.
 
@@ -75,7 +75,7 @@ None. The register CSV schema is unchanged; exactly one row is appended. No endp
 |---|---|---|---|
 | `AC-AI-153-01` | Author opens `apps/api/AGENTS.md` before an API change | File contains all six Review P1 gates plus condensed NestJS and Prisma rules with CC0 source attribution | File content; `git diff` |
 | `AC-AI-153-02` | Author opens `apps/web/AGENTS.md` before a UI change | File contains the UI state gates plus condensed Next.js rules with CC0 source attribution | File content; `git diff` |
-| `AC-AI-153-03` | Review the root `AGENTS.md` diff | Unit of delivery gains only the ~400-line and API/UI split bullet; no other line changes, no command changes | `git diff AGENTS.md` |
+| `AC-AI-153-03` | Review the root `AGENTS.md` diff | Unit of delivery gains only the advisory ~400-line PR target and API-before-UI implementation ordering bullet; no other line changes, no command changes | `git diff AGENTS.md` |
 | `AC-AI-153-04` | Register and Work Item consistency | Exactly one `TASK-AI-153` row, status `IN_PROGRESS`, matching path and branch; Work Item file status `IN_PROGRESS` with operator approval 2026-10-31 recorded | CSV diff; file content |
 | `AC-AI-153-05` | Handoff PR body exists | `.oc/pr-body.md` contains all ten `##` sections of `.oc/pr-body-template.md` and `Review status: READY_FOR_CODEX` | File content |
 | `AC-AI-153-06` | Repository verification passes | `pnpm lint`, `pnpm typecheck`, `pnpm test`, `git diff --check origin/main...HEAD` and `node scripts/ai/check-no-hardcode.mjs` all pass; new files use LF endings | Command output |
@@ -97,7 +97,8 @@ git diff --name-only origin/main...HEAD
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | Pending | Awaiting independent review | None |
+| 1 | `9fd6b1f6` | `CHANGES_REQUIRED` | Finding 1 (P1): Mandatory API/UI splitting conflicts with vertical delivery. Resolved: made ~400 lines advisory, kept API-before-UI as implementation ordering inside one vertical Work Item, and removed mandatory separate API/UI PRs. Synchronized `AGENTS.md`, `TASK-AI-153.md`, and `FEATURE-DELIVERY-REGISTER.csv`. Finding 2: Previous-review closure recorded explicitly with commit SHA and finding resolution. |
+| 2 | Pending | Awaiting independent review | None |
 
 ## Residual limitations
 
