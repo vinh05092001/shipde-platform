@@ -126,9 +126,10 @@ export function DashboardLayout({
   onProfileClick,
   profileHref,
   showSearch,
+  defaultMobileOpen = false,
 }: DashboardLayoutProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(defaultMobileOpen);
 
   const drawerRef = useRef<HTMLDivElement>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
@@ -148,7 +149,10 @@ export function DashboardLayout({
   useEffect(() => {
     if (!isMobileOpen) {
       // Restore focus to previously focused element upon dismissal
-      if (previousActiveElementRef.current && typeof previousActiveElementRef.current.focus === 'function') {
+      if (
+        previousActiveElementRef.current &&
+        typeof previousActiveElementRef.current.focus === 'function'
+      ) {
         previousActiveElementRef.current.focus();
         previousActiveElementRef.current = null;
       }
@@ -192,12 +196,18 @@ export function DashboardLayout({
         const last = focusables[focusables.length - 1];
 
         if (e.shiftKey) {
-          if (document.activeElement === first || !drawerRef.current.contains(document.activeElement)) {
+          if (
+            document.activeElement === first ||
+            !drawerRef.current.contains(document.activeElement)
+          ) {
             e.preventDefault();
             last.focus();
           }
         } else {
-          if (document.activeElement === last || !drawerRef.current.contains(document.activeElement)) {
+          if (
+            document.activeElement === last ||
+            !drawerRef.current.contains(document.activeElement)
+          ) {
             e.preventDefault();
             first.focus();
           }
@@ -218,6 +228,7 @@ export function DashboardLayout({
       <div
         className="hidden lg:block shrink-0 sticky top-0 h-screen z-30"
         aria-hidden={isMobileOpen ? 'true' : undefined}
+        inert={isMobileOpen || undefined}
       >
         <DashboardSidebar
           navSections={navSections}
@@ -258,7 +269,7 @@ export function DashboardLayout({
       <div
         className="flex-1 flex flex-col min-w-0"
         aria-hidden={isMobileOpen ? 'true' : undefined}
-        {...((isMobileOpen ? { inert: '' } : {}) as any)}
+        inert={isMobileOpen || undefined}
       >
         {/* Header */}
         <DashboardHeader

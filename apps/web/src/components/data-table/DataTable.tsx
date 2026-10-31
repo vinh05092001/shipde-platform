@@ -34,6 +34,19 @@ import React from 'react';
 import { AlertCircle, FileQuestion, RefreshCw } from 'lucide-react';
 import { DataTableProps } from './types';
 
+function isInteractiveControl(
+  target: EventTarget | null,
+  currentTarget: EventTarget | null
+): boolean {
+  if (!target || target === currentTarget) return false;
+  const el = target as Element;
+  return Boolean(
+    el.closest?.(
+      'button, a, input, select, textarea, [role="button"], [role="checkbox"], [role="link"], [role="menuitem"], [role="switch"]'
+    )
+  );
+}
+
 export function DataTable<TData = any>({
   data,
   columns,
@@ -221,10 +234,16 @@ export function DataTable<TData = any>({
                       key={id}
                       role="row"
                       aria-selected={isSelected}
-                      tabIndex={onRowClick ? 0 : undefined}
-                      onClick={() => onRowClick && onRowClick(item)}
+                      onClick={(e) => {
+                        if (!onRowClick) return;
+                        if (isInteractiveControl(e.target, e.currentTarget)) return;
+                        onRowClick(item);
+                      }}
                       onKeyDown={(e) => {
-                        if (onRowClick && (e.key === 'Enter' || e.key === ' ')) {
+                        if (!onRowClick) return;
+                        // Exclude descendant controls from row activation
+                        if (isInteractiveControl(e.target, e.currentTarget)) return;
+                        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
                           e.preventDefault();
                           onRowClick(item);
                         }
@@ -233,31 +252,37 @@ export function DataTable<TData = any>({
                         isSelected
                           ? 'bg-[var(--primary-subtle)] hover:bg-[var(--primary-subtle)]/80'
                           : 'hover:bg-[var(--bg-subtle)]'
-                      } ${
-                        onRowClick
-                          ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-focus)]'
-                          : ''
-                      }`}
+                      } ${onRowClick ? 'cursor-pointer' : ''}`}
                     >
                       {hasSelection && (
                         <td
                           className="px-3 py-3 text-center align-middle"
                           onClick={(e) => {
-                            e.stopPropagation();
-                            onToggleSelect?.(id, (e.nativeEvent as MouseEvent).shiftKey);
+                            if (e.target === e.currentTarget) {
+                              onToggleSelect?.(id, (e.nativeEvent as MouseEvent).shiftKey);
+                            }
                           }}
                         >
                           <input
                             type="checkbox"
                             checked={isSelected || false}
-                            onChange={() => {}}
+                            onChange={(e) => {
+                              onToggleSelect?.(id, (e.nativeEvent as any).shiftKey);
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                            }}
+                            onKeyDown={(e) => {
+                              // Ensure Space/Enter on checkbox never bubbles to row activation
+                              e.stopPropagation();
+                            }}
                             aria-label={`Chọn hàng có mã ${id}`}
                             className="w-3.5 h-3.5 rounded-[3px] border-[var(--border-strong)] text-[var(--primary)] focus:ring-[var(--border-focus)] cursor-pointer align-middle"
                           />
                         </td>
                       )}
 
-                      {displayedColumns.map((col) => {
+                      {displayedColumns.map((col, colIdx) => {
                         const alignClass =
                           col.align === 'right'
                             ? 'text-right'
@@ -270,6 +295,20 @@ export function DataTable<TData = any>({
                             key={col.id}
                             className={`px-4 py-3 text-[var(--text-primary)] align-middle ${alignClass}`}
                           >
+                            {colIdx === 0 && onRowClick && (
+                              <button
+                                type="button"
+                                data-row-action="true"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onRowClick(item);
+                                }}
+                                aria-label={`Xem chi tiết ${id}`}
+                                className="sr-only focus:not-sr-only focus:inline-block focus:px-2 focus:py-1 focus:text-xs focus:font-medium focus:text-[var(--primary)] focus:bg-[var(--bg-app)] focus:border focus:border-[var(--border-focus)] focus:rounded-[4px] focus:mr-2"
+                              >
+                                Xem chi tiết
+                              </button>
+                            )}
                             {col.cell
                               ? col.cell({ row: item, index })
                               : col.accessorKey

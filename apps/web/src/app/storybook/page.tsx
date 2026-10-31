@@ -27,18 +27,8 @@ import {
   useDataTable,
 } from '@/components/data-table';
 import { DashboardLayout, PageHeader } from '@/components/dashboard';
-import {
-  Download,
-  Plus,
-  RefreshCw,
-  Sparkles,
-} from 'lucide-react';
-import {
-  FIXTURE_SHIPMENTS,
-  FixtureShipment,
-  STATUS_OPTIONS,
-  CARRIER_OPTIONS,
-} from './fixtures';
+import { Download, Plus, RefreshCw, Sparkles } from 'lucide-react';
+import { FIXTURE_SHIPMENTS, FixtureShipment, STATUS_OPTIONS, CARRIER_OPTIONS } from './fixtures';
 
 function StorybookContent() {
   // State simulation toggles (isolated to simulator bar)

@@ -247,9 +247,10 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const setSearch = useCallback(
     (val: string | null) => {
-      const trimmed = val ? val.trim() : null;
+      // Preserve spaces during editing to allow normal typing of multiword phrases like 'Nguyễn Văn An'
+      const queryVal = val !== null && val !== undefined && val.length > 0 ? val : null;
       const qs = createQueryString({
-        search: trimmed && trimmed.length > 0 ? trimmed : null,
+        search: queryVal,
         page: null, // Reset to page 1 on search change
       });
       navigate(qs);

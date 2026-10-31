@@ -72,4 +72,5 @@ export interface DashboardLayoutProps {
   onProfileClick?: () => void;
   profileHref?: string;
   showSearch?: boolean;
+  defaultMobileOpen?: boolean;
 }

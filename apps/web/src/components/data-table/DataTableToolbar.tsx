@@ -44,7 +44,7 @@ interface DataTableToolbarProps {
 }
 
 export function DataTableToolbar({
-  searchValue,
+  searchValue = '',
   onSearchChange,
   searchPlaceholder = 'Tìm kiếm dữ liệu...',
   filtersSlot,
@@ -54,6 +54,27 @@ export function DataTableToolbar({
   onResetFilters,
   className = '',
 }: DataTableToolbarProps) {
+  // Maintain an immediately updated input draft to preserve spaces and avoid pending-navigation lag
+  const [prevSearchValue, setPrevSearchValue] = React.useState(searchValue);
+  const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
+
+  // Synchronize draft during render when external/committed searchValue prop changes (official React pattern)
+  if (searchValue !== prevSearchValue) {
+    setPrevSearchValue(searchValue);
+    setDraftSearch(searchValue || '');
+  }
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const nextVal = e.target.value;
+    setDraftSearch(nextVal);
+    onSearchChange?.(nextVal);
+  };
+
+  const handleClear = () => {
+    setDraftSearch('');
+    onSearchChange?.('');
+  };
+
   return (
     <div
       className={`flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-[var(--bg-card)] border-b border-[var(--border-subtle)] ${className}`}
@@ -69,15 +90,15 @@ export function DataTableToolbar({
             <input
               type="text"
               placeholder={searchPlaceholder}
-              value={searchValue || ''}
-              onChange={(e) => onSearchChange(e.target.value)}
+              value={draftSearch}
+              onChange={handleInputChange}
               aria-label={searchPlaceholder}
               className="w-full h-8 pl-8 pr-7 text-xs rounded-[6px] border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors"
             />
-            {searchValue && (
+            {draftSearch && (
               <button
                 type="button"
-                onClick={() => onSearchChange('')}
+                onClick={handleClear}
                 aria-label="Xóa nội dung tìm kiếm"
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded-[3px] focus-visible:outline-none"
               >

@@ -166,10 +166,7 @@ export function DashboardHeader({
               className="w-full h-9 pl-9 pr-3 text-xs rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-pointer text-left flex items-center justify-between transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
             >
               <div className="flex items-center gap-2 truncate">
-                <Search
-                  className="w-4 h-4 text-[var(--text-muted)] shrink-0"
-                  aria-hidden="true"
-                />
+                <Search className="w-4 h-4 text-[var(--text-muted)] shrink-0" aria-hidden="true" />
                 <span className="truncate">Tìm kiếm nhanh vận đơn, đơn hàng...</span>
               </div>
               <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-dim)] bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-[4px] shrink-0">

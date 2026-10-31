@@ -6,13 +6,7 @@
  */
 
 import { DataTableFilterOption } from '@/components/data-table';
-import {
-  AlertCircle,
-  CheckCircle2,
-  Clock,
-  Truck,
-  XCircle,
-} from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, Truck, XCircle } from 'lucide-react';
 
 export interface FixtureShipment {
   id: string;
