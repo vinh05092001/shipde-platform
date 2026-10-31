@@ -19,7 +19,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   readonly extended: ExtendedPrismaClient;
 
   constructor(options?: ConstructorParameters<typeof PrismaClient>[0]) {
-    super(options);
+    super({
+      ...options,
+      transactionOptions: {
+        maxWait: 5000,
+        timeout: 10000,
+        ...options?.transactionOptions,
+      },
+    });
     this.extended = createExtendedClient(this);
   }
 
@@ -44,7 +51,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    * Bounded database readiness check.
    * Executes a lightweight SELECT 1 with an internal timeout.
    */
-  async checkReadiness(timeoutMs = 2000): Promise<'up' | 'down'> {
+  async checkReadiness(timeoutMs = 5000): Promise<'up' | 'down'> {
     try {
       const queryPromise = this.$queryRaw`SELECT 1`;
       const timeoutPromise = new Promise<never>((_, reject) =>

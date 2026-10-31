@@ -17,8 +17,11 @@
  * limitations under the License.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { getTenantId, TENANT_SETTING } from './tenant-context';
+
+const inTransactionStorage = new AsyncLocalStorage<boolean>();
 
 /**
  * Tenant RLS Prisma client extension (TASK-AI-154 pilot).
@@ -31,15 +34,18 @@ import { getTenantId, TENANT_SETTING } from './tenant-context';
  * the value local to the current transaction, so it is discarded on commit
  * or rollback and can never leak across pooled connections or requests.
  *
- * Pilot scope:
- * - Order operations issued on the extended client run inside a transaction
- *   that first sets `app.tenant_id` for that transaction.
- * - Interactive transactions issued on the extended client set the variable
- *   once for their whole duration; use the provided transaction client for
- *   operations inside them.
+ * Scope & isolation:
+ * - All model queries, relations, and raw queries issued on the extended
+ *   client inside an authenticated tenant context run inside a transaction
+ *   that first establishes `app.tenant_id`.
+ * - Interactive transactions set the variable once for their whole duration
+ *   and preserve atomicity.
+ * - Array transactions preserve a single transaction for the entire batch,
+ *   pre-pending the `set_config` statement so that any failure inside the
+ *   batch rolls back all operations atomically.
  * - Operations without a tenant context (worker jobs, seed scripts, public
- *   and platform routes) are not wrapped and keep today's behavior; the RLS
- *   policy is fail-open for such sessions until the documented rollout.
+ *   and platform routes) are not wrapped and keep fail-open behavior until
+ *   the documented rollout.
  */
 export function tenantRlsExtension(base: PrismaClient) {
   const baseTransaction = base.$transaction.bind(base) as (...inner: unknown[]) => Promise<unknown>;
@@ -53,38 +59,46 @@ export function tenantRlsExtension(base: PrismaClient) {
         if (!tenantId) {
           return baseTransaction(...args);
         }
-        if (!Array.isArray(first)) {
-          return baseTransaction(async (tx: Prisma.TransactionClient) => {
-            await tx.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
-            return (first as (txClient: Prisma.TransactionClient) => Promise<unknown>)(tx);
-          }, options);
-        }
-        // Array form: pass through untouched. Each Order operation inside it
-        // still sets the tenant in its own nested transaction via the query
-        // hook below, so per-operation RLS isolation holds; batch atomicity
-        // across mixed models is not part of the pilot scope.
-        return baseTransaction(...args);
+        return inTransactionStorage.run(true, async () => {
+          if (!Array.isArray(first)) {
+            return baseTransaction(async (tx: Prisma.TransactionClient) => {
+              await tx.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
+              return (first as (txClient: Prisma.TransactionClient) => Promise<unknown>)(tx);
+            }, options);
+          }
+
+          // Array form: preserve ONE single transaction for the whole batch.
+          // Establish the tenant setting first so all batch operations run
+          // with RLS active and roll back atomically if any operation rejects.
+          const setConfigPromise = base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
+          const batch = [setConfigPromise, ...(first as unknown[])];
+          const results = (await (baseTransaction as any)(batch, options)) as unknown[];
+          return results.slice(1);
+        });
       },
     },
     query: {
-      order: {
-        async $allOperations({
-          args,
-          query,
-        }: {
-          args: unknown;
-          query: (args: unknown) => Promise<unknown>;
-        }): Promise<unknown> {
-          const tenantId = getTenantId();
-          if (!tenantId) {
-            return query(args);
-          }
+      async $allOperations({
+        args,
+        query,
+      }: {
+        model?: string;
+        operation: string;
+        args: unknown;
+        query: (args: unknown) => Promise<unknown>;
+      }): Promise<unknown> {
+        const tenantId = getTenantId();
+        const inTx = inTransactionStorage.getStore();
+        if (!tenantId || inTx) {
+          return query(args);
+        }
+        return inTransactionStorage.run(true, async () => {
           const [, result] = (await (base.$transaction as any)([
             base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`,
             query(args),
           ])) as [number, unknown];
           return result;
-        },
+        });
       },
     },
   });

@@ -51,6 +51,17 @@ function loadEnvFile(): void {
   }
 }
 
+export function sanitizeDatabaseEndpoint(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.host || 'localhost';
+    const db = parsed.pathname.replace(/^\//, '') || 'shipde_dev';
+    return `${parsed.protocol}//${parsed.username ? parsed.username + '@' : ''}${host}/${db}`;
+  } catch {
+    return '[sanitized-database-endpoint]';
+  }
+}
+
 function resolveDatabaseUrl(): string {
   return process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 }
@@ -79,14 +90,15 @@ async function main(): Promise<void> {
     await admin.$connect();
     await admin.$queryRaw`SELECT 1`;
   } catch {
+    const sanitizedEndpoint = sanitizeDatabaseEndpoint(databaseUrl);
     if (process.env.CI) {
       await admin.$disconnect().catch(() => {});
       throw new Error(
-        `PostgreSQL must be reachable for orders RLS integration tests in CI (${databaseUrl})`
+        `PostgreSQL must be reachable for orders RLS integration tests in CI (${sanitizedEndpoint})`
       );
     }
     console.warn(
-      `PostgreSQL is not reachable at ${databaseUrl}. Skipping orders RLS integration tests (run 'pnpm infra:up' to enable).`
+      `PostgreSQL is not reachable at ${sanitizedEndpoint}. Skipping orders RLS integration tests (run 'pnpm infra:up' to enable).`
     );
     await admin.$disconnect().catch(() => {});
     console.log('Orders RLS integration suite skipped offline safely!');
@@ -272,9 +284,127 @@ async function main(): Promise<void> {
       'malformed tenant values must fail closed'
     );
     console.log('PASS: malformed tenant value fails closed');
+
+    // 9. Finding 1: Cross-tenant raw query denial via extended.$queryRaw and $queryRawUnsafe.
+    await runWithTenant(merchantA, async () => {
+      const rawRows = await extended.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM orders WHERE id IN (${orderA.id}::uuid, ${orderB.id}::uuid)
+      `;
+      assert.deepEqual(
+        rawRows.map((r) => r.id),
+        [orderA.id],
+        'raw query must establish app.tenant_id and deny reading tenant B rows'
+      );
+
+      const rawUnsafeRows = await extended.$queryRawUnsafe<Array<{ id: string }>>(
+        'SELECT id FROM orders WHERE id = $1::uuid',
+        orderB.id
+      );
+      assert.deepEqual(
+        rawUnsafeRows,
+        [],
+        'raw unsafe query must deny reading tenant B row under restricted role'
+      );
+    });
+    console.log('PASS: cross-tenant raw queries denied by RLS under extended client');
+
+    // 10. Finding 1: Cross-tenant relation query denial (accessing orders through merchant).
+    await runWithTenant(merchantA, async () => {
+      const merchantBWithOrders = await extended.merchant.findUnique({
+        where: { id: merchantB },
+        include: { orders: true },
+      });
+      assert.deepEqual(
+        merchantBWithOrders?.orders || [],
+        [],
+        'relation query accessing orders through merchant must NOT return tenant B orders'
+      );
+
+      const merchantAWithOrders = await extended.merchant.findUnique({
+        where: { id: merchantA },
+        include: { orders: true },
+      });
+      assert.ok(
+        merchantAWithOrders?.orders.some((o) => o.id === orderA.id),
+        'relation query for own merchant returns own orders'
+      );
+      assert.ok(
+        !merchantAWithOrders?.orders.some((o) => o.id === orderB.id),
+        'relation query for own merchant must not include tenant B orders'
+      );
+    });
+    console.log('PASS: cross-tenant relation query denies other tenant orders');
+
+    // 11. Finding 2: Array transaction atomicity: batch containing an invalid write rolls back all writes.
+    const batchOwnCode = `RLS-BATCH-OWN-${suffix}`;
+    const batchCrossCode = `RLS-BATCH-CROSS-${suffix}`;
+    await assert.rejects(
+      runWithTenant(merchantA, async () => {
+        await extended.$transaction([
+          extended.order.create({ data: orderInput(merchantA, batchOwnCode) }),
+          extended.order.create({ data: orderInput(merchantB, batchCrossCode) }),
+        ]);
+      }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.match(message, /row-level security|new row violates/i);
+        return true;
+      },
+      'batch transaction containing RLS-violating insert must reject'
+    );
+    const uncommittedOwn = await admin.order.findFirst({ where: { order_code: batchOwnCode } });
+    assert.equal(
+      uncommittedOwn,
+      null,
+      'own-tenant insert in rejected batch transaction must be rolled back'
+    );
+    const uncommittedCross = await admin.order.findFirst({ where: { order_code: batchCrossCode } });
+    assert.equal(
+      uncommittedCross,
+      null,
+      'cross-tenant insert in rejected batch transaction must not be committed'
+    );
+    console.log('PASS: rejected array transaction leaves zero committed writes (atomic rollback)');
+
+    // 12. Finding 2: Array transaction success: valid batch commits all operations atomically.
+    const batchSuccess = (await runWithTenant(merchantA, async () =>
+      extended.$transaction([
+        extended.order.create({ data: orderInput(merchantA, `RLS-BATCH-OK1-${suffix}`) }),
+        extended.order.create({ data: orderInput(merchantA, `RLS-BATCH-OK2-${suffix}`) }),
+      ])
+    )) as Array<{ id: string }>;
+    assert.equal(
+      batchSuccess.length,
+      2,
+      'successful array transaction returns all operation results'
+    );
+    console.log('PASS: successful array transaction returns correct batch results');
+
+    // 13. Finding 3 negative test: connection diagnostics must not leak database credentials.
+    const secretPassword = 'ultra_secret_pg_password_999!';
+    const sensitiveUrl = `postgresql://shipde_app:${secretPassword}@db.internal:5432/shipde_prod?schema=public`;
+    const sanitized = sanitizeDatabaseEndpoint(sensitiveUrl);
+    assert.equal(
+      sanitized.includes(secretPassword),
+      false,
+      'sanitized database endpoint must NEVER contain the database password'
+    );
+    assert.equal(
+      sanitized,
+      'postgresql://shipde_app@db.internal:5432/shipde_prod',
+      'sanitized database endpoint must format host and db correctly without credentials'
+    );
+    console.log('PASS: connection diagnostics sanitize database credentials');
   } finally {
     await admin.order
-      .deleteMany({ where: { merchant_id: { in: [merchantA, merchantB] } } })
+      .deleteMany({
+        where: {
+          OR: [
+            { merchant_id: { in: [merchantA, merchantB] } },
+            { order_code: { startsWith: `RLS-BATCH-` } },
+          ],
+        },
+      })
       .catch(() => {});
     await admin.merchant
       .deleteMany({ where: { id: { in: [merchantA, merchantB] } } })

@@ -114,7 +114,11 @@ N/A — Backend database security architecture and middleware; no user interface
 | AC-AI-154-06 | Unauthenticated / system session without tenant context queries orders | Operation succeeds under pilot fail-open rules | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 6) |
 | AC-AI-154-07 | Interactive transaction `extended.$transaction(async (tx) => ...)` | Sets `app.tenant_id` for duration of transaction; tenant policy applies to tx operations | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 7) |
 | AC-AI-154-08 | Tenant context set to malformed string (e.g. `'not-a-uuid'`) | Query fails closed with syntax error `invalid input syntax for type uuid` | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 8) |
-| AC-AI-154-09 | `TenantMiddleware` processes verified token, unverified token, expired token, platform token | Correctly establishes tenant ID for valid merchant tokens; leaves context undefined for others | `apps/api/src/prisma/tenant.middleware.unit.spec.ts` (8/8 pass) |
+| AC-AI-154-09 | `TenantMiddleware` processes verified token, unverified token, expired token, platform token | Correctly establishes tenant ID for valid merchant tokens; leaves context undefined for others | `apps/api/src/prisma/tenant.middleware.unit.spec.ts` (10/10 pass) |
+| AC-AI-154-10 | Cross-tenant raw query (`extended.$queryRaw` / `$queryRawUnsafe`) | Establishes transaction-local `app.tenant_id`; cross-tenant rows excluded by PostgreSQL RLS | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 9) |
+| AC-AI-154-11 | Cross-tenant relation query (accessing orders relation via merchant) | Establishes transaction-local `app.tenant_id`; excludes cross-tenant orders in relations | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 10) |
+| AC-AI-154-12 | Array transaction `extended.$transaction([...])` with failing operation | Pre-pends `set_config` to batch; rejected batch rolls back all writes atomically | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 11, 12) |
+| AC-AI-154-13 | Connection failure diagnostics reporting | Sanitizes database endpoint so database password / credentials are never exposed in logs or errors | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 13) |
 
 ## Verification commands
 
@@ -129,7 +133,8 @@ N/A — Backend database security architecture and middleware; no user interface
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `HEAD` | `READY_FOR_CODEX` | Initial implementation |
+| 1 | `cb31b792` | `CHANGES_REQUIRED` | Initial implementation |
+| 2 | `HEAD` | `READY_FOR_CODEX` | Resolved P1 finding 1 (raw/relation queries bypass), P1 finding 2 (array transaction atomicity loss), and P1 finding 3 (diagnostic credential exposure) |
 
 ## Residual limitations
 

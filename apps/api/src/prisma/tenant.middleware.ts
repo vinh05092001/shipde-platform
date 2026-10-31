@@ -51,8 +51,11 @@ function extractVerifiedMerchantId(req: Request): string | null {
       rawToken,
       resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET)
     );
-    if (typeof claims.mid === 'string' && claims.mid.length > 0) {
-      return claims.mid;
+    if (claims.scope === 'setup') {
+      return null;
+    }
+    if (typeof claims.mid === 'string' && claims.mid.trim().length > 0) {
+      return claims.mid.trim();
     }
   } catch {
     // Unverifiable token: no tenant context. The SessionGuard rejects the

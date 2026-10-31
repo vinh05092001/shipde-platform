@@ -15,7 +15,8 @@ function signToken(
   mid: string | null,
   role: 'OWNER' | 'PLATFORM_ADMIN' = 'OWNER',
   ttlSeconds = 3600,
-  secret: string = SECRET
+  secret: string = SECRET,
+  scope?: string
 ): string {
   const { token } = signAccessToken(
     {
@@ -24,6 +25,7 @@ function signToken(
       mid,
       role,
       st: 'active',
+      scope,
     },
     secret,
     ttlSeconds
@@ -92,5 +94,17 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
       runMiddleware(`Bearer ${signToken(MERCHANT_B)}`)
     );
     assert.equal(tenant, MERCHANT_B);
+  });
+
+  it('does not establish tenant context for setup tokens (scope: setup)', async () => {
+    const setupToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, 'setup');
+    const tenant = await runMiddleware(`Bearer ${setupToken}`);
+    assert.equal(tenant, undefined, 'setup scoped tokens must not establish merchant tenant context');
+  });
+
+  it('does not establish tenant context for empty or whitespace-only mid claims', async () => {
+    const emptyMidToken = signToken('   ', 'OWNER', 3600, SECRET);
+    const tenant = await runMiddleware(`Bearer ${emptyMidToken}`);
+    assert.equal(tenant, undefined, 'empty mid must not establish tenant context');
   });
 });
