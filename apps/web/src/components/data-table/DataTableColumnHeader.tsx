@@ -1,15 +1,36 @@
 /**
  * Ported from sadmann7/shadcn-table (MIT License)
  * Source: https://github.com/sadmann7/shadcn-table
- * License: MIT
  *
- * Column header with sorting controls and accessible ARIA attributes.
+ * MIT License
+ * Copyright (c) 2024 Sadman Sakib
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * Reusable column header component with sort trigger and column actions menu.
+ * Respects DESIGN-SYSTEM-UX-RULES.md and ARIA sort semantics.
  */
 
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, EyeOff, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, EyeOff } from 'lucide-react';
 import { ColumnDef, ColumnSort } from './types';
 
 interface DataTableColumnHeaderProps<TData = any> {
@@ -32,9 +53,9 @@ export function DataTableColumnHeader<TData = any>({
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const isSorted = sort?.id === column.id ? (sort.desc ? 'desc' : 'asc') : null;
+  const isSorted = sort?.id === column.id ? (sort.desc ? 'desc' : 'asc') : false;
 
-  // Close dropdown on outside click or escape
+  // Close dropdown on click outside or escape key
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -69,7 +90,12 @@ export function DataTableColumnHeader<TData = any>({
   const ariaSort = isSorted === 'asc' ? 'ascending' : isSorted === 'desc' ? 'descending' : 'none';
 
   return (
-    <div className={`relative inline-flex items-center gap-1 ${className}`} ref={dropdownRef}>
+    <div
+      className={`relative inline-flex items-center gap-1 ${className}`}
+      ref={dropdownRef}
+      aria-sort={ariaSort}
+      data-sort={ariaSort}
+    >
       <button
         type="button"
         aria-label={`Sắp xếp theo ${title}: hiện tại ${isSorted === 'asc' ? 'tăng dần' : isSorted === 'desc' ? 'giảm dần' : 'chưa sắp xếp'}`}
@@ -104,14 +130,14 @@ export function DataTableColumnHeader<TData = any>({
               onSort(column.id, false);
               setIsOpen(false);
             }}
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer hover:bg-[var(--bg-subtle)] focus-visible:bg-[var(--bg-subtle)] focus-visible:outline-none transition-colors ${
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors ${
               isSorted === 'asc'
-                ? 'text-[var(--primary)] font-semibold'
-                : 'text-[var(--text-primary)]'
+                ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
+                : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Sắp xếp tăng dần</span>
+            <ArrowUp className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
+            <span>Tăng dần</span>
           </button>
 
           <button
@@ -121,30 +147,15 @@ export function DataTableColumnHeader<TData = any>({
               onSort(column.id, true);
               setIsOpen(false);
             }}
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer hover:bg-[var(--bg-subtle)] focus-visible:bg-[var(--bg-subtle)] focus-visible:outline-none transition-colors ${
+            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors ${
               isSorted === 'desc'
-                ? 'text-[var(--primary)] font-semibold'
-                : 'text-[var(--text-primary)]'
+                ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
+                : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>Sắp xếp giảm dần</span>
+            <ArrowDown className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
+            <span>Giảm dần</span>
           </button>
-
-          {isSorted !== null && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onSort(column.id); // Toggle or clear
-                setIsOpen(false);
-              }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer hover:bg-[var(--bg-subtle)] focus-visible:bg-[var(--bg-subtle)] focus-visible:outline-none text-[var(--text-muted)] transition-colors"
-            >
-              <X className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Xóa sắp xếp</span>
-            </button>
-          )}
 
           {column.enableHiding !== false && onHide && (
             <>
@@ -156,9 +167,9 @@ export function DataTableColumnHeader<TData = any>({
                   onHide(column.id);
                   setIsOpen(false);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer hover:bg-[var(--bg-subtle)] focus-visible:bg-[var(--bg-subtle)] focus-visible:outline-none text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors"
               >
-                <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+                <EyeOff className="w-3.5 h-3.5 text-[var(--text-dim)]" aria-hidden="true" />
                 <span>Ẩn cột này</span>
               </button>
             </>

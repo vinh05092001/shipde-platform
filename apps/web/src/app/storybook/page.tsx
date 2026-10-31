@@ -9,6 +9,8 @@
  * - Keyboard accessibility and Vietnamese labels
  *
  * NOTE: All data on this page is mock fixture data for demonstration and testing.
+ * Complies with BR-UI-01 (URL State Sync), BR-UI-02 (State Completeness),
+ * BR-UI-03 (Accessibility), BR-UI-04 (Vietnamese), and BR-UI-05 (Fixture Isolation).
  */
 
 'use client';
@@ -22,178 +24,59 @@ import {
   DataTableToolbar,
   DataTableViewOptions,
   ColumnDef,
-  DataTableFilterOption,
+  useDataTable,
 } from '@/components/data-table';
 import { DashboardLayout, PageHeader } from '@/components/dashboard';
 import {
-  AlertCircle,
-  CheckCircle2,
-  Clock,
   Download,
-  Package,
   Plus,
   RefreshCw,
   Sparkles,
-  Truck,
-  XCircle,
 } from 'lucide-react';
-
-// ============================================================================
-// FIXTURE DATA (Dữ liệu mẫu thử nghiệm)
-// ============================================================================
-export interface FixtureShipment {
-  id: string;
-  trackingCode: string;
-  orderNumber: string;
-  recipientName: string;
-  recipientPhone: string;
-  carrier: 'GHN' | 'GHTK' | 'VTP';
-  status: 'PENDING' | 'IN_TRANSIT' | 'DELIVERED' | 'FAILED' | 'CLAIM_PENDING';
-  codAmount: number;
-  feeAmount: number;
-  weightGrams: number;
-  createdAt: string;
-}
-
-export const FIXTURE_SHIPMENTS: FixtureShipment[] = [
-  {
-    id: 'fix-ord-001',
-    trackingCode: 'GHN982341201VN',
-    orderNumber: 'ORD-20261031-01',
-    recipientName: 'Nguyễn Văn An',
-    recipientPhone: '0901***123',
-    carrier: 'GHN',
-    status: 'DELIVERED',
-    codAmount: 350000,
-    feeAmount: 22000,
-    weightGrams: 500,
-    createdAt: '2026-10-31 08:30:00',
-  },
-  {
-    id: 'fix-ord-002',
-    trackingCode: 'GHTK74219082VN',
-    orderNumber: 'ORD-20261031-02',
-    recipientName: 'Trần Thị Mai',
-    recipientPhone: '0912***456',
-    carrier: 'GHTK',
-    status: 'IN_TRANSIT',
-    codAmount: 520000,
-    feeAmount: 32000,
-    weightGrams: 1200,
-    createdAt: '2026-10-31 09:15:00',
-  },
-  {
-    id: 'fix-ord-003',
-    trackingCode: 'VTP391204851VN',
-    orderNumber: 'ORD-20261031-03',
-    recipientName: 'Lê Hoàng Nam',
-    recipientPhone: '0983***789',
-    carrier: 'VTP',
-    status: 'PENDING',
-    codAmount: 180000,
-    feeAmount: 18000,
-    weightGrams: 300,
-    createdAt: '2026-10-31 10:00:00',
-  },
-  {
-    id: 'fix-ord-004',
-    trackingCode: 'GHN512938472VN',
-    orderNumber: 'ORD-20261031-04',
-    recipientName: 'Phạm Minh Đức',
-    recipientPhone: '0934***321',
-    carrier: 'GHN',
-    status: 'FAILED',
-    codAmount: 490000,
-    feeAmount: 25000,
-    weightGrams: 800,
-    createdAt: '2026-10-30 14:20:00',
-  },
-  {
-    id: 'fix-ord-005',
-    trackingCode: 'GHTK12948293VN',
-    orderNumber: 'ORD-20261031-05',
-    recipientName: 'Hoàng Bích Thủy',
-    recipientPhone: '0977***654',
-    carrier: 'GHTK',
-    status: 'CLAIM_PENDING',
-    codAmount: 890000,
-    feeAmount: 45000,
-    weightGrams: 2100,
-    createdAt: '2026-10-30 16:45:00',
-  },
-  {
-    id: 'fix-ord-006',
-    trackingCode: 'GHN672391024VN',
-    orderNumber: 'ORD-20261031-06',
-    recipientName: 'Đặng Quốc Huy',
-    recipientPhone: '0909***999',
-    carrier: 'GHN',
-    status: 'DELIVERED',
-    codAmount: 240000,
-    feeAmount: 20000,
-    weightGrams: 400,
-    createdAt: '2026-10-30 17:10:00',
-  },
-  {
-    id: 'fix-ord-007',
-    trackingCode: 'VTP839102948VN',
-    orderNumber: 'ORD-20261031-07',
-    recipientName: 'Vũ Thanh Hằng',
-    recipientPhone: '0945***888',
-    carrier: 'VTP',
-    status: 'IN_TRANSIT',
-    codAmount: 670000,
-    feeAmount: 28000,
-    weightGrams: 1000,
-    createdAt: '2026-10-29 11:30:00',
-  },
-  {
-    id: 'fix-ord-008',
-    trackingCode: 'GHTK90283741VN',
-    orderNumber: 'ORD-20261031-08',
-    recipientName: 'Bùi Anh Tuấn',
-    recipientPhone: '0966***777',
-    carrier: 'GHTK',
-    status: 'DELIVERED',
-    codAmount: 410000,
-    feeAmount: 24000,
-    weightGrams: 600,
-    createdAt: '2026-10-29 15:00:00',
-  },
-];
-
-const STATUS_OPTIONS: DataTableFilterOption[] = [
-  { label: 'Chờ lấy hàng', value: 'PENDING', icon: Clock, count: 1 },
-  { label: 'Đang giao', value: 'IN_TRANSIT', icon: Truck, count: 2 },
-  { label: 'Giao thành công', value: 'DELIVERED', icon: CheckCircle2, count: 3 },
-  { label: 'Giao thất bại', value: 'FAILED', icon: XCircle, count: 1 },
-  { label: 'Chờ bồi thường', value: 'CLAIM_PENDING', icon: AlertCircle, count: 1 },
-];
-
-const CARRIER_OPTIONS: DataTableFilterOption[] = [
-  { label: 'Giao Hàng Nhanh (GHN)', value: 'GHN', count: 3 },
-  { label: 'Giao Hàng Tiết Kiệm (GHTK)', value: 'GHTK', count: 3 },
-  { label: 'Viettel Post (VTP)', value: 'VTP', count: 2 },
-];
+import {
+  FIXTURE_SHIPMENTS,
+  FixtureShipment,
+  STATUS_OPTIONS,
+  CARRIER_OPTIONS,
+} from './fixtures';
 
 function StorybookContent() {
-  // State simulation toggles
+  // State simulation toggles (isolated to simulator bar)
   const [simulatedLoading, setSimulatedLoading] = useState(false);
   const [simulatedError, setSimulatedError] = useState(false);
   const [simulatedEmpty, setSimulatedEmpty] = useState(false);
 
-  // Table state
-  const [searchValue, setSearchValue] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState<string[]>([]);
-  const [selectedCarriers, setSelectedCarriers] = useState<string[]>([]);
-  const [sortColumn, setSortColumn] = useState<string>('createdAt');
-  const [sortDesc, setSortDesc] = useState<boolean>(true);
-  const [pageIndex, setPageIndex] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(10);
+  // Local column visibility & selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Filter & Sort Logic
+  // Server-driven URL synchronization via useDataTable (BR-UI-01)
+  const {
+    pageIndex,
+    pageSize,
+    sort,
+    searchValue,
+    setSearch,
+    filters,
+    setFilter,
+    resetFilters,
+    setPagination,
+    setSort,
+    isFiltered,
+  } = useDataTable({
+    defaultPageSize: 10,
+    defaultSort: { id: 'createdAt', desc: true },
+    filterableColumns: [
+      { id: 'status', title: 'Trạng thái', options: STATUS_OPTIONS },
+      { id: 'carrier', title: 'Hãng vận chuyển', options: CARRIER_OPTIONS },
+    ],
+    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+  });
+
+  const selectedStatus = useMemo(() => filters['status'] || [], [filters]);
+  const selectedCarriers = useMemo(() => filters['carrier'] || [], [filters]);
+
+  // Filter & Sort Logic driven by URL search params
   const filteredData = useMemo(() => {
     if (simulatedEmpty) return [];
 
@@ -201,7 +84,7 @@ function StorybookContent() {
 
     // Search filter
     if (searchValue.trim()) {
-      const q = searchValue.toLowerCase();
+      const q = searchValue.trim().toLowerCase();
       list = list.filter(
         (item) =>
           item.trackingCode.toLowerCase().includes(q) ||
@@ -221,9 +104,12 @@ function StorybookContent() {
     }
 
     // Sorting
+    const sortCol = sort?.id || 'createdAt';
+    const sortDesc = sort ? sort.desc : true;
+
     list.sort((a, b) => {
-      let valA: any = (a as any)[sortColumn];
-      let valB: any = (b as any)[sortColumn];
+      const valA: any = (a as any)[sortCol];
+      const valB: any = (b as any)[sortCol];
 
       if (typeof valA === 'string') {
         return sortDesc ? valB.localeCompare(valA) : valA.localeCompare(valB);
@@ -232,15 +118,15 @@ function StorybookContent() {
     });
 
     return list;
-  }, [simulatedEmpty, searchValue, selectedStatus, selectedCarriers, sortColumn, sortDesc]);
+  }, [simulatedEmpty, searchValue, selectedStatus, selectedCarriers, sort]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredData.length / pageSize));
 
   // Pagination slice
   const paginatedData = useMemo(() => {
     const start = (pageIndex - 1) * pageSize;
     return filteredData.slice(start, start + pageSize);
   }, [filteredData, pageIndex, pageSize]);
-
-  const pageCount = Math.ceil(filteredData.length / pageSize);
 
   // Column definitions
   const columns: ColumnDef<FixtureShipment>[] = useMemo(
@@ -251,11 +137,8 @@ function StorybookContent() {
           <DataTableColumnHeader
             column={column}
             title="Mã vận đơn"
-            sort={sortColumn === 'trackingCode' ? { id: 'trackingCode', desc: sortDesc } : null}
-            onSort={(id, desc) => {
-              setSortColumn(id);
-              setSortDesc(desc !== undefined ? desc : !sortDesc);
-            }}
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
@@ -292,11 +175,8 @@ function StorybookContent() {
           <DataTableColumnHeader
             column={column}
             title="Người nhận"
-            sort={sortColumn === 'recipientName' ? { id: 'recipientName', desc: sortDesc } : null}
-            onSort={(id, desc) => {
-              setSortColumn(id);
-              setSortDesc(desc !== undefined ? desc : !sortDesc);
-            }}
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
@@ -335,11 +215,8 @@ function StorybookContent() {
           <DataTableColumnHeader
             column={column}
             title="Thu hộ COD"
-            sort={sortColumn === 'codAmount' ? { id: 'codAmount', desc: sortDesc } : null}
-            onSort={(id, desc) => {
-              setSortColumn(id);
-              setSortDesc(desc !== undefined ? desc : !sortDesc);
-            }}
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
@@ -356,11 +233,8 @@ function StorybookContent() {
           <DataTableColumnHeader
             column={column}
             title="Cước phí"
-            sort={sortColumn === 'feeAmount' ? { id: 'feeAmount', desc: sortDesc } : null}
-            onSort={(id, desc) => {
-              setSortColumn(id);
-              setSortDesc(desc !== undefined ? desc : !sortDesc);
-            }}
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
@@ -377,11 +251,8 @@ function StorybookContent() {
           <DataTableColumnHeader
             column={column}
             title="Ngày tạo"
-            sort={sortColumn === 'createdAt' ? { id: 'createdAt', desc: sortDesc } : null}
-            onSort={(id, desc) => {
-              setSortColumn(id);
-              setSortDesc(desc !== undefined ? desc : !sortDesc);
-            }}
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
@@ -392,10 +263,10 @@ function StorybookContent() {
         ),
       },
     ],
-    [sortColumn, sortDesc]
+    [sort, setSort]
   );
 
-  const handleToggleSelect = (id: string, shiftKey?: boolean) => {
+  const handleToggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -415,17 +286,6 @@ function StorybookContent() {
     }
   };
 
-  const isFiltered = Boolean(
-    searchValue || selectedStatus.length > 0 || selectedCarriers.length > 0
-  );
-
-  const handleResetFilters = () => {
-    setSearchValue('');
-    setSelectedStatus([]);
-    setSelectedCarriers([]);
-    setPageIndex(1);
-  };
-
   return (
     <DashboardLayout
       shopName="Kho Tổng Ship Dễ — Hà Nội"
@@ -434,8 +294,10 @@ function StorybookContent() {
         email: 'admin@shipde.net',
         role: 'Chủ Shop / Quản trị viên',
       }}
+      searchHref="/search"
+      profileHref="/settings/profile"
     >
-      {/* Fixture Notice Banner */}
+      {/* Fixture Notice Banner (BR-UI-05) */}
       <div className="p-3.5 rounded-[8px] bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-3">
         <Sparkles className="w-5 h-5 text-amber-600 shrink-0" aria-hidden="true" />
         <div className="leading-relaxed">
@@ -534,6 +396,7 @@ function StorybookContent() {
       <DataTable
         data={paginatedData}
         columns={columns}
+        sort={sort}
         keyExtractor={(item) => item.id}
         loading={simulatedLoading}
         error={
@@ -549,36 +412,27 @@ function StorybookContent() {
         emptyTitle="Không tìm thấy vận đơn nào phù hợp"
         emptyDescription="Hãy kiểm tra lại từ khóa tìm kiếm hoặc các tiêu chí bộ lọc trạng thái và hãng vận chuyển."
         emptyActionLabel="Đặt lại bộ lọc"
-        onEmptyAction={handleResetFilters}
+        onEmptyAction={resetFilters}
         toolbar={
           <DataTableToolbar
             searchValue={searchValue}
-            onSearchChange={(val) => {
-              setSearchValue(val);
-              setPageIndex(1);
-            }}
+            onSearchChange={(val) => setSearch(val)}
             searchPlaceholder="Tìm theo mã vận đơn, mã đơn, khách hàng..."
             isFiltered={isFiltered}
-            onResetFilters={handleResetFilters}
+            onResetFilters={resetFilters}
             filtersSlot={
               <>
                 <DataTableFacetedFilter
                   title="Trạng thái"
                   options={STATUS_OPTIONS}
                   selectedValues={new Set(selectedStatus)}
-                  onSelect={(vals) => {
-                    setSelectedStatus(vals);
-                    setPageIndex(1);
-                  }}
+                  onSelect={(vals) => setFilter('status', vals)}
                 />
                 <DataTableFacetedFilter
                   title="Hãng vận chuyển"
                   options={CARRIER_OPTIONS}
                   selectedValues={new Set(selectedCarriers)}
-                  onSelect={(vals) => {
-                    setSelectedCarriers(vals);
-                    setPageIndex(1);
-                  }}
+                  onSelect={(vals) => setFilter('carrier', vals)}
                 />
               </>
             }
@@ -609,11 +463,8 @@ function StorybookContent() {
             pageCount={pageCount}
             totalCount={filteredData.length}
             pageSizeOptions={[5, 10, 20]}
-            onPageChange={(p) => setPageIndex(p)}
-            onPageSizeChange={(s) => {
-              setPageSize(s);
-              setPageIndex(1);
-            }}
+            onPageChange={(p) => setPagination(p, pageSize)}
+            onPageSizeChange={(s) => setPagination(1, s)}
             selectedCount={selectedIds.size}
           />
         }

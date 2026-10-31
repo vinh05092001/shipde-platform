@@ -1,7 +1,27 @@
 /**
  * Ported from Kiranism/next-shadcn-dashboard-starter (MIT License)
  * Source: https://github.com/Kiranism/next-shadcn-dashboard-starter
- * License: MIT
+ *
+ * MIT License
+ * Copyright (c) 2024 Kiran
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *
  * Top application header for the dashboard shell.
  * Includes mobile menu trigger, shop/branch context, global search trigger,
@@ -10,11 +30,12 @@
 
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { LogOut, Menu, Search, Store, User } from 'lucide-react';
 import { DashboardUser } from './types';
 
-interface DashboardHeaderProps {
+export interface DashboardHeaderProps {
   currentUser?: DashboardUser;
   shopName?: string;
   onToggleMobileNav?: () => void;
@@ -22,6 +43,11 @@ interface DashboardHeaderProps {
   onSignOut?: () => void;
   actions?: React.ReactNode;
   className?: string;
+  onSearchClick?: () => void;
+  searchHref?: string;
+  onProfileClick?: () => void;
+  profileHref?: string;
+  showSearch?: boolean;
 }
 
 export function DashboardHeader({
@@ -32,10 +58,46 @@ export function DashboardHeader({
   onSignOut,
   actions,
   className = '',
+  onSearchClick,
+  searchHref = '/search',
+  onProfileClick,
+  profileHref = '/settings/profile',
+  showSearch = true,
 }: DashboardHeaderProps) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
+  const handleSearchActivation = useCallback(() => {
+    if (onSearchClick) {
+      onSearchClick();
+    } else if (searchHref && typeof window !== 'undefined') {
+      window.location.href = searchHref;
+    }
+  }, [onSearchClick, searchHref]);
+
+  // Global Ctrl + K / Cmd + K shortcut
+  useEffect(() => {
+    if (showSearch === false) return;
+    function handleGlobalKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'k' || event.key === 'K')) {
+        const target = event.target as HTMLElement | null;
+        const isEditable =
+          target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.isContentEditable ||
+            target.getAttribute('contenteditable') === 'true');
+        if (!isEditable) {
+          event.preventDefault();
+          handleSearchActivation();
+        }
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [handleSearchActivation, showSearch]);
+
+  // Close user profile dropdown on click outside or escape key
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
@@ -93,22 +155,30 @@ export function DashboardHeader({
         </div>
       </div>
 
-      {/* Center / Search bar shortcut */}
-      <div className="hidden md:flex items-center max-w-md w-full">
-        <div className="relative w-full">
-          <Search
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-muted)]"
-            aria-hidden="true"
-          />
-          <input
-            type="text"
-            readOnly
-            placeholder="Tìm kiếm nhanh vận đơn, đơn hàng... (Ctrl + K)"
-            aria-label="Tìm kiếm nhanh toàn hệ thống"
-            className="w-full h-9 pl-9 pr-4 text-xs rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--text-muted)] hover:border-[var(--border-strong)] cursor-pointer focus:outline-none"
-          />
+      {/* Center: Global Search shortcut trigger */}
+      {showSearch && (
+        <div className="hidden md:flex items-center max-w-md w-full">
+          <div className="relative w-full">
+            <button
+              type="button"
+              onClick={handleSearchActivation}
+              aria-label="Tìm kiếm nhanh toàn hệ thống (Ctrl + K)"
+              className="w-full h-9 pl-9 pr-3 text-xs rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-pointer text-left flex items-center justify-between transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
+            >
+              <div className="flex items-center gap-2 truncate">
+                <Search
+                  className="w-4 h-4 text-[var(--text-muted)] shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="truncate">Tìm kiếm nhanh vận đơn, đơn hàng...</span>
+              </div>
+              <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-dim)] bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-[4px] shrink-0">
+                Ctrl K
+              </kbd>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Right: Actions & User Navigation Menu */}
       <div className="flex items-center gap-3">
@@ -158,15 +228,18 @@ export function DashboardHeader({
               </div>
 
               <div className="py-1">
-                <button
-                  type="button"
+                <Link
+                  href={profileHref}
                   role="menuitem"
-                  onClick={() => setIsUserMenuOpen(false)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors"
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    onProfileClick?.();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
                 >
                   <User className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
                   <span>Hồ sơ tài khoản</span>
-                </button>
+                </Link>
               </div>
 
               {onSignOut && (
@@ -180,7 +253,7 @@ export function DashboardHeader({
                         setIsUserMenuOpen(false);
                         onSignOut();
                       }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--status-risk-text)] hover:bg-[var(--status-risk-bg)] cursor-pointer transition-colors"
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--status-risk-text)] hover:bg-[var(--status-risk-bg)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--status-risk-border)]"
                     >
                       <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>Đăng xuất</span>

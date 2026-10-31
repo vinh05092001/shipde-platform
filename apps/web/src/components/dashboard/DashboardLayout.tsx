@@ -1,14 +1,34 @@
 /**
  * Ported from Kiranism/next-shadcn-dashboard-starter (MIT License)
  * Source: https://github.com/Kiranism/next-shadcn-dashboard-starter
- * License: MIT
+ *
+ * MIT License
+ * Copyright (c) 2024 Kiran
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *
  * Full Dashboard Shell Layout with responsive sidebar, header, and content container.
  */
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   AlertTriangle,
   Building2,
@@ -101,25 +121,104 @@ export function DashboardLayout({
   shopName,
   onSignOut,
   headerActions,
+  onSearchClick,
+  searchHref,
+  onProfileClick,
+  profileHref,
+  showSearch,
 }: DashboardLayoutProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
-  // Close mobile drawer on Escape key
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const previousActiveElementRef = useRef<HTMLElement | null>(null);
+
+  const closeMobileNav = useCallback(() => {
+    setIsMobileOpen(false);
+  }, []);
+
+  const openMobileNav = useCallback(() => {
+    if (typeof document !== 'undefined') {
+      previousActiveElementRef.current = document.activeElement as HTMLElement | null;
+    }
+    setIsMobileOpen(true);
+  }, []);
+
+  // Focus management and focus trapping for mobile drawer dialog
   useEffect(() => {
+    if (!isMobileOpen) {
+      // Restore focus to previously focused element upon dismissal
+      if (previousActiveElementRef.current && typeof previousActiveElementRef.current.focus === 'function') {
+        previousActiveElementRef.current.focus();
+        previousActiveElementRef.current = null;
+      }
+      return;
+    }
+
+    // Move focus inside drawer
+    const timer = setTimeout(() => {
+      if (drawerRef.current) {
+        const focusables = drawerRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length > 0) {
+          focusables[0].focus();
+        } else {
+          drawerRef.current.focus();
+        }
+      }
+    }, 10);
+
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && isMobileOpen) {
-        setIsMobileOpen(false);
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMobileNav();
+        return;
+      }
+
+      if (e.key === 'Tab' && drawerRef.current) {
+        const focusables = Array.from(
+          drawerRef.current.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        );
+
+        if (focusables.length === 0) {
+          e.preventDefault();
+          return;
+        }
+
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === first || !drawerRef.current.contains(document.activeElement)) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last || !drawerRef.current.contains(document.activeElement)) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
       }
     }
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMobileOpen]);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileOpen, closeMobileNav]);
 
   return (
     <div className="min-h-screen bg-[var(--bg-app)] flex overflow-x-hidden">
-      {/* Desktop Sidebar (hidden on mobile) */}
-      <div className="hidden lg:block shrink-0 sticky top-0 h-screen z-30">
+      {/* Desktop Sidebar (hidden on mobile, made inert when mobile drawer is open) */}
+      <div
+        className="hidden lg:block shrink-0 sticky top-0 h-screen z-30"
+        aria-hidden={isMobileOpen ? 'true' : undefined}
+      >
         <DashboardSidebar
           navSections={navSections}
           isCollapsed={isCollapsed}
@@ -129,11 +228,18 @@ export function DashboardLayout({
 
       {/* Mobile Sidebar Drawer Overlay */}
       {isMobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Điều hướng chính"
+          className="fixed inset-0 z-50 lg:hidden"
+          ref={drawerRef}
+          tabIndex={-1}
+        >
           {/* Backdrop */}
           <div
             className="fixed inset-0 bg-black/40 backdrop-blur-xs transition-opacity"
-            onClick={() => setIsMobileOpen(false)}
+            onClick={closeMobileNav}
             aria-hidden="true"
           />
 
@@ -142,22 +248,31 @@ export function DashboardLayout({
             <DashboardSidebar
               navSections={navSections}
               isMobile={true}
-              onCloseMobile={() => setIsMobileOpen(false)}
+              onCloseMobile={closeMobileNav}
             />
           </div>
         </div>
       )}
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main Content Area (made inert when mobile drawer is open) */}
+      <div
+        className="flex-1 flex flex-col min-w-0"
+        aria-hidden={isMobileOpen ? 'true' : undefined}
+        {...((isMobileOpen ? { inert: '' } : {}) as any)}
+      >
         {/* Header */}
         <DashboardHeader
           currentUser={currentUser}
           shopName={shopName}
-          onToggleMobileNav={() => setIsMobileOpen(true)}
+          onToggleMobileNav={openMobileNav}
           isMobileNavOpen={isMobileOpen}
           onSignOut={onSignOut}
           actions={headerActions}
+          onSearchClick={onSearchClick}
+          searchHref={searchHref}
+          onProfileClick={onProfileClick}
+          profileHref={profileHref}
+          showSearch={showSearch}
         />
 
         {/* Scrollable Page Body */}

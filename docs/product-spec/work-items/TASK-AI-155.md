@@ -119,7 +119,8 @@ git diff --check origin/main...HEAD
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | `HEAD` | `READY_FOR_CODEX` | Initial implementation of reusable data table and dashboard shell |
+| 1 | `19c7c192` | `CHANGES_REQUIRED` | Initial implementation of reusable data table and dashboard shell |
+| 2 | `HEAD` | `READY_FOR_CODEX` | Addressed all review findings: (Finding 2) moved fixtures to dedicated `fixtures.ts` removing unsupported named exports from `page.tsx`; (Finding 3) wired Storybook showcase to URL state via `useDataTable` with deep-linking, reload, and back/forward tests; (Finding 4) demonstrated complete MIT licenses with author copyrights and warranty disclaimers across all ported files; (Finding 5) added accessible mobile drawer focus trapping and focus restoration on dismiss, and keyboard-operable row actions on DataTable with Enter/Space; (Finding 6) connected header search trigger with Ctrl+K shortcut and user profile menu navigation to `/settings/profile`; (Finding 7) applied `aria-sort` to table column headers `<th>` and header triggers with tests. |
 
 ## Residual limitations
 
