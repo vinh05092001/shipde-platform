@@ -270,6 +270,20 @@ async function runAttachmentsSupertestSuite() {
       [whId1],
       [branchId1]
     );
+    const mixedUserA = await setupUserSession(
+      merchantIdA,
+      RoleEnum.WAREHOUSE,
+      'mixed-a',
+      [whId1],
+      ['*']
+    );
+    const emptyUserA = await setupUserSession(
+      merchantIdA,
+      RoleEnum.WAREHOUSE,
+      'empty-a',
+      [],
+      []
+    );
     const ownerB = await setupUserSession(merchantIdB, RoleEnum.OWNER, 'owner-b');
 
     // ========================================================================
@@ -304,6 +318,8 @@ async function runAttachmentsSupertestSuite() {
     assert.strictEqual(uploadRes.body.data.file_name, `damaged_box_${testSuffix}.png`);
     assert.strictEqual(uploadRes.body.data.checksum_sha256, validChecksum);
     assert.strictEqual(uploadRes.body.data.status, 'ACTIVE');
+    assert.strictEqual(uploadRes.body.data.metadata.scan_status, 'HEURISTIC_PASSED');
+    assert.strictEqual(uploadRes.body.data.metadata.scan_clearance, false);
     assert.ok(uploadRes.body.data.id);
     const createdAttachmentId = uploadRes.body.data.id;
 
@@ -385,6 +401,26 @@ async function runAttachmentsSupertestSuite() {
     // AC-COM-06-13: Download attachment content (Finding 8: filename contract)
     // ========================================================================
     console.log('🧪 Testing AC-COM-06-13: Download attachment content...');
+    // Review P1 (Finding 1) HTTP negative test: download rejected before external AV clearance
+    const preClearanceDl = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${createdAttachmentId}/download`)
+      .set('Authorization', `Bearer ${ownerA.token}`);
+    assert.strictEqual(preClearanceDl.status, 403);
+    assert.strictEqual(preClearanceDl.body.error.code, 'ATTACHMENT_UNAVAILABLE');
+
+    // External AV clearance daemon marks the attachment CLEAN
+    const attRow = await prisma.attachment.findFirst({ where: { id: createdAttachmentId } });
+    await prisma.attachment.update({
+      where: { id: createdAttachmentId },
+      data: {
+        metadata: {
+          ...((attRow?.metadata as any) ?? {}),
+          scan_status: 'CLEAN',
+          scan_clearance: true,
+        },
+      },
+    });
+
     const dlRes = await request(app.getHttpServer())
       .get(`/api/v1/attachments/${createdAttachmentId}/download`)
       .set('Authorization', `Bearer ${ownerA.token}`);
@@ -467,6 +503,133 @@ async function runAttachmentsSupertestSuite() {
     assert.strictEqual(bulkRes.status, 200);
     assert.strictEqual(bulkRes.body.data.total, 2);
     assert.strictEqual(bulkRes.body.data.failure_count, 2);
+
+    // ========================================================================
+    // Review P1 (Finding 4): HTTP-level negative tests for mixed-scope and empty-scope actors
+    // ========================================================================
+    console.log('🧪 Testing Review P1 (Finding 4): Mixed-scope and empty-scope actor access...');
+
+    // Upload an unscoped attachment using ownerA
+    const unscopedRes = await request(app.getHttpServer())
+      .post('/api/v1/attachments/upload')
+      .set('Authorization', `Bearer ${ownerA.token}`)
+      .send({
+        file_name: `unscoped_${testSuffix}.png`,
+        mime_type: 'image/png',
+        content_base64: fileBytes.toString('base64'),
+        entity_type: 'GENERAL',
+      });
+    assert.strictEqual(unscopedRes.status, 201);
+    const unscopedAttId = unscopedRes.body.data.id;
+    if (unscopedRes.body?.data?.storage_key) {
+      uploadedS3Keys.push(unscopedRes.body.data.storage_key);
+    }
+
+    // Mark unscoped attachment CLEAN so clearance check is satisfied
+    const unscopedRow = await prisma.attachment.findFirst({ where: { id: unscopedAttId } });
+    await prisma.attachment.update({
+      where: { id: unscopedAttId },
+      data: {
+        metadata: {
+          ...((unscopedRow?.metadata as any) ?? {}),
+          scan_status: 'CLEAN',
+          scan_clearance: true,
+        },
+      },
+    });
+
+    // 1. mixedUserA (wh: [whId1], store: ['*']) attempting unscoped attachment
+    const mixedGetRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${unscopedAttId}`)
+      .set('Authorization', `Bearer ${mixedUserA.token}`);
+    assert.strictEqual(mixedGetRes.status, 403);
+    assert.strictEqual(mixedGetRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const mixedDlRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${unscopedAttId}/download`)
+      .set('Authorization', `Bearer ${mixedUserA.token}`);
+    assert.strictEqual(mixedDlRes.status, 403);
+    assert.strictEqual(mixedDlRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const mixedDelRes = await request(app.getHttpServer())
+      .delete(`/api/v1/attachments/${unscopedAttId}`)
+      .set('Authorization', `Bearer ${mixedUserA.token}`)
+      .send({ confirm: true });
+    assert.strictEqual(mixedDelRes.status, 403);
+    assert.strictEqual(mixedDelRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const mixedUploadRes = await request(app.getHttpServer())
+      .post('/api/v1/attachments/upload')
+      .set('Authorization', `Bearer ${mixedUserA.token}`)
+      .send({
+        file_name: `attempt_unscoped_${testSuffix}.png`,
+        mime_type: 'image/png',
+        content_base64: fileBytes.toString('base64'),
+        entity_type: 'GENERAL',
+      });
+    assert.strictEqual(mixedUploadRes.status, 403);
+    assert.strictEqual(mixedUploadRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const mixedListRes = await request(app.getHttpServer())
+      .get('/api/v1/attachments')
+      .set('Authorization', `Bearer ${mixedUserA.token}`);
+    assert.strictEqual(mixedListRes.status, 200);
+    assert.strictEqual(
+      mixedListRes.body.data.some((a: any) => a.id === unscopedAttId),
+      false
+    );
+
+    // 2. emptyUserA (wh: [], store: []) attempting operations
+    const emptyListRes = await request(app.getHttpServer())
+      .get('/api/v1/attachments')
+      .set('Authorization', `Bearer ${emptyUserA.token}`);
+    assert.strictEqual(emptyListRes.status, 200);
+    assert.strictEqual(emptyListRes.body.data.length, 0);
+
+    const emptyGetRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${unscopedAttId}`)
+      .set('Authorization', `Bearer ${emptyUserA.token}`);
+    assert.strictEqual(emptyGetRes.status, 403);
+    assert.strictEqual(emptyGetRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const emptyUploadRes = await request(app.getHttpServer())
+      .post('/api/v1/attachments/upload')
+      .set('Authorization', `Bearer ${emptyUserA.token}`)
+      .send({
+        file_name: `empty_upload_${testSuffix}.png`,
+        mime_type: 'image/png',
+        content_base64: fileBytes.toString('base64'),
+        warehouse_id: whId1,
+      });
+    assert.strictEqual(emptyUploadRes.status, 403);
+    assert.strictEqual(emptyUploadRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    // ========================================================================
+    // Review P1 (Finding 5): Audit log sensitive data inspection
+    // ========================================================================
+    console.log('🧪 Testing Review P1 (Finding 5): Audit logs mask PII & sensitive text...');
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { merchant_id: merchantIdA },
+    });
+    assert.ok(auditLogs.length > 0);
+    for (const log of auditLogs) {
+      // Reason must never contain storage key or raw filename
+      if (log.reason) {
+        assert.strictEqual(
+          log.reason.includes(`damaged_box_${testSuffix}.png`),
+          false,
+          'Audit log reason must not contain raw filename'
+        );
+      }
+      if (log.new_value) {
+        const valStr = JSON.stringify(log.new_value);
+        assert.strictEqual(
+          valStr.includes(`damaged_box_${testSuffix}.png`),
+          false,
+          'Audit new_value must not contain raw filename'
+        );
+      }
+    }
 
     console.log('🎉 All Attachments Supertest assertions passed!');
   } finally {

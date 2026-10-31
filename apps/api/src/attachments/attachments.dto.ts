@@ -138,6 +138,49 @@ const ZIP_FORBIDDEN_EXTENSIONS = [
   '.ps1',
 ];
 
+interface CentralDirectoryEntry {
+  method: number;
+  compSize: number;
+  uncompSize: number;
+  flags: number;
+}
+
+/**
+ * Indexes the ZIP central directory by local header offset. Streaming writers
+ * (and writers that use data descriptors) leave the local-header sizes zero and
+ * store the real sizes only in the data descriptor / central directory, so the
+ * content gate resolves authoritative sizes from here.
+ */
+function buildCentralDirectoryIndex(buffer: Buffer): Map<number, CentralDirectoryEntry> {
+  const index = new Map<number, CentralDirectoryEntry>();
+  let j = 0;
+  while (j + 46 <= buffer.length) {
+    if (
+      buffer[j] !== 0x50 ||
+      buffer[j + 1] !== 0x4b ||
+      buffer[j + 2] !== 0x01 ||
+      buffer[j + 3] !== 0x02
+    ) {
+      j += 1;
+      continue;
+    }
+    const localOffset = buffer.readUInt32LE(j + 42);
+    if (!index.has(localOffset)) {
+      index.set(localOffset, {
+        method: buffer.readUInt16LE(j + 10),
+        compSize: buffer.readUInt32LE(j + 20),
+        uncompSize: buffer.readUInt32LE(j + 24),
+        flags: buffer.readUInt16LE(j + 8),
+      });
+    }
+    const nameLen = buffer.readUInt16LE(j + 28);
+    const extraLen = buffer.readUInt16LE(j + 30);
+    const commentLen = buffer.readUInt16LE(j + 32);
+    j += 46 + nameLen + extraLen + commentLen;
+  }
+  return index;
+}
+
 /**
  * Inspects a single decompressed archive entry for executable or active-content signatures.
  */
@@ -175,6 +218,10 @@ function scanZipArchiveEntries(
   let inspected = 0;
   let i = 0;
 
+  // Authoritative sizes for entries whose local header carries zero sizes
+  // (streaming writers / data descriptors). Fail closed when unverifiable.
+  const centralIndex = buildCentralDirectoryIndex(buffer);
+
   // Walk local file headers in order: signature 0x50, 0x4B, 0x03, 0x04
   while (i + 30 <= buffer.length) {
     const isLocalHeader =
@@ -199,10 +246,27 @@ function scanZipArchiveEntries(
 
     const flags = buffer.readUInt16LE(i + 6);
     const method = buffer.readUInt16LE(i + 8);
-    const compSize = buffer.readUInt32LE(i + 18);
+    let compSize = buffer.readUInt32LE(i + 18);
     const fileNameLen = buffer.readUInt16LE(i + 26);
     const extraLen = buffer.readUInt16LE(i + 28);
     const dataStart = i + 30 + fileNameLen + extraLen;
+
+    // A zero local compressed size means the size resides in a data descriptor.
+    // Resolve it from the central directory; without that record the entry
+    // content cannot be bounded or inspected, so fail closed.
+    if (compSize === 0) {
+      const central = centralIndex.get(i);
+      if (!central) {
+        return {
+          isExecutable: false,
+          isSuspicious: true,
+          hasOpenXmlParts,
+          reason:
+            'Archive entry declares a zero local size without a verifiable central directory record (streaming data descriptor).',
+        };
+      }
+      compSize = central.compSize;
+    }
 
     if (fileNameLen > 0 && i + 30 + fileNameLen <= buffer.length) {
       const fileName = buffer
@@ -897,18 +961,44 @@ export const SENSITIVE_ATTACHMENT_AUDIT_FIELDS = new Set([
   'contact_email',
   'recipient_phone',
   'customer_phone',
+  'phone_number',
+  'user_phone',
+  'user_email',
+  'secret',
+  'token',
+  'file_name',
+  'filename',
+  'storage_key',
+  'file_path',
+  'filepath',
 ]);
 
 export function maskAttachmentAuditValue(field: string, val: unknown): unknown {
   if (val === null || val === undefined) return val;
-  if (typeof val === 'string' && SENSITIVE_ATTACHMENT_AUDIT_FIELDS.has(field)) {
+  const lowerField = field.toLowerCase();
+  if (
+    typeof val === 'string' &&
+    (SENSITIVE_ATTACHMENT_AUDIT_FIELDS.has(lowerField) ||
+      lowerField.includes('phone') ||
+      lowerField.includes('email') ||
+      lowerField.includes('secret') ||
+      lowerField.includes('token') ||
+      lowerField.includes('filename') ||
+      lowerField.includes('file_name') ||
+      lowerField.includes('storage_key'))
+  ) {
     return maskIdentifier(val);
+  }
+  if (typeof val === 'string') {
+    return constrainAuditFreeText(val);
   }
   if (Array.isArray(val)) {
     return val.map((item) =>
       typeof item === 'object' && item !== null
         ? maskAttachmentAuditObject(item as Record<string, unknown>)
-        : item
+        : typeof item === 'string'
+          ? constrainAuditFreeText(item)
+          : item
     );
   }
   if (typeof val === 'object') {
@@ -924,4 +1014,28 @@ export function maskAttachmentAuditObject(obj: Record<string, unknown>): Record<
     result[k] = maskAttachmentAuditValue(k, v);
   }
   return result;
+}
+
+const AUDIT_EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const AUDIT_PHONE_CANDIDATE_RE = /\+?[\d\s().-]{8,16}/g;
+
+/**
+ * Constrains user-controlled free text before it is persisted in an audit
+ * record: redacts email addresses and phone-like sequences (digit runs of at
+ * least 8 digits), strips control characters and bounds the length. Audit
+ * records must never carry raw user-supplied PII or unbounded text
+ * (BR-COM06, zero-plaintext-PII rule).
+ */
+export function constrainAuditFreeText(text: unknown, maxLength = 500): string {
+  if (typeof text !== 'string') return '';
+  let out = text
+    .replace(AUDIT_EMAIL_RE, '[REDACTED_EMAIL]')
+    .replace(AUDIT_PHONE_CANDIDATE_RE, (match) =>
+      match.replace(/\D/g, '').length >= 8 ? '[REDACTED_PHONE]' : match
+    );
+  out = out.replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '');
+  if (out.length > maxLength) {
+    out = `${out.slice(0, maxLength - 1)}…`;
+  }
+  return out;
 }

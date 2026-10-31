@@ -17,6 +17,7 @@ export const WORKSPACE_ENV = {
   DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS: 300,
   DEFAULT_ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: 512,
   DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: 104857600,
+  DEFAULT_ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS: 900,
 } as const;
 
 export type WorkspaceEnvironment = typeof WORKSPACE_ENV;
@@ -73,6 +74,12 @@ export interface AppConfig {
   ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: number;
   /** Maximum decompressed bytes the attachment content gate will materialize per entry (FEAT-COM-06). */
   ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: number;
+  /**
+   * Grace period in seconds before an in-progress (PENDING) upload orphan record
+   * is considered stale and becomes eligible for orphan reconciliation (FEAT-COM-06).
+   * Prevents the reconciler from deleting objects of uploads that are still committing.
+   */
+  ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -445,6 +452,24 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  const attachmentOrphanGraceRaw = rawEnv.ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS;
+  let ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS;
+  if (attachmentOrphanGraceRaw !== undefined && attachmentOrphanGraceRaw !== '') {
+    if (!/^\d+$/.test(attachmentOrphanGraceRaw)) {
+      invalidFields.push('ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentOrphanGraceRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 86400) {
+        invalidFields.push(
+          'ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS (must be a positive integer between 1 and 86400)'
+        );
+      } else {
+        ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS = parsed;
+      }
+    }
+  }
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -481,6 +506,7 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     ATTACHMENT_DOWNLOAD_TTL_SECONDS,
     ATTACHMENT_SCAN_MAX_ZIP_ENTRIES,
     ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES,
+    ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS,
   };
 }
 

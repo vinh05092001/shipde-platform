@@ -1,5 +1,6 @@
 import { Injectable, HttpStatus, Inject } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { CanonicalApiException } from '../auth/auth.service';
@@ -14,7 +15,9 @@ import {
   BulkDeleteAttachmentsDto,
   isValidUuid,
   sanitizeFileName,
+  getFileExtension,
   maskAttachmentAuditObject,
+  constrainAuditFreeText,
 } from './attachments.dto';
 import {
   FormattedAttachment,
@@ -42,6 +45,16 @@ export class AttachmentsService {
       .update(ip || '127.0.0.1')
       .digest('hex')
       .substring(0, 16);
+  }
+
+  /**
+   * Masks an audit payload object (sensitive fields redacted) and returns it
+   * in a Prisma JSON-input-compatible shape. Every audit new_value/old_value
+   * written by this service MUST go through this helper so audit metadata is
+   * always masked.
+   */
+  private maskAuditJson(obj: Record<string, unknown>): Prisma.InputJsonValue {
+    return maskAttachmentAuditObject(obj) as unknown as Prisma.InputJsonValue;
   }
 
   public formatAttachment(att: any): FormattedAttachment {
@@ -104,6 +117,39 @@ export class AttachmentsService {
   }
 
   /**
+   * Single consistent predicate for unscoped (no warehouse_id AND no branch_id)
+   * attachment rows. An actor may reach unscoped rows only with tenant-wide
+   * permission (iam:shop_config / search:tenant_wide) or a wildcard scope in
+   * BOTH dimensions. A wildcard in only one dimension is NOT sufficient —
+   * this is the same predicate applied by upload, list discovery, retention
+   * purge discovery and reconciliation discovery, so a row is never reachable
+   * by ID that discovery excludes (and vice versa). Empty scopes deny.
+   */
+  public canAccessUnscopedAttachment(scopes: {
+    warehouseScopes: string[];
+    storeScopes: string[];
+    permissions: Set<string>;
+  }): boolean {
+    if (
+      scopes.permissions.has('iam:shop_config') ||
+      scopes.permissions.has('search:tenant_wide')
+    ) {
+      return true;
+    }
+    if (
+      !Array.isArray(scopes.warehouseScopes) ||
+      scopes.warehouseScopes.length === 0 ||
+      !Array.isArray(scopes.storeScopes) ||
+      scopes.storeScopes.length === 0
+    ) {
+      return false;
+    }
+    return (
+      scopes.warehouseScopes.includes('*') && scopes.storeScopes.includes('*')
+    );
+  }
+
+  /**
    * Evaluates if the actor is permitted to access an attachment per FEAT-RBAC-02.
    * Enforces server-side warehouse and branch scopes; rejects unscoped access for non-wildcard actors.
    */
@@ -111,6 +157,21 @@ export class AttachmentsService {
     attachment: { warehouse_id?: string | null; branch_id?: string | null },
     scopes: { warehouseScopes: string[]; storeScopes: string[]; permissions: Set<string> }
   ): boolean {
+    if (
+      scopes.permissions.has('iam:shop_config') ||
+      scopes.permissions.has('search:tenant_wide')
+    ) {
+      return true;
+    }
+
+    // Empty scopes deny all access
+    if (
+      (!scopes.warehouseScopes || scopes.warehouseScopes.length === 0) &&
+      (!scopes.storeScopes || scopes.storeScopes.length === 0)
+    ) {
+      return false;
+    }
+
     if (attachment.warehouse_id) {
       const hasAccess =
         scopes.warehouseScopes.includes('*') ||
@@ -124,17 +185,12 @@ export class AttachmentsService {
       if (!hasAccess) return false;
     }
 
-    // Unscoped attachment (no warehouse_id and no branch_id)
-    // Finding 3: Omitting scope fields must not create an unscoped record accessible to anyone.
-    // Unscoped attachments require wildcard scope ('*') OR tenant-wide access permission.
+    // Unscoped attachment (no warehouse_id and no branch_id):
+    // the same strict predicate used by discovery — wildcard in BOTH dimensions
+    // or tenant-wide permission. A single-dimension wildcard must not expose
+    // tenant-wide (unscoped) evidence. Empty scopes deny.
     if (!attachment.warehouse_id && !attachment.branch_id) {
-      const hasWildcardScope =
-        scopes.warehouseScopes.includes('*') || scopes.storeScopes.includes('*');
-      const hasTenantWidePermission =
-        scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
-      if (!hasWildcardScope && !hasTenantWidePermission) {
-        return false;
-      }
+      return this.canAccessUnscopedAttachment(scopes);
     }
 
     return true;
@@ -444,13 +500,11 @@ export class AttachmentsService {
       }
     }
 
-    // Unscoped validation: scoped actors (non-wildcard) cannot create unscoped records
+    // Unscoped validation: the same strict predicate as read access — creating
+    // an unscoped record requires tenant-wide permission or wildcard scope in
+    // BOTH dimensions. A single-dimension wildcard is not sufficient.
     if (!resolvedWarehouseId && !resolvedBranchId) {
-      const hasWildcardScope =
-        scopes.warehouseScopes.includes('*') && scopes.storeScopes.includes('*');
-      const hasTenantWidePermission =
-        scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide');
-      if (!hasWildcardScope && !hasTenantWidePermission) {
+      if (!this.canAccessUnscopedAttachment(scopes)) {
         throw new CanonicalApiException(
           HttpStatus.FORBIDDEN,
           'SCOPE_FORBIDDEN',
@@ -475,10 +529,16 @@ export class AttachmentsService {
 
     const attachmentId = randomUUID();
     const sanitizedName = sanitizeFileName(dto.file_name);
-    const storageKey = `merchants/${actor.merchantId}/attachments/${attachmentId}/${sanitizedName}`;
+    // Opaque object name (checksum prefix + extension only): user-controlled
+    // filenames must never appear in storage keys, S3 metadata or audit values.
+    const opaqueName = `${computedSha256.slice(0, 16)}${getFileExtension(dto.file_name)}`;
+    const storageKey = `merchants/${actor.merchantId}/attachments/${attachmentId}/${opaqueName}`;
     const storageBucket = this.config.S3_BUCKET;
 
-    // Finding 3: Persist recoverable orphan cleanup intent BEFORE external storage write
+    // Persist recoverable orphan cleanup intent BEFORE external storage write.
+    // PENDING means "upload in progress, this upload owns the object"; the
+    // reconciler may only touch it after the grace period or once the upload
+    // explicitly marks it ORPHANED (see reconcilePendingDeletions).
     let orphanIntent: any;
     try {
       orphanIntent = await this.prisma.attachmentOrphanCleanup.create({
@@ -504,11 +564,14 @@ export class AttachmentsService {
     try {
       await this.storage.putObject(storageKey, buffer, dto.mime_type.toLowerCase());
     } catch {
-      // If external upload failed, mark intent DONE so reconciler doesn't attempt deleting non-existent object
+      // Ambiguous storage outcome: S3 may have stored the object before its
+      // response was lost. The outcome must stay RECOVERABLE — mark the intent
+      // ORPHANED (never DONE) so reconciliation deletes the object if it exists
+      // (S3 DeleteObject is idempotent and succeeds for missing keys too).
       await this.prisma.attachmentOrphanCleanup
         .update({
           where: { id: orphanIntent.id },
-          data: { status: 'DONE' },
+          data: { status: 'ORPHANED' },
         })
         .catch(() => {});
 
@@ -549,11 +612,15 @@ export class AttachmentsService {
             expires_at: expiresAt,
             metadata: {
               ...(dto.metadata ? maskAttachmentAuditObject(dto.metadata) : {}),
-              scan_status: AttachmentScanStatus.CLEAN,
-              scan_clearance: true,
+              // The in-app content gate is heuristic: passing it establishes
+              // HEURISTIC_PASSED only. CLEAN is reserved for trusted external
+              // antivirus clearance (infrastructure-managed) and is never
+              // stamped by application code.
+              scan_status: AttachmentScanStatus.HEURISTIC_PASSED,
+              scan_clearance: false,
               scanned_at: new Date().toISOString(),
               scanner: 'shipde-content-gate',
-              scan_note: 'Malware and active-content inspection passed.',
+              scan_note: 'Heuristic content gate passed; awaiting trusted antivirus clearance.',
             } as any,
           },
         });
@@ -566,8 +633,9 @@ export class AttachmentsService {
             action: AttachmentAuditEvent.ATTACHMENT_UPLOADED,
             entity_type: 'ATTACHMENT',
             entity_id: created.id,
-            new_value: {
-              file_name: sanitizedName,
+            // Opaque identifiers only: user-controlled filenames and storage
+            // keys must never reach audit records (zero-plaintext-PII rule).
+            new_value: this.maskAuditJson({
               file_size: buffer.length,
               mime_type: dto.mime_type.toLowerCase(),
               checksum_sha256: computedSha256,
@@ -576,15 +644,17 @@ export class AttachmentsService {
               branch_id: created.branch_id,
               retention_days: retentionDays,
               correlation_id: correlationId,
-            },
+            }),
             ip_address: this.hashIp(ipAddress),
             reason: correlationId
               ? `correlation_id:${correlationId}`
-              : `Uploaded attachment ${sanitizedName} (${buffer.length} bytes)`,
+              : `Uploaded attachment ${created.id} (${buffer.length} bytes)`,
           },
         });
 
-        // Transactionally finalize the orphan intent record
+        // Transactionally finalize the orphan intent record: DONE means the
+        // object is now owned by the committed attachment row and the
+        // reconciler must never touch it.
         await tx.attachmentOrphanCleanup.update({
           where: { id: orphanIntent.id },
           data: { status: 'DONE' },
@@ -593,10 +663,11 @@ export class AttachmentsService {
         return created;
       });
     } catch (dbErr: any) {
-      // Finding 3 & 6: Compensation - remove the S3 object if the database
-      // transaction fails. If immediate removal succeeds, mark orphan intent DONE.
-      // If immediate removal fails, orphanIntent remains PENDING for reconcile.
-      // Finding 6: Opaque identifier in logs, NEVER leak storageKey containing user filename.
+      // Compensation - remove the S3 object if the database transaction fails.
+      // If immediate removal succeeds, mark orphan intent DONE (object known
+      // absent). If immediate removal fails, mark it ORPHANED (ambiguous: the
+      // object may still exist) so reconciliation retries the deletion.
+      // Opaque identifier in logs; never leak the storage key.
       try {
         await this.storage.deleteObject(storageKey);
         await this.prisma.attachmentOrphanCleanup
@@ -606,6 +677,12 @@ export class AttachmentsService {
           })
           .catch(() => {});
       } catch {
+        await this.prisma.attachmentOrphanCleanup
+          .update({
+            where: { id: orphanIntent.id },
+            data: { status: 'ORPHANED' },
+          })
+          .catch(() => {});
         console.warn(
           `[AttachmentsService] Stored durable orphan cleanup record for attachment id ${attachmentId}.`
         );
@@ -739,7 +816,6 @@ export class AttachmentsService {
     if (!query.entity_type && !scopes.permissions.has('iam:shop_config')) {
       andConditions.push({
         OR: [
-          { entity_type: null },
           { entity_type: 'GENERAL' },
           { entity_type: { in: allowedEntityTypes } },
         ],
@@ -758,9 +834,11 @@ export class AttachmentsService {
       });
     }
 
-    // Unscoped items (warehouse_id == null && branch_id == null) require tenant-wide permission
-    // OR wildcard in both dimensions
-    if (!hasTenantWide && (!hasWarehouseWildcard || !hasStoreWildcard)) {
+    // Unscoped items (warehouse_id == null && branch_id == null) are discoverable
+    // only through the same strict predicate as direct row access: tenant-wide
+    // permission or wildcard in BOTH dimensions (a single-dimension wildcard must
+    // not expose tenant-wide evidence).
+    if (!this.canAccessUnscopedAttachment(scopes)) {
       andConditions.push({
         NOT: {
           warehouse_id: null,
@@ -877,7 +955,22 @@ export class AttachmentsService {
       );
     }
 
-    // Finding 1: Quarantine/safety status gate and malware clearance verification
+    // Scope and capability gates first: a denied actor gets SCOPE_FORBIDDEN /
+    // FORBIDDEN regardless of scan state (no state-based info disclosure).
+    const scopes = await this.getActorScopes(actor);
+    const hasScopeAccess = this.checkAttachmentScope(attachment, scopes);
+    if (!hasScopeAccess) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'SCOPE_FORBIDDEN',
+        'Bạn không có quyền tải xuống tệp đính kèm thuộc kho hoặc chi nhánh này.'
+      );
+    }
+
+    // Verify capability for entity type
+    this.verifyAttachmentCapabilities(scopes, 'DOWNLOAD', attachment.entity_type);
+
+    // Quarantine/safety status gate
     const metadata = (attachment.metadata as Record<string, any>) || {};
     const scanStatus = metadata.scan_status;
     if (
@@ -900,29 +993,17 @@ export class AttachmentsService {
       );
     }
 
-    // Fail-closed scan clearance check: download requires verified clean scan clearance
-    const isScanCleared =
-      scanStatus === AttachmentScanStatus.CLEAN || metadata.scan_clearance === true;
-    if (!isScanCleared) {
+    // Fail-closed scan clearance check: content release requires TRUSTED
+    // clearance — scan_status === CLEAN, stamped exclusively by the
+    // infrastructure-managed external antivirus. HEURISTIC_PASSED (the
+    // in-app content gate) and any application-side flag are NOT clearance.
+    if (scanStatus !== AttachmentScanStatus.CLEAN) {
       throw new CanonicalApiException(
         HttpStatus.FORBIDDEN,
         'ATTACHMENT_UNAVAILABLE',
         'Tệp đính kèm chưa hoàn tất kiểm tra an toàn mã độc (malware clearance).'
       );
     }
-
-    const scopes = await this.getActorScopes(actor);
-    const hasScopeAccess = this.checkAttachmentScope(attachment, scopes);
-    if (!hasScopeAccess) {
-      throw new CanonicalApiException(
-        HttpStatus.FORBIDDEN,
-        'SCOPE_FORBIDDEN',
-        'Bạn không có quyền tải xuống tệp đính kèm thuộc kho hoặc chi nhánh này.'
-      );
-    }
-
-    // Finding 2: Verify capability for entity type
-    this.verifyAttachmentCapabilities(scopes, 'DOWNLOAD', attachment.entity_type);
 
     let s3Obj;
     try {
@@ -945,17 +1026,17 @@ export class AttachmentsService {
           action: AttachmentAuditEvent.ATTACHMENT_ACCESSED,
           entity_type: 'ATTACHMENT',
           entity_id: attachment.id,
-          new_value: {
-            file_name: attachment.file_name,
+          // Opaque identifiers only: no user-controlled filename or storage key.
+          new_value: this.maskAuditJson({
             file_size: Number(attachment.file_size),
             mime_type: attachment.mime_type,
-            storage_key: attachment.storage_key,
+            checksum_sha256: attachment.checksum_sha256,
             correlation_id: correlationId,
-          },
+          }),
           ip_address: this.hashIp(ipAddress),
           reason: correlationId
             ? `correlation_id:${correlationId}`
-            : `Downloaded attachment ${attachment.file_name} (${attachment.file_size} bytes)`,
+            : `Downloaded attachment ${attachment.id} (${attachment.file_size} bytes)`,
         },
       });
     } catch (auditErr: any) {
@@ -1048,19 +1129,19 @@ export class AttachmentsService {
             action: AttachmentAuditEvent.ATTACHMENT_DELETED,
             entity_type: 'ATTACHMENT',
             entity_id: attachment.id,
-            old_value: {
+            // Opaque identifiers only: no user-controlled filename.
+            old_value: this.maskAuditJson({
               status: attachment.status,
-              file_name: attachment.file_name,
               file_size: Number(attachment.file_size),
-            },
-            new_value: {
+            }),
+            new_value: this.maskAuditJson({
               status: 'PENDING_DELETION',
               correlation_id: correlationId,
-            },
+            }),
             ip_address: this.hashIp(ipAddress),
             reason: correlationId
               ? `correlation_id:${correlationId}`
-              : `Requested deletion of attachment ${attachment.file_name}`,
+              : `Requested deletion of attachment ${attachment.id}`,
           },
         });
       });
@@ -1119,7 +1200,10 @@ export class AttachmentsService {
 
     const where: any = {
       merchant_id: actor.merchantId,
-      status: 'ACTIVE',
+      // BR-COM06-09: expired QUARANTINED evidence must also flow through the
+      // deletion lifecycle; quarantine must never let an object escape its
+      // configured retention expiry.
+      status: { in: ['ACTIVE', 'QUARANTINED'] },
       expires_at: { lte: now },
     };
 
@@ -1127,7 +1211,7 @@ export class AttachmentsService {
       where.entity_type = dto.entity_type.trim().toUpperCase();
     }
 
-    // Finding 4: Scope conditions during discovery
+    // Scope conditions during discovery (consistent with list and row access)
     const scopeConditions: any[] = [];
     if (!scopes.warehouseScopes.includes('*')) {
       scopeConditions.push({
@@ -1138,6 +1222,9 @@ export class AttachmentsService {
       scopeConditions.push({
         OR: [{ branch_id: null }, { branch_id: { in: scopes.storeScopes } }],
       });
+    }
+    if (!this.canAccessUnscopedAttachment(scopes)) {
+      scopeConditions.push({ NOT: { warehouse_id: null, branch_id: null } });
     }
 
     if (scopeConditions.length > 0) {
@@ -1186,11 +1273,15 @@ export class AttachmentsService {
               action: AttachmentAuditEvent.ATTACHMENT_PURGED,
               entity_type: 'ATTACHMENT',
               entity_id: att.id,
-              new_value: {
+              old_value: this.maskAuditJson({
+                status: att.status,
+                file_size: Number(att.file_size),
+              }),
+              new_value: this.maskAuditJson({
                 status: 'PENDING_DELETION',
                 reason: 'RETENTION_EXPIRED',
                 correlation_id: correlationId,
-              },
+              }),
               ip_address: this.hashIp(ipAddress),
               reason: correlationId
                 ? `correlation_id:${correlationId}`
@@ -1343,14 +1434,18 @@ export class AttachmentsService {
               merchant_id: actor.merchantId,
               user_id: actor.userId,
               actor: actor.userId,
-              action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
-              entity_type: 'ATTACHMENT',
-              entity_id: id,
-              new_value: { status: 'PENDING_DELETION', correlation_id: correlationId },
-              ip_address: this.hashIp(ipAddress),
-              reason: correlationId
-                ? `correlation_id:${correlationId}`
-                : `Bulk deleted attachment ${attachment.file_name}`,
+            action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
+            entity_type: 'ATTACHMENT',
+            entity_id: id,
+            // Opaque identifier only: no user-controlled filename.
+            new_value: this.maskAuditJson({
+              status: 'PENDING_DELETION',
+              correlation_id: correlationId,
+            }),
+            ip_address: this.hashIp(ipAddress),
+            reason: correlationId
+              ? `correlation_id:${correlationId}`
+              : `Bulk deleted attachment ${id}`,
             },
           });
         });
@@ -1474,6 +1569,10 @@ export class AttachmentsService {
       );
     }
 
+    // User-controlled quarantine reason must not reach audit records as raw
+    // free text: redact phone-like/email sequences and bound the length.
+    const constrainedReason = constrainAuditFreeText(reason);
+
     const updated = await this.prisma.$transaction(async (tx) => {
       // Finding 5: Atomic conditional transition from ACTIVE to prevent race with concurrent deletion
       const updateRes = await tx.attachment.updateMany({
@@ -1505,12 +1604,17 @@ export class AttachmentsService {
           action: AttachmentAuditEvent.ATTACHMENT_QUARANTINED,
           entity_type: 'ATTACHMENT',
           entity_id: id,
-          old_value: { status: 'ACTIVE' },
-          new_value: { status: 'QUARANTINED', reason, correlation_id: correlationId },
+          old_value: this.maskAuditJson({ status: 'ACTIVE' }),
+          // Free-text reason is redacted and length-bounded before persistence.
+          new_value: this.maskAuditJson({
+            status: 'QUARANTINED',
+            reason: constrainedReason,
+            correlation_id: correlationId,
+          }),
           ip_address: this.hashIp('127.0.0.1'),
           reason: correlationId
             ? `correlation_id:${correlationId}`
-            : `Quarantined attachment ${attachment.file_name}: ${reason}`,
+            : `Quarantined attachment ${id}`,
         },
       });
 
@@ -1573,7 +1677,10 @@ export class AttachmentsService {
         }
       }
       andConditions.push({
-        OR: [{ entity_type: { in: allowedEntities } }, { entity_type: null }],
+        OR: [
+          { entity_type: 'GENERAL' },
+          { entity_type: { in: allowedEntities } },
+        ],
       });
     }
 
@@ -1633,10 +1740,29 @@ export class AttachmentsService {
     // Durable orphan-cleanup records (upload compensation outbox). These objects were
     // never linked to an attachment row, so they carry no warehouse/branch scope; they
     // are tenant-scoped and gated by the maintenance capability above.
+    //
+    // Eligibility is strict so reconciliation can never destroy the object of a
+    // successful or in-flight upload:
+    //   - ORPHANED: the upload explicitly declared the object unreferenced
+    //     (ambiguous storage outcome, or failed DB commit whose immediate
+    //     cleanup also failed);
+    //   - PENDING older than the grace period: the owning upload is presumed
+    //     dead (crash mid-flight). A fresh PENDING record is always owned by
+    //     a live upload and is never selected.
+    //
+    // Every deletion is preceded by an atomic claim (conditional updateMany).
+    // If the owning upload commits concurrently (PENDING -> DONE inside its
+    // transaction), the claim returns count 0 and the object is left untouched.
+    const stalePendingCutoff = new Date(
+      Date.now() - this.config.ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS * 1000
+    );
     const orphanRecords = await this.prisma.attachmentOrphanCleanup.findMany({
       where: {
         merchant_id: actor.merchantId,
-        status: 'PENDING',
+        OR: [
+          { status: 'ORPHANED' },
+          { status: 'PENDING', updated_at: { lte: stalePendingCutoff } },
+        ],
       },
       take: 50,
       orderBy: { created_at: 'asc' },
@@ -1646,8 +1772,28 @@ export class AttachmentsService {
     let orphanFailed = 0;
 
     for (const record of orphanRecords) {
+      const preStatus = record.status; // 'ORPHANED' or stale 'PENDING'
+
+      // Atomic claim: only proceed while the record is still in the claimed
+      // state. A concurrent upload commit (PENDING -> DONE) or a concurrent
+      // reconciler (-> RECONCILING) makes the claim fail; we then skip the
+      // object entirely instead of deleting it.
+      const claim = await this.prisma.attachmentOrphanCleanup.updateMany({
+        where: {
+          id: record.id,
+          merchant_id: actor.merchantId,
+          status: preStatus,
+        },
+        data: { status: 'RECONCILING', attempts: record.attempts + 1 },
+      });
+      if (claim.count === 0) {
+        continue;
+      }
+
       try {
-        // Finding 13: Persist durable audit log before deletion so audit is never lost
+        // Persist durable audit log before deletion so audit is never lost.
+        // Opaque identifiers only (record id / app-defined reason); no
+        // storage key or user filename is ever audited.
         await this.prisma.auditLog.create({
           data: {
             merchant_id: actor.merchantId,
@@ -1656,27 +1802,36 @@ export class AttachmentsService {
             action: AttachmentAuditEvent.ATTACHMENT_ORPHAN_CLEANED,
             entity_type: 'ATTACHMENT_ORPHAN',
             entity_id: record.id,
-            new_value: {
+            new_value: this.maskAuditJson({
               reason: record.reason,
               correlation_id: correlationId,
-            },
+            }),
             reason: correlationId
               ? `correlation_id:${correlationId}`
               : 'Reconciled durable orphan cleanup record from upload rollback.',
           },
         });
 
-        // External storage deletion
+        // External storage deletion (idempotent: S3 DeleteObject also succeeds
+        // when the object does not exist, which is the expected case for
+        // ambiguous putObject failures).
         await this.storage.deleteObject(record.storage_key);
 
-        // Transactionally finalize completion
+        // Finalize completion
         await this.prisma.attachmentOrphanCleanup.update({
           where: { id: record.id },
-          data: { status: 'DONE', attempts: record.attempts + 1 },
+          data: { status: 'DONE' },
         });
 
         orphanReconciled++;
       } catch {
+        // Release the claim so the next run can retry.
+        await this.prisma.attachmentOrphanCleanup
+          .update({
+            where: { id: record.id, status: 'RECONCILING' },
+            data: { status: preStatus },
+          })
+          .catch(() => {});
         orphanFailed++;
       }
     }

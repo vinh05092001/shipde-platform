@@ -22,6 +22,7 @@ tags:
   - name: Claims
   - name: Health
   - name: Search
+  - name: Attachments
 paths:
   /search:
     get:
@@ -2101,6 +2102,313 @@ paths:
         '201':
           description: Case transition recorded
         '409':
+          $ref: '#/components/responses/Error'
+  /attachments:
+    get:
+      tags: [Attachments]
+      summary: List attachments (FEAT-COM-06)
+      description: List attachments with tenant scoping, pagination, and RBAC enforcement.
+      operationId: listAttachments
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: entity_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: entity_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: warehouse_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: branch_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Attachment list returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentListResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /attachments/upload:
+    post:
+      tags: [Attachments]
+      summary: Upload attachment (FEAT-COM-06)
+      description: Upload attachment with polyglot malware scanning, tenant scoping and audit logging.
+      operationId: uploadAttachment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadAttachmentRequest'
+      responses:
+        '201':
+          description: Attachment uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentSingleResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /attachments/{id}:
+    get:
+      tags: [Attachments]
+      summary: Get attachment metadata (FEAT-COM-06)
+      description: Retrieve attachment metadata by ID with tenant scoping.
+      operationId: getAttachment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Attachment metadata returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentSingleResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Attachments]
+      summary: Delete attachment (FEAT-COM-06)
+      description: Delete attachment with explicit confirmation requirement.
+      operationId: deleteAttachment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: confirm
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteAttachmentRequest'
+      responses:
+        '200':
+          description: Attachment deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAttachmentResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /attachments/{id}/download:
+    get:
+      tags: [Attachments]
+      summary: Download attachment content (FEAT-COM-06)
+      description: Download attachment binary content with immutable access audit logging.
+      operationId: downloadAttachment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Attachment binary content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /attachments/bulk-delete:
+    post:
+      tags: [Attachments]
+      summary: Bulk delete attachments (FEAT-COM-06)
+      description: Delete multiple attachments with atomic audit and per-item results.
+      operationId: bulkDeleteAttachments
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkDeleteAttachmentsRequest'
+      responses:
+        '200':
+          description: Bulk delete outcome returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentBulkActionResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /attachments/{id}/quarantine:
+    post:
+      tags: [Attachments]
+      summary: Quarantine attachment (FEAT-COM-06)
+      description: Quarantine attachment for security inspection.
+      operationId: quarantineAttachment
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarantineAttachmentRequest'
+      responses:
+        '200':
+          description: Attachment quarantined successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentSingleResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+  /attachments/retention-purge:
+    post:
+      tags: [Attachments]
+      summary: Retention purge (FEAT-COM-06)
+      description: Purge expired attachments past their retention period.
+      operationId: purgeRetention
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionPurgeRequest'
+      responses:
+        '200':
+          description: Retention purge outcome returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentBulkActionResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
+          $ref: '#/components/responses/Error'
+  /attachments/reconcile-pending:
+    post:
+      tags: [Attachments]
+      summary: Reconcile pending deletions (FEAT-COM-06)
+      description: Reconcile pending deletion and durable orphan cleanup records.
+      operationId: reconcilePending
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Reconciliation outcome returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcilePendingResponse'
+        '401':
+          $ref: '#/components/responses/SessionInvalid'
+        '403':
           $ref: '#/components/responses/Error'
 components:
   securitySchemes:
@@ -4699,3 +5007,290 @@ components:
           $ref: '#/components/schemas/SearchResponseData'
         meta:
           $ref: '#/components/schemas/Meta'
+    FormattedAttachment:
+      type: object
+      required:
+        - id
+        - merchant_id
+        - file_name
+        - file_size
+        - mime_type
+        - checksum_sha256
+        - storage_key
+        - entity_type
+        - entity_id
+        - branch_id
+        - warehouse_id
+        - uploaded_by
+        - status
+        - retention_days
+        - expires_at
+        - metadata
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_id:
+          type: string
+        file_name:
+          type: string
+        file_size:
+          type: integer
+        mime_type:
+          type: string
+        checksum_sha256:
+          type: string
+        storage_key:
+          type: string
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          nullable: true
+        branch_id:
+          type: string
+          nullable: true
+        warehouse_id:
+          type: string
+          nullable: true
+        uploaded_by:
+          type: string
+        status:
+          type: string
+        retention_days:
+          type: integer
+          nullable: true
+        expires_at:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    AttachmentSingleResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/FormattedAttachment'
+        meta:
+          type: object
+          properties:
+            correlation_id:
+              type: string
+    AttachmentListResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/FormattedAttachment'
+        meta:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+            total_pages:
+              type: integer
+            correlation_id:
+              type: string
+            can_edit:
+              type: boolean
+    UploadAttachmentRequest:
+      type: object
+      required:
+        - file_name
+        - mime_type
+        - content_base64
+      properties:
+        file_name:
+          type: string
+        mime_type:
+          type: string
+        content_base64:
+          type: string
+        checksum_sha256:
+          type: string
+        entity_type:
+          type: string
+          enum: [RETURN, CLAIM, DISCREPANCY, STATEMENT, ORDER, SHIPMENT, GENERAL]
+        entity_id:
+          type: string
+        branch_id:
+          type: string
+        warehouse_id:
+          type: string
+        retention_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        metadata:
+          type: object
+    DeleteAttachmentRequest:
+      type: object
+      properties:
+        confirm:
+          type: boolean
+    DeleteAttachmentResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            id:
+              type: string
+            status:
+              type: string
+        meta:
+          type: object
+          properties:
+            correlation_id:
+              type: string
+    BulkDeleteAttachmentsRequest:
+      type: object
+      required:
+        - ids
+        - confirm
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        confirm:
+          type: boolean
+    QuarantineAttachmentRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    RetentionPurgeRequest:
+      type: object
+      properties:
+        entity_type:
+          type: string
+        dry_run:
+          type: boolean
+    AttachmentPerItemResult:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [SUCCEEDED, FAILED]
+        code:
+          type: string
+        message:
+          type: string
+    AttachmentBulkActionResult:
+      type: object
+      required:
+        - success
+        - total
+        - success_count
+        - failure_count
+        - succeeded_ids
+        - failed_ids
+        - results
+      properties:
+        success:
+          type: boolean
+        total:
+          type: integer
+        success_count:
+          type: integer
+        failure_count:
+          type: integer
+        succeeded_ids:
+          type: array
+          items:
+            type: string
+        failed_ids:
+          type: array
+          items:
+            type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttachmentPerItemResult'
+    AttachmentBulkActionResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/AttachmentBulkActionResult'
+        meta:
+          type: object
+          properties:
+            correlation_id:
+              type: string
+    ReconcilePendingResult:
+      type: object
+      required:
+        - reconciled
+        - failed
+        - skipped
+        - orphan_reconciled
+        - orphan_failed
+      properties:
+        reconciled:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+        orphan_reconciled:
+          type: integer
+        orphan_failed:
+          type: integer
+    ReconcilePendingResponse:
+      type: object
+      required:
+        - success
+        - data
+        - meta
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/ReconcilePendingResult'
+        meta:
+          type: object
+          properties:
+            correlation_id:
+              type: string
