@@ -725,6 +725,84 @@ export type ActivateUserRequest = components['schemas']['ActivateUserRequest'];
 export type ActivateUserResponse = components['schemas']['ActivateUserResponse'];
 export type DeactivateUserRequest = components['schemas']['DeactivateUserRequest'];
 export type DeactivateUserResponse = components['schemas']['DeactivateUserResponse'];
+// --- Import Framework Contracts (FEAT-COM-04) ---
+export const ImportTemplateType = {
+  BRANCHES: 'branches',
+  WAREHOUSES: 'warehouses',
+} as const;
+export type ImportTemplateType = (typeof ImportTemplateType)[keyof typeof ImportTemplateType];
+
+export const ImportStatus = {
+  UPLOADED: 'UPLOADED',
+  VALIDATING: 'VALIDATING',
+  STAGED: 'STAGED',
+  BLOCKED: 'BLOCKED',
+  PROMOTED: 'PROMOTED',
+  SUPERSEDED: 'SUPERSEDED',
+  FAILED: 'FAILED',
+} as const;
+export type ImportStatus = (typeof ImportStatus)[keyof typeof ImportStatus];
+
+export const ImportRowStatus = {
+  VALID: 'VALID',
+  ERROR: 'ERROR',
+  WARNING: 'WARNING',
+} as const;
+export type ImportRowStatus = (typeof ImportRowStatus)[keyof typeof ImportRowStatus];
+
+export const ImportIssueSeverity = {
+  BLOCKING: 'BLOCKING',
+  WARNING: 'WARNING',
+} as const;
+export type ImportIssueSeverity = (typeof ImportIssueSeverity)[keyof typeof ImportIssueSeverity];
+
+export const ImportAuditEvent = {
+  IMPORT_UPLOADED: 'IMPORT_UPLOADED',
+  IMPORT_VALIDATED: 'IMPORT_VALIDATED',
+  IMPORT_PROCESSING_FAILED: 'IMPORT_PROCESSING_FAILED',
+  IMPORT_PROMOTED: 'IMPORT_PROMOTED',
+} as const;
+export type ImportAuditEvent = (typeof ImportAuditEvent)[keyof typeof ImportAuditEvent];
+
+export const ImportErrorCode = {
+  IMPORT_NOT_FOUND: 'IMPORT_NOT_FOUND',
+  IMPORT_BLOCKED: 'IMPORT_BLOCKED',
+  IMPORT_ALREADY_PROMOTED: 'IMPORT_ALREADY_PROMOTED',
+  IDEMPOTENCY_CONFLICT: 'IDEMPOTENCY_CONFLICT',
+  REVISION_NOT_LATEST: 'REVISION_NOT_LATEST',
+  SCOPE_UNAUTHORIZED: 'SCOPE_UNAUTHORIZED',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  INVALID_FILE_TYPE: 'INVALID_FILE_TYPE',
+  MALWARE_DETECTED: 'MALWARE_DETECTED',
+  EMPTY_FILE: 'EMPTY_FILE',
+  FILE_PARSE_ERROR: 'FILE_PARSE_ERROR',
+  STORAGE_ERROR: 'STORAGE_ERROR',
+  CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE: 'CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE',
+  CANNOT_DEACTIVATE_DEFAULT_BRANCH: 'CANNOT_DEACTIVATE_DEFAULT_BRANCH',
+  CANNOT_REMOVE_DEFAULT_STATUS: 'CANNOT_REMOVE_DEFAULT_STATUS',
+  DEFAULT_WAREHOUSE_MUST_BE_ACTIVE: 'DEFAULT_WAREHOUSE_MUST_BE_ACTIVE',
+  DEFAULT_BRANCH_MUST_BE_ACTIVE: 'DEFAULT_BRANCH_MUST_BE_ACTIVE',
+  NO_ACTIVE_DEFAULT_WAREHOUSE: 'NO_ACTIVE_DEFAULT_WAREHOUSE',
+  NO_ACTIVE_DEFAULT_BRANCH: 'NO_ACTIVE_DEFAULT_BRANCH',
+  MULTIPLE_DEFAULTS: 'MULTIPLE_DEFAULTS',
+  MULTIPLE_DEFAULT_BRANCHES: 'MULTIPLE_DEFAULT_BRANCHES',
+  FORBIDDEN: 'FORBIDDEN',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+} as const;
+export type ImportErrorCode = (typeof ImportErrorCode)[keyof typeof ImportErrorCode];
+
+export type {
+  UploadImportInput,
+  ImportControlTotals,
+  ImportColumnMapping,
+  ImportRowIssue,
+  ImportSummary,
+  ImportRow,
+  ImportDetailResponse,
+  ListImportsResponse,
+  ListImportRowsResponse,
+  PromoteImportResponse,
+} from './imports';
 
 // --- Guided Onboarding Contracts (FEAT-ONB-01) ---
 export const OnboardingStepId = {
