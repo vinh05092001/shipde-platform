@@ -68,20 +68,22 @@ Assign `GEMINI` as primary implementation author. Due to full-stack depth (Prism
 ### Slice A — Core API, Persistence, Contracts & Consent Security
 - **Prisma Schema & Migrations**:
   - Add models: `SupportRequest`, `SupportReply`, `SupportAttachment`, `SupportAccessGrant`.
-  - Add enum types: `SupportRequestStatusEnum` (`OPEN`, `IN_PROGRESS`, `WAITING_FOR_SHOP`, `RESOLVED`), `SupportContextTypeEnum` (`NONE`, `ORDER`, `SHIPMENT`, `STATEMENT`, `CLAIM`, `DISCREPANCY`), `SupportGrantStatusEnum` (`ACTIVE`, `REVOKED`, `EXPIRED`).
+  - Add enum types: `SupportRequestStatusEnum` (`OPEN`, `IN_PROGRESS`, `WAITING_FOR_SHOP`, `RESOLVED`), `SupportContextTypeEnum` (`NONE`, `ORDER`, `SHIPMENT`, `STATEMENT`, `CLAIM`, `DISCREPANCY`), `SupportGrantStatusEnum` (`ACTIVE`, `REVOKED`, `EXPIRED`), `SupportAttachmentStatusEnum` (`STAGED`, `ATTACHED`, `QUARANTINED`, `EXPIRED`), `SupportAttachmentScanStatusEnum` (`PENDING`, `CLEAN`, `INFECTED`, `REJECTED`).
   - Add additive migration in `prisma/migrations/`.
   - Add seed fixtures for Tenant A and Tenant B in `infra/docker/seed.ts`.
 - **RBAC & Authorization**:
   - Add canonical capability permissions in `apps/api/src/rbac/rbac.constants.ts`:
-    - `support:request_create`
-    - `support:request_read`
-    - `support:request_reply`
-    - `support:request_transition`
-    - `support:grant_manage`
+    - `support:request_create` (shop roles)
+    - `support:request_read` (shop roles tenant-scoped; SHIPDE_OPERATOR platform-wide support queue)
+    - `support:request_reply` (shop roles own tenant; SHIPDE_OPERATOR platform-wide)
+    - `support:request_transition` (SHIPDE_OPERATOR progress/resolve; shop roles reopen within 14 days)
+    - `support:grant_manage` (strictly SHOP_OWNER)
 - **NestJS Support Module (`apps/api/src/support/`)**:
   - `support.controller.ts`: REST endpoints with `SessionGuard`, `RbacGuard`, `@Permissions()`.
   - `support.service.ts`: Business logic, optimistic locking (`version`), context validation, audit logging.
-  - DTOs with `class-validator`: `CreateSupportRequestDto`, `CreateSupportReplyDto`, `UpdateSupportStatusDto`, `CreateSupportGrantDto`.
+  - `support-storage.service.ts`: Staging presigned upload generation, virus scan verification, attachment linkage, presigned download.
+  - `support-context.service.ts`: Consented domain record reader for ORDER, SHIPMENT, STATEMENT, CLAIM, DISCREPANCY with active grant verification and PII masking.
+  - DTOs with `class-validator`: `CreateSupportRequestDto`, `CreateSupportReplyDto`, `UpdateSupportStatusDto`, `CreateSupportGrantDto`, `PresignAttachmentUploadDto`, `ScanVerifyAttachmentDto`.
   - Unit and integration tests (`apps/api/src/support/*.spec.ts`).
 - **Contracts**:
   - Update `docs/product-spec/contracts/openapi.yaml`.
@@ -131,8 +133,8 @@ All 9 former planning gaps have been resolved with explicit operator approval on
 - **Context**: Catalog §2 gives only a sentence; Use Cases and Business Rules contain no support flow, inputs or message policy. A complete form and backend cannot be specified.
 - **Recorded Decision**: Approved as written (Operator approval 2026-10-31).
 - **Specification**:
-  - `UC-SUP-01` (Create Request): An authenticated shop user submits a request with required `subject` (string, 5–200 characters), required `description` (string, 10–5000 characters), optional `context_type` (`NONE`, `ORDER`, `SHIPMENT`, `STATEMENT`, `CLAIM`, `DISCREPANCY`), optional `context_id` (string, validated server-side to belong to caller's `merchant_id`), and optional attachment IDs.
-  - `UC-SUP-02` (Reply Thread): Authenticated shop users and operators post replies (string, 1–5000 characters). All replies are shop-visible; internal private operator notes are excluded from this release.
+  - `UC-SUP-01` (Create Request): An authenticated shop user submits a request with required `subject` (string, 5–200 characters), required `description` (string, 10–5000 characters), optional `context_type` (`NONE`, `ORDER`, `SHIPMENT`, `STATEMENT`, `CLAIM`, `DISCREPANCY`), optional `context_id` (string, validated server-side to belong to caller's `merchant_id`), and optional `attachment_ids` (array of UUIDs; must be previously staged and verified clean by caller's merchant, max 5).
+  - `UC-SUP-02` (Reply Thread): Authenticated shop users and operators post replies (string, 1–5000 characters) with optional `attachment_ids` (max 5). All replies are shop-visible; internal private operator notes are excluded from this release. Posting an operator reply sets `author_role = 'SHIPDE_OPERATOR'` and automatically transitions ticket from `OPEN` or `WAITING_FOR_SHOP` to `IN_PROGRESS`.
   - `BR-SUP-01` (Immutability): Once created, the subject, description, and context of a request are immutable. New information must be submitted as replies.
   - `BR-SUP-02` (Context Verification): If `context_id` is supplied, the backend verifies that the entity exists and belongs to the caller's `merchant_id`. Invalid context returns canonical 400 Bad Request (`INVALID_CONTEXT_ENTITY`).
 
@@ -164,46 +166,93 @@ All 9 former planning gaps have been resolved with explicit operator approval on
   - Concurrency Control: Optimistic locking using integer `version` field. Stale update returns 409 Conflict (`CONCURRENT_MODIFICATION`).
   - Access Grant Lifecycle: Kept strictly independent: `ACTIVE`, `REVOKED`, `EXPIRED`.
 
-#### G04 — Granular RBAC Capabilities, Roles, and Consent Approver
+#### G04 — Granular RBAC Capabilities, Roles, Operator Permissions, and Scopes
 - **Context**: RBAC matrix has temporary access approval but no support request actions or consent approver. Current registry has neither support capabilities nor a support operator role.
-- **Recorded Decision**: Approved as written (Operator approval 2026-10-31).
+- **Recorded Decision**: Approved as written (Operator approval 2026-10-31; amended with explicit operator read/reply permissions and platform tenant scoping).
 - **Specification**:
   - Capability permissions added to `apps/api/src/rbac/rbac.constants.ts`:
-    - `support:request_create`: Permitted for `SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF`.
-    - `support:request_read`: Permitted for `SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF`.
-    - `support:request_reply`: Permitted for `SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF`.
-    - `support:request_transition`: Permitted for `SHIPDE_OPERATOR` (to progress/resolve) and shop roles (to reopen).
-    - `support:grant_manage`: Permitted strictly for `SHOP_OWNER`.
-  - Operator business data access: Operator has no default access to shop business records without an active `SupportAccessGrant`. Access is evaluated server-side per request.
+    - `support:request_create`:
+      - Permitted roles: `SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF`.
+      - Tenant scope: Scoped strictly to caller's `session.merchant_id`. Creates ticket with `merchant_id = session.merchant_id`, `creator_id = session.user.id`.
+    - `support:request_read`:
+      - Permitted roles: `SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF`, `SHIPDE_OPERATOR` (and `PLATFORM_ADMIN`).
+      - Tenant scope:
+        - For shop roles: strictly tenant-isolated (`WHERE merchant_id = session.merchant_id`). Attempting to read another tenant's ticket returns 404 Not Found.
+        - For `SHIPDE_OPERATOR`: platform-wide support scope. Operators can query `GET /api/v1/support/requests` across all tenants (or filter by `merchant_id`, `status`, `context_type`) to populate the triage queue (`SCR-SUP-05`), and can view ticket metadata, thread history, and diagnostic attachments for any ticket via `GET /api/v1/support/requests/:id`.
+        - Security boundary: Ticket read permission allows inspecting only the support conversation and diagnostic attachments; it confers **zero** default access to shop business records (orders, shipments, statements, claims). Access to shop records requires an active `SupportAccessGrant`.
+    - `support:request_reply`:
+      - Permitted roles: `SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF`, `SHIPDE_OPERATOR` (and `PLATFORM_ADMIN`).
+      - Tenant scope:
+        - For shop roles: scoped strictly to caller's `session.merchant_id`.
+        - For `SHIPDE_OPERATOR`: platform-wide scope. Allowed to reply to any ticket, recorded with `author_role = 'SHIPDE_OPERATOR'`. Posting an operator reply automatically updates ticket status from `WAITING_FOR_SHOP` or `OPEN` to `IN_PROGRESS`.
+    - `support:request_transition`:
+      - Permitted roles: `SHIPDE_OPERATOR` (to progress/resolve: `OPEN` → `IN_PROGRESS`, `IN_PROGRESS` → `WAITING_FOR_SHOP`, `IN_PROGRESS` → `RESOLVED`) and shop roles (`SHOP_OWNER`, `SHOP_ADMIN`, `SHOP_STAFF` to reopen `RESOLVED` → `OPEN` within 14 days with reason).
+    - `support:grant_manage`:
+      - Permitted roles: strictly `SHOP_OWNER`. Scoped to caller's `merchant_id`. Operators and non-owner shop roles are rejected with 403 Forbidden (`FORBIDDEN_ROLE_RESTRICTED`).
+  - Operator business data access: Operator has no default access to shop business records without an active `SupportAccessGrant`. Consented access is executed exclusively through `GET /api/v1/support/requests/:id/context-data` and validated dynamically against active grants.
   - Masking: PII (customer phone, email, recipient address, bank account numbers) is masked in audit logs, responses, and UI unless user possesses explicit `pii:unmask` capability.
 
-#### G05 — Private Diagnostic Attachments Contract
-- **Context**: Catalog requires attachments; COM-06 is BACKLOG; Data Dictionary/schema/contract lack generic attachment ownership, permitted MIME/size/count and retention. S3 readiness is insufficient.
-- **Recorded Decision**: Approved as written (Operator approval 2026-10-31).
+#### G05 — Private Diagnostic Attachments Contract and Staging Lifecycle
+- **Context**: Catalog requires attachments; COM-06 is BACKLOG; Data Dictionary/schema/contract lack generic attachment ownership, permitted MIME/size/count, upload staging, scan verification, and retention. S3 readiness is insufficient.
+- **Recorded Decision**: Approved as written (Operator approval 2026-10-31; amended with explicit upload staging and malware scan lifecycle).
 - **Specification**:
-  - Storage & Security: Files stored in private S3 bucket under path `support/{merchant_id}/{request_id}/{file_id}`.
-  - Pre-upload scan: Objects must pass virus/malware check before linkage. Quarantined/infected files rejected with 400 Bad Request (`ATTACHMENT_MALWARE_DETECTED`).
-  - Short-lived downloads: Presigned download URLs have a 15-minute expiration and are issued only after validating tenant session and permissions. Public URLs are strictly prohibited.
+  - Lifecycle and Ownership:
+    1. **Staging Intent (`POST /api/v1/support/attachments/presign-upload`)**:
+       - Authenticated shop user (or operator) calls endpoint with `{ file_name, mime_type, file_size, request_id? }`.
+       - Requires `support:request_create` or `support:request_reply`.
+       - Backend allocates UUID `attachment_id`, sets S3 staging key `support/staging/{merchant_id}/{attachment_id}/{file_name}`, generates S3 presigned PUT URL (15-minute expiry, strict Content-Type and Content-Length limits), and creates `SupportAttachment` record with `status: 'STAGED'`, `scan_status: 'PENDING'`, `merchant_id: session.merchant_id`, `uploader_id: session.user.id`, `request_id: null` (or existing `request_id` if replying).
+       - Returns `{ attachment_id, upload_url, file_key, expires_at }`.
+    2. **Binary Upload**: Client PUTs raw binary file directly to S3 using the presigned URL.
+    3. **Scan Verification (`POST /api/v1/support/attachments/:attachmentId/scan-verify`)**:
+       - Client confirms upload completion. Backend verifies S3 object existence and size, then invokes synchronous antivirus/malware scanner adapter (ClamAV stream/S3 scanner).
+       - If malware detected: sets `status = 'QUARANTINED'`, `scan_status = 'INFECTED'`, deletes/quarantines file from S3, logs security audit alert, and returns 400 Bad Request (`ATTACHMENT_MALWARE_DETECTED`).
+       - If clean: sets `scan_status = 'CLEAN'`, `scanned_at = now()`, `scan_result = 'CLEAN_VERIFIED'`. Returns 200 OK `{ attachment_id, status: "STAGED", scan_status: "CLEAN" }`.
+    4. **Atomic Linkage (`POST /api/v1/support/requests` or `POST /api/v1/support/requests/:id/replies`)**:
+       - Ticket creation and reply endpoints accept `attachment_ids: string[]` (max 5).
+       - Backend enforces:
+         a) All IDs exist in `SupportAttachment`.
+         b) Staging ownership: `attachment.merchant_id == session.merchant_id` (or for operator replies, `attachment.uploader_id == session.user.id`).
+         c) Staged state: `status == 'STAGED'` and `request_id IS NULL` (preventing cross-ticket attachment hijacking or re-attachment).
+         d) Scan state: `scan_status == 'CLEAN'` (rejects any unverified `PENDING` or `INFECTED` attachments with 400 Bad Request `ATTACHMENT_UNVERIFIED_OR_INFECTED`).
+       - On success, in a single transaction updates `request_id = ticket.id` (and `reply_id` if reply) and sets `status = 'ATTACHED'`.
+  - Short-lived downloads: Presigned download URLs (`GET /api/v1/support/requests/:id/attachments/:fileId`) have a 15-minute expiration and are issued only after validating tenant session and `support:request_read` permission. Public S3 URLs are strictly prohibited.
   - Constraints: Allowed MIME types: `application/pdf`, `image/png`, `image/jpeg`, `image/webp`. File size limit: 10 MB per file. File count limit: max 5 attachments per request or reply.
-  - Retention: Attachments retained for 30 days following ticket resolution, then purged in compliance with data retention policy.
+  - Retention & Cleanup: Staged attachments that remain unlinked (`status: 'STAGED'`, `request_id IS NULL`) after 24 hours are permanently purged by an automated background cleanup job. Attached files are retained for 30 days following ticket resolution, then purged in compliance with data retention policy.
 
-#### G06 — Support Access Grant Specification
-- **Context**: RBAC/Actors/Security require consent, scope and expiry, but define no grant identity, maximum duration, revocation, in-flight access behavior or operator authentication. Domain model merely names SupportAccessGrant.
-- **Recorded Decision**: Approved as written (Operator approval 2026-10-31).
+#### G06 — Support Access Grant and Consented Inspection Path
+- **Context**: RBAC/Actors/Security require consent, scope and expiry, but define no grant identity, maximum duration, revocation, in-flight access behavior or operator authentication. Domain model merely names SupportAccessGrant, and the inspection read path is unspecified.
+- **Recorded Decision**: Approved as written (Operator approval 2026-10-31; amended with explicit consented inspection path `GET /api/v1/support/requests/:id/context-data`).
 - **Specification**:
   - Entity `SupportAccessGrant`: Bound to `request_id`, `merchant_id`, named `operator_id` (User ID), `granted_by` (User ID of `SHOP_OWNER`).
   - Mandatory purpose: String (10–500 characters) describing the diagnostic reason.
-  - Read-only scope: Grants read access to records directly linked to `context_type` and `context_id`. No write permissions, no configuration modifications, no bulk data exports, no access to credentials or secrets, no implicit unmasking of PII.
   - Expiry: Configurable duration: default 4 hours, maximum 24 hours. Evaluated dynamically on every read request.
-  - Revocation: `SHOP_OWNER` can trigger immediate revocation via `DELETE /api/v1/support/requests/:id/grants/:grantId`. Any subsequent read by operator immediately returns 403 Forbidden (`SUPPORT_GRANT_REVOKED`).
-  - Audit: Grant creation, revocation, expiration, and every data read by the operator under the grant are logged immutably in `AuditLog`.
+  - Instant Revocation: `SHOP_OWNER` can trigger immediate revocation via `DELETE /api/v1/support/requests/:id/grants/:grantId`, setting `status = 'REVOKED'`, `revoked_at = now()`. Any subsequent read by operator immediately fails with 403 Forbidden (`SUPPORT_GRANT_REVOKED`).
+  - **Consented Inspection Path (`GET /api/v1/support/requests/:id/context-data`)**:
+    - Dedicated read endpoint in support module (`apps/api/src/support/`), eliminating need to modify existing domain controllers.
+    - Required permission: `support:request_read`.
+    - Authorization rule:
+      - If caller is a shop user (`session.merchant_id == ticket.merchant_id`): Allowed.
+      - If caller is `SHIPDE_OPERATOR` (or `PLATFORM_ADMIN`):
+        1. Checks database for active `SupportAccessGrant` on `ticket.id` where `operator_id == session.user.id`.
+        2. If grant missing: returns 403 Forbidden (`SUPPORT_GRANT_REQUIRED`, "Yêu cầu cần có quyền truy cập chẩn đoán (SupportAccessGrant) do Chủ cửa hàng phê duyệt.").
+        3. If grant `status == 'REVOKED'`: returns 403 Forbidden (`SUPPORT_GRANT_REVOKED`, "Quyền truy cập dữ liệu đã bị Chủ cửa hàng thu hồi.").
+        4. If grant `expires_at <= now()`: dynamically updates grant to `EXPIRED` and returns 403 Forbidden (`SUPPORT_GRANT_EXPIRED`, "Quyền truy cập dữ liệu chẩn đoán đã hết hạn.").
+    - Response Scope (Strictly Read-Only, scoped to `ticket.context_type` and `ticket.context_id`):
+      - `ORDER`: Resolves `Order` with `merchant_id = ticket.merchant_id` and `id = ticket.context_id`. Returns sanitized order data: `{ id, order_code, status, total_amount, shipping_fee, cod_amount, recipient_name, recipient_phone (masked), shipping_address (street masked), carrier_code, items: [{ sku, name, quantity, price }] }`.
+      - `SHIPMENT`: Resolves `Shipment` with `id = ticket.context_id`. Returns tracking number, carrier code, parcel weight, dimensions, tracking status events, carrier status code.
+      - `STATEMENT`: Resolves carrier statement summary: statement code, carrier code, period start/end, total order count, net settlement amount, discrepancy count.
+      - `CLAIM`: Resolves claim file: claim code, carrier code, incident date, claimed amount, status, evidence file list.
+      - `DISCREPANCY`: Resolves fee discrepancy: discrepancy code, tracking number, type, expected amount, billed amount, difference amount.
+      - `NONE`: Returns `{ context_type: "NONE", context_id: null, data: null }`.
+    - PII Protection: Recipient phone (`098***1234`), email, and street address are masked by default. Unmasked data is returned only if the operator holds explicit `pii:unmask` capability.
+    - Audit Trail: Every operator read of `/context-data` writes an immutable `AuditLog` entry with `action: 'SUPPORT_OPERATOR_ACCESS'`, `merchant_id: ticket.merchant_id`, `actor_id: session.user.id`, `reason: grant.purpose`, `details: { grant_id: grant.id, context_type: ticket.context_type, context_id: ticket.context_id }`. Transaction fails if audit logging fails.
 
 #### G07 — Dependency Architecture and Vertical Slicing
 - **Context**: FEAT-SUP-01 promises consented access at order 29 while SEC-02 defines support access at order 134/later admin slice. Generic register dependencies name only foundation; no support mock is approved.
 - **Recorded Decision**: Approved as written (Operator approval 2026-10-31).
 - **Specification**:
   - The delivery is decoupled from full platform-wide administrative impersonation (`FEAT-SEC-02`).
-  - `FEAT-SUP-01` delivers request-bound consent grant data modeling, authorization checks, and UI toggle in Slice A and Slice B.
+  - `FEAT-SUP-01` delivers request-bound consent grant data modeling, authorization checks, dedicated consented inspection endpoint `GET /api/v1/support/requests/:id/context-data`, and UI toggle in Slice A and Slice B.
   - One Work Item per PR; no placeholder or disabled buttons without real backing functionality.
 
 #### G08 — Internal API Contracts, Data Schemas, Canonical Errors, and Idempotency
@@ -211,14 +260,18 @@ All 9 former planning gaps have been resolved with explicit operator approval on
 - **Recorded Decision**: Approved as written (Operator approval 2026-10-31).
 - **Specification**:
   - Tenant mapping: Conceptual `tenant_id` maps strictly to `merchant_id` (`@db.Uuid` referencing `Merchant`).
-  - REST Endpoints under `/api/v1/support/requests`:
+  - REST Endpoints under `/api/v1/support`:
     - `POST /api/v1/support/requests`: Create request. Supports `Idempotency-Key` header (24-hour replay cache).
-    - `GET /api/v1/support/requests`: List requests for merchant (filters: `status`, `context_type`, pagination: `limit`, `offset`).
+    - `GET /api/v1/support/requests`: List requests (shop roles scoped to `merchant_id`; `SHIPDE_OPERATOR` platform triage queue; filters: `status`, `context_type`, pagination: `limit`, `offset`).
     - `GET /api/v1/support/requests/:id`: Get request detail, reply history, attachments, and grant status.
-    - `POST /api/v1/support/requests/:id/replies`: Post a reply.
-    - `PATCH /api/v1/support/requests/:id/status`: Update status (body: `{ status, version }`).
+    - `POST /api/v1/support/requests/:id/replies`: Post a reply (shop roles and `SHIPDE_OPERATOR`).
+    - `PATCH /api/v1/support/requests/:id/status`: Update status (body: `{ status, version, reason }`).
     - `POST /api/v1/support/requests/:id/grants`: Create support access grant (restricted to `SHOP_OWNER`).
     - `DELETE /api/v1/support/requests/:id/grants/:grantId`: Revoke support access grant (restricted to `SHOP_OWNER`).
+    - `POST /api/v1/support/attachments/presign-upload`: Generate presigned S3 upload URL for staging attachment before ticket creation or reply.
+    - `POST /api/v1/support/attachments/:attachmentId/scan-verify`: Confirm upload and run synchronous malware scan verification.
+    - `GET /api/v1/support/requests/:id/attachments/:fileId`: Generate temporary 15-minute presigned download URL for private attachment.
+    - `GET /api/v1/support/requests/:id/context-data`: Consented read-only inspection of linked business entity with active grant enforcement, PII masking, and audit logging.
   - Canonical errors: 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 409 Conflict.
   - Concurrency & Idempotency: `version` increment on update; duplicate idempotency key with identical payload returns cached result; duplicate key with altered payload returns 409 Conflict (`IDEMPOTENCY_CONFLICT`).
 
@@ -276,6 +329,20 @@ enum SupportGrantStatusEnum {
   EXPIRED
 }
 
+enum SupportAttachmentStatusEnum {
+  STAGED
+  ATTACHED
+  QUARANTINED
+  EXPIRED
+}
+
+enum SupportAttachmentScanStatusEnum {
+  PENDING
+  CLEAN
+  INFECTED
+  REJECTED
+}
+
 model SupportRequest {
   id           String                   @id @default(uuid()) @db.Uuid
   merchant_id  String                   @db.Uuid
@@ -320,21 +387,29 @@ model SupportReply {
 }
 
 model SupportAttachment {
-  id          String                   @id @default(uuid()) @db.Uuid
-  request_id  String                   @db.Uuid
-  reply_id    String?                  @db.Uuid
-  merchant_id String                   @db.Uuid
-  file_key    String                   @db.VarChar(512)
-  file_name   String                   @db.VarChar(255)
+  id          String                          @id @default(uuid()) @db.Uuid
+  request_id  String?                         @db.Uuid
+  reply_id    String?                         @db.Uuid
+  merchant_id String                          @db.Uuid
+  uploader_id String                          @db.Uuid
+  file_key    String                          @db.VarChar(512)
+  file_name   String                          @db.VarChar(255)
   file_size   Int
-  mime_type   String                   @db.VarChar(128)
-  created_at  DateTime                 @default(now()) @db.Timestamptz
+  mime_type   String                          @db.VarChar(128)
+  status      SupportAttachmentStatusEnum     @default(STAGED)
+  scan_status SupportAttachmentScanStatusEnum @default(PENDING)
+  scan_result String?                         @db.VarChar(255)
+  scanned_at  DateTime?                       @db.Timestamptz
+  created_at  DateTime                        @default(now()) @db.Timestamptz
 
-  request     SupportRequest           @relation(fields: [request_id], references: [id], onDelete: Cascade)
-  reply       SupportReply?            @relation(fields: [reply_id], references: [id], onDelete: Cascade)
-  merchant    Merchant                 @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  request     SupportRequest?                 @relation(fields: [request_id], references: [id], onDelete: Cascade)
+  reply       SupportReply?                   @relation(fields: [reply_id], references: [id], onDelete: Cascade)
+  merchant    Merchant                        @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  uploader    User                            @relation("SupportAttachmentUploader", fields: [uploader_id], references: [id], onDelete: Restrict)
 
   @@index([request_id])
+  @@index([merchant_id, status])
+  @@index([uploader_id, status])
   @@map("support_attachments")
 }
 
@@ -358,22 +433,26 @@ model SupportAccessGrant {
 
   @@index([merchant_id, status, expires_at])
   @@index([operator_id, status, expires_at])
+  @@index([request_id, operator_id, status])
   @@map("support_access_grants")
 }
 ```
 
 ### Internal REST API Endpoints
 
-| Method   | Path                                                | Required Permission         | Description                                                                                       | Status Codes            |
-| -------- | --------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
-| `POST`   | `/api/v1/support/requests`                          | `support:request_create`    | Create a new contextual support request. Supports `Idempotency-Key`.                              | 201, 400, 401, 403, 409 |
-| `GET`    | `/api/v1/support/requests`                          | `support:request_read`      | List support requests for tenant with pagination (`limit`, `offset`) and filter by `status`.     | 200, 401, 403           |
-| `GET`    | `/api/v1/support/requests/:id`                      | `support:request_read`      | Get full request detail, message thread, attachments, and consent grant status.                   | 200, 401, 403, 404      |
-| `POST`   | `/api/v1/support/requests/:id/replies`              | `support:request_reply`     | Append a reply to the ticket thread. Automatically advances `WAITING_FOR_SHOP` → `IN_PROGRESS`.   | 201, 400, 401, 403, 404 |
-| `PATCH`  | `/api/v1/support/requests/:id/status`               | `support:request_transition`| Update ticket status. Requires matching optimistic `version`.                                     | 200, 400, 401, 403, 409 |
-| `POST`   | `/api/v1/support/requests/:id/grants`               | `support:grant_manage`      | Grant temporary read-only support access to named operator. Restricted strictly to `SHOP_OWNER`.  | 201, 400, 401, 403, 404 |
-| `DELETE` | `/api/v1/support/requests/:id/grants/:grantId`      | `support:grant_manage`      | Revoke active support access grant immediately. Restricted strictly to `SHOP_OWNER`.             | 200, 401, 403, 404      |
-| `GET`    | `/api/v1/support/requests/:id/attachments/:fileId`  | `support:request_read`      | Generate temporary 15-minute presigned download URL for private attachment.                       | 200, 401, 403, 404      |
+| Method   | Path                                                | Required Permission                                 | Description                                                                                                                                                                                                                                  | Status Codes                 |
+| -------- | --------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| `POST`   | `/api/v1/support/requests`                          | `support:request_create`                            | Create a new contextual support request with optional pre-staged verified clean `attachment_ids`. Supports `Idempotency-Key`. Scoped to caller's `merchant_id`.                                                                             | 201, 400, 401, 403, 409      |
+| `GET`    | `/api/v1/support/requests`                          | `support:request_read`                              | List support requests. For shop roles, strictly tenant-scoped (`merchant_id`). For `SHIPDE_OPERATOR`, platform-wide triage queue (`SCR-SUP-05`) with filters (`status`, `context_type`, `merchant_id`) and pagination (`limit`, `offset`).| 200, 401, 403                |
+| `GET`    | `/api/v1/support/requests/:id`                      | `support:request_read`                              | Get full request detail, message thread, attachments, and consent grant status. Accessible by ticket merchant and `SHIPDE_OPERATOR`.                                                                                                         | 200, 401, 403, 404           |
+| `POST`   | `/api/v1/support/requests/:id/replies`              | `support:request_reply`                             | Append a reply to the ticket thread. Permitted for shop roles (own tenant) and `SHIPDE_OPERATOR` (platform). Automatically advances `OPEN` or `WAITING_FOR_SHOP` → `IN_PROGRESS` on operator reply. Supports optional `attachment_ids`.    | 201, 400, 401, 403, 404      |
+| `PATCH`  | `/api/v1/support/requests/:id/status`               | `support:request_transition`                        | Update ticket status. Requires matching optimistic `version`. Permitted for `SHIPDE_OPERATOR` (progress/resolve) and shop roles (reopen within 14 days).                                                                                  | 200, 400, 401, 403, 409      |
+| `POST`   | `/api/v1/support/requests/:id/grants`               | `support:grant_manage`                              | Grant temporary read-only support access to named operator. Restricted strictly to `SHOP_OWNER`.                                                                                                                                             | 201, 400, 401, 403, 404      |
+| `DELETE` | `/api/v1/support/requests/:id/grants/:grantId`      | `support:grant_manage`                              | Revoke active support access grant immediately. Restricted strictly to `SHOP_OWNER`. Operator inspection cut off instantly.                                                                                                                  | 200, 401, 403, 404           |
+| `POST`   | `/api/v1/support/attachments/presign-upload`        | `support:request_create` or `support:request_reply` | Request presigned S3 PUT URL to stage private diagnostic attachment prior to ticket or reply creation. Enforces MIME/size limits and records staging ownership.                                                              | 201, 400, 401, 403           |
+| `POST`   | `/api/v1/support/attachments/:attachmentId/scan-verify` | `support:request_create` or `support:request_reply` | Confirm direct upload completion and execute synchronous malware scan. Updates scan status to `CLEAN` or quarantines infected files. Required before attachment linkage.                                                       | 200, 400, 401, 403, 404      |
+| `GET`    | `/api/v1/support/requests/:id/attachments/:fileId`  | `support:request_read`                              | Generate temporary 15-minute presigned download URL for private attachment. Validates tenant session or operator ticket access.                                                                                                             | 200, 401, 403, 404           |
+| `GET`    | `/api/v1/support/requests/:id/context-data`         | `support:request_read`                              | Consented read-only inspection of linked business entity (`ORDER`, `SHIPMENT`, `STATEMENT`, `CLAIM`, `DISCREPANCY`). For `SHIPDE_OPERATOR`, requires active, unexpired, unrevoked grant for caller. Returns masked PII; logs `SUPPORT_OPERATOR_ACCESS`. | 200, 400, 401, 403, 404      |
 
 ### Audit Logging Requirements
 
@@ -393,15 +472,15 @@ All 14 acceptance criteria are unblocked and ready for verification:
 | AC-SUP-03 / TEST-SUP-03 | Concurrent create requests sent with identical `Idempotency-Key` header; or identical key replayed with modified payload.                         | Identical payload returns cached 201 response with identical request ID. Modified payload returns 409 Conflict (`IDEMPOTENCY_CONFLICT`). Single record in database.   | Concurrency and replay integration test in `support.service.spec.ts`.                                                         |
 | AC-SUP-04 / TEST-SUP-04 | Operator transitions ticket `OPEN` → `IN_PROGRESS` → `RESOLVED`; shop user attempts invalid skip `OPEN` → `RESOLVED` or stale version update.    | Permitted transitions succeed and update `version`; invalid transition returns 400 Bad Request; stale version update returns 409 Conflict (`CONCURRENT_MODIFICATION`).| State machine transition unit test; optimistic concurrency test in `support.service.spec.ts`.                                 |
 | AC-SUP-05 / TEST-SUP-05 | Tenant A authenticated user attempts to read, reply, transition, or download attachments belonging to Tenant B's support request.                 | API rejects with 404 Not Found (or 403 Forbidden). Zero Tenant B metadata or files disclosed. Security violation logged to `AuditLog`.                                | Multi-tenant isolation test using synthetic Tenant A and Tenant B fixtures in `support.controller.spec.ts`.                  |
-| AC-SUP-06 / TEST-SUP-06 | User lacking `support:request_create` attempts creation, or user with expired/revoked session calls support endpoints.                             | API rejects with 401 Unauthorized or 403 Forbidden (`FORBIDDEN_PERMISSION_REQUIRED`). Database remains unchanged.                                                     | RBAC guard and session integration tests in `apps/api/src/support/support.rbac.spec.ts`.                                      |
-| AC-SUP-07 / TEST-SUP-07 | Ship Dễ operator attempts to browse Tenant A orders without an active consent grant; then browses after grant is issued; then after it expires.    | Without grant: 403 Forbidden. With active grant: 200 OK (read-only context data). After expiration/revocation: immediate 403 Forbidden.                               | Time-travel / clock-mocked integration test verifying grant status check in `support.grant.spec.ts`.                           |
-| AC-SUP-08 / TEST-SUP-08 | `SHOP_OWNER` grants support access for 4 hours; non-owner role (`SHOP_STAFF`) attempts to grant or revoke access.                                 | `SHOP_OWNER` call succeeds (201 Created); `SHOP_STAFF` call is rejected with 403 Forbidden (`FORBIDDEN_ROLE_RESTRICTED`). Grant revocation immediate on DELETE.      | RBAC capability test asserting `support:grant_manage` strictly restricted to `SHOP_OWNER`.                                    |
-| AC-SUP-09 / TEST-SUP-09 | Shop user attaches 1 clean PDF and 1 infected file; requests download URL after ticket is resolved.                                                | Infected file rejected during scan (400 Bad Request); clean PDF linked. Presigned URL generated with 15-minute expiration; public S3 access denied.                   | Storage service integration test with mock scanner; presigned URL authorization test.                                         |
+| AC-SUP-06 / TEST-SUP-06 | User lacking required support capability or operator attempting out-of-scope action; or user with expired/revoked session calls support endpoints. | API rejects with 401 Unauthorized or 403 Forbidden (`FORBIDDEN_PERMISSION_REQUIRED`). Database remains unchanged.                                                     | RBAC guard and session integration tests in `apps/api/src/support/support.rbac.spec.ts`.                                      |
+| AC-SUP-07 / TEST-SUP-07 | Ship Dễ operator attempts to inspect Tenant A order context via `GET /api/v1/support/requests/:id/context-data` without an active consent grant; then inspects after grant is issued; then after it expires or is revoked. | Without grant: 403 Forbidden (`SUPPORT_GRANT_REQUIRED`). With active grant: 200 OK (read-only order data, masked PII, audited under `SUPPORT_OPERATOR_ACCESS`). After expiration/revocation: immediate 403 Forbidden (`SUPPORT_GRANT_EXPIRED` or `SUPPORT_GRANT_REVOKED`). | Time-travel / clock-mocked integration test verifying grant status check in `support.grant.spec.ts`.                           |
+| AC-SUP-08 / TEST-SUP-08 | `SHOP_OWNER` grants support access for 4 hours to named operator; non-owner role (`SHOP_STAFF`) attempts to grant or revoke access; `SHOP_OWNER` revokes active grant. | `SHOP_OWNER` grant call succeeds (201 Created); `SHOP_STAFF` call is rejected with 403 Forbidden (`FORBIDDEN_ROLE_RESTRICTED`). `SHOP_OWNER` revocation call succeeds (200 OK), sets grant to `REVOKED`, and cuts off operator inspection immediately. | RBAC capability test asserting `support:grant_manage` strictly restricted to `SHOP_OWNER`.                                    |
+| AC-SUP-09 / TEST-SUP-09 | Shop user stages 1 clean PDF and 1 infected file via `POST /api/v1/support/attachments/presign-upload` and `POST /api/v1/support/attachments/:attachmentId/scan-verify`; attempts to link both to a new support request. | Infected file fails scan verification (400 Bad Request `ATTACHMENT_MALWARE_DETECTED`), quarantined in S3, rejected from linkage. Clean PDF passes scan (`CLEAN`), successfully linked to ticket upon creation. Presigned download URL generated with 15-minute expiration; public S3 access denied. | Storage service integration test with mock scanner; presigned URL authorization test.                                         |
 | AC-SUP-10 / TEST-SUP-10 | Audit log assertions across ticket creation, status change, consent grant, and operator data access.                                              | All events present in `audit_logs` table with timestamp, `merchant_id`, actor ID, correlation ID, and masked PII. Audit write failure aborts transaction.            | Transactional audit logging test in `support.service.spec.ts`.                                                                |
 | AC-SUP-11 / TEST-SUP-11 | UI state coverage on `/support`, `/support/new`, `/support/[id]`: loading, empty, validation error, server error, forbidden, not found, success. | Every shared UI state renders correctly, keyboard focus is accessible, WCAG AA contrast met, and primary actions are fully interactive.                            | Component tests in `apps/web/src/components/support/*.spec.tsx` and Storybook/Playwright accessibility checks.               |
 | AC-SUP-12 / TEST-SUP-12 | Network interruption or session expiration while editing a support request draft.                                                                  | Form preserves entered subject, description, and context selection in session storage. Re-authenticating restores draft with prompt to continue.                      | Playwright browser offline/relogin recovery test in `apps/web/e2e/support.spec.ts`.                                            |
 | AC-SUP-13 / TEST-SUP-13 | Prisma migration execution and OpenAPI contract verification.                                                                                      | Schema migration applies cleanly to PostgreSQL without data loss. `scripts/verify-contracts.ts` confirms 0 drift between OpenAPI spec and generated client.          | `pnpm db:migrate` and `pnpm contract:check` execution in CI pipeline.                                                         |
-| AC-SUP-14 / TEST-SUP-14 | End-to-end customer journey: create contextual ticket → attach file → operator reply → grant consent → operator inspection → resolve ticket.      | Full journey completes with real database persistence, correct UI state transitions, live consent countdown, and verified audit trail.                               | Playwright E2E customer journey test in `apps/web/e2e/support.spec.ts`.                                                        |
+| AC-SUP-14 / TEST-SUP-14 | End-to-end customer journey: shop user stages attachment → creates contextual ticket → operator views ticket in triage queue via `GET /api/v1/support/requests` → operator posts reply → shop owner grants consent to operator → operator inspects linked business record via `GET /api/v1/support/requests/:id/context-data` → operator resolves ticket. | Full journey completes with real database persistence, correct UI state transitions, live consent countdown, verified audit trail (`SUPPORT_OPERATOR_ACCESS`), and successful ticket resolution. | Playwright E2E customer journey test in `apps/web/e2e/support.spec.ts`.                                                        |
 
 ## Verification commands
 
@@ -454,6 +533,8 @@ Handoff instruction for GEMINI: Read `AGENTS.md`, this Work Item, and `FEATURE-D
 | Review round | Commit                   | Verdict            | Findings resolved                                                                   |
 | ------------ | ------------------------ | ------------------ | ----------------------------------------------------------------------------------- |
 | Planning     | Planning finalization    | READY_FOR_AUTHOR   | All planning gaps G01–G09 resolved with operator approval on 2026-10-31. Work Item complete and implementable. |
+| Review Round 1 | 368667aa               | CHANGES_REQUIRED   | P1 findings 1–3 raised regarding operator read/reply authorization, attachment upload staging contract, and consented inspection read path. |
+| Review Round 2 | Current HEAD             | READY_FOR_CODEX    | Resolved P1 findings 1–3: specified operator read/reply permissions and platform-wide support queue scope (G04); defined two-phase presigned upload, staging ownership, scan-verify confirmation, and atomic linkage contract (G05/G08); specified dedicated consented inspection endpoint `GET /api/v1/support/requests/:id/context-data` with named-operator verification, instant revocation cutoff, read-only scope, and `SUPPORT_OPERATOR_ACCESS` audit logging (G06/G07/G08). |
 
 ## Residual limitations
 
