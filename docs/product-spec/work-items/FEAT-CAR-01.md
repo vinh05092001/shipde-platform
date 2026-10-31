@@ -29,14 +29,13 @@ Due to the cross-layer scope of this feature spanning database schema, shared co
 ### Slice A — Core Carrier Catalog API, Data Model, Contracts, Seeding & Taxonomy Reference
 
 1. **Database Schema & Migrations (`prisma/schema.prisma`, `prisma/migrations/**`)**:
-   - `Carrier`: Platform-owned carrier reference (`id` UUID, `code` string/enum matching `CarrierCodeEnum`, `name` string, `logo_url` string optional, `is_active` boolean default true, `evidence_level` string default `VERIFIED_OFFICIAL`, `description` string optional, `created_at` timestamptz, `updated_at` timestamptz).
-   - `CarrierService`: Supported carrier service catalog (`id` UUID, `carrier_code` foreign reference, `code` string, `name` string, `service_type` string e.g. `STANDARD`/`FAST`/`EXPRESS`, `description` string optional, `is_active` boolean default true, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[carrier_code, code]`.
-   - `CanonicalStatusReference`: Canonical shipment status taxonomy (`code` string primary key, `category` string e.g. `COMMAND`/`OPERATIONAL_PRE_TRANSIT`/`OPERATIONAL_IN_TRANSIT`/`OPERATIONAL_TERMINAL`, `label` string, `description` string, `stage_order` integer).
-   - `FeeComponentReference`: Canonical fee component definitions (`code` string primary key, `name` string, `category` string e.g. `BASE`/`SURCHARGE`/`COD`/`INSURANCE`/`RETURN`/`VAT`, `description` string, `is_refundable` boolean, `vat_applicable` boolean).
-2. **Deterministic Seed Data (`infra/docker/seed.ts`, `packages/testkit/src/carriers/catalog/**`)**:
-   - Seed the 4 canonical carriers: `GHN` (`VERIFIED_OFFICIAL`), `GHTK` (`VERIFIED_OFFICIAL`), `VIETTEL_POST` (`CONFIRMATION_REQUIRED`), `JT` (`CONFIRMATION_REQUIRED`).
-   - Seed baseline services: `GHN_STANDARD`, `GHN_FAST`, `GHTK_STANDARD`, `GHTK_FAST`, `VTP_STANDARD`, `VTP_FAST`, `JT_STANDARD`, `JT_FAST`.
-   - Seed canonical statuses and fee components.
+    - `Carrier`: Platform-owned carrier reference (`id` UUID, `code` string/enum matching `CarrierCodeEnum`, `name` string, `logo_url` string optional, `is_active` boolean default true, `evidence_level` string, `catalog_revision` string, `description` string optional, `created_at` timestamptz, `updated_at` timestamptz).
+    - `CarrierService`: Supported carrier service catalog (`id` UUID, `carrier_code` foreign reference, `code` string, `name` string, `service_type` string exactly `STANDARD` or `FAST`, `description` string, `is_active` boolean default true, `evidence_level` string inherited from the parent carrier and stored denormalized, `source_revision` string, `created_at` timestamptz, `updated_at` timestamptz). Unique constraint on `[carrier_code, code]`.
+    - `CanonicalStatusReference`: Canonical shipment status taxonomy (`code` string primary key, `category` string exactly one of `COMMAND` / `OPERATIONAL_PRE_TRANSIT` / `OPERATIONAL_IN_TRANSIT` / `OPERATIONAL_TERMINAL`, `label` string, `description` string, `stage_order` integer).
+    - `FeeComponentReference`: Canonical fee component definitions (`code` string primary key, `name` string, `category` string exactly one of `BASE` / `SURCHARGE` / `COD` / `INSURANCE` / `RETURN` / `VAT`, `description` string, `is_refundable` boolean, `vat_applicable` boolean). `VAT` is the tax line itself and is never itself VAT-applicable.
+    - `CatalogCompatibilityMapping`: Versioned raw-to-canonical rows (`id` UUID, `catalog_revision` string, `carrier_code` nullable, `domain` string exactly `CARRIER_ALIAS` / `STATUS` / `FEE`, `raw_key` string, `canonical_code` string nullable, `disposition` string exactly `MAPPED` or `UNMAPPED`). Unique constraint on `[catalog_revision, carrier_code, domain, raw_key]`. A null `canonical_code` is legal only when `disposition` is `UNMAPPED`.
+ 2. **Deterministic Seed Data (`infra/docker/seed.ts`, `packages/testkit/src/carriers/catalog/**`)**:
+    - Seed catalog revision `CATALOG-2026-10-31` only. The exact carrier, service, status, fee and mapping rows are the pinned dataset in "Approved catalog revision `CATALOG-2026-10-31`" below. Do not invent additional codes.
 3. **Contracts & OpenAPI (`docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`)**:
    - Define `/api/v1/carrier-catalog/carriers`, `/api/v1/carrier-catalog/carriers/{code}`, `/api/v1/carrier-catalog/statuses`, `/api/v1/carrier-catalog/fee-components`.
    - Schemas: `CarrierResponse`, `CarrierDetailResponse`, `CarrierServiceResponse`, `CanonicalStatusResponse`, `FeeComponentResponse`.
@@ -58,7 +57,7 @@ Due to the cross-layer scope of this feature spanning database schema, shared co
 2. **Catalog Presentation Components (`apps/web/src/features/carriers/catalog/**`)**:
    - `CarrierCatalogView`: Master container with tab navigation and filter controls.
    - `CarrierGrid` / `CarrierCard`: Cards displaying carrier brand name, canonical code, logo placeholder, active status, and evidence level badge (`VERIFIED_OFFICIAL` vs `CONFIRMATION_REQUIRED` warning badge).
-   - `CarrierServiceList`: Detail drawer or section listing carrier services, service codes, and delivery speed types.
+    - `CarrierServiceList`: Detail drawer or section listing carrier services, service codes, delivery speed types, and the service evidence-level badge inherited from the parent carrier.
    - `CanonicalStatusReferenceModal`: Reference view explaining decoupled command states vs operational shipment states and descriptions.
    - `FeeTaxonomyReferenceModal`: Reference view explaining canonical fee types, VAT applicability, and refundability.
 3. **Mandatory UI State Coverage (`docs/product-spec/docs/03-ux/DESIGN-SYSTEM-UX-RULES.md`)**:
@@ -158,14 +157,14 @@ The author must respect the following constraints:
 
 | Rule ID | Name | Required observable behavior |
 |---|---|---|
-| `BR-CAR-01` | Platform-Owned Reference Catalog | The carrier catalog is a global, versioned, platform-owned reference repository. Tenants have read-only access. Tenant-specific overrides or private catalog overlays are prohibited. |
+| `BR-CAR-01` | Platform-Owned Reference Catalog | The carrier catalog is a global, platform-owned reference repository. Tenants have read-only access. Tenant-specific overrides or private catalog overlays are prohibited. Every read response includes `catalog_revision`. The only approved revision is `CATALOG-2026-10-31`. A later revision is a new immutable row set published by `FEAT-ADM-01`; this Work Item never updates a published revision in place. |
 | `BR-CAR-02` | Canonical Carrier Codes & Boundary Aliases | Authoritative carrier codes are strictly `GHN`, `GHTK`, `VIETTEL_POST`, and `JT`. Boundary adapters and query parameters transparently map legacy aliases `VTP` -> `VIETTEL_POST` and `JT_EXPRESS` -> `JT`. Unknown carrier codes return 404 `RESOURCE_NOT_FOUND`. |
 | `BR-CAR-03` | Catalog Separation from Account & Capability | Catalog membership does not create a merchant carrier account, grant operational capabilities, or mark routes available. Browsing the catalog triggers zero third-party carrier API calls. |
 | `BR-CAR-04` | Decoupled Command vs Operational Statuses | Pre-transit shipment command execution states (`CREATING`, `CREATED`, `CREATE_FAILED`, `CREATE_OUTCOME_UNKNOWN`) are strictly separated from post-creation operational shipment lifecycle states (`DRAFT`, `READY_TO_PICK`, `PICKING`, `PICKED`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `DELIVERY_FAILED`, `RETURNING`, `RETURNED`, `CANCELLED`, `LOST`, `DAMAGED`). |
 | `BR-CAR-05` | Raw Status & Fee Key Preservation | Downstream tracking and settlement must preserve original provider strings. The catalog provides authoritative canonical mapping definitions; encountering an unknown provider status or unmapped fee key yields `null`/unmapped, never defaulting to `IN_TRANSIT` or zero fee. |
-| `BR-CAR-06` | Evidence Level Transparency | Carrier and service records explicitly surface their evidence level: `VERIFIED_OFFICIAL` (GHN, GHTK) vs `CONFIRMATION_REQUIRED` (VIETTEL_POST, JT). The UI displays a warning banner for confirmation-required integrations under open issues OI-001/OI-002. |
+| `BR-CAR-06` | Evidence Level Transparency | Every carrier and every service record surfaces `evidence_level`. Services inherit the parent carrier level and store it denormalized: `VERIFIED_OFFICIAL` for GHN and GHTK, `CONFIRMATION_REQUIRED` for VIETTEL_POST and JT. A service must not claim a stronger level than its carrier. The UI displays a warning badge on both the carrier card and each of its services when the level is `CONFIRMATION_REQUIRED` (OI-001/OI-002). |
 | `BR-CAR-07` | RBAC & Tenant Scoping | Querying catalog endpoints requires an active user session and the `iam:carrier_catalog:read` permission. Unauthenticated callers receive 401 `UNAUTHORIZED`; unauthorized roles receive 403 `FORBIDDEN`. Global catalog queries never join or expose private tenant account rows. |
-| `BR-CAR-08` | Fee Taxonomy Semantics | Fee components are classified into base, surcharge, cod, insurance, return, and vat categories. Each component indicates whether it is refundable and subject to VAT. Monetary rates are not hardcoded in taxonomy. |
+| `BR-CAR-08` | Fee Taxonomy Semantics | The approved fee catalog is exactly the eight keys in the fee table below. Categories are `BASE`, `SURCHARGE`, `COD`, `INSURANCE`, `RETURN` and `VAT`. `vat_applicable` means the component is a VAT base, not that VAT has been calculated. `VAT` itself has `vat_applicable=false`. No fee row stores an amount, rate or currency. An unmapped raw fee key stays unmapped and is never coerced to `BASE_FREIGHT` or zero. |
 | `BR-CAR-09` | Immutable Platform Audit | Platform administrative changes to the catalog (deferred to `FEAT-ADM-01`) produce immutable audit logs (`PLATFORM_CARRIER_CATALOG_UPDATED`). Unauthorized catalog read attempts trigger security audit events. |
 
 ## UI states
@@ -189,47 +188,57 @@ The catalog view on `SCR-CAR-01` (`/settings/carriers?tab=catalog`) must impleme
 
 ### Endpoints (Slice A)
 
+Every successful catalog response is an object `{ "catalog_revision": "CATALOG-2026-10-31", "data": ... }`. List endpoints return `data` as an array sorted by the order in the pinned tables. There is no pagination in this revision.
+
 1. `GET /api/v1/carrier-catalog/carriers`:
-   - Query params: `is_active` (boolean, optional).
-   - Response: `200 OK` with array of `CarrierResponse` (`id`, `code`, `name`, `logo_url`, `is_active`, `evidence_level`, `description`).
+   - Query params: `is_active` (boolean, optional). Omit it to return every seeded carrier.
+   - `data[]` of `CarrierResponse`: `id`, `code`, `name`, `logo_url`, `is_active`, `evidence_level`, `description`, `catalog_revision`.
 2. `GET /api/v1/carrier-catalog/carriers/:code`:
-   - Path params: `code` (canonical code `GHN`, `GHTK`, `VIETTEL_POST`, `JT` or aliases `VTP`, `JT_EXPRESS`).
-   - Response: `200 OK` with `CarrierDetailResponse` (carrier fields plus array of `CarrierServiceResponse`: `id`, `code`, `name`, `service_type`, `description`, `is_active`).
-   - Error: `404 NOT_FOUND` for unrecognized codes.
+   - Path params: canonical `GHN`, `GHTK`, `VIETTEL_POST`, `JT`, or boundary aliases `VTP` and `JT_EXPRESS` only. Matching is case-sensitive. `vtp`, `ViettelPost`, `J&T` and any other token are unrecognized.
+   - `data` is `CarrierDetailResponse`: the carrier fields plus `services[]` of `CarrierServiceResponse` (`id`, `code`, `name`, `service_type`, `description`, `is_active`, `evidence_level`, `source_revision`).
+   - Error: `404 RESOURCE_NOT_FOUND` for any unrecognized code. The body is the canonical error envelope and contains no catalog rows.
 3. `GET /api/v1/carrier-catalog/statuses`:
-   - Response: `200 OK` with array of `CanonicalStatusResponse` (`code`, `category`, `label`, `description`, `stage_order`).
+   - `data[]` of `CanonicalStatusResponse`: `code`, `category`, `label`, `description`, `stage_order`, `catalog_revision`.
 4. `GET /api/v1/carrier-catalog/fee-components`:
-   - Response: `200 OK` with array of `FeeComponentResponse` (`code`, `name`, `category`, `description`, `is_refundable`, `vat_applicable`).
+   - `data[]` of `FeeComponentResponse`: `code`, `name`, `category`, `description`, `is_refundable`, `vat_applicable`, `catalog_revision`.
+5. `GET /api/v1/carrier-catalog/compatibility`:
+   - Query params, all optional and combinable: `domain` (`CARRIER_ALIAS` | `STATUS` | `FEE`), `carrier_code` (canonical code; aliases are normalized before filter), `raw_key` (exact string).
+   - `data[]` of `CompatibilityMappingResponse`: `catalog_revision`, `carrier_code` (null for carrier-independent rows), `domain`, `raw_key`, `canonical_code` (null when unmapped), `disposition` (`MAPPED` | `UNMAPPED`).
+   - A query that matches nothing returns `200` with `data: []`. It does not 404.
+   - Lookup rule used by `AC-CAR-01-06`: exact `(catalog_revision, carrier_code, domain, raw_key)` first; if none, exact `(catalog_revision, null, domain, raw_key)`; if none, result is `{ canonical_code: null, disposition: "UNMAPPED" }`. Never substitute `IN_TRANSIT`, `BASE_FREIGHT` or `0`.
 
 ### Database Models (`prisma/schema.prisma`)
 
 ```prisma
 model Carrier {
-  id             String           @id @default(uuid()) @db.Uuid
-  code           CarrierCodeEnum  @unique
-  name           String           @db.VarChar(100)
-  logoUrl        String?          @map("logo_url") @db.VarChar(500)
-  isActive       Boolean          @default(true) @map("is_active")
-  evidenceLevel  String           @default("VERIFIED_OFFICIAL") @map("evidence_level") @db.VarChar(50)
-  description    String?          @db.Text
-  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
-  services       CarrierService[]
+  id              String           @id @default(uuid()) @db.Uuid
+  code            CarrierCodeEnum  @unique
+  name            String           @db.VarChar(100)
+  logoUrl         String?          @map("logo_url") @db.VarChar(500)
+  isActive        Boolean          @default(true) @map("is_active")
+  evidenceLevel   String           @map("evidence_level") @db.VarChar(50)
+  catalogRevision String           @map("catalog_revision") @db.VarChar(40)
+  description     String?          @db.Text
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  services        CarrierService[]
 
   @@map("carriers")
 }
 
 model CarrierService {
-  id          String   @id @default(uuid()) @db.Uuid
-  carrierCode CarrierCodeEnum @map("carrier_code")
-  code        String   @db.VarChar(100)
-  name        String   @db.VarChar(150)
-  serviceType String   @default("STANDARD") @map("service_type") @db.VarChar(50)
-  description String?  @db.Text
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  carrier     Carrier  @relation(fields: [carrierCode], references: [code], onDelete: Cascade)
+  id             String          @id @default(uuid()) @db.Uuid
+  carrierCode    CarrierCodeEnum @map("carrier_code")
+  code           String          @db.VarChar(100)
+  name           String          @db.VarChar(150)
+  serviceType    String          @map("service_type") @db.VarChar(50)
+  description    String          @db.Text
+  isActive       Boolean         @default(true) @map("is_active")
+  evidenceLevel  String          @map("evidence_level") @db.VarChar(50)
+  sourceRevision String          @map("source_revision") @db.VarChar(80)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  carrier        Carrier         @relation(fields: [carrierCode], references: [code], onDelete: Cascade)
 
   @@unique([carrierCode, code])
   @@map("carrier_services")
@@ -255,7 +264,164 @@ model FeeComponentReference {
 
   @@map("fee_component_references")
 }
+
+model CatalogCompatibilityMapping {
+  id              String           @id @default(uuid()) @db.Uuid
+  catalogRevision String           @map("catalog_revision") @db.VarChar(40)
+  carrierCode     CarrierCodeEnum? @map("carrier_code")
+  domain          String           @db.VarChar(20)
+  rawKey          String           @map("raw_key") @db.VarChar(100)
+  canonicalCode   String?          @map("canonical_code") @db.VarChar(50)
+  disposition     String           @db.VarChar(20)
+
+  @@unique([catalogRevision, carrierCode, domain, rawKey])
+  @@map("catalog_compatibility_mappings")
+}
 ```
+
+`evidenceLevel` has no database default. Seed writes the pinned value. `catalogRevision` on every seeded row of this Work Item is `CATALOG-2026-10-31`.
+
+## Approved catalog revision `CATALOG-2026-10-31`
+
+Owner of this revision: platform catalog, published read-only by FEAT-CAR-01. Mutation owner remains `FEAT-ADM-01`. Provenance is the `catalog_revision` column plus `source_revision` on each service. Responses echo `catalog_revision` so a client can detect which published set it read. This Work Item does not add an update endpoint.
+
+### Carriers
+
+| code | name | evidence_level | is_active | description |
+|---|---|---|---|---|
+| `GHN` | Giao Zara Ahmed | `VERIFIED_OFFICIAL` | true | Official public API surface recorded in `docs/product-spec/docs/05-api-integrations/GHN.md`. Catalog membership is not an account grant. |
+| `GHTK` | Giao Hàng Tiết Kiệm | `VERIFIED_OFFICIAL` | true | Official public OpenAPI surface recorded in `docs/product-spec/docs/05-api-integrations/GHTK.md`. Catalog membership is not an account grant. |
+| `VIETTEL_POST` | Viettel Post | `CONFIRMATION_REQUIRED` | true | Partner confirmation required (`OI-001`). Reference identity only. |
+| `JT` | J&T Express Vietnam | `CONFIRMATION_REQUIRED` | true | Partner confirmation required (`OI-002`). Reference identity only. |
+
+`logo_url` is null for every carrier in this revision. The UI renders a text monogram from `code`. Do not invent a logo URL.
+
+### Services
+
+Service identity is a Ship Dễ reference code, not a provider service id. `source_revision` records why the row exists. `evidence_level` is copied from the parent carrier. Labels are Vietnamese display names. No other service is seeded.
+
+| carrier_code | code | name | service_type | evidence_level | source_revision | description |
+|---|---|---|---|---|---|---|
+| `GHN` | `GHN_STANDARD` | GHN tiêu chuẩn | `STANDARD` | `VERIFIED_OFFICIAL` | `GHN-PUBLIC-API-2026-08-24` | Reference bucket for GHN available-service results whose delivery class is standard. Not a pinned GHN `service_id`. |
+| `GHN` | `GHN_FAST` | GHN hoả tốc | `FAST` | `VERIFIED_OFFICIAL` | `GHN-PUBLIC-API-2026-08-24` | Reference bucket for GHN available-service results whose delivery class is express. Not a pinned GHN `service_id`. |
+| `GHTK` | `GHTK_STANDARD` | GHTK tiết kiệm | `STANDARD` | `VERIFIED_OFFICIAL` | `GHTK-OPENAPI-2026-08-24` | Reference bucket for GHTK solution/service-list results whose class is standard. Not a pinned GHTK solution id. |
+| `GHTK` | `GHTK_FAST` | GHTK nhanh | `FAST` | `VERIFIED_OFFICIAL` | `GHTK-OPENAPI-2026-08-24` | Reference bucket for GHTK solution/service-list results whose class is express. Not a pinned GHTK solution id. |
+| `VIETTEL_POST` | `VTP_STANDARD` | Viettel Post tiêu chuẩn | `STANDARD` | `CONFIRMATION_REQUIRED` | `OI-001-UNCONFIRMED` | Placeholder identity pending partner service master. Do not call a Viettel Post API to fill it. |
+| `VIETTEL_POST` | `VTP_FAST` | Viettel Post hoả tốc | `FAST` | `CONFIRMATION_REQUIRED` | `OI-001-UNCONFIRMED` | Placeholder identity pending partner service master. Do not call a Viettel Post API to fill it. |
+| `JT` | `JT_STANDARD` | J&T tiêu chuẩn | `STANDARD` | `CONFIRMATION_REQUIRED` | `OI-002-UNCONFIRMED` | Placeholder identity pending Vietnam partner service master. Do not copy another country's J&T service id. |
+| `JT` | `JT_FAST` | J&T nhanh | `FAST` | `CONFIRMATION_REQUIRED` | `OI-002-UNCONFIRMED` | Placeholder identity pending Vietnam partner service master. Do not copy another country's J&T service id. |
+
+`VTP_STANDARD` and `VTP_FAST` keep the `VTP_` code prefix as the approved service code. Their `carrier_code` is `VIETTEL_POST`, never `VTP`. All eight `is_active` values are true.
+
+### Canonical statuses
+
+Command rows are not shipment-lifecycle rows. Operational rows are the shipment lifecycle. `stage_order` is the display order, not a legal transition. Transitions stay in `STATE-MACHINES.md`.
+
+| code | category | stage_order | label |
+|---|---|---|---|
+| `CREATING` | `COMMAND` | 10 | Đang tạo vận đơn |
+| `CREATED` | `COMMAND` | 20 | Đã tạo vận đơn |
+| `CREATE_FAILED` | `COMMAND` | 30 | Tạo vận đơn thất bại |
+| `CREATE_OUTCOME_UNKNOWN` | `COMMAND` | 40 | Chưa xác định kết quả tạo |
+| `DRAFT` | `OPERATIONAL_PRE_TRANSIT` | 110 | Nháp |
+| `READY_TO_PICK` | `OPERATIONAL_PRE_TRANSIT` | 120 | Sẵn sàng lấy |
+| `PICKING` | `OPERATIONAL_PRE_TRANSIT` | 130 | Đang lấy |
+| `PICKED` | `OPERATIONAL_PRE_TRANSIT` | 140 | Đã lấy |
+| `IN_TRANSIT` | `OPERATIONAL_IN_TRANSIT` | 210 | Đang luân chuyển |
+| `OUT_FOR_DELIVERY` | `OPERATIONAL_IN_TRANSIT` | 220 | Đang giao |
+| `DELIVERY_FAILED` | `OPERATIONAL_TERMINAL` | 310 | Giao thất bại |
+| `RETURNING` | `OPERATIONAL_TERMINAL` | 320 | Đang hoàn |
+| `RETURNED` | `OPERATIONAL_TERMINAL` | 330 | Đã hoàn |
+| `DELIVERED` | `OPERATIONAL_TERMINAL` | 340 | Đã giao |
+| `CANCELLED` | `OPERATIONAL_TERMINAL` | 350 | Đã huỷ |
+| `LOST` | `OPERATIONAL_TERMINAL` | 360 | Thất lạc |
+| `DAMAGED` | `OPERATIONAL_TERMINAL` | 370 | Hư hỏng |
+
+`description` for each status is the label plus ": canonical shipment status. Not a provider raw status." `DELIVERY_FAILED` is terminal for this taxonomy's category, while the state machine still allows redelivery back to `IN_TRANSIT` and return to `RETURNING`. Do not collapse those transitions.
+
+### Fee components
+
+Amounts are out of scope. `is_refundable=true` means a later settlement credit may reverse the component. It does not mean the component is always refunded.
+
+| code | name | category | is_refundable | vat_applicable | description |
+|---|---|---|---|---|---|
+| `BASE_FREIGHT` | Cước chính | `BASE` | true | true | Core transport charge before surcharges and tax. |
+| `SURCHARGE` | Phụ phí | `SURCHARGE` | true | true | Catch-all surcharge that has no narrower approved key. |
+| `REMOTE_AREA_SURCHARGE` | Phụ phí vùng xa | `SURCHARGE` | true | true | Remote-area surcharge. Not part of `BASE_FREIGHT`. |
+| `COD_FEE` | Phí thu hộ | `COD` | true | true | Carrier fee for collecting COD. Not the COD principal. |
+| `INSURANCE_FEE` | Phí bảo hiểm | `INSURANCE` | true | true | Declared-value insurance charge. |
+| `RETURN_FEE` | Phí hoàn | `RETURN` | false | true | Return-shipping charge. Not refundable in this revision. |
+| `OTHER_FEE` | Phí khác | `SURCHARGE` | true | true | Provider component recognised as a fee but not classified more narrowly. |
+| `VAT` | Thuế GTGT | `VAT` | false | false | VAT amount line. Not itself a VAT base. Never store a VAT rate here. |
+
+### Compatibility mappings
+
+Carrier-alias rows use `carrier_code` null because the raw token is the carrier identity. Status rows are carrier-specific. Fee rows are carrier-independent (`carrier_code` null) because this revision defines no provider fee-key crosswalk beyond the canonical keys. A raw fee string equal to a canonical code maps to itself. Any other raw fee string resolves `UNMAPPED`.
+
+| carrier_code | domain | raw_key | canonical_code | disposition |
+|---|---|---|---|---|
+| null | `CARRIER_ALIAS` | `VTP` | `VIETTEL_POST` | `MAPPED` |
+| null | `CARRIER_ALIAS` | `JT_EXPRESS` | `JT` | `MAPPED` |
+| null | `CARRIER_ALIAS` | `GHN` | `GHN` | `MAPPED` |
+| null | `CARRIER_ALIAS` | `GHTK` | `GHTK` | `MAPPED` |
+| null | `CARRIER_ALIAS` | `VIETTEL_POST` | `VIETTEL_POST` | `MAPPED` |
+| null | `CARRIER_ALIAS` | `JT` | `JT` | `MAPPED` |
+| `GHN` | `STATUS` | `ready_to_pick` | `READY_TO_PICK` | `MAPPED` |
+| `GHN` | `STATUS` | `picking` | `PICKING` | `MAPPED` |
+| `GHN` | `STATUS` | `money_collect_picking` | `PICKING` | `MAPPED` |
+| `GHN` | `STATUS` | `picked` | `PICKED` | `MAPPED` |
+| `GHN` | `STATUS` | `storing` | `IN_TRANSIT` | `MAPPED` |
+| `GHN` | `STATUS` | `sorting` | `IN_TRANSIT` | `MAPPED` |
+| `GHN` | `STATUS` | `transporting` | `IN_TRANSIT` | `MAPPED` |
+| `GHN` | `STATUS` | `delivering` | `OUT_FOR_DELIVERY` | `MAPPED` |
+| `GHN` | `STATUS` | `money_collect_delivering` | `OUT_FOR_DELIVERY` | `MAPPED` |
+| `GHN` | `STATUS` | `delivered` | `DELIVERED` | `MAPPED` |
+| `GHN` | `STATUS` | `delivery_fail` | `DELIVERY_FAILED` | `MAPPED` |
+| `GHN` | `STATUS` | `waiting_to_return` | `RETURNING` | `MAPPED` |
+| `GHN` | `STATUS` | `return` | `RETURNING` | `MAPPED` |
+| `GHN` | `STATUS` | `returned` | `RETURNED` | `MAPPED` |
+| `GHN` | `STATUS` | `cancel` | `CANCELLED` | `MAPPED` |
+| `GHN` | `STATUS` | `lost` | `LOST` | `MAPPED` |
+| `GHN` | `STATUS` | `damage` | `DAMAGED` | `MAPPED` |
+| `GHTK` | `STATUS` | `1` | `READY_TO_PICK` | `MAPPED` |
+| `GHTK` | `STATUS` | `2` | `PICKING` | `MAPPED` |
+| `GHTK` | `STATUS` | `3` | `IN_TRANSIT` | `MAPPED` |
+| `GHTK` | `STATUS` | `4` | `OUT_FOR_DELIVERY` | `MAPPED` |
+| `GHTK` | `STATUS` | `5` | `DELIVERED` | `MAPPED` |
+| `GHTK` | `STATUS` | `6` | `DELIVERED` | `MAPPED` |
+| `GHTK` | `STATUS` | `7` | `DELIVERY_FAILED` | `MAPPED` |
+| `GHTK` | `STATUS` | `8` | `DELIVERY_FAILED` | `MAPPED` |
+| `GHTK` | `STATUS` | `9` | `DELIVERY_FAILED` | `MAPPED` |
+| `GHTK` | `STATUS` | `10` | `RETURNING` | `MAPPED` |
+| `GHTK` | `STATUS` | `11` | `RETURNING` | `MAPPED` |
+| `GHTK` | `STATUS` | `12` | `IN_TRANSIT` | `MAPPED` |
+| `GHTK` | `STATUS` | `13` | `DAMAGED` | `MAPPED` |
+| `GHTK` | `STATUS` | `20` | `LOST` | `MAPPED` |
+| `GHTK` | `STATUS` | `21` | `RETURNED` | `MAPPED` |
+| `GHTK` | `STATUS` | `-1` | `CANCELLED` | `MAPPED` |
+| null | `FEE` | `BASE_FREIGHT` | `BASE_FREIGHT` | `MAPPED` |
+| null | `FEE` | `SURCHARGE` | `SURCHARGE` | `MAPPED` |
+| null | `FEE` | `REMOTE_AREA_SURCHARGE` | `REMOTE_AREA_SURCHARGE` | `MAPPED` |
+| null | `FEE` | `COD_FEE` | `COD_FEE` | `MAPPED` |
+| null | `FEE` | `INSURANCE_FEE` | `INSURANCE_FEE` | `MAPPED` |
+| null | `FEE` | `RETURN_FEE` | `RETURN_FEE` | `MAPPED` |
+| null | `FEE` | `OTHER_FEE` | `OTHER_FEE` | `MAPPED` |
+| null | `FEE` | `VAT` | `VAT` | `MAPPED` |
+
+Golden lookup cases the author must assert, in addition to every `MAPPED` row above:
+
+| carrier_code | domain | raw_key | canonical_code | disposition | Why |
+|---|---|---|---|---|---|
+| `GHN` | `STATUS` | `delivery_fail` | `DELIVERY_FAILED` | `MAPPED` | Must not map to `RETURNING`. |
+| `GHN` | `STATUS` | `some_weird_unknown_status_xyz` | null | `UNMAPPED` | Must not fall back to `IN_TRANSIT`. |
+| `GHTK` | `STATUS` | `9999` | null | `UNMAPPED` | Must not fall back to `IN_TRANSIT`. |
+| `GHTK` | `STATUS` | `9` | `DELIVERY_FAILED` | `MAPPED` | Undeliverable is not yet `RETURNING`. |
+| null | `FEE` | `mystery_fee` | null | `UNMAPPED` | Must not become `BASE_FREIGHT` or amount `0`. |
+| null | `FEE` | `VAT` | `VAT` | `MAPPED` | Identity mapping of the tax line. |
+| null | `CARRIER_ALIAS` | `VTP` | `VIETTEL_POST` | `MAPPED` | Boundary alias. |
+| null | `CARRIER_ALIAS` | `vtp` | null | `UNMAPPED` | Alias match is case-sensitive. |
+
+No Viettel Post or J&T raw status is mapped in this revision. Their raw statuses resolve `UNMAPPED` until partner evidence names them. Adapter code that still defaults unknown GHN/GHTK statuses to `IN_TRANSIT` is a `FEAT-TRK-01` defect. This catalog's lookup result is the contract those adapters must later follow. FEAT-CAR-01 does not edit adapter runtime code.
 
 ## Recorded product decisions (formerly blocking gaps CAR-GAP-01 through CAR-GAP-07)
 
