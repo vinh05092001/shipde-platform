@@ -162,6 +162,44 @@ async function seedCatalogIfMissing(prisma: PrismaService) {
   }
 }
 
+/**
+ * Redacts database connection strings to eliminate password or sensitive query parameter leakage
+ * in CI errors, warnings, or diagnostic logs (P1 review finding).
+ */
+export function redactDatabaseUrl(rawUrl?: string): string {
+  if (!rawUrl) {
+    return '[REDACTED_DATABASE_URL]';
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.password) {
+      parsed.password = '***';
+    }
+    // Sanitize any sensitive query parameters like password, secret, token, key
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      const lower = key.toLowerCase();
+      if (
+        lower.includes('password') ||
+        lower.includes('secret') ||
+        lower.includes('token') ||
+        lower.includes('key')
+      ) {
+        parsed.searchParams.set(key, '***');
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return rawUrl.replace(/(:\/\/[^:]+:)[^@]+(@)/, '$1***$2');
+  }
+}
+
+export function buildDatabaseReadinessFailureMessage(rawUrl: string, isCi: boolean): string {
+  const safeDiagnostics = redactDatabaseUrl(rawUrl);
+  return isCi
+    ? `Database must be reachable in CI environment at ${safeDiagnostics}`
+    : `⚠️ PostgreSQL is not reachable at ${safeDiagnostics}. Skipping live Carrier Catalog Supertest tests.`;
+}
+
 async function runCarrierCatalogSupertestSuite() {
   console.log('================================================================');
   console.log('SHIP DE - CARRIER CATALOG SUPERTEST SUITE (FEAT-CAR-01)');
@@ -213,12 +251,12 @@ async function runCarrierCatalogSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+    const isCi = Boolean(process.env.CI);
+    const failureMsg = buildDatabaseReadinessFailureMessage(databaseUrl, isCi);
+    if (isCi) {
+      throw new Error(failureMsg);
     }
-    console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Carrier Catalog Supertest tests.`
-    );
+    console.warn(failureMsg);
     await app.close();
     console.log('🎉 Carrier Catalog Supertest suite skipped offline safely!');
     return;
@@ -544,6 +582,110 @@ async function runCarrierCatalogSupertestSuite() {
       'Browsing catalog must insert 0 carrier_accounts rows'
     );
     console.log('  ✔ AC-CAR-01-09: Zero database side-effects verified');
+
+    // --------------------------------------------------------------------------
+    // P1 FINDING: Redact Database Credentials from Failure Diagnostics
+    // --------------------------------------------------------------------------
+    console.log('▶ Testing P1 Finding: Database credentials redaction in failure-path diagnostics');
+    const secretPassword = 'super_secret_pg_password_xyz987';
+    const secretToken = 'top_secret_token_abc';
+    const sensitiveDbUrl = `postgresql://carrier_admin:${secretPassword}@postgres.internal.net:5432/shipde_prod?schema=public&token=${secretToken}`;
+
+    const redactedOutput = redactDatabaseUrl(sensitiveDbUrl);
+    assert.strictEqual(
+      redactedOutput.includes(secretPassword),
+      false,
+      'Failure-path diagnostic must NEVER contain database password'
+    );
+    assert.strictEqual(
+      redactedOutput.includes(secretToken),
+      false,
+      'Failure-path diagnostic must NEVER contain sensitive query parameters'
+    );
+    assert.ok(
+      redactedOutput.includes('carrier_admin:***@postgres.internal.net:5432/shipde_prod'),
+      'Diagnostics must show host and database with password masked'
+    );
+
+    const ciFailureMsg = buildDatabaseReadinessFailureMessage(sensitiveDbUrl, true);
+    assert.strictEqual(
+      ciFailureMsg.includes(secretPassword),
+      false,
+      'CI error message must NEVER leak database credentials'
+    );
+    assert.strictEqual(
+      ciFailureMsg.includes(secretToken),
+      false,
+      'CI error message must NEVER leak sensitive query parameters'
+    );
+
+    const warnFailureMsg = buildDatabaseReadinessFailureMessage(sensitiveDbUrl, false);
+    assert.strictEqual(
+      warnFailureMsg.includes(secretPassword),
+      false,
+      'Local warning message must NEVER leak database credentials'
+    );
+    assert.strictEqual(
+      warnFailureMsg.includes(secretToken),
+      false,
+      'Local warning message must NEVER leak sensitive query parameters'
+    );
+    console.log(
+      '  ✔ P1 Finding: Failure-path assertions prove credentials never appear in diagnostics'
+    );
+
+    // --------------------------------------------------------------------------
+    // P2 FINDING: Global compatibility mappings database-enforced uniqueness
+    // --------------------------------------------------------------------------
+    console.log(
+      '▶ Testing P2 Finding: Global compatibility mappings unique partial index enforcement'
+    );
+    const testRawKey = `UNIQUE_TEST_RAW_KEY_${testSuffix}`;
+    const firstMappingId = randomUUID();
+    const secondMappingId = randomUUID();
+
+    await prisma.catalogCompatibilityMapping.create({
+      data: {
+        id: firstMappingId,
+        catalogRevision: 'CATALOG-2026-10-31',
+        carrierCode: null,
+        domain: 'FEE',
+        rawKey: testRawKey,
+        canonicalCode: 'BASE_FREIGHT',
+        disposition: 'MAPPED',
+      },
+    });
+
+    let duplicateRejected = false;
+    try {
+      await prisma.catalogCompatibilityMapping.create({
+        data: {
+          id: secondMappingId,
+          catalogRevision: 'CATALOG-2026-10-31',
+          carrierCode: null,
+          domain: 'FEE',
+          rawKey: testRawKey,
+          canonicalCode: 'SURCHARGE',
+          disposition: 'MAPPED',
+        },
+      });
+    } catch (err: any) {
+      // Prisma P2002 code or PostgreSQL unique constraint violation
+      duplicateRejected = err.code === 'P2002' || /unique/i.test(err.message || '');
+    } finally {
+      await prisma.catalogCompatibilityMapping.deleteMany({
+        where: { id: { in: [firstMappingId, secondMappingId] } },
+      });
+    }
+
+    assert.strictEqual(
+      duplicateRejected,
+      true,
+      'Database must enforce unique partial index on global compatibility mappings where carrier_code IS NULL'
+    );
+    console.log(
+      '  ✔ P2 Finding: Database-enforced uniqueness on global compatibility mappings verified'
+    );
 
     console.log('================================================================');
     console.log('🎉 ALL CARRIER CATALOG SUPERTEST TESTS PASSED SUCCESSFULLY!');

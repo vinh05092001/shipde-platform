@@ -101,6 +101,7 @@ CREATE INDEX IF NOT EXISTS "fee_component_references_catalog_revision_idx" ON "f
 
 -- CreateIndex
 CREATE UNIQUE INDEX IF NOT EXISTS "catalog_compatibility_mappings_catalog_revision_carrier_code_domain_raw_key_key" ON "catalog_compatibility_mappings"("catalog_revision", "carrier_code", "domain", "raw_key");
+CREATE UNIQUE INDEX IF NOT EXISTS "catalog_compatibility_mappings_global_unique_idx" ON "catalog_compatibility_mappings"("catalog_revision", "domain", "raw_key") WHERE "carrier_code" IS NULL;
 CREATE INDEX IF NOT EXISTS "catalog_compatibility_mappings_catalog_revision_domain_idx" ON "catalog_compatibility_mappings"("catalog_revision", "domain");
 
 -- AddForeignKey

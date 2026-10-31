@@ -12,6 +12,10 @@ import {
 import { CarrierCodeEnum } from '@prisma/client';
 import { HttpStatus } from '@nestjs/common';
 import { CanonicalApiException } from '../auth/auth.service';
+import {
+  redactDatabaseUrl,
+  buildDatabaseReadinessFailureMessage,
+} from './carrier-catalog.supertest.spec';
 
 function createMockPrismaService() {
   const carriers = SEED_CARRIERS.map((c) => ({
@@ -470,6 +474,38 @@ describe('FEAT-CAR-01 Carrier Catalog Unit Test Suite', () => {
       const res = await service.listCompatibility('STATUS', 'VIETTEL_POST', 'non_existent_key');
       assert.strictEqual(res.catalog_revision, CATALOG_REVISION_2026_10_31);
       assert.deepStrictEqual(res.data, []);
+    });
+  });
+
+  describe('P1 Finding: Diagnostic Credential Redaction in Failure Paths', () => {
+    it('redacts raw password and sensitive parameters from connection strings', () => {
+      const secretPass = 'super_secret_pg_pwd_456';
+      const secretToken = 'secret_access_token_789';
+      const sensitiveUrl = `postgresql://shipde_user:${secretPass}@db.internal:5432/shipde_db?schema=public&token=${secretToken}&auth_key=key123`;
+
+      const redacted = redactDatabaseUrl(sensitiveUrl);
+      assert.strictEqual(redacted.includes(secretPass), false);
+      assert.strictEqual(redacted.includes(secretToken), false);
+      assert.strictEqual(redacted.includes('key123'), false);
+      assert.ok(redacted.includes('shipde_user:***@db.internal:5432/shipde_db'));
+
+      const ciError = buildDatabaseReadinessFailureMessage(sensitiveUrl, true);
+      assert.strictEqual(ciError.includes(secretPass), false);
+      assert.strictEqual(ciError.includes(secretToken), false);
+      assert.ok(
+        ciError.includes(
+          'Database must be reachable in CI environment at postgresql://shipde_user:***@db.internal:5432/shipde_db'
+        )
+      );
+
+      const warnMsg = buildDatabaseReadinessFailureMessage(sensitiveUrl, false);
+      assert.strictEqual(warnMsg.includes(secretPass), false);
+      assert.strictEqual(warnMsg.includes(secretToken), false);
+      assert.ok(
+        warnMsg.includes(
+          'PostgreSQL is not reachable at postgresql://shipde_user:***@db.internal:5432/shipde_db'
+        )
+      );
     });
   });
 });
