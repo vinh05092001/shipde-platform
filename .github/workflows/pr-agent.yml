@@ -1,0 +1,62 @@
+name: PR Agent Advisory Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pr-agent:
+    name: Advisory PR Agent Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - name: Check preflight prerequisites
+        id: preflight
+        env:
+          PR_AGENT_API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          PR_AGENT_API_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          PR_AGENT_MODEL: ${{ secrets.PR_AGENT_MODEL }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          BASE_REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$IS_FORK" = "true" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::notice title=PR-Agent Skipped::Skipping advisory pr-agent review: Pull request originates from a fork."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$PR_AGENT_API_BASE" ] || [ -z "$PR_AGENT_API_KEY" ] || [ -z "$PR_AGENT_MODEL" ]; then
+            echo "::notice title=PR-Agent Skipped::Skipping advisory pr-agent review: Required repository secrets (PR_AGENT_API_BASE, PR_AGENT_API_KEY, PR_AGENT_MODEL) are absent."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        if: steps.preflight.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run pr-agent
+        if: steps.preflight.outputs.skip != 'true'
+        uses: qodo-ai/pr-agent@efdde4afe14aa401a3889012c7f3e9ef3081a430 # v0.49.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.PR_AGENT_API_BASE }}
+          OPENAI_API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          OPENAI__KEY: ${{ secrets.PR_AGENT_API_KEY }}
+          OPENAI__API_BASE: ${{ secrets.PR_AGENT_API_BASE }}
+          CONFIG__MODEL: ${{ secrets.PR_AGENT_MODEL }}
+          GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: 'false'
+          GITHUB_ACTION_CONFIG__AUTO_REVIEW: 'true'
+          GITHUB_ACTION_CONFIG__AUTO_IMPROVE: 'true'
+          GITHUB_ACTION_CONFIG__PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
+          GITHUB_ACTION_CONFIG__HANDLE_PUSH_TRIGGER: 'true'
+          GITHUB_ACTION_CONFIG__PUSH_COMMANDS: '["/review", "/improve"]'
