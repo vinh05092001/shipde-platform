@@ -165,8 +165,10 @@ async function seedCatalogIfMissing(prisma: PrismaService) {
 /**
  * Redacts database connection strings to eliminate password or sensitive query parameter leakage
  * in CI errors, warnings, or diagnostic logs (P1 review finding).
- * Fail-closed: any URL that cannot be fully parsed is replaced wholesale with the redaction
- * marker, because a partial regex replacement cannot guarantee query-parameter sanitization.
+ * Fail-closed: any URL that cannot be fully parsed, has an unsupported scheme, or lacks a valid
+ * authority/hostname (including opaque URLs like postgresql:user:sentinel@db/catalog) is replaced
+ * wholesale with the redaction marker, because credentials or query parameters cannot be safely
+ * isolated without a valid authority.
  */
 export function redactDatabaseUrl(rawUrl?: string): string {
   if (!rawUrl) {
@@ -174,6 +176,14 @@ export function redactDatabaseUrl(rawUrl?: string): string {
   }
   try {
     const parsed = new URL(rawUrl);
+    // Reject unsupported schemes: only postgresql: and postgres: are supported database schemes
+    if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:') {
+      return '[REDACTED_DATABASE_URL]';
+    }
+    // Reject URLs without a valid authority/hostname (e.g. opaque URLs without '//' like postgresql:user:sentinel@db)
+    if (!parsed.hostname || parsed.hostname.trim().length === 0) {
+      return '[REDACTED_DATABASE_URL]';
+    }
     if (parsed.password) {
       parsed.password = '***';
     }
@@ -182,9 +192,12 @@ export function redactDatabaseUrl(rawUrl?: string): string {
       const lower = key.toLowerCase();
       if (
         lower.includes('password') ||
+        lower.includes('pass') ||
+        lower.includes('pwd') ||
         lower.includes('secret') ||
         lower.includes('token') ||
-        lower.includes('key')
+        lower.includes('key') ||
+        lower.includes('credential')
       ) {
         parsed.searchParams.set(key, '***');
       }
@@ -763,6 +776,84 @@ async function runCarrierCatalogSupertestSuite() {
     );
     console.log(
       '  ✔ P1 Finding: Failure-path assertions prove credentials never appear in diagnostics (valid + malformed URLs)'
+    );
+
+    // --------------------------------------------------------------------------
+    // P1 FINDING: Redact Opaque URLs & Unsupported Schemes from Diagnostics
+    // --------------------------------------------------------------------------
+    console.log(
+      '▶ Testing P1 Finding: Redact opaque URLs, unsupported schemes, and missing authority from diagnostics'
+    );
+    const sentinelPassword = 'opaque_sentinel_credential_999';
+    const opaqueDbUrl = `postgresql:user:${sentinelPassword}@db/catalog`;
+
+    const rawOpaqueParsed = new URL(opaqueDbUrl);
+    assert.strictEqual(rawOpaqueParsed.hostname, '', 'Precondition: opaque URL hostname is empty');
+    assert.strictEqual(rawOpaqueParsed.password, '', 'Precondition: opaque URL password is empty');
+    assert.ok(
+      rawOpaqueParsed.pathname.includes(sentinelPassword),
+      'Precondition: raw URL parser retains credential in opaque pathname'
+    );
+
+    const opaqueRedacted = redactDatabaseUrl(opaqueDbUrl);
+    assert.strictEqual(
+      opaqueRedacted,
+      '[REDACTED_DATABASE_URL]',
+      'Opaque URL without valid authority must be replaced wholesale with the redaction marker'
+    );
+    assert.strictEqual(
+      opaqueRedacted.includes(sentinelPassword),
+      false,
+      'Opaque URL diagnostic must NEVER contain credential'
+    );
+
+    const opaqueCiMsg = buildDatabaseReadinessFailureMessage(opaqueDbUrl, true);
+    assert.strictEqual(
+      opaqueCiMsg.includes(sentinelPassword),
+      false,
+      'CI error message must NEVER leak credential from an opaque URL'
+    );
+    assert.ok(
+      opaqueCiMsg.includes('[REDACTED_DATABASE_URL]'),
+      'CI error message must show redaction marker for an opaque URL'
+    );
+
+    const opaqueWarnMsg = buildDatabaseReadinessFailureMessage(opaqueDbUrl, false);
+    assert.strictEqual(
+      opaqueWarnMsg.includes(sentinelPassword),
+      false,
+      'Local warning message must NEVER leak credential from an opaque URL'
+    );
+    assert.ok(
+      opaqueWarnMsg.includes('[REDACTED_DATABASE_URL]'),
+      'Local warning message must show redaction marker for an opaque URL'
+    );
+
+    // Unsupported scheme test
+    const unsupportedSchemeUrl = `http://user:${sentinelPassword}@db/catalog`;
+    const unsupportedRedacted = redactDatabaseUrl(unsupportedSchemeUrl);
+    assert.strictEqual(unsupportedRedacted, '[REDACTED_DATABASE_URL]');
+    assert.strictEqual(unsupportedRedacted.includes(sentinelPassword), false);
+    const unsupportedCiMsg = buildDatabaseReadinessFailureMessage(unsupportedSchemeUrl, true);
+    assert.strictEqual(unsupportedCiMsg.includes(sentinelPassword), false);
+    assert.ok(unsupportedCiMsg.includes('[REDACTED_DATABASE_URL]'));
+    const unsupportedWarnMsg = buildDatabaseReadinessFailureMessage(unsupportedSchemeUrl, false);
+    assert.strictEqual(unsupportedWarnMsg.includes(sentinelPassword), false);
+    assert.ok(unsupportedWarnMsg.includes('[REDACTED_DATABASE_URL]'));
+
+    // Missing hostname test
+    const missingHostUrl = `postgresql:///catalog?token=${sentinelPassword}`;
+    const missingHostRedacted = redactDatabaseUrl(missingHostUrl);
+    assert.strictEqual(missingHostRedacted, '[REDACTED_DATABASE_URL]');
+    assert.strictEqual(missingHostRedacted.includes(sentinelPassword), false);
+    const missingHostCiMsg = buildDatabaseReadinessFailureMessage(missingHostUrl, true);
+    assert.strictEqual(missingHostCiMsg.includes(sentinelPassword), false);
+    assert.ok(missingHostCiMsg.includes('[REDACTED_DATABASE_URL]'));
+    const missingHostWarnMsg = buildDatabaseReadinessFailureMessage(missingHostUrl, false);
+    assert.strictEqual(missingHostWarnMsg.includes(sentinelPassword), false);
+    assert.ok(missingHostWarnMsg.includes('[REDACTED_DATABASE_URL]'));
+    console.log(
+      '  ✔ P1 Finding: Opaque URLs, unsupported schemes, and missing authority fail closed to redaction marker in all diagnostics'
     );
 
     // --------------------------------------------------------------------------

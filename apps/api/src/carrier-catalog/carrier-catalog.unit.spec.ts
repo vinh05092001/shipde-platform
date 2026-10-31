@@ -543,5 +543,77 @@ describe('FEAT-CAR-01 Carrier Catalog Unit Test Suite', () => {
       assert.strictEqual(warnMsg.includes(secretToken), false);
       assert.ok(warnMsg.includes('[REDACTED_DATABASE_URL]'));
     });
+
+    it('redacts opaque URLs, unsupported schemes, and missing authority wholesale before emitting diagnostics (Finding 3)', () => {
+      const secretSentinel = 'sentinel_secret_credential_xyz';
+      const opaqueUrl = `postgresql:user:${secretSentinel}@db/catalog`;
+
+      // Precondition: WHATWG URL parser does NOT throw on opaque URL, but treats it as opaque path
+      // with empty hostname and empty password, leaving credentials in pathname
+      const rawParsed = new URL(opaqueUrl);
+      assert.strictEqual(rawParsed.hostname, '');
+      assert.strictEqual(rawParsed.password, '');
+      assert.ok(rawParsed.pathname.includes(secretSentinel));
+
+      // Helper must fail-closed: reject opaque URLs wholesale
+      const redacted = redactDatabaseUrl(opaqueUrl);
+      assert.strictEqual(
+        redacted,
+        '[REDACTED_DATABASE_URL]',
+        'Opaque URL without valid authority must be replaced wholesale with the redaction marker'
+      );
+      assert.strictEqual(redacted.includes(secretSentinel), false);
+
+      // Regression assertions for both diagnostic messages
+      const ciMsg = buildDatabaseReadinessFailureMessage(opaqueUrl, true);
+      assert.strictEqual(
+        ciMsg.includes(secretSentinel),
+        false,
+        'CI error message must NEVER leak credential from opaque URL'
+      );
+      assert.ok(
+        ciMsg.includes('[REDACTED_DATABASE_URL]'),
+        'CI error message must include redaction marker'
+      );
+
+      const warnMsg = buildDatabaseReadinessFailureMessage(opaqueUrl, false);
+      assert.strictEqual(
+        warnMsg.includes(secretSentinel),
+        false,
+        'Local warning message must NEVER leak credential from opaque URL'
+      );
+      assert.ok(
+        warnMsg.includes('[REDACTED_DATABASE_URL]'),
+        'Local warning message must include redaction marker'
+      );
+
+      // Unsupported scheme regression assertion
+      const unsupportedSchemeUrl = `http://user:${secretSentinel}@db/catalog`;
+      const unsupportedRedacted = redactDatabaseUrl(unsupportedSchemeUrl);
+      assert.strictEqual(unsupportedRedacted, '[REDACTED_DATABASE_URL]');
+      assert.strictEqual(unsupportedRedacted.includes(secretSentinel), false);
+
+      const unsupportedCiMsg = buildDatabaseReadinessFailureMessage(unsupportedSchemeUrl, true);
+      assert.strictEqual(unsupportedCiMsg.includes(secretSentinel), false);
+      assert.ok(unsupportedCiMsg.includes('[REDACTED_DATABASE_URL]'));
+
+      const unsupportedWarnMsg = buildDatabaseReadinessFailureMessage(unsupportedSchemeUrl, false);
+      assert.strictEqual(unsupportedWarnMsg.includes(secretSentinel), false);
+      assert.ok(unsupportedWarnMsg.includes('[REDACTED_DATABASE_URL]'));
+
+      // Missing hostname regression assertion
+      const missingHostUrl = `postgresql:///catalog?token=${secretSentinel}`;
+      const missingHostRedacted = redactDatabaseUrl(missingHostUrl);
+      assert.strictEqual(missingHostRedacted, '[REDACTED_DATABASE_URL]');
+      assert.strictEqual(missingHostRedacted.includes(secretSentinel), false);
+
+      const missingHostCiMsg = buildDatabaseReadinessFailureMessage(missingHostUrl, true);
+      assert.strictEqual(missingHostCiMsg.includes(secretSentinel), false);
+      assert.ok(missingHostCiMsg.includes('[REDACTED_DATABASE_URL]'));
+
+      const missingHostWarnMsg = buildDatabaseReadinessFailureMessage(missingHostUrl, false);
+      assert.strictEqual(missingHostWarnMsg.includes(secretSentinel), false);
+      assert.ok(missingHostWarnMsg.includes('[REDACTED_DATABASE_URL]'));
+    });
   });
 });
