@@ -14,8 +14,48 @@
 | Risk domains    | `tenant isolation`, `database ownership`, `rbac`, `audit`, `pii protection`, `async export jobs` |
 | Allowed paths   | `docs/product-spec/work-items/FEAT-COM-05.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/*`, `packages/config/src/*`, `prisma/schema.prisma`, `prisma/migrations/*`, `apps/api/package.json`, `apps/api/src/app.module.ts`, `apps/api/src/exports/*` |
 | Reviewer        | Codex — fresh independent task |
-| Branch          | `feat/feat-com-05` |
-| Pull Request    | #470 |
+| Branch          | `feat/feat-com-05-api` (Slice A), `feat/feat-com-05` (Slice B) |
+| Pull Request    | #482 (Slice A), #470 (Slice B) |
+
+## Slice A (API)
+
+- **Delivery Slice**: Slice A — Server-side API, Persistence, Generators, and Contracts.
+- **Branch**: `feat/feat-com-05-api` (Pull Request #482).
+- **Scope**:
+  - PostgreSQL schema and migration for `export_jobs` table (`prisma/schema.prisma`, `prisma/migrations/20261031023737_feat_com_05_export_jobs/migration.sql`).
+  - Shared domain contracts and enumerations (`packages/contracts/src/exports.ts`, `packages/contracts/src/index.ts`).
+  - Configuration schema, validations, and resolvers for export limits and TTL (`packages/config/src/index.ts`).
+  - Compliant zero-dependency multi-format generators:
+    - CSV (`apps/api/src/exports/generators/csv.generator.ts`): RFC 4180 escaping, UTF-8 BOM, metadata header, formula injection neutralization.
+    - XLSX (`apps/api/src/exports/generators/xlsx.generator.ts`): SpreadsheetML workbook with dedicated `Data` and `Metadata` sheets.
+    - PDF (`apps/api/src/exports/generators/pdf.generator.ts`): PDF 1.4 document with generation metadata box, tabular columnar layout, page wrapping, and trailer checksum.
+  - Complete backend module, controller, DTOs, and service (`apps/api/src/exports/`):
+    - Strict server-side tenant isolation (404 on cross-tenant requests).
+    - Dynamic capability-based RBAC enforcement for all resources (`users`, `warehouses`, `audit_logs`, `ledgers`).
+    - Per-row FEAT-RBAC-02 warehouse scoping on generation and download.
+    - Fail-closed PII protection with `maskIdentifier` unless actor holds `pii:unmask`.
+    - Truthful SHA-256 data payload checksum and binary file checksum.
+    - Asynchronous & synchronous job execution lifecycle, TTL expiration (410 `EXPORT_EXPIRED`), and tenant-scoped stale job recovery.
+    - Atomic transaction commit for job creation and mandatory initial `EXPORT_REQUESTED` audit log.
+    - Immutable audit trails for `EXPORT_REQUESTED` and `EXPORT_DOWNLOADED`.
+- **Acceptance IDs Covered in Slice A**:
+  - `AC-COM-05-01`: Create export job with valid parameters.
+  - `AC-COM-05-02`: Export users to CSV (RFC 4180).
+  - `AC-COM-05-03`: Export warehouses to XLSX.
+  - `AC-COM-05-04`: Export ledgers to PDF.
+  - `AC-COM-05-05`: FEAT-RBAC-02 scoped actor exports warehouses.
+  - `AC-COM-05-06`: Actor lacking resource permission requests export (403 FORBIDDEN).
+  - `AC-COM-05-07`: Actor queries or downloads export from another tenant (404 EXPORT_NOT_FOUND).
+  - `AC-COM-05-08`: Download completed export file.
+  - `AC-COM-05-09`: Download pending/processing export (409 EXPORT_NOT_READY).
+  - `AC-COM-05-10`: Invalid format or resource requested (400 VALIDATION_ERROR).
+  - `AC-COM-05-11`: DTO rejects non-string types on string fields (400 VALIDATION_ERROR).
+  - `AC-COM-05-12`: Audit log recorded for export creation and download.
+  - `AC-COM-05-13`: Actor with `pii:unmask` receives unmasked identifiers.
+- **What Remains for Slice B (Web UI - PR #470)**:
+  - `AC-COM-05-14`: Web UI `ExportModal` (`apps/web/src/components/ExportModal.tsx`) with all 8 AGENTS.md states (idle, loading, empty, validation, forbidden, partial/clamped, success, error/recovery).
+  - `AC-COM-05-15`: Web UI `ExportsSettingsPage` (`apps/web/src/app/settings/exports/page.tsx`) history console, filters, and triggers.
+  - Automated Web UI test suite (`apps/web/src/tests/exports-page-states.test.ts`).
 
 ## Business outcome
 
@@ -129,21 +169,21 @@ Key business capabilities delivered:
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 | --- | --- | --- | --- |
-| `AC-COM-05-01` | Create export job with valid parameters | 201 Created; job created with `status: completed` (or pending); metadata populated; total_rows accurate | Unit & Supertest tests |
-| `AC-COM-05-02` | Export users to CSV (RFC 4180) | 200 OK; valid CSV formatted with UTF-8 BOM; metadata banner; properly escaped fields; PII masked if no `pii:unmask` | Unit CSV generator test |
-| `AC-COM-05-03` | Export warehouses to XLSX | 200 OK; valid SpreadsheetML XML workbook with Data sheet and Metadata sheet | Unit XLSX generator test |
-| `AC-COM-05-04` | Export ledgers to PDF | 200 OK; valid PDF 1.4 syntax (`%PDF-1.4`); metadata header; table layout; `%%EOF` trailer | Unit PDF generator test |
-| `AC-COM-05-05` | FEAT-RBAC-02 scoped actor exports warehouses | Only permitted warehouses appear in file; unpermitted warehouses recorded as `SCOPE_FORBIDDEN` in `row_results` | Unit scope test |
-| `AC-COM-05-06` | Actor lacking resource permission requests export | 403 `FORBIDDEN` with canonical error; zero export rows generated | Unit RBAC test |
-| `AC-COM-05-07` | Actor queries or downloads export from another tenant | 404 `EXPORT_NOT_FOUND`; zero data leaked | Multi-tenant isolation test |
-| `AC-COM-05-08` | Download completed export file | 200 OK; streaming response with correct Content-Type, Content-Disposition, and X-Export-Checksum header | Supertest download test |
-| `AC-COM-05-09` | Download pending/processing export | 409 `EXPORT_NOT_READY` with actionable retry advice | Supertest lifecycle test |
-| `AC-COM-05-10` | Invalid format or resource requested | 400 `VALIDATION_ERROR` with canonical field errors; zero job created | DTO validation negative test |
-| `AC-COM-05-11` | DTO rejects non-string types on string fields | 400 `VALIDATION_ERROR` with `INVALID_TYPE` (never 500) | DTO type safety test |
-| `AC-COM-05-12` | Audit log recorded for export creation and download | `audit_logs` contains `EXPORT_REQUESTED` and `EXPORT_DOWNLOADED` with masked PII | Audit log test |
-| `AC-COM-05-13` | Actor with `pii:unmask` receives unmasked identifiers | Phone and email in export appear in plaintext | PII privilege test |
-| `AC-COM-05-14` | Web UI ExportModal state coverage | All 8 required AGENTS.md states (idle, loading, empty, validation, forbidden, partial, success, error) rendered and verified | `exports-page-states.test.ts` |
-| `AC-COM-05-15` | Web UI ExportsSettingsPage history and triggers | History table renders with status badges, resource filter toolbar, and launch button | `exports-page-states.test.ts` |
+| `AC-COM-05-01` | Create export job with valid parameters | 201 Created; job created with `status: completed` (or pending); metadata populated; total_rows accurate | Unit & Supertest tests (Slice A) |
+| `AC-COM-05-02` | Export users to CSV (RFC 4180) | 200 OK; valid CSV formatted with UTF-8 BOM; metadata banner; properly escaped fields; PII masked if no `pii:unmask` | Unit CSV generator test (Slice A) |
+| `AC-COM-05-03` | Export warehouses to XLSX | 200 OK; valid SpreadsheetML XML workbook with Data sheet and Metadata sheet | Unit XLSX generator test (Slice A) |
+| `AC-COM-05-04` | Export ledgers to PDF | 200 OK; valid PDF 1.4 syntax (`%PDF-1.4`); metadata header; table layout; `%%EOF` trailer | Unit PDF generator test (Slice A) |
+| `AC-COM-05-05` | FEAT-RBAC-02 scoped actor exports warehouses | Only permitted warehouses appear in file; unpermitted warehouses recorded as `SCOPE_FORBIDDEN` in `row_results` | Unit scope test (Slice A) |
+| `AC-COM-05-06` | Actor lacking resource permission requests export | 403 `FORBIDDEN` with canonical error; zero export rows generated | Unit RBAC test (Slice A) |
+| `AC-COM-05-07` | Actor queries or downloads export from another tenant | 404 `EXPORT_NOT_FOUND`; zero data leaked | Multi-tenant isolation test (Slice A) |
+| `AC-COM-05-08` | Download completed export file | 200 OK; streaming response with correct Content-Type, Content-Disposition, and X-Export-Checksum header | Supertest download test (Slice A) |
+| `AC-COM-05-09` | Download pending/processing export | 409 `EXPORT_NOT_READY` with actionable retry advice | Supertest lifecycle test (Slice A) |
+| `AC-COM-05-10` | Invalid format or resource requested | 400 `VALIDATION_ERROR` with canonical field errors; zero job created | DTO validation negative test (Slice A) |
+| `AC-COM-05-11` | DTO rejects non-string types on string fields | 400 `VALIDATION_ERROR` with `INVALID_TYPE` (never 500) | DTO type safety test (Slice A) |
+| `AC-COM-05-12` | Audit log recorded for export creation and download | `audit_logs` contains `EXPORT_REQUESTED` and `EXPORT_DOWNLOADED` with masked PII | Audit log test (Slice A) |
+| `AC-COM-05-13` | Actor with `pii:unmask` receives unmasked identifiers | Phone and email in export appear in plaintext | PII privilege test (Slice A) |
+| `AC-COM-05-14` | Web UI ExportModal state coverage | All 8 required AGENTS.md states (idle, loading, empty, validation, forbidden, partial, success, error) rendered and verified | `exports-page-states.test.ts` (Slice B — PR #470) |
+| `AC-COM-05-15` | Web UI ExportsSettingsPage history and triggers | History table renders with status badges, resource filter toolbar, and launch button | `exports-page-states.test.ts` (Slice B — PR #470) |
 
 ## Verification commands
 
@@ -177,7 +217,8 @@ pnpm --filter @shipde/web exec tsx src/tests/exports-page-states.test.ts
 | Round 1 | 32ca8ec3463c1a4cd7c5286a14d14be5a1b193a8 | CHANGES_REQUIRED | Initial implementation of exports backend vertical slice; review flagged out-of-date diff, fabricated ledger metrics, resource RBAC omission on get/list/download, OWNER role bypass, checksum mismatch, lifecycle/sync issues, PDF data dropping, and lack of HTTP integration proofs. |
 | Round 2 | bca303acacbc25a1dfadeb3e29cf05f1f059e7ce | CHANGES_REQUIRED | Merged origin/main cleanly; replaced hardcoded ledger metrics with real persisted tenant data (claims, exception cases, shipments, discrepancies); enforced resource capability RBAC across get, list, and download; eliminated hardcoded OWNER role bypasses across RBAC, PII masking, and warehouse scoping; implemented truthful SHA-256 data payload checksum and authentic file checksum; implemented real job lifecycle with dto.sync, EXPORT_LIMIT_EXCEEDED enforcement, query filtering, and FAILED status capture; rewritten PDF generator with multi-page support; expanded Supertest suite. |
 | Round 3 | d68f55ea2ba952dd30870ad697ebcb6d8880d090 | CHANGES_REQUIRED | Addressed findings from review.txt: (1) Fail-closed PII protection for historical unmarked exports on download without pii:unmask; (2) Background stale job recovery with tenant scoping; (3) Multi-page PDF generation with measured text wrapping, dynamic column widths, and UTF-16BE hex diacritics; (4) Formula injection neutralization for CSV metadata banner; (5) Sanitization of persisted raw filters to prevent PII leaks; (6) Scheduled retention cleanup for expired exports; (7) Authentic serialized-payload checksum preservation in generation_metadata; (8) Atomic export job and audit log commit via transaction; (9) Complete Web UI implementation with 100% state coverage (ExportModal, ExportsSettingsPage) and automated test suite. |
-| Round 4 | Pending | In progress | Fixed CI test failures when running against live PostgreSQL infrastructure: corrected Order and CarrierAccount schema fixtures, adjusted unrestricted warehouse download assertion to verify SCOPE_FORBIDDEN on multi-warehouse dataset, verified historical unmarked download rejection using user manager role lacking pii:unmask, and updated residual limitations. |
+| Round 4 | bc19fee293f5316ebb60f48d96235a4532d178e2 | CHANGES_REQUIRED | Extracted server-side slice into Slice A (API) on branch `feat/feat-com-05-api` (PR #482); CI reported contract drift and test failures due to unsynchronized openapi.ts types. |
+| Round 5 | Pending | In progress | Slice A CI green: eliminated openapi.ts contract drift via contract generation, verified all exports unit and Supertest suites, ensured strict tenant scoping, RBAC checks, PII protection, and atomic transaction audit logs. Documented Slice A scope boundaries and residual work for Slice B (PR #470). |
 
 ## Residual limitations
 
