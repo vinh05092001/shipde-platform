@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { runWithTenant } from './tenant-context';
-import { tenantRlsExtension } from './tenant-rls.extension';
+import { TenantRlsUnconfiguredTransactionError, tenantRlsExtension } from './tenant-rls.extension';
 
 /**
  * TASK-AI-154: orders row-level security integration test.
@@ -106,14 +106,14 @@ async function main(): Promise<void> {
   }
 
   // Verify the TASK-AI-154 migration DDL is present before testing behavior.
-  const rlsFlags = await admin.$queryRawUnsafe<
+  const rlsFlags = await admin.$queryRaw<
     Array<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>
-  >(
-    "SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'orders' AND c.relkind = 'r'"
-  );
-  const policyRows = await admin.$queryRawUnsafe<Array<{ policyname: string; permissive: string }>>(
-    "SELECT policyname, permissive FROM pg_policies WHERE schemaname = 'public' AND tablename = 'orders'"
-  );
+  >`
+    SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'orders' AND c.relkind = 'r'
+  `;
+  const policyRows = await admin.$queryRaw<Array<{ policyname: string; permissive: string }>>`
+    SELECT policyname, permissive FROM pg_policies WHERE schemaname = 'public' AND tablename = 'orders'
+  `;
   const rlsEnabled =
     rlsFlags.length === 1 &&
     rlsFlags[0].relrowsecurity === true &&
@@ -156,22 +156,16 @@ async function main(): Promise<void> {
     .$executeRaw(Prisma.raw(`REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`))
     .catch(() => {});
   await admin
-    .$executeRaw(
-      Prisma.raw(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
-    )
+    .$executeRaw(Prisma.raw(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`))
     .catch(() => {});
-  await admin
-    .$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`))
-    .catch(() => {});
+  await admin.$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`)).catch(() => {});
 
   await admin.$executeRaw(
     Prisma.raw(
       `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
     )
   );
-  await admin.$executeRaw(
-    Prisma.raw(`GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`)
-  );
+  await admin.$executeRaw(Prisma.raw(`GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`));
   await admin.$executeRaw(Prisma.raw(`GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`));
   await admin.$executeRaw(
     Prisma.raw(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE orders, merchants TO ${PROBE_ROLE}`)
@@ -439,6 +433,88 @@ async function main(): Promise<void> {
       'sanitized database endpoint must format host and db correctly without credentials'
     );
     console.log('PASS: connection diagnostics sanitize database credentials');
+
+    // 14. Review round 4 P1 (negative): an extended model query submitted
+    //     through a FOREIGN, unextended client's batch transaction carries
+    //     Prisma transaction metadata, but that transaction never executed
+    //     set_config('app.tenant_id'). The extension must fail closed
+    //     instead of letting the query run under the pilot fail-open clause
+    //     (which would return Tenant B's rows to Tenant A).
+    await assert.rejects(
+      runWithTenant(merchantA, async () => {
+        await probe.$transaction([
+          extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } }),
+        ]);
+      }),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof TenantRlsUnconfiguredTransactionError,
+          `foreign batch transaction must be rejected by the extension, got: ${
+            error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+          }`
+        );
+        assert.match(error.message, /Order\.findMany/, 'rejection must name the denied operation');
+        return true;
+      },
+      'extended query through an unextended batch transaction must fail closed under tenant context'
+    );
+    console.log(
+      'PASS: foreign batch transaction with extended query fails closed (no fail-open cross-tenant read)'
+    );
+
+    // 14b. The same composition with an extended RAW query must fail closed too.
+    await assert.rejects(
+      runWithTenant(merchantA, async () => {
+        await probe.$transaction([
+          extended.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM orders WHERE id IN (${orderA.id}::uuid, ${orderB.id}::uuid)
+          `,
+        ]);
+      }),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof TenantRlsUnconfiguredTransactionError,
+          'foreign batch transaction with raw query must be rejected by the extension'
+        );
+        return true;
+      },
+      'extended raw query through an unextended batch transaction must fail closed under tenant context'
+    );
+    console.log('PASS: foreign batch transaction with extended raw query fails closed');
+
+    // 15. A root-client extended query issued inside a FOREIGN interactive
+    //     transaction has no transaction metadata, so the extension still
+    //     wraps it in its own set_config transaction. Under the restricted
+    //     role, RLS must deny the cross-tenant row (not fail open).
+    await runWithTenant(merchantA, async () => {
+      const rows = await probe.$transaction(async () =>
+        extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } })
+      );
+      assert.deepEqual(
+        rows.map((row) => row.id),
+        [orderA.id],
+        'root-client extended query inside a foreign interactive transaction must stay tenant-scoped by RLS'
+      );
+    });
+    console.log(
+      'PASS: root-client extended query inside foreign interactive transaction stays tenant-scoped'
+    );
+
+    // 16. Behavior guard (BR-RLS-05): the foreign batch composition WITHOUT
+    //     a tenant context keeps the documented pilot fail-open behavior.
+    //     The rejection in test 14 is specific to tenant contexts, not a
+    //     blanket ban on foreign transactions.
+    const foreignUnscoped = (await probe.$transaction([
+      extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } }),
+    ])) as Array<Array<{ id: string }>>;
+    assert.deepEqual(
+      foreignUnscoped[0].map((row) => row.id).sort(),
+      [orderA.id, orderB.id].sort(),
+      'non-tenant sessions keep documented fail-open visibility through foreign batch transactions during the pilot'
+    );
+    console.log(
+      'PASS: foreign batch transaction without tenant context keeps documented fail-open behavior'
+    );
   } finally {
     await admin.order
       .deleteMany({
@@ -468,9 +544,7 @@ async function main(): Promise<void> {
         Prisma.raw(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
       )
       .catch(() => {});
-    await admin
-      .$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`))
-      .catch(() => {});
+    await admin.$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`)).catch(() => {});
     await admin.$disconnect().catch(() => {});
     await probe.$disconnect().catch(() => {});
   }

@@ -120,6 +120,7 @@ N/A — Backend database security architecture and middleware; no user interface
 | AC-AI-154-12 | Array transaction `extended.$transaction([...])` with failing operation | Pre-pends `set_config` to batch; rejected batch rolls back all writes atomically | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 11, 12) |
 | AC-AI-154-13 | Connection failure diagnostics reporting | Sanitizes database endpoint so database password / credentials are never exposed in logs or errors | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 13) |
 | AC-AI-154-14 | Root-client service helper called inside interactive transaction callback | Enforces tenant setting on root connection; denies cross-tenant reads | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 7b) |
+| AC-AI-154-15 | Extended model/raw query submitted through a foreign (unextended) client's transaction while a tenant context is active | Extension fails closed with `TenantRlsUnconfiguredTransactionError` — the query must NOT run under the pilot fail-open clause; the same composition without a tenant context keeps documented fail-open behavior; root-client queries inside a foreign interactive transaction are still wrapped and tenant-scoped | `apps/api/src/prisma/orders-rls.integration.spec.ts` (PASS 14, 14b, 15, 16) |
 
 ## Verification commands
 
@@ -128,7 +129,9 @@ N/A — Backend database security architecture and middleware; no user interface
 - `pnpm typecheck`
 - `tsx --tsconfig apps/api/tsconfig.json --test apps/api/src/prisma/tenant.middleware.unit.spec.ts`
 - `tsx --tsconfig apps/api/tsconfig.json apps/api/src/prisma/orders-rls.integration.spec.ts`
+- `pnpm --filter @shipde/api test`
 - `node scripts/ai/check-no-hardcode.mjs`
+- `git diff --check origin/main...HEAD`
 
 ## Codex review record
 
@@ -136,7 +139,8 @@ N/A — Backend database security architecture and middleware; no user interface
 |---|---|---|---|
 | 1 | `cb31b792` | `CHANGES_REQUIRED` | Initial implementation |
 | 2 | `c64b7130` | `CHANGES_REQUIRED` | Resolved P1 finding 1 (raw/relation queries bypass), P1 finding 2 (array transaction atomicity loss), and P1 finding 3 (diagnostic credential exposure) |
-| 3 | `HEAD` | `READY_FOR_CODEX` | Resolved P1 finding 1 (transaction-context bypass for root client in callback via binding bypass decisions to transaction client) and P1 finding 4 (scoped test cleanup fixtures) |
+| 3 | `a8bd0b59` | `CHANGES_REQUIRED` | Resolved P1 finding 1 (transaction-context bypass for root client in callback via binding bypass decisions to transaction client) and P1 finding 4 (scoped test cleanup fixtures) |
+| 4 | `HEAD` | `READY_FOR_CODEX` | Resolved NEW P1 (transaction metadata alone did not prove tenant setup; foreign/unextended-client transactions now fail closed via a per-instance establishment mark, with restricted-role regressions 14/14b/15/16), NEW P1 (restored unrelated origin/main content removed by branch drift: TASK-AI-153/157 Work Items, `apps/api/AGENTS.md`, `apps/web/AGENTS.md`, root `AGENTS.md` line, workflow docs, and register entries 270/271 kept alongside the TASK-AI-154 row 272), and open verification P1 (exact-head `current-application`/`application-gate`/`code-scan` CI results and a restricted-role RLS execution recorded in the PR packet) |
 
 ## Residual limitations
 

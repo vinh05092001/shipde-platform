@@ -37,7 +37,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | Ponytail                                                                            | REJECT            | It biases toward minimal output and previously produced generic, incomplete Ship Dễ UI. Disable both repository and 9Router injection. |
 | Caveman output mode                                                                 | REJECT            | Terse output removes reasoning and handoff evidence needed by a BA/product owner.                                                      |
 | Headroom semantic compression                                                       | DEFER             | Adds another local service and may alter context. Reconsider only after measured evaluation.                                           |
-| BMAD, Spec Kit, SuperClaude, Superpowers or another general orchestration framework | REJECT FOR NOW    | Duplicates the approved specification, Work Item and role contract and can create conflicting instructions.                            |
+| BMAD, Spec Kit, SuperClaude, Superpowers or another general orchestration framework | REJECT FOR NOW    | Duplicates approved specification and role contracts; Spec Kit patterns adopted docs-only without tooling (TASK-AI-157).              |
 | Generic dashboard/theme repositories                                                | REJECT            | Ship Dễ UI must come from approved screen states and design sources, not a transplanted AI theme.                                      |
 | Unreviewed DSH or public agent-skill collections                                    | REJECT BY DEFAULT | Plugins and skills execute or inject trusted instructions. Add only through a reviewed, commit-pinned Work Item.                       |
 | Global Nest, Prisma, Turbo, Playwright, Storybook or test CLIs                      | REJECT            | Project tools must be lockfile-pinned and invoked through root package scripts.                                                        |
@@ -528,6 +528,17 @@ devDependency pin that the manifest audit probes as `dependency "lefthook"`
 - In `tools/ai-brain/scheduler.js` (`planDispatch`), `maxImplementationAgents` defaults to 1. Any attempt to request `maxImplementationAgents > 1` without an approved governed decision identifier (`DEC-*` or `HUMAN-DECISION-*`) is rejected and clamped to 1, preserving the `AI-TOOL-03` stability measure.
 - The single-writer invariant (exactly one writer per Work Item / branch) remains absolute and non-configurable, holding permanently even when a governed decision raises concurrency across different Work Items.
 - In `tools/ai-brain/executor.js` (`executePlan`), `maxImplementation` is read from `plan.utilisation.maxImplementation` (defaulting to 1) and enforces `IMPLEMENTATION_CEILING` on any attempt to exceed it.
+
+## Spec Kit pattern adoption (TASK-AI-157)
+
+Under operator approval (2026-10-31), Ship Dễ adopts useful specification patterns from [GitHub Spec Kit](https://github.com/github/spec-kit) (MIT License, Copyright (c) GitHub, Inc.) into its existing Work Item workflow as documentation-only standards, without installing Spec Kit tooling, CLI, or altering repository status flows:
+
+1. **Ambiguity / `[NEEDS CLARIFICATION]` markers**: Any ambiguous requirement, rule gap, or unverified assumption must be explicitly tagged. Authors must stop and mark `BLOCKED` rather than guessing.
+2. **Pre-implementation Constitution check**: Explicit verification of non-negotiable invariants (tenant scope, RBAC, audit masking, VND integer math, carrier reconciliation, tests at the lowest useful level with test-first ordering for executable acceptance rows and justified non-applicability for non-executable rows).
+3. **Numbered task breakdown**: Execution ordered API/backend before UI and test-first for executable acceptance rows, with `[P]` markers indicating parallel-safe independent tasks.
+4. **Slice sizing rule**: Each Work Item Pull Request stays a single vertical delivery of ~400 changed lines (API/backend before UI inside the same PR). Work that does not fit is split at planning time into independently scoped prerequisite Work Items, never into horizontal backend/UI slices of one feature.
+
+Upstream CLI and framework tooling remain uninstalled; Ship Dễ's Work Item and Controller workflow remains authoritative.
 
 ## Advisory first-pass PR review: qodo-ai/pr-agent (TASK-AI-156)
 
