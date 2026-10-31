@@ -38,5 +38,6 @@
 | FEAT-AUD     | UC-AUD-01  | BR-AUD-01  | SCR-AUD-01   | JOB-RECONCILE        | ENT-FINDING            | ST-RUN       | AC-AUD-01  | EPIC-AUDIT  |
 | FEAT-BNK     | UC-BNK-01  | BR-BNK-01  | SCR-BATCH-01 | API-BANK-ALLOC       | ENT-BANK-ALLOCATION    | ST-BATCH     | AC-BNK-01  | EPIC-AUDIT  |
 | FEAT-CLM     | UC-CLM-01  | BR-CLM-01  | SCR-CASE-01  | API-CLAIM            | ENT-CLAIM              | ST-CASE      | AC-CLM-01  | EPIC-CLAIM  |
+| FEAT-COM-09  | UC-USR-01  | BR-IDEM-02, DEC-005, DEC-007 | SCR-COM-09, SCR-COM-09-JOBS | API-NOTIFICATIONS, API-NOTIFICATION-REDELIVER, JOB-NOTIFICATION-DISPATCH | ENT-NOTIFICATION, ENT-NOTIFICATION-CHANNEL-DELIVERY | ST-NOTIFICATION | AC-COM-09-01…16 | EPIC-REPORT |
 
 The complete matrix is expanded as use cases, APIs and tests are implemented. New CORE feature IDs cannot be merged without a traceability row.
