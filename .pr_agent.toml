@@ -1,0 +1,92 @@
+# Configuration for qodo-ai/pr-agent advisory reviewer
+# Guided by AGENTS.md Code Review Rules
+
+[config]
+# Size patch tokens for ~100KB chunks (~4 chars per token -> 25,000 tokens)
+max_model_tokens = 25000
+custom_model_max_tokens = 25000
+patch_extension_skip_types = [".md", ".txt"]
+response_language = "en-US"
+
+[github_action_config]
+auto_describe = false
+auto_review = true
+auto_improve = true
+pr_actions = ["opened", "reopened", "ready_for_review"]
+handle_push_trigger = true
+push_commands = ["/review", "/improve"]
+
+[ignore]
+# Ignore lockfiles, generated files, and migration snapshots
+glob = [
+  "**/pnpm-lock.yaml",
+  "**/package-lock.json",
+  "**/yarn.lock",
+  "**/bun.lockb",
+  "**/*.lock",
+  "**/migration_lock.toml",
+  "**/dist/**",
+  "**/build/**",
+  "**/.next/**",
+  "**/coverage/**",
+  "**/generated/**",
+  "**/__generated__/**",
+  "**/migrations/**/schema_snapshot.json",
+  "**/migrations/**/snapshot.json",
+  "**/*snapshot*"
+]
+regex = [
+  ".*pnpm-lock\\.yaml$",
+  ".*package-lock\\.json$",
+  ".*\\.lock$",
+  ".*/generated/.*",
+  ".*/migrations/.*snapshot.*"
+]
+
+[pr_reviewer]
+# Advisory code review guided by AGENTS.md Code Review Rules
+enable_large_pr_chunking = true
+max_number_of_calls = 3
+require_security_review = true
+require_tests_review = true
+extra_instructions = """
+You are acting as an ADVISORY reviewer for Ship Dễ pull requests.
+Enforce these core repository review rules:
+
+1. Tenancy & Server-Side Scoping:
+- Every tenant-owned read and write MUST be scoped server-side using the authenticated session or tenant context. Never trust client-supplied tenant ownership or IDs.
+- An empty tenant scope MUST deny access (fail-closed).
+
+2. Authorization & RBAC:
+- Every endpoint and mutation MUST be guarded by an explicit server-side RBAC / capability check. Unauthenticated or unauthorized calls must fail closed with canonical errors.
+
+3. Security & Sensitive Data (PII):
+- Secrets, credentials, tokens, and unnecessary PII must NEVER appear in logs, traces, exception messages, snapshot files, or test fixtures.
+- Audit event payloads must mask all sensitive data.
+
+4. Currency & Money Calculations:
+- Currency and financial calculations in VND (Vietnamese Dong) must NEVER use floating-point arithmetic. Use integer units, Decimal, or BigInt.
+
+5. Carrier Integrations & Side-Effects:
+- Any timed-out create, cancel, redelivery, or claim command MUST reconcile remote state before retry. Blind retries that can duplicate external side-effects are strictly prohibited.
+- Never infer carrier capability: unsupported, unavailable, unverified, and timed-out are distinct outcomes.
+
+6. Business Completeness & Tests:
+- Reject implementations covering only the happy path or screen mock when backend persistence, RBAC permissions, audit, or error recovery are required by the Work Item.
+- New behavior requires tests at the lowest useful level plus acceptance verification.
+"""
+
+[pr_code_suggestions]
+# Advisory code improvement suggestions guided by AGENTS.md
+enable_large_pr_chunking = true
+max_number_of_calls = 3
+focus_only_on_problems = true
+extra_instructions = """
+Focus improvements strictly on consequential correctness and repository rules:
+1. Ensure all database queries and writes enforce server-side tenant isolation.
+2. Ensure explicit RBAC guards protect every endpoint and handler.
+3. Eliminate any floating-point arithmetic on currency or VND amounts.
+4. Ensure audit logging masks sensitive fields and PII.
+5. Prevent duplicate side-effects on carrier commands via proper reconciliation.
+6. Provide tests for new behavior and edge cases.
+"""

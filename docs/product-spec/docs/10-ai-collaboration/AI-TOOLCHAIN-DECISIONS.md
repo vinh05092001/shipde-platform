@@ -24,6 +24,7 @@ The complete installation classification is maintained in `REPOSITORY-CLI-MANIFE
 | [MSW](https://github.com/mswjs/msw)                                                       | ADOPT IN `TASK-FOUND-04`         | Deterministic API and carrier response states for UI/testing                 | Mock behavior is labeled and never presented as live production evidence                                                                                                                                                                                      |
 | [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci)                            | ADOPT IN `TASK-FOUND-04`         | Performance budgets for critical approved routes                             | Targeted CI only; do not consume every local iteration                                                                                                                                                                                                        |
 | [Vercel agent skills](https://github.com/vercel-labs/agent-skills)                        | AUDIT AND PIN IN `TASK-FOUND-04` | React performance and UI review guidance                                     | Only `react-best-practices` and `web-design-guidelines`; Ship Dễ UX sources remain authoritative                                                                                                                                                              |
+| [qodo-ai/pr-agent](https://github.com/qodo-ai/pr-agent)                                   | USE NOW (ADVISORY)               | Advisory first-pass PR reviewer                                              | Operator approved 2026-10-31; advisory pre-review to cut CHANGES_REQUIRED rounds; does not replace independent Codex review; configured via repository secrets PR_AGENT_API_BASE, PR_AGENT_API_KEY, PR_AGENT_MODEL                          |
 
 ## External orchestration layer
 
@@ -527,3 +528,23 @@ devDependency pin that the manifest audit probes as `dependency "lefthook"`
 - In `tools/ai-brain/scheduler.js` (`planDispatch`), `maxImplementationAgents` defaults to 1. Any attempt to request `maxImplementationAgents > 1` without an approved governed decision identifier (`DEC-*` or `HUMAN-DECISION-*`) is rejected and clamped to 1, preserving the `AI-TOOL-03` stability measure.
 - The single-writer invariant (exactly one writer per Work Item / branch) remains absolute and non-configurable, holding permanently even when a governed decision raises concurrency across different Work Items.
 - In `tools/ai-brain/executor.js` (`executePlan`), `maxImplementation` is read from `plan.utilisation.maxImplementation` (defaulting to 1) and enforces `IMPLEMENTATION_CEILING` on any attempt to exceed it.
+
+## Advisory first-pass PR review: qodo-ai/pr-agent (TASK-AI-156)
+
+Operator approved on 2026-10-31 as an advisory pre-reviewer running via `.github/workflows/pr-agent.yml` and configured at `.pr_agent.toml`.
+
+### Purpose
+Provide automated first-pass feedback on Pull Requests across `/review` and `/improve` commands to identify common specification and code quality issues early—such as server-side tenant scoping violations, empty tenant scope bypasses, missing endpoint RBAC guards, unmasked PII or credentials in logs/audit events, floating-point math on VND currency, unreconciled carrier timeout side effects, and lack of test coverage for new behaviors. This surfaces defects before human or independent reviewer cycles, directly cutting down iterative `CHANGES_REQUIRED` rounds.
+
+### Advisory boundary
+- **Does not replace independent review:** `pr-agent` is strictly advisory. It never replaces the independent Codex-family review (or authorized Claude fallback) mandated by `AGENTS.md` and `AI-SUP-21`. The official merge gate remains the independent review-only Codex task returning `PASS`.
+- **Non-blocking gate isolation:** The workflow runs with `continue-on-error: true` and a 20-minute timeout. It is not added to required GitHub Actions status checks and can never block a PR merge or controller progression.
+- **Strict least-privilege permissions:** Workflow permissions are strictly limited to `contents: read` and `pull-requests: write`.
+
+### Operator secrets and configuration
+The action connects to an OpenAI-compatible endpoint using credentials provided exclusively via repository secrets. No model or API key is hardcoded in repository files. The operator must configure the following repository secrets in GitHub:
+- `PR_AGENT_API_BASE`: The base URL of the OpenAI-compatible API endpoint (e.g., `https://api.openai.com/v1` or an approved gateway URL).
+- `PR_AGENT_API_KEY`: The API key or token for authenticating against the endpoint.
+- `PR_AGENT_MODEL`: The model name to execute reviews and suggestions (e.g., `gpt-4o`, `gpt-4o-mini`, or provider model ID).
+
+If any of these secrets are absent, or if the Pull Request originates from a fork, `.github/workflows/pr-agent.yml` skips execution cleanly, posts an informational notice, and completes successfully without failing.
