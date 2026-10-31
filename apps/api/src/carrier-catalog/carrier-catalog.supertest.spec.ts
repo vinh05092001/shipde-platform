@@ -541,6 +541,66 @@ async function runCarrierCatalogSupertestSuite() {
     // Zero catalog data leaked
     assert.strictEqual(forbiddenRes.body.data, undefined);
 
+    // Empty scope: custom role with zero permissions must fail closed -> 403 FORBIDDEN
+    const emptyScopeRoleId = randomUUID();
+    await prisma.role.create({
+      data: {
+        id: emptyScopeRoleId,
+        merchant_id: merchantIdA,
+        name: `Empty Scope Role ${testSuffix}`,
+        name_lower: `empty scope role ${testSuffix}`,
+        description: 'Test fixture: custom role with an empty permission set',
+        is_system: false,
+      },
+    });
+
+    const emptyScopeUserId = randomUUID();
+    const emptyScopeSessionId = randomUUID();
+    const { token: emptyScopeToken } = signAccessToken(
+      {
+        sub: emptyScopeUserId,
+        sid: emptyScopeSessionId,
+        mid: merchantIdA,
+        role: RoleEnum.WAREHOUSE,
+        st: 'ACTIVE',
+      },
+      resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET),
+      3600
+    );
+
+    await prisma.user.create({
+      data: {
+        id: emptyScopeUserId,
+        merchant_id: merchantIdA,
+        email: `user_emptyScope_${testSuffix}@shipde.vn`,
+        full_name: 'Test User Empty Scope',
+        password_hash: 'hashed',
+        role: RoleEnum.WAREHOUSE,
+        custom_role_id: emptyScopeRoleId,
+        status: 'active',
+      },
+    });
+
+    await prisma.deviceSession.create({
+      data: {
+        id: emptyScopeSessionId,
+        user_id: emptyScopeUserId,
+        merchant_id: merchantIdA,
+        session_token_hash: createHash('sha256').update(emptyScopeToken).digest('hex'),
+        device_id: `test-device-emptyScope-${testSuffix}`,
+        status: SessionStatusEnum.ACTIVE,
+        expires_at: new Date(Date.now() + 3600 * 1000),
+      },
+    });
+
+    const emptyScopeRes = await request(app.getHttpServer())
+      .get('/api/v1/carrier-catalog/carriers')
+      .set('Authorization', `Bearer ${emptyScopeToken}`)
+      .expect(403);
+    assert.strictEqual(emptyScopeRes.body.error.code, 'FORBIDDEN');
+    // Zero catalog data leaked on empty-scope denial
+    assert.strictEqual(emptyScopeRes.body.data, undefined);
+
     // Permitted roles: OPS_CSKH can access catalog
     const opsRes = await request(app.getHttpServer())
       .get('/api/v1/carrier-catalog/carriers')
@@ -548,7 +608,9 @@ async function runCarrierCatalogSupertestSuite() {
       .expect(200);
     assert.strictEqual(opsRes.body.data.length, 4);
 
-    console.log('  ✔ AC-CAR-01-07: Authz denied 401/403 enforced and Ops permitted');
+    console.log(
+      '  ✔ AC-CAR-01-07: Authz denied 401/403 enforced (incl. empty-scope denial) and Ops permitted'
+    );
 
     // --------------------------------------------------------------------------
     // AC-CAR-01-08 / TEST-CAR-01-TENANT-ISOLATION
@@ -770,6 +832,9 @@ async function runCarrierCatalogSupertestSuite() {
       });
       await prisma.user.deleteMany({
         where: { merchant_id: { in: [merchantIdA, merchantIdB] } },
+      });
+      await prisma.role.deleteMany({
+        where: { merchant_id: { in: [merchantIdA, merchantIdB] }, is_system: false },
       });
       await prisma.merchant.deleteMany({
         where: { id: { in: [merchantIdA, merchantIdB] } },
