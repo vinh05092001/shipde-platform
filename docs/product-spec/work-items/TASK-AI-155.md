@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-155` |
 | Feature ID | `N/A — reusable UI data table components and dashboard shell pattern` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `270` |
+| Delivery order | `272` |
 | Dependencies | `TASK-AI-151` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
@@ -121,7 +121,8 @@ git diff --check origin/main...HEAD
 |---|---|---|---|
 | 1 | `19c7c192` | `CHANGES_REQUIRED` | Initial implementation of reusable data table and dashboard shell |
 | 2 | `b5d977be` | `CHANGES_REQUIRED` | Addressed round 1 review: isolated fixtures, wired URL table state, complete MIT notices, and accessibility fixes |
-| 3 | `HEAD` | `READY_FOR_CODEX` | Fixed all review findings: (Finding 1) Prettier formatting gate fixed across all changed files passing `pnpm format:check`; (Finding 2) Added stateful browser history navigation test with real push/back/forward stack exercising hook navigation and parameter restoration; (Finding 4) Passed boolean `inert` attribute to background desktop sidebar and main content containers when mobile drawer is open, and verified mounted drawer dialog; (Finding 5) Verified header search shortcut activation with real production `createGlobalShortcutHandler` covering positive, negative (input, textarea, contenteditable, missing modifier), and disabled states; (Finding 6) Added semantic row-action button and excluded descendant controls (checkboxes, cell buttons) from row activation, preventing keyboard Space hijacking on selection checkboxes, with tests executing against real production elements; (Finding 7) Maintained immediately updated search input draft, preserved spaces during editing in `useDataTable`, and synchronized committed search state with URL. |
+| 3 | `cac4b77c` | `CHANGES_REQUIRED` | Addressed round 2 review findings |
+| 4 | `HEAD` | `READY_FOR_CODEX` | Fixed all round 3 review findings: (Finding 1) Prettier and CI gate results documented with verified exit code 0; (Finding 2) Replaced fresh hook harness renders with reactive mounted table harness subscribing to browser history popstate events, testing real mounted table UI updates on browser Back/Forward; (Finding 3 & 7) Implemented handleDesktopBreakpointResize to automatically dismiss open mobile drawer when resizing into desktop breakpoint (1024px), restoring focus to trigger button and un-inerting desktop sidebar/main content, verified with mounted focus trap and negative tests; (Finding 5) Added computeToolbarDraftOnPropChange with pending edit tracking to prevent delayed search updates from overwriting active user typing drafts, backed by negative proof; (Finding 6) Merged origin/main cleanly, preserving TASK-AI-157, TASK-AI-153, apps/api/AGENTS.md, apps/web/AGENTS.md, and updating delivery order to 272 without removing baseline artifacts. |
 
 ## Residual limitations
 

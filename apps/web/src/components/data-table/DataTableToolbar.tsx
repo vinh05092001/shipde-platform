@@ -43,6 +43,65 @@ interface DataTableToolbarProps {
   className?: string;
 }
 
+/**
+ * Computes the synchronized draft for the search input when external/committed
+ * searchValue prop changes (Finding 5).
+ * Distinguishes acknowledgments of older local edits from external navigation.
+ */
+export function computeToolbarDraftOnPropChange(
+  currentDraft: string,
+  incomingSearchValue: string | undefined | null,
+  prevSearchValue: string | undefined | null,
+  pendingEdits: string[]
+): {
+  nextDraft: string;
+  nextPrevSearchValue: string;
+  nextPendingEdits: string[];
+  wasIgnoredDueToPendingEdits: boolean;
+} {
+  const incoming = incomingSearchValue || '';
+  const prev = prevSearchValue || '';
+
+  if (incoming === prev) {
+    return {
+      nextDraft: currentDraft,
+      nextPrevSearchValue: prev,
+      nextPendingEdits: pendingEdits,
+      wasIgnoredDueToPendingEdits: false,
+    };
+  }
+
+  const pendingIdx = pendingEdits.indexOf(incoming);
+  if (pendingIdx !== -1) {
+    const nextPending = pendingEdits.slice(pendingIdx + 1);
+    if (nextPending.length === 0) {
+      // All pending local edits are acknowledged; align draft with incoming
+      return {
+        nextDraft: incoming,
+        nextPrevSearchValue: incoming,
+        nextPendingEdits: nextPending,
+        wasIgnoredDueToPendingEdits: false,
+      };
+    } else {
+      // User typed newer edits, ignore older acknowledgment to avoid overwriting newer draft
+      return {
+        nextDraft: currentDraft,
+        nextPrevSearchValue: incoming,
+        nextPendingEdits: nextPending,
+        wasIgnoredDueToPendingEdits: true,
+      };
+    }
+  } else {
+    // External navigation: reset draft and clear pending edits
+    return {
+      nextDraft: incoming,
+      nextPrevSearchValue: incoming,
+      nextPendingEdits: [],
+      wasIgnoredDueToPendingEdits: false,
+    };
+  }
+}
+
 export function DataTableToolbar({
   searchValue = '',
   onSearchChange,
@@ -57,21 +116,34 @@ export function DataTableToolbar({
   // Maintain an immediately updated input draft to preserve spaces and avoid pending-navigation lag
   const [prevSearchValue, setPrevSearchValue] = React.useState(searchValue);
   const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
+  const [pendingEdits, setPendingEdits] = React.useState<string[]>([]);
 
-  // Synchronize draft during render when external/committed searchValue prop changes (official React pattern)
+  // Synchronize draft when external/committed searchValue prop changes:
+  // Distinguish acknowledgments of older local edits from external navigation.
   if (searchValue !== prevSearchValue) {
-    setPrevSearchValue(searchValue);
-    setDraftSearch(searchValue || '');
+    const result = computeToolbarDraftOnPropChange(
+      draftSearch,
+      searchValue,
+      prevSearchValue,
+      pendingEdits
+    );
+    setPrevSearchValue(result.nextPrevSearchValue);
+    setPendingEdits(result.nextPendingEdits);
+    if (result.nextDraft !== draftSearch) {
+      setDraftSearch(result.nextDraft);
+    }
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextVal = e.target.value;
     setDraftSearch(nextVal);
+    setPendingEdits((prev) => [...prev, nextVal]);
     onSearchChange?.(nextVal);
   };
 
   const handleClear = () => {
     setDraftSearch('');
+    setPendingEdits((prev) => [...prev, '']);
     onSearchChange?.('');
   };
 

@@ -114,6 +114,23 @@ export const DEFAULT_NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+/**
+ * Breakpoint handler for responsive drawer dismissal (Finding 7).
+ * When resizing to desktop (>= 1024px / Tailwind `lg`), an open mobile drawer
+ * must close to prevent the desktop layout from remaining inert and unresponsive.
+ */
+export function handleDesktopBreakpointResize(
+  matchesDesktop: boolean,
+  isMobileOpen: boolean,
+  closeMobileNav: () => void
+): boolean {
+  if (matchesDesktop && isMobileOpen) {
+    closeMobileNav();
+    return true;
+  }
+  return false;
+}
+
 export function DashboardLayout({
   children,
   navSections = DEFAULT_NAV_SECTIONS,
@@ -219,6 +236,33 @@ export function DashboardLayout({
     return () => {
       clearTimeout(timer);
       window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isMobileOpen, closeMobileNav]);
+
+  // Close mobile drawer when resizing or entering desktop breakpoint (lg = 1024px) to prevent inert desktop freeze
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+
+    const mql = window.matchMedia('(min-width: 1024px)');
+
+    const handleMediaChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      handleDesktopBreakpointResize(e.matches, isMobileOpen, closeMobileNav);
+    };
+
+    handleDesktopBreakpointResize(mql.matches, isMobileOpen, closeMobileNav);
+
+    if (mql.addEventListener) {
+      mql.addEventListener('change', handleMediaChange);
+    } else {
+      mql.addListener(handleMediaChange);
+    }
+
+    return () => {
+      if (mql.removeEventListener) {
+        mql.removeEventListener('change', handleMediaChange);
+      } else {
+        mql.removeListener(handleMediaChange);
+      }
     };
   }, [isMobileOpen, closeMobileNav]);
 

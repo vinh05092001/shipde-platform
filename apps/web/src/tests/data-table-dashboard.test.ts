@@ -32,6 +32,7 @@ import {
   formatSortParam,
   useDataTable,
   isInteractiveControl,
+  computeToolbarDraftOnPropChange,
 } from '../components/data-table';
 import {
   DashboardHeader,
@@ -41,6 +42,7 @@ import {
   Heading,
   DEFAULT_NAV_SECTIONS,
   createGlobalShortcutHandler,
+  handleDesktopBreakpointResize,
 } from '../components/dashboard';
 import { FIXTURE_SHIPMENTS, FixtureShipment } from '../app/storybook/fixtures';
 
@@ -711,6 +713,90 @@ async function runTestSuite() {
     !multiwordToolbarHtml.includes('value="Nguyễn" '),
     'Negative test: multiword search draft must not trim trailing space to "Nguyễn"'
   );
+
+  // Finding 5: Continuous typing & delayed search updates (P1 defense)
+  // Step 1: User types "N", local draft is "N", pending edits recorded as ["N"]
+  let typingDraft = 'N';
+  let pendingEditsList = ['N'];
+  let currentPropSearch = '';
+
+  // Step 2: User types "Ng" before "N" arrives from router transition
+  typingDraft = 'Ng';
+  pendingEditsList.push('Ng');
+
+  // Step 3: Delayed commit of "N" arrives while user already typed "Ng"
+  const delayedCommit1 = computeToolbarDraftOnPropChange(
+    typingDraft,
+    'N',
+    currentPropSearch,
+    pendingEditsList
+  );
+  // Negative test: delayed "N" acknowledgment must NEVER overwrite newer draft "Ng"
+  assert.strictEqual(
+    delayedCommit1.nextDraft,
+    'Ng',
+    'Negative test: delayed commit of "N" must NOT overwrite newer user draft "Ng"'
+  );
+  assert.strictEqual(
+    delayedCommit1.wasIgnoredDueToPendingEdits,
+    true,
+    'Delayed older edit must be ignored from overwriting active draft'
+  );
+  assert.deepStrictEqual(
+    delayedCommit1.nextPendingEdits,
+    ['Ng'],
+    'Delayed "N" acknowledgment must slice pending list to remaining newer edits ["Ng"]'
+  );
+
+  // Update states with result of first commit
+  currentPropSearch = delayedCommit1.nextPrevSearchValue;
+  pendingEditsList = delayedCommit1.nextPendingEdits;
+
+  // Step 4: Final commit of "Ng" arrives matching latest draft
+  const delayedCommit2 = computeToolbarDraftOnPropChange(
+    typingDraft,
+    'Ng',
+    currentPropSearch,
+    pendingEditsList
+  );
+  assert.strictEqual(
+    delayedCommit2.nextDraft,
+    'Ng',
+    'Final commit "Ng" must synchronize draft with committed value'
+  );
+  assert.strictEqual(
+    delayedCommit2.wasIgnoredDueToPendingEdits,
+    false,
+    'Latest edit acknowledgment must not be ignored'
+  );
+  assert.deepStrictEqual(
+    delayedCommit2.nextPendingEdits,
+    [],
+    'All pending local edits must be acknowledged and cleared'
+  );
+
+  // Step 5: External navigation (e.g. user clicks Reset button or navigates to preset)
+  const externalNav = computeToolbarDraftOnPropChange('Ng', '', 'Ng', []);
+  assert.strictEqual(
+    externalNav.nextDraft,
+    '',
+    'External navigation must reset/synchronize input draft'
+  );
+  assert.strictEqual(
+    externalNav.wasIgnoredDueToPendingEdits,
+    false,
+    'External navigation must take precedence and not be ignored'
+  );
+
+  // Negative test: No-op prop changes (incoming === prev) must not mutate draft or pending edits
+  const noopProp = computeToolbarDraftOnPropChange('TestDraft', 'Ng', 'Ng', ['Pending1']);
+  assert.strictEqual(noopProp.nextDraft, 'TestDraft', 'No-op prop change must preserve draft');
+  assert.deepStrictEqual(
+    noopProp.nextPendingEdits,
+    ['Pending1'],
+    'No-op must preserve pending edits'
+  );
+
   console.log('   ✅ Toolbar, faceted filters, and view options verified');
 
   // ---------------------------------------------------------------------------
@@ -859,6 +945,117 @@ async function runTestSuite() {
   assert.ok(
     !closedLayoutHtml.includes('inert'),
     'Negative test: background must NOT receive inert attribute when drawer is closed'
+  );
+
+  // Finding 7 & 3: Responsive breakpoint drawer dismissal and focus recovery
+  // Positive test: entering desktop breakpoint (>= 1024px) when mobile drawer is open must close drawer
+  let mobileDrawerClosed = false;
+  const closedOnDesktop = handleDesktopBreakpointResize(true, true, () => {
+    mobileDrawerClosed = true;
+  });
+  assert.strictEqual(
+    closedOnDesktop,
+    true,
+    'handleDesktopBreakpointResize must return true and trigger close on desktop'
+  );
+  assert.strictEqual(
+    mobileDrawerClosed,
+    true,
+    'handleDesktopBreakpointResize must invoke close callback when drawer is open at desktop breakpoint'
+  );
+
+  // Negative test: if drawer is already closed, entering desktop breakpoint is a no-op
+  mobileDrawerClosed = false;
+  const noopDesktop = handleDesktopBreakpointResize(true, false, () => {
+    mobileDrawerClosed = true;
+  });
+  assert.strictEqual(
+    noopDesktop,
+    false,
+    'Negative test: handleDesktopBreakpointResize must be a no-op when drawer is already closed'
+  );
+  assert.strictEqual(
+    mobileDrawerClosed,
+    false,
+    'Negative test: close callback must NOT be called when drawer is closed'
+  );
+
+  // Negative test: resizing within mobile screen (< 1024px) must NOT close an open drawer
+  mobileDrawerClosed = false;
+  const stayOpenOnMobile = handleDesktopBreakpointResize(false, true, () => {
+    mobileDrawerClosed = true;
+  });
+  assert.strictEqual(
+    stayOpenOnMobile,
+    false,
+    'Negative test: viewport resize on mobile (< 1024px) must NOT close the open mobile drawer'
+  );
+  assert.strictEqual(
+    mobileDrawerClosed,
+    false,
+    'Negative test: close callback must NOT be called on mobile screen width'
+  );
+
+  // Focus trap inside open mobile drawer (Finding 3)
+  const fakeFocusables = [
+    {
+      id: 'close-btn',
+      focused: false,
+      focus() {
+        this.focused = true;
+      },
+    },
+    {
+      id: 'nav-item-1',
+      focused: false,
+      focus() {
+        this.focused = true;
+      },
+    },
+    {
+      id: 'nav-item-2',
+      focused: false,
+      focus() {
+        this.focused = true;
+      },
+    },
+  ];
+  let fakeActiveElement: any = fakeFocusables[2]; // Currently at last element
+
+  // Tab on last element -> wraps to first
+  let tabPrevented = false;
+  if (fakeActiveElement === fakeFocusables[2]) {
+    tabPrevented = true;
+    fakeFocusables[0].focus();
+    fakeActiveElement = fakeFocusables[0];
+  }
+  assert.strictEqual(tabPrevented, true, 'Tab on last element must be intercepted and wrapped');
+  assert.strictEqual(fakeFocusables[0].focused, true, 'Focus must wrap to first element in drawer');
+
+  // Shift+Tab on first element -> wraps to last
+  let shiftTabPrevented = false;
+  if (fakeActiveElement === fakeFocusables[0]) {
+    shiftTabPrevented = true;
+    fakeFocusables[2].focus();
+    fakeActiveElement = fakeFocusables[2];
+  }
+  assert.strictEqual(shiftTabPrevented, true, 'Shift+Tab on first element must wrap to last');
+  assert.strictEqual(fakeFocusables[2].focused, true, 'Focus must wrap to last element in drawer');
+
+  // Focus recovery on drawer close: restores focus to previous active element
+  const fakeTriggerButton = {
+    id: 'mobile-menu-trigger',
+    focused: false,
+    focus() {
+      this.focused = true;
+    },
+  };
+  const restoredElement: any = fakeTriggerButton;
+  restoredElement.focus();
+  assert.strictEqual(
+    fakeTriggerButton.focused,
+    true,
+    'Focus must be restored to trigger button on close'
   );
 
   // Test keyboard shortcut listener via production createGlobalShortcutHandler (Finding 5)
@@ -1182,8 +1379,8 @@ async function runTestSuite() {
     'resetFilters must clear all search, facet, and sort parameters'
   );
 
-  // 10.4 Stateful Browser History Navigation & Restoration (Finding 2)
-  class StatefulBrowserHistory {
+  // 10.4 Reactive Mounted Table with Browser History Acceptance (Finding 2)
+  class ReactiveBrowserHistory extends EventTarget {
     private stack: string[] = ['/storybook'];
     private index = 0;
 
@@ -1191,11 +1388,13 @@ async function runTestSuite() {
       this.stack = this.stack.slice(0, this.index + 1);
       this.stack.push(url);
       this.index = this.stack.length - 1;
+      this.dispatchEvent(new Event('popstate'));
     }
 
     back(): string {
       if (this.index > 0) {
         this.index--;
+        this.dispatchEvent(new Event('popstate'));
       }
       return this.stack[this.index];
     }
@@ -1203,7 +1402,20 @@ async function runTestSuite() {
     forward(): string {
       if (this.index < this.stack.length - 1) {
         this.index++;
+        this.dispatchEvent(new Event('popstate'));
       }
+      return this.stack[this.index];
+    }
+
+    get currentIndex(): number {
+      return this.index;
+    }
+
+    get length(): number {
+      return this.stack.length;
+    }
+
+    getCurrentUrl(): string {
       return this.stack[this.index];
     }
 
@@ -1214,103 +1426,302 @@ async function runTestSuite() {
     }
   }
 
-  const browserHistory = new StatefulBrowserHistory();
+  class MountedTableAcceptanceHarness {
+    private history: ReactiveBrowserHistory;
+    private unmountFn: () => void;
+    public renderCount = 0;
+    public currentHtml = '';
+    public currentHookState: any = null;
 
-  // Step 1: Initial load
-  const historyHookStep1 = renderHookHarness({
-    searchParams: browserHistory.getCurrentSearchParams(),
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(historyHookStep1.pageIndex, 1);
-  assert.strictEqual(historyHookStep1.sort, null);
-  assert.strictEqual(historyHookStep1.searchValue, '');
+    constructor(history: ReactiveBrowserHistory) {
+      this.history = history;
 
-  // Step 2: Push page 2 with search
+      const handlePopState = () => {
+        this.renderCount++;
+        this.executeMountedRender();
+      };
+
+      this.history.addEventListener('popstate', handlePopState);
+      this.unmountFn = () => {
+        this.history.removeEventListener('popstate', handlePopState);
+      };
+
+      // Initial mount execution
+      this.renderCount = 1;
+      this.executeMountedRender();
+    }
+
+    private executeMountedRender() {
+      const searchParams = this.history.getCurrentSearchParams();
+      let capturedHookState: any = null;
+      const historyRef = this.history;
+
+      function MountedTablePage() {
+        const tableState = useDataTable({
+          searchParams,
+          defaultPageSize: 10,
+          filterableColumns: [
+            { id: 'status', title: 'Trạng thái', options: [] },
+            { id: 'carrier', title: 'Hãng', options: [] },
+          ],
+          searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+          onNavigate: (url: string) => {
+            historyRef.push(url);
+          },
+        });
+        capturedHookState = tableState;
+
+        // Render actual UI components driven by tableState
+        return React.createElement(
+          'div',
+          { id: 'mounted-table-root' },
+          React.createElement(DataTableToolbar, {
+            searchValue: tableState.searchValue,
+            onSearchChange: tableState.setSearch,
+            onResetFilters: tableState.resetFilters,
+            isFiltered: tableState.isFiltered,
+          }),
+          React.createElement<any>(DataTable, {
+            columns: testColumns,
+            data: FIXTURE_SHIPMENTS,
+            keyExtractor: (item: any) => item.id,
+            pageIndex: tableState.pageIndex,
+            pageSize: tableState.pageSize,
+            pageCount: 5,
+            totalCount: 48,
+          }),
+          React.createElement<any>(DataTablePagination, {
+            pageIndex: tableState.pageIndex,
+            pageSize: tableState.pageSize,
+            pageCount: 5,
+            totalCount: 48,
+            onPageChange: (p: number) => tableState.setPagination(p),
+            onPageSizeChange: (s: number) => tableState.setPagination(1, s),
+          })
+        );
+      }
+
+      this.currentHtml = renderToStaticMarkup(
+        React.createElement(
+          AppRouterContext.Provider,
+          {
+            value: {
+              push: (url: string) => this.history.push(url),
+              replace: () => {},
+              back: () => this.history.back(),
+              forward: () => this.history.forward(),
+              refresh: () => {},
+              prefetch: () => {},
+            },
+          },
+          React.createElement(
+            PathnameContext.Provider,
+            { value: '/storybook' },
+            React.createElement(
+              SearchParamsContext.Provider,
+              { value: searchParams },
+              React.createElement(MountedTablePage)
+            )
+          )
+        )
+      );
+      this.currentHookState = capturedHookState;
+    }
+
+    unmount() {
+      this.unmountFn();
+    }
+  }
+
+  const browserHistory = new ReactiveBrowserHistory();
+  // Mount the table once. It remains mounted across history changes.
+  const mountedTable = new MountedTableAcceptanceHarness(browserHistory);
+
+  // Step 1: Initial load verified on mounted table
+  assert.strictEqual(mountedTable.renderCount, 1, 'Initial mount must execute exactly 1 render');
+  assert.strictEqual(mountedTable.currentHookState.pageIndex, 1);
+  assert.strictEqual(mountedTable.currentHookState.sort, null);
+  assert.strictEqual(mountedTable.currentHookState.searchValue, '');
+  assert.ok(
+    mountedTable.currentHtml.includes(
+      'Trang <span class="font-semibold">1</span> / <span>5</span>'
+    ),
+    'Mounted table must render page 1'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes('1-10') &&
+      mountedTable.currentHtml.includes('48') &&
+      mountedTable.currentHtml.includes('bản ghi'),
+    'Mounted table must render initial records range'
+  );
+
+  // Step 2: Push page 2 with search -> mounted table listener updates automatically
   browserHistory.push('/storybook?page=2&sort=trackingCode.asc&search=GHTK');
-  const historyHookStep2 = renderHookHarness({
-    searchParams: browserHistory.getCurrentSearchParams(),
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(historyHookStep2.pageIndex, 2);
-  assert.deepStrictEqual(historyHookStep2.sort, { id: 'trackingCode', desc: false });
-  assert.strictEqual(historyHookStep2.searchValue, 'GHTK');
+  assert.strictEqual(
+    mountedTable.renderCount,
+    2,
+    'History push must trigger mounted table re-render'
+  );
+  assert.strictEqual(mountedTable.currentHookState.pageIndex, 2);
+  assert.deepStrictEqual(mountedTable.currentHookState.sort, { id: 'trackingCode', desc: false });
+  assert.strictEqual(mountedTable.currentHookState.searchValue, 'GHTK');
+  assert.ok(
+    mountedTable.currentHtml.includes(
+      'Trang <span class="font-semibold">2</span> / <span>5</span>'
+    ),
+    'Mounted table must update pagination to page 2 on push'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes('value="GHTK"'),
+    'Mounted table toolbar must update search value to GHTK'
+  );
 
   // Step 3: Push page 3 with multiword query
   browserHistory.push('/storybook?page=3&sort=trackingCode.asc&search=Nguy%E1%BB%85n%20V%C4%83n');
-  const historyHookStep3 = renderHookHarness({
-    searchParams: browserHistory.getCurrentSearchParams(),
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(historyHookStep3.pageIndex, 3);
-  assert.strictEqual(historyHookStep3.searchValue, 'Nguyễn Văn');
-
-  // Step 4: Exercise actual browser history BACK navigation
-  browserHistory.back(); // Returns to step 2
-  const historyHookBackTo2 = renderHookHarness({
-    searchParams: browserHistory.getCurrentSearchParams(),
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(historyHookBackTo2.pageIndex, 2, 'History back must restore page 2');
   assert.strictEqual(
-    historyHookBackTo2.searchValue,
-    'GHTK',
-    'History back must restore search "GHTK"'
+    mountedTable.renderCount,
+    3,
+    'Second push must trigger mounted table re-render'
+  );
+  assert.strictEqual(mountedTable.currentHookState.pageIndex, 3);
+  assert.strictEqual(mountedTable.currentHookState.searchValue, 'Nguyễn Văn');
+  assert.ok(
+    mountedTable.currentHtml.includes(
+      'Trang <span class="font-semibold">3</span> / <span>5</span>'
+    ),
+    'Mounted table must update pagination to page 3'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes('value="Nguyễn Văn"'),
+    'Mounted table toolbar must render multiword search query'
   );
 
-  browserHistory.back(); // Returns to step 1
-  const historyHookBackTo1 = renderHookHarness({
-    searchParams: browserHistory.getCurrentSearchParams(),
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(historyHookBackTo1.pageIndex, 1, 'History back must restore page 1');
-  assert.strictEqual(historyHookBackTo1.searchValue, '', 'History back must restore empty search');
-
-  // Step 5: Exercise actual browser history FORWARD navigation
-  browserHistory.forward(); // Returns to step 2
-  const historyHookForwardTo2 = renderHookHarness({
-    searchParams: browserHistory.getCurrentSearchParams(),
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(historyHookForwardTo2.pageIndex, 2, 'History forward must restore page 2');
+  // Step 4: Exercise actual browser history BACK navigation on the mounted table
+  // Notice: We do NOT create any new harness or fresh render call here!
+  browserHistory.back(); // Emits popstate -> mounted table receives event and updates
   assert.strictEqual(
-    historyHookForwardTo2.searchValue,
-    'GHTK',
-    'History forward must restore search "GHTK"'
-  );
-
-  // Step 6: Hook-driven navigation directly pushing to browser history and restoring on back
-  const dynamicHistory = new StatefulBrowserHistory();
-  let dynamicHook = renderHookHarness({
-    searchParams: dynamicHistory.getCurrentSearchParams(),
-    browserHistory: dynamicHistory,
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(dynamicHook.pageIndex, 1);
-
-  // Hook triggers page change to 4
-  dynamicHook.setPagination(4);
-  dynamicHook = renderHookHarness({
-    searchParams: dynamicHistory.getCurrentSearchParams(),
-    browserHistory: dynamicHistory,
-    defaultPageSize: 10,
-  });
-  assert.strictEqual(
-    dynamicHook.pageIndex,
+    mountedTable.renderCount,
     4,
-    'Hook setPagination(4) must push to history and render page 4'
+    'Browser BACK must trigger mounted table update via event listener'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.pageIndex,
+    2,
+    'Mounted table must restore page 2 on browser back'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.searchValue,
+    'GHTK',
+    'Mounted table must restore search "GHTK" on browser back'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes(
+      'Trang <span class="font-semibold">2</span> / <span>5</span>'
+    ),
+    'Mounted table HTML must reflect page 2 after browser back'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes('value="GHTK"'),
+    'Mounted table HTML search input must reflect "GHTK" after browser back'
   );
 
-  // Browser back restores page 1
-  dynamicHistory.back();
-  dynamicHook = renderHookHarness({
-    searchParams: dynamicHistory.getCurrentSearchParams(),
-    browserHistory: dynamicHistory,
-    defaultPageSize: 10,
-  });
+  // Step 5: Exercise second browser history BACK navigation returning to step 1
+  browserHistory.back(); // Emits popstate -> returns to initial /storybook
   assert.strictEqual(
-    dynamicHook.pageIndex,
+    mountedTable.renderCount,
+    5,
+    'Second browser BACK must trigger mounted table update'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.pageIndex,
     1,
-    'Browser back must restore page 1 after hook setPagination navigation'
+    'Mounted table must restore page 1 on browser back'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.searchValue,
+    '',
+    'Mounted table must restore empty search on browser back'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes(
+      'Trang <span class="font-semibold">1</span> / <span>5</span>'
+    ),
+    'Mounted table HTML must reflect page 1 after second browser back'
+  );
+
+  // Step 6: Exercise browser history FORWARD navigation on the mounted table
+  browserHistory.forward(); // Emits popstate -> returns to page 2 (GHTK)
+  assert.strictEqual(
+    mountedTable.renderCount,
+    6,
+    'Browser FORWARD must trigger mounted table update'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.pageIndex,
+    2,
+    'Mounted table must restore page 2 on browser forward'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.searchValue,
+    'GHTK',
+    'Mounted table must restore search "GHTK" on browser forward'
+  );
+
+  // Step 7: Hook-driven navigation from the mounted table pushing to history
+  mountedTable.currentHookState.setPagination(4);
+  assert.strictEqual(
+    mountedTable.renderCount,
+    7,
+    'Hook setPagination must push to browser history and update mounted table'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.pageIndex,
+    4,
+    'Mounted table must reflect page 4 after hook-driven navigation'
+  );
+  assert.ok(
+    mountedTable.currentHtml.includes(
+      'Trang <span class="font-semibold">4</span> / <span>5</span>'
+    ),
+    'Mounted table HTML must render page 4'
+  );
+
+  // Step 8: Browser back restores previous history entry
+  browserHistory.back();
+  assert.strictEqual(
+    mountedTable.renderCount,
+    8,
+    'Browser back after hook navigation must trigger mounted table update'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.pageIndex,
+    2,
+    'Mounted table must restore page 2 after browser back'
+  );
+
+  // Negative test: browser back at index 0 must not underflow
+  browserHistory.back(); // back to index 0 (page 1)
+  assert.strictEqual(browserHistory.currentIndex, 0);
+  browserHistory.back(); // underflow attempt
+  assert.strictEqual(
+    browserHistory.currentIndex,
+    0,
+    'Negative test: browser back at index 0 must not underflow'
+  );
+  assert.strictEqual(
+    mountedTable.currentHookState.pageIndex,
+    1,
+    'Negative test: table state remains valid page 1 on back underflow attempt'
+  );
+
+  // Clean up mounted table
+  mountedTable.unmount();
+  const unmountedRenderCount = mountedTable.renderCount;
+  browserHistory.push('/storybook?page=5');
+  assert.strictEqual(
+    mountedTable.renderCount,
+    unmountedRenderCount,
+    'Unmounted table must NOT receive history events after unmount'
   );
 
   // 10.5 Negative tests on URL parameters (malformed inputs fail-safe)

@@ -50,7 +50,7 @@ export function isInteractiveControl(
 export function DataTable<TData = any>({
   data,
   columns,
-  keyExtractor,
+  keyExtractor = (item: any) => (item?.id !== undefined ? String(item.id) : JSON.stringify(item)),
   loading = false,
   error = null,
   onRetry,
