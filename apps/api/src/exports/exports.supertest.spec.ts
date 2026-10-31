@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import * as assert from 'node:assert';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -11,7 +11,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum, SessionStatusEnum, DiscrepancyTypeEnum } from '@prisma/client';
 import { signAccessToken } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
-import { ExportResource, ExportFormat, ExportJobStatus, ExportErrorCode } from '@shipde/contracts';
+import {
+  ExportResource,
+  ExportFormat,
+  ExportJobStatus,
+  ExportErrorCode,
+  ExportAuditEvent,
+} from '@shipde/contracts';
 import { ExportsService } from './exports.service';
 
 async function runExportsSupertestSuite() {
@@ -50,9 +56,25 @@ async function runExportsSupertestSuite() {
     }
   }
 
-  const databaseUrl =
+  let databaseUrl =
     process.env.DATABASE_URL ||
     'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
+
+  if (!process.env.CI && databaseUrl.includes('localhost:5433')) {
+    databaseUrl = databaseUrl.replace('localhost:5433', '127.0.0.1:5433');
+    process.env.DATABASE_URL = databaseUrl;
+  }
+
+  function redactDatabaseUrl(rawUrl: string): string {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.username) parsed.username = '***';
+      if (parsed.password) parsed.password = '***';
+      return parsed.toString();
+    } catch {
+      return rawUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://***:***@');
+    }
+  }
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
@@ -66,11 +88,12 @@ async function runExportsSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
+    const redactedUrl = redactDatabaseUrl(databaseUrl);
     if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+      throw new Error(`Database must be reachable in CI environment at ${redactedUrl}`);
     }
     console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Exports Supertest tests (run 'pnpm infra:up' to enable).`
+      `⚠️ PostgreSQL is not reachable at ${redactedUrl}. Skipping live Exports Supertest tests (run 'pnpm infra:up' to enable).`
     );
     await app.close();
     console.log('🎉 Exports Supertest suite skipped offline safely!');
@@ -86,6 +109,70 @@ async function runExportsSupertestSuite() {
   try {
     const tokenSecret = 'test-token-secret-for-exports-supertest-32-chars';
     process.env.AUTH_TOKEN_SECRET = tokenSecret;
+
+    const setupTestUserSession = async (params: {
+      userId: string;
+      sessionId: string;
+      merchantId: string;
+      email: string;
+      phone: string;
+      fullName: string;
+      role?: RoleEnum | string;
+      customRoleId?: string;
+      warehouseScopes?: string[];
+      storeScopes?: string[];
+      carrierAccountScopes?: string[];
+    }): Promise<string> => {
+      const canonicalRole =
+        params.role && params.role in RoleEnum
+          ? (params.role as RoleEnum)
+          : RoleEnum.ACCOUNTANT;
+
+      const { token } = signAccessToken(
+        {
+          sub: params.userId,
+          sid: params.sessionId,
+          mid: params.merchantId,
+          role: canonicalRole,
+          st: 'active',
+        },
+        tokenSecret,
+        86400
+      );
+
+      await prisma.user.create({
+        data: {
+          id: params.userId,
+          merchant_id: params.merchantId,
+          email: params.email,
+          phone: params.phone,
+          full_name: params.fullName,
+          password_hash: 'mock_password_hash',
+          role: canonicalRole,
+          custom_role_id: params.customRoleId,
+          warehouse_scopes: params.warehouseScopes ?? ['*'],
+          store_scopes: params.storeScopes ?? ['*'],
+          carrier_account_scopes: params.carrierAccountScopes ?? ['*'],
+          status: 'active',
+        },
+      });
+
+      await prisma.deviceSession.create({
+        data: {
+          id: params.sessionId,
+          user_id: params.userId,
+          merchant_id: params.merchantId,
+          session_token_hash: createHash('sha256').update(token).digest('hex'),
+          device_id: `test-device-${params.userId.slice(0, 8)}`,
+          status: SessionStatusEnum.ACTIVE,
+          ip_address: '127.0.0.1',
+          last_active_at: new Date(),
+          expires_at: new Date(Date.now() + 86400000),
+        },
+      });
+
+      return token;
+    };
 
     // 1. Fixture: Merchant A & Merchant B
     merchantIdA = randomUUID();
@@ -111,43 +198,15 @@ async function runExportsSupertestSuite() {
     // 2. Fixture: Owner User for Merchant A
     const userIdA = randomUUID();
     const sessionIdA = randomUUID();
-
-    await prisma.user.create({
-      data: {
-        id: userIdA,
-        merchant_id: merchantIdA,
-        email: `owner_${testSuffix}@alpha.test`,
-        phone: `090${testSuffix}`,
-        full_name: 'Alpha Export Owner',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.OWNER,
-        warehouse_scopes: ['*'],
-        status: 'active',
-      },
+    const tokenA = await setupTestUserSession({
+      userId: userIdA,
+      sessionId: sessionIdA,
+      merchantId: merchantIdA,
+      email: `owner_${testSuffix}@alpha.test`,
+      phone: `090${testSuffix}`,
+      fullName: 'Alpha Export Owner',
+      role: RoleEnum.OWNER,
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: sessionIdA,
-        user_id: userIdA,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const tokenA = signAccessToken(
-      {
-        sub: userIdA,
-        session_id: sessionIdA,
-        merchant_id: merchantIdA,
-        role: 'OWNER',
-      },
-      tokenSecret
-    );
 
     // 3. Fixture: Warehouses for Merchant A
     await prisma.warehouse.create({
@@ -233,48 +292,20 @@ async function runExportsSupertestSuite() {
       });
 
     assert.strictEqual(badRes.status, 400);
-    assert.strictEqual(badRes.body.code, 'VALIDATION_ERROR');
+    assert.strictEqual(badRes.body.error?.code || badRes.body.code, 'VALIDATION_ERROR');
 
     // Test 6: Cross-tenant isolation - User from Tenant B cannot access Tenant A export
     const userIdB = randomUUID();
     const sessionIdB = randomUUID();
-
-    await prisma.user.create({
-      data: {
-        id: userIdB,
-        merchant_id: merchantIdB,
-        email: `owner_${testSuffix}@beta.test`,
-        phone: `091${testSuffix}`,
-        full_name: 'Beta Export Owner',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.OWNER,
-        warehouse_scopes: ['*'],
-        status: 'active',
-      },
+    const tokenB = await setupTestUserSession({
+      userId: userIdB,
+      sessionId: sessionIdB,
+      merchantId: merchantIdB,
+      email: `owner_${testSuffix}@beta.test`,
+      phone: `091${testSuffix}`,
+      fullName: 'Beta Export Owner',
+      role: RoleEnum.OWNER,
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: sessionIdB,
-        user_id: userIdB,
-        merchant_id: merchantIdB,
-        token_hash: 'mock_hash_b',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const tokenB = signAccessToken(
-      {
-        sub: userIdB,
-        session_id: sessionIdB,
-        merchant_id: merchantIdB,
-        role: 'OWNER',
-      },
-      tokenSecret
-    );
 
     console.log('Testing: Cross-tenant query isolation');
     const crossRes = await request(httpServer)
@@ -282,7 +313,7 @@ async function runExportsSupertestSuite() {
       .set('Authorization', `Bearer ${tokenB}`);
 
     assert.strictEqual(crossRes.status, 404);
-    assert.strictEqual(crossRes.body.code, 'EXPORT_NOT_FOUND');
+    assert.strictEqual(crossRes.body.error?.code || crossRes.body.code, 'EXPORT_NOT_FOUND');
 
     // Test 7: AC-COM-05-09 - Download pending export returns 409 EXPORT_NOT_READY
     console.log('Testing: AC-COM-05-09 Download pending export');
@@ -307,48 +338,21 @@ async function runExportsSupertestSuite() {
       409,
       `Expected 409 EXPORT_NOT_READY but got ${notReadyRes.status}: ${JSON.stringify(notReadyRes.body)}`
     );
-    assert.strictEqual(notReadyRes.body.code, 'EXPORT_NOT_READY');
+    assert.strictEqual(notReadyRes.body.error?.code || notReadyRes.body.code, 'EXPORT_NOT_READY');
 
     // Test 8: Finding 4 / AC-COM-05-06 - RBAC 403 when user lacks capability
     console.log('Testing: RBAC 403 on resource without permission');
     const noPermUserId = randomUUID();
     const noPermSessionId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: noPermUserId,
-        merchant_id: merchantIdA,
-        email: `warehouse_${testSuffix}@alpha.test`,
-        phone: `092${testSuffix}`,
-        full_name: 'Alpha Warehouse Worker',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.WAREHOUSE,
-        warehouse_scopes: ['*'],
-        status: 'active',
-      },
+    const noPermToken = await setupTestUserSession({
+      userId: noPermUserId,
+      sessionId: noPermSessionId,
+      merchantId: merchantIdA,
+      email: `warehouse_${testSuffix}@alpha.test`,
+      phone: `092${testSuffix}`,
+      fullName: 'Alpha Warehouse Worker',
+      role: RoleEnum.WAREHOUSE,
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: noPermSessionId,
-        user_id: noPermUserId,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash_noperm',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const noPermToken = signAccessToken(
-      {
-        sub: noPermUserId,
-        session_id: noPermSessionId,
-        merchant_id: merchantIdA,
-        role: 'WAREHOUSE',
-      },
-      tokenSecret
-    );
 
     const forbiddenRes = await request(httpServer)
       .post('/api/v1/exports')
@@ -360,7 +364,7 @@ async function runExportsSupertestSuite() {
       });
 
     assert.strictEqual(forbiddenRes.status, 403);
-    assert.strictEqual(forbiddenRes.body.code, 'FORBIDDEN');
+    assert.strictEqual(forbiddenRes.body.error?.code || forbiddenRes.body.code, 'FORBIDDEN');
 
     // Test 9 & 10: Finding 5 & AC-COM-05-05 - FEAT-RBAC-02 Per-row scope & PII masking
     console.log('Testing: FEAT-RBAC-02 Per-row scope & PII masking');
@@ -412,43 +416,17 @@ async function runExportsSupertestSuite() {
 
     const scopedUserId = randomUUID();
     const scopedSessionId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: scopedUserId,
-        merchant_id: merchantIdA,
-        email: `operator_${testSuffix}@alpha.test`,
-        phone: `093${testSuffix}`,
-        full_name: 'Alpha Scoped Operator',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.STAFF,
-        custom_role_id: scopedRoleId,
-        warehouse_scopes: [wh1Record.id], // Scoped only to wh1
-        status: 'active',
-      },
+    const scopedToken = await setupTestUserSession({
+      userId: scopedUserId,
+      sessionId: scopedSessionId,
+      merchantId: merchantIdA,
+      email: `operator_${testSuffix}@alpha.test`,
+      phone: `093${testSuffix}`,
+      fullName: 'Alpha Scoped Operator',
+      role: RoleEnum.STAFF,
+      customRoleId: scopedRoleId,
+      warehouseScopes: [wh1Record.id], // Scoped only to wh1
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: scopedSessionId,
-        user_id: scopedUserId,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash_scoped',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const scopedToken = signAccessToken(
-      {
-        sub: scopedUserId,
-        session_id: scopedSessionId,
-        merchant_id: merchantIdA,
-        role: 'STAFF',
-      },
-      tokenSecret
-    );
 
     const scopedExportRes = await request(httpServer)
       .post('/api/v1/exports')
@@ -529,7 +507,10 @@ async function runExportsSupertestSuite() {
       .set('Authorization', `Bearer ${scopedToken}`);
 
     assert.strictEqual(outOfScopeDlRes.status, 403);
-    assert.strictEqual(outOfScopeDlRes.body.code, 'SCOPE_FORBIDDEN');
+    assert.strictEqual(
+      outOfScopeDlRes.body.error?.code || outOfScopeDlRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
 
     // Test 13: Finding 9 - HTTP assertion proving permission revocation on download
     console.log('Testing: Finding 9 - Revoked permission rejects download with 403 FORBIDDEN');
@@ -554,43 +535,16 @@ async function runExportsSupertestSuite() {
 
     const revokableUserId = randomUUID();
     const revokableSessionId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: revokableUserId,
-        merchant_id: merchantIdA,
-        email: `revokable_${testSuffix}@alpha.test`,
-        phone: `094${testSuffix}`,
-        full_name: 'Alpha Revokable Manager',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.STAFF,
-        custom_role_id: revokableRoleId,
-        warehouse_scopes: ['*'],
-        status: 'active',
-      },
+    const revokableToken = await setupTestUserSession({
+      userId: revokableUserId,
+      sessionId: revokableSessionId,
+      merchantId: merchantIdA,
+      email: `revokable_${testSuffix}@alpha.test`,
+      phone: `094${testSuffix}`,
+      fullName: 'Alpha Revokable Manager',
+      role: RoleEnum.STAFF,
+      customRoleId: revokableRoleId,
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: revokableSessionId,
-        user_id: revokableUserId,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash_revokable',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const revokableToken = signAccessToken(
-      {
-        sub: revokableUserId,
-        session_id: revokableSessionId,
-        merchant_id: merchantIdA,
-        role: 'STAFF',
-      },
-      tokenSecret
-    );
 
     // Create users export while authorized
     const usersExportRes = await request(httpServer)
@@ -615,7 +569,7 @@ async function runExportsSupertestSuite() {
       .set('Authorization', `Bearer ${revokableToken}`);
 
     assert.strictEqual(revokedDlRes.status, 403);
-    assert.strictEqual(revokedDlRes.body.code, 'FORBIDDEN');
+    assert.strictEqual(revokedDlRes.body.error?.code || revokedDlRes.body.code, 'FORBIDDEN');
 
     // Test 14: Finding 9 & AC-COM-05-13 - HTTP assertion proving unmask privilege
     console.log('Testing: AC-COM-05-13 - Unmask privilege delivers plaintext identifiers');
@@ -640,43 +594,16 @@ async function runExportsSupertestSuite() {
 
     const unmaskUserId = randomUUID();
     const unmaskSessionId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: unmaskUserId,
-        merchant_id: merchantIdA,
-        email: `unmask_${testSuffix}@alpha.test`,
-        phone: `095${testSuffix}`,
-        full_name: 'Alpha Unmask Manager',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.STAFF,
-        custom_role_id: unmaskRoleId,
-        warehouse_scopes: ['*'],
-        status: 'active',
-      },
+    const unmaskToken = await setupTestUserSession({
+      userId: unmaskUserId,
+      sessionId: unmaskSessionId,
+      merchantId: merchantIdA,
+      email: `unmask_${testSuffix}@alpha.test`,
+      phone: `095${testSuffix}`,
+      fullName: 'Alpha Unmask Manager',
+      role: RoleEnum.STAFF,
+      customRoleId: unmaskRoleId,
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: unmaskSessionId,
-        user_id: unmaskUserId,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash_unmask',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const unmaskToken = signAccessToken(
-      {
-        sub: unmaskUserId,
-        session_id: unmaskSessionId,
-        merchant_id: merchantIdA,
-        role: 'STAFF',
-      },
-      tokenSecret
-    );
 
     const unmaskExportRes = await request(httpServer)
       .post('/api/v1/exports')
@@ -709,7 +636,10 @@ async function runExportsSupertestSuite() {
       .set('Authorization', `Bearer ${unmaskToken}`);
 
     assert.strictEqual(creatorRevokedDlRes.status, 403);
-    assert.strictEqual(creatorRevokedDlRes.body.code, 'FORBIDDEN');
+    assert.strictEqual(
+      creatorRevokedDlRes.body.error?.code || creatorRevokedDlRes.body.code,
+      'FORBIDDEN'
+    );
 
     // Test 14c: Finding 3 / Prior 4 - Historical unmarked file fails closed over HTTP
     console.log(
@@ -748,49 +678,25 @@ async function runExportsSupertestSuite() {
 
     const userMgrUserId = randomUUID();
     const userMgrSessionId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: userMgrUserId,
-        merchant_id: merchantIdA,
-        email: `usermgr_${testSuffix}@alpha.test`,
-        phone: `097${testSuffix}`,
-        full_name: 'Alpha User Manager',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.STAFF,
-        custom_role_id: userMgrRoleId,
-        warehouse_scopes: ['*'],
-        status: 'active',
-      },
+    const userMgrToken = await setupTestUserSession({
+      userId: userMgrUserId,
+      sessionId: userMgrSessionId,
+      merchantId: merchantIdA,
+      email: `usermgr_${testSuffix}@alpha.test`,
+      phone: `097${testSuffix}`,
+      fullName: 'Alpha User Manager',
+      role: RoleEnum.STAFF,
+      customRoleId: userMgrRoleId,
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: userMgrSessionId,
-        user_id: userMgrUserId,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash_usermgr',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const userMgrToken = signAccessToken(
-      {
-        sub: userMgrUserId,
-        session_id: userMgrSessionId,
-        merchant_id: merchantIdA,
-        role: 'STAFF',
-      },
-      tokenSecret
-    );
 
     const histNoUnmaskRes = await request(httpServer)
       .get(`/api/v1/exports/${historicalJobId}/download`)
       .set('Authorization', `Bearer ${userMgrToken}`);
     assert.strictEqual(histNoUnmaskRes.status, 403);
-    assert.strictEqual(histNoUnmaskRes.body.code, 'FORBIDDEN');
+    assert.strictEqual(
+      histNoUnmaskRes.body.error?.code || histNoUnmaskRes.body.code,
+      'FORBIDDEN'
+    );
 
     const histWithUnmaskRes = await request(httpServer)
       .get(`/api/v1/exports/${historicalJobId}/download`)
@@ -812,7 +718,6 @@ async function runExportsSupertestSuite() {
         status: ExportJobStatus.PROCESSING,
         filters: {},
         created_at: twentyMinutesAgo,
-        updated_at: twentyMinutesAgo,
       },
     });
 
@@ -848,43 +753,17 @@ async function runExportsSupertestSuite() {
 
     const ledgerScopedUserId = randomUUID();
     const ledgerScopedSessionId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: ledgerScopedUserId,
-        merchant_id: merchantIdA,
-        email: `ledger_scoped_${testSuffix}@alpha.test`,
-        phone: `096${testSuffix}`,
-        full_name: 'Ledger Scoped Auditor',
-        password_hash: 'mock_password_hash',
-        role: RoleEnum.STAFF,
-        custom_role_id: ledgerScopedRoleId,
-        store_scopes: ['branch-allowed-1'],
-        status: 'active',
-      },
+    const ledgerScopedToken = await setupTestUserSession({
+      userId: ledgerScopedUserId,
+      sessionId: ledgerScopedSessionId,
+      merchantId: merchantIdA,
+      email: `ledger_scoped_${testSuffix}@alpha.test`,
+      phone: `096${testSuffix}`,
+      fullName: 'Ledger Scoped Auditor',
+      role: RoleEnum.STAFF,
+      customRoleId: ledgerScopedRoleId,
+      storeScopes: ['branch-allowed-1'],
     });
-
-    await prisma.deviceSession.create({
-      data: {
-        id: ledgerScopedSessionId,
-        user_id: ledgerScopedUserId,
-        merchant_id: merchantIdA,
-        token_hash: 'mock_hash_ledger_scoped',
-        status: SessionStatusEnum.ACTIVE,
-        ip_address: '127.0.0.1',
-        last_seen_at: new Date(),
-        expires_at: new Date(Date.now() + 86400000),
-      },
-    });
-
-    const ledgerScopedToken = signAccessToken(
-      {
-        sub: ledgerScopedUserId,
-        session_id: ledgerScopedSessionId,
-        merchant_id: merchantIdA,
-        role: 'STAFF',
-      },
-      tokenSecret
-    );
 
     const outOfScopeBranchRes = await request(httpServer)
       .post('/api/v1/exports')
@@ -897,7 +776,86 @@ async function runExportsSupertestSuite() {
       });
 
     assert.strictEqual(outOfScopeBranchRes.status, 403);
-    assert.strictEqual(outOfScopeBranchRes.body.code, 'SCOPE_FORBIDDEN');
+    assert.strictEqual(
+      outOfScopeBranchRes.body.error?.code || outOfScopeBranchRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    // Finding 2 negative test: Actor with empty store_scopes is denied ledger export
+    console.log('Testing: Finding 2 - Actor with empty store_scopes is denied ledger export');
+    const emptyScopesUserId = randomUUID();
+    const emptyScopesSessionId = randomUUID();
+    const emptyScopesToken = await setupTestUserSession({
+      userId: emptyScopesUserId,
+      sessionId: emptyScopesSessionId,
+      merchantId: merchantIdA,
+      email: `empty_scopes_${testSuffix}@alpha.test`,
+      phone: `098${testSuffix}`,
+      fullName: 'Empty Scopes Auditor',
+      role: RoleEnum.STAFF,
+      customRoleId: ledgerScopedRoleId,
+      storeScopes: [],
+    });
+    const emptyScopesRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${emptyScopesToken}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(emptyScopesRes.status, 403);
+    assert.strictEqual(
+      emptyScopesRes.body.error?.code || emptyScopesRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    // Finding 3 test: Privileged user creates export with filter containing email -> audit metadata ALWAYS masked
+    console.log('Testing: Finding 3 - Audit log metadata always masks PII in filters');
+    const auditMaskTestRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        filters: { city: 'secret_owner@shopde.vn' },
+        sync: true,
+      });
+    assert.strictEqual(auditMaskTestRes.status, 201);
+    const reqAudit = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: ExportAuditEvent.EXPORT_REQUESTED,
+        entity_id: auditMaskTestRes.body.data.id,
+      },
+    });
+    assert.ok(reqAudit);
+    const reqNewVal = reqAudit.new_value as any;
+    assert.strictEqual(
+      JSON.stringify(reqNewVal.filters).includes('secret_owner@shopde.vn'),
+      false,
+      'Audit log EXPORT_REQUESTED must NOT contain plaintext email'
+    );
+
+    // Download audit log check
+    await request(httpServer)
+      .get(`/api/v1/exports/${auditMaskTestRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${tokenA}`);
+
+    const dlAudit = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: ExportAuditEvent.EXPORT_DOWNLOADED,
+        entity_id: auditMaskTestRes.body.data.id,
+      },
+    });
+    assert.ok(dlAudit);
+    const dlNewVal = dlAudit.new_value as any;
+    assert.strictEqual(
+      JSON.stringify(dlNewVal.filters).includes('secret_owner@shopde.vn'),
+      false,
+      'Audit log EXPORT_DOWNLOADED must NOT contain plaintext email'
+    );
 
     // Test 15: Finding 9 - Ledger calculations using tenant-separated persisted fixtures
     console.log('Testing: Finding 9 - Tenant-separated persisted ledger calculations');
@@ -954,7 +912,7 @@ async function runExportsSupertestSuite() {
         claim_type: 'LOST',
         requested_amount: 500000n,
         accepted_amount: 500000n,
-        recovered_amount: 500000n,
+        recovered_amount: 100000n,
         status: 'ACCEPTED',
         deadline_at: new Date(Date.now() + 86400000),
       },
@@ -1067,7 +1025,18 @@ async function runExportsSupertestSuite() {
       (r) => r.includes('Sổ 1 (Tiền thực nhận)') && r.includes('LEDGER1_RECOVERED_AMOUNT')
     );
     assert.ok(row1, 'Must include Sổ 1 row');
-    assert.strictEqual(row1.includes('500000'), true, 'Merchant A claim must be 500000');
+    assert.strictEqual(row1.includes('100000'), true, 'Merchant A claim recovered must be 100000');
+
+    // Finding 6: Partial recovery must retain outstanding pending amount (500k - 100k = 400k)
+    const row1Pending = dataRows.find(
+      (r) => r.includes('Sổ 1 (Tiền thực nhận)') && r.includes('LEDGER1_PENDING_ACCEPTANCE')
+    );
+    assert.ok(row1Pending, 'Must include Sổ 1 pending acceptance row');
+    assert.strictEqual(
+      row1Pending.includes('400000'),
+      true,
+      'Merchant A claim pending acceptance must be 400000 (500000 - 100000)'
+    );
 
     const row2 = dataRows.find(
       (r) => r.includes('Sổ 2 (Đơn cứu được)') && r.includes('LEDGER2_RESCUED_GMV')
@@ -1098,6 +1067,61 @@ async function runExportsSupertestSuite() {
       'Merchant B claim must NOT be present'
     );
     assert.strictEqual(ledgerCsv.includes('9999999'), false, 'Merchant B GMV must NOT be present');
+
+    // Finding 1 negative HTTP test: Owner's unfiltered ledger export downloaded by restricted finance user
+    console.log(
+      'Testing: Finding 1 - Restricted finance user cannot download unfiltered owner ledger export (negative HTTP test)'
+    );
+    const unfiltDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${ledgerScopedToken}`);
+    assert.strictEqual(unfiltDlRes.status, 403);
+    assert.strictEqual(
+      unfiltDlRes.body.error?.code || unfiltDlRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    // Finding 1 positive HTTP test: Owner creates ledger export explicitly filtered to branch-allowed-1
+    console.log(
+      'Testing: Finding 1 - Restricted finance user CAN download ledger export filtered to their branch'
+    );
+    const filteredForBranchRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        filters: { branch_id: 'branch-allowed-1' },
+        sync: true,
+      });
+    assert.strictEqual(filteredForBranchRes.status, 201);
+    const allowedBranchDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${filteredForBranchRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${ledgerScopedToken}`);
+    assert.strictEqual(allowedBranchDlRes.status, 200);
+
+    // Finding 1 negative HTTP test: User scoped to a different branch cannot download branch-allowed-1 export
+    const otherBranchUserId = randomUUID();
+    const otherBranchSessionId = randomUUID();
+    const otherBranchToken = await setupTestUserSession({
+      userId: otherBranchUserId,
+      sessionId: otherBranchSessionId,
+      merchantId: merchantIdA,
+      email: `other_br_${testSuffix}@alpha.test`,
+      phone: `099${testSuffix}`,
+      fullName: 'Other Branch Auditor',
+      role: RoleEnum.STAFF,
+      customRoleId: ledgerScopedRoleId,
+      storeScopes: ['branch-allowed-2'],
+    });
+    const forbiddenBranchDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${filteredForBranchRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${otherBranchToken}`);
+    assert.strictEqual(forbiddenBranchDlRes.status, 403);
+    assert.strictEqual(
+      forbiddenBranchDlRes.body.error?.code || forbiddenBranchDlRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
 
     // Test filtered ledger calculation (carrier_code: VTP)
     console.log('Testing: Finding 7 & Finding 10 - Filtered ledger calculation by carrier');

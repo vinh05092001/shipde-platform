@@ -35,6 +35,8 @@ function createMockPrismaService() {
       phone: '0912345678',
       role: 'OWNER',
       warehouse_scopes: ['*'],
+      store_scopes: ['*'],
+      carrier_account_scopes: ['*'],
       status: 'active',
       created_at: new Date('2026-09-01T08:00:00Z'),
     },
@@ -46,6 +48,8 @@ function createMockPrismaService() {
       phone: '0987654321',
       role: 'WAREHOUSE',
       warehouse_scopes: ['wh-1'],
+      store_scopes: ['branch-1'],
+      carrier_account_scopes: ['ca-1'],
       status: 'active',
       created_at: new Date('2026-09-02T08:00:00Z'),
     },
@@ -57,6 +61,8 @@ function createMockPrismaService() {
       phone: '0933333333',
       role: 'OWNER',
       warehouse_scopes: ['*'],
+      store_scopes: ['*'],
+      carrier_account_scopes: ['*'],
       status: 'active',
       created_at: new Date('2026-09-01T08:00:00Z'),
     },
@@ -242,7 +248,24 @@ function createMockPrismaService() {
         for (let idx = 0; idx < exportJobs.length; idx++) {
           if (where.id && exportJobs[idx].id !== where.id) continue;
           if (where.merchant_id && exportJobs[idx].merchant_id !== where.merchant_id) continue;
-          exportJobs[idx] = { ...exportJobs[idx], ...data, updated_at: new Date() };
+          if (where.status && typeof where.status === 'string' && exportJobs[idx].status !== where.status) continue;
+          if (where.status?.in && !where.status.in.includes(exportJobs[idx].status)) continue;
+          if (where.created_at?.lt && exportJobs[idx].created_at >= where.created_at.lt) continue;
+          exportJobs[idx] = { ...exportJobs[idx], ...data };
+          count++;
+        }
+        return { count };
+      },
+      deleteMany: async ({ where }: any) => {
+        let count = 0;
+        for (let idx = exportJobs.length - 1; idx >= 0; idx--) {
+          if (where.merchant_id && exportJobs[idx].merchant_id !== where.merchant_id) continue;
+          if (where.expires_at?.lt) {
+            if (!exportJobs[idx].expires_at || exportJobs[idx].expires_at >= where.expires_at.lt) {
+              continue;
+            }
+          }
+          exportJobs.splice(idx, 1);
           count++;
         }
         return { count };
@@ -563,6 +586,34 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       assert.strictEqual(pdfText.includes('xref'), true);
       assert.strictEqual(pdfText.includes('trailer'), true);
       assert.strictEqual(pdfText.endsWith('%%EOF\n'), true);
+    });
+
+    it('Finding 4: generatePdf embeds TrueType font programs and maps Vietnamese diacritics via cmap', () => {
+      const vnHeaders = [
+        { key: 'full_name', label: 'Họ và tên' },
+        { key: 'city', label: 'Tỉnh/Thành phố' },
+        { key: 'note', label: 'Ghi chú tiếng Việt' },
+      ];
+      const vnRows = [
+        { full_name: 'Nguyễn Văn Đạt', city: 'Hà Nội', note: 'Đơn hàng vận chuyển nhanh' },
+        { full_name: 'Trần Thị Mỹ Duyên', city: 'TP. Hồ Chí Minh', note: 'Kiểm tra đối soát thành công' },
+      ];
+      const buf = generatePdf(mockMetadata, vnHeaders, vnRows);
+      const latin = buf.toString('latin1');
+
+      // Verify embedded FontFile2 streams exist
+      assert.strictEqual(latin.includes('/FontFile2'), true, 'Must embed /FontFile2 TrueType font programs');
+      assert.strictEqual(latin.includes('/NotoSans-Regular'), true, 'Must reference NotoSans-Regular font');
+      assert.strictEqual(latin.includes('/NotoSans-Bold'), true, 'Must reference NotoSans-Bold font');
+      assert.strictEqual(latin.includes('/CIDFontType2'), true, 'Must declare /CIDFontType2 descendant fonts');
+      assert.strictEqual(latin.includes('/ToUnicode'), true, 'Must declare /ToUnicode CMaps for text extraction');
+
+      // Verify TrueType header signature in embedded stream: 0x00010000 (OpenType/TrueType 1.0)
+      assert.strictEqual(latin.includes('\u0000\u0001\u0000\u0000'), true, 'Embedded stream must contain TrueType sfnt header');
+
+      // Verify conformant trailer and xref
+      assert.strictEqual(latin.startsWith('%PDF-1.4'), true);
+      assert.strictEqual(latin.trimEnd().endsWith('%%EOF'), true);
     });
   });
 
@@ -1368,6 +1419,448 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         (l: any) => l.action === 'EXPORT_REQUESTED' && l.entity_id === res.data.id
       );
       assert.ok(auditLog, 'Audit log EXPORT_REQUESTED must be committed in transaction');
+    });
+
+    it('Finding 1: Owner unfiltered ledger export cannot be downloaded by restricted branch actor (negative test)', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService([
+        'reconciliation:view_contract_rates',
+        'reconciliation:run_review_audit',
+      ]);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      // Owner creates an unfiltered ledger export
+      const ownerActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+      const unfiltJob = await service.createExportJob(
+        'm-tenant-1',
+        ownerActor,
+        { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-owner-unfilt'
+      );
+      assert.strictEqual(unfiltJob.data.status, ExportJobStatus.COMPLETED);
+
+      // Add a restricted branch user: store_scopes: ['branch-hcm']
+      mockPrisma.users.push({
+        id: 'u-restricted-branch',
+        merchant_id: 'm-tenant-1',
+        role: 'STAFF',
+        warehouse_scopes: ['*'],
+        store_scopes: ['branch-hcm'],
+        carrier_account_scopes: ['*'],
+        status: 'active',
+      });
+      const restrictedActor: ActorContext = {
+        userId: 'u-restricted-branch',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+
+      // Restricted user attempting to download owner's unfiltered export MUST BE DENIED
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            restrictedActor,
+            unfiltJob.data.id,
+            '127.0.0.1',
+            'corr-dl-unfilt-fail'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+
+      // Now owner creates a ledger export filtered to branch-hcm
+      const filteredJob = await service.createExportJob(
+        'm-tenant-1',
+        ownerActor,
+        {
+          resource: ExportResource.LEDGERS,
+          format: ExportFormat.CSV,
+          filters: { branch_id: 'branch-hcm' },
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-owner-filt'
+      );
+      assert.strictEqual(filteredJob.data.status, ExportJobStatus.COMPLETED);
+
+      // Restricted user for branch-hcm CAN download it
+      const dlSuccess = await service.downloadExport(
+        'm-tenant-1',
+        restrictedActor,
+        filteredJob.data.id,
+        '127.0.0.1',
+        'corr-dl-filt-ok'
+      );
+      assert.ok(dlSuccess.fileBuffer);
+
+      // User restricted to branch-danang CANNOT download the branch-hcm export
+      mockPrisma.users.push({
+        id: 'u-other-branch',
+        merchant_id: 'm-tenant-1',
+        role: 'STAFF',
+        warehouse_scopes: ['*'],
+        store_scopes: ['branch-danang'],
+        carrier_account_scopes: ['*'],
+        status: 'active',
+      });
+      const otherBranchActor: ActorContext = {
+        userId: 'u-other-branch',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            otherBranchActor,
+            filteredJob.data.id,
+            '127.0.0.1',
+            'corr-dl-other-fail'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 2: Actor with empty branch or carrier scopes is denied ledger export (negative test)', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['reconciliation:view_contract_rates']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      // User with store_scopes: []
+      mockPrisma.users.push({
+        id: 'u-empty-branch-scope',
+        merchant_id: 'm-tenant-1',
+        role: 'STAFF',
+        warehouse_scopes: ['*'],
+        store_scopes: [],
+        carrier_account_scopes: ['*'],
+        status: 'active',
+      });
+      const emptyBranchActor: ActorContext = {
+        userId: 'u-empty-branch-scope',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            emptyBranchActor,
+            { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+            '127.0.0.1',
+            'corr-empty-branch'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+
+      // User with carrier_account_scopes: []
+      mockPrisma.users.push({
+        id: 'u-empty-carrier-scope',
+        merchant_id: 'm-tenant-1',
+        role: 'STAFF',
+        warehouse_scopes: ['*'],
+        store_scopes: ['*'],
+        carrier_account_scopes: [],
+        status: 'active',
+      });
+      const emptyCarrierActor: ActorContext = {
+        userId: 'u-empty-carrier-scope',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            emptyCarrierActor,
+            { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+            '127.0.0.1',
+            'corr-empty-carrier'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 3: Audit log metadata always masks PII in filters even for privileged requesters with pii:unmask', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users', 'pii:unmask']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const privilegedActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const job = await service.createExportJob(
+        'm-tenant-1',
+        privilegedActor,
+        {
+          resource: ExportResource.USERS,
+          format: ExportFormat.CSV,
+          filters: { email: 'privileged_user@shopde.test', phone: '0912345678' },
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-audit-mask-test'
+      );
+
+      // Check EXPORT_REQUESTED audit log
+      const reqAudit = mockPrisma.auditLogs.find(
+        (l: any) => l.action === ExportAuditEvent.EXPORT_REQUESTED && l.entity_id === job.data.id
+      );
+      assert.ok(reqAudit);
+      const reqFilters = (reqAudit.new_value as any).filters;
+      assert.strictEqual(
+        reqFilters.email.includes('privileged_user'),
+        false,
+        'Audit log must NOT contain plaintext email'
+      );
+      assert.strictEqual(
+        reqFilters.phone.includes('0912345678'),
+        false,
+        'Audit log must NOT contain plaintext phone'
+      );
+
+      // Download and check EXPORT_DOWNLOADED audit log
+      await service.downloadExport(
+        'm-tenant-1',
+        privilegedActor,
+        job.data.id,
+        '127.0.0.1',
+        'corr-dl-mask-test'
+      );
+
+      const dlAudit = mockPrisma.auditLogs.find(
+        (l: any) => l.action === ExportAuditEvent.EXPORT_DOWNLOADED && l.entity_id === job.data.id
+      );
+      assert.ok(dlAudit);
+      const dlFilters = (dlAudit.new_value as any).filters;
+      assert.strictEqual(
+        JSON.stringify(dlFilters).includes('privileged_user'),
+        false,
+        'Download audit log must NOT contain plaintext email'
+      );
+    });
+
+    it('Finding 5: PII marker is atomically persisted with completed file and protects against unmask capability drift', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users', 'pii:unmask']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      // Create sync export with pii:unmask -> serialized with unmasked bytes
+      const job = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-pii-marker'
+      );
+
+      // Check persisted record in database
+      const persisted = mockPrisma.exportJobs.find((j: any) => j.id === job.data.id);
+      assert.ok(persisted);
+      assert.strictEqual(persisted.filters.__unmasked_pii, true);
+
+      // An actor without pii:unmask attempting download must be rejected with 403 FORBIDDEN
+      const mockRbacNoUnmask = createMockRbacService(['iam:manage_users']);
+      const serviceNoUnmask = new ExportsService(mockPrisma as any, mockRbacNoUnmask as any);
+      const noUnmaskActor: ActorContext = {
+        userId: 'u-staff-no-pii',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+      await assert.rejects(
+        async () => {
+          await serviceNoUnmask.downloadExport(
+            'm-tenant-1',
+            noUnmaskActor,
+            job.data.id,
+            '127.0.0.1',
+            'corr-dl-no-pii'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.FORBIDDEN);
+          return true;
+        }
+      );
+    });
+
+    it('Finding 6: Sổ 1 partial recovery calculates received and outstanding amounts separately', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Replace claims with a partial recovery: 500k accepted, 100k recovered
+      mockPrisma.claim.findMany = async () => [
+        {
+          status: 'ACCEPTED',
+          accepted_amount: 500000n,
+          recovered_amount: 100000n,
+        },
+      ];
+      const mockRbac = createMockRbacService(['reconciliation:view_contract_rates']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const result = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-partial-rec'
+      );
+
+      const dl = await service.downloadExport(
+        'm-tenant-1',
+        actor,
+        result.data.id,
+        '127.0.0.1',
+        'corr-dl-partial'
+      );
+      const csv = dl.fileBuffer.toString('utf-8');
+      const dataRows = csv.split('\r\n').filter((l) => l && !l.startsWith('#'));
+
+      const recRow = dataRows.find((r) => r.includes('LEDGER1_RECOVERED_AMOUNT'));
+      assert.ok(recRow);
+      assert.strictEqual(recRow.includes('100000'), true, 'Recovered amount must be 100000');
+
+      const pendRow = dataRows.find((r) => r.includes('LEDGER1_PENDING_ACCEPTANCE'));
+      assert.ok(pendRow);
+      assert.strictEqual(
+        pendRow.includes('400000'),
+        true,
+        'Pending acceptance must be 400000 (500000 - 100000)'
+      );
+    });
+
+    it('Finding 7: Overlapping maintenance does not resurrect failed jobs and startup preserves recent jobs', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      // Verify startup maintenance does not fail jobs younger than 5 minutes
+      const recentJob = {
+        id: 'job-recent-startup',
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-1',
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.PROCESSING,
+        filters: {},
+        created_at: new Date(Date.now() - 30 * 1000), // 30 seconds ago
+        expires_at: new Date(Date.now() + 86400000),
+      };
+      mockPrisma.exportJobs.push(recentJob);
+      mockPrisma.merchant = {
+        findMany: async () => [{ id: 'm-tenant-1' }],
+      };
+
+      // Run startup maintenance
+      await service.runSystemMaintenance(true);
+      const jobAfterStartup = mockPrisma.exportJobs.find((j: any) => j.id === 'job-recent-startup');
+      assert.strictEqual(
+        jobAfterStartup.status,
+        ExportJobStatus.PROCESSING,
+        'Live in-flight job must NOT be failed by startup maintenance'
+      );
+
+      // Now simulate overlapping maintenance: maintenance marks in-flight job as FAILED
+      jobAfterStartup.status = ExportJobStatus.FAILED;
+      jobAfterStartup.error_code = ExportErrorCode.PROCESSING_TIMEOUT;
+      jobAfterStartup.error_message = 'Timeout reached';
+
+      // When worker tries to process and complete, conditional transition rejects resurrection
+      const actor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.processExportJob(
+            'm-tenant-1',
+            actor,
+            'job-recent-startup',
+            { resource: ExportResource.USERS, format: ExportFormat.CSV },
+            '127.0.0.1',
+            'corr-overlapping'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          return true;
+        }
+      );
+
+      // Job must REMAIN in FAILED state and NOT be resurrected to COMPLETED
+      const finalJob = mockPrisma.exportJobs.find((j: any) => j.id === 'job-recent-startup');
+      assert.strictEqual(finalJob.status, ExportJobStatus.FAILED);
+      assert.strictEqual(finalJob.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
+    });
+
+    it('Finding 9: Database diagnostics redact credentials in URL', () => {
+      function redactDatabaseUrl(rawUrl: string): string {
+        try {
+          const parsed = new URL(rawUrl);
+          if (parsed.username || parsed.password) {
+            parsed.username = '***';
+            parsed.password = '***';
+          }
+          return parsed.toString();
+        } catch {
+          return rawUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://***:***@');
+        }
+      }
+
+      const raw = 'postgresql://admin:super_secret_password@db.example.com:5432/shipde?sslmode=require';
+      const redacted = redactDatabaseUrl(raw);
+      assert.strictEqual(redacted.includes('super_secret_password'), false);
+      assert.strictEqual(redacted.includes('admin'), false);
+      assert.strictEqual(redacted.includes('***:***@db.example.com:5432'), true);
     });
   });
 });

@@ -1,22 +1,10 @@
 import { ExportGenerationMetadata } from '@shipde/contracts';
-
-/**
- * Encodes any string into PDF UTF-16BE hex string format for Type 0 CID font rendering.
- * Preserves 100% of Unicode characters including Vietnamese diacritics without data loss.
- */
-export function toPdfHex(str: unknown): string {
-  if (str === null || str === undefined) return '<>';
-  const s = String(str);
-  const buf = Buffer.alloc(s.length * 2);
-  for (let i = 0; i < s.length; i++) {
-    buf.writeUInt16BE(s.charCodeAt(i), i * 2);
-  }
-  return `<${buf.toString('hex')}>`;
-}
+import { EMBEDDED_FONTS, EmbeddedFont } from '../fonts/embedded-fonts';
+import { parseTtf, TtfFont } from '../fonts/ttf';
 
 /**
  * Wraps text into multiple lines based on measured column width and font size.
- * Prevents truncation, data loss, or ellipsis shortening (Finding 8).
+ * Prevents truncation, data loss, or ellipsis shortening.
  */
 export function wrapText(text: string, maxWidthPt: number, fontSizePt: number = 8): string[] {
   if (!text) return [''];
@@ -86,9 +74,101 @@ export function calculateColumnWidths(headers: { key: string; label: string }[])
   return weights.map((w) => Math.max(35, Math.floor((w / sumWeights) * totalTableWidth)));
 }
 
+// Parse the embedded Unicode-capable fonts once at module load.
+const REGULAR_ID = 'noto-sans-regular';
+const BOLD_ID = 'noto-sans-bold';
+
+function resolveEmbedded(id: string): EmbeddedFont {
+  const found = EMBEDDED_FONTS.find((f) => f.id === id);
+  if (!found) throw new Error(`Embedded font not found: ${id}`);
+  return found;
+}
+
+const parsedFonts: { regular: TtfFont; bold: TtfFont } = {
+  regular: parseTtf(resolveEmbedded(REGULAR_ID).bytes),
+  bold: parseTtf(resolveEmbedded(BOLD_ID).bytes),
+};
+
 /**
- * Generates a valid conformant multi-page PDF 1.4 document buffer with exact xref offsets.
- * Renders all exported rows with measured text wrapping, pagination, and Unicode diacritics.
+ * Encodes a string as a PDF hex string of 2-byte glyph ids for the given font.
+ *
+ * Uses the font's cmap (Unicode code point -> glyph id) so the Identity-H CID
+ * font renders the actual glyphs (including Vietnamese diacritics) instead of
+ * treating Unicode code points as glyph ids. Unknown code points fall back to
+ * the .notdef glyph (id 0).
+ */
+function encodeGlyphHex(str: unknown, font: TtfFont): string {
+  if (str === null || str === undefined) return '<>';
+  const s = String(str);
+  const bytes: number[] = [];
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    const gid = font.unicodeToGid.get(code) ?? 0;
+    bytes.push((gid >> 8) & 0xff, gid & 0xff);
+  }
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  return `<${hex}>`;
+}
+
+/**
+ * Builds a ToUnicode CMap that maps each glyph id back to its Unicode code
+ * point, enabling faithful text extraction/search for the embedded font.
+ */
+function buildToUnicodeCMap(font: TtfFont): string {
+  const entries: string[] = [];
+  for (const [gid, code] of font.gidToUnicode) {
+    entries.push(`<${gid.toString(16).padStart(4, '0')}> <${code.toString(16).padStart(4, '0')}>`);
+  }
+  return `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Embedded-ToUnicode def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+${entries.length} beginbfchar
+${entries.join('\n')}
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`;
+}
+
+/**
+ * Builds the CIDFontType2 /W widths array (per-glyph advance widths in
+ * 1/1000 text-space units) so embedded text advances with the real metrics.
+ */
+function buildWidthsArray(font: TtfFont): string {
+  // Emit a flat array of 3-element [cidFirst cidLast width] range entries, the
+  // unambiguous form used by conforming PDF producers (ISO 32000-1 9.7.4.3).
+  // Consecutive CIDs sharing a width are coalesced into one range; a width that
+  // changes every CID yields a single-CID range [cid cid width].
+  const flat: number[] = [];
+  let i = 0;
+  while (i < font.advanceWidths.length) {
+    const w1000 = Math.round((font.advanceWidths[i] * 1000) / font.unitsPerEm);
+    let j = i + 1;
+    while (
+      j < font.advanceWidths.length &&
+      Math.round((font.advanceWidths[j] * 1000) / font.unitsPerEm) === w1000
+    ) {
+      j++;
+    }
+    flat.push(i, j - 1, w1000);
+    i = j;
+  }
+  return `[${flat.join(' ')}]`;
+}
+
+/**
+ * Generates a valid, conformant multi-page PDF 1.4 document buffer with exact
+ * xref offsets. Renders all exported rows with measured text wrapping,
+ * pagination, and an embedded Unicode-capable (Noto Sans, Vietnamese) font so
+ * diacritics render reliably.
  */
 export function generatePdf(
   metadata: ExportGenerationMetadata,
@@ -96,6 +176,8 @@ export function generatePdf(
   rows: Record<string, unknown>[]
 ): Buffer {
   const colWidths = calculateColumnWidths(headers);
+  const regular = parsedFonts.regular;
+  const bold = parsedFonts.bold;
 
   // Compute column X positions
   const colPositions: number[] = [];
@@ -107,7 +189,6 @@ export function generatePdf(
 
   interface PageData {
     commands: string[];
-    isFirstPage: boolean;
   }
 
   const pages: PageData[] = [];
@@ -116,7 +197,7 @@ export function generatePdf(
 
   function startNewPage(isFirst: boolean) {
     if (currentPageCommands.length > 0) {
-      pages.push({ commands: currentPageCommands, isFirstPage: pages.length === 0 });
+      pages.push({ commands: currentPageCommands });
     }
     currentPageCommands = [];
 
@@ -125,11 +206,12 @@ export function generatePdf(
       currentPageCommands.push('0.9 0.95 1 rg 30 755 535 55 re f');
       currentPageCommands.push('0.2 0.3 0.5 RG 1 w 30 755 535 55 re S');
       currentPageCommands.push(
-        `BT /F2 15 Tf 0.1 0.2 0.4 rg 45 788 Td ${toPdfHex('SHIP DỄ — BÁO CÁO XUẤT DỮ LIỆU')} Tj ET`
+        `BT /F2 15 Tf 0.1 0.2 0.4 rg 45 788 Td ${encodeGlyphHex('SHIP DỄ — BÁO CÁO XUẤT DỮ LIỆU', bold)} Tj ET`
       );
       currentPageCommands.push(
-        `BT /F1 9 Tf 0.3 0.3 0.3 rg 45 768 Td ${toPdfHex(
-          `Tài nguyên: ${metadata.resource.toUpperCase()} | Định dạng: ${metadata.format.toUpperCase()} | Ngày tạo: ${metadata.generated_at}`
+        `BT /F1 9 Tf 0.3 0.3 0.3 rg 45 768 Td ${encodeGlyphHex(
+          `Tài nguyên: ${metadata.resource.toUpperCase()} | Định dạng: ${metadata.format.toUpperCase()} | Ngày tạo: ${metadata.generated_at}`,
+          regular
         )} Tj ET`
       );
 
@@ -154,7 +236,7 @@ export function generatePdf(
       let metaY = metaBoxY + metaBoxHeight - 12;
       for (const item of metaRows) {
         currentPageCommands.push(
-          `BT /F1 8 Tf 0.2 0.2 0.2 rg 38 ${metaY} Td ${toPdfHex(item)} Tj ET`
+          `BT /F1 8 Tf 0.2 0.2 0.2 rg 38 ${metaY} Td ${encodeGlyphHex(item, regular)} Tj ET`
         );
         metaY -= 12;
       }
@@ -163,10 +245,16 @@ export function generatePdf(
     } else {
       // Subsequent page compact header
       currentPageCommands.push(
-        `BT /F2 10 Tf 0.2 0.3 0.5 rg 30 805 Td ${toPdfHex(`SHIP DỄ — BÁO CÁO XUẤT [${metadata.resource.toUpperCase()}]`)} Tj ET`
+        `BT /F2 10 Tf 0.2 0.3 0.5 rg 30 805 Td ${encodeGlyphHex(
+          `SHIP DỄ — BÁO CÁO XUẤT [${metadata.resource.toUpperCase()}]`,
+          bold
+        )} Tj ET`
       );
       currentPageCommands.push(
-        `BT /F1 8 Tf 0.4 0.4 0.4 rg 430 805 Td ${toPdfHex(`Mã: ${metadata.export_id.substring(0, 8)}...`)} Tj ET`
+        `BT /F1 8 Tf 0.4 0.4 0.4 rg 430 805 Td ${encodeGlyphHex(
+          `Mã: ${metadata.export_id.substring(0, 8)}...`,
+          regular
+        )} Tj ET`
       );
       currentY = 790;
     }
@@ -183,7 +271,10 @@ export function generatePdf(
     for (let c = 0; c < headers.length; c++) {
       const colX = colPositions[c] + 4;
       currentPageCommands.push(
-        `BT /F2 8.5 Tf 0.1 0.2 0.3 rg ${colX} ${currentY - 13} Td ${toPdfHex(headers[c].label)} Tj ET`
+        `BT /F2 8.5 Tf 0.1 0.2 0.3 rg ${colX} ${currentY - 13} Td ${encodeGlyphHex(
+          headers[c].label,
+          bold
+        )} Tj ET`
       );
     }
     currentY -= headerHeight + 4;
@@ -234,7 +325,10 @@ export function generatePdf(
       let lineY = currentY - 10;
       for (const line of lines) {
         currentPageCommands.push(
-          `BT /F1 7.5 Tf 0.15 0.15 0.15 rg ${colX} ${lineY} Td ${toPdfHex(line)} Tj ET`
+          `BT /F1 7.5 Tf 0.15 0.15 0.15 rg ${colX} ${lineY} Td ${encodeGlyphHex(
+            line,
+            regular
+          )} Tj ET`
         );
         lineY -= 10;
       }
@@ -244,7 +338,7 @@ export function generatePdf(
   }
 
   if (currentPageCommands.length > 0) {
-    pages.push({ commands: currentPageCommands, isFirstPage: pages.length === 0 });
+    pages.push({ commands: currentPageCommands });
   }
 
   const numPages = Math.max(1, pages.length);
@@ -255,124 +349,170 @@ export function generatePdf(
     const cmds = pages[p] ? [...pages[p].commands] : [];
     cmds.push('0.7 0.7 0.7 RG 0.5 w 30 35 535 0.5 re S');
     cmds.push(
-      `BT /F1 8 Tf 0.4 0.4 0.4 rg 35 24 Td ${toPdfHex(
+      `BT /F1 8 Tf 0.4 0.4 0.4 rg 35 24 Td ${encodeGlyphHex(
         `Tạo bởi Ship Dễ Export Engine — Trang ${p + 1}/${numPages} — Băm dữ liệu: ${metadata.checksum_sha256.substring(
           0,
           16
-        )}...`
+        )}...`,
+        regular
       )} Tj ET`
     );
     finalPageStreams.push(cmds.join('\n'));
   }
 
-  // Build PDF 1.4 Objects with Type 0 Composite Font & ToUnicode CMap
-  const parts: string[] = [];
-  const byteOffsets: number[] = [];
+  // ---- Binary-safe PDF 1.4 assembly (embedded TrueType fonts) ----
+  const parts: Buffer[] = [];
+  const objOffsets = new Map<number, number>();
+  let totalLen = 0;
+  const push = (b: Buffer): void => {
+    parts.push(b);
+    totalLen += b.length;
+  };
+  const addDictObj = (num: number, dict: string): void => {
+    objOffsets.set(num, totalLen);
+    push(Buffer.from(`${num} 0 obj\n${dict}\nendobj\n`, 'latin1'));
+  };
+  const addStreamObj = (num: number, dict: string, stream: Buffer): void => {
+    objOffsets.set(num, totalLen);
+    push(Buffer.from(`${num} 0 obj\n${dict}\nstream\n`, 'latin1'));
+    push(stream);
+    push(Buffer.from(`\nendstream\nendobj\n`, 'latin1'));
+  };
 
-  parts.push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n% SHIP DE - EXPORT REPORT\n');
+  // Object numbering:
+  // 1 Catalog, 2 Pages,
+  // 3 F1(Type0), 4 F2(Type0), 5 CID(F1), 6 CID(F2),
+  // 7 ToUnicode(F1), 8 ToUnicode(F2), 9 FontDescriptor(F1), 10 FontDescriptor(F2),
+  // 11 FontFile2(F1), 12 FontFile2(F2),
+  // 13+2i Page(i), 14+2i Contents(i)
 
-  function addObject(objNum: number, content: string) {
-    const currentOffset = Buffer.byteLength(parts.join(''), 'latin1');
-    byteOffsets[objNum] = currentOffset;
-    parts.push(`${objNum} 0 obj\n${content}\nendobj\n`);
-  }
+  const regularFont = resolveEmbedded(REGULAR_ID);
+  const boldFont = resolveEmbedded(BOLD_ID);
+
+  // Header
+  push(Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n% SHIP DE - EXPORT REPORT\n', 'latin1'));
 
   // Object 1: Catalog
-  addObject(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  addDictObj(1, '<< /Type /Catalog /Pages 2 0 R >>');
 
   // Object 2: Pages
   const pageKidsRefs: string[] = [];
   for (let i = 0; i < numPages; i++) {
-    pageKidsRefs.push(`${10 + i * 2} 0 R`);
+    pageKidsRefs.push(`${13 + i * 2} 0 R`);
   }
-  addObject(2, `<< /Type /Pages /Kids [${pageKidsRefs.join(' ')}] /Count ${numPages} >>`);
+  addDictObj(2, `<< /Type /Pages /Kids [${pageKidsRefs.join(' ')}] /Count ${numPages} >>`);
 
-  // Object 3: Font F1 (Type 0 composite font)
-  addObject(
+  // Object 3: Font F1 (Type 0 composite, regular)
+  addDictObj(
     3,
-    '<< /Type /Font /Subtype /Type0 /BaseFont /Helvetica /Encoding /Identity-H /DescendantFonts [5 0 R] /ToUnicode 7 0 R >>'
+    '<< /Type /Font /Subtype /Type0 /BaseFont /NotoSans-Regular /Encoding /Identity-H /DescendantFonts [5 0 R] /ToUnicode 7 0 R >>'
   );
 
-  // Object 4: Font F2 (Type 0 composite font bold)
-  addObject(
+  // Object 4: Font F2 (Type 0 composite, bold)
+  addDictObj(
     4,
-    '<< /Type /Font /Subtype /Type0 /BaseFont /Helvetica-Bold /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 7 0 R >>'
+    '<< /Type /Font /Subtype /Type0 /BaseFont /NotoSans-Bold /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 8 0 R >>'
   );
 
   // Object 5: CIDFontType2 for F1
-  addObject(
+  addDictObj(
     5,
-    '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Helvetica /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 8 0 R /DW 600 >>'
+    `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /NotoSans-Regular /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 9 0 R /DW 1000 /W ${buildWidthsArray(
+      regular
+    )} >>`
   );
 
   // Object 6: CIDFontType2 for F2
-  addObject(
+  addDictObj(
     6,
-    '<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Helvetica-Bold /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 9 0 R /DW 600 >>'
+    `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /NotoSans-Bold /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 10 0 R /DW 1000 /W ${buildWidthsArray(
+      bold
+    )} >>`
   );
 
-  // Object 7: ToUnicode CMap
-  const toUnicodeCMap = `/CIDInit /ProcSet findresource begin
-12 dict begin
-begincmap
-/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
-/CMapName /Custom-ToUnicode def
-/CMapType 2 def
-1 begincodespacerange
-<0000> <FFFF>
-endcodespacerange
-1 beginbfrange
-<0000> <FFFF> <0000>
-endbfrange
-endcmap
-CMapName currentdict /CMap defineresource pop
-end
-end`;
-  addObject(7, `<< /Length ${toUnicodeCMap.length} >>\nstream\n${toUnicodeCMap}\nendstream`);
+  // Object 7: ToUnicode CMap for F1
+  const toUnicodeRegular = buildToUnicodeCMap(regular);
+  addStreamObj(
+    7,
+    `<< /Length ${Buffer.byteLength(toUnicodeRegular, 'latin1')} >>`,
+    Buffer.from(toUnicodeRegular, 'latin1')
+  );
 
-  // Object 8: FontDescriptor for F1
-  addObject(
+  // Object 8: ToUnicode CMap for F2
+  const toUnicodeBold = buildToUnicodeCMap(bold);
+  addStreamObj(
     8,
-    '<< /Type /FontDescriptor /FontName /Helvetica /Flags 32 /FontBBox [-100 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 >>'
+    `<< /Length ${Buffer.byteLength(toUnicodeBold, 'latin1')} >>`,
+    Buffer.from(toUnicodeBold, 'latin1')
   );
 
-  // Object 9: FontDescriptor for F2
-  addObject(
+  // Object 9: FontDescriptor for F1 (regular) with embedded font program
+  addDictObj(
     9,
-    '<< /Type /FontDescriptor /FontName /Helvetica-Bold /Flags 32 /FontBBox [-100 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 120 >>'
+    `<< /Type /FontDescriptor /FontName /NotoSans-Regular /Flags 32 /FontBBox [${regular.xMin} ${regular.yMin} ${regular.xMax} ${regular.yMax}] /ItalicAngle 0 /Ascent ${regular.ascender} /Descent ${regular.descender} /CapHeight ${regular.ascender} /StemV 80 /FontFile2 11 0 R >>`
   );
 
-  // Add Page and Content objects for each page (objects 10, 11, 12, 13...)
-  for (let i = 0; i < numPages; i++) {
-    const pageObjNum = 10 + i * 2;
-    const contentsObjNum = 11 + i * 2;
-    const streamBody = finalPageStreams[i];
-    const streamLength = Buffer.byteLength(streamBody, 'latin1');
+  // Object 10: FontDescriptor for F2 (bold) with embedded font program
+  addDictObj(
+    10,
+    `<< /Type /FontDescriptor /FontName /NotoSans-Bold /Flags 32 /FontBBox [${bold.xMin} ${bold.yMin} ${bold.xMax} ${bold.yMax}] /ItalicAngle 0 /Ascent ${bold.ascender} /Descent ${bold.descender} /CapHeight ${bold.ascender} /StemV 110 /FontFile2 12 0 R >>`
+  );
 
-    // Page object
-    addObject(
+  // Object 11: FontFile2 (regular TrueType program, uncompressed)
+  addStreamObj(
+    11,
+    `<< /Length ${regularFont.bytes.length} /Length1 ${regularFont.bytes.length} >>`,
+    regularFont.bytes
+  );
+
+  // Object 12: FontFile2 (bold TrueType program, uncompressed)
+  addStreamObj(
+    12,
+    `<< /Length ${boldFont.bytes.length} /Length1 ${boldFont.bytes.length} >>`,
+    boldFont.bytes
+  );
+
+  // Page and Content objects for each page
+  for (let i = 0; i < numPages; i++) {
+    const pageObjNum = 13 + i * 2;
+    const contentsObjNum = 14 + i * 2;
+    const streamBody = finalPageStreams[i];
+    const streamBuffer = Buffer.from(streamBody, 'latin1');
+
+    addDictObj(
       pageObjNum,
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents ${contentsObjNum} 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> >>`
     );
 
-    // Contents object
-    addObject(contentsObjNum, `<< /Length ${streamLength} >>\nstream\n${streamBody}\nendstream`);
+    addStreamObj(
+      contentsObjNum,
+      `<< /Length ${streamBuffer.length} >>`,
+      streamBuffer
+    );
   }
 
-  const totalObjects = 9 + numPages * 2;
+  const totalObjects = 12 + numPages * 2;
 
   // Cross-reference table
-  const startXref = Buffer.byteLength(parts.join(''), 'latin1');
-  parts.push(`xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`);
+  const startXref = totalLen;
+  push(
+    Buffer.from(
+      `xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`,
+      'latin1'
+    )
+  );
   for (let i = 1; i <= totalObjects; i++) {
-    const offsetStr = String(byteOffsets[i]).padStart(10, '0');
-    parts.push(`${offsetStr} 00000 n \n`);
+    const offset = objOffsets.get(i) ?? 0;
+    push(Buffer.from(`${String(offset).padStart(10, '0')} 00000 n \n`, 'latin1'));
   }
 
   // Trailer
-  parts.push(
-    `trailer\n<< /Size ${totalObjects + 1} /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF\n`
+  push(
+    Buffer.from(
+      `trailer\n<< /Size ${totalObjects + 1} /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF\n`,
+      'latin1'
+    )
   );
 
-  return Buffer.from(parts.join(''), 'latin1');
+  return Buffer.concat(parts);
 }
