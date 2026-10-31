@@ -18,7 +18,9 @@ import {
   generateCsv,
   generateXlsxTemplate,
   parseXlsx,
+  unpackZipArchive,
   normalizeRowsWithTemplate,
+  DuplicateHeaderMappingError,
   calculateFileHash,
   scanBufferForMalware,
 } from './imports.parser';
@@ -186,25 +188,30 @@ export class ImportsService {
       'text/plain',
     ];
 
+    // Exact normalized media-type comparison: a claimed type like 'text/csv-unapproved'
+    // must not match the allowlisted 'text/csv' through substring containment.
     const cleanMime = mimeType ? mimeType.toLowerCase().split(';')[0].trim() : '';
-    const hasValidMime = allowedMimeTypes.some(
-      (m) => cleanMime.includes(m.toLowerCase()) || m.toLowerCase().includes(cleanMime)
+    const allowedMimeSet = new Set(
+      allowedMimeTypes
+        .map((m) => String(m).toLowerCase().split(';')[0].trim())
+        .filter((m) => m.length > 0)
     );
+    const hasValidMime = cleanMime.length > 0 && allowedMimeSet.has(cleanMime);
     const lowerName = fileName.toLowerCase();
     const isCsvExtension = lowerName.endsWith('.csv');
     const isXlsxExtension = lowerName.endsWith('.xlsx');
     const hasValidExtension = isCsvExtension || isXlsxExtension;
 
-    const isCsvMime =
-      cleanMime.includes('csv') ||
-      cleanMime.includes('text/plain') ||
-      cleanMime === 'application/csv';
-    const isXlsxMime =
-      cleanMime.includes('openxmlformats') ||
-      cleanMime.includes('excel') ||
-      cleanMime.includes('spreadsheetml') ||
-      cleanMime === 'application/octet-stream';
-    const isMimeCompatible = (isCsvExtension && isCsvMime) || (isXlsxExtension && isXlsxMime);
+    // Supported extension <-> media-type pairs, also compared exactly.
+    const CSV_COMPATIBLE_MIME_TYPES = ['text/csv', 'application/csv', 'text/plain'];
+    const XLSX_COMPATIBLE_MIME_TYPES = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'application/octet-stream',
+    ];
+    const isMimeCompatible =
+      (isCsvExtension && CSV_COMPATIBLE_MIME_TYPES.includes(cleanMime)) ||
+      (isXlsxExtension && XLSX_COMPATIBLE_MIME_TYPES.includes(cleanMime));
 
     if (!hasValidExtension || !hasValidMime || !isMimeCompatible) {
       throw new CanonicalApiException(
@@ -223,8 +230,54 @@ export class ImportsService {
       );
     }
 
-    // 3. Malware scanner verification from config
-    if (this.config.MALWARE_SCANNER_ENABLED) {
+    // 3. Archive integrity + malware scanner verification.
+    // XLSX uploads are scanned archive-aware: the container is verified and extracted
+    // with bounds (CRC-32, sizes, entry counts) and EVERY extracted entry is scanned,
+    // so a deflated payload hidden inside a valid workbook cannot bypass the scanner.
+    if (isXlsxExtension) {
+      let extractedEntries: Record<string, Buffer>;
+      try {
+        extractedEntries = unpackZipArchive(fileBuffer);
+      } catch (extractErr: any) {
+        throw new CanonicalApiException(
+          HttpStatus.BAD_REQUEST,
+          'FILE_PARSE_ERROR',
+          `Tệp XLSX bị hỏng hoặc vượt quá giới hạn trích xuất: ${
+            extractErr?.message || 'lỗi không xác định'
+          }`,
+          false,
+          undefined,
+          [
+            {
+              field: 'file',
+              code: 'FILE_PARSE_ERROR',
+              message: 'XLSX archive is corrupted or exceeds extraction limits',
+            },
+          ]
+        );
+      }
+      if (this.config.MALWARE_SCANNER_ENABLED) {
+        for (const [entryName, entryData] of Object.entries(extractedEntries)) {
+          const malwareResult = scanBufferForMalware(entryData);
+          if (!malwareResult.safe) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'MALWARE_DETECTED',
+              `Phát hiện tệp tin nghi ngờ độc hại hoặc chứa mã nguy hiểm (mục ${entryName}): ${malwareResult.reason}`,
+              false,
+              undefined,
+              [
+                {
+                  field: 'file',
+                  code: 'MALWARE_DETECTED',
+                  message: `${entryName}: ${malwareResult.reason || 'Malware detected'}`,
+                },
+              ]
+            );
+          }
+        }
+      }
+    } else if (this.config.MALWARE_SCANNER_ENABLED) {
       const malwareResult = scanBufferForMalware(fileBuffer);
       if (!malwareResult.safe) {
         throw new CanonicalApiException(
@@ -290,6 +343,66 @@ export class ImportsService {
                 `Khóa bất biến (Idempotency-Key: ${idempotencyKey}) đã được sử dụng với nội dung tệp khác nhau`,
                 false
               );
+            }
+          }
+
+          // Persist the replay-key association under the same merchant lock: a key
+          // supplied on a checksum replay becomes bound to this import, so a later
+          // upload of DIFFERENT content with the same key is a 409 conflict instead
+          // of being silently accepted.
+          if (idempotencyKey && existingWithSameHash.idempotency_key !== idempotencyKey) {
+            if (
+              existingWithSameHash.idempotency_key === null &&
+              typeof tx.import?.update === 'function'
+            ) {
+              await tx.import.update({
+                where: { id: existingWithSameHash.id },
+                data: { idempotency_key: idempotencyKey },
+              });
+              existingWithSameHash.idempotency_key = idempotencyKey;
+            } else if (
+              typeof tx.import?.findFirst === 'function' &&
+              typeof tx.import?.create === 'function'
+            ) {
+              const existingRecordForThisKey = await tx.import.findFirst({
+                where: {
+                  merchant_id: merchantId,
+                  idempotency_key: idempotencyKey,
+                },
+              });
+              if (!existingRecordForThisKey) {
+                const latestRevisionRecord = await tx.import.findFirst({
+                  where: {
+                    merchant_id: merchantId,
+                    template_type: dto.template_type,
+                  },
+                  orderBy: { revision: 'desc' },
+                  select: { revision: true },
+                });
+                const nextRevision =
+                  (latestRevisionRecord?.revision ?? existingWithSameHash.revision) + 1;
+                await tx.import.create({
+                  data: {
+                    merchant_id: merchantId,
+                    template_type: dto.template_type,
+                    file_name: fileName || existingWithSameHash.file_name,
+                    file_size: fileBuffer.length,
+                    file_hash: fileHash,
+                    mime_type: mimeType || existingWithSameHash.mime_type,
+                    storage_path: existingWithSameHash.storage_path,
+                    status: existingWithSameHash.status,
+                    revision: nextRevision,
+                    idempotency_key: idempotencyKey,
+                    total_rows: existingWithSameHash.total_rows,
+                    valid_rows: existingWithSameHash.valid_rows,
+                    error_rows: existingWithSameHash.error_rows,
+                    warning_rows: existingWithSameHash.warning_rows,
+                    control_totals: existingWithSameHash.control_totals ?? undefined,
+                    header_mapping: existingWithSameHash.header_mapping ?? undefined,
+                    created_by_user_id: actor.userId || null,
+                  },
+                });
+              }
             }
           }
 
@@ -373,7 +486,7 @@ export class ImportsService {
           },
         });
 
-        // Audit upload
+        // Audit upload (all audit metadata passes through the PII mask)
         if (tx.auditLog?.create) {
           await tx.auditLog.create({
             data: {
@@ -383,14 +496,15 @@ export class ImportsService {
               action: 'IMPORT_UPLOADED',
               entity_type: 'import',
               entity_id: imp.id,
+              reason: correlationId ? `correlation_id:${correlationId}` : null,
               ip_address: clientIp ? this.hashIp(clientIp) : null,
-              new_value: {
+              new_value: this.maskAuditData({
                 template_type: imp.template_type,
                 revision: imp.revision,
                 file_name: imp.file_name,
                 file_hash: imp.file_hash,
                 status: ImportStatus.UPLOADED,
-              },
+              }),
             },
           });
         }
@@ -408,27 +522,15 @@ export class ImportsService {
       if (createdRecord) {
         // The record is durable; its storage object is now tracked by the record.
         storagePathForCompensation = null;
-        const processingPromise = this.processImport(
-          merchantId,
-          createdRecord.id,
-          actor,
-          correlationId,
-          clientIp
-        );
-        this.activeProcessingJobs.add(processingPromise);
-        void processingPromise.finally(() => this.activeProcessingJobs.delete(processingPromise));
 
-        // Await processing so synchronous API callers/tests receive the completed STAGED/BLOCKED/FAILED status (201),
-        // while the durable record was committed first in transaction 1 and processing failures are persisted
-        // in transaction 3 outside any rolled-back transaction.
-        await processingPromise;
+        // Durable asynchronous processing boundary: parsing, validation and row staging
+        // run in the idempotent background worker (recoverable via detail reads for stale
+        // UPLOADED/VALIDATING records), never on the upload request's critical path.
+        this.startProcessing(merchantId, createdRecord.id, actor, correlationId, clientIp);
 
-        const updated = await this.prisma.import.findUnique({
-          where: { id: createdRecord.id },
-        });
-        const detail = await this.formatImportDetail(updated || createdRecord, correlationId);
+        const detail = await this.formatImportDetail(createdRecord, correlationId);
         return {
-          statusCode: HttpStatus.CREATED,
+          statusCode: HttpStatus.ACCEPTED,
           data: detail.data,
           meta: detail.meta,
         };
@@ -550,11 +652,25 @@ export class ImportsService {
         }
 
         // Normalize & validate rows in memory and capture the ACTUAL source-header mapping.
-        const { normalizedRows, headerMapping } = normalizeRowsWithTemplate(
-          template,
-          parsed.headers,
-          parsed.rows
-        );
+        // Ambiguous header mappings (two columns supplying one template field) are
+        // rejected durably as FAILED before any row is staged.
+        let normalizedRows: ReturnType<typeof normalizeRowsWithTemplate>['normalizedRows'];
+        let headerMapping: ReturnType<typeof normalizeRowsWithTemplate>['headerMapping'];
+        try {
+          ({ normalizedRows, headerMapping } = normalizeRowsWithTemplate(
+            template,
+            parsed.headers,
+            parsed.rows
+          ));
+        } catch (err: any) {
+          if (err instanceof DuplicateHeaderMappingError) {
+            throw new ImportProcessingError('DUPLICATE_HEADER_MAPPING', err.message);
+          }
+          throw new ImportProcessingError(
+            'FILE_PARSE_ERROR',
+            err?.message || 'Không thể chuẩn hóa dữ liệu tệp tin theo mẫu'
+          );
+        }
         const seenScopeCodes = new Set<string>();
         const validatedRows: ValidatedRowResult[] = [];
         for (const nr of normalizedRows) {
@@ -634,6 +750,7 @@ export class ImportsService {
               action: ImportAuditEvent.IMPORT_VALIDATED,
               entity_type: 'import',
               entity_id: imp.id,
+              reason: correlationId ? `correlation_id:${correlationId}` : null,
               ip_address: clientIp ? this.hashIp(clientIp) : null,
               new_value: this.maskAuditData({
                 revision: imp.revision,
@@ -649,7 +766,7 @@ export class ImportsService {
       });
     } catch (err: any) {
       // Persist the failure durably OUTSIDE the rolled-back processing transaction.
-      await this.persistProcessingFailure(merchantId, importId, err, actor, clientIp);
+      await this.persistProcessingFailure(merchantId, importId, err, actor, clientIp, correlationId);
     }
   }
 
@@ -663,7 +780,8 @@ export class ImportsService {
     importId: string,
     err: unknown,
     actor?: ActorContext,
-    clientIp?: string
+    clientIp?: string,
+    correlationId?: string
   ): Promise<void> {
     const code = err instanceof ImportProcessingError ? err.code : 'PROCESSING_ERROR';
     const rawMessage = err instanceof Error ? err.message : String(err);
@@ -702,6 +820,7 @@ export class ImportsService {
               action: ImportAuditEvent.IMPORT_PROCESSING_FAILED,
               entity_type: 'import',
               entity_id: importId,
+              reason: correlationId ? `correlation_id:${correlationId}` : null,
               ip_address: clientIp ? this.hashIp(clientIp) : null,
               // Only the canonical code is audited; raw error text may carry file content.
               new_value: this.maskAuditData({ error_code: code }),
@@ -845,8 +964,12 @@ export class ImportsService {
           created_by_user_id: imp.created_by_user_id,
           promoted_by_user_id: imp.promoted_by_user_id,
           promoted_at: imp.promoted_at ? imp.promoted_at.toISOString() : null,
-          created_at: imp.created_at.toISOString(),
-          updated_at: imp.updated_at.toISOString(),
+          created_at:
+            imp.created_at?.toISOString?.() ||
+            (imp.created_at ? new Date(imp.created_at).toISOString() : new Date().toISOString()),
+          updated_at:
+            imp.updated_at?.toISOString?.() ||
+            (imp.updated_at ? new Date(imp.updated_at).toISOString() : new Date().toISOString()),
         },
         mapping,
         preview_rows: previewRows.map((r: any) => ({
@@ -1345,11 +1468,15 @@ export class ImportsService {
             }
           }
         }
-        if (finalActiveWh > 0 && finalActiveDefaultWh === 0) {
+        if (finalActiveWh > 0 && finalActiveDefaultWh !== 1) {
           throw new CanonicalApiException(
             HttpStatus.BAD_REQUEST,
-            'NO_ACTIVE_DEFAULT_WAREHOUSE',
-            'Kết quả cuối cùng phải có ít nhất một kho mặc định hoạt động',
+            finalActiveDefaultWh === 0
+              ? 'NO_ACTIVE_DEFAULT_WAREHOUSE'
+              : 'MULTIPLE_DEFAULT_WAREHOUSES',
+            finalActiveDefaultWh === 0
+              ? 'Kết quả cuối cùng phải có ít nhất một kho mặc định hoạt động'
+              : 'Kết quả cuối cùng chỉ được có đúng một kho mặc định hoạt động',
             false
           );
         }
@@ -1369,12 +1496,16 @@ export class ImportsService {
                 action: 'WAREHOUSE_UPDATED',
                 entity_type: 'warehouse',
                 entity_id: defWh.id,
+                reason: correlationId ? `correlation_id:${correlationId}` : null,
                 ip_address: clientIp ? this.hashIp(clientIp) : null,
                 new_value: this.maskAuditData({
                   code: defWh.code,
                   name: defWh.name,
                   is_default: false,
                   status: defWh.status,
+                  contact_name: defWh.contact_name || null,
+                  contact_phone: defWh.contact_phone || null,
+                  contact_email: defWh.contact_email || null,
                 }),
               },
             });
@@ -1479,6 +1610,7 @@ export class ImportsService {
                   action: 'WAREHOUSE_UPDATED',
                   entity_type: 'warehouse',
                   entity_id: savedWhId,
+                  reason: correlationId ? `correlation_id:${correlationId}` : null,
                   ip_address: clientIp ? this.hashIp(clientIp) : null,
                   new_value: this.maskAuditData({
                     code,
@@ -1488,6 +1620,11 @@ export class ImportsService {
                         ? updateData.is_default
                         : existingWarehouse.is_default,
                     status: updateData.status || existingWarehouse.status,
+                    contact_name: updateData.contact_name || existingWarehouse.contact_name || null,
+                    contact_phone:
+                      updateData.contact_phone || existingWarehouse.contact_phone || null,
+                    contact_email:
+                      updateData.contact_email || existingWarehouse.contact_email || null,
                   }),
                 },
               });
@@ -1574,12 +1711,16 @@ export class ImportsService {
                   action: 'WAREHOUSE_CREATED',
                   entity_type: 'warehouse',
                   entity_id: savedWhId,
+                  reason: correlationId ? `correlation_id:${correlationId}` : null,
                   ip_address: clientIp ? this.hashIp(clientIp) : null,
                   new_value: this.maskAuditData({
                     code,
                     name,
                     is_default: isDefault,
                     status,
+                    contact_name: contactName || null,
+                    contact_phone: contactPhone || null,
+                    contact_email: contactEmail || null,
                   }),
                 },
               });
@@ -1647,6 +1788,10 @@ export class ImportsService {
           string,
           { status: string; isDefault: boolean; existed: boolean }
         >();
+        // Initial import (no existing branches, no explicit default in the file): only
+        // the FIRST branch row of the file receives the implicit default, applied once,
+        // so a multi-row file can never produce multiple default branches (BR-BRANCH-03).
+        let implicitDefaultAssigned = false;
         for (const row of allRows) {
           const norm = (row.normalized_data as Record<string, any>) || {};
           const code = row.scope_identifier!;
@@ -1654,8 +1799,10 @@ export class ImportsService {
           const hasExplicitDefault = norm.is_default !== undefined && norm.is_default !== null;
           let isDefault: boolean;
           if (existingBranches.length === 0 && !existingBr && !anyExplicitDefault) {
-            // First branch is automatically default
-            isDefault = true;
+            isDefault = !implicitDefaultAssigned;
+            if (isDefault) {
+              implicitDefaultAssigned = true;
+            }
           } else if (hasExplicitDefault) {
             isDefault = norm.is_default === true;
           } else {
@@ -1763,11 +1910,13 @@ export class ImportsService {
             }
           }
         }
-        if (finalActiveBr > 0 && finalActiveDefaultBr === 0) {
+        if (finalActiveBr > 0 && finalActiveDefaultBr !== 1) {
           throw new CanonicalApiException(
             HttpStatus.BAD_REQUEST,
-            'NO_ACTIVE_DEFAULT_BRANCH',
-            'Kết quả cuối cùng phải có ít nhất một chi nhánh mặc định hoạt động',
+            finalActiveDefaultBr === 0 ? 'NO_ACTIVE_DEFAULT_BRANCH' : 'MULTIPLE_DEFAULT_BRANCHES',
+            finalActiveDefaultBr === 0
+              ? 'Kết quả cuối cùng phải có ít nhất một chi nhánh mặc định hoạt động'
+              : 'Kết quả cuối cùng chỉ được có đúng một chi nhánh mặc định hoạt động (BR-BRANCH-03)',
             false
           );
         }
@@ -1787,12 +1936,15 @@ export class ImportsService {
                 action: 'BRANCH_UPDATED',
                 entity_type: 'branch',
                 entity_id: defBranch.id,
+                reason: correlationId ? `correlation_id:${correlationId}` : null,
                 ip_address: clientIp ? this.hashIp(clientIp) : null,
                 new_value: this.maskAuditData({
                   code: defBranch.code,
                   name: defBranch.name,
                   is_default: false,
                   status: defBranch.status,
+                  contact_name: defBranch.contact_name || null,
+                  contact_phone: defBranch.contact_phone || null,
                 }),
               },
             });
@@ -1864,6 +2016,7 @@ export class ImportsService {
                   action: 'BRANCH_UPDATED',
                   entity_type: 'branch',
                   entity_id: savedBrId,
+                  reason: correlationId ? `correlation_id:${correlationId}` : null,
                   ip_address: clientIp ? this.hashIp(clientIp) : null,
                   new_value: this.maskAuditData({
                     code,
@@ -1873,6 +2026,8 @@ export class ImportsService {
                         ? updateData.is_default
                         : existingBranch.is_default,
                     status: updateData.status || existingBranch.status,
+                    contact_name: updateData.contact_name || existingBranch.contact_name || null,
+                    contact_phone: updateData.contact_phone || existingBranch.contact_phone || null,
                   }),
                 },
               });
@@ -1951,12 +2106,15 @@ export class ImportsService {
                   action: 'BRANCH_CREATED',
                   entity_type: 'branch',
                   entity_id: savedBrId,
+                  reason: correlationId ? `correlation_id:${correlationId}` : null,
                   ip_address: clientIp ? this.hashIp(clientIp) : null,
                   new_value: this.maskAuditData({
                     code,
                     name,
                     is_default: isDefault,
                     status,
+                    contact_name: contactName || null,
+                    contact_phone: contactPhone || null,
                   }),
                 },
               });
@@ -2020,9 +2178,11 @@ export class ImportsService {
         data: {
           merchant_id: merchantId,
           user_id: actor.userId || null,
+          actor: actor.role || 'OWNER',
           action: ImportAuditEvent.IMPORT_PROMOTED,
           entity_type: 'import',
           entity_id: imp.id,
+          reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: clientIp ? this.hashIp(clientIp) : null,
           new_value: this.maskAuditData(auditPayload),
         },

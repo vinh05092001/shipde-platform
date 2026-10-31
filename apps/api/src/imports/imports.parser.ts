@@ -13,9 +13,35 @@ export function parseCsv(csvText: string): { headers: string[]; rows: Record<str
   }
 
   const rawRows: string[][] = [];
+  const overflowedRowIndexes = new Set<number>();
   let currentRow: string[] = [];
   let currentField = '';
   let insideQuotes = false;
+  let rowOverflowed = false;
+
+  const pushField = (value: string): void => {
+    if (currentRow.length < MAX_CSV_FIELDS_PER_ROW) {
+      currentRow.push(value);
+    } else {
+      rowOverflowed = true;
+    }
+  };
+
+  const finishRow = (): void => {
+    pushField(currentField.trim());
+    if (rawRows.length >= MAX_CSV_ROWS) {
+      throw new Error(`CSV contains too many rows (more than ${MAX_CSV_ROWS})`);
+    }
+    if (rowOverflowed) {
+      overflowedRowIndexes.add(rawRows.length);
+      rawRows.push(currentRow);
+    } else if (currentRow.some((f) => f.length > 0)) {
+      rawRows.push(currentRow);
+    }
+    currentRow = [];
+    currentField = '';
+    rowOverflowed = false;
+  };
 
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
@@ -38,25 +64,15 @@ export function parseCsv(csvText: string): { headers: string[]; rows: Record<str
       if (char === '"') {
         insideQuotes = true;
       } else if (char === ',') {
-        currentRow.push(currentField.trim());
+        pushField(currentField.trim());
         currentField = '';
       } else if (char === '\r') {
         if (nextChar === '\n') {
           i++; // Consume \n
         }
-        currentRow.push(currentField.trim());
-        if (currentRow.some((f) => f.length > 0)) {
-          rawRows.push(currentRow);
-        }
-        currentRow = [];
-        currentField = '';
+        finishRow();
       } else if (char === '\n') {
-        currentRow.push(currentField.trim());
-        if (currentRow.some((f) => f.length > 0)) {
-          rawRows.push(currentRow);
-        }
-        currentRow = [];
-        currentField = '';
+        finishRow();
       } else {
         currentField += char;
       }
@@ -64,10 +80,7 @@ export function parseCsv(csvText: string): { headers: string[]; rows: Record<str
   }
 
   if (currentField.length > 0 || currentRow.length > 0) {
-    currentRow.push(currentField.trim());
-    if (currentRow.some((f) => f.length > 0)) {
-      rawRows.push(currentRow);
-    }
+    finishRow();
   }
 
   if (rawRows.length === 0) {
@@ -80,13 +93,23 @@ export function parseCsv(csvText: string): { headers: string[]; rows: Record<str
   for (let r = 1; r < rawRows.length; r++) {
     const rowValues = rawRows[r];
     const rowObj: Record<string, string> = {};
-    for (let c = 0; c < headers.length; c++) {
-      const header = headers[c];
-      if (header) {
-        rowObj[header] = rowValues[c] !== undefined ? rowValues[c] : '';
+    for (let c = 0; c < rowValues.length; c++) {
+      const value = rowValues[c] ?? '';
+      if (c < headers.length) {
+        const header = headers[c];
+        if (header) {
+          rowObj[header] = value;
+        }
+      } else if (value.length > 0) {
+        // Preserve surplus values beyond the header width so structurally malformed
+        // rows survive parsing and are reported instead of disappearing silently.
+        appendSurplusValue(rowObj, c, value);
       }
     }
-    // Only keep rows that have at least one non-empty value
+    if (overflowedRowIndexes.has(r)) {
+      rowObj['__extra_overflow'] = '1';
+    }
+    // Only keep rows that have at least one non-empty value (surplus included)
     if (Object.values(rowObj).some((v) => v.length > 0)) {
       rows.push(rowObj);
     }
@@ -117,8 +140,9 @@ export function generateCsv(headers: string[], rows: Record<string, string>[]): 
 
 /**
  * Helper to construct a standard PKZIP archive in memory without external dependencies.
+ * Exported so tests can build exact byte-level archive fixtures (CRC, corruption, payloads).
  */
-function createZipArchive(files: Array<{ name: string; data: Buffer | string }>): Buffer {
+export function createZipArchive(files: Array<{ name: string; data: Buffer | string }>): Buffer {
   const parts: Buffer[] = [];
   const cdEntries: Buffer[] = [];
   let offset = 0;
@@ -188,11 +212,22 @@ const MAX_ZIP_ENTRIES = 100;
 const MAX_UNCOMPRESSED_ENTRY_SIZE = 10 * 1024 * 1024; // 10MB per entry
 const MAX_TOTAL_UNCOMPRESSED_SIZE = 25 * 1024 * 1024; // 25MB total across all entries
 
+// Content-level bounds layered on top of the ZIP limits: a tiny archive must not be able
+// to force unbounded allocations through sparse cell references or oversized grids.
+const MAX_XLSX_ROWS = 50_000;
+const MAX_XLSX_TOTAL_CELLS = 100_000;
+const MAX_XLSX_COLUMN_INDEX = 16_384; // Excel's last column (XFD), exclusive 0-based bound
+const MAX_CSV_ROWS = 50_000;
+const MAX_CSV_FIELDS_PER_ROW = 10_000;
+const MAX_RETAINED_SURPLUS_COLUMNS = 10;
+
 /**
  * Extracts all files from a standard ZIP buffer into a dictionary.
- * Bounds decompressed bytes, entries, and resources to prevent zip bomb attacks (Finding 18).
+ * Bounds decompressed bytes, entries, and resources to prevent zip bomb attacks (Finding 18),
+ * and verifies each entry's recorded CRC-32 and uncompressed size so corrupted content
+ * can never reach staging (review P1: uploaded ZIP checksums must be verified).
  */
-function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
+export function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
   const entries: Record<string, Buffer> = {};
   let offset = 0;
   let totalDecompressedBytes = 0;
@@ -246,6 +281,23 @@ function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
       );
     }
 
+    // Verify integrity of the extracted entry before accepting its contents.
+    const entryLabel = name || '<unnamed>';
+    const recordedCrc = buf.readUInt32LE(offset + 14);
+    const actualCrc = zlib.crc32(data);
+    if (actualCrc !== recordedCrc) {
+      throw new Error(
+        `XLSX entry ${entryLabel} failed CRC-32 verification (recorded 0x${recordedCrc.toString(
+          16
+        )}, computed 0x${actualCrc.toString(16)})`
+      );
+    }
+    if (data.length !== uncompSize) {
+      throw new Error(
+        `XLSX entry ${entryLabel} uncompressed size mismatch (declared ${uncompSize}, actual ${data.length})`
+      );
+    }
+
     entries[name] = data;
     offset = dataStart + compSize;
   }
@@ -257,6 +309,9 @@ function unpackZipArchive(buf: Buffer): Record<string, Buffer> {
  * Converts column letters (A, B, ..., Z, AA, AB, etc.) to 0-based column index.
  */
 function lettersToColumnIndex(letters: string): number {
+  if (letters.length > 3) {
+    return MAX_XLSX_COLUMN_INDEX + 1;
+  }
   let col = 0;
   const upper = letters.toUpperCase();
   for (let i = 0; i < upper.length; i++) {
@@ -277,7 +332,7 @@ function parseCellReference(ref: string): number {
 /**
  * Converts column index (0-based) to Excel column letters (A, B, ..., Z, AA, etc.)
  */
-function columnIndexToLetters(idx: number): string {
+export function columnIndexToLetters(idx: number): string {
   let letters = '';
   let temp = idx;
   while (temp >= 0) {
@@ -388,8 +443,12 @@ export function parseXlsx(buf: Buffer): { headers: string[]; rows: Record<string
   if (!rowMatches || rowMatches.length === 0) {
     return { headers: [], rows: [] };
   }
+  if (rowMatches.length > MAX_XLSX_ROWS) {
+    throw new Error(`XLSX sheet contains too many rows (${rowMatches.length} > ${MAX_XLSX_ROWS})`);
+  }
 
   const matrix: string[][] = [];
+  let totalCells = 0;
 
   for (const rowXml of rowMatches) {
     const rowValues: string[] = [];
@@ -405,6 +464,20 @@ export function parseXlsx(buf: Buffer): { headers: string[]; rows: Record<string
           if (parsedCol >= 0) {
             colIdx = parsedCol;
           }
+        }
+
+        // Bound coordinates before any allocation: a tiny payload must not be able to
+        // request hundreds of millions of empty cells (sparse-cell memory exhaustion).
+        if (colIdx >= MAX_XLSX_COLUMN_INDEX) {
+          throw new Error(
+            `XLSX cell reference ${rAttrMatch ? rAttrMatch[1] : `column ${colIdx}`} exceeds the maximum supported column index ${MAX_XLSX_COLUMN_INDEX}`
+          );
+        }
+        totalCells += 1;
+        if (totalCells > MAX_XLSX_TOTAL_CELLS) {
+          throw new Error(
+            `XLSX sheet contains too many cells (more than ${MAX_XLSX_TOTAL_CELLS})`
+          );
         }
 
         // Fill any skipped empty columns before this cell
@@ -450,10 +523,18 @@ export function parseXlsx(buf: Buffer): { headers: string[]; rows: Record<string
   for (let r = 1; r < matrix.length; r++) {
     const rowValues = matrix[r];
     const rowObj: Record<string, string> = {};
-    for (let c = 0; c < headers.length; c++) {
-      const header = headers[c];
-      if (header) {
-        rowObj[header] = rowValues[c] !== undefined ? rowValues[c].trim() : '';
+    for (let c = 0; c < rowValues.length; c++) {
+      const raw = rowValues[c];
+      if (c < headers.length) {
+        const header = headers[c];
+        if (header) {
+          rowObj[header] = raw !== undefined ? raw.trim() : '';
+        }
+      } else if (raw !== undefined && raw.trim().length > 0) {
+        // Preserve surplus cells beyond the header width as structural markers so the
+        // row cannot silently disappear from control totals (reported as structural
+        // errors during validation).
+        appendSurplusValue(rowObj, c, raw.trim());
       }
     }
     if (Object.values(rowObj).some((v) => v.length > 0)) {
@@ -462,6 +543,28 @@ export function parseXlsx(buf: Buffer): { headers: string[]; rows: Record<string
   }
 
   return { headers, rows };
+}
+
+/**
+ * Appends a surplus (beyond-header-width) cell value to a parsed row under a synthetic
+ * `__extra_<colIndex>` key. Retention is bounded; further surplus values are collapsed
+ * into a single `__extra_overflow` marker so pathological rows stay memory-safe while
+ * still being visibly flagged.
+ */
+function appendSurplusValue(
+  rowObj: Record<string, string>,
+  colIndex: number,
+  value: string
+): void {
+  if (!value) return;
+  const retained = Object.keys(rowObj).filter(
+    (k) => k.startsWith('__extra_') && k !== '__extra_overflow'
+  ).length;
+  if (retained < MAX_RETAINED_SURPLUS_COLUMNS) {
+    rowObj[`__extra_${colIndex}`] = value;
+  } else if (!rowObj['__extra_overflow']) {
+    rowObj['__extra_overflow'] = '1';
+  }
 }
 
 /**
@@ -476,6 +579,29 @@ export interface HeaderMappingEntry {
   required: boolean;
   rule: string;
   description: string;
+}
+
+/**
+ * Raised when the uploaded file supplies the same canonical template field through
+ * more than one column (e.g. both `code` and `Mã chi nhánh`). Accepting such files
+ * would let row mapping silently pick a different target than the advertised mapping,
+ * so they are rejected before staging.
+ */
+export class DuplicateHeaderMappingError extends Error {
+  constructor(
+    public readonly conflicts: Array<{ field: string; headers: string[] }>
+  ) {
+    super(
+      'Ambiguous header mapping: ' +
+        conflicts
+          .map(
+            (c) =>
+              `field '${c.field}' is supplied by multiple columns (${c.headers.join(', ')})`
+          )
+          .join('; ')
+    );
+    this.name = 'DuplicateHeaderMappingError';
+  }
 }
 
 /**
@@ -503,6 +629,29 @@ export function normalizeRowsWithTemplate(
     headerMap.set(col.header.toLowerCase(), col.key);
     // Also strip diacritics for flexible matching
     headerMap.set(stripDiacritics(col.header.toLowerCase()), col.key);
+  }
+
+  // Reject ambiguous mappings before staging: if two different source columns both
+  // resolve to the same canonical template field, last-wins row mapping would silently
+  // change imported values relative to the first-match mapping metadata.
+  const fieldSources = new Map<string, string[]>();
+  for (const rawHeader of rawHeaders) {
+    const cleanKey = rawHeader.trim().toLowerCase();
+    if (!cleanKey) continue;
+    const canonicalKey = headerMap.get(cleanKey) || headerMap.get(stripDiacritics(cleanKey));
+    if (!canonicalKey) continue;
+    const sources = fieldSources.get(canonicalKey);
+    if (sources) {
+      sources.push(rawHeader.trim());
+    } else {
+      fieldSources.set(canonicalKey, [rawHeader.trim()]);
+    }
+  }
+  const conflicts = [...fieldSources.entries()]
+    .filter(([, sources]) => sources.length > 1)
+    .map(([field, headers]) => ({ field, headers }));
+  if (conflicts.length > 0) {
+    throw new DuplicateHeaderMappingError(conflicts);
   }
 
   const normalizedRows = rawRows.map((rawRow, idx) => {

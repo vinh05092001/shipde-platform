@@ -238,6 +238,10 @@ export const TEMPLATE_DEFINITIONS: Record<string, TemplateDefinition> = {
 export const SENSITIVE_IMPORT_AUDIT_FIELDS = new Set([
   'contact_phone',
   'contact_email',
+  'contact_name',
   'phone',
   'email',
+  'address_line',
+  'address',
+  'postal_code',
 ]);

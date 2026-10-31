@@ -3,6 +3,7 @@ import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as zlib from 'node:zlib';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
@@ -12,6 +13,57 @@ import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
 import { ImportStatus } from '@shipde/contracts';
+import { createZipArchive } from './imports.parser';
+
+function buildStoredZip(
+  files: Array<{ name: string; data: Buffer }>,
+  overrides?: { corruptCrc?: boolean; wrongUncompSize?: number }
+): Buffer {
+  const parts: Buffer[] = [];
+  const cdEntries: Buffer[] = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name, 'utf8');
+    let crc = zlib.crc32(file.data) >>> 0;
+    let uncompSize = file.data.length;
+    if (overrides?.corruptCrc) crc = (crc ^ 0xdeadbeef) >>> 0;
+    if (overrides?.wrongUncompSize !== undefined) uncompSize = overrides.wrongUncompSize;
+
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(20, 4);
+    lh.writeUInt16LE(0, 6);
+    lh.writeUInt16LE(0, 8); // stored
+    lh.writeUInt32LE(crc, 14);
+    lh.writeUInt32LE(file.data.length, 18);
+    lh.writeUInt32LE(uncompSize, 22);
+    lh.writeUInt16LE(nameBuf.length, 26);
+    const localEntry = Buffer.concat([lh, nameBuf, file.data]);
+    parts.push(localEntry);
+
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0);
+    cd.writeUInt16LE(20, 4);
+    cd.writeUInt16LE(20, 6);
+    cd.writeUInt16LE(0, 8);
+    cd.writeUInt16LE(0, 10);
+    cd.writeUInt32LE(crc, 16);
+    cd.writeUInt32LE(file.data.length, 20);
+    cd.writeUInt32LE(uncompSize, 24);
+    cd.writeUInt16LE(nameBuf.length, 28);
+    cd.writeUInt32LE(offset, 42);
+    cdEntries.push(Buffer.concat([cd, nameBuf]));
+    offset += localEntry.length;
+  }
+  const cdBuf = Buffer.concat(cdEntries);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, cdBuf, eocd]);
+}
 
 async function runImportsSupertestSuite() {
   console.log('================================================================');
@@ -49,9 +101,31 @@ async function runImportsSupertestSuite() {
     }
   }
 
-  const databaseUrl =
+  function redactDatabaseUrl(rawUrl: string): string {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.password) {
+        parsed.password = '***';
+      }
+      return parsed.toString();
+    } catch {
+      return rawUrl.replace(/:\/\/[^:]+:[^@]+@/, '://***:***@');
+    }
+  }
+
+  let databaseUrl =
     process.env.DATABASE_URL ||
     'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
+  if (
+    (databaseUrl.startsWith('"') && databaseUrl.endsWith('"')) ||
+    (databaseUrl.startsWith("'") && databaseUrl.endsWith("'"))
+  ) {
+    databaseUrl = databaseUrl.slice(1, -1);
+  }
+  if (databaseUrl.includes('localhost:5433')) {
+    databaseUrl = databaseUrl.replace('localhost:5433', '127.0.0.1:5433');
+  }
+  process.env.DATABASE_URL = databaseUrl;
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
@@ -66,10 +140,14 @@ async function runImportsSupertestSuite() {
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+      throw new Error(
+        `Database must be reachable in CI environment at ${redactDatabaseUrl(databaseUrl)}`
+      );
     }
     console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Imports Supertest tests (run 'pnpm infra:up' to enable).`
+      `⚠️ PostgreSQL is not reachable at ${redactDatabaseUrl(
+        databaseUrl
+      )}. Skipping live Imports Supertest tests (run 'pnpm infra:up' to enable).`
     );
     await app.close();
     console.log('🎉 Imports Supertest suite skipped offline safely!');
@@ -164,9 +242,7 @@ async function runImportsSupertestSuite() {
       return { token, userId, sessionId };
     };
 
-    // Custom role carrying exactly iam:shop_config (permission resolved from the seeded
-    // registry, never hardcoded): lets the scoped user pass the permission gate while the
-    // FEAT-RBAC-02 row scope is still enforced per row.
+    // Custom role carrying exactly iam:shop_config (permission resolved from seeded registry)
     const scopedRoleA = await prisma.role.create({
       data: {
         merchant_id: merchantIdA,
@@ -188,6 +264,14 @@ async function runImportsSupertestSuite() {
     });
 
     const ownerA = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'owner-a');
+    // OWNER with explicitly empty store and warehouse scopes (Finding 5: prove no OWNER bypass)
+    const ownerEmptyScopesA = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OWNER,
+      'owner-empty-a',
+      [],
+      []
+    );
     const scopedUserA = await setupUserSession(
       merchantIdA,
       RoleEnum.OPS_CSKH,
@@ -207,6 +291,37 @@ async function runImportsSupertestSuite() {
     const ownerB = await setupUserSession(merchantIdB, RoleEnum.OWNER, 'owner-b');
 
     const server = app.getHttpServer();
+
+    // Polling helper for durable asynchronous processing boundary (Finding 10)
+    const waitForImportStatus = async (
+      importId: string,
+      token: string,
+      targetStatuses: ImportStatus[] = [
+        ImportStatus.STAGED,
+        ImportStatus.BLOCKED,
+        ImportStatus.FAILED,
+      ],
+      timeoutMs = 6000
+    ): Promise<any> => {
+      const startTime = Date.now();
+      while (Date.now() - startTime < timeoutMs) {
+        const res = await request(server)
+          .get(`/api/v1/imports/${importId}`)
+          .set('Authorization', `Bearer ${token}`);
+        if (res.status === 200 && res.body?.data?.import) {
+          const imp = res.body.data.import;
+          if (targetStatuses.includes(imp.status)) {
+            return imp;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      throw new Error(
+        `Import ${importId} did not reach target status [${targetStatuses.join(
+          ', '
+        )}] within ${timeoutMs}ms`
+      );
+    };
 
     // ------------------------------------------------------------------------
     // COM-04-01: Download templates for branches and warehouses (CSV and XLSX)
@@ -234,7 +349,7 @@ async function runImportsSupertestSuite() {
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-01 & COM-04-05: Upload valid warehouse CSV -> 201 STAGED
+    // COM-04-01 & COM-04-05: Upload valid warehouse CSV -> 202 ACCEPTED -> poll STAGED (Finding 10)
     // ------------------------------------------------------------------------
     let import1Id = '';
     const whCode1 = `WH-A-01-${testSuffix}`;
@@ -245,21 +360,41 @@ async function runImportsSupertestSuite() {
       const res = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
+        .set('X-Correlation-Id', `corr-upload-wh-${testSuffix}`)
         .send({
           template_type: 'warehouses',
           file_name: 'valid_warehouses.csv',
           content: validCsvContent,
         });
 
-      assert.strictEqual(res.status, 201);
+      // Finding 10: 202 ACCEPTED returned immediately across durable asynchronous boundary
+      assert.strictEqual(res.status, 202);
       assert.strictEqual(res.body.success, true);
-      assert.strictEqual(res.body.data.import.status, ImportStatus.STAGED);
       assert.strictEqual(res.body.data.import.revision, 1);
-      assert.strictEqual(res.body.data.import.total_rows, 2);
-      assert.strictEqual(res.body.data.import.valid_rows, 2);
-      assert.strictEqual(res.body.data.import.error_rows, 0);
       import1Id = res.body.data.import.id;
-      console.log('PASS: COM-04-01 & COM-04-05 Upload valid warehouses CSV -> 201 STAGED');
+
+      // Poll until background processing stages the file
+      const stagedImp = await waitForImportStatus(import1Id, ownerA.token, [ImportStatus.STAGED]);
+      assert.strictEqual(stagedImp.status, ImportStatus.STAGED);
+      assert.strictEqual(stagedImp.total_rows, 2);
+      assert.strictEqual(stagedImp.valid_rows, 2);
+      assert.strictEqual(stagedImp.error_rows, 0);
+
+      // Verify IMPORT_UPLOADED audit log includes correlationId (Finding 12 / Finding 9 Part 3)
+      const uploadAudit = await prisma.auditLog.findFirst({
+        where: {
+          merchant_id: merchantIdA,
+          action: 'IMPORT_UPLOADED',
+          entity_id: import1Id,
+        },
+      });
+      assert.ok(uploadAudit, 'IMPORT_UPLOADED audit log must exist');
+      assert.ok(
+        uploadAudit.reason?.includes(`corr-upload-wh-${testSuffix}`),
+        'Audit log must retain correlation ID'
+      );
+      assert.strictEqual(uploadAudit.user_id, ownerA.userId);
+      console.log('PASS: COM-04-01 & COM-04-05 Upload valid warehouses CSV -> 202 ACCEPTED -> STAGED');
     }
 
     // ------------------------------------------------------------------------
@@ -282,11 +417,10 @@ async function runImportsSupertestSuite() {
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-07: Scope Enforcement per row (FEAT-RBAC-02 & Decision 3)
-    // Must be tested while import1Id is the latest revision (Finding 8)
+    // COM-04-07: Scope Enforcement per row, empty scopes deny, and NO OWNER BYPASS (Finding 5)
     // ------------------------------------------------------------------------
     {
-      // scopedUserA only has scope for whCode1 (WH-A-01-xxx), but import1Id contains whCode1 AND whCode2!
+      // 1. scopedUserA only has scope for whCode1, but import1Id contains whCode1 AND whCode2 -> 403
       const resScopedPromote = await request(server)
         .post(`/api/v1/imports/${import1Id}/promote`)
         .set('Authorization', `Bearer ${scopedUserA.token}`);
@@ -294,32 +428,44 @@ async function runImportsSupertestSuite() {
       assert.strictEqual(resScopedPromote.status, 403);
       assert.strictEqual(resScopedPromote.body.error?.code, 'WAREHOUSE_SCOPE_UNAUTHORIZED');
 
-      // noPermUserA lacks iam:shop_config
+      // 2. OWNER with empty warehouse_scopes -> MUST be denied 403 (Proves NO OWNER bypass!)
+      const resOwnerEmptyPromote = await request(server)
+        .post(`/api/v1/imports/${import1Id}/promote`)
+        .set('Authorization', `Bearer ${ownerEmptyScopesA.token}`);
+
+      assert.strictEqual(
+        resOwnerEmptyPromote.status,
+        403,
+        'OWNER with empty warehouse_scopes must be denied (no wildcard OWNER bypass)'
+      );
+      assert.strictEqual(resOwnerEmptyPromote.body.error?.code, 'WAREHOUSE_SCOPE_UNAUTHORIZED');
+
+      // 3. noPermUserA lacks iam:shop_config
       const resNoPerm = await request(server)
         .post(`/api/v1/imports/${import1Id}/promote`)
         .set('Authorization', `Bearer ${noPermUserA.token}`);
 
       assert.strictEqual(resNoPerm.status, 403);
 
-      // Cross-tenant: Owner B accessing Merchant A's import -> 404
+      // 4. Cross-tenant: Owner B accessing Merchant A's import -> 404
       const resCrossTenant = await request(server)
         .get(`/api/v1/imports/${import1Id}`)
         .set('Authorization', `Bearer ${ownerB.token}`);
 
       assert.strictEqual(resCrossTenant.status, 404);
       console.log(
-        'PASS: COM-04-07 Scope enforcement per row, capability check, and tenant isolation'
+        'PASS: COM-04-07 Scope enforcement per row, empty scopes deny, no OWNER bypass, and tenant isolation'
       );
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-08 & COM-04-09: Explicit Promotion by Owner & Audit Log verification
-    // Must be tested on latest revision (import1Id is revision 1) (Finding 8)
+    // COM-04-08 & COM-04-09: Explicit Promotion by Owner & Masked Audit Verification (Finding 9 Part 3)
     // ------------------------------------------------------------------------
     {
       const resPromote = await request(server)
         .post(`/api/v1/imports/${import1Id}/promote`)
-        .set('Authorization', `Bearer ${ownerA.token}`);
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .set('X-Correlation-Id', `corr-promote-wh-${testSuffix}`);
 
       assert.strictEqual(resPromote.status, 200);
       assert.strictEqual(resPromote.body.data.status, ImportStatus.PROMOTED);
@@ -339,98 +485,248 @@ async function runImportsSupertestSuite() {
       assert.ok(dbWh2);
       assert.strictEqual(dbWh2.name, 'Kho Long Biên');
 
-      // Verify Audit Log was recorded with masked values
-      const audit = await prisma.auditLog.findFirst({
+      // Verify IMPORT_PROMOTED Audit Log was recorded with correlationId and masked values
+      const promoteAudit = await prisma.auditLog.findFirst({
         where: {
           merchant_id: merchantIdA,
           action: 'IMPORT_PROMOTED',
           entity_id: import1Id,
         },
       });
-      assert.ok(audit);
-      assert.strictEqual(audit.user_id, ownerA.userId);
+      assert.ok(promoteAudit);
+      assert.strictEqual(promoteAudit.user_id, ownerA.userId);
+      assert.ok(
+        promoteAudit.reason?.includes(`corr-promote-wh-${testSuffix}`),
+        'Audit reason must persist correlation ID'
+      );
+
+      // Verify WAREHOUSE_CREATED Audit Log masks contact_phone (Finding 9 Part 3)
+      const whCreatedAudit = await prisma.auditLog.findFirst({
+        where: {
+          merchant_id: merchantIdA,
+          action: 'WAREHOUSE_CREATED',
+          entity_id: dbWh1.id,
+        },
+      });
+      assert.ok(whCreatedAudit, 'WAREHOUSE_CREATED audit log must exist');
+      assert.ok(
+        whCreatedAudit.reason?.includes(`corr-promote-wh-${testSuffix}`),
+        'Warehouse mutation audit must persist correlation ID'
+      );
+      const whAuditVal = whCreatedAudit.new_value as any;
+      assert.ok(
+        whAuditVal?.contact_phone?.includes('****'),
+        'contact_phone in audit log must be masked with ****'
+      );
+      assert.strictEqual(
+        whAuditVal?.contact_phone?.includes('0901234567'),
+        false,
+        'Raw contact_phone must not leak into audit log'
+      );
       console.log(
-        'PASS: COM-04-08 & COM-04-09 Explicit promotion, persistence, and masked audit log'
+        'PASS: COM-04-08 & COM-04-09 Explicit promotion, persistence, and masked audit logs'
       );
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-06: Idempotency conflict verification (409 CONFLICT)
+    // COM-04-06: Checksum Replay Key Binding sequence (Finding 6)
+    // Upload A with K1 -> replay A with K2 -> upload B with K2 -> 409 CONFLICT
     // ------------------------------------------------------------------------
     {
-      const resIdemConflict = await request(server)
+      const key1 = `k1-${testSuffix}`;
+      const key2 = `k2-${testSuffix}`;
+      const contentA = `code,name,status,is_default,contact_name,contact_phone,address_line,district,city\nWH-K-01-${testSuffix},Kho K1,active,false,Name,0901234567,Addr,Dist,City`;
+      const contentB = `code,name,status,is_default,contact_name,contact_phone,address_line,district,city\nWH-K-02-${testSuffix},Kho K2 Different,active,false,Name,0901234567,Addr,Dist,City`;
+
+      // Step 1: Upload A with K1
+      const resA1 = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
-        .set('Idempotency-Key', 'idem-test-01')
+        .set('Idempotency-Key', key1)
         .send({
           template_type: 'warehouses',
-          file_name: 'different_content.csv',
-          content: `code,name,contact_name,contact_phone,address_line,district,city\n${whCode1},Different,Name,0901234567,123 Street,District,City`,
+          file_name: 'content_a.csv',
+          content: contentA,
         });
+      assert.strictEqual(resA1.status, 202);
+      const impAId = resA1.body.data.import.id;
+      await waitForImportStatus(impAId, ownerA.token, [ImportStatus.STAGED]);
 
-      assert.strictEqual(resIdemConflict.status, 201);
-
-      // Now retry same key with different content
-      const resRetryDifferent = await request(server)
+      // Step 2: Replay content A with K2 -> should bind K2 to content A
+      const resA2 = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
-        .set('Idempotency-Key', 'idem-test-01')
+        .set('Idempotency-Key', key2)
         .send({
           template_type: 'warehouses',
-          file_name: 'yet_another.csv',
-          content: `code,name,contact_name,contact_phone,address_line,district,city\n${whCode2},Another,Name,0901234567,456 Street,District,City`,
+          file_name: 'content_a.csv',
+          content: contentA,
         });
+      assert.strictEqual(resA2.status, 200, 'Replay of content A must succeed (200 OK)');
+      assert.strictEqual(resA2.body.data.import.id, impAId);
 
-      assert.strictEqual(resRetryDifferent.status, 409);
-      assert.strictEqual(resRetryDifferent.body.error?.code, 'IDEMPOTENCY_CONFLICT');
+      // Step 3: Upload different content B with K2 -> MUST throw 409 IDEMPOTENCY_CONFLICT
+      const resB2 = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .set('Idempotency-Key', key2)
+        .send({
+          template_type: 'warehouses',
+          file_name: 'content_b.csv',
+          content: contentB,
+        });
+      assert.strictEqual(
+        resB2.status,
+        409,
+        'K2 was bound to content A on replay; content B with K2 must return 409 CONFLICT'
+      );
+      assert.strictEqual(resB2.body.error?.code, 'IDEMPOTENCY_CONFLICT');
       console.log(
-        'PASS: COM-04-06 Same idempotency key with different content returns 409 CONFLICT'
+        'PASS: COM-04-06 Checksum replay binds newly supplied idempotency key (Finding 6)'
       );
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-02: Invalid file type / Malware / Missing content -> 400
+    // COM-04-02: MIME allowlisting exact match and extension mismatch (Finding 4 & Finding 7)
     // ------------------------------------------------------------------------
     {
-      const resBad = await request(server)
-        .post('/api/v1/imports/upload')
-        .set('Authorization', `Bearer ${ownerA.token}`)
-        .send({
-          template_type: 'invalid_type',
-          content: 'some,data',
-        });
-      assert.strictEqual(resBad.status, 400);
-
-      const resMalware = await request(server)
+      // 1. Claimed MIME text/csv-unapproved when allowlist allows text/csv (exact match, Finding 4)
+      const resUnapprovedMime = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
         .send({
           template_type: 'warehouses',
-          content: 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*',
+          file_name: 'test.csv',
+          content: 'code,name\nWH-01,Test',
+          mime_type: 'text/csv-unapproved',
         });
-      assert.strictEqual(resMalware.status, 400);
-      assert.strictEqual(resMalware.body.error?.code, 'MALWARE_DETECTED');
-      console.log('PASS: COM-04-02 Negative validation and malware rejection');
+      assert.strictEqual(resUnapprovedMime.status, 400);
+      assert.strictEqual(resUnapprovedMime.body.error?.code, 'INVALID_FILE_TYPE');
+
+      // 2. Extension and MIME mismatch: .csv with xlsx MIME
+      const resMismatch1 = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .send({
+          template_type: 'warehouses',
+          file_name: 'test.csv',
+          content: 'code,name\nWH-01,Test',
+          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        });
+      assert.strictEqual(resMismatch1.status, 400);
+      assert.strictEqual(resMismatch1.body.error?.code, 'INVALID_FILE_TYPE');
+
+      // 3. Extension and MIME mismatch: .xlsx with csv MIME
+      const resMismatch2 = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .send({
+          template_type: 'warehouses',
+          file_name: 'test.xlsx',
+          file_base64: Buffer.from('dummy').toString('base64'),
+          mime_type: 'text/csv',
+        });
+      assert.strictEqual(resMismatch2.status, 400);
+      assert.strictEqual(resMismatch2.body.error?.code, 'INVALID_FILE_TYPE');
+
+      // 4. Corrupted ZIP entry CRC-32 (Finding 3)
+      const cleanSheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>code</t></is></c></row></sheetData>
+</worksheet>`;
+      const corruptCrcZip = buildStoredZip(
+        [{ name: 'xl/worksheets/sheet1.xml', data: Buffer.from(cleanSheetXml) }],
+        { corruptCrc: true }
+      );
+      const resCorruptCrc = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .send({
+          template_type: 'warehouses',
+          file_name: 'corrupt.xlsx',
+          file_base64: corruptCrcZip.toString('base64'),
+        });
+      assert.strictEqual(resCorruptCrc.status, 400);
+      assert.strictEqual(resCorruptCrc.body.error?.code, 'FILE_PARSE_ERROR');
+
+      // 5. Sparse cell coordinate memory exhaustion rejected during background staging (Finding 5)
+      const sparseSheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>code</t></is></c></row>
+    <row r="2"><c r="ZZZZZZ1" t="inlineStr"><is><t>x</t></is></c></row>
+  </sheetData>
+</worksheet>`;
+      const sparseZip = createZipArchive([
+        { name: 'xl/worksheets/sheet1.xml', data: Buffer.from(sparseSheetXml) },
+      ]);
+      const resSparse = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .send({
+          template_type: 'warehouses',
+          file_name: 'sparse.xlsx',
+          file_base64: sparseZip.toString('base64'),
+        });
+      assert.strictEqual(resSparse.status, 202);
+      const sparseImpId = resSparse.body.data.import.id;
+      const failedSparse = await waitForImportStatus(sparseImpId, ownerA.token, [
+        ImportStatus.FAILED,
+      ]);
+      assert.strictEqual(failedSparse.status, ImportStatus.FAILED);
+      assert.strictEqual(failedSparse.control_totals?.error_code, 'FILE_PARSE_ERROR');
+
+      // 6. Deflated EICAR malware inside XLSX (Finding 7)
+      const eicarPayload = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
+      const maliciousXlsx = createZipArchive([
+        {
+          name: 'xl/worksheets/sheet1.xml',
+          data: Buffer.from(cleanSheetXml),
+        },
+        {
+          name: 'xl/drawings/payload.xml',
+          data: Buffer.from(eicarPayload),
+        },
+      ]);
+      const resEicar = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .send({
+          template_type: 'warehouses',
+          file_name: 'eicar.xlsx',
+          file_base64: maliciousXlsx.toString('base64'),
+        });
+      assert.strictEqual(resEicar.status, 400);
+      assert.strictEqual(resEicar.body.error?.code, 'MALWARE_DETECTED');
+      console.log('PASS: COM-04-02 Negative validation: MIME, ZIP CRC, bounds, and deflated malware');
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-03: Row validation issues & BLOCKED status
+    // COM-04-03: Row validation issues & preservation of surplus row (Finding 8)
     // ------------------------------------------------------------------------
     let blockedImportId = '';
     {
-      const blockedCsv = `code,name,contact_name,contact_phone,address_line,district,city\n,Missing Scope Code,Nguyễn A,0901234567,123 Đường,Quận 1,TP.HCM\nWH-BAD-PHONE,Kho Sai Số,Nguyễn B,12345,123 Đường,Quận 1,TP.HCM`;
+      // Row with empty declared columns but nonempty surplus value: must NOT disappear
+      const surplusCsv = `code,name,contact_name,contact_phone,address_line,district,city\n,,,,,,"surplus_value"\n${whCode1},Kho Tân Bình,Nguyễn A,0901234567,123 Đường,Quận 1,TP.HCM`;
       const resBlocked = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
         .send({
           template_type: 'warehouses',
-          content: blockedCsv,
+          file_name: 'surplus_and_valid.csv',
+          content: surplusCsv,
         });
 
-      assert.strictEqual(resBlocked.status, 201);
-      assert.strictEqual(resBlocked.body.data.import.status, ImportStatus.BLOCKED);
-      assert.strictEqual(resBlocked.body.data.import.error_rows, 2);
+      assert.strictEqual(resBlocked.status, 202);
       blockedImportId = resBlocked.body.data.import.id;
+
+      // Poll until BLOCKED
+      const blockedImp = await waitForImportStatus(blockedImportId, ownerA.token, [
+        ImportStatus.BLOCKED,
+      ]);
+      assert.strictEqual(blockedImp.status, ImportStatus.BLOCKED);
+      assert.strictEqual(blockedImp.total_rows, 2, 'Empty declared row with surplus must NOT be dropped');
+      assert.strictEqual(blockedImp.error_rows, 1);
 
       // Promotion must be blocked
       const resPromoteBlocked = await request(server)
@@ -439,7 +735,32 @@ async function runImportsSupertestSuite() {
 
       assert.strictEqual(resPromoteBlocked.status, 400);
       assert.strictEqual(resPromoteBlocked.body.error?.code, 'IMPORT_BLOCKED');
-      console.log('PASS: COM-04-03 Row errors set BLOCKED status and prevent promotion');
+      console.log(
+        'PASS: COM-04-03 Row errors set BLOCKED status and surplus records are preserved (Finding 8)'
+      );
+    }
+
+    // ------------------------------------------------------------------------
+    // COM-04-04: Ambiguous duplicate header mapping rejection (Finding 9)
+    // ------------------------------------------------------------------------
+    {
+      const ambiguousCsv = `code,Mã chi nhánh,name,status\nBR-DUP-01,BR-DUP-01,Chi Nhánh Trùng,active`;
+      const resAmbig = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerA.token}`)
+        .send({
+          template_type: 'branches',
+          file_name: 'ambiguous_headers.csv',
+          content: ambiguousCsv,
+        });
+
+      assert.strictEqual(resAmbig.status, 202);
+      const ambigId = resAmbig.body.data.import.id;
+
+      const failedImp = await waitForImportStatus(ambigId, ownerA.token, [ImportStatus.FAILED]);
+      assert.strictEqual(failedImp.status, ImportStatus.FAILED);
+      assert.strictEqual(failedImp.control_totals?.error_code, 'DUPLICATE_HEADER_MAPPING');
+      console.log('PASS: COM-04-04 Ambiguous duplicate header mappings rejected before staging (Finding 9)');
     }
 
     // ------------------------------------------------------------------------
@@ -475,7 +796,7 @@ async function runImportsSupertestSuite() {
     {
       const newRevisionCsv = `code,name,status,is_default,contact_name,contact_phone,contact_email,address_line,ward,district,city\n${whCode1},Kho Tân Bình V2,active,true,Nguyễn Văn A,0901234567,tanbinh@example.com,55 Cộng Hòa Mới,Phường 13,Tân Bình,TP.HCM`;
 
-      const resRev4 = await request(server)
+      const resRev = await request(server)
         .post('/api/v1/imports/upload')
         .set('Authorization', `Bearer ${ownerA.token}`)
         .send({
@@ -484,60 +805,146 @@ async function runImportsSupertestSuite() {
           content: newRevisionCsv,
         });
 
-      assert.strictEqual(resRev4.status, 201);
-      assert.strictEqual(resRev4.body.data.import.revision, 4);
-      const import4Id = resRev4.body.data.import.id;
+      assert.strictEqual(resRev.status, 202);
+      const newImpId = resRev.body.data.import.id;
+      const stagedRev = await waitForImportStatus(newImpId, ownerA.token, [ImportStatus.STAGED]);
+      assert.strictEqual(stagedRev.status, ImportStatus.STAGED);
 
-      // Promote revision 4
-      const resPromoteRev4 = await request(server)
-        .post(`/api/v1/imports/${import4Id}/promote`)
+      // Promote new revision
+      const resPromoteRev = await request(server)
+        .post(`/api/v1/imports/${newImpId}/promote`)
         .set('Authorization', `Bearer ${ownerA.token}`);
 
-      assert.strictEqual(resPromoteRev4.status, 200);
+      assert.strictEqual(resPromoteRev.status, 200);
 
       // Verify revision 1 is now SUPERSEDED
       const dbImp1 = await prisma.import.findUnique({ where: { id: import1Id } });
       assert.strictEqual(dbImp1?.status, ImportStatus.SUPERSEDED);
 
-      // Verify revision 4 is PROMOTED
-      const dbImp4 = await prisma.import.findUnique({ where: { id: import4Id } });
-      assert.strictEqual(dbImp4?.status, ImportStatus.PROMOTED);
+      // Verify new revision is PROMOTED
+      const dbImpNew = await prisma.import.findUnique({ where: { id: newImpId } });
+      assert.strictEqual(dbImpNew?.status, ImportStatus.PROMOTED);
       console.log('PASS: COM-04-08 New revision promotion supersedes prior revision');
     }
 
     // ------------------------------------------------------------------------
-    // COM-04-01 & COM-04-08: Branches Template Import & Promotion
+    // COM-04-01 & COM-04-08: Initial multirow branch import assigns first branch default (Finding 2)
     // ------------------------------------------------------------------------
     {
-      const brCode = `BR-A-01-${testSuffix}`;
-      const branchCsv = `code,name,status,is_default,contact_name,contact_phone,address_line,ward,district,city\n${brCode},Chi Nhánh Quận 1,active,true,Nguyễn Văn Chi Nhánh,0901234567,123 Lê Lợi,Phường Bến Nghé,Quận 1,TP. Hồ Chí Minh`;
+      const brCode1 = `BR-INIT-01-${testSuffix}`;
+      const brCode2 = `BR-INIT-02-${testSuffix}`;
+      // Initial branch import for Merchant B (has 0 branches) with NO explicit is_default column
+      const initialBranchCsv = `code,name,status,contact_name,contact_phone,address_line,district,city\n${brCode1},Chi Nhánh Đầu Tiên,active,Nguyễn A,0901234567,1 Lê Lợi,Quận 1,TP.HCM\n${brCode2},Chi Nhánh Thứ Hai,active,Nguyễn B,0901234568,2 Lê Lợi,Quận 1,TP.HCM`;
 
-      const resBranchUpload = await request(server)
+      const resInitBr = await request(server)
         .post('/api/v1/imports/upload')
-        .set('Authorization', `Bearer ${ownerA.token}`)
+        .set('Authorization', `Bearer ${ownerB.token}`)
         .send({
           template_type: 'branches',
-          file_name: 'branches.csv',
-          content: branchCsv,
+          file_name: 'initial_branches.csv',
+          content: initialBranchCsv,
         });
 
-      assert.strictEqual(resBranchUpload.status, 201);
-      assert.strictEqual(resBranchUpload.body.data.import.status, ImportStatus.STAGED);
-      const branchImportId = resBranchUpload.body.data.import.id;
+      assert.strictEqual(resInitBr.status, 202);
+      const initBrId = resInitBr.body.data.import.id;
+      await waitForImportStatus(initBrId, ownerB.token, [ImportStatus.STAGED]);
 
-      const resBranchPromote = await request(server)
-        .post(`/api/v1/imports/${branchImportId}/promote`)
-        .set('Authorization', `Bearer ${ownerA.token}`);
+      const resInitBrPromote = await request(server)
+        .post(`/api/v1/imports/${initBrId}/promote`)
+        .set('Authorization', `Bearer ${ownerB.token}`);
 
-      assert.strictEqual(resBranchPromote.status, 200);
-      assert.strictEqual(resBranchPromote.body.data.status, ImportStatus.PROMOTED);
+      assert.strictEqual(resInitBrPromote.status, 200);
 
-      const dbBranch = await prisma.branch.findUnique({
-        where: { merchant_id_code: { merchant_id: merchantIdA, code: brCode } },
+      // Verify in DB: exactly first branch is default; second branch is not (Finding 2)
+      const dbBr1 = await prisma.branch.findUnique({
+        where: { merchant_id_code: { merchant_id: merchantIdB, code: brCode1 } },
       });
-      assert.ok(dbBranch);
-      assert.strictEqual(dbBranch.name, 'Chi Nhánh Quận 1');
-      console.log('PASS: COM-04-01 & COM-04-08 Branches template import and promotion');
+      const dbBr2 = await prisma.branch.findUnique({
+        where: { merchant_id_code: { merchant_id: merchantIdB, code: brCode2 } },
+      });
+      assert.ok(dbBr1);
+      assert.ok(dbBr2);
+      assert.strictEqual(dbBr1.is_default, true, 'First branch on initial import must be default');
+      assert.strictEqual(dbBr2.is_default, false, 'Second branch on initial import must not be default');
+
+      // Negative check: multiple rows specifying is_default=true is rejected (Finding 2)
+      const multiDefaultCsv = `code,name,status,is_default,contact_name,contact_phone,address_line,district,city\nBR-MD-1,Chi Nhánh MD 1,active,true,Nguyễn A,0901234567,123 Đường,Quận 1,TP.HCM\nBR-MD-2,Chi Nhánh MD 2,active,true,Nguyễn B,0901234568,456 Đường,Quận 1,TP.HCM`;
+      const resMultiDef = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .send({
+          template_type: 'branches',
+          file_name: 'multi_default.csv',
+          content: multiDefaultCsv,
+        });
+      assert.strictEqual(resMultiDef.status, 202);
+      const multiDefId = resMultiDef.body.data.import.id;
+      const stagedMultiDef = await waitForImportStatus(multiDefId, ownerB.token, [
+        ImportStatus.STAGED,
+        ImportStatus.BLOCKED,
+      ]);
+      // If staged with validation issues, promotion fails
+      const resPromoteMultiDef = await request(server)
+        .post(`/api/v1/imports/${multiDefId}/promote`)
+        .set('Authorization', `Bearer ${ownerB.token}`);
+      assert.strictEqual(resPromoteMultiDef.status, 400);
+
+      // Displaced default branch scope check (Part 3 Finding 5 & P1-Finding-14)
+      // Actor holds scope for brCode2 only, displacing existing default brCode1 (out of scope) -> 403
+      const scopedRoleB = await prisma.role.create({
+        data: {
+          merchant_id: merchantIdB,
+          name: `Scoped Op B ${testSuffix}`,
+          name_lower: `scoped op b ${testSuffix}`.toLowerCase(),
+          description: 'Scoped user in Merchant B',
+          is_system: false,
+        },
+      });
+      await prisma.rolePermission.create({
+        data: {
+          role_id: scopedRoleB.id,
+          permission_id: shopConfigPermission.id,
+        },
+      });
+      const scopedUserB = await setupUserSession(
+        merchantIdB,
+        RoleEnum.OPS_CSKH,
+        'scoped-b',
+        [],
+        [brCode2], // ONLY has scope for brCode2, lacks scope for default brCode1!
+        scopedRoleB.id
+      );
+
+      const displaceCsv = `code,name,status,is_default,contact_name,contact_phone,address_line,district,city\n${brCode2},Chi Nhánh 2 Mới Thành Mặc Định,active,true,Nguyễn B,0901234568,2 Lê Lợi,Quận 1,TP.HCM`;
+      const resDisplaceUpload = await request(server)
+        .post('/api/v1/imports/upload')
+        .set('Authorization', `Bearer ${ownerB.token}`)
+        .send({
+          template_type: 'branches',
+          file_name: 'displace_default.csv',
+          content: displaceCsv,
+        });
+      assert.strictEqual(resDisplaceUpload.status, 202);
+      const displaceImpId = resDisplaceUpload.body.data.import.id;
+      await waitForImportStatus(displaceImpId, ownerB.token, [ImportStatus.STAGED]);
+
+      const resDisplacePromote = await request(server)
+        .post(`/api/v1/imports/${displaceImpId}/promote`)
+        .set('Authorization', `Bearer ${scopedUserB.token}`);
+      assert.strictEqual(
+        resDisplacePromote.status,
+        403,
+        'Restricted actor displacing out-of-scope default branch must be denied 403'
+      );
+      assert.strictEqual(resDisplacePromote.body.error?.code, 'SCOPE_UNAUTHORIZED');
+      assert.ok(
+        resDisplacePromote.body.error?.message?.includes(brCode1),
+        'Error message must cite displaced out-of-scope default branch code'
+      );
+
+      console.log(
+        'PASS: COM-04-01 & COM-04-08 Initial branch import assigns exactly one default, rejects multiple defaults, and verifies displaced default scope check'
+      );
     }
 
     console.log('🎉 ALL FEAT-COM-04 SUPERTEST INTEGRATION TESTS PASSED!');

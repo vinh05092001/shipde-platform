@@ -8,12 +8,14 @@ import {
   isValidCutoffTime,
 } from '@shipde/contracts';
 import { TEMPLATE_DEFINITIONS, TemplateDefinition } from './imports.constants';
+import { columnIndexToLetters } from './imports.parser';
 
 export class UploadImportDto {
   template_type!: string;
   file_name?: string;
   content?: string;
   file_base64?: string;
+  mime_type?: string;
 }
 
 export class ListImportsDto {
@@ -93,6 +95,14 @@ export function validateUploadImportDto(body: any): UploadImportDto {
     });
   }
 
+  if (body.mime_type !== undefined && typeof body.mime_type !== 'string') {
+    errors.push({
+      field: 'mime_type',
+      code: 'INVALID_TYPE',
+      message: 'MIME type phải là chuỗi ký tự',
+    });
+  }
+
   if (errors.length > 0) {
     throw new CanonicalApiException(
       HttpStatus.BAD_REQUEST,
@@ -109,6 +119,7 @@ export function validateUploadImportDto(body: any): UploadImportDto {
     file_name: body.file_name ? body.file_name.trim() : undefined,
     content: body.content,
     file_base64: body.file_base64,
+    mime_type: body.mime_type ? body.mime_type.trim() : undefined,
   };
 }
 
@@ -166,6 +177,28 @@ export function validateImportRow(
       seenScopeCodes.add(cleanCode.toUpperCase());
     }
     normalized[template.scopeField] = cleanCode;
+  }
+
+  // 1.5. Structural check: surplus cells beyond the header width are preserved by the
+  // parsers as `__extra_<col>` markers. They must surface as a blocking structural error
+  // instead of letting the row (or part of it) disappear from the import.
+  const extraColumns = Object.keys(mappedData).filter((key) => key.startsWith('__extra_'));
+  if (extraColumns.length > 0) {
+    const columnLabels = extraColumns
+      .filter((key) => key !== '__extra_overflow')
+      .map((key) => key.slice('__extra_'.length))
+      .filter((idx) => /^\d+$/.test(idx))
+      .sort((a, b) => parseInt(a, 10) - parseInt(b, 10))
+      .map((idx) => columnIndexToLetters(parseInt(idx, 10)));
+    const overflow = extraColumns.includes('__extra_overflow');
+    issues.push({
+      field: 'row_structure',
+      code: 'EXTRA_COLUMNS',
+      message: `Dòng ${rowNumber}: Fila chứa dữ liệu ở các cột vượt quá cấu trúc header${
+        columnLabels.length > 0 ? ` (${columnLabels.join(', ')})` : ''
+      }${overflow ? ' cùng với nhiều cột phụ khác' : ''}. Đây là lỗi cấu trúc tệp: dòng này bị loại khỏi nhập liệu.`,
+      severity: 'BLOCKING',
+    });
   }
 
   // 2. Validate Template Specific Fields

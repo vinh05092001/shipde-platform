@@ -120,9 +120,11 @@ export class ImportsController {
           false
         );
       }
-      mimeType = isXlsx
-        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        : 'text/csv';
+      mimeType =
+        dto.mime_type ||
+        (isXlsx
+          ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          : 'text/csv');
     } else if (dto.content !== undefined) {
       if (isXlsx) {
         throw new CanonicalApiException(
@@ -133,7 +135,7 @@ export class ImportsController {
         );
       }
       fileBuffer = Buffer.from(dto.content, 'utf8');
-      mimeType = 'text/csv';
+      mimeType = dto.mime_type || 'text/csv';
     } else {
       throw new CanonicalApiException(
         HttpStatus.BAD_REQUEST,
