@@ -153,69 +153,74 @@ describe('FEAT-COM-01: Global Search Unit Test Suite', () => {
         row.merchant_id === where.merchant_id &&
         (!where.AND || where.AND.every((part: any) => matchesScope(row, part)));
 
+      const prisma: any = {
+        user: {
+          findFirst: async ({ where }: any) => {
+            if (fixtures.users) {
+              const found = fixtures.users.find((u) => u.id === where.id);
+              if (found) return { status: 'active', ...found };
+              return null;
+            }
+            return {
+              id: where.id,
+              role: 'OWNER',
+              status: 'active',
+              store_scopes: ['*'],
+              warehouse_scopes: ['*'],
+            };
+          },
+        },
+        order: {
+          findMany: async (args: any) => {
+            queriesRecorded.order.push(args);
+            return (fixtures.orders || []).filter((o) => visible(o, args.where));
+          },
+        },
+        shipment: {
+          findMany: async (args: any) => {
+            queriesRecorded.shipment.push(args);
+            return (fixtures.shipments || []).filter((s) => visible(s, args.where));
+          },
+        },
+        carrierStatement: {
+          findMany: async (args: any) => {
+            queriesRecorded.carrierStatement.push(args);
+            return (fixtures.carrierStatements || []).filter((b) => visible(b, args.where));
+          },
+        },
+        exceptionCase: {
+          findMany: async (args: any) => {
+            queriesRecorded.exceptionCase.push(args);
+            return (fixtures.exceptionCases || []).filter((e) => visible(e, args.where));
+          },
+        },
+        claim: {
+          findMany: async (args: any) => {
+            queriesRecorded.claim.push(args);
+            return (fixtures.claims || []).filter((c) => visible(c, args.where));
+          },
+        },
+        discrepancy: {
+          findMany: async (args: any) => {
+            queriesRecorded.discrepancy.push(args);
+            return (fixtures.discrepancies || []).filter((d) => visible(d, args.where));
+          },
+        },
+        auditLog: {
+          create: async ({ data }: any) => {
+            auditLogs.push(data);
+            return { id: 'audit-id-1', ...data };
+          },
+        },
+      };
+      // TASK-AI-154: SearchService consumes PrismaService.extended; in this
+      // mock the extended client is the same in-memory stand-in.
+      prisma.extended = prisma;
+
       return {
         auditLogs,
         queriesRecorded,
-        prisma: {
-          user: {
-            findFirst: async ({ where }: any) => {
-              if (fixtures.users) {
-                const found = fixtures.users.find((u) => u.id === where.id);
-                if (found) return { status: 'active', ...found };
-                return null;
-              }
-              return {
-                id: where.id,
-                role: 'OWNER',
-                status: 'active',
-                store_scopes: ['*'],
-                warehouse_scopes: ['*'],
-              };
-            },
-          },
-          order: {
-            findMany: async (args: any) => {
-              queriesRecorded.order.push(args);
-              return (fixtures.orders || []).filter((o) => visible(o, args.where));
-            },
-          },
-          shipment: {
-            findMany: async (args: any) => {
-              queriesRecorded.shipment.push(args);
-              return (fixtures.shipments || []).filter((s) => visible(s, args.where));
-            },
-          },
-          carrierStatement: {
-            findMany: async (args: any) => {
-              queriesRecorded.carrierStatement.push(args);
-              return (fixtures.carrierStatements || []).filter((b) => visible(b, args.where));
-            },
-          },
-          exceptionCase: {
-            findMany: async (args: any) => {
-              queriesRecorded.exceptionCase.push(args);
-              return (fixtures.exceptionCases || []).filter((e) => visible(e, args.where));
-            },
-          },
-          claim: {
-            findMany: async (args: any) => {
-              queriesRecorded.claim.push(args);
-              return (fixtures.claims || []).filter((c) => visible(c, args.where));
-            },
-          },
-          discrepancy: {
-            findMany: async (args: any) => {
-              queriesRecorded.discrepancy.push(args);
-              return (fixtures.discrepancies || []).filter((d) => visible(d, args.where));
-            },
-          },
-          auditLog: {
-            create: async ({ data }: any) => {
-              auditLogs.push(data);
-              return { id: 'audit-id-1', ...data };
-            },
-          },
-        } as any,
+        prisma,
       };
     }
 
