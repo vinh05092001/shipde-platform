@@ -28,6 +28,14 @@ Final response:
 - assumptions, limitations or blockers
 ```
 
+## Pre-implementation checklist (spec-kit)
+
+Verify before writing code:
+- [ ] **Ambiguity check**: If any `[NEEDS CLARIFICATION]` marker or missing specification exists, stop and mark `BLOCKED` with evidence; never guess or assume behavior.
+- [ ] **Constitution check**: Verify tenant scope, RBAC, audit masking, VND integer arithmetic, carrier reconciliation, and tests at the lowest useful level (test-first for executable acceptance rows; `test not applicable: <justification>` recorded for non-executable rows).
+- [ ] **Task breakdown**: Execute numbered tasks ordered API/backend before UI and test-first for executable rows, running independent `[P]` tasks in parallel where applicable.
+- [ ] **Slice sizing**: Keep the single vertical Pull Request bounded to ~400 lines (API/backend before UI inside it); if the diff would exceed the budget, stop and escalate a split into prerequisite Work Items to the planner instead of shipping horizontal slices.
+
 ## Review-fix prompt
 
 ```text
