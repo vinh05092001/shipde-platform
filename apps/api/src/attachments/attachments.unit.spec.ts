@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { createHash, randomUUID } from 'node:crypto';
 import { deflateRawSync } from 'node:zlib';
+import { HttpStatus } from '@nestjs/common';
 import {
   validateUploadAttachmentDto,
   validateDeleteAttachmentDto,
@@ -84,8 +85,7 @@ function buildZip(
         : entry.corrupt
           ? Buffer.from([0xab, 0xcd, 0xef, 0x01, 0x02, 0x03])
           : deflateRawSync(entry.data);
-    const flags =
-      (entry.encrypted ? 0x0801 : 0x0800) | (entry.dataDescriptor ? 0x0008 : 0x0000);
+    const flags = (entry.encrypted ? 0x0801 : 0x0800) | (entry.dataDescriptor ? 0x0008 : 0x0000);
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4);
@@ -122,8 +122,7 @@ function buildZip(
     central.writeUInt32LE(offset, 42);
     centralParts.push(central, nameBuf);
 
-    offset +=
-      30 + nameBuf.length + compressed.length + (entry.dataDescriptor ? 16 : 0);
+    offset += 30 + nameBuf.length + compressed.length + (entry.dataDescriptor ? 16 : 0);
   }
   const localBuf = Buffer.concat(localParts);
   if (opts.omitCentral) {
@@ -442,7 +441,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
             data: Buffer.from('<Types xmlns="x"></Types>'),
             dataDescriptor: true,
           },
-          { name: 'xl/workbook.xml', data: Buffer.from('<workbook></workbook>'), dataDescriptor: true },
+          {
+            name: 'xl/workbook.xml',
+            data: Buffer.from('<workbook></workbook>'),
+            dataDescriptor: true,
+          },
         ],
         {}
       );
@@ -572,6 +575,9 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       const attachmentsTable: any[] = [];
       const auditLogs: any[] = [];
       const orphansTable: any[] = [];
+      const claimsTable: any[] = [];
+      const discrepanciesTable: any[] = [];
+      const carrierStatementsTable: any[] = [];
       const s3Storage = new Map<string, { body: Buffer; contentType?: string }>();
 
       const mockUsers: any[] = [
@@ -595,6 +601,27 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           status: 'active',
           store_scopes: [],
           warehouse_scopes: [],
+        },
+        {
+          id: 'u-empty-admin',
+          role: 'ADMIN',
+          status: 'active',
+          store_scopes: [],
+          warehouse_scopes: [],
+        },
+        {
+          id: 'u-restricted-branch',
+          role: 'WAREHOUSE',
+          status: 'active',
+          store_scopes: ['branch-danang'],
+          warehouse_scopes: ['*'],
+        },
+        {
+          id: 'u-unauth-wh',
+          role: 'WAREHOUSE',
+          status: 'active',
+          store_scopes: ['*'],
+          warehouse_scopes: ['wh-danang'],
         },
         // Round 3: scoped administrator — holds iam:shop_config but limited warehouse scope
         {
@@ -637,7 +664,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         { id: 'wh-danang', code: 'wh-danang', merchant_id: 'm-tenant-1' },
       ];
 
-      const mockBranches = [{ id: 'branch-hcm', code: 'branch-hcm', merchant_id: 'm-tenant-1' }];
+      const mockBranches = [
+        { id: 'branch-hcm', code: 'branch-hcm', merchant_id: 'm-tenant-1' },
+        { id: 'branch-hcm-01', code: 'branch-hcm-01', merchant_id: 'm-tenant-1' },
+        { id: 'branch-danang', code: 'branch-danang', merchant_id: 'm-tenant-1' },
+      ];
 
       const mockPrisma: any = {
         attachment: {
@@ -826,13 +857,52 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           },
         },
         claim: {
-          findFirst: async ({ where }: any) => null,
+          create: async ({ data }: any) => {
+            const row = { id: data.id || randomUUID(), ...data };
+            claimsTable.push(row);
+            return row;
+          },
+          findFirst: async ({ where }: any) => {
+            return (
+              claimsTable.find((c) => {
+                if (where.id && c.id !== where.id) return false;
+                if (where.merchant_id && c.merchant_id !== where.merchant_id) return false;
+                return true;
+              }) || null
+            );
+          },
         },
         discrepancy: {
-          findFirst: async ({ where }: any) => null,
+          create: async ({ data }: any) => {
+            const row = { id: data.id || randomUUID(), ...data };
+            discrepanciesTable.push(row);
+            return row;
+          },
+          findFirst: async ({ where }: any) => {
+            return (
+              discrepanciesTable.find((d) => {
+                if (where.id && d.id !== where.id) return false;
+                if (where.merchant_id && d.merchant_id !== where.merchant_id) return false;
+                return true;
+              }) || null
+            );
+          },
         },
         carrierStatement: {
-          findFirst: async ({ where }: any) => null,
+          create: async ({ data }: any) => {
+            const row = { id: data.id || randomUUID(), ...data };
+            carrierStatementsTable.push(row);
+            return row;
+          },
+          findFirst: async ({ where }: any) => {
+            return (
+              carrierStatementsTable.find((s) => {
+                if (where.id && s.id !== where.id) return false;
+                if (where.merchant_id && s.merchant_id !== where.merchant_id) return false;
+                return true;
+              }) || null
+            );
+          },
         },
         auditLog: {
           create: async ({ data }: any) => {
@@ -846,14 +916,26 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           },
         },
         attachmentOrphanCleanup: {
+          findFirst: async ({ where }: any) => {
+            return (
+              orphansTable.find((r) => {
+                if (where.id && r.id !== where.id) return false;
+                if (where.merchant_id && r.merchant_id !== where.merchant_id) return false;
+                if (where.attachment_id && r.attachment_id !== where.attachment_id) return false;
+                if (where.storage_key && r.storage_key !== where.storage_key) return false;
+                if (where.status && r.status !== where.status) return false;
+                return true;
+              }) || null
+            );
+          },
           create: async ({ data }: any) => {
             const row = {
               id: `orphan-${Date.now()}-${orphansTable.length}`,
               status: 'PENDING',
               attempts: 0,
-              ...data,
               created_at: new Date(),
               updated_at: new Date(),
+              ...data,
             };
             orphansTable.push(row);
             return row;
@@ -880,7 +962,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           update: async ({ where, data }: any) => {
             const idx = orphansTable.findIndex((r) => r.id === where.id);
             if (idx === -1) throw new Error('Not found');
-            orphansTable[idx] = { ...orphansTable[idx], ...data, updated_at: new Date() };
+            orphansTable[idx] = { ...orphansTable[idx], ...data, updated_at: data.updated_at || new Date() };
             return orphansTable[idx];
           },
           updateMany: async ({ where, data }: any) => {
@@ -890,7 +972,9 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
               if (where.id && r.id !== where.id) continue;
               if (where.merchant_id && r.merchant_id !== where.merchant_id) continue;
               if (where.status && r.status !== where.status) continue;
-              orphansTable[i] = { ...r, ...data, updated_at: new Date() };
+              if (where.updated_at && r.updated_at.getTime() !== where.updated_at.getTime())
+                continue;
+              orphansTable[i] = { ...r, ...data, updated_at: data.updated_at || new Date() };
               count++;
             }
             return { count };
@@ -926,9 +1010,26 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
       const mockRbac: any = {
         getActorPermissions: async (actor: ActorContext) => {
-          if (actor.userId === 'u-scoped-admin') {
+          if (
+            actor.userId === 'u-scoped-admin' ||
+            actor.userId === 'u-empty-admin' ||
+            actor.role === 'ADMIN'
+          ) {
             // Scoped administrator: tenant config rights, restricted warehouse scope
-            return ['iam:shop_config'];
+            return [
+              'iam:shop_config',
+              'order:view_create',
+              'shipment:receive_return',
+              'claim:verify_submit',
+              'reconciliation:import_settlement_bank',
+              'reconciliation:run_review_audit',
+            ];
+          }
+          if (actor.userId === 'u-restricted-branch') {
+            return ['claim:verify_submit', 'order:view_create'];
+          }
+          if (actor.userId === 'u-unauth-wh' || actor.userId === 'u-unauth-br') {
+            return ['reconciliation:import_settlement_bank', 'order:view_create'];
           }
           if (actor.role === 'OWNER') {
             return [
@@ -953,6 +1054,8 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
           return perms.every((p: string) => held.includes(p));
         },
       };
+
+      (mockPrisma as any).orphansTable = orphansTable;
 
       const config = createMockAppConfig();
       const service = new AttachmentsService(mockPrisma, mockStorage, config, mockRbac);
@@ -2667,7 +2770,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
         },
       });
 
-      await mockStorage.putObject(unscopedAtt.storage_key, Buffer.from('unscoped-content'), 'application/pdf');
+      await mockStorage.putObject(
+        unscopedAtt.storage_key,
+        Buffer.from('unscoped-content'),
+        'application/pdf'
+      );
 
       const actorsToTest = [
         { name: 'all warehouses, one branch', actor: mixedWildcardActor },
@@ -2728,7 +2835,11 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
             );
           },
           (err: any) => {
-            assert.strictEqual(err.code, 'SCOPE_FORBIDDEN', `${name} should be denied unscoped upload`);
+            assert.strictEqual(
+              err.code,
+              'SCOPE_FORBIDDEN',
+              `${name} should be denied unscoped upload`
+            );
             assert.strictEqual(err.getStatus(), 403);
             return true;
           }
@@ -2842,7 +2953,9 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       assert.strictEqual(att.storage_key.includes(sensitiveFileName), false);
 
       // Check upload audit log
-      const uploadAudit = auditLogs.find((a) => a.action === AttachmentAuditEvent.ATTACHMENT_UPLOADED);
+      const uploadAudit = auditLogs.find(
+        (a) => a.action === AttachmentAuditEvent.ATTACHMENT_UPLOADED
+      );
       assert.ok(uploadAudit);
       assert.strictEqual(uploadAudit.entity_id, att.id); // Opaque UUID
       assert.strictEqual(uploadAudit.reason.includes(sensitiveFileName), false);
@@ -2864,18 +2977,21 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       assert.strictEqual(JSON.stringify(dlAudit.new_value).includes(att.storage_key), false);
 
       // 3. Quarantine with free-text reason containing email and phone
-      const sensitiveReason = 'Detected virus from attacker@evil.org, contact +84912345678 immediately!';
+      const sensitiveReason =
+        'Detected virus from attacker@evil.org, contact +84912345678 immediately!';
       await service.quarantineAttachment(ownerActor, att.id, sensitiveReason, 'corr-aud-q');
-      const qAudit = auditLogs.find((a) => a.action === AttachmentAuditEvent.ATTACHMENT_QUARANTINED);
+      const qAudit = auditLogs.find(
+        (a) => a.action === AttachmentAuditEvent.ATTACHMENT_QUARANTINED
+      );
       assert.ok(qAudit);
       assert.strictEqual(qAudit.entity_id, att.id);
       assert.strictEqual(qAudit.reason.includes(sensitiveFileName), false);
-      // Redaction in new_value: email and phone must be redacted
+      // Redaction in new_value: arbitrary free-text reason omitted; allowlisted reason_code persisted
       const qNewValue = qAudit.new_value;
-      assert.strictEqual(qNewValue.reason.includes('attacker@evil.org'), false);
-      assert.ok(qNewValue.reason.includes('[REDACTED_EMAIL]'));
-      assert.strictEqual(qNewValue.reason.includes('+84912345678'), false);
-      assert.ok(qNewValue.reason.includes('[REDACTED_PHONE]'));
+      assert.strictEqual(qNewValue.reason, undefined);
+      assert.strictEqual(qNewValue.reason_code, 'MANUAL_SECURITY_REVIEW');
+      assert.strictEqual(JSON.stringify(qAudit).includes('attacker@evil.org'), false);
+      assert.strictEqual(JSON.stringify(qAudit).includes('+84912345678'), false);
 
       // 4. Delete attachment
       await service.deleteAttachment(ownerActor, att.id, true, '127.0.0.1', 'corr-aud-del');
@@ -2938,8 +3054,7 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
 
       // Purge audit log persisted with masked metadata
       const purgeAudit = auditLogs.find(
-        (a: any) =>
-          a.action === AttachmentAuditEvent.ATTACHMENT_PURGED && a.entity_id === qAtt.id
+        (a: any) => a.action === AttachmentAuditEvent.ATTACHMENT_PURGED && a.entity_id === qAtt.id
       );
       assert.ok(purgeAudit);
       assert.strictEqual(purgeAudit.old_value?.status, 'QUARANTINED');
@@ -3002,6 +3117,647 @@ describe('FEAT-COM-06: Attachments Unit Test Suite', () => {
       assert.strictEqual(s3Storage.has(qKey), false);
       const rowDeleted = await mockPrisma.attachment.findFirst({ where: { id: qAtt.id } });
       assert.strictEqual(rowDeleted?.status, 'DELETED');
+    });
+
+    // ========================================================================
+    // Review Round 2 (Finding 10): Scoped administrators cannot bypass restrictions by ID
+    // ========================================================================
+    it('Review Round 2 (Finding 10): scoped administrator is denied access to attachments outside warehouse/branch scope by ID', async () => {
+      const { service, mockPrisma, mockStorage } = setupService();
+
+      // Administrator has iam:shop_config but is scoped to wh-hcm-01 only
+      const scopedAdminActor: ActorContext = {
+        merchantId: 'm-tenant-1',
+        userId: 'u-scoped-admin',
+        role: 'ADMIN',
+        warehouseScopes: ['wh-hcm-01'],
+        storeScopes: ['*'],
+      };
+
+      const whBAttId = randomUUID();
+      const whBAtt = await mockPrisma.attachment.create({
+        data: {
+          id: whBAttId,
+          merchant_id: 'm-tenant-1',
+          file_name: 'wh_b_doc.png',
+          file_size: BigInt(200),
+          mime_type: 'image/png',
+          checksum_sha256: 'hash-wh-b',
+          storage_key: `merchants/m-tenant-1/attachments/${whBAttId}/wh_b_doc.png`,
+          storage_bucket: 'test-bucket',
+          entity_type: 'GENERAL',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-danang-02', // Different warehouse!
+          branch_id: null,
+          metadata: { scan_status: 'CLEAN', scan_clearance: true },
+        },
+      });
+      await mockStorage.putObject(whBAtt.storage_key, Buffer.from('wh-b-data'), 'image/png');
+
+      const scopes = await service.getActorScopes(scopedAdminActor);
+      assert.strictEqual(service.checkAttachmentScope(whBAtt, scopes), false);
+
+      // 1. GET by ID -> denied with 403 SCOPE_FORBIDDEN
+      await assert.rejects(
+        async () => {
+          await service.getAttachment(scopedAdminActor, whBAttId, 'corr-admin-get');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+
+      // 2. DOWNLOAD by ID -> denied with 403 SCOPE_FORBIDDEN
+      await assert.rejects(
+        async () => {
+          await service.downloadAttachment(scopedAdminActor, whBAttId, '127.0.0.1', 'corr-admin-dl');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+
+      // 3. DELETE by ID -> denied with 403 SCOPE_FORBIDDEN
+      await assert.rejects(
+        async () => {
+          await service.deleteAttachment(scopedAdminActor, whBAttId, true, '127.0.0.1', 'corr-admin-del');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+    });
+
+    it('Review Round 2 (Finding 10): empty scopes deny all access across all endpoints even with iam:shop_config', async () => {
+      const { service, mockPrisma, mockStorage } = setupService();
+
+      const emptyAdminActor: ActorContext = {
+        merchantId: 'm-tenant-1',
+        userId: 'u-empty-admin',
+        role: 'ADMIN',
+        warehouseScopes: [],
+        storeScopes: [],
+      };
+
+      const attId = randomUUID();
+      const att = await mockPrisma.attachment.create({
+        data: {
+          id: attId,
+          merchant_id: 'm-tenant-1',
+          file_name: 'test.png',
+          file_size: BigInt(200),
+          mime_type: 'image/png',
+          checksum_sha256: 'hash-test',
+          storage_key: `merchants/m-tenant-1/attachments/${attId}/test.png`,
+          storage_bucket: 'test-bucket',
+          entity_type: 'GENERAL',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-1',
+          metadata: { scan_status: 'CLEAN', scan_clearance: true },
+        },
+      });
+      await mockStorage.putObject(att.storage_key, Buffer.from('data'), 'image/png');
+
+      // GET -> denied
+      await assert.rejects(
+        async () => {
+          await service.getAttachment(emptyAdminActor, attId, 'corr-empty-get');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          return true;
+        }
+      );
+
+      // DOWNLOAD -> denied
+      await assert.rejects(
+        async () => {
+          await service.downloadAttachment(emptyAdminActor, attId, '127.0.0.1', 'corr-empty-dl');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          return true;
+        }
+      );
+
+      // DELETE -> denied
+      await assert.rejects(
+        async () => {
+          await service.deleteAttachment(emptyAdminActor, attId, true, '127.0.0.1', 'corr-empty-del');
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          return true;
+        }
+      );
+
+      // LIST -> returns empty
+      const listRes = await service.listAttachments(emptyAdminActor, {}, 'corr-empty-list');
+      assert.strictEqual(listRes.data.length, 0);
+      assert.strictEqual(listRes.meta.total, 0);
+    });
+
+    // ========================================================================
+    // Review Round 2 (Finding 9): Parent branch & warehouse scope derivation and validation
+    // ========================================================================
+    it('Review Round 2 (Finding 9): CLAIM derives branch_id; rejects conflicting branch and unauthorized branch', async () => {
+      const { service, mockPrisma } = setupService();
+
+      const claimId = randomUUID();
+      await mockPrisma.claim.create({
+        data: {
+          id: claimId,
+          merchant_id: 'm-tenant-1',
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm-01',
+          shipment_id: randomUUID(),
+          claim_type: 'LOST',
+          deadline_at: new Date(Date.now() + 86400000),
+        },
+      });
+
+      // 1. Conflicting branch throws 400 VALIDATION_ERROR
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            ownerActor,
+            {
+              file_name: 'claim_proof.png',
+              mime_type: 'image/png',
+              content_base64: validPngBuffer.toString('base64'),
+              entity_type: 'CLAIM',
+              entity_id: claimId,
+              branch_id: 'branch-danang',
+            },
+            validPngBuffer,
+            '127.0.0.1',
+            'corr-claim-mismatch'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), 400);
+          const errMsg = (err.getResponse?.() as any)?.error?.message || '';
+          assert.ok(errMsg.includes('Chi nhánh không khớp'));
+          return true;
+        }
+      );
+
+      // 2. Actor lacking branch scope throws 403 SCOPE_FORBIDDEN
+      const restrictedBranchActor: ActorContext = {
+        merchantId: 'm-tenant-1',
+        userId: 'u-restricted-branch',
+        role: 'WAREHOUSE',
+        warehouseScopes: ['*'],
+        storeScopes: ['branch-other'], // Does not have branch-hcm-01
+      };
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            restrictedBranchActor,
+            {
+              file_name: 'claim_proof.png',
+              mime_type: 'image/png',
+              content_base64: validPngBuffer.toString('base64'),
+              entity_type: 'CLAIM',
+              entity_id: claimId,
+            },
+            validPngBuffer,
+            '127.0.0.1',
+            'corr-claim-forbidden'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+
+      // 3. Successful upload derives both warehouse_id and branch_id
+      const uploadRes = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'claim_proof.png',
+          mime_type: 'image/png',
+          content_base64: validPngBuffer.toString('base64'),
+          entity_type: 'CLAIM',
+          entity_id: claimId,
+        },
+        validPngBuffer,
+        '127.0.0.1',
+        'corr-claim-ok'
+      );
+      assert.strictEqual(uploadRes.warehouse_id, 'wh-hcm-01');
+      assert.strictEqual(uploadRes.branch_id, 'branch-hcm-01');
+    });
+
+    it('Review Round 2 (Finding 9): DISCREPANCY derives branch_id; rejects conflicting and unauthorized branch', async () => {
+      const { service, mockPrisma } = setupService();
+
+      const discId = randomUUID();
+      await mockPrisma.discrepancy.create({
+        data: {
+          id: discId,
+          merchant_id: 'm-tenant-1',
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm-01',
+          shipment_id: randomUUID(),
+          tracking_code: 'TRK-DISC-01',
+          type: 'COD_MISMATCH',
+        },
+      });
+
+      // Conflicting branch
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            ownerActor,
+            {
+              file_name: 'disc_proof.png',
+              mime_type: 'image/png',
+              content_base64: validPngBuffer.toString('base64'),
+              entity_type: 'DISCREPANCY',
+              entity_id: discId,
+              branch_id: 'branch-danang',
+            },
+            validPngBuffer,
+            '127.0.0.1',
+            'corr-disc-bad'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), 400);
+          const errMsg = (err.getResponse?.() as any)?.error?.message || '';
+          assert.ok(errMsg.includes('Chi nhánh không khớp'));
+          return true;
+        }
+      );
+    });
+
+    it('Review Round 2 (Finding 9): STATEMENT derives both warehouse and branch; validates caller scopes', async () => {
+      const { service, mockPrisma } = setupService();
+
+      const stmtId = randomUUID();
+      await mockPrisma.carrierStatement.create({
+        data: {
+          id: stmtId,
+          merchant_id: 'm-tenant-1',
+          carrier_account_id: randomUUID(),
+          period_start: new Date('2026-01-01'),
+          period_end: new Date('2026-01-31'),
+          checksum: 'sha-stmt-1',
+          file_storage_key: 'statements/1.xlsx',
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-hcm-01',
+        },
+      });
+
+      // 1. Conflicting warehouse throws 400 VALIDATION_ERROR
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            ownerActor,
+            {
+              file_name: 'stmt_doc.png',
+              mime_type: 'image/png',
+              content_base64: validPngBuffer.toString('base64'),
+              entity_type: 'STATEMENT',
+              entity_id: stmtId,
+              warehouse_id: 'wh-danang',
+            },
+            validPngBuffer,
+            '127.0.0.1',
+            'corr-stmt-wh-bad'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), 400);
+          const errMsg = (err.getResponse?.() as any)?.error?.message || '';
+          assert.ok(errMsg.includes('Kho không khớp'));
+          return true;
+        }
+      );
+
+      // 2. Conflicting branch throws 400 VALIDATION_ERROR
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            ownerActor,
+            {
+              file_name: 'stmt_doc.png',
+              mime_type: 'image/png',
+              content_base64: validPngBuffer.toString('base64'),
+              entity_type: 'STATEMENT',
+              entity_id: stmtId,
+              branch_id: 'branch-danang',
+            },
+            validPngBuffer,
+            '127.0.0.1',
+            'corr-stmt-br-bad'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'VALIDATION_ERROR');
+          assert.strictEqual(err.getStatus(), 400);
+          const errMsg = (err.getResponse?.() as any)?.error?.message || '';
+          assert.ok(errMsg.includes('Chi nhánh không khớp'));
+          return true;
+        }
+      );
+
+      // 3. Unauthorized warehouse actor throws 403 SCOPE_FORBIDDEN
+      const unauthWhActor: ActorContext = {
+        merchantId: 'm-tenant-1',
+        userId: 'u-unauth-wh',
+        role: 'WAREHOUSE',
+        warehouseScopes: ['wh-other'],
+        storeScopes: ['*'],
+      };
+      await assert.rejects(
+        async () => {
+          await service.uploadAttachment(
+            unauthWhActor,
+            {
+              file_name: 'stmt_doc.png',
+              mime_type: 'image/png',
+              content_base64: validPngBuffer.toString('base64'),
+              entity_type: 'STATEMENT',
+              entity_id: stmtId,
+            },
+            validPngBuffer,
+            '127.0.0.1',
+            'corr-stmt-wh-forbidden'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'SCOPE_FORBIDDEN');
+          assert.strictEqual(err.getStatus(), 403);
+          return true;
+        }
+      );
+
+      // 4. Successful upload derives both
+      const stmtUpload = await service.uploadAttachment(
+        ownerActor,
+        {
+          file_name: 'stmt_doc.png',
+          mime_type: 'image/png',
+          content_base64: validPngBuffer.toString('base64'),
+          entity_type: 'STATEMENT',
+          entity_id: stmtId,
+        },
+        validPngBuffer,
+        '127.0.0.1',
+        'corr-stmt-derived'
+      );
+      assert.strictEqual(stmtUpload.warehouse_id, 'wh-hcm-01');
+      assert.strictEqual(stmtUpload.branch_id, 'branch-hcm-01');
+    });
+
+    // ========================================================================
+    // Review Round 2 (Finding 2): Cleanup ownership fencing — claim first, upload commit second, deletion third
+    // ========================================================================
+    it('Review Round 2 (Finding 2): claim first, upload commit second, deletion third fences uploader', async () => {
+      const { service, mockPrisma, mockStorage, s3Storage } = setupService();
+
+      // Step 1: An in-flight upload started, S3 object written, and orphan intent created
+      const intentId = randomUUID();
+      const storageKey = `merchants/m-tenant-1/attachments/${intentId}/stale_upload.png`;
+      await mockStorage.putObject(storageKey, validPngBuffer, 'image/png');
+      const staleDate = new Date(Date.now() - 1000 * 1000); // Exceeded grace period
+
+      const orphanIntent = await mockPrisma.attachmentOrphanCleanup.create({
+        data: {
+          id: intentId,
+          merchant_id: 'm-tenant-1',
+          storage_key: storageKey,
+          status: 'PENDING',
+          attempts: 0,
+          reason: 'upload_in_flight',
+          created_at: staleDate,
+          updated_at: staleDate,
+        },
+      });
+
+      // Step 2 (CLAIM FIRST): Reconciler runs and atomically claims the stale PENDING intent
+      const claim = await mockPrisma.attachmentOrphanCleanup.updateMany({
+        where: {
+          id: orphanIntent.id,
+          merchant_id: 'm-tenant-1',
+          status: 'PENDING',
+        },
+        data: { status: 'RECONCILING', attempts: 1 },
+      });
+      assert.strictEqual(claim.count, 1, 'Reconciler must successfully claim the stale upload');
+
+      // Step 3 (UPLOAD COMMIT SECOND): The slow uploader tries to finalize inside its transaction
+      // The conditional updateMany({ where: { status: 'PENDING' }, data: { status: 'DONE' } }) fails
+      await assert.rejects(
+        async () => {
+          await mockPrisma.$transaction(async (tx: any) => {
+            const finalized = await tx.attachmentOrphanCleanup.updateMany({
+              where: { id: orphanIntent.id, status: 'PENDING' },
+              data: { status: 'DONE' },
+            });
+            if (finalized.count === 0) {
+              throw new CanonicalApiException(
+                HttpStatus.CONFLICT,
+                'UPLOAD_EXPIRED',
+                'Upload session expired and was claimed for cleanup. Please retry upload.'
+              );
+            }
+            // Attachment creation would happen here, but transaction aborts
+            await tx.attachment.create({
+              data: {
+                id: intentId,
+                merchant_id: 'm-tenant-1',
+                file_name: 'stale_upload.png',
+                file_size: BigInt(validPngBuffer.length),
+                mime_type: 'image/png',
+                checksum_sha256: 'xyz',
+                storage_key: storageKey,
+                storage_bucket: 'test-bucket',
+                entity_type: 'GENERAL',
+                status: 'ACTIVE',
+                retention_days: 90,
+                expires_at: new Date(Date.now() + 86400000),
+              },
+            });
+          });
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, 'UPLOAD_EXPIRED');
+          assert.strictEqual(err.getStatus(), 409);
+          return true;
+        }
+      );
+
+      // Verify no ACTIVE attachment row was committed
+      const attRow = await mockPrisma.attachment.findFirst({ where: { id: intentId } });
+      assert.strictEqual(attRow, null, 'Uploader transaction must have rolled back completely');
+
+      // Step 4 (DELETION THIRD): Reconciler completes storage deletion and sets cleanup to DONE
+      await mockStorage.deleteObject(storageKey);
+      await mockPrisma.attachmentOrphanCleanup.updateMany({
+        where: { id: orphanIntent.id, status: 'RECONCILING' },
+        data: { status: 'DONE' },
+      });
+
+      assert.strictEqual(s3Storage.has(storageKey), false, 'S3 object must be deleted by reconciler');
+      const finalIntent = await mockPrisma.attachmentOrphanCleanup.findFirst({ where: { id: intentId } });
+      assert.strictEqual(finalIntent?.status, 'DONE');
+    });
+
+    // ========================================================================
+    // Review Round 2 (Finding 8): Crashed reconciler recovery and restart coverage
+    // ========================================================================
+    it('Review Round 2 (Finding 8): crashed reconciler permanently stranded cleanup is recovered on restart', async () => {
+      const { service, mockPrisma, mockStorage, s3Storage, auditLogs } = setupService();
+
+      const crashedIntentId = randomUUID();
+      const storageKey = `merchants/m-tenant-1/attachments/${crashedIntentId}/crashed_reconcile.png`;
+      await mockStorage.putObject(storageKey, validPngBuffer, 'image/png');
+      const expiredDate = new Date(Date.now() - 1000 * 1000); // 1000s ago (> 900s grace period)
+
+      // Simulate a crashed reconciler: status is durably RECONCILING, but process died
+      await mockPrisma.attachmentOrphanCleanup.create({
+        data: {
+          id: crashedIntentId,
+          merchant_id: 'm-tenant-1',
+          storage_key: storageKey,
+          status: 'RECONCILING',
+          attempts: 1,
+          reason: 'upload_in_flight',
+          created_at: expiredDate,
+          updated_at: expiredDate,
+        },
+      });
+
+      // An active RECONCILING claim from another live reconciler (within grace period)
+      const activeIntentId = randomUUID();
+      const activeKey = `merchants/m-tenant-1/attachments/${activeIntentId}/active_reconcile.png`;
+      await mockStorage.putObject(activeKey, validPngBuffer, 'image/png');
+      await mockPrisma.attachmentOrphanCleanup.create({
+        data: {
+          id: activeIntentId,
+          merchant_id: 'm-tenant-1',
+          storage_key: activeKey,
+          status: 'RECONCILING',
+          attempts: 1,
+          reason: 'upload_in_flight',
+          created_at: new Date(),
+          updated_at: new Date(), // Fresh!
+        },
+      });
+
+      // Reconciler restarts and runs
+      const outcome = await service.reconcilePendingDeletions(ownerActor, 'corr-restart');
+      assert.strictEqual(outcome.orphan_reconciled, 1, 'Must recover exactly the 1 expired crashed claim');
+
+      // The crashed record is now DONE, and its S3 object is removed
+      const recoveredRecord = await mockPrisma.attachmentOrphanCleanup.findFirst({ where: { id: crashedIntentId } });
+      assert.strictEqual(recoveredRecord?.status, 'DONE');
+      assert.strictEqual(s3Storage.has(storageKey), false, 'Orphan S3 object must be deleted');
+
+      // Audit log was created
+      const orphanAudit = auditLogs.find((a) => a.action === AttachmentAuditEvent.ATTACHMENT_ORPHAN_CLEANED && a.entity_id === crashedIntentId);
+      assert.ok(orphanAudit);
+
+      // The active fresh RECONCILING record was untouched
+      const activeRecord = await mockPrisma.attachmentOrphanCleanup.findFirst({ where: { id: activeIntentId } });
+      assert.strictEqual(activeRecord?.status, 'RECONCILING', 'Active lease within grace period must NOT be stolen');
+      assert.strictEqual(s3Storage.has(activeKey), true, 'Active lease object must not be deleted');
+    });
+
+    // ========================================================================
+    // Review Round 2 (Finding 5): Zero plaintext secrets in quarantine audit text
+    // ========================================================================
+    it('Review Round 2 (Finding 5): quarantine audit metadata omits arbitrary text and preserves zero plaintext secrets', async () => {
+      const { service, mockPrisma, auditLogs } = setupService();
+
+      const attId = randomUUID();
+      await mockPrisma.attachment.create({
+        data: {
+          id: attId,
+          merchant_id: 'm-tenant-1',
+          file_name: 'suspicious.png',
+          file_size: BigInt(300),
+          mime_type: 'image/png',
+          checksum_sha256: 'sha-suspicious',
+          storage_key: `merchants/m-tenant-1/attachments/${attId}/suspicious.png`,
+          storage_bucket: 'test-bucket',
+          entity_type: 'GENERAL',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-1',
+          metadata: { scan_status: 'HEURISTIC_PASSED' },
+        },
+      });
+
+      // Quarantine with reason containing raw passwords, API keys, and JWT tokens
+      const hostileReason =
+        'Security alert: password=MySecretPassword123! token=ghp_abcdef1234567890 api_key=sk-live-9876543210 credential=super_secret';
+      await service.quarantineAttachment(ownerActor, attId, hostileReason, 'corr-hostile-q');
+
+      const qAudit = auditLogs.find(
+        (a) => a.action === AttachmentAuditEvent.ATTACHMENT_QUARANTINED && a.entity_id === attId
+      );
+      assert.ok(qAudit);
+
+      const auditStr = JSON.stringify(qAudit);
+      assert.strictEqual(auditStr.includes('MySecretPassword123!'), false, 'Password must not appear in audit log');
+      assert.strictEqual(auditStr.includes('ghp_abcdef1234567890'), false, 'Token must not appear in audit log');
+      assert.strictEqual(auditStr.includes('sk-live-9876543210'), false, 'API key must not appear in audit log');
+      assert.strictEqual(auditStr.includes('super_secret'), false, 'Credential must not appear in audit log');
+
+      // The new_value contains only allowlisted reason_code, no arbitrary reason property
+      const newVal = qAudit.new_value;
+      assert.strictEqual(newVal.status, 'QUARANTINED');
+      assert.strictEqual(newVal.reason, undefined);
+      assert.strictEqual(newVal.reason_code, 'MANUAL_SECURITY_REVIEW');
+
+      // When caller supplies an allowlisted reason code, it is preserved as reason_code
+      const attId2 = randomUUID();
+      await mockPrisma.attachment.create({
+        data: {
+          id: attId2,
+          merchant_id: 'm-tenant-1',
+          file_name: 'malware.png',
+          file_size: BigInt(300),
+          mime_type: 'image/png',
+          checksum_sha256: 'sha-malware',
+          storage_key: `merchants/m-tenant-1/attachments/${attId2}/malware.png`,
+          storage_bucket: 'test-bucket',
+          entity_type: 'GENERAL',
+          status: 'ACTIVE',
+          retention_days: 90,
+          expires_at: new Date(Date.now() + 86400000),
+          warehouse_id: 'wh-hcm-01',
+          branch_id: 'branch-1',
+        },
+      });
+      await service.quarantineAttachment(ownerActor, attId2, 'MALWARE_SUSPECTED', 'corr-malware-q');
+      const qAudit2 = auditLogs.find(
+        (a) => a.action === AttachmentAuditEvent.ATTACHMENT_QUARANTINED && a.entity_id === attId2
+      );
+      assert.ok(qAudit2);
+      assert.strictEqual(qAudit2.new_value.reason_code, 'MALWARE_SUSPECTED');
     });
   });
 });

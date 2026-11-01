@@ -277,10 +277,18 @@ async function runAttachmentsSupertestSuite() {
       [whId1],
       ['*']
     );
-    const emptyUserA = await setupUserSession(
+    const emptyUserA = await setupUserSession(merchantIdA, RoleEnum.WAREHOUSE, 'empty-a', [], []);
+    const scopedAdminUserA = await setupUserSession(
       merchantIdA,
-      RoleEnum.WAREHOUSE,
-      'empty-a',
+      RoleEnum.OWNER,
+      'scoped-admin-a',
+      [whId1],
+      ['*']
+    );
+    const emptyAdminUserA = await setupUserSession(
+      merchantIdA,
+      RoleEnum.OWNER,
+      'empty-admin-a',
       [],
       []
     );
@@ -603,6 +611,66 @@ async function runAttachmentsSupertestSuite() {
       });
     assert.strictEqual(emptyUploadRes.status, 403);
     assert.strictEqual(emptyUploadRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    // ========================================================================
+    // Review Round 2 (Finding 10): Scoped administrator cannot bypass warehouse/branch by ID
+    // ========================================================================
+    console.log('🧪 Testing Review Round 2 (Finding 10): Scoped & empty-scope admin access by ID...');
+
+    // 1. Scoped admin (holds iam:shop_config, scoped to whId1) cannot access whId2 attachment by ID
+    const scopedAdminGetRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${danangAttId}`)
+      .set('Authorization', `Bearer ${scopedAdminUserA.token}`);
+    assert.strictEqual(scopedAdminGetRes.status, 403);
+    assert.strictEqual(scopedAdminGetRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const scopedAdminDlRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${danangAttId}/download`)
+      .set('Authorization', `Bearer ${scopedAdminUserA.token}`);
+    assert.strictEqual(scopedAdminDlRes.status, 403);
+    assert.strictEqual(scopedAdminDlRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const scopedAdminDelRes = await request(app.getHttpServer())
+      .delete(`/api/v1/attachments/${danangAttId}`)
+      .set('Authorization', `Bearer ${scopedAdminUserA.token}`)
+      .send({ confirm: true });
+    assert.strictEqual(scopedAdminDelRes.status, 403);
+    assert.strictEqual(scopedAdminDelRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const scopedAdminListRes = await request(app.getHttpServer())
+      .get('/api/v1/attachments')
+      .set('Authorization', `Bearer ${scopedAdminUserA.token}`);
+    assert.strictEqual(scopedAdminListRes.status, 200);
+    assert.strictEqual(
+      scopedAdminListRes.body.data.some((a: any) => a.id === danangAttId),
+      false
+    );
+
+    // 2. Empty-scope admin (holds iam:shop_config, scopes []) denied across all actions
+    const emptyAdminListRes = await request(app.getHttpServer())
+      .get('/api/v1/attachments')
+      .set('Authorization', `Bearer ${emptyAdminUserA.token}`);
+    assert.strictEqual(emptyAdminListRes.status, 200);
+    assert.strictEqual(emptyAdminListRes.body.data.length, 0);
+
+    const emptyAdminGetRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${danangAttId}`)
+      .set('Authorization', `Bearer ${emptyAdminUserA.token}`);
+    assert.strictEqual(emptyAdminGetRes.status, 403);
+    assert.strictEqual(emptyAdminGetRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const emptyAdminDlRes = await request(app.getHttpServer())
+      .get(`/api/v1/attachments/${danangAttId}/download`)
+      .set('Authorization', `Bearer ${emptyAdminUserA.token}`);
+    assert.strictEqual(emptyAdminDlRes.status, 403);
+    assert.strictEqual(emptyAdminDlRes.body.error.code, 'SCOPE_FORBIDDEN');
+
+    const emptyAdminDelRes = await request(app.getHttpServer())
+      .delete(`/api/v1/attachments/${danangAttId}`)
+      .set('Authorization', `Bearer ${emptyAdminUserA.token}`)
+      .send({ confirm: true });
+    assert.strictEqual(emptyAdminDelRes.status, 403);
+    assert.strictEqual(emptyAdminDelRes.body.error.code, 'SCOPE_FORBIDDEN');
 
     // ========================================================================
     // Review P1 (Finding 5): Audit log sensitive data inspection

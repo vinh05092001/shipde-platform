@@ -971,6 +971,13 @@ export const SENSITIVE_ATTACHMENT_AUDIT_FIELDS = new Set([
   'storage_key',
   'file_path',
   'filepath',
+  'password',
+  'passphrase',
+  'secret',
+  'token',
+  'api_key',
+  'credential',
+  'auth',
 ]);
 
 export function maskAttachmentAuditValue(field: string, val: unknown): unknown {
@@ -983,6 +990,11 @@ export function maskAttachmentAuditValue(field: string, val: unknown): unknown {
       lowerField.includes('email') ||
       lowerField.includes('secret') ||
       lowerField.includes('token') ||
+      lowerField.includes('password') ||
+      lowerField.includes('passphrase') ||
+      lowerField.includes('credential') ||
+      lowerField.includes('api_key') ||
+      lowerField.includes('auth') ||
       lowerField.includes('filename') ||
       lowerField.includes('file_name') ||
       lowerField.includes('storage_key'))
@@ -1018,13 +1030,40 @@ export function maskAttachmentAuditObject(obj: Record<string, unknown>): Record<
 
 const AUDIT_EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const AUDIT_PHONE_CANDIDATE_RE = /\+?[\d\s().-]{8,16}/g;
+const AUDIT_SECRET_RE =
+  /(?:password|passwd|secret|token|api[_-]?key|bearer|credential|auth)[\s:=]+[^\s,;&]+/gi;
+
+/**
+ * Allowlisted quarantine reason codes. User-controlled free text is omitted from
+ * audit records to guarantee zero plaintext secrets leakage (Finding 5).
+ */
+export const ALLOWED_QUARANTINE_REASON_CODES = [
+  'MALWARE_SUSPECTED',
+  'MANUAL_SECURITY_REVIEW',
+  'SUSPICIOUS_CONTENT',
+  'POLICY_VIOLATION',
+  'UNRECOGNIZED_FORMAT',
+] as const;
+
+export type QuarantineReasonCode = (typeof ALLOWED_QUARANTINE_REASON_CODES)[number];
+
+export function sanitizeQuarantineReasonCode(reason?: unknown): QuarantineReasonCode {
+  if (typeof reason !== 'string') {
+    return 'MANUAL_SECURITY_REVIEW';
+  }
+  const normalized = reason.trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if ((ALLOWED_QUARANTINE_REASON_CODES as readonly string[]).includes(normalized)) {
+    return normalized as QuarantineReasonCode;
+  }
+  return 'MANUAL_SECURITY_REVIEW';
+}
 
 /**
  * Constrains user-controlled free text before it is persisted in an audit
- * record: redacts email addresses and phone-like sequences (digit runs of at
- * least 8 digits), strips control characters and bounds the length. Audit
- * records must never carry raw user-supplied PII or unbounded text
- * (BR-COM06, zero-plaintext-PII rule).
+ * record: redacts email addresses, phone-like sequences, and secret-bearing
+ * token patterns; strips control characters and bounds the length. Audit
+ * records must never carry raw user-supplied PII or secrets
+ * (BR-COM06, zero-plaintext-PII / zero-plaintext-secrets rule).
  */
 export function constrainAuditFreeText(text: unknown, maxLength = 500): string {
   if (typeof text !== 'string') return '';
@@ -1032,7 +1071,8 @@ export function constrainAuditFreeText(text: unknown, maxLength = 500): string {
     .replace(AUDIT_EMAIL_RE, '[REDACTED_EMAIL]')
     .replace(AUDIT_PHONE_CANDIDATE_RE, (match) =>
       match.replace(/\D/g, '').length >= 8 ? '[REDACTED_PHONE]' : match
-    );
+    )
+    .replace(AUDIT_SECRET_RE, '[REDACTED_SECRET]');
   out = out.replace(/[^\x20-\x7E\u00A0-\uFFFF]/g, '');
   if (out.length > maxLength) {
     out = `${out.slice(0, maxLength - 1)}…`;

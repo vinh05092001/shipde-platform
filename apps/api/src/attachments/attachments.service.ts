@@ -18,6 +18,7 @@ import {
   getFileExtension,
   maskAttachmentAuditObject,
   constrainAuditFreeText,
+  sanitizeQuarantineReasonCode,
 } from './attachments.dto';
 import {
   FormattedAttachment,
@@ -131,12 +132,6 @@ export class AttachmentsService {
     permissions: Set<string>;
   }): boolean {
     if (
-      scopes.permissions.has('iam:shop_config') ||
-      scopes.permissions.has('search:tenant_wide')
-    ) {
-      return true;
-    }
-    if (
       !Array.isArray(scopes.warehouseScopes) ||
       scopes.warehouseScopes.length === 0 ||
       !Array.isArray(scopes.storeScopes) ||
@@ -144,30 +139,28 @@ export class AttachmentsService {
     ) {
       return false;
     }
-    return (
-      scopes.warehouseScopes.includes('*') && scopes.storeScopes.includes('*')
-    );
+    if (scopes.permissions.has('iam:shop_config') || scopes.permissions.has('search:tenant_wide')) {
+      return true;
+    }
+    return scopes.warehouseScopes.includes('*') && scopes.storeScopes.includes('*');
   }
 
   /**
    * Evaluates if the actor is permitted to access an attachment per FEAT-RBAC-02.
    * Enforces server-side warehouse and branch scopes; rejects unscoped access for non-wildcard actors.
+   * Finding 10: Scoped administrators cannot bypass warehouse or branch restrictions by ID.
+   * Empty scopes deny all access.
    */
   public checkAttachmentScope(
     attachment: { warehouse_id?: string | null; branch_id?: string | null },
     scopes: { warehouseScopes: string[]; storeScopes: string[]; permissions: Set<string> }
   ): boolean {
+    // Empty scopes deny all access - fail closed
     if (
-      scopes.permissions.has('iam:shop_config') ||
-      scopes.permissions.has('search:tenant_wide')
-    ) {
-      return true;
-    }
-
-    // Empty scopes deny all access
-    if (
-      (!scopes.warehouseScopes || scopes.warehouseScopes.length === 0) &&
-      (!scopes.storeScopes || scopes.storeScopes.length === 0)
+      !Array.isArray(scopes.warehouseScopes) ||
+      scopes.warehouseScopes.length === 0 ||
+      !Array.isArray(scopes.storeScopes) ||
+      scopes.storeScopes.length === 0
     ) {
       return false;
     }
@@ -439,6 +432,16 @@ export class AttachmentsService {
           }
           resolvedWarehouseId = claim.warehouse_id;
         }
+        if (claim.branch_id) {
+          if (resolvedBranchId && resolvedBranchId !== claim.branch_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Chi nhánh không khớp với hồ sơ khiếu nại '${entityId}'.`
+            );
+          }
+          resolvedBranchId = claim.branch_id;
+        }
       } else if (entityType === 'DISCREPANCY') {
         const discrepancy = await this.prisma.discrepancy.findFirst({
           where: { id: entityId, merchant_id: actor.merchantId },
@@ -460,6 +463,16 @@ export class AttachmentsService {
           }
           resolvedWarehouseId = discrepancy.warehouse_id;
         }
+        if (discrepancy.branch_id) {
+          if (resolvedBranchId && resolvedBranchId !== discrepancy.branch_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Chi nhánh không khớp với hồ sơ sai lệch '${entityId}'.`
+            );
+          }
+          resolvedBranchId = discrepancy.branch_id;
+        }
       } else if (entityType === 'STATEMENT') {
         const statement = await this.prisma.carrierStatement.findFirst({
           where: { id: entityId, merchant_id: actor.merchantId },
@@ -470,6 +483,26 @@ export class AttachmentsService {
             'VALIDATION_ERROR',
             `Bảng kê '${entityId}' không tồn tại hoặc không thuộc tổ chức của bạn.`
           );
+        }
+        if (statement.warehouse_id) {
+          if (resolvedWarehouseId && resolvedWarehouseId !== statement.warehouse_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Kho không khớp với bảng kê '${entityId}'.`
+            );
+          }
+          resolvedWarehouseId = statement.warehouse_id;
+        }
+        if (statement.branch_id) {
+          if (resolvedBranchId && resolvedBranchId !== statement.branch_id) {
+            throw new CanonicalApiException(
+              HttpStatus.BAD_REQUEST,
+              'VALIDATION_ERROR',
+              `Chi nhánh không khớp với bảng kê '${entityId}'.`
+            );
+          }
+          resolvedBranchId = statement.branch_id;
         }
       }
     }
@@ -652,17 +685,30 @@ export class AttachmentsService {
           },
         });
 
-        // Transactionally finalize the orphan intent record: DONE means the
-        // object is now owned by the committed attachment row and the
-        // reconciler must never touch it.
-        await tx.attachmentOrphanCleanup.update({
-          where: { id: orphanIntent.id },
+        // Finding 2: Conditional ownership transition fencing the uploader.
+        // DONE means the object is now owned by the committed attachment row.
+        // If a reconciler claimed the stale intent (RECONCILING) after grace period
+        // expiry, this update matches 0 rows and aborts the transaction, preventing
+        // an ACTIVE attachment commit whose object is being deleted.
+        const finalized = await tx.attachmentOrphanCleanup.updateMany({
+          where: { id: orphanIntent.id, status: 'PENDING' },
           data: { status: 'DONE' },
         });
+        if (finalized.count === 0) {
+          throw new CanonicalApiException(
+            HttpStatus.CONFLICT,
+            'UPLOAD_EXPIRED',
+            'Phiên tải lên đã hết hạn và đang được thu hồi dọn dẹp. Vui lòng tải lại tệp tin.',
+            true
+          );
+        }
 
         return created;
       });
     } catch (dbErr: any) {
+      if (dbErr instanceof CanonicalApiException && dbErr.code === 'UPLOAD_EXPIRED') {
+        throw dbErr;
+      }
       // Compensation - remove the S3 object if the database transaction fails.
       // If immediate removal succeeds, mark orphan intent DONE (object known
       // absent). If immediate removal fails, mark it ORPHANED (ambiguous: the
@@ -742,12 +788,11 @@ export class AttachmentsService {
       }
     }
 
-    // Fail closed if actor has empty scopes and no wildcard/tenant-wide access
+    // Fail closed if actor has empty scopes - empty scopes must deny
     if (
-      !hasTenantWide &&
-      !hasWarehouseWildcard &&
-      !hasStoreWildcard &&
-      scopes.warehouseScopes.length === 0 &&
+      !Array.isArray(scopes.warehouseScopes) ||
+      scopes.warehouseScopes.length === 0 ||
+      !Array.isArray(scopes.storeScopes) ||
       scopes.storeScopes.length === 0
     ) {
       return {
@@ -815,10 +860,7 @@ export class AttachmentsService {
     // Finding 2: If entity_type wasn't explicitly queried, restrict to allowed entity types
     if (!query.entity_type && !scopes.permissions.has('iam:shop_config')) {
       andConditions.push({
-        OR: [
-          { entity_type: 'GENERAL' },
-          { entity_type: { in: allowedEntityTypes } },
-        ],
+        OR: [{ entity_type: 'GENERAL' }, { entity_type: { in: allowedEntityTypes } }],
       });
     }
 
@@ -1434,18 +1476,18 @@ export class AttachmentsService {
               merchant_id: actor.merchantId,
               user_id: actor.userId,
               actor: actor.userId,
-            action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
-            entity_type: 'ATTACHMENT',
-            entity_id: id,
-            // Opaque identifier only: no user-controlled filename.
-            new_value: this.maskAuditJson({
-              status: 'PENDING_DELETION',
-              correlation_id: correlationId,
-            }),
-            ip_address: this.hashIp(ipAddress),
-            reason: correlationId
-              ? `correlation_id:${correlationId}`
-              : `Bulk deleted attachment ${id}`,
+              action: AttachmentAuditEvent.ATTACHMENT_BULK_DELETE,
+              entity_type: 'ATTACHMENT',
+              entity_id: id,
+              // Opaque identifier only: no user-controlled filename.
+              new_value: this.maskAuditJson({
+                status: 'PENDING_DELETION',
+                correlation_id: correlationId,
+              }),
+              ip_address: this.hashIp(ipAddress),
+              reason: correlationId
+                ? `correlation_id:${correlationId}`
+                : `Bulk deleted attachment ${id}`,
             },
           });
         });
@@ -1569,9 +1611,9 @@ export class AttachmentsService {
       );
     }
 
-    // User-controlled quarantine reason must not reach audit records as raw
-    // free text: redact phone-like/email sequences and bound the length.
-    const constrainedReason = constrainAuditFreeText(reason);
+    // Finding 5: Allowlisted reason code only; arbitrary user text is omitted
+    // from audit records to guarantee zero plaintext secrets.
+    const reasonCode = sanitizeQuarantineReasonCode(reason);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // Finding 5: Atomic conditional transition from ACTIVE to prevent race with concurrent deletion
@@ -1605,10 +1647,11 @@ export class AttachmentsService {
           entity_type: 'ATTACHMENT',
           entity_id: id,
           old_value: this.maskAuditJson({ status: 'ACTIVE' }),
-          // Free-text reason is redacted and length-bounded before persistence.
+          // Finding 5: Allowlisted reason code only; arbitrary user text is omitted
+          // from audit records to guarantee zero plaintext secrets.
           new_value: this.maskAuditJson({
             status: 'QUARANTINED',
-            reason: constrainedReason,
+            reason_code: reasonCode,
             correlation_id: correlationId,
           }),
           ip_address: this.hashIp('127.0.0.1'),
@@ -1677,10 +1720,7 @@ export class AttachmentsService {
         }
       }
       andConditions.push({
-        OR: [
-          { entity_type: 'GENERAL' },
-          { entity_type: { in: allowedEntities } },
-        ],
+        OR: [{ entity_type: 'GENERAL' }, { entity_type: { in: allowedEntities } }],
       });
     }
 
@@ -1753,15 +1793,19 @@ export class AttachmentsService {
     // Every deletion is preceded by an atomic claim (conditional updateMany).
     // If the owning upload commits concurrently (PENDING -> DONE inside its
     // transaction), the claim returns count 0 and the object is left untouched.
-    const stalePendingCutoff = new Date(
+    const staleCutoff = new Date(
       Date.now() - this.config.ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS * 1000
     );
+    // Finding 8: Include stale RECONCILING records so a crashed reconciler does not
+    // permanently strand claimed cleanup. Discovery selects ORPHANED, stale PENDING,
+    // and expired RECONCILING claims.
     const orphanRecords = await this.prisma.attachmentOrphanCleanup.findMany({
       where: {
         merchant_id: actor.merchantId,
         OR: [
           { status: 'ORPHANED' },
-          { status: 'PENDING', updated_at: { lte: stalePendingCutoff } },
+          { status: 'PENDING', updated_at: { lte: staleCutoff } },
+          { status: 'RECONCILING', updated_at: { lte: staleCutoff } },
         ],
       },
       take: 50,
@@ -1772,19 +1816,23 @@ export class AttachmentsService {
     let orphanFailed = 0;
 
     for (const record of orphanRecords) {
-      const preStatus = record.status; // 'ORPHANED' or stale 'PENDING'
+      const preStatus = record.status; // 'ORPHANED', stale 'PENDING', or expired 'RECONCILING'
 
-      // Atomic claim: only proceed while the record is still in the claimed
-      // state. A concurrent upload commit (PENDING -> DONE) or a concurrent
-      // reconciler (-> RECONCILING) makes the claim fail; we then skip the
-      // object entirely instead of deleting it.
+      // Atomic claim with ownership fencing (Finding 8): condition on both preStatus
+      // AND exact updated_at. If another reconciler or the uploader mutated the row,
+      // updateMany returns 0 and skips this record without race conditions.
       const claim = await this.prisma.attachmentOrphanCleanup.updateMany({
         where: {
           id: record.id,
           merchant_id: actor.merchantId,
           status: preStatus,
+          updated_at: record.updated_at,
         },
-        data: { status: 'RECONCILING', attempts: record.attempts + 1 },
+        data: {
+          status: 'RECONCILING',
+          attempts: record.attempts + 1,
+          updated_at: new Date(),
+        },
       });
       if (claim.count === 0) {
         continue;
@@ -1818,8 +1866,8 @@ export class AttachmentsService {
         await this.storage.deleteObject(record.storage_key);
 
         // Finalize completion
-        await this.prisma.attachmentOrphanCleanup.update({
-          where: { id: record.id },
+        await this.prisma.attachmentOrphanCleanup.updateMany({
+          where: { id: record.id, status: 'RECONCILING' },
           data: { status: 'DONE' },
         });
 
@@ -1827,9 +1875,9 @@ export class AttachmentsService {
       } catch {
         // Release the claim so the next run can retry.
         await this.prisma.attachmentOrphanCleanup
-          .update({
+          .updateMany({
             where: { id: record.id, status: 'RECONCILING' },
-            data: { status: preStatus },
+            data: { status: preStatus === 'PENDING' ? 'ORPHANED' : preStatus },
           })
           .catch(() => {});
         orphanFailed++;
