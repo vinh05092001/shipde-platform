@@ -206,7 +206,14 @@ OpenAPI and centralized in `USERS_LIST_POLICY`. Query values never become arbitr
 
 ## Codex review record
 
-- Review SHA: d29f7ab2e3253e0da36055bb4093bd95364ea560
+- Review SHA: fafe492797c7f92abdd204a6b7c93df2e871b5e1
+- Verdict: CHANGES_REQUIRED (addressed in review fixes)
+- All P0 and P1 review findings addressed:
+  1. Recoverable failure handling for branches and warehouses (AC-COM-02-10): Handled database rejections in `BranchesService.listBranches` and `WarehousesService.listWarehouses` by catching unexpected rejections and translating them to canonical retryable `503 TEMPORARILY_UNAVAILABLE` errors without leaking database or Prisma details. Added unit and HTTP outage assertions across both endpoints.
+  2. OpenAPI synchronization and verification (AC-COM-02-11): Added `PaginationMeta` schema to `docs/product-spec/contracts/openapi.yaml` and synchronized `ListUsersResponse`, `ListBranchesResponse`, and `ListWarehousesResponse`. Documented query parameters (`page`, `limit`, `status`, `search`, `sort_by`, `sort_order`) for `/branches` and `/warehouses`, as well as `sort_by`/`sort_order` for `/users`. Re-generated `@shipde/contracts` openapi types with zero drift and added response-level schema compatibility tests.
+  3. Scope fail-closed and audit masking invariants: Non-owner actors with empty scopes receive empty success with zero database queries, mutations outside assigned scopes deny with 403 `FORBIDDEN` / `WAREHOUSE_SCOPE_UNAUTHORIZED`, and audit diffs unconditionally mask sensitive fields (`phone`, `email`, nested address json).
+
+- Previous review SHA: d29f7ab2e3253e0da36055bb4093bd95364ea560
 - Verdict: CHANGES_REQUIRED (addressed in Round 3 review fixes)
 - All P0 and P1 review findings addressed:
   1. Exact-SHA CI alignment: Resolved ESLint react-hooks warning and fixed JSX nesting and API test mock runner.

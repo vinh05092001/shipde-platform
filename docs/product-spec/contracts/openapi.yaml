@@ -739,6 +739,18 @@ paths:
           in: query
           schema:
             type: string
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [created_at, full_name, id]
+            default: created_at
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
       responses:
         '200':
           description: List of tenant users
@@ -746,9 +758,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListUsersResponse'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
         '403':
+          $ref: '#/components/responses/Error'
+        '503':
           $ref: '#/components/responses/Error'
   /users/{id}:
     get:
@@ -1462,12 +1478,46 @@ paths:
       security:
         - bearerAuth: []
       parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
         - name: status
           in: query
           required: false
           schema:
             type: string
             enum: [ACTIVE, INACTIVE]
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sort_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [created_at, name, code, id]
+            default: name
+        - name: sort_order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
       responses:
         '200':
           description: List of branches
@@ -1475,9 +1525,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListBranchesResponse'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/SessionInvalid'
         '403':
+          $ref: '#/components/responses/Error'
+        '503':
           $ref: '#/components/responses/Error'
     post:
       tags: [Organization]
@@ -1669,6 +1723,47 @@ paths:
       operationId: listWarehouses
       security:
         - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, inactive]
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sort_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [created_at, name, code, id]
+            default: created_at
+        - name: sort_order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
       responses:
         '200':
           description: List of authorized warehouses
@@ -1676,9 +1771,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ListWarehousesResponse'
+        '400':
+          $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/SessionInvalid'
         '403':
+          $ref: '#/components/responses/Error'
+        '503':
           $ref: '#/components/responses/Error'
     post:
       tags: [Warehouse]
@@ -2928,8 +3027,10 @@ components:
                 Server-derived capability flag. True only when the caller holds
                 iam:shop_config. The web UI must derive edit rights from this
                 field, never from hardcoded role names.
+            meta:
+              $ref: '#/components/schemas/PaginationMeta'
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: '#/components/schemas/PaginationMeta'
     DeleteBranchResponse:
       type: object
       required:
@@ -3280,15 +3381,7 @@ components:
           items:
             $ref: '#/components/schemas/Warehouse'
         meta:
-          type: object
-          required:
-            - correlation_id
-            - total
-          properties:
-            correlation_id:
-              type: string
-            total:
-              type: integer
+          $ref: '#/components/schemas/PaginationMeta'
     CarrierAccountInput:
       type: object
       required: [carrier_code, alias, permission_profile, credential]
@@ -3464,6 +3557,25 @@ components:
       properties:
         correlation_id:
           type: string
+    PaginationMeta:
+      type: object
+      required:
+        - correlation_id
+        - page
+        - limit
+        - total
+        - total_pages
+      properties:
+        correlation_id:
+          type: string
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer
     LivenessResponse:
       type: object
       required: [status, service, timestamp, correlationId]
@@ -4466,19 +4578,7 @@ components:
           items:
             $ref: '#/components/schemas/UserListItem'
         meta:
-          type: object
-          required: [total, page, limit, total_pages, correlation_id]
-          properties:
-            total:
-              type: integer
-            page:
-              type: integer
-            limit:
-              type: integer
-            total_pages:
-              type: integer
-            correlation_id:
-              type: string
+          $ref: '#/components/schemas/PaginationMeta'
     UserDetail:
       type: object
       required: [id, merchant_id, full_name, role, status, store_scopes, warehouse_scopes, carrier_account_scopes, created_at, updated_at]

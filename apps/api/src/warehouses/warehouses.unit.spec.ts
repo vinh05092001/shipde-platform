@@ -1231,5 +1231,28 @@ describe('FEAT-WH-01: Warehouses Unit Test Suite', () => {
       assert.strictEqual(mockPrisma.findManyCalls.length, 0);
       assert.strictEqual(mockPrisma.countCalls.length, 0);
     });
+
+    it('FEAT-COM-02-10: database rejection translates into canonical 503 TEMPORARILY_UNAVAILABLE', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.warehouse.findMany = async () => {
+        throw new Error('Database connection pool timeout / query error');
+      };
+      const service = new WarehousesService(mockPrisma as any);
+
+      await assert.rejects(
+        () => service.listWarehouses('m-tenant-1', ownerActor, true, 'corr-outage', {}),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), 503);
+          assert.strictEqual(err.code, 'TEMPORARILY_UNAVAILABLE');
+          assert.strictEqual(err.retryable, true);
+          assert.strictEqual(
+            (err.getResponse() as any).error.message,
+            'Danh sách kho hàng tạm thời không khả dụng'
+          );
+          return true;
+        }
+      );
+    });
   });
 });

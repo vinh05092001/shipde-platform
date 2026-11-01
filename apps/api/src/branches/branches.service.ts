@@ -183,83 +183,115 @@ export class BranchesService {
       BRANCHES_LIST_POLICY
     );
 
-    const scopedIdentifiers = await this.getActorStoreScopes(actor);
+    try {
+      const scopedIdentifiers = await this.getActorStoreScopes(actor);
 
-    const whereClause: any = {
-      merchant_id: merchantId,
-    };
+      const whereClause: any = {
+        merchant_id: merchantId,
+      };
 
-    if (filters.status) {
-      whereClause.status = filters.status;
-    }
-
-    if (filters.search && filters.search.trim().length > 0) {
-      const search = filters.search.trim();
-      whereClause.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { code: { contains: search, mode: 'insensitive' } },
-        { address: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    if (scopedIdentifiers !== null) {
-      const isUuid = (val: string) =>
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
-      const uuidScopes = scopedIdentifiers.filter(isUuid);
-      const codeScopes = scopedIdentifiers.filter((s) => !isUuid(s));
-
-      const orConditions: any[] = [];
-      if (uuidScopes.length > 0) {
-        orConditions.push({ id: { in: uuidScopes } });
-      }
-      if (codeScopes.length > 0) {
-        orConditions.push({ code: { in: codeScopes } });
+      if (filters.status) {
+        whereClause.status = filters.status;
       }
 
-      if (orConditions.length > 0) {
-        if (whereClause.OR) {
-          // Combine active search conditions with the scope restriction so
-          // filters and counts keep describing the same tenant-scoped set.
-          whereClause.AND = [{ OR: whereClause.OR }, { OR: orConditions }];
-          delete whereClause.OR;
-        } else {
-          whereClause.OR = orConditions;
+      if (filters.search && filters.search.trim().length > 0) {
+        const search = filters.search.trim();
+        whereClause.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { code: { contains: search, mode: 'insensitive' } },
+          { address: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      if (scopedIdentifiers !== null) {
+        if (scopedIdentifiers.length === 0) {
+          const canEdit = await this.canActorEditBranches(actor);
+          const meta = {
+            correlation_id: correlationId,
+            page,
+            limit,
+            total: 0,
+            total_pages: 1,
+          };
+          return {
+            success: true,
+            data: {
+              branches: [],
+              can_edit: canEdit,
+              meta,
+            },
+            meta,
+          };
         }
-      } else {
-        whereClause.id = '00000000-0000-0000-0000-000000000000';
+
+        const isUuid = (val: string) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+        const uuidScopes = scopedIdentifiers.filter(isUuid);
+        const codeScopes = scopedIdentifiers.filter((s) => !isUuid(s));
+
+        const orConditions: any[] = [];
+        if (uuidScopes.length > 0) {
+          orConditions.push({ id: { in: uuidScopes } });
+        }
+        if (codeScopes.length > 0) {
+          orConditions.push({ code: { in: codeScopes } });
+        }
+
+        if (orConditions.length > 0) {
+          if (whereClause.OR) {
+            // Combine active search conditions with the scope restriction so
+            // filters and counts keep describing the same tenant-scoped set.
+            whereClause.AND = [{ OR: whereClause.OR }, { OR: orConditions }];
+            delete whereClause.OR;
+          } else {
+            whereClause.OR = orConditions;
+          }
+        } else {
+          whereClause.id = '00000000-0000-0000-0000-000000000000';
+        }
       }
-    }
 
-    const [total, branches] = await Promise.all([
-      this.prisma.branch.count({ where: whereClause }),
-      this.prisma.branch.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        orderBy,
-      }),
-    ]);
+      const [total, branches] = await Promise.all([
+        this.prisma.branch.count({ where: whereClause }),
+        this.prisma.branch.findMany({
+          where: whereClause,
+          skip,
+          take: limit,
+          orderBy,
+        }),
+      ]);
 
-    const canEdit = await this.canActorEditBranches(actor);
+      const canEdit = await this.canActorEditBranches(actor);
 
-    const meta = {
-      correlation_id: correlationId,
-      page,
-      limit,
-      total,
-      total_pages: Math.ceil(total / limit) || 1,
-    };
+      const meta = {
+        correlation_id: correlationId,
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit) || 1,
+      };
 
-    return {
-      success: true,
-      data: {
-        branches: branches.map((b) => this.formatBranch(b)),
-        can_edit: canEdit,
+      return {
+        success: true,
+        data: {
+          branches: branches.map((b) => this.formatBranch(b)),
+          can_edit: canEdit,
+          meta,
+        },
         meta,
-      },
-      meta,
-    };
+      };
+    } catch (error) {
+      if (error instanceof CanonicalApiException) {
+        throw error;
+      }
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'TEMPORARILY_UNAVAILABLE',
+        'Danh sách chi nhánh tạm thời không khả dụng',
+        true
+      );
+    }
   }
 
   /**

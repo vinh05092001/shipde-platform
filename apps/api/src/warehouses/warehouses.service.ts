@@ -151,71 +151,83 @@ export class WarehousesService {
       WAREHOUSES_LIST_POLICY
     );
 
-    const scopes = await this.getActorWarehouseScopes(actor);
-    const hasUniversalAccess = scopes.includes('*');
+    try {
+      const scopes = await this.getActorWarehouseScopes(actor);
+      const hasUniversalAccess = scopes.includes('*');
 
-    let whereClause: any = {
-      merchant_id: merchantId,
-    };
+      let whereClause: any = {
+        merchant_id: merchantId,
+      };
 
-    if (filters.status) {
-      whereClause.status = filters.status;
-    }
-
-    if (filters.search && filters.search.trim().length > 0) {
-      const search = filters.search.trim();
-      whereClause.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { code: { contains: search, mode: 'insensitive' } },
-        { address_line: { contains: search, mode: 'insensitive' } },
-      ];
-    }
-
-    if (!hasUniversalAccess) {
-      if (scopes.length === 0) {
-        return {
-          success: true,
-          data: [],
-          meta: {
-            correlation_id: correlationId,
-            total: 0,
-            page,
-            limit,
-            total_pages: 1,
-          },
-        };
+      if (filters.status) {
+        whereClause.status = filters.status;
       }
-      const scopeConditions = [{ id: { in: scopes } }, { code: { in: scopes } }];
-      if (whereClause.OR) {
-        whereClause.AND = [{ OR: whereClause.OR }, { OR: scopeConditions }];
-        delete whereClause.OR;
-      } else {
-        whereClause.OR = scopeConditions;
+
+      if (filters.search && filters.search.trim().length > 0) {
+        const search = filters.search.trim();
+        whereClause.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { code: { contains: search, mode: 'insensitive' } },
+          { address_line: { contains: search, mode: 'insensitive' } },
+        ];
       }
+
+      if (!hasUniversalAccess) {
+        if (scopes.length === 0) {
+          return {
+            success: true,
+            data: [],
+            meta: {
+              correlation_id: correlationId,
+              total: 0,
+              page,
+              limit,
+              total_pages: 1,
+            },
+          };
+        }
+        const scopeConditions = [{ id: { in: scopes } }, { code: { in: scopes } }];
+        if (whereClause.OR) {
+          whereClause.AND = [{ OR: whereClause.OR }, { OR: scopeConditions }];
+          delete whereClause.OR;
+        } else {
+          whereClause.OR = scopeConditions;
+        }
+      }
+
+      const [total, warehouses] = await Promise.all([
+        this.prisma.warehouse.count({ where: whereClause }),
+        this.prisma.warehouse.findMany({
+          where: whereClause,
+          skip,
+          take: limit,
+          orderBy,
+        }),
+      ]);
+
+      const formatted = warehouses.map((w) => this.formatWarehouse(w));
+      return {
+        success: true,
+        data: formatted,
+        meta: {
+          correlation_id: correlationId,
+          total,
+          page,
+          limit,
+          total_pages: Math.ceil(total / limit) || 1,
+        },
+      };
+    } catch (error) {
+      if (error instanceof CanonicalApiException) {
+        throw error;
+      }
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'TEMPORARILY_UNAVAILABLE',
+        'Danh sách kho hàng tạm thời không khả dụng',
+        true
+      );
     }
-
-    const [total, warehouses] = await Promise.all([
-      this.prisma.warehouse.count({ where: whereClause }),
-      this.prisma.warehouse.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        orderBy,
-      }),
-    ]);
-
-    const formatted = warehouses.map((w) => this.formatWarehouse(w));
-    return {
-      success: true,
-      data: formatted,
-      meta: {
-        correlation_id: correlationId,
-        total,
-        page,
-        limit,
-        total_pages: Math.ceil(total / limit) || 1,
-      },
-    };
   }
 
   /**

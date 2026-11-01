@@ -24,6 +24,8 @@ export interface ListMetadata {
   correlation_id: string;
 }
 
+export type PaginationMeta = ListMetadata;
+
 export interface ListResponse<T> {
   data: T[];
   meta: ListMetadata;

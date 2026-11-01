@@ -453,7 +453,10 @@ export class UsersService {
           correlation_id: correlationId,
         },
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof CanonicalApiException) {
+        throw error;
+      }
       throw new CanonicalApiException(
         HttpStatus.SERVICE_UNAVAILABLE,
         'TEMPORARILY_UNAVAILABLE',

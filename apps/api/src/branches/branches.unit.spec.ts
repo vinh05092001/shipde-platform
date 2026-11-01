@@ -122,6 +122,12 @@ function createMockPrismaService() {
       role: 'OPS_CSKH',
       store_scopes: ['HCM-TB', 'HCM-NEW-SCOPED'],
     },
+    {
+      id: 'u-scoped-empty',
+      merchant_id: 'm-tenant-1',
+      role: 'OPS_CSKH',
+      store_scopes: [],
+    },
   ];
 
   const auditLogs: any[] = [];
@@ -1569,6 +1575,49 @@ describe('FEAT-ORG-02: Branches Unit Test Suite', () => {
         'tied names must be ordered by the id tie-breaker, not insertion order'
       );
       assert.deepStrictEqual(mockPrisma.findManyCalls[0].orderBy, [{ name: 'asc' }, { id: 'asc' }]);
+    });
+
+    it('FEAT-COM-02-08/09: empty-scope actor gets empty success without any database read', async () => {
+      const mockPrisma = createMockPrismaService();
+      seedExtraTenantBranches(mockPrisma, 10);
+      const service = new BranchesService(mockPrisma as any);
+      const emptyActor: ActorContext = {
+        userId: 'u-scoped-empty',
+        merchantId: 'm-tenant-1',
+        role: 'OPS_CSKH',
+      };
+
+      const res = await service.listBranches('m-tenant-1', emptyActor, {}, 'corr-s-empty');
+
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(res.data.branches.length, 0);
+      assert.strictEqual(res.meta.total, 0);
+      assert.strictEqual(res.meta.total_pages, 1);
+      assert.strictEqual(mockPrisma.findManyCalls.length, 0);
+      assert.strictEqual(mockPrisma.countCalls.length, 0);
+    });
+
+    it('FEAT-COM-02-10: database rejection translates into canonical 503 TEMPORARILY_UNAVAILABLE', async () => {
+      const mockPrisma = createMockPrismaService();
+      mockPrisma.branch.findMany = async () => {
+        throw new Error('Database connection pool timeout / query error');
+      };
+      const service = new BranchesService(mockPrisma as any);
+
+      await assert.rejects(
+        () => service.listBranches('m-tenant-1', ownerActor, {}, 'corr-outage'),
+        (err: any) => {
+          assert.ok(err instanceof CanonicalApiException);
+          assert.strictEqual(err.getStatus(), 503);
+          assert.strictEqual(err.code, 'TEMPORARILY_UNAVAILABLE');
+          assert.strictEqual(err.retryable, true);
+          assert.strictEqual(
+            (err.getResponse() as any).error.message,
+            'Danh sách chi nhánh tạm thời không khả dụng'
+          );
+          return true;
+        }
+      );
     });
   });
 });
