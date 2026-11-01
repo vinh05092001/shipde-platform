@@ -186,6 +186,12 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     RBAC_SEED_RETRY_INTERVAL_MS: 1000,
     RBAC_SEED_MAX_ATTEMPTS: 10,
     RBAC_SEED_BACKOFF_FACTOR: 1.5,
+    MAX_IMPORT_FILE_SIZE_BYTES: 10 * 1024 * 1024,
+    ALLOWED_IMPORT_MIME_TYPES: [
+      'text/csv',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ],
+    MALWARE_SCANNER_ENABLED: false,
     ...overrides,
   };
 }
