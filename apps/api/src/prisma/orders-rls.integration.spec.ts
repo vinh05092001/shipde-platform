@@ -515,6 +515,65 @@ async function main(): Promise<void> {
     console.log(
       'PASS: foreign batch transaction without tenant context keeps documented fail-open behavior'
     );
+
+    // 17. Finding 1 regression: nested composition where an extended interactive transaction
+    //     callback encloses an inner foreign batch transaction under tenant context:
+    //     runWithTenant(A, () => extended.$transaction(async () => probe.$transaction([extended.order.findMany()])))
+    //     Even though the outer transaction executed tenant setup, the inner foreign batch runs on
+    //     a distinct unconfigured connection. Because setup proof is bound to the actual transaction
+    //     identity, the inner batch must be rejected with TenantRlsUnconfiguredTransactionError
+    //     instead of admitting the foreign batch to return other tenants' orders under the restricted role.
+    await assert.rejects(
+      runWithTenant(merchantA, async () => {
+        await extended.$transaction(async () => {
+          await probe.$transaction([
+            extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } }),
+          ]);
+        });
+      }),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof TenantRlsUnconfiguredTransactionError,
+          `nested foreign batch transaction inside extended transaction must fail closed, got: ${
+            error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+          }`
+        );
+        assert.match(
+          error.message,
+          /Order\.findMany/,
+          'nested foreign batch rejection must name the denied operation'
+        );
+        return true;
+      },
+      'nested foreign batch transaction inside outer extended transaction must fail closed under tenant context'
+    );
+    console.log(
+      'PASS: nested foreign batch transaction inside extended transaction fails closed (setup proof bound to tx identity)'
+    );
+
+    // 17b. The same nested composition with an extended RAW query must fail closed too.
+    await assert.rejects(
+      runWithTenant(merchantA, async () => {
+        await extended.$transaction(async () => {
+          await probe.$transaction([
+            extended.$queryRaw<Array<{ id: string }>>`
+              SELECT id FROM orders WHERE id IN (${orderA.id}::uuid, ${orderB.id}::uuid)
+            `,
+          ]);
+        });
+      }),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof TenantRlsUnconfiguredTransactionError,
+          'nested foreign batch transaction with raw query must fail closed'
+        );
+        return true;
+      },
+      'nested foreign batch transaction with raw query inside extended transaction must fail closed'
+    );
+    console.log(
+      'PASS: nested foreign batch transaction with raw query inside extended transaction fails closed'
+    );
   } finally {
     await admin.order
       .deleteMany({

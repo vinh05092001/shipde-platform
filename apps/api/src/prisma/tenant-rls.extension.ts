@@ -21,6 +21,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { getTenantId, TENANT_SETTING } from './tenant-context';
 
+const ITX_ID_SYMBOL = Symbol.for('prisma.client.transaction.id');
+
 /**
  * Thrown when a query under an active tenant context is submitted inside a
  * transaction whose tenant setup this extension cannot prove.
@@ -87,14 +89,14 @@ export class TenantRlsUnconfiguredTransactionError extends Error {
 export function tenantRlsExtension(base: PrismaClient) {
   const baseTransaction = base.$transaction.bind(base) as (...inner: unknown[]) => Promise<unknown>;
 
-  // Marks the async scopes in which this extension instance has established
-  // (or is establishing, in the very same transaction) the transaction-local
-  // `app.tenant_id` setting. Presence of the mark — never Prisma's
-  // `__internalParams.transaction` metadata alone — is the proof that a
-  // surrounding transaction is tenant-configured. The storage is created per
+  // Tracks the set of transaction IDs in which this extension instance has
+  // established (or is establishing, in the very same transaction) the
+  // transaction-local `app.tenant_id` setting. Setup proof is bound to the
+  // actual transaction identity — never an ambient flag or Prisma's
+  // `__internalParams.transaction` metadata alone. The storage is created per
   // extension instance: a mark owned by an extension built on a different
   // base client is not evidence for this one.
-  const establishedTxStorage = new AsyncLocalStorage<object>();
+  const establishedTxStorage = new AsyncLocalStorage<Set<string | number>>();
 
   return Prisma.defineExtension({
     name: 'tenant-rls',
@@ -105,12 +107,19 @@ export function tenantRlsExtension(base: PrismaClient) {
         if (!tenantId) {
           return baseTransaction(...args);
         }
+
+        const currentStore = establishedTxStorage.getStore();
+        const activeTxIds = new Set<string | number>(currentStore);
+
         if (!Array.isArray(first)) {
           return baseTransaction(async (tx: Prisma.TransactionClient) => {
+            const itxId = (tx as any)[ITX_ID_SYMBOL];
+            if (itxId !== undefined) {
+              activeTxIds.add(itxId);
+            }
             await tx.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
-            // Mark only after set_config succeeded: anything observing the
-            // mark knows the setting is live for this transaction.
-            return establishedTxStorage.run({}, () =>
+            // Register and bind to this transaction identity only after set_config succeeded.
+            return establishedTxStorage.run(activeTxIds, () =>
               (first as (txClient: Prisma.TransactionClient) => Promise<unknown>)(tx)
             );
           }, options);
@@ -119,11 +128,20 @@ export function tenantRlsExtension(base: PrismaClient) {
         // Array form: preserve ONE single transaction for the whole batch.
         // Establish the tenant setting first so all batch operations run
         // with RLS active and roll back atomically if any operation rejects.
+        const setConfigPromise = base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
+        const origRequestTx = (setConfigPromise as any).requestTransaction;
+        (setConfigPromise as any).requestTransaction = function (txParams: any) {
+          if (txParams?.id !== undefined) {
+            activeTxIds.add(txParams.id);
+          }
+          return origRequestTx ? origRequestTx.call(this, txParams) : setConfigPromise;
+        };
+
         const batch = [
-          base.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`,
+          setConfigPromise,
           ...(first as unknown[]),
         ];
-        const results = (await establishedTxStorage.run({}, async () =>
+        const results = (await establishedTxStorage.run(activeTxIds, async () =>
           (baseTransaction as any)(batch, options)
         )) as unknown[];
         return results.slice(1);
@@ -158,7 +176,9 @@ export function tenantRlsExtension(base: PrismaClient) {
           ])) as [number, unknown];
           return result;
         }
-        if (establishedTxStorage.getStore() !== undefined) {
+        const activeTxIds = establishedTxStorage.getStore();
+        const txId = __internalParams?.transaction?.id;
+        if (activeTxIds !== undefined && txId !== undefined && activeTxIds.has(txId)) {
           // This extension established the surrounding transaction and its
           // set_config statement is live on the transaction's connection;
           // no extra wrapper is needed.
@@ -166,7 +186,8 @@ export function tenantRlsExtension(base: PrismaClient) {
         }
         // The query carries transaction metadata, but the surrounding
         // transaction was opened by an unextended client (or another
-        // extension instance) and never established app.tenant_id. Running
+        // extension instance, or an inner foreign transaction) and never
+        // established app.tenant_id for this transaction id. Running
         // it would fall under the pilot fail-open clause and could read or
         // write across tenants: fail closed.
         throw new TenantRlsUnconfiguredTransactionError(
