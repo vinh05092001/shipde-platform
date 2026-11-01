@@ -47,7 +47,11 @@ function readTables(buf: Buffer): Map<string, TableEntry> {
   return tables;
 }
 
-function parseCmapFormat4(buf: Buffer, tableOffset: number, subOffset: number): Map<number, number> {
+function parseCmapFormat4(
+  buf: Buffer,
+  tableOffset: number,
+  subOffset: number
+): Map<number, number> {
   const base = tableOffset + subOffset;
   // The field is segCountX2 (twice the actual segment count).
   const segCountX2 = buf.readUInt16BE(base + 6);
@@ -72,7 +76,8 @@ function parseCmapFormat4(buf: Buffer, tableOffset: number, subOffset: number): 
       if (idRangeOffsetRaw === 0) {
         gid = (code + idDelta) & 0xffff;
       } else {
-        const glyphIndexOffset = idRangeOffsetBase + i * 2 + idRangeOffsetRaw + (code - startCode) * 2;
+        const glyphIndexOffset =
+          idRangeOffsetBase + i * 2 + idRangeOffsetRaw + (code - startCode) * 2;
         const glyphIndex = buf.readUInt16BE(glyphIndexOffset);
         gid = glyphIndex === 0 ? 0 : (glyphIndex + idDelta) & 0xffff;
       }
@@ -82,7 +87,11 @@ function parseCmapFormat4(buf: Buffer, tableOffset: number, subOffset: number): 
   return map;
 }
 
-function parseCmapFormat12(buf: Buffer, tableOffset: number, subOffset: number): Map<number, number> {
+function parseCmapFormat12(
+  buf: Buffer,
+  tableOffset: number,
+  subOffset: number
+): Map<number, number> {
   const base = tableOffset + subOffset;
   const numGroups = buf.readUInt32BE(base + 12);
   const map = new Map<number, number>();
@@ -111,7 +120,12 @@ function parseCmap(buf: Buffer): Map<number, number> {
 
   // Prefer: (platform 3, encoding 10) format 12 full Unicode,
   // then (platform 3, encoding 4) format 4 BMP, then (platform 0, any).
-  const candidates: Array<{ platform: number; encoding: number; offset: number; priority: number }> = [];
+  const candidates: Array<{
+    platform: number;
+    encoding: number;
+    offset: number;
+    priority: number;
+  }> = [];
   let pos = cmap.offset + 4;
   for (let i = 0; i < numSubtables; i++) {
     const platform = buf.readUInt16BE(pos);
@@ -192,5 +206,17 @@ export function parseTtf(buf: Buffer): TtfFont {
     }
   }
 
-  return { unicodeToGid, gidToUnicode, unitsPerEm, xMin, yMin, xMax, yMax, ascender, descender, numGlyphs, advanceWidths };
+  return {
+    unicodeToGid,
+    gidToUnicode,
+    unitsPerEm,
+    xMin,
+    yMin,
+    xMax,
+    yMax,
+    ascender,
+    descender,
+    numGlyphs,
+    advanceWidths,
+  };
 }

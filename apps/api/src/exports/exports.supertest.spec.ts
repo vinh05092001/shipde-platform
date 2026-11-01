@@ -19,6 +19,9 @@ import {
   ExportAuditEvent,
 } from '@shipde/contracts';
 import { ExportsService } from './exports.service';
+import { readXlsx } from './generators/xlsx.generator';
+
+export { redactDatabaseUrl } from './exports.util';
 
 async function runExportsSupertestSuite() {
   console.log('================================================================');
@@ -63,17 +66,6 @@ async function runExportsSupertestSuite() {
   if (!process.env.CI && databaseUrl.includes('localhost:5433')) {
     databaseUrl = databaseUrl.replace('localhost:5433', '127.0.0.1:5433');
     process.env.DATABASE_URL = databaseUrl;
-  }
-
-  function redactDatabaseUrl(rawUrl: string): string {
-    try {
-      const parsed = new URL(rawUrl);
-      if (parsed.username) parsed.username = '***';
-      if (parsed.password) parsed.password = '***';
-      return parsed.toString();
-    } catch {
-      return rawUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://***:***@');
-    }
   }
 
   const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -124,9 +116,7 @@ async function runExportsSupertestSuite() {
       carrierAccountScopes?: string[];
     }): Promise<string> => {
       const canonicalRole =
-        params.role && params.role in RoleEnum
-          ? (params.role as RoleEnum)
-          : RoleEnum.ACCOUNTANT;
+        params.role && params.role in RoleEnum ? (params.role as RoleEnum) : RoleEnum.ACCOUNTANT;
 
       const { token } = signAccessToken(
         {
@@ -140,12 +130,14 @@ async function runExportsSupertestSuite() {
         86400
       );
 
+      const userPhone = params.phone || `09${Math.floor(10000000 + Math.random() * 90000000)}`;
+
       await prisma.user.create({
         data: {
           id: params.userId,
           merchant_id: params.merchantId,
           email: params.email,
-          phone: params.phone,
+          phone: userPhone,
           full_name: params.fullName,
           password_hash: 'mock_password_hash',
           role: canonicalRole,
@@ -693,10 +685,7 @@ async function runExportsSupertestSuite() {
       .get(`/api/v1/exports/${historicalJobId}/download`)
       .set('Authorization', `Bearer ${userMgrToken}`);
     assert.strictEqual(histNoUnmaskRes.status, 403);
-    assert.strictEqual(
-      histNoUnmaskRes.body.error?.code || histNoUnmaskRes.body.code,
-      'FORBIDDEN'
-    );
+    assert.strictEqual(histNoUnmaskRes.body.error?.code || histNoUnmaskRes.body.code, 'FORBIDDEN');
 
     const histWithUnmaskRes = await request(httpServer)
       .get(`/api/v1/exports/${historicalJobId}/download`)
@@ -810,7 +799,91 @@ async function runExportsSupertestSuite() {
       'SCOPE_FORBIDDEN'
     );
 
-    // Finding 3 test: Privileged user creates export with filter containing email -> audit metadata ALWAYS masked
+    // Finding 2 negative HTTP test: Actor with empty carrier_account_scopes is denied ledger export
+    console.log(
+      'Testing: Finding 2 - Actor with empty carrier_account_scopes is denied ledger export (negative HTTP test)'
+    );
+    const emptyCarrierToken = await setupTestUserSession({
+      userId: randomUUID(),
+      sessionId: randomUUID(),
+      merchantId: merchantIdA,
+      email: `empty_carrier_${randomUUID().slice(0, 8)}_${testSuffix}@alpha.test`,
+      phone: `097${Math.floor(1000000 + Math.random() * 9000000)}`,
+      fullName: 'Empty Carrier Scopes Auditor',
+      role: RoleEnum.STAFF,
+      customRoleId: ledgerScopedRoleId,
+      carrierAccountScopes: [],
+    });
+    const emptyCarrierRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${emptyCarrierToken}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(emptyCarrierRes.status, 403);
+    assert.strictEqual(
+      emptyCarrierRes.body.error?.code || emptyCarrierRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    // Finding 2 negative HTTP test: Actor with empty warehouse_scopes is denied ledger export
+    console.log(
+      'Testing: Finding 2 - Actor with empty warehouse_scopes is denied ledger export (negative HTTP test)'
+    );
+    const emptyWhLedgerToken = await setupTestUserSession({
+      userId: randomUUID(),
+      sessionId: randomUUID(),
+      merchantId: merchantIdA,
+      email: `empty_wh_ld_${randomUUID().slice(0, 8)}_${testSuffix}@alpha.test`,
+      phone: `096${Math.floor(1000000 + Math.random() * 9000000)}`,
+      fullName: 'Empty Warehouse Scopes Auditor',
+      role: RoleEnum.STAFF,
+      customRoleId: ledgerScopedRoleId,
+      warehouseScopes: [],
+    });
+    const emptyWhLedgerRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${emptyWhLedgerToken}`)
+      .send({
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(emptyWhLedgerRes.status, 403);
+    assert.strictEqual(
+      emptyWhLedgerRes.body.error?.code || emptyWhLedgerRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    // Finding 2 negative HTTP test: Actor with empty warehouse_scopes is denied warehouse export
+    console.log(
+      'Testing: Finding 2 - Actor with empty warehouse_scopes is denied warehouse export (negative HTTP test)'
+    );
+    const emptyWhOperatorToken = await setupTestUserSession({
+      userId: randomUUID(),
+      sessionId: randomUUID(),
+      merchantId: merchantIdA,
+      email: `empty_wh_op_${randomUUID().slice(0, 8)}_${testSuffix}@alpha.test`,
+      phone: `095${Math.floor(1000000 + Math.random() * 9000000)}`,
+      fullName: 'Empty Warehouse Operator',
+      role: RoleEnum.STAFF,
+      customRoleId: scopedRoleId,
+      warehouseScopes: [],
+    });
+    const emptyWhOpRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${emptyWhOperatorToken}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        sync: true,
+      });
+    assert.strictEqual(emptyWhOpRes.status, 403);
+    assert.strictEqual(emptyWhOpRes.body.error?.code || emptyWhOpRes.body.code, 'SCOPE_FORBIDDEN');
+
+    // Finding 3 test: Privileged user creates export with filter containing email & phone -> audit metadata ALWAYS masked
     console.log('Testing: Finding 3 - Audit log metadata always masks PII in filters');
     const auditMaskTestRes = await request(httpServer)
       .post('/api/v1/exports')
@@ -818,7 +891,9 @@ async function runExportsSupertestSuite() {
       .send({
         resource: ExportResource.WAREHOUSES,
         format: ExportFormat.CSV,
-        filters: { city: 'secret_owner@shopde.vn' },
+        filters: {
+          city: 'secret_owner@shopde.vn',
+        },
         sync: true,
       });
     assert.strictEqual(auditMaskTestRes.status, 201);
@@ -831,10 +906,16 @@ async function runExportsSupertestSuite() {
     });
     assert.ok(reqAudit);
     const reqNewVal = reqAudit.new_value as any;
+    const reqFiltersJson = JSON.stringify(reqNewVal.filters);
     assert.strictEqual(
-      JSON.stringify(reqNewVal.filters).includes('secret_owner@shopde.vn'),
+      reqFiltersJson.includes('secret_owner@shopde.vn'),
       false,
       'Audit log EXPORT_REQUESTED must NOT contain plaintext email'
+    );
+    assert.strictEqual(
+      reqFiltersJson.includes('s****r@shopde.vn'),
+      true,
+      'Audit log EXPORT_REQUESTED must contain masked email'
     );
 
     // Download audit log check
@@ -851,10 +932,75 @@ async function runExportsSupertestSuite() {
     });
     assert.ok(dlAudit);
     const dlNewVal = dlAudit.new_value as any;
+    const dlFiltersJson = JSON.stringify(dlNewVal.filters);
     assert.strictEqual(
-      JSON.stringify(dlNewVal.filters).includes('secret_owner@shopde.vn'),
+      dlFiltersJson.includes('secret_owner@shopde.vn'),
       false,
       'Audit log EXPORT_DOWNLOADED must NOT contain plaintext email'
+    );
+    assert.strictEqual(
+      dlFiltersJson.includes('s****r@shopde.vn'),
+      true,
+      'Audit log EXPORT_DOWNLOADED must contain masked email'
+    );
+
+    // Finding 3 negative HTTP test: Privileged user creates export with filter containing phone -> audit metadata ALWAYS masked
+    const auditMaskPhoneRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        filters: {
+          city: '0912345678',
+        },
+        sync: true,
+      });
+    assert.strictEqual(auditMaskPhoneRes.status, 201);
+    const reqPhoneAudit = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: ExportAuditEvent.EXPORT_REQUESTED,
+        entity_id: auditMaskPhoneRes.body.data.id,
+      },
+    });
+    assert.ok(reqPhoneAudit);
+    const reqPhoneVal = reqPhoneAudit.new_value as any;
+    const reqPhoneJson = JSON.stringify(reqPhoneVal.filters);
+    assert.strictEqual(
+      reqPhoneJson.includes('0912345678'),
+      false,
+      'Audit log EXPORT_REQUESTED must NOT contain plaintext phone'
+    );
+    assert.strictEqual(
+      reqPhoneJson.includes('091****678'),
+      true,
+      'Audit log EXPORT_REQUESTED must contain masked phone'
+    );
+
+    await request(httpServer)
+      .get(`/api/v1/exports/${auditMaskPhoneRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${tokenA}`);
+
+    const dlPhoneAudit = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: ExportAuditEvent.EXPORT_DOWNLOADED,
+        entity_id: auditMaskPhoneRes.body.data.id,
+      },
+    });
+    assert.ok(dlPhoneAudit);
+    const dlPhoneVal = dlPhoneAudit.new_value as any;
+    const dlPhoneJson = JSON.stringify(dlPhoneVal.filters);
+    assert.strictEqual(
+      dlPhoneJson.includes('0912345678'),
+      false,
+      'Audit log EXPORT_DOWNLOADED must NOT contain plaintext phone'
+    );
+    assert.strictEqual(
+      dlPhoneJson.includes('091****678'),
+      true,
+      'Audit log EXPORT_DOWNLOADED must contain masked phone'
     );
 
     // Test 15: Finding 9 - Ledger calculations using tenant-separated persisted fixtures
@@ -1076,10 +1222,32 @@ async function runExportsSupertestSuite() {
       .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
       .set('Authorization', `Bearer ${ledgerScopedToken}`);
     assert.strictEqual(unfiltDlRes.status, 403);
+    assert.strictEqual(unfiltDlRes.body.error?.code || unfiltDlRes.body.code, 'SCOPE_FORBIDDEN');
+
+    // Finding 2 negative HTTP download tests: Users with empty scopes cannot download ledger export
+    const emptyScopesDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${emptyScopesToken}`);
+    assert.strictEqual(emptyScopesDlRes.status, 403);
     assert.strictEqual(
-      unfiltDlRes.body.error?.code || unfiltDlRes.body.code,
+      emptyScopesDlRes.body.error?.code || emptyScopesDlRes.body.code,
       'SCOPE_FORBIDDEN'
     );
+
+    const emptyCarrierDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${emptyCarrierToken}`);
+    assert.strictEqual(emptyCarrierDlRes.status, 403);
+    assert.strictEqual(
+      emptyCarrierDlRes.body.error?.code || emptyCarrierDlRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    const emptyWhDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${emptyWhLedgerToken}`);
+    assert.strictEqual(emptyWhDlRes.status, 403);
+    assert.strictEqual(emptyWhDlRes.body.error?.code || emptyWhDlRes.body.code, 'SCOPE_FORBIDDEN');
 
     // Finding 1 positive HTTP test: Owner creates ledger export explicitly filtered to branch-allowed-1
     console.log(
@@ -1153,6 +1321,62 @@ async function runExportsSupertestSuite() {
       fRow1.includes(',0,') || fRow1.includes('"0"'),
       true,
       'VTP recovered amount must be 0'
+    );
+
+    // Finding 2 negative HTTP download test: Actor with empty warehouse scopes cannot download warehouse export
+    const emptyWhOpDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${auditMaskTestRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${emptyWhOperatorToken}`);
+    assert.strictEqual(emptyWhOpDlRes.status, 403);
+    assert.strictEqual(
+      emptyWhOpDlRes.body.error?.code || emptyWhOpDlRes.body.code,
+      'SCOPE_FORBIDDEN'
+    );
+
+    // Finding 10: XLSX generation returns valid OOXML ZIP package verified by XLSX reader
+    console.log('Testing: Finding 10 - XLSX generation returns conformant OOXML ZIP workbook');
+    const xlsxExportRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.XLSX,
+        sync: true,
+      });
+    assert.strictEqual(xlsxExportRes.status, 201);
+    assert.strictEqual(xlsxExportRes.body.data.file_name.endsWith('.xlsx'), true);
+
+    const xlsxDlRes = await request(httpServer)
+      .get(`/api/v1/exports/${xlsxExportRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${tokenA}`)
+      .buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        );
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+        res.on('error', (err) => callback(err, Buffer.alloc(0)));
+      });
+    assert.strictEqual(xlsxDlRes.status, 200);
+    assert.strictEqual(
+      xlsxDlRes.headers['content-type'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    assert.strictEqual(xlsxDlRes.body instanceof Buffer, true);
+    assert.strictEqual(xlsxDlRes.body.readUInt32LE(0), 0x04034b50, 'Must be valid PKZIP');
+
+    // Parse with XLSX reader
+    const parsedXlsx = readXlsx(xlsxDlRes.body);
+    assert.ok(parsedXlsx.sheets.Data, 'Data worksheet must be present');
+    assert.ok(parsedXlsx.sheets.Data.headers.includes('Tên kho hàng'));
+    assert.ok(parsedXlsx.metadata['Export ID']);
+    assert.strictEqual(parsedXlsx.metadata['Format'], ExportFormat.XLSX);
+
+    // Negative test: readXlsx throws on invalid/legacy XML bytes
+    assert.throws(
+      () => readXlsx(Buffer.from('<?xml version="1.0"?><Workbook></Workbook>')),
+      /Invalid XLSX package/
     );
 
     console.log('🎉 All Exports Supertest tests passed successfully!');

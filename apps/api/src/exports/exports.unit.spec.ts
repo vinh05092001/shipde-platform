@@ -12,9 +12,12 @@ import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
 import { validateCreateExportJobDto, validateListExportJobsQuery } from './exports.dto';
 import { generateCsv, escapeCsvCell } from './generators/csv.generator';
-import { generateXlsx, escapeXml } from './generators/xlsx.generator';
+import { generateXlsx, escapeXml, readXlsx } from './generators/xlsx.generator';
 import { generatePdf } from './generators/pdf.generator';
+import { parseTtf } from './fonts/ttf';
+import { EMBEDDED_FONTS } from './fonts/embedded-fonts';
 import { ExportsService } from './exports.service';
+import { redactDatabaseUrl } from './exports.util';
 
 const ALL_PERMISSIONS = [
   'iam:manage_users',
@@ -233,14 +236,14 @@ function createMockPrismaService() {
     },
     exportJob: {
       create: async ({ data }: any) => {
-        const item = { ...data, created_at: new Date(), updated_at: new Date() };
+        const item = { ...data, created_at: new Date() };
         exportJobs.push(item);
         return item;
       },
       update: async ({ where, data }: any) => {
         const idx = exportJobs.findIndex((j) => j.id === where.id);
         if (idx === -1) throw new Error('Not found');
-        exportJobs[idx] = { ...exportJobs[idx], ...data, updated_at: new Date() };
+        exportJobs[idx] = { ...exportJobs[idx], ...data };
         return exportJobs[idx];
       },
       updateMany: async ({ where, data }: any) => {
@@ -248,7 +251,12 @@ function createMockPrismaService() {
         for (let idx = 0; idx < exportJobs.length; idx++) {
           if (where.id && exportJobs[idx].id !== where.id) continue;
           if (where.merchant_id && exportJobs[idx].merchant_id !== where.merchant_id) continue;
-          if (where.status && typeof where.status === 'string' && exportJobs[idx].status !== where.status) continue;
+          if (
+            where.status &&
+            typeof where.status === 'string' &&
+            exportJobs[idx].status !== where.status
+          )
+            continue;
           if (where.status?.in && !where.status.in.includes(exportJobs[idx].status)) continue;
           if (where.created_at?.lt && exportJobs[idx].created_at >= where.created_at.lt) continue;
           exportJobs[idx] = { ...exportJobs[idx], ...data };
@@ -559,19 +567,52 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       assert.strictEqual(escapeXml(null), '');
     });
 
-    it('generateXlsx produces conformant SpreadsheetML XML with Data and Metadata sheets', () => {
+    it('Finding 10: generateXlsx produces conformant OOXML ZIP workbook verified by readXlsx', () => {
       const buf = generateXlsx(mockMetadata, mockHeaders, mockRows);
-      const xml = buf.toString('utf-8');
+      assert.strictEqual(buf.length > 0, true);
+      assert.strictEqual(buf.readUInt32LE(0), 0x04034b50, 'Must have PKZIP local header signature');
 
-      assert.strictEqual(xml.includes('<?xml version="1.0" encoding="UTF-8"?>'), true);
+      // Verify with real XLSX reader
+      const parsed = readXlsx(buf);
+      assert.ok(parsed.sheets.Data, 'Must parse Data worksheet');
+      assert.deepStrictEqual(parsed.sheets.Data.headers, ['Tên người dùng', 'Email', 'Ghi chú']);
+      assert.strictEqual(parsed.sheets.Data.rows.length, 2);
+      assert.strictEqual(parsed.sheets.Data.rows[0]['Tên người dùng'], 'Nguyễn Văn A');
       assert.strictEqual(
-        xml.includes('xmlns="urn:schemas-microsoft-com:office:spreadsheet"'),
-        true
+        parsed.sheets.Data.rows[1]['Ghi chú'],
+        'Có dấu phẩy, nháy "kép" và\nxuống dòng'
       );
-      assert.strictEqual(xml.includes('<Worksheet ss:Name="Data">'), true);
-      assert.strictEqual(xml.includes('<Worksheet ss:Name="Metadata">'), true);
-      assert.strictEqual(xml.includes('exp-test-uuid-001'), true);
-      assert.strictEqual(xml.includes('Nguyễn Văn A'), true);
+
+      // Verify Metadata sheet
+      assert.strictEqual(parsed.metadata['Export ID'], 'exp-test-uuid-001');
+      assert.strictEqual(parsed.metadata['Tenant ID'], 'm-tenant-1');
+      assert.strictEqual(parsed.metadata['Total Records'], '2');
+
+      // Negative test: readXlsx rejects non-ZIP / legacy XML content
+      assert.throws(
+        () => readXlsx(Buffer.from('<?xml version="1.0"?><Workbook></Workbook>')),
+        /Invalid XLSX package/
+      );
+
+      // Negative test: Formula injection in cells is neutralized with single quote prefix
+      const injectionHeaders = [{ key: 'val', label: 'Formula Test' }];
+      const injectionRows = [
+        { val: '=1+2' },
+        { val: '+cmd|/c calc' },
+        { val: '-5+2' },
+        { val: '@SUM(A1:A10)' },
+      ];
+      const injectionBuf = generateXlsx(mockMetadata, injectionHeaders, injectionRows);
+      const parsedInjection = readXlsx(injectionBuf);
+      for (let i = 0; i < injectionRows.length; i++) {
+        const raw = injectionRows[i].val;
+        const cell = parsedInjection.sheets.Data.rows[i]['Formula Test'];
+        assert.strictEqual(
+          cell.startsWith("'"),
+          true,
+          `Formula ${raw} must be escaped with leading quote`
+        );
+      }
     });
 
     it('generatePdf produces valid PDF 1.4 document with catalog, font objects, xref, and %%EOF', () => {
@@ -596,20 +637,79 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       ];
       const vnRows = [
         { full_name: 'Nguyễn Văn Đạt', city: 'Hà Nội', note: 'Đơn hàng vận chuyển nhanh' },
-        { full_name: 'Trần Thị Mỹ Duyên', city: 'TP. Hồ Chí Minh', note: 'Kiểm tra đối soát thành công' },
+        {
+          full_name: 'Trần Thị Mỹ Duyên',
+          city: 'TP. Hồ Chí Minh',
+          note: 'Kiểm tra đối soát thành công',
+        },
       ];
       const buf = generatePdf(mockMetadata, vnHeaders, vnRows);
       const latin = buf.toString('latin1');
 
       // Verify embedded FontFile2 streams exist
-      assert.strictEqual(latin.includes('/FontFile2'), true, 'Must embed /FontFile2 TrueType font programs');
-      assert.strictEqual(latin.includes('/NotoSans-Regular'), true, 'Must reference NotoSans-Regular font');
-      assert.strictEqual(latin.includes('/NotoSans-Bold'), true, 'Must reference NotoSans-Bold font');
-      assert.strictEqual(latin.includes('/CIDFontType2'), true, 'Must declare /CIDFontType2 descendant fonts');
-      assert.strictEqual(latin.includes('/ToUnicode'), true, 'Must declare /ToUnicode CMaps for text extraction');
+      assert.strictEqual(
+        latin.includes('/FontFile2'),
+        true,
+        'Must embed /FontFile2 TrueType font programs'
+      );
+      assert.strictEqual(latin.includes('/NotoSans-Regular'), true);
+      assert.strictEqual(latin.includes('/NotoSans-Bold'), true);
+      assert.strictEqual(latin.includes('/CIDFontType2'), true);
+      assert.strictEqual(latin.includes('/ToUnicode'), true);
 
       // Verify TrueType header signature in embedded stream: 0x00010000 (OpenType/TrueType 1.0)
-      assert.strictEqual(latin.includes('\u0000\u0001\u0000\u0000'), true, 'Embedded stream must contain TrueType sfnt header');
+      assert.strictEqual(
+        latin.includes('\u0000\u0001\u0000\u0000'),
+        true,
+        'Embedded stream must contain TrueType sfnt header'
+      );
+
+      // Verify font cmap mapping: test actual glyph IDs for Vietnamese characters
+      const regularFontData = EMBEDDED_FONTS.find((f) => f.id === 'noto-sans-regular')!;
+      const parsedRegular = parseTtf(regularFontData.bytes);
+
+      // Test diacritics: Đ (U+0110), ễ (U+1EC5), ạ (U+1EA1), ơ (U+01A1), ư (U+01B0)
+      const testChars = ['Đ', 'ễ', 'ạ', 'ơ', 'ư', 'ắ', 'ộ', 'ỷ'];
+      for (const ch of testChars) {
+        const cp = ch.codePointAt(0)!;
+        const gid = parsedRegular.unicodeToGid.get(cp);
+        assert.ok(
+          gid !== undefined && gid > 0,
+          `Character ${ch} (U+${cp.toString(16)}) must map to non-zero GID`
+        );
+        // And gidToUnicode must map back
+        assert.strictEqual(
+          parsedRegular.gidToUnicode.get(gid),
+          cp,
+          `GID ${gid} must map back to U+${cp.toString(16)}`
+        );
+      }
+
+      // Verify PDF content stream contains hex-encoded glyph sequences for Vietnamese text
+      const nguyenGids = Array.from('Nguyễn').map(
+        (ch) => parsedRegular.unicodeToGid.get(ch.codePointAt(0)!) ?? 0
+      );
+      const nguyenHex = nguyenGids.map((g) => g.toString(16).padStart(4, '0')).join('');
+      assert.strictEqual(
+        latin.includes(nguyenHex),
+        true,
+        `PDF stream must contain hex-encoded glyph string for 'Nguyễn' (${nguyenHex})`
+      );
+
+      // Verify /ToUnicode CMap block in PDF contains mappings for those glyphs
+      for (const gid of nguyenGids) {
+        const gidHex = `<${gid.toString(16).padStart(4, '0')}>`;
+        assert.strictEqual(
+          latin.includes(gidHex),
+          true,
+          `ToUnicode CMap must contain entry for GID ${gidHex}`
+        );
+      }
+
+      // Negative test: character outside font falls back to .notdef (GID 0)
+      const unmappedCp = 0x10ffff; // unmapped codepoint
+      const unmappedGid = parsedRegular.unicodeToGid.get(unmappedCp) ?? 0;
+      assert.strictEqual(unmappedGid, 0, 'Unmapped character must fall back to GID 0 (.notdef)');
 
       // Verify conformant trailer and xref
       assert.strictEqual(latin.startsWith('%PDF-1.4'), true);
@@ -1538,9 +1638,12 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
     });
 
-    it('Finding 2: Actor with empty branch or carrier scopes is denied ledger export (negative test)', async () => {
+    it('Finding 2: Actor with empty branch, carrier, or warehouse scopes is denied export (negative test)', async () => {
       const mockPrisma = createMockPrismaService();
-      const mockRbac = createMockRbacService(['reconciliation:view_contract_rates']);
+      const mockRbac = createMockRbacService([
+        'reconciliation:view_contract_rates',
+        'iam:shop_config',
+      ]);
       const service = new ExportsService(mockPrisma as any, mockRbac as any);
 
       // User with store_scopes: []
@@ -1610,6 +1713,151 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
           return true;
         }
       );
+
+      // User with warehouse_scopes: [] on LEDGERS
+      mockPrisma.users.push({
+        id: 'u-empty-wh-scope',
+        merchant_id: 'm-tenant-1',
+        role: 'STAFF',
+        warehouse_scopes: [],
+        store_scopes: ['*'],
+        carrier_account_scopes: ['*'],
+        status: 'active',
+      });
+      const emptyWhActor: ActorContext = {
+        userId: 'u-empty-wh-scope',
+        merchantId: 'm-tenant-1',
+        role: 'STAFF',
+      };
+
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            emptyWhActor,
+            { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+            '127.0.0.1',
+            'corr-empty-wh-ledger'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+
+      // User with warehouse_scopes: [] on WAREHOUSES
+      await assert.rejects(
+        async () => {
+          await service.createExportJob(
+            'm-tenant-1',
+            emptyWhActor,
+            { resource: ExportResource.WAREHOUSES, format: ExportFormat.CSV, sync: true },
+            '127.0.0.1',
+            'corr-empty-wh-wh'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+
+      // Seed a completed ledger export job for download scope checks
+      mockPrisma.exportJobs.push({
+        id: 'job-completed-ledger',
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-1',
+        resource: ExportResource.LEDGERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.COMPLETED,
+        filters: {
+          __effective_scopes: {
+            warehouse_scopes: ['*'],
+            store_scopes: ['*'],
+            carrier_account_scopes: ['*'],
+          },
+        },
+        file_data: Buffer.from('dummy-ledger-data'),
+        created_at: new Date(),
+        expires_at: new Date(Date.now() + 86400000),
+      });
+
+      // Download negative test: empty branch scopes
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            emptyBranchActor,
+            'job-completed-ledger',
+            '127.0.0.1',
+            'corr-dl-empty-branch'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+
+      // Download negative test: empty carrier scopes
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            emptyCarrierActor,
+            'job-completed-ledger',
+            '127.0.0.1',
+            'corr-dl-empty-carrier'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
+
+      // Seed a completed warehouse export job
+      mockPrisma.exportJobs.push({
+        id: 'job-completed-wh',
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-1',
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.COMPLETED,
+        filters: {},
+        row_results: [{ status: 'succeeded', entity_id: 'wh-1' }],
+        file_data: Buffer.from('dummy-wh-data'),
+        created_at: new Date(),
+        expires_at: new Date(Date.now() + 86400000),
+      });
+
+      // Download negative test: empty warehouse scopes on warehouse export
+      await assert.rejects(
+        async () => {
+          await service.downloadExport(
+            'm-tenant-1',
+            emptyWhActor,
+            'job-completed-wh',
+            '127.0.0.1',
+            'corr-dl-empty-wh'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 403);
+          assert.strictEqual(err.code, ExportErrorCode.SCOPE_FORBIDDEN);
+          return true;
+        }
+      );
     });
 
     it('Finding 3: Audit log metadata always masks PII in filters even for privileged requesters with pii:unmask', async () => {
@@ -1629,7 +1877,12 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         {
           resource: ExportResource.USERS,
           format: ExportFormat.CSV,
-          filters: { email: 'privileged_user@shopde.test', phone: '0912345678' },
+          filters: {
+            email: 'privileged_user@shopde.test',
+            phone: '0912345678',
+            contact_email: 'admin_contact@shopde.test',
+            contact_phone: '+84987654321',
+          },
           sync: true,
         },
         '127.0.0.1',
@@ -1652,6 +1905,16 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         false,
         'Audit log must NOT contain plaintext phone'
       );
+      assert.strictEqual(
+        reqFilters.contact_email.includes('admin_contact'),
+        false,
+        'Audit log must NOT contain plaintext contact_email'
+      );
+      assert.strictEqual(
+        reqFilters.contact_phone.includes('987654321'),
+        false,
+        'Audit log must NOT contain plaintext contact_phone'
+      );
 
       // Download and check EXPORT_DOWNLOADED audit log
       await service.downloadExport(
@@ -1672,49 +1935,114 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         false,
         'Download audit log must NOT contain plaintext email'
       );
+      assert.strictEqual(
+        JSON.stringify(dlFilters).includes('admin_contact'),
+        false,
+        'Download audit log must NOT contain plaintext contact_email'
+      );
+      assert.strictEqual(
+        JSON.stringify(dlFilters).includes('0912345678'),
+        false,
+        'Download audit log must NOT contain plaintext phone'
+      );
     });
 
     it('Finding 5: PII marker is atomically persisted with completed file and protects against unmask capability drift', async () => {
       const mockPrisma = createMockPrismaService();
-      const mockRbac = createMockRbacService(['iam:manage_users', 'pii:unmask']);
-      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+      // Actor initially does NOT have pii:unmask
+      const currentPerms = new Set(['iam:manage_users']);
+      const dynamicRbac = {
+        actorHasPermissions: async (_act: any, perms: string[]) =>
+          perms.every((p) => currentPerms.has(p)),
+      };
+      const service = new ExportsService(mockPrisma as any, dynamicRbac as any);
 
       const actor: ActorContext = {
         userId: 'u-1',
         merchantId: 'm-tenant-1',
-        role: 'OWNER',
+        role: 'STAFF',
       };
 
-      // Create sync export with pii:unmask -> serialized with unmasked bytes
+      // Hook into prisma.user.findMany to simulate granting pii:unmask mid-generation
+      const originalFindMany = mockPrisma.user.findMany;
+      mockPrisma.user.findMany = async (args: any) => {
+        const result = await originalFindMany(args);
+        // Mid-generation grant: permission granted while file generation was underway!
+        currentPerms.add('pii:unmask');
+        return result;
+      };
+
       const job = await service.createExportJob(
         'm-tenant-1',
         actor,
         { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
         '127.0.0.1',
-        'corr-pii-marker'
+        'corr-pii-grant-race'
       );
 
-      // Check persisted record in database
+      // Verify the persisted marker remains false (reflecting that file data was generated masked)
       const persisted = mockPrisma.exportJobs.find((j: any) => j.id === job.data.id);
       assert.ok(persisted);
-      assert.strictEqual(persisted.filters.__unmasked_pii, true);
+      assert.strictEqual(
+        persisted.filters.__unmasked_pii,
+        false,
+        'Marker must be false because data was generated masked, even though pii:unmask was granted mid-flight'
+      );
+      assert.strictEqual(
+        Buffer.from(persisted.file_data).toString('utf-8').includes('091****678'),
+        true,
+        'File bytes must contain masked phone'
+      );
 
-      // An actor without pii:unmask attempting download must be rejected with 403 FORBIDDEN
-      const mockRbacNoUnmask = createMockRbacService(['iam:manage_users']);
-      const serviceNoUnmask = new ExportsService(mockPrisma as any, mockRbacNoUnmask as any);
-      const noUnmaskActor: ActorContext = {
-        userId: 'u-staff-no-pii',
-        merchantId: 'm-tenant-1',
-        role: 'STAFF',
+      // A user without pii:unmask CAN download this export because the file bytes are masked
+      const noUnmaskRbac = createMockRbacService(['iam:manage_users']);
+      const noUnmaskService = new ExportsService(mockPrisma as any, noUnmaskRbac as any);
+      const dlResult = await noUnmaskService.downloadExport(
+        'm-tenant-1',
+        { userId: 'u-other', merchantId: 'm-tenant-1', role: 'STAFF' },
+        job.data.id,
+        '127.0.0.1',
+        'corr-dl-masked-ok'
+      );
+      assert.ok(dlResult.fileBuffer);
+
+      // Conversely: start WITH pii:unmask, revoke permission mid-flight
+      const currentPerms2 = new Set(['iam:manage_users', 'pii:unmask']);
+      const dynamicRbac2 = {
+        actorHasPermissions: async (_act: any, perms: string[]) =>
+          perms.every((p) => currentPerms2.has(p)),
       };
+      const service2 = new ExportsService(mockPrisma as any, dynamicRbac2 as any);
+      mockPrisma.user.findMany = async (args: any) => {
+        const result = await originalFindMany(args);
+        // Revoke pii:unmask mid-generation
+        currentPerms2.delete('pii:unmask');
+        return result;
+      };
+
+      const unmaskedJob = await service2.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-pii-revoke-race'
+      );
+      const persisted2 = mockPrisma.exportJobs.find((j: any) => j.id === unmaskedJob.data.id);
+      assert.strictEqual(
+        persisted2.filters.__unmasked_pii,
+        true,
+        'Marker must be true because data was generated unmasked'
+      );
+
+      // Now downloading without pii:unmask MUST be rejected with 403 FORBIDDEN
       await assert.rejects(
         async () => {
-          await serviceNoUnmask.downloadExport(
+          await noUnmaskService.downloadExport(
             'm-tenant-1',
-            noUnmaskActor,
-            job.data.id,
+            { userId: 'u-other', merchantId: 'm-tenant-1', role: 'STAFF' },
+            unmaskedJob.data.id,
             '127.0.0.1',
-            'corr-dl-no-pii'
+            'corr-dl-unmasked-fail'
           );
         },
         (err: any) => {
@@ -1774,93 +2102,156 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         true,
         'Pending acceptance must be 400000 (500000 - 100000)'
       );
+
+      // Negative test: when recovered >= accepted (e.g. 200k recovered, 150k accepted), pending does not become negative
+      mockPrisma.claim.findMany = async () => [
+        {
+          status: 'ACCEPTED',
+          accepted_amount: 150000n,
+          recovered_amount: 200000n,
+        },
+      ];
+      const resultOver = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-partial-over'
+      );
+      const dlOver = await service.downloadExport(
+        'm-tenant-1',
+        actor,
+        resultOver.data.id,
+        '127.0.0.1',
+        'corr-dl-partial-over'
+      );
+      const overRows = dlOver.fileBuffer
+        .toString('utf-8')
+        .split('\r\n')
+        .filter((l) => l && !l.startsWith('#'));
+      const pendOverRow = overRows.find((r) => r.includes('LEDGER1_PENDING_ACCEPTANCE'));
+      assert.ok(pendOverRow);
+      assert.strictEqual(
+        pendOverRow.includes(',0,') || pendOverRow.includes('"0"'),
+        true,
+        'Pending acceptance must remain 0 when recovered >= accepted'
+      );
+
+      // Negative test: rejected or non-accepted claims are excluded from Sổ 1
+      mockPrisma.claim.findMany = async () => [
+        {
+          status: 'REJECTED',
+          accepted_amount: 500000n,
+          recovered_amount: 100000n,
+        },
+      ];
+      const resultRej = await service.createExportJob(
+        'm-tenant-1',
+        actor,
+        { resource: ExportResource.LEDGERS, format: ExportFormat.CSV, sync: true },
+        '127.0.0.1',
+        'corr-partial-rej'
+      );
+      const dlRej = await service.downloadExport(
+        'm-tenant-1',
+        actor,
+        resultRej.data.id,
+        '127.0.0.1',
+        'corr-dl-partial-rej'
+      );
+      const rejRows = dlRej.fileBuffer
+        .toString('utf-8')
+        .split('\r\n')
+        .filter((l) => l && !l.startsWith('#'));
+      const recRejRow = rejRows.find((r) => r.includes('LEDGER1_RECOVERED_AMOUNT'));
+      assert.ok(recRejRow);
+      assert.strictEqual(
+        recRejRow.includes(',0,') || recRejRow.includes('"0"'),
+        true,
+        'Rejected claim recovered amount must be 0'
+      );
     });
 
-    it('Finding 7: Overlapping maintenance does not resurrect failed jobs and startup preserves recent jobs', async () => {
+    it('Finding 7: Overlapping maintenance during worker processing rejects resurrection', async () => {
       const mockPrisma = createMockPrismaService();
       const mockRbac = createMockRbacService(['iam:manage_users']);
       const service = new ExportsService(mockPrisma as any, mockRbac as any);
 
-      // Verify startup maintenance does not fail jobs younger than 5 minutes
-      const recentJob = {
-        id: 'job-recent-startup',
+      // Create an in-flight job in PROCESSING state
+      const targetJob = {
+        id: 'job-overlap-worker-race',
         merchant_id: 'm-tenant-1',
         user_id: 'u-1',
         resource: ExportResource.USERS,
         format: ExportFormat.CSV,
         status: ExportJobStatus.PROCESSING,
         filters: {},
-        created_at: new Date(Date.now() - 30 * 1000), // 30 seconds ago
+        created_at: new Date(Date.now() - 60 * 1000),
         expires_at: new Date(Date.now() + 86400000),
       };
-      mockPrisma.exportJobs.push(recentJob);
-      mockPrisma.merchant = {
-        findMany: async () => [{ id: 'm-tenant-1' }],
+      mockPrisma.exportJobs.push(targetJob);
+
+      // Hook into user.findMany: DURING worker data retrieval, maintenance runs and marks the job FAILED!
+      const originalFindMany = mockPrisma.user.findMany;
+      mockPrisma.user.findMany = async (args: any) => {
+        // Overlapping maintenance fires while worker is generating data!
+        const found = mockPrisma.exportJobs.find((j: any) => j.id === 'job-overlap-worker-race');
+        if (found) {
+          found.status = ExportJobStatus.FAILED;
+          found.error_code = ExportErrorCode.PROCESSING_TIMEOUT;
+          found.error_message = 'Tác vụ đã bị thu hồi do quá thời gian xử lý';
+        }
+        return originalFindMany ? originalFindMany(args) : [];
       };
 
-      // Run startup maintenance
-      await service.runSystemMaintenance(true);
-      const jobAfterStartup = mockPrisma.exportJobs.find((j: any) => j.id === 'job-recent-startup');
-      assert.strictEqual(
-        jobAfterStartup.status,
-        ExportJobStatus.PROCESSING,
-        'Live in-flight job must NOT be failed by startup maintenance'
-      );
-
-      // Now simulate overlapping maintenance: maintenance marks in-flight job as FAILED
-      jobAfterStartup.status = ExportJobStatus.FAILED;
-      jobAfterStartup.error_code = ExportErrorCode.PROCESSING_TIMEOUT;
-      jobAfterStartup.error_message = 'Timeout reached';
-
-      // When worker tries to process and complete, conditional transition rejects resurrection
       const actor: ActorContext = {
         userId: 'u-1',
         merchantId: 'm-tenant-1',
         role: 'OWNER',
       };
 
+      // Worker continues processing and attempts completion transition
       await assert.rejects(
         async () => {
           await service.processExportJob(
             'm-tenant-1',
             actor,
-            'job-recent-startup',
+            'job-overlap-worker-race',
             { resource: ExportResource.USERS, format: ExportFormat.CSV },
             '127.0.0.1',
-            'corr-overlapping'
+            'corr-overlapping-worker'
           );
         },
         (err: any) => {
           assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.getStatus(), 408);
+          assert.strictEqual(err.code, ExportErrorCode.PROCESSING_TIMEOUT);
           return true;
         }
       );
 
-      // Job must REMAIN in FAILED state and NOT be resurrected to COMPLETED
-      const finalJob = mockPrisma.exportJobs.find((j: any) => j.id === 'job-recent-startup');
-      assert.strictEqual(finalJob.status, ExportJobStatus.FAILED);
-      assert.strictEqual(finalJob.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
+      // Crucial: The job in the database must REMAIN FAILED and NOT be resurrected to COMPLETED
+      const finalRecord = mockPrisma.exportJobs.find(
+        (j: any) => j.id === 'job-overlap-worker-race'
+      );
+      assert.strictEqual(finalRecord.status, ExportJobStatus.FAILED);
+      assert.strictEqual(finalRecord.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
     });
 
-    it('Finding 9: Database diagnostics redact credentials in URL', () => {
-      function redactDatabaseUrl(rawUrl: string): string {
-        try {
-          const parsed = new URL(rawUrl);
-          if (parsed.username || parsed.password) {
-            parsed.username = '***';
-            parsed.password = '***';
-          }
-          return parsed.toString();
-        } catch {
-          return rawUrl.replace(/:\/\/([^:]+):([^@]+)@/, '://***:***@');
-        }
-      }
-
-      const raw = 'postgresql://admin:super_secret_password@db.example.com:5432/shipde?sslmode=require';
+    it('Finding 9: Database diagnostics redact credentials in URL using imported redactDatabaseUrl', () => {
+      const raw =
+        'postgresql://admin:super_secret_password@db.example.com:5432/shipde?sslmode=require';
       const redacted = redactDatabaseUrl(raw);
       assert.strictEqual(redacted.includes('super_secret_password'), false);
       assert.strictEqual(redacted.includes('admin'), false);
       assert.strictEqual(redacted.includes('***:***@db.example.com:5432'), true);
+
+      // Malformed / non-standard string fallback
+      const rawFallback = 'postgresql://myuser:secret123@127.0.0.1:5433/db';
+      const redactedFallback = redactDatabaseUrl(rawFallback);
+      assert.strictEqual(redactedFallback.includes('secret123'), false);
+      assert.strictEqual(redactedFallback.includes('myuser'), false);
+      assert.strictEqual(redactedFallback.includes('***:***@127.0.0.1:5433'), true);
     });
   });
 });

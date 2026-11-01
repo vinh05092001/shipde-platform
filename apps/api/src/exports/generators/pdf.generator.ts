@@ -484,23 +484,14 @@ export function generatePdf(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents ${contentsObjNum} 0 R /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> >>`
     );
 
-    addStreamObj(
-      contentsObjNum,
-      `<< /Length ${streamBuffer.length} >>`,
-      streamBuffer
-    );
+    addStreamObj(contentsObjNum, `<< /Length ${streamBuffer.length} >>`, streamBuffer);
   }
 
   const totalObjects = 12 + numPages * 2;
 
   // Cross-reference table
   const startXref = totalLen;
-  push(
-    Buffer.from(
-      `xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`,
-      'latin1'
-    )
-  );
+  push(Buffer.from(`xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`, 'latin1'));
   for (let i = 1; i <= totalObjects; i++) {
     const offset = objOffsets.get(i) ?? 0;
     push(Buffer.from(`${String(offset).padStart(10, '0')} 00000 n \n`, 'latin1'));

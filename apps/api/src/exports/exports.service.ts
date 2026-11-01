@@ -138,7 +138,10 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
     const sanitized: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(filters)) {
       if (typeof val === 'string') {
-        if (!hasPiiUnmask && (val.includes('@') || /^\+?[0-9]{8,15}$/.test(val))) {
+        const isPiiKey =
+          /(email|phone|contact|recipient|customer|user_name|user_id|identity)/i.test(key);
+        const containsPiiValue = val.includes('@') || /^\+?[0-9\s\-().]{7,20}$/.test(val.trim());
+        if (!hasPiiUnmask && (isPiiKey || containsPiiValue)) {
           sanitized[key] = maskIdentifier(val);
         } else {
           sanitized[key] = val;
@@ -270,6 +273,9 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
     // 1. Authorize resource capability permission
     await this.assertResourcePermission(actor, dto.resource);
 
+    // 1b. Enforce empty scopes and requested filter scopes fail-closed (Finding 2, Finding 1)
+    await this.assertScopeAuthorization(actor, dto);
+
     const ttlSeconds = resolveExportJobTtlSeconds();
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
     const ruleVersion = resolveExportRuleVersion();
@@ -394,6 +400,102 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
       select: { role: true, warehouse_scopes: true },
     });
     return user?.warehouse_scopes || [];
+  }
+
+  /**
+   * Enforces that actors with empty data scopes cannot create export jobs (fail-closed)
+   * and verifies that explicit filters do not exceed actor's allowed scopes. (Finding 2, Finding 1)
+   */
+  async assertScopeAuthorization(actor: ActorContext, dto: CreateExportJobDto): Promise<void> {
+    if (dto.resource === ExportResource.LEDGERS) {
+      // 1. Warehouse scope check
+      const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
+      const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
+      if (!hasUniversalWarehouseScope && actorWarehouseScopes.length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          ExportErrorCode.SCOPE_FORBIDDEN,
+          'Tài khoản không có quyền truy cập dữ liệu kho hàng (phạm vi rỗng)'
+        );
+      }
+      if (dto.filters?.warehouse_id && typeof dto.filters.warehouse_id === 'string') {
+        if (
+          !hasUniversalWarehouseScope &&
+          !actorWarehouseScopes.includes(dto.filters.warehouse_id)
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Kho hàng được lọc nằm ngoài phạm vi kho được phân quyền của tài khoản'
+          );
+        }
+      }
+
+      // 2. Branch scope check
+      const actorStoreScopes = await this.getActorStoreScopes(actor);
+      const hasUniversalStoreScope = actorStoreScopes.includes('*');
+      if (!hasUniversalStoreScope && actorStoreScopes.length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          ExportErrorCode.SCOPE_FORBIDDEN,
+          'Tài khoản không có quyền truy cập dữ liệu chi nhánh (phạm vi rỗng)'
+        );
+      }
+      if (dto.filters?.branch_id && typeof dto.filters.branch_id === 'string') {
+        if (!hasUniversalStoreScope && !actorStoreScopes.includes(dto.filters.branch_id)) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Tài khoản không có quyền truy cập dữ liệu chi nhánh được yêu cầu'
+          );
+        }
+      }
+
+      // 3. Carrier account scope check
+      const actorCarrierScopes = await this.getActorCarrierAccountScopes(actor);
+      const hasUniversalCarrierScope = actorCarrierScopes.includes('*');
+      if (!hasUniversalCarrierScope && actorCarrierScopes.length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          ExportErrorCode.SCOPE_FORBIDDEN,
+          'Tài khoản không có quyền truy cập dữ liệu tài khoản vận chuyển (phạm vi rỗng)'
+        );
+      }
+      if (dto.filters?.carrier_account_id && typeof dto.filters.carrier_account_id === 'string') {
+        if (
+          !hasUniversalCarrierScope &&
+          !actorCarrierScopes.includes(dto.filters.carrier_account_id)
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Tài khoản không có quyền truy cập tài khoản vận chuyển được yêu cầu'
+          );
+        }
+      }
+    } else if (dto.resource === ExportResource.WAREHOUSES) {
+      const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
+      const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
+      if (!hasUniversalWarehouseScope && actorWarehouseScopes.length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          ExportErrorCode.SCOPE_FORBIDDEN,
+          'Tài khoản không có quyền truy cập dữ liệu kho hàng (phạm vi rỗng)'
+        );
+      }
+      if (dto.filters?.warehouse_id && typeof dto.filters.warehouse_id === 'string') {
+        if (
+          !hasUniversalWarehouseScope &&
+          !actorWarehouseScopes.includes(dto.filters.warehouse_id)
+        ) {
+          throw new CanonicalApiException(
+            HttpStatus.FORBIDDEN,
+            ExportErrorCode.SCOPE_FORBIDDEN,
+            'Kho hàng được lọc nằm ngoài phạm vi kho được phân quyền của tài khoản'
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -731,7 +833,9 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
             scopedWarehouseFilter = { equals: requestedWhId };
           } else {
             effectiveWarehouseScopes = hasUniversalWarehouseScope ? ['*'] : actorWarehouseScopes;
-            scopedWarehouseFilter = hasUniversalWarehouseScope ? undefined : { in: actorWarehouseScopes };
+            scopedWarehouseFilter = hasUniversalWarehouseScope
+              ? undefined
+              : { in: actorWarehouseScopes };
           }
 
           // 2. Branch scope & filter authorization (Finding 1, Finding 2)
@@ -795,8 +899,9 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
             effectiveCarrierAccountFilter = { equals: dto.filters.carrier_account_id };
           } else {
             effectiveCarrierScopes = hasUniversalCarrierScope ? ['*'] : actorCarrierScopes;
-            effectiveCarrierAccountFilter =
-              hasUniversalCarrierScope ? undefined : { in: actorCarrierScopes };
+            effectiveCarrierAccountFilter = hasUniversalCarrierScope
+              ? undefined
+              : { in: actorCarrierScopes };
           }
 
           effectiveScopes = {
@@ -872,7 +977,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
               // Sổ 1: Tiền thực nhận và tiền chờ đối soát tính riêng biệt (Finding 6)
               totalRecoveredBigInt += rec;
               if (acc > rec) {
-                pendingAcceptanceBigInt += (acc - rec);
+                pendingAcceptanceBigInt += acc - rec;
               }
             }
           }
@@ -1078,7 +1183,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
       // Compute cryptographic SHA-256 integrity checksum of the final binary file
       const fileChecksumSha256 = createHash('sha256').update(fileBuffer).digest('hex');
 
-      const fileExtension = dto.format === ExportFormat.XLSX ? 'xml' : dto.format;
+      const fileExtension = dto.format;
       const fileName = `shipde_${dto.resource}_${jobId.substring(0, 8)}.${fileExtension}`;
 
       const currentJob = await this.prisma.exportJob.findFirst({
@@ -1545,7 +1650,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
 
     let mimeType = 'text/csv; charset=utf-8';
     if (job.format === ExportFormat.XLSX) {
-      mimeType = 'application/vnd.ms-excel';
+      mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     } else if (job.format === ExportFormat.PDF) {
       mimeType = 'application/pdf';
     }
@@ -1606,8 +1711,12 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
       const { effective_scopes: _eff, ...cleanMeta } = rawMeta;
       metadata = cleanMeta as unknown as ExportGenerationMetadata;
       if (metadata.filters) {
-        const { __unmasked_pii: _u, __effective_scopes: _e, __worker_lease: _w, ...cleanMetaFilters } =
-          metadata.filters as Record<string, unknown>;
+        const {
+          __unmasked_pii: _u,
+          __effective_scopes: _e,
+          __worker_lease: _w,
+          ...cleanMetaFilters
+        } = metadata.filters as Record<string, unknown>;
         metadata = {
           ...metadata,
           filters: viewerHasPiiUnmask
