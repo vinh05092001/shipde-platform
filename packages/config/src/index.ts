@@ -12,6 +12,12 @@ export const WORKSPACE_ENV = {
   DEFAULT_RBAC_SEED_RETRY_INTERVAL_MS: 1000,
   DEFAULT_RBAC_SEED_MAX_ATTEMPTS: 10,
   DEFAULT_RBAC_SEED_BACKOFF_FACTOR: 1.5,
+  DEFAULT_MAX_ATTACHMENT_SIZE_BYTES: 10 * 1024 * 1024,
+  DEFAULT_ATTACHMENT_RETENTION_DAYS: 90,
+  DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS: 300,
+  DEFAULT_ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: 512,
+  DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: 104857600,
+  DEFAULT_ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS: 900,
 } as const;
 
 export type WorkspaceEnvironment = typeof WORKSPACE_ENV;
@@ -58,6 +64,22 @@ export interface AppConfig {
   RBAC_SEED_MAX_ATTEMPTS?: number;
   /** Backoff multiplier for RBAC platform seed */
   RBAC_SEED_BACKOFF_FACTOR?: number;
+  /** Maximum allowed size in bytes for attachment uploads (FEAT-COM-06). Default 10MB (10485760). */
+  MAX_ATTACHMENT_SIZE_BYTES: number;
+  /** Default retention period in days for evidence attachments (FEAT-COM-06). Default 90 days. */
+  ATTACHMENT_DEFAULT_RETENTION_DAYS: number;
+  /** Download URL expiry / buffer TTL in seconds (FEAT-COM-06). Default 300 seconds (5 min). */
+  ATTACHMENT_DOWNLOAD_TTL_SECONDS: number;
+  /** Maximum ZIP entries the attachment content gate will decompress and inspect (FEAT-COM-06). */
+  ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: number;
+  /** Maximum decompressed bytes the attachment content gate will materialize per entry (FEAT-COM-06). */
+  ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: number;
+  /**
+   * Grace period in seconds before an in-progress (PENDING) upload orphan record
+   * is considered stale and becomes eligible for orphan reconciliation (FEAT-COM-06).
+   * Prevents the reconciler from deleting objects of uploads that are still committing.
+   */
+  ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS: number;
 }
 
 export class ConfigValidationError extends Error {
@@ -342,6 +364,112 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     }
   }
 
+  const maxAttachmentSizeRaw = rawEnv.MAX_ATTACHMENT_SIZE_BYTES;
+  let MAX_ATTACHMENT_SIZE_BYTES: number = WORKSPACE_ENV.DEFAULT_MAX_ATTACHMENT_SIZE_BYTES;
+  if (maxAttachmentSizeRaw !== undefined && maxAttachmentSizeRaw !== '') {
+    if (!/^\d+$/.test(maxAttachmentSizeRaw)) {
+      invalidFields.push('MAX_ATTACHMENT_SIZE_BYTES (must be a positive integer)');
+    } else {
+      const parsed = Number(maxAttachmentSizeRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 104857600) {
+        invalidFields.push(
+          'MAX_ATTACHMENT_SIZE_BYTES (must be a positive integer between 1 and 104857600)'
+        );
+      } else {
+        MAX_ATTACHMENT_SIZE_BYTES = parsed;
+      }
+    }
+  }
+
+  const attachmentRetentionRaw = rawEnv.ATTACHMENT_DEFAULT_RETENTION_DAYS;
+  let ATTACHMENT_DEFAULT_RETENTION_DAYS: number = WORKSPACE_ENV.DEFAULT_ATTACHMENT_RETENTION_DAYS;
+  if (attachmentRetentionRaw !== undefined && attachmentRetentionRaw !== '') {
+    if (!/^\d+$/.test(attachmentRetentionRaw)) {
+      invalidFields.push('ATTACHMENT_DEFAULT_RETENTION_DAYS (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentRetentionRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 3650) {
+        invalidFields.push(
+          'ATTACHMENT_DEFAULT_RETENTION_DAYS (must be a positive integer between 1 and 3650)'
+        );
+      } else {
+        ATTACHMENT_DEFAULT_RETENTION_DAYS = parsed;
+      }
+    }
+  }
+
+  const attachmentDownloadTtlRaw = rawEnv.ATTACHMENT_DOWNLOAD_TTL_SECONDS;
+  let ATTACHMENT_DOWNLOAD_TTL_SECONDS: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_DOWNLOAD_TTL_SECONDS;
+  if (attachmentDownloadTtlRaw !== undefined && attachmentDownloadTtlRaw !== '') {
+    if (!/^\d+$/.test(attachmentDownloadTtlRaw)) {
+      invalidFields.push('ATTACHMENT_DOWNLOAD_TTL_SECONDS (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentDownloadTtlRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 86400) {
+        invalidFields.push(
+          'ATTACHMENT_DOWNLOAD_TTL_SECONDS (must be a positive integer between 1 and 86400)'
+        );
+      } else {
+        ATTACHMENT_DOWNLOAD_TTL_SECONDS = parsed;
+      }
+    }
+  }
+
+  const attachmentScanMaxEntriesRaw = rawEnv.ATTACHMENT_SCAN_MAX_ZIP_ENTRIES;
+  let ATTACHMENT_SCAN_MAX_ZIP_ENTRIES: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_ZIP_ENTRIES;
+  if (attachmentScanMaxEntriesRaw !== undefined && attachmentScanMaxEntriesRaw !== '') {
+    if (!/^\d+$/.test(attachmentScanMaxEntriesRaw)) {
+      invalidFields.push('ATTACHMENT_SCAN_MAX_ZIP_ENTRIES (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentScanMaxEntriesRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 10000) {
+        invalidFields.push(
+          'ATTACHMENT_SCAN_MAX_ZIP_ENTRIES (must be a positive integer between 1 and 10000)'
+        );
+      } else {
+        ATTACHMENT_SCAN_MAX_ZIP_ENTRIES = parsed;
+      }
+    }
+  }
+
+  const attachmentScanMaxDecompressedRaw = rawEnv.ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES;
+  let ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES;
+  if (attachmentScanMaxDecompressedRaw !== undefined && attachmentScanMaxDecompressedRaw !== '') {
+    if (!/^\d+$/.test(attachmentScanMaxDecompressedRaw)) {
+      invalidFields.push('ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentScanMaxDecompressedRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 1073741824) {
+        invalidFields.push(
+          'ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES (must be a positive integer between 1 and 1073741824)'
+        );
+      } else {
+        ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES = parsed;
+      }
+    }
+  }
+
+  const attachmentOrphanGraceRaw = rawEnv.ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS;
+  let ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS: number =
+    WORKSPACE_ENV.DEFAULT_ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS;
+  if (attachmentOrphanGraceRaw !== undefined && attachmentOrphanGraceRaw !== '') {
+    if (!/^\d+$/.test(attachmentOrphanGraceRaw)) {
+      invalidFields.push('ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS (must be a positive integer)');
+    } else {
+      const parsed = Number(attachmentOrphanGraceRaw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 86400) {
+        invalidFields.push(
+          'ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS (must be a positive integer between 1 and 86400)'
+        );
+      } else {
+        ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS = parsed;
+      }
+    }
+  }
+
   if (invalidFields.length > 0) {
     throw new ConfigValidationError(invalidFields);
   }
@@ -373,11 +501,45 @@ export function validateConfig(rawEnv: NodeJS.ProcessEnv = process.env): AppConf
     RBAC_SEED_RETRY_INTERVAL_MS,
     RBAC_SEED_MAX_ATTEMPTS,
     RBAC_SEED_BACKOFF_FACTOR,
+    MAX_ATTACHMENT_SIZE_BYTES,
+    ATTACHMENT_DEFAULT_RETENTION_DAYS,
+    ATTACHMENT_DOWNLOAD_TTL_SECONDS,
+    ATTACHMENT_SCAN_MAX_ZIP_ENTRIES,
+    ATTACHMENT_SCAN_MAX_DECOMPRESSED_BYTES,
+    ATTACHMENT_ORPHAN_RECONCILE_GRACE_SECONDS,
   };
 }
 
 // --- Correlation Identification ---
 export const CORRELATION_ID_HEADER = 'x-correlation-id' as const;
+
+// --- Attachments & Evidence Configuration (FEAT-COM-06) ---
+export const ATTACHMENT_ALLOWED_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+] as const;
+
+export const ATTACHMENT_DISALLOWED_EXTENSIONS = new Set([
+  '.exe',
+  '.bat',
+  '.cmd',
+  '.sh',
+  '.js',
+  '.mjs',
+  '.html',
+  '.htm',
+  '.svg',
+  '.php',
+  '.py',
+  '.ps1',
+  '.vbs',
+  '.com',
+  '.jar',
+]);
 
 /**
  * Validates whether an incoming correlation identifier adheres to format and safety constraints.

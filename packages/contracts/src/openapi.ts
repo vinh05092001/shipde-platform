@@ -1344,6 +1344,170 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/attachments': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List attachments (FEAT-COM-06)
+     * @description List attachments with tenant scoping, pagination, and RBAC enforcement.
+     */
+    get: operations['listAttachments'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/upload': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Upload attachment (FEAT-COM-06)
+     * @description Upload attachment with polyglot malware scanning, tenant scoping and audit logging.
+     */
+    post: operations['uploadAttachment'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get attachment metadata (FEAT-COM-06)
+     * @description Retrieve attachment metadata by ID with tenant scoping.
+     */
+    get: operations['getAttachment'];
+    put?: never;
+    post?: never;
+    /**
+     * Delete attachment (FEAT-COM-06)
+     * @description Delete attachment with explicit confirmation requirement.
+     */
+    delete: operations['deleteAttachment'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/{id}/download': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Download attachment content (FEAT-COM-06)
+     * @description Download attachment binary content with immutable access audit logging.
+     */
+    get: operations['downloadAttachment'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/bulk-delete': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Bulk delete attachments (FEAT-COM-06)
+     * @description Delete multiple attachments with atomic audit and per-item results.
+     */
+    post: operations['bulkDeleteAttachments'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/{id}/quarantine': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Quarantine attachment (FEAT-COM-06)
+     * @description Quarantine attachment for security inspection.
+     */
+    post: operations['quarantineAttachment'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/retention-purge': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Retention purge (FEAT-COM-06)
+     * @description Purge expired attachments past their retention period.
+     */
+    post: operations['purgeRetention'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/attachments/reconcile-pending': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reconcile pending deletions (FEAT-COM-06)
+     * @description Reconcile pending deletion and durable orphan cleanup records.
+     */
+    post: operations['reconcilePending'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2486,6 +2650,121 @@ export interface components {
       success: boolean;
       data: components['schemas']['SearchResponseData'];
       meta: components['schemas']['Meta'];
+    };
+    FormattedAttachment: {
+      /** Format: uuid */
+      id: string;
+      merchant_id: string;
+      file_name: string;
+      file_size: number;
+      mime_type: string;
+      checksum_sha256: string;
+      storage_key: string;
+      entity_type: string;
+      entity_id: string | null;
+      branch_id: string | null;
+      warehouse_id: string | null;
+      uploaded_by: string;
+      status: string;
+      retention_days: number | null;
+      expires_at: string | null;
+      metadata: Record<string, never> | null;
+      created_at: string;
+      updated_at: string;
+    };
+    AttachmentSingleResponse: {
+      success: boolean;
+      data: components['schemas']['FormattedAttachment'];
+      meta: {
+        correlation_id?: string;
+      };
+    };
+    AttachmentListResponse: {
+      success: boolean;
+      data: components['schemas']['FormattedAttachment'][];
+      meta: {
+        page?: number;
+        limit?: number;
+        total?: number;
+        total_pages?: number;
+        correlation_id?: string;
+        can_edit?: boolean;
+      };
+    };
+    UploadAttachmentRequest: {
+      file_name: string;
+      mime_type: string;
+      content_base64: string;
+      checksum_sha256?: string;
+      /** @enum {string} */
+      entity_type?:
+        'RETURN' | 'CLAIM' | 'DISCREPANCY' | 'STATEMENT' | 'ORDER' | 'SHIPMENT' | 'GENERAL';
+      entity_id?: string;
+      branch_id?: string;
+      warehouse_id?: string;
+      retention_days?: number;
+      metadata?: Record<string, never>;
+    };
+    DeleteAttachmentRequest: {
+      confirm?: boolean;
+    };
+    DeleteAttachmentResponse: {
+      success: boolean;
+      data: {
+        id?: string;
+        status?: string;
+      };
+      meta: {
+        correlation_id?: string;
+      };
+    };
+    BulkDeleteAttachmentsRequest: {
+      ids: string[];
+      confirm: boolean;
+    };
+    QuarantineAttachmentRequest: {
+      reason?: string;
+    };
+    RetentionPurgeRequest: {
+      entity_type?: string;
+      dry_run?: boolean;
+    };
+    AttachmentPerItemResult: {
+      id: string;
+      /** @enum {string} */
+      status: 'SUCCEEDED' | 'FAILED';
+      code?: string;
+      message?: string;
+    };
+    AttachmentBulkActionResult: {
+      success: boolean;
+      total: number;
+      success_count: number;
+      failure_count: number;
+      succeeded_ids: string[];
+      failed_ids: string[];
+      results: components['schemas']['AttachmentPerItemResult'][];
+    };
+    AttachmentBulkActionResponse: {
+      success: boolean;
+      data: components['schemas']['AttachmentBulkActionResult'];
+      meta: {
+        correlation_id?: string;
+      };
+    };
+    ReconcilePendingResult: {
+      reconciled: number;
+      failed: number;
+      skipped: number;
+      orphan_reconciled: number;
+      orphan_failed: number;
+    };
+    ReconcilePendingResponse: {
+      success: boolean;
+      data: components['schemas']['ReconcilePendingResult'];
+      meta: {
+        correlation_id?: string;
+      };
     };
   };
   responses: {
@@ -4706,6 +4985,258 @@ export interface operations {
         content?: never;
       };
       409: components['responses']['Error'];
+    };
+  };
+  listAttachments: {
+    parameters: {
+      query?: {
+        entity_type?: string;
+        entity_id?: string;
+        warehouse_id?: string;
+        branch_id?: string;
+        status?: string;
+        page?: number;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Attachment list returned successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttachmentListResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  uploadAttachment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UploadAttachmentRequest'];
+      };
+    };
+    responses: {
+      /** @description Attachment uploaded successfully */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttachmentSingleResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      503: components['responses']['Error'];
+    };
+  };
+  getAttachment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Attachment metadata returned successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttachmentSingleResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  deleteAttachment: {
+    parameters: {
+      query?: {
+        confirm?: string;
+      };
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['DeleteAttachmentRequest'];
+      };
+    };
+    responses: {
+      /** @description Attachment deleted successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeleteAttachmentResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+      503: components['responses']['Error'];
+    };
+  };
+  downloadAttachment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Attachment binary content */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/octet-stream': string;
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+      503: components['responses']['Error'];
+    };
+  };
+  bulkDeleteAttachments: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['BulkDeleteAttachmentsRequest'];
+      };
+    };
+    responses: {
+      /** @description Bulk delete outcome returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttachmentBulkActionResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  quarantineAttachment: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['QuarantineAttachmentRequest'];
+      };
+    };
+    responses: {
+      /** @description Attachment quarantined successfully */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttachmentSingleResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+      409: components['responses']['Error'];
+    };
+  };
+  purgeRetention: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['RetentionPurgeRequest'];
+      };
+    };
+    responses: {
+      /** @description Retention purge outcome returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttachmentBulkActionResponse'];
+        };
+      };
+      400: components['responses']['Error'];
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  reconcilePending: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Reconciliation outcome returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ReconcilePendingResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
     };
   };
 }
