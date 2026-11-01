@@ -127,4 +127,20 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
       'whitespace-only scope must not establish merchant tenant context'
     );
   });
+
+  it('does not establish tenant context for empty array scope claims', async () => {
+    const emptyArrayScopeToken = signToken(
+      MERCHANT_A,
+      'OWNER',
+      3600,
+      SECRET,
+      [] as unknown as string
+    );
+    const tenant = await runMiddleware(`Bearer ${emptyArrayScopeToken}`);
+    assert.equal(
+      tenant,
+      undefined,
+      'empty array scope must not establish merchant tenant context'
+    );
+  });
 });

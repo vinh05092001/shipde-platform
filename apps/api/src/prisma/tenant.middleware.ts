@@ -51,9 +51,13 @@ function extractVerifiedMerchantId(req: Request): string | null {
       rawToken,
       resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET)
     );
+    const rawScope = (claims as any).scope;
+    const rawScopes = (claims as any).scopes;
     if (
-      claims.scope === 'setup' ||
-      (typeof claims.scope === 'string' && claims.scope.trim().length === 0)
+      rawScope === 'setup' ||
+      (typeof rawScope === 'string' && rawScope.trim().length === 0) ||
+      (Array.isArray(rawScope) && rawScope.length === 0) ||
+      (Array.isArray(rawScopes) && rawScopes.length === 0)
     ) {
       return null;
     }
