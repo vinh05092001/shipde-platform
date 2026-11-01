@@ -12,8 +12,46 @@
 | Risk | HIGH — authorization, tenant isolation, privilege ceiling and destructive action safety |
 | Allowed paths | `apps/api/src/` relevant bulk and action modules and tests; `apps/web/src/` relevant components, pages and tests; `apps/web/package.json`; `packages/contracts/src/`; `packages/config/src/`; `prisma/schema.prisma` and migrations; `docs/product-spec/contracts/openapi.yaml`; this Work Item and its register row |
 | Reviewer | Codex — fresh independent task |
-| Branch | `feat/feat-com-03` |
-| Pull Request | #468 |
+| Branch | `feat/feat-com-03-api` (Slice A) / `feat/feat-com-03` (Slice B) |
+| Pull Request | #480 (Slice A) / #468 (Slice B) |
+
+## Slice A (API)
+
+Pursuant to operator decision (31/10 split) to decouple server-side foundation from user interface delivery, FEAT-COM-03 is partitioned into two sequential delivery slices:
+
+### Scope of Slice A (PR #480)
+- **Allowed paths**: `apps/api/src/bulk/`, `apps/api/package.json`, `packages/config/`, `packages/contracts/`, `packages/testkit/`, `prisma/schema.prisma`, `prisma/migrations/20261031120000_feat_com_03_bulk_operations/`, and `docs/product-spec/work-items/FEAT-COM-03.md`.
+- **Framework & Endpoints**: POST `/api/v1/bulk-actions` supporting up to `BULK_ACTION_MAX_ITEMS` with fail-closed configuration validation.
+- **Idempotency & Concurrency**: Atomic upfront idempotency reservation (`bulk_action_batches`) under tenant row lock (`FOR NO KEY UPDATE`), request hash verification, matching replay with re-verified resource scope, altered payload conflict detection (409 `IDEMPOTENCY_CONFLICT`), and safe resumption of interrupted `IN_PROGRESS` batches.
+- **Savepoint Isolation**: Per-item PostgreSQL savepoints (`SAVEPOINT bulk_item_sp_${i}`) ensuring individual item failures do not abort sibling mutations or durable batch outcome persistence.
+- **Business Operations**:
+  - `users`: activate, deactivate (session revocation, last owner protection `CANNOT_REMOVE_LAST_OWNER`, self-deactivation guard `SELF_SUSPENSION_PROHIBITED`), assign_scopes (`store_scopes`, `warehouse_scopes` with privilege ceiling enforcement), export_csv (RFC 4180 format with masked PII).
+  - `branches`: activate, deactivate (default branch protection `CANNOT_DEACTIVATE_DEFAULT_BRANCH`), export_csv.
+  - `warehouses`: activate, deactivate (default warehouse protection `CANNOT_DEACTIVATE_DEFAULT_WAREHOUSE`), export_csv.
+- **Tenancy, RBAC & Audit**: Multi-tenant isolation server-side (404 `ITEM_NOT_FOUND` on foreign IDs), dynamic permission enforcement (`iam:manage_users`, `iam:shop_config`), FEAT-RBAC-02 scope checks per item, and exactly one tenant-scoped audit record per mutated item with phone/email masked.
+- **Test coverage**: Unit test suite (`apps/api/src/bulk/bulk.unit.spec.ts`) and Supertest integration suite (`apps/api/src/bulk/bulk.supertest.spec.ts`) creating and tearing down isolated test tenants.
+
+### Acceptance IDs Covered in Slice A
+- `AC-COM-03-01`: Valid items bulk action execution and truthful outcome report.
+- `AC-COM-03-02`: Partial failure handling with truthful `succeeded_ids` and `failed_ids` partitioning.
+- `AC-COM-03-03`: Multi-tenant isolation (foreign or non-existent target IDs return 404 `ITEM_NOT_FOUND`).
+- `AC-COM-03-04`: Server-side RBAC permission checks fail closed with 403 `FORBIDDEN`.
+- `AC-COM-03-05`: FEAT-RBAC-02 store/warehouse scope checks per item (403 `SCOPE_FORBIDDEN`).
+- `AC-COM-03-06`: Idempotency replay with matching payload returns cached batch result.
+- `AC-COM-03-07`: Idempotency replay with altered payload fails with 409 `IDEMPOTENCY_CONFLICT`.
+- `AC-COM-03-08`: DTO bounds validation (`MAX_ITEMS_EXCEEDED`, `EMPTY_ID_LIST`, `INVALID_UUID`).
+- `AC-COM-03-09`: Destructive action confirmation guard (`CONFIRMATION_REQUIRED` when `confirm: true` is missing).
+- `AC-COM-03-10`: User safety invariants (sole active owner protection, self-deactivation guard, session revocation).
+- `AC-COM-03-11`: Privilege ceiling enforcement on scope assignment.
+- `AC-COM-03-12`: RFC 4180 CSV export with masked PII and RFC 4180 multiline quote parsing.
+- `AC-COM-03-13`: Immutable audit log trail with one record per mutated item and masked sensitive data.
+- `AC-COM-03-14`: Unsupported entity rejection with 400 `UNSUPPORTED_BULK_ENTITY`.
+
+### What Remains for Slice B (UI Slice)
+- **Branch / PR**: `feat/feat-com-03` / PR #468.
+- **Acceptance IDs**: `AC-COM-03-15` through `AC-COM-03-22`.
+- **UI Components & Pages**: Multi-select table headers and row checkboxes, `BulkActionBar`, `BulkConfirmModal`, `BulkAssignScopesModal`, `BulkResultsModal`, and integration into `UserManagementTab` across users, branches, and warehouses lists.
+- **UI States & Scenarios**: Selection counts, progress spinners, granular outcome badges, partial-failure retry workflow (retrying only failed IDs), dynamic API permission checking without hardcoded role strings, and axe-core accessibility compliance (`verify-a11y.ts`).
 
 ## Business outcome and sources
 

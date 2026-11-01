@@ -150,7 +150,7 @@ async function runBulkSupertestSuite() {
           merchant_id: mId,
           email: `bulk_${emailSuffix}_${testSuffix}@shipde.vn`,
           full_name: `Bulk User ${role}`,
-          phone: '0901234567',
+          phone: `09${Math.floor(10000000 + Math.random() * 90000000)}`,
           password_hash: 'hashed',
           role,
           status: 'active',
