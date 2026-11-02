@@ -66,19 +66,90 @@ function concrete(value) {
     .replace(/<[^>]*>/g, '')
     .replace(/[`*_~]/g, '')
     .trim();
+  const stripped = text
+    .replace(/^[[({<"'`\s]+/, '')
+    .replace(/[\])}>'"`;\s]+$/, '');
   return (
     /[\p{L}\p{N}]/u.test(text) &&
-    !/^(?:n\/a|none|todo|tbd|tbc|pending|not applicable)[.!]?$/i.test(text)
+    !/^(?:n\/a|none|todo|tbd|tbc|pending|not applicable)(?:$|[\s:._\-([].*)/i.test(stripped)
   );
 }
 
+const REGRESSION_SPLIT =
+  /(?:;\s*|:\s*|\s+[-—]\s*|\s*,\s*|\s*\(\s*)?\b(?:regression[\s-]*(?:tests?|proofs?|commands?)?|regression\s*proof)\s*[:=-]?\s*/i;
+
+function isValidBehaviourPair(entry) {
+  const match = entry.match(REGRESSION_SPLIT);
+  if (!match || match.index === undefined) return false;
+  const behaviour = entry.slice(0, match.index).trim();
+  const proof = entry.slice(match.index + match[0].length).replace(/\)\s*$/, '').trim();
+  return concrete(behaviour) && concrete(proof);
+}
+
+function checkTableBehaviours(lines) {
+  let foundTable = false;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const header = tableCells(lines[i]);
+    const separator = tableCells(lines[i + 1]);
+    if (!header?.length || separator?.length !== header.length || !isTableSeparator(separator)) {
+      continue;
+    }
+    foundTable = true;
+    let bCol = header.findIndex((c) => /behavio[u]?r/i.test(c));
+    let pCol = header.findIndex((c) => /regression|proof|test/i.test(c));
+    if (bCol === -1 && header.length >= 2) bCol = 0;
+    if (pCol === -1 && header.length >= 2) pCol = 1;
+    if (bCol === -1 || pCol === -1 || bCol === pCol) return false;
+
+    let rows = 0;
+    let cursor = i + 2;
+    for (; cursor < lines.length; cursor++) {
+      const row = tableCells(lines[cursor]);
+      if (!row) break;
+      rows++;
+      const behaviour = row[bCol] ?? '';
+      const proof = row[pCol] ?? '';
+      if (!concrete(behaviour) || !concrete(proof)) return false;
+    }
+    if (rows === 0) return false;
+    i = cursor - 1;
+  }
+  return foundTable;
+}
+
+function checkListBehaviours(lines) {
+  const entries = [];
+  let current = '';
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || HEADING.test(line)) continue;
+    const isBullet = /^(?:[-*+]|\d+[.)])\s+/.test(line);
+    if (isBullet) {
+      if (current) entries.push(current);
+      current = line.replace(/^(?:[-*+]|\d+[.)])\s+/, '').trim();
+    } else if (current) {
+      current += ' ' + line;
+    } else {
+      current = line;
+    }
+  }
+  if (current) entries.push(current);
+
+  if (entries.length === 0) return false;
+  return entries.every((entry) => isValidBehaviourPair(entry));
+}
+
 function hasBehaviour(lines) {
-  return lines.some(
-    (line, index) =>
-      !HEADING.test(line) &&
-      !isTableSeparator(tableCells(lines[index + 1] ?? '')) &&
-      concrete(line.replace(/^\s*(?:[-*+]|\d+[.)])\s*/, '').replace(/\bregression test\s*:?/gi, ''))
-  );
+  const hasTable = lines.some((line, index) => {
+    const separator = tableCells(lines[index + 1] ?? '');
+    return separator && isTableSeparator(separator);
+  });
+
+  if (hasTable) {
+    return checkTableBehaviours(lines);
+  }
+  return checkListBehaviours(lines);
 }
 
 function isTableSeparator(cells) {

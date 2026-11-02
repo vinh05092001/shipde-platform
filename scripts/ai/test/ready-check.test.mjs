@@ -43,6 +43,12 @@ for (const proof of [
   '`<test name or runnable command>`',
   'TBD',
   'N/A',
+  'TODO: choose a test',
+  'TBD: verification command',
+  'TBD - verification command',
+  'Pending: verification',
+  'N/A: not applicable',
+  '[TODO: choose a test]',
 ]) {
   test(`rejects missing or placeholder Proof: ${JSON.stringify(proof)}`, () => {
     const result = check(valid.replace('`preserves-existing-behaviour`', proof));
@@ -102,8 +108,13 @@ for (const body of [
   '### Regression\n\n- ',
   '- `<behaviour>`: `<test>`',
   '- `<Existing behaviour to preserve>`: regression test `<test name or command>`',
+  '- Existing CLI input remains read-only.',
+  '- Existing CLI input remains read-only; regression test: `ready-cli-does-not-write`.\n- Preserved behaviour without regression proof.',
+  '- Existing CLI input remains read-only; regression test: TODO: choose a test',
+  '- Existing CLI input remains read-only; regression test: TBD: verification command',
+  '- Existing CLI input remains read-only; regression test:',
 ]) {
-  test(`rejects empty Unchanged behaviour: ${JSON.stringify(body)}`, () => {
+  test(`rejects empty or unproved Unchanged behaviour: ${JSON.stringify(body)}`, () => {
     const result = check(
       valid.replace(
         /## Unchanged behaviour[\s\S]*?(?=## Acceptance)/,
