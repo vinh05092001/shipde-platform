@@ -678,4 +678,3 @@ available check and each `BLOCKED_BY_SANDBOX` check with its exact error in the 
 body; the host coordinator commits the output and runs blocked refresh/checks.
 Failed scans never justify replacing live evidence with model IDs or scores from
 operator notes or fixture data.
-
