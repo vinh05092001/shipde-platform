@@ -41,7 +41,7 @@ GEMINI is assigned as author for the full vertical slice: database migration DDL
 ## In scope
 
 - Create Prisma migration `20261031120000_task_ai_154_orders_rls` enabling RLS and `FORCE ROW LEVEL SECURITY` on `orders` with the `orders_tenant_isolation` policy for `USING` and `WITH CHECK`.
-- Implement `tenant-context.ts` using `AsyncLocalStorage<string>` to store and retrieve the active request tenant ID.
+- Implement `tenant-context.ts` using an `AsyncLocalStorage` keyed by the tenant ID string to store and retrieve the active request tenant ID.
 - Implement `tenant-rls.extension.ts` adapting the Apache-2.0 pattern from `prisma/prisma-client-extensions`, executing `SELECT set_config('app.tenant_id', ${tenantId}, true)` inside Prisma transactions.
 - Implement `TenantMiddleware` in `apps/api/src/prisma/tenant.middleware.ts` to extract verified `mid` claims from Bearer access tokens and run subsequent request handling inside the tenant context.
 - Wire `tenantRlsExtension` into `PrismaService` via `prismaService.extended`.
@@ -174,13 +174,14 @@ The current restricted-role execution passed all original scenarios 1-17b: cross
 | 2 | `c64b7130` | `CHANGES_REQUIRED` | Resolved P1 finding 1 (raw/relation queries bypass), P1 finding 2 (array transaction atomicity loss), and P1 finding 3 (diagnostic credential exposure) |
 | 3 | `a8bd0b59` | `CHANGES_REQUIRED` | Resolved P1 finding 1 (transaction-context bypass for root client in callback via binding bypass decisions to transaction client) and P1 finding 4 (scoped test cleanup fixtures) |
 | 4 | `6f2e3904` | `CHANGES_REQUIRED` | Resolved previous P1 finding 2 (scope restoration preserved TASK-AI-157 and TASK-AI-153 alongside TASK-AI-154). Previous P1 finding 1 remained open (ambient mark not bound to transaction identity allowed foreign batch nested in extended transaction). |
-| 5 | `67485942` | `CHANGES_REQUIRED` | Resolved P1 finding 1 in code: bound setup proof to actual transaction identity (`activeTxIds: Set<string | number>` tracking `tx[Symbol.for('prisma.client.transaction.id')]` for interactive transactions and intercepted `txParams.id` for batch transactions); nested foreign batch inside outer extended transaction fails closed with `TenantRlsUnconfiguredTransactionError`; added restricted-role regressions 17 and 17b in `orders-rls.integration.spec.ts`. Review verified fix in code; required exact execution logs and CI results. |
+| 5 | `67485942` | `CHANGES_REQUIRED` | Resolved P1 finding 1 in code: bound setup proof to actual transaction identity (`activeTxIds`, a set of interactive and batch transaction identifiers, tracking `tx[Symbol.for('prisma.client.transaction.id')]` for interactive transactions and intercepted `txParams.id` for batch transactions); nested foreign batch inside outer extended transaction fails closed with `TenantRlsUnconfiguredTransactionError`; added restricted-role regressions 17 and 17b in `orders-rls.integration.spec.ts`. Review verified fix in code; required exact execution logs and CI results. |
 | 6 | `e73b986` | `CHANGES_REQUIRED` | Earlier author packet claimed verification closure using local results. That closure claim is withdrawn: the subsequent review at `929aef5b51a459ac35d2fde523a79f6d5ae643d9` observed failed CI gates. |
 | 7 | Working tree based on `929aef5b51a459ac35d2fde523a79f6d5ae643d9` | `CHANGES_REQUIRED` pending fresh CI/review | Identified both actual gate causes, reproduced their negative checks, retained the two formatting repairs and all earlier isolation fixes, corrected CI evidence, and prepared a contract-valid PR body. No commit, push or independent PASS issued. |
+| 8 | Working tree based on `929aef5b51a459ac35d2fde523a79f6d5ae643d9` | `CHANGES_REQUIRED` pending fresh CI/review | Removed the two angle-bracket template placeholders from this file (they are published verbatim as the PR body and re-tripped the `contract` gate); added a unit regression that fails on any `<...>` placeholder in the Work Item. Merge of `origin/main` keeps one register row per Work Item. No new production behavior. |
 
 ## Known limitations
 
-- Full local root/API suites are not green: shared Redis quota exhaustion blocks invitations acceptance. See the exact failure and reproduction in `.oc/pr-body.md`; a fresh isolated-infrastructure run remains necessary.
+- A full clean-infrastructure rerun is required. Invitations acceptance depends on shared Redis; it fails closed rather than skipping when the quota is unavailable.
 - Exact-head CI remains failed at the reviewed commit. Updated local evidence is not a CI pass; the coordinator must publish the prepared body, commit the changes, and obtain fresh CI plus independent review.
-- Git fetch/merge/commit and Docker lifecycle operations were not attempted, as required by the operator sandbox note. Tests used the already reachable local database.
+- Docker lifecycle follows the operator rule: database services are started only for the test run and stopped afterwards. Tests that do not need PostgreSQL/Redis/MinIO run without them.
 - The original BR-RLS-05 uncontexted-session pilot exception remains; it does not authorize merchant HTTP requests or replace session/RBAC guards. No new product decision was needed for the review fixes.

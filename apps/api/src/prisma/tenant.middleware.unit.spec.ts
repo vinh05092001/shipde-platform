@@ -1,4 +1,6 @@
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, it } from 'node:test';
 import type { NextFunction, Request, Response } from 'express';
 import { TenantMiddleware } from './tenant.middleware';
@@ -10,6 +12,29 @@ process.env.AUTH_TOKEN_SECRET = SECRET;
 
 const MERCHANT_A = '11111111-1111-4111-8111-111111111111';
 const MERCHANT_B = '22222222-2222-4222-8222-222222222222';
+
+/**
+ * Repository-root-relative path resolution (tests run from apps/api or the
+ * repository root). The Work Item is published as the Pull Request body, so
+ * the test reads the committed document rather than a build artifact.
+ */
+function repoRootFrom(start: string): string {
+  let dir = start;
+  for (;;) {
+    if (fs.existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return start;
+    dir = parent;
+  }
+}
+
+const WORK_ITEM_PATH = path.join(
+  repoRootFrom(__dirname),
+  'docs',
+  'product-spec',
+  'work-items',
+  'TASK-AI-154.md'
+);
 
 function signToken(
   mid: string | null,
@@ -126,6 +151,15 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
       undefined,
       'whitespace-only scope must not establish merchant tenant context'
     );
+  });
+
+  // TASK-AI-154 review round 8: the Work Item file is published as the Pull
+  // Request body, and the PR contract gate rejects any angle-bracket template
+  // placeholder. Documentation must never reintroduce one.
+  it('Work Item text contains no angle-bracket template placeholder', () => {
+    const body = fs.readFileSync(WORK_ITEM_PATH, 'utf8');
+    const placeholders = body.match(/<[^>\n]+>/g) || [];
+    assert.deepEqual(placeholders, [], `placeholders: ${placeholders.join(', ')}`);
   });
 
   it('does not establish tenant context for empty array scope claims', async () => {
