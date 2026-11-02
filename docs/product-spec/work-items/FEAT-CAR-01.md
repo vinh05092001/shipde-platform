@@ -6,14 +6,14 @@
 |---|---|
 | Work Item ID | `FEAT-CAR-01` |
 | Feature ID | `FEAT-CAR-01` |
-| Status | `READY_FOR_AUTHOR` |
+| Status | `IN_PROGRESS` |
 | Delivery order | `30`, slice `S02`, epic `EPIC-CAR` |
 | Dependencies | `TASK-FOUND-04` MERGED; `FEAT-AUTH-01` MERGED; `FEAT-AUTH-06` MERGED; `FEAT-RBAC-01` MERGED; `FEAT-RBAC-02` MERGED; `FEAT-ORG-01` MERGED |
 | Assigned author | `GEMINI` |
 | Risk | `HIGH` — shared taxonomy affects tenant boundaries, shipment state and financial interpretation |
 | Allowed paths | `docs/product-spec/work-items/FEAT-CAR-01.md`, `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`, `docs/product-spec/docs/00-control/TRACEABILITY.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`, `docs/product-spec/contracts/openapi.yaml`, `packages/contracts/src/index.ts`, `packages/contracts/src/openapi.ts`, `prisma/schema.prisma`, `prisma/migrations/**`, `infra/docker/seed.ts`, `packages/testkit/src/carriers/catalog/**`, `apps/api/src/app.module.ts`, `apps/api/src/rbac/rbac.constants.ts`, `apps/api/src/carrier-catalog/**`, `apps/api/package.json`, `apps/web/src/app/settings/carriers/**`, `apps/web/src/features/carriers/**`, `apps/web/src/tests/carrier-catalog*.test.ts`, `apps/web/e2e/carrier-catalog*.spec.ts`, `apps/web/package.json`, `docs/product-spec/evidence/FEAT-CAR-01/**` |
 | Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/feat-car-01` |
+| Branch | `feat/feat-car-01-impl` |
 | Pull Request | Pending |
 
 ## Business outcome
@@ -521,6 +521,8 @@ pnpm build
 | Planning round 1 (2026-10-30) | `b52f3af7` | BLOCKED | Identified CAR-GAP-01 through CAR-GAP-07 requiring product owner decisions |
 | Planning round 2 (2026-10-31) | `9a9b6437` | CHANGES_REQUIRED | Resolved: (1) Corrected GHN carrier name to "Giao Hàng Nhanh" (VERIFIED_OFFICIAL, citing GHN.md and public API docs); (2) Corrected GHTK raw status 20 mapping to canonical RETURNING ("Đang trả hàng" / return in progress per official GHTK docs https://docs.giaohangtietkiem.vn/) with provider evidence and golden assert; (3) Resolved schema revision identity and relationships for immutable multi-revision publication: UUID PKs across all models, explicit catalog_revision, Carrier @@unique([catalogRevision, code]), CarrierService @@unique([catalogRevision, carrierCode, code]) with carrier_id UUID FK (onDelete: Cascade), CanonicalStatusReference and FeeComponentReference @@unique([catalogRevision, code]), CatalogCompatibilityMapping @@unique([catalogRevision, carrierCode, domain, rawKey]). |
 | Planning round 3 (2026-10-31) | `a5a3f053` | CHANGES_REQUIRED | Findings 1-3 confirmed resolved by Codex review. Finding 4 (NEW P1): GHTK status 13 ('Đơn hàng bồi thường' / compensation) mapped to UNMAPPED / null, preserving raw status without incorrectly classifying as DAMAGED. |
+| Implementation round 4 (2026-10-31) | `565c9ae5` | CHANGES_REQUIRED | Restored unrelated workflow records from origin/main and added empty-scope denial HTTP test. Review findings: (1) Previous P1 #2: path-specific restoration evidence needed for FEATURE-DELIVERY-REGISTER.csv:268-269, apps/api/AGENTS.md:1-29, apps/web/AGENTS.md:1-19, TASK-AI-153.md, TASK-AI-157.md, and workflow prompts; (2) NEW P1: redact opaque URLs (e.g. postgresql:user:sentinel@db/catalog), unsupported schemes, and missing authority before emitting diagnostics. |
+| Implementation round 5 (2026-11-01) | Pending | READY_FOR_CODEX | Resolved: (1) NEW P1: redactDatabaseUrl fails closed to [REDACTED_DATABASE_URL] wholesale on unsupported schemes and URLs without valid authority/hostname; added regression assertions for both CI error and local warning messages in both unit and supertest suites; (2) Previous P1 #2: verified path-by-path exact parity against origin/main (0 diff) for FEATURE-DELIVERY-REGISTER.csv, apps/api/AGENTS.md, apps/web/AGENTS.md, TASK-AI-153.md, TASK-AI-157.md, CODEX-PLANNING-PROMPT.md, GEMINI-START-PROMPT.md, NINEROUTER-START-PROMPT.md, WORK-ITEM-TEMPLATE.md, AI-TOOLCHAIN-DECISIONS.md, and root AGENTS.md. Empty-scope denial proven via HTTP 403 test with 0 data leaked; audit metadata masked across all diagnostic outputs. |
 
 ## Residual limitations
 

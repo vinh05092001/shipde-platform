@@ -930,3 +930,96 @@ model OutboxEvent {
   @@index([correlation_id])
   @@map("outbox_events")
 }
+
+// ============================================================================
+// 9. Platform Carrier Catalog & Taxonomy Reference (FEAT-CAR-01)
+// ============================================================================
+
+model Carrier {
+  id              String           @id @default(uuid()) @db.Uuid
+  catalogRevision String           @map("catalog_revision") @db.VarChar(40)
+  code            CarrierCodeEnum
+  name            String           @db.VarChar(100)
+  logoUrl         String?          @map("logo_url") @db.VarChar(500)
+  isActive        Boolean          @default(true) @map("is_active")
+  evidenceLevel   String           @map("evidence_level") @db.VarChar(50)
+  description     String?          @db.Text
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  services        CarrierService[]
+
+  @@unique([catalogRevision, code])
+  @@index([catalogRevision])
+  @@map("carriers")
+}
+
+model CarrierService {
+  id              String          @id @default(uuid()) @db.Uuid
+  carrierId       String          @map("carrier_id") @db.Uuid
+  catalogRevision String          @map("catalog_revision") @db.VarChar(40)
+  carrierCode     CarrierCodeEnum @map("carrier_code")
+  code            String          @db.VarChar(100)
+  name            String          @db.VarChar(150)
+  serviceType     String          @map("service_type") @db.VarChar(50)
+  description     String          @db.Text
+  isActive        Boolean         @default(true) @map("is_active")
+  evidenceLevel   String          @map("evidence_level") @db.VarChar(50)
+  sourceRevision  String          @map("source_revision") @db.VarChar(80)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  carrier         Carrier         @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+
+  @@unique([catalogRevision, carrierCode, code])
+  @@index([carrierId])
+  @@index([catalogRevision, carrierCode])
+  @@map("carrier_services")
+}
+
+model CanonicalStatusReference {
+  id              String   @id @default(uuid()) @db.Uuid
+  catalogRevision String   @map("catalog_revision") @db.VarChar(40)
+  code            String   @db.VarChar(50)
+  category        String   @db.VarChar(50)
+  label           String   @db.VarChar(100)
+  description     String   @db.Text
+  stageOrder      Int      @map("stage_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([catalogRevision, code])
+  @@index([catalogRevision])
+  @@map("canonical_status_references")
+}
+
+model FeeComponentReference {
+  id              String   @id @default(uuid()) @db.Uuid
+  catalogRevision String   @map("catalog_revision") @db.VarChar(40)
+  code            String   @db.VarChar(50)
+  name            String   @db.VarChar(100)
+  category        String   @db.VarChar(50)
+  description     String   @db.Text
+  isRefundable    Boolean  @default(false) @map("is_refundable")
+  vatApplicable   Boolean  @default(true) @map("vat_applicable")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([catalogRevision, code])
+  @@index([catalogRevision])
+  @@map("fee_component_references")
+}
+
+model CatalogCompatibilityMapping {
+  id              String           @id @default(uuid()) @db.Uuid
+  catalogRevision String           @map("catalog_revision") @db.VarChar(40)
+  carrierCode     CarrierCodeEnum? @map("carrier_code")
+  domain          String           @db.VarChar(20)
+  rawKey          String           @map("raw_key") @db.VarChar(100)
+  canonicalCode   String?          @map("canonical_code") @db.VarChar(50)
+  disposition     String           @db.VarChar(20)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([catalogRevision, carrierCode, domain, rawKey])
+  @@index([catalogRevision, domain])
+  @@map("catalog_compatibility_mappings")
+}
