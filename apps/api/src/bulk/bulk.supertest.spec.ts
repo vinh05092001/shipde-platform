@@ -12,6 +12,7 @@ import { RoleEnum, SessionStatusEnum, Prisma } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
 import { BulkItemStatus } from '@shipde/contracts';
+import { parseCsvRecords } from './bulk.service';
 
 async function runBulkSupertestSuite() {
   console.log('================================================================');
@@ -545,7 +546,11 @@ async function runBulkSupertestSuite() {
       'owner_a2'
     );
 
-    // Deactivate ownerA2 first so ownerAId becomes the sole active owner
+    const auditReasonEmail = 'audit-note@example.invalid';
+    const auditReasonPhone = '0909123456';
+    const auditReasonCredential = 'test-not-a-secret-bulk-reason';
+    const auditOpaqueReason = 'test-not-a-secret-opaque-reason';
+    // Deactivate ownerA2 first so ownerAId becomes the sole active owner.
     const resDeactOwner2 = await request(app.getHttpServer())
       .post('/api/v1/bulk-actions')
       .set('Authorization', `Bearer ${ownerTokenA}`)
@@ -554,6 +559,16 @@ async function runBulkSupertestSuite() {
         action: 'deactivate',
         ids: [ownerA2Id],
         confirm: true,
+        params: {
+          reason:
+            auditReasonEmail +
+            ' ' +
+            auditReasonPhone +
+            ' token=' +
+            auditReasonCredential +
+            ' ' +
+            auditOpaqueReason,
+        },
       })
       .expect(200);
 
@@ -606,6 +621,130 @@ async function runBulkSupertestSuite() {
     assert.strictEqual(resSoleOwner.body.data.results[0].error.code, 'CANNOT_REMOVE_LAST_OWNER');
     console.log('  PASS: Sole active owner deactivation blocked with CANNOT_REMOVE_LAST_OWNER.');
 
+    // Empty target scopes must deny even a wildcard actor. A cached CSV row
+    // with embedded line breaks and doubled quotes must be removed as a unit.
+    const scopeReplayKey = 'idemp-bulk-scope-replay-' + Date.now();
+    const privateCsvFragment = 'PRIVATE-COM03-MULTILINE-FRAGMENT';
+    await prisma.user.update({
+      where: { id: targetUser2Id },
+      data: { full_name: 'Private,\n"' + privateCsvFragment + '"' },
+    });
+    const scopeExportPayload = {
+      entity_type: 'users',
+      action: 'export_csv',
+      ids: [targetUser1Id, targetUser2Id],
+    };
+    const scopeExport = await request(app.getHttpServer())
+      .post('/api/v1/bulk-actions')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .set('Idempotency-Key', scopeReplayKey)
+      .send(scopeExportPayload)
+      .expect(200);
+    assert.strictEqual(scopeExport.body.data.success_count, 2);
+    assert.ok(scopeExport.body.data.export_payload.includes(privateCsvFragment));
+
+    for (const targetScopes of [
+      { store_scopes: [], warehouse_scopes: ['wh-south'] },
+      { store_scopes: ['branch-south'], warehouse_scopes: [] },
+      { store_scopes: [], warehouse_scopes: [] },
+    ]) {
+      await prisma.user.update({
+        where: { id: targetUser2Id },
+        data: { ...targetScopes, status: 'suspended' },
+      });
+      for (const actorToken of [adminToken, ownerTokenA]) {
+        const fresh = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .set('Authorization', `Bearer ${actorToken}`)
+          .send({ entity_type: 'users', action: 'activate', ids: [targetUser2Id] })
+          .expect(200);
+        assert.strictEqual(fresh.body.data.results[0].error.code, 'SCOPE_FORBIDDEN');
+        assert.strictEqual(fresh.body.data.results[0].data, undefined);
+        const replay = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .set('Authorization', `Bearer ${actorToken}`)
+          .set('Idempotency-Key', scopeReplayKey)
+          .send(scopeExportPayload)
+          .expect(200);
+        assert.strictEqual(replay.body.data.success_count, 1);
+        assert.strictEqual(replay.body.data.failure_count, 1);
+        const forbidden = replay.body.data.results.find((item: any) => item.id === targetUser2Id);
+        assert.strictEqual(forbidden.error.code, 'SCOPE_FORBIDDEN');
+        assert.strictEqual(forbidden.data, undefined);
+        assert.ok(!replay.body.data.export_payload.includes(targetUser2Id));
+        assert.ok(!replay.body.data.export_payload.includes(privateCsvFragment));
+        assert.strictEqual(parseCsvRecords(replay.body.data.export_payload).length, 2);
+      }
+      assert.strictEqual(
+        (await prisma.user.findUnique({ where: { id: targetUser2Id } }))?.status,
+        'suspended'
+      );
+    }
+    await prisma.user.update({
+      where: { id: targetUser2Id },
+      data: {
+        store_scopes: ['branch-south'],
+        warehouse_scopes: ['wh-south'],
+        full_name: 'Target User 2 Active',
+      },
+    });
+
+    // Empty actor grants must also deny both a fresh mutation and cached disclosure.
+    for (const actor of [
+      { id: adminUserId, token: adminToken },
+      { id: ownerAId, token: ownerTokenA },
+    ]) {
+      for (const actorScopes of [
+        { store_scopes: [], warehouse_scopes: ['*'] },
+        { store_scopes: ['*'], warehouse_scopes: [] },
+        { store_scopes: [], warehouse_scopes: [] },
+      ]) {
+        await prisma.user.update({ where: { id: actor.id }, data: actorScopes });
+        try {
+          const fresh = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .set('Authorization', `Bearer ${actor.token}`)
+            .send({ entity_type: 'users', action: 'activate', ids: [targetUser2Id] })
+            .expect(200);
+          const replay = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .set('Authorization', `Bearer ${actor.token}`)
+            .set('Idempotency-Key', scopeReplayKey)
+            .send(scopeExportPayload)
+            .expect(200);
+          for (const response of [fresh, replay]) {
+            assert.strictEqual(response.body.data.success_count, 0);
+            assert.ok(
+              response.body.data.results.every(
+                (item: any) => item.error?.code === 'SCOPE_FORBIDDEN' && item.data === undefined
+              )
+            );
+          }
+          assert.ok(!replay.body.data.export_payload.includes(targetUser1Id));
+          assert.ok(!replay.body.data.export_payload.includes(targetUser2Id));
+          assert.strictEqual(
+            (await prisma.user.findUnique({ where: { id: targetUser2Id } }))?.status,
+            'suspended'
+          );
+        } finally {
+          await prisma.user.update({
+            where: { id: actor.id },
+            data: { store_scopes: ['*'], warehouse_scopes: ['*'] },
+          });
+        }
+      }
+    }
+    assert.strictEqual(
+      await prisma.auditLog.count({
+        where: { merchant_id: merchantIdA, entity_id: targetUser2Id },
+      }),
+      0,
+      'denied scope checks must not mutate or create item audits'
+    );
+    console.log(
+      '  PASS: Empty actor/target scopes deny execution and cached multiline CSV disclosure.'
+    );
+
     // ========================================================================
     // 8b. Per-item savepoint isolation (real PostgreSQL): one item's database
     //     failure must not abort the shared transaction (review Finding 3)
@@ -613,6 +752,7 @@ async function runBulkSupertestSuite() {
     console.log('🧪 Testing per-item savepoint isolation with a real database error...');
     const savepointFailUserId = randomUUID();
     const savepointHealthyUserId = randomUUID();
+    const savepointKey = 'idemp-bulk-savepoint-' + Date.now();
     await prisma.user.createMany({
       data: [
         {
@@ -644,12 +784,24 @@ async function runBulkSupertestSuite() {
 
     // Test-owned trigger aborts only the failing target's UPDATE; dropped right
     // after the assertions (and again in cleanup) so no untracked DB objects remain.
+    // PostgreSQL trigger functions must declare no formal arguments; the target
+    // UUID is passed via CREATE TRIGGER ... EXECUTE FUNCTION fn('uuid') and read
+    // through TG_ARGV[0] inside the function body (Finding 1, review round 5).
     await prisma.$executeRaw(
       Prisma.raw(
-        `CREATE OR REPLACE FUNCTION bulk_test_item_failure_guard(target uuid) RETURNS trigger AS $fn$
+        `CREATE OR REPLACE FUNCTION bulk_test_item_failure_guard() RETURNS trigger AS $fn$
        BEGIN
-         IF NEW.id = target THEN
-           RAISE EXCEPTION 'simulated per-item database failure';
+         IF NEW.id IN (TG_ARGV[0]::uuid, TG_ARGV[1]::uuid) AND NOT EXISTS (
+           SELECT 1 FROM bulk_action_batches
+           WHERE merchant_id = NEW.merchant_id
+             AND idempotency_key = TG_ARGV[2]
+             AND status = 'IN_PROGRESS'
+         ) THEN
+           RAISE EXCEPTION 'missing upfront batch reservation';
+         END IF;
+         IF NEW.id = TG_ARGV[0]::uuid THEN
+           RAISE EXCEPTION 'private failing row email=% phone=% token=test-not-a-secret-db SQL=UPDATE users',
+             NEW.email, NEW.phone USING ERRCODE = 'XX000';
          END IF;
          RETURN NEW;
        END;
@@ -658,11 +810,10 @@ async function runBulkSupertestSuite() {
     );
     await prisma.$executeRaw(
       Prisma.raw(
-        `CREATE TRIGGER bulk_test_item_fail_trg BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION bulk_test_item_failure_guard('${savepointFailUserId}')`
+        `CREATE TRIGGER bulk_test_item_fail_trg BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION bulk_test_item_failure_guard('${savepointFailUserId}', '${savepointHealthyUserId}', '${savepointKey}')`
       )
     );
 
-    const savepointKey = `idemp-bulk-savepoint-${Date.now()}`;
     const resSavepoint = await request(app.getHttpServer())
       .post('/api/v1/bulk-actions')
       .set('Authorization', `Bearer ${ownerTokenA}`)
@@ -685,8 +836,12 @@ async function runBulkSupertestSuite() {
       (r: any) => r.id === savepointFailUserId
     );
     assert.ok(
-      spFailedItem?.error?.message?.includes('simulated per-item database failure'),
-      'failed item must surface the database error'
+      spFailedItem?.error?.code === 'INTERNAL_ERROR',
+      'raw database error must be sanitized to INTERNAL_ERROR (Finding 3, review round 5)'
+    );
+    assert.ok(
+      !spFailedItem?.error?.message?.includes('private failing row'),
+      'raw database diagnostics must not leak into the response'
     );
 
     // The failed item's aborted update is rolled back; the healthy item persists
@@ -726,12 +881,41 @@ async function runBulkSupertestSuite() {
     assert.strictEqual(spBatch?.status, 'PARTIAL_FAILURE');
     assert.strictEqual(spBatch?.success_count, 1);
     assert.strictEqual(spBatch?.failure_count, 1);
+    assert.deepStrictEqual(spBatch?.results, resSavepoint.body.data);
+    for (const raw of [
+      'private failing row',
+      '0909000001',
+      'test-not-a-secret-db',
+      'UPDATE users',
+    ]) {
+      assert.ok(!JSON.stringify([resSavepoint.body, spBatch?.results]).includes(raw));
+    }
+    const savepointReplay = await request(app.getHttpServer())
+      .post('/api/v1/bulk-actions')
+      .set('Authorization', `Bearer ${ownerTokenA}`)
+      .set('Idempotency-Key', savepointKey)
+      .send({
+        entity_type: 'users',
+        action: 'activate',
+        ids: [savepointFailUserId, savepointHealthyUserId],
+      })
+      .expect(200);
+    assert.deepStrictEqual(savepointReplay.body.data, resSavepoint.body.data);
+    assert.strictEqual(
+      await prisma.auditLog.count({
+        where: {
+          merchant_id: merchantIdA,
+          action: 'USER_ACTIVATED',
+          entity_id: { in: [savepointFailUserId, savepointHealthyUserId] },
+        },
+      }),
+      1,
+      'replay must not repeat an item mutation or audit'
+    );
 
     // Release the test-owned trigger objects immediately
     await prisma.$executeRaw(Prisma.raw(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`));
-    await prisma.$executeRaw(
-      Prisma.raw(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`)
-    );
+    await prisma.$executeRaw(Prisma.raw(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard()`));
     console.log('  PASS: Per-item savepoint isolation verified against real PostgreSQL.');
 
     // ========================================================================
@@ -839,6 +1023,14 @@ async function runBulkSupertestSuite() {
         !serialized.includes('0901111111'),
         'Plaintext phone must never appear in audit log'
       );
+      for (const raw of [
+        auditReasonEmail,
+        auditReasonPhone,
+        auditReasonCredential,
+        auditOpaqueReason,
+      ]) {
+        assert.ok(!serialized.includes(raw), 'audit metadata must mask sensitive reason text');
+      }
     }
     console.log(`  PASS: Verified ${auditLogs.length} audit logs clean of plaintext secrets/PII.`);
 
@@ -853,7 +1045,7 @@ async function runBulkSupertestSuite() {
           Prisma.raw(`DROP TRIGGER IF EXISTS bulk_test_item_fail_trg ON users`)
         );
         await prisma.$executeRaw(
-          Prisma.raw(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard(uuid)`)
+          Prisma.raw(`DROP FUNCTION IF EXISTS bulk_test_item_failure_guard()`)
         );
         await prisma.bulkActionBatch.deleteMany({
           where: { merchant_id: { in: [merchantIdA, merchantIdB] } },

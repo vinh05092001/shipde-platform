@@ -1,10 +1,20 @@
+import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
+import { Test } from '@nestjs/testing';
+import type { ExecutionContext } from '@nestjs/common';
+import request from 'supertest';
 import { BulkService, parseCsvRecords } from './bulk.service';
+import { BulkModule } from './bulk.module';
 import { validateBulkActionDto } from './bulk.dto';
 import { BulkEntityType, BulkActionType, BulkItemStatus } from '@shipde/contracts';
 import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
+import { PrismaService } from '../prisma/prisma.service';
+import { RbacService } from '../rbac/rbac.service';
+import { RbacSeedGuard } from '../rbac/rbac.guard';
+import { SessionGuard } from '../session/session.guard';
+import { APP_CONFIG } from '../config.token';
 
 function createMockPrismaService() {
   const users: any[] = [
@@ -129,8 +139,18 @@ function createMockPrismaService() {
   const batches: any[] = [];
   const auditLogs: any[] = [];
   const deviceSessions: any[] = [
-    { id: 'sess-1', user_id: '22222222-2222-4222-8222-222222222222', token: 'tok-1' },
-    { id: 'sess-2', user_id: '33333333-3333-4333-8333-333333333333', token: 'tok-2' },
+    {
+      id: 'sess-1',
+      user_id: '22222222-2222-4222-8222-222222222222',
+      merchant_id: 'm-tenant-1',
+      token: 'tok-1',
+    },
+    {
+      id: 'sess-2',
+      user_id: '33333333-3333-4333-8333-333333333333',
+      merchant_id: 'm-tenant-1',
+      token: 'tok-2',
+    },
   ];
 
   const userModel = {
@@ -223,7 +243,10 @@ function createMockPrismaService() {
   const deviceSessionModel = {
     deleteMany: async ({ where }: any) => {
       const initial = deviceSessions.length;
-      const remaining = deviceSessions.filter((s) => s.user_id !== where.user_id);
+      const remaining = deviceSessions.filter(
+        (s) =>
+          s.user_id !== where.user_id || (where.merchant_id && s.merchant_id !== where.merchant_id)
+      );
       const deleted = initial - remaining.length;
       deviceSessions.length = 0;
       deviceSessions.push(...remaining);
@@ -287,6 +310,31 @@ function createMockRbacService(allowPermissions: boolean = true) {
   };
 }
 
+async function createBulkTestApp(
+  prisma: ReturnType<typeof createMockPrismaService>,
+  actor: ActorContext,
+  allowPermissions = true
+) {
+  const fixture = await Test.createTestingModule({ imports: [BulkModule] })
+    .overrideProvider(PrismaService)
+    .useValue(prisma)
+    .overrideProvider(RbacService)
+    .useValue(createMockRbacService(allowPermissions))
+    .overrideProvider(APP_CONFIG)
+    .useValue({})
+    .overrideGuard(RbacSeedGuard)
+    .useValue({ canActivate: () => true })
+    .overrideGuard(SessionGuard)
+    .useValue({
+      canActivate: (context: ExecutionContext) => {
+        context.switchToHttp().getRequest().actorContext = actor;
+        return true;
+      },
+    })
+    .compile();
+  return fixture.createNestApplication();
+}
+
 describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
   const callerOwner: ActorContext = {
     userId: '11111111-1111-4111-8111-111111111111',
@@ -299,6 +347,35 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
     merchantId: 'm-tenant-1',
     role: 'OPS_CSKH',
   };
+
+  it('Slice A wiring does not expose unrelated feature routes through BulkModule', async () => {
+    const app = await createBulkTestApp(createMockPrismaService(), callerOwner);
+    try {
+      await app.init();
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/bulk-actions')
+        .send({
+          entity_type: 'users',
+          action: 'activate',
+          ids: ['33333333-3333-4333-8333-333333333333'],
+        })
+        .expect(200);
+      assert.strictEqual(response.body.data.success_count, 1);
+      for (const route of [
+        '/api/v1/invitations',
+        '/api/v1/users',
+        '/api/v1/shops',
+        '/api/v1/branches',
+        '/api/v1/warehouses',
+        '/api/v1/onboarding',
+        '/api/v1/search',
+      ]) {
+        await request(app.getHttpServer()).get(route).expect(404);
+      }
+    } finally {
+      await app.close();
+    }
+  });
 
   describe('DTO Validation: validateBulkActionDto', () => {
     it('accepts valid bulk action DTO', () => {
@@ -650,6 +727,597 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       assert.strictEqual(resEmpty.data.results[0].error?.code, 'SCOPE_FORBIDDEN');
     });
 
+    it('empty actor or target scopes deny execution and cached disclosure, including owners and wildcard actors', async () => {
+      const scopeCases = [
+        { actorStore: [], actorWarehouse: ['*'], targetStore: ['north'], targetWarehouse: ['wh'] },
+        { actorStore: ['*'], actorWarehouse: [], targetStore: ['north'], targetWarehouse: ['wh'] },
+        { actorStore: [], actorWarehouse: [], targetStore: ['north'], targetWarehouse: ['wh'] },
+        { actorStore: ['*'], actorWarehouse: ['*'], targetStore: [], targetWarehouse: ['wh'] },
+        { actorStore: ['*'], actorWarehouse: ['*'], targetStore: ['north'], targetWarehouse: [] },
+        { actorStore: ['*'], actorWarehouse: ['*'], targetStore: [], targetWarehouse: [] },
+      ];
+      for (const actor of [callerOwner, callerOpsStaff]) {
+        for (const [index, scopes] of scopeCases.entries()) {
+          const mockPrisma = createMockPrismaService();
+          const service = new BulkService(mockPrisma as any, createMockRbacService() as any);
+          const target = mockPrisma.users[2];
+          const actorUser = mockPrisma.users.find((u) => u.id === actor.userId)!;
+          const exportDto = {
+            entity_type: BulkEntityType.USERS,
+            action: BulkActionType.EXPORT_CSV,
+            ids: [target.id],
+            idempotency_key: 'empty-scope-replay-' + actor.role + '-' + index,
+          };
+          const original = await service.executeBulkAction(
+            'm-tenant-1',
+            callerOwner,
+            exportDto,
+            '127.0.0.1',
+            'before-empty-scopes'
+          );
+          assert.strictEqual(original.data.success_count, 1);
+          actorUser.store_scopes = scopes.actorStore;
+          actorUser.warehouse_scopes = scopes.actorWarehouse;
+          target.store_scopes = scopes.targetStore;
+          target.warehouse_scopes = scopes.targetWarehouse;
+
+          const executed = await service.executeBulkAction(
+            'm-tenant-1',
+            actor,
+            {
+              entity_type: BulkEntityType.USERS,
+              action: BulkActionType.ACTIVATE,
+              ids: [target.id],
+            },
+            '127.0.0.1',
+            'execute-empty-scopes'
+          );
+          const replayed = await service.executeBulkAction(
+            'm-tenant-1',
+            actor,
+            exportDto,
+            '127.0.0.1',
+            'replay-empty-scopes'
+          );
+          for (const response of [executed, replayed]) {
+            assert.strictEqual(response.data.success_count, 0, actor.role + ' case ' + index);
+            assert.strictEqual(response.data.results[0].error?.code, 'SCOPE_FORBIDDEN');
+            assert.strictEqual(response.data.results[0].data, undefined);
+            assert.deepStrictEqual(response.data.succeeded_ids, []);
+          }
+          assert.ok(!replayed.data.export_payload?.includes(target.full_name));
+          assert.ok(!replayed.data.export_payload?.includes(target.id));
+          assert.strictEqual(target.status, 'suspended');
+          assert.strictEqual(mockPrisma.auditLogs.length, 0);
+        }
+      }
+    });
+
+    it('reservation failure aborts before any item mutation or audit', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BulkService(mockPrisma as any, createMockRbacService() as any);
+      let mutations = 0;
+      mockPrisma.user.update = async () => {
+        mutations += 1;
+        throw new Error('item execution must not begin without a reservation');
+      };
+      mockPrisma.bulkActionBatch.create = async () => {
+        throw new Error('test reservation unavailable');
+      };
+      await assert.rejects(
+        service.executeBulkAction(
+          'm-tenant-1',
+          callerOwner,
+          {
+            entity_type: BulkEntityType.USERS,
+            action: BulkActionType.ACTIVATE,
+            ids: [mockPrisma.users[2].id],
+            idempotency_key: 'reservation-unavailable',
+          },
+          '127.0.0.1',
+          'reservation-negative'
+        ),
+        (err: unknown) =>
+          err instanceof CanonicalApiException &&
+          err.getStatus() === 500 &&
+          err.code === 'INTERNAL_ERROR'
+      );
+      assert.strictEqual(mutations, 0);
+      assert.strictEqual(mockPrisma.auditLogs.length, 0);
+      assert.strictEqual(mockPrisma.users[2].status, 'suspended');
+    });
+
+    it('a failed tenant lock cannot be ignored or permit execution', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new BulkService(mockPrisma as any, createMockRbacService() as any);
+      mockPrisma.$transaction = async (callback: any) =>
+        callback({
+          ...mockPrisma,
+          $queryRaw: async () => {
+            throw new Error('test tenant lock unavailable');
+          },
+        });
+      await assert.rejects(
+        service.executeBulkAction(
+          'm-tenant-1',
+          callerOwner,
+          {
+            entity_type: BulkEntityType.USERS,
+            action: BulkActionType.ACTIVATE,
+            ids: [mockPrisma.users[2].id],
+            idempotency_key: 'lock-failure',
+          },
+          '127.0.0.1',
+          'lock-failure-negative'
+        ),
+        (err: unknown) =>
+          err instanceof CanonicalApiException &&
+          err.getStatus() === 500 &&
+          err.code === 'INTERNAL_ERROR'
+      );
+      assert.strictEqual(mockPrisma.users[2].status, 'suspended');
+      assert.strictEqual(mockPrisma.batches.length, 0);
+      assert.strictEqual(mockPrisma.auditLogs.length, 0);
+    });
+
+    it('HTTP reservation failure returns a sanitized canonical error before any mutation', async () => {
+      const mockPrisma = createMockPrismaService();
+      const privateDiagnostic =
+        'private-reservation@example.invalid 0909123456 SQL=INSERT token=test-not-a-secret';
+      mockPrisma.bulkActionBatch.create = async () => {
+        throw Object.assign(new Error(privateDiagnostic), { code: 'P2002' });
+      };
+      const app = await createBulkTestApp(mockPrisma, callerOwner);
+      try {
+        await app.init();
+        const response = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .set('Idempotency-Key', 'http-reservation-unavailable')
+          .send({
+            entity_type: BulkEntityType.USERS,
+            action: BulkActionType.ACTIVATE,
+            ids: [mockPrisma.users[2].id],
+          })
+          .expect(500);
+        assert.strictEqual(response.body.error.code, 'INTERNAL_ERROR');
+        assert.strictEqual(response.body.error.message, 'Lỗi nội bộ khi xử lý tác vụ hàng loạt');
+        assert.ok(!JSON.stringify(response.body).includes(privateDiagnostic));
+        assert.strictEqual(mockPrisma.users[2].status, 'suspended');
+        assert.strictEqual(mockPrisma.batches.length, 0);
+        assert.strictEqual(mockPrisma.auditLogs.length, 0);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('HTTP execution and replay deny empty owner scopes for users, branches and warehouses', async () => {
+      for (const entity of [
+        BulkEntityType.USERS,
+        BulkEntityType.BRANCHES,
+        BulkEntityType.WAREHOUSES,
+      ]) {
+        const mockPrisma = createMockPrismaService();
+        const target =
+          entity === BulkEntityType.USERS
+            ? mockPrisma.users[2]
+            : entity === BulkEntityType.BRANCHES
+              ? mockPrisma.branches[1]
+              : mockPrisma.warehouses[1];
+        const initialStatus =
+          entity === BulkEntityType.BRANCHES
+            ? 'INACTIVE'
+            : entity === BulkEntityType.WAREHOUSES
+              ? 'inactive'
+              : 'suspended';
+        target.status = initialStatus;
+        const app = await createBulkTestApp(mockPrisma, callerOwner);
+        try {
+          await app.init();
+          const exportDto = {
+            entity_type: entity,
+            action: BulkActionType.EXPORT_CSV,
+            ids: [target.id],
+            idempotency_key: 'http-empty-scope-' + entity,
+          };
+          const initial = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send(exportDto)
+            .expect(200);
+          assert.strictEqual(initial.body.data.success_count, 1);
+          mockPrisma.users[0].store_scopes = [];
+          mockPrisma.users[0].warehouse_scopes = [];
+          const replay = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send(exportDto)
+            .expect(200);
+          const fresh = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send({ entity_type: entity, action: BulkActionType.ACTIVATE, ids: [target.id] })
+            .expect(200);
+          for (const response of [replay, fresh]) {
+            assert.strictEqual(response.body.data.failure_count, 1);
+            assert.strictEqual(response.body.data.results[0].error.code, 'SCOPE_FORBIDDEN');
+            assert.strictEqual(response.body.data.results[0].data, undefined);
+          }
+          assert.ok(!replay.body.data.export_payload.includes(target.id));
+          assert.strictEqual(mockPrisma.auditLogs.length, 0);
+          assert.strictEqual(target.status, initialStatus);
+        } finally {
+          await app.close();
+        }
+      }
+    });
+
+    it('HTTP partial replay preserves ITEM_NOT_FOUND for foreign and missing IDs across all entities', async () => {
+      for (const entity of Object.values(BulkEntityType)) {
+        const prisma = createMockPrismaService();
+        const rows =
+          entity === BulkEntityType.USERS
+            ? prisma.users
+            : entity === BulkEntityType.BRANCHES
+              ? prisma.branches
+              : prisma.warehouses;
+        const target = rows[1];
+        const initialStatus =
+          entity === BulkEntityType.BRANCHES
+            ? 'INACTIVE'
+            : entity === BulkEntityType.WAREHOUSES
+              ? 'inactive'
+              : 'suspended';
+        target.status = initialStatus;
+        const foreign = {
+          ...target,
+          id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          merchant_id: 'm-tenant-2',
+        };
+        rows.push(foreign);
+        const missingId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        const body = {
+          entity_type: entity,
+          action: BulkActionType.ACTIVATE,
+          ids: [target.id, foreign.id, missingId],
+          // Client-supplied tenancy must not override the session's tenant.
+          merchant_id: foreign.merchant_id,
+          idempotency_key: 'partial-replay-' + entity,
+        };
+        const app = await createBulkTestApp(prisma, callerOwner);
+        try {
+          await app.init();
+          const first = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send(body)
+            .expect(200);
+          assert.deepStrictEqual(first.body.data.succeeded_ids, [target.id]);
+          assert.deepStrictEqual(first.body.data.failed_ids, [foreign.id, missingId]);
+          const failed = first.body.data.results.slice(1);
+          assert.ok(failed.every((item: any) => item.error.code === 'ITEM_NOT_FOUND'));
+          assert.deepStrictEqual(failed[0].error, failed[1].error);
+          const replay = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send(body)
+            .expect(200);
+          assert.deepStrictEqual(replay.body.data, first.body.data, entity);
+          assert.strictEqual(prisma.auditLogs.length, 1);
+          assert.strictEqual(prisma.auditLogs[0].merchant_id, callerOwner.merchantId);
+          assert.strictEqual(prisma.auditLogs[0].entity_id, target.id);
+          assert.strictEqual(foreign.status, initialStatus);
+          assert.strictEqual(prisma.batches.length, 1);
+        } finally {
+          await app.close();
+        }
+      }
+    });
+
+    it('HTTP RBAC denial and invalid input reject before mutations, reservations or audits', async () => {
+      for (const entity of Object.values(BulkEntityType)) {
+        const prisma = createMockPrismaService();
+        const app = await createBulkTestApp(prisma, callerOwner, false);
+        try {
+          await app.init();
+          const response = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send({
+              entity_type: entity,
+              action: BulkActionType.ACTIVATE,
+              ids: [prisma.users[2].id],
+              idempotency_key: 'forbidden-' + entity,
+            })
+            .expect(403);
+          assert.strictEqual(response.body.error.code, 'FORBIDDEN');
+          assert.strictEqual(prisma.users[2].status, 'suspended');
+          assert.strictEqual(prisma.batches.length, 0);
+          assert.strictEqual(prisma.auditLogs.length, 0);
+        } finally {
+          await app.close();
+        }
+      }
+
+      const prisma = createMockPrismaService();
+      const app = await createBulkTestApp(prisma, callerOwner);
+      const originalLimit = process.env.BULK_ACTION_MAX_ITEMS;
+      process.env.BULK_ACTION_MAX_ITEMS = '1';
+      try {
+        await app.init();
+        for (const [input, code, fieldCode] of [
+          [{ ids: [] }, 'VALIDATION_ERROR', 'EMPTY_ID_LIST'],
+          [
+            { ids: [prisma.users[1].id, prisma.users[2].id] },
+            'VALIDATION_ERROR',
+            'MAX_ITEMS_EXCEEDED',
+          ],
+          [{ ids: ['invalid-uuid'] }, 'VALIDATION_ERROR', 'INVALID_UUID'],
+          [{ action: 'deactivate' }, 'CONFIRMATION_REQUIRED', undefined],
+          [{ entity_type: 'orders' }, 'UNSUPPORTED_BULK_ENTITY', undefined],
+          [{ entity_type: 'shipments' }, 'UNSUPPORTED_BULK_ENTITY', undefined],
+        ] as const) {
+          const response = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send({
+              entity_type: 'users',
+              action: 'activate',
+              ids: [prisma.users[2].id],
+              idempotency_key: 'invalid-input',
+              ...input,
+            })
+            .expect(400);
+          assert.strictEqual(response.body.error.code, code);
+          if (fieldCode) assert.strictEqual(response.body.error.fields[0].code, fieldCode);
+          assert.strictEqual(prisma.users[2].status, 'suspended');
+          assert.strictEqual(prisma.batches.length, 0);
+          assert.strictEqual(prisma.auditLogs.length, 0);
+        }
+      } finally {
+        if (originalLimit === undefined) delete process.env.BULK_ACTION_MAX_ITEMS;
+        else process.env.BULK_ACTION_MAX_ITEMS = originalLimit;
+        await app.close();
+      }
+    });
+
+    it('HTTP unexpected exceptions cannot leak through canonical-looking codes, null throws, batch storage or replay', async () => {
+      const privateMessage = 'private-row@example.invalid 0909123456 token=test-not-a-secret-db';
+      for (const thrown of [
+        Object.assign(new Error(privateMessage), { code: 'XX000' }),
+        Object.assign(new Error(privateMessage), { code: 'INTERNAL_ERROR' }),
+        Object.assign(new Error(privateMessage), { code: 'P2002' }),
+        { code: 'FORBIDDEN', message: privateMessage },
+        null,
+        undefined,
+      ]) {
+        const mockPrisma = createMockPrismaService();
+        let attempts = 0;
+        mockPrisma.user.update = async () => {
+          attempts += 1;
+          throw thrown;
+        };
+        const dto = {
+          entity_type: BulkEntityType.USERS,
+          action: BulkActionType.ACTIVATE,
+          ids: [mockPrisma.users[2].id],
+          idempotency_key: 'sanitized-failure-replay',
+        };
+        const app = await createBulkTestApp(mockPrisma, callerOwner);
+        try {
+          await app.init();
+          const first = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send(dto)
+            .expect(200);
+          const replay = await request(app.getHttpServer())
+            .post('/api/v1/bulk-actions')
+            .send(dto)
+            .expect(200);
+          const expectedError = { code: 'INTERNAL_ERROR', message: 'Lỗi nội bộ khi xử lý mục này' };
+          assert.deepStrictEqual(first.body.data.results[0].error, expectedError);
+          assert.deepStrictEqual(replay.body.data, first.body.data);
+          assert.deepStrictEqual(mockPrisma.batches[0].results, first.body.data);
+          assert.ok(
+            !JSON.stringify([first.body, replay.body, mockPrisma.batches]).includes(privateMessage)
+          );
+          assert.strictEqual(attempts, 1, 'replay must not retry the failed database operation');
+          assert.strictEqual(mockPrisma.auditLogs.length, 0);
+          assert.strictEqual(mockPrisma.users[2].status, 'suspended');
+        } finally {
+          await app.close();
+        }
+      }
+    });
+
+    it('HTTP mutations cannot write a target that leaves the tenant after authorization', async (t) => {
+      for (const [entity, action] of [
+        [BulkEntityType.USERS, BulkActionType.ACTIVATE],
+        [BulkEntityType.USERS, BulkActionType.DEACTIVATE],
+        [BulkEntityType.USERS, BulkActionType.ASSIGN_SCOPES],
+        [BulkEntityType.BRANCHES, BulkActionType.ACTIVATE],
+        [BulkEntityType.BRANCHES, BulkActionType.DEACTIVATE],
+        [BulkEntityType.WAREHOUSES, BulkActionType.ACTIVATE],
+        [BulkEntityType.WAREHOUSES, BulkActionType.DEACTIVATE],
+      ] as const) {
+        await t.test(`${entity}:${action}`, async () => {
+          const prisma = createMockPrismaService();
+          const [model, target] =
+            entity === BulkEntityType.USERS
+              ? [prisma.user, prisma.users[2]]
+              : entity === BulkEntityType.BRANCHES
+                ? [prisma.branch, prisma.branches[1]]
+                : [prisma.warehouse, prisma.warehouses[1]];
+          target.status = entity === BulkEntityType.BRANCHES ? 'INACTIVE' : 'suspended';
+          const originalStatus = target.status;
+          let writes = 0;
+          model.update = async ({ where, data }) => {
+            // Simulate ownership changing after the authorized read. Match Prisma's
+            // conditional update semantics against the row at write time.
+            target.merchant_id = 'm-tenant-2';
+            if (where.merchant_id && where.merchant_id !== target.merchant_id) {
+              throw new Error('Record no longer matches update predicate');
+            }
+            writes += 1;
+            Object.assign(target, data);
+            return target;
+          };
+          const app = await createBulkTestApp(prisma, callerOwner);
+          try {
+            await app.init();
+            const response = await request(app.getHttpServer())
+              .post('/api/v1/bulk-actions')
+              .send({
+                entity_type: entity,
+                action,
+                ids: [target.id],
+                confirm: true,
+                params: { store_scopes: ['branch-north'] },
+              })
+              .expect(200);
+            assert.strictEqual(response.body.data.failure_count, 1);
+            assert.strictEqual(writes, 0, 'foreign tenant row must not be mutated');
+            assert.strictEqual(target.status, originalStatus);
+            assert.strictEqual(prisma.auditLogs.length, 0);
+            assert.strictEqual(prisma.deviceSessions.length, 2);
+          } finally {
+            await app.close();
+          }
+        });
+      }
+    });
+
+    it('HTTP deactivation revokes only sessions belonging to the actor tenant', async () => {
+      const prisma = createMockPrismaService();
+      const target = prisma.users[2];
+      prisma.deviceSessions.push({
+        ...prisma.deviceSessions[1],
+        id: 'foreign-session',
+        merchant_id: 'm-tenant-2',
+      });
+      const app = await createBulkTestApp(prisma, callerOwner);
+      try {
+        await app.init();
+        const response = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send({ entity_type: 'users', action: 'deactivate', ids: [target.id], confirm: true })
+          .expect(200);
+        assert.strictEqual(response.body.data.success_count, 1);
+        assert.deepStrictEqual(
+          prisma.deviceSessions
+            .filter((session) => session.user_id === target.id)
+            .map((session) => session.id),
+          ['foreign-session']
+        );
+        assert.strictEqual(prisma.auditLogs.length, 1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('HTTP finalization cannot overwrite a batch that leaves the tenant', async (t) => {
+      for (const resume of [false, true]) {
+        await t.test(resume ? 'interrupted batch' : 'new reservation', async () => {
+          const prisma = createMockPrismaService();
+          const app = await createBulkTestApp(prisma, callerOwner);
+          const dto = {
+            entity_type: BulkEntityType.USERS,
+            action: BulkActionType.EXPORT_CSV,
+            ids: [prisma.users[2].id],
+            idempotency_key: 'tenant-finalization',
+          };
+          try {
+            await app.init();
+            if (resume) {
+              await request(app.getHttpServer()).post('/api/v1/bulk-actions').send(dto).expect(200);
+              prisma.batches[0].status = 'IN_PROGRESS';
+              prisma.batches[0].results = {};
+            }
+            let writes = 0;
+            prisma.bulkActionBatch.update = async ({ where, data }) => {
+              const batch = prisma.batches.find((item) => item.id === where.id);
+              batch.merchant_id = 'm-tenant-2';
+              if (where.merchant_id && where.merchant_id !== batch.merchant_id) {
+                throw new Error('Record no longer matches update predicate');
+              }
+              writes += 1;
+              Object.assign(batch, data);
+              return batch;
+            };
+            const response = await request(app.getHttpServer())
+              .post('/api/v1/bulk-actions')
+              .send(dto);
+            assert.strictEqual(response.status, 500);
+            assert.strictEqual(response.body.error.code, 'INTERNAL_ERROR');
+            assert.strictEqual(writes, 0);
+            assert.strictEqual(prisma.batches[0].status, 'IN_PROGRESS');
+            assert.deepStrictEqual(prisma.batches[0].results, {});
+          } finally {
+            await app.close();
+          }
+        });
+      }
+    });
+
+    it('audit metadata masks sensitive text in every mutation, including reasons and nested scope arrays', async () => {
+      const email = 'audit-private@example.invalid';
+      const phone = '0909123456';
+      const credential = 'test-not-a-secret-audit';
+      const opaqueReason = 'test-not-a-secret-opaque-reason';
+      const metadataText = email + ' ' + phone + ' token=' + credential;
+      for (const [entity, action] of [
+        [BulkEntityType.USERS, BulkActionType.ACTIVATE],
+        [BulkEntityType.USERS, BulkActionType.DEACTIVATE],
+        [BulkEntityType.USERS, BulkActionType.ASSIGN_SCOPES],
+        [BulkEntityType.BRANCHES, BulkActionType.ACTIVATE],
+        [BulkEntityType.BRANCHES, BulkActionType.DEACTIVATE],
+        [BulkEntityType.WAREHOUSES, BulkActionType.ACTIVATE],
+        [BulkEntityType.WAREHOUSES, BulkActionType.DEACTIVATE],
+      ] as const) {
+        const mockPrisma = createMockPrismaService();
+        const service = new BulkService(mockPrisma as any, createMockRbacService() as any);
+        const target =
+          entity === BulkEntityType.USERS
+            ? mockPrisma.users[2]
+            : entity === BulkEntityType.BRANCHES
+              ? mockPrisma.branches[1]
+              : mockPrisma.warehouses[1];
+        target.status =
+          entity === BulkEntityType.BRANCHES
+            ? action === BulkActionType.ACTIVATE
+              ? 'INACTIVE'
+              : 'ACTIVE'
+            : action === BulkActionType.ACTIVATE
+              ? entity === BulkEntityType.WAREHOUSES
+                ? 'inactive'
+                : 'suspended'
+              : 'active';
+        target.name = metadataText;
+        target.code = metadataText;
+        target.store_scopes = [metadataText];
+        target.warehouse_scopes = [metadataText];
+        const response = await service.executeBulkAction(
+          'm-tenant-1',
+          callerOwner,
+          {
+            entity_type: entity,
+            action,
+            ids: [target.id],
+            confirm: true,
+            params: {
+              reason: metadataText + ' ' + opaqueReason,
+              store_scopes: [metadataText],
+              warehouse_scopes: [metadataText],
+              carrier_account_scopes: [metadataText],
+            },
+          },
+          '127.0.0.1',
+          'audit-metadata-negative'
+        );
+        assert.strictEqual(response.data.success_count, 1, entity + ':' + action);
+        assert.strictEqual(mockPrisma.auditLogs.length, 1);
+        const log = mockPrisma.auditLogs[0];
+        const serialized = JSON.stringify([log.old_value, log.new_value]);
+        for (const raw of [email, phone, credential, opaqueReason, target.email, target.phone]) {
+          if (raw) assert.ok(!serialized.includes(raw), entity + ':' + action + ' leaked metadata');
+        }
+        assert.strictEqual(log.merchant_id, 'm-tenant-1');
+        assert.strictEqual(log.user_id, callerOwner.userId);
+      }
+    });
+
     it('AC-COM-03-06 & 07: enforces idempotency replay and detects conflict on altered payload', async () => {
       const mockPrisma = createMockPrismaService();
       const mockRbac = createMockRbacService(true);
@@ -902,7 +1570,9 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       assert.deepStrictEqual(res.data.failed_ids, [failingId]);
       const failedItem = res.data.results.find((r) => r.id === failingId);
       assert.strictEqual(failedItem?.status, BulkItemStatus.FAILED);
-      assert.ok(failedItem?.error?.message?.includes('simulated per-item database failure'));
+      // Raw database errors are sanitized to INTERNAL_ERROR (Finding 3, review round 5)
+      assert.strictEqual(failedItem?.error?.code, 'INTERNAL_ERROR');
+      assert.ok(!failedItem?.error?.message?.includes('simulated per-item database failure'));
 
       // Savepoint protocol: open per item, roll back + release on failure
       const sql = (mockPrisma as any).rawSqlLog as string[];
@@ -1019,13 +1689,20 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
       const remainingSessions = mockPrisma.deviceSessions.filter((s) => s.user_id === staffId);
       assert.strictEqual(remainingSessions.length, 0);
 
-      // Non-self actor with scope (e.g. secondary owner session) attempts to deactivate sole active owner (ownerId)
+      // A real delegated actor with wildcard scopes attempts to deactivate the sole owner.
       // Must reach transaction and fail with CANNOT_REMOVE_LAST_OWNER
       const callerOtherOwner: ActorContext = {
         userId: '99999999-9999-4999-8999-999999999999',
         merchantId: 'm-tenant-1',
-        role: 'OWNER',
+        role: 'OPS_CSKH',
       };
+      mockPrisma.users.push({
+        ...mockPrisma.users[2],
+        id: callerOtherOwner.userId,
+        status: 'active',
+        store_scopes: ['*'],
+        warehouse_scopes: ['*'],
+      });
 
       const resNonSelfOwnerDeact = await service.executeBulkAction(
         'm-tenant-1',
