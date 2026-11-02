@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { LoginView } from '@/components/auth/LoginView';
 import { RegisterView } from '@/components/auth/RegisterView';
@@ -40,10 +39,14 @@ import {
   Search,
   Settings,
   RefreshCw,
+  LogOut,
   ChevronDown,
   ShieldCheck,
   Store,
+  CheckCircle2,
+  Lock,
   Key,
+  PackageCheck,
 } from 'lucide-react';
 
 export interface SearchActivationActions {
@@ -117,21 +120,10 @@ export function handleSearchResultActivation(
 }
 
 export default function ShipDeConsoleApp() {
-  const { user, merchant, isAuthenticated, isHydrating, switchRole } = useAuth();
+  const { user, merchant, isAuthenticated, isHydrating, logout, switchRole } = useAuth();
   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
 
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const routeTab = searchParams.get('view') || 'dashboard';
-  const [activeTab, setActiveTabState] = useState<string>(routeTab);
-  useEffect(() => {
-    // Existing tab content follows links, command selection and browser history.
-    if (pathname === '/') Promise.resolve().then(() => setActiveTabState(routeTab));
-  }, [pathname, routeTab]);
-  const setActiveTab = (tab: string) => {
-    setActiveTabState(tab);
-    window.history.pushState(null, '', '/?view=' + encodeURIComponent(tab));
-  };
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [carrierGhnTier, setCarrierGhnTier] = useState<'L2' | 'L1'>('L2');
 
   const [exceptions, setExceptions] = useState<UIExceptionItem[]>(MASTER_EXCEPTIONS);
@@ -154,6 +146,7 @@ export default function ShipDeConsoleApp() {
   const [selectedGlobalTracking, setSelectedGlobalTracking] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [syncingPancake, setSyncingPancake] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [selectedStore, setSelectedStore] = useState<string>('ALL');
   const [storeMenuOpen, setStoreMenuOpen] = useState(false);
 
@@ -205,17 +198,16 @@ export default function ShipDeConsoleApp() {
     }
   };
 
-  // Ctrl/Cmd+K belongs to page navigation; preserve entity search on Shift+K.
+  // Keyboard shortcut ⌘K
   useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'k') {
-        if (document.querySelector('dialog[open], [role="dialog"]')) return;
-        event.preventDefault();
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
         setGlobalSearchOpen(true);
       }
     };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const currentRole = user?.role || 'OWNER';
@@ -299,11 +291,14 @@ export default function ShipDeConsoleApp() {
     }
   };
 
+  const currentTabs = getTabsForRole(currentRole);
+
   const handleRoleChange = (newRole: any) => {
     switchRole(newRole);
+    setUserMenuOpen(false);
     const newTabs = getTabsForRole(newRole);
     if (!newTabs.some((t) => t.id === activeTab)) {
-      setActiveTab(newTabs[0]?.id || 'dashboard');
+      setActiveTab(newTabs[0].id);
     }
     showToast(`Đã chuyển vai trò: ${newRole}`);
   };
@@ -340,11 +335,8 @@ export default function ShipDeConsoleApp() {
         )}
 
         {/* Top Header */}
-        <header
-          aria-label="Thao tác vận hành"
-          className="border-b border-(--border-subtle) bg-(--bg-card)"
-        >
-          <div className="max-w-[1600px] mx-auto p-4 flex flex-wrap items-center justify-between gap-3">
+        <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#EAE7E4] shadow-xs">
+          <div className="max-w-[1600px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
             {/* Logo & Store Selector */}
             <div className="flex items-center gap-3.5">
               <div
@@ -374,7 +366,7 @@ export default function ShipDeConsoleApp() {
                   </button>
 
                   {storeMenuOpen && (
-                    <div className="absolute left-0 mt-1.5 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs">
+                    <div className="absolute left-0 mt-1.5 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs">
                       <div className="px-2.5 py-1.5 border-b border-slate-100 font-bold text-[11px] text-slate-400 uppercase tracking-wider">
                         Phạm Vi Chi Nhánh / Kho Xuất Hàng:
                       </div>
@@ -404,24 +396,24 @@ export default function ShipDeConsoleApp() {
             </div>
 
             {/* Top Operational Status & Actions */}
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-2.5">
               {/* POS Status Badge */}
               <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold">
                 <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
                 <span>Pancake POS: Đã Kết Nối</span>
               </div>
 
-              {/* Existing entity search: Ctrl/Cmd+Shift+K */}
+              {/* Quick Search Shortcut ⌘K */}
               <button
                 type="button"
-                aria-label="Tìm mã đơn hàng"
-                aria-keyshortcuts="Control+Shift+K Meta+Shift+K"
-                title="Tìm mã đơn hàng (Ctrl hoặc Command Shift K)"
                 onClick={() => setGlobalSearchOpen(true)}
-                className="flex items-center gap-2 text-xs font-medium text-slate-600 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] px-3 py-1.5 rounded-lg transition"
+                className="hidden sm:flex items-center gap-2 text-xs font-medium text-slate-600 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] px-3 py-1.5 rounded-lg transition"
               >
                 <Search className="w-3.5 h-3.5 text-slate-400" />
                 <span>Tìm mã</span>
+                <kbd className="font-mono text-[11px] bg-white text-slate-600 px-1.5 py-0.5 rounded border border-[#EAE7E4] shadow-2xs">
+                  ⌘K
+                </kbd>
               </button>
 
               {/* Manual POS Sync Trigger */}
@@ -429,7 +421,7 @@ export default function ShipDeConsoleApp() {
                 type="button"
                 onClick={handleSyncPancake}
                 disabled={syncingPancake}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] rounded-lg transition cursor-pointer"
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] rounded-lg transition cursor-pointer"
                 title="Kích hoạt đồng bộ đơn hàng mới từ Pancake POS"
               >
                 <RefreshCw
@@ -467,28 +459,164 @@ export default function ShipDeConsoleApp() {
                 </button>
               )}
 
-              {/* Existing role preview changes display only; shell permissions come from the server. */}
-              <label className="flex items-center gap-2 text-xs">
-                <span className="sr-only">Chuyển Vai Trò Vận Hành</span>
-                <select
-                  aria-label="Chuyển Vai Trò Vận Hành"
-                  value={currentRole}
-                  onChange={(event) => handleRoleChange(event.target.value)}
-                  className="modern-input max-w-40"
+              {/* User Dropdown */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setUserMenuOpen(!userMenuOpen)}
+                  className="flex items-center gap-2 bg-[#F6F5F3] hover:bg-[#EAE7E4] px-2.5 py-1.5 rounded-lg border border-[#EAE7E4] transition text-xs font-semibold"
                 >
-                  <option value="OWNER">Chủ Shop (Owner)</option>
-                  <option value="OPS_CSKH">CSKH / Vận Hành (Ops)</option>
-                  <option value="ACCOUNTANT">Kế Toán Đối Soát</option>
-                  <option value="WAREHOUSE">Thủ Kho Quét Hoàn</option>
-                  <option value="BACKOFFICE">Quản Trị Hệ Thống</option>
-                </select>
-              </label>
+                  <div className="w-6.5 h-6.5 rounded-md bg-[#0C1421] text-white flex items-center justify-center text-xs font-bold">
+                    {user?.full_name?.charAt(0) || 'U'}
+                  </div>
+                  <div className="hidden md:block text-left pr-1">
+                    <div className="text-xs text-slate-900 leading-tight truncate max-w-[120px]">
+                      {user?.full_name}
+                    </div>
+                    <div className="text-[11px] text-[#c23807] font-semibold leading-none">
+                      {user?.role}
+                    </div>
+                  </div>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                </button>
+
+                {userMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs space-y-1">
+                    <div className="p-2 border-b border-slate-100">
+                      <div className="font-bold text-slate-900">{user?.full_name}</div>
+                      <div className="text-xs text-slate-500 font-mono">{user?.email}</div>
+                      <span className="badge-info mt-1.5 inline-flex text-xs">
+                        Vai trò: {user?.role}
+                      </span>
+                    </div>
+
+                    <div className="py-1 border-b border-slate-100 space-y-0.5">
+                      <span className="text-[11px] text-slate-400 font-bold px-2 block uppercase tracking-wider">
+                        Chuyển Vai Trò Vận Hành:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('OWNER')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        👑 Chủ Shop (Owner)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('OPS_CSKH')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        🎧 CSKH / Vận Hành (Ops)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('ACCOUNTANT')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        📊 Kế Toán Đối Soát
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('WAREHOUSE')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        📦 Thủ Kho Quét Hoàn
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRoleChange('BACKOFFICE')}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium"
+                      >
+                        🛡️ Quản Trị Hệ Thống
+                      </button>
+                    </div>
+
+                    <div className="pt-1 space-y-0.5">
+                      {currentRole === 'OWNER' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab('settings');
+                            setUserMenuOpen(false);
+                          }}
+                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
+                        >
+                          <Settings className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Cài Đặt Cửa Hàng</span>
+                        </button>
+                      )}
+                      <a
+                        href="/onboarding"
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
+                      >
+                        <PackageCheck className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Thiết lập ban đầu (SCR-ONB-01)</span>
+                      </a>
+                      <a
+                        href="/sessions"
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 font-medium flex items-center gap-1.5"
+                      >
+                        <Lock className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Phiên đăng nhập</span>
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          logout();
+                          setUserMenuOpen(false);
+                        }}
+                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 font-bold flex items-center gap-1.5"
+                      >
+                        <LogOut className="w-3.5 h-3.5" /> Đăng xuất
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
+
+          {/* Role Navigation Bar */}
+          {activeTab !== 'settings' && (
+            <div className="max-w-[1600px] mx-auto px-4 sm:px-6 flex items-center space-x-1.5 overflow-x-auto custom-scrollbar border-t border-[#EAE7E4] py-2">
+              {currentTabs.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`px-4 py-2 text-xs font-bold rounded-xl transition whitespace-nowrap flex items-center gap-2 cursor-pointer ${
+                      isActive
+                        ? 'bg-[#c23807] text-white shadow-xs'
+                        : 'text-slate-700 hover:bg-[#F6F5F3] hover:text-slate-900'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span>{tab.label}</span>
+                    {tab.count !== undefined && tab.count > 0 && (
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-bold ml-0.5 ${
+                          isActive
+                            ? 'bg-white/20 text-white'
+                            : tab.countType === 'risk'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {tab.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </header>
 
         {/* Main Viewport */}
-        <main className="min-w-0 max-w-[1600px] mx-auto px-4 sm:px-6 py-6">
+        <main className="max-w-[1600px] mx-auto px-4 sm:px-6 py-6">
           {activeTab === 'dashboard' && (
             <ControlTowerTab
               role={user?.role || 'OWNER'}
@@ -553,10 +681,6 @@ export default function ShipDeConsoleApp() {
 
           {activeTab === 'settings' && (
             <SettingsWorkspace
-              key={searchParams.get('section') || 'stores'}
-              initialSection={
-                searchParams.get('section') === 'integrations' ? 'integrations' : undefined
-              }
               onBackToDashboard={() => setActiveTab('dashboard')}
               onToast={showToast}
               carrierGhnTier={carrierGhnTier}
@@ -574,7 +698,7 @@ export default function ShipDeConsoleApp() {
       {/* Modern Footer */}
       <footer className="border-t border-[#EAE7E4] bg-white text-slate-500 text-xs py-4 px-4 sm:px-6 mt-12">
         <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row justify-between items-center gap-2">
-          <div className="flex flex-wrap justify-center items-center gap-2">
+          <div className="flex items-center gap-2">
             <span className="font-bold text-slate-900">Ship Dễ Platform</span>
             <span>· Hệ thống điều hành & kiểm soát vận tải sau bán</span>
             <span className="text-slate-300">|</span>
@@ -599,8 +723,7 @@ export default function ShipDeConsoleApp() {
         onSelectResult={(item) => {
           setGlobalSearchOpen(false);
           handleSearchResultActivation(item, {
-            // Entity results already supply their own URL; preserve that deep link.
-            setActiveTab: setActiveTabState,
+            setActiveTab,
             setSelectedGlobalTracking,
             setSelectedOrderId,
             setSelectedOrderCode,

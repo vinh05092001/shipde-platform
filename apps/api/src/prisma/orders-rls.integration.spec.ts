@@ -4,15 +4,51 @@ import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Prisma, PrismaClient, RoleEnum, SessionStatusEnum } from '@prisma/client';
-import { runWithTenant } from './tenant-context';
+import { runWithTenant, getTenantId } from './tenant-context';
 import { TenantRlsUnconfiguredTransactionError, tenantRlsExtension } from './tenant-rls.extension';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { Controller, RequestMethod, Inject } from '@nestjs/common';
+import { PATH_METADATA, METHOD_METADATA, GUARDS_METADATA } from '@nestjs/common/constants';
 import request from 'supertest';
 import { AppModule } from '../app.module';
+import { SessionModule } from '../session/session.module';
 import { PrismaService } from './prisma.service';
 import { RbacService } from '../rbac/rbac.service';
+import { SessionGuard } from '../session/session.guard';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
+
+@Controller('api/v1/test-rls')
+class TestRlsContextController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async getOrders() {
+    const observedTenantId = getTenantId();
+    // Downstream unfiltered orders query through the application's extended Prisma client.
+    // Proves that RLS enforces isolation even when service-level merchant_id filters are omitted.
+    const orders = await this.prisma.extended.order.findMany({
+      select: { id: true, merchant_id: true, order_code: true },
+    });
+    return {
+      observedTenantId,
+      orders,
+    };
+  }
+}
+
+Reflect.defineMetadata('design:paramtypes', [PrismaService], TestRlsContextController);
+
+Reflect.defineMetadata(PATH_METADATA, 'orders', TestRlsContextController.prototype.getOrders);
+Reflect.defineMetadata(
+  METHOD_METADATA,
+  RequestMethod.GET,
+  TestRlsContextController.prototype.getOrders
+);
+Reflect.defineMetadata(
+  GUARDS_METADATA,
+  [SessionGuard],
+  TestRlsContextController.prototype.getOrders
+);
 
 /**
  * TASK-AI-154: orders row-level security integration test.
@@ -178,7 +214,9 @@ async function main(): Promise<void> {
   await admin.$executeRaw(Prisma.raw(`GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`));
   await admin.$executeRaw(Prisma.raw(`GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`));
   await admin.$executeRaw(
-    Prisma.raw(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE orders, merchants TO ${PROBE_ROLE}`)
+    Prisma.raw(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`
+    )
   );
   await admin.$executeRaw(
     Prisma.raw(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`)
@@ -188,7 +226,29 @@ async function main(): Promise<void> {
   probeUrl.username = PROBE_ROLE;
   probeUrl.password = probePassword;
   const probe = new PrismaClient({ datasources: { db: { url: probeUrl.toString() } } });
-  const extended = probe.$extends(tenantRlsExtension(probe));
+  // Finding 4: innermost dispatch counter attached BELOW the tenant RLS
+  // extension. It records only operations actually dispatched toward the
+  // database engine; an operation the extension rejects (fail-closed) never
+  // reaches this counter. Used to prove a rejected foreign batch issues no SQL.
+  const dispatchedOperations: string[] = [];
+  const dispatchCounter = Prisma.defineExtension({
+    name: 'rls-dispatch-counter',
+    query: {
+      async $allOperations(payload: {
+        model?: string;
+        operation: string;
+        args: unknown;
+        query: (args: unknown) => Promise<unknown>;
+      }): Promise<unknown> {
+        dispatchedOperations.push(
+          payload.model ? `${payload.model}.${payload.operation}` : payload.operation
+        );
+        return payload.query(payload.args);
+      },
+    },
+  });
+  const extendedBase = probe.$extends(tenantRlsExtension(probe));
+  const extended = extendedBase.$extends(dispatchCounter) as unknown as typeof extendedBase;
 
   const suffix = Date.now().toString(36);
   const merchantA = randomUUID();
@@ -496,6 +556,7 @@ async function main(): Promise<void> {
     //     set_config('app.tenant_id'). The extension must fail closed
     //     instead of letting the query run under the pilot fail-open clause
     //     (which would return Tenant B's rows to Tenant A).
+    const dispatchCountBeforeRejections = dispatchedOperations.length;
     await assert.rejects(
       runWithTenant(merchantA, async () => {
         await probe.$transaction([
@@ -517,6 +578,12 @@ async function main(): Promise<void> {
     console.log(
       'PASS: foreign batch transaction with extended query fails closed (no fail-open cross-tenant read)'
     );
+    // Finding 4: Prove that no SQL was dispatched for the rejected foreign batch transaction
+    assert.equal(
+      dispatchedOperations.length,
+      dispatchCountBeforeRejections,
+      'rejected foreign batch transaction must NOT dispatch any operation/SQL to the engine'
+    );
 
     // 14b. The same composition with an extended RAW query must fail closed too.
     await assert.rejects(
@@ -536,6 +603,11 @@ async function main(): Promise<void> {
       },
       'extended raw query through an unextended batch transaction must fail closed under tenant context'
     );
+    assert.equal(
+      dispatchedOperations.length,
+      dispatchCountBeforeRejections,
+      'rejected foreign batch transaction with raw query must NOT dispatch any operation/SQL to the engine'
+    );
     console.log('PASS: foreign batch transaction with extended raw query fails closed');
 
     // 15. A root-client extended query issued inside a FOREIGN interactive
@@ -545,7 +617,7 @@ async function main(): Promise<void> {
     //     Finding 1: We demonstrate that the inner query sets and enforces
     //     app.tenant_id with connection isolation.
     await runWithTenant(merchantA, async () => {
-      const { rows, innerTenant } = await probe.$transaction(async (tx) => {
+      const { rows, innerTenant, outerPid, innerPid } = await probe.$transaction(async (tx) => {
         const [outerPidRow] = await tx.$queryRaw<Array<{ pid: number }>>`
           SELECT pg_backend_pid() AS pid
         `;
@@ -562,6 +634,14 @@ async function main(): Promise<void> {
           innerTenant: innerInfo[0]?.tenant,
         };
       });
+      // Finding 1: Assert distinct connection PIDs proving connection isolation
+      assert.ok(outerPid, 'outer transaction connection PID must be present');
+      assert.ok(innerPid, 'inner query connection PID must be present');
+      assert.notEqual(
+        outerPid,
+        innerPid,
+        'inner root-client query must use a distinct pooled connection from the outer interactive transaction'
+      );
       assert.deepEqual(
         rows.map((row) => row.id),
         [orderA.id],
@@ -676,17 +756,25 @@ async function main(): Promise<void> {
       'PASS: concurrent transactions under distinct tenant contexts maintain strict isolation'
     );
 
-    // 19. Finding 19: End-to-end HTTP pipeline verification via NestJS + Supertest
-    // Proves context propagation: Token -> TenantMiddleware -> SessionGuard -> SearchController -> SearchService -> extended Prisma -> RLS
+    // 19. Finding 3 / Finding 19: End-to-end HTTP pipeline verification via NestJS + Supertest
+    // Configures the application connection with the restricted probe role (NOBYPASSRLS)
+    // and asserts downstream getTenantId() observation plus unfiltered orders query isolation.
+    const restrictedPrisma = new PrismaService({
+      datasources: { db: { url: probeUrl.toString() } },
+    });
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
+      imports: [AppModule, SessionModule],
+      controllers: [TestRlsContextController],
+    })
+      .overrideProvider(PrismaService)
+      .useValue(restrictedPrisma)
+      .compile();
     const app = moduleFixture.createNestApplication<NestExpressApplication>();
     app.set('trust proxy', 1);
     await app.init();
 
-    const appPrisma = app.get(PrismaService);
-    await appPrisma.checkReadiness();
+    await restrictedPrisma.checkReadiness();
     const rbacService = app.get(RbacService);
     await rbacService.ensurePlatformSeed();
 
@@ -758,6 +846,57 @@ async function main(): Promise<void> {
         },
       });
 
+      // Finding 3 / Finding 19: HTTP acceptance with observed getTenantId() downstream
+      // and unfiltered orders query through the restricted application connection.
+      // Merchant A test-rls request:
+      // 1. downstream handler observes getTenantId() === merchantA
+      // 2. unfiltered query through restricted application connection returns ONLY Tenant A's orders
+      const httpRlsResA = await request(app.getHttpServer())
+        .get('/api/v1/test-rls/orders')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+
+      assert.equal(
+        httpRlsResA.body.observedTenantId,
+        merchantA,
+        'downstream HTTP handler must observe getTenantId() === merchantA from TenantMiddleware'
+      );
+      const rlsCodesA = httpRlsResA.body.orders?.map((o: any) => o.order_code) || [];
+      assert.ok(
+        rlsCodesA.includes(`RLS-A-${suffix}`),
+        'unfiltered orders query through restricted connection must include own-tenant order A'
+      );
+      assert.ok(
+        !rlsCodesA.includes(`RLS-B-${suffix}`),
+        'unfiltered orders query through restricted connection must NOT return foreign-tenant order B'
+      );
+
+      // Merchant B test-rls request:
+      // 1. downstream handler observes getTenantId() === merchantB
+      // 2. unfiltered query returns ONLY Tenant B's orders
+      const httpRlsResB = await request(app.getHttpServer())
+        .get('/api/v1/test-rls/orders')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(200);
+
+      assert.equal(
+        httpRlsResB.body.observedTenantId,
+        merchantB,
+        'downstream HTTP handler must observe getTenantId() === merchantB from TenantMiddleware'
+      );
+      const rlsCodesB = httpRlsResB.body.orders?.map((o: any) => o.order_code) || [];
+      assert.ok(
+        rlsCodesB.includes(`RLS-B-${suffix}`),
+        'unfiltered orders query through restricted connection must include own-tenant order B'
+      );
+      assert.ok(
+        !rlsCodesB.includes(`RLS-A-${suffix}`),
+        'unfiltered orders query through restricted connection must NOT return foreign-tenant order A'
+      );
+
+      // Unauthenticated request to test-rls endpoint must be denied with 401
+      await request(app.getHttpServer()).get('/api/v1/test-rls/orders').expect(401);
+
       // Merchant A search request: must only see Tenant A's orders, never Tenant B's orders
       const httpResA = await request(app.getHttpServer())
         .get(`/api/v1/search?q=RLS-&type=ORDER`)
@@ -792,6 +931,7 @@ async function main(): Promise<void> {
       );
     } finally {
       await app.close();
+      await restrictedPrisma.$disconnect().catch(() => {});
       await admin.deviceSession
         .deleteMany({ where: { user_id: { in: [uIdA, uIdB] } } })
         .catch(() => {});

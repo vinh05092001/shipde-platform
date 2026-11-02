@@ -33,7 +33,6 @@ import { UserManagementTab } from './UserManagementTab';
 import { ProfileSettingsTab } from './ProfileSettingsTab';
 
 interface Props {
-  initialSection?: 'integrations';
   onBackToDashboard: () => void;
   onToast: (msg: string) => void;
   carrierGhnTier?: 'L2' | 'L1';
@@ -41,7 +40,6 @@ interface Props {
 }
 
 export const SettingsWorkspace: React.FC<Props> = ({
-  initialSection,
   onBackToDashboard,
   onToast,
   carrierGhnTier = 'L2',
@@ -55,7 +53,7 @@ export const SettingsWorkspace: React.FC<Props> = ({
     | 'notifications'
     | 'security'
     | 'tracking_portal'
-  >(initialSection || 'stores');
+  >('stores');
 
   // Integrations State
   const [ghnTokenInput, setGhnTokenInput] = useState('');
