@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "workItemId": "TASK-AI-133",
+  "reviewedCommit": "bebd8a2e6b2722e31245d5b43381a03b0cdd329c",
+  "reviewedBase": "64c5658e62cdd1d485439f0194639a8dd705089f",
+  "reviewedTree": "17b6f75c45a30e11c00312f359ba637be80f0c34",
+  "reviewedPatchId": "e21c5996bbde66dbdcf771de739bc76eb86f3857",
+  "reviewerCandidateKey": "agy::local::direct::google::acc-reviewer::scope::gemini-2.5-pro",
+  "writerCandidateKey": "paseo::local::9router::anthropic::acc-writer::scope::claude-3-7-sonnet",
+  "writerFailureDomain": "9router/anthropic",
+  "reviewerFailureDomain": "direct/google",
+  "verdict": "PASS",
+  "findings": [],
+  "tests": [
+    {
+      "command": "pnpm test",
+      "result": "pass",
+      "summary": "ok"
+    }
+  ],
+  "artifactSha256": "32116af3431c98251ea49cbc31f2d696bd7632bdf1c6d4647469470063bcacb4",
+  "createdAt": "2026-11-02T10:25:42.023Z"
+}

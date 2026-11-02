@@ -1,0 +1,2 @@
+{"workItemId":"TASK-AI-133","stage":"writer","role":"writer","writerCandidateKey":"paseo::local::9router::anthropic::acc-writer::scope::claude-3-7-sonnet"}
+{"workItemId":"TASK-AI-133-review","stage":"review-launch","role":"reviewer","sessionId":"sess-diff-rev-2","chosen":"other-reviewer-key","reviewerCandidateKey":"other-reviewer-key","reviewedSha":"fea27bda542648d1c01987168d6f581b448e81d3","sha":"fea27bda542648d1c01987168d6f581b448e81d3","detail":"REVIEW_LANE: reviews TASK-AI-133 at fea27bda542648d1c01987168d6f581b448e81d3"}

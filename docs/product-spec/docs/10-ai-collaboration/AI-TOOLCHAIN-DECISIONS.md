@@ -559,3 +559,123 @@ The action connects to an OpenAI-compatible endpoint using credentials provided 
 - `PR_AGENT_MODEL`: The model name to execute reviews and suggestions (e.g., `gpt-4o`, `gpt-4o-mini`, or provider model ID).
 
 If any of these secrets are absent, or if the Pull Request originates from a fork, `.github/workflows/pr-agent.yml` skips execution cleanly, posts an informational notice, and completes successfully without failing.
+## TASK-AI-166 — Live refresh and unattended coordination (operator 2026-11-02)
+
+Run `pnpm ai:refresh-catalogue` daily on the authenticated operator host. It runs
+the Controller's `priors refresh`, `discovery run`, and `quota-scan` in that order,
+including quota scanning after a prior stage fails. Run it again after changing
+provider configuration or when a provider announces new model IDs. Hermes is not
+required. Public descriptors include BenchLM's
+`https://benchlm.ai/data/models.json` and Artificial Analysis's
+`https://artificialanalysis.ai/leaderboards/models`; existing coding benchmarks
+remain configured. Every source declares verification and percentage scale;
+`benchmarks.js` retains discrete sourced records and never averages benchmarks.
+The existing prior role weighting and normalization remain a separate routing
+input. Public fetch/schema failures retain the last good priors.
+
+Discovery reads each configured OpenCode provider's live `/models`, the operator's
+own `agy models`, and `agy models` through each existing per-user scheduled lane
+adapter. Credentials stay in memory or the native user session; discovery never
+opens an authentication store. A listing establishes advertisement only, never
+quota or successful execution. The versioned JSONL ledger preserves previous
+observations, appends additions/removals and records successful unchanged scans in
+`data/discovery/freshness.json`. A failed, missing or partial listing cannot remove
+models. Freshness advances only after all applicable live catalogues succeed;
+presence-only harnesses have no listing to refresh. Partial runs keep source
+failure reasons and the last successful observation time.
+
+`dispatch --dry-run` fails with exit code 1 and `STALE_CATALOGUE` when the last
+successful observation is absent, invalid, future-dated, or older than 48 hours.
+Refresh reports and discovery snapshots expose partial failures without declaring
+them current. Fixture-injected candidate tests use their own evidence, without
+requiring a live host catalogue.
+
+The host coordinator runs
+`node tools/ai-brain/cli.js coordinator run .oc/items.json --loop` (omit `--loop`
+for one pass). It performs one persisted refresh attempt daily, with an exclusive
+loop lock, and processes existing PR worktrees. Its input is a JSON array:
+
+```json
+[
+  {
+    "id": "TASK-AI-166",
+    "cwd": "C:/Users/gumac/AI/shipde-platform/.worktrees/p-task-ai-166",
+    "pr": 123,
+    "task": ".oc/operator-task.md",
+    "risk": "HIGH",
+    "fanout": false,
+    "writer": {
+      "model": "provider/configured-model-id",
+      "family": "gpt",
+      "harness": "codex",
+      "cannotCommit": true
+    }
+  }
+]
+```
+
+Replace the PR number and initial writer with the actual PR and writer identity;
+the initial identity is required to review an already-authored branch. Paths must
+identify isolated worktrees on the expected Work Item branch. Selection consumes
+the Controller's current qualified candidate ranking and only offers configured
+OpenCode models. Native Claude runs only through host-authenticated Claude Code;
+third-party Claude quotas are excluded. Scheduled AGY writers reuse the existing
+lane lock and job receipt through a host process whose PID remains live while the
+lane runs. Unsupported harnesses fail closed.
+
+The writer is alive while its PID exists or its current log was written less than
+three minutes ago. Unreadable liveness evidence stays unknown. A dead writer is
+rerouted at most once every eight minutes per item. Quota/rate refusals classified
+from sanitized logs exclude the model for two hours; successful quota refresh and
+the existing Controller quota checks still apply. One failed review round prefers
+a different writer; high-risk items prefer a score of at least 80. No model gets
+more than two writer launches in twenty minutes across items. Launch reservations
+are saved before starting the process; unresolved reservations or reviewer
+interruptions require operator reconciliation, preventing duplicate launches.
+
+For sandbox writers that cannot commit, the host stages output excluding `.oc/`,
+`.serena/` and `.oc-codex-task.md`, then commits
+`[ID] Address review: writer output (model)` through the existing installed-hook
+validator. There is no hook bypass. Before review, the host fetches and cleanly
+merges `origin/main`; a register-only conflict may use exact row union, while
+conflicting values for the same item or any other merge conflict abort. Bad commit
+subjects, protected gate files and `diff --check` findings become review feedback
+and refuse push. `gh pr checks` at the exact PR head is authoritative: red CI is
+`CHANGES_REQUIRED` with zero reviewer tokens, pending CI waits without consuming a
+round, and unknown checks stop for an operator.
+
+The independent reviewer family differs from the writer's. It reads a separate
+checkout at the exact merged/pushed SHA, first checks tenant scope, RBAC/empty
+scope, negative tests, acceptance rows, integer VND, idempotency/reconciliation,
+audit/PII, UI states and prior findings `FIXED`/`NOT FIXED`, then performs an open
+sweep of the full implementation and source contracts. Every round is appended to
+the PR worktree's `.oc/history.md`, with current repair feedback in `.oc/review.txt`.
+After four unsuccessful rounds the item becomes `STUCK` for a human. A `PASS` is
+independent review evidence; existing human/conditional merge authorization still
+owns merge. This loop never merges a PR.
+
+Optional `fanout: true` groups findings into at most three connected, file-disjoint
+lanes in separate worktrees. Lane 1 owns shared contracts (OpenAPI, Prisma,
+contracts, package metadata, register and Work Items). Unknown file ownership
+falls back to one writer. The host checks each lane's actual changed files against
+its assigned files, commits through hooks, and merges lanes in numerical order.
+No lane is dropped on conflict; conflicts or out-of-bound writes produce `STUCK`.
+The combined SHA returns through main merge, gates, CI and independent review.
+Review worktrees and lane worktrees are retained for operator inspection.
+
+One `.oc/coordinator/metrics.jsonl` record per PR/SHA/round stores time, item, PR,
+round, writer, verdict, measured reviewer tokens and CI-red status. Unknown token
+usage remains null. `pnpm ai:metrics` prints median/p90 final rounds to PASS,
+CI-red review rate and reviewer tokens per confirmed merged PR, consulting GitHub
+for merge state. It deduplicates replayed metrics and never treats PASS as merged.
+Unknown token usage makes the merged-token aggregate unknown. These metrics and
+all coordinator state remain local and excluded from writer commits. A sanitized
+`data/quota-scan-summary.json` snapshot summarizes the observed quota results for
+the PR; the existing local `quota-state.json` remains the routing store.
+
+Sandbox authors do not run git write commands, push, or commit. Record each
+available check and each `BLOCKED_BY_SANDBOX` check with its exact error in the PR
+body; the host coordinator commits the output and runs blocked refresh/checks.
+Failed scans never justify replacing live evidence with model IDs or scores from
+operator notes or fixture data.
+

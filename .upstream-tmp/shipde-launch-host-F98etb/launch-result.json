@@ -1,0 +1,14 @@
+﻿{
+    "verifiedToolCalls":  0,
+    "budgetExceeded":  true,
+    "stdout":  "{\"tokens\":{\"input\":100,\"output\":0,\"total\":100}}\r\n",
+    "requestTooLarge":  false,
+    "localFailure":  "",
+    "progressDetail":  "",
+    "stderr":  "\r\nTOKEN_BUDGET_EXCEEDED: live worker usage exceeded configured token budget",
+    "completionNonce":  "",
+    "failureReason":  "TOKEN_BUDGET_EXCEEDED: live worker usage exceeded configured token budget",
+    "timedOut":  false,
+    "exitCode":  -1,
+    "completed":  false
+}

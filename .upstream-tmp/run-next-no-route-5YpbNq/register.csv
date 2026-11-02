@@ -1,0 +1,2 @@
+"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"1","S00","AI workflow","FEAT-AUTH-02","","Feature FEAT-AUTH-02","behavior","READY_FOR_AUTHOR","","docs/product-spec/work-items/FEAT-AUTH-02.md","feat/feat-auth-02","","",""

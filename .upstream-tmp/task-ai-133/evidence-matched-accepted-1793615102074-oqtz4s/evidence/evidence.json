@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "combinations": [
+    {
+      "harness": "agy",
+      "accessPath": "local",
+      "gateway": "direct",
+      "upstream": "google",
+      "accountId": "acc-reviewer",
+      "quotaScope": "scope",
+      "model": "gemini-2.5-pro",
+      "evidence": [
+        {
+          "ts": "2026-11-02T10:25:04.409Z",
+          "level": 3,
+          "proofLevel": "WORK_ITEM_PASS",
+          "status": "passed",
+          "workItem": "TASK-AI-133",
+          "sha": "7a84adc7bd4d2832485527d5a9e24154c2d8fa66",
+          "reviewer": "agy::local::direct::google::acc-reviewer::scope::gemini-2.5-pro"
+        }
+      ]
+    }
+  ]
+}

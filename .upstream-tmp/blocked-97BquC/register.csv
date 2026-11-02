@@ -1,0 +1,4 @@
+"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"1","S00","AI workflow","TASK-BLK-1","","Feature TASK-BLK-1","behavior","BLOCKED: human decision needed","","docs/product-spec/work-items/TASK-BLK-1.md","feat/task-blk-1","","",""
+"2","S00","AI workflow","TASK-BLK-2","","Feature TASK-BLK-2","behavior","BLOCKED_DEPENDENCY","","docs/product-spec/work-items/TASK-BLK-2.md","feat/task-blk-2","","",""
+"3","S00","AI workflow","TASK-BLK-3","","Feature TASK-BLK-3","behavior","READY_FOR_AUTHOR","","docs/product-spec/work-items/TASK-BLK-3.md","feat/task-blk-3","","",""

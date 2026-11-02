@@ -1,0 +1,3 @@
+"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
+"1","S00","AI workflow","TASK-DONE-1","","Feature TASK-DONE-1","behavior","MERGED","","docs/product-spec/work-items/TASK-DONE-1.md","feat/task-done-1","","",""
+"2","S00","AI workflow","TASK-BLK-1","","Feature TASK-BLK-1","behavior","BLOCKED: waiting","","docs/product-spec/work-items/TASK-BLK-1.md","feat/task-blk-1","","",""

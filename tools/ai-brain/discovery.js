@@ -66,8 +66,8 @@ async function enumerateRegistry(registry, ctx) {
   return results;
 }
 
-async function cmdRun(flags) {
-  const registry = loadRegistry();
+async function cmdRun(flags, deps = {}) {
+  let registry = deps.registry || loadRegistry();
   const prefixes = registryPrefixes(registry);
   const dataDir = flags['data-dir'] || DEFAULT_DATA_DIR;
   const storeFile = flags['store-file'] || path.join(dataDir, 'catalogue.jsonl');
@@ -80,12 +80,27 @@ async function cmdRun(flags) {
 
   const ctx = {
     registry,
-    httpGet: (url, opts) => httpGetModels(url, { envName: opts && opts.envName }),
+    httpGet: (url, opts) =>
+      httpGetModels(url, { envName: opts && opts.envName, timeoutMs: opts && opts.timeoutMs }),
     runCommand,
     resolveCommand: (name) => classifyPresence(resolveCommand(name, {})),
   };
 
-  const results = await enumerateRegistry(registry, ctx);
+  const live = await require('./discovery/live').enumerateLiveSources({
+    ...deps,
+    cwd: process.cwd(),
+  });
+  const liveIds = new Set(live.sources.map((source) => source.id));
+  registry = {
+    ...registry,
+    sources: [...registry.sources.filter((source) => !liveIds.has(source.id)), ...live.sources],
+  };
+  ctx.registry = registry;
+  const results = await enumerateRegistry(
+    { ...registry, sources: registry.sources.filter((source) => !liveIds.has(source.id)) },
+    ctx
+  );
+  for (const [id, result] of Object.entries(live.results)) results.set(id, result);
   const resultsObj = {};
   for (const [id, res] of results) resultsObj[id] = res;
 
@@ -105,7 +120,33 @@ async function cmdRun(flags) {
     appendLine(storeFile, line);
   }
 
+  const { readJson, writeJson } = require('./catalogue-refresh');
+  // Presence-only CLI harnesses have no catalogue to refresh. Their unknown
+  // state must not permanently block successfully refreshed live listings.
+  const failed = [...results].filter(([id, result]) => {
+    if (liveIds.has(id)) return result.status !== 'enumerated';
+    const source = registry.sources.find((entry) => entry.id === id);
+    return source?.endpoint && ['unknown', 'unavailable', 'error'].includes(result.status);
+  });
+  const successful = [...results].filter(
+    ([, result]) =>
+      ['enumerated', 'enumerated-via-route'].includes(result.status) && !(result.notes || []).length
+  );
+  const freshnessFile = path.join(dataDir, 'freshness.json');
+  const previous = readJson(freshnessFile);
+  const complete = successful.length > 0 && failed.length === 0;
+  writeJson(freshnessFile, {
+    lastAttemptAt: now,
+    lastSuccessfulAt: complete ? now : previous.lastSuccessfulAt || null,
+    complete,
+    failedSources: failed.map(([id, result]) => ({
+      id,
+      reason: result.reason || 'INCOMPLETE_LISTING',
+    })),
+  });
+
   return {
+    exitCode: complete ? 0 : 1,
     runId,
     dataDir: dataDir.replace(/\\/g, '/'),
     storeFile: storeFile.replace(/\\/g, '/'),

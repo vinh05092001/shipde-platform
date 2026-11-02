@@ -1,0 +1,5 @@
+{"at":"2026-11-02T10:23:41.284Z","stage":"selected","workItemId":"FEAT-AUTH-02"}
+{"at":"2026-11-02T10:23:41.292Z","stage":"cooled","workItemId":"FEAT-AUTH-02","outcome":"blocked_no_route","exitCode":1,"detail":"BLOCKED_NO_ROUTE: no available routes for work item","triedRoutes":[{"candidateKey":"9router:gpt-5-6-sol","reasonCode":"QUOTA_EXHAUSTED","reason":"429 Insufficient quota"}]}
+{"at":"2026-11-02T10:23:41.293Z","stage":"selected","workItemId":"FEAT-AUTH-02"}
+{"at":"2026-11-02T10:23:41.295Z","stage":"completed","workItemId":"FEAT-AUTH-02","outcome":"completed","exitCode":0}
+{"at":"2026-11-02T10:23:41.295Z","stage":"refused","detail":"NO_READY_ITEM"}

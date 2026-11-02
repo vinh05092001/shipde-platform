@@ -1,0 +1,14 @@
+﻿{
+    "verifiedToolCalls":  0,
+    "budgetExceeded":  false,
+    "stdout":  "",
+    "requestTooLarge":  false,
+    "localFailure":  "",
+    "progressDetail":  "stall detector observed no worker file signature change (4 tracked files), no verified tool progress (0 tool calls), and no monotonic token usage increase (usage=unavailable) for 1200 ms",
+    "stderr":  "\r\nSTALLED_NO_PROGRESS: stall detector observed no worker file signature change (4 tracked files), no verified tool progress (0 tool calls), and no monotonic token usage increase (usage=unavailable) for 1200 ms; worker was killed",
+    "completionNonce":  "",
+    "failureReason":  "STALLED_NO_PROGRESS: stall detector observed no worker file signature change (4 tracked files), no verified tool progress (0 tool calls), and no monotonic token usage increase (usage=unavailable) for 1200 ms; worker was killed",
+    "timedOut":  false,
+    "exitCode":  -1,
+    "completed":  false
+}

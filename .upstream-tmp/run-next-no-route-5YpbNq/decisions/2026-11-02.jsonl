@@ -1,0 +1,2 @@
+{"at":"2026-11-02T10:23:41.323Z","stage":"selected","workItemId":"FEAT-AUTH-02"}
+{"at":"2026-11-02T10:23:41.497Z","stage":"cooled","workItemId":"FEAT-AUTH-02","outcome":"blocked_no_route","exitCode":1,"detail":"BLOCKED_NO_ROUTE: no available routes for work item","triedRoutes":[{"candidateKey":"opencode:fast","reasonCode":"RATE_LIMIT"}]}

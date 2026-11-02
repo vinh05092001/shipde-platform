@@ -1,0 +1,5 @@
+{"at":"2026-11-02T10:23:05.801Z","stage":"selected","workItemId":"TASK-FAIL-1"}
+{"at":"2026-11-02T10:23:05.828Z","stage":"refused","workItemId":"TASK-FAIL-1","outcome":"refused","exitCode":1,"detail":"INTAKE_INCOMPLETE: work item invalid"}
+{"at":"2026-11-02T10:23:05.829Z","stage":"selected","workItemId":"TASK-OK-2"}
+{"at":"2026-11-02T10:23:05.831Z","stage":"completed","workItemId":"TASK-OK-2","outcome":"completed","exitCode":0}
+{"at":"2026-11-02T10:23:05.832Z","stage":"refused","detail":"NO_READY_ITEM"}

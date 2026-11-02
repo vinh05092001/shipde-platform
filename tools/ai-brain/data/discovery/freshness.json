@@ -1,0 +1,119 @@
+{
+  "lastAttemptAt": "2026-11-02T10:34:07.306Z",
+  "lastSuccessfulAt": null,
+  "complete": false,
+  "failedSources": [
+    {
+      "id": "agy-gateway",
+      "reason": "catalogue unavailable at this moment"
+    },
+    {
+      "id": "rqsty",
+      "reason": "catalogue unavailable at this moment"
+    },
+    {
+      "id": "thb",
+      "reason": "catalogue unavailable at this moment"
+    },
+    {
+      "id": "bai",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "aihubmix",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "thegrid",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "poolside",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "internlm",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "iteracompute",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "tencent",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "cohere",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "baseten",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "inception",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "regolo",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "amd-radeon",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "opencode-zen",
+      "reason": "catalogue request failed with http 0"
+    },
+    {
+      "id": "opencode-config",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy-local",
+      "reason": "MODELS_COMMAND_FAILED"
+    },
+    {
+      "id": "agy01",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy02",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy03",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy04",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy05",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy06",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy07",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy08",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy09",
+      "reason": "EPERM"
+    },
+    {
+      "id": "agy10",
+      "reason": "EPERM"
+    }
+  ]
+}

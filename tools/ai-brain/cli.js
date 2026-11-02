@@ -2081,6 +2081,26 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
 
+  if (
+    dryRunFlag &&
+    !deps.candidates &&
+    !deps.discoveryCatalogue &&
+    !args.close &&
+    !args.complete &&
+    !args.fail
+  ) {
+    const freshness = require('./catalogue-refresh').catalogueFreshness({
+      dataDir: args['discovery-dir'] || deps.discoveryDataDir,
+      now: deps.now,
+    });
+    if (freshness.stale) {
+      error(
+        'STALE_CATALOGUE: last successful live enumeration is missing or older than 48h; run pnpm ai:refresh-catalogue'
+      );
+      return { exitCode: 1, dryRun: true, warning: freshness };
+    }
+  }
+
   // Releasing a claim is its own operation:
   const close = args.close || args.complete || args.fail;
   if (typeof close === 'string') {
@@ -3432,6 +3452,24 @@ function discoveryCommand(args, deps) {
   const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
   const rootDir = args.root || d.rootDir || process.cwd();
 
+  if (sub === 'run') {
+    return require('./discovery')
+      .cmdRun({ 'data-dir': dataDir }, d)
+      .then((result) => {
+        log(JSON.stringify(result, null, 2));
+        if (result.exitCode)
+          error(
+            'DISCOVERY_INCOMPLETE: ' +
+              result.sources
+                .filter((source) => ['unknown', 'unavailable', 'error'].includes(source.status))
+                .map((source) => source.id + '=' + source.reason)
+                .join('; ')
+          );
+        process.exitCode = result.exitCode;
+        return result;
+      });
+  }
+
   if (sub === 'import') {
     const { importCatalogue, formatSummary } = require('./discovery/catalogue-import');
     if (typeof args.catalogue !== 'string' || !args.catalogue) {
@@ -4645,6 +4683,11 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
   if (command === 'quota-scan') return quotaScanCommand(args, deps);
+  if (command === 'coordinator')
+    return require('./coordinator-cli').main(args._.slice(1).concat(args.loop ? ['--loop'] : [])).catch((err) => {
+      console.error(require('./coordinator-runtime').safeText(err.code || err.message));
+      process.exitCode = 1;
+    });
   if (command === 'dispatch') {
     const result = dispatchCommand(args);
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a
@@ -4652,13 +4695,16 @@ function main(argv = process.argv.slice(2), deps = {}) {
     // here and turned into a non-zero exit instead.
     if (result && typeof result.then === 'function') {
       result.then(
-        () => {},
+        (value) => {
+          if (value?.exitCode) process.exitCode = value.exitCode;
+        },
         (err) => {
           console.error('Dispatch lỗi: ' + (err && err.message ? err.message : err));
           process.exitCode = 1;
         }
       );
     }
+    if (result?.exitCode) process.exitCode = result.exitCode;
     return;
   }
   if (command === 'shadow') return shadowCommand(args);

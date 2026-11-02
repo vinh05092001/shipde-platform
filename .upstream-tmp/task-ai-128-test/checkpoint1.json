@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "liveSteps": {
+    "FEAT-1": {
+      "launch": {
+        "workerSha": "21f7aee9d6586032e6369e435b07a89e8e138b02"
+      },
+      "repair": {
+        "sha": "21f7aee9d6586032e6369e435b07a89e8e138b02"
+      }
+    }
+  }
+}

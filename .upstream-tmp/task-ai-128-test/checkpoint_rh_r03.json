@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "liveSteps": {
+    "FEAT-1": {
+      "workItemId": "FEAT-1",
+      "failures": [],
+      "repair": {
+        "round": 1,
+        "sha": "5a519c4b252b3e12a9aba39d74ddc7fbec6735b7",
+        "candidateKey": "hermes::cli-test-model::gw-test-model::::*::::"
+      },
+      "stage": "repair_round_completed",
+      "updatedAt": "2026-11-02T10:22:56.980Z"
+    }
+  }
+}
