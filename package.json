@@ -46,7 +46,8 @@
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",
-    "guard:status": "node tools/ai-guard/cli.js status"
+    "guard:status": "node tools/ai-guard/cli.js status",
+    "ai:pack": "node scripts/ai/pack-context.mjs"
   },
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
@@ -59,6 +60,7 @@
     "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.6",
     "prisma": "^6.19.2",
+    "repomix": "1.18.1",
     "tsx": "^4.21.0",
     "turbo": "^2.4.4",
     "typescript": "^5"

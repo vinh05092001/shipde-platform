@@ -1,0 +1,50 @@
+{
+  "output": {
+    "style": "xml",
+    "filePath": "repomix-output.xml",
+    "removeComments": false,
+    "showLineNumbers": true,
+    "topFilesLength": 10
+  },
+  "include": ["apps/**", "packages/**", "prisma/**", "docs/product-spec/docs/**"],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "node_modules/**",
+      "pnpm-lock.yaml",
+      "package-lock.json",
+      "yarn.lock",
+      ".next/**",
+      "dist/**",
+      "build/**",
+      ".turbo/**",
+      ".worktrees/**",
+      ".env",
+      ".env.*",
+      "!.env.example",
+      "**/*.secret",
+      "**/*.pem",
+      "**/*.key",
+      "prisma/generated/**",
+      "**/__snapshots__/**",
+      "**/*.snap",
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.jpeg",
+      "**/*.gif",
+      "**/*.ico",
+      "**/*.svg",
+      "**/*.woff",
+      "**/*.woff2",
+      "**/*.ttf",
+      "**/*.eot",
+      "**/*.mp4",
+      "**/*.webm",
+      "**/*.pdf"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}
