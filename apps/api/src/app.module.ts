@@ -52,6 +52,10 @@ import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(CorrelationMiddleware, TenantMiddleware).forRoutes('*');
+    consumer.apply(CorrelationMiddleware).forRoutes('*');
+    consumer
+      .apply(TenantMiddleware)
+      .exclude('health', 'health/(.*)', 'api/v1/health', 'api/v1/health/(.*)')
+      .forRoutes('*');
   }
 }

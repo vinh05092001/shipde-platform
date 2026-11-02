@@ -85,8 +85,20 @@ export class TenantRlsUnconfiguredTransactionError extends Error {
  * - Operations without a tenant context (worker jobs, seed scripts, public
  *   and platform routes) are not wrapped and keep fail-open behavior until
  *   the documented rollout.
+ *
+ * @requires @prisma/client >=6.0.0 <8.0.0
  */
 export function tenantRlsExtension(base: PrismaClient) {
+  const clientVersion = Prisma.prismaVersion?.client;
+  if (clientVersion) {
+    const major = parseInt(clientVersion.split('.')[0] || '0', 10);
+    if (major < 6 || major >= 8) {
+      throw new Error(
+        `tenantRlsExtension requires @prisma/client >=6.0.0 <8.0.0, detected: ${clientVersion}`
+      );
+    }
+  }
+
   const baseTransaction = base.$transaction.bind(base) as (...inner: unknown[]) => Promise<unknown>;
 
   // Tracks the set of transaction IDs in which this extension instance has

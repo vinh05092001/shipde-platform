@@ -16,6 +16,13 @@ import { resolveAccessTokenSecret, verifyAccessToken } from '../auth/token.util'
  * lookup, revocation and role checks remain the SessionGuard's
  * responsibility, and it still runs after this middleware.
  *
+ * RLS is defense-in-depth and never access authority. TenantMiddleware only
+ * scopes PostgreSQL queries; it does not authorize requests. Session revocation,
+ * user status, MFA, and route access control are strictly enforced by SessionGuard
+ * and PermissionsGuard before controller handlers execute. Any query reaching the
+ * database before SessionGuard remains subject to tenant isolation, but authorization
+ * decisions are never delegated to RLS.
+ *
  * Requests without a verified merchant claim (public routes, platform
  * operators, invalid or expired tokens) run without a tenant context. The
  * RLS pilot policy is fail-open for such sessions; the SessionGuard rejects
@@ -51,16 +58,45 @@ function extractVerifiedMerchantId(req: Request): string | null {
       rawToken,
       resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET)
     );
-    const rawScope = (claims as any).scope;
-    const rawScopes = (claims as any).scopes;
-    if (
-      rawScope === 'setup' ||
-      (typeof rawScope === 'string' && rawScope.trim().length === 0) ||
-      (Array.isArray(rawScope) && rawScope.length === 0) ||
-      (Array.isArray(rawScopes) && rawScopes.length === 0)
-    ) {
+
+    // Finding 3: Platform administrators must never be scoped to a merchant tenant.
+    if (claims.role === 'PLATFORM_ADMIN') {
       return null;
     }
+
+    // Finding 22: Scope checks. Empty, setup, or malformed scope claims deny tenant context.
+    const rawScope = (claims as any).scope;
+    const rawScopes = (claims as any).scopes;
+
+    if (rawScope !== undefined) {
+      if (typeof rawScope !== 'string') {
+        return null;
+      }
+      const trimmedScope = rawScope.trim();
+      if (
+        trimmedScope.length === 0 ||
+        trimmedScope === 'setup' ||
+        trimmedScope.startsWith('setup-')
+      ) {
+        return null;
+      }
+    }
+
+    if (rawScopes !== undefined) {
+      if (!Array.isArray(rawScopes) || rawScopes.length === 0) {
+        return null;
+      }
+      for (const s of rawScopes) {
+        if (typeof s !== 'string') {
+          return null;
+        }
+        const trimmed = s.trim();
+        if (trimmed.length === 0 || trimmed === 'setup' || trimmed.startsWith('setup-')) {
+          return null;
+        }
+      }
+    }
+
     if (typeof claims.mid === 'string' && claims.mid.trim().length > 0) {
       return claims.mid.trim();
     }

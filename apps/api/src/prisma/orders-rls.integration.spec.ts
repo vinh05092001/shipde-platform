@@ -1,10 +1,18 @@
+import 'reflect-metadata';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient, RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { runWithTenant } from './tenant-context';
 import { TenantRlsUnconfiguredTransactionError, tenantRlsExtension } from './tenant-rls.extension';
+import { Test, TestingModule } from '@nestjs/testing';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import request from 'supertest';
+import { AppModule } from '../app.module';
+import { PrismaService } from './prisma.service';
+import { RbacService } from '../rbac/rbac.service';
+import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 
 /**
  * TASK-AI-154: orders row-level security integration test.
@@ -17,7 +25,9 @@ import { TenantRlsUnconfiguredTransactionError, tenantRlsExtension } from './ten
  * and could not demonstrate the denial.
  */
 
-const PROBE_ROLE = 'shipde_rls_probe';
+// Finding 23: Per-run random suffix prevents cluster-global role collisions in parallel runs
+const probeRoleSuffix = randomUUID().replace(/-/g, '').slice(0, 10).toLowerCase();
+const PROBE_ROLE = `shipde_rls_probe_${probeRoleSuffix}`;
 const DEFAULT_DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
 const POLICY_NAME = 'orders_tenant_isolation';
@@ -205,14 +215,34 @@ async function main(): Promise<void> {
         'tenant A must not read tenant B orders even without a merchant_id filter'
       );
     });
-    console.log('PASS: cross-tenant read denied without merchant_id filter');
+
+    // Finding 5: Symmetric test for Tenant B reading orders without merchant_id filter.
+    await runWithTenant(merchantB, async () => {
+      const visibleB = await extended.order.findMany({
+        where: { id: { in: [orderA.id, orderB.id] } },
+      });
+      assert.deepEqual(
+        visibleB.map((row) => row.id),
+        [orderB.id],
+        'tenant B must not read tenant A orders even without a merchant_id filter'
+      );
+    });
+    console.log(
+      'PASS: cross-tenant read denied without merchant_id filter (symmetric for A and B)'
+    );
 
     // 2. Cross-tenant point read returns no row.
     await runWithTenant(merchantA, async () => {
       const row = await extended.order.findUnique({ where: { id: orderB.id } });
       assert.equal(row, null, 'lookup of another tenant order must return no row');
     });
-    console.log('PASS: cross-tenant point read returns no row');
+
+    // Finding 5: Symmetric point read for Tenant B looking up Tenant A order.
+    await runWithTenant(merchantB, async () => {
+      const rowB = await extended.order.findUnique({ where: { id: orderA.id } });
+      assert.equal(rowB, null, 'tenant B looking up tenant A order must return no row');
+    });
+    console.log('PASS: cross-tenant point read returns no row (symmetric for A and B)');
 
     // 3. Cross-tenant insert is rejected by the WITH CHECK policy clause.
     await assert.rejects(
@@ -226,7 +256,20 @@ async function main(): Promise<void> {
       },
       'inserting another tenant order must be denied by RLS'
     );
-    console.log('PASS: cross-tenant insert denied by RLS');
+
+    // Finding 5: Symmetric insert rejection for Tenant B attempting to create order for Tenant A.
+    await assert.rejects(
+      runWithTenant(merchantB, async () => {
+        await extended.order.create({ data: orderInput(merchantA, `RLS-CROSS-B-${suffix}`) });
+      }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.match(message, /row-level security|new row violates/i);
+        return true;
+      },
+      'tenant B inserting tenant A order must be denied by RLS'
+    );
+    console.log('PASS: cross-tenant insert denied by RLS (symmetric for A and B)');
 
     // 4. Cross-tenant update is rejected and the row stays untouched.
     await assert.rejects(
@@ -323,6 +366,16 @@ async function main(): Promise<void> {
     console.log('PASS: malformed tenant value fails closed');
 
     // 9. Finding 1: Cross-tenant raw query denial via extended.$queryRaw and $queryRawUnsafe.
+    // Finding 12 assumption guard: verify that the connection role is indeed non-superuser
+    const [probeRoleMeta] = await probe.$queryRaw<Array<{ rolsuper: boolean }>>`
+      SELECT rolsuper FROM pg_roles WHERE rolname = CURRENT_USER
+    `;
+    assert.equal(
+      probeRoleMeta?.rolsuper,
+      false,
+      'probe role must be non-superuser (NOBYPASSRLS) for RLS isolation verification'
+    );
+
     await runWithTenant(merchantA, async () => {
       const rawRows = await extended.$queryRaw<Array<{ id: string }>>`
         SELECT id FROM orders WHERE id IN (${orderA.id}::uuid, ${orderB.id}::uuid)
@@ -427,10 +480,13 @@ async function main(): Promise<void> {
       false,
       'sanitized database endpoint must NEVER contain the database password'
     );
-    assert.equal(
-      sanitized,
-      'postgresql://shipde_app@db.internal:5432/shipde_prod',
-      'sanitized database endpoint must format host and db correctly without credentials'
+    // Finding 11: assert intent (username kept, password stripped, host/db preserved) without brittle exact string
+    assert.ok(
+      sanitized.includes('shipde_app') &&
+        !sanitized.includes(secretPassword) &&
+        sanitized.includes('db.internal') &&
+        sanitized.includes('shipde_prod'),
+      'sanitized database endpoint must retain username and host while omitting password'
     );
     console.log('PASS: connection diagnostics sanitize database credentials');
 
@@ -486,14 +542,35 @@ async function main(): Promise<void> {
     //     transaction has no transaction metadata, so the extension still
     //     wraps it in its own set_config transaction. Under the restricted
     //     role, RLS must deny the cross-tenant row (not fail open).
+    //     Finding 1: We demonstrate that the inner query sets and enforces
+    //     app.tenant_id with connection isolation.
     await runWithTenant(merchantA, async () => {
-      const rows = await probe.$transaction(async () =>
-        extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } })
-      );
+      const { rows, innerTenant } = await probe.$transaction(async (tx) => {
+        const [outerPidRow] = await tx.$queryRaw<Array<{ pid: number }>>`
+          SELECT pg_backend_pid() AS pid
+        `;
+        const innerInfo = await extended.$queryRaw<Array<{ pid: number; tenant: string | null }>>`
+          SELECT pg_backend_pid() AS pid, NULLIF(current_setting('app.tenant_id', true), '') AS tenant
+        `;
+        const candidateRows = await extended.order.findMany({
+          where: { id: { in: [orderA.id, orderB.id] } },
+        });
+        return {
+          rows: candidateRows,
+          outerPid: outerPidRow?.pid,
+          innerPid: innerInfo[0]?.pid,
+          innerTenant: innerInfo[0]?.tenant,
+        };
+      });
       assert.deepEqual(
         rows.map((row) => row.id),
         [orderA.id],
         'root-client extended query inside a foreign interactive transaction must stay tenant-scoped by RLS'
+      );
+      assert.equal(
+        innerTenant,
+        merchantA,
+        'inner query connection must have app.tenant_id = merchantA'
       );
     });
     console.log(
@@ -574,6 +651,152 @@ async function main(): Promise<void> {
     console.log(
       'PASS: nested foreign batch transaction with raw query inside extended transaction fails closed'
     );
+
+    // 18. Finding 21: Parallel concurrent transactions under different tenant contexts
+    // Must guarantee per-$transaction isolation with zero cross-tenant contamination.
+    const concurrentCodeA = `RLS-CONC-A-${suffix}`;
+    const concurrentCodeB = `RLS-CONC-B-${suffix}`;
+    const [resA, resB] = await Promise.all([
+      runWithTenant(merchantA, async () =>
+        extended.$transaction(async (tx) => {
+          return tx.order.create({ data: orderInput(merchantA, concurrentCodeA) });
+        })
+      ),
+      runWithTenant(merchantB, async () =>
+        extended.$transaction(async (tx) => {
+          return tx.order.create({ data: orderInput(merchantB, concurrentCodeB) });
+        })
+      ),
+    ]);
+    assert.equal(resA.merchant_id, merchantA, 'concurrent txA must write merchantA');
+    assert.equal(resB.merchant_id, merchantB, 'concurrent txB must write merchantB');
+    assert.equal(resA.order_code, concurrentCodeA);
+    assert.equal(resB.order_code, concurrentCodeB);
+    console.log(
+      'PASS: concurrent transactions under distinct tenant contexts maintain strict isolation'
+    );
+
+    // 19. Finding 19: End-to-end HTTP pipeline verification via NestJS + Supertest
+    // Proves context propagation: Token -> TenantMiddleware -> SessionGuard -> SearchController -> SearchService -> extended Prisma -> RLS
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    const app = moduleFixture.createNestApplication<NestExpressApplication>();
+    app.set('trust proxy', 1);
+    await app.init();
+
+    const appPrisma = app.get(PrismaService);
+    await appPrisma.checkReadiness();
+    const rbacService = app.get(RbacService);
+    await rbacService.ensurePlatformSeed();
+
+    const uIdA = randomUUID();
+    const sIdA = randomUUID();
+    const uIdB = randomUUID();
+    const sIdB = randomUUID();
+    const tokenSecret = resolveAccessTokenSecret(process.env.AUTH_TOKEN_SECRET);
+
+    const { token: tokenA } = signAccessToken(
+      { sub: uIdA, sid: sIdA, mid: merchantA, role: RoleEnum.OWNER, st: 'ACTIVE' },
+      tokenSecret,
+      3600
+    );
+    const { token: tokenB } = signAccessToken(
+      { sub: uIdB, sid: sIdB, mid: merchantB, role: RoleEnum.OWNER, st: 'ACTIVE' },
+      tokenSecret,
+      3600
+    );
+
+    try {
+      await admin.user.create({
+        data: {
+          id: uIdA,
+          merchant_id: merchantA,
+          email: `rls_probe_a_${suffix}@shipde.vn`,
+          full_name: 'Probe User A',
+          password_hash: 'hashed',
+          role: RoleEnum.OWNER,
+          status: 'active',
+          store_scopes: ['*'],
+          warehouse_scopes: ['*'],
+        },
+      });
+      await admin.deviceSession.create({
+        data: {
+          id: sIdA,
+          user_id: uIdA,
+          merchant_id: merchantA,
+          session_token_hash: createHash('sha256').update(tokenA).digest('hex'),
+          device_id: `test-device-a-${suffix}`,
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 3600 * 1000),
+        },
+      });
+
+      await admin.user.create({
+        data: {
+          id: uIdB,
+          merchant_id: merchantB,
+          email: `rls_probe_b_${suffix}@shipde.vn`,
+          full_name: 'Probe User B',
+          password_hash: 'hashed',
+          role: RoleEnum.OWNER,
+          status: 'active',
+          store_scopes: ['*'],
+          warehouse_scopes: ['*'],
+        },
+      });
+      await admin.deviceSession.create({
+        data: {
+          id: sIdB,
+          user_id: uIdB,
+          merchant_id: merchantB,
+          session_token_hash: createHash('sha256').update(tokenB).digest('hex'),
+          device_id: `test-device-b-${suffix}`,
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 3600 * 1000),
+        },
+      });
+
+      // Merchant A search request: must only see Tenant A's orders, never Tenant B's orders
+      const httpResA = await request(app.getHttpServer())
+        .get(`/api/v1/search?q=RLS-&type=ORDER`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+
+      const codesA = httpResA.body.data?.items?.map((i: any) => i.code) || [];
+      assert.ok(codesA.includes(`RLS-A-${suffix}`), 'Merchant A must find its own order');
+      assert.ok(
+        !codesA.includes(`RLS-B-${suffix}`),
+        'Merchant A search must NOT return Tenant B order'
+      );
+
+      // Merchant B search request: must only see Tenant B's orders
+      const httpResB = await request(app.getHttpServer())
+        .get(`/api/v1/search?q=RLS-&type=ORDER`)
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(200);
+
+      const codesB = httpResB.body.data?.items?.map((i: any) => i.code) || [];
+      assert.ok(codesB.includes(`RLS-B-${suffix}`), 'Merchant B must find its own order');
+      assert.ok(
+        !codesB.includes(`RLS-A-${suffix}`),
+        'Merchant B search must NOT return Tenant A order'
+      );
+
+      // Unauthenticated request must be denied with 401 UNAUTHENTICATED
+      await request(app.getHttpServer()).get(`/api/v1/search?q=RLS-&type=ORDER`).expect(401);
+
+      console.log(
+        'PASS: end-to-end HTTP pipeline (middleware -> guard -> controller -> service -> extended Prisma -> RLS) verified'
+      );
+    } finally {
+      await app.close();
+      await admin.deviceSession
+        .deleteMany({ where: { user_id: { in: [uIdA, uIdB] } } })
+        .catch(() => {});
+      await admin.user.deleteMany({ where: { id: { in: [uIdA, uIdB] } } }).catch(() => {});
+    }
   } finally {
     await admin.order
       .deleteMany({

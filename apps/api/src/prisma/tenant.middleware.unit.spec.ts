@@ -173,4 +173,42 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
     const tenant = await runMiddleware(`Bearer ${emptyArrayScopeToken}`);
     assert.equal(tenant, undefined, 'empty array scope must not establish merchant tenant context');
   });
+
+  it('does not establish tenant context for PLATFORM_ADMIN tokens even if mid is present', async () => {
+    const adminWithMid = signToken(MERCHANT_A, 'PLATFORM_ADMIN');
+    const tenant = await runMiddleware(`Bearer ${adminWithMid}`);
+    assert.equal(
+      tenant,
+      undefined,
+      'PLATFORM_ADMIN tokens must never establish merchant tenant context even if mid is set'
+    );
+  });
+
+  it('does not establish tenant context for setup prefixed scope array claims', async () => {
+    const setupArrayScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, [
+      'setup-invite',
+    ] as unknown as string);
+    const tenant = await runMiddleware(`Bearer ${setupArrayScopeToken}`);
+    assert.equal(tenant, undefined, 'setup-x scope must not establish merchant tenant context');
+  });
+
+  it('does not establish tenant context for null/invalid scope array claims', async () => {
+    const nullArrayScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, [
+      null,
+    ] as unknown as string);
+    const tenant = await runMiddleware(`Bearer ${nullArrayScopeToken}`);
+    assert.equal(tenant, undefined, '[null] scope must not establish merchant tenant context');
+  });
+
+  it('does not establish tenant context for non-string scope claims', async () => {
+    const numberScopeToken = signToken(
+      MERCHANT_A,
+      'OWNER',
+      3600,
+      SECRET,
+      12345 as unknown as string
+    );
+    const tenant = await runMiddleware(`Bearer ${numberScopeToken}`);
+    assert.equal(tenant, undefined, 'non-string scope must not establish merchant tenant context');
+  });
 });
