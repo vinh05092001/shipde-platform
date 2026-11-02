@@ -161,6 +161,28 @@ describe('failure markers', () => {
 });
 
 describe('main — token limit', () => {
+  test('denies blank or comma-only path selections without creating a pack', async () => {
+    const fixture = createFixtureRoot();
+    const logs = [];
+    const errors = [];
+    try {
+      for (const paths of ['', ' , , ']) {
+        const code = await main(['--paths', paths, '--out', 'output.xml'], {
+          root: fixture,
+          log: (line) => logs.push(line),
+          logError: (line) => errors.push(line),
+        });
+        assert.equal(code, 1);
+        assert.equal(fs.existsSync(path.join(fixture, 'output.xml')), false);
+      }
+      assert.equal(logs.length, 0);
+      assert.match(errors.join('\n'), /--paths is required/);
+      assert.equal(errors.join('\n').includes('export const hello'), false);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
   test('fails when the fixture pack exceeds --max-tokens and does not keep the file', async () => {
     const fixture = createFixtureRoot();
     const logs = [];
@@ -207,6 +229,62 @@ describe('main — token limit', () => {
       cleanupDir(fixture);
     }
   });
+});
+
+describe('environment file exclusion', () => {
+  const excludedPaths = [
+    '.env',
+    '.env.example',
+    '.env.local',
+    '.envrc',
+    '.environment',
+    'src/.env',
+    'src/.env.example',
+    'src/deep/.env.production',
+    'src/deep/.envrc',
+  ];
+
+  for (const [selection, paths] of [
+    ['explicit paths', ['src/hello.js', 'src/world.js', ...excludedPaths].join(',')],
+    ['globs', 'src/**,.env*'],
+  ]) {
+    test(`excludes root and nested .env* files selected by ${selection}`, async () => {
+      const fixture = createFixtureRoot();
+      const logs = [];
+      const errors = [];
+      const markers = excludedPaths.map((_, index) => `EXCLUDED_ENV_CONTENT_${index}`);
+      try {
+        fs.copyFileSync(
+          path.join(REPO_ROOT, 'repomix.config.json'),
+          path.join(fixture, 'repomix.config.json'),
+        );
+        for (const [index, relativePath] of excludedPaths.entries()) {
+          const filePath = path.join(fixture, relativePath);
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          // Harmless markers prove exclusion without relying on secretlint detection.
+          fs.writeFileSync(filePath, `context_marker=${markers[index]}\n`);
+        }
+        const code = await main(['--paths', paths, '--out', 'output.xml'], {
+          root: fixture,
+          log: (line) => logs.push(line),
+          logError: (line) => errors.push(line),
+        });
+        assert.equal(errors.join('\n'), '');
+        assert.equal(code, 0);
+        const output = fs.readFileSync(path.join(fixture, 'output.xml'), 'utf8');
+        assert.match(output, /export const hello/);
+        assert.match(output, /export const world/);
+        const printed = `${logs.join('\n')}\n${errors.join('\n')}`;
+        for (const [index, relativePath] of excludedPaths.entries()) {
+          assert.equal(output.includes(markers[index]), false, `Packed ${relativePath}`);
+          assert.equal(printed.includes(markers[index]), false, `Printed ${relativePath}`);
+        }
+        assert.match(logs.join('\n'), /OK: 2 files,/);
+      } finally {
+        cleanupDir(fixture);
+      }
+    });
+  }
 });
 
 describe('repomix security check', () => {

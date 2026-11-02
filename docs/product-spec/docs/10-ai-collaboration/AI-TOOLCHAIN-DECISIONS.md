@@ -578,7 +578,7 @@ The command prints only a summary (`files`, estimated tokens, output path). It n
 
 ### Secrets
 
-The pack never includes secrets or `.env` files. Ignore patterns drop `.env`, `.env.*`, key and certificate files, and `security.enableSecurityCheck` is on. A secret hit fails the command.
+The pack never includes secrets or `.env` files. Ignore patterns drop every `.env` variant at the root and in nested directories, including `.env.example`, with no exception. The nested pattern is `**/**/.env*` because repomix 1.18.1 rewrites `**/.env*` as a directory-only pattern. Key and certificate files are also ignored, and `security.enableSecurityCheck` is on. A secret hit fails the command.
 
 ### Boundary
 
