@@ -137,10 +137,6 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
       [] as unknown as string
     );
     const tenant = await runMiddleware(`Bearer ${emptyArrayScopeToken}`);
-    assert.equal(
-      tenant,
-      undefined,
-      'empty array scope must not establish merchant tenant context'
-    );
+    assert.equal(tenant, undefined, 'empty array scope must not establish merchant tenant context');
   });
 });

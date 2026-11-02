@@ -137,10 +137,7 @@ export function tenantRlsExtension(base: PrismaClient) {
           return origRequestTx ? origRequestTx.call(this, txParams) : setConfigPromise;
         };
 
-        const batch = [
-          setConfigPromise,
-          ...(first as unknown[]),
-        ];
+        const batch = [setConfigPromise, ...(first as unknown[])];
         const results = (await establishedTxStorage.run(activeTxIds, async () =>
           (baseTransaction as any)(batch, options)
         )) as unknown[];
