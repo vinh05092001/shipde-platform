@@ -1,1 +1,0 @@
-{"groups":[{"id":"gemini","models":["gemini-3.8-flash-high"],"weekly":{"remaining":0}},{"id":"claude-gpt","models":["claude-opus-4-6-thinking"],"weekly":{"remaining":0.8}}]}

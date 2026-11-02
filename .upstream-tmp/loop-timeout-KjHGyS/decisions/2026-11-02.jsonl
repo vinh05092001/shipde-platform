@@ -1,5 +1,0 @@
-{"at":"2026-11-02T10:23:41.298Z","stage":"selected","workItemId":"FEAT-AUTH-02"}
-{"at":"2026-11-02T10:23:41.298Z","stage":"cooled","workItemId":"FEAT-AUTH-02","outcome":"blocked_no_route","exitCode":1,"detail":"BLOCKED_NO_ROUTE: no available routes for work item","triedRoutes":[{"candidateKey":"9router:combo","reasonCode":"QUOTA_EXHAUSTED","reason":"upstream down"}]}
-{"at":"2026-11-02T10:24:16.298Z","stage":"selected","workItemId":"FEAT-AUTH-02"}
-{"at":"2026-11-02T10:24:16.298Z","stage":"cooled","workItemId":"FEAT-AUTH-02","outcome":"blocked_no_route","exitCode":1,"detail":"BLOCKED_NO_ROUTE: no available routes for work item","triedRoutes":[{"candidateKey":"9router:combo","reasonCode":"QUOTA_EXHAUSTED","reason":"upstream down"}]}
-{"at":"2026-11-02T10:24:16.298Z","stage":"failed","workItemId":"FEAT-AUTH-02","detail":"BLOCKED_NO_ROUTE_TIMEOUT","elapsedMs":35000,"timeoutMs":30000,"triedRoutes":[{"candidateKey":"9router:combo","reasonCode":"QUOTA_EXHAUSTED","reason":"upstream down"}]}

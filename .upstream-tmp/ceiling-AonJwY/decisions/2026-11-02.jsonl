@@ -1,6 +1,0 @@
-{"at":"2026-11-02T10:23:05.474Z","stage":"launched","workItemId":"OTHER-W1","sessionId":"sw1"}
-{"at":"2026-11-02T10:23:05.475Z","stage":"refused","detail":"WRITER_CEILING_REACHED","workItemId":"TASK-CEIL-1"}
-{"at":"2026-11-02T10:23:05.641Z","stage":"completed","workItemId":"OTHER-W1"}
-{"at":"2026-11-02T10:23:05.641Z","stage":"review","workItemId":"REV-1","sessionId":"sr1","role":"reviewer.primary"}
-{"at":"2026-11-02T10:23:05.642Z","stage":"review","workItemId":"REV-1","sessionId":"sr2","role":"reviewer.fallback"}
-{"at":"2026-11-02T10:23:05.643Z","stage":"refused","detail":"REVIEWER_CEILING_REACHED","workItemId":"TASK-CEIL-1"}

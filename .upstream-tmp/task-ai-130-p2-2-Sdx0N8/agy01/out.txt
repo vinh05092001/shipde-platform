@@ -1,1 +1,0 @@
-{"groups":[{"id":"gemini","models":["gemini-no-tools","gemini-has-tools","gemini-plain"],"weekly":{"remaining":1}}]}

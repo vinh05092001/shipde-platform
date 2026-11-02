@@ -1,2 +1,0 @@
-"delivery_order","slice","group","work_item_id","feature_id","feature_name","key_behavior","status","dependencies","work_item_path","branch","pr","codex_verdict","merge_commit"
-"1","S00","AI workflow","TASK-ARG-1","","Feature TASK-ARG-1","behavior","READY_FOR_AUTHOR","","docs/product-spec/work-items/TASK-ARG-1.md","feat/task-arg-1","","",""

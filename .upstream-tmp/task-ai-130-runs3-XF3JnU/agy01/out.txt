@@ -1,1 +1,0 @@
-{"groups":[{"id":"gemini","models":["gemini-3.8-flash-high"],"weekly":{"remaining":0.5}}]}

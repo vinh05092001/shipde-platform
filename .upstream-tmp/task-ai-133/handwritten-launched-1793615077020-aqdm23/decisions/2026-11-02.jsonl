@@ -1,1 +1,0 @@
-{"at":"2026-11-02T10:24:48.161Z","stage":"refused","workItemId":"TASK-AI-133","status":"refused","detail":"GOVERNED_MERGE_REFUSED","reason":"REVIEWER_NOT_RECORDED: manifest reviewer candidate key was not recorded in the decision log for this work item and commit SHA with a valid signature","refusalCode":"REVIEWER_NOT_RECORDED"}
