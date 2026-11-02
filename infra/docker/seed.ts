@@ -1,4 +1,12 @@
 import { PrismaClient, RoleEnum, CarrierCodeEnum, CarrierTierEnum } from '@prisma/client';
+import {
+  CATALOG_REVISION_2026_10_31,
+  SEED_CARRIERS,
+  SEED_CARRIER_SERVICES,
+  SEED_CANONICAL_STATUSES,
+  SEED_FEE_COMPONENTS,
+  SEED_COMPATIBILITY_MAPPINGS,
+} from '../../packages/testkit/src/carriers/catalog/index.js';
 
 export const SEED_MERCHANT_ID = 'a0000000-0000-0000-0000-000000000001';
 export const SEED_MERCHANT_CODE = 'SHOP_DEMO_01';
@@ -312,7 +320,190 @@ export async function seedDatabase(client?: PrismaClient): Promise<{
         });
       }
     }
-    return { merchantsCount, usersCount, accountsCount, tokensCount };
+
+    // 6. Seed Platform Carrier Catalog Revision (FEAT-CAR-01)
+    let carriersCount = 0;
+    let servicesCount = 0;
+    let statusesCount = 0;
+    let feeComponentsCount = 0;
+    let mappingsCount = 0;
+
+    if (prisma.carrier) {
+      for (const c of SEED_CARRIERS) {
+        await prisma.carrier.upsert({
+          where: {
+            catalogRevision_code: {
+              catalogRevision: c.catalog_revision,
+              code: c.code,
+            },
+          },
+          update: {
+            name: c.name,
+            logoUrl: c.logo_url,
+            isActive: c.is_active,
+            evidenceLevel: c.evidence_level,
+            description: c.description,
+          },
+          create: {
+            id: c.id,
+            catalogRevision: c.catalog_revision,
+            code: c.code,
+            name: c.name,
+            logoUrl: c.logo_url,
+            isActive: c.is_active,
+            evidenceLevel: c.evidence_level,
+            description: c.description,
+          },
+        });
+      }
+      carriersCount = await prisma.carrier.count({
+        where: { catalogRevision: CATALOG_REVISION_2026_10_31 },
+      });
+    }
+
+    if (prisma.carrierService) {
+      for (const s of SEED_CARRIER_SERVICES) {
+        await prisma.carrierService.upsert({
+          where: {
+            catalogRevision_carrierCode_code: {
+              catalogRevision: s.catalog_revision,
+              carrierCode: s.carrier_code,
+              code: s.code,
+            },
+          },
+          update: {
+            name: s.name,
+            serviceType: s.service_type,
+            description: s.description,
+            isActive: s.is_active,
+            evidenceLevel: s.evidence_level,
+            sourceRevision: s.source_revision,
+          },
+          create: {
+            id: s.id,
+            carrierId: s.carrier_id,
+            catalogRevision: s.catalog_revision,
+            carrierCode: s.carrier_code,
+            code: s.code,
+            name: s.name,
+            serviceType: s.service_type,
+            description: s.description,
+            isActive: s.is_active,
+            evidenceLevel: s.evidence_level,
+            sourceRevision: s.source_revision,
+          },
+        });
+      }
+      servicesCount = await prisma.carrierService.count({
+        where: { catalogRevision: CATALOG_REVISION_2026_10_31 },
+      });
+    }
+
+    if (prisma.canonicalStatusReference) {
+      for (const st of SEED_CANONICAL_STATUSES) {
+        await prisma.canonicalStatusReference.upsert({
+          where: {
+            catalogRevision_code: {
+              catalogRevision: st.catalog_revision,
+              code: st.code,
+            },
+          },
+          update: {
+            category: st.category,
+            label: st.label,
+            description: st.description,
+            stageOrder: st.stage_order,
+          },
+          create: {
+            id: st.id,
+            catalogRevision: st.catalog_revision,
+            code: st.code,
+            category: st.category,
+            label: st.label,
+            description: st.description,
+            stageOrder: st.stage_order,
+          },
+        });
+      }
+      statusesCount = await prisma.canonicalStatusReference.count({
+        where: { catalogRevision: CATALOG_REVISION_2026_10_31 },
+      });
+    }
+
+    if (prisma.feeComponentReference) {
+      for (const fc of SEED_FEE_COMPONENTS) {
+        await prisma.feeComponentReference.upsert({
+          where: {
+            catalogRevision_code: {
+              catalogRevision: fc.catalog_revision,
+              code: fc.code,
+            },
+          },
+          update: {
+            name: fc.name,
+            category: fc.category,
+            description: fc.description,
+            isRefundable: fc.is_refundable,
+            vatApplicable: fc.vat_applicable,
+          },
+          create: {
+            id: fc.id,
+            catalogRevision: fc.catalog_revision,
+            code: fc.code,
+            name: fc.name,
+            category: fc.category,
+            description: fc.description,
+            isRefundable: fc.is_refundable,
+            vatApplicable: fc.vat_applicable,
+          },
+        });
+      }
+      feeComponentsCount = await prisma.feeComponentReference.count({
+        where: { catalogRevision: CATALOG_REVISION_2026_10_31 },
+      });
+    }
+
+    if (prisma.catalogCompatibilityMapping) {
+      for (const m of SEED_COMPATIBILITY_MAPPINGS) {
+        await prisma.catalogCompatibilityMapping.upsert({
+          where: {
+            id: m.id,
+          },
+          update: {
+            catalogRevision: m.catalog_revision,
+            carrierCode: m.carrier_code,
+            domain: m.domain,
+            rawKey: m.raw_key,
+            canonicalCode: m.canonical_code,
+            disposition: m.disposition,
+          },
+          create: {
+            id: m.id,
+            catalogRevision: m.catalog_revision,
+            carrierCode: m.carrier_code,
+            domain: m.domain,
+            rawKey: m.raw_key,
+            canonicalCode: m.canonical_code,
+            disposition: m.disposition,
+          },
+        });
+      }
+      mappingsCount = await prisma.catalogCompatibilityMapping.count({
+        where: { catalogRevision: CATALOG_REVISION_2026_10_31 },
+      });
+    }
+
+    return {
+      merchantsCount,
+      usersCount,
+      accountsCount,
+      tokensCount,
+      carriersCount,
+      servicesCount,
+      statusesCount,
+      feeComponentsCount,
+      mappingsCount,
+    };
   } finally {
     if (!client) {
       await prisma.$disconnect();
@@ -332,6 +523,11 @@ async function main() {
     console.log(` - Users: ${counts.usersCount}`);
     console.log(` - Carrier Accounts: ${counts.accountsCount}`);
     console.log(` - Verification Tokens: ${counts.tokensCount}`);
+    console.log(` - Carriers: ${counts.carriersCount}`);
+    console.log(` - Carrier Services: ${counts.servicesCount}`);
+    console.log(` - Canonical Statuses: ${counts.statusesCount}`);
+    console.log(` - Fee Components: ${counts.feeComponentsCount}`);
+    console.log(` - Compatibility Mappings: ${counts.mappingsCount}`);
   } catch (error: any) {
     console.error('❌ Lỗi khởi tạo dữ liệu mẫu:', error.message);
     process.exit(1);
