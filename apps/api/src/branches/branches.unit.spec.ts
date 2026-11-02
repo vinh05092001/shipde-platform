@@ -102,7 +102,7 @@ function createMockPrismaService() {
       id: 'u-owner-1',
       merchant_id: 'm-tenant-1',
       role: 'OWNER',
-      store_scopes: [],
+      store_scopes: ['*'],
     },
     {
       id: 'u-scoped-1',
@@ -226,7 +226,11 @@ function createMockPrismaService() {
     },
     user: {
       findUnique: async ({ where }: any) => {
-        return users.find((u) => u.id === where.id) || null;
+        return (
+          users.find(
+            (u) => u.id === where.id && (!where.merchant_id || u.merchant_id === where.merchant_id)
+          ) || null
+        );
       },
     },
     auditLog: mockTx.auditLog,

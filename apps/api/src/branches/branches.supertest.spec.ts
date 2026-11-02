@@ -12,6 +12,7 @@ import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { RbacService } from '../rbac/rbac.service';
 import { BranchesService } from './branches.service';
+import { runCarrierCatalogSupertestSuite } from '../carrier-catalog/carrier-catalog.supertest.spec';
 
 async function runBranchesSupertestSuite() {
   console.log('================================================================');
@@ -109,7 +110,7 @@ async function runBranchesSupertestSuite() {
       mId: string,
       role: RoleEnum,
       emailSuffix: string,
-      storeScopes: string[] = [],
+      storeScopes: string[] = role === RoleEnum.OWNER ? ['*'] : [],
       customRoleId: string | null = null
     ): Promise<{ userId: string; token: string }> => {
       const uId = randomUUID();
@@ -953,6 +954,71 @@ async function runBranchesSupertestSuite() {
       );
     }
 
+    // FEAT-COM-02: prove empty OWNER scopes deny through HTTP and real persistence.
+    const reviewBranch = await prisma.branch.create({
+      data: {
+        merchant_id: merchantIdA,
+        name: 'Review scope target',
+        code: `REVIEW-SCOPE-${testSuffix}`,
+        is_default: false,
+      },
+    });
+    const emptyOwner = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'review_empty', []);
+    const scopedOwner = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'review_scoped', [
+      reviewBranch.id,
+    ]);
+    const snapshotBranches = () =>
+      prisma.branch.findMany({
+        where: { merchant_id: merchantIdA },
+        orderBy: { id: 'asc' },
+      });
+    const beforeDenied = await snapshotBranches();
+    const auditCountBeforeDenied = await prisma.auditLog.count({
+      where: { merchant_id: merchantIdA },
+    });
+    const emptyList = await request(app.getHttpServer())
+      .get('/api/v1/branches')
+      .set('Authorization', `Bearer ${emptyOwner.token}`)
+      .expect(200);
+    assert.deepStrictEqual(emptyList.body.data.branches, []);
+    assert.strictEqual(emptyList.body.meta.total, 0, 'empty scopes cannot leak tenant counts');
+    for (const [method, route] of [
+      ['post', '/api/v1/branches'],
+      ['patch', `/api/v1/branches/${reviewBranch.id}`],
+      ['post', `/api/v1/branches/${reviewBranch.id}/activate`],
+      ['post', `/api/v1/branches/${reviewBranch.id}/deactivate`],
+      ['delete', `/api/v1/branches/${reviewBranch.id}`],
+    ] as const) {
+      const denied = await request(app.getHttpServer())
+        [method](route)
+        .set('Authorization', `Bearer ${emptyOwner.token}`)
+        .send({ name: 'Denied branch', code: `REVIEW-DENIED-${testSuffix}` })
+        .expect(403);
+      assert.strictEqual(denied.body.error.code, 'FORBIDDEN');
+      assert.deepStrictEqual(await snapshotBranches(), beforeDenied);
+      assert.strictEqual(
+        await prisma.auditLog.count({ where: { merchant_id: merchantIdA } }),
+        auditCountBeforeDenied
+      );
+    }
+    const scopedList = await request(app.getHttpServer())
+      .get('/api/v1/branches?limit=10&sort_by=name&sort_order=asc')
+      .set('Authorization', `Bearer ${scopedOwner.token}`)
+      .expect(200);
+    assert.deepStrictEqual(
+      scopedList.body.data.branches.map((row: { id: string }) => row.id),
+      [reviewBranch.id]
+    );
+    assert.strictEqual(
+      scopedList.body.meta.total,
+      1,
+      'scoped database count must exclude every unassigned branch'
+    );
+    assert.strictEqual(scopedList.body.meta.total_pages, 1);
+    console.log(
+      '  PASS: FEAT-COM-02 empty/scoped OWNER HTTP negatives preserve database rows and audits.'
+    );
+
     console.log('================================================================');
     console.log('🎉 ALL FEAT-ORG-02 SUPERTEST CHECKS PASSED (AC-01..16)!');
     console.log('================================================================');
@@ -1013,7 +1079,9 @@ async function runBranchesSupertestSuite() {
   }
 }
 
-runBranchesSupertestSuite().catch((err) => {
-  console.error('Branches Supertest suite failed:', err);
-  process.exit(1);
-});
+runBranchesSupertestSuite()
+  .then(() => runCarrierCatalogSupertestSuite())
+  .catch((err) => {
+    console.error('Branches or carrier catalog Supertest suite failed:', err);
+    process.exit(1);
+  });

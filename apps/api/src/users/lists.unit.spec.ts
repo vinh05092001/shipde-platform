@@ -581,7 +581,7 @@ test('HTTP branches list effects: filters, pagination, deterministic sorting, ou
   ];
 
   const testUsers: Record<string, any> = {
-    'u-owner': { id: 'u-owner', merchant_id: 'tenant-a', role: 'OWNER', store_scopes: [] },
+    'u-owner': { id: 'u-owner', merchant_id: 'tenant-a', role: 'OWNER', store_scopes: ['*'] },
     'u-scoped-empty': {
       id: 'u-scoped-empty',
       merchant_id: 'tenant-a',

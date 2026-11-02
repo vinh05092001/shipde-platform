@@ -543,7 +543,15 @@ async function runWarehousesWebTestSuite() {
   assert.ok(a11yMarkup.includes('aria-label="Đóng thông báo lỗi"'));
   assert.ok(a11yMarkup.includes('aria-label="Đóng thông báo thành công"'));
   assert.ok(a11yMarkup.includes('aria-label="Làm mới danh sách kho hàng"'));
-  assert.ok(a11yMarkup.includes('aria-label="Chỉnh sửa kho '));
+  assert.ok(!a11yMarkup.includes('data-testid="warehouse-list-state"'));
+  assert.ok(!a11yMarkup.includes('data-testid="edit-warehouse-button-'));
+  const readyA11yMarkup = renderToStaticMarkup(
+    React.createElement(WarehouseManagementView, {
+      warehouses: allWarehouses,
+      canEdit: true,
+    })
+  );
+  assert.ok(readyA11yMarkup.includes('aria-label="Chỉnh sửa kho '));
   console.log('  PASS: Icon-only button aria-labels verified.');
 
   console.log('================================================================');

@@ -11,7 +11,7 @@ import {
   validateCreateWarehouseDto,
   validateUpdateWarehouseDto,
 } from './warehouses.dto';
-import { maskIdentifier } from '../invitations/invitations.service';
+import { maskSensitiveAuditValue } from '../utils/audit-mask';
 import { WarehouseAuditEvent } from '@shipde/contracts';
 import { WAREHOUSES_LIST_POLICY } from '@shipde/config';
 import { parseCanonicalListQuery } from '../users/list-scope';
@@ -27,35 +27,33 @@ export const SENSITIVE_WAREHOUSE_AUDIT_FIELDS = new Set([
 ]);
 
 export function maskWarehouseAuditValue(field: string, val: unknown): unknown {
-  if (val === null || val === undefined) return val;
-  if (typeof val === 'string' && SENSITIVE_WAREHOUSE_AUDIT_FIELDS.has(field)) {
-    return maskIdentifier(val);
-  }
-  if (Array.isArray(val)) {
-    return val.map((item) =>
-      typeof item === 'object' && item !== null
-        ? maskWarehouseAuditObject(item as Record<string, unknown>)
-        : item
-    );
-  }
-  if (typeof val === 'object') {
-    return maskWarehouseAuditObject(val as Record<string, unknown>);
-  }
-  return val;
+  return maskSensitiveAuditValue(field, val);
 }
 
 export function maskWarehouseAuditObject(obj: Record<string, unknown>): Record<string, unknown> {
-  if (!obj || typeof obj !== 'object') return obj;
-  const result: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    result[k] = maskWarehouseAuditValue(k, v);
-  }
-  return result;
+  return maskSensitiveAuditValue('metadata', obj) as Record<string, unknown>;
 }
 
 @Injectable()
 export class WarehousesService {
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+
+  private async lockMerchantWarehouses(
+    tx: Prisma.TransactionClient,
+    merchantId: string
+  ): Promise<void> {
+    const merchants = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM merchants WHERE id = ${merchantId}::uuid FOR NO KEY UPDATE
+    `;
+    if (!merchants.length) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'Yêu cầu không xác định được danh tính cửa hàng',
+        false
+      );
+    }
+  }
 
   private hashIp(ip: string): string {
     return createHash('sha256')
@@ -107,7 +105,7 @@ export class WarehousesService {
    * Fetches the actor's live warehouse scopes from the database
    */
   public async getActorWarehouseScopes(actor: ActorContext): Promise<string[]> {
-    if (!actor.userId) {
+    if (!actor.userId || !actor.merchantId) {
       return [];
     }
     const user = await this.prisma.user.findFirst({
@@ -125,6 +123,32 @@ export class WarehousesService {
       return true;
     }
     return scopes.includes(warehouse.id) || scopes.includes(warehouse.code);
+  }
+
+  private async assertDefaultReplacementScope(
+    tx: Prisma.TransactionClient,
+    merchantId: string,
+    scopes: string[],
+    warehouseId?: string
+  ): Promise<void> {
+    if (scopes.includes('*')) return;
+    // The existing partial unique index permits at most one default per tenant.
+    const previousDefault = await tx.warehouse.findFirst({
+      where: {
+        merchant_id: merchantId,
+        is_default: true,
+        ...(warehouseId ? { id: { not: warehouseId } } : {}),
+      },
+      select: { id: true, code: true },
+    });
+    if (previousDefault && !this.hasWarehouseAccess(scopes, previousDefault)) {
+      throw new CanonicalApiException(
+        HttpStatus.FORBIDDEN,
+        'WAREHOUSE_SCOPE_UNAUTHORIZED',
+        'Người dùng không có quyền thay đổi kho mặc định ngoài phạm vi được phân công',
+        false
+      );
+    }
   }
 
   /**
@@ -368,7 +392,8 @@ export class WarehousesService {
 
     try {
       const created = await this.prisma.$transaction(async (tx) => {
-        // Evaluate default count strictly inside transaction to prevent race conditions
+        // All default writers take the same tenant lock before checking affected scopes.
+        await this.lockMerchantWarehouses(tx, merchantId);
         const existingCount = await tx.warehouse.count({
           where: { merchant_id: merchantId },
         });
@@ -377,6 +402,7 @@ export class WarehousesService {
         const isDefault = isFirst ? true : Boolean(dto.is_default);
 
         if (isDefault && existingCount > 0) {
+          await this.assertDefaultReplacementScope(tx, merchantId, scopes);
           await tx.warehouse.updateMany({
             where: { merchant_id: merchantId, is_default: true },
             data: { is_default: false },
@@ -428,23 +454,21 @@ export class WarehousesService {
         });
 
         // Audit trail with masked PII across top-level and nested JSON objects
-        const auditPayload: Record<string, unknown> = {
+        const auditPayload = maskWarehouseAuditObject({
           name: record.name,
           code: record.code,
           status: record.status,
           is_default: record.is_default,
           contact_name: record.contact_name,
-          contact_phone: maskWarehouseAuditValue('contact_phone', record.contact_phone),
-          contact_email: maskWarehouseAuditValue('contact_email', record.contact_email),
+          contact_phone: record.contact_phone,
+          contact_email: record.contact_email,
           address_line: record.address_line,
           district: record.district,
           city: record.city,
-          address_json: maskWarehouseAuditValue('address_json', addressJson),
+          address_json: addressJson,
           use_different_return_address: record.use_different_return_address,
-          return_address_json: returnAddressJson
-            ? maskWarehouseAuditValue('return_address_json', returnAddressJson)
-            : null,
-        };
+          return_address_json: returnAddressJson,
+        });
 
         await tx.auditLog.create({
           data: {
@@ -688,7 +712,9 @@ export class WarehousesService {
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
+        await this.lockMerchantWarehouses(tx, merchantId);
         if (dataToUpdate.is_default === true) {
+          await this.assertDefaultReplacementScope(tx, merchantId, scopes, id);
           await tx.warehouse.updateMany({
             where: { merchant_id: merchantId, is_default: true, id: { not: id } },
             data: { is_default: false },
@@ -706,8 +732,8 @@ export class WarehousesService {
         const afterDiff: Record<string, any> = {};
 
         for (const field of updatedFields) {
-          beforeDiff[field] = maskWarehouseAuditValue(field, (existing as any)[field]);
-          afterDiff[field] = maskWarehouseAuditValue(field, (result as any)[field]);
+          beforeDiff[field] = (existing as any)[field];
+          afterDiff[field] = (result as any)[field];
         }
 
         await tx.auditLog.create({
@@ -718,8 +744,8 @@ export class WarehousesService {
             action: WarehouseAuditEvent.WAREHOUSE_UPDATED,
             entity_type: 'warehouse',
             entity_id: id,
-            old_value: beforeDiff as unknown as Prisma.InputJsonValue,
-            new_value: afterDiff as unknown as Prisma.InputJsonValue,
+            old_value: maskWarehouseAuditObject(beforeDiff) as Prisma.InputJsonValue,
+            new_value: maskWarehouseAuditObject(afterDiff) as Prisma.InputJsonValue,
             reason: correlationId ? `correlation_id:${correlationId}` : null,
             ip_address: this.hashIp(clientIp),
           },
@@ -793,7 +819,9 @@ export class WarehousesService {
 
     try {
       const updated = await this.prisma.$transaction(async (tx) => {
-        // Unset previous defaults
+        await this.lockMerchantWarehouses(tx, merchantId);
+        // Re-read and authorize the default while concurrent default writers are excluded.
+        await this.assertDefaultReplacementScope(tx, merchantId, scopes, id);
         await tx.warehouse.updateMany({
           where: { merchant_id: merchantId, is_default: true, id: { not: id } },
           data: { is_default: false },
@@ -812,8 +840,10 @@ export class WarehousesService {
             action: WarehouseAuditEvent.WAREHOUSE_SET_DEFAULT,
             entity_type: 'warehouse',
             entity_id: id,
-            old_value: { is_default: existing.is_default } as unknown as Prisma.InputJsonValue,
-            new_value: { is_default: true } as unknown as Prisma.InputJsonValue,
+            old_value: maskWarehouseAuditObject({
+              is_default: existing.is_default,
+            }) as Prisma.InputJsonValue,
+            new_value: maskWarehouseAuditObject({ is_default: true }) as Prisma.InputJsonValue,
             reason: correlationId ? `correlation_id:${correlationId}` : null,
             ip_address: this.hashIp(clientIp),
           },
@@ -888,8 +918,8 @@ export class WarehousesService {
           action: WarehouseAuditEvent.WAREHOUSE_DEACTIVATED,
           entity_type: 'warehouse',
           entity_id: id,
-          old_value: { status: existing.status } as unknown as Prisma.InputJsonValue,
-          new_value: { status: 'inactive' } as unknown as Prisma.InputJsonValue,
+          old_value: maskWarehouseAuditObject({ status: existing.status }) as Prisma.InputJsonValue,
+          new_value: maskWarehouseAuditObject({ status: 'inactive' }) as Prisma.InputJsonValue,
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },

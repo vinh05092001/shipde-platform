@@ -170,6 +170,7 @@ function createMockPrismaService() {
   const auditLogs: any[] = [];
 
   const mockTx = {
+    $queryRaw: async () => [{ id: 'm-tenant-1' }],
     warehouse: {
       create: async ({ data }: any) => {
         const record = {
@@ -233,13 +234,7 @@ function createMockPrismaService() {
     countCalls,
     warehouse: {
       findFirst: async ({ where }: any) => {
-        return (
-          warehouses.find((w) => {
-            if (where.id && w.id !== where.id) return false;
-            if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
-            return true;
-          }) || null
-        );
+        return warehouses.find((w) => warehouseMatchesWhere(w, where)) || null;
       },
       findUnique: async ({ where }: any) => {
         if (where.id) {

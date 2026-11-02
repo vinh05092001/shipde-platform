@@ -12,7 +12,7 @@ import {
   validateCreateBranchDto,
   validateUpdateBranchDto,
 } from './branches.dto';
-import { maskIdentifier } from '../invitations/invitations.service';
+import { maskSensitiveAuditValue } from '../utils/audit-mask';
 import { BRANCHES_LIST_POLICY } from '@shipde/config';
 import { parseCanonicalListQuery } from '../users/list-scope';
 import type { ListQuery } from '@shipde/contracts';
@@ -25,12 +25,7 @@ export function isUuid(val: string): boolean {
 }
 
 export function maskAuditValue(field: string, val: unknown): any {
-  if (val === null || val === undefined) return val;
-  if (typeof val !== 'string') return val;
-  if (field === 'phone') {
-    return maskIdentifier(val);
-  }
-  return val;
+  return maskSensitiveAuditValue(field, val);
 }
 
 @Injectable()
@@ -83,48 +78,23 @@ export class BranchesService {
     };
   }
 
-  /**
-   * Helper to verify if an actor has scope access to a specific branch.
-   * If actor is OWNER or has '*', access is unrestricted.
-   */
+  /** Resolve scopes from the actor's current tenant membership; missing and empty deny. */
+  private async getActorStoreScopes(actor: ActorContext): Promise<string[] | null> {
+    if (!actor.userId || !actor.merchantId) return [];
+    const user = await this.prisma.user.findUnique({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+      select: { store_scopes: true },
+    });
+    const scopes = user?.store_scopes || [];
+    return scopes.includes('*') ? null : scopes;
+  }
+
   async checkActorBranchScope(
     actor: ActorContext,
     branch: { id: string; code: string }
   ): Promise<boolean> {
-    if (actor.role === 'OWNER') return true;
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: actor.userId },
-      select: { store_scopes: true, role: true },
-    });
-
-    if (!user) return false;
-    if (user.role === 'OWNER') return true;
-
-    const scopes = user.store_scopes || [];
-    if (scopes.includes('*')) return true;
-
-    return scopes.includes(branch.id) || scopes.includes(branch.code);
-  }
-
-  /**
-   * Helper to get allowed branch identifiers for an actor.
-   * Returns null if actor has full wildcard access.
-   */
-  private async getActorStoreScopes(actor: ActorContext): Promise<string[] | null> {
-    if (actor.role === 'OWNER') return null;
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: actor.userId },
-      select: { store_scopes: true, role: true },
-    });
-
-    if (!user || user.role === 'OWNER') return null;
-
-    const scopes = user.store_scopes || [];
-    if (scopes.includes('*')) return null;
-
-    return scopes;
+    const scopes = await this.getActorStoreScopes(actor);
+    return scopes === null || scopes.includes(branch.id) || scopes.includes(branch.code);
   }
 
   /**
@@ -206,7 +176,6 @@ export class BranchesService {
 
       if (scopedIdentifiers !== null) {
         if (scopedIdentifiers.length === 0) {
-          const canEdit = await this.canActorEditBranches(actor);
           const meta = {
             correlation_id: correlationId,
             page,
@@ -218,7 +187,7 @@ export class BranchesService {
             success: true,
             data: {
               branches: [],
-              can_edit: canEdit,
+              can_edit: false,
               meta,
             },
             meta,
@@ -500,15 +469,15 @@ export class BranchesService {
             entity_type: 'branch',
             entity_id: newBranch.id,
             old_value: Prisma.DbNull,
-            new_value: {
+            new_value: maskAuditValue('metadata', {
               id: newBranch.id,
               name: newBranch.name,
               code: newBranch.code,
               address: newBranch.address,
-              phone: maskAuditValue('phone', newBranch.phone),
+              phone: newBranch.phone,
               is_default: newBranch.is_default,
               status: newBranch.status,
-            },
+            }),
             reason: correlationId ? `correlation_id:${correlationId}` : null,
             ip_address: this.hashIp(clientIp),
           },
@@ -718,8 +687,8 @@ export class BranchesService {
         const afterDiff: Record<string, any> = {};
 
         for (const field of updatedFields) {
-          beforeDiff[field] = maskAuditValue(field, (existing as any)[field]);
-          afterDiff[field] = maskAuditValue(field, (result as any)[field]);
+          beforeDiff[field] = (existing as any)[field];
+          afterDiff[field] = (result as any)[field];
         }
 
         await tx.auditLog.create({
@@ -730,8 +699,8 @@ export class BranchesService {
             action: 'BRANCH_UPDATED',
             entity_type: 'branch',
             entity_id: branchId,
-            old_value: beforeDiff,
-            new_value: afterDiff,
+            old_value: maskAuditValue('metadata', beforeDiff),
+            new_value: maskAuditValue('metadata', afterDiff),
             reason: correlationId ? `correlation_id:${correlationId}` : null,
             ip_address: this.hashIp(clientIp),
           },
@@ -810,7 +779,7 @@ export class BranchesService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.branch.update({
-        where: { id: branchId },
+        where: { id: branchId, merchant_id: merchantId },
         data: { status: 'ACTIVE' },
       });
 
@@ -822,8 +791,8 @@ export class BranchesService {
           action: 'BRANCH_ACTIVATED',
           entity_type: 'branch',
           entity_id: branchId,
-          old_value: { status: existing.status },
-          new_value: { status: 'ACTIVE' },
+          old_value: maskAuditValue('metadata', { status: existing.status }),
+          new_value: maskAuditValue('metadata', { status: 'ACTIVE' }),
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
@@ -899,7 +868,7 @@ export class BranchesService {
       }
 
       const result = await tx.branch.update({
-        where: { id: branchId },
+        where: { id: branchId, merchant_id: merchantId },
         data: { status: 'INACTIVE' },
       });
 
@@ -911,8 +880,8 @@ export class BranchesService {
           action: 'BRANCH_DEACTIVATED',
           entity_type: 'branch',
           entity_id: branchId,
-          old_value: { status: existing.status },
-          new_value: { status: 'INACTIVE' },
+          old_value: maskAuditValue('metadata', { status: existing.status }),
+          new_value: maskAuditValue('metadata', { status: 'INACTIVE' }),
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
@@ -988,7 +957,7 @@ export class BranchesService {
       }
 
       await tx.branch.delete({
-        where: { id: branchId },
+        where: { id: branchId, merchant_id: merchantId },
       });
 
       await tx.auditLog.create({
@@ -999,15 +968,15 @@ export class BranchesService {
           action: 'BRANCH_DELETED',
           entity_type: 'branch',
           entity_id: branchId,
-          old_value: {
+          old_value: maskAuditValue('metadata', {
             id: existing.id,
             name: existing.name,
             code: existing.code,
             address: existing.address,
-            phone: maskAuditValue('phone', existing.phone),
+            phone: existing.phone,
             is_default: existing.is_default,
             status: existing.status,
-          },
+          }),
           new_value: Prisma.DbNull,
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),

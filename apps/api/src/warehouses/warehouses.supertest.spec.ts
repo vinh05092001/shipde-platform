@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RoleEnum, SessionStatusEnum } from '@prisma/client';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
 import { RbacService, SYSTEM_ROLE_IDS } from '../rbac/rbac.service';
+import { WarehousesService } from './warehouses.service';
 
 async function runWarehousesSupertestSuite() {
   console.log('================================================================');
@@ -564,6 +565,274 @@ async function runWarehousesSupertestSuite() {
     }
     console.log(
       `  PASS: AC-WH-01-17 verified ${allWhAudits.length} audit logs clean of secrets and PII.`
+    );
+
+    // FEAT-COM-02: real HTTP/persistence negatives for scopes, defaults and audit metadata.
+    const reviewInput = {
+      name: 'Review warehouse',
+      code: `REVIEW-${testSuffix}`,
+      contact_name: 'Review contact',
+      contact_phone: '0909876543',
+      address_line: 'Test address',
+      district: 'Test district',
+      city: 'Test city',
+      contacts_json: [[{ bank_account: 'review-bank-before', phone: ['0909876543'] }]],
+      printer_config: { nested: [[{ token: 'review-token-before', apiKey: 'review-key-before' }]] },
+      operating_hours: { nested: [{ secret: 'review-secret-before' }] },
+    };
+    const createdReview = await request(app.getHttpServer())
+      .post('/api/v1/warehouses')
+      .set('Authorization', `Bearer ${ownerA.token}`)
+      .send(reviewInput)
+      .expect(201);
+    const reviewId = createdReview.body.data.id as string;
+    const emptyOwner = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'review_empty', []);
+    const scopedOwner = await setupUserSession(merchantIdA, RoleEnum.OWNER, 'review_scoped', [
+      reviewId,
+      `REVIEW-NEW-${testSuffix}`,
+    ]);
+    const snapshotWarehouses = () =>
+      prisma.warehouse.findMany({
+        where: { merchant_id: merchantIdA },
+        orderBy: { id: 'asc' },
+      });
+    const beforeDenied = await snapshotWarehouses();
+    const auditCountBeforeDenied = await prisma.auditLog.count({
+      where: { merchant_id: merchantIdA },
+    });
+    const emptyList = await request(app.getHttpServer())
+      .get('/api/v1/warehouses')
+      .set('Authorization', `Bearer ${emptyOwner.token}`)
+      .expect(200);
+    assert.deepStrictEqual(emptyList.body.data, []);
+    assert.strictEqual(emptyList.body.meta.total, 0, 'empty scopes cannot leak tenant counts');
+    for (const [method, route, body] of [
+      ['post', '/api/v1/warehouses', { ...reviewInput, code: `DENIED-${testSuffix}` }],
+      ['patch', `/api/v1/warehouses/${reviewId}`, { contact_name: 'Denied update' }],
+      ['post', `/api/v1/warehouses/${reviewId}/default`, {}],
+      ['delete', `/api/v1/warehouses/${reviewId}`, {}],
+    ] as const) {
+      await request(app.getHttpServer())
+        [method](route)
+        .set('Authorization', `Bearer ${emptyOwner.token}`)
+        .send(body)
+        .expect(403);
+      assert.deepStrictEqual(await snapshotWarehouses(), beforeDenied);
+      assert.strictEqual(
+        await prisma.auditLog.count({ where: { merchant_id: merchantIdA } }),
+        auditCountBeforeDenied
+      );
+    }
+    const scopedList = await request(app.getHttpServer())
+      .get('/api/v1/warehouses?status=active&limit=10&sort_by=name&sort_order=asc')
+      .set('Authorization', `Bearer ${scopedOwner.token}`)
+      .expect(200);
+    assert.deepStrictEqual(
+      scopedList.body.data.map((row: { id: string }) => row.id),
+      [reviewId]
+    );
+    assert.strictEqual(
+      scopedList.body.meta.total,
+      1,
+      'scoped database count must exclude every unassigned warehouse'
+    );
+    for (const [method, route, body] of [
+      [
+        'post',
+        '/api/v1/warehouses',
+        { ...reviewInput, code: `REVIEW-NEW-${testSuffix}`, is_default: true },
+      ],
+      ['patch', `/api/v1/warehouses/${reviewId}`, { is_default: true }],
+      ['post', `/api/v1/warehouses/${reviewId}/default`, {}],
+    ] as const) {
+      const denied = await request(app.getHttpServer())
+        [method](route)
+        .set('Authorization', `Bearer ${scopedOwner.token}`)
+        .send(body)
+        .expect(403);
+      assert.strictEqual(denied.body.error.code, 'WAREHOUSE_SCOPE_UNAUTHORIZED');
+      assert.deepStrictEqual(
+        await snapshotWarehouses(),
+        beforeDenied,
+        'unassigned default must remain unchanged'
+      );
+      assert.strictEqual(
+        await prisma.auditLog.count({ where: { merchant_id: merchantIdA } }),
+        auditCountBeforeDenied
+      );
+    }
+    await request(app.getHttpServer())
+      .patch(`/api/v1/warehouses/${reviewId}`)
+      .set('Authorization', `Bearer ${ownerA.token}`)
+      .send({
+        contacts_json: [[{ bank_account: 'review-bank-after', phone: ['0919123456'] }]],
+        printer_config: {
+          nested: [
+            [
+              {
+                token: 'review-token-after',
+                authorization: 'review-authorization',
+                apiKey: 'review-key-after',
+              },
+            ],
+          ],
+        },
+        operating_hours: {
+          nested: [{ secret: 'review-secret-after', credentials: { password: 'review-password' } }],
+        },
+      })
+      .expect(200);
+    const reviewAudits = await prisma.auditLog.findMany({
+      where: { merchant_id: merchantIdA, entity_id: reviewId, entity_type: 'warehouse' },
+    });
+    assert.strictEqual(reviewAudits.length, 2);
+    const persistedUpdate = reviewAudits.find((log) => log.action === 'WAREHOUSE_UPDATED');
+    assert.ok(persistedUpdate?.old_value && persistedUpdate.new_value);
+    for (const raw of [
+      'review-bank-before',
+      'review-bank-after',
+      'review-token-before',
+      'review-token-after',
+      'review-key-before',
+      'review-key-after',
+      'review-secret-before',
+      'review-secret-after',
+      'review-authorization',
+      'review-password',
+      '0909876543',
+      '0919123456',
+    ]) {
+      assert.ok(
+        !JSON.stringify(reviewAudits).includes(raw),
+        'real audit rows must never retain raw sensitive metadata'
+      );
+    }
+    assert.ok(JSON.stringify(persistedUpdate).includes('[REDACTED]'));
+    const businessRow = await prisma.warehouse.findFirst({
+      where: { id: reviewId, merchant_id: merchantIdA },
+    });
+    assert.ok(businessRow);
+    const businessContacts = businessRow.contacts_json as unknown as { bank_account: string }[][];
+    assert.strictEqual(
+      businessContacts[0][0].bank_account,
+      'review-bank-after',
+      'masking must preserve the business record'
+    );
+
+    // A concurrent writer replaces an assigned default with an unassigned one.
+    // Every scoped default path must re-read after the tenant lock is released.
+    for (const operation of ['create', 'update', 'default'] as const) {
+      await prisma.user.update({
+        where: { id: scopedOwner.userId, merchant_id: merchantIdA },
+        data: { warehouse_scopes: [warehouseId1, reviewId, `REVIEW-NEW-${testSuffix}`] },
+      });
+      await prisma.$transaction(async (tx) => {
+        await tx.warehouse.updateMany({
+          where: { merchant_id: merchantIdA },
+          data: { is_default: false },
+        });
+        await tx.warehouse.update({
+          where: { id: warehouseId1, merchant_id: merchantIdA },
+          data: { is_default: true },
+        });
+      });
+      let entered!: () => void;
+      const transactionEntered = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const db = new Proxy(prisma, {
+        get(client, key) {
+          if (key === '$transaction')
+            return (callback: any) =>
+              client.$transaction(async (tx) => {
+                entered();
+                return callback(tx);
+              });
+          return Reflect.get(client, key);
+        },
+      });
+      const service = new WarehousesService(db);
+      const actor = { userId: scopedOwner.userId, merchantId: merchantIdA, role: RoleEnum.OWNER };
+      const correlationId = `warehouse-review-race-${operation}-${testSuffix}`;
+      let denied!: Promise<void>;
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM merchants WHERE id = ${merchantIdA}::uuid FOR NO KEY UPDATE`;
+        await tx.warehouse.update({
+          where: { id: warehouseId1, merchant_id: merchantIdA },
+          data: { is_default: false },
+        });
+        await tx.warehouse.update({
+          where: { id: warehouseId2, merchant_id: merchantIdA },
+          data: { is_default: true },
+        });
+        const pending =
+          operation === 'create'
+            ? service.createWarehouse(
+                { ...reviewInput, code: `REVIEW-NEW-${testSuffix}`, is_default: true },
+                merchantIdA,
+                actor,
+                correlationId,
+                '127.0.0.1'
+              )
+            : operation === 'update'
+              ? service.updateWarehouse(
+                  reviewId,
+                  { is_default: true },
+                  merchantIdA,
+                  actor,
+                  correlationId,
+                  '127.0.0.1'
+                )
+              : service.setDefaultWarehouse(
+                  reviewId,
+                  merchantIdA,
+                  actor,
+                  correlationId,
+                  '127.0.0.1'
+                );
+        denied = assert.rejects(
+          pending,
+          (error: any) => error.getStatus() === 403 && error.code === 'WAREHOUSE_SCOPE_UNAUTHORIZED'
+        );
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            transactionEntered,
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error('Scoped warehouse transaction did not start')),
+                3000
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+      await denied;
+      const defaults = await prisma.warehouse.findMany({
+        where: { merchant_id: merchantIdA, is_default: true },
+      });
+      assert.deepStrictEqual(
+        defaults.map((row) => row.id),
+        [warehouseId2],
+        'unassigned concurrent default must remain unchanged'
+      );
+      assert.strictEqual(
+        await prisma.warehouse.count({
+          where: { merchant_id: merchantIdA, code: `REVIEW-NEW-${testSuffix}` },
+        }),
+        0
+      );
+      assert.strictEqual(
+        await prisma.auditLog.count({
+          where: { merchant_id: merchantIdA, reason: `correlation_id:${correlationId}` },
+        }),
+        0
+      );
+    }
+    console.log(
+      '  PASS: FEAT-COM-02 HTTP negatives verify scoped database counts, default preservation and masked persisted audit diffs.'
     );
 
     console.log('================================================================');
