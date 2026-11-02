@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft,
@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { WarehouseManagementView } from '@/components/WarehouseManagementView';
 import { useAuth } from '@/context/AuthContext';
+import { useServerList } from '@/hooks/useServerList';
+import { WAREHOUSES_LIST_POLICY } from '@/lib/list-contract';
 import type { Warehouse, CreateWarehouseInput, UpdateWarehouseInput } from '@shipde/contracts';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -31,8 +33,7 @@ export default function WarehousesSettingsPage({
   initialError = null,
   initialScopedWarehouses = null,
 }: WarehousesSettingsPageProps) {
-  const { user } = useAuth();
-  const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
+  const { user, token, isHydrating } = useAuth();
 
   // Mutation access strictly requires the iam:shop_config permission, never defaults to true
   const derivedCanEdit =
@@ -47,52 +48,20 @@ export default function WarehousesSettingsPage({
   const derivedScopedWarehouses =
     initialScopedWarehouses !== null ? initialScopedWarehouses : user?.warehouse_scopes || null;
 
-  const [warehouses, setWarehouses] = useState<Warehouse[]>(initialWarehouses || []);
-  const [loading, setLoading] = useState<boolean>(
-    initialWarehouses ? false : (initialLoading ?? true)
-  );
-  const [error, setError] = useState<string | null>(initialError);
-
-  const fetchWarehouses = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const res = await fetch(`${API_BASE}/api/v1/warehouses`, { headers });
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error('Bạn không có quyền truy cập danh sách kho hàng.');
-        }
-        if (res.status === 401) {
-          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách kho hàng');
-      }
-
-      const json = await res.json();
-      if (json.success && json.data) {
-        setWarehouses(json.data);
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý kho hàng');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (!initialWarehouses) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial warehouses fetch
-      void fetchWarehouses();
-    }
-  }, [initialWarehouses, fetchWarehouses]);
+  const list = useServerList<Warehouse>({
+    baseUrl: API_BASE,
+    resource: 'warehouses',
+    policy: WAREHOUSES_LIST_POLICY,
+    token,
+    tenantId: user?.merchant_id,
+    userId: user?.id,
+    isHydrating,
+    initialRows: initialWarehouses ?? undefined,
+    initialLoading,
+    initialError,
+    initialCanEdit,
+  });
+  const { rows: warehouses, loading, error, refresh: fetchWarehouses } = list;
 
   // Create Warehouse Handler
   const handleCreate = async (input: CreateWarehouseInput) => {
@@ -235,6 +204,13 @@ export default function WarehousesSettingsPage({
               <Store className="w-3.5 h-3.5 text-slate-500" />
               <span>Hồ sơ Shop</span>
             </Link>
+            <Link
+              href="/settings/branches"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 transition font-medium"
+            >
+              <GitBranch className="w-3.5 h-3.5 text-slate-500" />
+              <span>Chi nhánh</span>
+            </Link>
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 font-bold">
               <WarehouseIcon className="w-3.5 h-3.5 text-orange-600" />
               <span>Kho hàng</span>
@@ -261,14 +237,20 @@ export default function WarehousesSettingsPage({
           warehouses={warehouses}
           loading={loading}
           canEdit={derivedCanEdit}
+          isForbidden={list.forbidden}
           scopedWarehouses={derivedScopedWarehouses}
           error={error}
-          onRefresh={fetchWarehouses}
+          onRefresh={() => fetchWarehouses()}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
           onSetDefault={handleSetDefault}
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
+          serverTotal={list.meta.total}
+          serverTotalPages={list.meta.total_pages}
+          onQueryChange={list.onQueryChange}
+          tenantId={user?.merchant_id}
+          userId={user?.id}
         />
       </div>
     </div>

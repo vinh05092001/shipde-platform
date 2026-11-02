@@ -1,10 +1,19 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Store, GitBranch, Users, Shield } from 'lucide-react';
+import {
+  ArrowLeft,
+  Store,
+  GitBranch,
+  Warehouse as WarehouseIcon,
+  Users,
+  Shield,
+} from 'lucide-react';
 import { BranchManagementView } from '@/components/BranchManagementView';
 import { useAuth } from '@/context/AuthContext';
+import { useServerList } from '@/hooks/useServerList';
+import { BRANCHES_LIST_POLICY } from '@/lib/list-contract';
 import type { Branch, CreateBranchInput, UpdateBranchInput } from '@shipde/contracts';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -13,6 +22,7 @@ export interface BranchesSettingsPageProps {
   initialBranches?: Branch[] | null;
   initialLoading?: boolean;
   initialCanEdit?: boolean;
+  initialForbidden?: boolean;
   initialError?: string | null;
   initialScopedStores?: string[] | null;
 }
@@ -21,11 +31,11 @@ export default function BranchesSettingsPage({
   initialBranches = null,
   initialLoading,
   initialCanEdit,
+  initialForbidden = false,
   initialError = null,
   initialScopedStores = null,
 }: BranchesSettingsPageProps) {
-  const { user } = useAuth();
-  const token = typeof window !== 'undefined' ? localStorage.getItem('shipde_token') : null;
+  const { user, token, isHydrating } = useAuth();
 
   // Edit rights are server-authoritative: the branches list endpoint returns
   // `can_edit`, derived from the actor's `iam:shop_config` permission. We never
@@ -34,52 +44,21 @@ export default function BranchesSettingsPage({
   const derivedScopedStores =
     initialScopedStores !== null ? initialScopedStores : user?.store_scopes || null;
 
-  const [branches, setBranches] = useState<Branch[]>(initialBranches || []);
-  const [canEdit, setCanEdit] = useState<boolean>(initialCanEdit ?? false);
-  const [loading, setLoading] = useState<boolean>(initialLoading ?? initialBranches === null);
-  const [error, setError] = useState<string | null>(initialError);
-
-  const fetchBranches = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      const res = await fetch(`${API_BASE}/api/v1/branches`, { headers });
-      if (!res.ok) {
-        if (res.status === 403) {
-          throw new Error('Bạn không có quyền truy cập danh sách chi nhánh.');
-        }
-        if (res.status === 401) {
-          throw new Error('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-        }
-        const errJson = await res.json().catch(() => null);
-        throw new Error(errJson?.error?.message || 'Không thể tải danh sách chi nhánh');
-      }
-
-      const json = await res.json();
-      if (json.success && json.data?.branches) {
-        setBranches(json.data.branches);
-        setCanEdit(Boolean(json.data.can_edit));
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Lỗi khi kết nối với máy chủ quản lý chi nhánh');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (!initialBranches) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- initial branches fetch
-      void fetchBranches();
-    }
-  }, [initialBranches, fetchBranches]);
+  const list = useServerList<Branch>({
+    baseUrl: API_BASE,
+    resource: 'branches',
+    policy: BRANCHES_LIST_POLICY,
+    token,
+    tenantId: user?.merchant_id,
+    userId: user?.id,
+    isHydrating,
+    initialRows: initialBranches ?? undefined,
+    initialLoading,
+    initialError,
+    initialCanEdit,
+    initialForbidden,
+  });
+  const { rows: branches, loading, error, refresh: fetchBranches } = list;
 
   // Create Branch Handler
   const handleCreate = async (input: CreateBranchInput) => {
@@ -189,6 +168,7 @@ export default function BranchesSettingsPage({
             <span className="text-xs font-bold text-slate-700">
               Chi nhánh &amp; Điểm gửi hàng (SCR-WH-01 / FEAT-ORG-02)
             </span>
+            <span className="sr-only">Cửa hàng &amp; Chi nhánh</span>
           </div>
 
           {/* Quick Settings Switcher Tabs */}
@@ -204,6 +184,13 @@ export default function BranchesSettingsPage({
               <GitBranch className="w-3.5 h-3.5 text-orange-600" />
               <span>Chi nhánh</span>
             </span>
+            <Link
+              href="/settings/warehouses"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 transition font-medium"
+            >
+              <WarehouseIcon className="w-3.5 h-3.5 text-slate-500" />
+              <span>Kho hàng</span>
+            </Link>
             <Link
               href="/settings/users"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 transition font-medium"
@@ -225,14 +212,20 @@ export default function BranchesSettingsPage({
         <BranchManagementView
           branches={branches}
           loading={loading}
-          canEdit={canEdit}
+          canEdit={initialCanEdit ?? list.canEdit}
+          isForbidden={list.forbidden}
           scopedStores={derivedScopedStores}
           error={error}
-          onRefresh={fetchBranches}
+          onRefresh={() => fetchBranches()}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
           onActivate={handleActivate}
           onDeactivate={handleDeactivate}
+          serverTotal={list.meta.total}
+          serverTotalPages={list.meta.total_pages}
+          onQueryChange={list.onQueryChange}
+          tenantId={user?.merchant_id}
+          userId={user?.id}
         />
       </div>
     </div>

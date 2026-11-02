@@ -81,11 +81,11 @@ export class BranchesController {
   }
 
   /**
-   * GET /api/v1/branches (AC-ORG-02-01, AC-ORG-02-02)
+   * GET /api/v1/branches (AC-ORG-02-01, AC-ORG-02-02, FEAT-COM-02)
    */
   @Get()
   async listBranches(
-    @Query('status') status: 'ACTIVE' | 'INACTIVE' | undefined,
+    @Query() query: any,
     @Req() req: Request,
     @Res() res: Response
   ): Promise<Response> {
@@ -94,10 +94,12 @@ export class BranchesController {
     this.assertTenantMembership(actor);
     await this.assertCanViewBranches(actor);
 
+    const queryObj = typeof query === 'string' ? { status: query } : query || {};
+
     const result = await this.branchesService.listBranches(
       actor.merchantId,
       actor,
-      { status },
+      queryObj,
       correlationId
     );
     return res.status(HttpStatus.OK).json(result);

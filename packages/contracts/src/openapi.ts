@@ -1778,8 +1778,9 @@ export interface components {
         branches: components['schemas']['Branch'][];
         /** @description Server-derived capability flag. True only when the caller holds iam:shop_config. The web UI must derive edit rights from this field, never from hardcoded role names. */
         can_edit: boolean;
+        meta?: components['schemas']['PaginationMeta'];
       };
-      meta: components['schemas']['Meta'];
+      meta: components['schemas']['PaginationMeta'];
     };
     DeleteBranchResponse: {
       success: boolean;
@@ -1908,10 +1909,7 @@ export interface components {
     ListWarehousesResponse: {
       success: boolean;
       data: components['schemas']['Warehouse'][];
-      meta: {
-        correlation_id: string;
-        total: number;
-      };
+      meta: components['schemas']['PaginationMeta'];
     };
     /**
      * @description Canonical carrier code. Legacy aliases VTP (VIETTEL_POST) and JT_EXPRESS (JT) are normalized at API boundaries.
@@ -2085,6 +2083,13 @@ export interface components {
     };
     Meta: {
       correlation_id: string;
+    };
+    PaginationMeta: {
+      correlation_id: string;
+      page: number;
+      limit: number;
+      total: number;
+      total_pages: number;
     };
     LivenessResponse: {
       /** @enum {string} */
@@ -2561,13 +2566,7 @@ export interface components {
     };
     ListUsersResponse: {
       data: components['schemas']['UserListItem'][];
-      meta: {
-        total: number;
-        page: number;
-        limit: number;
-        total_pages: number;
-        correlation_id: string;
-      };
+      meta: components['schemas']['PaginationMeta'];
     };
     UserDetail: {
       /** Format: uuid */
@@ -3375,6 +3374,8 @@ export interface operations {
         role?: 'OWNER' | 'OPS_CSKH' | 'WAREHOUSE' | 'ACCOUNTANT' | 'FINANCE';
         status?: 'ACTIVE' | 'SUSPENDED' | 'DISABLED' | 'PENDING_VERIFICATION' | 'INVITED';
         search?: string;
+        sort_by?: 'created_at' | 'full_name' | 'id';
+        sort_order?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -3391,8 +3392,10 @@ export interface operations {
           'application/json': components['schemas']['ListUsersResponse'];
         };
       };
+      400: components['responses']['Error'];
       401: components['responses']['Error'];
       403: components['responses']['Error'];
+      503: components['responses']['Error'];
     };
   };
   getUser: {
@@ -4138,7 +4141,12 @@ export interface operations {
   listBranches: {
     parameters: {
       query?: {
+        page?: number;
+        limit?: number;
         status?: 'ACTIVE' | 'INACTIVE';
+        search?: string;
+        sort_by?: 'created_at' | 'name' | 'code' | 'id';
+        sort_order?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -4155,8 +4163,10 @@ export interface operations {
           'application/json': components['schemas']['ListBranchesResponse'];
         };
       };
+      400: components['responses']['Error'];
       401: components['responses']['SessionInvalid'];
       403: components['responses']['Error'];
+      503: components['responses']['Error'];
     };
   };
   createBranch: {
@@ -4323,7 +4333,14 @@ export interface operations {
   };
   listWarehouses: {
     parameters: {
-      query?: never;
+      query?: {
+        page?: number;
+        limit?: number;
+        status?: 'active' | 'inactive';
+        search?: string;
+        sort_by?: 'created_at' | 'name' | 'code' | 'id';
+        sort_order?: 'asc' | 'desc';
+      };
       header?: never;
       path?: never;
       cookie?: never;
@@ -4339,8 +4356,10 @@ export interface operations {
           'application/json': components['schemas']['ListWarehousesResponse'];
         };
       };
+      400: components['responses']['Error'];
       401: components['responses']['SessionInvalid'];
       403: components['responses']['Error'];
+      503: components['responses']['Error'];
     };
   };
   createWarehouse: {

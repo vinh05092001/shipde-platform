@@ -12,7 +12,10 @@ import {
   validateCreateBranchDto,
   validateUpdateBranchDto,
 } from './branches.dto';
-import { maskIdentifier } from '../invitations/invitations.service';
+import { maskSensitiveAuditValue } from '../utils/audit-mask';
+import { BRANCHES_LIST_POLICY } from '@shipde/config';
+import { parseCanonicalListQuery } from '../users/list-scope';
+import type { ListQuery } from '@shipde/contracts';
 
 export const SENSITIVE_AUDIT_FIELDS = ['phone'];
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -22,12 +25,7 @@ export function isUuid(val: string): boolean {
 }
 
 export function maskAuditValue(field: string, val: unknown): any {
-  if (val === null || val === undefined) return val;
-  if (typeof val !== 'string') return val;
-  if (field === 'phone') {
-    return maskIdentifier(val);
-  }
-  return val;
+  return maskSensitiveAuditValue(field, val);
 }
 
 @Injectable()
@@ -80,48 +78,23 @@ export class BranchesService {
     };
   }
 
-  /**
-   * Helper to verify if an actor has scope access to a specific branch.
-   * If actor is OWNER or has '*', access is unrestricted.
-   */
+  /** Resolve scopes from the actor's current tenant membership; missing and empty deny. */
+  private async getActorStoreScopes(actor: ActorContext): Promise<string[] | null> {
+    if (!actor.userId || !actor.merchantId) return [];
+    const user = await this.prisma.user.findUnique({
+      where: { id: actor.userId, merchant_id: actor.merchantId },
+      select: { store_scopes: true },
+    });
+    const scopes = user?.store_scopes || [];
+    return scopes.includes('*') ? null : scopes;
+  }
+
   async checkActorBranchScope(
     actor: ActorContext,
     branch: { id: string; code: string }
   ): Promise<boolean> {
-    if (actor.role === 'OWNER') return true;
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: actor.userId },
-      select: { store_scopes: true, role: true },
-    });
-
-    if (!user) return false;
-    if (user.role === 'OWNER') return true;
-
-    const scopes = user.store_scopes || [];
-    if (scopes.includes('*')) return true;
-
-    return scopes.includes(branch.id) || scopes.includes(branch.code);
-  }
-
-  /**
-   * Helper to get allowed branch identifiers for an actor.
-   * Returns null if actor has full wildcard access.
-   */
-  private async getActorStoreScopes(actor: ActorContext): Promise<string[] | null> {
-    if (actor.role === 'OWNER') return null;
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: actor.userId },
-      select: { store_scopes: true, role: true },
-    });
-
-    if (!user || user.role === 'OWNER') return null;
-
-    const scopes = user.store_scopes || [];
-    if (scopes.includes('*')) return null;
-
-    return scopes;
+    const scopes = await this.getActorStoreScopes(actor);
+    return scopes === null || scopes.includes(branch.id) || scopes.includes(branch.code);
   }
 
   /**
@@ -143,12 +116,28 @@ export class BranchesService {
   async listBranches(
     merchantId: string,
     actor: ActorContext,
-    query: { status?: 'ACTIVE' | 'INACTIVE' },
+    query: ListQuery = {},
     correlationId: string
   ): Promise<{
     success: boolean;
-    data: { branches: FormattedBranch[]; can_edit: boolean };
-    meta: { correlation_id: string };
+    data: {
+      branches: FormattedBranch[];
+      can_edit: boolean;
+      meta?: {
+        page: number;
+        limit: number;
+        total: number;
+        total_pages: number;
+        correlation_id: string;
+      };
+    };
+    meta: {
+      correlation_id: string;
+      page: number;
+      limit: number;
+      total: number;
+      total_pages: number;
+    };
   }> {
     if (!merchantId) {
       throw new CanonicalApiException(
@@ -159,68 +148,119 @@ export class BranchesService {
       );
     }
 
-    const scopedIdentifiers = await this.getActorStoreScopes(actor);
+    const { page, limit, skip, filters, orderBy } = parseCanonicalListQuery(
+      query,
+      BRANCHES_LIST_POLICY
+    );
 
-    const whereClause: any = {
-      merchant_id: merchantId,
-    };
+    try {
+      const scopedIdentifiers = await this.getActorStoreScopes(actor);
 
-    if (query?.status) {
-      if (query.status !== 'ACTIVE' && query.status !== 'INACTIVE') {
-        throw new CanonicalApiException(
-          HttpStatus.BAD_REQUEST,
-          'VALIDATION_ERROR',
-          'Trạng thái chi nhánh không hợp lệ. Chỉ chấp nhận ACTIVE hoặc INACTIVE',
-          false,
-          'Vui lòng chỉ định trạng thái ACTIVE hoặc INACTIVE',
-          [
-            {
-              field: 'status',
-              code: 'INVALID_VALUE',
-              message: 'Trạng thái chi nhánh chỉ có thể là ACTIVE hoặc INACTIVE',
+      const whereClause: any = {
+        merchant_id: merchantId,
+      };
+
+      if (filters.status) {
+        whereClause.status = filters.status;
+      }
+
+      if (filters.search && filters.search.trim().length > 0) {
+        const search = filters.search.trim();
+        whereClause.OR = [
+          { name: { contains: search, mode: 'insensitive' } },
+          { code: { contains: search, mode: 'insensitive' } },
+          { address: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+        ];
+      }
+
+      if (scopedIdentifiers !== null) {
+        if (scopedIdentifiers.length === 0) {
+          const meta = {
+            correlation_id: correlationId,
+            page,
+            limit,
+            total: 0,
+            total_pages: 1,
+          };
+          return {
+            success: true,
+            data: {
+              branches: [],
+              can_edit: false,
+              meta,
             },
-          ]
-        );
+            meta,
+          };
+        }
+
+        const isUuid = (val: string) =>
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+        const uuidScopes = scopedIdentifiers.filter(isUuid);
+        const codeScopes = scopedIdentifiers.filter((s) => !isUuid(s));
+
+        const orConditions: any[] = [];
+        if (uuidScopes.length > 0) {
+          orConditions.push({ id: { in: uuidScopes } });
+        }
+        if (codeScopes.length > 0) {
+          orConditions.push({ code: { in: codeScopes } });
+        }
+
+        if (orConditions.length > 0) {
+          if (whereClause.OR) {
+            // Combine active search conditions with the scope restriction so
+            // filters and counts keep describing the same tenant-scoped set.
+            whereClause.AND = [{ OR: whereClause.OR }, { OR: orConditions }];
+            delete whereClause.OR;
+          } else {
+            whereClause.OR = orConditions;
+          }
+        } else {
+          whereClause.id = '00000000-0000-0000-0000-000000000000';
+        }
       }
-      whereClause.status = query.status;
+
+      const [total, branches] = await Promise.all([
+        this.prisma.branch.count({ where: whereClause }),
+        this.prisma.branch.findMany({
+          where: whereClause,
+          skip,
+          take: limit,
+          orderBy,
+        }),
+      ]);
+
+      const canEdit = await this.canActorEditBranches(actor);
+
+      const meta = {
+        correlation_id: correlationId,
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit) || 1,
+      };
+
+      return {
+        success: true,
+        data: {
+          branches: branches.map((b) => this.formatBranch(b)),
+          can_edit: canEdit,
+          meta,
+        },
+        meta,
+      };
+    } catch (error) {
+      if (error instanceof CanonicalApiException) {
+        throw error;
+      }
+      throw new CanonicalApiException(
+        HttpStatus.SERVICE_UNAVAILABLE,
+        'TEMPORARILY_UNAVAILABLE',
+        'Danh sách chi nhánh tạm thời không khả dụng',
+        true
+      );
     }
-
-    if (scopedIdentifiers !== null) {
-      const isUuid = (val: string) =>
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
-      const uuidScopes = scopedIdentifiers.filter(isUuid);
-      const codeScopes = scopedIdentifiers.filter((s) => !isUuid(s));
-
-      const orConditions: any[] = [];
-      if (uuidScopes.length > 0) {
-        orConditions.push({ id: { in: uuidScopes } });
-      }
-      if (codeScopes.length > 0) {
-        orConditions.push({ code: { in: codeScopes } });
-      }
-
-      if (orConditions.length > 0) {
-        whereClause.OR = orConditions;
-      } else {
-        whereClause.id = '00000000-0000-0000-0000-000000000000';
-      }
-    }
-
-    const branches = await this.prisma.branch.findMany({
-      where: whereClause,
-      orderBy: [{ is_default: 'desc' }, { created_at: 'asc' }],
-    });
-
-    const canEdit = await this.canActorEditBranches(actor);
-
-    return {
-      success: true,
-      data: {
-        branches: branches.map((b) => this.formatBranch(b)),
-        can_edit: canEdit,
-      },
-      meta: { correlation_id: correlationId },
-    };
   }
 
   /**
@@ -429,15 +469,15 @@ export class BranchesService {
             entity_type: 'branch',
             entity_id: newBranch.id,
             old_value: Prisma.DbNull,
-            new_value: {
+            new_value: maskAuditValue('metadata', {
               id: newBranch.id,
               name: newBranch.name,
               code: newBranch.code,
               address: newBranch.address,
-              phone: maskAuditValue('phone', newBranch.phone),
+              phone: newBranch.phone,
               is_default: newBranch.is_default,
               status: newBranch.status,
-            },
+            }),
             reason: correlationId ? `correlation_id:${correlationId}` : null,
             ip_address: this.hashIp(clientIp),
           },
@@ -647,8 +687,8 @@ export class BranchesService {
         const afterDiff: Record<string, any> = {};
 
         for (const field of updatedFields) {
-          beforeDiff[field] = maskAuditValue(field, (existing as any)[field]);
-          afterDiff[field] = maskAuditValue(field, (result as any)[field]);
+          beforeDiff[field] = (existing as any)[field];
+          afterDiff[field] = (result as any)[field];
         }
 
         await tx.auditLog.create({
@@ -659,8 +699,8 @@ export class BranchesService {
             action: 'BRANCH_UPDATED',
             entity_type: 'branch',
             entity_id: branchId,
-            old_value: beforeDiff,
-            new_value: afterDiff,
+            old_value: maskAuditValue('metadata', beforeDiff),
+            new_value: maskAuditValue('metadata', afterDiff),
             reason: correlationId ? `correlation_id:${correlationId}` : null,
             ip_address: this.hashIp(clientIp),
           },
@@ -739,7 +779,7 @@ export class BranchesService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.branch.update({
-        where: { id: branchId },
+        where: { id: branchId, merchant_id: merchantId },
         data: { status: 'ACTIVE' },
       });
 
@@ -751,8 +791,8 @@ export class BranchesService {
           action: 'BRANCH_ACTIVATED',
           entity_type: 'branch',
           entity_id: branchId,
-          old_value: { status: existing.status },
-          new_value: { status: 'ACTIVE' },
+          old_value: maskAuditValue('metadata', { status: existing.status }),
+          new_value: maskAuditValue('metadata', { status: 'ACTIVE' }),
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
@@ -828,7 +868,7 @@ export class BranchesService {
       }
 
       const result = await tx.branch.update({
-        where: { id: branchId },
+        where: { id: branchId, merchant_id: merchantId },
         data: { status: 'INACTIVE' },
       });
 
@@ -840,8 +880,8 @@ export class BranchesService {
           action: 'BRANCH_DEACTIVATED',
           entity_type: 'branch',
           entity_id: branchId,
-          old_value: { status: existing.status },
-          new_value: { status: 'INACTIVE' },
+          old_value: maskAuditValue('metadata', { status: existing.status }),
+          new_value: maskAuditValue('metadata', { status: 'INACTIVE' }),
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),
         },
@@ -917,7 +957,7 @@ export class BranchesService {
       }
 
       await tx.branch.delete({
-        where: { id: branchId },
+        where: { id: branchId, merchant_id: merchantId },
       });
 
       await tx.auditLog.create({
@@ -928,15 +968,15 @@ export class BranchesService {
           action: 'BRANCH_DELETED',
           entity_type: 'branch',
           entity_id: branchId,
-          old_value: {
+          old_value: maskAuditValue('metadata', {
             id: existing.id,
             name: existing.name,
             code: existing.code,
             address: existing.address,
-            phone: maskAuditValue('phone', existing.phone),
+            phone: existing.phone,
             is_default: existing.is_default,
             status: existing.status,
-          },
+          }),
           new_value: Prisma.DbNull,
           reason: correlationId ? `correlation_id:${correlationId}` : null,
           ip_address: this.hashIp(clientIp),

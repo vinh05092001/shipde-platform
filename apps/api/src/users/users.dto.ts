@@ -1,11 +1,14 @@
 import { RoleEnum } from '@prisma/client';
+import type { ListQuery } from '@shipde/contracts';
 
-export interface ListUsersQueryDto {
+export interface ListUsersQueryDto extends ListQuery {
   page?: string | number;
   limit?: string | number;
   role?: string;
   status?: string;
   search?: string;
+  sort_by?: string;
+  sort_order?: 'asc' | 'desc';
 }
 
 export interface UpdateUserDto {

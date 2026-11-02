@@ -215,7 +215,7 @@ export function buildDatabaseReadinessFailureMessage(rawUrl: string, isCi: boole
     : `⚠️ PostgreSQL is not reachable at ${safeDiagnostics}. Skipping live Carrier Catalog Supertest tests.`;
 }
 
-async function runCarrierCatalogSupertestSuite() {
+export async function runCarrierCatalogSupertestSuite() {
   console.log('================================================================');
   console.log('SHIP DE - CARRIER CATALOG SUPERTEST SUITE (FEAT-CAR-01)');
   console.log('================================================================');

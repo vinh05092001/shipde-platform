@@ -3,6 +3,9 @@
  * Core domain contracts, enumerations, and canonical error definitions for Ship Dễ.
  */
 
+// --- Shared List Contracts (FEAT-COM-02) ---
+export * from './lists';
+
 // --- Canonical Roles ---
 export const UserRole = {
   OWNER: 'OWNER',
