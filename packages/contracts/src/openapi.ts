@@ -1104,6 +1104,106 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/carrier-catalog/carriers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Danh mục hãng vận chuyển
+     * @description Returns list of canonical carriers registered in the platform catalog.
+     */
+    get: operations['listCarriers'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/carrier-catalog/carriers/{code}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Chi tiết hãng vận chuyển và danh sách dịch vụ
+     * @description Returns carrier details and associated services for a canonical code or supported alias.
+     */
+    get: operations['getCarrierDetail'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/carrier-catalog/statuses': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Danh mục trạng thái chuẩn hóa
+     * @description Returns canonical shipment statuses distinguishing command execution from operational lifecycle.
+     */
+    get: operations['listCanonicalStatuses'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/carrier-catalog/fee-components': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Danh mục thành phần phí chuẩn hóa
+     * @description Returns canonical fee component definitions with category, VAT applicability, and refundability flags.
+     */
+    get: operations['listFeeComponents'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/carrier-catalog/compatibility': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Danh mục ánh xạ tương thích raw-to-canonical
+     * @description Returns raw-to-canonical compatibility mappings for carrier aliases, status codes, and fee keys.
+     */
+    get: operations['listCompatibilityMappings'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/carrier-accounts': {
     parameters: {
       query?: never;
@@ -1813,9 +1913,93 @@ export interface components {
         total: number;
       };
     };
-    CarrierAccountInput: {
+    /**
+     * @description Canonical carrier code. Legacy aliases VTP (VIETTEL_POST) and JT_EXPRESS (JT) are normalized at API boundaries.
+     * @enum {string}
+     */
+    CarrierCode: 'GHN' | 'GHTK' | 'VIETTEL_POST' | 'JT';
+    CarrierResponse: {
+      /** Format: uuid */
+      id: string;
+      code: components['schemas']['CarrierCode'];
+      name: string;
+      logo_url: string | null;
+      is_active: boolean;
+      evidence_level: string;
+      description: string | null;
+      catalog_revision: string;
+    };
+    CarrierServiceResponse: {
+      /** Format: uuid */
+      id: string;
+      code: string;
+      name: string;
       /** @enum {string} */
-      carrier_code: 'GHN' | 'GHTK' | 'VIETTEL_POST' | 'JT_EXPRESS';
+      service_type: 'STANDARD' | 'FAST';
+      description: string;
+      is_active: boolean;
+      evidence_level: string;
+      source_revision: string;
+    };
+    CarrierDetailResponse: components['schemas']['CarrierResponse'] & {
+      services: components['schemas']['CarrierServiceResponse'][];
+    };
+    CarrierListResponse: {
+      catalog_revision: string;
+      data: components['schemas']['CarrierResponse'][];
+    };
+    CarrierDetailResponseEnvelope: {
+      catalog_revision: string;
+      data: components['schemas']['CarrierDetailResponse'];
+    };
+    CanonicalStatusResponse: {
+      code: string;
+      /** @enum {string} */
+      category:
+        'COMMAND' | 'OPERATIONAL_PRE_TRANSIT' | 'OPERATIONAL_IN_TRANSIT' | 'OPERATIONAL_TERMINAL';
+      label: string;
+      description: string;
+      stage_order: number;
+      catalog_revision: string;
+    };
+    CanonicalStatusListResponse: {
+      catalog_revision: string;
+      data: components['schemas']['CanonicalStatusResponse'][];
+    };
+    FeeComponentResponse: {
+      code: string;
+      name: string;
+      /** @enum {string} */
+      category: 'BASE' | 'SURCHARGE' | 'COD' | 'INSURANCE' | 'RETURN' | 'VAT';
+      description: string;
+      is_refundable: boolean;
+      vat_applicable: boolean;
+      catalog_revision: string;
+    };
+    FeeComponentListResponse: {
+      catalog_revision: string;
+      data: components['schemas']['FeeComponentResponse'][];
+    };
+    CompatibilityMappingResponse: {
+      catalog_revision: string;
+      carrier_code: string | null;
+      /** @enum {string} */
+      domain: 'CARRIER_ALIAS' | 'STATUS' | 'FEE';
+      raw_key: string;
+      canonical_code: string | null;
+      /** @enum {string} */
+      disposition: 'MAPPED' | 'UNMAPPED';
+    };
+    CompatibilityMappingListResponse: {
+      catalog_revision: string;
+      data: components['schemas']['CompatibilityMappingResponse'][];
+    };
+    CarrierAccountInput: {
+      /**
+       * @description Canonical carrier code. Legacy aliases VTP and JT_EXPRESS are normalized at API boundaries.
+       * @enum {string}
+       */
+      carrier_code: 'GHN' | 'GHTK' | 'VIETTEL_POST' | 'JT';
       alias: string;
       /** @enum {string} */
       permission_profile: 'OBSERVE' | 'ACTION';
@@ -4342,6 +4526,130 @@ export interface operations {
       };
       400: components['responses']['Error'];
       401: components['responses']['Error'];
+      403: components['responses']['Error'];
+    };
+  };
+  listCarriers: {
+    parameters: {
+      query?: {
+        /** @description Filter by active status. If omitted, returns all carriers. */
+        is_active?: boolean;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Carrier catalog list response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CarrierListResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  getCarrierDetail: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        /** @description Canonical carrier code (GHN, GHTK, VIETTEL_POST, JT) or boundary alias (VTP, JT_EXPRESS). Case-sensitive. */
+        code: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Carrier detail response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CarrierDetailResponseEnvelope'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+      404: components['responses']['Error'];
+    };
+  };
+  listCanonicalStatuses: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Canonical statuses response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CanonicalStatusListResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  listFeeComponents: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Fee components response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['FeeComponentListResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
+      403: components['responses']['Error'];
+    };
+  };
+  listCompatibilityMappings: {
+    parameters: {
+      query?: {
+        /** @description Mapping domain (CARRIER_ALIAS, STATUS, FEE) */
+        domain?: 'CARRIER_ALIAS' | 'STATUS' | 'FEE';
+        /** @description Carrier code filter (canonical code or legacy alias) */
+        carrier_code?: string;
+        /** @description Exact raw string key from provider */
+        raw_key?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Compatibility mappings response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CompatibilityMappingListResponse'];
+        };
+      };
+      401: components['responses']['SessionInvalid'];
       403: components['responses']['Error'];
     };
   };
