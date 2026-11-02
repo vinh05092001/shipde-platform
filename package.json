@@ -24,6 +24,7 @@
     "test:perf": "tsx scripts/verify-perf.ts",
     "test:baseline": "tsx apps/web/src/tests/preservation-smoke.test.ts",
     "test:brain": "node --test \"tools/ai-brain/test/*.test.js\"",
+    "ai:ready": "node scripts/ai/ready-check.mjs",
     "contract:check": "tsx scripts/verify-contracts.ts",
     "contract:generate": "tsx scripts/verify-contracts.ts --generate",
     "mock:carriers": "tsx packages/testkit/src/carriers/server.ts",
