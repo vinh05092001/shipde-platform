@@ -14,7 +14,7 @@
 | Allowed paths | `scripts/ai/prepush-check.mjs`, `tools/ai-brain/test/task-ai-162-prepush-check.test.js`, `package.json`, `lefthook.yml`, this file, `docs/product-spec/docs/10-ai-collaboration/{AI-TOOLCHAIN-DECISIONS.md,WORK-ITEM-TEMPLATE.md,FEATURE-DELIVERY-REGISTER.csv}`, `.oc/pr-body.md` |
 | Reviewer | Codex — fresh independent task |
 | Branch | `feat/task-ai-162-shared-prepush` |
-| Pull Request | None — operator requested local commit only |
+| Pull Request | [#499](https://github.com/vinh05092001/shipde-platform/pull/499) — this repair remains local under the sandbox instruction |
 
 ## Business outcome
 
@@ -89,14 +89,14 @@ None. No schemas, migrations, API routes, jobs or persisted application data cha
 ## Task breakdown
 
 - [x] `T01` Write and observe failing offline command-stub tests for executable acceptance rows.
-- [ ] `T02` Implement checker, alias and optional hook.
-- [ ] `T03` Complete author checklist, decision record, register and PR body.
+- [x] `T02` Implement checker, alias and optional hook.
+- [x] `T03` Complete author checklist, decision record, register and PR body.
 - [ ] `T04` Run frozen install, checker, new tests, no-hardcode and diff checks; record exact results.
-- [ ] `T05` Commit the requested message with existing hooks; do not push.
+- [ ] `T05` Coordinator commits with existing hooks; no commit or push from this sandbox, per operator decision 2026-11-02.
 
 ## Author checklist
 
-- [ ] Run pnpm ai:check and paste its summary in the PR.
+- [x] Run pnpm ai:check and paste its summary in the PR. Executed locally; the recorded secrets failure keeps T04 incomplete.
 
 ## Verification commands
 
@@ -105,13 +105,23 @@ From the isolated worktree (use `pnpm.cmd` on Windows where PowerShell blocks th
 ```text
 pnpm install --frozen-lockfile
 pnpm ai:check
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm --filter @shipde/api test
 node --test tools/ai-brain/test/task-ai-162-prepush-check.test.js
 node scripts/ai/check-no-hardcode.mjs
 git diff --check
 git diff --check origin/main...HEAD
 ```
 
-Evidence pending; local results do not establish remote CI or independent review.
+Repair evidence, 2026-11-02: eight new negative tests were observed failing before the repair (24 tests: 16 pass, 8 fail); that repair's focused suite passed all 25 tests, including the earlier gate, hook and output-suppression regressions. The repair validates committed, staged and unstaged changed-file coverage before narrowing tests, requires runnable Turbo tasks for every affected workspace/dependent, and rejects failed or malformed selection probes. Its red/green logs are retained in `.oc/tmp/task-ai-162-{red,green}.log`.
+
+Repair evidence, 2026-11-03: two additional negative tests were observed failing before the fix (27 tests: 25 pass, 2 fail). A successful Turbo process with missing or malformed task metadata now requires full tests, including absent stdout and JSON fragments inside diagnostic output. Valid bare JSON and LF/CRLF Turbo banners remain supported, and a failed Turbo process still uses the verified pnpm fallback. All 27 focused tests pass without skips; the earlier 25 regressions remain covered. Logs: `.oc/tmp/task-ai-162-round2-red.log`, `.oc/tmp/task-ai-162-round2-incomplete-red.log`, and `.oc/tmp/task-ai-162-round2-green.log`.
+
+Frozen installs, focused tests, lint, typecheck, the full API command and explicit no-hardcode checks pass locally. The API run uses three missing environment values from repository test fixtures and canonical LF OpenAPI bytes; no contract content changed. A configured root run (`TURBO_ENV_MODE=loose` to preserve those test variables) passes all 12 main test tasks, then fails in the unchanged regression audit's separate fixture install with `ERR_SQLITE_ERROR`. The default strict Turbo run drops the required test variables and fails shop configuration validation. No Turbo or gate configuration was changed.
+
+Full validation remains incomplete: the secrets gate still reports two existing `DASHBOARD.html:115` findings, and the regression audit needs coordinator verification. The audit creates separate Git fixtures internally, so it was not retried after discovering that conflict with the operator's no-clone/no-Git-write boundary. Docker lifecycle and publication remain assigned to the coordinator. Exact commands, results, safe checker output and finding-to-test mappings are in `.oc/pr-body.md`; local results do not establish remote CI or independent review.
 
 ## Codex review record
 
@@ -119,6 +129,8 @@ Evidence pending; local results do not establish remote CI or independent review
 |---|---|---|---|
 | None | None | Pending independent review | None |
 
+The repair request references `.oc/review.txt` and optional `.oc/history.md`, but neither file was present. A read-only GitHub lookup of PR #499 confirmed head `5380fc06b510546488c7b8365a6f0c1f840876d6`, matching this checkout, and returned zero submitted reviews, comments and review threads. No reviewer finding IDs or earlier verdicts can be reconstructed from these inputs; the PR body distinguishes the author's acceptance self-check from an independent review. No GitHub state was changed.
+
 ## Residual limitations
 
-Local hook installation is optional; the operator owns installation in writer workspaces and CI remains authoritative. No remote validation or push is requested.
+Local hook installation is optional; the operator owns installation in writer workspaces and CI remains authoritative. The coordinator must supply the missing review artifacts and resolve/re-run the outstanding full gates before claiming complete acceptance. Fetch, merge and commit are deferred to the coordinator under the sandbox instruction; no Git metadata writes, remote validation or push occurred in this repair.
