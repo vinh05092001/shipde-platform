@@ -129,28 +129,64 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Sanitizes filter values to ensure no unmasked PII leaks into metadata or audit logs (Finding 10, Finding 13).
+   * PII-bearing keys are masked wholesale; every other string value is scanned for embedded
+   * email/phone tokens so PII smuggled inside permitted filter keys (e.g. `city`) is masked too (Finding 3).
    */
   private sanitizeMetadataFilters(
     filters?: Record<string, unknown>,
     hasPiiUnmask = false
   ): Record<string, unknown> {
     if (!filters) return {};
+    const maskValue = (key: string, val: unknown): unknown => {
+      if (typeof val === 'string') {
+        if (hasPiiUnmask) return val;
+        const isPiiKey =
+          /(email|phone|contact|recipient|customer|user_name|user_id|identity|tax)/i.test(key);
+        if (
+          /^(from_date|to_date|period_start|period_end)$/.test(key) &&
+          /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(val) &&
+          !Number.isNaN(Date.parse(val))
+        ) {
+          return val;
+        }
+        return isPiiKey ? maskIdentifier(val) : this.maskEmbeddedPii(val);
+      }
+      if (Array.isArray(val)) {
+        return val.map((item) => maskValue(key, item));
+      }
+      if (val && typeof val === 'object') {
+        const nested: Record<string, unknown> = {};
+        for (const [childKey, childVal] of Object.entries(val as Record<string, unknown>)) {
+          nested[childKey] = maskValue(childKey, childVal);
+        }
+        return nested;
+      }
+      return val;
+    };
     const sanitized: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(filters)) {
-      if (typeof val === 'string') {
-        const isPiiKey =
-          /(email|phone|contact|recipient|customer|user_name|user_id|identity)/i.test(key);
-        const containsPiiValue = val.includes('@') || /^\+?[0-9\s\-().]{7,20}$/.test(val.trim());
-        if (!hasPiiUnmask && (isPiiKey || containsPiiValue)) {
-          sanitized[key] = maskIdentifier(val);
-        } else {
-          sanitized[key] = val;
-        }
-      } else {
-        sanitized[key] = val;
-      }
+      sanitized[key] = maskValue(key, val);
     }
     return sanitized;
+  }
+
+  private static readonly EMBEDDED_EMAIL_RE =
+    /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  private static readonly EMBEDDED_PHONE_RE = /\+?\d[\d\s.\-()]*\d/g;
+
+  /**
+   * Masks email and phone-number tokens embedded inside an arbitrary string value so audit
+   * metadata never carries PII smuggled into permitted filter keys (Finding 3).
+   * Only validated date filters are exempt; date-like prefixes cannot hide phone tokens.
+   */
+  private maskEmbeddedPii(value: string): string {
+    let masked = value.replace(ExportsService.EMBEDDED_EMAIL_RE, (token) => maskIdentifier(token));
+    masked = masked.replace(ExportsService.EMBEDDED_PHONE_RE, (token) => {
+      const digits = token.replace(/\D/g, '');
+      if (digits.length < 7) return token;
+      return maskIdentifier(token);
+    });
+    return masked;
   }
 
   /**
@@ -158,18 +194,34 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
    * Scoped strictly by merchantId.
    */
   async recoverStaleJobs(merchantId: string, cutoff: Date = new Date()): Promise<number> {
+    const now = new Date();
     const result = await this.prisma.exportJob.updateMany({
       where: {
         merchant_id: merchantId,
         status: { in: [ExportJobStatus.PENDING, ExportJobStatus.PROCESSING] },
         created_at: { lt: cutoff },
+        OR: [
+          { status: ExportJobStatus.PENDING },
+          {
+            filters: {
+              path: ['__worker_lease', 'expires_at'],
+              equals: Prisma.AnyNull,
+            },
+          },
+          {
+            filters: {
+              path: ['__worker_lease', 'expires_at'],
+              string_lte: now.toISOString(),
+            },
+          },
+        ],
       },
       data: {
         status: ExportJobStatus.FAILED,
         error_code: 'PROCESSING_TIMEOUT',
         error_message:
           'Tác vụ xuất dữ liệu bị gián đoạn do hệ thống khởi động lại, vui lòng thử lại',
-        completed_at: new Date(),
+        completed_at: now,
       },
     });
     return result.count;
@@ -510,8 +562,8 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
     clientIp: string,
     correlationId: string
   ): Promise<ExportJobItem> {
+    const workerId = randomUUID();
     try {
-      const workerId = randomUUID();
       const leaseDurationMs = 5 * 60 * 1000;
       const leaseExpiresAt = new Date(Date.now() + leaseDurationMs);
 
@@ -520,7 +572,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
         select: { filters: true, status: true },
       });
 
-      if (!existingJob || existingJob.status === ExportJobStatus.FAILED) {
+      if (!existingJob || existingJob.status !== ExportJobStatus.PENDING) {
         throw new CanonicalApiException(
           HttpStatus.BAD_REQUEST,
           ExportErrorCode.EXPORT_FAILED,
@@ -543,7 +595,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
         where: {
           id: jobId,
           merchant_id: merchantId,
-          status: { in: [ExportJobStatus.PENDING, ExportJobStatus.PROCESSING] },
+          status: ExportJobStatus.PENDING,
         },
         data: {
           status: ExportJobStatus.PROCESSING,
@@ -574,6 +626,13 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
       // Actor warehouse scopes for FEAT-RBAC-02 per-row scoping
       const actorWarehouseScopes = await this.getActorWarehouseScopes(actor);
       const hasUniversalWarehouseScope = actorWarehouseScopes.includes('*');
+      if (dto.resource === ExportResource.WAREHOUSES && actorWarehouseScopes.length === 0) {
+        throw new CanonicalApiException(
+          HttpStatus.FORBIDDEN,
+          ExportErrorCode.SCOPE_FORBIDDEN,
+          'Tài khoản không có quyền truy cập dữ liệu kho hàng (phạm vi rỗng)'
+        );
+      }
 
       // Retrieve data according to requested resource with filters and limits applied
       switch (dto.resource) {
@@ -1186,13 +1245,8 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
       const fileExtension = dto.format;
       const fileName = `shipde_${dto.resource}_${jobId.substring(0, 8)}.${fileExtension}`;
 
-      const currentJob = await this.prisma.exportJob.findFirst({
-        where: { id: jobId, merchant_id: merchantId },
-        select: { filters: true },
-      });
-      const currentFilters = (currentJob?.filters as Record<string, unknown>) || {};
       const updatedFilters: Record<string, unknown> = {
-        ...currentFilters,
+        ...processingFilters,
         __unmasked_pii: hasPiiUnmask,
         ...(effectiveScopes ? { __effective_scopes: effectiveScopes } : {}),
       };
@@ -1209,6 +1263,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
           id: jobId,
           merchant_id: merchantId,
           status: ExportJobStatus.PROCESSING,
+          filters: { path: ['__worker_lease', 'worker_id'], equals: workerId },
         },
         data: {
           status: ExportJobStatus.COMPLETED,
@@ -1252,12 +1307,13 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
         ? err.message
         : 'Lỗi xử lý tạo tệp xuất dữ liệu. Vui lòng thử lại sau.';
 
-      // Only transition to FAILED if job is still in PROCESSING status (conditional transition, Finding 7)
+      // A rejected/stale worker cannot fail a job owned by another worker.
       await this.prisma.exportJob.updateMany({
         where: {
           id: jobId,
           merchant_id: merchantId,
           status: ExportJobStatus.PROCESSING,
+          filters: { path: ['__worker_lease', 'worker_id'], equals: workerId },
         },
         data: {
           status: ExportJobStatus.FAILED,
@@ -1496,6 +1552,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
         const dataWarehouseScopes = effectiveScopes?.warehouse_scopes;
         if (dataWarehouseScopes) {
           const hasUnauthorizedWarehouse =
+            dataWarehouseScopes.length === 0 ||
             dataWarehouseScopes.includes('*') ||
             dataWarehouseScopes.some((whId) => !actorWarehouseScopes.includes(whId));
           if (hasUnauthorizedWarehouse) {
@@ -1536,6 +1593,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
         const dataStoreScopes = effectiveScopes?.store_scopes;
         if (dataStoreScopes) {
           const hasUnauthorizedBranch =
+            dataStoreScopes.length === 0 ||
             dataStoreScopes.includes('*') ||
             dataStoreScopes.some((brId) => !actorStoreScopes.includes(brId));
           if (hasUnauthorizedBranch) {
@@ -1576,6 +1634,7 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
         const dataCarrierScopes = effectiveScopes?.carrier_account_scopes;
         if (dataCarrierScopes) {
           const hasUnauthorizedCarrier =
+            dataCarrierScopes.length === 0 ||
             dataCarrierScopes.includes('*') ||
             dataCarrierScopes.some((accId) => !actorCarrierScopes.includes(accId));
           if (hasUnauthorizedCarrier) {
@@ -1656,8 +1715,14 @@ export class ExportsService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Write immutable EXPORT_DOWNLOADED audit log with client IP hash and sanitized filters (Finding 13, Finding 3)
-    // Audit metadata is ALWAYS masked unconditionally (Finding 3)
-    const sanitizedFilters = this.sanitizeMetadataFilters(jobFilters, false);
+    // Audit metadata is ALWAYS masked unconditionally (Finding 3). Internal markers are never copied.
+    const {
+      __unmasked_pii: _unmasked,
+      __effective_scopes: _scopes,
+      __worker_lease: _lease,
+      ...auditFilters
+    } = jobFilters;
+    const sanitizedFilters = this.sanitizeMetadataFilters(auditFilters, false);
     await this.prisma.auditLog.create({
       data: {
         merchant_id: merchantId,

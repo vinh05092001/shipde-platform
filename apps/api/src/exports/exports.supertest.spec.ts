@@ -20,8 +20,24 @@ import {
 } from '@shipde/contracts';
 import { ExportsService } from './exports.service';
 import { readXlsx } from './generators/xlsx.generator';
+import JSZip from 'jszip';
 
-export { redactDatabaseUrl } from './exports.util';
+import { handleUnavailableDatabase, redactDatabaseUrl } from './exports.util';
+export { redactDatabaseUrl };
+
+async function waitForWorker(entered: Promise<void>): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      entered,
+      new Promise<void>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Export worker did not reach data retrieval')), 5000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function runExportsSupertestSuite() {
   console.log('================================================================');
@@ -80,14 +96,7 @@ async function runExportsSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    const redactedUrl = redactDatabaseUrl(databaseUrl);
-    if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${redactedUrl}`);
-    }
-    console.warn(
-      `⚠️ PostgreSQL is not reachable at ${redactedUrl}. Skipping live Exports Supertest tests (run 'pnpm infra:up' to enable).`
-    );
-    await app.close();
+    await handleUnavailableDatabase(databaseUrl, () => app.close(), Boolean(process.env.CI));
     console.log('🎉 Exports Supertest suite skipped offline safely!');
     return;
   }
@@ -693,6 +702,68 @@ async function runExportsSupertestSuite() {
     assert.strictEqual(histWithUnmaskRes.status, 200);
     assert.strictEqual(histWithUnmaskRes.text.includes('0901234567'), true);
 
+    // Finding 5: change real role permissions after the generation snapshot, during data retrieval.
+    console.log('Testing: Finding 5 - Mid-generation PII grant/revocation preserves the file marker');
+    const findUsers = prisma.user.findMany.bind(prisma.user);
+    const updateJobs = prisma.exportJob.updateMany.bind(prisma.exportJob);
+    const completionWrites: any[] = [];
+    (prisma.exportJob as any).updateMany = async (args: any) => {
+      if (args.data.status === ExportJobStatus.COMPLETED) completionWrites.push(args);
+      return updateJobs(args);
+    };
+    try {
+      for (const initiallyUnmasked of [false, true]) {
+        if (initiallyUnmasked) {
+          await prisma.rolePermission.create({
+            data: { role_id: userMgrRoleId, permission_id: piiUnmaskPerm.id },
+          });
+        }
+        (prisma.user as any).findMany = async (args: any) => {
+          const rows = await findUsers(args);
+          if (initiallyUnmasked) {
+            await prisma.rolePermission.deleteMany({
+              where: { role_id: userMgrRoleId, permission_id: piiUnmaskPerm.id },
+            });
+          } else {
+            await prisma.rolePermission.create({
+              data: { role_id: userMgrRoleId, permission_id: piiUnmaskPerm.id },
+            });
+          }
+          return rows;
+        };
+        const writeCount = completionWrites.length;
+        const generated = await request(httpServer).post('/api/v1/exports')
+          .set('Authorization', `Bearer ${userMgrToken}`)
+          .send({ resource: ExportResource.USERS, format: ExportFormat.CSV, sync: true });
+        assert.strictEqual(generated.status, 201);
+        (prisma.user as any).findMany = findUsers;
+        assert.strictEqual(completionWrites.length, writeCount + 1);
+        const completion = completionWrites[writeCount];
+        assert.strictEqual(completion.data.filters.__unmasked_pii, initiallyUnmasked);
+        assert.ok(completion.data.file_data, 'Marker and bytes must share one completion write');
+        const persisted = await prisma.exportJob.findUnique({ where: { id: generated.body.data.id } });
+        assert.ok(persisted?.file_data);
+        assert.strictEqual((persisted.filters as any).__unmasked_pii, initiallyUnmasked);
+        assert.deepStrictEqual(Buffer.from(persisted.file_data), Buffer.from(completion.data.file_data));
+        assert.strictEqual(Buffer.from(persisted.file_data).toString('utf8')
+          .includes(`owner_${testSuffix}@alpha.test`), initiallyUnmasked);
+        await prisma.rolePermission.deleteMany({
+          where: { role_id: userMgrRoleId, permission_id: piiUnmaskPerm.id },
+        });
+        const download = await request(httpServer)
+          .get(`/api/v1/exports/${generated.body.data.id}/download`)
+          .set('Authorization', `Bearer ${userMgrToken}`);
+        assert.strictEqual(download.status, initiallyUnmasked ? 403 : 200);
+        if (initiallyUnmasked) assert.strictEqual(download.body.error?.code, ExportErrorCode.FORBIDDEN);
+      }
+    } finally {
+      (prisma.user as any).findMany = findUsers;
+      (prisma.exportJob as any).updateMany = updateJobs;
+      await prisma.rolePermission.deleteMany({
+        where: { role_id: userMgrRoleId, permission_id: piiUnmaskPerm.id },
+      });
+    }
+
     // Test 14d: Prior 7 - Restart recovery marks stranded jobs as FAILED with PROCESSING_TIMEOUT
     console.log('Testing: Prior 7 - Restart recovery handles stranded jobs');
     const staleJobId = randomUUID();
@@ -716,6 +787,72 @@ async function runExportsSupertestSuite() {
     assert.ok(recoveredJob);
     assert.strictEqual(recoveredJob.status, ExportJobStatus.FAILED);
     assert.strictEqual(recoveredJob.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
+
+    // Finding 7: pause an active HTTP-created worker while another worker/maintenance overlaps.
+    console.log('Testing: Finding 7 - Active worker ownership and recovery overlap over HTTP');
+    for (const reclaim of [false, true]) {
+      let signalEntered!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+      const resume = new Promise<void>((resolve) => { release = resolve; });
+      let dataReads = 0;
+      (prisma.user as any).findMany = async (args: any) => {
+        if (dataReads++ === 0) {
+          signalEntered();
+          await resume;
+        }
+        return findUsers(args);
+      };
+      try {
+        const started = await request(httpServer).post('/api/v1/exports')
+          .set('Authorization', `Bearer ${userMgrToken}`)
+          .send({ resource: ExportResource.USERS, format: ExportFormat.CSV, sync: false });
+        assert.strictEqual(started.status, 201);
+        await waitForWorker(entered);
+        const jobId = started.body.data.id;
+        const active = await prisma.exportJob.findUnique({ where: { id: jobId } });
+        assert.ok(active);
+        assert.strictEqual(active.status, ExportJobStatus.PROCESSING);
+        const lease = (active.filters as any).__worker_lease;
+        assert.ok(lease.worker_id);
+        // Model a queued job older than the cutoff; a live lease must still protect it.
+        await prisma.exportJob.update({ where: { id: jobId }, data: {
+          created_at: new Date(Date.now() - 20 * 60 * 1000),
+          ...(reclaim ? { filters: { ...(active.filters as any), __worker_lease: {
+            ...lease, expires_at: new Date(Date.now() - 60 * 1000).toISOString(),
+          } } } : {}),
+        } });
+        const cutoff = new Date(Date.now() - 5 * 60 * 1000);
+        assert.strictEqual(await exportsServiceInstance.recoverStaleJobs(merchantIdA, cutoff), reclaim ? 1 : 0);
+        if (!reclaim) {
+          await assert.rejects(exportsServiceInstance.processExportJob(
+            merchantIdA, { userId: userMgrUserId, merchantId: merchantIdA, role: RoleEnum.STAFF }, jobId,
+            { resource: ExportResource.USERS, format: ExportFormat.CSV }, '127.0.0.1', 'corr-second-http-worker'
+          ));
+          const stillActive = await prisma.exportJob.findUnique({ where: { id: jobId } });
+          assert.strictEqual(stillActive?.status, ExportJobStatus.PROCESSING);
+          assert.strictEqual((stillActive?.filters as any).__worker_lease.worker_id, lease.worker_id);
+        }
+        release();
+        await exportsServiceInstance.drainActiveJobs();
+        const finalJob = await prisma.exportJob.findUnique({ where: { id: jobId } });
+        assert.ok(finalJob);
+        assert.strictEqual(finalJob.status, reclaim ? ExportJobStatus.FAILED : ExportJobStatus.COMPLETED);
+        assert.strictEqual(Boolean(finalJob.file_data), !reclaim);
+        const status = await request(httpServer).get(`/api/v1/exports/${jobId}`)
+          .set('Authorization', `Bearer ${userMgrToken}`);
+        assert.strictEqual(status.status, 200);
+        assert.strictEqual(status.body.data.status, finalJob.status);
+        const download = await request(httpServer).get(`/api/v1/exports/${jobId}/download`)
+          .set('Authorization', `Bearer ${userMgrToken}`);
+        assert.strictEqual(download.status, reclaim ? 400 : 200);
+        if (reclaim) assert.strictEqual(download.body.error?.code, ExportErrorCode.EXPORT_FAILED);
+      } finally {
+        release();
+        await exportsServiceInstance.drainActiveJobs();
+        (prisma.user as any).findMany = findUsers;
+      }
+    }
 
     // Test 14e: Finding 7 & Finding 10 - Branch scope authorization on ledgers export
     console.log(
@@ -772,6 +909,10 @@ async function runExportsSupertestSuite() {
 
     // Finding 2 negative test: Actor with empty store_scopes is denied ledger export
     console.log('Testing: Finding 2 - Actor with empty store_scopes is denied ledger export');
+    const beforeEmptyScopes = await prisma.exportJob.count({ where: { merchant_id: merchantIdA } });
+    const beforeEmptyScopeAudits = await prisma.auditLog.count({ where: {
+      merchant_id: merchantIdA, action: ExportAuditEvent.EXPORT_REQUESTED,
+    } });
     const emptyScopesUserId = randomUUID();
     const emptyScopesSessionId = randomUUID();
     const emptyScopesToken = await setupTestUserSession({
@@ -882,6 +1023,10 @@ async function runExportsSupertestSuite() {
       });
     assert.strictEqual(emptyWhOpRes.status, 403);
     assert.strictEqual(emptyWhOpRes.body.error?.code || emptyWhOpRes.body.code, 'SCOPE_FORBIDDEN');
+    assert.strictEqual(await prisma.exportJob.count({ where: { merchant_id: merchantIdA } }), beforeEmptyScopes);
+    assert.strictEqual(await prisma.auditLog.count({ where: {
+      merchant_id: merchantIdA, action: ExportAuditEvent.EXPORT_REQUESTED,
+    } }), beforeEmptyScopeAudits, 'Denied scopes must create neither jobs nor request audits');
 
     // Finding 3 test: Privileged user creates export with filter containing email & phone -> audit metadata ALWAYS masked
     console.log('Testing: Finding 3 - Audit log metadata always masks PII in filters');
@@ -1002,6 +1147,55 @@ async function runExportsSupertestSuite() {
       true,
       'Audit log EXPORT_DOWNLOADED must contain masked phone'
     );
+
+    // Finding 3 negative HTTP test: PII nested inside a permitted filter is still masked
+    const auditNestedRes = await request(httpServer)
+      .post('/api/v1/exports')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        resource: ExportResource.WAREHOUSES,
+        format: ExportFormat.CSV,
+        filters: {
+          city: 'Kho nested_owner@shopde.vn 2026-10-31 090.111.1222 0987654321',
+        },
+        sync: true,
+      });
+    assert.strictEqual(auditNestedRes.status, 201);
+    const nestedAudit = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: ExportAuditEvent.EXPORT_REQUESTED,
+        entity_id: auditNestedRes.body.data.id,
+      },
+    });
+    assert.ok(nestedAudit);
+    const nestedJson = JSON.stringify((nestedAudit.new_value as any).filters);
+    assert.strictEqual(nestedJson.includes('nested_owner@shopde.vn'), false);
+    assert.strictEqual(nestedJson.includes('0901111222'), false);
+    assert.strictEqual(nestedJson.includes('090.111.1222'), false);
+    assert.strictEqual(nestedJson.includes('0987654321'), false);
+    assert.strictEqual(nestedJson.includes('__unmasked_pii'), false);
+    assert.strictEqual(nestedJson.includes('__worker_lease'), false);
+
+    await request(httpServer)
+      .get(`/api/v1/exports/${auditNestedRes.body.data.id}/download`)
+      .set('Authorization', `Bearer ${tokenA}`);
+    const nestedDlAudit = await prisma.auditLog.findFirst({
+      where: {
+        merchant_id: merchantIdA,
+        action: ExportAuditEvent.EXPORT_DOWNLOADED,
+        entity_id: auditNestedRes.body.data.id,
+      },
+    });
+    assert.ok(nestedDlAudit);
+    const nestedDlJson = JSON.stringify((nestedDlAudit.new_value as any).filters);
+    assert.strictEqual(nestedDlJson.includes('nested_owner@shopde.vn'), false);
+    assert.strictEqual(nestedDlJson.includes('0901111222'), false);
+    assert.strictEqual(nestedDlJson.includes('090.111.1222'), false);
+    assert.strictEqual(nestedDlJson.includes('0987654321'), false);
+    assert.strictEqual(nestedDlJson.includes('__unmasked_pii'), false);
+    assert.strictEqual(nestedDlJson.includes('__effective_scopes'), false);
+    assert.strictEqual(nestedDlJson.includes('__worker_lease'), false);
 
     // Test 15: Finding 9 - Ledger calculations using tenant-separated persisted fixtures
     console.log('Testing: Finding 9 - Tenant-separated persisted ledger calculations');
@@ -1218,11 +1412,32 @@ async function runExportsSupertestSuite() {
     console.log(
       'Testing: Finding 1 - Restricted finance user cannot download unfiltered owner ledger export (negative HTTP test)'
     );
+    const storedLedger = await prisma.exportJob.findUnique({ where: { id: ledgerExportRes.body.data.id } });
+    assert.ok(storedLedger);
+    const universalScopes = { warehouse_scopes: ['*'], store_scopes: ['*'], carrier_account_scopes: ['*'] };
+    assert.deepStrictEqual((storedLedger.filters as any).__effective_scopes, universalScopes);
+    assert.deepStrictEqual((storedLedger.generation_metadata as any).effective_scopes, universalScopes);
     const unfiltDlRes = await request(httpServer)
       .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
       .set('Authorization', `Bearer ${ledgerScopedToken}`);
     assert.strictEqual(unfiltDlRes.status, 403);
     assert.strictEqual(unfiltDlRes.body.error?.code || unfiltDlRes.body.code, 'SCOPE_FORBIDDEN');
+
+    for (const scopes of [{ warehouseScopes: [`WH_A_${testSuffix}`] },
+      { carrierAccountScopes: [carrierAccountIdA] }]) {
+      const scopedToken = await setupTestUserSession({
+        userId: randomUUID(), sessionId: randomUUID(), merchantId: merchantIdA,
+        email: `restricted_${randomUUID()}@alpha.test`,
+        phone: `09${Math.floor(10000000 + Math.random() * 90000000)}`,
+        fullName: 'Restricted Ledger Auditor', role: RoleEnum.STAFF,
+        customRoleId: ledgerScopedRoleId, ...scopes,
+      });
+      const denied = await request(httpServer)
+        .get(`/api/v1/exports/${ledgerExportRes.body.data.id}/download`)
+        .set('Authorization', `Bearer ${scopedToken}`);
+      assert.strictEqual(denied.status, 403);
+      assert.strictEqual(denied.body.error?.code, ExportErrorCode.SCOPE_FORBIDDEN);
+    }
 
     // Finding 2 negative HTTP download tests: Users with empty scopes cannot download ledger export
     const emptyScopesDlRes = await request(httpServer)
@@ -1263,10 +1478,30 @@ async function runExportsSupertestSuite() {
         sync: true,
       });
     assert.strictEqual(filteredForBranchRes.status, 201);
+    const storedFilteredLedger = await prisma.exportJob.findUnique({ where: { id: filteredForBranchRes.body.data.id } });
+    assert.ok(storedFilteredLedger);
+    assert.deepStrictEqual((storedFilteredLedger.filters as any).__effective_scopes.store_scopes, ['branch-allowed-1']);
+    assert.deepStrictEqual((storedFilteredLedger.generation_metadata as any).effective_scopes.store_scopes, ['branch-allowed-1']);
     const allowedBranchDlRes = await request(httpServer)
       .get(`/api/v1/exports/${filteredForBranchRes.body.data.id}/download`)
       .set('Authorization', `Bearer ${ledgerScopedToken}`);
     assert.strictEqual(allowedBranchDlRes.status, 200);
+
+    try {
+      await prisma.exportJob.update({ where: { id: storedFilteredLedger.id }, data: {
+        filters: { ...(storedFilteredLedger.filters as any), __effective_scopes: {
+          ...(storedFilteredLedger.filters as any).__effective_scopes, store_scopes: [],
+        } },
+      } });
+      const emptyStoredScopeDownload = await request(httpServer)
+        .get(`/api/v1/exports/${storedFilteredLedger.id}/download`)
+        .set('Authorization', `Bearer ${ledgerScopedToken}`);
+      assert.strictEqual(emptyStoredScopeDownload.status, 403);
+      assert.strictEqual(emptyStoredScopeDownload.body.error?.code, ExportErrorCode.SCOPE_FORBIDDEN);
+    } finally {
+      await prisma.exportJob.update({ where: { id: storedFilteredLedger.id },
+        data: { filters: storedFilteredLedger.filters as any } });
+    }
 
     // Finding 1 negative HTTP test: User scoped to a different branch cannot download branch-allowed-1 export
     const otherBranchUserId = randomUUID();
@@ -1377,6 +1612,52 @@ async function runExportsSupertestSuite() {
     assert.throws(
       () => readXlsx(Buffer.from('<?xml version="1.0"?><Workbook></Workbook>')),
       /Invalid XLSX package/
+    );
+
+    // Finding 10: independent third-party ZIP consumer (JSZip, zero shared code with the
+    // generator) verifies the downloaded OOXML package structure and entry CRC-32 integrity.
+    const independentZip = await JSZip.loadAsync(xlsxDlRes.body, { checkCRC32: true });
+    const independentPartNames = Object.keys(independentZip.files);
+    for (const part of [
+      '[Content_Types].xml',
+      '_rels/.rels',
+      'xl/workbook.xml',
+      'xl/_rels/workbook.xml.rels',
+      'xl/styles.xml',
+      'xl/worksheets/sheet1.xml',
+      'xl/worksheets/sheet2.xml',
+    ]) {
+      assert.ok(
+        independentPartNames.includes(part),
+        `Independent ZIP consumer must see required OOXML part ${part}`
+      );
+    }
+    const independentSheet1 = await independentZip
+      .file('xl/worksheets/sheet1.xml')!
+      .async('string');
+    assert.ok(
+      independentSheet1.includes('Tên kho hàng'),
+      'Independent consumer must round-trip the Vietnamese Data sheet header'
+    );
+    const independentSheet2 = await independentZip
+      .file('xl/worksheets/sheet2.xml')!
+      .async('string');
+    assert.ok(
+      independentSheet2.includes('Data Payload Checksum (SHA-256)'),
+      'Independent consumer must round-trip the Metadata sheet'
+    );
+
+    // Negative test: the independent consumer rejects legacy (non-ZIP) spreadsheet bytes
+    let legacyRejected = false;
+    try {
+      await JSZip.loadAsync(Buffer.from('D0CF11E0A1B11AE1legacy-biff-bytes-not-a-zip-package'));
+    } catch {
+      legacyRejected = true;
+    }
+    assert.strictEqual(
+      legacyRejected,
+      true,
+      'Independent consumer must reject non-ZIP legacy bytes'
     );
 
     console.log('🎉 All Exports Supertest tests passed successfully!');

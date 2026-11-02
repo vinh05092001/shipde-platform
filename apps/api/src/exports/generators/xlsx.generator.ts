@@ -1,5 +1,5 @@
 import { deflateRawSync, inflateRawSync, crc32 } from 'node:zlib';
-import { ExportGenerationMetadata } from '@shipde/contracts';
+import type { ExportGenerationMetadata } from '@shipde/contracts';
 
 /**
  * Escapes characters for XML attributes and text nodes.
@@ -254,6 +254,9 @@ export function generateXlsx(
     <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
     <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
   </cellXfs>
+  <cellStyles count="1">
+    <cellStyle name="Normal" xfId="0" builtinId="0"/>
+  </cellStyles>
 </styleSheet>`;
 
   // 6. xl/worksheets/sheet1.xml (Data Sheet)

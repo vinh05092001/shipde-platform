@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
+import { Prisma } from '@prisma/client';
 import {
   ExportFormat,
   ExportResource,
@@ -12,12 +13,13 @@ import { CanonicalApiException } from '../auth/auth.service';
 import type { ActorContext } from '../rbac/rbac.dto';
 import { validateCreateExportJobDto, validateListExportJobsQuery } from './exports.dto';
 import { generateCsv, escapeCsvCell } from './generators/csv.generator';
+import JSZip from 'jszip';
 import { generateXlsx, escapeXml, readXlsx } from './generators/xlsx.generator';
-import { generatePdf } from './generators/pdf.generator';
+import { generatePdf, wrapText, calculateColumnWidths } from './generators/pdf.generator';
 import { parseTtf } from './fonts/ttf';
 import { EMBEDDED_FONTS } from './fonts/embedded-fonts';
 import { ExportsService } from './exports.service';
-import { redactDatabaseUrl } from './exports.util';
+import { handleUnavailableDatabase, redactDatabaseUrl } from './exports.util';
 
 const ALL_PERMISSIONS = [
   'iam:manage_users',
@@ -135,6 +137,26 @@ function createMockPrismaService() {
 
   const exportJobs: any[] = [];
 
+  const matchesExportJob = (job: any, where: any): boolean => {
+    if (where.id && job.id !== where.id) return false;
+    if (where.merchant_id && job.merchant_id !== where.merchant_id) return false;
+    if (typeof where.status === 'string' && job.status !== where.status) return false;
+    if (where.status?.in && !where.status.in.includes(job.status)) return false;
+    if (where.created_at?.lt && job.created_at >= where.created_at.lt) return false;
+    if (where.filters?.path) {
+      const value = where.filters.path.reduce((current: any, key: string) => current?.[key], job.filters);
+      if ('equals' in where.filters) {
+        if (where.filters.equals === Prisma.AnyNull) {
+          if (value !== null && value !== undefined) return false;
+        } else if (value !== where.filters.equals) return false;
+      }
+      if (where.filters.string_lte !== undefined &&
+        (typeof value !== 'string' || value > where.filters.string_lte)) return false;
+    }
+    if (where.OR && !where.OR.some((condition: any) => matchesExportJob(job, condition))) return false;
+    return true;
+  };
+
   const mockPrisma: any = {
     users,
     warehouses,
@@ -249,16 +271,7 @@ function createMockPrismaService() {
       updateMany: async ({ where, data }: any) => {
         let count = 0;
         for (let idx = 0; idx < exportJobs.length; idx++) {
-          if (where.id && exportJobs[idx].id !== where.id) continue;
-          if (where.merchant_id && exportJobs[idx].merchant_id !== where.merchant_id) continue;
-          if (
-            where.status &&
-            typeof where.status === 'string' &&
-            exportJobs[idx].status !== where.status
-          )
-            continue;
-          if (where.status?.in && !where.status.in.includes(exportJobs[idx].status)) continue;
-          if (where.created_at?.lt && exportJobs[idx].created_at >= where.created_at.lt) continue;
+          if (!matchesExportJob(exportJobs[idx], where)) continue;
           exportJobs[idx] = { ...exportJobs[idx], ...data };
           count++;
         }
@@ -323,6 +336,182 @@ function createMockRbacService(grantedPermissions: string[] = ALL_PERMISSIONS) {
       return required.every((r) => set.has(r));
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Independent OOXML package conformance verifier (Finding 10).
+//
+// This verifier deliberately shares NO code with the XLSX generator module: it
+// unpacks the ZIP with the third-party JSZip implementation (which independently
+// parses the central directory and verifies every entry's CRC-32), then checks
+// the OPC/OOXML package structure against the ISO/IEC 29500 requirements and
+// extracts cell values with its own scanning logic. A generator/reader pair that
+// only agrees with itself cannot establish OOXML compatibility.
+// ---------------------------------------------------------------------------
+
+const REQUIRED_OOXML_PARTS = [
+  '[Content_Types].xml',
+  '_rels/.rels',
+  'xl/workbook.xml',
+  'xl/_rels/workbook.xml.rels',
+  'xl/styles.xml',
+  'xl/worksheets/sheet1.xml',
+  'xl/worksheets/sheet2.xml',
+] as const;
+
+interface OoxmlConformanceResult {
+  partNames: string[];
+  dataCells: string[][];
+  metadata: Map<string, string>;
+}
+
+function decodeXmlText(raw: string): string {
+  return raw
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function scanWorksheetCells(xml: string): string[][] {
+  const rowsOut: string[][] = [];
+  const rowRe = /<row\b[^>]*>([\s\S]*?)<\/row>/g;
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowRe.exec(xml)) !== null) {
+    const cells: string[] = [];
+    const cellRe = /<c\b[^>]*?(?:\/>|>([\s\S]*?)<\/c>)/g;
+    let cellMatch: RegExpExecArray | null;
+    while ((cellMatch = cellRe.exec(rowMatch[1])) !== null) {
+      const inner = cellMatch[1] ?? '';
+      const inlineText = /<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/.exec(inner);
+      if (inlineText) {
+        cells.push(decodeXmlText(inlineText[1]));
+      } else {
+        const numeric = /<v>([\s\S]*?)<\/v>/.exec(inner);
+        cells.push(numeric ? numeric[1] : '');
+      }
+    }
+    rowsOut.push(cells);
+  }
+  return rowsOut;
+}
+
+async function verifyOoxmlPackageConformance(buf: Buffer): Promise<OoxmlConformanceResult> {
+  // JSZip rejects non-ZIP bytes and any CRC-32 mismatch during entry decompression.
+  const zip = await JSZip.loadAsync(buf, { checkCRC32: true });
+  const partNames = Object.keys(zip.files);
+
+  for (const part of REQUIRED_OOXML_PARTS) {
+    assert.ok(partNames.includes(part), `OOXML package must contain part ${part}`);
+  }
+
+  const contentTypes = await zip.file('[Content_Types].xml')!.async('string');
+  assert.ok(
+    contentTypes.includes(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'
+    ),
+    '[Content_Types].xml must declare the workbook main content type'
+  );
+  assert.ok(
+    contentTypes.includes(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'
+    ),
+    '[Content_Types].xml must declare the worksheet content type'
+  );
+
+  const rootRels = await zip.file('_rels/.rels')!.async('string');
+  const rootRelMatch =
+    /<Relationship\b[^>]*Type="[^"]*\/officeDocument"[^>]*Target="([^"]+)"[^>]*\/>/.exec(
+      rootRels
+    ) ??
+    /<Relationship\b[^>]*Target="([^"]+)"[^>]*Type="[^"]*\/officeDocument"[^>]*\/>/.exec(
+      rootRels
+    );
+  assert.ok(rootRelMatch, 'root .rels must reference the officeDocument part');
+  assert.strictEqual(rootRelMatch![1], 'xl/workbook.xml');
+
+  const workbook = await zip.file('xl/workbook.xml')!.async('string');
+  const sheets: Array<[string, string]> = [];
+  const sheetRe = /<sheet\b[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"[^>]*\/>/g;
+  let sheetMatch: RegExpExecArray | null;
+  while ((sheetMatch = sheetRe.exec(workbook)) !== null) {
+    sheets.push([sheetMatch[1], sheetMatch[2]]);
+  }
+  assert.ok(
+    sheets.some(([name]) => name === 'Data'),
+    'workbook must declare a Data sheet'
+  );
+  assert.ok(
+    sheets.some(([name]) => name === 'Metadata'),
+    'workbook must declare a Metadata sheet'
+  );
+
+  const workbookRels = await zip.file('xl/_rels/workbook.xml.rels')!.async('string');
+  const relTargets = new Map<string, string>();
+  const relRe = /<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*\/>/g;
+  let relMatch: RegExpExecArray | null;
+  while ((relMatch = relRe.exec(workbookRels)) !== null) {
+    relTargets.set(relMatch[1], relMatch[2]);
+  }
+  for (const [name, relId] of sheets) {
+    const target = relTargets.get(relId);
+    assert.ok(target, `workbook rels must resolve r:id ${relId} for sheet ${name}`);
+    const resolved = target.startsWith('xl/') ? target : `xl/${target}`;
+    assert.ok(partNames.includes(resolved), `worksheet part ${resolved} must exist in the package`);
+  }
+
+  const sheet1Xml = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+  const dataCells = scanWorksheetCells(sheet1Xml);
+  const sheet2Xml = await zip.file('xl/worksheets/sheet2.xml')!.async('string');
+  const metaCells = scanWorksheetCells(sheet2Xml);
+  const metadata = new Map<string, string>();
+  for (let i = 1; i < metaCells.length; i++) {
+    if (metaCells[i][0]) metadata.set(metaCells[i][0], metaCells[i][1] ?? '');
+  }
+
+  return { partNames, dataCells, metadata };
+}
+
+// Minimal part stubs used to build a deliberately INCOMPLETE package (negative test).
+function contentTypesStub(): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+    '</Types>'
+  );
+}
+
+function rootRelsStub(): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+    '</Relationships>'
+  );
+}
+
+function workbookStub(): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Metadata" sheetId="2" r:id="rId2"/></sheets>' +
+    '</workbook>'
+  );
+}
+
+function workbookRelsStub(): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' +
+    '</Relationships>'
+  );
 }
 
 describe('FEAT-COM-05: Exports Unit Test Suite', () => {
@@ -615,6 +804,60 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       }
     });
 
+    it('Finding 10: independent JSZip consumer verifies OOXML package structure, CRCs, and cell values', async () => {
+      const buf = generateXlsx(mockMetadata, mockHeaders, mockRows);
+
+      // Independent consumer: third-party ZIP parser (CRC-32 verified) + spec conformance checks
+      const conformance = await verifyOoxmlPackageConformance(buf);
+
+      // Data sheet round-trip through the independent extraction
+      assert.deepStrictEqual(conformance.dataCells[0], ['Tên người dùng', 'Email', 'Ghi chú']);
+      assert.strictEqual(conformance.dataCells[1][0], 'Nguyễn Văn A');
+      assert.strictEqual(conformance.dataCells[1][1], 'a@test.vn');
+      assert.strictEqual(
+        conformance.dataCells[2][2],
+        'Có dấu phẩy, nháy "kép" và\nxuống dòng'
+      );
+
+      // Metadata sheet round-trip
+      assert.strictEqual(conformance.metadata.get('Export ID'), 'exp-test-uuid-001');
+      assert.strictEqual(conformance.metadata.get('Tenant ID'), 'm-tenant-1');
+      assert.strictEqual(conformance.metadata.get('Total Records'), '2');
+
+      // Negative test: legacy (non-ZIP) spreadsheet bytes must be rejected
+      await assert.rejects(
+        verifyOoxmlPackageConformance(
+          Buffer.from('D0CF11E0A1B11AE1legacy-biff-bytes-not-a-zip-package')
+        ),
+        'Legacy BIFF/OLE bytes must not load as an OOXML ZIP package'
+      );
+
+      // Negative test: truncated package (broken central directory) must be rejected
+      await assert.rejects(
+        verifyOoxmlPackageConformance(buf.subarray(0, Math.floor(buf.length / 2))),
+        'Truncated ZIP package must be rejected'
+      );
+
+      const badCrc = Buffer.from(buf);
+      const centralDirectory = badCrc.readUInt32LE(badCrc.length - 6);
+      badCrc[centralDirectory + 16] ^= 1;
+      await assert.rejects(verifyOoxmlPackageConformance(badCrc), /CRC32 mismatch/);
+
+      // Negative test: package missing a required OOXML part must fail conformance
+      const incomplete = new JSZip();
+      incomplete.file('[Content_Types].xml', contentTypesStub());
+      incomplete.file('_rels/.rels', rootRelsStub());
+      incomplete.file('xl/workbook.xml', workbookStub());
+      incomplete.file('xl/_rels/workbook.xml.rels', workbookRelsStub());
+      incomplete.file('xl/styles.xml', '<styleSheet/>');
+      incomplete.file('xl/worksheets/sheet1.xml', '<worksheet/>');
+      const incompleteBuf = await incomplete.generateAsync({ type: 'nodebuffer' });
+      await assert.rejects(
+        verifyOoxmlPackageConformance(incompleteBuf),
+        'Package missing xl/worksheets/sheet2.xml must fail conformance'
+      );
+    });
+
     it('generatePdf produces valid PDF 1.4 document with catalog, font objects, xref, and %%EOF', () => {
       const buf = generatePdf(mockMetadata, mockHeaders, mockRows);
       const pdfText = buf.toString('binary');
@@ -714,6 +957,189 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       // Verify conformant trailer and xref
       assert.strictEqual(latin.startsWith('%PDF-1.4'), true);
       assert.strictEqual(latin.trimEnd().endsWith('%%EOF'), true);
+    });
+
+    it('Finding 4: rendered glyphs decode through the PDF-embedded ToUnicode CMap back to the original Vietnamese text', () => {
+      const vnHeaders = [
+        { key: 'full_name', label: 'Họ và tên' },
+        { key: 'city', label: 'Tỉnh/Thành phố' },
+        { key: 'note', label: 'Ghi chú tiếng Việt' },
+      ];
+      const vnRows = [
+        { full_name: 'Nguyễn Văn Đạt', city: 'Hà Nội', note: 'Đơn hàng vận chuyển nhanh' },
+        {
+          full_name: 'Trần Thị Mỹ Duyên',
+          city: 'TP. Hồ Chí Minh',
+          note: 'Kiểm tra đối soát thành công',
+        },
+      ];
+      const buf = generatePdf(mockMetadata, vnHeaders, vnRows);
+      const latin = buf.toString('latin1');
+
+      // Independently parse the xref table and validate that every recorded offset
+      // points exactly at its object header (exact-xref conformance).
+      const startxrefIdx = latin.lastIndexOf('startxref\n');
+      assert.notStrictEqual(startxrefIdx, -1, 'PDF must contain a startxref pointer');
+      const xrefStart = parseInt(
+        latin.slice(startxrefIdx + 10).split('\n')[0].trim(),
+        10
+      );
+      assert.strictEqual(
+        latin.substring(xrefStart, xrefStart + 5),
+        'xref\n',
+        'startxref must point exactly at the xref table'
+      );
+      const subHeaderStart = latin.indexOf('\n', xrefStart) + 1;
+      const subHeaderEnd = latin.indexOf('\n', subHeaderStart) + 1;
+      const entryCount = parseInt(latin.slice(subHeaderStart, subHeaderEnd).split(' ')[1], 10);
+      const objOffsets = new Map<number, number>();
+      for (let i = 0; i < entryCount; i++) {
+        const entryStart = subHeaderEnd + i * 20;
+        const offset = parseInt(latin.slice(entryStart, entryStart + 10), 10);
+        if (latin.charAt(entryStart + 17) === 'n') objOffsets.set(i, offset);
+      }
+      assert.ok(objOffsets.size > 12, 'xref must reference the font and page objects');
+      for (const [num, offset] of objOffsets) {
+        assert.strictEqual(
+          latin.substring(offset, offset + String(num).length + 6),
+          `${num} 0 obj`,
+          `xref offset for object ${num} must point exactly at its object header`
+        );
+      }
+
+      const extractStreamAt = (objNum: number): string => {
+        const objStart = objOffsets.get(objNum);
+        assert.ok(objStart !== undefined, `object ${objNum} must be referenced in xref`);
+        const streamStart = latin.indexOf('stream\n', objStart!) + 'stream\n'.length;
+        const streamEnd = latin.indexOf('\nendstream', streamStart);
+        return latin.substring(streamStart, streamEnd);
+      };
+
+      // Parse the ToUnicode CMaps embedded in the PDF itself (the exact mapping a
+      // PDF viewer uses to render/extract the text) — not the generator's maps.
+      const parseToUnicode = (stream: string): Map<number, number> => {
+        const map = new Map<number, number>();
+        const entryRe = /<([0-9A-Fa-f]{4})>\s*<([0-9A-Fa-f]{4})>/g;
+        let m: RegExpExecArray | null;
+        while ((m = entryRe.exec(stream)) !== null) {
+          map.set(parseInt(m[1], 16), parseInt(m[2], 16));
+        }
+        return map;
+      };
+      const toUnicodeF1 = parseToUnicode(extractStreamAt(7));
+      const toUnicodeF2 = parseToUnicode(extractStreamAt(8));
+      assert.ok(toUnicodeF1.size > 100, 'F1 ToUnicode CMap must cover the embedded font');
+      assert.ok(toUnicodeF2.size > 100, 'F2 ToUnicode CMap must cover the embedded font');
+
+      // Decode every rendered Tj string in page order through the document's own CMaps.
+      const maxObj = Math.max(...objOffsets.keys());
+      const numPages = (maxObj - 12) / 2;
+      let rendered = '';
+      for (let p = 0; p < numPages; p++) {
+        const stream = extractStreamAt(14 + p * 2);
+        const tjRe =
+          /BT \/F([12]) [0-9.]+ Tf [0-9.]+ [0-9.]+ [0-9.]+ rg -?\d+(?:\.\d+)? -?\d+(?:\.\d+)? Td <([0-9A-Fa-f]+)> Tj ET/g;
+        let m: RegExpExecArray | null;
+        while ((m = tjRe.exec(stream)) !== null) {
+          const cmap = m[1] === '1' ? toUnicodeF1 : toUnicodeF2;
+          const hex = m[2];
+          for (let i = 0; i + 4 <= hex.length; i += 4) {
+            const gid = parseInt(hex.slice(i, i + 4), 16);
+            const codePoint = cmap.get(gid);
+            rendered +=
+              codePoint !== undefined ? String.fromCodePoint(codePoint) : '\uFFFD';
+          }
+        }
+      }
+
+      for (const expected of [
+        'SHIP DỄ — BÁO CÁO XUẤT DỮ LIỆU',
+        'Họ và tên',
+        'Tỉnh/Thành phố',
+        'Ghi chú tiếng Việt',
+        'Nguyễn Văn Đạt',
+        'Hà Nội',
+        'Đơn hàng vận chuyển nhanh',
+        'Trần Thị Mỹ Duyên',
+        'TP. Hồ Chí Minh',
+        'Kiểm tra đối soát thành công',
+      ]) {
+        assert.ok(rendered.includes(expected), `rendered text must contain "${expected}"`);
+      }
+      assert.strictEqual(rendered.includes('\uFFFD'), false, 'no glyph may decode to .notdef');
+    });
+
+    it('Finding 11b: an 80-line cell is split across pages and every glyph stays above the footer', () => {
+      const longText = Array.from({ length: 80 }, (_, i) => `Dòng ${String(i).padStart(3, '0')} Nguyễn Văn Đạt`).join('\n');
+      const oversizedHeaders = [{ key: 'note', label: 'Ghi chú' }];
+      const columnWidths = calculateColumnWidths(oversizedHeaders);
+      const wrapped = wrapText(longText, columnWidths[0] - 6, 7.5);
+      assert.ok(wrapped.length >= 80, `fixture must wrap to ≥80 lines (got ${wrapped.length})`);
+      const oversizedRows = [{ note: longText }];
+      const oversizedMeta: ExportGenerationMetadata = {
+        ...mockMetadata,
+        total_rows: 1,
+        succeeded_rows: 1,
+        failed_rows: 0,
+      };
+
+      const buf = generatePdf(oversizedMeta, oversizedHeaders, oversizedRows);
+      const latin = buf.toString('latin1');
+
+      const pageMatches = latin.match(/\/Type \/Page(?!\s*s)/g);
+      assert.ok(pageMatches, 'PDF must contain /Type /Page objects');
+      assert.ok(
+        pageMatches.length >= 2,
+        `Oversized row must split across at least 2 pages (got ${pageMatches.length})`
+      );
+
+      const regularFontData = EMBEDDED_FONTS.find((f) => f.id === 'noto-sans-regular')!;
+      const parsedRegular = parseTtf(regularFontData.bytes);
+      const glyphOf = (text: string) =>
+        `<${Array.from(text)
+          .map((ch) => (parsedRegular.unicodeToGid.get(ch.codePointAt(0)!) ?? 0).toString(16).padStart(4, '0'))
+          .join('')}>`;
+
+      const contentStreams = latin.split('stream\n').slice(1).map((part) => part.split('\nendstream')[0]);
+      const renderedGlyphs: string[] = [];
+      const textPattern =
+        /(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+Td\s+(<[0-9a-fA-F]+>)\s+Tj/g;
+      for (let si = 0; si < contentStreams.length; si++) {
+        const stream = contentStreams[si];
+        let match: RegExpExecArray | null;
+        const local = new RegExp(textPattern.source, 'g');
+        while ((match = local.exec(stream)) !== null) {
+          const yVal = parseFloat(match[2]);
+          const glyph = match[3].toLowerCase();
+          renderedGlyphs.push(glyph);
+          if (yVal === 24) continue;
+          assert.ok(
+            yVal >= 45,
+            `Content stream ${si}: body text rendered at Y=${yVal} crosses the 45pt footer margin`
+          );
+        }
+      }
+
+      for (const line of wrapped) {
+        const glyph = glyphOf(line).toLowerCase();
+        assert.strictEqual(renderedGlyphs.filter((rendered) => rendered === glyph).length, 1,
+          `Wrapped line "${line}" must appear exactly once in the PDF`);
+      }
+      assert.strictEqual(latin.startsWith('%PDF-1.4'), true);
+      assert.strictEqual(latin.trimEnd().endsWith('%%EOF'), true);
+    });
+
+    it('Finding 11b: long unbroken wide glyphs wrap within the real embedded font width without losing characters', () => {
+      const font = parseTtf(EMBEDDED_FONTS.find((entry) => entry.id === 'noto-sans-regular')!.bytes);
+      const source = 'M'.repeat(12000);
+      const lines = wrapText(source, 523, 7.5);
+      assert.ok(lines.length > 80);
+      assert.strictEqual(lines.join(''), source);
+      for (const line of lines) {
+        const width = Array.from(line).reduce((sum, ch) => sum +
+          font.advanceWidths[font.unicodeToGid.get(ch.codePointAt(0)!)!] * 7.5 / font.unitsPerEm, 0);
+        assert.ok(width <= 517, `Line width ${width} exceeds the cell`);
+      }
     });
   });
 
@@ -1860,6 +2286,45 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
     });
 
+    it('Finding 2: warehouse scope revoked before generation denies without reading or publishing warehouse rows', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new ExportsService(mockPrisma as any, createMockRbacService(['iam:shop_config']) as any);
+      const actor: ActorContext = { userId: 'u-2', merchantId: 'm-tenant-1', role: 'WAREHOUSE' };
+      const createJob = mockPrisma.exportJob.create;
+      mockPrisma.exportJob.create = async (args: any) => {
+        const job = await createJob(args);
+        mockPrisma.users.find((user: any) => user.id === actor.userId).warehouse_scopes = [];
+        return job;
+      };
+      let reads = 0;
+      mockPrisma.warehouse.findMany = async () => { reads++; return []; };
+      await assert.rejects(service.createExportJob(actor.merchantId!, actor,
+        { resource: ExportResource.WAREHOUSES, format: ExportFormat.CSV }, '127.0.0.1', 'corr-empty-generation'),
+        (err: any) => err instanceof CanonicalApiException && err.getStatus() === 403 && err.code === ExportErrorCode.SCOPE_FORBIDDEN);
+      assert.strictEqual(reads, 0);
+      assert.strictEqual(mockPrisma.exportJobs[0].status, ExportJobStatus.FAILED);
+      assert.strictEqual(mockPrisma.exportJobs[0].file_data, undefined);
+    });
+
+    it('Finding 2: a ledger with an empty persisted scope cannot be downloaded by a restricted actor', async () => {
+      for (const emptyKey of ['warehouse_scopes', 'store_scopes', 'carrier_account_scopes']) {
+        const mockPrisma = createMockPrismaService();
+        const service = new ExportsService(mockPrisma as any,
+          createMockRbacService(['reconciliation:run_review_audit']) as any);
+        const actor: ActorContext = { userId: 'u-2', merchantId: 'm-tenant-1', role: 'STAFF' };
+        mockPrisma.exportJobs.push({ id: 'empty-scope-ledger', merchant_id: actor.merchantId,
+          resource: ExportResource.LEDGERS, format: ExportFormat.CSV, status: ExportJobStatus.COMPLETED,
+          filters: { __unmasked_pii: false, __effective_scopes: {
+            warehouse_scopes: ['wh-1'], store_scopes: ['branch-1'], carrier_account_scopes: ['ca-1'],
+            [emptyKey]: [],
+          } }, file_data: Buffer.from('private-ledger') });
+        await assert.rejects(service.downloadExport(actor.merchantId!, actor, 'empty-scope-ledger',
+          '127.0.0.1', 'corr-empty-persisted'),
+          (err: any) => err instanceof CanonicalApiException && err.getStatus() === 403 && err.code === ExportErrorCode.SCOPE_FORBIDDEN);
+        assert.strictEqual(mockPrisma.auditLogs.some((log: any) => log.action === ExportAuditEvent.EXPORT_DOWNLOADED), false);
+      }
+    });
+
     it('Finding 3: Audit log metadata always masks PII in filters even for privileged requesters with pii:unmask', async () => {
       const mockPrisma = createMockPrismaService();
       const mockRbac = createMockRbacService(['iam:manage_users', 'pii:unmask']);
@@ -1947,8 +2412,110 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
     });
 
+    it('Finding 3: PII embedded inside a permitted filter key is masked in audit metadata (unit)', async () => {
+      const mockPrisma = createMockPrismaService();
+      // Privileged actor WITH pii:unmask: audit masking must not depend on the
+      // requester's privileges, and `city` is a PERMITTED filter for warehouses.
+      const mockRbac = createMockRbacService(['iam:shop_config', 'pii:unmask']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const privilegedActor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      const job = await service.createExportJob(
+        'm-tenant-1',
+        privilegedActor,
+        {
+          resource: ExportResource.WAREHOUSES,
+          format: ExportFormat.CSV,
+          filters: { city: 'TP. Hồ Chí Minh city_owner@shopde.test 0901111222' },
+          sync: true,
+        },
+        '127.0.0.1',
+        'corr-audit-permitted-key'
+      );
+      assert.strictEqual(job.data.status, ExportJobStatus.COMPLETED);
+
+      const reqAudit = mockPrisma.auditLogs.find(
+        (l: any) =>
+          l.action === ExportAuditEvent.EXPORT_REQUESTED && l.entity_id === job.data.id
+      );
+      assert.ok(reqAudit);
+      const reqJson = JSON.stringify((reqAudit.new_value as any).filters);
+      assert.ok(
+        !reqJson.includes('city_owner@shopde.test'),
+        'Request audit log must NOT contain embedded email inside permitted key'
+      );
+      assert.ok(
+        !reqJson.includes('0901111222'),
+        'Request audit log must NOT contain embedded phone inside permitted key'
+      );
+      assert.ok(!reqJson.includes('__unmasked_pii'), 'Internal markers must not reach audit logs');
+
+      await service.downloadExport(
+        'm-tenant-1',
+        privilegedActor,
+        job.data.id,
+        '127.0.0.1',
+        'corr-dl-permitted-key'
+      );
+      const dlAudit = mockPrisma.auditLogs.find(
+        (l: any) =>
+          l.action === ExportAuditEvent.EXPORT_DOWNLOADED && l.entity_id === job.data.id
+      );
+      assert.ok(dlAudit);
+      const dlJson = JSON.stringify((dlAudit.new_value as any).filters);
+      assert.ok(!dlJson.includes('city_owner@shopde.test'), 'Download audit must mask email');
+      assert.ok(!dlJson.includes('0901111222'), 'Download audit must mask phone');
+      assert.ok(!dlJson.includes('__unmasked_pii'), 'Download audit must drop __unmasked_pii');
+      assert.ok(!dlJson.includes('__effective_scopes'), 'Download audit must drop __effective_scopes');
+      assert.ok(!dlJson.includes('__worker_lease'), 'Download audit must drop __worker_lease');
+    });
+
+    it('Finding 3: audit masking covers dotted phones, adjacent numbers, and date-prefixed PII in permitted filters', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new ExportsService(mockPrisma as any, createMockRbacService() as any);
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'OWNER' };
+      const city = '2026-10-31 090.123.4567 0987654321; liên hệ owner@example.test';
+      const job = await service.createExportJob(
+        actor.merchantId!, actor,
+        { resource: ExportResource.WAREHOUSES, format: ExportFormat.CSV, filters: { city } },
+        '127.0.0.1', 'corr-embedded-pii'
+      );
+      await service.downloadExport(actor.merchantId!, actor, job.data.id, '127.0.0.1', 'corr-embedded-dl');
+      const audits = mockPrisma.auditLogs.filter((log: any) => log.entity_id === job.data.id);
+      assert.strictEqual(audits.length, 2);
+      for (const audit of audits) {
+        const metadata = JSON.stringify(audit.new_value);
+        for (const pii of ['090.123.4567', '0987654321', 'owner@example.test']) {
+          assert.strictEqual(metadata.includes(pii), false, `${audit.action} must mask ${pii}`);
+        }
+        assert.strictEqual('__worker_lease' in audit.new_value.filters, false);
+      }
+
+      const dated = await service.createExportJob(
+        actor.merchantId!, actor,
+        { resource: ExportResource.LEDGERS, format: ExportFormat.CSV,
+          filters: { from_date: '2026-10-31T00:00:00Z' } },
+        '127.0.0.1', 'corr-audit-date'
+      );
+      const datedAudit = mockPrisma.auditLogs.find((log: any) => log.entity_id === dated.data.id);
+      assert.strictEqual(datedAudit.new_value.filters.from_date, '2026-10-31T00:00:00Z');
+    });
+
     it('Finding 5: PII marker is atomically persisted with completed file and protects against unmask capability drift', async () => {
       const mockPrisma = createMockPrismaService();
+      // Record every exportJob.updateMany call to prove the completion write is a single
+      // atomic transition carrying both the PII marker and the file bytes.
+      const updateManyCalls: Array<{ where: any; data: any }> = [];
+      const originalUpdateMany = mockPrisma.exportJob.updateMany;
+      mockPrisma.exportJob.updateMany = async (args: any) => {
+        updateManyCalls.push(args);
+        return originalUpdateMany(args);
+      };
       // Actor initially does NOT have pii:unmask
       const currentPerms = new Set(['iam:manage_users']);
       const dynamicRbac = {
@@ -1993,6 +2560,37 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         true,
         'File bytes must contain masked phone'
       );
+      assert.strictEqual(Buffer.from(persisted.file_data).toString('utf-8').includes('0912345678'), false);
+
+      // Atomicity proof: the marker and the file bytes must be persisted by ONE
+      // conditional completion write, never by separate updates.
+      const completionWrites = updateManyCalls.filter(
+        (call) => call.data?.status === ExportJobStatus.COMPLETED
+      );
+      assert.strictEqual(
+        completionWrites.length,
+        1,
+        'Exactly one conditional completion write must persist the job'
+      );
+      const completionData = completionWrites[0].data;
+      assert.ok(
+        'file_data' in completionData && completionData.file_data,
+        'File bytes must be part of the completion write'
+      );
+      assert.ok(
+        completionData.filters && '__unmasked_pii' in (completionData.filters as object),
+        'PII marker must be written in the SAME completion write as the file bytes'
+      );
+      assert.strictEqual(
+        (completionData.filters as any).__unmasked_pii,
+        false,
+        'Completion write must carry the marker reflecting the generation-time permission snapshot'
+      );
+      assert.strictEqual(
+        completionWrites[0].where.status,
+        ExportJobStatus.PROCESSING,
+        'Completion must be a conditional transition from PROCESSING'
+      );
 
       // A user without pii:unmask CAN download this export because the file bytes are masked
       const noUnmaskRbac = createMockRbacService(['iam:manage_users']);
@@ -2033,6 +2631,7 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
         true,
         'Marker must be true because data was generated unmasked'
       );
+      assert.strictEqual(Buffer.from(persisted2.file_data).toString('utf-8').includes('0912345678'), true);
 
       // Now downloading without pii:unmask MUST be rejected with 403 FORBIDDEN
       await assert.rejects(
@@ -2172,35 +2771,34 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
     });
 
-    it('Finding 7: Overlapping maintenance during worker processing rejects resurrection', async () => {
+    it('Finding 7: Overlapping maintenance during worker processing rejects resurrection', async (t) => {
+      const now = Date.now();
+      t.mock.timers.enable({ apis: ['Date'], now });
       const mockPrisma = createMockPrismaService();
       const mockRbac = createMockRbacService(['iam:manage_users']);
       const service = new ExportsService(mockPrisma as any, mockRbac as any);
 
-      // Create an in-flight job in PROCESSING state
+      // The worker claims a pending job before pausing in data retrieval.
       const targetJob = {
         id: 'job-overlap-worker-race',
         merchant_id: 'm-tenant-1',
         user_id: 'u-1',
         resource: ExportResource.USERS,
         format: ExportFormat.CSV,
-        status: ExportJobStatus.PROCESSING,
+        status: ExportJobStatus.PENDING,
         filters: {},
         created_at: new Date(Date.now() - 60 * 1000),
         expires_at: new Date(Date.now() + 86400000),
       };
       mockPrisma.exportJobs.push(targetJob);
 
-      // Hook into user.findMany: DURING worker data retrieval, maintenance runs and marks the job FAILED!
+      // Expire the active worker's lease and invoke real maintenance while it is paused.
       const originalFindMany = mockPrisma.user.findMany;
       mockPrisma.user.findMany = async (args: any) => {
-        // Overlapping maintenance fires while worker is generating data!
-        const found = mockPrisma.exportJobs.find((j: any) => j.id === 'job-overlap-worker-race');
-        if (found) {
-          found.status = ExportJobStatus.FAILED;
-          found.error_code = ExportErrorCode.PROCESSING_TIMEOUT;
-          found.error_message = 'Tác vụ đã bị thu hồi do quá thời gian xử lý';
-        }
+        t.mock.timers.tick(6 * 60 * 1000);
+        assert.strictEqual(await service.recoverStaleJobs(
+          'm-tenant-1', new Date(Date.now() - 5 * 60 * 1000)
+        ), 1);
         return originalFindMany ? originalFindMany(args) : [];
       };
 
@@ -2236,6 +2834,188 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       );
       assert.strictEqual(finalRecord.status, ExportJobStatus.FAILED);
       assert.strictEqual(finalRecord.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
+      assert.strictEqual(finalRecord.file_data, undefined, 'Reclaimed worker cannot publish bytes');
+    });
+
+    it('Finding 7: maintenance spares a live lease even when the job was queued before the stale cutoff', async () => {
+      const mockPrisma = createMockPrismaService();
+      const mockRbac = createMockRbacService(['iam:manage_users']);
+      const service = new ExportsService(mockPrisma as any, mockRbac as any);
+
+      const actor: ActorContext = {
+        userId: 'u-1',
+        merchantId: 'm-tenant-1',
+        role: 'OWNER',
+      };
+
+      // An old queued job has just been claimed by an active worker.
+      const freshJobId = 'job-fresh-in-flight';
+      mockPrisma.exportJobs.push({
+        id: freshJobId,
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-1',
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.PENDING,
+        filters: {},
+        created_at: new Date(Date.now() - 30 * 60 * 1000),
+        expires_at: new Date(Date.now() + 86_400_000),
+      });
+      // Stranded job from 30 minutes ago in the same tenant.
+      const staleJobId = 'job-stale-stranded';
+      mockPrisma.exportJobs.push({
+        id: staleJobId,
+        merchant_id: 'm-tenant-1',
+        user_id: 'u-1',
+        resource: ExportResource.USERS,
+        format: ExportFormat.CSV,
+        status: ExportJobStatus.PROCESSING,
+        filters: {},
+        created_at: new Date(Date.now() - 30 * 60 * 1000),
+        expires_at: new Date(Date.now() + 86_400_000),
+      });
+
+      // Overlapping maintenance fires during the worker's data retrieval,
+      // using the same stale cutoff as runSystemMaintenance (5 minutes).
+      const originalFindMany = mockPrisma.user.findMany;
+      mockPrisma.user.findMany = async (args: any) => {
+        const recovered = await service.recoverStaleJobs(
+          'm-tenant-1',
+          new Date(Date.now() - 5 * 60 * 1000)
+        );
+        assert.strictEqual(
+          recovered,
+          1,
+          'Only the 30-minute-old stranded job may be recovered, never the fresh in-flight job'
+        );
+        return originalFindMany(args);
+      };
+
+      const done = await service.processExportJob(
+        'm-tenant-1',
+        actor,
+        freshJobId,
+        { resource: ExportResource.USERS, format: ExportFormat.CSV },
+        '127.0.0.1',
+        'corr-overlap-survives'
+      );
+      assert.strictEqual(done.status, ExportJobStatus.COMPLETED);
+      mockPrisma.user.findMany = originalFindMany;
+
+      const freshRecord = mockPrisma.exportJobs.find((j: any) => j.id === freshJobId);
+      assert.strictEqual(
+        freshRecord.status,
+        ExportJobStatus.COMPLETED,
+        'Fresh in-flight job must survive overlapping maintenance'
+      );
+      assert.ok(freshRecord.file_data, 'Fresh job file bytes must be persisted');
+      assert.ok(
+        freshRecord.filters?.__worker_lease,
+        'Worker lease (ownership marker) must be persisted on the job'
+      );
+
+      const staleRecord = mockPrisma.exportJobs.find((j: any) => j.id === staleJobId);
+      assert.strictEqual(staleRecord.status, ExportJobStatus.FAILED);
+      assert.strictEqual(staleRecord.error_code, ExportErrorCode.PROCESSING_TIMEOUT);
+
+      // A second overlapping worker may no longer claim or resurrect the completed job.
+      const checksumBefore = freshRecord.checksum_sha256;
+      const fileBefore = Buffer.from(freshRecord.file_data).toString('latin1');
+      await assert.rejects(
+        async () => {
+          await service.processExportJob(
+            'm-tenant-1',
+            actor,
+            freshJobId,
+            { resource: ExportResource.USERS, format: ExportFormat.CSV },
+            '127.0.0.1',
+            'corr-overlap-second-worker'
+          );
+        },
+        (err: any) => {
+          assert.strictEqual(err instanceof CanonicalApiException, true);
+          assert.strictEqual(err.code, ExportErrorCode.EXPORT_FAILED);
+          return true;
+        }
+      );
+      const after = mockPrisma.exportJobs.find((j: any) => j.id === freshJobId);
+      assert.strictEqual(
+        after.status,
+        ExportJobStatus.COMPLETED,
+        'Completed job must not be resurrected by a second worker'
+      );
+      assert.strictEqual(after.checksum_sha256, checksumBefore);
+      assert.strictEqual(Buffer.from(after.file_data).toString('latin1'), fileBefore);
+    });
+
+    it('Finding 7: a second worker overlapping data retrieval cannot steal or fail the first worker', { timeout: 5000 }, async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new ExportsService(mockPrisma as any, createMockRbacService(['iam:manage_users']) as any);
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'STAFF' };
+      let signalEntered!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+      const resume = new Promise<void>((resolve) => { release = resolve; });
+      const findMany = mockPrisma.user.findMany;
+      let dataReads = 0;
+      mockPrisma.user.findMany = async (args: any) => {
+        if (dataReads++ === 0) {
+          signalEntered();
+          await resume;
+        }
+        return findMany(args);
+      };
+      const firstWorker = service.createExportJob(
+        actor.merchantId!, actor, { resource: ExportResource.USERS, format: ExportFormat.CSV },
+        '127.0.0.1', 'corr-first-worker'
+      );
+      await entered;
+      const job = mockPrisma.exportJobs[0];
+      const owner = job.filters.__worker_lease.worker_id;
+      try {
+        await assert.rejects(
+          service.processExportJob(actor.merchantId!, actor, job.id,
+            { resource: ExportResource.USERS, format: ExportFormat.CSV }, '127.0.0.1', 'corr-second-worker'),
+          (err: any) => err instanceof CanonicalApiException && err.code === ExportErrorCode.EXPORT_FAILED
+        );
+        const inFlight = mockPrisma.exportJobs[0];
+        assert.strictEqual(inFlight.status, ExportJobStatus.PROCESSING);
+        assert.strictEqual(inFlight.filters.__worker_lease.worker_id, owner);
+        assert.strictEqual(inFlight.file_data, undefined);
+      } finally {
+        release();
+        await firstWorker;
+      }
+      const completed = mockPrisma.exportJobs[0];
+      assert.strictEqual(completed.status, ExportJobStatus.COMPLETED);
+      assert.strictEqual(completed.filters.__worker_lease.worker_id, owner);
+      assert.ok(completed.file_data);
+    });
+
+    it('Finding 7: a worker whose ownership changed cannot publish bytes or fail the new owner', async () => {
+      const mockPrisma = createMockPrismaService();
+      const service = new ExportsService(mockPrisma as any, createMockRbacService(['iam:manage_users']) as any);
+      const actor: ActorContext = { userId: 'u-1', merchantId: 'm-tenant-1', role: 'STAFF' };
+      const findMany = mockPrisma.user.findMany;
+      mockPrisma.user.findMany = async (args: any) => {
+        const job = mockPrisma.exportJobs[0];
+        await mockPrisma.exportJob.updateMany({
+          where: { id: job.id, status: ExportJobStatus.PROCESSING },
+          data: { filters: { ...job.filters,
+            __worker_lease: { ...job.filters.__worker_lease, worker_id: 'replacement-worker' } } },
+        });
+        return findMany(args);
+      };
+      await assert.rejects(
+        service.createExportJob(actor.merchantId!, actor,
+          { resource: ExportResource.USERS, format: ExportFormat.CSV }, '127.0.0.1', 'corr-lost-owner'),
+        (err: any) => err instanceof CanonicalApiException && err.code === ExportErrorCode.PROCESSING_TIMEOUT
+      );
+      const job = mockPrisma.exportJobs[0];
+      assert.strictEqual(job.status, ExportJobStatus.PROCESSING);
+      assert.strictEqual(job.filters.__worker_lease.worker_id, 'replacement-worker');
+      assert.strictEqual(job.file_data, undefined);
+      assert.strictEqual(job.error_code, undefined);
     });
 
     it('Finding 9: Database diagnostics redact credentials in URL using imported redactDatabaseUrl', () => {
@@ -2252,6 +3032,33 @@ describe('FEAT-COM-05: Exports Unit Test Suite', () => {
       assert.strictEqual(redactedFallback.includes('secret123'), false);
       assert.strictEqual(redactedFallback.includes('myuser'), false);
       assert.strictEqual(redactedFallback.includes('***:***@127.0.0.1:5433'), true);
+
+      const malformed = redactDatabaseUrl('postgresql://diagnostic-user@db.example.test:bad-port/db');
+      assert.strictEqual(malformed, '[invalid database URL]');
+      const queryCredentials = redactDatabaseUrl('postgresql://db.example.test/db?password=diagnostic-secret&sslmode=require');
+      assert.strictEqual(queryCredentials.includes('diagnostic-secret'), false);
+      assert.strictEqual(queryCredentials.includes('sslmode=require'), true);
+    });
+
+    it('Finding 11: unavailable-database diagnostics use the locally imported redactor and close before CI failure', async (t) => {
+      const warnings: string[] = [];
+      t.mock.method(console, 'warn', (message: unknown) => { warnings.push(String(message)); });
+      const url = 'postgresql://diagnostic-user:diagnostic-secret@db.example.test:5432/db';
+      let closes = 0;
+      const close = async () => { closes++; };
+      await assert.rejects(handleUnavailableDatabase(url, close, true), (err: any) => {
+        assert.strictEqual(closes, 1, 'CI failure must close the app');
+        assert.strictEqual(err instanceof ReferenceError, false);
+        assert.strictEqual(err.message.includes('Database must be reachable'), true);
+        assert.strictEqual(err.message.includes('diagnostic-user'), false);
+        assert.strictEqual(err.message.includes('diagnostic-secret'), false);
+        return true;
+      });
+      await handleUnavailableDatabase(url, close, false);
+      assert.strictEqual(closes, 2);
+      assert.strictEqual(warnings.length, 1);
+      assert.strictEqual(warnings[0].includes('diagnostic-user'), false);
+      assert.strictEqual(warnings[0].includes('diagnostic-secret'), false);
     });
   });
 });

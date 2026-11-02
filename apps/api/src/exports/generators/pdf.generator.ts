@@ -1,6 +1,6 @@
-import { ExportGenerationMetadata } from '@shipde/contracts';
-import { EMBEDDED_FONTS, EmbeddedFont } from '../fonts/embedded-fonts';
-import { parseTtf, TtfFont } from '../fonts/ttf';
+import type { ExportGenerationMetadata } from '@shipde/contracts';
+import { EMBEDDED_FONTS, type EmbeddedFont } from '../fonts/embedded-fonts';
+import { parseTtf, type TtfFont } from '../fonts/ttf';
 
 /**
  * Wraps text into multiple lines based on measured column width and font size.
@@ -8,39 +8,35 @@ import { parseTtf, TtfFont } from '../fonts/ttf';
  */
 export function wrapText(text: string, maxWidthPt: number, fontSizePt: number = 8): string[] {
   if (!text) return [''];
-  const avgCharWidth = fontSizePt * 0.55;
-  const maxCharsPerLine = Math.max(4, Math.floor((maxWidthPt - 6) / avgCharWidth));
-
-  const words = text.split(' ');
+  const availableWidth = Math.max(1, maxWidthPt - 6);
+  const font = parsedFonts.regular;
+  const widthOf = (value: string): number =>
+    Array.from(value).reduce((width, ch) => {
+      const gid = font.unicodeToGid.get(ch.codePointAt(0) ?? 0) ?? 0;
+      return width + (font.advanceWidths[gid] * fontSizePt) / font.unitsPerEm;
+    }, 0);
   const lines: string[] = [];
-  let currentLine = '';
-
-  for (const word of words) {
-    if (word.length > maxCharsPerLine) {
-      if (currentLine) {
-        lines.push(currentLine);
-        currentLine = '';
+  for (const paragraph of text.split(/\r\n|\r|\n/)) {
+    let currentLine = '';
+    for (const word of paragraph.split(' ')) {
+      const nextLine = currentLine ? `${currentLine} ${word}` : word;
+      if (widthOf(nextLine) <= availableWidth) {
+        currentLine = nextLine;
+        continue;
       }
-      for (let i = 0; i < word.length; i += maxCharsPerLine) {
-        lines.push(word.substring(i, i + maxCharsPerLine));
-      }
-      continue;
-    }
-
-    const testLine = currentLine ? `${currentLine} ${word}` : word;
-    if (testLine.length <= maxCharsPerLine) {
-      currentLine = testLine;
-    } else {
       if (currentLine) lines.push(currentLine);
-      currentLine = word;
+      currentLine = '';
+      for (const ch of word) {
+        if (currentLine && widthOf(currentLine + ch) > availableWidth) {
+          lines.push(currentLine);
+          currentLine = '';
+        }
+        currentLine += ch;
+      }
     }
-  }
-
-  if (currentLine) {
     lines.push(currentLine);
   }
-
-  return lines.length > 0 ? lines : [''];
+  return lines;
 }
 
 /**
@@ -120,6 +116,11 @@ function buildToUnicodeCMap(font: TtfFont): string {
   for (const [gid, code] of font.gidToUnicode) {
     entries.push(`<${gid.toString(16).padStart(4, '0')}> <${code.toString(16).padStart(4, '0')}>`);
   }
+  const blocks: string[] = [];
+  for (let i = 0; i < entries.length; i += 100) {
+    const block = entries.slice(i, i + 100);
+    blocks.push(`${block.length} beginbfchar\n${block.join('\n')}\nendbfchar`);
+  }
   return `/CIDInit /ProcSet findresource begin
 12 dict begin
 begincmap
@@ -129,9 +130,7 @@ begincmap
 1 begincodespacerange
 <0000> <FFFF>
 endcodespacerange
-${entries.length} beginbfchar
-${entries.join('\n')}
-endbfchar
+${blocks.join('\n')}
 endcmap
 CMapName currentdict /CMap defineresource pop
 end
@@ -283,7 +282,8 @@ export function generatePdf(
   // Start initial page
   startNewPage(true);
 
-  // Render Data Rows with dynamic measured wrapping
+  // Render Data Rows with dynamic measured wrapping and multi-page overflow (Finding 11b)
+  const PAGE_BOTTOM_MARGIN = 45;
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
 
@@ -303,38 +303,80 @@ export function generatePdf(
 
     const rowHeight = Math.max(16, maxLinesInRow * 10 + 6);
 
-    // If row exceeds available page height, move to next page
-    if (currentY - rowHeight < 45) {
-      startNewPage(false);
-    }
-
-    // Row background and border
-    if (r % 2 === 1) {
-      currentPageCommands.push(
-        `0.98 0.98 0.98 rg 30 ${currentY - rowHeight} 535 ${rowHeight} re f`
-      );
-    }
-    currentPageCommands.push(
-      `0.9 0.9 0.9 RG 0.5 w 30 ${currentY - rowHeight} 535 ${rowHeight} re S`
-    );
-
-    // Render cell text lines
-    for (let c = 0; c < headers.length; c++) {
-      const colX = colPositions[c] + 4;
-      const lines = cellWrappedLines[c];
-      let lineY = currentY - 10;
-      for (const line of lines) {
+    // If the entire row fits on the current page, render it in one shot
+    if (currentY - rowHeight >= PAGE_BOTTOM_MARGIN) {
+      // Row background and border
+      if (r % 2 === 1) {
         currentPageCommands.push(
-          `BT /F1 7.5 Tf 0.15 0.15 0.15 rg ${colX} ${lineY} Td ${encodeGlyphHex(
-            line,
-            regular
-          )} Tj ET`
+          `0.98 0.98 0.98 rg 30 ${currentY - rowHeight} 535 ${rowHeight} re f`
         );
-        lineY -= 10;
+      }
+      currentPageCommands.push(
+        `0.9 0.9 0.9 RG 0.5 w 30 ${currentY - rowHeight} 535 ${rowHeight} re S`
+      );
+
+      // Render cell text lines
+      for (let c = 0; c < headers.length; c++) {
+        const colX = colPositions[c] + 4;
+        const lines = cellWrappedLines[c];
+        let lineY = currentY - 10;
+        for (const line of lines) {
+          currentPageCommands.push(
+            `BT /F1 7.5 Tf 0.15 0.15 0.15 rg ${colX} ${lineY} Td ${encodeGlyphHex(
+              line,
+              regular
+            )} Tj ET`
+          );
+          lineY -= 10;
+        }
+      }
+
+      currentY -= rowHeight;
+    } else {
+      // Oversized or overflowing row: split lines across pages (Finding 11b)
+      let lineIndex = 0;
+      while (lineIndex < maxLinesInRow) {
+        // A continuation page starts at Y=790. Never force a line onto a page
+        // that cannot hold it above the footer (PAGE_BOTTOM_MARGIN = 45).
+        const availableHeight = currentY - PAGE_BOTTOM_MARGIN;
+        const linesAvailable = Math.floor((availableHeight - 6) / 10);
+        if (linesAvailable < 1) {
+          startNewPage(false);
+          continue;
+        }
+        const linesThisSlice = Math.min(linesAvailable, maxLinesInRow - lineIndex);
+        const sliceHeight = linesThisSlice * 10 + 6;
+
+        // Row background and border for this slice
+        if (r % 2 === 1) {
+          currentPageCommands.push(
+            `0.98 0.98 0.98 rg 30 ${currentY - sliceHeight} 535 ${sliceHeight} re f`
+          );
+        }
+        currentPageCommands.push(
+          `0.9 0.9 0.9 RG 0.5 w 30 ${currentY - sliceHeight} 535 ${sliceHeight} re S`
+        );
+
+        // Render the lines for this slice from each column
+        for (let c = 0; c < headers.length; c++) {
+          const colX = colPositions[c] + 4;
+          const lines = cellWrappedLines[c];
+          let lineY = currentY - 10;
+          for (let li = lineIndex; li < lineIndex + linesThisSlice && li < lines.length; li++) {
+            currentPageCommands.push(
+              `BT /F1 7.5 Tf 0.15 0.15 0.15 rg ${colX} ${lineY} Td ${encodeGlyphHex(
+                lines[li],
+                regular
+              )} Tj ET`
+            );
+            lineY -= 10;
+          }
+        }
+
+        currentY -= sliceHeight;
+        lineIndex += linesThisSlice;
       }
     }
-
-    currentY -= rowHeight;
   }
 
   if (currentPageCommands.length > 0) {

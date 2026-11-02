@@ -218,9 +218,65 @@ pnpm --filter @shipde/web exec tsx src/tests/exports-page-states.test.ts
 | Round 2 | bca303acacbc25a1dfadeb3e29cf05f1f059e7ce | CHANGES_REQUIRED | Merged origin/main cleanly; replaced hardcoded ledger metrics with real persisted tenant data (claims, exception cases, shipments, discrepancies); enforced resource capability RBAC across get, list, and download; eliminated hardcoded OWNER role bypasses across RBAC, PII masking, and warehouse scoping; implemented truthful SHA-256 data payload checksum and authentic file checksum; implemented real job lifecycle with dto.sync, EXPORT_LIMIT_EXCEEDED enforcement, query filtering, and FAILED status capture; rewritten PDF generator with multi-page support; expanded Supertest suite. |
 | Round 3 | d68f55ea2ba952dd30870ad697ebcb6d8880d090 | CHANGES_REQUIRED | Addressed findings from review.txt: (1) Fail-closed PII protection for historical unmarked exports on download without pii:unmask; (2) Background stale job recovery with tenant scoping; (3) Multi-page PDF generation with measured text wrapping, dynamic column widths, and UTF-16BE hex diacritics; (4) Formula injection neutralization for CSV metadata banner; (5) Sanitization of persisted raw filters to prevent PII leaks; (6) Scheduled retention cleanup for expired exports; (7) Authentic serialized-payload checksum preservation in generation_metadata; (8) Atomic export job and audit log commit via transaction; (9) Complete Web UI implementation with 100% state coverage (ExportModal, ExportsSettingsPage) and automated test suite. |
 | Round 4 | bc19fee293f5316ebb60f48d96235a4532d178e2 | CHANGES_REQUIRED | Extracted server-side slice into Slice A (API) on branch `feat/feat-com-05-api` (PR #482); CI reported contract drift and test failures due to unsynchronized openapi.ts types. |
-| Round 5 | Pending | In progress | Slice A CI green: eliminated openapi.ts contract drift via contract generation, verified all exports unit and Supertest suites, ensured strict tenant scoping, RBAC checks, PII protection, and atomic transaction audit logs. Documented Slice A scope boundaries and residual work for Slice B (PR #470). |
+| Round 5 | `0676f76f242eb2d98c36e8a9fce0a97257acc9ba` | CHANGES_REQUIRED | PR #482 review leaves prior P1 closures unverified and identifies the missing local diagnostics binding and oversized PDF row clipping. Successful current-application and application-gate results are not established; the previous CI-green claim is withdrawn. |
+
+## PR #482 review repair evidence (2026-11-02)
+
+The repair is local and uncommitted, based on the reviewed SHA above. No CI or independent review PASS is claimed. The negative tests below are present; application and HTTP execution remain blocked by the local sandbox permissions described after the table.
+
+| Review finding | Repair and negative coverage |
+| --- | --- |
+| P1 #1: ledger download scope | Generation persists the effective warehouse, branch and carrier-account scopes with the completed file. Unit and HTTP tests reject restricted downloaders for unrestricted files and files outside their branch, warehouse or carrier-account scope; HTTP assertions also inspect the persisted scope snapshot. |
+| P1 #2: empty scopes | Empty warehouse, branch and carrier-account scopes deny requests and downloads. Generation rechecks warehouse scope before reading rows. Unit tests also reject empty persisted ledger scopes; HTTP tests exercise empty actor scopes and an empty stored branch scope. |
+| P1 #3: audit masking | Request and download audit filters are masked regardless of `pii:unmask`. Unit and HTTP tests put emails, dotted phone numbers, adjacent numbers and date-prefixed PII inside the permitted `city` filter and reject plaintext audit values. Internal markers are excluded from download audits. |
+| P1 #4: Vietnamese PDF rendering | Embedded fonts and glyph mappings are checked in unit tests. The independent PDF reader verifies Vietnamese text and both embedded font programs; the generated pages were rendered and visually inspected. |
+| P1 #5: PII marker race | The generation-time permission decision controls both file content and the marker in one conditional completion write. Unit and HTTP tests grant and revoke the real permission during data retrieval, assert the marker and bytes share that write, and deny download of an unmasked file after revocation. |
+| P1 #6: partial recovery | Existing calculation and persisted HTTP fixture separate 500,000 VND accepted from 100,000 VND recovered and assert 400,000 VND outstanding. Unit negatives cover partial recovery, over-recovery without a negative remainder and rejected claims. Execution of these application tests is still required. |
+| P1 #7: maintenance and worker race | Only PENDING jobs can be claimed. Completion and failure require the worker's lease identity; maintenance respects live lease expiry. Unit and HTTP tests pause an active worker during real maintenance, reject a competing worker, and verify a reclaimed job remains FAILED without published bytes. Unit coverage also replaces ownership during generation. |
+| P1 #8: application evidence and invalid fixture | The persisted stale fixture uses schema-valid `created_at` and no `updated_at`. The unsupported CI-green statement is removed. Required application checks remain blocked, so this finding is not claimed closed. |
+| P1 #9 and new diagnostics P1 | The HTTP suite locally imports its diagnostics helper. Shared redaction masks URL user-info and credential query parameters and hides malformed URLs. Negative tests verify cleanup before CI failure and exclude plaintext credentials from the diagnostic. |
+| P1: XLSX compatibility | The OOXML workbook includes a Normal style. Independent JSZip tests enable CRC verification and reject legacy, truncated, corrupted and incomplete packages. The independently executed openpyxl tests read values and metadata and reject legacy XML and a missing workbook part. |
+| New P1: oversized PDF rows | Font-measured wrapping and row continuation preserve every cell line above the footer. Unit and independent reader tests cover 80 unique lines and 12,000 unbroken wide glyphs. Running the reviewed generator against the same boundary criterion demonstrates its off-page regression. |
+
+The application regressions are in `apps/api/src/exports/exports.unit.spec.ts` and `apps/api/src/exports/exports.supertest.spec.ts`. Independent format checks use `apps/api/src/exports/exports.files.spec.cjs` and `apps/api/src/exports/exports.files.spec.py` with openpyxl 3.1.5 and pypdf 6.18.0:
+
+```powershell
+node --experimental-vm-modules apps/api/src/exports/exports.files.spec.cjs .oc/exports-file-evidence .oc/legacy-pdf.generator.ts
+python apps/api/src/exports/exports.files.spec.py .oc/exports-file-evidence
+```
+
+The legacy generator input is the reviewed SHA's `apps/api/src/exports/generators/pdf.generator.ts`. Local artifacts are under `.oc/exports-file-evidence/`, including `vietnamese.pdf`, `long-row.pdf`, `wide-row.pdf` and the rendered `contact-sheet.png`.
+
+| Check | Observed result |
+| --- | --- |
+| Independent source fixtures and diagnostics negatives | PASS; actual generator sources produced the XLSX/PDF fixtures and unavailable-database cleanup/redaction assertions passed. |
+| Independent openpyxl/pypdf checks | PASS; 7 tests, including all 80 lines and all 12,000 wide glyphs, plus the reviewed generator's failing page-boundary criterion. |
+| `pnpm lint` | BLOCKED before project checks: `EPERM` opening the installed Turbo entry point. |
+| `pnpm typecheck` | BLOCKED before compilation: `EPERM` opening the installed TypeScript entry point. |
+| `pnpm --filter @shipde/api test` | BLOCKED: installed TSX entry point is inaccessible (`EPERM`, also reproduced by `tsx --version`) and Docker engine access is denied. No application or live HTTP passing result is established. |
+| `git diff --check origin/main...HEAD` | PASS. |
+| `git diff --check` | PASS for the local repair. |
+| `node scripts/ai/check-no-hardcode.mjs` | BLOCKED: installed TypeScript ESLint parser cannot resolve. |
+
+Docker Desktop was launched with its window hidden. `docker info` continues to fail with permission denied to the engine pipe, so this session could not start the three local database services. The cleanup command `docker stop shipde-postgres shipde-redis shipde-minio` was attempted and denied by the same pipe permissions. Registry access also fails with `EACCES`; reinstalling dependencies is unavailable in this sandbox. The required checks must pass before the repair commit; no push is authorized.
+
+The pre-existing `legacy-javascript` lockfile version change is unrelated to this repair and remains unstaged; exclude it from the repair commit.
+
+### Fresh continuation verification (2026-11-02)
+
+The continuation preserved the existing uncommitted repair. `git fetch origin` failed because the sandbox cannot write the linked worktree's `FETCH_HEAD`, so the requested merge did not run. HEAD remains `0676f76f242eb2d98c36e8a9fce0a97257acc9ba`; local `origin/main` is `c6e71fcb9354cd2b14d1f5dcaed794abff306991`, with remote currency unverified.
+
+The independent source-fixture command and all seven openpyxl/pypdf tests passed again. The legacy PDF input was verified against the reviewed Git blob (`ca0c290d72f18f118fbe68ff018c2bd7e7d4f56e`); its off-page regression is reproduced by the independent boundary test. These results do not establish application or HTTP acceptance, and no fresh raster rendering was available in this continuation.
+
+Fresh `pnpm.cmd lint`, `pnpm.cmd typecheck`, `pnpm.cmd --filter @shipde/api test`, `pnpm.cmd test`, and focused export unit/HTTP commands all failed before their checks could execute, with `EPERM` on installed Turbo, TypeScript or TSX entry points. The no-hardcode command failed resolving its installed TypeScript ESLint parser. Both Git diff checks passed. Docker Desktop was launched hidden, but engine access remained denied; the final service-stop command was also denied. No commit or push was made.
+
+The current finding-to-test-to-command matrix and all 15 acceptance-row statuses are recorded in `.oc/pr-body.md`. Historical PASS logs do not certify the current uncommitted changes. Required application gates and test-first red/green evidence remain outstanding.
+
+### Known limitations requiring a decision
+
+- `NEEDS_DECISION`: The linked `docs/product-spec/docs/06-architecture/ADR.md` ADR-004 includes exports in Redis/BullMQ scope, while current async export execution uses in-process `processExportJob` and `activeJobs`. No Slice A exception was found in this Work Item. Record an approved scoped exception or assign the queue implementation; the repair does not silently select a different architecture.
 
 ## Residual limitations
 
-- In-app download push notification center is scheduled for subsequent notifications work item; export modal and history console are fully delivered in apps/web.
+- In-app download push notification center is scheduled for a subsequent notifications Work Item; export modal and history console acceptance belongs to Slice B (PR #470) and is not certified by this API repair.
 - Orders and shipments export will be linked when order/shipment domains are delivered.
