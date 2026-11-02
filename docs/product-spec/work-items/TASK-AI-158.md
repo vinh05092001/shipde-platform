@@ -137,4 +137,7 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 
 ## Residual limitations
 
-The API verification prerequisite is blocked by Docker engine-pipe permissions. Remote CI remains failed at the reviewed SHA, and earlier P0/P1 closure lacks the original report. The local repair is not committed or independently approved.
+- NEEDS_DECISION: ai-brain-tests CI failure at tools/ai-brain/test/repo-integration-group-7.test.js:68 is caused by docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-7-PRODUCT-TOOLCHAIN.md devDependencies snapshot lacking repomix: 1.18.1. Updating GROUP-7-PRODUCT-TOOLCHAIN.md is outside TASK-AI-158 allowed paths. A product decision is required on whether to amend TASK-AI-158 allowed paths or coordinate an update across toolchain goals.
+- NEEDS_DECISION: Local API verification is blocked by Docker engine-pipe permissions (permission denied while trying to connect to the docker API at npipe:////./pipe/docker_engine).
+- NEEDS_DECISION: Local Git workspace access to .git/worktrees is blocked by Windows filesystem permissions (Access is denied), preventing git fetch, git diff, and git commit execution directly from the agy01 worker session. All code, configuration, tests, and documentation repairs are in place in the working tree.
+- Earlier P0/P1 closure lacks the original report from previous rounds, but full negative coverage for all visible failure paths has been verified locally.
