@@ -66,28 +66,33 @@ function concrete(value) {
     .replace(/<[^>]*>/g, '')
     .replace(/[`*_~]/g, '')
     .trim();
-  const stripped = text
-    .replace(/^[[({<"'`\s]+/, '')
-    .replace(/[\])}>'"`;\s]+$/, '');
+  const stripped = text.replace(/^[[({<"'`\s]+/, '').replace(/[\])}>'"`;?!,\s]+$/, '');
   return (
     /[\p{L}\p{N}]/u.test(text) &&
-    !/^(?:n\/a|none|todo|tbd|tbc|pending|not applicable)(?:$|[\s:._\-([].*)/i.test(stripped)
+    !/^(?:n\/a|none|todo|tbd|tbc|tba|wip|fixme|pending|placeholder|not applicable)(?![\p{L}\p{N}])/iu.test(
+      stripped
+    )
   );
 }
 
 const REGRESSION_SPLIT =
-  /(?:;\s*|:\s*|\s+[-—]\s*|\s*,\s*|\s*\(\s*)?\b(?:regression[\s-]*(?:tests?|proofs?|commands?)?|regression\s*proof)\s*[:=-]?\s*/i;
+  /(?:[;:,]\s*|\s+[-—]\s*|\s*[[(]\s*|\n\s*)\bregression[\s-]+(?:tests?|proofs?|commands?)\b\s*[:=-]?\s*|\bregression(?:[\s-]+(?:tests?|proofs?|commands?))?\b\s*[:=]\s*/i;
 
 function isValidBehaviourPair(entry) {
-  const match = entry.match(REGRESSION_SPLIT);
+  const text = entry.replace(/[`*_~]/g, '');
+  const match = text.match(REGRESSION_SPLIT);
   if (!match || match.index === undefined) return false;
-  const behaviour = entry.slice(0, match.index).trim();
-  const proof = entry.slice(match.index + match[0].length).replace(/\)\s*$/, '').trim();
+  const behaviour = text.slice(0, match.index).trim();
+  const proof = text
+    .slice(match.index + match[0].length)
+    .replace(/[\])]\s*$/, '')
+    .trim();
   return concrete(behaviour) && concrete(proof);
 }
 
-function checkTableBehaviours(lines) {
+function hasBehaviour(lines) {
   let foundTable = false;
+  const listLines = [...lines];
   for (let i = 0; i < lines.length - 1; i++) {
     const header = tableCells(lines[i]);
     const separator = tableCells(lines[i + 1]);
@@ -109,47 +114,54 @@ function checkTableBehaviours(lines) {
       rows++;
       const behaviour = row[bCol] ?? '';
       const proof = row[pCol] ?? '';
-      if (!concrete(behaviour) || !concrete(proof)) return false;
+      if (row.length !== header.length || !concrete(behaviour) || !concrete(proof)) return false;
     }
     if (rows === 0) return false;
+    listLines.fill('', i, cursor);
     i = cursor - 1;
   }
-  return foundTable;
+  // A proved table cannot supply proof for unrelated list or paragraph entries.
+  const hasListEntries = listLines.some((line) => line.trim() && !HEADING.test(line));
+  return hasListEntries ? checkListBehaviours(listLines) : foundTable;
 }
 
 function checkListBehaviours(lines) {
   const entries = [];
   let current = '';
+  let currentIndent = 0;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
-    if (!line || HEADING.test(line)) continue;
-    const isBullet = /^(?:[-*+]|\d+[.)])\s+/.test(line);
-    if (isBullet) {
+    if (!line || HEADING.test(rawLine)) {
+      if (current) {
+        entries.push(current);
+        current = '';
+      }
+      continue;
+    }
+    const bullet = rawLine.match(/^(\s*)(?:[-*+]|\d+[.)])\s+(.+)$/);
+    const isNestedProof =
+      bullet &&
+      current &&
+      bullet[1].length > currentIndent &&
+      /^regression(?:[\s-]+(?:tests?|proofs?|commands?)\b|\s*[:=])/i.test(
+        bullet[2].replace(/[`*_~]/g, '')
+      );
+    if (bullet && !isNestedProof) {
       if (current) entries.push(current);
-      current = line.replace(/^(?:[-*+]|\d+[.)])\s+/, '').trim();
+      current = bullet[2].trim();
+      currentIndent = bullet[1].length;
     } else if (current) {
-      current += ' ' + line;
+      current += '\n' + (isNestedProof ? bullet[2] : line);
     } else {
       current = line;
+      currentIndent = rawLine.length - rawLine.trimStart().length;
     }
   }
   if (current) entries.push(current);
 
   if (entries.length === 0) return false;
   return entries.every((entry) => isValidBehaviourPair(entry));
-}
-
-function hasBehaviour(lines) {
-  const hasTable = lines.some((line, index) => {
-    const separator = tableCells(lines[index + 1] ?? '');
-    return separator && isTableSeparator(separator);
-  });
-
-  if (hasTable) {
-    return checkTableBehaviours(lines);
-  }
-  return checkListBehaviours(lines);
 }
 
 function isTableSeparator(cells) {

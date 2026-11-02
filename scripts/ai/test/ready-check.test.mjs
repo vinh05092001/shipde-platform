@@ -49,6 +49,15 @@ for (const proof of [
   'Pending: verification',
   'N/A: not applicable',
   '[TODO: choose a test]',
+  'TBA: to be announced',
+  'WIP: work in progress',
+  'FIXME: broken proof',
+  'placeholder: choose command',
+  'TODO/TBD',
+  '(TODO: choose a test)',
+  'TODO (choose a test)',
+  'Not applicable: no proof',
+  'TBC: to be confirmed',
 ]) {
   test(`rejects missing or placeholder Proof: ${JSON.stringify(proof)}`, () => {
     const result = check(valid.replace('`preserves-existing-behaviour`', proof));
@@ -112,7 +121,12 @@ for (const body of [
   '- Existing CLI input remains read-only; regression test: `ready-cli-does-not-write`.\n- Preserved behaviour without regression proof.',
   '- Existing CLI input remains read-only; regression test: TODO: choose a test',
   '- Existing CLI input remains read-only; regression test: TBD: verification command',
+  '- Existing CLI input remains read-only; regression test: WIP',
+  '- Existing CLI input remains read-only; regression test: TBA: to be announced',
+  '- Existing CLI input remains read-only (regression test: TODO)',
   '- Existing CLI input remains read-only; regression test:',
+  '| Preserved behaviour | Regression test |\n| --- | --- |\n| CLI remains read-only | TODO: write test |',
+  '| Preserved behaviour | Regression test |\n| --- | --- |\n| CLI remains read-only | `ready-cli-does-not-write` |\n| Another behaviour | |',
 ]) {
   test(`rejects empty or unproved Unchanged behaviour: ${JSON.stringify(body)}`, () => {
     const result = check(
@@ -125,6 +139,22 @@ for (const body of [
     assert.ok(result.problems.some((p) => p.includes('Unchanged behaviour')));
   });
 }
+
+test('accepts valid parenthesized and bracketed regression proof in Unchanged behaviour', () => {
+  for (const item of [
+    '- Existing CLI input remains read-only (regression test: `ready-cli-does-not-write`)',
+    '- Existing CLI input remains read-only [regression test: ready-cli-does-not-write]',
+    '| Preserved behaviour | Regression test |\n| --- | --- |\n| CLI remains read-only | `ready-cli-does-not-write` |',
+  ]) {
+    const result = check(
+      valid.replace(
+        /## Unchanged behaviour[\s\S]*?(?=## Acceptance)/,
+        `## Unchanged behaviour\n\n${item}\n\n`
+      )
+    );
+    assert.equal(result.ok, true);
+  }
+});
 
 test('rejects absent Unchanged behaviour and content leaking from the next section', () => {
   assert.equal(check(valid.replace('## Unchanged behaviour', '## Something else')).ok, false);
@@ -205,3 +235,25 @@ test('CLI rejects missing/extra arguments, missing files and directories without
     assert.equal(result.stderr.trim().split(/\r?\n/).length, 1, result.stderr);
   }
 });
+
+for (const [name, rule] of [
+  ['missing-regression', 'Unchanged behaviour'],
+  ['placeholder-proof', 'Proof'],
+]) {
+  test(`CLI rejects ${name} with a masked diagnostic and preserves the file`, () => {
+    const target = fixture(name);
+    const before = readFileSync(target);
+    const result = cli(target);
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr.trim(), new RegExp(`^line \\d+: [^\\r\\n]*${rule}[^\\r\\n]*$`));
+    assert.ok(!result.stderr.includes('synthetic-review-canary'));
+    assert.ok(!result.stderr.includes(target));
+    assert.deepEqual(readFileSync(target), before);
+    const repeated = cli(target);
+    assert.equal(repeated.status, result.status);
+    assert.equal(repeated.stderr, result.stderr);
+    assert.equal(repeated.stdout, result.stdout);
+  });
+}

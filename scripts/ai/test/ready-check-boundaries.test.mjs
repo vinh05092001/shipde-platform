@@ -80,3 +80,108 @@ test('unchanged behaviour cannot consist solely of an empty table', () => {
     checkWorkItemReady(text).problems.some((problem) => problem.includes('Unchanged behaviour'))
   );
 });
+
+const withBehaviour = (body) =>
+  valid.replace(
+    /## Unchanged behaviour[\s\S]*?(?=## Acceptance)/,
+    `## Unchanged behaviour\n\n${body}\n\n`
+  );
+const provedBehaviour =
+  '- Existing CLI input remains read-only; regression test: `ready-cli-does-not-write`.';
+const provedTable =
+  '| Preserved behaviour | Regression test |\n| --- | --- |\n| CLI remains read-only | `ready-cli-does-not-write` |';
+
+for (const [name, body] of [
+  ['bullet before a table', `- Existing diagnostics stay masked.\n\n${provedTable}`],
+  ['bullet after a table', `${provedTable}\n\n- Existing diagnostics stay masked.`],
+  ['paragraph after a table', `${provedTable}\n\nExisting diagnostics stay masked.`],
+  [
+    'nested section after a table',
+    `${provedTable}\n\n### Diagnostics\n\n- Existing diagnostics stay masked.`,
+  ],
+  [
+    'paragraph across a heading',
+    'Existing diagnostics stay masked.\n### CLI\nExisting CLI input remains read-only; regression test: `ready-cli-does-not-write`.',
+  ],
+  ['regression mentioned without proof', '- Existing regression coverage remains available.'],
+  [
+    'regression word prefix without proof',
+    '- Existing behaviour and regression testing remain available.',
+  ],
+  [
+    'regression words before a placeholder proof',
+    '- Existing regression tests remain available; regression test: TODO: choose a test',
+  ],
+]) {
+  test(`rejects unproved Unchanged behaviour: ${name}`, () => {
+    const result = checkWorkItemReady(withBehaviour(body));
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
+  });
+}
+
+test('rejects Unchanged behaviour table rows with missing or surplus cells', () => {
+  for (const body of [
+    provedTable.replace(
+      'CLI remains read-only |',
+      'CLI remains read-only | Unproved extra behaviour |'
+    ),
+    provedTable
+      .replace('| Regression test |', '| Regression test | Notes |')
+      .replace('| --- | --- |', '| --- | --- | --- |'),
+  ]) {
+    const result = checkWorkItemReady(withBehaviour(body));
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
+  }
+});
+
+for (const label of ['**regression test**:', 'regression **proof**:', '*regression command*:']) {
+  test(`rejects placeholder Unchanged behaviour proof after ${label}`, () => {
+    const result = checkWorkItemReady(
+      withBehaviour(`- Existing CLI input remains read-only; ${label} TODO: choose a test`)
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
+  });
+}
+
+test('accepts Unchanged behaviour with complete mixed and continued regression proofs', () => {
+  for (const body of [
+    `${provedBehaviour}\n\n${provedTable}\n\nExisting diagnostics stay masked; regression proof: \`ready-cli-masks-errors\`.`,
+    '- Existing CLI input remains read-only;\n  regression test: `ready-cli-does-not-write`.',
+    '- Existing CLI input remains read-only.\n  - Regression test: `ready-cli-does-not-write`.',
+    '1. Existing CLI input remains read-only; **regression test**: `ready-cli-does-not-write`.',
+    provedTable.replace(/^\| | \|$/gm, '').replaceAll('\n', '\r\n'),
+  ]) {
+    assert.deepEqual(checkWorkItemReady(withBehaviour(body)), { ok: true, problems: [] });
+  }
+});
+
+for (const proof of [
+  '`TODO`—choose a test',
+  '**TBD**; verification command',
+  '[TODO] choose a test',
+  '[TBD](#planned-check)',
+  'TBD： verification command',
+  'TODO! choose a test',
+]) {
+  test(`rejects placeholder Proof with punctuation: ${proof}`, () => {
+    const result = checkWorkItemReady(valid.replace('`preserves-existing-behaviour`', proof));
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+  });
+}
+
+test('accepts named Proof and commands that discuss unresolved placeholders', () => {
+  for (const proof of [
+    '`rejects TODO and TBD placeholders`',
+    '`node --test scripts/ai/test/ready-check.test.mjs`',
+    '`pendingWorkItemTests`',
+  ]) {
+    assert.deepEqual(checkWorkItemReady(valid.replace('`preserves-existing-behaviour`', proof)), {
+      ok: true,
+      problems: [],
+    });
+  }
+});
