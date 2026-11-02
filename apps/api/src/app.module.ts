@@ -20,6 +20,7 @@ import { WarehousesModule } from './warehouses/warehouses.module';
 import { ExportsModule } from './exports/exports.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { SearchModule } from './search/search.module';
+import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { SearchModule } from './search/search.module';
     ExportsModule,
     OnboardingModule,
     SearchModule,
+    CarrierCatalogModule,
   ],
   controllers: [HealthController],
   providers: [
