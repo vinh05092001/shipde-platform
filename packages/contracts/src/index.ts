@@ -169,6 +169,70 @@ export type CarrierCode = (typeof CarrierCode)[keyof typeof CarrierCode];
 export const CanonicalCarrierCode = CarrierCode;
 export type CanonicalCarrierCode = CarrierCode;
 
+// --- Carrier Catalog Constants & Normalization (FEAT-CAR-01) ---
+export const CATALOG_REVISION = 'CATALOG-2026-10-31';
+
+export const CARRIER_BOUNDARY_ALIASES: Record<string, CarrierCode> = {
+  VTP: 'VIETTEL_POST',
+  JT_EXPRESS: 'JT',
+  GHN: 'GHN',
+  GHTK: 'GHTK',
+  VIETTEL_POST: 'VIETTEL_POST',
+  JT: 'JT',
+};
+
+export function normalizeCarrierCode(raw?: string | null): CarrierCode | null {
+  if (typeof raw !== 'string') return null;
+  return CARRIER_BOUNDARY_ALIASES[raw] || null;
+}
+
+export const CarrierEvidenceLevel = {
+  VERIFIED_OFFICIAL: 'VERIFIED_OFFICIAL',
+  CONFIRMATION_REQUIRED: 'CONFIRMATION_REQUIRED',
+} as const;
+export type CarrierEvidenceLevel = (typeof CarrierEvidenceLevel)[keyof typeof CarrierEvidenceLevel];
+
+export const CommandShipmentStatus = {
+  CREATING: 'CREATING',
+  CREATED: 'CREATED',
+  CREATE_FAILED: 'CREATE_FAILED',
+  CREATE_OUTCOME_UNKNOWN: 'CREATE_OUTCOME_UNKNOWN',
+} as const;
+export type CommandShipmentStatus =
+  (typeof CommandShipmentStatus)[keyof typeof CommandShipmentStatus];
+
+export const StatusCategory = {
+  COMMAND: 'COMMAND',
+  OPERATIONAL_PRE_TRANSIT: 'OPERATIONAL_PRE_TRANSIT',
+  OPERATIONAL_IN_TRANSIT: 'OPERATIONAL_IN_TRANSIT',
+  OPERATIONAL_TERMINAL: 'OPERATIONAL_TERMINAL',
+} as const;
+export type StatusCategory = (typeof StatusCategory)[keyof typeof StatusCategory];
+
+export const FeeComponentCategory = {
+  BASE: 'BASE',
+  SURCHARGE: 'SURCHARGE',
+  COD: 'COD',
+  INSURANCE: 'INSURANCE',
+  RETURN: 'RETURN',
+  VAT: 'VAT',
+} as const;
+export type FeeComponentCategory = (typeof FeeComponentCategory)[keyof typeof FeeComponentCategory];
+
+export const CompatibilityDomain = {
+  CARRIER_ALIAS: 'CARRIER_ALIAS',
+  STATUS: 'STATUS',
+  FEE: 'FEE',
+} as const;
+export type CompatibilityDomain = (typeof CompatibilityDomain)[keyof typeof CompatibilityDomain];
+
+export const CompatibilityDisposition = {
+  MAPPED: 'MAPPED',
+  UNMAPPED: 'UNMAPPED',
+} as const;
+export type CompatibilityDisposition =
+  (typeof CompatibilityDisposition)[keyof typeof CompatibilityDisposition];
+
 // --- Carrier Capability Tier ---
 export const CarrierCapabilityTier = {
   L0_OBSERVE: 'L0',
