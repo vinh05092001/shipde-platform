@@ -62,6 +62,7 @@ Pre-implementation quality and safety invariants verified by author before codin
 - [ ] **Tenant scope**: Every database query and mutation is strictly scoped to the authenticated tenant server-side; client-supplied tenant ownership is never trusted.
 - [ ] **RBAC & permissions**: Every route and action verifies actor roles and permissions explicitly; unauthorized access returns canonical forbidden responses.
 - [ ] **Audit & sensitive data**: PII, tokens, and secrets are masked in logs, audits, and error outputs; sensitive actions record audit events.
+- [ ] When external API/library behaviour is uncertain, research it with pnpm ai:research and cite the URL.
 - [ ] **VND integer arithmetic**: All monetary amounts in VND use integer arithmetic only (no floating-point calculations).
 - [ ] **Carrier reconciliation**: External carrier operations (create, cancel, redelivery, claim) reconcile remote state before retry; timeouts never trigger blind retries.
 - [ ] **Tests at the lowest useful level, test-first where executable**: Each acceptance row declares its evidence level (`unit`, `integration`, `e2e`, `docs-inspection`, `screenshot` or `log`). Rows with an executable level have their tests written and observed failing before production implementation begins, per AGENTS.md ("lowest useful level plus the Work Item acceptance path"). Rows with a non-executable level (e.g. documentation-only, screenshot-only) instead record `test not applicable: <justification>` in the acceptance matrix; no universal unit-plus-integration gate applies.

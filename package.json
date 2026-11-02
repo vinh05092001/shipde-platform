@@ -9,6 +9,7 @@
     "pnpm": ">=11.0.0"
   },
   "scripts": {
+    "ai:research": "node scripts/ai/research.mjs",
     "dev": "turbo dev --cache-dir=.turbo/cache",
     "build": "pnpm db:generate && turbo build --cache-dir=.turbo/cache",
     "lint": "turbo lint --cache-dir=.turbo/cache && eslint scripts",
