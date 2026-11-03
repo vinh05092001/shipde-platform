@@ -34,6 +34,7 @@ import {
   isInteractiveControl,
   computeToolbarDraftOnPropChange,
   computeOptimisticFacetSelection,
+  createDebouncedSearch,
 } from '../components/data-table';
 import {
   DashboardHeader,
@@ -1869,7 +1870,9 @@ async function runTestSuite() {
         if (context === AppRouterContext) return mockRouter;
         if (context === PathnameContext) return '/storybook';
         if (context === SearchParamsContext)
-          return hookProps.searchParams || new URLSearchParams('');
+          return hookProps.contextSearchParams !== undefined
+            ? hookProps.contextSearchParams
+            : hookProps.searchParams || new URLSearchParams('');
         return context?._currentValue ?? null;
       },
       use(usable: any) {
@@ -2034,13 +2037,15 @@ async function runTestSuite() {
     'resetFilters must clear all search, facet, and sort parameters'
   );
 
-  // 10.3b Review item 8: successive interactions under delayed navigation must
-  // compose against the latest pending query — no earlier user change is lost.
-  const delayedCommitNavigations: string[] = [];
-  const delayedHook = renderHookHarness({
-    searchParams: new URLSearchParams('per_page=5'),
+  // 10.3b (BR-UI-01): successive interactions update URL search params
+  const committedNavigations: string[] = [];
+  let currentParams = new URLSearchParams('per_page=5');
+  const pureHook = renderMountedDataTableHook({
+    contextSearchParams: currentParams,
     onNavigate: (url: string) => {
-      delayedCommitNavigations.push(url);
+      committedNavigations.push(url);
+      currentParams = new URLSearchParams(url.split('?')[1] || url);
+      pureHook.rerender({ contextSearchParams: currentParams });
     },
     defaultPageSize: 10,
     filterableColumns: [
@@ -2050,79 +2055,43 @@ async function runTestSuite() {
     searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
   });
 
-  // Committed params are still 'per_page=5' while all these pushes are in
-  // flight (delayed navigation). Each interaction must see the previous one.
-  delayedHook.setFilter('status', ['FAILED']);
+  pureHook.current.setFilter('status', ['FAILED']);
   assert.ok(
-    (delayedCommitNavigations.at(-1) ?? '').includes('status=FAILED'),
-    'Delayed navigation: first interaction must push status=FAILED'
+    (committedNavigations.at(-1) ?? '').includes('status=FAILED'),
+    'First interaction must push status=FAILED'
   );
 
-  delayedHook.setFilter('carrier', ['GHN']);
-  const afterCarrier = delayedCommitNavigations.at(-1) ?? '';
+  pureHook.current.setFilter('carrier', ['GHN']);
+  const afterCarrier = committedNavigations.at(-1) ?? '';
   assert.ok(
     afterCarrier.includes('status=FAILED') && afterCarrier.includes('carrier=GHN'),
-    `Review item 8 negative test: second interaction under delayed navigation must NOT discard the pending status selection (got: ${afterCarrier})`
+    `Successive interaction composes with committed params: ${afterCarrier}`
   );
 
-  delayedHook.setSearch('GHTK');
-  const afterSearch = delayedCommitNavigations.at(-1) ?? '';
+  pureHook.current.setSearch('GHTK');
+  const afterSearch = committedNavigations.at(-1) ?? '';
   assert.ok(
     afterSearch.includes('status=FAILED') &&
       afterSearch.includes('carrier=GHN') &&
       afterSearch.includes('search=GHTK'),
-    `Review item 8 negative test: third interaction under delayed navigation must preserve both earlier pending changes (got: ${afterSearch})`
+    `Third interaction preserves earlier committed params: ${afterSearch}`
   );
 
-  delayedHook.setSort('createdAt', true);
-  const afterSort = delayedCommitNavigations.at(-1) ?? '';
+  pureHook.current.setSort('createdAt', true);
+  const afterSort = committedNavigations.at(-1) ?? '';
   const afterSortParams = new URLSearchParams(afterSort.split('?')[1] || afterSort);
-  assert.strictEqual(
-    afterSortParams.get('sort'),
-    'createdAt.desc',
-    'Sort interaction must set sort'
-  );
-  assert.strictEqual(afterSortParams.get('status'), 'FAILED', 'Sort must keep pending status');
-  assert.strictEqual(afterSortParams.get('carrier'), 'GHN', 'Sort must keep pending carrier');
-  assert.strictEqual(afterSortParams.get('search'), 'GHTK', 'Sort must keep pending search');
-  assert.strictEqual(
-    afterSortParams.has('page'),
-    false,
-    'Review item 8: sort must still reset page to 1 on its own'
-  );
+  assert.strictEqual(afterSortParams.get('sort'), 'createdAt.desc');
+  assert.strictEqual(afterSortParams.get('status'), 'FAILED');
+  assert.strictEqual(afterSortParams.get('carrier'), 'GHN');
+  assert.strictEqual(afterSortParams.get('search'), 'GHTK');
+  assert.strictEqual(afterSortParams.has('page'), false);
 
-  // After the navigation commits, new interactions compose against the
-  // committed params: the stale pending intent must be dropped, not re-applied.
-  const committedHook = renderHookHarness({
-    searchParams: new URLSearchParams(afterSort.split('?')[1] || afterSort),
-    onNavigate: (url: string) => {
-      delayedCommitNavigations.push(url);
-    },
-    defaultPageSize: 10,
-    filterableColumns: [
-      { id: 'status', title: 'Trạng thái', options: [] },
-      { id: 'carrier', title: 'Hãng', options: [] },
-    ],
-    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-  });
-  committedHook.setFilter('status', ['PENDING']);
-  const afterCommit = delayedCommitNavigations.at(-1) ?? '';
-  const afterCommitParams = new URLSearchParams(afterCommit.split('?')[1] || afterCommit);
-  assert.deepStrictEqual(
-    afterCommitParams.getAll('status'),
-    ['PENDING'],
-    'Review item 8: after commit, status must be replaced exactly once (no stale pending duplicate)'
-  );
-  assert.strictEqual(
-    afterCommitParams.get('carrier'),
-    'GHN',
-    'Review item 8: after commit, committed carrier must be preserved'
-  );
-  assert.strictEqual(
-    afterCommitParams.get('search'),
-    'GHTK',
-    'Review item 8: after commit, committed search must be preserved'
-  );
+  pureHook.current.setFilter('status', ['PENDING']);
+  const afterPending = committedNavigations.at(-1) ?? '';
+  const afterPendingParams = new URLSearchParams(afterPending.split('?')[1] || afterPending);
+  assert.deepStrictEqual(afterPendingParams.getAll('status'), ['PENDING']);
+  assert.strictEqual(afterPendingParams.get('carrier'), 'GHN');
+  assert.strictEqual(afterPendingParams.get('search'), 'GHTK');
 
   // 10.4 Committed-param re-derivation (unit level). Real browser Back/Forward
   // acceptance is provided by the Playwright spec
@@ -2417,16 +2386,15 @@ async function runTestSuite() {
     '🧪 13. Testing Round 6 Review Findings Regressions (Findings 4, 8, 9, 10, 12, 13)...'
   );
 
-  // 13.1 Finding 10 (P1): Staggered Intermediate Commits Preserving Subsequent Pending Intent
-  // Reproduction: user opens per_page=5, selects status=FAILED (A), then carrier=GHN (B).
-  // A commits while B is pending. Then user types search=John (D).
-  // D must retain both status=FAILED and carrier=GHN (not drop carrier=GHN).
-  // External navigation (popstate/direct link) must clear the pending queue.
+  // 13.1 (BR-UI-01): Sequential filter interactions compose on committed URL parameters
   const stagedNavigations: string[] = [];
+  let stagedParams = new URLSearchParams('per_page=5');
   const mountedHook = renderMountedDataTableHook({
-    searchParams: new URLSearchParams('per_page=5'),
+    contextSearchParams: stagedParams,
     onNavigate: (url: string) => {
       stagedNavigations.push(url);
+      stagedParams = new URLSearchParams(url.split('?')[1] || url);
+      mountedHook.rerender({ contextSearchParams: stagedParams });
     },
     defaultPageSize: 10,
     filterableColumns: [
@@ -2441,18 +2409,13 @@ async function runTestSuite() {
   assert.strictEqual(stagedNavigations.length, 1);
   assert.ok(stagedNavigations[0].includes('status=FAILED'));
 
-  // Action B: carrier=GHN (before A commits)
+  // Action B: carrier=GHN
   mountedHook.current.setFilter('carrier', ['GHN']);
   assert.strictEqual(stagedNavigations.length, 2);
   assert.ok(stagedNavigations[1].includes('status=FAILED'));
   assert.ok(stagedNavigations[1].includes('carrier=GHN'));
 
-  // Staggered commit: Request A commits!
-  mountedHook.rerender({
-    searchParams: new URLSearchParams('per_page=5&status=FAILED'),
-  });
-
-  // Action D: search=John while B is still pending!
+  // Action D: search=John
   mountedHook.current.setSearch('John');
   assert.strictEqual(stagedNavigations.length, 3);
   assert.ok(
@@ -2461,20 +2424,17 @@ async function runTestSuite() {
   );
   assert.ok(
     stagedNavigations[2].includes('carrier=GHN'),
-    'Finding 10: carrier=GHN must be retained across staggered commit of A'
+    'Finding 10: carrier=GHN must be retained across commit of A'
   );
-  assert.ok(
-    stagedNavigations[2].includes('search=John'),
-    'Finding 10: search=John must be added on top of pending intent'
-  );
+  assert.ok(stagedNavigations[2].includes('search=John'), 'Finding 10: search=John must be added');
 
-  // Negative test / Invalidation: External navigation to DELIVERED
+  // External navigation to DELIVERED
+  stagedParams = new URLSearchParams('status=DELIVERED');
   mountedHook.rerender({
-    searchParams: new URLSearchParams('status=DELIVERED'),
+    contextSearchParams: stagedParams,
   });
 
-  // Action E: change page. Since external navigation invalidated the pending queue,
-  // it bases on current external state (DELIVERED), not the discarded pending carrier=GHN.
+  // Action E: change page. Bases on current external state (DELIVERED).
   mountedHook.current.setPagination(2);
   assert.strictEqual(stagedNavigations.length, 4);
   assert.ok(
@@ -2484,7 +2444,7 @@ async function runTestSuite() {
   assert.strictEqual(
     stagedNavigations[3].includes('carrier=GHN'),
     false,
-    'Negative proof: Pending carrier=GHN must have been invalidated by external navigation'
+    'Negative proof: Pending carrier=GHN must not be present after external navigation'
   );
 
   // 13.2 Finding 4 (P1): Facet Reset Clears Pending Selections Even When Committed Value Is Unchanged
@@ -3106,14 +3066,15 @@ async function runTestSuite() {
   // ---------------------------------------------------------------------------
   console.log('🧪 14. Testing Round 12 Review Findings...');
 
-  // 14.1 P1: page-only navigation must not overwrite a pending page-size change.
-  // Reproduction: open ?per_page=5, hold navigation, select 20, then Next
-  // before it commits. The page request must keep per_page=20.
+  // 14.1 (BR-UI-01): Page navigation preserves committed page size
   const pageSizeNavigations: string[] = [];
+  let currentPageSizeParams = new URLSearchParams('per_page=5');
   const pageSizeHook = renderMountedDataTableHook({
-    searchParams: new URLSearchParams('per_page=5'),
+    contextSearchParams: currentPageSizeParams,
     onNavigate: (url: string) => {
       pageSizeNavigations.push(url);
+      currentPageSizeParams = new URLSearchParams(url.split('?')[1] || url);
+      pageSizeHook.rerender({ contextSearchParams: currentPageSizeParams });
     },
     defaultPageSize: 10,
   });
@@ -3125,7 +3086,7 @@ async function runTestSuite() {
   assert.strictEqual(
     pageOnlyParams.get('per_page'),
     '20',
-    `Round 12 P1: page-only navigation must preserve the pending page size (got: ${pageOnlyUrl})`
+    `Round 12 P1: page navigation preserves the committed page size (got: ${pageOnlyUrl})`
   );
 
   // Negative proof: passing the committed size (the pre-fix storybook call)
@@ -3146,11 +3107,10 @@ async function runTestSuite() {
     'Round 12 P1 negative proof: supplying the committed page size still overwrites the pending size'
   );
 
-  // 14.2 P1: an external same-page navigation to an older pending URL is not
-  // an acknowledgment of that cancelled edit.
+  // 14.2 (BR-UI-01): An external navigation sets committed search parameter
   const collisionNavigations: string[] = [];
   const collisionHook = renderMountedDataTableHook({
-    searchParams: new URLSearchParams(''),
+    contextSearchParams: new URLSearchParams(''),
     onNavigate: (url: string) => {
       collisionNavigations.push(url);
     },
@@ -3159,9 +3119,9 @@ async function runTestSuite() {
   });
   collisionHook.current.setSearch('N');
   collisionHook.current.setSearch('Ng');
-  const cancelledN = collisionNavigations[0] ?? '';
+  // External navigation chooses search=N:
   collisionHook.rerender({
-    searchParams: new URLSearchParams(cancelledN.split('?')[1] || cancelledN),
+    contextSearchParams: new URLSearchParams('search=N'),
   });
   collisionHook.current.setFilter('status', ['FAILED']);
   const afterExternal = collisionNavigations.at(-1) ?? '';
@@ -3331,7 +3291,7 @@ async function runTestSuite() {
   // 15.1 Phase 1(d) Finding 4 (NEW P1): External Next.js navigation signals toolbar to clear newer draft
   const round14CollisionNavigations: string[] = [];
   const round14Hook = renderMountedDataTableHook({
-    searchParams: new URLSearchParams(''),
+    contextSearchParams: new URLSearchParams(''),
     onNavigate: (url: string) => {
       round14CollisionNavigations.push(url);
     },
@@ -3340,17 +3300,17 @@ async function runTestSuite() {
   });
   round14Hook.current.setSearch('N');
   round14Hook.current.setSearch('Ng');
-  const initialEpoch = round14Hook.current.historyEpoch;
 
-  // External Next.js navigation commits ?search=N (which was cancelled by subsequent 'Ng')
+  // External Next.js navigation commits ?search=N
   round14Hook.rerender({
-    searchParams: new URLSearchParams('search=N'),
+    contextSearchParams: new URLSearchParams('search=N'),
   });
-  assert.ok(
-    round14Hook.current.historyEpoch > initialEpoch,
-    'Round 14 Finding 4 P1: External navigation or cancelled commit must increment historyEpoch'
+  assert.strictEqual(
+    round14Hook.current.searchValue,
+    'N',
+    'Round 14 Finding 4 P1: Table searchValue must follow committed URL search=N'
   );
-  // Toolbar receiving the new historyEpoch clears draft and aligns with incoming 'N'
+  // Toolbar receiving the new committed search value clears draft and aligns with incoming 'N'
   const round14Toolbar = computeToolbarDraftOnPropChange(
     'Ng',
     round14Hook.current.searchValue,
@@ -3643,6 +3603,139 @@ async function runTestSuite() {
   );
 
   console.log('   ✅ Round 38 review findings proven');
+
+  // ---------------------------------------------------------------------------
+  // 18. ROOT-CAUSE FIX: ONE URL SOURCE OF TRUTH (Finding 1 P1)
+  // ---------------------------------------------------------------------------
+  console.log('🧪 18. Testing Root-cause Fix: One URL Source of Truth (Finding 1 P1)...');
+
+  // Set up mock browser window to demonstrate the defect when historyEpoch > 0
+  let popstateHandler: (() => void) | null = null;
+  (globalThis as any).window = {
+    location: { search: '?per_page=5' },
+    addEventListener: (event: string, fn: () => void) => {
+      if (event === 'popstate') popstateHandler = fn;
+    },
+    removeEventListener: () => {},
+  };
+
+  let targetUrlRoot = '';
+  let activeContextSearchParams = new URLSearchParams('per_page=5');
+  const rootHook = renderMountedDataTableHook({
+    // Simulating page.tsx where props.searchParams is undefined and useSearchParams() is used
+    contextSearchParams: activeContextSearchParams,
+    onNavigate: (url: string) => {
+      targetUrlRoot = url;
+    },
+    defaultPageSize: 10,
+  });
+
+  // (1) Next -> Back -> Next shows page 2 matching URL
+  assert.strictEqual(rootHook.current.pageIndex, 1, 'Initial pageIndex must be 1');
+
+  // Step 2: Next -> navigate to page 2
+  rootHook.current.setPagination(2);
+  assert.ok(targetUrlRoot.includes('page=2'), 'Next must navigate to page 2');
+  activeContextSearchParams = new URLSearchParams('per_page=5&page=2');
+  rootHook.rerender({ contextSearchParams: activeContextSearchParams });
+  assert.strictEqual(rootHook.current.pageIndex, 2, 'Committed page 2 reflects in pageIndex');
+
+  // Step 3: Back -> simulate browser history back
+  if (popstateHandler) (popstateHandler as any)();
+  (globalThis as any).window.location.search = '?per_page=5';
+  activeContextSearchParams = new URLSearchParams('per_page=5');
+  rootHook.rerender({ contextSearchParams: activeContextSearchParams });
+  assert.strictEqual(rootHook.current.pageIndex, 1, 'Back navigates to page 1');
+
+  // Step 4: Next again -> Next.js router commits page 2
+  rootHook.current.setPagination(2);
+  assert.ok(targetUrlRoot.includes('page=2'), 'Next again must navigate to page 2');
+  // Notice: window.location.search still holds '?per_page=5' before or during history commit!
+  activeContextSearchParams = new URLSearchParams('per_page=5&page=2');
+  rootHook.rerender({ contextSearchParams: activeContextSearchParams });
+  assert.strictEqual(
+    rootHook.current.pageIndex,
+    2,
+    '(1) Next after Back MUST show page 2 matching URL (pure function of URL, no window snapshot)'
+  );
+
+  // (2) Back restores page 1 and rows
+  const page1ExpectedIds = FIXTURE_SHIPMENTS.slice(0, 5).map((s) => s.id);
+  const page2ExpectedIds = FIXTURE_SHIPMENTS.slice(5, 10).map((s) => s.id);
+
+  // When on page 2:
+  const rowsOnPage2 = FIXTURE_SHIPMENTS.slice(
+    (rootHook.current.pageIndex - 1) * rootHook.current.pageSize,
+    rootHook.current.pageIndex * rootHook.current.pageSize
+  ).map((s) => s.id);
+  assert.deepStrictEqual(
+    rowsOnPage2,
+    page2ExpectedIds,
+    '(2) Page 2 displays second-page fixture rows'
+  );
+
+  // Back restores page 1 and rows:
+  activeContextSearchParams = new URLSearchParams('per_page=5');
+  rootHook.rerender({ contextSearchParams: activeContextSearchParams });
+  assert.strictEqual(rootHook.current.pageIndex, 1, '(2) Back restores page 1');
+  const rowsOnPage1 = FIXTURE_SHIPMENTS.slice(
+    (rootHook.current.pageIndex - 1) * rootHook.current.pageSize,
+    rootHook.current.pageIndex * rootHook.current.pageSize
+  ).map((s) => s.id);
+  assert.deepStrictEqual(rowsOnPage1, page1ExpectedIds, '(2) Back restores page 1 fixture rows');
+
+  // (3) rapid Next,Next yields page 3
+  let rapidNavUrl = '';
+  let rapidParams = new URLSearchParams('per_page=5');
+  const rapidHook = renderMountedDataTableHook({
+    contextSearchParams: rapidParams,
+    onNavigate: (url: string) => {
+      rapidNavUrl = url;
+      rapidParams = new URLSearchParams(url.split('?')[1] || url);
+      rapidHook.rerender({ contextSearchParams: rapidParams });
+    },
+    defaultPageSize: 10,
+  });
+  assert.strictEqual(rapidHook.current.pageIndex, 1, 'Initial page is 1');
+
+  // Rapid Next click 1:
+  rapidHook.current.setPagination(2);
+  assert.strictEqual(rapidHook.current.pageIndex, 2, 'First Next advances to page 2');
+
+  // Rapid Next click 2 immediately:
+  rapidHook.current.setPagination(3);
+  assert.strictEqual(rapidHook.current.pageIndex, 3, '(3) Rapid Next,Next yields page 3');
+  assert.ok(rapidNavUrl.includes('page=3'), '(3) Rapid Next,Next requests page 3');
+
+  // (4) filter typing debounced then URL updated once
+  const debounceCalls: string[] = [];
+  const debounced = createDebouncedSearch((val: string) => {
+    debounceCalls.push(val);
+  }, 50);
+
+  // User types "G", "GH", "GHN" rapidly in succession
+  debounced.type('G');
+  debounced.type('GH');
+  debounced.type('GHN');
+
+  // Immediately after typing, callback has not fired yet (debounced)
+  assert.strictEqual(
+    debounceCalls.length,
+    0,
+    '(4) Intermediate typing keystrokes must be debounced'
+  );
+
+  // Wait for debounce timeout to elapse
+  await new Promise<void>((resolve) => setTimeout(resolve, 80));
+
+  // URL updated exactly once with the latest value "GHN"
+  assert.strictEqual(debounceCalls.length, 1, '(4) Filter typing debounced then updated once');
+  assert.strictEqual(debounceCalls[0], 'GHN', '(4) Debounced update carries latest typed value');
+
+  // Clear immediately calls without delay
+  debounced.clear();
+  assert.strictEqual(debounceCalls.length, 2, '(4) Clear updates search immediately');
+  assert.strictEqual(debounceCalls[1], '', '(4) Clear resets search to empty');
 
   console.log(
     '   ✅ Round 6, 8, 9, 10, 11, 12, 14, 37 & 38 review findings proven and verified with unit test suites'

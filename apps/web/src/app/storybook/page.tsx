@@ -65,7 +65,6 @@ function StorybookContent() {
     setPagination,
     setSort,
     isFiltered,
-    historyEpoch,
     resetEpoch,
   } = useDataTable({
     defaultPageSize: 10,
@@ -580,7 +579,6 @@ function StorybookContent() {
             searchPlaceholder="Tìm theo mã vận đơn, mã đơn, khách hàng..."
             isFiltered={isFiltered}
             onResetFilters={resetFilters}
-            historyEpoch={historyEpoch}
             resetEpoch={resetEpoch}
             filtersSlot={
               <>
@@ -589,7 +587,6 @@ function StorybookContent() {
                   options={STATUS_OPTIONS}
                   selectedValues={new Set(selectedStatus)}
                   onSelect={(vals) => setFilter('status', vals)}
-                  historyEpoch={historyEpoch}
                   resetEpoch={resetEpoch}
                 />
                 <DataTableFacetedFilter
@@ -597,7 +594,6 @@ function StorybookContent() {
                   options={CARRIER_OPTIONS}
                   selectedValues={new Set(selectedCarriers)}
                   onSelect={(vals) => setFilter('carrier', vals)}
-                  historyEpoch={historyEpoch}
                   resetEpoch={resetEpoch}
                 />
               </>

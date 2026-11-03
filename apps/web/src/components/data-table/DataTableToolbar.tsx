@@ -31,7 +31,7 @@
 import React from 'react';
 import { Search, X } from 'lucide-react';
 
-interface DataTableToolbarProps {
+export interface DataTableToolbarProps {
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   searchPlaceholder?: string;
@@ -41,9 +41,8 @@ interface DataTableToolbarProps {
   isFiltered?: boolean;
   onResetFilters?: () => void;
   className?: string;
-  // useDataTable historyEpoch: increments on every browser Back/Forward
-  // (popstate). When it changes, the incoming searchValue (even an unchanged
-  // one) is a navigation, not an acknowledgment of pending edits.
+  debounceMs?: number;
+  // useDataTable historyEpoch: optional for backwards compatibility
   historyEpoch?: number;
   // useDataTable resetEpoch: increments on explicit filter resets.
   resetEpoch?: number;
@@ -145,6 +144,32 @@ export function computeToolbarDraftOnPropChange(
   }
 }
 
+export function createDebouncedSearch(
+  onSearchChange: ((val: string) => void) | undefined,
+  delay: number = 300
+) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    type: (val: string) => {
+      if (timer) clearTimeout(timer);
+      if (delay <= 0) {
+        onSearchChange?.(val);
+      } else {
+        timer = setTimeout(() => {
+          onSearchChange?.(val);
+        }, delay);
+      }
+    },
+    clear: () => {
+      if (timer) clearTimeout(timer);
+      onSearchChange?.('');
+    },
+    cancel: () => {
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
 export function DataTableToolbar({
   searchValue = '',
   onSearchChange,
@@ -155,6 +180,7 @@ export function DataTableToolbar({
   isFiltered = false,
   onResetFilters,
   className = '',
+  debounceMs = 300,
   historyEpoch = 0,
   resetEpoch = 0,
 }: DataTableToolbarProps) {
@@ -164,6 +190,17 @@ export function DataTableToolbar({
   const [pendingEdits, setPendingEdits] = React.useState<string[]>([]);
   const [prevHistoryEpoch, setPrevHistoryEpoch] = React.useState(historyEpoch);
   const [prevResetEpoch, setPrevResetEpoch] = React.useState(resetEpoch);
+
+  const debouncedSearchRef = React.useRef(createDebouncedSearch(onSearchChange, debounceMs));
+  React.useEffect(() => {
+    debouncedSearchRef.current = createDebouncedSearch(onSearchChange, debounceMs);
+  }, [onSearchChange, debounceMs]);
+
+  React.useEffect(() => {
+    return () => {
+      debouncedSearchRef.current.cancel();
+    };
+  }, []);
 
   // Synchronize draft when external/committed searchValue prop changes, a
   // browser history navigation (Back/Forward) occurs, or an explicit filter reset is triggered.
@@ -193,16 +230,18 @@ export function DataTableToolbar({
     const nextVal = e.target.value;
     setDraftSearch(nextVal);
     setPendingEdits((prev) => [...prev, nextVal]);
-    onSearchChange?.(nextVal);
+    debouncedSearchRef.current.type(nextVal);
   };
 
   const handleClear = () => {
+    debouncedSearchRef.current.cancel();
     setDraftSearch('');
     setPendingEdits((prev) => [...prev, '']);
     onSearchChange?.('');
   };
 
   const handleReset = () => {
+    debouncedSearchRef.current.cancel();
     setDraftSearch('');
     setPendingEdits(['']);
     onResetFilters?.();

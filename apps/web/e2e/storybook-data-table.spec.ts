@@ -173,6 +173,32 @@ test('mounted reset filters clears search and facet filters but retains default 
   await expect(resetButton).not.toBeVisible();
 });
 
+test('mounted pagination remains synchronized after Back then Next', async ({ page }) => {
+  await page.goto('/storybook?per_page=5');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toBeVisible();
+  await expect(page.getByText(new RegExp(`^Trang 1 / 2$`))).toBeVisible();
+
+  // Click Next: advances to page 2
+  await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
+  await page.waitForURL(/page=2/);
+  await expect(page.getByText(new RegExp(`^Trang 2 / 2$`))).toBeVisible();
+
+  // Real browser Back: restores page 1
+  await page.goBack();
+  await page.waitForURL(
+    (url) => !url.searchParams.has('page') || url.searchParams.get('page') === '1'
+  );
+  await expect(page.getByText(new RegExp(`^Trang 1 / 2$`))).toBeVisible();
+
+  // Click Next again: URL contains page=2, indicator reads Trang 2 / 2, displays second-page fixture rows
+  await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
+  await page.waitForURL(/page=2/);
+  await expect(page.getByText(new RegExp(`^Trang 2 / 2$`))).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('page')).toBe('2');
+  await expect(page.getByText('GHN672391024VN')).toBeVisible();
+});
+
 test('mounted popstate Back arriving at a previously drafted value is not dropped as an acknowledgment', async ({
   page,
 }) => {

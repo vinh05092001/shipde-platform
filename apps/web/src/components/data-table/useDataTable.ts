@@ -28,7 +28,7 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
@@ -61,10 +61,6 @@ export interface UseDataTableReturn {
   resetFilters: () => void;
   createQueryString: (params: Record<string, string | number | null | undefined>) => string;
   isPending: boolean;
-  // Increments on every real browser history navigation (Back/Forward popstate).
-  // Consumers use it to distinguish navigation from acknowledgments of their own
-  // pending interactions (Review item 3).
-  historyEpoch: number;
   // Increments on explicit filter resets (Finding 4 P1).
   resetEpoch: number;
 }
@@ -119,74 +115,12 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const [isPending, startTransition] = useTransition();
 
-  // Explicit browser history navigation signal (Review item 3): increments on
-  // every Back/Forward popstate so consumers can distinguish navigation from
-  // acknowledgments of their own pending interactions.
-  const [historyEpoch, setHistoryEpoch] = useState(0);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handlePopState = () => setHistoryEpoch((epoch) => epoch + 1);
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  const activeSearchParams = useMemo(() => {
-    if (props.searchParams !== undefined) {
-      return props.searchParams;
-    }
-    if (typeof window !== 'undefined' && historyEpoch > 0) {
-      return new URLSearchParams(window.location.search);
-    }
-    return nextSearchParams;
-  }, [props.searchParams, historyEpoch, nextSearchParams]);
-
   // Filter reset signal (Finding 4 P1): increments when resetFilters is called.
   const [resetEpoch, setResetEpoch] = useState(0);
 
-  // Queue of pending navigation requests (Finding 10 P1).
-  // Successive interactions under delayed navigation accumulate on top of the
-  // latest pending query. When intermediate commits arrive (acknowledging older
-  // requests in the queue), remaining newer pending queries are retained rather
-  // than being discarded. On external navigation or popstate, the queue is cleared.
-  //
-  // Round 12 P1: query equality alone cannot tell our own commit from another
-  // same-page Next.js navigation that happens to land on an older pending URL
-  // (pending searches "N" then "Ng"; an external navigation chooses "?search=N").
-  // If an older pending navigation had parameters changed or removed by a subsequent
-  // navigation, it is marked cancelled. A matching commit of a cancelled edit or
-  // an unrecognized URL is treated as external: the pending queue is dropped so
-  // later edits compose from the URL that won.
-  const pendingNavigationsRef = useRef<
-    Array<{ query: URLSearchParams; normalized: string; cancelled?: boolean }>
-  >([]);
-  const prevHistoryEpochRef = useRef<number>(0);
-  const prevActiveSearchParamsStrRef = useRef<string>(normalizeParamsString(activeSearchParams));
-
-  // Synchronize pending navigation queue on activeSearchParams or historyEpoch change
-  const currentCommittedNorm = normalizeParamsString(activeSearchParams);
-  useEffect(() => {
-    if (historyEpoch !== prevHistoryEpochRef.current) {
-      // Popstate navigation: Back/Forward always clears all pending navigations
-      pendingNavigationsRef.current = [];
-      prevHistoryEpochRef.current = historyEpoch;
-      prevActiveSearchParamsStrRef.current = currentCommittedNorm;
-    } else if (currentCommittedNorm !== prevActiveSearchParamsStrRef.current) {
-      prevHistoryEpochRef.current = historyEpoch;
-      prevActiveSearchParamsStrRef.current = currentCommittedNorm;
-      const idx = pendingNavigationsRef.current.findIndex(
-        (p) => !p.cancelled && p.normalized === currentCommittedNorm
-      );
-      if (idx !== -1) {
-        // Intermediate uncancelled request acknowledged! Retain subsequent pending intent (Finding 10 P1)
-        pendingNavigationsRef.current = pendingNavigationsRef.current.slice(idx + 1);
-        prevHistoryEpochRef.current = historyEpoch;
-      } else {
-        // External navigation or commit of a cancelled edit (Round 12/14 P1)
-        pendingNavigationsRef.current = [];
-        setHistoryEpoch((epoch) => epoch + 1);
-      }
-    }
-  }, [currentCommittedNorm, historyEpoch]);
+  // Table state is a pure function of the committed router search params (BR-UI-01)
+  const activeSearchParams =
+    props.searchParams !== undefined ? props.searchParams : nextSearchParams;
 
   // Search params state with validation & fallback
   const page = useMemo(() => {
@@ -261,19 +195,10 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // Column visibility local state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
 
-  // URL query builder. Composes against the latest pending query when requests
-  // are in-flight, so successive interactions under delayed navigation accumulate
-  // instead of discarding each other (Finding 10 P1).
+  // URL query builder: composes against committed router search parameters
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
-      const latestPending =
-        pendingNavigationsRef.current.length > 0
-          ? pendingNavigationsRef.current[pendingNavigationsRef.current.length - 1]
-          : null;
-      const base = latestPending
-        ? latestPending.query.toString()
-        : (activeSearchParams?.toString() ?? '');
-      const newSearchParams = new URLSearchParams(base);
+      const newSearchParams = new URLSearchParams(activeSearchParams?.toString() ?? '');
 
       for (const [key, value] of Object.entries(params)) {
         if (value === null || value === undefined || value === '') {
@@ -290,26 +215,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const navigate = useCallback(
     (queryString: string) => {
-      const query = new URLSearchParams(queryString);
-      const normalized = normalizeParamsString(query);
-
-      // Check if this new navigation cancels any older pending navigation.
-      // An older pending navigation is cancelled if any parameter key it set
-      // is different or missing in the new navigation (e.g. search changed from 'N' to 'Ng').
-      // It is NOT cancelled if the new navigation preserves its parameters (e.g. adding carrier=GHN on top of status=FAILED).
-      const updatedQueue = pendingNavigationsRef.current.map((p) => {
-        if (p.cancelled) return p;
-        let isCancelled = false;
-        p.query.forEach((val, key) => {
-          if (query.get(key) !== val) {
-            isCancelled = true;
-          }
-        });
-        return isCancelled ? { ...p, cancelled: true } : p;
-      });
-
-      pendingNavigationsRef.current = [...updatedQueue, { query, normalized, cancelled: false }];
-
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
       if (onNavigate) {
         onNavigate(targetUrl);
@@ -333,9 +238,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
       const updates: Record<string, string | number | null> = {
         page: newPage <= 1 ? null : newPage,
       };
-      // Page-only navigation omits the size argument so a pending page-size
-      // change already queued is not overwritten by the committed size
-      // (Round 12 P1). An explicit size still replaces or clears per_page.
       if (newPageSize !== undefined) {
         updates.per_page = newPageSize === defaultPageSize ? null : newPageSize;
       }
@@ -371,7 +273,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const setSearch = useCallback(
     (val: string | null) => {
-      // Preserve spaces during editing to allow normal typing of multiword phrases like 'Nguyễn Văn An'
       const queryVal = val !== null && val !== undefined && val.length > 0 ? val : null;
       const qs = createQueryString({
         search: queryVal,
@@ -403,7 +304,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const resetFilters = useCallback(() => {
     setResetEpoch((epoch) => epoch + 1);
-    pendingNavigationsRef.current = [];
     const keysToRemove: Record<string, null> = {
       page: null,
       sort: null,
@@ -437,7 +337,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     resetFilters,
     createQueryString,
     isPending,
-    historyEpoch,
     resetEpoch,
   };
 }
