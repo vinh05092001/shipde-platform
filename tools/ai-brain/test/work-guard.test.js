@@ -1,0 +1,145 @@
+'use strict';
+
+/**
+ * Ship Dễ — work-guard tests. No network, no real git; state only in os.tmpdir().
+ */
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const g = require('../work-guard');
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'work-guard-'));
+
+function fakeGit(map) {
+  return (args) => {
+    const r = map[args.join(' ')];
+    return r === undefined ? { status: 1, stdout: '' } : typeof r === 'string' ? { status: 0, stdout: r } : r;
+  };
+}
+
+const okGit = (branch) =>
+  fakeGit({
+    'rev-parse --show-toplevel': '/w/p-task-ai-165\n',
+    'diff --name-only --diff-filter=U': '',
+    'symbolic-ref --quiet --short HEAD': branch + '\n',
+    'rev-parse HEAD': 'abc\n',
+  });
+
+test('workspace on the item branch is accepted', () => {
+  const r = g.checkWorkspace({ cwd: '/w/p-task-ai-165', expectedRoot: '/w/p-task-ai-165', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-165-ci') });
+  assert.equal(r.ok, true);
+  assert.equal(r.head, 'abc');
+});
+
+test('workspace on another item branch is WRONG_BRANCH (165 on 155)', () => {
+  const r = g.checkWorkspace({ cwd: '/w/p-task-ai-165', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-155-web-data-table') });
+  assert.deepEqual([r.ok, r.cause, r.branch], [false, g.Cause.WRONG_BRANCH, 'feat/task-ai-155-web-data-table']);
+});
+
+test('id prefix does not match a longer id (TASK-AI-16 vs task-ai-165)', () => {
+  const r = g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', branchPattern: /^(feat|fix)\/task-ai-16-/, git: okGit('feat/task-ai-165-ci') });
+  assert.equal(r.cause, g.Cause.WRONG_BRANCH);
+});
+
+test('cwd in a different checkout is CWD_MISMATCH', () => {
+  const r = g.checkWorkspace({ cwd: '/w/x', expectedRoot: '/w/p-task-ai-160', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-165-ci') });
+  assert.equal(r.cause, g.Cause.CWD_MISMATCH);
+});
+
+test('unmerged files are MERGE_CONFLICT, detached head is refused', () => {
+  const c = fakeGit({ 'rev-parse --show-toplevel': '/w', 'diff --name-only --diff-filter=U': 'a.csv\n' });
+  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: c }).cause, g.Cause.CONFLICT);
+  const d = fakeGit({ 'rev-parse --show-toplevel': '/w', 'diff --name-only --diff-filter=U': '' });
+  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: d }).cause, g.Cause.DETACHED_HEAD);
+});
+
+test('same head/base/input is not reviewed twice; new head, base or input reopens', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  const fp = g.fingerprint({ headSha: 'h1', baseSha: 'b1', inputs: 'ci:red' });
+  assert.equal(L.admit('A', 'review', fp).ok, true);
+  L.record('A', 'review', fp, 'CHANGES_REQUIRED', { tokens: 100 });
+  assert.equal(L.admit('A', 'review', fp).cause, g.Cause.NO_PROGRESS);
+  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h2', baseSha: 'b1', inputs: 'ci:red' })).ok, true);
+  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b2', inputs: 'ci:red' })).ok, true);
+  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b1', inputs: 'ci:green' })).ok, true);
+});
+
+test('transient outcome allows a controlled retry of the same input', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  const fp = g.fingerprint({ headSha: 'h1' });
+  L.record('A', 'repair', fp, 'TIMEOUT', {});
+  assert.equal(L.admit('A', 'repair', fp).ok, true);
+});
+
+test('blocking one item leaves independent items running', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  L.block('TASK-AI-165', 'WRONG_BRANCH feat/task-ai-155');
+  const fp = g.fingerprint({ headSha: 'h' });
+  assert.equal(L.admit('TASK-AI-165', 'review', fp).cause, g.Cause.ITEM_BLOCKED);
+  assert.equal(L.admit('TASK-AI-163', 'review', fp).ok, true);
+  L.unblock('TASK-AI-165');
+  assert.equal(L.admit('TASK-AI-165', 'review', fp).ok, true);
+});
+
+test('item and goal budgets cap attempts, time and tokens; unknown tokens stay unknown', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({ file, limits: { item: { attempts: 2, tokens: 1000 }, goal: { ms: 5000 } } });
+  L.record('A', 'review', 'f1', 'CHANGES_REQUIRED', { tokens: 400 });
+  L.record('A', 'repair', 'f2', 'DONE', {});
+  assert.equal(L.admit('A', 'review', 'f3').cause, g.Cause.ATTEMPTS_EXHAUSTED);
+  const s = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(s.items.A.spent.tokens, 400);
+  assert.equal(s.items.A.spent.tokensUnknown, 1);
+  L.record('B', 'review', 'f1', 'X', { ms: 6000 });
+  assert.equal(L.admit('C', 'review', 'f1').cause, g.Cause.GOAL_EXHAUSTED);
+});
+
+test('lock: second owner refused; only owner releases; live holder never stolen by age', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, { pidAlive: () => true }).ok, true);
+  const second = g.acquireLock(f, { jobId: 'j2', pid: 222 }, { pidAlive: () => true });
+  assert.deepEqual([second.ok, second.cause, second.holder.jobId], [false, g.Cause.LOCK_HELD, 'j1']);
+  assert.equal(g.releaseLock(f, { jobId: 'j2' }).cause, g.Cause.LOCK_NOT_OWNER);
+  assert.equal(fs.existsSync(f), true);
+  assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
+});
+
+test('lock held by a dead pid is taken over', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  g.acquireLock(f, { jobId: 'j1', pid: 111 }, { pidAlive: () => true });
+  const r = g.acquireLock(f, { jobId: 'j2', pid: 222 }, { pidAlive: (p) => p !== 111 });
+  assert.equal(r.ok, true);
+  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).jobId, 'j2');
+});
+
+test('result from a previous job is rejected', () => {
+  assert.equal(g.acceptResult({ jobId: 'j2' }, { jobId: 'j1' }).cause, g.Cause.JOB_MISMATCH);
+  assert.equal(g.acceptResult({ jobId: 'j2' }, {}).cause, g.Cause.JOB_UNBOUND);
+  assert.equal(g.acceptResult({ jobId: 'j2' }, { jobId: 'j2' }).ok, true);
+});
+
+test('cleanup cannot mask the real exit code', async () => {
+  const r = await g.runWithCleanup(async () => ({ exitCode: 1 }), async () => {
+    throw new Error('rm failed');
+  });
+  assert.equal(r.exitCode, 1);
+  assert.match(r.cleanupError, /rm failed/);
+  await assert.rejects(g.runWithCleanup(async () => { throw new Error('worker crashed'); }, async () => {}), /worker crashed/);
+});
+
+test('CLI: refused admit exits 3, record then admit same input is NO_PROGRESS', () => {
+  const ledger = path.join(tmp(), 'l.json');
+  const cli = path.join(__dirname, '..', 'work-guard.js');
+  const base = ['--ledger', ledger, '--item', 'A', '--stage', 'review', '--head', 'h1', '--base', 'b1'];
+  assert.equal(spawnSync(process.execPath, [cli, 'admit', ...base]).status, 0);
+  assert.equal(spawnSync(process.execPath, [cli, 'record', ...base, '--outcome', 'CHANGES_REQUIRED']).status, 0);
+  const r = spawnSync(process.execPath, [cli, 'admit', ...base], { encoding: 'utf8' });
+  assert.equal(r.status, 3);
+  assert.equal(JSON.parse(r.stdout).cause, g.Cause.NO_PROGRESS);
+  assert.equal(spawnSync(process.execPath, [cli, 'nope']).status, 2);
+});
