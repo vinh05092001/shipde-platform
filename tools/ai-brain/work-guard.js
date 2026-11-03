@@ -132,9 +132,8 @@ function checkWorkspace(o) {
   const id = String(o.workItemId || '').toLowerCase();
   // The whole id, bounded: TASK-AI-16 must not accept feat/task-ai-165-ci.
   const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const fits = o.branchPattern
-    ? o.branchPattern.test(branch)
-    : id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
+  const matchesId = id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
+  const fits = matchesId && (o.branchPattern ? o.branchPattern.test(branch) : true);
   if (!fits) return { ok: false, cause: Cause.WRONG_BRANCH, branch };
   const head = git(['rev-parse', 'HEAD'], o.cwd);
   return {
@@ -200,7 +199,11 @@ class ProgressLedger {
         throw new Error('LEDGER_CORRUPT: ' + this.file);
       }
     }
-    if (raw === null) return { items: {}, goal: { attempts: 0, ms: 0, tokens: 0 } };
+    if (raw === null)
+      return {
+        items: {},
+        goal: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+      };
     validateLedger(s, this.file);
     return s;
   }
@@ -308,7 +311,10 @@ class ProgressLedger {
       }
       const t = it.spent
         ? it
-        : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
+        : Object.assign(it, {
+            spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+            stages: it.stages || {},
+          });
       t.stages = t.stages || {};
       t.spent.attempts += 1;
       s.goal.attempts += 1;
@@ -341,27 +347,52 @@ class ProgressLedger {
 
   recordUnlocked(itemId, stage, fp, outcome, usage) {
     const s = this.load();
-    const it = s.items[itemId] || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
-    it.spent = it.spent || { attempts: 0, ms: 0, tokens: 0 };
+    const it = s.items[itemId] || {
+      spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+      stages: {},
+    };
+    it.spent = it.spent || {
+      attempts: 0,
+      ms: 0,
+      tokens: 0,
+      tokensUnknown: 0,
+      unknownTokens: 0,
+    };
     it.stages = it.stages || {};
     const u = usage || {};
     // Usage only ever adds: negative or non-finite values would refund a spent budget.
-    if (u.ms !== undefined && !isCount(Number(u.ms)))
+    if (u.ms !== undefined && (typeof u.ms !== 'number' || !isCount(u.ms)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
-    if (u.tokens !== undefined && !isCount(Number(u.tokens)))
+    if (u.tokens !== undefined && (typeof u.tokens !== 'number' || !isCount(u.tokens)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
-    const knownTokens = u.tokens !== undefined && Number.isFinite(Number(u.tokens));
+    const knownTokens = typeof u.tokens === 'number' && Number.isFinite(u.tokens);
     const perAttemptTokens = getPerAttemptTokens(this.limits);
     const prevImputed = reserved
       ? prev.imputedTokens !== undefined
         ? Number(prev.imputedTokens)
         : perAttemptTokens
       : 0;
+    const suppliedMs = typeof u.ms === 'number' ? u.ms : 0;
+    if (
+      reserved &&
+      (!prev ||
+        prev.at === undefined ||
+        typeof prev.at !== 'number' ||
+        !Number.isFinite(prev.at) ||
+        prev.at < 0)
+    ) {
+      throw new Error('LEDGER_CORRUPT: ' + this.file);
+    }
+    const elapsedMs =
+      reserved && prev && Number.isFinite(prev.at) && prev.at >= 0
+        ? Math.max(0, this.now() - prev.at)
+        : 0;
+    const consumedMs = u.ms !== undefined ? Math.max(suppliedMs, elapsedMs) : elapsedMs;
     for (const acc of [it.spent, s.goal]) {
       if (!reserved) acc.attempts += 1;
-      acc.ms += Number(u.ms) || 0;
+      acc.ms += consumedMs;
       if (knownTokens) {
         acc.tokens += Number(u.tokens);
         if (reserved) {
@@ -394,7 +425,18 @@ class ProgressLedger {
 
   blockUnlocked(itemId, reason) {
     const s = this.load();
-    const it = s.items[itemId] || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
+    const it = s.items[itemId] || {
+      spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+      stages: {},
+    };
+    it.spent = it.spent || {
+      attempts: 0,
+      ms: 0,
+      tokens: 0,
+      tokensUnknown: 0,
+      unknownTokens: 0,
+    };
+    it.stages = it.stages || {};
     it.blocked = String(reason);
     s.items[itemId] = it;
     writeJson(this.file, s);
@@ -414,13 +456,27 @@ class ProgressLedger {
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isCount = (v) => Number.isFinite(v) && v >= 0;
 
+const isPlainObject = (v) => {
+  if (v === null || typeof v !== 'object') return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === null || proto === Object.prototype;
+};
+
+const isInheritedObject = (v) => {
+  if (v === null || typeof v !== 'object') return false;
+  const proto = Object.getPrototypeOf(v);
+  if (!proto) return false;
+  return (
+    (proto.constructor === Object || !proto.constructor) &&
+    (!v.constructor || v.constructor === Object)
+  );
+};
+
 // Persisted counters are mandatory: a missing counter would read as zero and reopen a spent budget.
 function validSpent(v) {
   return (
     isObj(v) &&
-    ['attempts', 'ms', 'tokens'].every((k) => isCount(v[k])) &&
-    (v.tokensUnknown === undefined || isCount(v.tokensUnknown)) &&
-    (v.unknownTokens === undefined || isCount(v.unknownTokens))
+    ['attempts', 'ms', 'tokens', 'tokensUnknown', 'unknownTokens'].every((k) => isCount(v[k]))
   );
 }
 
@@ -493,16 +549,51 @@ function validateLedger(s, file) {
     throw new Error('LEDGER_CORRUPT: ' + file);
   };
   if (!isObj(s) || !isObj(s.items) || !validSpent(s.goal)) bad();
+  let sumAttempts = 0;
+  let sumMs = 0;
+  let sumTokens = 0;
+  let sumTokensUnknown = 0;
+  let sumUnknownTokens = 0;
+  let totalImputedTokens = 0;
   for (const it of Object.values(s.items)) {
     if (!isObj(it)) bad();
     if (!validSpent(it.spent)) bad();
     if (it.blocked !== undefined && typeof it.blocked !== 'string') bad();
     if (!isObj(it.stages)) bad();
+    let itemImputedTokens = 0;
+    let itemRecordCount = 0;
     for (const st of Object.values(it.stages)) {
       if (!isObj(st) || !isObj(st.fps)) bad();
-      for (const r of Object.values(st.fps)) if (!isObj(r) || typeof r.outcome !== 'string') bad();
+      for (const r of Object.values(st.fps)) {
+        if (!isObj(r) || typeof r.outcome !== 'string') bad();
+        if (r.outcome === 'IN_FLIGHT') {
+          if (!Number.isInteger(r.pid) || r.pid <= 0) bad();
+          if (r.imputedTokens === undefined || !isCount(r.imputedTokens)) bad();
+          if (r.at === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at) || r.at < 0)
+            bad();
+        }
+        if (r.imputedTokens !== undefined) {
+          if (!isCount(r.imputedTokens)) bad();
+          itemImputedTokens += r.imputedTokens;
+        }
+        itemRecordCount += 1;
+      }
     }
+    if (it.spent.attempts < itemRecordCount) bad();
+    if (it.spent.unknownTokens < itemImputedTokens) bad();
+    sumAttempts += it.spent.attempts;
+    sumMs += it.spent.ms;
+    sumTokens += it.spent.tokens;
+    sumTokensUnknown += it.spent.tokensUnknown;
+    sumUnknownTokens += it.spent.unknownTokens;
+    totalImputedTokens += itemImputedTokens;
   }
+  if (s.goal.attempts !== sumAttempts) bad();
+  if (s.goal.ms !== sumMs) bad();
+  if (s.goal.tokens !== sumTokens) bad();
+  if (s.goal.tokensUnknown !== sumTokensUnknown) bad();
+  if (s.goal.unknownTokens !== sumUnknownTokens) bad();
+  if (s.goal.unknownTokens < totalImputedTokens) bad();
 }
 
 function exceeded(spent, lim) {
@@ -585,7 +676,8 @@ function lockHolder(file) {
 /** Returns { ok, owner } or { ok:false, cause, holder }. */
 function acquireLock(file, owner, o) {
   const alive = (o && o.pidAlive) || pidAlive;
-  if (!owner || !owner.jobId) throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
+  if (!owner || !owner.jobId || typeof owner.jobId !== 'string')
+    throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
   const pid = owner.pid === undefined ? process.pid : owner.pid;
   // 0 and negative pids name process groups; liveness of one owner cannot be proven from them.
   if (!Number.isInteger(pid) || pid <= 0)
@@ -622,8 +714,16 @@ function acquireLock(file, owner, o) {
 }
 
 function releaseLock(file, owner) {
+  if (!owner || !owner.jobId || typeof owner.jobId !== 'string') {
+    return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder: lockHolder(file) };
+  }
   const gens = lockGenerations(file).filter((g) => !g.released);
-  const own = owner && gens.find((g) => (readJson(g.path, {}) || {}).jobId === owner.jobId);
+  const candidates =
+    owner.gen !== undefined ? gens.filter((g) => g.gen === owner.gen) : [...gens].reverse();
+  const own = candidates.find((g) => {
+    const meta = readJson(g.path, null);
+    return Boolean(meta && meta.jobId && meta.jobId === owner.jobId);
+  });
   if (!own) return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder: lockHolder(file) };
   fs.renameSync(own.path, own.path + '.released');
   return { ok: true };
@@ -671,12 +771,29 @@ async function runWithCleanup(fn, cleanup) {
   }
   if (!cleanupError || out === null || typeof out !== 'object') return out;
   const note = String(cleanupError.message || cleanupError);
-  // Never mutate the worker's result: a TypeError here would replace the real exit code.
-  // Preserving built-in types (Array, Date, RegExp, Map, Set, Buffer) maintains JSON serialization
-  // and internal slots; class instances and plain objects inherit prototype fields.
+
+  // If the result is extensible, directly define cleanupError to preserve internal slots,
+  // private fields and prototype getters without any wrapping.
+  if (Object.isExtensible(out)) {
+    try {
+      Object.defineProperty(out, 'cleanupError', {
+        value: note,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      return out;
+    } catch (_) {
+      /* fallback below if defineProperty fails */
+    }
+  }
+
+  // Never mutate the worker's result if not possible: a TypeError here would replace the real exit code.
+  // Preserving built-in types (Array, Date, RegExp, Map, Set, Buffer) and plain objects maintains JSON serialization.
+  // Unsupported built-ins or custom class instances with private fields are preserved as-is.
   let copy;
   if (Array.isArray(out)) {
-    copy = Array.from(out);
+    copy = [];
   } else if (out instanceof Date) {
     copy = new Date(out.getTime());
   } else if (out instanceof RegExp) {
@@ -687,8 +804,12 @@ async function runWithCleanup(fn, cleanup) {
     copy = new Set(out);
   } else if (typeof Buffer !== 'undefined' && Buffer.isBuffer(out)) {
     copy = Buffer.from(out);
+  } else if (isPlainObject(out)) {
+    copy = Object.create(Object.getPrototypeOf(out));
+  } else if (isInheritedObject(out)) {
+    copy = Object.create(Object.getPrototypeOf(out));
   } else {
-    copy = Object.create(out);
+    return out;
   }
   for (const key of Reflect.ownKeys(out)) {
     if (key === 'cleanupError') continue;
@@ -765,7 +886,7 @@ if (require.main === module) {
     }
     if (cmd === 'record') {
       const usage = {
-        ms: a.ms === undefined ? 0 : Number(a.ms),
+        ms: a.ms === undefined ? undefined : Number(a.ms),
         tokens: a.tokens === undefined ? undefined : Number(a.tokens),
       };
       ledger.record(a.item, a.stage, fp, a.outcome, usage);
