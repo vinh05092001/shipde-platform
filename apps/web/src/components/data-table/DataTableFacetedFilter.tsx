@@ -63,6 +63,19 @@ export function computeOptimisticFacetSelection(
   wasIgnoredDueToPending: boolean;
 } {
   if (resetEvent) {
+    // The reset itself is a pending acknowledgment target (''). A selection
+    // made before that reset commits stays queued after it, so the later empty
+    // commit is an acknowledgment rather than an external change that would
+    // erase the newer facet (Round 12 P2).
+    const resetIdx = pendingSelections.indexOf('');
+    const nextPending = resetIdx === -1 ? [] : pendingSelections.slice(resetIdx + 1);
+    if (nextPending.length > 0) {
+      return {
+        nextOptimistic: currentOptimistic,
+        nextPending,
+        wasIgnoredDueToPending: true,
+      };
+    }
     return {
       nextOptimistic: new Set<string>(),
       nextPending: [],

@@ -234,7 +234,7 @@ export function DataTableToolbar({
                 onClick={handleClear}
                 aria-label="Xóa nội dung tìm kiếm"
                 title="Xóa nội dung tìm kiếm"
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded-[3px] focus-visible:outline-none"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded-[3px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
               >
                 <X className="w-3.5 h-3.5" aria-hidden="true" />
               </button>

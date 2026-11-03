@@ -621,7 +621,7 @@ function StorybookContent() {
             pageCount={pageCount}
             totalCount={filteredData.length}
             pageSizeOptions={[5, 10, 20]}
-            onPageChange={(p) => setPagination(p, pageSize)}
+            onPageChange={(p) => setPagination(p)}
             onPageSizeChange={(s) => setPagination(1, s)}
             selectedCount={selectedIds.size}
           />

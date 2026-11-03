@@ -141,7 +141,17 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // latest pending query. When intermediate commits arrive (acknowledging older
   // requests in the queue), remaining newer pending queries are retained rather
   // than being discarded. On external navigation or popstate, the queue is cleared.
-  const pendingNavigationsRef = useRef<Array<{ query: URLSearchParams; normalized: string }>>([]);
+  //
+  // Round 12 P1: query equality alone cannot tell our own commit from another
+  // same-page Next.js navigation that happens to land on an older pending URL
+  // (pending searches "N" then "Ng"; an external navigation chooses "?search=N").
+  // If an older pending navigation had parameters changed or removed by a subsequent
+  // navigation, it is marked cancelled. A matching commit of a cancelled edit or
+  // an unrecognized URL is treated as external: the pending queue is dropped so
+  // later edits compose from the URL that won.
+  const pendingNavigationsRef = useRef<
+    Array<{ query: URLSearchParams; normalized: string; cancelled?: boolean }>
+  >([]);
   const prevHistoryEpochRef = useRef<number>(0);
   const prevActiveSearchParamsStrRef = useRef<string>(normalizeParamsString(activeSearchParams));
 
@@ -149,19 +159,21 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   const currentCommittedNorm = normalizeParamsString(activeSearchParams);
   useEffect(() => {
     if (historyEpoch !== prevHistoryEpochRef.current) {
+      // Popstate navigation: Back/Forward always clears all pending navigations
       pendingNavigationsRef.current = [];
       prevHistoryEpochRef.current = historyEpoch;
       prevActiveSearchParamsStrRef.current = currentCommittedNorm;
     } else if (currentCommittedNorm !== prevActiveSearchParamsStrRef.current) {
+      prevHistoryEpochRef.current = historyEpoch;
       prevActiveSearchParamsStrRef.current = currentCommittedNorm;
       const idx = pendingNavigationsRef.current.findIndex(
-        (p) => p.normalized === currentCommittedNorm
+        (p) => !p.cancelled && p.normalized === currentCommittedNorm
       );
       if (idx !== -1) {
-        // Intermediate request acknowledged! Retain subsequent pending intent (Finding 10 P1)
+        // Intermediate uncancelled request acknowledged! Retain subsequent pending intent (Finding 10 P1)
         pendingNavigationsRef.current = pendingNavigationsRef.current.slice(idx + 1);
       } else {
-        // External navigation (e.g. user clicked an external link)
+        // External navigation or commit of a cancelled edit (Round 12 P1)
         pendingNavigationsRef.current = [];
       }
     }
@@ -271,7 +283,23 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     (queryString: string) => {
       const query = new URLSearchParams(queryString);
       const normalized = normalizeParamsString(query);
-      pendingNavigationsRef.current.push({ query, normalized });
+
+      // Check if this new navigation cancels any older pending navigation.
+      // An older pending navigation is cancelled if any parameter key it set
+      // is different or missing in the new navigation (e.g. search changed from 'N' to 'Ng').
+      // It is NOT cancelled if the new navigation preserves its parameters (e.g. adding carrier=GHN on top of status=FAILED).
+      const updatedQueue = pendingNavigationsRef.current.map((p) => {
+        if (p.cancelled) return p;
+        let isCancelled = false;
+        p.query.forEach((val, key) => {
+          if (query.get(key) !== val) {
+            isCancelled = true;
+          }
+        });
+        return isCancelled ? { ...p, cancelled: true } : p;
+      });
+
+      pendingNavigationsRef.current = [...updatedQueue, { query, normalized, cancelled: false }];
 
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
       if (onNavigate) {
@@ -296,10 +324,11 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
       const updates: Record<string, string | number | null> = {
         page: newPage <= 1 ? null : newPage,
       };
-      if (newPageSize !== undefined && newPageSize !== defaultPageSize) {
-        updates.per_page = newPageSize;
-      } else if (newPageSize === defaultPageSize) {
-        updates.per_page = null;
+      // Page-only navigation omits the size argument so a pending page-size
+      // change already queued is not overwritten by the committed size
+      // (Round 12 P1). An explicit size still replaces or clears per_page.
+      if (newPageSize !== undefined) {
+        updates.per_page = newPageSize === defaultPageSize ? null : newPageSize;
       }
       const qs = createQueryString(updates);
       navigate(qs);

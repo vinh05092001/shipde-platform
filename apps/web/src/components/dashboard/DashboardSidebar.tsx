@@ -59,6 +59,21 @@ export function handleMobileNavigationClick(
   return false;
 }
 
+/**
+ * Suppresses native activation of a disabled navigation item (Round 12 P2).
+ * Disabled items stay in the tab order (opacity marks them; focus ring stays)
+ * but must not follow the fragment href via click, Enter, or Space.
+ */
+export function suppressDisabledNavigation(
+  event: { preventDefault: () => void; stopPropagation?: () => void },
+  disabled?: boolean
+): boolean {
+  if (!disabled) return false;
+  event.preventDefault();
+  event.stopPropagation?.();
+  return true;
+}
+
 export function DashboardSidebar({
   navSections,
   isCollapsed = false,
@@ -165,11 +180,18 @@ export function DashboardSidebar({
                       key={item.href}
                       href={item.disabled ? '#' : item.href}
                       aria-current={isActive ? 'page' : undefined}
-                      aria-disabled={item.disabled}
+                      aria-disabled={item.disabled || undefined}
+                      tabIndex={item.disabled ? 0 : undefined}
                       title={isCollapsed && !isMobile ? item.title : undefined}
-                      onClick={() =>
-                        handleMobileNavigationClick(isMobile, onCloseMobile, item.disabled)
-                      }
+                      onClick={(event) => {
+                        if (suppressDisabledNavigation(event, item.disabled)) return;
+                        handleMobileNavigationClick(isMobile, onCloseMobile, item.disabled);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          suppressDisabledNavigation(event, item.disabled);
+                        }
+                      }}
                       className={`flex items-center gap-3 px-3 py-2 rounded-[8px] text-xs font-medium transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
                         isActive
                           ? 'bg-[var(--primary-subtle)] text-[var(--primary)] font-semibold shadow-xs'

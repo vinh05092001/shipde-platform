@@ -46,6 +46,7 @@ import {
   handleDesktopBreakpointResize,
   handleDrawerKeyDown,
   handleMobileNavigationClick,
+  suppressDisabledNavigation,
   filterNavSectionsByPermissions,
   isNavItemPermitted,
   maskEmail,
@@ -577,6 +578,11 @@ async function runTestSuite() {
     'Must display error message'
   );
   assert.ok(errorHtml.includes('Thử lại'), 'Must render retry button');
+  assert.strictEqual(
+    errorHtml.includes('Không tìm thấy dữ liệu'),
+    false,
+    'Round 12 P2: a failed load with empty data must not also claim the result is empty'
+  );
   console.log('   ✅ Error state verified with role="alert", error explanation, and retry button');
 
   // ---------------------------------------------------------------------------
@@ -2977,6 +2983,31 @@ async function runTestSuite() {
   assert.strictEqual(maskEmail('a@shipde.vn'), 'a*@shipde.vn');
   assert.strictEqual(maskEmail(''), '');
   assert.strictEqual(maskEmail(null), '');
+  assert.strictEqual(
+    maskEmail('not-an-email'),
+    '***',
+    'Round 12 P2: a malformed address without @ must not be displayed verbatim'
+  );
+  assert.strictEqual(maskEmail('@shipde.vn'), '***');
+  const malformedHeaderHtml = renderToStaticMarkup(
+    React.createElement<any>(DashboardHeader, {
+      currentUser: {
+        name: 'Nguyễn Văn A',
+        email: 'not-an-email',
+        role: 'Chủ shop',
+      },
+      defaultUserMenuOpen: true,
+    })
+  );
+  assert.strictEqual(
+    malformedHeaderHtml.includes('not-an-email'),
+    false,
+    'Round 12 P2: DashboardHeader must not render a malformed email verbatim'
+  );
+  assert.ok(
+    malformedHeaderHtml.includes('***'),
+    'Round 12 P2: DashboardHeader must render the masked fallback for a malformed email'
+  );
 
   const headerWithEmailHtml = renderToStaticMarkup(
     React.createElement<any>(DashboardHeader, {
@@ -3054,8 +3085,188 @@ async function runTestSuite() {
     'Finding 13: mobile screen must NOT call closeMobileNav'
   );
 
+  // ---------------------------------------------------------------------------
+  // 14. ROUND 12 REVIEW FINDINGS
+  // ---------------------------------------------------------------------------
+  console.log('🧪 14. Testing Round 12 Review Findings...');
+
+  // 14.1 P1: page-only navigation must not overwrite a pending page-size change.
+  // Reproduction: open ?per_page=5, hold navigation, select 20, then Next
+  // before it commits. The page request must keep per_page=20.
+  const pageSizeNavigations: string[] = [];
+  const pageSizeHook = renderMountedDataTableHook({
+    searchParams: new URLSearchParams('per_page=5'),
+    onNavigate: (url: string) => {
+      pageSizeNavigations.push(url);
+    },
+    defaultPageSize: 10,
+  });
+  pageSizeHook.current.setPagination(1, 20);
+  pageSizeHook.current.setPagination(2);
+  const pageOnlyUrl = pageSizeNavigations.at(-1) ?? '';
+  const pageOnlyParams = new URLSearchParams(pageOnlyUrl.split('?')[1] || pageOnlyUrl);
+  assert.strictEqual(pageOnlyParams.get('page'), '2', 'Round 12 P1: Next must request page 2');
+  assert.strictEqual(
+    pageOnlyParams.get('per_page'),
+    '20',
+    `Round 12 P1: page-only navigation must preserve the pending page size (got: ${pageOnlyUrl})`
+  );
+
+  // Negative proof: passing the committed size (the pre-fix storybook call)
+  // restores per_page=5 and loses the pending selection.
+  const overwriteNavigations: string[] = [];
+  const overwriteHook = renderMountedDataTableHook({
+    searchParams: new URLSearchParams('per_page=5'),
+    onNavigate: (url: string) => {
+      overwriteNavigations.push(url);
+    },
+    defaultPageSize: 10,
+  });
+  overwriteHook.current.setPagination(1, 20);
+  overwriteHook.current.setPagination(2, overwriteHook.current.pageSize);
+  const overwrittenUrl = overwriteNavigations.at(-1) ?? '';
+  assert.ok(
+    overwrittenUrl.includes('per_page=5') && !overwrittenUrl.includes('per_page=20'),
+    'Round 12 P1 negative proof: supplying the committed page size still overwrites the pending size'
+  );
+
+  // 14.2 P1: an external same-page navigation to an older pending URL is not
+  // an acknowledgment of that cancelled edit.
+  const collisionNavigations: string[] = [];
+  const collisionHook = renderMountedDataTableHook({
+    searchParams: new URLSearchParams(''),
+    onNavigate: (url: string) => {
+      collisionNavigations.push(url);
+    },
+    defaultPageSize: 10,
+    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+  });
+  collisionHook.current.setSearch('N');
+  collisionHook.current.setSearch('Ng');
+  const cancelledN = collisionNavigations[0] ?? '';
+  collisionHook.rerender({
+    searchParams: new URLSearchParams(cancelledN.split('?')[1] || cancelledN),
+  });
+  collisionHook.current.setFilter('status', ['FAILED']);
+  const afterExternal = collisionNavigations.at(-1) ?? '';
+  const afterExternalParams = new URLSearchParams(afterExternal.split('?')[1] || afterExternal);
+  assert.strictEqual(
+    afterExternalParams.get('search'),
+    'N',
+    `Round 12 P1: a later edit must compose from the externally selected search, not the cancelled newer draft (got: ${afterExternal})`
+  );
+  assert.strictEqual(afterExternalParams.get('status'), 'FAILED');
+  const toolbarAfterExternal = computeToolbarDraftOnPropChange('Ng', 'N', '', ['N', 'Ng'], true);
+  assert.strictEqual(
+    toolbarAfterExternal.nextDraft,
+    'N',
+    'Round 12 P1: toolbar must drop the newer draft when the navigation is external'
+  );
+  assert.deepStrictEqual(toolbarAfterExternal.nextPendingEdits, []);
+
+  // 14.3 P2: reset -> newer facet selection -> empty reset acknowledgment
+  // must keep the newer selection.
+  const resetThenSelect = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    ['', 'DELIVERED'],
+    false,
+    true
+  );
+  assert.deepStrictEqual(
+    Array.from(resetThenSelect.nextOptimistic),
+    ['DELIVERED'],
+    'Round 12 P2: an empty reset acknowledgment must not erase a facet selected after the reset'
+  );
+  assert.deepStrictEqual(resetThenSelect.nextPending, ['DELIVERED']);
+  const acknowledgedReset = computeOptimisticFacetSelection(
+    new Set(['FAILED']),
+    new Set(),
+    new Set(['FAILED']),
+    [''],
+    false,
+    true
+  );
+  assert.deepStrictEqual(
+    Array.from(acknowledgedReset.nextOptimistic),
+    [],
+    'Round 12 P2: a reset with no newer facet selection must still clear'
+  );
+
+  // 14.4 P2: disabled navigation must not activate, and must stay focusable.
+  let disabledPrevented = false;
+  assert.strictEqual(
+    suppressDisabledNavigation(
+      {
+        preventDefault: () => {
+          disabledPrevented = true;
+        },
+      },
+      true
+    ),
+    true
+  );
+  assert.strictEqual(disabledPrevented, true, 'Round 12 P2: disabled activation must be prevented');
+  assert.strictEqual(
+    suppressDisabledNavigation({ preventDefault: () => {} }, false),
+    false,
+    'Round 12 P2: an enabled item must still activate'
+  );
+  const disabledSidebarHtml = renderToStaticMarkup(
+    React.createElement<any>(DashboardSidebar, {
+      navSections: [
+        {
+          title: 'Chính',
+          items: [{ title: 'Đối soát', href: '/reconciliation', disabled: true }],
+        },
+      ],
+    })
+  );
+  assert.ok(
+    disabledSidebarHtml.includes('aria-disabled="true"'),
+    'Round 12 P2: disabled navigation item must expose aria-disabled'
+  );
+  assert.ok(
+    disabledSidebarHtml.includes('tabindex="0"') || disabledSidebarHtml.includes('tabIndex'),
+    'Round 12 P2: disabled navigation item must remain keyboard focusable'
+  );
+  assert.ok(
+    disabledSidebarHtml.includes('focus-visible:ring-2'),
+    'Round 12 P2: disabled navigation item must keep a visible focus ring'
+  );
+
+  // 14.5 P2: search clear keeps a visible keyboard focus treatment.
+  const clearToolbarHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTableToolbar, {
+      searchValue: 'An',
+      onSearchChange: () => {},
+    })
+  );
+  assert.ok(
+    clearToolbarHtml.includes('Xóa nội dung tìm kiếm'),
+    'Round 12 P2: search clear button must be present for a non-empty draft'
+  );
+  assert.ok(
+    clearToolbarHtml.includes('focus-visible:ring-2') &&
+      clearToolbarHtml.includes('focus-visible:ring-[var(--border-focus)]'),
+    'Round 12 P2: search clear button must expose a visible focus ring'
+  );
+
+  // 14.6 P2: the fixture module is inside the declared Work Item boundary.
+  const workItemSource = fs.readFileSync(
+    path.resolve(rootDir, 'docs/product-spec/work-items/TASK-AI-155.md'),
+    'utf8'
+  );
+  assert.ok(
+    workItemSource.includes('apps/web/src/app/storybook/fixtures.ts'),
+    'Round 12 P2: allowed paths must include the extracted storybook fixture module'
+  );
+
+  console.log('   ✅ Round 12 review findings proven');
+
   console.log(
-    '   ✅ Round 6, 8, 9, 10 & 11 review findings proven and verified with unit test suites'
+    '   ✅ Round 6, 8, 9, 10, 11 & 12 review findings proven and verified with unit test suites'
   );
 
   console.log('\n================================================================');

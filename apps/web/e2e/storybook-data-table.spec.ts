@@ -440,3 +440,102 @@ test('review 10 / finding 11 P2: reset filters applies empty search immediately 
   expect(page.url()).not.toContain('search=');
   expect(page.url()).not.toContain('status=');
 });
+
+test('review 12 P1: page navigation keeps a pending page-size change while navigation is held', async ({
+  page,
+}) => {
+  await page.goto('/storybook?per_page=5');
+  const pageSizeSelect = page.getByRole('combobox', { name: PAGE_SIZE_LABEL });
+  await expect(pageSizeSelect).toHaveValue('5');
+
+  const held = await holdTableNavigation(page);
+  try {
+    await pageSizeSelect.selectOption('20');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('per_page') === '20'))
+      .toBe(true);
+    await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('page') === '2'))
+      .toBe(true);
+    const pageRequest = held.requests.find((url) => url.searchParams.get('page') === '2')!;
+    expect(pageRequest.searchParams.get('per_page')).toBe('20');
+  } finally {
+    await held.finish();
+  }
+
+  await page.waitForURL(
+    (url) => url.searchParams.get('page') === '2' && url.searchParams.get('per_page') === '20'
+  );
+});
+
+test('review 12 P1: external same-page navigation to an older pending search cancels the newer draft', async ({
+  page,
+}) => {
+  await page.goto('/storybook');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toBeVisible();
+
+  const held = await holdTableNavigation(page);
+  try {
+    await search.fill('N');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'N'))
+      .toBe(true);
+    await search.fill('Ng');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'Ng'))
+      .toBe(true);
+    await expect(search).toHaveValue('Ng');
+
+    // Another same-page Next.js navigation chooses the older "?search=N" URL.
+    // Query equality would treat it as an acknowledgment of the cancelled "N"
+    // edit and keep the newer "Ng" draft.
+    await page.evaluate(() => {
+      window.history.pushState(window.history.state, '', '/storybook?search=N');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await expect(search).toHaveValue('N');
+
+    await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
+    await page.getByRole('option', { name: /Giao thất bại/ }).click();
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'FAILED'))
+      .toBe(true);
+    const facetRequest = [...held.requests]
+      .reverse()
+      .find((url) => url.searchParams.get('status') === 'FAILED')!;
+    expect(facetRequest.searchParams.get('search')).toBe('N');
+  } finally {
+    await held.finish();
+  }
+});
+
+test('review 12 P2: a facet selected after reset survives the empty reset acknowledgment', async ({
+  page,
+}) => {
+  await page.goto('/storybook?status=FAILED');
+  await expect(page.getByRole('button', { name: 'Bộ lọc Trạng thái: 1 đã chọn' })).toBeVisible();
+
+  const held = await holdTableNavigation(page);
+  try {
+    await page.getByRole('button', { name: 'Đặt lại tất cả bộ lọc' }).click();
+    await expect
+      .poll(() => held.requests.some((url) => !url.searchParams.has('status')))
+      .toBe(true);
+
+    await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
+    await page.getByRole('option', { name: /Giao thành công/ }).click();
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'DELIVERED'))
+      .toBe(true);
+
+    await page.evaluate(() => {
+      window.history.pushState(window.history.state, '', '/storybook');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await expect(page.getByRole('button', { name: 'Bộ lọc Trạng thái: 1 đã chọn' })).toBeVisible();
+  } finally {
+    await held.finish();
+  }
+});

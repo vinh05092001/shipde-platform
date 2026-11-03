@@ -56,7 +56,7 @@ export interface DashboardHeaderProps {
  */
 export function maskEmail(email?: string | null): string {
   if (!email) return '';
-  if (!email.includes('@')) return email;
+  if (!email.includes('@')) return '***';
   const [name, domain] = email.split('@');
   if (!name || !domain) return '***';
   if (name.length <= 2) {

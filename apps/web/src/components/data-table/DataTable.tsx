@@ -230,7 +230,7 @@ export function DataTable<TData = any>({
                     </div>
                   </td>
                 </tr>
-              ) : data.length === 0 ? (
+              ) : error ? null : data.length === 0 ? (
                 // Empty State
                 <tr role="row">
                   <td
