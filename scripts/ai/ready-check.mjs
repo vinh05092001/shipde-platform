@@ -9,6 +9,7 @@ const CLARIFICATION = /\[NEEDS\s+CLARIFICATION(?:\s*:[^\]]*)?\s*\]/gi;
 // Keep line numbers stable; comment tokens inside fenced examples stay literal.
 function documentLines(text) {
   let fence;
+  let fenceQuotePrefix;
   let comment = false;
   const uncommented = [];
   const lines = text.split('\n').map((raw) => {
@@ -28,6 +29,15 @@ function documentLines(text) {
       }
     }
     uncommented.push(line);
+    // Extract blockquote prefix (sequence of > markers) from the current line.
+    const quoteMatch = line.match(/^((?:[ \t]*>)*)/);
+    const lineQuotePrefix = quoteMatch ? quoteMatch[1].replace(/[ \t]/g, '') : '';
+    // If inside a fence, check whether the blockquote context still holds.
+    // A line outside the opener's blockquote context ends the fence implicitly.
+    if (fence && fenceQuotePrefix && !lineQuotePrefix.startsWith(fenceQuotePrefix)) {
+      fence = undefined;
+      fenceQuotePrefix = undefined;
+    }
     const marker = line.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})(.*)$/);
     if (fence) {
       if (
@@ -37,11 +47,13 @@ function documentLines(text) {
         !marker[2].trim()
       ) {
         fence = undefined;
+        fenceQuotePrefix = undefined;
       }
       return '';
     }
     if (marker) {
       fence = marker[1];
+      fenceQuotePrefix = lineQuotePrefix || undefined;
       return '';
     }
     return line;

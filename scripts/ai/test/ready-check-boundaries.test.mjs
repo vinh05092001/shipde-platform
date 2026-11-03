@@ -240,3 +240,10 @@ test('accepts real source outside a fenced example', () => {
   );
   assert.deepEqual(checkWorkItemReady(text), { ok: true, problems: [] });
 });
+
+test('rejects blank Proof after a blockquote ends an unclosed fenced example', () => {
+  const text = `${valid}\n> ~~~text\n> Example only.\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
