@@ -820,10 +820,15 @@ test('masking preserves ordinary public content', async () => {
 });
 
 test('test fixtures contain no generic secret scanner patterns or live tokens (P1 secret-scan)', () => {
-  const content = readFileSync(fixture, 'utf8');
+  const fixtureContent = readFileSync(fixture, 'utf8');
   // Proves that fixture does not introduce GitHub PATs or generic api keys (e.g. ghp_ followed by high-entropy string)
-  assert.doesNotMatch(content, /ghp_[a-zA-Z0-9]{20,}/);
-  assert.doesNotMatch(content, /(?:api_key|secret_key|auth_token|access_token)\s*[:=]\s*['"][0-9a-zA-Z_\-]{24,}['"]/i);
+  assert.doesNotMatch(fixtureContent, /ghp_[a-zA-Z0-9]{20,}/);
+  assert.doesNotMatch(fixtureContent, /(?:api_key|secret_key|auth_token|access_token)\s*[:=]\s*['"][0-9a-zA-Z_\-]{24,}['"]/i);
+
+  const testFileContent = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  // Proves that test file itself contains no GitHub PATs or generic api keys
+  assert.doesNotMatch(testFileContent, /ghp_[a-zA-Z0-9]{20,}/);
+  assert.doesNotMatch(testFileContent, /GH_TOKEN\s*[:=]\s*['"]ghp_/);
 });
 
 test('search queries distinguish library identifiers from URL candidates', async () => {
