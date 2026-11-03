@@ -11,7 +11,8 @@ function maskCredentials(v) {
   if (!v) return v;
   if (typeof v === 'string') {
     return v
-      .replace(/(https?:\/\/)([^:@]+):([^@]+)@/g, '$1$2:***@')
+      .replace(/(https?:\/\/)([^:@/]+):([^@/]+)@/g, '$1$2:***@')
+      .replace(/(https?:\/\/)([^:@/]+)@/g, '$1')
       .replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
   }
   if (Array.isArray(v)) {
@@ -103,7 +104,29 @@ class RunLedger {
           : null);
       if (itemId && stage && actualFp) {
         this.progressLedger.limits = this.limits;
-        return this.progressLedger.admit(itemId, stage, actualFp, opts);
+        const res = this.progressLedger.admit(itemId, stage, actualFp, opts);
+        if (res && res.ok && opts.goalId) {
+          this.progressLedger.locked(() => {
+            const s = this.progressLedger.load();
+            s.goals = s.goals || {};
+            const gAcc = s.goals[opts.goalId] || {
+              attempts: 0,
+              ms: 0,
+              tokens: 0,
+              tokensUnknown: 0,
+              unknownTokens: 0,
+            };
+            gAcc.attempts = (gAcc.attempts || 0) + 1;
+            s.goals[opts.goalId] = gAcc;
+            const it = s.items && s.items[itemId];
+            const stObj = it && it.stages && it.stages[stage];
+            if (stObj && stObj.fps && stObj.fps[actualFp]) {
+              stObj.fps[actualFp].goalId = opts.goalId;
+            }
+            writeJson(this.file, s);
+          });
+        }
+        return res;
       }
     }
     const s = this.progressLedger.load();
@@ -139,10 +162,17 @@ class RunLedger {
     if (!opts.attemptId && !opts.jobId) {
       throw new Error('RUN_LEDGER_REFUSED: missing jobId or attemptId');
     }
+    if (
+      opts.ms !== undefined &&
+      (typeof opts.ms !== 'number' || !Number.isFinite(opts.ms) || opts.ms < 0)
+    ) {
+      throw new Error('RUN_LEDGER_REFUSED: invalid ms');
+    }
     return this.progressLedger.locked(() => {
       const s = this.progressLedger.load();
       const itemId = opts.itemId;
-      const it = (itemId && s.items[itemId]) || {
+      const itemKey = opts.itemId || opts.attemptId || opts.jobId;
+      const it = (itemKey && s.items[itemKey]) || {
         spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
         stages: {},
       };
@@ -160,6 +190,7 @@ class RunLedger {
       it.spent.unknownTokens = it.spent.unknownTokens || 0;
       it.stages = it.stages || {};
       it.seenAttempts = it.seenAttempts || {};
+      s.seenAttempts = s.seenAttempts || {};
 
       s.goal = s.goal || {
         attempts: 0,
@@ -175,7 +206,8 @@ class RunLedger {
       s.goal.unknownTokens = s.goal.unknownTokens || 0;
 
       const attemptKey = opts.attemptId || opts.jobId;
-      const isNew = !it.seenAttempts[attemptKey];
+      const isNew =
+        !Object.hasOwn(it.seenAttempts, attemptKey) && !Object.hasOwn(s.seenAttempts, attemptKey);
 
       const runReviewSha = opts.reviewSha || opts.headSha || null;
       const fp =
@@ -196,15 +228,24 @@ class RunLedger {
 
       const consumesAttempt = isNew && !reserved;
 
-      if (!opts.force) {
-        if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
-        const over = exceeded(s.goal, this.limits.goal, { ignoreAttempts: !consumesAttempt });
-        if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
-        const own = exceeded(it.spent, this.limits.item, { ignoreAttempts: !consumesAttempt });
-        if (own) return { ok: false, cause: limitCause(own), limit: own };
-      }
+      if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
+      const over = exceeded(s.goal, this.limits.goal, { ignoreAttempts: !consumesAttempt });
+      if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
+      const own = exceeded(it.spent, this.limits.item, { ignoreAttempts: !consumesAttempt });
+      if (own) return { ok: false, cause: limitCause(own), limit: own };
 
-      it.seenAttempts[attemptKey] = true;
+      Object.defineProperty(it.seenAttempts, attemptKey, {
+        value: true,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      Object.defineProperty(s.seenAttempts, attemptKey, {
+        value: true,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
       const ms = Number(opts.ms) || 0;
       const hasTokens = Number.isFinite(opts.tokens);
       const tokens = hasTokens ? opts.tokens : 'UNKNOWN';
@@ -239,7 +280,12 @@ class RunLedger {
         gAcc.tokens = gAcc.tokens || 0;
         gAcc.tokensUnknown = gAcc.tokensUnknown || 0;
         gAcc.unknownTokens = gAcc.unknownTokens || 0;
-        if (isNew) gAcc.attempts += 1;
+        const goalAlreadyCharged = Boolean(
+          reserved &&
+          prev &&
+          (prev.goalId === opts.goalId || (gAcc.attempts >= it.spent.attempts && gAcc.attempts > 0))
+        );
+        if (isNew && !goalAlreadyCharged) gAcc.attempts += 1;
         gAcc.ms += ms;
         if (hasTokens) gAcc.tokens += tokens;
         else gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
@@ -269,6 +315,17 @@ class RunLedger {
       it.runs.push(run);
       it.stages[st] = it.stages[st] || { fps: {} };
       it.stages[st].fps = it.stages[st].fps || {};
+      if (!isNew) {
+        for (const stageObj of Object.values(it.stages)) {
+          if (stageObj && stageObj.fps) {
+            for (const [oldFp, rec] of Object.entries(stageObj.fps)) {
+              if (rec && rec.attemptId === attemptKey && oldFp !== fp) {
+                delete stageObj.fps[oldFp];
+              }
+            }
+          }
+        }
+      }
       const runVerdict = String(run.verdict || 'DONE');
       const fpsRecord = {
         outcome: runVerdict,
@@ -293,8 +350,11 @@ class RunLedger {
       } else if (reserved && prev && prev.imputedTokens !== undefined) {
         fpsRecord.imputedTokens = hasTokens ? 0 : prev.imputedTokens;
       }
+      if (opts.goalId) {
+        fpsRecord.goalId = opts.goalId;
+      }
       it.stages[st].fps[fp] = fpsRecord;
-      if (itemId) s.items[itemId] = it;
+      if (itemKey) s.items[itemKey] = it;
       writeJson(this.file, s);
       return { ok: true, run };
     });
