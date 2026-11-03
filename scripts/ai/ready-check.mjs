@@ -28,7 +28,7 @@ function documentLines(text) {
       }
     }
     uncommented.push(line);
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    const marker = line.match(/^(?: {0,3}>[ \t]*)* {0,3}(`{3,}|~{3,})(.*)$/);
     if (fence) {
       if (
         marker &&
@@ -62,8 +62,8 @@ function sections(lines) {
 }
 
 function concrete(value) {
+  if (/<[^>]*>/.test(value)) return false;
   const text = value
-    .replace(/<[^>]*>/g, '')
     .replace(/[`*_~]/g, '')
     .trim();
   const stripped = text

@@ -185,3 +185,22 @@ test('accepts named Proof and commands that discuss unresolved placeholders', ()
     });
   }
 });
+
+test('rejects angle-placeholder Proof with explanatory suffix', () => {
+  const result = checkWorkItemReady(
+    valid.replace(
+      '`preserves-existing-behaviour`',
+      '<test name or runnable command> — select after assignment'
+    )
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects source links inside blockquoted fenced examples', () => {
+  const result = checkWorkItemReady(
+    valid.replace(source, '> ~~~text\n> https://example.com/spec\n> ~~~')
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
