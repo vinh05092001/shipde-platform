@@ -84,7 +84,11 @@ async function runReviewLoop(state, deps) {
   let currentSha = s.sha;
   let repairCount = 0;
   const rounds = [];
+  // A repair that never ran leaves the commit unchanged: its tests and review are
+  // reused, never bought again for the same SHA.
+  let testedSha = currentSha;
   let tests = runTests();
+  const reviewed = new Map();
 
   for (let round = 1; round <= budget + 2; round += 1) {
     if (!tests.pass) {
@@ -123,11 +127,15 @@ async function runReviewLoop(state, deps) {
         };
       }
       currentSha = nextSha || currentSha;
-      tests = runTests();
+      if (testedSha !== currentSha) {
+        testedSha = currentSha;
+        tests = runTests();
+      }
       continue;
     }
 
-    const rev = await review(currentSha);
+    if (!reviewed.has(currentSha)) reviewed.set(currentSha, await review(currentSha));
+    const rev = reviewed.get(currentSha);
 
     // A review that names no commit is evidence for every commit at once.
     if (!rev || typeof rev.sha !== 'string' || rev.sha.trim() === '') {
@@ -233,7 +241,10 @@ async function runReviewLoop(state, deps) {
       };
     }
     currentSha = nextSha || currentSha;
-    tests = runTests();
+    if (testedSha !== currentSha) {
+      testedSha = currentSha;
+      tests = runTests();
+    }
   }
 
   return { status: Status.BLOCKED, rounds, finalSha: currentSha, repairCount };

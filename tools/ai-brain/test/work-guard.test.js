@@ -143,3 +143,20 @@ test('CLI: refused admit exits 3, record then admit same input is NO_PROGRESS', 
   assert.equal(JSON.parse(r.stdout).cause, g.Cause.NO_PROGRESS);
   assert.equal(spawnSync(process.execPath, [cli, 'nope']).status, 2);
 });
+
+test('review loop: a repair that never ran does not re-test or re-review the same SHA', async () => {
+  const { runReviewLoop, Status } = require('../review-loop');
+  let tests = 0;
+  let reviews = 0;
+  const r = await runReviewLoop(
+    { sha: 's1', budget: 3 },
+    {
+      runTests: () => ((tests += 1), { pass: true }),
+      review: (sha) => ((reviews += 1), { pass: false, sha, findings: [{ id: 'P1' }] }),
+      repair: () => ({ repairNotAttempted: true }),
+    },
+  );
+  assert.equal(r.status, Status.BLOCKED);
+  assert.equal(tests, 1);
+  assert.equal(reviews, 1);
+});
