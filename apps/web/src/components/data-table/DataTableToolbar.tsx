@@ -80,8 +80,22 @@ export function computeToolbarDraftOnPropChange(
   const incoming = incomingSearchValue || '';
   const prev = prevSearchValue || '';
 
-  if (navigationEvent || resetEvent) {
-    // Explicit browser/history navigation or filter reset: resynchronize draft to incoming
+  if (resetEvent) {
+    // Explicit filter reset: apply the reset's target value ('') immediately.
+    // If incoming still contains the old committed search text, retain prev
+    // and enqueue '' as a pending edit so that delayed reset navigation
+    // does not repopulate the old search text while in-flight (Finding 11 P2).
+    const isOldSearchPendingClear = incoming !== '';
+    return {
+      nextDraft: '',
+      nextPrevSearchValue: isOldSearchPendingClear ? prev : '',
+      nextPendingEdits: isOldSearchPendingClear ? [''] : [],
+      wasIgnoredDueToPendingEdits: false,
+    };
+  }
+
+  if (navigationEvent) {
+    // Explicit browser/history navigation: resynchronize draft to incoming URL value
     // and drop pending edit tracking. Never treat as an acknowledgment.
     return {
       nextDraft: incoming,
@@ -190,7 +204,7 @@ export function DataTableToolbar({
 
   const handleReset = () => {
     setDraftSearch('');
-    setPendingEdits([]);
+    setPendingEdits(['']);
     onResetFilters?.();
   };
 

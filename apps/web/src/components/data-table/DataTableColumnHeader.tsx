@@ -29,7 +29,8 @@
 
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, ArrowUpDown, EyeOff } from 'lucide-react';
 import { ColumnDef, ColumnSort } from './types';
 
@@ -51,12 +52,43 @@ export function DataTableColumnHeader<TData = any>({
   className = '',
 }: DataTableColumnHeaderProps<TData>) {
   const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const isMounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const prevIsOpenRef = useRef(false);
 
   const isSorted = sort?.id === column.id ? (sort.desc ? 'desc' : 'asc') : false;
+
+  const updateMenuPosition = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const menuWidth = 176;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+      setMenuPosition({
+        top: rect.bottom + 6,
+        left,
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [isOpen]);
 
   // Restore trigger focus on dropdown close (Finding 14 P2)
   useEffect(() => {
@@ -69,7 +101,13 @@ export function DataTableColumnHeader<TData = any>({
   // Close dropdown on click outside or escape key
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(target) &&
+        triggerRef.current &&
+        !triggerRef.current.contains(target)
+      ) {
         setIsOpen(false);
       }
     }
@@ -135,10 +173,99 @@ export function DataTableColumnHeader<TData = any>({
     }
   };
 
+  const menuElement = isOpen ? (
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label={`Tùy chọn cho cột ${title}`}
+      className={`${
+        isMounted && typeof document !== 'undefined'
+          ? 'fixed z-50'
+          : 'absolute left-0 top-full mt-1.5 z-30'
+      } w-44 rounded-[8px] bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-lg py-1 animate-in fade-in zoom-in-95 duration-100`}
+      style={
+        isMounted && typeof document !== 'undefined'
+          ? {
+              top: menuPosition ? `${menuPosition.top}px` : undefined,
+              left: menuPosition ? `${menuPosition.left}px` : undefined,
+              visibility: menuPosition ? 'visible' : 'hidden',
+            }
+          : undefined
+      }
+    >
+      <button
+        ref={(el) => {
+          menuItemRefs.current[0] = el;
+        }}
+        type="button"
+        role="menuitem"
+        tabIndex={0}
+        onClick={() => {
+          onSort(column.id, false);
+          setIsOpen(false);
+        }}
+        onKeyDown={(e) => handleMenuItemKeyDown(e, 0)}
+        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
+          isSorted === 'asc'
+            ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
+            : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
+        }`}
+      >
+        <ArrowUp className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+        <span>Tăng dần</span>
+      </button>
+
+      <button
+        ref={(el) => {
+          menuItemRefs.current[1] = el;
+        }}
+        type="button"
+        role="menuitem"
+        tabIndex={-1}
+        onClick={() => {
+          onSort(column.id, true);
+          setIsOpen(false);
+        }}
+        onKeyDown={(e) => handleMenuItemKeyDown(e, 1)}
+        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
+          isSorted === 'desc'
+            ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
+            : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
+        }`}
+      >
+        <ArrowDown className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+        <span>Giảm dần</span>
+      </button>
+
+      {hasHide && (
+        <>
+          <div className="h-px bg-[var(--border-subtle)] my-1" />
+          <button
+            ref={(el) => {
+              menuItemRefs.current[2] = el;
+            }}
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            onClick={() => {
+              onHide!(column.id);
+              setIsOpen(false);
+            }}
+            onKeyDown={(e) => handleMenuItemKeyDown(e, 2)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
+          >
+            <EyeOff className="w-3.5 h-3.5 text-[var(--text-dim)]" aria-hidden="true" />
+            <span>Ẩn cột này</span>
+          </button>
+        </>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div
+      ref={containerRef}
       className={`relative inline-flex items-center gap-1 ${className}`}
-      ref={dropdownRef}
       aria-sort={ariaSort}
       data-sort={ariaSort}
     >
@@ -149,7 +276,17 @@ export function DataTableColumnHeader<TData = any>({
         title={labelText}
         aria-expanded={isOpen}
         aria-haspopup="menu"
-        onClick={() => setIsOpen((prev) => !prev)}
+        onClick={() => {
+          setIsOpen((prev) => {
+            const next = !prev;
+            if (next) {
+              updateMenuPosition();
+            } else {
+              setMenuPosition(null);
+            }
+            return next;
+          });
+        }}
         className="group inline-flex items-center gap-1.5 px-1.5 py-1 -ml-1.5 rounded-[6px] text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors cursor-pointer"
       >
         <span>{title}</span>
@@ -162,80 +299,10 @@ export function DataTableColumnHeader<TData = any>({
         )}
       </button>
 
-      {isOpen && (
-        <div
-          role="menu"
-          aria-label={`Tùy chọn cho cột ${title}`}
-          className="absolute left-0 top-full mt-1.5 w-44 rounded-[8px] bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-lg py-1 z-30 animate-in fade-in zoom-in-95 duration-100"
-        >
-          <button
-            ref={(el) => {
-              menuItemRefs.current[0] = el;
-            }}
-            type="button"
-            role="menuitem"
-            tabIndex={0}
-            onClick={() => {
-              onSort(column.id, false);
-              setIsOpen(false);
-            }}
-            onKeyDown={(e) => handleMenuItemKeyDown(e, 0)}
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
-              isSorted === 'asc'
-                ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
-                : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
-            }`}
-          >
-            <ArrowUp className="w-3.5 h-3.5 text-[var(--text-muted)]" />
-            <span>Tăng dần</span>
-          </button>
-
-          <button
-            ref={(el) => {
-              menuItemRefs.current[1] = el;
-            }}
-            type="button"
-            role="menuitem"
-            tabIndex={-1}
-            onClick={() => {
-              onSort(column.id, true);
-              setIsOpen(false);
-            }}
-            onKeyDown={(e) => handleMenuItemKeyDown(e, 1)}
-            className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
-              isSorted === 'desc'
-                ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
-                : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
-            }`}
-          >
-            <ArrowDown className="w-3.5 h-3.5 text-[var(--text-muted)]" />
-            <span>Giảm dần</span>
-          </button>
-
-          {hasHide && (
-            <>
-              <div className="h-px bg-[var(--border-subtle)] my-1" />
-              <button
-                ref={(el) => {
-                  menuItemRefs.current[2] = el;
-                }}
-                type="button"
-                role="menuitem"
-                tabIndex={-1}
-                onClick={() => {
-                  onHide!(column.id);
-                  setIsOpen(false);
-                }}
-                onKeyDown={(e) => handleMenuItemKeyDown(e, 2)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
-              >
-                <EyeOff className="w-3.5 h-3.5 text-[var(--text-dim)]" aria-hidden="true" />
-                <span>Ẩn cột này</span>
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      {isOpen &&
+        (isMounted && typeof document !== 'undefined'
+          ? createPortal(menuElement, document.body)
+          : menuElement)}
     </div>
   );
 }

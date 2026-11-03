@@ -45,6 +45,7 @@ import {
   createGlobalShortcutHandler,
   handleDesktopBreakpointResize,
   handleDrawerKeyDown,
+  handleMobileNavigationClick,
   filterNavSectionsByPermissions,
   isNavItemPermitted,
   NavItem,
@@ -2740,7 +2741,169 @@ async function runTestSuite() {
     'Negative test: Sanitized text contains zero template placeholders'
   );
 
-  console.log('   ✅ Round 6, 8 & 9 review findings proven and verified with unit test suites');
+  // 13.10 Round 10 Finding 11 P2: Reset immediately applies empty search target without restoring old search
+  // Scenario: user had searchValue = 'GHN', clicks Reset, delayed reset navigation is held in-flight
+  const draftBeforeReset = 'GHN';
+  const committedBeforeReset = 'GHN';
+  const resetEpochChangeResult = computeToolbarDraftOnPropChange(
+    draftBeforeReset,
+    committedBeforeReset, // 'GHN' is still in-flight/held from parent
+    committedBeforeReset, // prev is 'GHN'
+    [],
+    false, // not history
+    true // resetEvent!
+  );
+
+  assert.strictEqual(
+    resetEpochChangeResult.nextDraft,
+    '',
+    'Finding 11: resetEvent must immediately clear search draft to empty string'
+  );
+  assert.deepStrictEqual(
+    resetEpochChangeResult.nextPendingEdits,
+    [''],
+    'Finding 11: resetEvent must track empty string in pending edits while navigation is in-flight'
+  );
+
+  // Negative test: verify that without resetEvent handling, the old implementation would have restored 'GHN'
+  const oldNaiveBehaviorResult = computeToolbarDraftOnPropChange(
+    draftBeforeReset,
+    committedBeforeReset,
+    committedBeforeReset,
+    [],
+    false,
+    false // without resetEvent
+  );
+  assert.strictEqual(
+    oldNaiveBehaviorResult.nextDraft,
+    'GHN',
+    'Negative test proof: without resetEvent handling, input draft would remain/restore to old "GHN"'
+  );
+
+  // Subsequent re-render while reset navigation is still in-flight
+  const subsequentHeldRenderResult = computeToolbarDraftOnPropChange(
+    resetEpochChangeResult.nextDraft, // ''
+    committedBeforeReset, // 'GHN' still held
+    resetEpochChangeResult.nextPrevSearchValue, // 'GHN'
+    resetEpochChangeResult.nextPendingEdits, // ['']
+    false,
+    false
+  );
+  assert.strictEqual(
+    subsequentHeldRenderResult.nextDraft,
+    '',
+    'Finding 11: draft must stably remain empty while reset navigation is held in-flight'
+  );
+
+  // When reset navigation finally commits, incoming becomes ''
+  const committedResetResult = computeToolbarDraftOnPropChange(
+    '',
+    '', // committed URL search param is now ''
+    'GHN', // prev was 'GHN'
+    [''], // pending edit ['']
+    false,
+    false
+  );
+  assert.strictEqual(
+    committedResetResult.nextDraft,
+    '',
+    'Finding 11: committed reset aligns draft with empty string'
+  );
+  assert.deepStrictEqual(
+    committedResetResult.nextPendingEdits,
+    [],
+    'Finding 11: acknowledged reset clears pending edits queue'
+  );
+
+  // 13.11 Round 10 Finding 8 P2: Column header sorting menu portalled and not clipped
+  const columnHeaderHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTableColumnHeader, {
+      column: testColumns[0],
+      title: 'Mã vận đơn',
+      sort: null,
+      onSort: () => {},
+    })
+  );
+  assert.ok(
+    columnHeaderHtml.includes('Sắp xếp theo Mã vận đơn: hiện tại chưa sắp xếp'),
+    'Finding 8: Column header renders accessible trigger'
+  );
+  assert.ok(
+    columnHeaderHtml.includes('aria-haspopup="menu"'),
+    'Finding 8: Column header trigger has aria-haspopup="menu"'
+  );
+
+  // 13.12 Round 10 Finding 10 P2: Mobile navigation dismisses drawer upon selecting destination
+  let mobileCloseCount = 0;
+  const onCloseMobile = () => {
+    mobileCloseCount++;
+  };
+
+  // 1. Brand logo and active navigation links dismiss mobile drawer
+  const dismissedBrand = handleMobileNavigationClick(true, onCloseMobile, false);
+  assert.strictEqual(dismissedBrand, true, 'Brand navigation click on mobile must return true');
+  assert.strictEqual(
+    mobileCloseCount,
+    1,
+    'Brand navigation click on mobile must call onCloseMobile'
+  );
+
+  const dismissedActive = handleMobileNavigationClick(true, onCloseMobile, false);
+  assert.strictEqual(dismissedActive, true, 'Active destination click on mobile must return true');
+  assert.strictEqual(
+    mobileCloseCount,
+    2,
+    'Active destination click on mobile must call onCloseMobile'
+  );
+
+  // 2. Negative test: Disabled navigation items must NOT dismiss drawer
+  const dismissedDisabled = handleMobileNavigationClick(true, onCloseMobile, true);
+  assert.strictEqual(dismissedDisabled, false, 'Negative test: Disabled item must return false');
+  assert.strictEqual(
+    mobileCloseCount,
+    2,
+    'Negative test: Disabled navigation link must NOT call onCloseMobile'
+  );
+
+  // 3. Negative test: Desktop mode (isMobile = false) must NOT trigger mobile drawer dismissal
+  const dismissedDesktop = handleMobileNavigationClick(false, onCloseMobile, false);
+  assert.strictEqual(dismissedDesktop, false, 'Desktop navigation click must return false');
+  assert.strictEqual(
+    mobileCloseCount,
+    2,
+    'Desktop navigation click must NOT trigger mobile drawer dismissal'
+  );
+
+  // 4. Negative test: Undefined onCloseMobile callback must be handled gracefully
+  const dismissedNoCallback = handleMobileNavigationClick(true, undefined, false);
+  assert.strictEqual(dismissedNoCallback, false, 'Missing callback must return false');
+
+  // 13.13 Round 10 Finding 9 P1: PR body contract validation
+  const rootDir = fs.existsSync(path.resolve(process.cwd(), '.oc/pr-body.md'))
+    ? process.cwd()
+    : path.resolve(process.cwd(), '../..');
+  const prBodyContent = fs.readFileSync(path.resolve(rootDir, '.oc/pr-body.md'), 'utf8');
+  assert.strictEqual(
+    prBodyContent.match(/<[^>\n]+>/g),
+    null,
+    'Finding 9: PR body contains zero template placeholders'
+  );
+  assert.strictEqual(
+    prBodyContent.includes('- [ ]'),
+    false,
+    'Finding 9: PR body contains zero unchecked items'
+  );
+  assert.strictEqual(
+    prBodyContent.match(/\b(?:TBD|TODO)\b/g),
+    null,
+    'Finding 9: PR body contains zero TBD/TODO markers'
+  );
+  assert.ok(
+    prBodyContent.includes('Review status: READY_FOR_CODEX'),
+    'Finding 9: PR body is marked READY_FOR_CODEX'
+  );
+
+  console.log('   ✅ Round 6, 8, 9 & 10 review findings proven and verified with unit test suites');
 
   console.log('\n================================================================');
   console.log('🎉 ALL 13 DATA TABLE & DASHBOARD SHELL TEST SUITES PASSED 100%!');

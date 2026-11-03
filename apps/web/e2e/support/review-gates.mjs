@@ -114,3 +114,56 @@ test('review 9: PR body contains zero template placeholders matching contract ga
     `PR body contains required template placeholders: ${JSON.stringify(matches)}`
   );
 });
+
+test('review 10: PR body files pass complete validate_pr_contract gate logic', () => {
+  const prFiles = ['.oc/pr-body.md', '.oc/pr-body-gh.md', '.oc/pr-body-remote.md'].filter((rel) =>
+    existsSync(join(root, rel))
+  );
+  assert.ok(prFiles.length > 0, 'At least one PR body file must exist');
+
+  const requiredHeadings = [
+    '## Work Item',
+    '## Source requirements',
+    '## Scope integrity',
+    '## Implementation',
+    '## Acceptance evidence',
+    '## Verification',
+    '## Safety and recovery',
+    '## Documentation and traceability',
+    '## Risks and limitations',
+    '## Codex review',
+  ];
+
+  for (const rel of prFiles) {
+    const body = readFileSync(join(root, rel), 'utf8');
+
+    // All 10 required headings must be present
+    for (const heading of requiredHeadings) {
+      assert.ok(body.includes(heading), `${rel} missing section: ${heading}`);
+    }
+
+    // Must reference TASK-AI-155
+    assert.ok(body.includes('TASK-AI-155'), `${rel} must reference TASK-AI-155`);
+
+    // Must not contain template placeholders
+    const placeholders = body.match(/<[^>\n]+>/g);
+    assert.equal(
+      placeholders,
+      null,
+      `${rel} contains forbidden template placeholders: ${JSON.stringify(placeholders)}`
+    );
+
+    // Must not contain TBD or TODO
+    const todos = body.match(/\b(?:TBD|TODO)\b/g);
+    assert.equal(todos, null, `${rel} contains TBD or TODO: ${JSON.stringify(todos)}`);
+
+    // Must not contain unchecked items
+    assert.ok(!body.includes('- [ ]'), `${rel} contains unchecked items (- [ ])`);
+
+    // Must contain READY_FOR_CODEX
+    assert.ok(
+      body.includes('Review status: READY_FOR_CODEX'),
+      `${rel} must declare READY_FOR_CODEX`
+    );
+  }
+});

@@ -333,16 +333,28 @@ test('review 6 / finding 8 P2: table thead remains sticky at top during vertical
   const thead = scrollContainer.locator('thead');
   await expect(thead).toBeVisible();
 
+  // Finding 12 P2: Force vertical overflow by setting container max-height smaller than table content
+  await scrollContainer.evaluate((el) => {
+    el.style.maxHeight = '200px';
+    el.style.height = '200px';
+  });
+
+  // Verify container actually overflows vertically
+  const hasOverflow = await scrollContainer.evaluate((el) => el.scrollHeight > el.clientHeight);
+  expect(hasOverflow).toBe(true);
+
   // Initial header bounding box
   const initialTheadBox = await thead.boundingBox();
   expect(initialTheadBox).not.toBeNull();
 
-  // Scroll the table container vertically
-  await scrollContainer.evaluate((el) => {
-    el.scrollTop = 150;
+  // Scroll the table container vertically and verify actual positive scroll movement
+  const scrollMovement = await scrollContainer.evaluate((el) => {
+    el.scrollTop = 100;
+    return el.scrollTop;
   });
+  expect(scrollMovement).toBeGreaterThan(0);
 
-  // Verify thead remains stuck at top of scroll container
+  // Verify thead remains stuck at top of scroll container despite positive scroll movement
   const scrolledTheadBox = await thead.boundingBox();
   const containerBox = await scrollContainer.boundingBox();
 
@@ -352,4 +364,70 @@ test('review 6 / finding 8 P2: table thead remains sticky at top during vertical
     // Top of the sticky thead should align with or stay within top border of scroll container
     expect(Math.abs(scrolledTheadBox.y - containerBox.y)).toBeLessThanOrEqual(2);
   }
+});
+
+test('review 10 / finding 8 P2: column header sort menu is rendered via portal and not clipped on 1-row table', async ({
+  page,
+}) => {
+  await page.goto('/storybook?search=SGHN0001');
+  const codHeader = page.getByRole('button', { name: /^Sắp xếp theo Thu hộ COD:/ });
+  await expect(codHeader).toBeVisible();
+  await codHeader.click();
+
+  const ascItem = page.getByRole('menuitem', { name: 'Tăng dần' });
+  const descItem = page.getByRole('menuitem', { name: 'Giảm dần' });
+  await expect(ascItem).toBeVisible();
+  await expect(descItem).toBeVisible();
+
+  // Verify that the menu item bounding box is fully accessible and not clipped
+  const descBox = await descItem.boundingBox();
+  expect(descBox).not.toBeNull();
+  expect(descBox!.height).toBeGreaterThan(0);
+});
+
+test('review 10 / finding 10 P2: mobile drawer navigation dismisses drawer upon selecting destination', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto('/storybook');
+
+  const hamburger = page.getByRole('button', { name: 'Mở menu điều hướng' });
+  await expect(hamburger).toBeVisible();
+  await hamburger.click();
+
+  const closeButton = page.getByRole('button', { name: 'Đóng menu' });
+  await expect(closeButton).toBeVisible();
+
+  // Click on a navigation item inside the mobile drawer
+  const navLink = page.getByRole('link', { name: /Đối soát/ }).first();
+  await expect(navLink).toBeVisible();
+  await navLink.click();
+
+  // Drawer should be automatically dismissed upon navigation
+  await expect(closeButton).not.toBeVisible();
+});
+
+test('review 10 / finding 11 P2: reset filters applies empty search immediately even when reset navigation is held', async ({
+  page,
+}) => {
+  await page.goto('/storybook?search=An&status=DELIVERED');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toHaveValue('An');
+
+  const unblockHolder: { fn: (() => Promise<void>) | null } = { fn: null };
+  await page.route('**/storybook?**', async (route) => {
+    unblockHolder.fn = () => route.continue();
+  });
+
+  const resetButton = page.getByRole('button', { name: 'Đặt lại tất cả bộ lọc' });
+  await expect(resetButton).toBeVisible();
+  await resetButton.click();
+
+  // Target value must be applied immediately, not temporarily restoring 'An' while reset navigation is in-flight
+  await expect(search).toHaveValue('');
+
+  if (unblockHolder.fn) {
+    await unblockHolder.fn();
+  }
+  await page.unroute('**/storybook?**');
 });

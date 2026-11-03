@@ -158,6 +158,7 @@ git diff --check origin/main...HEAD
 | 7 | `4afbe4d8` | `CHANGES_REQUIRED` | Addressed round 7 CI failure findings: (1) Reassigned delivery order to unique sequential 274 in register and work item, eliminating duplicate 272 collision with TASK-AI-161; (2) Prettier-formatted all modified files and PR markdown documentation to pass formatting gate; (3) Cleanly merged origin/main with zero conflict markers. |
 | 8 | `4b193808` | `CHANGES_REQUIRED` | Addressed round 8 review findings: (1) Contract validation template placeholder cleanup; (2) Aligned COD column header title in page.tsx to 'Thu hộ COD' matching storybook-data-table.spec.ts selector. |
 | 9 | `f51473f8` | `CHANGES_REQUIRED` | Addressed round 9 review finding: Resolved CI contract failure by removing all template placeholder angle bracket patterns from PR body documentation; verified by negative tests in data-table-dashboard.test.ts and review-gates.mjs. |
+| 10 | `aafa62f0` | `CHANGES_REQUIRED` | Addressed round 10 review findings: (1) Rendered DataTableColumnHeader sorting menu via portal to document.body, eliminating scroll container clipping; (2) Fully reproduced validate_pr_contract logic across all PR body files; (3) Added handleMobileNavigationClick in DashboardSidebar to dismiss mobile drawer upon navigation; (4) Immediate application of empty search target in DataTableToolbar on reset, preventing temporary repopulation of old search text; (5) Forced vertical overflow in storybook-data-table.spec.ts sticky header test and asserted positive scroll movement. |
 
 ## Residual limitations
 
@@ -170,8 +171,8 @@ git diff --check origin/main...HEAD
   - `pnpm lint`: PASS (0 errors, 12 turbo tasks green).
   - `pnpm typecheck`: PASS (0 errors, 12 turbo tasks green).
   - `pnpm --filter @shipde/web test`: PASS (13/13 data-table & dashboard shell suites pass 100%, 57/57 comprehensive audit rules pass).
-  - `node --test apps/web/e2e/support/review-gates.mjs`: PASS (7/7 review gate tests pass, including delivery order uniqueness and contract placeholder sanitization).
-  - `pnpm format:check`: PASS (28/28 files pass Prettier).
+  - `node --test apps/web/e2e/support/review-gates.mjs`: PASS (8/8 review gate tests pass, including delivery order uniqueness and complete PR body contract validation).
+  - `pnpm format:check`: PASS (all changed files pass Prettier).
   - `pnpm exec tsx scripts/verify-a11y.ts`: PASS (A11y scanner exits 0).
   - `pnpm security:secrets`: PASS (Gitleaks scanner exits 0 with 0 secret violations).
   - `node scripts/ai/check-no-hardcode.mjs`: PASS (0 hardcoded credentials/secrets found).

@@ -44,6 +44,21 @@ interface DashboardSidebarProps {
   className?: string;
 }
 
+/**
+ * Dismisses the mobile drawer upon selecting an active navigation destination (Finding 10 P2).
+ */
+export function handleMobileNavigationClick(
+  isMobile: boolean,
+  onCloseMobile?: () => void,
+  disabled?: boolean
+): boolean {
+  if (isMobile && onCloseMobile && !disabled) {
+    onCloseMobile();
+    return true;
+  }
+  return false;
+}
+
 export function DashboardSidebar({
   navSections,
   isCollapsed = false,
@@ -90,8 +105,9 @@ export function DashboardSidebar({
       <div className="h-16 px-4 flex items-center justify-between border-b border-[var(--border-subtle)]">
         <Link
           href="/"
-          className="flex items-center gap-3 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] rounded-[6px]"
           title="Ship Dễ Home"
+          onClick={() => handleMobileNavigationClick(isMobile, onCloseMobile, false)}
+          className="flex items-center gap-3 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] rounded-[6px]"
         >
           <div className="w-9 h-9 rounded-[8px] bg-[var(--primary)] text-white flex items-center justify-center shrink-0 shadow-sm font-bold text-base">
             <Package className="w-5 h-5" aria-hidden="true" />
@@ -151,6 +167,9 @@ export function DashboardSidebar({
                       aria-current={isActive ? 'page' : undefined}
                       aria-disabled={item.disabled}
                       title={isCollapsed && !isMobile ? item.title : undefined}
+                      onClick={() =>
+                        handleMobileNavigationClick(isMobile, onCloseMobile, item.disabled)
+                      }
                       className={`flex items-center gap-3 px-3 py-2 rounded-[8px] text-xs font-medium transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
                         isActive
                           ? 'bg-[var(--primary-subtle)] text-[var(--primary)] font-semibold shadow-xs'
