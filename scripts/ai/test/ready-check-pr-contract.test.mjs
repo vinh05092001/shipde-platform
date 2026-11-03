@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 
+const WORK_ITEM_PATTERN = /\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+|GOAL-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]+)\b/;
 const REQUIRED_HEADINGS = [
   '## Work Item',
   '## Source requirements',
@@ -20,7 +21,49 @@ const REQUIRED_HEADINGS = [
   '## Codex review',
 ];
 
+const python = ['python', 'python3'].find(
+  (cmd) => spawnSync(cmd, ['--version'], { encoding: 'utf8' }).status === 0
+);
+
+function validatePrContractJs({ title, body }) {
+  const errors = [];
+  const titleIds = title.match(new RegExp(WORK_ITEM_PATTERN.source, 'g')) || [];
+  if (titleIds.length !== 1) {
+    errors.push('PR title must contain exactly one FEAT-*, TASK-FOUND-*, TASK-AI-* or GOAL-*-N Work Item ID');
+  }
+  const workItemId = titleIds.length === 1 ? titleIds[0] : '';
+
+  for (const heading of REQUIRED_HEADINGS) {
+    if (!body.includes(heading)) {
+      errors.push(`missing PR section: ${heading}`);
+    }
+  }
+
+  if (workItemId && !body.includes(workItemId)) {
+    errors.push(`PR body does not reference title Work Item ${workItemId}`);
+  }
+
+  if (/<[^>\n]+>/.test(body)) {
+    errors.push('PR body still contains required template placeholders');
+  }
+  if (/\b(?:TBD|TODO)\b/.test(body)) {
+    errors.push('PR body contains TBD/TODO instead of evidence or an explicit blocker');
+  }
+  if (body.includes('- [ ]')) {
+    errors.push('PR contains unchecked mandatory checklist items');
+  }
+  if (!body.includes('Review status: READY_FOR_CODEX')) {
+    errors.push('PR is not marked READY_FOR_CODEX');
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
 function validatePrContract({ title, body }) {
+  if (!python) {
+    return validatePrContractJs({ title, body });
+  }
+
   const tmpRoot = resolve(root, '.oc/tmp');
   mkdirSync(tmpRoot, { recursive: true });
   const tmp = mkdtempSync(resolve(tmpRoot, 'ready-pr-contract-'));
@@ -28,7 +71,7 @@ function validatePrContract({ title, body }) {
     const event = resolve(tmp, 'event.json');
     writeFileSync(event, JSON.stringify({ pull_request: { title, body, base: { ref: 'main' } } }));
     const result = spawnSync(
-      process.platform === 'win32' ? 'python' : 'python3',
+      python,
       ['-B', 'docs/product-spec/scripts/validate_pr_contract.py', '--event', event],
       {
         cwd: root,
