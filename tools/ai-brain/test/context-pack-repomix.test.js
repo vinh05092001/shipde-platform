@@ -40,3 +40,38 @@ test('a pack without repomix says so instead of passing as a repomix pack', () =
     if (saved !== undefined) process.env.SHIPDE_REPOMIX_BIN = saved;
   }
 });
+
+test('fake repomix package with .cmd and package.json bin', () => {
+  const root = tempRoot();
+  const bin = path.join(root, 'node_modules', '.bin');
+  const dir = path.join(root, 'node_modules', 'repomix');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'cli.js'),
+    'const fs=require("node:fs");if(process.env.M_FAIL)process.exit(1);' +
+      'const o=process.argv[process.argv.indexOf("--output")+1];if(o)fs.writeFileSync(o,"# p");\n'
+  );
+  fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"repomix","bin":"./cli.js"}');
+  fs.writeFileSync(path.join(bin, 'repomix.cmd'), '@echo off\n');
+  const saved = process.env.SHIPDE_REPOMIX_BIN;
+  delete process.env.SHIPDE_REPOMIX_BIN;
+  try {
+    const pack = createContextPack([{ allowedPaths: ['src/a.js'] }], {
+      root,
+      outputDir: path.join(root, 'o1'),
+    });
+    assert.equal(pack.packer, 'repomix');
+    assert.ok(pack.content.includes('# p'));
+    process.env.M_FAIL = '1';
+    const fail = createContextPack([{ allowedPaths: ['src/a.js'] }], {
+      root,
+      outputDir: path.join(root, 'o2'),
+    });
+    assert.equal(fail.packer, 'fallback');
+    assert.equal(fail.packerReason, 'REPOMIX_FAILED');
+  } finally {
+    delete process.env.M_FAIL;
+    if (saved !== undefined) process.env.SHIPDE_REPOMIX_BIN = saved;
+  }
+});

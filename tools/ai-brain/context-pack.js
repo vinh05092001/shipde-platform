@@ -71,6 +71,22 @@ function resolveRepomix(root, env = process.env) {
   return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null;
 }
 
+function resolveRepomixCmd(bin, root, includeArg, output) {
+  const args = ['--include', includeArg, '--output', output];
+  if (!bin || !/\.(cmd|bat)$/i.test(bin)) return { cmd: bin, args };
+  const d = path.dirname(bin);
+  for (const p of ['../repomix', '.']) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.resolve(d, p, 'package.json'), 'utf8'));
+      const b = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.repomix;
+      if (b && fs.existsSync(path.resolve(d, p, b))) {
+        return { cmd: process.execPath, args: [path.resolve(d, p, b), ...args] };
+      }
+    } catch {}
+  }
+  return { cmd: bin, args };
+}
+
 function fallbackReason(repomix, includeArg, attempted) {
   if (!repomix) return 'REPOMIX_NOT_INSTALLED';
   if (includeArg.length > 4000) return 'INCLUDE_ARG_TOO_LONG';
@@ -99,21 +115,27 @@ function createContextPack(items, options = {}) {
   const repomix = resolveRepomix(root);
   let content = null;
   let attempted = false;
+  let repomixErr = null;
   if (repomix && includeArg.length <= 4000) {
     attempted = true;
-    const result = cp.spawnSync(repomix, ['--include', includeArg, '--output', output], {
+    const { cmd, args } = resolveRepomixCmd(repomix, root, includeArg, output);
+    const result = cp.spawnSync(cmd, args, {
       cwd: root,
       encoding: 'utf8',
       timeout: 120000,
       windowsHide: true,
       shell: false,
     });
-    if (result.status === 0 && fs.existsSync(output)) {
-      content = fs.readFileSync(output, 'utf8');
-    }
+    if (result.status === 0 && fs.existsSync(output)) content = fs.readFileSync(output, 'utf8');
+    else repomixErr = result.error || { code: result.status != null ? result.status : 'UNKNOWN' };
   }
   const packer = content ? 'repomix' : 'fallback';
   const packerReason = content ? null : fallbackReason(repomix, includeArg, attempted);
+  if (packer === 'fallback' && packerReason === 'REPOMIX_FAILED') {
+    process.stderr.write(
+      `[context-pack] warning: repomix failed: ${repomixErr?.code ?? repomixErr?.message ?? 'UNKNOWN'}\n`
+    );
+  }
   if (!content) {
     content =
       '# Focused context pack\n\n' +
@@ -156,9 +178,11 @@ async function createContextPackAsync(items, options = {}) {
   const repomix = resolveRepomix(root);
   let content = null;
   let attempted = false;
+  let repomixErr = null;
   if (repomix && includeArg.length <= 4000) {
     attempted = true;
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000;
+    const { cmd, args } = resolveRepomixCmd(repomix, root, includeArg, output);
     const completed = await new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
@@ -167,28 +191,40 @@ async function createContextPackAsync(items, options = {}) {
         clearTimeout(timer);
         resolve(result);
       };
-      const child = cp.spawn(repomix, ['--include', includeArg, '--output', output], {
+      const child = cp.spawn(cmd, args, {
         cwd: root,
         stdio: 'ignore',
         windowsHide: true,
         shell: false,
       });
       const timer = setTimeout(() => {
+        repomixErr = { code: 'ETIMEDOUT' };
         child.kill();
         finish(false);
       }, timeoutMs);
-      child.once('error', () => finish(false));
-      child.once('close', (code) => finish(code === 0));
+      child.once('error', (err) => {
+        repomixErr = err;
+        finish(false);
+      });
+      child.once('close', (code) => {
+        if (code !== 0 && !repomixErr) repomixErr = { code: code != null ? code : 'UNKNOWN' };
+        finish(code === 0);
+      });
     });
     if (completed && fs.existsSync(output)) {
       const outputStat = await fs.promises.stat(output);
       const maxTotalBytes = Number(options.maxTotalBytes) || DEFAULT_MAX_TOTAL_BYTES;
       if (outputStat.size > maxTotalBytes) throw new Error('CONTEXT_PACK_TOO_LARGE');
       content = await fs.promises.readFile(output, 'utf8');
-    }
+    } else if (!repomixErr) repomixErr = { code: 'NO_OUTPUT' };
   }
   const packer = content ? 'repomix' : 'fallback';
   const packerReason = content ? null : fallbackReason(repomix, includeArg, attempted);
+  if (packer === 'fallback' && packerReason === 'REPOMIX_FAILED') {
+    process.stderr.write(
+      `[context-pack] warning: repomix failed: ${repomixErr?.code ?? repomixErr?.message ?? 'UNKNOWN'}\n`
+    );
+  }
   if (!content) {
     const sections = [];
     for (const file of manifest) {
