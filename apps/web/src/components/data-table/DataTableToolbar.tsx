@@ -45,6 +45,8 @@ interface DataTableToolbarProps {
   // (popstate). When it changes, the incoming searchValue (even an unchanged
   // one) is a navigation, not an acknowledgment of pending edits.
   historyEpoch?: number;
+  // useDataTable resetEpoch: increments on explicit filter resets.
+  resetEpoch?: number;
 }
 
 /**
@@ -59,13 +61,16 @@ interface DataTableToolbarProps {
  * edit (e.g. draft "Ngu", committed "N", pending ["Ng","Ngu"] and Back to an
  * existing "Ng" entry): the draft resynchronizes to the URL value and the
  * pending edit tracking is discarded.
+ *
+ * Finding 4 P1: `resetEvent` marks changes driven by an explicit filter reset.
  */
 export function computeToolbarDraftOnPropChange(
   currentDraft: string,
   incomingSearchValue: string | undefined | null,
   prevSearchValue: string | undefined | null,
   pendingEdits: string[],
-  navigationEvent = false
+  navigationEvent = false,
+  resetEvent = false
 ): {
   nextDraft: string;
   nextPrevSearchValue: string;
@@ -75,9 +80,9 @@ export function computeToolbarDraftOnPropChange(
   const incoming = incomingSearchValue || '';
   const prev = prevSearchValue || '';
 
-  if (navigationEvent) {
-    // Explicit browser/history navigation: resynchronize the draft to the URL
-    // value and drop pending edit tracking. Never treat as an acknowledgment.
+  if (navigationEvent || resetEvent) {
+    // Explicit browser/history navigation or filter reset: resynchronize draft to incoming
+    // and drop pending edit tracking. Never treat as an acknowledgment.
     return {
       nextDraft: incoming,
       nextPrevSearchValue: incoming,
@@ -137,27 +142,33 @@ export function DataTableToolbar({
   onResetFilters,
   className = '',
   historyEpoch = 0,
+  resetEpoch = 0,
 }: DataTableToolbarProps) {
   // Maintain an immediately updated input draft to preserve spaces and avoid pending-navigation lag
   const [prevSearchValue, setPrevSearchValue] = React.useState(searchValue);
   const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
   const [pendingEdits, setPendingEdits] = React.useState<string[]>([]);
   const [prevHistoryEpoch, setPrevHistoryEpoch] = React.useState(historyEpoch);
+  const [prevResetEpoch, setPrevResetEpoch] = React.useState(resetEpoch);
 
-  // Synchronize draft when external/committed searchValue prop changes or a
-  // browser history navigation (Back/Forward) occurs. A history navigation is
-  // never an acknowledgment of pending edits (Review item 3), so it forces a
-  // resync to the URL value even when the committed search value is unchanged.
-  if (searchValue !== prevSearchValue || historyEpoch !== prevHistoryEpoch) {
+  // Synchronize draft when external/committed searchValue prop changes, a
+  // browser history navigation (Back/Forward) occurs, or an explicit filter reset is triggered.
+  if (
+    searchValue !== prevSearchValue ||
+    historyEpoch !== prevHistoryEpoch ||
+    resetEpoch !== prevResetEpoch
+  ) {
     const result = computeToolbarDraftOnPropChange(
       draftSearch,
       searchValue,
       prevSearchValue,
       pendingEdits,
-      historyEpoch !== prevHistoryEpoch
+      historyEpoch !== prevHistoryEpoch,
+      resetEpoch !== prevResetEpoch
     );
     setPrevSearchValue(result.nextPrevSearchValue);
     setPrevHistoryEpoch(historyEpoch);
+    setPrevResetEpoch(resetEpoch);
     setPendingEdits(result.nextPendingEdits);
     if (result.nextDraft !== draftSearch) {
       setDraftSearch(result.nextDraft);
@@ -175,6 +186,12 @@ export function DataTableToolbar({
     setDraftSearch('');
     setPendingEdits((prev) => [...prev, '']);
     onSearchChange?.('');
+  };
+
+  const handleReset = () => {
+    setDraftSearch('');
+    setPendingEdits([]);
+    onResetFilters?.();
   };
 
   return (
@@ -202,6 +219,7 @@ export function DataTableToolbar({
                 type="button"
                 onClick={handleClear}
                 aria-label="Xóa nội dung tìm kiếm"
+                title="Xóa nội dung tìm kiếm"
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded-[3px] focus-visible:outline-none"
               >
                 <X className="w-3.5 h-3.5" aria-hidden="true" />
@@ -215,8 +233,9 @@ export function DataTableToolbar({
         {isFiltered && onResetFilters && (
           <button
             type="button"
-            onClick={onResetFilters}
+            onClick={handleReset}
             aria-label="Đặt lại tất cả bộ lọc"
+            title="Đặt lại tất cả bộ lọc"
             className="h-8 inline-flex items-center gap-1.5 px-2.5 rounded-[6px] text-xs font-medium text-[var(--text-muted)] hover:text-[var(--primary)] hover:bg-[var(--primary-subtle)] transition-colors cursor-pointer"
           >
             <span>Đặt lại bộ lọc</span>

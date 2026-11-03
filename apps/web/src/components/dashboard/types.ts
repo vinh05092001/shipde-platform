@@ -44,6 +44,8 @@ export interface NavItem {
   disabled?: boolean;
   external?: boolean;
   children?: NavItem[];
+  permissions?: string[];
+  roles?: string[];
 }
 
 export interface NavSection {
@@ -55,6 +57,7 @@ export interface DashboardUser {
   name: string;
   email: string;
   role: string;
+  permissions?: string[];
   avatarUrl?: string;
   shopName?: string;
 }
@@ -62,7 +65,7 @@ export interface DashboardUser {
 export interface DashboardLayoutProps {
   children: React.ReactNode;
   navSections?: NavSection[];
-  currentUser?: DashboardUser;
+  currentUser?: DashboardUser | null;
   breadcrumbs?: BreadcrumbItem[];
   shopName?: string;
   onSignOut?: () => void;

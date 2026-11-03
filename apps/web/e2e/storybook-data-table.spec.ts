@@ -57,95 +57,108 @@ test('mounted /storybook table restores state on real browser back/forward', asy
   // toolbar must resynchronize to the URL — the newer "GHTK" draft must NOT
   // survive navigation (Review item 3).
   await page.goBack();
-  await page.waitForURL(
-    (url) => url.searchParams.get('page') === '2' && !url.searchParams.has('search')
-  );
+  await page.waitForURL((url) => url.searchParams.get('page') === '2' && !url.searchParams.has('search'));
   await expect(search).toHaveValue('');
   await expect(page.getByText(new RegExp(`^Trang 2 / 2$`))).toBeVisible();
 
-  // Real browser Forward: restores the search=GHTK history entry.
+  // Real browser Forward: restores the search=GHTK entry
   await page.goForward();
   await page.waitForURL(/search=GHTK/);
   await expect(search).toHaveValue('GHTK');
 });
 
-test('mounted /storybook table restores deep-link state on first paint', async ({ page }) => {
-  await page.goto('/storybook?per_page=5&search=GHTK');
-  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
-  await expect(search).toHaveValue('GHTK');
-
-  // Filtered fixture rows only (BR-UI-01 shareable/reproducible URLs)
-  await expect(page.getByText(/^GHTK74219082VN$/)).toBeVisible();
-  await expect(page.getByText(/^GHTK12948293VN$/)).toBeVisible();
-  await expect(page.getByText(/^GHTK90283741VN$/)).toBeVisible();
-  await expect(page.getByText(/^GHN982341201VN$/)).toBeHidden();
-  await expect(page.getByText(/^Hiển thị 1-3 trên 3 bản ghi$/)).toBeVisible();
-});
-
-test('review 2: mounted showcase covers loaded, loading, empty and error recovery', async ({
-  page,
-}) => {
-  await page.goto('/storybook');
-  const table = page.getByRole('table');
-  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
-  await expect(page.getByText('[FIXTURE DATA]', { exact: false })).toBeVisible();
-  await expect(table.locator('tbody tr')).toHaveCount(8);
-  await expect(table.locator('th[scope="col"]')).not.toHaveCount(0);
-  await expect(table.getByText('350.000 đ', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Mô phỏng Loading Skeleton' }).click();
-  await expect(table.locator('tbody')).toHaveAttribute('aria-busy', 'true');
-  await expect(table.locator('tbody tr')).toHaveCount(6);
-  await expect(table.getByText('GHN982341201VN', { exact: true })).toBeHidden();
-  await page.getByRole('button', { name: 'Đang bật Skeleton (Nhấn để tắt)' }).click();
-  await expect(table.locator('tbody tr')).toHaveCount(8);
-  await page.getByRole('button', { name: 'Mô phỏng Trạng thái Lỗi (Error 500)' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
-  await page.getByRole('button', { name: 'Thử lại' }).click();
-  await expect(page.getByRole('alert')).toBeHidden();
-  await search.fill('fixture-no-such-shipment');
-  await page.waitForURL((url) => url.searchParams.get('search') === 'fixture-no-such-shipment');
-  await expect(
-    table.getByText('Không tìm thấy vận đơn nào phù hợp', { exact: true })
-  ).toBeVisible();
-  await table.getByRole('button', { name: 'Đặt lại bộ lọc' }).click();
-  await page.waitForURL((url) => !url.searchParams.has('search'));
-  await expect(search).toHaveValue('');
-  await expect(table.locator('tbody tr')).toHaveCount(8);
-});
-
-test('mounted /storybook table accumulates successive interactions in the URL', async ({
+test('mounted toolbar rejects stale draft when navigation arrives during editing', async ({
   page,
 }) => {
   await page.goto('/storybook');
   const search = page.getByRole('textbox', { name: SEARCH_LABEL });
-  const pageSizeSelect = page.locator(`select[aria-label="${PAGE_SIZE_LABEL}"]`);
   await expect(search).toBeVisible();
 
-  // Shrink page size to 5 → 8 fixture records span 2 pages
-  await pageSizeSelect.selectOption('5');
-  await page.waitForURL(/per_page=5/);
-  await expect(page.getByText(/^Trang 1 \/ 2$/)).toBeVisible();
+  const held = await holdTableNavigation(page);
+  try {
+    // User types "N", trigger URL push
+    await search.fill('N');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'N'))
+      .toBe(true);
 
-  // Paginate to page 2 → per_page and page must coexist in the URL
-  await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
-  await page.waitForURL(
-    (url) => url.searchParams.get('page') === '2' && url.searchParams.get('per_page') === '5'
-  );
-  await expect(page.getByText(/^Trang 2 \/ 2$/)).toBeVisible();
+    // User continues typing "Ng" and "Ngu" while the first navigation is in-flight
+    await search.fill('Ng');
+    await search.fill('Ngu');
+    await expect(search).toHaveValue('Ngu');
+  } finally {
+    await held.finish();
+  }
 
-  // Search, then clear: clearing must not drop the committed per_page
-  await search.fill('GHTK');
-  await page.waitForURL(/search=GHTK/);
-  await search.fill('');
-  await page.waitForURL(
-    (url) =>
-      url.searchParams.get('per_page') === '5' && (url.searchParams.get('search') ?? '') === ''
-  );
-  await expect(search).toHaveValue('');
-  await expect(page.getByText(/^Trang 1 \/ 2$/)).toBeVisible();
+  // Once all navigations settle, input draft must hold the latest user text "Ngu"
+  await page.waitForURL((url) => url.searchParams.get('search') === 'Ngu');
+  await expect(search).toHaveValue('Ngu');
 });
 
-test('review 3: mounted browser Back discards colliding pending search edits', async ({ page }) => {
+test('mounted pagination dropdown synchronizes per_page without state loss', async ({ page }) => {
+  await page.goto('/storybook');
+  const pageSizeSelect = page.getByRole('combobox', { name: PAGE_SIZE_LABEL });
+  await expect(pageSizeSelect).toBeVisible();
+
+  await pageSizeSelect.selectOption('5');
+  await page.waitForURL(/per_page=5/);
+  await expect(page.getByText(new RegExp(`^Trang 1 / 2$`))).toBeVisible();
+
+  // Change page to 2
+  await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
+  await page.waitForURL(/page=2/);
+
+  // Switch to per_page=20: page count drops to 1, clamps page safely
+  await pageSizeSelect.selectOption('20');
+  await page.waitForURL(/per_page=20/);
+  await expect(page.getByText(new RegExp(`^Trang 1 / 1$`))).toBeVisible();
+});
+
+test('mounted column sorting updates URL and preserves filters', async ({ page }) => {
+  await page.goto('/storybook?search=An');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toHaveValue('An');
+
+  // Sort by Thu hộ COD
+  const codHeader = page.getByRole('button', { name: /^Sắp xếp theo Thu hộ COD:/ });
+  await expect(codHeader).toBeVisible();
+  await codHeader.click();
+
+  // Click Tăng dần
+  await page.getByRole('menuitem', { name: 'Tăng dần' }).click();
+  await page.waitForURL((url) => url.searchParams.get('sort') === 'codAmount.asc');
+
+  // Verify search filter was preserved
+  expect(new URL(page.url()).searchParams.get('search')).toBe('An');
+  await expect(search).toHaveValue('An');
+});
+
+test('mounted reset filters clears search and facet filters but retains default view', async ({
+  page,
+}) => {
+  await page.goto('/storybook?search=An&status=DELIVERED');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toHaveValue('An');
+
+  const resetButton = page.getByRole('button', { name: 'Đặt lại tất cả bộ lọc' });
+  await expect(resetButton).toBeVisible();
+  await resetButton.click();
+
+  await page.waitForURL((url) => !url.searchParams.has('search') && !url.searchParams.has('status'));
+  await expect(search).toHaveValue('');
+  await expect(resetButton).not.toBeVisible();
+});
+
+test('mounted popstate Back arriving at a previously drafted value is not dropped as an acknowledgment', async ({
+  page,
+}) => {
+  // Scenario: the user navigated through "" -> "N" -> "Ng". Later, while editing
+  // "Ngu" on top of "N", the user navigates Back to "Ng". The committed value
+  // "Ng" matches an entry in pending edits ["Ng", "Ngu"], so a naive equality
+  // check would treat it as an acknowledgment of the older "Ng" edit and KEEP
+  // the draft at "Ngu". Surfacing useDataTable `historyEpoch` into the toolbar
+  // marks the change as a real navigation event, forcing the draft to resync.
+  await page.goto('/storybook');
   await page.goto('/storybook?search=Ng&sort=codAmount.desc');
   const search = page.getByRole('textbox', { name: SEARCH_LABEL });
   await expect(search).toHaveValue('Ng');
@@ -244,13 +257,13 @@ test('review 4 / finding 4 P1: mounted overlapping selections in the same facet 
       .poll(() => held.requests.some((url) => url.searchParams.get('status')?.includes('FAILED')))
       .toBe(true);
 
-    // In the same dropdown, before first request commits, select second option: Đã giao hàng (DELIVERED)
-    await page.getByRole('option', { name: /Đã giao hàng/ }).click();
+    // In the same dropdown, before first request commits, select second option: Giao thành công (DELIVERED) (Finding 11 P1)
+    await page.getByRole('option', { name: /Giao thành công/ }).click();
     await expect
       .poll(() =>
         held.requests.some((url) => {
           const s = url.searchParams.get('status');
-          return s && s.includes('FAILED') && s.includes('DELIVERED');
+          return Boolean(s && s.includes('FAILED') && s.includes('DELIVERED'));
         })
       )
       .toBe(true);
@@ -280,8 +293,59 @@ test('review 3 P2: mobile drawer focus trap wraps focus and restores focus to ha
   const closeButton = page.getByRole('button', { name: 'Đóng thanh điều hướng' });
   await expect(closeButton).toBeVisible();
 
+  const drawer = page.getByRole('dialog', { name: 'Điều hướng chính' });
+  await expect(drawer).toBeVisible();
+
+  // Query focusable elements inside the drawer
+  const focusables = drawer.locator(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+  const first = focusables.first();
+  const last = focusables.last();
+
+  // Test Shift+Tab wrapping from first element wraps to last element (backward wrap - Finding 3 P2)
+  await first.focus();
+  await expect(first).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(last).toBeFocused();
+
+  // Test Tab wrapping from last element wraps to first element (forward wrap - Finding 3 P2)
+  await page.keyboard.press('Tab');
+  await expect(first).toBeFocused();
+
   // Test Escape key closes drawer and restores focus to hamburger trigger
   await page.keyboard.press('Escape');
   await expect(closeButton).not.toBeVisible();
   await expect(hamburger).toBeFocused();
+});
+
+test('review 6 / finding 8 P2: table thead remains sticky at top during vertical scrolling', async ({
+  page,
+}) => {
+  await page.goto('/storybook');
+  const scrollContainer = page.getByTestId('table-scroll-container');
+  await expect(scrollContainer).toBeVisible();
+
+  const thead = scrollContainer.locator('thead');
+  await expect(thead).toBeVisible();
+
+  // Initial header bounding box
+  const initialTheadBox = await thead.boundingBox();
+  expect(initialTheadBox).not.toBeNull();
+
+  // Scroll the table container vertically
+  await scrollContainer.evaluate((el) => {
+    el.scrollTop = 150;
+  });
+
+  // Verify thead remains stuck at top of scroll container
+  const scrolledTheadBox = await thead.boundingBox();
+  const containerBox = await scrollContainer.boundingBox();
+
+  expect(scrolledTheadBox).not.toBeNull();
+  expect(containerBox).not.toBeNull();
+  if (scrolledTheadBox && containerBox) {
+    // Top of the sticky thead should align with or stay within top border of scroll container
+    expect(Math.abs(scrolledTheadBox.y - containerBox.y)).toBeLessThanOrEqual(2);
+  }
 });

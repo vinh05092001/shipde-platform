@@ -124,53 +124,59 @@ export function DashboardSidebar({
 
       {/* Navigation Sections */}
       <div className="flex-1 overflow-y-auto py-4 px-3 space-y-6 custom-scrollbar">
-        {navSections.map((section, sIdx) => (
-          <div key={sIdx} className="space-y-1">
-            {section.title && (!isCollapsed || isMobile) && (
-              <div className="px-3 text-[11px] font-semibold text-[var(--text-dim)] uppercase tracking-wider mb-2">
-                {section.title}
-              </div>
-            )}
-
-            <div className="space-y-0.5">
-              {section.items.map((item) => {
-                const isActive =
-                  pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
-                const Icon = item.icon;
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.disabled ? '#' : item.href}
-                    aria-current={isActive ? 'page' : undefined}
-                    aria-disabled={item.disabled}
-                    title={isCollapsed && !isMobile ? item.title : undefined}
-                    className={`flex items-center gap-3 px-3 py-2 rounded-[8px] text-xs font-medium transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
-                      isActive
-                        ? 'bg-[var(--primary-subtle)] text-[var(--primary)] font-semibold shadow-xs'
-                        : 'text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'
-                    } ${item.disabled ? 'opacity-40 pointer-events-none' : ''}`}
-                  >
-                    {Icon && (
-                      <Icon
-                        className={`w-4 h-4 shrink-0 transition-colors ${
-                          isActive
-                            ? 'text-[var(--primary)]'
-                            : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]'
-                        }`}
-                        aria-hidden="true"
-                      />
-                    )}
-
-                    {(!isCollapsed || isMobile) && <span className="truncate">{item.title}</span>}
-
-                    {(!isCollapsed || isMobile) && renderBadge(item)}
-                  </Link>
-                );
-              })}
-            </div>
+        {navSections.length === 0 ? (
+          <div className="px-3 py-4 text-xs text-[var(--text-dim)] text-center" role="status">
+            Chưa có mục điều hướng khả dụng
           </div>
-        ))}
+        ) : (
+          navSections.map((section, sIdx) => (
+            <div key={sIdx} className="space-y-1">
+              {section.title && (!isCollapsed || isMobile) && (
+                <div className="px-3 text-[11px] font-semibold text-[var(--text-dim)] uppercase tracking-wider mb-2">
+                  {section.title}
+                </div>
+              )}
+
+              <div className="space-y-0.5">
+                {section.items.map((item) => {
+                  const isActive =
+                    pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
+                  const Icon = item.icon;
+
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.disabled ? '#' : item.href}
+                      aria-current={isActive ? 'page' : undefined}
+                      aria-disabled={item.disabled}
+                      title={isCollapsed && !isMobile ? item.title : undefined}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-[8px] text-xs font-medium transition-all group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
+                        isActive
+                          ? 'bg-[var(--primary-subtle)] text-[var(--primary)] font-semibold shadow-xs'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'
+                      } ${item.disabled ? 'opacity-40 pointer-events-none' : ''}`}
+                    >
+                      {Icon && (
+                        <Icon
+                          className={`w-4 h-4 shrink-0 transition-colors ${
+                            isActive
+                              ? 'text-[var(--primary)]'
+                              : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]'
+                          }`}
+                          aria-hidden="true"
+                        />
+                      )}
+
+                      {(!isCollapsed || isMobile) && <span className="truncate">{item.title}</span>}
+
+                      {(!isCollapsed || isMobile) && renderBadge(item)}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Bottom Collapse Button (Desktop Only) */}

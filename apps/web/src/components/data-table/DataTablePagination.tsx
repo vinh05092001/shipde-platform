@@ -42,8 +42,16 @@ export function DataTablePagination({
   onPageSizeChange,
   selectedCount,
 }: DataTablePaginationProps) {
-  const fromRecord = totalCount === 0 ? 0 : (pageIndex - 1) * pageSize + 1;
-  const toRecord = Math.min(pageIndex * pageSize, totalCount);
+  // Clamp page index within valid range to avoid inverted record ranges (Finding 12 P2)
+  const derivedPageCount =
+    pageCount !== undefined && !Number.isNaN(pageCount)
+      ? pageCount
+      : Math.ceil((totalCount || 0) / (pageSize || 10));
+  const safePageCount = Math.max(1, derivedPageCount);
+  const safePageIndex = Math.max(1, Math.min(pageIndex, safePageCount));
+  const fromRecord =
+    totalCount === 0 ? 0 : Math.min((safePageIndex - 1) * pageSize + 1, totalCount);
+  const toRecord = Math.min(safePageIndex * pageSize, totalCount);
 
   return (
     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 border-t border-[var(--border-subtle)] bg-[var(--bg-app)] text-xs text-[var(--text-secondary)]">
@@ -96,8 +104,8 @@ export function DataTablePagination({
 
         {/* Current page indicator */}
         <div className="tabular-nums font-mono text-[var(--text-primary)] whitespace-nowrap">
-          Trang <span className="font-semibold">{pageIndex}</span> /{' '}
-          <span>{Math.max(1, pageCount)}</span>
+          Trang <span className="font-semibold">{safePageIndex}</span> /{' '}
+          <span>{safePageCount}</span>
         </div>
 
         {/* Navigation buttons */}
@@ -105,7 +113,7 @@ export function DataTablePagination({
           <button
             type="button"
             onClick={() => onPageChange(1)}
-            disabled={pageIndex <= 1}
+            disabled={safePageIndex <= 1}
             aria-label="Đến trang đầu tiên"
             title="Trang đầu"
             className="p-1.5 rounded-[6px] border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors"
@@ -115,8 +123,8 @@ export function DataTablePagination({
 
           <button
             type="button"
-            onClick={() => onPageChange(pageIndex - 1)}
-            disabled={pageIndex <= 1}
+            onClick={() => onPageChange(safePageIndex - 1)}
+            disabled={safePageIndex <= 1}
             aria-label="Đến trang trước"
             title="Trang trước"
             className="p-1.5 rounded-[6px] border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors"
@@ -126,8 +134,8 @@ export function DataTablePagination({
 
           <button
             type="button"
-            onClick={() => onPageChange(pageIndex + 1)}
-            disabled={pageIndex >= pageCount}
+            onClick={() => onPageChange(safePageIndex + 1)}
+            disabled={safePageIndex >= safePageCount}
             aria-label="Đến trang kế tiếp"
             title="Trang sau"
             className="p-1.5 rounded-[6px] border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors"
@@ -137,8 +145,8 @@ export function DataTablePagination({
 
           <button
             type="button"
-            onClick={() => onPageChange(pageCount)}
-            disabled={pageIndex >= pageCount}
+            onClick={() => onPageChange(safePageCount)}
+            disabled={safePageIndex >= safePageCount}
             aria-label="Đến trang cuối cùng"
             title="Trang cuối"
             className="p-1.5 rounded-[6px] border border-[var(--border-subtle)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors"

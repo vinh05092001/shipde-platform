@@ -45,6 +45,11 @@ import {
   createGlobalShortcutHandler,
   handleDesktopBreakpointResize,
   handleDrawerKeyDown,
+  filterNavSectionsByPermissions,
+  isNavItemPermitted,
+  NavItem,
+  NavSection,
+  DashboardUser,
 } from '../components/dashboard';
 import { FIXTURE_SHIPMENTS, FixtureShipment } from '../app/storybook/fixtures';
 
@@ -1731,6 +1736,165 @@ async function runTestSuite() {
     return hookResult;
   }
 
+  // Mounted hook runner for testing continuous lifecycle and staggered commits across rerenders
+  const ReactSharedInternals =
+    (React as any).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE ||
+    (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED;
+
+  function renderMountedDataTableHook(initialProps: any) {
+    let hookProps = { ...initialProps };
+    let hookResult: any = null;
+
+    const states: any[] = [];
+    const refs: any[] = [];
+    const memos: { val: any; deps: any[] | undefined }[] = [];
+    const effects: { fn: () => void; deps: any[] | undefined }[] = [];
+
+    let stateIdx = 0;
+    let refIdx = 0;
+    let memoIdx = 0;
+    let effectIdx = 0;
+
+    const mockRouter = {
+      push: (url: string) => {
+        if (hookProps.onNavigate) {
+          hookProps.onNavigate(url);
+        }
+      },
+      replace: () => {},
+      back: () => {},
+      forward: () => {},
+      refresh: () => {},
+      prefetch: () => {},
+    };
+
+    const dispatcher = {
+      useState(initialValue: any) {
+        const idx = stateIdx++;
+        if (idx >= states.length) {
+          states.push(typeof initialValue === 'function' ? initialValue() : initialValue);
+        }
+        const setState = (action: any) => {
+          states[idx] = typeof action === 'function' ? action(states[idx]) : action;
+          runRender();
+        };
+        return [states[idx], setState];
+      },
+      useRef(initialValue: any) {
+        const idx = refIdx++;
+        if (idx >= refs.length) {
+          refs.push({ current: initialValue });
+        }
+        return refs[idx];
+      },
+      useTransition() {
+        return [false, (fn: () => void) => fn()];
+      },
+      useMemo(fn: () => any, deps: any[] | undefined) {
+        const idx = memoIdx++;
+        if (idx >= memos.length) {
+          const val = fn();
+          memos.push({ val, deps });
+          return val;
+        }
+        const prev = memos[idx];
+        let changed = !deps || !prev.deps || deps.length !== prev.deps.length;
+        if (!changed && deps && prev.deps) {
+          for (let i = 0; i < deps.length; i++) {
+            if (!Object.is(deps[i], prev.deps[i])) {
+              changed = true;
+              break;
+            }
+          }
+        }
+        if (changed) {
+          prev.val = fn();
+          prev.deps = deps;
+        }
+        return prev.val;
+      },
+      useCallback(fn: any, deps: any[] | undefined) {
+        return dispatcher.useMemo(() => fn, deps);
+      },
+      useEffect(fn: () => void, deps: any[] | undefined) {
+        const idx = effectIdx++;
+        if (idx >= effects.length) {
+          effects.push({ fn, deps });
+          fn();
+        } else {
+          const prev = effects[idx];
+          let changed = !deps || !prev.deps || deps.length !== prev.deps.length;
+          if (!changed && deps && prev.deps) {
+            for (let i = 0; i < deps.length; i++) {
+              if (!Object.is(deps[i], prev.deps[i])) {
+                changed = true;
+                break;
+              }
+            }
+          }
+          if (changed) {
+            prev.fn = fn;
+            prev.deps = deps;
+            fn();
+          }
+        }
+      },
+      useContext(context: any) {
+        if (context === AppRouterContext) return mockRouter;
+        if (context === PathnameContext) return '/storybook';
+        if (context === SearchParamsContext) return hookProps.searchParams || new URLSearchParams('');
+        return context?._currentValue ?? null;
+      },
+      use(usable: any) {
+        return dispatcher.useContext(usable);
+      },
+      useReducer(reducer: any, initialArg: any, init?: any) {
+        const idx = stateIdx++;
+        if (idx >= states.length) {
+          states.push(init ? init(initialArg) : initialArg);
+        }
+        const dispatch = (action: any) => {
+          states[idx] = reducer(states[idx], action);
+        };
+        return [states[idx], dispatch];
+      },
+      useId() {
+        return 'test-id';
+      },
+      useDebugValue() {},
+    };
+
+    function runRender() {
+      stateIdx = 0;
+      refIdx = 0;
+      memoIdx = 0;
+      effectIdx = 0;
+
+      const prevDispatcher = ReactSharedInternals.H;
+      ReactSharedInternals.H = dispatcher;
+      try {
+        // eslint-disable-next-line react-hooks/rules-of-hooks
+        hookResult = useDataTable(hookProps);
+      } finally {
+        ReactSharedInternals.H = prevDispatcher;
+      }
+    }
+
+    runRender();
+
+    return {
+      get current() {
+        return hookResult;
+      },
+      rerender(newProps?: any) {
+        if (newProps) {
+          hookProps = { ...hookProps, ...newProps };
+        }
+        runRender();
+      },
+    };
+  }
+
   // 10.2 Deep link parsing with useDataTable
   const initialUrl = new URLSearchParams(
     'page=2&per_page=5&sort=codAmount.desc&status=DELIVERED.IN_TRANSIT&carrier=GHN&search=Nguy%E1%BB%85n'
@@ -2197,8 +2361,328 @@ async function runTestSuite() {
     '   ✅ Complete MIT notices and application a11y gate rule verified across all 15 ported component modules'
   );
 
+  // ---------------------------------------------------------------------------
+  // 13. ROUND 6 REVIEW FINDINGS REGRESSION PROOFS (.oc/review.txt)
+  // ---------------------------------------------------------------------------
+  console.log(
+    '🧪 13. Testing Round 6 Review Findings Regressions (Findings 4, 8, 9, 10, 12, 13)...'
+  );
+
+  // 13.1 Finding 10 (P1): Staggered Intermediate Commits Preserving Subsequent Pending Intent
+  // Reproduction: user opens per_page=5, selects status=FAILED (A), then carrier=GHN (B).
+  // A commits while B is pending. Then user types search=John (D).
+  // D must retain both status=FAILED and carrier=GHN (not drop carrier=GHN).
+  // External navigation (popstate/direct link) must clear the pending queue.
+  const stagedNavigations: string[] = [];
+  const mountedHook = renderMountedDataTableHook({
+    searchParams: new URLSearchParams('per_page=5'),
+    onNavigate: (url: string) => {
+      stagedNavigations.push(url);
+    },
+    defaultPageSize: 10,
+    filterableColumns: [
+      { id: 'status', title: 'Trạng thái', options: [] },
+      { id: 'carrier', title: 'Hãng', options: [] },
+    ],
+    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+  });
+
+  // Action A: status=FAILED
+  mountedHook.current.setFilter('status', ['FAILED']);
+  assert.strictEqual(stagedNavigations.length, 1);
+  assert.ok(stagedNavigations[0].includes('status=FAILED'));
+
+  // Action B: carrier=GHN (before A commits)
+  mountedHook.current.setFilter('carrier', ['GHN']);
+  assert.strictEqual(stagedNavigations.length, 2);
+  assert.ok(stagedNavigations[1].includes('status=FAILED'));
+  assert.ok(stagedNavigations[1].includes('carrier=GHN'));
+
+  // Staggered commit: Request A commits!
+  mountedHook.rerender({
+    searchParams: new URLSearchParams('per_page=5&status=FAILED'),
+  });
+
+  // Action D: search=John while B is still pending!
+  mountedHook.current.setSearch('John');
+  assert.strictEqual(stagedNavigations.length, 3);
+  assert.ok(
+    stagedNavigations[2].includes('status=FAILED'),
+    'Finding 10: status=FAILED must be retained'
+  );
+  assert.ok(
+    stagedNavigations[2].includes('carrier=GHN'),
+    'Finding 10: carrier=GHN must be retained across staggered commit of A'
+  );
+  assert.ok(
+    stagedNavigations[2].includes('search=John'),
+    'Finding 10: search=John must be added on top of pending intent'
+  );
+
+  // Negative test / Invalidation: External navigation to DELIVERED
+  mountedHook.rerender({
+    searchParams: new URLSearchParams('status=DELIVERED'),
+  });
+
+  // Action E: change page. Since external navigation invalidated the pending queue,
+  // it bases on current external state (DELIVERED), not the discarded pending carrier=GHN.
+  mountedHook.current.setPagination(2);
+  assert.strictEqual(stagedNavigations.length, 4);
+  assert.ok(
+    stagedNavigations[3].includes('status=DELIVERED'),
+    'External navigation state DELIVERED must be base'
+  );
+  assert.strictEqual(
+    stagedNavigations[3].includes('carrier=GHN'),
+    false,
+    'Negative proof: Pending carrier=GHN must have been invalidated by external navigation'
+  );
+
+  // 13.2 Finding 4 (P1): Facet Reset Clears Pending Selections Even When Committed Value Is Unchanged
+  // Case from review.txt Finding 4:
+  // User opens /storybook?search=GHN (committed status is empty).
+  // User selects 'FAILED' -> optimistic is Set(['FAILED']), pendingSelections is ['FAILED'].
+  // Then clicks toolbar reset button (resetEvent = true).
+  // Committed status remains empty (incomingCommitted = new Set(), prevCommitted = new Set()).
+  const resetFacetResult = computeOptimisticFacetSelection(
+    new Set(['FAILED']),
+    new Set(),
+    new Set(),
+    ['FAILED'],
+    false,
+    true
+  );
+  assert.deepStrictEqual(
+    Array.from(resetFacetResult.nextOptimistic),
+    [],
+    'Finding 4 (P1): Explicit reset (resetEvent=true) must discard pending selections even if committed value is unchanged'
+  );
+  assert.deepStrictEqual(
+    resetFacetResult.nextPending,
+    [],
+    'Finding 4 (P1): Pending selections queue must be emptied on reset'
+  );
+
+  // Negative proof: without resetEvent (resetEvent=false), identical incoming and prev committed values
+  // would retain optimistic selections and pending queue!
+  const nonResetFacetResult = computeOptimisticFacetSelection(
+    new Set(['FAILED']),
+    new Set(),
+    new Set(),
+    ['FAILED'],
+    false,
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(nonResetFacetResult.nextOptimistic),
+    ['FAILED'],
+    'Negative proof: without resetEvent, matching committed values retain pending optimistic selection'
+  );
+  assert.deepStrictEqual(
+    nonResetFacetResult.nextPending,
+    ['FAILED'],
+    'Negative proof: without resetEvent, matching committed values retain pending queue'
+  );
+
+  // Hook resetFilters() increments resetEpoch
+  assert.strictEqual(typeof mountedHook.current.resetEpoch, 'number');
+  const prevEpoch = mountedHook.current.resetEpoch;
+  mountedHook.current.resetFilters();
+  assert.strictEqual(
+    mountedHook.current.resetEpoch,
+    prevEpoch + 1,
+    'resetFilters must increment resetEpoch to signal faceted filters'
+  );
+
+  // 13.3 Finding 4 (P2): Permission-Filtered Navigation Contract & Denied/Empty Permissions
+  const adminItem: NavItem = {
+    title: 'Người dùng',
+    href: '/settings/users',
+    permissions: ['users:read', 'users:write'],
+  };
+  const staffItem: NavItem = {
+    title: 'Xử lý bất thường',
+    href: '/exceptions',
+    permissions: ['exceptions:read'],
+  };
+  const publicItem: NavItem = {
+    title: 'Tổng quan',
+    href: '/dashboard',
+  };
+
+  const sampleSections: NavSection[] = [
+    { title: 'Chính', items: [publicItem, staffItem] },
+    { title: 'Quản trị', items: [adminItem] },
+  ];
+
+  // Absent user (null or undefined)
+  assert.strictEqual(
+    isNavItemPermitted(adminItem, null),
+    false,
+    'Finding 4 (P2): Absent user must be denied administrative item'
+  );
+  assert.strictEqual(
+    isNavItemPermitted(staffItem, undefined),
+    false,
+    'Finding 4 (P2): Undefined user must be denied staff item'
+  );
+  assert.strictEqual(
+    isNavItemPermitted(publicItem, null),
+    true,
+    'Items with no permissions requirement are permitted for absent user'
+  );
+
+  const absentFiltered = filterNavSectionsByPermissions(sampleSections, null);
+  assert.strictEqual(absentFiltered.length, 1);
+  assert.strictEqual(absentFiltered[0].items.length, 1);
+  assert.strictEqual(absentFiltered[0].items[0].href, '/dashboard');
+
+  // Empty permissions user
+  const emptyUser: DashboardUser = {
+    name: 'Khách',
+    email: 'guest@example.com',
+    role: 'GUEST',
+    permissions: [],
+  };
+  assert.strictEqual(
+    isNavItemPermitted(adminItem, emptyUser),
+    false,
+    'Finding 4 (P2): User with empty permissions must be denied admin item'
+  );
+  assert.strictEqual(
+    isNavItemPermitted(staffItem, emptyUser),
+    false,
+    'Finding 4 (P2): User with empty permissions must be denied staff item'
+  );
+
+  // Staff user with partial permissions
+  const staffUser: DashboardUser = {
+    name: 'Nhân viên vận hành',
+    email: 'staff@example.com',
+    role: 'STAFF',
+    permissions: ['exceptions:read'],
+  };
+  assert.strictEqual(
+    isNavItemPermitted(staffItem, staffUser),
+    true,
+    'Staff user with exceptions:read must be permitted'
+  );
+  assert.strictEqual(
+    isNavItemPermitted(adminItem, staffUser),
+    false,
+    'Staff user without users:* must be denied admin item'
+  );
+  const staffFiltered = filterNavSectionsByPermissions(sampleSections, staffUser);
+  assert.strictEqual(staffFiltered.length, 1);
+  assert.strictEqual(staffFiltered[0].items.length, 2);
+
+  // Owner user with wildcard '*'
+  const ownerUser: DashboardUser = {
+    name: 'Chủ shop',
+    email: 'owner@example.com',
+    role: 'OWNER',
+    permissions: ['*'],
+  };
+  assert.strictEqual(isNavItemPermitted(adminItem, ownerUser), true, 'Owner with * is permitted');
+  assert.strictEqual(isNavItemPermitted(staffItem, ownerUser), true, 'Owner with * is permitted');
+  const ownerFiltered = filterNavSectionsByPermissions(sampleSections, ownerUser);
+  assert.strictEqual(ownerFiltered.length, 2);
+
+  // 13.4 Finding 12 (P2): Out-of-Range Deep Link Clamping
+  // Deep link: page 3 with 8 total items and page size 10
+  const outOfRangePaginationHtml = renderToStaticMarkup(
+    React.createElement(DataTablePagination, {
+      pageIndex: 3,
+      pageSize: 10,
+      pageCount: 1,
+      totalCount: 8,
+      onPageChange: () => {},
+      onPageSizeChange: () => {},
+    })
+  );
+  assert.ok(
+    outOfRangePaginationHtml.includes('>1-8</strong>') &&
+      outOfRangePaginationHtml.includes('>8</strong> bản ghi'),
+    'Finding 12: Clamped range must display 1-8 trên 8 bản ghi'
+  );
+  assert.strictEqual(
+    outOfRangePaginationHtml.includes('21-8'),
+    false,
+    'Negative proof: Out-of-range deep link must NOT produce inverted range 21-8'
+  );
+  assert.ok(
+    outOfRangePaginationHtml.includes('Trang <span class="font-semibold">1</span> / <span>1</span>'),
+    'Finding 12: Page index must clamp to safe page count (Trang 1 / 1)'
+  );
+
+  // 13.5 Finding 13 (P2): Reusable Shell Supplies NO Fabricated Operational Badge
+  for (const section of DEFAULT_NAV_SECTIONS) {
+    for (const item of section.items) {
+      assert.strictEqual(
+        item.badge,
+        undefined,
+        `Finding 13: Reusable DEFAULT_NAV_SECTIONS item ${item.href} must not supply hardcoded operational badge`
+      );
+      assert.strictEqual(
+        item.badgeVariant,
+        undefined,
+        `Finding 13: Reusable DEFAULT_NAV_SECTIONS item ${item.href} must not supply badgeVariant`
+      );
+    }
+  }
+
+  // 13.6 Finding 9 (P2): Dropdown Accessibility & Search Clear Title
+  const finding9ToolbarHtml = renderToStaticMarkup(
+    React.createElement(DataTableToolbar, {
+      searchValue: 'Đang tìm kiếm',
+      onSearchChange: () => {},
+    })
+  );
+  assert.ok(
+    finding9ToolbarHtml.includes('title="Xóa nội dung tìm kiếm"'),
+    'Finding 9: Clear search button must have title="Xóa nội dung tìm kiếm"'
+  );
+
+  const finding9ViewOptionsHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTableViewOptions, {
+      columns: testColumns,
+      hiddenColumns: new Set(),
+      onToggleColumn: () => {},
+    })
+  );
+  assert.ok(
+    finding9ViewOptionsHtml.includes('title="Tùy chọn hiển thị cột"'),
+    'Finding 9: View options trigger button must have title="Tùy chọn hiển thị cột"'
+  );
+
+  // 13.7 Finding 8 (P2): Sticky Header Bounded Vertical Scroll Container
+  const tableContainerHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTable, {
+      columns: testColumns,
+      data: FIXTURE_SHIPMENTS,
+      keyExtractor: (item: FixtureShipment) => item.id,
+      maxHeight: 600,
+    })
+  );
+  assert.ok(
+    tableContainerHtml.includes('data-testid="table-scroll-container"'),
+    'Finding 8: DataTable must render table-scroll-container'
+  );
+  assert.ok(
+    tableContainerHtml.includes('overflow-y-auto'),
+    'Finding 8: table-scroll-container must have vertical scroll overflow-y-auto'
+  );
+  assert.ok(
+    tableContainerHtml.includes('max-h-[600px]'),
+    'Finding 8: table-scroll-container must have bounded max-height'
+  );
+
+  console.log(
+    '   ✅ Round 6 review findings (4, 8, 9, 10, 12, 13) proven and verified with unit test suites'
+  );
+
   console.log('\n================================================================');
-  console.log('🎉 ALL 12 DATA TABLE & DASHBOARD SHELL TEST SUITES PASSED 100%!');
+  console.log('🎉 ALL 13 DATA TABLE & DASHBOARD SHELL TEST SUITES PASSED 100%!');
   console.log('================================================================');
 }
 

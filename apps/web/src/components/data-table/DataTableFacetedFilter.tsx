@@ -40,27 +40,29 @@ interface DataTableFacetedFilterProps {
   onSelect: (values: string[]) => void;
   className?: string;
   historyEpoch?: number;
+  resetEpoch?: number;
 }
 
 /**
  * Computes the synchronized optimistic selection for faceted filter when
- * committed selectedValues prop or historyEpoch changes (Finding 4 P1).
+ * committed selectedValues prop, historyEpoch, or resetEpoch changes (Finding 4 P1).
  * Preserves optimistic selections when multiple selections happen in the same
  * dropdown before committed search params update, and drops pending selections
- * on browser history navigation (popstate) or external filter resets.
+ * on browser history navigation (popstate) or explicit external filter resets.
  */
 export function computeOptimisticFacetSelection(
   currentOptimistic: Set<string>,
   incomingCommitted: Set<string>,
   prevCommitted: Set<string>,
   pendingSelections: string[],
-  historyEvent = false
+  historyEvent = false,
+  resetEvent = false
 ): {
   nextOptimistic: Set<string>;
   nextPending: string[];
   wasIgnoredDueToPending: boolean;
 } {
-  if (historyEvent) {
+  if (historyEvent || resetEvent) {
     return {
       nextOptimistic: new Set(incomingCommitted),
       nextPending: [],
@@ -114,6 +116,7 @@ export function DataTableFacetedFilter({
   onSelect,
   className = '',
   historyEpoch,
+  resetEpoch,
 }: DataTableFacetedFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -126,6 +129,7 @@ export function DataTableFacetedFilter({
   const pendingSelectionsRef = useRef<string[]>([]);
   const prevCommittedRef = useRef<Set<string>>(selectedValues);
   const prevHistoryEpochRef = useRef<number | undefined>(historyEpoch);
+  const prevResetEpochRef = useRef<number | undefined>(resetEpoch);
   const prevIsOpenRef = useRef(false);
 
   // Synchronize optimistic state with prop changes
@@ -136,19 +140,26 @@ export function DataTableFacetedFilter({
       historyEpoch !== prevHistoryEpochRef.current;
     prevHistoryEpochRef.current = historyEpoch;
 
+    const resetEvent =
+      resetEpoch !== undefined &&
+      prevResetEpochRef.current !== undefined &&
+      resetEpoch !== prevResetEpochRef.current;
+    prevResetEpochRef.current = resetEpoch;
+
     const res = computeOptimisticFacetSelection(
       optimisticValues,
       selectedValues,
       prevCommittedRef.current,
       pendingSelectionsRef.current,
-      historyEvent
+      historyEvent,
+      resetEvent
     );
     prevCommittedRef.current = selectedValues;
     pendingSelectionsRef.current = res.nextPending;
     if (res.nextOptimistic !== optimisticValues) {
       setOptimisticValues(res.nextOptimistic);
     }
-  }, [selectedValues, historyEpoch, optimisticValues]);
+  }, [selectedValues, historyEpoch, resetEpoch, optimisticValues]);
 
   // Restore trigger focus on dropdown close (Finding 14 P2)
   useEffect(() => {

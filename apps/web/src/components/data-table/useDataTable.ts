@@ -65,6 +65,23 @@ export interface UseDataTableReturn {
   // Consumers use it to distinguish navigation from acknowledgments of their own
   // pending interactions (Review item 3).
   historyEpoch: number;
+  // Increments on explicit filter resets (Finding 4 P1).
+  resetEpoch: number;
+}
+
+export function normalizeParamsString(params: URLSearchParams | string | null | undefined): string {
+  if (!params) return '';
+  const sp = typeof params === 'string' ? new URLSearchParams(params) : new URLSearchParams(params.toString());
+  const entries: [string, string][] = [];
+  sp.forEach((value, key) => {
+    entries.push([key, value]);
+  });
+  entries.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  const sorted = new URLSearchParams();
+  for (const [k, v] of entries) {
+    sorted.append(k, v);
+  }
+  return sorted.toString();
 }
 
 export function parseSortParam(sortParam: string | null): ColumnSort | null {
@@ -113,16 +130,39 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Latest requested query that has not yet been committed to the URL (Review
-  // item 8). Successive interactions under delayed navigation must compose
-  // against this so an earlier user change is never discarded. The recorded
-  // committed-params identity marks when the intent becomes stale: as soon as
-  // the committed search params change (push committed or history navigation),
-  // callbacks ignore the pending intent and compose from the committed params.
-  const pendingQueryRef = useRef<{
-    query: URLSearchParams;
-    committedParams: URLSearchParams | null;
-  } | null>(null);
+  // Filter reset signal (Finding 4 P1): increments when resetFilters is called.
+  const [resetEpoch, setResetEpoch] = useState(0);
+
+  // Queue of pending navigation requests (Finding 10 P1).
+  // Successive interactions under delayed navigation accumulate on top of the
+  // latest pending query. When intermediate commits arrive (acknowledging older
+  // requests in the queue), remaining newer pending queries are retained rather
+  // than being discarded. On external navigation or popstate, the queue is cleared.
+  const pendingNavigationsRef = useRef<Array<{ query: URLSearchParams; normalized: string }>>([]);
+  const prevHistoryEpochRef = useRef<number>(0);
+  const prevActiveSearchParamsStrRef = useRef<string>(normalizeParamsString(activeSearchParams));
+
+  // Synchronize pending navigation queue on activeSearchParams or historyEpoch change
+  const currentCommittedNorm = normalizeParamsString(activeSearchParams);
+  useEffect(() => {
+    if (historyEpoch !== prevHistoryEpochRef.current) {
+      pendingNavigationsRef.current = [];
+      prevHistoryEpochRef.current = historyEpoch;
+      prevActiveSearchParamsStrRef.current = currentCommittedNorm;
+    } else if (currentCommittedNorm !== prevActiveSearchParamsStrRef.current) {
+      prevActiveSearchParamsStrRef.current = currentCommittedNorm;
+      const idx = pendingNavigationsRef.current.findIndex(
+        (p) => p.normalized === currentCommittedNorm
+      );
+      if (idx !== -1) {
+        // Intermediate request acknowledged! Retain subsequent pending intent (Finding 10 P1)
+        pendingNavigationsRef.current = pendingNavigationsRef.current.slice(idx + 1);
+      } else {
+        // External navigation (e.g. user clicked an external link)
+        pendingNavigationsRef.current = [];
+      }
+    }
+  }, [currentCommittedNorm, historyEpoch]);
 
   // Search params state with validation & fallback
   const page = useMemo(() => {
@@ -197,16 +237,18 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // Column visibility local state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
 
-  // URL query builder. Composes against the latest pending query when the
-  // committed search params have not moved yet, so successive interactions
-  // under delayed navigation accumulate instead of discarding each other.
+  // URL query builder. Composes against the latest pending query when requests
+  // are in-flight, so successive interactions under delayed navigation accumulate
+  // instead of discarding each other (Finding 10 P1).
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
-      const pending = pendingQueryRef.current;
-      const base =
-        pending && pending.committedParams === activeSearchParams
-          ? pending.query.toString()
-          : (activeSearchParams?.toString() ?? '');
+      const latestPending =
+        pendingNavigationsRef.current.length > 0
+          ? pendingNavigationsRef.current[pendingNavigationsRef.current.length - 1]
+          : null;
+      const base = latestPending
+        ? latestPending.query.toString()
+        : (activeSearchParams?.toString() ?? '');
       const newSearchParams = new URLSearchParams(base);
 
       for (const [key, value] of Object.entries(params)) {
@@ -224,10 +266,10 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const navigate = useCallback(
     (queryString: string) => {
-      pendingQueryRef.current = {
-        query: new URLSearchParams(queryString),
-        committedParams: activeSearchParams,
-      };
+      const query = new URLSearchParams(queryString);
+      const normalized = normalizeParamsString(query);
+      pendingNavigationsRef.current.push({ query, normalized });
+
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
       if (onNavigate) {
         onNavigate(targetUrl);
@@ -243,7 +285,7 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
         }
       }
     },
-    [activeSearchParams, onNavigate, pathname, router]
+    [onNavigate, pathname, router]
   );
 
   const setPagination = useCallback(
@@ -319,6 +361,8 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   );
 
   const resetFilters = useCallback(() => {
+    setResetEpoch((epoch) => epoch + 1);
+    pendingNavigationsRef.current = [];
     const keysToRemove: Record<string, null> = {
       page: null,
       sort: null,
@@ -353,5 +397,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     createQueryString,
     isPending,
     historyEpoch,
+    resetEpoch,
   };
 }

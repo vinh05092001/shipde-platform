@@ -49,6 +49,17 @@ export function DataTableViewOptions<TData = any>({
 }: DataTableViewOptionsProps<TData>) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const prevIsOpenRef = useRef(false);
+
+  // Restore trigger focus on dropdown close (Finding 9 / Finding 14 P2)
+  useEffect(() => {
+    if (prevIsOpenRef.current && !isOpen) {
+      triggerRef.current?.focus();
+    }
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -72,12 +83,43 @@ export function DataTableViewOptions<TData = any>({
   }, [isOpen]);
 
   const toggleableColumns = columns.filter((col) => col.enableHiding !== false);
+  const hasReset = Boolean(onResetColumns && hiddenColumns.size > 0);
+  const totalMenuItems = toggleableColumns.length + (hasReset ? 1 : 0);
+
+  // Focus first menu item on open
+  useEffect(() => {
+    if (isOpen) {
+      const timer = setTimeout(() => {
+        menuItemRefs.current[0]?.focus();
+      }, 10);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]);
+
+  const handleMenuItemKeyDown = (e: React.KeyboardEvent, index: number) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextIdx = (index + 1) % totalMenuItems;
+      menuItemRefs.current[nextIdx]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevIdx = (index - 1 + totalMenuItems) % totalMenuItems;
+      menuItemRefs.current[prevIdx]?.focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      menuItemRefs.current[0]?.focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      menuItemRefs.current[totalMenuItems - 1]?.focus();
+    }
+  };
 
   if (toggleableColumns.length === 0) return null;
 
   return (
     <div className={`relative inline-block ${className}`} ref={containerRef}>
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Tùy chọn hiển thị cột"
         title="Tùy chọn hiển thị cột"
@@ -100,19 +142,23 @@ export function DataTableViewOptions<TData = any>({
             Hiển thị cột
           </div>
 
-          <div className="max-h-56 overflow-y-auto space-y-0.5 py-1">
-            {toggleableColumns.map((column) => {
+          <div className="max-h-56 overflow-y-auto space-y-0.5 py-1 custom-scrollbar">
+            {toggleableColumns.map((column, idx) => {
               const isVisible = !hiddenColumns.has(column.id);
               const title = column.title || (typeof column.header === 'string' ? column.header : column.id);
 
               return (
                 <button
                   key={column.id}
+                  ref={(el) => {
+                    menuItemRefs.current[idx] = el;
+                  }}
                   type="button"
                   role="menuitemcheckbox"
                   aria-checked={isVisible}
                   onClick={() => onToggleColumn(column.id)}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-[4px] text-xs text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer select-none transition-colors"
+                  onKeyDown={(e) => handleMenuItemKeyDown(e, idx)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-[4px] text-xs text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer select-none transition-colors focus-visible:outline-none focus-visible:bg-[var(--bg-subtle)]"
                 >
                   <div
                     className={`w-3.5 h-3.5 rounded-[3px] border flex items-center justify-center transition-colors ${
@@ -129,16 +175,21 @@ export function DataTableViewOptions<TData = any>({
             })}
           </div>
 
-          {onResetColumns && hiddenColumns.size > 0 && (
+          {hasReset && (
             <>
               <div className="h-px bg-[var(--border-subtle)] my-1" />
               <button
+                ref={(el) => {
+                  menuItemRefs.current[toggleableColumns.length] = el;
+                }}
                 type="button"
+                role="menuitem"
                 onClick={() => {
-                  onResetColumns();
+                  onResetColumns?.();
                   setIsOpen(false);
                 }}
-                className="w-full py-1 text-center text-[11px] text-[var(--primary)] hover:underline cursor-pointer"
+                onKeyDown={(e) => handleMenuItemKeyDown(e, toggleableColumns.length)}
+                className="w-full py-1 text-center text-[11px] text-[var(--primary)] hover:underline cursor-pointer focus-visible:outline-none focus-visible:underline"
               >
                 Hiển thị tất cả
               </button>

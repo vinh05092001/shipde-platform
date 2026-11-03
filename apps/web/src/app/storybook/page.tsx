@@ -11,7 +11,7 @@
 
 'use client';
 
-import React, { useState, useMemo, Suspense } from 'react';
+import React, { useState, useMemo, useEffect, Suspense } from 'react';
 import {
   Download,
   Plus,
@@ -33,6 +33,8 @@ import {
   FIXTURE_SHIPMENTS,
   STATUS_OPTIONS,
   CARRIER_OPTIONS,
+  SHOWCASE_NAV_SECTIONS,
+  SHOWCASE_USER,
   FixtureShipment,
 } from './fixtures';
 
@@ -67,6 +69,7 @@ function StorybookContent() {
     setSort,
     isFiltered,
     historyEpoch,
+    resetEpoch,
   } = useDataTable({
     defaultPageSize: 10,
     defaultSort: { id: 'createdAt', desc: true },
@@ -126,11 +129,20 @@ function StorybookContent() {
 
   const pageCount = Math.max(1, Math.ceil(filteredData.length / pageSize));
 
+  // Clamp out-of-range deep links against available count (Finding 12 P2)
+  useEffect(() => {
+    if (pageIndex > pageCount && pageCount > 0) {
+      setPagination(pageCount);
+    }
+  }, [pageIndex, pageCount, setPagination]);
+
+  const safePageIndex = Math.max(1, Math.min(pageIndex, pageCount));
+
   // Pagination slice
   const paginatedData = useMemo(() => {
-    const start = (pageIndex - 1) * pageSize;
+    const start = (safePageIndex - 1) * pageSize;
     return filteredData.slice(start, start + pageSize);
-  }, [filteredData, pageIndex, pageSize]);
+  }, [filteredData, safePageIndex, pageSize]);
 
   // Column definitions with Vietnamese localized title (Finding 12 P2 / BR-UI-04)
   const columns: ColumnDef<FixtureShipment>[] = useMemo(
@@ -159,16 +171,26 @@ function StorybookContent() {
       {
         id: 'carrier',
         title: 'Hãng vận chuyển',
-        header: 'Hãng vận chuyển',
+        header: ({ column }) => (
+          <DataTableColumnHeader
+            column={column}
+            title="Hãng vận chuyển"
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
+            onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
+          />
+        ),
         cell: ({ row }) => {
           let badgeColor = 'bg-blue-50 text-blue-700 border-blue-200';
-          if (row.carrier === 'GHN') badgeColor = 'bg-orange-50 text-orange-700 border-orange-200';
-          if (row.carrier === 'GHTK')
+          if (row.carrier === 'GHTK') {
             badgeColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+          } else if (row.carrier === 'VTP') {
+            badgeColor = 'bg-red-50 text-red-700 border-red-200';
+          }
 
           return (
             <span
-              className={`inline-flex items-center px-2 py-0.5 rounded-[4px] text-[11px] font-semibold border ${badgeColor}`}
+              className={`inline-flex items-center px-2 py-0.5 rounded-[4px] text-[11px] font-bold border ${badgeColor}`}
             >
               {row.carrier}
             </span>
@@ -177,11 +199,11 @@ function StorybookContent() {
       },
       {
         id: 'recipientName',
-        title: 'Khách hàng',
+        title: 'Người nhận & SĐT',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title="Khách hàng"
+            title="Người nhận"
             sort={sort}
             onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
@@ -197,48 +219,28 @@ function StorybookContent() {
         ),
       },
       {
-        id: 'status',
-        title: 'Trạng thái',
-        header: 'Trạng thái',
-        cell: ({ row }) => {
-          switch (row.status) {
-            case 'DELIVERED':
-              return <span className="badge-ok">Đã giao hàng</span>;
-            case 'IN_TRANSIT':
-              return <span className="badge-info">Đang giao hàng</span>;
-            case 'PENDING':
-              return <span className="badge-warn">Chờ lấy hàng</span>;
-            case 'FAILED':
-              return <span className="badge-risk">Giao thất bại</span>;
-            case 'CLAIM_PENDING':
-              return <span className="badge-risk">Chờ bồi thường</span>;
-            default:
-              return null;
-          }
-        },
-      },
-      {
         id: 'codAmount',
-        title: 'Thu hộ COD',
+        title: 'Tiền thu hộ COD',
+        align: 'right',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title="Thu hộ COD"
+            title="Tiền COD"
             sort={sort}
             onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
-        align: 'right',
         cell: ({ row }) => (
-          <span className="tabular-nums font-mono font-semibold text-[var(--text-primary)]">
+          <span className="tabular-nums font-mono font-medium text-[var(--text-primary)]">
             {row.codAmount.toLocaleString('vi-VN')} đ
           </span>
         ),
       },
       {
         id: 'feeAmount',
-        title: 'Cước phí',
+        title: 'Cước vận chuyển',
+        align: 'right',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
@@ -248,12 +250,60 @@ function StorybookContent() {
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
           />
         ),
-        align: 'right',
         cell: ({ row }) => (
           <span className="tabular-nums font-mono text-[var(--text-secondary)]">
             {row.feeAmount.toLocaleString('vi-VN')} đ
           </span>
         ),
+      },
+      {
+        id: 'status',
+        title: 'Trạng thái giao hàng',
+        header: ({ column }) => (
+          <DataTableColumnHeader
+            column={column}
+            title="Trạng thái"
+            sort={sort}
+            onSort={(id, desc) => setSort(id, desc)}
+            onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
+          />
+        ),
+        cell: ({ row }) => {
+          const statusMap: Record<string, { label: string; class: string }> = {
+            PENDING: {
+              label: 'Chờ lấy hàng',
+              class: 'bg-amber-50 text-amber-700 border-amber-200',
+            },
+            IN_TRANSIT: {
+              label: 'Đang giao',
+              class: 'bg-blue-50 text-blue-700 border-blue-200',
+            },
+            DELIVERED: {
+              label: 'Đã giao hàng',
+              class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+            },
+            FAILED: {
+              label: 'Giao thất bại',
+              class: 'bg-rose-50 text-rose-700 border-rose-200',
+            },
+            CLAIM_PENDING: {
+              label: 'Chờ bồi thường',
+              class: 'bg-purple-50 text-purple-700 border-purple-200',
+            },
+          };
+          const info = statusMap[row.status] || {
+            label: row.status,
+            class: 'bg-gray-50 text-gray-700 border-gray-200',
+          };
+
+          return (
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${info.class}`}
+            >
+              {info.label}
+            </span>
+          );
+        },
       },
       {
         id: 'createdAt',
@@ -353,11 +403,8 @@ function StorybookContent() {
   return (
     <DashboardLayout
       shopName="Kho Tổng Ship Dễ — Hà Nội"
-      currentUser={{
-        name: 'Trần Quản Trị',
-        email: 'admin@shipde.net',
-        role: 'Chủ Shop / Quản trị viên',
-      }}
+      currentUser={SHOWCASE_USER}
+      navSections={SHOWCASE_NAV_SECTIONS}
       searchHref="/search"
       profileHref="/settings/profile"
     >
@@ -530,6 +577,7 @@ function StorybookContent() {
             isFiltered={isFiltered}
             onResetFilters={resetFilters}
             historyEpoch={historyEpoch}
+            resetEpoch={resetEpoch}
             filtersSlot={
               <>
                 <DataTableFacetedFilter
@@ -538,6 +586,7 @@ function StorybookContent() {
                   selectedValues={new Set(selectedStatus)}
                   onSelect={(vals) => setFilter('status', vals)}
                   historyEpoch={historyEpoch}
+                  resetEpoch={resetEpoch}
                 />
                 <DataTableFacetedFilter
                   title="Hãng vận chuyển"
@@ -545,6 +594,7 @@ function StorybookContent() {
                   selectedValues={new Set(selectedCarriers)}
                   onSelect={(vals) => setFilter('carrier', vals)}
                   historyEpoch={historyEpoch}
+                  resetEpoch={resetEpoch}
                 />
               </>
             }
@@ -570,7 +620,7 @@ function StorybookContent() {
         }
         pagination={
           <DataTablePagination
-            pageIndex={pageIndex}
+            pageIndex={safePageIndex}
             pageSize={pageSize}
             pageCount={pageCount}
             totalCount={filteredData.length}

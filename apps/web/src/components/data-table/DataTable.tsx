@@ -24,8 +24,8 @@
  * SOFTWARE.
  *
  * Core reusable server-driven DataTable component.
- * Supports loading skeleton, accessible empty and error states,
- * keyboard accessibility, row selection, and Vietnamese localization.
+ * Supports loading skeleton, accessible empty, forbidden, and error states,
+ * keyboard accessibility, row selection, sticky header in vertical scroll container, and Vietnamese localization.
  */
 
 'use client';
@@ -71,6 +71,7 @@ export function DataTable<TData = any>({
   onRowClick,
   visibleColumns,
   sort,
+  maxHeight,
 }: DataTableProps<TData>) {
   // Filter columns based on visibility set
   const displayedColumns = columns.filter((col) => !visibleColumns?.has(col.id));
@@ -112,21 +113,25 @@ export function DataTable<TData = any>({
         </div>
       )}
 
-      {/* Table Container */}
+      {/* Table Container with vertical scroll container for sticky header (Finding 8 P2) */}
       <div className="rounded-[10px] border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
+        <div
+          data-testid="table-scroll-container"
+          className="overflow-x-auto overflow-y-auto max-h-[600px] relative custom-scrollbar"
+          style={maxHeight !== undefined ? { maxHeight } : undefined}
+        >
           <table
             className="w-full text-left text-xs text-[var(--text-primary)]"
             role="table"
             aria-busy={loading}
           >
-            <thead className="sticky top-0 z-10 bg-[var(--bg-subtle)] border-b border-[var(--border-subtle)] text-[11px] select-none">
+            <thead className="sticky top-0 z-10 bg-[var(--bg-subtle)] border-b border-[var(--border-subtle)] text-[11px] select-none shadow-xs">
               <tr role="row">
                 {hasSelection && (
                   <th
                     scope="col"
                     style={{ width: '40px' }}
-                    className="px-3 py-3 text-center align-middle"
+                    className="px-3 py-3 text-center align-middle bg-[var(--bg-subtle)]"
                   >
                     <input
                       type="checkbox"
@@ -163,7 +168,7 @@ export function DataTable<TData = any>({
                       scope="col"
                       aria-sort={colSortState}
                       style={{ width: col.width }}
-                      className={`px-4 py-3 font-semibold text-[var(--text-secondary)] uppercase tracking-wider align-middle ${alignClass}`}
+                      className={`px-4 py-3 font-semibold text-[var(--text-secondary)] uppercase tracking-wider bg-[var(--bg-subtle)] align-middle ${alignClass}`}
                     >
                       {typeof col.header === 'function' ? col.header({ column: col }) : col.header}
                     </th>
@@ -174,29 +179,20 @@ export function DataTable<TData = any>({
 
             <tbody
               className="divide-y divide-[var(--border-subtle)] bg-[var(--bg-card)]"
-              role="rowgroup"
-              aria-busy={loading}
+              aria-busy={loading ? 'true' : undefined}
             >
               {loading ? (
                 // Loading Skeleton State
                 Array.from({ length: 6 }).map((_, rIdx) => (
-                  <tr key={`skeleton-${rIdx}`} className="animate-pulse" role="row">
+                  <tr key={`skeleton-${rIdx}`} role="row" className="animate-pulse">
                     {hasSelection && (
                       <td className="px-3 py-3 text-center align-middle">
-                        <div className="w-3.5 h-3.5 bg-[var(--bg-hover)] mx-auto rounded-[3px]" />
+                        <div className="w-3.5 h-3.5 rounded-[3px] bg-[var(--bg-subtle)] mx-auto" />
                       </td>
                     )}
-                    {displayedColumns.map((col, cIdx) => (
-                      <td key={`skeleton-col-${cIdx}`} className="px-4 py-3 align-middle">
-                        <div
-                          className={`h-3.5 bg-[var(--bg-hover)] rounded-[4px] ${
-                            col.align === 'right'
-                              ? 'ml-auto w-16'
-                              : col.align === 'center'
-                                ? 'mx-auto w-20'
-                                : 'w-3/4'
-                          }`}
-                        />
+                    {displayedColumns.map((col) => (
+                      <td key={`skel-cell-${col.id}`} className="px-4 py-3 align-middle">
+                        <div className="h-3.5 bg-[var(--bg-subtle)] rounded-[4px] w-3/4" />
                       </td>
                     ))}
                   </tr>

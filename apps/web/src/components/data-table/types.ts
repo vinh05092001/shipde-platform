@@ -23,13 +23,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Reusable server-driven data table type definitions.
- * Respects DESIGN-SYSTEM-UX-RULES.md and Vietnamese localization.
+ * Types for DataTable component family, URL synchronization, and pagination.
  */
 
 import React from 'react';
+import { LucideIcon } from 'lucide-react';
 
-export type SortDirection = 'asc' | 'desc';
+export type SortOrder = 'asc' | 'desc';
 
 export interface ColumnSort {
   id: string;
@@ -38,20 +38,20 @@ export interface ColumnSort {
 
 export interface ColumnDef<TData = any> {
   id: string;
-  header: string | ((props: { column: ColumnDef<any> }) => React.ReactNode);
+  header: React.ReactNode | ((props: { column: ColumnDef<TData> }) => React.ReactNode);
   title?: string;
-  accessorKey?: keyof TData | string;
   cell?: (props: { row: TData; index: number }) => React.ReactNode;
+  accessorKey?: keyof TData | string;
+  align?: 'left' | 'center' | 'right';
+  width?: string | number;
   enableSorting?: boolean;
   enableHiding?: boolean;
-  align?: 'left' | 'center' | 'right';
-  width?: string;
 }
 
 export interface DataTableFilterOption {
   label: string;
   value: string;
-  icon?: React.ComponentType<{ className?: string }>;
+  icon?: LucideIcon | React.ComponentType<{ className?: string }>;
   count?: number;
 }
 
@@ -102,4 +102,5 @@ export interface DataTableProps<TData = any> {
   onRowClick?: (item: TData) => void;
   visibleColumns?: Set<string>;
   sort?: ColumnSort | null;
+  maxHeight?: string | number;
 }

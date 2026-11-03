@@ -23,26 +23,27 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Full Dashboard Shell Layout with responsive sidebar, header, and content container.
+ * Responsive application shell layout with collapsible sidebar, mobile drawer overlay,
+ * sticky top navigation bar, and main content area.
  */
 
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
-  AlertTriangle,
-  Building2,
-  FileSpreadsheet,
   LayoutDashboard,
   Package,
-  Settings,
-  ShieldCheck,
   Truck,
+  AlertTriangle,
+  FileSpreadsheet,
+  ShieldCheck,
+  Building2,
   Users,
+  Settings,
 } from 'lucide-react';
-import { DashboardHeader } from './DashboardHeader';
 import { DashboardSidebar } from './DashboardSidebar';
-import { DashboardLayoutProps, NavSection } from './types';
+import { DashboardHeader } from './DashboardHeader';
+import { DashboardLayoutProps, DashboardUser, NavItem, NavSection } from './types';
 
 export const DEFAULT_NAV_SECTIONS: NavSection[] = [
   {
@@ -52,6 +53,7 @@ export const DEFAULT_NAV_SECTIONS: NavSection[] = [
         title: 'Bàn làm việc (Dashboard)',
         href: '/',
         icon: LayoutDashboard,
+        permissions: ['order:view_create', 'reconciliation:run_review_audit', 'shipment:track_exceptions'],
       },
     ],
   },
@@ -62,18 +64,19 @@ export const DEFAULT_NAV_SECTIONS: NavSection[] = [
         title: 'Quản lý vận đơn',
         href: '/shipments',
         icon: Package,
+        permissions: ['order:view_create', 'shipment:track_exceptions'],
       },
       {
         title: 'Kết nối hãng vận chuyển',
         href: '/carriers',
         icon: Truck,
+        permissions: ['iam:connect_observe_token'],
       },
       {
         title: 'Cứu đơn giao thất bại',
         href: '/exceptions',
         icon: AlertTriangle,
-        badge: 3,
-        badgeVariant: 'risk',
+        permissions: ['shipment:track_exceptions'],
       },
     ],
   },
@@ -84,11 +87,13 @@ export const DEFAULT_NAV_SECTIONS: NavSection[] = [
         title: 'Bảng kê & Đối soát',
         href: '/reconciliation',
         icon: FileSpreadsheet,
+        permissions: ['reconciliation:run_review_audit'],
       },
       {
         title: 'Hồ sơ khiếu nại',
         href: '/claims',
         icon: ShieldCheck,
+        permissions: ['claim:verify_submit'],
       },
     ],
   },
@@ -99,20 +104,73 @@ export const DEFAULT_NAV_SECTIONS: NavSection[] = [
         title: 'Chi nhánh & Kho hàng',
         href: '/settings/warehouses',
         icon: Building2,
+        permissions: ['iam:shop_view', 'iam:shop_config'],
       },
       {
         title: 'Phân quyền & Thành viên',
         href: '/settings/users',
         icon: Users,
+        permissions: ['iam:manage_users'],
       },
       {
         title: 'Cài đặt hệ thống',
         href: '/settings',
         icon: Settings,
+        permissions: ['iam:shop_config'],
       },
     ],
   },
 ];
+
+/**
+ * Evaluates whether an individual NavItem is accessible to the given user based
+ * on required permissions or allowed roles (Finding 4 P2).
+ */
+export function isNavItemPermitted(item: NavItem, user?: DashboardUser | null): boolean {
+  // If item specifies no required permissions or roles, it is public/unrestricted
+  if (!item.permissions?.length && !item.roles?.length) {
+    return true;
+  }
+  // If user is absent/unauthenticated, all restricted items are denied
+  if (!user) {
+    return false;
+  }
+  const userRole = user.role?.toUpperCase();
+  // OWNER role holds full operational and administrative permissions across Ship Dễ
+  if (userRole === 'OWNER') {
+    return true;
+  }
+  // Check role matches
+  if (item.roles?.length && item.roles.some((r) => r.toUpperCase() === userRole)) {
+    return true;
+  }
+  const userPerms = user.permissions ?? [];
+  // Wildcard permission grant
+  if (userPerms.includes('*')) {
+    return true;
+  }
+  // Check discrete canonical permission code matches
+  if (item.permissions?.length && item.permissions.some((p) => userPerms.includes(p))) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Filters navigation sections by active user permissions and roles (Finding 4 P2).
+ * Empty sections resulting from filtering are pruned from display.
+ */
+export function filterNavSectionsByPermissions(
+  navSections: NavSection[],
+  user?: DashboardUser | null
+): NavSection[] {
+  return navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => isNavItemPermitted(item, user)),
+    }))
+    .filter((section) => section.items.length > 0);
+}
 
 /**
  * Breakpoint handler for responsive drawer dismissal (Finding 7).
@@ -206,6 +264,11 @@ export function DashboardLayout({
   const drawerRef = useRef<HTMLDivElement>(null);
   const previousActiveElementRef = useRef<HTMLElement | null>(null);
 
+  // Filter navigation items by active user permissions (Finding 4 P2)
+  const visibleNavSections = useMemo(() => {
+    return filterNavSectionsByPermissions(navSections, currentUser);
+  }, [navSections, currentUser]);
+
   const closeMobileNav = useCallback(() => {
     setIsMobileOpen(false);
   }, []);
@@ -258,15 +321,13 @@ export function DashboardLayout({
 
   // Close mobile drawer when resizing or entering desktop breakpoint (lg = 1024px) to prevent inert desktop freeze
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    if (typeof window === 'undefined') return;
 
     const mql = window.matchMedia('(min-width: 1024px)');
 
-    const handleMediaChange = (e: MediaQueryListEvent | MediaQueryList) => {
+    function handleMediaChange(e: MediaQueryListEvent | MediaQueryList) {
       handleDesktopBreakpointResize(e.matches, isMobileOpen, closeMobileNav);
-    };
-
-    handleDesktopBreakpointResize(mql.matches, isMobileOpen, closeMobileNav);
+    }
 
     if (mql.addEventListener) {
       mql.addEventListener('change', handleMediaChange);
@@ -292,7 +353,7 @@ export function DashboardLayout({
         inert={isMobileOpen}
       >
         <DashboardSidebar
-          navSections={navSections}
+          navSections={visibleNavSections}
           isCollapsed={isCollapsed}
           onToggleCollapse={() => setIsCollapsed((prev) => !prev)}
         />
@@ -318,7 +379,7 @@ export function DashboardLayout({
           {/* Drawer container */}
           <div className="fixed inset-y-0 left-0 max-w-full flex">
             <DashboardSidebar
-              navSections={navSections}
+              navSections={visibleNavSections}
               isMobile={true}
               onCloseMobile={closeMobileNav}
             />
