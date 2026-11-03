@@ -66,7 +66,9 @@ function concrete(value) {
     .replace(/<[^>]*>/g, '')
     .replace(/[`*_~]/g, '')
     .trim();
-  const stripped = text.replace(/^[[({<"'`\s]+/, '').replace(/[\])}>'"`;?!,\s]+$/, '');
+  const stripped = text
+    .replace(/^[-—:;~#/*[({<"'`\s]+/, '')
+    .replace(/[-—:;~#/*\])}>'"`;?!,\s]+$/, '');
   return (
     /[\p{L}\p{N}]/u.test(text) &&
     !/^(?:n\/a|none|todo|tbd|tbc|tba|wip|fixme|pending|placeholder|not applicable)(?![\p{L}\p{N}])/iu.test(

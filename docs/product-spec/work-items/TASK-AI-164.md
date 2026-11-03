@@ -135,7 +135,7 @@ On Windows, `pnpm.cmd` selects the same pnpm CLI if PowerShell blocks its `.ps1`
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | Round 1 | `300c08e7eaf6039cc8c995a26a7f2f8af0a64588` | CHANGES_REQUIRED | Findings 4 and 5 were open at this SHA; both are reproduced by the recorded negative tests. |
-| Repair handoff | Working tree based on `2619061473cfa3e091270e6457031640363fbd42` | Independent review pending | Local regression evidence for findings 4 and 5 is in `.oc/pr-body.md`; no independent PASS is claimed. |
+| Repair handoff | Working tree based on `b398626a77d33ec6e79fc38828e4ad3b5e0a4842` | Independent review pending | Local regression evidence for findings 4 and 5 is in `.oc/pr-body.md`; no independent PASS is claimed. |
 
 ## Residual limitations
 
