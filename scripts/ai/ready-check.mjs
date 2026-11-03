@@ -28,7 +28,7 @@ function documentLines(text) {
       }
     }
     uncommented.push(line);
-    const marker = line.match(/^(?: {0,3}>[ \t]*)* {0,3}(`{3,}|~{3,})(.*)$/);
+    const marker = line.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})(.*)$/);
     if (fence) {
       if (
         marker &&

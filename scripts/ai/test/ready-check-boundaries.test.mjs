@@ -204,3 +204,39 @@ test('rejects source links inside blockquoted fenced examples', () => {
   assert.equal(result.ok, false);
   assert.ok(result.problems.some((problem) => problem.includes('source-document')));
 });
+
+test('rejects source links inside list-nested fenced examples', () => {
+  const result = checkWorkItemReady(
+    valid.replace(source, '- Example:\n\n    ~~~text\n    https://example.com/spec\n    ~~~')
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects source links inside tab-indented fenced examples', () => {
+  const result = checkWorkItemReady(
+    valid.replace(source, '\t```text\n\thttps://example.com/spec\n\t```')
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects source links inside blockquote and list fenced examples', () => {
+  for (const snippet of [
+    '> - ~~~text\n>   https://example.com/spec\n>   ~~~',
+    '> - ```text\n>   https://example.com/spec\n>   ```',
+    '> - Example:\n>\n>     ~~~text\n>     https://example.com/spec\n>     ~~~',
+  ]) {
+    const result = checkWorkItemReady(valid.replace(source, snippet));
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+  }
+});
+
+test('accepts real source outside a fenced example', () => {
+  const text = valid.replace(
+    source,
+    `- Example:\n\n    ~~~text\n    https://example.com/spec\n    ~~~\n\n${source}`
+  );
+  assert.deepEqual(checkWorkItemReady(text), { ok: true, problems: [] });
+});

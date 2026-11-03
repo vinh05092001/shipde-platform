@@ -42,3 +42,28 @@ test('TASK-AI-164 delivery order does not collide with merged Work Items', () =>
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
 });
+
+test('TASK-AI-164 delivery order matches its Work Item', () => {
+  const registerPath = resolve(
+    root,
+    'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+  );
+  const registerText = readFileSync(registerPath, 'utf8');
+  const lines = registerText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const rows = lines.slice(1).map((line) => {
+    const match = line.match(/^"(\d+)",(?:"[^"]*",){2}"([^"]+)"/);
+    return { order: match ? match[1] : null, workItemId: match ? match[2] : null };
+  });
+  const item164 = rows.find((r) => r.workItemId === 'TASK-AI-164');
+  assert.ok(item164, 'TASK-AI-164 must exist in register');
+
+  const workItemPath = resolve(root, 'docs/product-spec/work-items/TASK-AI-164.md');
+  const workItemText = readFileSync(workItemPath, 'utf8');
+  const orderMatch = workItemText.match(/\|\s*Delivery order\s*\|\s*`?(\d+)`?\s*\|/i);
+  assert.ok(orderMatch, 'TASK-AI-164 must have a Delivery order in Control table');
+  assert.equal(
+    item164.order,
+    orderMatch[1],
+    `Register delivery order (${item164.order}) must match Work Item delivery order (${orderMatch[1]})`
+  );
+});
