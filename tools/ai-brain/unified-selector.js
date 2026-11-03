@@ -74,7 +74,11 @@ function harnessEnforcesTokens(harness) {
  * Computes deterministic SHA-256 hash of any JSON-serializable object.
  */
 function hashObject(obj) {
-  return crypto.createHash('sha256').update(JSON.stringify(obj || {})).digest('hex').slice(0, 16);
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(obj || {}))
+    .digest('hex')
+    .slice(0, 16);
 }
 
 // Module-level persistent cache across selection calls
@@ -100,10 +104,14 @@ class UnifiedRouteSelector {
 
     // Model restrictions belong to the caller's role policy, including combo branches.
     const patterns = this.excludedModelPatterns[role] || [];
-    const excluded = (route) => patterns.some((pattern) => {
-      const regex = pattern instanceof RegExp ? new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, '')) : new RegExp(pattern, 'i');
-      return regex.test(route.outboundModelId) || regex.test(route.configuredModelId);
-    });
+    const excluded = (route) =>
+      patterns.some((pattern) => {
+        const regex =
+          pattern instanceof RegExp
+            ? new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''))
+            : new RegExp(pattern, 'i');
+        return regex.test(route.outboundModelId) || regex.test(route.configuredModelId);
+      });
     if (excluded(id) || (id.isCombo && id.comboBranches.some(excluded))) {
       return { admitted: false, rejectionReason: 'MODEL_EXCLUDED_BY_ROLE_POLICY' };
     }
@@ -135,7 +143,9 @@ class UnifiedRouteSelector {
     // 3. Combo Constituent Branch Health & Capabilities Check (Finding 8)
     if (id.isCombo) {
       const branches = Array.isArray(id.comboBranches) ? id.comboBranches : [];
-      const viableBranches = Array.isArray(id.metadata?.viableBranches) ? id.metadata.viableBranches : [];
+      const viableBranches = Array.isArray(id.metadata?.viableBranches)
+        ? id.metadata.viableBranches
+        : [];
       if (branches.length === 0 && viableBranches.length === 0) {
         return {
           admitted: false,
@@ -148,14 +158,20 @@ class UnifiedRouteSelector {
       for (const branch of branches) {
         const evaluation = this.evaluateAdmission(branch, profile, authorCandidate);
         if (!evaluation.admitted) {
-          return { admitted: false, rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason };
+          return {
+            admitted: false,
+            rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason,
+          };
         }
       }
 
       for (const branch of viableBranches) {
         const evaluation = this.evaluateAdmission(branch, profile, authorCandidate);
         if (!evaluation.admitted) {
-          return { admitted: false, rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason };
+          return {
+            admitted: false,
+            rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason,
+          };
         }
       }
     } else {
@@ -187,8 +203,14 @@ class UnifiedRouteSelector {
     // 5. Cost Ceiling Check (Finding 2)
     // Strictly reject candidates with unknown cost when a cost ceiling is set
     const ceiling = Number(profile.costCeiling);
-    if (!id.isCombo && profile.costCeiling !== undefined && profile.costCeiling !== null &&
-        profile.costCeiling !== UNKNOWN && Number.isFinite(ceiling) && ceiling >= 0) {
+    if (
+      !id.isCombo &&
+      profile.costCeiling !== undefined &&
+      profile.costCeiling !== null &&
+      profile.costCeiling !== UNKNOWN &&
+      Number.isFinite(ceiling) &&
+      ceiling >= 0
+    ) {
       const rawCost = id.metadata?.estimatedCostUsd;
       if (rawCost === undefined || rawCost === null || rawCost === UNKNOWN) {
         return {
@@ -222,12 +244,14 @@ class UnifiedRouteSelector {
 
     // Quality: from live evidence / priors / metadata
     const qualityRaw = meta.qualityScore !== undefined ? meta.qualityScore : meta.intelligenceIndex;
-    const hasQuality = qualityRaw !== undefined && qualityRaw !== null && Number.isFinite(Number(qualityRaw));
+    const hasQuality =
+      qualityRaw !== undefined && qualityRaw !== null && Number.isFinite(Number(qualityRaw));
     const quality = hasQuality ? Number(qualityRaw) : null;
 
     // Latency: from priors / evidence
     const latencyRaw = meta.latencyScore;
-    const hasLatency = latencyRaw !== undefined && latencyRaw !== null && Number.isFinite(Number(latencyRaw));
+    const hasLatency =
+      latencyRaw !== undefined && latencyRaw !== null && Number.isFinite(Number(latencyRaw));
     const latency = hasLatency ? Number(latencyRaw) : null;
 
     // Cost: from metadata / pricing
@@ -334,7 +358,8 @@ class UnifiedRouteSelector {
         contextSize: profile.contextSize,
         deadlineMs: profile.deadlineMs,
         healthStateHash: this.healthRegistry.getStateHash(),
-        candidates: admitted.map((x) => ({ key: x.candidateKey, metadata: x.metadata, branches: x.comboBranches }))
+        candidates: admitted
+          .map((x) => ({ key: x.candidateKey, metadata: x.metadata, branches: x.comboBranches }))
           .sort((a, b) => a.key.localeCompare(b.key)),
       });
 
@@ -383,7 +408,7 @@ class UnifiedRouteSelector {
             // Rule: "JEV lỗi/undecided phải có fallback xác định được và được ghi log."
             jevOutcome = 'UNDECIDED';
             jevReason = 'JEV_LOW_CONFIDENCE_OR_UNDECIDED_DETERMINISTIC_FALLBACK';
-            jevConfidence = jevResponse ? jevResponse.confidence ?? UNKNOWN : UNKNOWN;
+            jevConfidence = jevResponse ? (jevResponse.confidence ?? UNKNOWN) : UNKNOWN;
             chosenProfileKey = fallbackProfileKey;
           }
 
@@ -397,7 +422,11 @@ class UnifiedRouteSelector {
           jevOutcome = 'ERROR';
           jevReason = `JEV_CALL_FAILED_${err.message || 'EXCEPTION'}_DETERMINISTIC_FALLBACK`;
           chosenProfileKey = fallbackProfileKey;
-          this.jevCache.set(cacheKey, { chosenProfileKey, confidence: jevConfidence, outcome: jevOutcome });
+          this.jevCache.set(cacheKey, {
+            chosenProfileKey,
+            confidence: jevConfidence,
+            outcome: jevOutcome,
+          });
         }
       }
     } else if (admitted.length < 2) {
@@ -545,9 +574,13 @@ class UnifiedRouteSelector {
  */
 async function selectOptimalRoute(params = {}) {
   const { aggregateAllCandidates } = require('./candidate-adapters');
-  const selector = new UnifiedRouteSelector({ healthRegistry: SHARED_HEALTH_REGISTRY, ...params.selectorOptions });
+  const selector = new UnifiedRouteSelector({
+    healthRegistry: SHARED_HEALTH_REGISTRY,
+    ...params.selectorOptions,
+  });
 
-  const aggregated = params.candidates ? { candidates: params.candidates, unconnectedSources: [] }
+  const aggregated = params.candidates
+    ? { candidates: params.candidates, unconnectedSources: [] }
     : aggregateAllCandidates(params.adapterOptions || {});
   const candidates = params.candidates || aggregated.candidates;
 

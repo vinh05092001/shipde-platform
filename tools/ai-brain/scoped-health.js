@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-'use strict';
+('use strict');
 
 /**
  * Ship Dễ — Scoped Health & Failure Classification (PATCH 1 - Fixed per Codex Review)
@@ -51,7 +51,9 @@ const HealthScope = Object.freeze({
 function classifyError(input, now = Date.now()) {
   const i = input || {};
   const status = Number(i.httpStatus || i.status || i.statusCode || 0);
-  const code = String(i.code || '').trim().toUpperCase();
+  const code = String(i.code || '')
+    .trim()
+    .toUpperCase();
   const text = [
     String(i.message || ''),
     String(i.error || ''),
@@ -67,7 +69,9 @@ function classifyError(input, now = Date.now()) {
   // 1. GATEWAY_DOWN: Gateway process down / connection refused on port 20128
   if (
     code === 'ECONNREFUSED' &&
-    (lowerText.includes('20128') || String(i.endpoint || '').includes('20128') || i.gatewayId === '9router')
+    (lowerText.includes('20128') ||
+      String(i.endpoint || '').includes('20128') ||
+      i.gatewayId === '9router')
   ) {
     return {
       category: ErrorCategory.GATEWAY_DOWN,
@@ -85,7 +89,9 @@ function classifyError(input, now = Date.now()) {
     code === 'EAI_AGAIN' ||
     code === 'ECONNRESET' ||
     code === 'EPIPE' ||
-    /getaddrinfo (enotfound|eai_again)|dns resolution failed|socket hang up|read econnreset/i.test(text)
+    /getaddrinfo (enotfound|eai_again)|dns resolution failed|socket hang up|read econnreset/i.test(
+      text
+    )
   ) {
     return {
       category: ErrorCategory.NETWORK_DNS,
@@ -132,10 +138,7 @@ function classifyError(input, now = Date.now()) {
   }
 
   // 5. PERMISSION: 403 Forbidden / Access denied
-  if (
-    status === 403 &&
-    !/unsupported model|model not found|no channel/i.test(text)
-  ) {
+  if (status === 403 && !/unsupported model|model not found|no channel/i.test(text)) {
     return {
       category: ErrorCategory.PERMISSION,
       scope: HealthScope.ACCOUNT,
@@ -149,12 +152,14 @@ function classifyError(input, now = Date.now()) {
   // 6. QUOTA_CREDIT: Out of credits, balance exhausted, monthly quota
   if (
     status === 402 ||
-    (status === 400 && /credit insufficient|balance=0|insufficient balance|balance is zero/i.test(text)) ||
+    (status === 400 &&
+      /credit insufficient|balance=0|insufficient balance|balance is zero/i.test(text)) ||
     /quota exceeded|quota reached|usage limit exceeded|insufficient_quota|monthly limit exceeded|out of credits|balance=0/i.test(
       text
     )
   ) {
-    const parsedReset = parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
+    const parsedReset =
+      parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
     const cooldownMs = parsedReset ? Math.max(0, parsedReset - now) : 60 * 60 * 1000;
     return {
       category: ErrorCategory.QUOTA_CREDIT,
@@ -168,7 +173,8 @@ function classifyError(input, now = Date.now()) {
 
   // 7. RATE_LIMIT: Transient 429 (scoped to model/account)
   if (status === 429) {
-    const parsedReset = parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
+    const parsedReset =
+      parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
     const cooldownMs = parsedReset ? Math.max(0, parsedReset - now) : 5 * 60 * 1000;
     return {
       category: ErrorCategory.RATE_LIMIT,
@@ -258,14 +264,18 @@ function parseResetHint(text, now = Date.now()) {
  */
 function accountHealthKey(id) {
   const realAccount = id.metadata?.realAccountRef;
-  const fromPrivate = (realAccount && realAccount !== 'UNKNOWN' ? getPrivateEmail(realAccount) : null)
-    || (id.accountRef && id.accountRef !== 'UNKNOWN' ? getPrivateEmail(id.accountRef) : null);
-  const account = fromPrivate || (realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef);
+  const fromPrivate =
+    (realAccount && realAccount !== 'UNKNOWN' ? getPrivateEmail(realAccount) : null) ||
+    (id.accountRef && id.accountRef !== 'UNKNOWN' ? getPrivateEmail(id.accountRef) : null);
+  const account =
+    fromPrivate || (realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef);
   const observed = account && account !== 'UNKNOWN' ? account : id.connectionId;
-  const safeObserved = typeof observed === 'string' && observed.includes('@')
-    ? hashEmail(observed)
-    : observed;
-  return JSON.stringify([id.upstreamProviderId, safeObserved && safeObserved !== 'UNKNOWN' ? safeObserved : id.candidateKey]);
+  const safeObserved =
+    typeof observed === 'string' && observed.includes('@') ? hashEmail(observed) : observed;
+  return JSON.stringify([
+    id.upstreamProviderId,
+    safeObserved && safeObserved !== 'UNKNOWN' ? safeObserved : id.candidateKey,
+  ]);
 }
 
 function quotaHealthKey(id) {
@@ -273,7 +283,11 @@ function quotaHealthKey(id) {
 }
 
 function modelLockHealthKey(provider, model, connectionId) {
-  return JSON.stringify([String(provider || 'unknown'), String(model || 'unknown'), String(connectionId || '*')]);
+  return JSON.stringify([
+    String(provider || 'unknown'),
+    String(model || 'unknown'),
+    String(connectionId || '*'),
+  ]);
 }
 
 function accountModelHealthKey(id) {
@@ -297,7 +311,11 @@ class ScopedHealthRegistry {
 
     switch (classification.scope) {
       case HealthScope.GATEWAY:
-        if (identity.gatewayId && identity.gatewayId !== 'direct' && identity.gatewayId !== 'none') {
+        if (
+          identity.gatewayId &&
+          identity.gatewayId !== 'direct' &&
+          identity.gatewayId !== 'none'
+        ) {
           this.gateways.set(identity.gatewayId, {
             category: classification.category,
             resetsAt: classification.resetsAt,
@@ -409,7 +427,9 @@ class ScopedHealthRegistry {
     }
 
     // Check Multi-account Combo Candidate Accounts
-    const candidateAccounts = Array.isArray(id.metadata?.candidateAccounts) ? id.metadata.candidateAccounts : [];
+    const candidateAccounts = Array.isArray(id.metadata?.candidateAccounts)
+      ? id.metadata.candidateAccounts
+      : [];
     if (candidateAccounts.length > 0) {
       let anyHealthy = false;
       let lastFailure = null;
@@ -421,21 +441,41 @@ class ScopedHealthRegistry {
           quotaScopeId: cand.quotaScopeId || id.quotaScopeId,
         };
         const candAccKey = accountHealthKey(dummyId);
-        const candRec = this.accounts.get(candAccKey) || (cand.accountRef && cand.accountRef !== 'UNKNOWN' ? this.accounts.get(cand.accountRef) : null);
-        const candBlocked = candRec && (candRec.isPermanent || (candRec.resetsAt && now < candRec.resetsAt));
+        const candRec =
+          this.accounts.get(candAccKey) ||
+          (cand.accountRef && cand.accountRef !== 'UNKNOWN'
+            ? this.accounts.get(cand.accountRef)
+            : null);
+        const candBlocked =
+          candRec && (candRec.isPermanent || (candRec.resetsAt && now < candRec.resetsAt));
 
         const candQuotaKey = quotaHealthKey(dummyId);
-        const candQuotaRec = this.quotaScopes.get(candQuotaKey) || (cand.quotaScopeId && cand.quotaScopeId !== 'UNKNOWN' ? this.quotaScopes.get(cand.quotaScopeId) : null);
+        const candQuotaRec =
+          this.quotaScopes.get(candQuotaKey) ||
+          (cand.quotaScopeId && cand.quotaScopeId !== 'UNKNOWN'
+            ? this.quotaScopes.get(cand.quotaScopeId)
+            : null);
         // Elapsed resetAt requires fresh probe evidence; it does NOT treat the account as recovered
         const candQuotaBlocked = Boolean(candQuotaRec && candQuotaRec.exhausted);
 
         const candModelKey = accountModelHealthKey(dummyId);
         const candModelRec = this.accountModels.get(candModelKey);
-        const candModelBlocked = Boolean(candModelRec && (candModelRec.isPermanent || (candModelRec.resetsAt && now < candModelRec.resetsAt)));
+        const candModelBlocked = Boolean(
+          candModelRec &&
+          (candModelRec.isPermanent || (candModelRec.resetsAt && now < candModelRec.resetsAt))
+        );
 
         // Per-connection and wildcard model locks
-        const candLockKey = modelLockHealthKey(dummyId.upstreamProviderId, dummyId.outboundModelId, dummyId.connectionId);
-        const candWildcardKey = modelLockHealthKey(dummyId.upstreamProviderId, dummyId.outboundModelId, '*');
+        const candLockKey = modelLockHealthKey(
+          dummyId.upstreamProviderId,
+          dummyId.outboundModelId,
+          dummyId.connectionId
+        );
+        const candWildcardKey = modelLockHealthKey(
+          dummyId.upstreamProviderId,
+          dummyId.outboundModelId,
+          '*'
+        );
         let candConnLock = this.modelLocks.get(candLockKey);
         if (candConnLock && now > candConnLock) {
           this.modelLocks.delete(candLockKey);
@@ -446,7 +486,9 @@ class ScopedHealthRegistry {
           this.modelLocks.delete(candWildcardKey);
           candWildcardLock = null;
         }
-        const candLockUntil = (candConnLock && now <= candConnLock ? candConnLock : null) || (candWildcardLock && now <= candWildcardLock ? candWildcardLock : null);
+        const candLockUntil =
+          (candConnLock && now <= candConnLock ? candConnLock : null) ||
+          (candWildcardLock && now <= candWildcardLock ? candWildcardLock : null);
         const candLockBlocked = Boolean(candLockUntil);
 
         if (!candBlocked && !candQuotaBlocked && !candModelBlocked && !candLockBlocked) {
@@ -462,7 +504,12 @@ class ScopedHealthRegistry {
           };
         } else if (candModelBlocked) {
           lastFailure = candModelRec;
-        } else if (candQuotaBlocked && candQuotaRec && candQuotaRec.resetsAt && now > candQuotaRec.resetsAt) {
+        } else if (
+          candQuotaBlocked &&
+          candQuotaRec &&
+          candQuotaRec.resetsAt &&
+          now > candQuotaRec.resetsAt
+        ) {
           lastFailure = {
             category: ErrorCategory.QUOTA_CREDIT,
             scope: HealthScope.QUOTA_SCOPE,
@@ -470,7 +517,15 @@ class ScopedHealthRegistry {
             resetsAt: null,
           };
         } else {
-          lastFailure = candRec || (candQuotaBlocked ? { category: ErrorCategory.QUOTA_CREDIT, scope: HealthScope.QUOTA_SCOPE, reason: candQuotaRec?.reason || 'QUOTA_EXHAUSTED' } : null);
+          lastFailure =
+            candRec ||
+            (candQuotaBlocked
+              ? {
+                  category: ErrorCategory.QUOTA_CREDIT,
+                  scope: HealthScope.QUOTA_SCOPE,
+                  reason: candQuotaRec?.reason || 'QUOTA_EXHAUSTED',
+                }
+              : null);
         }
       }
       if (!anyHealthy) {
@@ -521,7 +576,10 @@ class ScopedHealthRegistry {
 
     // 5. Check Account-scoped Model (rate limits on this specific account)
     const accModelRec = this.accountModels.get(accountModelHealthKey(id));
-    if (accModelRec && (accModelRec.isPermanent || (accModelRec.resetsAt && now < accModelRec.resetsAt))) {
+    if (
+      accModelRec &&
+      (accModelRec.isPermanent || (accModelRec.resetsAt && now < accModelRec.resetsAt))
+    ) {
       return {
         healthy: false,
         blockedBy: HealthScope.MODEL,

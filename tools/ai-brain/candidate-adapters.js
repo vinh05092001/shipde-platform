@@ -19,7 +19,14 @@
 
 const fs = require('fs');
 const path = require('path');
-const { createRouteIdentity, linkSharedQuotaScopes, PREFIX_PROVIDER_MAP, UNKNOWN, registerPrivateEmail, hashEmail } = require('./route-identity');
+const {
+  createRouteIdentity,
+  linkSharedQuotaScopes,
+  PREFIX_PROVIDER_MAP,
+  UNKNOWN,
+  registerPrivateEmail,
+  hashEmail,
+} = require('./route-identity');
 
 // Using shared PREFIX_PROVIDER_MAP imported from ./route-identity
 
@@ -27,7 +34,8 @@ function modelQuotaGroup(model) {
   const m = String(model || '').toLowerCase();
   if (/argon/i.test(m)) return 'argon';
   if (m.includes('gemini')) return 'gemini';
-  if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet')) return 'external';
+  if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet'))
+    return 'external';
   return 'external';
 }
 
@@ -38,7 +46,7 @@ function modelFamily(model) {
 function readLaneIdentityEmail(laneId, options) {
   if (typeof options?.readLaneIdentity === 'function') {
     const res = options.readLaneIdentity(laneId);
-    const em = typeof res === 'string' ? res : (res?.email || res?.label);
+    const em = typeof res === 'string' ? res : res?.email || res?.label;
     if (typeof em === 'string' && em.includes('@') && em !== laneId) return em.trim();
   }
   if (options?.laneIdentities && options.laneIdentities[laneId]) {
@@ -47,7 +55,8 @@ function readLaneIdentityEmail(laneId, options) {
   }
   try {
     const agyPool = require('./agy-pool-runtime');
-    const dir = typeof agyPool.accountDir === 'function' ? agyPool.accountDir(laneId, options) : null;
+    const dir =
+      typeof agyPool.accountDir === 'function' ? agyPool.accountDir(laneId, options) : null;
     if (dir) {
       const idFile = path.join(dir, 'identity.json');
       if (fs.existsSync(idFile)) {
@@ -64,7 +73,9 @@ function readLaneIdentityEmail(laneId, options) {
 
 // Preserve discovered evidence; absence is never a capability or ranking claim.
 function modelId(model) {
-  return typeof model === 'string' ? model.trim() : String(model?.id || model?.modelId || model?.model || model?.configuredModelId || '').trim();
+  return typeof model === 'string'
+    ? model.trim()
+    : String(model?.id || model?.modelId || model?.model || model?.configuredModelId || '').trim();
 }
 
 function modelEvidence(model, options, source = {}) {
@@ -79,17 +90,26 @@ function modelEvidence(model, options, source = {}) {
   const explicitGroup = evidence.quotaGroup || metadata.quotaGroup;
   const explicitFamily = evidence.quotaFamily || metadata.quotaFamily;
   const familyToGroup = explicitFamily
-    ? (/argon/i.test(explicitFamily) ? 'argon' : /claude|gpt|3p|external/i.test(explicitFamily) ? 'external' : /gemini/i.test(explicitFamily) ? 'gemini' : explicitFamily)
+    ? /argon/i.test(explicitFamily)
+      ? 'argon'
+      : /claude|gpt|3p|external/i.test(explicitFamily)
+        ? 'external'
+        : /gemini/i.test(explicitFamily)
+          ? 'gemini'
+          : explicitFamily
     : undefined;
   // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily).
   // Do NOT inject inferred group into evidence here so parsed group membership in lane quota is reachable!
   const quotaGroup = explicitGroup || familyToGroup;
-  const quotaFamily = explicitFamily || (quotaGroup ? (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup) : undefined);
+  const quotaFamily =
+    explicitFamily ||
+    (quotaGroup ? (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup) : undefined);
   return {
     ...metadata,
     ...(quotaGroup ? { quotaGroup } : {}),
     ...(quotaFamily ? { quotaFamily } : {}),
-    capabilities: options.modelCapabilities?.[id] ?? metadata.capabilities ?? source.capabilities ?? [],
+    capabilities:
+      options.modelCapabilities?.[id] ?? metadata.capabilities ?? source.capabilities ?? [],
   };
 }
 
@@ -121,7 +141,9 @@ function load9RouterCandidates(options = {}) {
             rawCatalog = content;
             break;
           } else if (content && content.models && typeof content.models === 'object') {
-            rawCatalog = Array.isArray(content.models) ? content.models : Object.entries(content.models).map(([id, evidence]) => ({ ...evidence, id }));
+            rawCatalog = Array.isArray(content.models)
+              ? content.models
+              : Object.entries(content.models).map(([id, evidence]) => ({ ...evidence, id }));
             break;
           }
         }
@@ -173,7 +195,10 @@ function load9RouterCandidates(options = {}) {
 
   const connectionList = Array.isArray(connections) ? connections : [];
   if (connectionList.length === 0) {
-    return { candidates, unconnected: [{ sourceId: '9router', reason: 'NO_ENABLED_CONNECTIONS_DISCOVERED' }] };
+    return {
+      candidates,
+      unconnected: [{ sourceId: '9router', reason: 'NO_ENABLED_CONNECTIONS_DISCOVERED' }],
+    };
   }
 
   for (const rawModel of rawCatalog) {
@@ -196,8 +221,12 @@ function load9RouterCandidates(options = {}) {
           connProv === provider.toLowerCase() ||
           resolvedConnProv === provider.toLowerCase() ||
           (prefix && connProv === prefix.toLowerCase()) ||
-          (prefix && PREFIX_PROVIDER_MAP[prefix] && connProv === PREFIX_PROVIDER_MAP[prefix].toLowerCase());
-        return provMatch && (!Array.isArray(conn.modelAllowlist) || conn.modelAllowlist.includes(m));
+          (prefix &&
+            PREFIX_PROVIDER_MAP[prefix] &&
+            connProv === PREFIX_PROVIDER_MAP[prefix].toLowerCase());
+        return (
+          provMatch && (!Array.isArray(conn.modelAllowlist) || conn.modelAllowlist.includes(m))
+        );
       });
 
       if (matchingConnections.length === 0) {
@@ -216,7 +245,8 @@ function load9RouterCandidates(options = {}) {
           registerPrivateEmail(conn.connectionId, rawAcc);
           registerPrivateEmail(hashEmail(rawAcc), rawAcc);
         }
-        const accRef = typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
+        const accRef =
+          typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
         const connId = conn.connectionId || UNKNOWN;
         candidates.push(
           createRouteIdentity({
@@ -308,7 +338,8 @@ function loadDirectProviderCandidates(options = {}) {
         registerPrivateEmail(src.id, rawAcc);
         registerPrivateEmail(hashEmail(rawAcc), rawAcc);
       }
-      const accRef = typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
+      const accRef =
+        typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
       const connId = src.id;
       const prov = src.provider || src.id;
 
@@ -353,7 +384,10 @@ function loadAgyPoolCandidates(options = {}) {
         lanes = accountIds.map((laneId) => {
           let quota;
           try {
-            quota = typeof agyPool.quotaReading === 'function' ? agyPool.quotaReading(laneId, options) : null;
+            quota =
+              typeof agyPool.quotaReading === 'function'
+                ? agyPool.quotaReading(laneId, options)
+                : null;
           } catch {}
           const realAccountRef = readLaneIdentityEmail(laneId, options);
           return {
@@ -389,14 +423,20 @@ function loadAgyPoolCandidates(options = {}) {
     }
 
     let laneEmail = UNKNOWN;
-    if (lane.accountRef && lane.accountRef !== lane.laneId && lane.accountRef !== UNKNOWN && String(lane.accountRef).includes('@')) {
+    if (
+      lane.accountRef &&
+      lane.accountRef !== lane.laneId &&
+      lane.accountRef !== UNKNOWN &&
+      String(lane.accountRef).includes('@')
+    ) {
       laneEmail = lane.accountRef;
     } else {
       laneEmail = readLaneIdentityEmail(lane.laneId, options);
     }
-    const safeAccountHash = laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')
-      ? hashEmail(laneEmail)
-      : UNKNOWN;
+    const safeAccountHash =
+      laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')
+        ? hashEmail(laneEmail)
+        : UNKNOWN;
 
     if (laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')) {
       registerPrivateEmail(lane.laneId, laneEmail);
@@ -414,39 +454,109 @@ function loadAgyPoolCandidates(options = {}) {
 
       // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily, then parsed group membership).
       // Name inference ONLY when no data exists, and it never overrides data.
-      const explicitGroup = rawModel.quotaGroup || rawModel.metadata?.quotaGroup || options.modelMetadata?.[m]?.quotaGroup || evidence.quotaGroup;
-      const explicitFamily = rawModel.quotaFamily || rawModel.metadata?.quotaFamily || options.modelMetadata?.[m]?.quotaFamily || evidence.quotaFamily;
+      const explicitGroup =
+        rawModel.quotaGroup ||
+        rawModel.metadata?.quotaGroup ||
+        options.modelMetadata?.[m]?.quotaGroup ||
+        evidence.quotaGroup;
+      const explicitFamily =
+        rawModel.quotaFamily ||
+        rawModel.metadata?.quotaFamily ||
+        options.modelMetadata?.[m]?.quotaFamily ||
+        evidence.quotaFamily;
       const explicitGroupFromFamily = explicitFamily
-        ? (/argon/i.test(explicitFamily) ? 'argon' : /claude|gpt|3p|external/i.test(explicitFamily) ? 'external' : /gemini/i.test(explicitFamily) ? 'gemini' : explicitFamily)
+        ? /argon/i.test(explicitFamily)
+          ? 'argon'
+          : /claude|gpt|3p|external/i.test(explicitFamily)
+            ? 'external'
+            : /gemini/i.test(explicitFamily)
+              ? 'gemini'
+              : explicitFamily
         : null;
       const explicitDataGroup = explicitGroup || explicitGroupFromFamily;
 
       const membershipRow = rows.find((r) => Array.isArray(r.models) && r.models.includes(m));
-      const membershipGroup = membershipRow?.group || (membershipRow?.family ? (/argon/i.test(membershipRow.family) ? 'argon' : /claude|gpt|3p|external/i.test(membershipRow.family) ? 'external' : /gemini/i.test(membershipRow.family) ? 'gemini' : membershipRow.family) : null);
-      const laneGroups = Array.isArray(lane.quota?.groups) ? lane.quota.groups : Array.isArray(lane.groups) ? lane.groups : [];
-      const membershipFromGroup = laneGroups.find((g) => Array.isArray(g.models) && g.models.includes(m));
+      const membershipGroup =
+        membershipRow?.group ||
+        (membershipRow?.family
+          ? /argon/i.test(membershipRow.family)
+            ? 'argon'
+            : /claude|gpt|3p|external/i.test(membershipRow.family)
+              ? 'external'
+              : /gemini/i.test(membershipRow.family)
+                ? 'gemini'
+                : membershipRow.family
+          : null);
+      const laneGroups = Array.isArray(lane.quota?.groups)
+        ? lane.quota.groups
+        : Array.isArray(lane.groups)
+          ? lane.groups
+          : [];
+      const membershipFromGroup = laneGroups.find(
+        (g) => Array.isArray(g.models) && g.models.includes(m)
+      );
       const parsedGroupFromLane = membershipFromGroup?.id || membershipFromGroup?.group;
-      const parsedGroup = membershipGroup || (parsedGroupFromLane ? (/argon/i.test(parsedGroupFromLane) ? 'argon' : /claude|gpt|3p|external/i.test(parsedGroupFromLane) ? 'external' : /gemini/i.test(parsedGroupFromLane) ? 'gemini' : parsedGroupFromLane) : null);
+      const parsedGroup =
+        membershipGroup ||
+        (parsedGroupFromLane
+          ? /argon/i.test(parsedGroupFromLane)
+            ? 'argon'
+            : /claude|gpt|3p|external/i.test(parsedGroupFromLane)
+              ? 'external'
+              : /gemini/i.test(parsedGroupFromLane)
+                ? 'gemini'
+                : parsedGroupFromLane
+          : null);
 
       const targetGroup = explicitDataGroup || parsedGroup || modelQuotaGroup(m);
-      const targetFamily = explicitFamily || (targetGroup === 'external' ? 'claude-gpt' : targetGroup);
+      const targetFamily =
+        explicitFamily || (targetGroup === 'external' ? 'claude-gpt' : targetGroup);
 
       const matchingRows = rows.filter((r) => {
         if (modelId(r) === m) return true;
         if (Array.isArray(r.models) && r.models.includes(m)) return true;
-        const rowGroup = r.group || (r.family ? (/argon/i.test(r.family) ? 'argon' : /claude|gpt|3p|external/i.test(r.family) ? 'external' : /gemini/i.test(r.family) ? 'gemini' : r.family) : null);
+        const rowGroup =
+          r.group ||
+          (r.family
+            ? /argon/i.test(r.family)
+              ? 'argon'
+              : /claude|gpt|3p|external/i.test(r.family)
+                ? 'external'
+                : /gemini/i.test(r.family)
+                  ? 'gemini'
+                  : r.family
+            : null);
         if (rowGroup && rowGroup === targetGroup) return true;
-        if (r.family && (r.family === targetGroup || (targetGroup === 'external' && r.family === 'claude-gpt'))) return true;
+        if (
+          r.family &&
+          (r.family === targetGroup || (targetGroup === 'external' && r.family === 'claude-gpt'))
+        )
+          return true;
         return false;
       });
-      const exhausted = matchingRows.some((r) => r.disabled === true ||
-        (r.remainingPercent != null && Number.isFinite(Number(r.remainingPercent)) && Number(r.remainingPercent) <= 0));
-      const known = matchingRows.length > 0 && matchingRows.every((r) =>
-        r.known !== false && r.remainingPercent != null && r.remainingPercent !== '' &&
-        Number.isFinite(Number(r.remainingPercent)));
+      const exhausted = matchingRows.some(
+        (r) =>
+          r.disabled === true ||
+          (r.remainingPercent != null &&
+            Number.isFinite(Number(r.remainingPercent)) &&
+            Number(r.remainingPercent) <= 0)
+      );
+      const known =
+        matchingRows.length > 0 &&
+        matchingRows.every(
+          (r) =>
+            r.known !== false &&
+            r.remainingPercent != null &&
+            r.remainingPercent !== '' &&
+            Number.isFinite(Number(r.remainingPercent))
+        );
       if (lane.quota?.available === false || exhausted || !known) {
-        unconnected.push({ sourceId: 'agy-pool', laneId: lane.laneId, configuredModelId: m,
-          reason: exhausted ? 'AGY_MODEL_QUOTA_EXHAUSTED' : 'AGY_MODEL_QUOTA_UNKNOWN' });
+        unconnected.push({
+          sourceId: 'agy-pool',
+          laneId: lane.laneId,
+          configuredModelId: m,
+          reason: exhausted ? 'AGY_MODEL_QUOTA_EXHAUSTED' : 'AGY_MODEL_QUOTA_UNKNOWN',
+        });
         continue;
       }
       const quotaScopeKey = `agy-quota::${lane.laneId}::${targetGroup}`;

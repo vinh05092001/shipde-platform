@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-'use strict';
+('use strict');
 
 /**
  * Ship Dễ — Route Identity Specification (PATCH 1 - Fixed per Codex Review)
@@ -57,10 +57,7 @@ function escapePart(str) {
 
 function unescapePart(str) {
   if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/%3A/g, ':')
-    .replace(/%241F/g, '\u241f')
-    .replace(/%25/g, '%');
+  return String(str).replace(/%3A/g, ':').replace(/%241F/g, '\u241f').replace(/%25/g, '%');
 }
 
 /**
@@ -70,8 +67,14 @@ const PRIVATE_ACCOUNT_EMAIL_MAP = new Map();
 const PRIVATE_SALT = 'shipde-route-identity-salt-v1';
 
 function hashEmail(email) {
-  const normalized = String(email || '').trim().toLowerCase();
-  return crypto.createHash('sha256').update(PRIVATE_SALT + '::' + normalized).digest('hex').slice(0, 10);
+  const normalized = String(email || '')
+    .trim()
+    .toLowerCase();
+  return crypto
+    .createHash('sha256')
+    .update(PRIVATE_SALT + '::' + normalized)
+    .digest('hex')
+    .slice(0, 10);
 }
 
 function registerPrivateEmail(key, email) {
@@ -107,11 +110,13 @@ function sanitizeMetadata(meta) {
   const out = {};
   for (const [k, v] of Object.entries(meta)) {
     // Property names (keys) must be sanitized so email addresses are never copied into keys
-    const safeKey = typeof k === 'string' && k.includes('@')
-      ? maskEmailsInString(k)
-      : k;
+    const safeKey = typeof k === 'string' && k.includes('@') ? maskEmailsInString(k) : k;
 
-    if (safeKey === 'realAccountRef' || safeKey === 'accountRef' || safeKey === 'originalQuotaScope') {
+    if (
+      safeKey === 'realAccountRef' ||
+      safeKey === 'accountRef' ||
+      safeKey === 'originalQuotaScope'
+    ) {
       if (typeof v === 'string' && v.includes('@')) {
         registerPrivateEmail(hashEmail(v), v);
         out[safeKey] = hashEmail(v);
@@ -144,7 +149,8 @@ function getQuotaGroup(id) {
     const f = String(id.metadata.quotaFamily).toLowerCase();
     if (f.includes('argon')) return 'argon';
     if (f.includes('gemini')) return 'gemini';
-    if (f.includes('claude') || f.includes('gpt') || f.includes('3p') || f.includes('external')) return 'external';
+    if (f.includes('claude') || f.includes('gpt') || f.includes('3p') || f.includes('external'))
+      return 'external';
     return f;
   }
   const m = String(id?.outboundModelId || id?.configuredModelId || '').toLowerCase();
@@ -152,7 +158,8 @@ function getQuotaGroup(id) {
   if (m.includes('gemini')) return 'gemini';
   const prov = String(id?.upstreamProviderId || id?.sourceId || '').toLowerCase();
   if (prov.includes('antigravity') || prov.includes('agy')) {
-    if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet')) return 'external';
+    if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet'))
+      return 'external';
     return 'external';
   }
   return undefined;
@@ -216,7 +223,7 @@ function createRouteIdentity(input) {
 
   const harness = input.harness ? String(input.harness).trim() : UNKNOWN;
   const sourceId = input.sourceId ? String(input.sourceId).trim() : UNKNOWN;
-  
+
   let gatewayId = input.gatewayId || input.gateway;
   if (!gatewayId) {
     if (sourceId === '9router' || (input.endpoint && String(input.endpoint).includes('20128'))) {
@@ -227,10 +234,8 @@ function createRouteIdentity(input) {
   }
 
   const configuredModelId = input.configuredModelId || input.modelId || input.model || UNKNOWN;
-  const { upstreamProviderId: parsedProvider, outboundModelId: parsedOutbound } = resolveModelPrefix(
-    configuredModelId,
-    input.customAliases
-  );
+  const { upstreamProviderId: parsedProvider, outboundModelId: parsedOutbound } =
+    resolveModelPrefix(configuredModelId, input.customAliases);
 
   const upstreamProviderId = input.upstreamProviderId || input.upstream || parsedProvider;
   const outboundModelId = input.outboundModelId || parsedOutbound;
@@ -405,7 +410,9 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     }
     const fromPrivate =
       getPrivateEmail(id.accountRef) ||
-      (id.metadata?.laneId && id.accountRef ? getPrivateEmail(id.metadata.laneId + '::' + id.accountRef) : null);
+      (id.metadata?.laneId && id.accountRef
+        ? getPrivateEmail(id.metadata.laneId + '::' + id.accountRef)
+        : null);
     if (fromPrivate) return fromPrivate;
     if (id.harness === 'agy-pool' || id.pathway === 'AGY_POOL') {
       return UNKNOWN;
@@ -426,7 +433,9 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     ) {
       const prov = id.upstreamProviderId || 'shared';
       const qGroup = getQuotaGroup(id);
-      const key = qGroup ? JSON.stringify([prov, account, qGroup]) : JSON.stringify([prov, account]);
+      const key = qGroup
+        ? JSON.stringify([prov, account, qGroup])
+        : JSON.stringify([prov, account]);
       if (!accountOccurrences.has(key)) {
         accountOccurrences.set(key, []);
       }
@@ -440,9 +449,7 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     const baseKey = JSON.stringify([prov, account]);
     // Auto-detect if not already explicitly mapped
     if (!links.has(key) && !links.has(baseKey) && !links.has(account) && ids.length > 1) {
-      const safeAccount = String(account).includes('@')
-        ? hashEmail(account)
-        : account;
+      const safeAccount = String(account).includes('@') ? hashEmail(account) : account;
       const canonicalScope = qGroup
         ? `quota::${prov}::${safeAccount}::${qGroup}`
         : `quota::${prov}::${safeAccount}`;
@@ -471,9 +478,10 @@ function linkSharedQuotaScopes(identities, accountLinks) {
       links.get(id.connectionId);
 
     if (targetScope && targetScope !== id.quotaScopeId) {
-      const safeOrigScope = typeof id.quotaScopeId === 'string' && id.quotaScopeId.includes('@')
-        ? maskEmailsInString(id.quotaScopeId)
-        : id.quotaScopeId;
+      const safeOrigScope =
+        typeof id.quotaScopeId === 'string' && id.quotaScopeId.includes('@')
+          ? maskEmailsInString(id.quotaScopeId)
+          : id.quotaScopeId;
       return createRouteIdentity({
         ...id,
         quotaScopeId: targetScope,
@@ -519,7 +527,9 @@ function expandComboIdentity(comboIdentity, constituentModels, candidateAccountM
           connectionId: a.connectionId || UNKNOWN,
           accountRef: a.accountRef || UNKNOWN,
           priority: a.priority ?? UNKNOWN,
-          quotaScopeId: a.quotaScopeId || `quota::${upstreamProviderId}::${a.accountRef || a.connectionId || UNKNOWN}`,
+          quotaScopeId:
+            a.quotaScopeId ||
+            `quota::${upstreamProviderId}::${a.accountRef || a.connectionId || UNKNOWN}`,
         })),
       },
     });

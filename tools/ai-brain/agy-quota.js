@@ -58,7 +58,8 @@ function mapFamily(name) {
     .toLowerCase();
   if (s.includes('argon')) return 'argon';
   if (s.includes('gemini')) return Family.GEMINI;
-  if (s.includes('claude') || s.includes('gpt') || s.includes('3p') || s.includes('external')) return Family.CLAUDE_GPT;
+  if (s.includes('claude') || s.includes('gpt') || s.includes('3p') || s.includes('external'))
+    return Family.CLAUDE_GPT;
   return null;
 }
 
@@ -103,8 +104,9 @@ function parseTsvRows(text) {
       const colName = cols[0];
       const s = colName.toLowerCase();
       const isArgon = /argon/i.test(s);
-      const isExternal = s.includes('claude') || s.includes('gpt') || s.includes('3p') || s.includes('external');
-      const group = isArgon ? 'argon' : (isExternal ? 'external' : 'gemini');
+      const isExternal =
+        s.includes('claude') || s.includes('gpt') || s.includes('3p') || s.includes('external');
+      const group = isArgon ? 'argon' : isExternal ? 'external' : 'gemini';
       const family = isArgon ? 'argon' : mapFamily(colName);
       const window = mapWindow(cols[1]);
       if (!family || !window) continue;
@@ -157,13 +159,24 @@ function parseFixtureGroups(doc) {
     const gid = String(group.id || '').toLowerCase();
     const gname = String(group.name || '');
     const isArgon = gid === 'argon' || /argon/i.test(gname);
-    const isExternal = gid === 'external' || /claude|gpt|3p/i.test(gname) || /claude|gpt|3p/i.test(gid);
+    const isExternal =
+      gid === 'external' || /claude|gpt|3p/i.test(gname) || /claude|gpt|3p/i.test(gid);
     const isGemini = gid === 'gemini' || /gemini/i.test(gname);
-    const groupName = isArgon ? 'argon' : (isExternal ? 'external' : (isGemini ? 'gemini' : (group.id || gname)));
-    const family = isArgon ? 'argon' : (mapFamily(group.id || group.family || group.name) || group.family || group.id || groupName);
+    const groupName = isArgon
+      ? 'argon'
+      : isExternal
+        ? 'external'
+        : isGemini
+          ? 'gemini'
+          : group.id || gname;
+    const family = isArgon
+      ? 'argon'
+      : mapFamily(group.id || group.family || group.name) || group.family || group.id || groupName;
     if (!family) continue;
     const groupModels = Array.isArray(group.models)
-      ? group.models.map((m) => (typeof m === 'string' ? m.trim() : String(m?.id || m?.modelId || m || '').trim()))
+      ? group.models.map((m) =>
+          typeof m === 'string' ? m.trim() : String(m?.id || m?.modelId || m || '').trim()
+        )
       : undefined;
     for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
       const windowValue = group[key];

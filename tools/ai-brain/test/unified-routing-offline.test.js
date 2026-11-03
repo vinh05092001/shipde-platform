@@ -319,7 +319,11 @@ describe('Criterion 7: Combo không làm mất identity hoặc vượt ràng bu�
     };
 
     const evaluation = selector.evaluateAdmission(expanded, taskProfileForReviewer);
-    assert.equal(evaluation.admitted, false, 'Combo containing Claude branch must fail admission for reviewer role');
+    assert.equal(
+      evaluation.admitted,
+      false,
+      'Combo containing Claude branch must fail admission for reviewer role'
+    );
     assert.equal(evaluation.rejectionReason, 'MODEL_EXCLUDED_BY_ROLE_POLICY');
   });
 });
@@ -344,10 +348,19 @@ describe('Criterion 8: Candidate từ cả ba đường đều có thể đượ
       },
       '9router': {
         catalog: ['ag/gemini-3.8-flash'],
-        connections: [{ connectionId: 'c1', provider: 'antigravity', accountRef: 'u1', enabled: true }],
+        connections: [
+          { connectionId: 'c1', provider: 'antigravity', accountRef: 'u1', enabled: true },
+        ],
       },
       agy: {
-        lanes: [{ laneId: 'agy01', accountRef: 'lane1@corp.com', quotaExhausted: false, rows: [{ modelId: 'gemini-3.8-flash', remainingPercent: 40 }] }],
+        lanes: [
+          {
+            laneId: 'agy01',
+            accountRef: 'lane1@corp.com',
+            quotaExhausted: false,
+            rows: [{ modelId: 'gemini-3.8-flash', remainingPercent: 40 }],
+          },
+        ],
         models: ['gemini-3.8-flash'],
       },
     });
@@ -387,8 +400,16 @@ describe('Criterion 9: JEV cache hit/miss và undecided không gây gọi lặp 
     const selector = new UnifiedRouteSelector({ jevAsk: mockJevAsk, minConfidence: 0.7 });
 
     const candidates = [
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'model-a', metadata: { capabilities: ['c1'] } }),
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'model-b', metadata: { capabilities: ['c1'] } }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'model-a',
+        metadata: { capabilities: ['c1'] },
+      }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'model-b',
+        metadata: { capabilities: ['c1'] },
+      }),
     ];
 
     const profile = { taskId: 'TASK-JEV-TEST', role: 'writer', requiredCapabilities: ['c1'] };
@@ -459,7 +480,10 @@ describe('Codex Finding 1: Production Defaults Do Not Invent Fixtures', () => {
     });
 
     assert.equal(emptyResult.candidates.length, 0, 'Must produce 0 candidates when unconfigured');
-    assert.ok(emptyResult.unconnectedSources.length >= 3, 'Must report unconnected reasons for all 3 pathways');
+    assert.ok(
+      emptyResult.unconnectedSources.length >= 3,
+      'Must report unconnected reasons for all 3 pathways'
+    );
     const reasons = emptyResult.unconnectedSources.map((s) => s.reason);
     assert.ok(reasons.includes('NO_9ROUTER_DATA_OR_CATALOG_DISCOVERED'));
     assert.ok(reasons.includes('NO_DIRECT_SOURCES_CONFIGURED'));
@@ -481,7 +505,11 @@ describe('Codex Finding 2: Unknown Cost Strictly Rejected by Ceiling; No Score I
       requiredCapabilities: ['code'],
     });
 
-    assert.equal(evaluation.admitted, false, 'Candidate with unknown cost must NOT pass cost ceiling');
+    assert.equal(
+      evaluation.admitted,
+      false,
+      'Candidate with unknown cost must NOT pass cost ceiling'
+    );
     assert.equal(evaluation.rejectionReason, 'UNKNOWN_COST_REJECTED_BY_CEILING');
   });
 
@@ -499,7 +527,11 @@ describe('Codex Finding 2: Unknown Cost Strictly Rejected by Ceiling; No Score I
       WEIGHT_PROFILES.BALANCED
     );
 
-    assert.equal(scoring.totalScore, 0, 'Unproven candidate without metadata must score 0, never boosted by name');
+    assert.equal(
+      scoring.totalScore,
+      0,
+      'Unproven candidate without metadata must score 0, never boosted by name'
+    );
     assert.equal(scoring.breakdown.qualityScore, UNKNOWN);
     assert.equal(scoring.breakdown.costScore, UNKNOWN);
   });
@@ -518,13 +550,21 @@ describe('Codex Finding 3: Elapsed Quota Reset Does Not Bypass Locks or Require 
 
     const now = 1730000000000;
     // 1. Mark quota reset in 5 seconds
-    health.recordFailure(candidate, { httpStatus: 402, message: 'Quota exceeded resets in 5s' }, now);
+    health.recordFailure(
+      candidate,
+      { httpStatus: 402, message: 'Quota exceeded resets in 5s' },
+      now
+    );
     // 2. Set an active model lock for 30 seconds
     health.setModelLock('antigravity', 'gemini-3.8-flash', 'conn_ag_01', now + 30000);
 
     // Evaluate after quota reset elapsed (10s later), but while lock is still active
     const evalAt10s = health.evaluateHealth(candidate, now + 10000);
-    assert.equal(evalAt10s.healthy, false, 'Must be blocked by active model lock despite quota reset elapsed');
+    assert.equal(
+      evalAt10s.healthy,
+      false,
+      'Must be blocked by active model lock despite quota reset elapsed'
+    );
     assert.equal(evalAt10s.blockedBy, 'model_lock');
 
     const selector = new UnifiedRouteSelector({ healthRegistry: health });
@@ -580,8 +620,18 @@ describe('Codex Finding 5: Consuming Connections & Linking Shared Quota Scopes',
     const { candidates } = load9RouterCandidates({
       catalog: ['ag/gemini-3.8-flash', 'gh/gpt-5.4-nano'],
       connections: [
-        { connectionId: 'ag_conn_1', provider: 'antigravity', accountRef: 'ag_user_1', enabled: true },
-        { connectionId: 'ag_conn_2', provider: 'antigravity', accountRef: 'ag_user_2', enabled: true },
+        {
+          connectionId: 'ag_conn_1',
+          provider: 'antigravity',
+          accountRef: 'ag_user_1',
+          enabled: true,
+        },
+        {
+          connectionId: 'ag_conn_2',
+          provider: 'antigravity',
+          accountRef: 'ag_user_2',
+          enabled: true,
+        },
         { connectionId: 'gh_conn_1', provider: 'github', accountRef: 'gh_user_1', enabled: true },
       ],
     });
@@ -597,11 +647,25 @@ describe('Codex Finding 5: Consuming Connections & Linking Shared Quota Scopes',
     const aggregated = aggregateAllCandidates({
       '9router': {
         catalog: ['ag/gemini-3.8-flash'],
-        connections: [{ connectionId: 'c_shared', provider: 'antigravity', accountRef: 'shared@google.com', enabled: true }],
+        connections: [
+          {
+            connectionId: 'c_shared',
+            provider: 'antigravity',
+            accountRef: 'shared@google.com',
+            enabled: true,
+          },
+        ],
       },
       direct: { sources: [] },
       agy: {
-        lanes: [{ laneId: 'agy01', accountRef: 'shared@google.com', quotaExhausted: false, rows: [{ modelId: 'gemini-3.8-flash', remainingPercent: 40 }] }],
+        lanes: [
+          {
+            laneId: 'agy01',
+            accountRef: 'shared@google.com',
+            quotaExhausted: false,
+            rows: [{ modelId: 'gemini-3.8-flash', remainingPercent: 40 }],
+          },
+        ],
         models: ['gemini-3.8-flash'],
       },
     });
@@ -633,7 +697,11 @@ describe('Codex Finding 6: Canonical Key Splitting with Double Colons', () => {
     const key = canonicalCandidateKey(original);
     const parsed = parseRouteIdentity(key);
 
-    assert.equal(parsed.quotaScopeId, 'quota::deepseek::alpha', 'Quota scope with :: must not split incorrectly');
+    assert.equal(
+      parsed.quotaScopeId,
+      'quota::deepseek::alpha',
+      'Quota scope with :: must not split incorrectly'
+    );
     assert.equal(parsed.configuredModelId, 'deepseek-v4.1');
     assert.equal(parsed.accountRef, 'user_alpha');
     assert.equal(parsed.sourceId, 'deepseek-pool');
@@ -706,9 +774,15 @@ describe('Codex Finding 8: Combo Branch Evaluation for Health and Capabilities',
     };
 
     const selector = new UnifiedRouteSelector({ healthRegistry: health });
-    const evalResult = selector.evaluateAdmission(comboExpanded, { requiredCapabilities: ['code'] });
+    const evalResult = selector.evaluateAdmission(comboExpanded, {
+      requiredCapabilities: ['code'],
+    });
 
-    assert.equal(evalResult.admitted, false, 'Combo must be rejected when all branches are exhausted');
+    assert.equal(
+      evalResult.admitted,
+      false,
+      'Combo must be rejected when all branches are exhausted'
+    );
     assert.match(evalResult.rejectionReason, /^COMBO_BRANCH_REJECTED_/);
   });
 });
@@ -724,15 +798,31 @@ describe('Codex Finding 9: JEV Advisory Contract Adherence (Identity Prohibited)
     const selector = new UnifiedRouteSelector({ jevAsk: rogueJevAsk, minConfidence: 0.6 });
 
     const candidates = [
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm1', metadata: { capabilities: ['code'] } }),
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm2', metadata: { capabilities: ['code'] } }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'm1',
+        metadata: { capabilities: ['code'] },
+      }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'm2',
+        metadata: { capabilities: ['code'] },
+      }),
     ];
 
-    const result = await selector.selectRoute(candidates, { taskId: 'T1', role: 'writer', requiredCapabilities: ['code'] });
+    const result = await selector.selectRoute(candidates, {
+      taskId: 'T1',
+      role: 'writer',
+      requiredCapabilities: ['code'],
+    });
 
     assert.equal(result.jev.outcome, 'UNDECIDED');
     assert.equal(result.jev.reason, 'IDENTITY_PROHIBITED');
-    assert.equal(result.weightProfileUsed, 'BALANCED', 'Must fall back to deterministic role profile');
+    assert.equal(
+      result.weightProfileUsed,
+      'BALANCED',
+      'Must fall back to deterministic role profile'
+    );
   });
 });
 
@@ -746,22 +836,49 @@ describe('Codex Finding 10: Composite Cache Key Includes Criteria, Budgets & Liv
 
     const selector = new UnifiedRouteSelector({ jevAsk: mockJev });
     const candidates = [
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm1', metadata: { capabilities: ['code'] } }),
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm2', metadata: { capabilities: ['code'] } }),
-      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm3', metadata: { capabilities: ['code'] } }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'm1',
+        metadata: { capabilities: ['code'] },
+      }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'm2',
+        metadata: { capabilities: ['code'] },
+      }),
+      createRouteIdentity({
+        harness: 'direct-http',
+        configuredModelId: 'm3',
+        metadata: { capabilities: ['code'] },
+      }),
     ];
 
     // Call 1
-    await selector.selectRoute(candidates, { taskId: 'TASK-C1', instructions: 'Inst A', requiredCapabilities: ['code'] });
+    await selector.selectRoute(candidates, {
+      taskId: 'TASK-C1',
+      instructions: 'Inst A',
+      requiredCapabilities: ['code'],
+    });
     assert.equal(callCount, 1);
 
     // Call 2 with DIFFERENT instructions: MUST NOT use cached advice
-    await selector.selectRoute(candidates, { taskId: 'TASK-C1', instructions: 'Inst B (CHANGED)', requiredCapabilities: ['code'] });
+    await selector.selectRoute(candidates, {
+      taskId: 'TASK-C1',
+      instructions: 'Inst B (CHANGED)',
+      requiredCapabilities: ['code'],
+    });
     assert.equal(callCount, 2, 'Changed task instructions must trigger fresh advisory question');
 
     // Call 3 with health registry state change (m1 fails, m2 and m3 still admitted): MUST NOT use cached advice
-    selector.healthRegistry.recordFailure(candidates[0], { httpStatus: 500, message: 'Internal error' });
-    await selector.selectRoute(candidates, { taskId: 'TASK-C1', instructions: 'Inst A', requiredCapabilities: ['code'] });
+    selector.healthRegistry.recordFailure(candidates[0], {
+      httpStatus: 500,
+      message: 'Internal error',
+    });
+    await selector.selectRoute(candidates, {
+      taskId: 'TASK-C1',
+      instructions: 'Inst A',
+      requiredCapabilities: ['code'],
+    });
     assert.equal(callCount, 3, 'Changed health registry state hash must invalidate cache');
   });
 });
@@ -782,22 +899,40 @@ describe('Codex Finding 11: Budget Precedence & Production Bridge', () => {
       requiredCapabilities: ['code'],
     });
 
-    assert.equal(result.budgetContract.tokenBudget, 8000, 'Explicit tokenBudget must win over contextSize');
+    assert.equal(
+      result.budgetContract.tokenBudget,
+      8000,
+      'Explicit tokenBudget must win over contextSize'
+    );
   });
 
   test('Production bridge selectOptimalRoute is exported from routing.js', () => {
     const routingApi = require('../routing');
-    assert.equal(typeof routingApi.selectOptimalRoute, 'function', 'routing.js must export selectOptimalRoute');
-    assert.equal(typeof routingApi.UnifiedRouteSelector, 'function', 'routing.js must export UnifiedRouteSelector');
+    assert.equal(
+      typeof routingApi.selectOptimalRoute,
+      'function',
+      'routing.js must export selectOptimalRoute'
+    );
+    assert.equal(
+      typeof routingApi.UnifiedRouteSelector,
+      'function',
+      'routing.js must export UnifiedRouteSelector'
+    );
   });
 });
-const regressionRoute = (overrides = {}) => createRouteIdentity({
-  harness: 'direct-http', sourceId: 'regression', gatewayId: 'direct',
-  upstreamProviderId: 'provider-a', accountRef: 'account-a', connectionId: 'connection-a',
-  configuredModelId: 'model-a', outboundModelId: 'model-a',
-  metadata: { capabilities: ['general_code'], estimatedCostUsd: 1, qualityScore: 70 },
-  ...overrides,
-});
+const regressionRoute = (overrides = {}) =>
+  createRouteIdentity({
+    harness: 'direct-http',
+    sourceId: 'regression',
+    gatewayId: 'direct',
+    upstreamProviderId: 'provider-a',
+    accountRef: 'account-a',
+    connectionId: 'connection-a',
+    configuredModelId: 'model-a',
+    outboundModelId: 'model-a',
+    metadata: { capabilities: ['general_code'], estimatedCostUsd: 1, qualityScore: 70 },
+    ...overrides,
+  });
 
 describe('Review 50c26d7 regressions', () => {
   test('F01: missing discovery never reads fixtures or invents pool connections', () => {
@@ -807,10 +942,16 @@ describe('Review 50c26d7 regressions', () => {
     const reads = [];
     try {
       // Simulate a machine where only the repository test catalog exists.
-      fs.existsSync = (p) => { reads.push(String(p)); return String(p).includes('fixtures'); };
+      fs.existsSync = (p) => {
+        reads.push(String(p));
+        return String(p).includes('fixtures');
+      };
       fs.readFileSync = () => JSON.stringify(['ag/fixture-only']);
       assert.equal(load9RouterCandidates({ connections: [] }).candidates.length, 0);
-      assert.equal(reads.some((p) => p.includes('fixtures')), false);
+      assert.equal(
+        reads.some((p) => p.includes('fixtures')),
+        false
+      );
     } finally {
       fs.existsSync = originalExists;
       fs.readFileSync = originalRead;
@@ -828,18 +969,34 @@ describe('Review 50c26d7 regressions', () => {
         { provider: 'github', connectionId: 'wrong', modelAllowlist: ['ag/allowed'] },
       ],
     });
-    assert.deepEqual(result.candidates.map((c) => [c.connectionId, c.configuredModelId]), [['right', 'ag/allowed']]);
+    assert.deepEqual(
+      result.candidates.map((c) => [c.connectionId, c.configuredModelId]),
+      [['right', 'ag/allowed']]
+    );
   });
 
   test('F03: all adapters preserve live evidence without inventing capabilities', () => {
-    const evidence = { capabilities: ['supplied-capability'], estimatedCostUsd: 0.25,
-      qualityScore: 83, latencyScore: 41, costScore: 66, pricing: { input: 0.1 } };
+    const evidence = {
+      capabilities: ['supplied-capability'],
+      estimatedCostUsd: 0.25,
+      qualityScore: 83,
+      latencyScore: 41,
+      costScore: 66,
+      pricing: { input: 0.1 },
+    };
     const results = [
-      load9RouterCandidates({ catalog: [{ id: 'ag/live', ...evidence }],
-        connections: [{ provider: 'antigravity', connectionId: 'c' }] }),
-      loadDirectProviderCandidates({ sources: [{ id: 's', accountRef: 'a', models: [{ id: 'live', ...evidence }] }], skipMissingCredentials: false }),
-      loadAgyPoolCandidates({ models: [{ id: 'live', ...evidence }],
-        lanes: [{ laneId: 'lane', rows: [{ modelId: 'live', remainingPercent: 10 }] }] }),
+      load9RouterCandidates({
+        catalog: [{ id: 'ag/live', ...evidence }],
+        connections: [{ provider: 'antigravity', connectionId: 'c' }],
+      }),
+      loadDirectProviderCandidates({
+        sources: [{ id: 's', accountRef: 'a', models: [{ id: 'live', ...evidence }] }],
+        skipMissingCredentials: false,
+      }),
+      loadAgyPoolCandidates({
+        models: [{ id: 'live', ...evidence }],
+        lanes: [{ laneId: 'lane', rows: [{ modelId: 'live', remainingPercent: 10 }] }],
+      }),
     ];
     const selector = new UnifiedRouteSelector();
     const combo = expandComboIdentity(regressionRoute(), [{ id: 'ag/live', ...evidence }]);
@@ -847,36 +1004,85 @@ describe('Review 50c26d7 regressions', () => {
     assert.equal(combo.comboBranches[0].metadata.qualityScore, evidence.qualityScore);
     for (const { candidates } of results) {
       assert.equal(candidates.length, 1);
-      for (const [key, value] of Object.entries(evidence)) assert.deepEqual(candidates[0].metadata[key], value);
-      assert.equal(selector.evaluateAdmission(candidates[0], { requiredCapabilities: ['large_context_64k'] }).admitted, false);
+      for (const [key, value] of Object.entries(evidence))
+        assert.deepEqual(candidates[0].metadata[key], value);
+      assert.equal(
+        selector.evaluateAdmission(candidates[0], { requiredCapabilities: ['large_context_64k'] })
+          .admitted,
+        false
+      );
       assert.equal(selector.evaluateAdmission(candidates[0], { costCeiling: 0.5 }).admitted, true);
-      assert.equal(selector.scoreCandidate(candidates[0], {}, WEIGHT_PROFILES.BALANCED).breakdown.qualityScore, 83);
+      assert.equal(
+        selector.scoreCandidate(candidates[0], {}, WEIGHT_PROFILES.BALANCED).breakdown.qualityScore,
+        83
+      );
     }
     const unknowns = [
-      load9RouterCandidates({ catalog: ['ag/live'], connections: [{ provider: 'antigravity', connectionId: 'c' }] }),
-      loadDirectProviderCandidates({ sources: [{ id: 's', accountRef: 'a', models: ['live'] }], skipMissingCredentials: false }),
-      loadAgyPoolCandidates({ models: ['live'], lanes: [{ laneId: 'lane', rows: [{ modelId: 'live', remainingPercent: 10 }] }] }),
+      load9RouterCandidates({
+        catalog: ['ag/live'],
+        connections: [{ provider: 'antigravity', connectionId: 'c' }],
+      }),
+      loadDirectProviderCandidates({
+        sources: [{ id: 's', accountRef: 'a', models: ['live'] }],
+        skipMissingCredentials: false,
+      }),
+      loadAgyPoolCandidates({
+        models: ['live'],
+        lanes: [{ laneId: 'lane', rows: [{ modelId: 'live', remainingPercent: 10 }] }],
+      }),
     ];
     for (const { candidates } of unknowns) {
       assert.deepEqual(candidates[0].metadata.capabilities, []);
-      assert.equal(selector.evaluateAdmission(candidates[0], { requiredCapabilities: ['general_code'] }).admitted, false);
+      assert.equal(
+        selector.evaluateAdmission(candidates[0], { requiredCapabilities: ['general_code'] })
+          .admitted,
+        false
+      );
       assert.equal(candidates[0].metadata.estimatedCostUsd, undefined);
     }
   });
 
   test('F04: AGY admits only models with positive quota on that lane', () => {
-    const result = loadAgyPoolCandidates({ models: ['open', 'exhausted', 'unknown'], lanes: [
-      { laneId: 'lane-a', rows: [{ modelId: 'open', remainingPercent: 20 }, { modelId: 'exhausted', remainingPercent: 0 }] },
-      { laneId: 'lane-b', rows: [{ modelId: 'open', remainingPercent: 0 }, { modelId: 'exhausted', remainingPercent: 80 }] },
-    ] });
-    assert.deepEqual(result.candidates.map((c) => [c.accountRef, c.configuredModelId]), [['lane-a', 'open'], ['lane-b', 'exhausted']]);
+    const result = loadAgyPoolCandidates({
+      models: ['open', 'exhausted', 'unknown'],
+      lanes: [
+        {
+          laneId: 'lane-a',
+          rows: [
+            { modelId: 'open', remainingPercent: 20 },
+            { modelId: 'exhausted', remainingPercent: 0 },
+          ],
+        },
+        {
+          laneId: 'lane-b',
+          rows: [
+            { modelId: 'open', remainingPercent: 0 },
+            { modelId: 'exhausted', remainingPercent: 80 },
+          ],
+        },
+      ],
+    });
+    assert.deepEqual(
+      result.candidates.map((c) => [c.accountRef, c.configuredModelId]),
+      [
+        ['lane-a', 'open'],
+        ['lane-b', 'exhausted'],
+      ]
+    );
     assert.ok(result.unconnected.some((r) => r.reason === 'AGY_MODEL_QUOTA_UNKNOWN'));
     assert.ok(result.unconnected.some((r) => r.reason === 'AGY_MODEL_QUOTA_EXHAUSTED'));
-    const windows = loadAgyPoolCandidates({ models: [{ id: 'scoped', quotaFamily: 'discovered-family' }],
-      lanes: [{ laneId: 'lane', rows: [
-        { family: 'discovered-family', remainingPercent: 50 },
-        { family: 'discovered-family', remainingPercent: 0 },
-      ] }] });
+    const windows = loadAgyPoolCandidates({
+      models: [{ id: 'scoped', quotaFamily: 'discovered-family' }],
+      lanes: [
+        {
+          laneId: 'lane',
+          rows: [
+            { family: 'discovered-family', remainingPercent: 50 },
+            { family: 'discovered-family', remainingPercent: 0 },
+          ],
+        },
+      ],
+    });
     assert.equal(windows.candidates.length, 0, 'every quota window must permit the model');
   });
 
@@ -887,14 +1093,24 @@ describe('Review 50c26d7 regressions', () => {
     health.recordFailure(a, { httpStatus: 404, message: 'model not found' });
     assert.equal(health.evaluateHealth(a).healthy, false);
     assert.equal(health.evaluateHealth(b).healthy, true);
-    assert.equal(health.evaluateHealth(regressionRoute({ connectionId: 'another-path' })).healthy, false);
+    assert.equal(
+      health.evaluateHealth(regressionRoute({ connectionId: 'another-path' })).healthy,
+      false
+    );
   });
 
   test('F06: same email at different providers isolates auth and automatic quotas', () => {
     const health = new ScopedHealthRegistry();
     const a = regressionRoute({ accountRef: 'same@example.invalid' });
-    const b = regressionRoute({ upstreamProviderId: 'provider-b', accountRef: 'same@example.invalid' });
-    const aOtherPath = regressionRoute({ accountRef: a.accountRef, sourceId: 'other', quotaScopeId: 'another-scope' });
+    const b = regressionRoute({
+      upstreamProviderId: 'provider-b',
+      accountRef: 'same@example.invalid',
+    });
+    const aOtherPath = regressionRoute({
+      accountRef: a.accountRef,
+      sourceId: 'other',
+      quotaScopeId: 'another-scope',
+    });
     const linked = linkSharedQuotaScopes([a, b, aOtherPath]);
     assert.equal(linked[0].quotaScopeId, linked[2].quotaScopeId);
     assert.notEqual(linked[0].quotaScopeId, linked[1].quotaScopeId);
@@ -902,7 +1118,12 @@ describe('Review 50c26d7 regressions', () => {
     assert.equal(health.evaluateHealth(linked[1]).healthy, true);
     assert.equal(health.evaluateHealth(linked[2]).healthy, false);
     health.recordFailure(linked[0], { httpStatus: 402, message: 'credit exhausted' });
-    assert.equal(health.evaluateHealth(regressionRoute({ upstreamProviderId: 'provider-b', quotaScopeId: linked[0].quotaScopeId })).healthy, true);
+    assert.equal(
+      health.evaluateHealth(
+        regressionRoute({ upstreamProviderId: 'provider-b', quotaScopeId: linked[0].quotaScopeId })
+      ).healthy,
+      true
+    );
     assert.equal(health.evaluateHealth(linked[1]).healthy, true);
   });
 
@@ -920,7 +1141,13 @@ describe('Review 50c26d7 regressions', () => {
     const affordable = regressionRoute({ isCombo: true, comboBranches: [good] });
     assert.equal(selector.evaluateAdmission(affordable, { costCeiling: 2 }).admitted, true);
     const unknown = regressionRoute({ metadata: {} });
-    assert.equal(selector.evaluateAdmission(regressionRoute({ isCombo: true, comboBranches: [good, unknown] }), { costCeiling: 2 }).admitted, false);
+    assert.equal(
+      selector.evaluateAdmission(
+        regressionRoute({ isCombo: true, comboBranches: [good, unknown] }),
+        { costCeiling: 2 }
+      ).admitted,
+      false
+    );
   });
 
   test('F08: convenience wrapper preserves context fallback and deadline', async () => {
@@ -928,14 +1155,22 @@ describe('Review 50c26d7 regressions', () => {
     const result = await selectOptimalRoute(base);
     assert.equal(result.budgetContract.tokenBudget, 123);
     assert.equal(result.budgetContract.deadlineMs, 456);
-    assert.equal((await selectOptimalRoute({ ...base, tokenBudget: 0 })).budgetContract.tokenBudget, 0);
+    assert.equal(
+      (await selectOptimalRoute({ ...base, tokenBudget: 0 })).budgetContract.tokenBudget,
+      0
+    );
   });
 
   test('F09: convenience calls retain default health state across selections', async () => {
     const { SHARED_HEALTH_REGISTRY } = require('../unified-selector');
     const route = regressionRoute({ accountRef: 'F09-only', configuredModelId: 'F09' });
-    assert.equal((await selectOptimalRoute({ candidates: [route] })).status, 'ADMITTED_AND_SELECTED');
-    SHARED_HEALTH_REGISTRY.recordFailure(route, { message: 'getaddrinfo ENOTFOUND regression.invalid' });
+    assert.equal(
+      (await selectOptimalRoute({ candidates: [route] })).status,
+      'ADMITTED_AND_SELECTED'
+    );
+    SHARED_HEALTH_REGISTRY.recordFailure(route, {
+      message: 'getaddrinfo ENOTFOUND regression.invalid',
+    });
     try {
       assert.equal((await selectOptimalRoute({ candidates: [route] })).status, 'BLOCKED');
     } finally {
@@ -944,12 +1179,17 @@ describe('Review 50c26d7 regressions', () => {
   });
 
   test('F10: Claude allowed by default; caller role policy covers single and combo routes', () => {
-    const claude = regressionRoute({ configuredModelId: 'claude-sonnet', outboundModelId: 'claude-sonnet' });
+    const claude = regressionRoute({
+      configuredModelId: 'claude-sonnet',
+      outboundModelId: 'claude-sonnet',
+    });
     const combo = regressionRoute({ isCombo: true, comboBranches: [regressionRoute(), claude] });
     for (const role of ['writer', 'repair', 'reviewer', 'security-review']) {
       assert.equal(new UnifiedRouteSelector().evaluateAdmission(claude, { role }).admitted, true);
       assert.equal(new UnifiedRouteSelector().evaluateAdmission(combo, { role }).admitted, true);
-      const selector = new UnifiedRouteSelector({ excludedModelPatterns: { [role]: [/claude/gi] } });
+      const selector = new UnifiedRouteSelector({
+        excludedModelPatterns: { [role]: [/claude/gi] },
+      });
       assert.equal(selector.evaluateAdmission(claude, { role }).admitted, false);
       assert.equal(selector.evaluateAdmission(combo, { role }).admitted, false);
       assert.equal(selector.evaluateAdmission(combo, { role }).admitted, false);
@@ -974,16 +1214,29 @@ describe('Review 50c26d7 regressions', () => {
     const health = new ScopedHealthRegistry();
     const route = regressionRoute();
     const now = Date.now();
-    const failure = health.recordFailure(route, { message: 'getaddrinfo ENOTFOUND regression.invalid' }, now);
+    const failure = health.recordFailure(
+      route,
+      { message: 'getaddrinfo ENOTFOUND regression.invalid' },
+      now
+    );
     assert.equal(failure.scope, HealthScope.NETWORK);
     assert.equal(health.evaluateHealth(route, now + 1).healthy, false);
-    assert.equal(health.evaluateHealth(regressionRoute({ connectionId: 'other' }), now + 1).healthy, true);
+    assert.equal(
+      health.evaluateHealth(regressionRoute({ connectionId: 'other' }), now + 1).healthy,
+      true
+    );
     assert.equal(health.evaluateHealth(route, failure.resetsAt + 1).healthy, true);
   });
 
   test('F13: advisory cache varies with evidence and deadline and caches exceptions', async () => {
     let calls = 0;
-    const selector = new UnifiedRouteSelector({ jevCache: new Map(), jevAsk: async () => { calls++; throw new Error('offline failure'); } });
+    const selector = new UnifiedRouteSelector({
+      jevCache: new Map(),
+      jevAsk: async () => {
+        calls++;
+        throw new Error('offline failure');
+      },
+    });
     const routes = [regressionRoute(), regressionRoute({ accountRef: 'second' })];
     const profile = { deadlineMs: 10 };
     const first = await selector.selectRoute(routes, profile);
@@ -1001,11 +1254,19 @@ describe('Review 50c26d7 regressions', () => {
   test('F14: zero ceiling accepts only known zero-cost routes', () => {
     const selector = new UnifiedRouteSelector();
     for (const cost of [3, undefined, null, UNKNOWN]) {
-      assert.equal(selector.evaluateAdmission(regressionRoute({ metadata: { estimatedCostUsd: cost } }), { costCeiling: 0 }).admitted, false);
+      assert.equal(
+        selector.evaluateAdmission(regressionRoute({ metadata: { estimatedCostUsd: cost } }), {
+          costCeiling: 0,
+        }).admitted,
+        false
+      );
     }
     const free = regressionRoute({ metadata: { estimatedCostUsd: 0 } });
     assert.equal(selector.evaluateAdmission(free, { costCeiling: 0 }).admitted, true);
-    assert.equal(selector.evaluateAdmission(regressionRoute(), { costCeiling: null }).admitted, true);
+    assert.equal(
+      selector.evaluateAdmission(regressionRoute(), { costCeiling: null }).admitted,
+      true
+    );
   });
 });
 
@@ -1016,11 +1277,9 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       lanes: [
         {
           laneId: 'lane-alpha',
-          rows: [
-            { family: 'gemini', remainingPercent: 80, windowMinutes: 60 }
-          ],
-        }
-      ]
+          rows: [{ family: 'gemini', remainingPercent: 80, windowMinutes: 60 }],
+        },
+      ],
     });
     assert.equal(pool.candidates.length, 2);
     assert.equal(pool.unconnected.length, 0);
@@ -1037,16 +1296,21 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
           laneId: 'lane-alpha',
           rows: [
             { family: 'gemini', remainingPercent: 50, windowMinutes: 60 },
-            { family: 'claude-gpt', remainingPercent: 90, windowMinutes: 60 }
-          ]
-        }
-      ]
+            { family: 'claude-gpt', remainingPercent: 90, windowMinutes: 60 },
+          ],
+        },
+      ],
     });
     assert.equal(pool.candidates.length, 2);
-    const geminiCandidate = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
-    const claudeCandidate = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    const geminiCandidate = pool.candidates.find((c) => c.configuredModelId === 'gemini-2.5-flash');
+    const claudeCandidate = pool.candidates.find(
+      (c) => c.configuredModelId === 'claude-3-7-sonnet'
+    );
     assert.ok(geminiCandidate.quotaScopeId.includes('gemini'));
-    assert.ok(claudeCandidate.quotaScopeId.includes('external') || claudeCandidate.quotaScopeId.includes('claude-gpt'));
+    assert.ok(
+      claudeCandidate.quotaScopeId.includes('external') ||
+        claudeCandidate.quotaScopeId.includes('claude-gpt')
+    );
     assert.notEqual(geminiCandidate.quotaScopeId, claudeCandidate.quotaScopeId);
 
     // Record quota exhaustion for Gemini candidate
@@ -1070,10 +1334,18 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       connectionId: UNKNOWN,
       metadata: {
         candidateAccounts: [
-          { accountRef: 'acc1@corp.com', connectionId: 'conn-1', quotaScopeId: 'quota::anthropic::acc1' },
-          { accountRef: 'acc2@corp.com', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' }
-        ]
-      }
+          {
+            accountRef: 'acc1@corp.com',
+            connectionId: 'conn-1',
+            quotaScopeId: 'quota::anthropic::acc1',
+          },
+          {
+            accountRef: 'acc2@corp.com',
+            connectionId: 'conn-2',
+            quotaScopeId: 'quota::anthropic::acc2',
+          },
+        ],
+      },
     });
 
     const combo = createRouteIdentity({
@@ -1084,7 +1356,7 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       configuredModelId: 'combo/fast',
       accountRef: UNKNOWN,
       isCombo: true,
-      comboBranches: [branchA]
+      comboBranches: [branchA],
     });
 
     assert.equal(health.evaluateHealth(branchA).healthy, true);
@@ -1092,7 +1364,12 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
 
     // Record permanent 401 failure on first account
     health.recordFailure(
-      { accountRef: 'acc1@corp.com', connectionId: 'conn-1', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc1' },
+      {
+        accountRef: 'acc1@corp.com',
+        connectionId: 'conn-1',
+        upstreamProviderId: 'anthropic',
+        quotaScopeId: 'quota::anthropic::acc1',
+      },
       { status: 401, message: 'unauthorized' }
     );
     // acc2 is still healthy, so branchA should still be healthy
@@ -1100,7 +1377,12 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
 
     // Record permanent 401 failure on second account
     health.recordFailure(
-      { accountRef: 'acc2@corp.com', connectionId: 'conn-2', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc2' },
+      {
+        accountRef: 'acc2@corp.com',
+        connectionId: 'conn-2',
+        upstreamProviderId: 'anthropic',
+        quotaScopeId: 'quota::anthropic::acc2',
+      },
       { status: 401, message: 'unauthorized' }
     );
     // Now ALL executable candidate accounts for branchA have permanent 401 failures -> branchA becomes unhealthy
@@ -1113,19 +1395,22 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       models: ['gemini-2.5-flash'],
       lanes: [
         { laneId: 'lane-with-email', rows: [{ family: 'gemini', remainingPercent: 100 }] },
-        { laneId: 'lane-no-email', rows: [{ family: 'gemini', remainingPercent: 100 }] }
+        { laneId: 'lane-no-email', rows: [{ family: 'gemini', remainingPercent: 100 }] },
       ],
       readLaneIdentity: (laneId) => {
         if (laneId === 'lane-with-email') return { label: 'realuser@gmail.com' };
         return { label: laneId };
-      }
+      },
     });
 
-    const candidate1 = pool.candidates.find(c => c.connectionId === 'lane-with-email');
-    const candidate2 = pool.candidates.find(c => c.connectionId === 'lane-no-email');
+    const candidate1 = pool.candidates.find((c) => c.connectionId === 'lane-with-email');
+    const candidate2 = pool.candidates.find((c) => c.connectionId === 'lane-no-email');
 
     assert.equal(candidate1.accountRef, 'lane-with-email');
-    assert.ok(!candidate1.metadata.realAccountRef || !candidate1.metadata.realAccountRef.includes('@'), 'candidate1 metadata must not contain raw email');
+    assert.ok(
+      !candidate1.metadata.realAccountRef || !candidate1.metadata.realAccountRef.includes('@'),
+      'candidate1 metadata must not contain raw email'
+    );
     assert.equal(getPrivateEmail(candidate1.accountRef), 'realuser@gmail.com');
     assert.ok(!candidate1.candidateKey.includes('@'), 'candidateKey must not contain @');
     assert.equal(candidate2.accountRef, 'lane-no-email');
@@ -1139,7 +1424,7 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       upstreamProviderId: 'antigravity',
       accountRef: 'realuser@gmail.com',
       connectionId: 'conn-google-1',
-      configuredModelId: 'gemini-2.5-flash'
+      configuredModelId: 'gemini-2.5-flash',
     });
     const nineRouterFakeRoute = createRouteIdentity({
       harness: 'direct-http',
@@ -1148,14 +1433,19 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       upstreamProviderId: 'antigravity',
       accountRef: 'lane-no-email',
       connectionId: 'conn-google-2',
-      configuredModelId: 'gemini-2.5-flash'
+      configuredModelId: 'gemini-2.5-flash',
     });
 
-    const linked = linkSharedQuotaScopes([candidate1, candidate2, nineRouterRoute, nineRouterFakeRoute]);
-    const linkedC1 = linked.find(c => c.connectionId === candidate1.connectionId);
-    const linked9R = linked.find(c => c.connectionId === nineRouterRoute.connectionId);
-    const linkedC2 = linked.find(c => c.connectionId === candidate2.connectionId);
-    const linked9RFake = linked.find(c => c.connectionId === nineRouterFakeRoute.connectionId);
+    const linked = linkSharedQuotaScopes([
+      candidate1,
+      candidate2,
+      nineRouterRoute,
+      nineRouterFakeRoute,
+    ]);
+    const linkedC1 = linked.find((c) => c.connectionId === candidate1.connectionId);
+    const linked9R = linked.find((c) => c.connectionId === nineRouterRoute.connectionId);
+    const linkedC2 = linked.find((c) => c.connectionId === candidate2.connectionId);
+    const linked9RFake = linked.find((c) => c.connectionId === nineRouterFakeRoute.connectionId);
 
     assert.equal(linkedC1.quotaScopeId, linked9R.quotaScopeId);
     assert.notEqual(linkedC2.quotaScopeId, linked9RFake.quotaScopeId);
@@ -1169,8 +1459,8 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       catalog: ['cl/deepseek-chat', 'gcli/grok-2'],
       connections: [
         { connectionId: 'c-cline', provider: 'cline', accountRef: 'cl-user' },
-        { connectionId: 'c-grok', provider: 'grok-cli', accountRef: 'grok-user' }
-      ]
+        { connectionId: 'c-grok', provider: 'grok-cli', accountRef: 'grok-user' },
+      ],
     });
     assert.equal(loaded.candidates.length, 2);
     assert.equal(loaded.candidates[0].upstreamProviderId, 'cline');
@@ -1178,25 +1468,47 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
   });
 
   test('R06 (Finding 6): Supplying explicit links does not suppress auto-detection for other shared accounts', () => {
-    const routeOpenAI1 = regressionRoute({ upstreamProviderId: 'openai', accountRef: 'user1@corp.com', connectionId: 'c1' });
-    const routeOpenAI2 = regressionRoute({ upstreamProviderId: 'openai', accountRef: 'user1@corp.com', connectionId: 'c2' });
-    const routeDeepseek1 = regressionRoute({ upstreamProviderId: 'deepseek', accountRef: 'corp@deepseek.com', connectionId: 'd1' });
-    const routeDeepseek2 = regressionRoute({ upstreamProviderId: 'deepseek', accountRef: 'corp@deepseek.com', connectionId: 'd2' });
+    const routeOpenAI1 = regressionRoute({
+      upstreamProviderId: 'openai',
+      accountRef: 'user1@corp.com',
+      connectionId: 'c1',
+    });
+    const routeOpenAI2 = regressionRoute({
+      upstreamProviderId: 'openai',
+      accountRef: 'user1@corp.com',
+      connectionId: 'c2',
+    });
+    const routeDeepseek1 = regressionRoute({
+      upstreamProviderId: 'deepseek',
+      accountRef: 'corp@deepseek.com',
+      connectionId: 'd1',
+    });
+    const routeDeepseek2 = regressionRoute({
+      upstreamProviderId: 'deepseek',
+      accountRef: 'corp@deepseek.com',
+      connectionId: 'd2',
+    });
 
     const explicitLinks = {
-      [JSON.stringify(['openai', 'user1@corp.com'])]: 'explicit-shared-openai-quota'
+      [JSON.stringify(['openai', 'user1@corp.com'])]: 'explicit-shared-openai-quota',
     };
 
-    const linked = linkSharedQuotaScopes([routeOpenAI1, routeOpenAI2, routeDeepseek1, routeDeepseek2], explicitLinks);
-    const resO1 = linked.find(r => r.connectionId === routeOpenAI1.connectionId);
-    const resO2 = linked.find(r => r.connectionId === routeOpenAI2.connectionId);
-    const resD1 = linked.find(r => r.connectionId === routeDeepseek1.connectionId);
-    const resD2 = linked.find(r => r.connectionId === routeDeepseek2.connectionId);
+    const linked = linkSharedQuotaScopes(
+      [routeOpenAI1, routeOpenAI2, routeDeepseek1, routeDeepseek2],
+      explicitLinks
+    );
+    const resO1 = linked.find((r) => r.connectionId === routeOpenAI1.connectionId);
+    const resO2 = linked.find((r) => r.connectionId === routeOpenAI2.connectionId);
+    const resD1 = linked.find((r) => r.connectionId === routeDeepseek1.connectionId);
+    const resD2 = linked.find((r) => r.connectionId === routeDeepseek2.connectionId);
 
     assert.equal(resO1.quotaScopeId, 'explicit-shared-openai-quota');
     assert.equal(resO2.quotaScopeId, 'explicit-shared-openai-quota');
     assert.equal(resD1.quotaScopeId, resD2.quotaScopeId);
-    assert.ok(resD1.quotaScopeId.includes('shared-quota::deepseek') || resD1.quotaScopeId.includes('quota::deepseek'));
+    assert.ok(
+      resD1.quotaScopeId.includes('shared-quota::deepseek') ||
+        resD1.quotaScopeId.includes('quota::deepseek')
+    );
   });
 
   test('R07 (Finding 7): Model lock keys prevent delimiter collision for (p, m, b::c) vs (p, m::b, c)', () => {
@@ -1206,8 +1518,18 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
 
     health.setModelLock(provider, 'm', 'b::c', now + 60000, 'testing');
 
-    const route1 = regressionRoute({ upstreamProviderId: provider, configuredModelId: 'm', outboundModelId: 'm', connectionId: 'b::c' });
-    const route2 = regressionRoute({ upstreamProviderId: provider, configuredModelId: 'm::b', outboundModelId: 'm::b', connectionId: 'c' });
+    const route1 = regressionRoute({
+      upstreamProviderId: provider,
+      configuredModelId: 'm',
+      outboundModelId: 'm',
+      connectionId: 'b::c',
+    });
+    const route2 = regressionRoute({
+      upstreamProviderId: provider,
+      configuredModelId: 'm::b',
+      outboundModelId: 'm::b',
+      connectionId: 'c',
+    });
 
     assert.equal(health.evaluateHealth(route1, now).healthy, false);
     assert.equal(health.evaluateHealth(route2, now).healthy, true);
@@ -1225,20 +1547,20 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
             { group: 'external', family: 'claude-gpt', window: 'weekly', remainingPercent: 1 },
             { group: 'external', family: 'claude-gpt', window: 'fiveHour', remainingPercent: 100 },
             { group: 'argon', family: 'argon', window: 'weekly', remainingPercent: 0 },
-          ]
-        }
-      ]
+          ],
+        },
+      ],
     });
 
-    const flash = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
-    const claude = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
-    const argon = pool.candidates.find(c => c.configuredModelId === 'gemini-4-argon');
+    const flash = pool.candidates.find((c) => c.configuredModelId === 'gemini-2.5-flash');
+    const claude = pool.candidates.find((c) => c.configuredModelId === 'claude-3-7-sonnet');
+    const argon = pool.candidates.find((c) => c.configuredModelId === 'gemini-4-argon');
 
     assert.ok(flash, 'Flash must be admitted because Gemini weekly quota is 50%');
     assert.ok(claude, 'Claude must be admitted because external quota is positive');
     assert.equal(argon, undefined, 'Argon must be rejected because Argon weekly quota is 0%');
 
-    const argonUnconnected = pool.unconnected.find(u => u.configuredModelId === 'gemini-4-argon');
+    const argonUnconnected = pool.unconnected.find((u) => u.configuredModelId === 'gemini-4-argon');
     assert.ok(argonUnconnected);
     assert.equal(argonUnconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
   });
@@ -1258,9 +1580,9 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       metadata: {
         candidateAccounts: [
           { accountRef: 'acc1', connectionId: 'conn-1', quotaScopeId: 'quota::anthropic::acc1' },
-          { accountRef: 'acc2', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' }
-        ]
-      }
+          { accountRef: 'acc2', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' },
+        ],
+      },
     });
 
     const combo = createRouteIdentity({
@@ -1271,18 +1593,28 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       configuredModelId: 'combo/fast',
       accountRef: UNKNOWN,
       isCombo: true,
-      comboBranches: [branchA]
+      comboBranches: [branchA],
     });
 
     const now = Date.now();
     // Record quota exhaustion with resetAt in the past
     health.recordFailure(
-      { accountRef: 'acc1', connectionId: 'conn-1', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc1' },
+      {
+        accountRef: 'acc1',
+        connectionId: 'conn-1',
+        upstreamProviderId: 'anthropic',
+        quotaScopeId: 'quota::anthropic::acc1',
+      },
       { message: 'insufficient_quota', resetAt: new Date(now - 10000).toISOString() },
       now - 20000
     );
     health.recordFailure(
-      { accountRef: 'acc2', connectionId: 'conn-2', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc2' },
+      {
+        accountRef: 'acc2',
+        connectionId: 'conn-2',
+        upstreamProviderId: 'anthropic',
+        quotaScopeId: 'quota::anthropic::acc2',
+      },
       { message: 'insufficient_quota', resetAt: new Date(now - 10000).toISOString() },
       now - 20000
     );
@@ -1298,18 +1630,27 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
     const pool = loadAgyPoolCandidates({
       models: ['gemini-2.5-flash'],
       lanes: [
-        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 100 }] }
+        {
+          laneId: 'agy01',
+          rows: [{ group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 100 }],
+        },
       ],
-      readLaneIdentity: () => ({ email: 'secret_user@domain.com' })
+      readLaneIdentity: () => ({ email: 'secret_user@domain.com' }),
     });
 
     const cand = pool.candidates[0];
     assert.ok(cand);
     assert.equal(cand.accountRef, 'agy01');
-    assert.ok(!cand.metadata.realAccountRef || !cand.metadata.realAccountRef.includes('@'), 'cand metadata must not contain raw email');
+    assert.ok(
+      !cand.metadata.realAccountRef || !cand.metadata.realAccountRef.includes('@'),
+      'cand metadata must not contain raw email'
+    );
     assert.equal(getPrivateEmail(cand.accountRef), 'secret_user@domain.com');
     assert.ok(!cand.candidateKey.includes('@'), 'candidateKey must never contain @');
-    assert.ok(!cand.candidateKey.includes('secret_user'), 'candidateKey must not contain raw email username');
+    assert.ok(
+      !cand.candidateKey.includes('secret_user'),
+      'candidateKey must not contain raw email username'
+    );
 
     // Also verify after shared linking
     const nineRouterRoute = createRouteIdentity({
@@ -1321,12 +1662,12 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       metadata: { laneId: 'conn-1' },
       connectionId: 'conn-1',
       configuredModelId: 'gemini-2.5-flash',
-      quotaScopeId: 'dummy-scope'
+      quotaScopeId: 'dummy-scope',
     });
 
     const linked = linkSharedQuotaScopes([cand, nineRouterRoute]);
-    const linkedAgy = linked.find(c => c.connectionId === cand.connectionId);
-    const linked9r = linked.find(c => c.connectionId === nineRouterRoute.connectionId);
+    const linkedAgy = linked.find((c) => c.connectionId === cand.connectionId);
+    const linked9r = linked.find((c) => c.connectionId === nineRouterRoute.connectionId);
 
     assert.equal(linkedAgy.quotaScopeId, linked9r.quotaScopeId);
     assert.ok(!linkedAgy.quotaScopeId.includes('@'), 'linked quotaScopeId must not contain @');
@@ -1337,36 +1678,44 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
 describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
   test('Finding 1: Explicit quotaFamily: argon and parsed group membership override name inference and reject on 0% Argon', () => {
     const pool = loadAgyPoolCandidates({
-      models: [
-        { id: 'gemini-experimental', quotaFamily: 'argon' },
-        'gemini-2.5-flash'
-      ],
+      models: [{ id: 'gemini-experimental', quotaFamily: 'argon' }, 'gemini-2.5-flash'],
       lanes: [
         {
           laneId: 'agy01',
           rows: [
             { group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 50 },
-            { group: 'argon', family: 'argon', window: 'weekly', remainingPercent: 0 }
-          ]
-        }
-      ]
+            { group: 'argon', family: 'argon', window: 'weekly', remainingPercent: 0 },
+          ],
+        },
+      ],
     });
 
-    const expCand = pool.candidates.find(c => c.configuredModelId === 'gemini-experimental');
-    assert.equal(expCand, undefined, 'gemini-experimental with quotaFamily: argon must not be admitted using Gemini 50%');
-    const expUnconnected = pool.unconnected.find(u => u.configuredModelId === 'gemini-experimental');
+    const expCand = pool.candidates.find((c) => c.configuredModelId === 'gemini-experimental');
+    assert.equal(
+      expCand,
+      undefined,
+      'gemini-experimental with quotaFamily: argon must not be admitted using Gemini 50%'
+    );
+    const expUnconnected = pool.unconnected.find(
+      (u) => u.configuredModelId === 'gemini-experimental'
+    );
     assert.ok(expUnconnected);
     assert.equal(expUnconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
 
-    const flashCand = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    const flashCand = pool.candidates.find((c) => c.configuredModelId === 'gemini-2.5-flash');
     assert.ok(flashCand, 'gemini-2.5-flash must be admitted under Gemini 50%');
 
     // Part B: Parsed group membership preserves models in group and rejects opaque model on Argon 0%
     const fixtureDoc = {
       groups: [
-        { id: 'argon', name: 'Argon Experimental', models: ['opaque-argon-preview'], weekly: { remainingPercent: 0 } },
-        { id: 'external', name: 'External 3P', weekly: { remainingPercent: 80 } }
-      ]
+        {
+          id: 'argon',
+          name: 'Argon Experimental',
+          models: ['opaque-argon-preview'],
+          weekly: { remainingPercent: 0 },
+        },
+        { id: 'external', name: 'External 3P', weekly: { remainingPercent: 80 } },
+      ],
     };
     const { parseFixtureGroups } = require('../agy-quota');
     const parsedRows = parseFixtureGroups(fixtureDoc);
@@ -1376,18 +1725,24 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       lanes: [
         {
           laneId: 'agy02',
-          rows: parsedRows
-        }
-      ]
+          rows: parsedRows,
+        },
+      ],
     });
 
-    const opaqueCand = pool2.candidates.find(c => c.configuredModelId === 'opaque-argon-preview');
-    assert.equal(opaqueCand, undefined, 'opaque-argon-preview must not be admitted against external quota');
-    const opaqueUnconnected = pool2.unconnected.find(u => u.configuredModelId === 'opaque-argon-preview');
+    const opaqueCand = pool2.candidates.find((c) => c.configuredModelId === 'opaque-argon-preview');
+    assert.equal(
+      opaqueCand,
+      undefined,
+      'opaque-argon-preview must not be admitted against external quota'
+    );
+    const opaqueUnconnected = pool2.unconnected.find(
+      (u) => u.configuredModelId === 'opaque-argon-preview'
+    );
     assert.ok(opaqueUnconnected);
     assert.equal(opaqueUnconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
 
-    const claudeCand = pool2.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    const claudeCand = pool2.candidates.find((c) => c.configuredModelId === 'claude-3-7-sonnet');
     assert.ok(claudeCand, 'claude-3-7-sonnet admitted under external 80%');
   });
 
@@ -1403,7 +1758,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       connectionId: 'agy01',
       configuredModelId: 'gemini-2.5-flash',
       quotaScopeId: 'agy-quota::agy01::gemini',
-      metadata: { quotaGroup: 'gemini', laneId: 'agy01' }
+      metadata: { quotaGroup: 'gemini', laneId: 'agy01' },
     });
 
     const agyClaude = createRouteIdentity({
@@ -1415,7 +1770,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       connectionId: 'agy01',
       configuredModelId: 'claude-3-7-sonnet',
       quotaScopeId: 'agy-quota::agy01::external',
-      metadata: { quotaGroup: 'external', laneId: 'agy01' }
+      metadata: { quotaGroup: 'external', laneId: 'agy01' },
     });
 
     const routerGemini = createRouteIdentity({
@@ -1427,7 +1782,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       connectionId: 'conn-1',
       configuredModelId: 'ag/gemini-2.5-flash',
       quotaScopeId: 'quota::antigravity::conn-1',
-      metadata: { quotaGroup: 'gemini', connectionId: 'conn-1' }
+      metadata: { quotaGroup: 'gemini', connectionId: 'conn-1' },
     });
 
     const routerClaude = createRouteIdentity({
@@ -1439,14 +1794,18 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       connectionId: 'conn-2',
       configuredModelId: 'ag/claude-3-7-sonnet',
       quotaScopeId: 'quota::antigravity::conn-2',
-      metadata: { quotaGroup: 'external', connectionId: 'conn-2' }
+      metadata: { quotaGroup: 'external', connectionId: 'conn-2' },
     });
 
     const linked = linkSharedQuotaScopes([agyGemini, agyClaude, routerGemini, routerClaude]);
-    const lAgyGemini = linked.find(c => c.connectionId === 'agy01' && c.configuredModelId === 'gemini-2.5-flash');
-    const lRouterGemini = linked.find(c => c.connectionId === 'conn-1');
-    const lAgyClaude = linked.find(c => c.connectionId === 'agy01' && c.configuredModelId === 'claude-3-7-sonnet');
-    const lRouterClaude = linked.find(c => c.connectionId === 'conn-2');
+    const lAgyGemini = linked.find(
+      (c) => c.connectionId === 'agy01' && c.configuredModelId === 'gemini-2.5-flash'
+    );
+    const lRouterGemini = linked.find((c) => c.connectionId === 'conn-1');
+    const lAgyClaude = linked.find(
+      (c) => c.connectionId === 'agy01' && c.configuredModelId === 'claude-3-7-sonnet'
+    );
+    const lRouterClaude = linked.find((c) => c.connectionId === 'conn-2');
 
     assert.equal(lAgyGemini.quotaScopeId, lRouterGemini.quotaScopeId);
     assert.ok(lAgyGemini.quotaScopeId.includes('gemini'));
@@ -1473,9 +1832,12 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
     const pool = loadAgyPoolCandidates({
       models: ['gemini-2.5-flash'],
       lanes: [
-        { laneId: 'agy03', rows: [{ group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 90 }] }
+        {
+          laneId: 'agy03',
+          rows: [{ group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 90 }],
+        },
       ],
-      readLaneIdentity: () => ({ email: rawEmail })
+      readLaneIdentity: () => ({ email: rawEmail }),
     });
 
     const cand = pool.candidates[0];
@@ -1483,7 +1845,10 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
     assert.ok(!cand.accountRef.includes('@'), 'accountRef must not contain @');
     assert.ok(!cand.candidateKey.includes('@'), 'candidateKey must not contain @');
     assert.ok(!cand.quotaScopeId.includes('@'), 'quotaScopeId must not contain @');
-    assert.ok(!cand.candidateKey.includes('sensitive_dev'), 'candidateKey must not contain email username');
+    assert.ok(
+      !cand.candidateKey.includes('sensitive_dev'),
+      'candidateKey must not contain email username'
+    );
 
     for (const [k, v] of Object.entries(cand.metadata)) {
       if (typeof v === 'string') {
@@ -1494,9 +1859,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
 
     const loaded9r = load9RouterCandidates({
       catalog: ['ag/gemini-2.5-flash'],
-      connections: [
-        { connectionId: 'c_test', provider: 'antigravity', accountRef: rawEmail }
-      ]
+      connections: [{ connectionId: 'c_test', provider: 'antigravity', accountRef: rawEmail }],
     });
     const cand9r = loaded9r.candidates[0];
     assert.ok(cand9r);
@@ -1509,18 +1872,24 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       assert.ok(!item.candidateKey.includes('@'), 'linked candidateKey must not contain @');
       assert.ok(!item.quotaScopeId.includes('@'), 'linked quotaScopeId must not contain @');
       if (item.metadata?.originalQuotaScope) {
-        assert.ok(!item.metadata.originalQuotaScope.includes('@'), 'originalQuotaScope must not contain @');
+        assert.ok(
+          !item.metadata.originalQuotaScope.includes('@'),
+          'originalQuotaScope must not contain @'
+        );
       }
     }
 
     const selection = await selector.selectRoute(linked, {
       role: 'writer',
-      requiredCapabilities: ['general_code']
+      requiredCapabilities: ['general_code'],
     });
 
     const serialized = JSON.stringify(selection);
     assert.ok(!serialized.includes('@'), 'Serialized selection output must never contain @');
-    assert.ok(!serialized.includes('sensitive_dev'), 'Serialized selection output must never contain email username');
+    assert.ok(
+      !serialized.includes('sensitive_dev'),
+      'Serialized selection output must never contain email username'
+    );
   });
 
   test('Finding 4: Multi-account combo evaluation blocks when candidate accounts fail 404 or are actively locked', () => {
@@ -1538,25 +1907,41 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       metadata: {
         candidateAccounts: [
           { accountRef: 'acc1', connectionId: 'conn-1', quotaScopeId: 'quota::anthropic::acc1' },
-          { accountRef: 'acc2', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' }
-        ]
-      }
+          { accountRef: 'acc2', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' },
+        ],
+      },
     });
 
     // Case A: Both candidate accounts permanently fail 404 (MODEL_NOT_FOUND)
     health.recordFailure(
-      { accountRef: 'acc1', connectionId: 'conn-1', upstreamProviderId: 'anthropic', outboundModelId: 'claude-3-5-sonnet', candidateKey: 'k1' },
+      {
+        accountRef: 'acc1',
+        connectionId: 'conn-1',
+        upstreamProviderId: 'anthropic',
+        outboundModelId: 'claude-3-5-sonnet',
+        candidateKey: 'k1',
+      },
       { httpStatus: 404, message: 'Model claude-3-5-sonnet not found' },
       now
     );
     health.recordFailure(
-      { accountRef: 'acc2', connectionId: 'conn-2', upstreamProviderId: 'anthropic', outboundModelId: 'claude-3-5-sonnet', candidateKey: 'k2' },
+      {
+        accountRef: 'acc2',
+        connectionId: 'conn-2',
+        upstreamProviderId: 'anthropic',
+        outboundModelId: 'claude-3-5-sonnet',
+        candidateKey: 'k2',
+      },
       { httpStatus: 404, message: 'Model claude-3-5-sonnet not found' },
       now
     );
 
     const eval404 = health.evaluateHealth(branch, now);
-    assert.equal(eval404.healthy, false, 'Multi-account branch must be unhealthy when both accounts permanently fail 404');
+    assert.equal(
+      eval404.healthy,
+      false,
+      'Multi-account branch must be unhealthy when both accounts permanently fail 404'
+    );
     assert.equal(eval404.category, ErrorCategory.MODEL_NOT_FOUND);
 
     // Case B: Both accounts actively locked with per-connection locks
@@ -1565,7 +1950,11 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
     health2.setModelLock('anthropic', 'claude-3-5-sonnet', 'conn-2', now + 60000);
 
     const evalLock = health2.evaluateHealth(branch, now);
-    assert.equal(evalLock.healthy, false, 'Multi-account branch must be unhealthy when both accounts are actively locked');
+    assert.equal(
+      evalLock.healthy,
+      false,
+      'Multi-account branch must be unhealthy when both accounts are actively locked'
+    );
     assert.equal(evalLock.blockedBy, 'model_lock');
   });
 
@@ -1586,7 +1975,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       upstreamProviderId: 'anthropic',
       configuredModelId: 'claude-3-5-sonnet',
       accountRef: 'user1',
-      connectionId: 'conn-1'
+      connectionId: 'conn-1',
     });
 
     const routeConn2 = createRouteIdentity({
@@ -1596,7 +1985,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       upstreamProviderId: 'anthropic',
       configuredModelId: 'claude-3-5-sonnet',
       accountRef: 'user2',
-      connectionId: 'conn-2'
+      connectionId: 'conn-2',
     });
 
     const evalConn1 = health.evaluateHealth(routeConn1, now);
@@ -1620,7 +2009,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       configuredModelId: 'gpt-4o',
       accountRef: 'user-healthy',
       connectionId: 'conn-h',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.01 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.01 },
     });
 
     const failedBranch = createRouteIdentity({
@@ -1631,7 +2020,7 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       configuredModelId: 'claude-3-5-sonnet',
       accountRef: 'user-failed',
       connectionId: 'conn-f',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.05 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.05 },
     });
 
     health.recordFailure(failedBranch, { message: 'insufficient_quota' });
@@ -1648,20 +2037,24 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
       metadata: {
         viableBranches: [failedBranch],
         capabilities: ['general_code'],
-        estimatedCostUsd: 0.06
-      }
+        estimatedCostUsd: 0.06,
+      },
     });
 
     const admission = selector.evaluateAdmission(comboCandidate, {
       role: 'writer',
-      requiredCapabilities: ['general_code']
+      requiredCapabilities: ['general_code'],
     });
-    assert.equal(admission.admitted, false, 'Combo must not be admitted when viableBranches has an unhealthy branch');
+    assert.equal(
+      admission.admitted,
+      false,
+      'Combo must not be admitted when viableBranches has an unhealthy branch'
+    );
     assert.ok(admission.rejectionReason.startsWith('COMBO_BRANCH_REJECTED_'));
 
     const selection = await selector.selectRoute([comboCandidate], {
       role: 'writer',
-      requiredCapabilities: ['general_code']
+      requiredCapabilities: ['general_code'],
     });
     assert.equal(selection.status, 'BLOCKED', 'Combo must not be selected');
     assert.notEqual(selection.status, 'ADMITTED_AND_SELECTED');
@@ -1672,47 +2065,47 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
   test('Finding 1: Explicit quotaGroup: experimental overrides model name and rejects on 0% experimental quota', () => {
     // Lane has 80% Gemini quota, but 0% experimental quota
     const pool = loadAgyPoolCandidates({
-      models: [
-        { id: 'gemini-2.5-flash', quotaGroup: 'experimental' }
-      ],
+      models: [{ id: 'gemini-2.5-flash', quotaGroup: 'experimental' }],
       lanes: [
         {
           laneId: 'agy01',
           rows: [
             { group: 'gemini', family: 'gemini', remainingPercent: 80, known: true },
-            { group: 'experimental', family: 'experimental', remainingPercent: 0, known: true }
-          ]
-        }
-      ]
+            { group: 'experimental', family: 'experimental', remainingPercent: 0, known: true },
+          ],
+        },
+      ],
     });
 
     // Explicit quotaGroup: 'experimental' must NOT be admitted against 80% Gemini quota!
-    const cand = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    const cand = pool.candidates.find((c) => c.configuredModelId === 'gemini-2.5-flash');
     assert.equal(cand, undefined, 'Model with 0% experimental quota must not be admitted');
 
-    const unconnected = pool.unconnected.find(u => u.configuredModelId === 'gemini-2.5-flash');
+    const unconnected = pool.unconnected.find((u) => u.configuredModelId === 'gemini-2.5-flash');
     assert.ok(unconnected, 'Should be reported in unconnected');
     assert.equal(unconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
 
     // And if experimental quota is positive (e.g. 50%), it is admitted against ::experimental, NOT ::gemini
     const pool2 = loadAgyPoolCandidates({
-      models: [
-        { id: 'gemini-2.5-flash', quotaGroup: 'experimental' }
-      ],
+      models: [{ id: 'gemini-2.5-flash', quotaGroup: 'experimental' }],
       lanes: [
         {
           laneId: 'agy01',
           rows: [
             { group: 'gemini', family: 'gemini', remainingPercent: 80, known: true },
-            { group: 'experimental', family: 'experimental', remainingPercent: 50, known: true }
-          ]
-        }
-      ]
+            { group: 'experimental', family: 'experimental', remainingPercent: 50, known: true },
+          ],
+        },
+      ],
     });
 
-    const cand2 = pool2.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    const cand2 = pool2.candidates.find((c) => c.configuredModelId === 'gemini-2.5-flash');
     assert.ok(cand2, 'Model admitted when experimental quota is positive');
-    assert.equal(cand2.quotaScopeId, 'agy-quota::agy01::experimental', 'Quota scope must be experimental, not gemini');
+    assert.equal(
+      cand2.quotaScopeId,
+      'agy-quota::agy01::experimental',
+      'Quota scope must be experimental, not gemini'
+    );
     assert.equal(cand2.metadata.quotaGroup, 'experimental');
   });
 
@@ -1726,20 +2119,39 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
         {
           laneId: 'agy01',
           rows: [
-            { group: 'argon', family: 'argon', models: ['opaque-v3'], remainingPercent: 80, known: true },
-            { group: 'external', family: 'claude-gpt', models: ['claude-3-7-sonnet'], remainingPercent: 0, known: true }
-          ]
-        }
-      ]
+            {
+              group: 'argon',
+              family: 'argon',
+              models: ['opaque-v3'],
+              remainingPercent: 80,
+              known: true,
+            },
+            {
+              group: 'external',
+              family: 'claude-gpt',
+              models: ['claude-3-7-sonnet'],
+              remainingPercent: 0,
+              known: true,
+            },
+          ],
+        },
+      ],
     });
 
     // 1. External 0% must NOT reject the available Argon model
-    const opaqueCand = pool.candidates.find(c => c.configuredModelId === 'opaque-v3');
-    assert.ok(opaqueCand, 'opaque-v3 must be admitted under Argon 80% quota even if external is 0%');
-    assert.equal(opaqueCand.quotaScopeId, 'agy-quota::agy01::argon', 'opaque-v3 must have argon quota scope');
+    const opaqueCand = pool.candidates.find((c) => c.configuredModelId === 'opaque-v3');
+    assert.ok(
+      opaqueCand,
+      'opaque-v3 must be admitted under Argon 80% quota even if external is 0%'
+    );
+    assert.equal(
+      opaqueCand.quotaScopeId,
+      'agy-quota::agy01::argon',
+      'opaque-v3 must have argon quota scope'
+    );
     assert.equal(opaqueCand.metadata.quotaGroup, 'argon');
 
-    const claudeCand = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    const claudeCand = pool.candidates.find((c) => c.configuredModelId === 'claude-3-7-sonnet');
     assert.equal(claudeCand, undefined, 'Claude must be rejected because external is 0%');
 
     // 2. Claude exhaustion must NOT block Argon when both have positive quota initially
@@ -1749,14 +2161,26 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
         {
           laneId: 'agy01',
           rows: [
-            { group: 'argon', family: 'argon', models: ['opaque-v3'], remainingPercent: 80, known: true },
-            { group: 'external', family: 'claude-gpt', models: ['claude-3-7-sonnet'], remainingPercent: 80, known: true }
-          ]
-        }
-      ]
+            {
+              group: 'argon',
+              family: 'argon',
+              models: ['opaque-v3'],
+              remainingPercent: 80,
+              known: true,
+            },
+            {
+              group: 'external',
+              family: 'claude-gpt',
+              models: ['claude-3-7-sonnet'],
+              remainingPercent: 80,
+              known: true,
+            },
+          ],
+        },
+      ],
     });
-    const candArgon = pool2.candidates.find(c => c.configuredModelId === 'opaque-v3');
-    const candClaude = pool2.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    const candArgon = pool2.candidates.find((c) => c.configuredModelId === 'opaque-v3');
+    const candClaude = pool2.candidates.find((c) => c.configuredModelId === 'claude-3-7-sonnet');
     assert.ok(candArgon);
     assert.ok(candClaude);
     assert.equal(candArgon.quotaScopeId, 'agy-quota::agy01::argon');
@@ -1765,7 +2189,11 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     // Record Claude exhaustion
     health.recordFailure(candClaude, { message: 'insufficient_quota' });
     assert.equal(health.evaluateHealth(candClaude).healthy, false, 'Claude is exhausted');
-    assert.equal(health.evaluateHealth(candArgon).healthy, true, 'Argon model MUST REMAIN HEALTHY when Claude is exhausted');
+    assert.equal(
+      health.evaluateHealth(candArgon).healthy,
+      true,
+      'Argon model MUST REMAIN HEALTHY when Claude is exhausted'
+    );
   });
 
   test('Finding 3: AGY 401 blocks linked 9router candidate for the same account without leaking email', () => {
@@ -1775,9 +2203,12 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     const agyPool = loadAgyPoolCandidates({
       models: ['gemini-2.5-flash'],
       lanes: [
-        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }] }
+        {
+          laneId: 'agy01',
+          rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }],
+        },
       ],
-      readLaneIdentity: () => ({ email: sharedEmail })
+      readLaneIdentity: () => ({ email: sharedEmail }),
     });
     const agyCandidate = agyPool.candidates[0];
     assert.ok(agyCandidate);
@@ -1786,9 +2217,7 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
 
     const loaded9r = load9RouterCandidates({
       catalog: ['ag/gemini-2.5-flash'],
-      connections: [
-        { connectionId: 'c1', provider: 'antigravity', accountRef: sharedEmail }
-      ]
+      connections: [{ connectionId: 'c1', provider: 'antigravity', accountRef: sharedEmail }],
     });
     const routerCandidate = loaded9r.candidates[0];
     assert.ok(routerCandidate);
@@ -1800,7 +2229,10 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     assert.equal(health.evaluateHealth(routerCandidate).healthy, true);
 
     // Record 401 Auth failure against AGY candidate
-    health.recordFailure(agyCandidate, { httpStatus: 401, message: 'Unauthorized: authentication failed' });
+    health.recordFailure(agyCandidate, {
+      httpStatus: 401,
+      message: 'Unauthorized: authentication failed',
+    });
 
     // AGY candidate is blocked
     const agyEval = health.evaluateHealth(agyCandidate);
@@ -1809,7 +2241,11 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
 
     // Linked 9router candidate sharing the same account MUST ALSO BE BLOCKED!
     const routerEval = health.evaluateHealth(routerCandidate);
-    assert.equal(routerEval.healthy, false, 'Linked 9router candidate must be blocked on shared account AUTH failure');
+    assert.equal(
+      routerEval.healthy,
+      false,
+      'Linked 9router candidate must be blocked on shared account AUTH failure'
+    );
     assert.equal(routerEval.category, ErrorCategory.AUTH);
   });
 
@@ -1828,31 +2264,44 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
         capabilities: ['general_code', 'fast_response'],
         estimatedCostUsd: 0.002,
         byAccount: {
-          [syntheticEmail]: { quotaUsed: 42, activeUsers: 3 }
-        }
-      }
+          [syntheticEmail]: { quotaUsed: 42, activeUsers: 3 },
+        },
+      },
     });
 
     // Check identity metadata
     assert.ok(!candidate.accountRef.includes('@'));
-    assert.ok(!candidate.metadata.byAccount[syntheticEmail], 'Property name syntheticEmail must not exist in metadata.byAccount');
+    assert.ok(
+      !candidate.metadata.byAccount[syntheticEmail],
+      'Property name syntheticEmail must not exist in metadata.byAccount'
+    );
     const safeHash = hashEmail(syntheticEmail);
-    assert.ok(candidate.metadata.byAccount[safeHash], 'Sanitized hash property name must exist in metadata.byAccount');
+    assert.ok(
+      candidate.metadata.byAccount[safeHash],
+      'Sanitized hash property name must exist in metadata.byAccount'
+    );
 
     // Run selection with requiredCapabilities matching the candidate
     const selection = await selector.selectRoute([candidate], {
       role: 'writer',
-      requiredCapabilities: ['general_code']
+      requiredCapabilities: ['general_code'],
     });
 
     // Must successfully reach ADMITTED_AND_SELECTED
-    assert.equal(selection.status, 'ADMITTED_AND_SELECTED', 'Selection must succeed, not return BLOCKED');
+    assert.equal(
+      selection.status,
+      'ADMITTED_AND_SELECTED',
+      'Selection must succeed, not return BLOCKED'
+    );
     assert.equal(selection.chosen, candidate.candidateKey);
 
     // Serialize full selection (identities, ranking, breakdown)
     const serialized = JSON.stringify(selection);
     assert.ok(!serialized.includes('@'), 'Serialized selection output must not contain @');
-    assert.ok(!serialized.includes('leaked_internal'), 'Serialized selection output must not contain email username');
+    assert.ok(
+      !serialized.includes('leaked_internal'),
+      'Serialized selection output must not contain email username'
+    );
   });
 
   test('Finding 5: Reloading a lane from account A to B does not rebind frozen candidate A to router B', () => {
@@ -1863,9 +2312,12 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     const poolA = loadAgyPoolCandidates({
       models: ['gemini-2.5-flash'],
       lanes: [
-        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }] }
+        {
+          laneId: 'agy01',
+          rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }],
+        },
       ],
-      readLaneIdentity: () => ({ email: emailA })
+      readLaneIdentity: () => ({ email: emailA }),
     });
     const candA = poolA.candidates[0];
     assert.ok(candA);
@@ -1874,9 +2326,12 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     const poolB = loadAgyPoolCandidates({
       models: ['gemini-2.5-flash'],
       lanes: [
-        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }] }
+        {
+          laneId: 'agy01',
+          rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }],
+        },
       ],
-      readLaneIdentity: () => ({ email: emailB })
+      readLaneIdentity: () => ({ email: emailB }),
     });
     const candB = poolB.candidates[0];
     assert.ok(candB);
@@ -1891,7 +2346,7 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
       connectionId: 'conn-A',
       configuredModelId: 'ag/gemini-2.5-flash',
       quotaScopeId: 'quota::antigravity::conn-A',
-      metadata: { quotaGroup: 'gemini' }
+      metadata: { quotaGroup: 'gemini' },
     });
 
     const routerB = createRouteIdentity({
@@ -1903,16 +2358,20 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
       connectionId: 'conn-B',
       configuredModelId: 'ag/gemini-2.5-flash',
       quotaScopeId: 'quota::antigravity::conn-B',
-      metadata: { quotaGroup: 'gemini' }
+      metadata: { quotaGroup: 'gemini' },
     });
 
     // 4. Link shared quota scopes across all candidates
     const linked = linkSharedQuotaScopes([candA, candB, routerA, routerB]);
 
-    const linkedCandA = linked.find(c => c.connectionId === 'agy01' && c.metadata.realAccountRef === hashEmail(emailA));
-    const linkedCandB = linked.find(c => c.connectionId === 'agy01' && c.metadata.realAccountRef === hashEmail(emailB));
-    const linkedRouterA = linked.find(c => c.connectionId === 'conn-A');
-    const linkedRouterB = linked.find(c => c.connectionId === 'conn-B');
+    const linkedCandA = linked.find(
+      (c) => c.connectionId === 'agy01' && c.metadata.realAccountRef === hashEmail(emailA)
+    );
+    const linkedCandB = linked.find(
+      (c) => c.connectionId === 'agy01' && c.metadata.realAccountRef === hashEmail(emailB)
+    );
+    const linkedRouterA = linked.find((c) => c.connectionId === 'conn-A');
+    const linkedRouterB = linked.find((c) => c.connectionId === 'conn-B');
 
     assert.ok(linkedCandA, 'Candidate A must exist in linked pool');
     assert.ok(linkedCandB, 'Candidate B must exist in linked pool');
@@ -1920,12 +2379,28 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     assert.ok(linkedRouterB, 'Router B must exist in linked pool');
 
     // Candidate A must link to Router A (Account A), NOT Router B!
-    assert.equal(linkedCandA.quotaScopeId, linkedRouterA.quotaScopeId, 'Candidate A must link with Router A');
-    assert.notEqual(linkedCandA.quotaScopeId, linkedRouterB.quotaScopeId, 'Candidate A must NOT link with Router B');
+    assert.equal(
+      linkedCandA.quotaScopeId,
+      linkedRouterA.quotaScopeId,
+      'Candidate A must link with Router A'
+    );
+    assert.notEqual(
+      linkedCandA.quotaScopeId,
+      linkedRouterB.quotaScopeId,
+      'Candidate A must NOT link with Router B'
+    );
 
     // Candidate B must link to Router B (Account B)
-    assert.equal(linkedCandB.quotaScopeId, linkedRouterB.quotaScopeId, 'Candidate B must link with Router B');
-    assert.notEqual(linkedCandA.quotaScopeId, linkedCandB.quotaScopeId, 'Candidate A and B must have distinct quota scopes');
+    assert.equal(
+      linkedCandB.quotaScopeId,
+      linkedRouterB.quotaScopeId,
+      'Candidate B must link with Router B'
+    );
+    assert.notEqual(
+      linkedCandA.quotaScopeId,
+      linkedCandB.quotaScopeId,
+      'Candidate A and B must have distinct quota scopes'
+    );
   });
 
   test('Finding 6: Branch exhausted during awaited JEV causes selector to re-validate and pick healthy alternative', async () => {
@@ -1939,7 +2414,7 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
       configuredModelId: 'claude-3-5-sonnet',
       accountRef: 'user-fail',
       connectionId: 'conn-f',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.05, qualityScore: 95 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.05, qualityScore: 95 },
     });
 
     // Combo candidate has higher score (quality 95) but its executable viable branch will fail during JEV
@@ -1956,8 +2431,8 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
         viableBranches: [failedBranch],
         capabilities: ['general_code'],
         estimatedCostUsd: 0.05,
-        qualityScore: 95
-      }
+        qualityScore: 95,
+      },
     });
 
     // Healthy alternative single route has slightly lower score (quality 80)
@@ -1969,7 +2444,7 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
       configuredModelId: 'gpt-4o',
       accountRef: 'user-healthy',
       connectionId: 'conn-h',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.02, qualityScore: 80 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.02, qualityScore: 80 },
     });
 
     // JEV function that simulates an async delay during which failedBranch becomes exhausted!
@@ -1983,13 +2458,21 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
 
     const selection = await selector.selectRoute([comboCandidate, healthyAlternative], {
       role: 'writer',
-      requiredCapabilities: ['general_code']
+      requiredCapabilities: ['general_code'],
     });
 
     // Must NOT retain the failed combo candidate or return ADMITTED_AND_SELECTED with failed branch!
     assert.equal(selection.status, 'ADMITTED_AND_SELECTED');
-    assert.equal(selection.chosen, healthyAlternative.candidateKey, 'Selector must pick healthyAlternative when combo branch failed during JEV');
-    assert.notEqual(selection.chosen, comboCandidate.candidateKey, 'Selector must NOT retain failed combo');
+    assert.equal(
+      selection.chosen,
+      healthyAlternative.candidateKey,
+      'Selector must pick healthyAlternative when combo branch failed during JEV'
+    );
+    assert.notEqual(
+      selection.chosen,
+      comboCandidate.candidateKey,
+      'Selector must NOT retain failed combo'
+    );
   });
 });
 
@@ -2005,7 +2488,7 @@ describe('Review fb8826b regressions', () => {
       configuredModelId: 'ag/claude-3-5-sonnet',
       accountRef: UNKNOWN,
       connectionId: 'conn-shared-auth',
-      metadata: { capabilities: ['general_code'] }
+      metadata: { capabilities: ['general_code'] },
     });
 
     const modelB = createRouteIdentity({
@@ -2016,7 +2499,7 @@ describe('Review fb8826b regressions', () => {
       configuredModelId: 'ag/claude-3-7-sonnet',
       accountRef: UNKNOWN,
       connectionId: 'conn-shared-auth',
-      metadata: { capabilities: ['general_code'] }
+      metadata: { capabilities: ['general_code'] },
     });
 
     assert.equal(health.evaluateHealth(modelA).healthy, true);
@@ -2029,7 +2512,11 @@ describe('Review fb8826b regressions', () => {
     assert.equal(evalA.category, ErrorCategory.AUTH);
 
     const evalB = health.evaluateHealth(modelB);
-    assert.equal(evalB.healthy, false, 'Model B on same connection must be blocked when model A fails 401');
+    assert.equal(
+      evalB.healthy,
+      false,
+      'Model B on same connection must be blocked when model A fails 401'
+    );
     assert.equal(evalB.category, ErrorCategory.AUTH);
   });
 
@@ -2044,7 +2531,7 @@ describe('Review fb8826b regressions', () => {
       configuredModelId: 'ag/claude-3-5-sonnet',
       accountRef: 'user-branch-a',
       connectionId: 'conn-a',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.04, qualityScore: 90 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.04, qualityScore: 90 },
     });
 
     const branchB = createRouteIdentity({
@@ -2055,7 +2542,7 @@ describe('Review fb8826b regressions', () => {
       configuredModelId: 'gpt-4o',
       accountRef: 'user-branch-b',
       connectionId: 'conn-b',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.03, qualityScore: 85 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.03, qualityScore: 85 },
     });
 
     const comboCandidate = createRouteIdentity({
@@ -2071,8 +2558,8 @@ describe('Review fb8826b regressions', () => {
         viableBranches: [branchA, branchB],
         capabilities: ['general_code'],
         estimatedCostUsd: 0.04,
-        qualityScore: 90
-      }
+        qualityScore: 90,
+      },
     });
 
     const singleRoute = createRouteIdentity({
@@ -2083,7 +2570,7 @@ describe('Review fb8826b regressions', () => {
       configuredModelId: 'deepseek-chat',
       accountRef: 'user-single',
       connectionId: 'conn-s',
-      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.01, qualityScore: 80 }
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.01, qualityScore: 80 },
     });
 
     const jevAsk = async () => {
@@ -2096,14 +2583,21 @@ describe('Review fb8826b regressions', () => {
 
     const selection = await selector.selectRoute([comboCandidate, singleRoute], {
       role: 'writer',
-      requiredCapabilities: ['general_code']
+      requiredCapabilities: ['general_code'],
     });
 
-    assert.equal(selection.status, 'ADMITTED_AND_SELECTED', 'Selection must succeed through healthy branch B');
+    assert.equal(
+      selection.status,
+      'ADMITTED_AND_SELECTED',
+      'Selection must succeed through healthy branch B'
+    );
     assert.equal(selection.chosen, comboCandidate.candidateKey);
     assert.equal(selection.identity.comboBranches.length, 1);
     assert.equal(selection.identity.comboBranches[0].configuredModelId, branchB.configuredModelId);
     assert.equal(selection.identity.metadata.viableBranches.length, 1);
-    assert.equal(selection.identity.metadata.viableBranches[0].configuredModelId, branchB.configuredModelId);
+    assert.equal(
+      selection.identity.metadata.viableBranches[0].configuredModelId,
+      branchB.configuredModelId
+    );
   });
 });
