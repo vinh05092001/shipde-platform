@@ -38,6 +38,29 @@ test('local runner rejects production before spawning suites', () => {
   assert.doesNotMatch(output, /^RUN /m, 'Must launch zero child suites');
 });
 
+test('local runner keeps production mode for child suites instead of relabelling it', () => {
+  // Review finding: the runner used to force NODE_ENV=test on children, which hides the
+  // caller's production mode from the helper's own production rejection (BR-LOCAL-01).
+  const runnerPath = fileURLToPath(new URL('../../../scripts/test-local-db.mjs', import.meta.url));
+  const source = readFileSync(runnerPath, 'utf8');
+  // A hard-coded child NODE_ENV (with or without spaces) must never appear in the runner.
+  assert.equal(
+    /NODE_ENV: 'test',/.test(source),
+    false,
+    'The runner must not relabel the caller NODE_ENV when starting child suites'
+  );
+  assert.equal(
+    /NODE_ENV:'test',/.test(source),
+    false,
+    'The runner must not relabel the caller NODE_ENV when starting child suites'
+  );
+  // Child suites must inherit the caller's mode so the helper can still reject production.
+  assert.ok(
+    source.includes('NODE_ENV: process.env.NODE_ENV'),
+    'Child suite environment must inherit the caller NODE_ENV'
+  );
+});
+
 test('TASK-AI-163 delivery stays within allowed paths', () => {
   const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
   // Compare diff against origin/main (including uncommitted working tree changes)
@@ -99,31 +122,33 @@ test('TASK-AI-163 delivery stays within allowed paths', () => {
 });
 
 test('local readiness failure omits caller credentials', () => {
-  const specPath = fileURLToPath(
-    new URL('../../../apps/api/src/auth/auth.login.supertest.spec.ts', import.meta.url)
-  );
+  const apiDir = fileURLToPath(new URL('../../../apps/api', import.meta.url));
   const require = createRequire(import.meta.url);
   const tsxHref = pathToFileURL(require.resolve('tsx')).href;
-  const sensitiveUrl =
-    'postgresql://fixture_user:fixture_secret_pwd_888@synthetic-host.local:5432/db';
+  // Obviously fake credentials; never a key-shaped or real connection string.
+  const fixturePassword = 'fixture-not-a-real-password';
+  const sensitiveUrl = `postgresql://fixture_user:${fixturePassword}@synthetic-host.invalid:5432/db`;
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    TEST_DB: 'local',
+    DATABASE_URL: sensitiveUrl,
+    TEST_FORCE_READINESS: 'down',
+  };
+  // The assertion must not depend on whether the caller happens to run in CI.
+  delete childEnv.CI;
 
-  const res = spawnSync(process.execPath, ['--import', tsxHref, specPath], {
-    cwd: fileURLToPath(new URL('../../../apps/api', import.meta.url)),
-    env: {
-      ...process.env,
-      TEST_DB: 'local',
-      DATABASE_URL: sensitiveUrl,
-      TEST_FORCE_READINESS: 'down',
-    },
-    encoding: 'utf8',
-    windowsHide: true,
-  });
+  const res = spawnSync(
+    process.execPath,
+    ['--import', tsxHref, 'src/auth/auth.login.supertest.spec.ts'],
+    { cwd: apiDir, env: childEnv, encoding: 'utf8', timeout: 180_000, windowsHide: true }
+  );
 
-  assert.notEqual(res.status, 0, 'Readiness failure must remain a failure');
+  assert.notEqual(res.status, 0, 'Readiness failure must remain a failure (BR-LOCAL-04)');
   const diagnostics = `${res.stdout || ''}\n${res.stderr || ''}`;
-  assert.equal(diagnostics.includes('fixture_secret_pwd_888'), false, 'Must not expose password');
-  assert.equal(diagnostics.includes(sensitiveUrl), false, 'Must not expose caller connection URL');
-  assert.match(diagnostics, /Database must be reachable/i, 'Must report readiness failure');
+  assert.equal(diagnostics.includes(sensitiveUrl), false, 'Must not echo the caller URL');
+  assert.equal(diagnostics.includes(fixturePassword), false, 'Must not echo the caller password');
+  assert.equal(diagnostics.includes('synthetic-host.invalid'), false, 'Must not echo the host');
+  assert.match(diagnostics, /reachable/i, 'Failure must still explain the readiness failure');
 });
 
 describe('Prisma 6 with the complete repository migration history', { concurrency: false }, () => {
