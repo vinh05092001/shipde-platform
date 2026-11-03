@@ -18,7 +18,7 @@ function makeTempLane() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'lane-launcher-test-'));
 }
 
-test('2 job tranh 1 lane -> 1 bị từ chối', (t) => {
+test('2 job tranh 1 lane -> 1 bị từ chối, bỏ skipLock', (t) => {
   const dir = makeTempLane();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -29,6 +29,22 @@ test('2 job tranh 1 lane -> 1 bị từ chối', (t) => {
 
   const res2 = launch(dir, { name: 'job-2' });
   assert.strictEqual(res2.ok, false);
+
+  // skipLock đã bị loại bỏ -> vẫn bị từ chối
+  const res3 = launch(dir, { name: 'job-3' }, { skipLock: true });
+  assert.strictEqual(res3.ok, false);
+
+  // kiểm tra pid > 0 được bảo đảm không bị bypass kể cả khi truyền skipLock: true
+  const dirPid = makeTempLane();
+  t.after(() => fs.rmSync(dirPid, { recursive: true, force: true }));
+  assert.throws(
+    () => launch(dirPid, { name: 'job-4' }, { pid: 0, skipLock: true }),
+    /positive pid required/
+  );
+  assert.throws(
+    () => launch(dirPid, { name: 'job-5' }, { pid: -1, skipLock: true }),
+    /positive pid required/
+  );
 });
 
 test('result job cũ bị bỏ', (t) => {
@@ -88,17 +104,28 @@ test('owner chết -> chiếm qua thế hệ mới, chỉ owner release, không 
   assert.strictEqual(goodRel.ok, true);
 });
 
-test('cleanup không đụng pid job khác', (t) => {
+test('cleanup không đụng pid job khác, chỉ kill khi jobId lưu trong lane khớp', (t) => {
   const dir = makeTempLane();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const killed = [];
   const mockKill = (pid) => killed.push(pid);
 
+  // lane đang lưu jobA
   const jobA = { jobId: 'job-A', pidTree: [100, 101, 102] };
-  const jobB = { jobId: 'job-B', pidTree: [200, 201] };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(jobA, null, 2));
 
-  cleanup(dir, jobA, { kill: mockKill });
+  // cleanup với jobB khác jobId -> không kill gì
+  const jobB = { jobId: 'job-B', pidTree: [200, 201] };
+  const resB = cleanup(dir, jobB, { kill: mockKill });
+  assert.strictEqual(resB.ok, false);
+  assert.deepStrictEqual(resB.killed, []);
+  assert.deepStrictEqual(killed, []);
+
+  // cleanup với jobA khớp jobId -> dùng pidTree đã lưu trong lane
+  const resA = cleanup(dir, jobA, { kill: mockKill });
+  assert.strictEqual(resA.ok, true);
+  assert.deepStrictEqual(resA.killed, [100, 101, 102]);
   assert.deepStrictEqual(killed, [100, 101, 102]);
   assert.strictEqual(killed.includes(200), false);
   assert.strictEqual(killed.includes(201), false);
@@ -108,13 +135,32 @@ test('stderr không còn chuỗi key (regex key/token/Bearer), lưu exitCode, du
   const dir = makeTempLane();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  const dirty = 'Error: Bearer secret-tok-999; api_key="secret-key-888"; token=tok-777; --key=key-666';
-  const saved = saveResult(dir, { jobId: 'job-secure' }, {
-    exitCode: 7,
-    stderr: dirty,
-    durationMs: 350,
-    logPath: '/tmp/job.log',
-  });
+  // Test che JSON {"api_key":"secret","token":"secret"}
+  const jsonDirty = '{"api_key":"secret","token":"secret"}';
+  const savedJson = saveResult(
+    dir,
+    { jobId: 'job-json' },
+    {
+      stderr: jsonDirty,
+    }
+  );
+  assert.strictEqual(savedJson.stderr.includes('secret'), false);
+  const parsedJson = JSON.parse(savedJson.stderr);
+  assert.strictEqual(parsedJson.api_key, '[REDACTED]');
+  assert.strictEqual(parsedJson.token, '[REDACTED]');
+
+  const dirty =
+    'Error: Bearer secret-tok-999; api_key="secret-key-888"; token=tok-777; --key=key-666';
+  const saved = saveResult(
+    dir,
+    { jobId: 'job-secure' },
+    {
+      exitCode: 7,
+      stderr: dirty,
+      durationMs: 350,
+      logPath: '/tmp/job.log',
+    }
+  );
 
   assert.strictEqual(saved.exitCode, 7);
   assert.strictEqual(saved.durationMs, 350);
@@ -126,6 +172,26 @@ test('stderr không còn chuỗi key (regex key/token/Bearer), lưu exitCode, du
 
   const read = readResult(dir, { jobId: 'job-secure' });
   assert.strictEqual(read.stderr, saved.stderr);
+});
+
+test('relaunch cùng object job cũ -> ID khác, result cũ bị bỏ', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const l1 = launch(dir, { name: 'relaunch-task' });
+  assert.strictEqual(l1.ok, true);
+  saveResult(dir, l1.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, l1.job);
+
+  // relaunch cùng object job cũ
+  const l2 = launch(dir, l1.job);
+  assert.strictEqual(l2.ok, true);
+  assert.notStrictEqual(l2.job.jobId, l1.job.jobId);
+  assert.notStrictEqual(l2.job.attemptId, l1.job.attemptId);
+
+  // result cũ bị bỏ vì jobId không khớp
+  const oldResult = readResult(dir, l2.job);
+  assert.strictEqual(oldResult, null);
 });
 
 test('launch cho phép job mới khi job cũ đã có result và lock giải phóng', (t) => {

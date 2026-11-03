@@ -16,8 +16,12 @@ function getLockPath(lane) {
 function redactStderr(text) {
   if (!text) return '';
   return String(text)
-    .replace(/(Bearer\s+)[^\s'"]+/gi, '$1[REDACTED]')
-    .replace(/((?:[\w.-]*(?:key|token)[\w.-]*)\s*[:=]\s*)['"]?[^'"\s]+['"]?/gi, '$1[REDACTED]');
+    .replace(/(Bearer\s+)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s'"]+)/gi, '$1[REDACTED]')
+    .replace(
+      /((?:['"]?[\w.-]*(?:key|token|secret)[\w.-]*['"]?)\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s,;}"'>]+)/gi,
+      (match, prefix, quote) =>
+        quote ? `${prefix}${quote}[REDACTED]${quote}` : `${prefix}[REDACTED]`
+    );
 }
 
 function launch(lane, job, options = {}) {
@@ -33,13 +37,11 @@ function launch(lane, job, options = {}) {
       return { ok: false, cause: 'LANE_BUSY', error: 'Active job without matching result' };
     }
   }
-  const jobId = (job && job.jobId) || `job-${crypto.randomUUID()}`;
-  const attemptId = (job && job.attemptId) || `att-${crypto.randomUUID()}`;
-  const pid = options.pid !== undefined ? options.pid : ((job && job.pid) || process.pid);
-  if (!options.skipLock) {
-    const locked = acquireLaneLock(lane, { jobId, pid }, options);
-    if (!locked.ok) return locked;
-  }
+  const jobId = `job-${crypto.randomUUID()}`;
+  const attemptId = `att-${crypto.randomUUID()}`;
+  const pid = options.pid !== undefined ? options.pid : (job && job.pid) || process.pid;
+  const locked = acquireLaneLock(lane, { jobId, pid }, options);
+  if (!locked.ok) return locked;
   const jobData = Object.assign({}, job, { jobId, attemptId, pid, launchedAt: Date.now() });
   fs.writeFileSync(jobFile, JSON.stringify(jobData, null, 2));
   return { ok: true, job: jobData };
@@ -86,13 +88,25 @@ function saveResult(lane, job, outcome = {}) {
 }
 
 function cleanup(lane, job, options = {}) {
-  const killFn = options.kill || ((pid) => { try { process.kill(pid); } catch (_) {} });
-  const target = job || (() => {
-    try { return JSON.parse(fs.readFileSync(path.join(toLaneDir(lane), 'job.json'), 'utf8')); }
-    catch (_) { return null; }
-  })();
-  if (!target) return { ok: true, killed: [] };
-  const list = target.pidTree || target.pids || (target.pid ? [target.pid] : []);
+  const killFn =
+    options.kill ||
+    ((pid) => {
+      try {
+        process.kill(pid);
+      } catch (_) {}
+    });
+  const dir = toLaneDir(lane);
+  let stored = null;
+  try {
+    stored = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+  } catch (_) {
+    stored = null;
+  }
+  if (!stored || !stored.jobId) return { ok: true, killed: [] };
+  if (job && job.jobId && job.jobId !== stored.jobId) {
+    return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
+  }
+  const list = stored.pidTree || stored.pids || (stored.pid ? [stored.pid] : []);
   const pids = Array.isArray(list) ? list : [list];
   const killed = [];
   for (const p of pids) {
