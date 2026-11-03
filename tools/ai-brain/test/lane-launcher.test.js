@@ -5,6 +5,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { once } = require('node:events');
+const { Worker } = require('node:worker_threads');
 const {
   launch,
   acquireLaneLock,
@@ -444,6 +446,149 @@ test('redacts-json-credential-value-after-separator-line', (t) => {
   // Structural lines that carry no credential are preserved.
   assert.ok(saved.stderr.startsWith('{\n'));
   assert.ok(saved.stderr.endsWith('}'));
+});
+
+// A paused lane operation must be reproducible across processes to prove the
+// fix: a worker runs the delayed operation and pauses at the seam while the
+// main thread replaces the lane, then the paused operation resumes.
+const PAUSE_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const control = new Int32Array(workerData.sab);
+const launcher = require(workerData.launcher);
+const seam = () => {
+  // 1 = paused, 2 = released. Wait for the release token, never for 0.
+  Atomics.store(control, 0, 1);
+  Atomics.notify(control, 0);
+  Atomics.wait(control, 0, 1, 15000);
+};
+const options = {};
+if (workerData.pauseAt === 'beforePublish') options.beforePublish = seam;
+if (workerData.pauseAt === 'beforeLockAcquire') options.beforeLockAcquire = seam;
+const res =
+  workerData.op === 'saveResult'
+    ? launcher.saveResult(workerData.dir, workerData.job, workerData.outcome, options)
+    : launcher.launch(workerData.dir, workerData.job, options);
+parentPort.postMessage(res === null ? { discarded: true } : { discarded: false, res });
+`;
+
+function startPauseWorker(t, { pauseAt, op, dir, job, outcome }) {
+  const sab = new SharedArrayBuffer(4);
+  const control = new Int32Array(sab);
+  const worker = new Worker(PAUSE_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      sab,
+      pauseAt,
+      op,
+      dir,
+      job: job || null,
+      outcome: outcome || null,
+      launcher: path.join(__dirname, '..', 'lane-launcher.js'),
+    },
+  });
+  t.after(() => worker.terminate());
+  // 'ok' = woken by the pause store; 'not-equal' = the worker paused first.
+  const paused = Atomics.wait(control, 0, 0, 15000);
+  assert.ok(
+    paused === 'ok' || paused === 'not-equal',
+    `the delayed ${op} must pause at ${pauseAt} (seam reached before its critical section)`
+  );
+  const resume = () => {
+    Atomics.store(control, 0, 2);
+    Atomics.notify(control, 0);
+  };
+  const done = once(worker, 'message');
+  return { resume, done };
+}
+
+test('late-result-race-preserves-active-completion', async (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Complete and release A.
+  const resA = launch(dir, { name: 'job-A' });
+  assert.strictEqual(resA.ok, true);
+  saveResult(dir, resA.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resA.job);
+
+  // A's delayed save validates A's identity, pauses before publication, and only
+  // resumes after another process has launched, completed and released B.
+  const { resume, done } = startPauseWorker(t, {
+    pauseAt: 'beforePublish',
+    op: 'saveResult',
+    dir,
+    job: resA.job,
+    outcome: { exitCode: 1, stderr: 'late A' },
+  });
+
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  saveResult(dir, resB.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resB.job);
+
+  resume();
+  const [{ discarded }] = await done;
+
+  // A's late publication must be discarded, never overwrite B's completion.
+  assert.strictEqual(discarded, true);
+  const readB = readResult(dir, resB.job);
+  assert.ok(readB);
+  assert.strictEqual(readB.jobId, resB.job.jobId);
+  assert.strictEqual(readB.exitCode, 0);
+
+  // Launching C succeeds.
+  const resC = launch(dir, { name: 'job-C' });
+  assert.strictEqual(resC.ok, true);
+  assert.ok(resC.job.jobId);
+});
+
+test('launch-rechecks-active-job-after-lock-acquisition', async (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Completed and released A recorded on the lane.
+  const resA = launch(dir, { name: 'job-A' });
+  assert.strictEqual(resA.ok, true);
+  saveResult(dir, resA.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resA.job);
+
+  // Contender C passes the initial busy check, then pauses before acquiring the
+  // lock. B launches, stays active without a result, and its owner releases the lock.
+  const { resume, done } = startPauseWorker(t, {
+    pauseAt: 'beforeLockAcquire',
+    op: 'launch',
+    dir,
+    job: { name: 'job-C' },
+  });
+
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  releaseLaneLock(dir, resB.job);
+
+  resume();
+  const [{ res: resC }] = await done;
+
+  // C must be rejected; it cannot overwrite B's active job.json.
+  assert.strictEqual(resC.ok, false);
+  assert.strictEqual(resC.cause, 'LANE_BUSY');
+  const stored = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+  assert.strictEqual(stored.jobId, resB.job.jobId);
+});
+
+test('redacts-credential-container-with-keyword-on-opening-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-container-keyword-line' };
+  const rawStderr = '{\n"secret": { "token": "FAKE_A",\n"value": "FAKE_CREDENTIAL"\n}\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_A'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_CREDENTIAL'), false);
+
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_A'), false);
+  assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
 });
 
 test('redacts-json-credential-nested-object-and-array-values', (t) => {

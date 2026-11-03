@@ -13,6 +13,40 @@ function getLockPath(lane) {
   return path.join(toLaneDir(lane), 'lock');
 }
 
+// Serializes the check-then-publish steps of `launch` and `saveResult` across
+// processes, so a paused validation can never publish across a replacement launch.
+function withLaneOpLock(dir, fn) {
+  const lockPath = path.join(dir, 'lane.op');
+  const owner = { jobId: `op-${crypto.randomUUID()}`, pid: process.pid };
+  const until = Date.now() + 10000;
+  for (;;) {
+    if (acquireLock(lockPath, owner).ok) break;
+    if (Date.now() > until) throw new Error('LANE_OP_LOCK_TIMEOUT');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  try {
+    return fn();
+  } finally {
+    releaseLock(lockPath, owner);
+  }
+}
+
+function readStoredJob(dir) {
+  const jobFile = path.join(dir, 'job.json');
+  if (!fs.existsSync(jobFile)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function activeJobWithoutResult(dir) {
+  const stored = readStoredJob(dir);
+  if (stored && stored.jobId && !readResult(dir, stored)) return stored;
+  return null;
+}
+
 const CREDENTIAL_LINE_RE = /(?:api[-_]?key|apikey|key|token|secret|password|authorization|bearer)/i;
 
 const CREDENTIAL_GLOBAL_RE = new RegExp(CREDENTIAL_LINE_RE.source, 'gi');
@@ -41,15 +75,22 @@ function bracketDelta(text) {
 // value (key without its value, e.g. `"api_key":` or `"api_key"`) or an open
 // container (`"secret": {`) whose lines must stay masked until it closes.
 function trailingState(trimmed) {
+  const matches = [...trimmed.matchAll(CREDENTIAL_GLOBAL_RE)];
+  if (matches.length === 0) return { pending: false, depth: 0 };
+  // The first credential keyword whose value opens a container keeps every line
+  // of that container masked until it closes, even when the opening line carries
+  // further credential keywords after the opener (e.g. `"secret": { "token": …`).
   let lastEnd = -1;
-  for (const m of trimmed.matchAll(CREDENTIAL_GLOBAL_RE)) lastEnd = m.index + m[0].length;
-  if (lastEnd < 0) return { pending: false, depth: 0 };
-  const rest = trimmed.slice(lastEnd);
-  const opener = /^[\w-]*["'`]?\s*[:=]\s*([[{].*)$/.exec(rest);
-  if (opener) {
-    const depth = bracketDelta(opener[1]);
-    return { pending: false, depth: depth > 0 ? depth : 0 };
+  for (const m of matches) {
+    const rest = trimmed.slice(m.index + m[0].length);
+    const opener = /^[\w-]*["'`]?\s*[:=]\s*([[{].*)$/.exec(rest);
+    if (opener) {
+      const depth = bracketDelta(opener[1]);
+      if (depth > 0) return { pending: false, depth };
+    }
+    lastEnd = m.index + m[0].length;
   }
+  const rest = trimmed.slice(lastEnd);
   const pending =
     /[:=]$/.test(trimmed) ||
     /^--?[\w-]+$/.test(trimmed) ||
@@ -107,14 +148,8 @@ function launch(lane, job, options = {}) {
   const dir = toLaneDir(lane);
   fs.mkdirSync(dir, { recursive: true });
   const jobFile = path.join(dir, 'job.json');
-  if (fs.existsSync(jobFile)) {
-    let prev;
-    try {
-      prev = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
-    } catch (_) {}
-    if (prev && prev.jobId && !readResult(lane, prev)) {
-      return { ok: false, cause: 'LANE_BUSY', error: 'Active job without matching result' };
-    }
+  if (activeJobWithoutResult(dir)) {
+    return { ok: false, cause: 'LANE_BUSY', error: 'Active job without matching result' };
   }
   const jobId = `job-${crypto.randomUUID()}`;
   const attemptId = `att-${crypto.randomUUID()}`;
@@ -123,11 +158,21 @@ function launch(lane, job, options = {}) {
   if (!Number.isInteger(pid) || pid <= 0) {
     throw new Error('LANE_LAUNCHER_REFUSED: positive pid required');
   }
-  const locked = acquireLaneLock(lane, { jobId, pid }, options);
-  if (!locked.ok) return locked;
-  const jobData = Object.assign({}, job, { jobId, attemptId, pid, launchedAt: Date.now() });
-  fs.writeFileSync(jobFile, JSON.stringify(jobData, null, 2));
-  return { ok: true, job: jobData };
+  if (typeof options.beforeLockAcquire === 'function') options.beforeLockAcquire();
+  return withLaneOpLock(dir, () => {
+    const locked = acquireLaneLock(lane, { jobId, pid }, options);
+    if (!locked.ok) return locked;
+    // Revalidate lane occupancy with the lock acquired: while this process was
+    // contending, a replacement launch may have installed an active job whose
+    // result does not exist yet.
+    if (activeJobWithoutResult(dir)) {
+      releaseLaneLock(lane, { jobId, pid });
+      return { ok: false, cause: 'LANE_BUSY', error: 'Active job without matching result' };
+    }
+    const jobData = Object.assign({}, job, { jobId, attemptId, pid, launchedAt: Date.now() });
+    fs.writeFileSync(jobFile, JSON.stringify(jobData, null, 2));
+    return { ok: true, job: jobData };
+  });
 }
 
 function acquireLaneLock(lane, owner, options) {
@@ -155,31 +200,29 @@ function readResult(lane, job) {
   return check.ok ? parsed : null;
 }
 
-function saveResult(lane, job, outcome = {}) {
+function saveResult(lane, job, outcome = {}, options = {}) {
   const dir = toLaneDir(lane);
   fs.mkdirSync(dir, { recursive: true });
   const jobId = (job && job.jobId) || outcome.jobId;
-  const jobFile = path.join(dir, 'job.json');
-  if (fs.existsSync(jobFile)) {
-    let active;
-    try {
-      active = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
-    } catch (_) {}
-    // A result not bound to the active job (stale or missing jobId) is discarded so it
-    // cannot overwrite the active job's completion.
-    if (active && active.jobId && active.jobId !== jobId) {
-      return null;
-    }
-  }
-  const result = Object.assign({}, outcome, {
-    jobId,
-    exitCode: outcome.exitCode !== undefined ? outcome.exitCode : 0,
-    stderr: redactStderr(outcome.stderr || ''),
-    durationMs: outcome.durationMs !== undefined ? outcome.durationMs : 0,
-    logPath: outcome.logPath || '',
+  // A result not bound to the active job (stale or missing jobId) is discarded so it
+  // cannot overwrite the active job's completion.
+  const isStale = (active) => Boolean(active && active.jobId && active.jobId !== jobId);
+  if (isStale(readStoredJob(dir))) return null;
+  if (typeof options.beforePublish === 'function') options.beforePublish();
+  return withLaneOpLock(dir, () => {
+    // Validate again immediately before publication with `launch`'s replacement
+    // serialized: while this process was paused, the lane may have moved on.
+    if (isStale(readStoredJob(dir))) return null;
+    const result = Object.assign({}, outcome, {
+      jobId,
+      exitCode: outcome.exitCode !== undefined ? outcome.exitCode : 0,
+      stderr: redactStderr(outcome.stderr || ''),
+      durationMs: outcome.durationMs !== undefined ? outcome.durationMs : 0,
+      logPath: outcome.logPath || '',
+    });
+    fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(result, null, 2));
+    return result;
   });
-  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(result, null, 2));
-  return result;
 }
 
 function cleanup(lane, job, options = {}) {
