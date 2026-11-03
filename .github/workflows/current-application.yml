@@ -3,6 +3,9 @@ name: Current application checks
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  merge_group:
 
 permissions:
   contents: read
@@ -21,7 +24,14 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Event $EVENT_NAME runs full application checks."
+            echo "application=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           application=false
           paths_file="$(mktemp)"
           trap 'rm -f "$paths_file"' EXIT
@@ -33,7 +43,7 @@ jobs:
 
           while IFS= read -r -d '' path; do
             case "$path" in
-              .agents/*|.github/*|docs/*|scripts/ai/*|AGENTS.md|README.md|.gitignore)
+              .agents/*|.github/*|.oc/*|docs/*|scripts/ai/*|AGENTS.md|README.md|.gitignore)
                 ;;
               *)
                 application=true
@@ -65,6 +75,13 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
+      - name: Cache Turborepo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-
       - name: Verify clean production-only install
         run: pnpm install --prod --frozen-lockfile
       - name: Install full development dependencies
@@ -83,7 +100,19 @@ jobs:
         run: pnpm db:migrate
       - name: Verify Migration Status
         run: pnpm db:migrate:status
-      - run: pnpm lint
+      - name: Run lint, typecheck, test, build (affected on pull_request, full on push/merge_group)
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Running affected tasks against PR base: ${{ github.event.pull_request.base.sha }}"
+            TURBO_SCM_BASE="${{ github.event.pull_request.base.sha }}" pnpm exec turbo run lint typecheck test build --affected
+            pnpm exec eslint scripts
+          else
+            echo "Running full tasks on ${{ github.event_name }}"
+            pnpm lint
+            pnpm typecheck
+            pnpm test
+            pnpm build
+          fi
       - name: ast-grep structural rules
         run: pnpm lint:ast
       - name: Controller prompt contract (promptfoo, offline echo provider)
@@ -133,8 +162,7 @@ jobs:
           GITLEAKS_VERSION="8.24.0"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
-      - run: pnpm typecheck
-      - run: pnpm test
+      - run: pnpm build
       - name: Run Foundation Integration Tests
         run: pnpm test:integration
       - run: pnpm test:e2e
@@ -152,7 +180,6 @@ jobs:
             echo "Error: Expected preservation baseline negative proof to exit with exact code 1, but got code $EXIT_CODE!"
             exit 1
           fi
-      - run: pnpm build
       - name: Install Playwright Chromium for accessibility gate
         run: pnpm --filter @shipde/web exec playwright install --with-deps chromium
       - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
