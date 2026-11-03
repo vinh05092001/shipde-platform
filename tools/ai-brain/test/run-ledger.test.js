@@ -160,7 +160,7 @@ test('route identity masks credentials', () => {
   assert.equal(masked.apiKey, '[REDACTED]');
   assert.equal(masked.secret, '[REDACTED]');
   assert.equal(masked.token, '[REDACTED]');
-  assert.equal(masked.endpoint, 'https://user:***@api.anthropic.com/v1');
+  assert.equal(masked.endpoint, 'https://api.anthropic.com/v1');
   assert.equal(masked.provider, 'anthropic');
 });
 
@@ -174,7 +174,7 @@ test('route identity masks credentials recursively in providers array', () => {
   assert.equal(masked.providers[0].apiKey, '[REDACTED]');
   assert.equal(masked.providers[0].name, 'anthropic');
   assert.equal(masked.providers[1].secret, '[REDACTED]');
-  assert.equal(masked.providers[1].endpoint, 'https://user:***@api.deepseek.com');
+  assert.equal(masked.providers[1].endpoint, 'https://api.deepseek.com');
   const serialized = JSON.stringify(masked);
   assert.equal(serialized.includes('"x"'), false);
   assert.equal(serialized.includes('pass123'), false);
@@ -693,4 +693,159 @@ test('run-ledger output loads through ProgressLedger.load without LEDGER_CORRUPT
   assert.equal(state.items['TASK-GUARD'].spent.attempts, 2);
   assert.equal(state.goal.attempts, 2);
   assert.equal(state.goal.tokens, 150);
+});
+
+// --- TASK-AI-169 review findings (CHANGES_REQUIRED round) ---
+
+test('retry_cannot_change_established_item', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const rA = ledger.record('writer', { itemId: 'ITEM-A', attemptId: 'a1', ms: 100 });
+  assert.equal(rA.ok, true);
+
+  const rB = ledger.record('writer', { itemId: 'ITEM-B', attemptId: 'a1', ms: 200 });
+  assert.equal(rB.ok, false);
+
+  const state = ledger.load();
+  assert.equal(state.items['ITEM-A'].spent.attempts, 1);
+  assert.equal(Object.hasOwn(state.items, 'ITEM-B'), false);
+  assert.equal(state.goal.attempts, 1);
+});
+
+test('retry_with_late_goal_id_counts_goal_attempt', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', {
+    itemId: 'ITEM-T',
+    attemptId: 'a1',
+    retryLayer: 'gateway',
+    ms: 100,
+  });
+  assert.equal(r1.ok, true);
+  assert.equal(ledger.load().goals ? true : true, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'ITEM-T',
+    attemptId: 'a1',
+    retryLayer: 'pipeline',
+    goalId: 'G',
+    ms: 200,
+  });
+  assert.equal(r2.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.goals['G'].attempts, 1);
+  assert.equal(state.items['ITEM-T'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 1);
+  assert.equal(ledger.getRuns('ITEM-T').length, 2);
+});
+
+test('known_token_in_flight_completion_tracks_unknown_tokens', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', {
+    itemId: 'ITEM-K',
+    attemptId: 'a1',
+    fp: 'F-K',
+    verdict: 'IN_FLIGHT',
+    tokens: 100,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'ITEM-K',
+    attemptId: 'a1',
+    fp: 'F-K',
+    verdict: 'DONE',
+    ms: 10,
+  });
+  assert.equal(r2.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['ITEM-K'].spent.tokens, 100);
+  assert.equal(state.items['ITEM-K'].spent.tokensUnknown, 1);
+  assert.equal(state.goal.tokensUnknown, 1);
+  assert.equal(state.goal.tokens, 100);
+});
+
+test('concurrent_completion_then_fallback_counts_once', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledgerA = new RunLedger({ file });
+  const ledgerB = new RunLedger({ file });
+
+  const origAdmit = ledgerA.progressLedger.admit.bind(ledgerA.progressLedger);
+  ledgerA.progressLedger.admit = (itemId, stage, fp, opts) => {
+    const res = origAdmit(itemId, stage, fp, opts);
+    const rB = ledgerB.record('writer', {
+      itemId: 'TASK-CONCUR',
+      attemptId: 'att-b1',
+      fp: 'fp-c1',
+      goalId: 'G',
+      ms: 100,
+      verdict: 'DONE',
+    });
+    assert.equal(rB.ok, true);
+    const rF = ledgerB.record('fallback', {
+      itemId: 'TASK-CONCUR',
+      attemptId: 'att-b1',
+      fp: 'fp-c1',
+      goalId: 'G',
+      ms: 50,
+      verdict: 'PASS',
+    });
+    assert.equal(rF.ok, true);
+    return res;
+  };
+
+  const resA = ledgerA.admit('TASK-CONCUR', 'writer', 'fp-c1', {
+    reserve: true,
+    pid: process.pid,
+    goalId: 'G',
+  });
+  assert.equal(resA.ok, true);
+
+  const state = ledgerA.load();
+  assert.equal(state.items['TASK-CONCUR'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 1);
+  assert.equal(state.goals['G'].attempts, 1);
+});
+
+test('masks_username_credential_with_nonempty_password', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const endpoint = 'https://privateBearerValue:x@api.example/v1';
+  const rec = ledger.record('writer', {
+    itemId: 'TASK-MASK-USER',
+    attemptId: 'a1',
+    route: { endpoint },
+    ms: 100,
+  });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.run.route.endpoint, 'https://api.example/v1');
+
+  const content = fs.readFileSync(ledger.file, 'utf8');
+  assert.equal(content.includes('privateBearerValue'), false);
+});
+
+test('job_id_collision_does_not_migrate_real_item', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', { itemId: 'job-7', attemptId: 'original-a', ms: 100 });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'ITEM-B',
+    attemptId: 'new-a',
+    jobId: 'job-7',
+    ms: 200,
+  });
+  assert.equal(r2.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['job-7'].spent.attempts, 1);
+  assert.equal(state.items['ITEM-B'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 2);
+  assert.deepEqual(
+    ledger.getChain('job-7').map((r) => r.attemptId),
+    ['original-a']
+  );
+  assert.deepEqual(
+    ledger.getChain('ITEM-B').map((r) => r.attemptId),
+    ['new-a']
+  );
 });

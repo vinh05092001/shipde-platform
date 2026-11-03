@@ -10,9 +10,10 @@ const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
 function maskCredentials(v) {
   if (!v) return v;
   if (typeof v === 'string') {
+    // Strip the whole userinfo section: a credential may sit in the username as well
+    // as in the password, so masking only the password would persist the username one.
     return v
-      .replace(/(https?:\/\/)([^:@/]+):([^@/]+)@/g, '$1$2:***@')
-      .replace(/(https?:\/\/)([^:@/]+):?@/g, '$1')
+      .replace(/(https?:\/\/)[^@/\s]*@/g, '$1')
       .replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
   }
   if (Array.isArray(v)) {
@@ -111,7 +112,7 @@ class RunLedger {
             const it = s.items && s.items[itemId];
             const stObj = it && it.stages && it.stages[stage];
             const cur = stObj && stObj.fps && stObj.fps[actualFp];
-            if (cur && (cur.goalId === opts.goalId || cur.outcome !== 'IN_FLIGHT')) {
+            if (!cur || cur.outcome !== 'IN_FLIGHT' || cur.goalId === opts.goalId) {
               if (cur && !cur.goalId) cur.goalId = opts.goalId;
               writeJson(this.file, s);
               return;
@@ -190,16 +191,25 @@ class RunLedger {
         const priorRun = s.runs.find((r) => r.attemptId === attemptKey && r.itemId);
         if (priorRun) itemId = priorRun.itemId;
       }
+      // A placeholder is an item created from this attempt alone. A real item named by
+      // jobId that holds only other attempts is not a placeholder; migrating it would
+      // transfer another item's budget and chain on an identifier coincidence.
+      const isPlaceholder = (key) => {
+        const cand = key && Object.hasOwn(s.items, key) ? s.items[key] : null;
+        if (!cand) return false;
+        const keys = Object.keys(cand.seenAttempts || {});
+        const chain = (cand.runs || []).map((r) => r.attemptId);
+        return (
+          (keys.length === 0 || (keys.length === 1 && keys[0] === attemptKey)) &&
+          chain.every((a) => a === attemptKey)
+        );
+      };
       const prevPlaceholderKey =
         itemId &&
-        ((opts.attemptId &&
-          opts.attemptId !== itemId &&
-          Object.hasOwn(s.items, opts.attemptId) &&
-          opts.attemptId) ||
-          (opts.jobId &&
-            opts.jobId !== itemId &&
-            Object.hasOwn(s.items, opts.jobId) &&
-            opts.jobId));
+        ((opts.attemptId !== itemId && opts.attemptId && isPlaceholder(opts.attemptId)
+          ? opts.attemptId
+          : null) ||
+          (opts.jobId !== itemId && opts.jobId && isPlaceholder(opts.jobId) ? opts.jobId : null));
       if (prevPlaceholderKey && Object.hasOwn(s.items, prevPlaceholderKey)) {
         const placeholder = s.items[prevPlaceholderKey];
         delete s.items[prevPlaceholderKey];
@@ -276,6 +286,16 @@ class RunLedger {
 
       const isNew =
         !Object.hasOwn(it.seenAttempts, attemptKey) && !Object.hasOwn(s.seenAttempts, attemptKey);
+      // The attempt is already charged to another item: charging it here as well would
+      // either double the budget or leave this item's attempts below its own records.
+      if (!isNew && itemId) {
+        const owner = Object.keys(s.items || {}).find(
+          (k) =>
+            k !== itemId && Object.hasOwn((s.items[k] && s.items[k].seenAttempts) || {}, attemptKey)
+        );
+        if (owner)
+          return { ok: false, cause: Cause.NO_PROGRESS, reason: 'attempt-owned-by-other-item' };
+      }
 
       const runReviewSha = opts.reviewSha || opts.headSha || null;
       const fp =
@@ -319,17 +339,23 @@ class RunLedger {
       const tokens = hasTokens ? opts.tokens : 'UNKNOWN';
       const tokenEnforcement = hasTokens ? opts.tokenEnforcement || 'ENFORCED' : 'UNENFORCED';
       const prevImputed = prev && prev.imputedTokens !== undefined ? Number(prev.imputedTokens) : 0;
+      const prevHasKnownTokens = Boolean(
+        (prev && prev.hasTokens) ||
+        (prev &&
+          (s.runs || []).some((r) => r.attemptId === attemptKey && Number.isFinite(r.tokens)))
+      );
+      const prevHasUnknownCredit = Boolean(reserved && !prevHasKnownTokens);
       for (const acc of [it.spent, s.goal]) {
         if (consumesAttempt) acc.attempts += 1;
         acc.ms += ms;
         if (hasTokens) {
           acc.tokens += tokens;
-          if (reserved) {
+          if (prevHasUnknownCredit) {
             acc.unknownTokens = Math.max(0, (acc.unknownTokens || 0) - prevImputed);
             acc.tokensUnknown = Math.max(0, (acc.tokensUnknown || 0) - 1);
           }
         } else {
-          if (!reserved) {
+          if (!prevHasUnknownCredit) {
             acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
           }
         }
@@ -348,8 +374,13 @@ class RunLedger {
         gAcc.tokens = gAcc.tokens || 0;
         gAcc.tokensUnknown = gAcc.tokensUnknown || 0;
         gAcc.unknownTokens = gAcc.unknownTokens || 0;
-        const goalAlreadyCharged = Boolean(reserved && prev && prev.goalId === opts.goalId);
-        if (isNew && !goalAlreadyCharged) gAcc.attempts += 1;
+        // Charged when the item was first charged to this goal (a reservation admitted
+        // under it) or the item charged it later (a run already recorded for it). A
+        // retry that only now names the goal counts the existing attempt once here.
+        const goalAlreadyCharged =
+          Boolean(reserved && prev && prev.goalId === opts.goalId) ||
+          (s.runs || []).some((r) => r.attemptId === attemptKey && r.goalId === opts.goalId);
+        if (!goalAlreadyCharged) gAcc.attempts += 1;
         gAcc.ms += ms;
         if (hasTokens) gAcc.tokens += tokens;
         else gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
@@ -411,6 +442,7 @@ class RunLedger {
             : prev && prev.imputedTokens !== undefined && Number.isFinite(prev.imputedTokens)
               ? prev.imputedTokens
               : 0;
+        fpsRecord.hasTokens = hasTokens;
       } else if (reserved && prev && prev.imputedTokens !== undefined) {
         fpsRecord.imputedTokens = hasTokens ? 0 : prev.imputedTokens;
       }
