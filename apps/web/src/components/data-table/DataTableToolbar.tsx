@@ -41,18 +41,31 @@ interface DataTableToolbarProps {
   isFiltered?: boolean;
   onResetFilters?: () => void;
   className?: string;
+  // useDataTable historyEpoch: increments on every browser Back/Forward
+  // (popstate). When it changes, the incoming searchValue (even an unchanged
+  // one) is a navigation, not an acknowledgment of pending edits.
+  historyEpoch?: number;
 }
 
 /**
  * Computes the synchronized draft for the search input when external/committed
  * searchValue prop changes (Finding 5).
  * Distinguishes acknowledgments of older local edits from external navigation.
+ *
+ * Review item 3: `navigationEvent` marks changes driven by a real browser
+ * history navigation (Back/Forward popstate, surfaced as useDataTable
+ * `historyEpoch`). Such a change is NEVER an acknowledgment of a pending
+ * local edit, even when the incoming value happens to match an older pending
+ * edit (e.g. draft "Ngu", committed "N", pending ["Ng","Ngu"] and Back to an
+ * existing "Ng" entry): the draft resynchronizes to the URL value and the
+ * pending edit tracking is discarded.
  */
 export function computeToolbarDraftOnPropChange(
   currentDraft: string,
   incomingSearchValue: string | undefined | null,
   prevSearchValue: string | undefined | null,
-  pendingEdits: string[]
+  pendingEdits: string[],
+  navigationEvent = false
 ): {
   nextDraft: string;
   nextPrevSearchValue: string;
@@ -61,6 +74,17 @@ export function computeToolbarDraftOnPropChange(
 } {
   const incoming = incomingSearchValue || '';
   const prev = prevSearchValue || '';
+
+  if (navigationEvent) {
+    // Explicit browser/history navigation: resynchronize the draft to the URL
+    // value and drop pending edit tracking. Never treat as an acknowledgment.
+    return {
+      nextDraft: incoming,
+      nextPrevSearchValue: incoming,
+      nextPendingEdits: [],
+      wasIgnoredDueToPendingEdits: false,
+    };
+  }
 
   if (incoming === prev) {
     return {
@@ -112,22 +136,28 @@ export function DataTableToolbar({
   isFiltered = false,
   onResetFilters,
   className = '',
+  historyEpoch = 0,
 }: DataTableToolbarProps) {
   // Maintain an immediately updated input draft to preserve spaces and avoid pending-navigation lag
   const [prevSearchValue, setPrevSearchValue] = React.useState(searchValue);
   const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
   const [pendingEdits, setPendingEdits] = React.useState<string[]>([]);
+  const [prevHistoryEpoch, setPrevHistoryEpoch] = React.useState(historyEpoch);
 
-  // Synchronize draft when external/committed searchValue prop changes:
-  // Distinguish acknowledgments of older local edits from external navigation.
-  if (searchValue !== prevSearchValue) {
+  // Synchronize draft when external/committed searchValue prop changes or a
+  // browser history navigation (Back/Forward) occurs. A history navigation is
+  // never an acknowledgment of pending edits (Review item 3), so it forces a
+  // resync to the URL value even when the committed search value is unchanged.
+  if (searchValue !== prevSearchValue || historyEpoch !== prevHistoryEpoch) {
     const result = computeToolbarDraftOnPropChange(
       draftSearch,
       searchValue,
       prevSearchValue,
-      pendingEdits
+      pendingEdits,
+      historyEpoch !== prevHistoryEpoch
     );
     setPrevSearchValue(result.nextPrevSearchValue);
+    setPrevHistoryEpoch(historyEpoch);
     setPendingEdits(result.nextPendingEdits);
     if (result.nextDraft !== draftSearch) {
       setDraftSearch(result.nextDraft);

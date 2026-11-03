@@ -28,7 +28,7 @@
 
 'use client';
 
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
@@ -61,6 +61,10 @@ export interface UseDataTableReturn {
   resetFilters: () => void;
   createQueryString: (params: Record<string, string | number | null | undefined>) => string;
   isPending: boolean;
+  // Increments on every real browser history navigation (Back/Forward popstate).
+  // Consumers use it to distinguish navigation from acknowledgments of their own
+  // pending interactions (Review item 3).
+  historyEpoch: number;
 }
 
 export function parseSortParam(sortParam: string | null): ColumnSort | null {
@@ -97,6 +101,28 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     props.searchParams !== undefined ? props.searchParams : nextSearchParams;
 
   const [isPending, startTransition] = useTransition();
+
+  // Explicit browser history navigation signal (Review item 3): increments on
+  // every Back/Forward popstate so consumers can distinguish navigation from
+  // acknowledgments of their own pending interactions.
+  const [historyEpoch, setHistoryEpoch] = useState(0);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => setHistoryEpoch((epoch) => epoch + 1);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Latest requested query that has not yet been committed to the URL (Review
+  // item 8). Successive interactions under delayed navigation must compose
+  // against this so an earlier user change is never discarded. The recorded
+  // committed-params identity marks when the intent becomes stale: as soon as
+  // the committed search params change (push committed or history navigation),
+  // callbacks ignore the pending intent and compose from the committed params.
+  const pendingQueryRef = useRef<{
+    query: URLSearchParams;
+    committedParams: URLSearchParams | null;
+  } | null>(null);
 
   // Search params state with validation & fallback
   const page = useMemo(() => {
@@ -171,10 +197,17 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // Column visibility local state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
 
-  // URL query builder
+  // URL query builder. Composes against the latest pending query when the
+  // committed search params have not moved yet, so successive interactions
+  // under delayed navigation accumulate instead of discarding each other.
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
-      const newSearchParams = new URLSearchParams(activeSearchParams?.toString() ?? '');
+      const pending = pendingQueryRef.current;
+      const base =
+        pending && pending.committedParams === activeSearchParams
+          ? pending.query.toString()
+          : (activeSearchParams?.toString() ?? '');
+      const newSearchParams = new URLSearchParams(base);
 
       for (const [key, value] of Object.entries(params)) {
         if (value === null || value === undefined || value === '') {
@@ -191,6 +224,10 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const navigate = useCallback(
     (queryString: string) => {
+      pendingQueryRef.current = {
+        query: new URLSearchParams(queryString),
+        committedParams: activeSearchParams,
+      };
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
       if (onNavigate) {
         onNavigate(targetUrl);
@@ -206,7 +243,7 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
         }
       }
     },
-    [onNavigate, pathname, router]
+    [activeSearchParams, onNavigate, pathname, router]
   );
 
   const setPagination = useCallback(
@@ -315,5 +352,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     resetFilters,
     createQueryString,
     isPending,
+    historyEpoch,
   };
 }

@@ -106,14 +106,11 @@ export function DataTableColumnHeader<TData = any>({
       >
         <span>{title}</span>
         {isSorted === 'desc' ? (
-          <ArrowDown className="w-3.5 h-3.5 text-[var(--primary)]" aria-hidden="true" />
+          <ArrowDown className="w-3.5 h-3.5 text-[var(--primary)]" />
         ) : isSorted === 'asc' ? (
-          <ArrowUp className="w-3.5 h-3.5 text-[var(--primary)]" aria-hidden="true" />
+          <ArrowUp className="w-3.5 h-3.5 text-[var(--primary)]" />
         ) : (
-          <ArrowUpDown
-            className="w-3.5 h-3.5 text-[var(--text-dim)] group-hover:text-[var(--text-secondary)]"
-            aria-hidden="true"
-          />
+          <ArrowUpDown className="w-3.5 h-3.5 text-[var(--text-dim)] group-hover:text-[var(--text-secondary)]" />
         )}
       </button>
 
@@ -136,7 +133,7 @@ export function DataTableColumnHeader<TData = any>({
                 : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            <ArrowUp className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
+            <ArrowUp className="w-3.5 h-3.5 text-[var(--text-muted)]" />
             <span>Tăng dần</span>
           </button>
 
@@ -153,7 +150,7 @@ export function DataTableColumnHeader<TData = any>({
                 : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            <ArrowDown className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
+            <ArrowDown className="w-3.5 h-3.5 text-[var(--text-muted)]" />
             <span>Giảm dần</span>
           </button>
 

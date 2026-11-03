@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-151` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `apps/web/src/components/data-table/**`; `apps/web/src/components/dashboard/**`; `apps/web/src/app/storybook/page.tsx`; `apps/web/src/tests/data-table-dashboard.test.ts`; `apps/web/package.json`; `docs/product-spec/work-items/TASK-AI-155.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
+| Allowed paths | `apps/web/src/components/data-table/**`; `apps/web/src/components/dashboard/**`; `apps/web/src/app/storybook/page.tsx`; `apps/web/src/tests/data-table-dashboard.test.ts`; `apps/web/e2e/**`; `apps/web/package.json`; `docs/product-spec/work-items/TASK-AI-155.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-155-web-data-table` |
 | Pull Request | `N/A — local authoring stage` |
@@ -35,9 +35,22 @@ Provide `apps/web` with a unified, reusable server-driven data table and respons
 - Clean Next.js 16 / React 19 workspace baseline in `apps/web` with Tailwind CSS and Lucide icons.
 - No new external runtime dependencies added; components built with native accessible HTML and workspace tokens.
 
+## Ambiguity and clarification markers
+
+The operator approved the porting of `sadmann7/shadcn-table` and `Kiranism/next-shadcn-dashboard-starter` patterns under MIT license on 2026-10-31. No unresolved questions remain; any future question returns to planning before authoring proceeds.
+
+## Open questions
+
 ## Author boundary
 
 GEMINI is assigned as author for porting and crafting the data-table components/hooks, dashboard shell layout, sidebar, header, page-header patterns, Storybook fixture test page, unit tests, Work Item documentation, and delivery register tracking. The author is prohibited from modifying existing feature screens (`apps/web/src/components/ShipmentListTab.tsx`, `ReconciliationTab.tsx`, etc.), gate configurations, allowlists, baselines, semgrep rules, or `.github/` workflows.
+
+## Slice sizing rule
+
+Keep each Work Item Pull Request a single vertical delivery (one Work Item, one branch, one Pull Request per AGENTS.md) sized to cut review rounds and prevent reviewer fatigue:
+- Target ~400 changed lines (excluding lockfiles, generated fixtures, and migration snapshots) per Work Item Pull Request.
+- API/backend work precedes UI work as implementation ordering inside the same Pull Request (failing tests -> API/backend -> UI); one Work Item is never split into a backend Pull Request plus a separate UI Pull Request.
+- If the work cannot stay within the budget while remaining vertical, the planner splits it before authoring into independently scoped prerequisite Work Items: each successor gets its own Work Item file, register row, branch, Pull Request and acceptance matrix; the register `dependencies` field links each successor to its prerequisites; and no predecessor or intermediate item may declare the overall feature complete until the terminal dependent Work Item is `MERGED`.
 
 ## In scope
 
@@ -67,6 +80,12 @@ GEMINI is assigned as author for porting and crafting the data-table components/
 - Adding third-party authentication services like Clerk (plain Ship Dễ session model is preserved).
 - Altering CI/CD gate configurations, allowlists, or security baselines.
 
+## Unchanged behaviour
+
+- Existing feature screens remain untouched: regression test `apps/web/src/tests/data-table-dashboard.test.ts`
+- Existing app shell and navigation continue to function: regression test `apps/web/src/tests/app-shell.test.tsx`
+- Existing web features (shops, branches, warehouses, profile, users) continue to pass: regression test `pnpm --filter @shipde/web test`
+
 ## Business rules and edge cases
 
 - `BR-UI-01`: URL State Synchronization — Table pagination (`page`, `per_page`), sorting (`sort=col.desc`), and filter parameters must reflect in URL search parameters to support shareable and reproducible URLs (`SCREEN-SPECIFICATIONS.md`).
@@ -74,6 +93,17 @@ GEMINI is assigned as author for porting and crafting the data-table components/
 - `BR-UI-03`: Accessibility (a11y) — Table headers must declare `scope="col"`, sorted columns must reflect `aria-sort`, loading tbody must declare `aria-busy="true"`, error banners must use `role="alert"`, and all icon buttons must have accessible `aria-label` and `title` attributes.
 - `BR-UI-04`: Vietnamese Localization — All user-facing text, button labels, page size labels, and status summaries must be in Vietnamese.
 - `BR-UI-05`: Fixture Isolation — All Storybook demonstration data must be explicitly labeled as fixtures and prefixed with `fix-` to avoid confusion with live operational records.
+
+## Constitution check
+
+Pre-implementation quality and safety invariants verified by author before coding and by Codex during review:
+
+- [x] **Tenant scope**: Presentation-layer UI components only; zero direct database queries or mutations; all tenant scope enforced server-side.
+- [x] **RBAC & permissions**: Navigation links filter based on active role permissions; header profile menu respects auth state.
+- [x] **Audit & sensitive data**: PII (phone numbers, emails) masked in fixtures and UI displays; no secrets or tokens handled.
+- [x] **VND integer arithmetic**: Currency values formatted using discrete integer VND arithmetic without floating-point calculations.
+- [x] **Carrier reconciliation**: Carrier tags and filter badges are presentation indicators; no direct external carrier side effects.
+- [x] **Tests at the lowest useful level, test-first where executable**: Acceptance tests implemented in `apps/web/src/tests/data-table-dashboard.test.ts` covering all states and accessibility attributes.
 
 ## UI states
 
@@ -91,7 +121,7 @@ GEMINI is assigned as author for porting and crafting the data-table components/
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
+| AC/Test ID | Scenario | Expected result | Proof |
 |---|---|---|---|
 | `AC-AI-155-01` | DataTable normal loaded state | Table renders semantic role="table", columns, rows, formatted currency, and text-right numeric alignment | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 1) |
 | `AC-AI-155-02` | DataTable loading skeleton state | Renders animated skeleton rows, sets `aria-busy="true"`, no data rows shown | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 2) |
@@ -122,8 +152,20 @@ git diff --check origin/main...HEAD
 | 1 | `19c7c192` | `CHANGES_REQUIRED` | Initial implementation of reusable data table and dashboard shell |
 | 2 | `b5d977be` | `CHANGES_REQUIRED` | Addressed round 1 review: isolated fixtures, wired URL table state, complete MIT notices, and accessibility fixes |
 | 3 | `cac4b77c` | `CHANGES_REQUIRED` | Addressed round 2 review findings |
-| 4 | `HEAD` | `READY_FOR_CODEX` | Fixed all round 3 review findings: (Finding 1) Prettier and CI gate results documented with verified exit code 0; (Finding 2) Replaced fresh hook harness renders with reactive mounted table harness subscribing to browser history popstate events, testing real mounted table UI updates on browser Back/Forward; (Finding 3 & 7) Implemented handleDesktopBreakpointResize to automatically dismiss open mobile drawer when resizing into desktop breakpoint (1024px), restoring focus to trigger button and un-inerting desktop sidebar/main content, verified with mounted focus trap and negative tests; (Finding 5) Added computeToolbarDraftOnPropChange with pending edit tracking to prevent delayed search updates from overwriting active user typing drafts, backed by negative proof; (Finding 6) Merged origin/main cleanly, preserving TASK-AI-157, TASK-AI-153, apps/api/AGENTS.md, apps/web/AGENTS.md, and updating delivery order to 272 without removing baseline artifacts. |
+| 4 | `fcfccad8` | `CHANGES_REQUIRED` | Addressed round 3 review findings. Reviewer reported: P1 #1 application gates fail; P1 #2 simulated browser acceptance; P1 #3 navigation collision with acknowledgment detection; P1 #8 overlapping updates lose changes; P1 #6 out-of-scope removal of FEAT-COM-09. |
+| 5 | Working tree based on `fcfccad8` | `IN_PROGRESS` | Inherited repairs have not passed all required checks. The actual a11y scanner passes locally and rejects the reviewed source. Handoff preservation tests pass after restoring the stale FEAT-CAR-01 register row as well as the inherited FEAT-COM-09 restoration. Mounted browser tests now hold actual Next.js navigation requests for pending-search collisions and overlapping facets, but execution is blocked by dependency permissions. See repair verification below; no new commit or remote CI success is claimed. |
 
 ## Residual limitations
 
-None.
+- Required lint, typecheck, web tests, build and browser acceptance are blocked by `EPERM` reading the worktree's installed dependencies. Clean installation is blocked by network `EACCES`. Temporary dependency substitutions were reverted; original directories are restored.
+- Fetch succeeded, but merge cannot write `ORIG_HEAD.lock` in the shared Git metadata directory. No merge, repair commit or push was performed. The reviewed SHA's remote application checks remain failed.
+- The shared screen contract requires a dedicated forbidden state; the current reusable table/showcase has no such state. Storybook export/create buttons have no handlers, the header falls back to an owner role/email without user props, and some icon buttons lack required titles. These source-contract gaps remain open because React/browser negative tests cannot run in this environment. The PR is not ready for review.
+
+## Repair verification (2026-11-02)
+
+- Scope: this approved Work Item and `.oc/review.txt` concern reusable UI components. Backend APIs, database schemas, tenant guards and audit metadata are outside this Work Item; no API security guarantees are claimed from presentation tests.
+- Exact reviewed CI: `fcfccad8ed76be0741943bde2e0c98d41b0e5a1d`, [run 41248363546](https://github.com/vinh05092001/shipde-platform/actions/runs/41248363546), job `124676505331`. Lint and typecheck succeeded at that old SHA; `pnpm test` failed in the real a11y scanner for `DataTable.tsx` and `DataTableColumnHeader.tsx`. Those old checks do not validate this working tree.
+- Red proof: `SHIPDE_REVIEW_REVISION=fcfccad8ed76be0741943bde2e0c98d41b0e5a1d node --test apps/web/e2e/support/review-gates.mjs` fails the actual a11y scan, missing approved handoff and unrelated-register preservation tests. Before the register correction, the current-file run separately failed on the stale FEAT-CAR-01 row.
+- Green proof: `node --test apps/web/e2e/support/review-gates.mjs` passes 5/5 tests. `node scripts/verify-a11y.ts` passes. `git diff --check origin/main...HEAD` and `git diff --check` pass, with the former checking the existing committed delta only.
+- Acceptance rows `AC-AI-155-01` through `AC-AI-155-11`: execution remains `BLOCKED`. Existing unit cases and the mounted-browser suite are evidence targets, not current passing evidence. The mounted suite is in `apps/web/e2e/storybook-data-table.spec.ts`; review-to-test-to-command mapping and exact blockers are in `.oc/pr-body.md`.
+- No new product decision was invented. None of the supplied findings requires a product decision; remaining blockers are execution permissions and existing implementation gaps.

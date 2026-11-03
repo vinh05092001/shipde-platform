@@ -729,7 +729,8 @@ async function runTestSuite() {
     typingDraft,
     'N',
     currentPropSearch,
-    pendingEditsList
+    pendingEditsList,
+    false
   );
   // Negative test: delayed "N" acknowledgment must NEVER overwrite newer draft "Ng"
   assert.strictEqual(
@@ -757,7 +758,8 @@ async function runTestSuite() {
     typingDraft,
     'Ng',
     currentPropSearch,
-    pendingEditsList
+    pendingEditsList,
+    false
   );
   assert.strictEqual(
     delayedCommit2.nextDraft,
@@ -775,26 +777,96 @@ async function runTestSuite() {
     'All pending local edits must be acknowledged and cleared'
   );
 
-  // Step 5: External navigation (e.g. user clicks Reset button or navigates to preset)
-  const externalNav = computeToolbarDraftOnPropChange('Ng', '', 'Ng', []);
+  // Step 5: External value change (e.g. user clicks Reset button, which pushes
+  // a new URL rather than firing a history popstate)
+  const externalNav = computeToolbarDraftOnPropChange('Ng', '', 'Ng', [], false);
   assert.strictEqual(
     externalNav.nextDraft,
     '',
-    'External navigation must reset/synchronize input draft'
+    'External value change must reset/synchronize input draft'
   );
   assert.strictEqual(
     externalNav.wasIgnoredDueToPendingEdits,
     false,
-    'External navigation must take precedence and not be ignored'
+    'External value change must take precedence and not be ignored'
   );
 
   // Negative test: No-op prop changes (incoming === prev) must not mutate draft or pending edits
-  const noopProp = computeToolbarDraftOnPropChange('TestDraft', 'Ng', 'Ng', ['Pending1']);
+  const noopProp = computeToolbarDraftOnPropChange('TestDraft', 'Ng', 'Ng', ['Pending1'], false);
   assert.strictEqual(noopProp.nextDraft, 'TestDraft', 'No-op prop change must preserve draft');
   assert.deepStrictEqual(
     noopProp.nextPendingEdits,
     ['Pending1'],
     'No-op must preserve pending edits'
+  );
+
+  // Review item 3: browser Back/Forward must be distinguished from edit
+  // acknowledgments. Collision scenario: draft "Ngu", committed "N", pending
+  // edits ["Ng","Ngu"]; browser Back lands on an EXISTING "Ng" history entry.
+  // The incoming "Ng" matches an older pending edit but is NOT its
+  // acknowledgment — it is navigation, so the draft must resync to the URL.
+  const navCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', ['Ng', 'Ngu'], true);
+  assert.strictEqual(
+    navCollision.nextDraft,
+    'Ng',
+    'Review item 3: Back to an existing "Ng" entry must resynchronize draft to the URL value'
+  );
+  assert.deepStrictEqual(
+    navCollision.nextPendingEdits,
+    [],
+    'Review item 3: navigation must discard pending edit tracking'
+  );
+  assert.strictEqual(
+    navCollision.wasIgnoredDueToPendingEdits,
+    false,
+    'Review item 3: navigation must not be reported as an ignored pending edit'
+  );
+
+  // Negative control: the SAME incoming value arriving as an ordered
+  // acknowledgment (no navigation) must preserve the newer "Ngu" draft.
+  const ackCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', ['Ng', 'Ngu'], false);
+  assert.strictEqual(
+    ackCollision.nextDraft,
+    'Ngu',
+    'Review item 3 negative control: ordered acknowledgment must NOT be mistaken for navigation'
+  );
+  assert.deepStrictEqual(
+    ackCollision.nextPendingEdits,
+    ['Ngu'],
+    'Review item 3 negative control: newer pending edits must remain tracked'
+  );
+  assert.strictEqual(
+    ackCollision.wasIgnoredDueToPendingEdits,
+    true,
+    'Review item 3 negative control: stale acknowledgment must be reported as ignored'
+  );
+
+  // Negative test: navigation must resync even when the committed search value
+  // is unchanged (epoch advanced, value identical, e.g. Back to same search on
+  // a different page) — the pending draft must not survive navigation.
+  const navSameValue = computeToolbarDraftOnPropChange('Ngu', 'N', 'N', ['Ng', 'Ngu'], true);
+  assert.strictEqual(
+    navSameValue.nextDraft,
+    'N',
+    'Review item 3: navigation with unchanged search value must still resync draft to URL'
+  );
+  assert.deepStrictEqual(
+    navSameValue.nextPendingEdits,
+    [],
+    'Review item 3: navigation with unchanged search value must clear pending edits'
+  );
+
+  // Negative test: navigation to a value never typed locally must resync draft.
+  const navForeign = computeToolbarDraftOnPropChange('Ngu', 'XYZ', 'N', ['Ng', 'Ngu'], true);
+  assert.strictEqual(
+    navForeign.nextDraft,
+    'XYZ',
+    'Review item 3: navigation to a foreign value must resync draft to the URL value'
+  );
+  assert.deepStrictEqual(
+    navForeign.nextPendingEdits,
+    [],
+    'Review item 3: foreign nav clears pending'
   );
 
   console.log('   ✅ Toolbar, faceted filters, and view options verified');
@@ -1379,350 +1451,131 @@ async function runTestSuite() {
     'resetFilters must clear all search, facet, and sort parameters'
   );
 
-  // 10.4 Reactive Mounted Table with Browser History Acceptance (Finding 2)
-  class ReactiveBrowserHistory extends EventTarget {
-    private stack: string[] = ['/storybook'];
-    private index = 0;
+  // 10.3b Review item 8: successive interactions under delayed navigation must
+  // compose against the latest pending query — no earlier user change is lost.
+  const delayedCommitNavigations: string[] = [];
+  const delayedHook = renderHookHarness({
+    searchParams: new URLSearchParams('per_page=5'),
+    onNavigate: (url: string) => {
+      delayedCommitNavigations.push(url);
+    },
+    defaultPageSize: 10,
+    filterableColumns: [
+      { id: 'status', title: 'Trạng thái', options: [] },
+      { id: 'carrier', title: 'Hãng', options: [] },
+    ],
+    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+  });
 
-    push(url: string) {
-      this.stack = this.stack.slice(0, this.index + 1);
-      this.stack.push(url);
-      this.index = this.stack.length - 1;
-      this.dispatchEvent(new Event('popstate'));
-    }
-
-    back(): string {
-      if (this.index > 0) {
-        this.index--;
-        this.dispatchEvent(new Event('popstate'));
-      }
-      return this.stack[this.index];
-    }
-
-    forward(): string {
-      if (this.index < this.stack.length - 1) {
-        this.index++;
-        this.dispatchEvent(new Event('popstate'));
-      }
-      return this.stack[this.index];
-    }
-
-    get currentIndex(): number {
-      return this.index;
-    }
-
-    get length(): number {
-      return this.stack.length;
-    }
-
-    getCurrentUrl(): string {
-      return this.stack[this.index];
-    }
-
-    getCurrentSearchParams(): URLSearchParams {
-      const url = this.stack[this.index];
-      const qIndex = url.indexOf('?');
-      return new URLSearchParams(qIndex >= 0 ? url.slice(qIndex + 1) : '');
-    }
-  }
-
-  class MountedTableAcceptanceHarness {
-    private history: ReactiveBrowserHistory;
-    private unmountFn: () => void;
-    public renderCount = 0;
-    public currentHtml = '';
-    public currentHookState: any = null;
-
-    constructor(history: ReactiveBrowserHistory) {
-      this.history = history;
-
-      const handlePopState = () => {
-        this.renderCount++;
-        this.executeMountedRender();
-      };
-
-      this.history.addEventListener('popstate', handlePopState);
-      this.unmountFn = () => {
-        this.history.removeEventListener('popstate', handlePopState);
-      };
-
-      // Initial mount execution
-      this.renderCount = 1;
-      this.executeMountedRender();
-    }
-
-    private executeMountedRender() {
-      const searchParams = this.history.getCurrentSearchParams();
-      let capturedHookState: any = null;
-      const historyRef = this.history;
-
-      function MountedTablePage() {
-        const tableState = useDataTable({
-          searchParams,
-          defaultPageSize: 10,
-          filterableColumns: [
-            { id: 'status', title: 'Trạng thái', options: [] },
-            { id: 'carrier', title: 'Hãng', options: [] },
-          ],
-          searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-          onNavigate: (url: string) => {
-            historyRef.push(url);
-          },
-        });
-        capturedHookState = tableState;
-
-        // Render actual UI components driven by tableState
-        return React.createElement(
-          'div',
-          { id: 'mounted-table-root' },
-          React.createElement(DataTableToolbar, {
-            searchValue: tableState.searchValue,
-            onSearchChange: tableState.setSearch,
-            onResetFilters: tableState.resetFilters,
-            isFiltered: tableState.isFiltered,
-          }),
-          React.createElement<any>(DataTable, {
-            columns: testColumns,
-            data: FIXTURE_SHIPMENTS,
-            keyExtractor: (item: any) => item.id,
-            pageIndex: tableState.pageIndex,
-            pageSize: tableState.pageSize,
-            pageCount: 5,
-            totalCount: 48,
-          }),
-          React.createElement<any>(DataTablePagination, {
-            pageIndex: tableState.pageIndex,
-            pageSize: tableState.pageSize,
-            pageCount: 5,
-            totalCount: 48,
-            onPageChange: (p: number) => tableState.setPagination(p),
-            onPageSizeChange: (s: number) => tableState.setPagination(1, s),
-          })
-        );
-      }
-
-      this.currentHtml = renderToStaticMarkup(
-        React.createElement(
-          AppRouterContext.Provider,
-          {
-            value: {
-              push: (url: string) => this.history.push(url),
-              replace: () => {},
-              back: () => this.history.back(),
-              forward: () => this.history.forward(),
-              refresh: () => {},
-              prefetch: () => {},
-            },
-          },
-          React.createElement(
-            PathnameContext.Provider,
-            { value: '/storybook' },
-            React.createElement(
-              SearchParamsContext.Provider,
-              { value: searchParams },
-              React.createElement(MountedTablePage)
-            )
-          )
-        )
-      );
-      this.currentHookState = capturedHookState;
-    }
-
-    unmount() {
-      this.unmountFn();
-    }
-  }
-
-  const browserHistory = new ReactiveBrowserHistory();
-  // Mount the table once. It remains mounted across history changes.
-  const mountedTable = new MountedTableAcceptanceHarness(browserHistory);
-
-  // Step 1: Initial load verified on mounted table
-  assert.strictEqual(mountedTable.renderCount, 1, 'Initial mount must execute exactly 1 render');
-  assert.strictEqual(mountedTable.currentHookState.pageIndex, 1);
-  assert.strictEqual(mountedTable.currentHookState.sort, null);
-  assert.strictEqual(mountedTable.currentHookState.searchValue, '');
+  // Committed params are still 'per_page=5' while all these pushes are in
+  // flight (delayed navigation). Each interaction must see the previous one.
+  delayedHook.setFilter('status', ['FAILED']);
   assert.ok(
-    mountedTable.currentHtml.includes(
-      'Trang <span class="font-semibold">1</span> / <span>5</span>'
-    ),
-    'Mounted table must render page 1'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes('1-10') &&
-      mountedTable.currentHtml.includes('48') &&
-      mountedTable.currentHtml.includes('bản ghi'),
-    'Mounted table must render initial records range'
+    (delayedCommitNavigations.at(-1) ?? '').includes('status=FAILED'),
+    'Delayed navigation: first interaction must push status=FAILED'
   );
 
-  // Step 2: Push page 2 with search -> mounted table listener updates automatically
-  browserHistory.push('/storybook?page=2&sort=trackingCode.asc&search=GHTK');
+  delayedHook.setFilter('carrier', ['GHN']);
+  const afterCarrier = delayedCommitNavigations.at(-1) ?? '';
+  assert.ok(
+    afterCarrier.includes('status=FAILED') && afterCarrier.includes('carrier=GHN'),
+    `Review item 8 negative test: second interaction under delayed navigation must NOT discard the pending status selection (got: ${afterCarrier})`
+  );
+
+  delayedHook.setSearch('GHTK');
+  const afterSearch = delayedCommitNavigations.at(-1) ?? '';
+  assert.ok(
+    afterSearch.includes('status=FAILED') &&
+      afterSearch.includes('carrier=GHN') &&
+      afterSearch.includes('search=GHTK'),
+    `Review item 8 negative test: third interaction under delayed navigation must preserve both earlier pending changes (got: ${afterSearch})`
+  );
+
+  delayedHook.setSort('createdAt', true);
+  const afterSort = delayedCommitNavigations.at(-1) ?? '';
+  const afterSortParams = new URLSearchParams(afterSort.split('?')[1] || afterSort);
   assert.strictEqual(
-    mountedTable.renderCount,
-    2,
-    'History push must trigger mounted table re-render'
+    afterSortParams.get('sort'),
+    'createdAt.desc',
+    'Sort interaction must set sort'
   );
-  assert.strictEqual(mountedTable.currentHookState.pageIndex, 2);
-  assert.deepStrictEqual(mountedTable.currentHookState.sort, { id: 'trackingCode', desc: false });
-  assert.strictEqual(mountedTable.currentHookState.searchValue, 'GHTK');
-  assert.ok(
-    mountedTable.currentHtml.includes(
-      'Trang <span class="font-semibold">2</span> / <span>5</span>'
-    ),
-    'Mounted table must update pagination to page 2 on push'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes('value="GHTK"'),
-    'Mounted table toolbar must update search value to GHTK'
+  assert.strictEqual(afterSortParams.get('status'), 'FAILED', 'Sort must keep pending status');
+  assert.strictEqual(afterSortParams.get('carrier'), 'GHN', 'Sort must keep pending carrier');
+  assert.strictEqual(afterSortParams.get('search'), 'GHTK', 'Sort must keep pending search');
+  assert.strictEqual(
+    afterSortParams.has('page'),
+    false,
+    'Review item 8: sort must still reset page to 1 on its own'
   );
 
-  // Step 3: Push page 3 with multiword query
-  browserHistory.push('/storybook?page=3&sort=trackingCode.asc&search=Nguy%E1%BB%85n%20V%C4%83n');
-  assert.strictEqual(
-    mountedTable.renderCount,
-    3,
-    'Second push must trigger mounted table re-render'
-  );
-  assert.strictEqual(mountedTable.currentHookState.pageIndex, 3);
-  assert.strictEqual(mountedTable.currentHookState.searchValue, 'Nguyễn Văn');
-  assert.ok(
-    mountedTable.currentHtml.includes(
-      'Trang <span class="font-semibold">3</span> / <span>5</span>'
-    ),
-    'Mounted table must update pagination to page 3'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes('value="Nguyễn Văn"'),
-    'Mounted table toolbar must render multiword search query'
-  );
-
-  // Step 4: Exercise actual browser history BACK navigation on the mounted table
-  // Notice: We do NOT create any new harness or fresh render call here!
-  browserHistory.back(); // Emits popstate -> mounted table receives event and updates
-  assert.strictEqual(
-    mountedTable.renderCount,
-    4,
-    'Browser BACK must trigger mounted table update via event listener'
+  // After the navigation commits, new interactions compose against the
+  // committed params: the stale pending intent must be dropped, not re-applied.
+  const committedHook = renderHookHarness({
+    searchParams: new URLSearchParams(afterSort.split('?')[1] || afterSort),
+    onNavigate: (url: string) => {
+      delayedCommitNavigations.push(url);
+    },
+    defaultPageSize: 10,
+    filterableColumns: [
+      { id: 'status', title: 'Trạng thái', options: [] },
+      { id: 'carrier', title: 'Hãng', options: [] },
+    ],
+    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+  });
+  committedHook.setFilter('status', ['PENDING']);
+  const afterCommit = delayedCommitNavigations.at(-1) ?? '';
+  const afterCommitParams = new URLSearchParams(afterCommit.split('?')[1] || afterCommit);
+  assert.deepStrictEqual(
+    afterCommitParams.getAll('status'),
+    ['PENDING'],
+    'Review item 8: after commit, status must be replaced exactly once (no stale pending duplicate)'
   );
   assert.strictEqual(
-    mountedTable.currentHookState.pageIndex,
-    2,
-    'Mounted table must restore page 2 on browser back'
+    afterCommitParams.get('carrier'),
+    'GHN',
+    'Review item 8: after commit, committed carrier must be preserved'
   );
   assert.strictEqual(
-    mountedTable.currentHookState.searchValue,
+    afterCommitParams.get('search'),
     'GHTK',
-    'Mounted table must restore search "GHTK" on browser back'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes(
-      'Trang <span class="font-semibold">2</span> / <span>5</span>'
-    ),
-    'Mounted table HTML must reflect page 2 after browser back'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes('value="GHTK"'),
-    'Mounted table HTML search input must reflect "GHTK" after browser back'
+    'Review item 8: after commit, committed search must be preserved'
   );
 
-  // Step 5: Exercise second browser history BACK navigation returning to step 1
-  browserHistory.back(); // Emits popstate -> returns to initial /storybook
-  assert.strictEqual(
-    mountedTable.renderCount,
-    5,
-    'Second browser BACK must trigger mounted table update'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.pageIndex,
-    1,
-    'Mounted table must restore page 1 on browser back'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.searchValue,
-    '',
-    'Mounted table must restore empty search on browser back'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes(
-      'Trang <span class="font-semibold">1</span> / <span>5</span>'
-    ),
-    'Mounted table HTML must reflect page 1 after second browser back'
-  );
-
-  // Step 6: Exercise browser history FORWARD navigation on the mounted table
-  browserHistory.forward(); // Emits popstate -> returns to page 2 (GHTK)
-  assert.strictEqual(
-    mountedTable.renderCount,
-    6,
-    'Browser FORWARD must trigger mounted table update'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.pageIndex,
-    2,
-    'Mounted table must restore page 2 on browser forward'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.searchValue,
-    'GHTK',
-    'Mounted table must restore search "GHTK" on browser forward'
-  );
-
-  // Step 7: Hook-driven navigation from the mounted table pushing to history
-  mountedTable.currentHookState.setPagination(4);
-  assert.strictEqual(
-    mountedTable.renderCount,
-    7,
-    'Hook setPagination must push to browser history and update mounted table'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.pageIndex,
-    4,
-    'Mounted table must reflect page 4 after hook-driven navigation'
-  );
-  assert.ok(
-    mountedTable.currentHtml.includes(
-      'Trang <span class="font-semibold">4</span> / <span>5</span>'
-    ),
-    'Mounted table HTML must render page 4'
-  );
-
-  // Step 8: Browser back restores previous history entry
-  browserHistory.back();
-  assert.strictEqual(
-    mountedTable.renderCount,
-    8,
-    'Browser back after hook navigation must trigger mounted table update'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.pageIndex,
-    2,
-    'Mounted table must restore page 2 after browser back'
-  );
-
-  // Negative test: browser back at index 0 must not underflow
-  browserHistory.back(); // back to index 0 (page 1)
-  assert.strictEqual(browserHistory.currentIndex, 0);
-  browserHistory.back(); // underflow attempt
-  assert.strictEqual(
-    browserHistory.currentIndex,
-    0,
-    'Negative test: browser back at index 0 must not underflow'
-  );
-  assert.strictEqual(
-    mountedTable.currentHookState.pageIndex,
-    1,
-    'Negative test: table state remains valid page 1 on back underflow attempt'
-  );
-
-  // Clean up mounted table
-  mountedTable.unmount();
-  const unmountedRenderCount = mountedTable.renderCount;
-  browserHistory.push('/storybook?page=5');
-  assert.strictEqual(
-    mountedTable.renderCount,
-    unmountedRenderCount,
-    'Unmounted table must NOT receive history events after unmount'
-  );
+  // 10.4 Committed-param re-derivation (unit level). Real browser Back/Forward
+  // acceptance is provided by the Playwright spec
+  // apps/web/e2e/storybook-data-table.spec.ts against the mounted Next.js
+  // /storybook page: real history entries, real router commits, real DOM.
+  // (The previous array-backed "mounted" harness was removed: it re-rendered
+  // static markup on every popstate, so no React DOM tree remained mounted and
+  // toolbar state/effects were recreated or skipped.)
+  {
+    const backEntry = new URLSearchParams('sort=trackingCode.asc');
+    const backDerived = renderHookHarness({
+      searchParams: backEntry,
+      onNavigate: () => {},
+      defaultPageSize: 10,
+      filterableColumns: [
+        { id: 'status', title: 'Trạng thái', options: [] },
+        { id: 'carrier', title: 'Hãng', options: [] },
+      ],
+      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    });
+    assert.strictEqual(
+      backDerived.pageIndex,
+      1,
+      'Re-derivation: back history entry without page param must fall back to page 1'
+    );
+    assert.strictEqual(
+      backDerived.searchValue,
+      '',
+      'Re-derivation: back history entry must clear search state'
+    );
+    assert.deepStrictEqual(
+      backDerived.sort,
+      { id: 'trackingCode', desc: false },
+      'Re-derivation: back history entry must restore sort state'
+    );
+  }
 
   // 10.5 Negative tests on URL parameters (malformed inputs fail-safe)
   const malformedUrl = new URLSearchParams('page=-99&per_page=invalid&sort=bad-format&status=');
@@ -1870,7 +1723,47 @@ async function runTestSuite() {
     'Negative test: stub file without full notice must fail check'
   );
 
-  console.log('   ✅ Complete MIT notices verified across all 15 ported component modules');
+  // Review item 1: the application a11y gate (scripts/verify-a11y.ts, rule 3)
+  // rejects any interactive element (button/a/input/select/textarea) carrying
+  // aria-hidden="true". Encode that exact rule here so the gate failure cannot
+  // regress — including the case-insensitive prefix collision that flagged the
+  // lucide icons (AlertCircle, ArrowUp/ArrowDown/ArrowUpDown) in this PR.
+  const a11yGateRuleSource =
+    /<(?:button|a|input|select|textarea)[^>]*\baria-hidden=["']true["'][^>]*>/gi.source;
+  const allPortedFiles = [
+    ...dataTableFiles.map((f) => path.join(dataTableDir, f)),
+    ...dashboardFiles.map((f) => path.join(dashboardDir, f)),
+  ];
+  for (const filePath of allPortedFiles) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const gateRule = new RegExp(a11yGateRuleSource, 'gi');
+    assert.strictEqual(
+      gateRule.test(content),
+      false,
+      `Review item 1: ${path.basename(filePath)} must not mark an interactive element aria-hidden (application a11y gate)`
+    );
+  }
+
+  // Negative proofs: the gate rule must still detect the violation patterns,
+  // i.e. the pre-fix markup would fail this test.
+  assert.strictEqual(
+    new RegExp(a11yGateRuleSource, 'gi').test(
+      '<AlertCircle className="w-5 h-5" aria-hidden="true" />'
+    ),
+    true,
+    'Review item 1 negative proof: gate rule must detect aria-hidden on an A-prefixed icon opening tag'
+  );
+  assert.strictEqual(
+    new RegExp(a11yGateRuleSource, 'gi').test(
+      '<button type="button" aria-hidden="true">\n  <span>x</span>\n</button>'
+    ),
+    true,
+    'Review item 1 negative proof: gate rule must detect aria-hidden on a real button element'
+  );
+
+  console.log(
+    '   ✅ Complete MIT notices and application a11y gate rule verified across all 15 ported component modules'
+  );
 
   console.log('\n================================================================');
   console.log('🎉 ALL 12 DATA TABLE & DASHBOARD SHELL TEST SUITES PASSED 100%!');

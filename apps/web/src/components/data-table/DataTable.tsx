@@ -87,7 +87,7 @@ export function DataTable<TData = any>({
           className="p-4 rounded-[8px] bg-[var(--status-risk-bg)] border border-[var(--status-risk-border)] text-[var(--status-risk-text)] flex items-start justify-between gap-3"
         >
           <div className="flex items-start gap-2.5">
-            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" aria-hidden="true" />
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
             <div className="text-xs leading-relaxed">
               <span className="font-semibold block mb-0.5">Đã xảy ra lỗi khi tải dữ liệu</span>
               <span>{typeof error === 'string' ? error : error.message}</span>

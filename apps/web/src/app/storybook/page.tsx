@@ -53,6 +53,7 @@ function StorybookContent() {
     setPagination,
     setSort,
     isFiltered,
+    historyEpoch,
   } = useDataTable({
     defaultPageSize: 10,
     defaultSort: { id: 'createdAt', desc: true },
@@ -410,6 +411,7 @@ function StorybookContent() {
             searchPlaceholder="Tìm theo mã vận đơn, mã đơn, khách hàng..."
             isFiltered={isFiltered}
             onResetFilters={resetFilters}
+            historyEpoch={historyEpoch}
             filtersSlot={
               <>
                 <DataTableFacetedFilter
