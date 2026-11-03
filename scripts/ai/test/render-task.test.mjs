@@ -286,6 +286,30 @@ Refactor scripts; do not touch .github/ workflows.
     assert.ok(scope.tenantRbacRequirement.includes('cross-tenant access must be denied'));
   });
 
+  it('treats negated .github with space "! .github/**" as forbidden', () => {
+    const workItemWithSpaceNegated = `# TASK-CFG-05 — Space negated github
+## Control
+| Field | Value |
+| Work Item ID | TASK-CFG-05 |
+| Allowed paths | scripts/**, ! .github/** |
+`;
+    const meta = extractWorkItemMeta(workItemWithSpaceNegated);
+    const scope = evaluateWorkItemScope(meta);
+    assert.equal(scope.permitsGithub, false, '"! .github/**" with space must be forbidden');
+    assert.ok(scope.githubScopeRule.includes('.github/'), 'Must forbid .github/');
+
+    const workItemWithBacktickSpace = `# TASK-CFG-06 — Backtick space negated github
+## Control
+| Field | Value |
+| Work Item ID | TASK-CFG-06 |
+| Allowed paths | \`scripts/**\`, \`! .github/**\` |
+`;
+    const metaBacktick = extractWorkItemMeta(workItemWithBacktickSpace);
+    const scopeBacktick = evaluateWorkItemScope(metaBacktick);
+    assert.equal(scopeBacktick.permitsGithub, false, 'Backtick `! .github/**` with space must be forbidden');
+    assert.ok(scopeBacktick.githubScopeRule.includes('.github/'), 'Must forbid .github/');
+  });
+
   it('records UNKNOWN for empty WHERE and does not swallow WRONG', () => {
     const raw = 'WHERE:\nWRONG: Shop ID read from body instead of token\nGOAL: Fix\nVERIFY: Test';
     const formatted = formatFindings(raw);

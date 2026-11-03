@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   selectReviewer,
   parseCandidate,
+  canonicalIdentity,
   checkIndependence,
   getSelectionApiStub,
 } from '../select-reviewer.mjs';
@@ -212,5 +213,61 @@ describe('select-reviewer', () => {
     assert.equal(result.verdict, 'BLOCKED');
     assert.equal(result.reviewer, null);
     assert.ok(result.reason.includes('UNVERIFIED_UPSTREAM') || result.reason.includes('upstream is empty'));
+  });
+
+  it('blocks resolved object with conflicting candidate key', () => {
+    const writer = {
+      harness: 'cli-harness-w',
+      accessPath: 'path-direct',
+      gateway: 'gw-w',
+      upstream: 'up-w',
+      account: 'acc-w',
+      quotaScope: 'scope-w',
+      modelId: 'model-w',
+      candidateKey: 'cli-harness-w::path-direct::gw-w::up-w::acc-w::scope-w::model-w',
+    };
+
+    const eligibleReviewer = {
+      harness: 'hr',
+      accessPath: 'pr',
+      gateway: 'gw-r',
+      upstream: 'up-r',
+      account: 'acc-r',
+      quotaScope: 'qr',
+      modelId: 'model-r',
+      candidateKey: 'hr::pr::gw-r::up-r::acc-r::qr::model-r',
+      qualifiedRoles: ['reviewer'],
+    };
+
+    const result = selectReviewer({
+      writer,
+      candidates: [eligibleReviewer],
+      resolveCandidate: (c) => ({ ...c, candidateKey: 'hr::pr::gw-r::up-w::acc-w::qr::model-r' }),
+    });
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.reviewer, null);
+  });
+
+  it('blocks candidate when key upstream is empty but field is present', () => {
+    const candidateEmptyKeyUpstream = {
+      harness: 'hr',
+      accessPath: 'pr',
+      gateway: 'gw-r',
+      upstream: 'up-r',
+      account: 'acc-r',
+      quotaScope: 'qr',
+      modelId: 'model-r',
+      candidateKey: 'hr::pr::gw-r::::acc-r::qr::model-r',
+      qualifiedRoles: ['reviewer'],
+    };
+
+    const result = selectReviewer({
+      writer: writerCandidate,
+      candidates: [candidateEmptyKeyUpstream],
+    });
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.reviewer, null);
   });
 });

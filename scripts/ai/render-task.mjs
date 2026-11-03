@@ -95,8 +95,9 @@ export function extractWorkItemMeta(markdownText = '') {
  * Evaluates tenant/auth and .github scope boundaries for a Work Item.
  */
 export function evaluateWorkItemScope(meta = {}) {
-  const allowed = meta.allowedPaths || '';
-  const inScope = meta.inScope || '';
+  // Normalize negation: strip whitespace following '!' (e.g. '! .github/**' -> '!.github/**')
+  const allowed = String(meta.allowedPaths || '').replace(/!\s+/g, '!');
+  const inScope = String(meta.inScope || '').replace(/!\s+/g, '!');
   const constitution = meta.constitutionCheck || '';
   const combined = [meta.title || '', meta.businessOutcome || '', inScope, allowed].join(' ');
 
