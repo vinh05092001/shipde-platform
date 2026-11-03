@@ -216,12 +216,12 @@ function StorybookContent() {
       },
       {
         id: 'codAmount',
-        title: 'Tiền thu hộ COD',
+        title: 'Thu hộ COD',
         align: 'right',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title="Tiền COD"
+            title="Thu hộ COD"
             sort={sort}
             onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}

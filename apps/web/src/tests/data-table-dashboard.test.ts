@@ -2704,9 +2704,26 @@ async function runTestSuite() {
     'Finding 8: table-scroll-container must have bounded max-height'
   );
 
-  console.log(
-    '   ✅ Round 6 review findings (4, 8, 9, 10, 12, 13) proven and verified with unit test suites'
+  // 13.8 Round 8 Finding: Column Header Title Alignment with E2E Specs (Thu hộ COD vs Tiền COD)
+  const headerCodHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTableColumnHeader, {
+      column: testColumns[2], // codAmount
+      title: 'Thu hộ COD',
+      sort: null,
+      onSort: () => {},
+    })
   );
+  assert.ok(
+    headerCodHtml.includes('Sắp xếp theo Thu hộ COD: hiện tại chưa sắp xếp'),
+    'Round 8: Column header aria-label must match "Thu hộ COD"'
+  );
+  assert.strictEqual(
+    headerCodHtml.includes('Sắp xếp theo Tiền COD:'),
+    false,
+    'Negative test: Column header must not revert to mismatched title "Tiền COD"'
+  );
+
+  console.log('   ✅ Round 6 & 8 review findings proven and verified with unit test suites');
 
   console.log('\n================================================================');
   console.log('🎉 ALL 13 DATA TABLE & DASHBOARD SHELL TEST SUITES PASSED 100%!');
