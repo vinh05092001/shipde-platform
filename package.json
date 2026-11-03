@@ -11,6 +11,7 @@
   "scripts": {
     "ai:research": "node scripts/ai/research.mjs",
     "dev": "turbo dev --cache-dir=.turbo/cache",
+    "ai:check": "node scripts/ai/prepush-check.mjs",
     "build": "pnpm db:generate && turbo build --cache-dir=.turbo/cache",
     "lint": "turbo lint --cache-dir=.turbo/cache && eslint scripts",
     "format:check": "tsx scripts/verify-formatting.ts",

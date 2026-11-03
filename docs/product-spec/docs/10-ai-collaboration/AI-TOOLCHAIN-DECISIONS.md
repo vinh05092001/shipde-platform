@@ -1,5 +1,21 @@
 # Ship Dễ AI Toolchain Decisions
 
+## Shared author pre-push check (TASK-AI-162)
+
+Operator approved on 2026-11-02. Every writer lane (Gemini, Claude, 9Router and directly assigned Codex authors) runs `pnpm ai:check` before committing/pushing and pastes its summary in the PR. This local helper calls the existing CI gate scripts; **CI remains the authority**, and a local PASS is not independent review or permission to merge.
+
+The checker runs `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm security:secrets`, `git diff --check origin/main...HEAD`, then tests, sequentially and failing fast. It pins the existing incremental scripts' base to `origin/main`, including their existing working-tree checks. It does not fetch; keep that ref current before starting work. Missing dependencies, Git history or native Gitleaks fail the relevant gate.
+
+For tests, pnpm's since filter selects workspaces changed from the merge-base of `origin/main` and `HEAD`, plus their dependents. Before narrowing tests, the checker verifies that these workspace directories cover every committed, staged and unstaged changed path, including deletions and both sides of renames. Root/shared changes, untracked files, an empty selection, incomplete metadata or unavailable filtering conservatively fall back to full `pnpm test`.
+
+When Turbo's affected dry-run contains runnable tests for every selected workspace, the checker uses `turbo run test --affected` to preserve its build graph. Empty, non-runnable or incomplete task sets require full tests, as does a successful probe with missing or malformed output. Only valid JSON with an optional Turbo version banner is accepted; a failed Turbo process may use the already verified pnpm filter. A failing test command is a failure, never a fallback trigger. Lint, typecheck and secrets retain their existing scope. The whitespace command checks committed changes; authors should also check their staged diff before committing.
+
+The summary has one PASS/FAIL line per executed gate followed by `PASS ai:check` or `FAIL ai:check`; failure exits nonzero. Child output and exception text are suppressed because any gate can print sensitive source or environment data. The failed gate's name identifies the command to diagnose locally; never paste raw secrets or environment values into PR evidence.
+
+Local hook installation remains optional and explicit: after `pnpm install --frozen-lockfile`, run `pnpm lefthook install`. Installed pre-push hooks invoke the shared command by default. The supported exception is the explicit, hook-only variable `SHIPDE_SKIP_AI_CHECK=1`; record why the local hook was skipped in PR evidence and still run the author checklist. Direct `pnpm ai:check` ignores the skip variable. Existing pre-commit and no-hardcode hooks are unchanged. No CI workflow, gate configuration, allowlist, baseline or Semgrep rule is relaxed.
+
+On PowerShell systems that block `.ps1` shims, use `pnpm.cmd` for the same commands. Offline regression tests: `node --test tools/ai-brain/test/task-ai-162-prepush-check.test.js` (also discovered by the existing `pnpm test:brain` command).
+
 ## Objective
 
 Use the lowest-cost capable author without reducing business completeness, UI quality, security or evidence. GitHub artifacts are the shared memory; no agent framework may replace the approved product specification, Work Item or independent review.
