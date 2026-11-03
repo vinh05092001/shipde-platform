@@ -1,6 +1,7 @@
 import 'reflect-metadata';
+import { createApiTestModule, isLocalTestDb } from '../../test-support/test-module';
 import * as assert from 'node:assert';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { RoleEnum } from '@prisma/client';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
@@ -50,7 +51,7 @@ async function main() {
     TRUST_PROXY_HOPS: 1,
   } as AppConfig;
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+  const moduleFixture: TestingModule = await createApiTestModule({ imports: [AppModule] })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
@@ -61,7 +62,8 @@ async function main() {
   const prisma = app.get(PrismaService);
 
   if ((await prisma.checkReadiness()) !== 'up') {
-    if (process.env.CI) throw new Error(`Database must be reachable in CI at ${databaseUrl}`);
+    if (process.env.CI || isLocalTestDb())
+      throw new Error('Database must be reachable in CI or TEST_DB=local');
     console.warn('PostgreSQL not reachable; skipping MFA reset idempotency suite.');
     await app.close();
     return;

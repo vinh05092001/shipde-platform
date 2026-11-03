@@ -1,9 +1,14 @@
 import 'reflect-metadata';
+import {
+  createApiTestModule,
+  isLocalTestDb,
+  skipLocalDbTest,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
@@ -31,6 +36,7 @@ async function runSessionSupertestSuite() {
     path.resolve(__dirname, '../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -96,7 +102,7 @@ async function runSessionSupertestSuite() {
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   })
     .overrideProvider(APP_CONFIG)
@@ -114,7 +120,7 @@ async function runSessionSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
+    if (process.env.CI || isLocalTestDb()) {
       throw new Error(`Database must be reachable in CI at ${databaseUrl}`);
     }
     console.warn(`⚠️ PostgreSQL not reachable at ${databaseUrl}. Skipping session tests.`);
@@ -1169,51 +1175,53 @@ async function runSessionSupertestSuite() {
       'Audit IP must not use unkeyed plain SHA-256'
     );
 
-    // Verify concurrency safety: simultaneous revocations insert exactly 1 audit record (Finding 3)
-    const sessConcurrent = await prisma.deviceSession.create({
-      data: {
-        user_id: user.id,
-        merchant_id: merchant.id,
-        session_token_hash: createSessionToken().hash,
-        device_id: 'device_concurrent_revoke_test',
-        status: SessionStatusEnum.ACTIVE,
-        expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
-      },
-    });
+    if (!skipLocalDbTest('concurrent session revocations')) {
+      // Verify concurrency safety: simultaneous revocations insert exactly 1 audit record (Finding 3)
+      const sessConcurrent = await prisma.deviceSession.create({
+        data: {
+          user_id: user.id,
+          merchant_id: merchant.id,
+          session_token_hash: createSessionToken().hash,
+          device_id: 'device_concurrent_revoke_test',
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
+        },
+      });
 
-    const [resConc1, resConc2] = await Promise.all([
-      sessionService.revoke(
-        sessConcurrent.id,
-        user.id,
-        merchant.id,
-        'corr-conc-1',
-        'Concurrent revoke 1',
-        testRawIp
-      ),
-      sessionService.revoke(
-        sessConcurrent.id,
-        user.id,
-        merchant.id,
-        'corr-conc-2',
-        'Concurrent revoke 2',
-        testRawIp
-      ),
-    ]);
-    assert.strictEqual(resConc1.status, SessionStatusEnum.REVOKED);
-    assert.strictEqual(resConc2.status, SessionStatusEnum.REVOKED);
+      const [resConc1, resConc2] = await Promise.all([
+        sessionService.revoke(
+          sessConcurrent.id,
+          user.id,
+          merchant.id,
+          'corr-conc-1',
+          'Concurrent revoke 1',
+          testRawIp
+        ),
+        sessionService.revoke(
+          sessConcurrent.id,
+          user.id,
+          merchant.id,
+          'corr-conc-2',
+          'Concurrent revoke 2',
+          testRawIp
+        ),
+      ]);
+      assert.strictEqual(resConc1.status, SessionStatusEnum.REVOKED);
+      assert.strictEqual(resConc2.status, SessionStatusEnum.REVOKED);
 
-    const concurrentAudits = await prisma.auditLog.count({
-      where: {
-        merchant_id: merchant.id,
-        action: 'SESSION_REVOKED',
-        entity_id: sessConcurrent.id,
-      },
-    });
-    assert.strictEqual(
-      concurrentAudits,
-      1,
-      'Concurrent revocations must insert exactly ONE audit record (no duplicate audits)'
-    );
+      const concurrentAudits = await prisma.auditLog.count({
+        where: {
+          merchant_id: merchant.id,
+          action: 'SESSION_REVOKED',
+          entity_id: sessConcurrent.id,
+        },
+      });
+      assert.strictEqual(
+        concurrentAudits,
+        1,
+        'Concurrent revocations must insert exactly ONE audit record (no duplicate audits)'
+      );
+    }
 
     // Verify fail-closed behavior when AUDIT_IDENTIFIER_HMAC_KEY is absent (Finding 4)
     const savedKey = process.env.AUDIT_IDENTIFIER_HMAC_KEY;

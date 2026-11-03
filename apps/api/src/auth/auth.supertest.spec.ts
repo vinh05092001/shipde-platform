@@ -1,8 +1,13 @@
 import 'reflect-metadata';
+import {
+  createApiTestModule,
+  isLocalTestDb,
+  skipLocalDbTest,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
@@ -27,6 +32,7 @@ async function runAuthSupertestSuite() {
     path.resolve(__dirname, '../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -86,7 +92,7 @@ async function runAuthSupertestSuite() {
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   })
     .overrideProvider(APP_CONFIG)
@@ -104,7 +110,7 @@ async function runAuthSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
+    if (process.env.CI || isLocalTestDb()) {
       throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
     }
     console.warn(
@@ -531,40 +537,42 @@ async function runAuthSupertestSuite() {
     // -------------------------------------------------------------------------
     // AC-AUTH-02-12: Concurrent duplicate submissions, same unverified identifier
     // -------------------------------------------------------------------------
-    console.log('[TEST 12 / AC-AUTH-02-12] Concurrent duplicate submissions safety');
-    const concurrentEmail = `concurrent.${testSuffix}@shipde.vn`;
-    const submitPayload = {
-      merchant_name: `Concurrent Shop ${testSuffix}`,
-      full_name: 'Concurrent User',
-      email: concurrentEmail,
-      password: 'SecurePassword123!',
-      terms_accepted: true,
-      terms_version: '2026.1',
-    };
+    if (!skipLocalDbTest('AC-AUTH-02-12 concurrent registration')) {
+      console.log('[TEST 12 / AC-AUTH-02-12] Concurrent duplicate submissions safety');
+      const concurrentEmail = `concurrent.${testSuffix}@shipde.vn`;
+      const submitPayload = {
+        merchant_name: `Concurrent Shop ${testSuffix}`,
+        full_name: 'Concurrent User',
+        email: concurrentEmail,
+        password: 'SecurePassword123!',
+        terms_accepted: true,
+        terms_version: '2026.1',
+      };
 
-    const [cRes1, cRes2] = await Promise.all([
-      request(app.getHttpServer())
-        .post('/auth/register')
-        .set('x-forwarded-for', '198.51.100.50')
-        .send(submitPayload),
-      request(app.getHttpServer())
-        .post('/auth/register')
-        .set('x-forwarded-for', '198.51.100.51')
-        .send(submitPayload),
-    ]);
+      const [cRes1, cRes2] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/auth/register')
+          .set('x-forwarded-for', '198.51.100.50')
+          .send(submitPayload),
+        request(app.getHttpServer())
+          .post('/auth/register')
+          .set('x-forwarded-for', '198.51.100.51')
+          .send(submitPayload),
+      ]);
 
-    // Both should respond 201 (one created, other treated as retry/re-issue)
-    assert.strictEqual(cRes1.status, 201);
-    assert.strictEqual(cRes2.status, 201);
+      // Both should respond 201 (one created, other treated as retry/re-issue)
+      assert.strictEqual(cRes1.status, 201);
+      assert.strictEqual(cRes2.status, 201);
 
-    // Exactly ONE user record exists for this email
-    const concurrentUsers = await prisma.user.findMany({
-      where: { email: concurrentEmail },
-    });
-    assert.strictEqual(concurrentUsers.length, 1, 'Exactly one user record must persist');
-    console.log(
-      '  PASS: AC-AUTH-02-12 Handled concurrent registration safely without duplicate records'
-    );
+      // Exactly ONE user record exists for this email
+      const concurrentUsers = await prisma.user.findMany({
+        where: { email: concurrentEmail },
+      });
+      assert.strictEqual(concurrentUsers.length, 1, 'Exactly one user record must persist');
+      console.log(
+        '  PASS: AC-AUTH-02-12 Handled concurrent registration safely without duplicate records'
+      );
+    }
 
     // -------------------------------------------------------------------------
     // AC-AUTH-02-13: Password hashing verification
@@ -1083,42 +1091,44 @@ async function runAuthSupertestSuite() {
     assert.strictEqual(res21h.body.error.code, 'TOKEN_EXPIRED');
     console.log('  PASS: Expired token rejected with 400 TOKEN_EXPIRED');
 
-    // 21i. Atomic single-use test (concurrent requests)
-    rateLimitService.clear();
-    await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
-    const raceMsg = mockDeliveryAdapter.getLastMessage();
-    const raceToken = new URL(raceMsg.link!).searchParams.get('token')!;
+    if (!skipLocalDbTest('password reset atomic single use')) {
+      // 21i. Atomic single-use test (concurrent requests)
+      rateLimitService.clear();
+      await request(app.getHttpServer()).post('/auth/forgot-password').send({ identifier: email1 });
+      const raceMsg = mockDeliveryAdapter.getLastMessage();
+      const raceToken = new URL(raceMsg.link!).searchParams.get('token')!;
 
-    const [resRace1, resRace2] = await Promise.all([
-      request(app.getHttpServer())
-        .post('/auth/reset-password')
-        .set('x-forwarded-for', '203.0.113.14')
-        .send({
-          token: raceToken,
-          password: 'RacePassword123!',
-          password_confirm: 'RacePassword123!',
-        }),
-      request(app.getHttpServer())
-        .post('/auth/reset-password')
-        .set('x-forwarded-for', '203.0.113.15')
-        .send({
-          token: raceToken,
-          password: 'RacePassword456!',
-          password_confirm: 'RacePassword456!',
-        }),
-    ]);
+      const [resRace1, resRace2] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/auth/reset-password')
+          .set('x-forwarded-for', '203.0.113.14')
+          .send({
+            token: raceToken,
+            password: 'RacePassword123!',
+            password_confirm: 'RacePassword123!',
+          }),
+        request(app.getHttpServer())
+          .post('/auth/reset-password')
+          .set('x-forwarded-for', '203.0.113.15')
+          .send({
+            token: raceToken,
+            password: 'RacePassword456!',
+            password_confirm: 'RacePassword456!',
+          }),
+      ]);
 
-    const statuses = [resRace1.status, resRace2.status].sort();
-    assert.deepStrictEqual(statuses, [200, 400]); // one succeeds, one fails
-    const failedRes = resRace1.status === 400 ? resRace1 : resRace2;
-    assert.strictEqual(failedRes.body.error.code, 'TOKEN_ALREADY_USED');
+      const statuses = [resRace1.status, resRace2.status].sort();
+      assert.deepStrictEqual(statuses, [200, 400]); // one succeeds, one fails
+      const failedRes = resRace1.status === 400 ? resRace1 : resRace2;
+      assert.strictEqual(failedRes.body.error.code, 'TOKEN_ALREADY_USED');
 
-    const userRace = await prisma.user.findFirst({ where: { email: email1 } });
-    const pw1Match = await verifyPassword('RacePassword123!', userRace!.password_hash);
-    const pw2Match = await verifyPassword('RacePassword456!', userRace!.password_hash);
-    assert.ok(pw1Match || pw2Match, 'Password should have changed to one of the race passwords');
-    assert.ok(!(pw1Match && pw2Match), 'Password cannot be both');
-    console.log('  PASS: Concurrent resets atomically handled (exactly one succeeds)');
+      const userRace = await prisma.user.findFirst({ where: { email: email1 } });
+      const pw1Match = await verifyPassword('RacePassword123!', userRace!.password_hash);
+      const pw2Match = await verifyPassword('RacePassword456!', userRace!.password_hash);
+      assert.ok(pw1Match || pw2Match, 'Password should have changed to one of the race passwords');
+      assert.ok(!(pw1Match && pw2Match), 'Password cannot be both');
+      console.log('  PASS: Concurrent resets atomically handled (exactly one succeeds)');
+    }
 
     // 21j. Suspended account during reset returns 403 FORBIDDEN
     rateLimitService.clear();

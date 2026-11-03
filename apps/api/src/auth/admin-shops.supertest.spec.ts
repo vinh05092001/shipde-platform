@@ -1,9 +1,10 @@
 import 'reflect-metadata';
+import { createApiTestModule, isLocalTestDb } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
@@ -28,6 +29,7 @@ async function runAdminShopsSupertestSuite() {
     path.resolve(__dirname, '../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -87,7 +89,7 @@ async function runAdminShopsSupertestSuite() {
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   })
     .overrideProvider(APP_CONFIG)
@@ -104,7 +106,7 @@ async function runAdminShopsSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
+    if (process.env.CI || isLocalTestDb()) {
       throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
     }
     console.warn(
