@@ -12,7 +12,17 @@ function openCodeConfig(options = {}) {
     process.env.OPENCODE_CONFIG ||
     path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
   // Configuration is consumed only in memory; auth stores are never opened.
-  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  // A missing configuration means no configured providers (truthful empty);
+  // any other read or parse failure must surface as an enumeration failure,
+  // never as a silently empty catalogue.
+  let raw;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return { provider: {} };
+    throw error;
+  }
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
 }
 function configuredModels(config) {
   const disabled = new Set(config.disabled_providers || []);
@@ -105,14 +115,22 @@ async function enumerateLiveSources(options = {}) {
         continue;
       }
       const body = await response.json();
-      const rows = Array.isArray(body) ? body : body.data || body.models;
-      if (!Array.isArray(rows)) throw new Error('SCHEMA_CHANGED');
+      const rows = Array.isArray(body) ? body : body?.data || body?.models;
+      const identifiers = Array.isArray(rows)
+        ? rows.map((row) => (typeof row === 'string' ? row : row?.id))
+        : null;
+      // A filtered listing is not evidence of disappearance. Validate every
+      // row, including namespaced/preset IDs, before making it authoritative.
+      if (
+        !identifiers ||
+        identifiers.some((model) => typeof model !== 'string' || !/^[\w@][\w@./:+-]*$/.test(model))
+      ) {
+        record(source, [], 'INCOMPLETE_LISTING', url);
+        continue;
+      }
       const models = [
         ...new Set(
-          rows
-            .map((row) => (typeof row === 'string' ? row : row?.id))
-            .filter((model) => typeof model === 'string' && /^[\w./:+-]+$/.test(model))
-            .map((model) => (model.startsWith(id + '/') ? model : id + '/' + model))
+          identifiers.map((model) => (model.startsWith(id + '/') ? model : id + '/' + model))
         ),
       ].sort();
       record(source, models, null, url);
@@ -151,14 +169,17 @@ async function enumerateLiveSources(options = {}) {
     try {
       const result = options.submitModels
         ? await options.submitModels(lane)
-        : pool.submitJob(
+        : await pool.submitJob(
             lane,
             { command: 'models', cwd: options.cwd || process.cwd() },
             { ...options, timeoutMs: 60000 }
           );
       // Read only the result for the submitted job, never a cached models-out list.
-      const stdout =
-        result.stdout ?? (result.exitCode === 0 ? pool.readOutText(lane, options) : '');
+      const stdout = result.stdout;
+      if (result.exitCode === 0 && typeof stdout !== 'string') {
+        record(source, [], 'MODELS_OUTPUT_MISSING', lane + ' agy models');
+        continue;
+      }
       record(
         source,
         result.exitCode === 0 ? pool.parseCliModels(stdout) : [],

@@ -8,42 +8,80 @@ const { runCommand, resolveCommand } = require('./discovery/spawn');
 const { openCodeConfig, configuredModels } = require('./discovery/live');
 const { readJson, writeJson, refreshCatalogue } = require('./catalogue-refresh');
 const policy = require('./coordinator');
-const { sanitizeErrorSnippet } = require('./quota-scan');
+const { safeText, errorText } = require('./coordinator-text');
 const REGISTER = 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
 const EXCLUSIONS = ['.', ':(exclude).oc', ':(exclude).serena', ':(exclude).oc-codex-task.md'];
 
-function safeText(value) {
-  return String(value || '')
-    .split(/\r?\n/)
-    .map((line) => sanitizeErrorSnippet(line, 100000))
-    .join('\n')
-    .replace(
-      /(["']?(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|secret|password)["']?\s*[:=]\s*)["'][^"'\n]*["']/gi,
-      '$1"[REDACTED]"'
-    )
-    .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, '[REDACTED_EMAIL]');
+const MAX_LOG_BYTES = 2 * 1024 * 1024; // 2MB bounded log retention
+const MAX_LOG_LINE_BYTES = 64 * 1024;
+const TRUNCATION = '[TRUNCATED: LOG_SIZE_LIMIT_EXCEEDED]\n';
+
+function itemBranch(item, branch) {
+  const slug = /^(?:feat|fix)\/[\w-]+$/.test(branch) && branch.split('/')[1];
+  const id = item.id.toLowerCase();
+  return Boolean(slug && (slug === id || slug.startsWith(id + '-')));
+}
+
+function readLog(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const buffer = Buffer.alloc(MAX_LOG_BYTES + 1);
+    let count = 0;
+    while (count < buffer.length) {
+      const size = fs.readSync(fd, buffer, count, buffer.length - count, null);
+      if (!size) break;
+      count += size;
+    }
+    const truncated = count > MAX_LOG_BYTES;
+    const end = truncated
+      ? Math.max(0, buffer.lastIndexOf(10, MAX_LOG_BYTES - Buffer.byteLength(TRUNCATION) - 1))
+      : count;
+    return buffer.subarray(0, end).toString('utf8') + (truncated ? '\n' + TRUNCATION : '');
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 function readLines(file) {
+  let malformedRowsSkipped = 0;
   try {
-    return fs
+    const rows = fs
       .readFileSync(file, 'utf8')
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .flatMap((line) => {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return [parsed];
+          malformedRowsSkipped++;
+          return [];
+        } catch {
+          malformedRowsSkipped++;
+          return [];
+        }
+      });
+    Object.defineProperty(rows, 'malformedRowsSkipped', { value: malformedRowsSkipped });
+    return rows;
   } catch (error) {
     if (error.code === 'ENOENT') return [];
-    throw error;
+    throw new Error('READ_FAILED: ' + errorText(error));
   }
 }
 function parseReview(text, tokens = null) {
+  if (/\[TRUNCATED:/.test(text))
+    return { verdict: 'BLOCKED', reason: 'REVIEW_OUTPUT_TRUNCATED', tokens, text: safeText(text) };
   const verdict = text.match(/^VERDICT:\s*(PASS|CHANGES_REQUIRED|BLOCKED)\s*$/m)?.[1];
   const sha = text.match(/^Reviewed SHA:\s*([a-f0-9]{40})\s*$/im)?.[1];
   const findings = text
     .split(/\n(?=\s*(?:\d+\.|-)\s+)/)
     .filter((block) => /\bP[012]\b/.test(block))
     .map((block) => ({
-      severity: block.match(/\bP[012]\b/)[0],
-      closed: /\bFIXED\b/.test(block) && !/NOT FIXED/.test(block),
+      severity: [...block.matchAll(/\bP[012]\b/g)].map((match) => match[0]).sort()[0],
+      // Only an explicit finding prefix can close that finding. A mixed
+      // block or prior-FIXED commentary must never hide another open issue.
+      closed:
+        /^\s*(?:\d+\.|-)\s*P[012]\s+FIXED:\s*\S/i.test(block) &&
+        [...block.matchAll(/\bP[012]\b/g)].length === 1 &&
+        !/\b(?:NOT\s+FIXED|OPEN|UNRESOLVED)\b/i.test(block),
       files: [
         ...new Set(
           [
@@ -105,7 +143,8 @@ function createRuntime(options = {}) {
     )
       throw new Error('PRIVATE_FILES_STAGED');
     const diff = await git(item.cwd, ['diff', '--check'], true);
-    if (diff.exitCode !== 0) throw new Error('DIFF_CHECK_FAILED');
+    if (diff.exitCode !== 0)
+      throw new Error('DIFF_CHECK_FAILED: ' + safeText(diff.stderr || diff.stdout));
     await git(item.cwd, ['add', '-A', '--', ...EXCLUSIONS]);
     await hooked(item.cwd, [
       'commit',
@@ -133,6 +172,23 @@ function createRuntime(options = {}) {
           const theirs = await checked(item.cwd, ['show', ':3:' + REGISTER]);
           fs.writeFileSync(path.join(item.cwd, REGISTER), policy.unionRegister(ours, theirs));
           await git(item.cwd, ['add', '--', REGISTER]);
+          const remainingUnmerged = (
+            await checked(item.cwd, ['diff', '--name-only', '--diff-filter=U'])
+          )
+            .split('\n')
+            .filter(Boolean);
+          const regContent = fs.readFileSync(path.join(item.cwd, REGISTER), 'utf8');
+          if (remainingUnmerged.length > 0 || regContent.includes('<<<<<<<')) {
+            await git(item.cwd, ['merge', '--abort'], true);
+            return {
+              ok: false,
+              reason:
+                'MAIN_MERGE_CONFLICT: ' +
+                (remainingUnmerged.length
+                  ? remainingUnmerged.join(', ')
+                  : 'conflict markers in ' + REGISTER),
+            };
+          }
         } catch {
           await git(item.cwd, ['merge', '--abort'], true);
           return { ok: false, reason: 'REGISTER_CONFLICT' };
@@ -149,7 +205,14 @@ function createRuntime(options = {}) {
     const files = await ownFiles(item.cwd);
     const whitespace = await git(item.cwd, ['diff', '--check', 'origin/main...HEAD'], true);
     return {
-      ...policy.preflight(item.id, subjects, files, whitespace.exitCode ? 'DIFF_CHECK_FAILED' : ''),
+      ...policy.preflight(
+        item.id,
+        subjects,
+        files,
+        whitespace.exitCode
+          ? 'DIFF_CHECK_FAILED: ' + safeText(whitespace.stderr || whitespace.stdout)
+          : ''
+      ),
       sha: await checked(item.cwd, ['rev-parse', 'HEAD']),
     };
   };
@@ -175,11 +238,25 @@ function createRuntime(options = {}) {
     if (candidate.harness === 'codex') {
       command = 'codex';
       args = ['exec', '-m', candidate.model, '-s', review ? 'read-only' : 'workspace-write', '-'];
-    } else if (candidate.harness === 'agy-pool' && !review && policy.family(candidate.model) !== 'claude') {
+    } else if (
+      candidate.harness === 'agy-pool' &&
+      !review &&
+      policy.family(candidate.model) !== 'claude'
+    ) {
       const accountId = candidate.accountId || candidate.account;
-      if (!require('./agy-pool-runtime').isValidAccountId(accountId)) throw new Error('INVALID_ACCOUNT_ID');
+      if (!require('./agy-pool-runtime').isValidAccountId(accountId))
+        throw new Error('INVALID_ACCOUNT_ID');
       const jobFile = path.join(dir, 'pool-writer-job.json');
-      fs.writeFileSync(jobFile, JSON.stringify({ accountId, model: candidate.model, cwd: item.cwd, prompt, candidateKey: candidate.candidateKey }));
+      fs.writeFileSync(
+        jobFile,
+        JSON.stringify({
+          accountId,
+          model: candidate.model,
+          cwd: item.cwd,
+          prompt,
+          candidateKey: candidate.candidateKey,
+        })
+      );
       command = process.execPath;
       args = [path.join(__dirname, 'coordinator-pool-writer.js'), jobFile];
     } else if (candidate.harness === 'claude') {
@@ -211,11 +288,28 @@ function createRuntime(options = {}) {
           permission: { edit: 'deny', bash: 'deny', external_directory: 'deny' },
         });
     } else throw new Error('UNSUPPORTED_COORDINATOR_HARNESS');
-    const resolved = command === process.execPath ? { file: command, args: [] } : resolveCommand(command, {});
+    const resolved =
+      command === process.execPath ? { file: command, args: [] } : resolveCommand(command, {});
     if (resolved.error) throw new Error('LAUNCH_COMMAND_' + resolved.error);
     const file = review ? path.join(dir, 'review-output.txt') : launchLog(item);
     fs.writeFileSync(file, '');
-    const child = spawn(resolved.file, [...resolved.args, ...args], {
+    let totalBytesWritten = 0;
+    let logTruncated = false;
+    const writeBoundedLine = (line) => {
+      if (logTruncated) return;
+      const text = safeText(line) + '\n';
+      const byteLen = Buffer.byteLength(text, 'utf8');
+      if (totalBytesWritten + byteLen > MAX_LOG_BYTES - Buffer.byteLength(TRUNCATION)) {
+        fs.appendFileSync(file, TRUNCATION);
+        logTruncated = true;
+        return;
+      }
+      fs.appendFileSync(file, text);
+      totalBytesWritten += byteLen;
+    };
+
+    const spawnFn = options.spawn || spawn;
+    const child = spawnFn(resolved.file, [...resolved.args, ...args], {
       cwd: item.cwd,
       env,
       windowsHide: true,
@@ -225,26 +319,76 @@ function createRuntime(options = {}) {
     });
     child.stdin.on('error', () => {});
     child.stdin.end(candidate.harness === 'codex' ? prompt : undefined);
-    const buffers = new Map();
-    for (const stream of [child.stdout, child.stderr]) {
-      buffers.set(stream, '');
-      stream.on('data', (chunk) => {
-        const parts = (buffers.get(stream) + chunk).split(/\r?\n/);
-        buffers.set(stream, parts.pop());
-        for (const line of parts) fs.appendFileSync(file, safeText(line) + '\n');
-      });
-    }
-    const completed = new Promise((resolve) => {
-      child.on('error', (error) => {
-        fs.appendFileSync(file, error.code || 'SPAWN_FAILED');
-        resolve({ exitCode: 1 });
-      });
-      child.on('close', (code) => {
-        for (const buffer of buffers.values())
-          if (buffer) fs.appendFileSync(file, safeText(buffer) + '\n');
-        resolve({ exitCode: code ?? 1 });
+    const streamDonePromises = [child.stdout, child.stderr].filter(Boolean).map((stream) => {
+      return new Promise((res) => {
+        let parts = [],
+          bytes = 0,
+          dropping = false;
+        const flush = () => {
+          if (!dropping && bytes)
+            writeBoundedLine(Buffer.concat(parts, bytes).toString('utf8').replace(/\r$/, ''));
+          parts = [];
+          bytes = 0;
+          dropping = false;
+        };
+        stream.on('data', (chunk) => {
+          const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          if (logTruncated) {
+            // Continued output remains a liveness signal after retention ends.
+            const now = new Date();
+            fs.utimesSync(file, now, now);
+            return;
+          }
+          let offset = 0;
+          while (offset < data.length) {
+            const newline = data.indexOf(10, offset);
+            const end = newline === -1 ? data.length : newline;
+            const length = end - offset;
+            if (!dropping && bytes + length > MAX_LOG_LINE_BYTES) {
+              parts = [];
+              bytes = 0;
+              dropping = true;
+              writeBoundedLine('[TRUNCATED: LOG_LINE_LIMIT_EXCEEDED]');
+            } else if (!dropping && length) {
+              // Copy only the bounded fragment, not a reference to a huge chunk.
+              parts.push(Buffer.from(data.subarray(offset, end)));
+              bytes += length;
+            }
+            if (newline !== -1) flush();
+            offset = end + 1;
+            if (logTruncated) {
+              parts = [];
+              bytes = 0;
+              break;
+            }
+          }
+        });
+        const onEnd = () => {
+          flush();
+          res();
+        };
+        stream.on('end', onEnd);
+        stream.on('close', onEnd);
+        stream.on('error', onEnd);
       });
     });
+
+    let childExitCode = null;
+    const childClosePromise = new Promise((resolve) => {
+      child.on('error', (error) => {
+        writeBoundedLine(error.code || 'SPAWN_FAILED');
+        childExitCode = 1;
+        resolve();
+      });
+      child.on('close', (code) => {
+        childExitCode = code ?? 1;
+        resolve();
+      });
+    });
+
+    const completed = Promise.all([childClosePromise, ...streamDonePromises]).then(() => ({
+      exitCode: childExitCode ?? 1,
+    }));
     if (!review) child.unref();
     return {
       pid: child.pid,
@@ -264,8 +408,7 @@ function createRuntime(options = {}) {
         await checked(item.cwd, ['status', '--porcelain', '--', ...EXCLUSIONS])
       );
       const branch = await checked(item.cwd, ['branch', '--show-current']);
-      if (!branch.match(/^(?:feat|fix)\/[\w-]+$/) || !branch.includes(item.id.toLowerCase()))
-        throw new Error('ITEM_BRANCH_MISMATCH');
+      if (!itemBranch(item, branch)) throw new Error('ITEM_BRANCH_MISMATCH');
       const subjects = await checked(item.cwd, [
         'log',
         'origin/main..HEAD',
@@ -278,7 +421,11 @@ function createRuntime(options = {}) {
     prepare,
     push: async (item, sha) => {
       await assertHead(item.cwd, sha);
-      await git(item.cwd, ['push', 'origin', 'HEAD']);
+      // Pin the exact reviewed SHA to the item branch ref; never push a
+      // movable HEAD that could have moved between the assertion and the push.
+      const branch = await checked(item.cwd, ['branch', '--show-current']);
+      if (!itemBranch(item, branch)) throw new Error('ITEM_BRANCH_MISMATCH');
+      await git(item.cwd, ['push', 'origin', sha + ':refs/heads/' + branch]);
     },
     ci: async (item, sha) => {
       const head = async () =>
@@ -340,20 +487,30 @@ function createRuntime(options = {}) {
         }))
         .filter(
           (row) =>
-          (role === 'reviewer' ? ['opencode', 'codex', 'claude'] : ['opencode', 'codex', 'claude', 'agy-pool']).includes(row.harness) &&
-            !(row.family === 'claude' && row.harness !== 'claude')
+            (role === 'reviewer'
+              ? ['opencode', 'codex', 'claude']
+              : ['opencode', 'codex', 'claude', 'agy-pool']
+            ).includes(row.harness) && !(row.family === 'claude' && row.harness !== 'claude')
         );
     },
     launch: async (item, candidate) => {
-      const { pid, log, cannotCommit } = launch(item, candidate);
-      return { pid, log, cannotCommit };
+      const { pid, log, cannotCommit, completed } = launch(item, candidate);
+      return { pid, log, cannotCommit, completed };
     },
     logText: async (writer) => {
       try {
-        return fs.readFileSync(writer.log, 'utf8');
+        return readLog(writer.log);
       } catch {
         return '';
       }
+    },
+    quotaEvidence: async (writer) => {
+      const quota = require('./quota-scan');
+      const result = quota.getQuotaScopeState(
+        { ...writer, modelId: writer.modelId || writer.model },
+        quota.loadQuotaState({ quotaStateFile: options.quotaFile })
+      );
+      return result ? { at: result.at, code: result.code } : null;
     },
     review: async (item, candidate, prompt, sha) => {
       await assertHead(item.cwd, sha);
@@ -372,7 +529,7 @@ function createRuntime(options = {}) {
       }
       if (result.exitCode !== 0)
         return { verdict: 'BLOCKED', sha, reason: 'REVIEW_COMMAND_FAILED', tokens: null };
-      const usage = reviewUsage(fs.readFileSync(handle.log, 'utf8'));
+      const usage = reviewUsage(readLog(handle.log));
       return parseReview(usage.text, usage.tokens);
     },
     history: async (item, record) => {
@@ -382,7 +539,9 @@ function createRuntime(options = {}) {
       const history = path.join(dir, 'history.md');
       const prior = fs.existsSync(history) ? fs.readFileSync(history, 'utf8') : '';
       const body = safeText(record.text || record.reason || JSON.stringify(record.findings || []));
-      const entry = `${marker}\n\nWriter: ${record.writer}\nVERDICT: ${record.verdict}\n${body}\n`;
+      const entry = safeText(
+        `${marker}\n\nWriter: ${record.writer}\nVERDICT: ${record.verdict}\n${body}\n`
+      );
       if (!prior.includes(marker)) fs.appendFileSync(history, '\n' + entry);
       fs.writeFileSync(path.join(dir, 'review.txt'), entry);
     },
@@ -391,7 +550,7 @@ function createRuntime(options = {}) {
       if (
         !readLines(metricsFile).some((row) => policy.metricsKey(row) === policy.metricsKey(record))
       )
-        fs.appendFileSync(metricsFile, JSON.stringify(record) + '\n');
+        fs.appendFileSync(metricsFile, safeText(JSON.stringify(record)) + '\n');
     },
     fanout: async (item, lanes, candidates, state) => {
       const base = await checked(item.cwd, ['rev-parse', 'HEAD']);
@@ -413,16 +572,20 @@ function createRuntime(options = {}) {
         fs.mkdirSync(path.join(cwd, '.oc'), { recursive: true });
         const task = fs.readFileSync(path.resolve(item.cwd, item.task), 'utf8');
         const prompt = `${task}\n\nLane ${lane.lane}. Fix only these findings: ${JSON.stringify(lane.findings)}. Edit only: ${lane.files.join(', ')}. Shared contracts belong to lane 1. Do not merge main. Do not commit; the coordinator validates file ownership and commits.\n`;
-        const handle = launch({ ...item, cwd }, writer, false, prompt);
-        active.push({
+        const reservedAt = Date.now();
+        const laneState = {
           ...lane,
           base,
           cwd,
           branch,
-          writer: { ...writer, pid: handle.pid, log: handle.log, cannotCommit: true },
-        });
-        state.launches.push({ item: item.id, model: writer.model, at: Date.now() });
+          writer: { ...writer, reservedAt, log: launchLog({ cwd }), cannotCommit: true },
+        };
+        active.push(laneState);
+        state.launches.push({ item: item.id, model: writer.model, at: reservedAt });
         state.items[item.id].lanes = active;
+        await runtime.save(state);
+        const handle = launch({ ...item, cwd }, writer, false, prompt);
+        Object.assign(laneState.writer, { pid: handle.pid, log: handle.log });
         await runtime.save(state);
       }
       return active;
@@ -456,6 +619,7 @@ function createRuntime(options = {}) {
   };
 }
 function reviewUsage(log) {
+  if (/\[TRUNCATED:/.test(log)) return { text: log, tokens: null };
   let text = '',
     tokens = null;
   for (const line of log.split(/\r?\n/)) {
@@ -484,4 +648,14 @@ function reviewUsage(log) {
   if (match) tokens = Number(match[1].replace(/,/g, ''));
   return { text: text || log, tokens };
 }
-module.exports = { createRuntime, parseReview, safeText, readLines, reviewUsage, EXCLUSIONS };
+module.exports = {
+  createRuntime,
+  parseReview,
+  safeText,
+  readLines,
+  reviewUsage,
+  EXCLUSIONS,
+  MAX_LOG_BYTES,
+  MAX_LOG_LINE_BYTES,
+  readLog,
+};

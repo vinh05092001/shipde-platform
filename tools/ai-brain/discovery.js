@@ -123,16 +123,19 @@ async function cmdRun(flags, deps = {}) {
   const { readJson, writeJson } = require('./catalogue-refresh');
   // Presence-only CLI harnesses have no catalogue to refresh. Their unknown
   // state must not permanently block successfully refreshed live listings.
+  const completeListing = (result) =>
+    ['enumerated', 'enumerated-via-route'].includes(result.status) && !(result.notes || []).length;
   const failed = [...results].filter(([id, result]) => {
-    if (liveIds.has(id)) return result.status !== 'enumerated';
+    if (completeListing(result)) return false;
+    if (liveIds.has(id) || (result.notes || []).length) return true;
     const source = registry.sources.find((entry) => entry.id === id);
-    return source?.endpoint && ['unknown', 'unavailable', 'error'].includes(result.status);
+    return (
+      Boolean(source?.endpoint) &&
+      !['deferred', 'recalled', 'not-permitted'].includes(result.status)
+    );
   });
-  const successful = [...results].filter(
-    ([, result]) =>
-      ['enumerated', 'enumerated-via-route'].includes(result.status) && !(result.notes || []).length
-  );
-  const freshnessFile = path.join(dataDir, 'freshness.json');
+  const successful = [...results].filter(([, result]) => completeListing(result));
+  const freshnessFile = flags['freshness-file'] || path.join(dataDir, 'freshness.json');
   const previous = readJson(freshnessFile);
   const complete = successful.length > 0 && failed.length === 0;
   writeJson(freshnessFile, {
@@ -155,7 +158,9 @@ async function cmdRun(flags, deps = {}) {
       id,
       kind: (registry.sources.find((s) => s.id === id) || {}).kind,
       status: res.status,
-      reason: res.reason,
+      incomplete: failed.some(([failedId]) => failedId === id),
+      reason:
+        res.reason || (failed.some(([failedId]) => failedId === id) ? 'INCOMPLETE_LISTING' : null),
       advertised: reconciled.perSourceNarrow[id] ? reconciled.perSourceNarrow[id].advertised : 0,
       catalogs: (res.catalogs || []).map((c) => ({ upstream: c.upstream, count: c.count })),
     })),

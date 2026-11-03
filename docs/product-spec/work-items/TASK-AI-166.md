@@ -14,7 +14,7 @@
 | Allowed paths | `tools/ai-brain/`, `package.json`, this Work Item, one register row, `AI-TOOLCHAIN-DECISIONS.md`, `.oc/pr-body.md` |
 | Reviewer | Fresh independent reviewer from a different model family |
 | Branch | `feat/task-ai-166-refresh-model-catalogue` |
-| Pull Request | Coordinator creates after committing; no push from this sandbox |
+| Pull Request | Coordinator updates the existing TASK-AI-166 PR after host commit; no push from this sandbox |
 
 ## Business outcome
 
@@ -62,7 +62,7 @@ Product APIs/UI/database, auth stores, new model credentials, automatic PR merge
 - BR-166-04: Writer alive means live PID OR current launch log modified within 180 seconds. Dead reroutes occur at most once per item per 480 seconds; unknown liveness fails closed.
 - BR-166-05: A dead sandbox writer's output is committed by the host excluding `.oc/`, `.serena/`, `.oc-codex-task.md`; hooks are mandatory, never `--no-verify`.
 - BR-166-06: Clean merge of origin/main precedes push/review. Only register CSV conflicts may use deterministic row union; all other conflicts abort and return findings. Bad subjects, protected paths and whitespace reject publication. Red CI returns CHANGES_REQUIRED with zero reviewer tokens; pending CI waits.
-- BR-166-07: Two-phase full-contract review verifies tenant scope, RBAC/empty scope, negative tests, acceptance rows, integer VND, idempotency/reconcile, audit/PII, UI states and FIXED/NOT FIXED prior findings before an open sweep. Reviewer family differs from writer family. Exact SHA is mandatory. Four unsuccessful rounds produce STUCK.
+- BR-166-07: Two-phase full-contract review verifies tenant scope, RBAC/empty scope, negative tests, acceptance rows, integer VND, idempotency/reconcile, audit/PII, UI states and FIXED/NOT FIXED prior findings before an open sweep. Reviewer family differs from every contributing writer family, including repair lanes and earlier rounds. Exact SHA is mandatory. Mixed finding status and truncated output cannot authorize PASS. Four unsuccessful rounds produce STUCK.
 - BR-166-08: Quota/rate log classifications exclude that model until cooldown expires, without storing raw logs. One failed round triggers stronger-model preference; high-risk work prefers score >=80. Maximum two model launches in twenty minutes across items. OpenCode routes must exist in its configuration.
 - BR-166-09: Optional <=3 lanes use separate worktrees, connected file ownership and lane-1 shared contracts. Unexpected file writes or merge conflicts stop fan-out; merge in lane order and re-review the combined SHA.
 - BR-166-10: One metrics record per review, deduplicated by PR/SHA/round; summary reports median/p90 rounds to PASS, CI red rate and tokens per confirmed merged PR. Daily refresh is single-flight and persisted; failed refresh retries on the next day and freshness still blocks dispatch.
@@ -72,7 +72,8 @@ Product APIs/UI/database, auth stores, new model credentials, automatic PR merge
 - [x] Tenant/RBAC: no product access changes; both are mandatory review checks.
 - [x] Audit/sensitive data: no raw credentials or provider error bodies in committed evidence.
 - [x] Integer VND and carrier reconciliation: unchanged, explicitly reviewed.
-- [ ] Lowest useful tests and acceptance path: node:test plus real scanner attempts and check evidence recorded in PR body.
+- [x] Lowest useful negative tests: discovery, quota, publication, independent review, bounded output and metadata masking, with red/green evidence in `.oc/pr-body.md`.
+- [ ] Complete live acceptance evidence: AC-166-01/02 retain their live-log requirement; unavailable host checks are identified separately in `.oc/pr-body.md` and must be completed by the coordinator.
 
 ## UI states
 
@@ -80,7 +81,7 @@ N/A — internal CLI. Truthful CLI states: waiting for writer/CI, refresh error,
 
 ## API, event and data impact
 
-Adds `ai:refresh-catalogue`, `ai:metrics` and a coordinator CLI; versioned discovery freshness/report JSON and local `.oc/` state/history. Existing imports and candidate consumers remain compatible. No product schema migration.
+Adds `ai:refresh-catalogue`, `ai:metrics` and a coordinator CLI; versioned discovery freshness/report JSON and local `.oc/` state/history. Discovery source results include an additive `incomplete` flag. Refresh uses a private per-attempt discovery observation before atomically publishing the canonical freshness record. Persisted author families and per-launch quota observation times survive restart. Existing imports and candidate consumers remain compatible. No product schema migration.
 
 ## Acceptance matrix
 
@@ -99,19 +100,19 @@ Adds `ai:refresh-catalogue`, `ai:metrics` and a coordinator CLI; versioned disco
 
 ## Task breakdown
 
-- [ ] T01 Write failing scanner/coordination tests.
-- [ ] T02 Implement refresh/scanner/freshness and coordinator runtime.
-- [ ] T03 Record live additions/removals/scores only if observed; record sandbox failures otherwise.
-- [ ] T04 Run available verification, fix failures introduced by this item, prepare coordinator handoff.
+- [x] T01 Write failing scanner/coordination tests, including round-4 findings and prior-round regressions.
+- [x] T02 Implement refresh/scanner/freshness and coordinator runtime repairs.
+- [x] T03 Preserve previously recorded live evidence; do not invent additions, removals, scores or freshness. Attempt/check results are in `.oc/pr-body.md`.
+- [x] T04 Run available verification, repair the append-only ledger regression without changing its immutable prefix/hash evidence, and prepare the coordinator handoff. Record incomplete host/API checks explicitly.
 
 ## Verification commands
 
-`pnpm ai:refresh-catalogue`; `pnpm lint`; `pnpm format:check`; `pnpm typecheck`; `pnpm test:brain`; `node scripts/ai/check-no-hardcode.mjs`; `git diff --check origin/main...HEAD`; `git diff --check` for uncommitted output. No git write command is run in this sandbox.
+`pnpm ai:refresh-catalogue`; `pnpm lint`; `pnpm format:check`; `pnpm typecheck`; `pnpm --filter @shipde/api test`; `pnpm test`; `pnpm test:brain`; `node scripts/ai/check-no-hardcode.mjs`; `git diff --check origin/main...HEAD`; `git diff --check` for uncommitted output. Runtime tests inject Git commands, and the discovery regression reads the working ledger without writing Git objects. Git publication and Docker control remain host-only under the operator instruction. Exact local results are in `.oc/pr-body.md`.
 
 ## Codex review record
 
-No independent review yet. Review status: READY_FOR_CODEX after coordinator commit. Author cannot grant PASS.
+Round 3 reviewed `4d708d736fd27508fbd08ab1191fabee9e068b9b`; round 4 reviewed `df63795e5ea10091ade7f94254f6ca006df25513`. Both returned `CHANGES_REQUIRED`; the complete supplied history remains in `.oc/history.md` and current findings in `.oc/review.txt`. This author repair is uncommitted. A fresh independent review must evaluate the coordinator's resulting exact SHA after the required checks. Author tests and self-checks do not grant PASS.
 
 ## Residual limitations
 
-Sandbox blocks git metadata writes, some shared dependencies, Docker and outbound access. Owner: host coordinator; next action: commit `[TASK-AI-166] Refresh model catalogue and priors from live scanners`, run blocked refresh/checks and CI, then obtain independent review. Exact results are in `.oc/pr-body.md`.
+Git publication, Docker control and full live discovery require the coordinator. The LF-only OpenAPI assertion passes after byte-equivalent local LF normalization; product source and contract content remain unchanged from `origin/main`. The API command stalls in its DB-backed RBAC HTTP suite, and the root test command exits at the API task without a conclusive failing-step diagnostic. These are incomplete verification results, not PASS claims. Owner: host coordinator; next action: complete live and full-suite verification, commit `[TASK-AI-166] Address review: preserve discovery and independent publication` through installed hooks, run CI, and obtain independent review of that exact SHA. Finding-to-test mappings and command outcomes are in `.oc/pr-body.md`.

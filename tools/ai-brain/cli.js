@@ -2081,6 +2081,11 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
 
+  // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
+  // caller injects fixture candidates (deps.candidates /
+  // deps.discoveryCatalogue). Fixture-injected tests do not assert live
+  // freshness; every production path (item, profile, execute) resolves
+  // candidates from the live catalogue and therefore goes through this gate.
   if (
     dryRunFlag &&
     !deps.candidates &&
@@ -3454,14 +3459,14 @@ function discoveryCommand(args, deps) {
 
   if (sub === 'run') {
     return require('./discovery')
-      .cmdRun({ 'data-dir': dataDir }, d)
+      .cmdRun({ 'data-dir': dataDir, 'freshness-file': args['freshness-file'] }, d)
       .then((result) => {
         log(JSON.stringify(result, null, 2));
         if (result.exitCode)
           error(
             'DISCOVERY_INCOMPLETE: ' +
               result.sources
-                .filter((source) => ['unknown', 'unavailable', 'error'].includes(source.status))
+                .filter((source) => source.incomplete)
                 .map((source) => source.id + '=' + source.reason)
                 .join('; ')
           );
@@ -4684,10 +4689,12 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'quota') return quotaCommand(args);
   if (command === 'quota-scan') return quotaScanCommand(args, deps);
   if (command === 'coordinator')
-    return require('./coordinator-cli').main(args._.slice(1).concat(args.loop ? ['--loop'] : [])).catch((err) => {
-      console.error(require('./coordinator-runtime').safeText(err.code || err.message));
-      process.exitCode = 1;
-    });
+    return require('./coordinator-cli')
+      .main(args._.slice(1).concat(args.loop ? ['--loop'] : []))
+      .catch((err) => {
+        console.error(require('./coordinator-text').errorText(err));
+        process.exitCode = 1;
+      });
   if (command === 'dispatch') {
     const result = dispatchCommand(args);
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a

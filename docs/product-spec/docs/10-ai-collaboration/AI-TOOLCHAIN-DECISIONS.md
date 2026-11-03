@@ -584,6 +584,13 @@ models. Freshness advances only after all applicable live catalogues succeed;
 presence-only harnesses have no listing to refresh. Partial runs keep source
 failure reasons and the last successful observation time.
 
+Every provider model row is validated before a listing is authoritative, including
+namespaced `@` identifiers. Registry notes mark a listing incomplete. Scheduled
+lanes return the completed job's own model output, captured while that job owns
+the lane lock. The full refresh stages discovery into a private per-attempt
+observation and publishes the canonical freshness record only after all stages
+succeed; a crash during quota cannot advance dispatch freshness.
+
 `dispatch --dry-run` fails with exit code 1 and `STALE_CATALOGUE` when the last
 successful observation is absent, invalid, future-dated, or older than 48 hours.
 Refresh reports and discovery snapshots expose partial failures without declaring
@@ -615,7 +622,8 @@ loop lock, and processes existing PR worktrees. Its input is a JSON array:
 ```
 
 Replace the PR number and initial writer with the actual PR and writer identity;
-the initial identity is required to review an already-authored branch. Paths must
+the initial identity is required to review an already-authored branch. Supported
+identifiers include `GOAL-<GOAL>-<n>` as well as FEAT and TASK items. Paths must
 identify isolated worktrees on the expected Work Item branch. Selection consumes
 the Controller's current qualified candidate ranking and only offers configured
 OpenCode models. Native Claude runs only through host-authenticated Claude Code;
@@ -627,7 +635,9 @@ The writer is alive while its PID exists or its current log was written less tha
 three minutes ago. Unreadable liveness evidence stays unknown. A dead writer is
 rerouted at most once every eight minutes per item. Quota/rate refusals classified
 from sanitized logs exclude the model for two hours; successful quota refresh and
-the existing Controller quota checks still apply. One failed review round prefers
+the existing Controller quota checks still apply. Log classification is persisted
+once per launch; rereading an old log cannot extend the exclusion. Only newer
+evidence for the selected quota scope can reconcile it. One failed review round prefers
 a different writer; high-risk items prefer a score of at least 80. No model gets
 more than two writer launches in twenty minutes across items. Launch reservations
 are saved before starting the process; unresolved reservations or reviewer
@@ -640,11 +650,16 @@ validator. There is no hook bypass. Before review, the host fetches and cleanly
 merges `origin/main`; a register-only conflict may use exact row union, while
 conflicting values for the same item or any other merge conflict abort. Bad commit
 subjects, protected gate files and `diff --check` findings become review feedback
-and refuse push. `gh pr checks` at the exact PR head is authoritative: red CI is
+and refuse push. The complete committed delta also rejects private `.oc/`,
+`.serena/` and `.oc-codex-task.md` paths, including native-writer commits. Push uses
+the pinned OID and a validated Work Item branch ref. `gh pr checks` at the exact PR head is authoritative: red CI is
 `CHANGES_REQUIRED` with zero reviewer tokens, pending CI waits without consuming a
 round, and unknown checks stop for an operator.
 
-The independent reviewer family differs from the writer's. It reads a separate
+The independent reviewer family differs from every contributing author's family,
+including earlier repair rounds and collected lanes. The family history persists
+after lane collection and restart. Unknown authors or no independent family
+require an operator. The reviewer reads a separate
 checkout at the exact merged/pushed SHA, first checks tenant scope, RBAC/empty
 scope, negative tests, acceptance rows, integer VND, idempotency/reconciliation,
 audit/PII, UI states and prior findings `FIXED`/`NOT FIXED`, then performs an open
@@ -653,6 +668,14 @@ the PR worktree's `.oc/history.md`, with current repair feedback in `.oc/review.
 After four unsuccessful rounds the item becomes `STUCK` for a human. A `PASS` is
 independent review evidence; existing human/conditional merge authorization still
 owns merge. This loop never merges a PR.
+
+Review findings use one numbered block per issue, with an explicit severity and
+`FIXED:` or `NOT FIXED:` prefix. Prior-finding commentary cannot close a new issue;
+mixed or ambiguous status fails closed. Child output has a 64 KiB partial-line
+limit and 2 MiB total retention/read limit. Truncation is explicit, discarded
+fragments are never persisted, and a truncated review cannot authorize PASS.
+The child and both streams finish before review output is consumed. All log,
+history and metrics metadata is masked before persistence.
 
 Optional `fanout: true` groups findings into at most three connected, file-disjoint
 lanes in separate worktrees. Lane 1 owns shared contracts (OpenAPI, Prisma,
@@ -668,10 +691,15 @@ round, writer, verdict, measured reviewer tokens and CI-red status. Unknown toke
 usage remains null. `pnpm ai:metrics` prints median/p90 final rounds to PASS,
 CI-red review rate and reviewer tokens per confirmed merged PR, consulting GitHub
 for merge state. It deduplicates replayed metrics and never treats PASS as merged.
+Malformed JSON/records are counted and skipped; invalid PR identifiers are never
+queried. Failed merge-state lookups make the summary explicitly partial.
 Unknown token usage makes the merged-token aggregate unknown. These metrics and
 all coordinator state remain local and excluded from writer commits. A sanitized
 `data/quota-scan-summary.json` snapshot summarizes the observed quota results for
-the PR; the existing local `quota-state.json` remains the routing store.
+the PR using aggregate counts only; source, scope, upstream and model identifiers
+are not copied into that summary. The existing local `quota-state.json` remains
+the routing store. A held loop lock reports PID/age and manual inspection guidance;
+it is never stolen automatically.
 
 Sandbox authors do not run git write commands, push, or commit. Record each
 available check and each `BLOCKED_BY_SANDBOX` check with its exact error in the PR
