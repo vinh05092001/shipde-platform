@@ -252,3 +252,17 @@ test('codex 4625b50: structurally damaged ledger fails closed', () => {
     assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
   }
 });
+
+test('codex e4a6705: missing counters or fingerprint containers fail closed; pid must be positive; read-only annotation', async () => {
+  const file = path.join(tmp(), 'l.json');
+  fs.writeFileSync(file, '{"items":{"A":{"spent":{},"stages":{"review":{}}}},"goal":{}}');
+  assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  assert.throws(() => L.admit('A', 'review', 'F', { reserve: true, pid: 0 }), /integer owner pid/);
+  assert.throws(() => L.admit('A', 'review', 'F', { reserve: true, pid: -4 }), /integer owner pid/);
+  const out = Object.defineProperty({ exitCode: 7 }, 'cleanupError', { value: 'x', writable: false, enumerable: false });
+  const r = await g.runWithCleanup(async () => out, async () => { throw new Error('rm'); });
+  assert.equal(r.exitCode, 7);
+  const e = Object.defineProperty(new Error('crash'), 'cleanupError', { value: 1, writable: false });
+  await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /crash/);
+});

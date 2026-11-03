@@ -186,7 +186,10 @@ class ProgressLedger {
     }
     if (opts.reserve) {
       // A reservation must name a live owner, or a crash would leave it IN_FLIGHT forever.
-      if (!Number.isInteger(opts.pid)) throw new Error('WORK_GUARD_REFUSED: reserve needs an integer owner pid');
+      // 0 and negative pids name process groups, not one owner.
+      if (!Number.isInteger(opts.pid) || opts.pid <= 0) {
+        throw new Error('WORK_GUARD_REFUSED: reserve needs an integer owner pid');
+      }
       const t = it.spent ? it : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
       t.stages = t.stages || {};
       t.spent.attempts += 1;
@@ -252,10 +255,15 @@ class ProgressLedger {
 }
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-const isCount = (v) => v === undefined || (Number.isFinite(v) && v >= 0);
+const isCount = (v) => Number.isFinite(v) && v >= 0;
 
+// Persisted counters are mandatory: a missing counter would read as zero and reopen a spent budget.
 function validSpent(v) {
-  return isObj(v) && ['attempts', 'ms', 'tokens', 'tokensUnknown'].every((k) => isCount(v[k]));
+  return (
+    isObj(v) &&
+    ['attempts', 'ms', 'tokens'].every((k) => isCount(v[k])) &&
+    (v.tokensUnknown === undefined || isCount(v.tokensUnknown))
+  );
 }
 
 /** Any structural damage fails closed: a damaged ledger must never read as empty. */
@@ -271,8 +279,8 @@ function validateLedger(s, file) {
     if (it.stages !== undefined) {
       if (!isObj(it.stages)) bad();
       for (const st of Object.values(it.stages)) {
-        if (!isObj(st) || (st.fps !== undefined && !isObj(st.fps))) bad();
-        for (const r of Object.values(st.fps || {})) if (!isObj(r) || typeof r.outcome !== 'string') bad();
+        if (!isObj(st) || !isObj(st.fps)) bad();
+        for (const r of Object.values(st.fps)) if (!isObj(r) || typeof r.outcome !== 'string') bad();
       }
     }
   }
@@ -401,14 +409,19 @@ async function runWithCleanup(fn, cleanup) {
     cleanupError = e;
   }
   if (err) {
-    if (cleanupError && Object.isExtensible(err)) err.cleanupError = cleanupError;
+    if (cleanupError) {
+      try {
+        err.cleanupError = cleanupError;
+      } catch (_) {
+        /* annotation is best effort; the original error is what propagates */
+      }
+    }
     throw err;
   }
   if (cleanupError && out && typeof out === 'object') {
     const note = String(cleanupError.message || cleanupError);
-    // Never mutate a frozen result: a TypeError here would replace the real exit code.
-    if (Object.isExtensible(out)) out.cleanupError = note;
-    else return Object.assign({}, out, { cleanupError: note });
+    // Never mutate the worker's result: a TypeError here would replace the real exit code.
+    return Object.assign({}, out, { cleanupError: note });
   }
   return out;
 }
