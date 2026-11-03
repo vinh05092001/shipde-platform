@@ -210,3 +210,40 @@ test('codex 8fa765f: returning to a tested SHA does not re-run its tests', async
   );
   void runs;
 });
+
+test('codex a820c19: reserved admission blocks a duplicate until recorded; dead reserver frees it', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 5 } } });
+  assert.equal(L.admit('A', 'review', 'F', { reserve: true }).ok, true);
+  assert.equal(L.admit('A', 'review', 'F', { reserve: true }).cause, g.Cause.NO_PROGRESS);
+  L.record('A', 'review', 'F', 'CHANGES_REQUIRED', {});
+  assert.equal(L.load().items.A.spent.attempts, 1);
+  assert.equal(L.admit('A', 'review', 'G', { reserve: true, pid: 999999 }).ok, true);
+  assert.equal(L.admit('A', 'review', 'G', { reserve: true }).ok, true);
+});
+
+test('codex a820c19: goal cap of one admits only one reserved attempt', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 1 } } });
+  assert.equal(L.admit('A', 'review', 'F1', { reserve: true }).ok, true);
+  assert.equal(L.admit('B', 'review', 'F2', { reserve: true }).cause, g.Cause.GOAL_EXHAUSTED);
+});
+
+test('codex a820c19: corrupt ledger fails closed', () => {
+  const file = path.join(tmp(), 'l.json');
+  fs.writeFileSync(file, '{"items":{"A":{"bloc');
+  const L = new g.ProgressLedger({ file });
+  assert.throws(() => L.admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
+});
+
+test('codex a820c19: takeover guard left by a dead contender is recovered', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  fs.writeFileSync(f, JSON.stringify({ jobId: 'dead', pid: 111, at: 1 }));
+  fs.writeFileSync(f + '.takeover', JSON.stringify({ jobId: 'crashed', pid: 112 }));
+  const r = g.acquireLock(f, { jobId: 'j5', pid: 555 }, { pidAlive: (p) => p !== 111 && p !== 112 });
+  assert.equal(r.ok, true);
+  assert.equal(fs.existsSync(f + '.takeover'), false);
+});
+
+test('codex a820c19: frozen worker exception survives a failing cleanup', async () => {
+  const e = Object.freeze(new Error('worker crashed'));
+  await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /worker crashed/);
+});

@@ -121,12 +121,53 @@ class ProgressLedger {
   }
 
   load() {
-    const s = readJson(this.file, null) || {};
+    // Missing state is empty; damaged state fails closed, so it can never erase
+    // exhausted budgets, blocks or reviewed fingerprints.
+    let raw;
+    try {
+      raw = fs.readFileSync(this.file, 'utf8');
+    } catch (e) {
+      if (e.code === 'ENOENT') raw = null;
+      else throw new Error('LEDGER_UNREADABLE: ' + e.code);
+    }
+    let s = {};
+    if (raw !== null) {
+      try {
+        s = JSON.parse(raw);
+      } catch (_) {
+        throw new Error('LEDGER_CORRUPT: ' + this.file);
+      }
+    }
     return { items: s.items || {}, goal: s.goal || { attempts: 0, ms: 0, tokens: 0 } };
   }
 
   /** May this stage run for this fingerprint? Returns { ok, cause? }. */
-  admit(itemId, stage, fp) {
+  /** Serialise read-modify-write of the ledger across processes. */
+  locked(fn) {
+    const lock = this.file + '.lock';
+    const owner = { jobId: 'ledger-' + process.pid + '-' + crypto.randomBytes(4).toString('hex') };
+    const until = Date.now() + 10000;
+    for (;;) {
+      if (acquireLock(lock, owner).ok) break;
+      if (Date.now() > until) throw new Error('LEDGER_LOCK_TIMEOUT');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+    try {
+      return fn();
+    } finally {
+      releaseLock(lock, owner);
+    }
+  }
+
+  /**
+   * opts.reserve: mark the fingerprint IN_FLIGHT and count the attempt now, so a
+   * second caller cannot admit the same work before the first records it.
+   */
+  admit(itemId, stage, fp, opts) {
+    return this.locked(() => this.admitUnlocked(itemId, stage, fp, opts || {}));
+  }
+
+  admitUnlocked(itemId, stage, fp, opts) {
     const s = this.load();
     const it = s.items[itemId] || {};
     if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
@@ -136,21 +177,41 @@ class ProgressLedger {
     if (own) return { ok: false, cause: limitCause(own), limit: own };
     // Every fingerprint keeps its outcome, so alternating inputs (F1, F2, F1) cannot loop.
     const seen = ((it.stages || {})[stage] || {}).fps || {};
-    if (seen[fp] && !TRANSIENT.has(seen[fp].outcome)) {
-      return { ok: false, cause: Cause.NO_PROGRESS, outcome: seen[fp].outcome };
+    const prior = seen[fp];
+    const deadFlight = prior && prior.outcome === 'IN_FLIGHT' && Number.isInteger(prior.pid) && !pidAlive(prior.pid);
+    if (prior && !TRANSIENT.has(prior.outcome) && !deadFlight) {
+      return { ok: false, cause: Cause.NO_PROGRESS, outcome: prior.outcome };
+    }
+    if (opts.reserve) {
+      const t = it.spent ? it : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
+      t.stages = t.stages || {};
+      t.spent.attempts += 1;
+      s.goal.attempts += 1;
+      const st = t.stages[stage] || { fps: {} };
+      st.fps = st.fps || {};
+      st.fps[fp] = { outcome: 'IN_FLIGHT', pid: opts.pid, at: this.now() };
+      t.stages[stage] = st;
+      s.items[itemId] = t;
+      writeJson(this.file, s);
     }
     return { ok: true };
   }
 
   /** Record a finished attempt. usage: { ms?, tokens? }; unknown tokens stay unknown. */
   record(itemId, stage, fp, outcome, usage) {
+    return this.locked(() => this.recordUnlocked(itemId, stage, fp, outcome, usage));
+  }
+
+  recordUnlocked(itemId, stage, fp, outcome, usage) {
     const s = this.load();
     const it = s.items[itemId] || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
     it.spent = it.spent || { attempts: 0, ms: 0, tokens: 0 };
     it.stages = it.stages || {};
     const u = usage || {};
+    const prev = ((it.stages[stage] || {}).fps || {})[fp];
+    const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
     for (const acc of [it.spent, s.goal]) {
-      acc.attempts += 1;
+      if (!reserved) acc.attempts += 1;
       acc.ms += Number(u.ms) || 0;
       if (Number.isFinite(u.tokens)) acc.tokens += u.tokens;
       else acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
@@ -164,6 +225,10 @@ class ProgressLedger {
   }
 
   block(itemId, reason) {
+    return this.locked(() => this.blockUnlocked(itemId, reason));
+  }
+
+  blockUnlocked(itemId, reason) {
     const s = this.load();
     const it = s.items[itemId] || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
     it.blocked = String(reason);
@@ -172,6 +237,10 @@ class ProgressLedger {
   }
 
   unblock(itemId) {
+    return this.locked(() => this.unblockUnlocked(itemId));
+  }
+
+  unblockUnlocked(itemId) {
     const s = this.load();
     if (s.items[itemId]) delete s.items[itemId].blocked;
     writeJson(this.file, s);
@@ -216,10 +285,19 @@ function acquireLock(file, owner, o) {
       // still the exact instance observed dead, so a racing contender cannot delete a new owner.
       if (holder && Number.isInteger(holder.pid) && !alive(holder.pid) && i === 0) {
         const guard = file + '.takeover';
+        const mine = JSON.stringify({ jobId: owner.jobId, pid: owner.pid || process.pid });
         try {
-          fs.writeFileSync(guard, String(owner.jobId), { flag: 'wx' });
+          fs.writeFileSync(guard, mine, { flag: 'wx' });
         } catch (_) {
-          return { ok: false, cause: Cause.LOCK_HELD, holder };
+          // A takeover guard left by a crashed contender is cleared once its pid is provably dead.
+          const g = readJson(guard, null);
+          if (!(g && Number.isInteger(g.pid) && !alive(g.pid))) return { ok: false, cause: Cause.LOCK_HELD, holder };
+          try {
+            fs.unlinkSync(guard);
+            fs.writeFileSync(guard, mine, { flag: 'wx' });
+          } catch (_e) {
+            return { ok: false, cause: Cause.LOCK_HELD, holder };
+          }
         }
         try {
           const again = readJson(file, null);
@@ -270,7 +348,7 @@ async function runWithCleanup(fn, cleanup) {
     cleanupError = e;
   }
   if (err) {
-    if (cleanupError) err.cleanupError = cleanupError;
+    if (cleanupError && Object.isExtensible(err)) err.cleanupError = cleanupError;
     throw err;
   }
   if (cleanupError && out && typeof out === 'object') {
@@ -326,7 +404,7 @@ if (require.main === module) {
     }
     const fp = fingerprint({ headSha: a.head, baseSha: a.base, inputs: a.inputs });
     if (cmd === 'admit') {
-      const r = ledger.admit(a.item, a.stage, fp);
+      const r = ledger.admit(a.item, a.stage, fp, { reserve: true, pid: a.pid === undefined ? undefined : Number(a.pid) });
       out(r, r.ok ? 0 : 3);
     }
     if (cmd === 'record') {
