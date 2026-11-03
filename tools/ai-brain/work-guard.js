@@ -138,7 +138,9 @@ class ProgressLedger {
         throw new Error('LEDGER_CORRUPT: ' + this.file);
       }
     }
-    return { items: s.items || {}, goal: s.goal || { attempts: 0, ms: 0, tokens: 0 } };
+    if (raw === null) return { items: {}, goal: { attempts: 0, ms: 0, tokens: 0 } };
+    validateLedger(s, this.file);
+    return s;
   }
 
   /** May this stage run for this fingerprint? Returns { ok, cause? }. */
@@ -183,6 +185,8 @@ class ProgressLedger {
       return { ok: false, cause: Cause.NO_PROGRESS, outcome: prior.outcome };
     }
     if (opts.reserve) {
+      // A reservation must name a live owner, or a crash would leave it IN_FLIGHT forever.
+      if (!Number.isInteger(opts.pid)) throw new Error('WORK_GUARD_REFUSED: reserve needs an integer owner pid');
       const t = it.spent ? it : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
       t.stages = t.stages || {};
       t.spent.attempts += 1;
@@ -247,6 +251,33 @@ class ProgressLedger {
   }
 }
 
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isCount = (v) => v === undefined || (Number.isFinite(v) && v >= 0);
+
+function validSpent(v) {
+  return isObj(v) && ['attempts', 'ms', 'tokens', 'tokensUnknown'].every((k) => isCount(v[k]));
+}
+
+/** Any structural damage fails closed: a damaged ledger must never read as empty. */
+function validateLedger(s, file) {
+  const bad = () => {
+    throw new Error('LEDGER_CORRUPT: ' + file);
+  };
+  if (!isObj(s) || !isObj(s.items) || !validSpent(s.goal)) bad();
+  for (const it of Object.values(s.items)) {
+    if (!isObj(it)) bad();
+    if (it.spent !== undefined && !validSpent(it.spent)) bad();
+    if (it.blocked !== undefined && typeof it.blocked !== 'string') bad();
+    if (it.stages !== undefined) {
+      if (!isObj(it.stages)) bad();
+      for (const st of Object.values(it.stages)) {
+        if (!isObj(st) || (st.fps !== undefined && !isObj(st.fps))) bad();
+        for (const r of Object.values(st.fps || {})) if (!isObj(r) || typeof r.outcome !== 'string') bad();
+      }
+    }
+  }
+}
+
 function exceeded(spent, lim) {
   if (!lim) return null;
   for (const k of ['attempts', 'ms', 'tokens']) {
@@ -268,61 +299,83 @@ function pidAlive(pid) {
   }
 }
 
-/** Atomic lock. Returns { ok, owner } or { ok:false, cause, holder }. */
+/**
+ * Generation lock. Each owner holds its own file `<file>.g<N>`, created with an
+ * exclusive create; the current lock is the highest generation. A dead holder is
+ * superseded by creating generation N+1, never by deleting its file, so no racing
+ * contender can remove a live owner's lock. After creating, an owner that finds
+ * a higher generation backs off. Release renames the file to `.released`, so
+ * generation numbers never go backwards.
+ */
+function lockGenerations(file) {
+  const dir = path.dirname(file);
+  const base = path.basename(file) + '.g';
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  const gens = [];
+  for (const n of names) {
+    if (!n.startsWith(base)) continue;
+    const m = /^(\d+)(\.released)?$/.exec(n.slice(base.length));
+    if (m) gens.push({ gen: Number(m[1]), released: Boolean(m[2]), path: path.join(dir, n) });
+  }
+  return gens.sort((x, y) => x.gen - y.gen);
+}
+
+function lockHolder(file) {
+  const gens = lockGenerations(file);
+  const top = gens[gens.length - 1];
+  if (!top || top.released) return null;
+  return Object.assign({ gen: top.gen }, readJson(top.path, { unreadable: true }));
+}
+
+/** Returns { ok, owner } or { ok:false, cause, holder }. */
 function acquireLock(file, owner, o) {
   const alive = (o && o.pidAlive) || pidAlive;
   if (!owner || !owner.jobId) throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
-  const body = JSON.stringify({ jobId: owner.jobId, pid: owner.pid || process.pid, at: Date.now() });
-  for (let i = 0; i < 2; i += 1) {
-    try {
-      fs.writeFileSync(file, body, { flag: 'wx' });
-      return { ok: true, owner };
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const holder = readJson(file, null);
-      // Stale only when the holder pid is provably dead; unreadable or live holders keep the lock.
-      // Takeover is serialised by a second exclusive file, and the lock is removed only if it is
-      // still the exact instance observed dead, so a racing contender cannot delete a new owner.
-      if (holder && Number.isInteger(holder.pid) && !alive(holder.pid) && i === 0) {
-        const guard = file + '.takeover';
-        const mine = JSON.stringify({ jobId: owner.jobId, pid: owner.pid || process.pid });
-        try {
-          fs.writeFileSync(guard, mine, { flag: 'wx' });
-        } catch (_) {
-          // A takeover guard left by a crashed contender is cleared once its pid is provably dead.
-          const g = readJson(guard, null);
-          if (!(g && Number.isInteger(g.pid) && !alive(g.pid))) return { ok: false, cause: Cause.LOCK_HELD, holder };
-          try {
-            fs.unlinkSync(guard);
-            fs.writeFileSync(guard, mine, { flag: 'wx' });
-          } catch (_e) {
-            return { ok: false, cause: Cause.LOCK_HELD, holder };
-          }
-        }
-        try {
-          const again = readJson(file, null);
-          if (!again || again.jobId !== holder.jobId || again.at !== holder.at) {
-            return { ok: false, cause: Cause.LOCK_HELD, holder: again };
-          }
-          fs.unlinkSync(file);
-          fs.writeFileSync(file, body, { flag: 'wx' });
-          return { ok: true, owner };
-        } finally {
-          fs.unlinkSync(guard);
-        }
-      }
+  const pid = owner.pid || process.pid;
+  const gens = lockGenerations(file);
+  const top = gens[gens.length - 1];
+  if (top && !top.released) {
+    const holder = readJson(top.path, null);
+    // Unreadable (being written) or live holders keep the lock; stale only when the pid is provably dead.
+    if (!holder || !Number.isInteger(holder.pid) || alive(holder.pid)) {
       return { ok: false, cause: Cause.LOCK_HELD, holder };
     }
   }
-  return { ok: false, cause: Cause.LOCK_HELD, holder: readJson(file, null) };
+  const gen = top ? top.gen + 1 : 1;
+  const mine = file + '.g' + gen;
+  try {
+    fs.writeFileSync(mine, JSON.stringify({ jobId: owner.jobId, pid, at: Date.now() }), { flag: 'wx' });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
+  }
+  const after = lockGenerations(file);
+  if (after.some((g) => g.gen > gen)) {
+    fs.unlinkSync(mine);
+    return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
+  }
+  for (const g of after) {
+    if (g.gen < gen) {
+      try {
+        fs.unlinkSync(g.path);
+      } catch (_) {
+        /* superseded generation already gone */
+      }
+    }
+  }
+  return { ok: true, owner: Object.assign({}, owner, { gen }) };
 }
 
 function releaseLock(file, owner) {
-  const holder = readJson(file, null);
-  if (!holder || !owner || holder.jobId !== owner.jobId) {
-    return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder };
-  }
-  fs.unlinkSync(file);
+  const gens = lockGenerations(file).filter((g) => !g.released);
+  const own = owner && gens.find((g) => (readJson(g.path, {}) || {}).jobId === owner.jobId);
+  if (!own) return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder: lockHolder(file) };
+  fs.renameSync(own.path, own.path + '.released');
   return { ok: true };
 }
 
@@ -368,6 +421,7 @@ module.exports = {
   ProgressLedger,
   acquireLock,
   releaseLock,
+  lockHolder,
   acceptResult,
   runWithCleanup,
 };
@@ -375,7 +429,7 @@ module.exports = {
 // CLI for shell runtimes (pipeline scripts, Hermes): JSON on stdout, exit 0 when
 // allowed, 3 when refused, 2 on usage error.
 //   check-workspace --cwd D --item ID [--root R]
-//   admit  --ledger F --item ID --stage S --head SHA [--base SHA] [--inputs STR] [--limits JSON]
+//   admit  --ledger F --item ID --stage S --head SHA --pid WINPID [--base SHA] [--inputs STR] [--limits JSON]
 //   record --ledger F --item ID --stage S --head SHA [--base SHA] [--inputs STR] --outcome O [--ms N] [--tokens N]
 //   block  --ledger F --item ID --reason R
 if (require.main === module) {
@@ -404,7 +458,7 @@ if (require.main === module) {
     }
     const fp = fingerprint({ headSha: a.head, baseSha: a.base, inputs: a.inputs });
     if (cmd === 'admit') {
-      const r = ledger.admit(a.item, a.stage, fp, { reserve: true, pid: a.pid === undefined ? undefined : Number(a.pid) });
+      const r = ledger.admit(a.item, a.stage, fp, { reserve: true, pid: Number(a.pid) });
       out(r, r.ok ? 0 : 3);
     }
     if (cmd === 'record') {

@@ -99,24 +99,6 @@ test('item and goal budgets cap attempts, time and tokens; unknown tokens stay u
   assert.equal(L.admit('C', 'review', 'f1').cause, g.Cause.GOAL_EXHAUSTED);
 });
 
-test('lock: second owner refused; only owner releases; live holder never stolen by age', () => {
-  const f = path.join(tmp(), 'lane.lock');
-  assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, { pidAlive: () => true }).ok, true);
-  const second = g.acquireLock(f, { jobId: 'j2', pid: 222 }, { pidAlive: () => true });
-  assert.deepEqual([second.ok, second.cause, second.holder.jobId], [false, g.Cause.LOCK_HELD, 'j1']);
-  assert.equal(g.releaseLock(f, { jobId: 'j2' }).cause, g.Cause.LOCK_NOT_OWNER);
-  assert.equal(fs.existsSync(f), true);
-  assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
-});
-
-test('lock held by a dead pid is taken over', () => {
-  const f = path.join(tmp(), 'lane.lock');
-  g.acquireLock(f, { jobId: 'j1', pid: 111 }, { pidAlive: () => true });
-  const r = g.acquireLock(f, { jobId: 'j2', pid: 222 }, { pidAlive: (p) => p !== 111 });
-  assert.equal(r.ok, true);
-  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).jobId, 'j2');
-});
-
 test('result from a previous job is rejected', () => {
   assert.equal(g.acceptResult({ jobId: 'j2' }, { jobId: 'j1' }).cause, g.Cause.JOB_MISMATCH);
   assert.equal(g.acceptResult({ jobId: 'j2' }, {}).cause, g.Cause.JOB_UNBOUND);
@@ -136,9 +118,9 @@ test('CLI: refused admit exits 3, record then admit same input is NO_PROGRESS', 
   const ledger = path.join(tmp(), 'l.json');
   const cli = path.join(__dirname, '..', 'work-guard.js');
   const base = ['--ledger', ledger, '--item', 'A', '--stage', 'review', '--head', 'h1', '--base', 'b1'];
-  assert.equal(spawnSync(process.execPath, [cli, 'admit', ...base]).status, 0);
+  assert.equal(spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)]).status, 0);
   assert.equal(spawnSync(process.execPath, [cli, 'record', ...base, '--outcome', 'CHANGES_REQUIRED']).status, 0);
-  const r = spawnSync(process.execPath, [cli, 'admit', ...base], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)], { encoding: 'utf8' });
   assert.equal(r.status, 3);
   assert.equal(JSON.parse(r.stdout).cause, g.Cause.NO_PROGRESS);
   assert.equal(spawnSync(process.execPath, [cli, 'nope']).status, 2);
@@ -174,20 +156,6 @@ test('codex 8fa765f: alternating inputs F1, F2, F1 do not reopen F1', () => {
   assert.equal(L.admit('A', 'review', 'F1').cause, g.Cause.NO_PROGRESS);
 });
 
-test('codex 8fa765f: stale takeover never deletes a lock a racing contender just took', () => {
-  const f = path.join(tmp(), 'lane.lock');
-  g.acquireLock(f, { jobId: 'dead', pid: 111 }, { pidAlive: () => true });
-  const dead = { pidAlive: (p) => p !== 111 };
-  assert.equal(g.acquireLock(f, { jobId: 'j2', pid: 222 }, dead).ok, true);
-  // a contender that observed the dead holder earlier finds a different instance now
-  const late = g.acquireLock(f, { jobId: 'j3', pid: 333 }, dead);
-  assert.equal(late.ok, false);
-  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).jobId, 'j2');
-  fs.writeFileSync(f + '.takeover', 'other');
-  fs.writeFileSync(f, JSON.stringify({ jobId: 'dead2', pid: 111, at: 1 }));
-  assert.equal(g.acquireLock(f, { jobId: 'j4', pid: 444 }, dead).cause, g.Cause.LOCK_HELD);
-});
-
 test('codex 8fa765f: frozen worker result survives a failing cleanup', async () => {
   const r = await g.runWithCleanup(async () => Object.freeze({ exitCode: 7 }), async () => {
     throw new Error('rm failed');
@@ -211,22 +179,6 @@ test('codex 8fa765f: returning to a tested SHA does not re-run its tests', async
   void runs;
 });
 
-test('codex a820c19: reserved admission blocks a duplicate until recorded; dead reserver frees it', () => {
-  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 5 } } });
-  assert.equal(L.admit('A', 'review', 'F', { reserve: true }).ok, true);
-  assert.equal(L.admit('A', 'review', 'F', { reserve: true }).cause, g.Cause.NO_PROGRESS);
-  L.record('A', 'review', 'F', 'CHANGES_REQUIRED', {});
-  assert.equal(L.load().items.A.spent.attempts, 1);
-  assert.equal(L.admit('A', 'review', 'G', { reserve: true, pid: 999999 }).ok, true);
-  assert.equal(L.admit('A', 'review', 'G', { reserve: true }).ok, true);
-});
-
-test('codex a820c19: goal cap of one admits only one reserved attempt', () => {
-  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 1 } } });
-  assert.equal(L.admit('A', 'review', 'F1', { reserve: true }).ok, true);
-  assert.equal(L.admit('B', 'review', 'F2', { reserve: true }).cause, g.Cause.GOAL_EXHAUSTED);
-});
-
 test('codex a820c19: corrupt ledger fails closed', () => {
   const file = path.join(tmp(), 'l.json');
   fs.writeFileSync(file, '{"items":{"A":{"bloc');
@@ -234,16 +186,69 @@ test('codex a820c19: corrupt ledger fails closed', () => {
   assert.throws(() => L.admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
 });
 
-test('codex a820c19: takeover guard left by a dead contender is recovered', () => {
-  const f = path.join(tmp(), 'lane.lock');
-  fs.writeFileSync(f, JSON.stringify({ jobId: 'dead', pid: 111, at: 1 }));
-  fs.writeFileSync(f + '.takeover', JSON.stringify({ jobId: 'crashed', pid: 112 }));
-  const r = g.acquireLock(f, { jobId: 'j5', pid: 555 }, { pidAlive: (p) => p !== 111 && p !== 112 });
-  assert.equal(r.ok, true);
-  assert.equal(fs.existsSync(f + '.takeover'), false);
-});
-
 test('codex a820c19: frozen worker exception survives a failing cleanup', async () => {
   const e = Object.freeze(new Error('worker crashed'));
   await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /worker crashed/);
+});
+
+test('lock: second owner refused; only owner releases; live holder never superseded', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+  assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, live).ok, true);
+  const second = g.acquireLock(f, { jobId: 'j2', pid: 222 }, live);
+  assert.deepEqual([second.ok, second.cause, second.holder.jobId], [false, g.Cause.LOCK_HELD, 'j1']);
+  assert.equal(g.releaseLock(f, { jobId: 'j2' }).cause, g.Cause.LOCK_NOT_OWNER);
+  assert.equal(g.lockHolder(f).jobId, 'j1');
+  assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
+  assert.equal(g.lockHolder(f), null);
+  assert.equal(g.acquireLock(f, { jobId: 'j3', pid: 333 }, live).ok, true);
+});
+
+test('codex 4625b50: dead holder is superseded by a new generation; racing contenders cannot both win', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  g.acquireLock(f, { jobId: 'dead', pid: 111 }, { pidAlive: () => true });
+  const dead = { pidAlive: (p) => p !== 111 };
+  // two contenders both observed the dead holder; the exclusive create of g2 admits one
+  const a = g.acquireLock(f, { jobId: 'A', pid: 222 }, dead);
+  const b = g.acquireLock(f, { jobId: 'B', pid: 333 }, dead);
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, false);
+  assert.equal(g.lockHolder(f).jobId, 'A');
+});
+
+test('codex 4625b50: a late contender creating an old generation backs off', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+  g.acquireLock(f, { jobId: 'j1', pid: 1 }, live);
+  g.releaseLock(f, { jobId: 'j1' });
+  g.acquireLock(f, { jobId: 'j2', pid: 2 }, live); // g2
+  // a contender that observed generation 1 creates g1 again after g2 exists
+  fs.writeFileSync(f + '.g1', JSON.stringify({ jobId: 'late', pid: 9, at: 1 }));
+  assert.equal(g.lockHolder(f).jobId, 'j2');
+  assert.equal(g.acquireLock(f, { jobId: 'j3', pid: 3 }, live).cause, g.Cause.LOCK_HELD);
+});
+
+test('codex a820c19: reserved admission blocks a duplicate until recorded; dead reserver frees it', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 5 } } });
+  assert.equal(L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).cause, g.Cause.NO_PROGRESS);
+  L.record('A', 'review', 'F', 'CHANGES_REQUIRED', {});
+  assert.equal(L.load().items.A.spent.attempts, 1);
+  assert.equal(L.admit('A', 'review', 'G', { reserve: true, pid: 999999 }).ok, true);
+  assert.equal(L.admit('A', 'review', 'G', { reserve: true, pid: process.pid }).ok, true);
+  assert.throws(() => L.admit('A', 'review', 'H', { reserve: true }), /integer owner pid/);
+});
+
+test('codex a820c19: goal cap of one admits only one reserved attempt', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 1 } } });
+  assert.equal(L.admit('A', 'review', 'F1', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.admit('B', 'review', 'F2', { reserve: true, pid: process.pid }).cause, g.Cause.GOAL_EXHAUSTED);
+});
+
+test('codex 4625b50: structurally damaged ledger fails closed', () => {
+  for (const bad of ['{"items":false,"goal":false}', '{"items":{"A":{"spent":{"attempts":"x"}}},"goal":{"attempts":0}}', '[]']) {
+    const file = path.join(tmp(), 'l.json');
+    fs.writeFileSync(file, bad);
+    assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
+  }
 });
