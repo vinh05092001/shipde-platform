@@ -253,13 +253,28 @@ function parseResetHint(text, now = Date.now()) {
 /**
  * Scoped Health Registry.
  */
+function accountHealthKey(id) {
+  const realAccount = id.metadata?.realAccountRef;
+  const account = realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef;
+  const observed = account && account !== 'UNKNOWN' ? account : id.connectionId;
+  return JSON.stringify([id.upstreamProviderId, observed && observed !== 'UNKNOWN' ? observed : id.candidateKey]);
+}
+
+function quotaHealthKey(id) {
+  return JSON.stringify([id.upstreamProviderId, id.quotaScopeId]);
+}
+
+function accountModelHealthKey(id) {
+  return JSON.stringify([accountHealthKey(id), id.outboundModelId]);
+}
+
 class ScopedHealthRegistry {
   constructor() {
     this.gateways = new Map(); // gatewayId -> { category, resetsAt, reason }
-    this.accounts = new Map(); // accountRef / connectionId -> { category, resetsAt, reason }
-    this.quotaScopes = new Map(); // quotaScopeId -> { status, resetsAt, reason, exhausted }
+    this.accounts = new Map(); // provider-qualified account -> { category, resetsAt, reason }
+    this.quotaScopes = new Map(); // provider-qualified quotaScopeId -> { status, resetsAt, reason, exhausted }
     this.catalogueModels = new Map(); // upstreamProviderId::outboundModelId -> { category, resetsAt, reason } (global catalogue 404)
-    this.accountModels = new Map(); // upstreamProviderId::outboundModelId::accountRef -> { category, resetsAt, reason } (rate limits)
+    this.accountModels = new Map(); // provider/account/model tuple -> { category, resetsAt, reason, isPermanent }
     this.routes = new Map(); // candidateKey -> { category, resetsAt, reason }
     this.modelLocks = new Map(); // upstreamProviderId::outboundModelId::connectionId -> lockedUntil
   }
@@ -281,7 +296,7 @@ class ScopedHealthRegistry {
         break;
 
       case HealthScope.ACCOUNT:
-        const acc = identity.accountRef !== 'UNKNOWN' ? identity.accountRef : identity.connectionId;
+        const acc = accountHealthKey(identity);
         if (acc && acc !== 'UNKNOWN') {
           this.accounts.set(acc, {
             category: classification.category,
@@ -295,7 +310,7 @@ class ScopedHealthRegistry {
 
       case HealthScope.QUOTA_SCOPE:
         if (identity.quotaScopeId && identity.quotaScopeId !== 'UNKNOWN') {
-          this.quotaScopes.set(identity.quotaScopeId, {
+          this.quotaScopes.set(quotaHealthKey(identity), {
             exhausted: true,
             status: 'EXHAUSTED',
             resetsAt: classification.resetsAt,
@@ -306,28 +321,13 @@ class ScopedHealthRegistry {
         break;
 
       case HealthScope.MODEL:
-        const baseKey = `${identity.upstreamProviderId || 'unknown'}::${identity.outboundModelId || 'unknown'}`;
-        if (classification.category === ErrorCategory.MODEL_NOT_FOUND) {
-          // Model does not exist in catalogue: global for provider/model
-          this.catalogueModels.set(baseKey, {
-            category: classification.category,
-            resetsAt: classification.resetsAt,
-            reason: classification.reason,
-            isPermanent: true,
-            recordedAt: now,
-          });
-        } else {
-          // Rate limits or transient model errors: SCOPED TO ACCOUNT/CONNECTION!
-          // Account A's 429 does not block Account B!
-          const accKey = identity.accountRef !== 'UNKNOWN' ? identity.accountRef : (identity.connectionId || '*');
-          const accountModelKey = `${baseKey}::${accKey}`;
-          this.accountModels.set(accountModelKey, {
-            category: classification.category,
-            resetsAt: classification.resetsAt,
-            reason: classification.reason,
-            recordedAt: now,
-          });
-        }
+        this.accountModels.set(accountModelHealthKey(identity), {
+          category: classification.category,
+          resetsAt: classification.resetsAt,
+          reason: classification.reason,
+          isPermanent: classification.isPermanent,
+          recordedAt: now,
+        });
         break;
 
       case HealthScope.ROUTE:
@@ -341,6 +341,7 @@ class ScopedHealthRegistry {
         }
         break;
 
+      case HealthScope.NETWORK:
       case HealthScope.LOCAL:
         if (identity.candidateKey && classification.cooldownMs > 0) {
           this.routes.set(identity.candidateKey, {
@@ -352,7 +353,6 @@ class ScopedHealthRegistry {
         }
         break;
 
-      case HealthScope.NETWORK:
       default:
         break;
     }
@@ -380,7 +380,7 @@ class ScopedHealthRegistry {
     }
 
     // 2. Check Account
-    const acc = id.accountRef !== 'UNKNOWN' ? id.accountRef : id.connectionId;
+    const acc = accountHealthKey(id);
     if (acc && acc !== 'UNKNOWN') {
       const aRec = this.accounts.get(acc);
       if (aRec) {
@@ -398,7 +398,7 @@ class ScopedHealthRegistry {
 
     // 3. Check Quota Scope
     if (id.quotaScopeId && id.quotaScopeId !== 'UNKNOWN') {
-      const qRec = this.quotaScopes.get(id.quotaScopeId);
+      const qRec = this.quotaScopes.get(quotaHealthKey(id));
       if (qRec && qRec.exhausted) {
         if (qRec.resetsAt && now > qRec.resetsAt) {
           // Reset time has elapsed: mark probe needed, DO NOT return early healthy!
@@ -432,10 +432,8 @@ class ScopedHealthRegistry {
     }
 
     // 5. Check Account-scoped Model (rate limits on this specific account)
-    const accKey = id.accountRef !== 'UNKNOWN' ? id.accountRef : (id.connectionId || '*');
-    const accountModelKey = `${baseModelKey}::${accKey}`;
-    const accModelRec = this.accountModels.get(accountModelKey);
-    if (accModelRec && accModelRec.resetsAt && now < accModelRec.resetsAt) {
+    const accModelRec = this.accountModels.get(accountModelHealthKey(id));
+    if (accModelRec && (accModelRec.isPermanent || (accModelRec.resetsAt && now < accModelRec.resetsAt))) {
       return {
         healthy: false,
         blockedBy: HealthScope.MODEL,

@@ -6,7 +6,7 @@
  * Implements the shared unified route selection contract:
  * 1. Candidate Aggregation across 3 pathways (9router, direct, AGY pool).
  * 2. Strict Admission Gating before Ranking:
- *    - Barred model families (Claude worker/reviewer policy).
+ *    - Caller-supplied role policies.
  *    - Reviewer independence from author provider/domain.
  *    - Combo constituent branch health and capabilities.
  *    - Quota and route health (including unprobed reset elapsed routes).
@@ -25,10 +25,6 @@
 const crypto = require('crypto');
 const { createRouteIdentity, distinguishPathway, UNKNOWN } = require('./route-identity');
 const { ScopedHealthRegistry, ErrorCategory, HealthScope } = require('./scoped-health');
-
-// AGENTS.md policy: Claude family models are excluded from worker/reviewer roles
-const CLAUDE_FAMILY_PATTERN = /claude|opus|sonnet|haiku/i;
-const WORKER_REVIEWER_ROLES = new Set(['writer', 'reviewer', 'security-review', 'repair']);
 
 const WEIGHT_PROFILES = Object.freeze({
   LATENCY_FIRST: { latency: 55, quality: 20, cost: 25 },
@@ -83,12 +79,14 @@ function hashObject(obj) {
 
 // Module-level persistent cache across selection calls
 const SHARED_JEV_CACHE = new Map();
+const SHARED_HEALTH_REGISTRY = new ScopedHealthRegistry();
 
 class UnifiedRouteSelector {
   constructor(options = {}) {
     this.healthRegistry = options.healthRegistry || new ScopedHealthRegistry();
     this.jevCache = options.jevCache || SHARED_JEV_CACHE;
     this.jevAsk = options.jevAsk || null;
+    this.excludedModelPatterns = options.excludedModelPatterns || {};
     this.minConfidence = options.minConfidence || 0.6;
   }
 
@@ -100,30 +98,14 @@ class UnifiedRouteSelector {
     const id = candidate;
     const role = String(profile.role || 'writer').toLowerCase();
 
-    // 1. Policy Bar: AGENTS.md Claude exclusion for worker/reviewer
-    if (WORKER_REVIEWER_ROLES.has(role)) {
-      if (id.isCombo) {
-        const branches = Array.isArray(id.comboBranches) ? id.comboBranches : [];
-        const hasForbiddenBranch = branches.some(
-          (b) => CLAUDE_FAMILY_PATTERN.test(b.outboundModelId) || CLAUDE_FAMILY_PATTERN.test(b.configuredModelId)
-        );
-        if (hasForbiddenBranch) {
-          return {
-            admitted: false,
-            rejectionReason: 'COMBO_CONTAINS_CLAUDE_BRANCH_BARRED_FOR_ROLE',
-          };
-        }
-      } else {
-        if (
-          CLAUDE_FAMILY_PATTERN.test(id.outboundModelId) ||
-          CLAUDE_FAMILY_PATTERN.test(id.configuredModelId)
-        ) {
-          return {
-            admitted: false,
-            rejectionReason: 'CLAUDE_FAMILY_EXCLUDED_BY_AGENTS_MD_POLICY',
-          };
-        }
-      }
+    // Model restrictions belong to the caller's role policy, including combo branches.
+    const patterns = this.excludedModelPatterns[role] || [];
+    const excluded = (route) => patterns.some((pattern) => {
+      const regex = pattern instanceof RegExp ? new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, '')) : new RegExp(pattern, 'i');
+      return regex.test(route.outboundModelId) || regex.test(route.configuredModelId);
+    });
+    if (excluded(id) || (id.isCombo && id.comboBranches.some(excluded))) {
+      return { admitted: false, rejectionReason: 'MODEL_EXCLUDED_BY_ROLE_POLICY' };
     }
 
     // 2. Reviewer Independence Policy: Reviewer cannot share author's provider or failure domain
@@ -160,21 +142,13 @@ class UnifiedRouteSelector {
         };
       }
 
-      const requiredCaps = profile.requiredCapabilities || [];
-      const viableBranches = branches.filter((branch) => {
-        // Branch must be healthy
-        const bHealth = this.healthRegistry.evaluateHealth(branch);
-        if (!bHealth.healthy) return false;
-        // Branch must have required capabilities
-        const bCaps = branch.metadata?.capabilities || [];
-        return requiredCaps.every((cap) => bCaps.includes(cap));
-      });
-
-      if (viableBranches.length === 0) {
-        return {
-          admitted: false,
-          rejectionReason: 'COMBO_ALL_BRANCHES_UNHEALTHY_OR_EXHAUSTED',
-        };
+      // Reject the whole combo if any executable branch fails admission. Retaining
+      // a rejected branch would let downstream execution bypass these gates.
+      for (const branch of branches) {
+        const evaluation = this.evaluateAdmission(branch, profile, authorCandidate);
+        if (!evaluation.admitted) {
+          return { admitted: false, rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason };
+        }
       }
     } else {
       // Required Capabilities Match for single route
@@ -205,7 +179,8 @@ class UnifiedRouteSelector {
     // 5. Cost Ceiling Check (Finding 2)
     // Strictly reject candidates with unknown cost when a cost ceiling is set
     const ceiling = Number(profile.costCeiling);
-    if (Number.isFinite(ceiling) && ceiling > 0) {
+    if (!id.isCombo && profile.costCeiling !== undefined && profile.costCeiling !== null &&
+        profile.costCeiling !== UNKNOWN && Number.isFinite(ceiling) && ceiling >= 0) {
       const rawCost = id.metadata?.estimatedCostUsd;
       if (rawCost === undefined || rawCost === null || rawCost === UNKNOWN) {
         return {
@@ -349,8 +324,10 @@ class UnifiedRouteSelector {
         turnBudget: profile.turnBudget,
         expectedDuration: profile.expectedDuration,
         contextSize: profile.contextSize,
+        deadlineMs: profile.deadlineMs,
         healthStateHash: this.healthRegistry.getStateHash(),
-        candidates: admitted.map((x) => x.candidateKey).sort(),
+        candidates: admitted.map((x) => ({ key: x.candidateKey, metadata: x.metadata, branches: x.comboBranches }))
+          .sort((a, b) => a.key.localeCompare(b.key)),
       });
 
       const cached = this.jevCache.get(cacheKey);
@@ -412,6 +389,7 @@ class UnifiedRouteSelector {
           jevOutcome = 'ERROR';
           jevReason = `JEV_CALL_FAILED_${err.message || 'EXCEPTION'}_DETERMINISTIC_FALLBACK`;
           chosenProfileKey = fallbackProfileKey;
+          this.jevCache.set(cacheKey, { chosenProfileKey, confidence: jevConfidence, outcome: jevOutcome });
         }
       }
     } else if (admitted.length < 2) {
@@ -519,9 +497,10 @@ class UnifiedRouteSelector {
  */
 async function selectOptimalRoute(params = {}) {
   const { aggregateAllCandidates } = require('./candidate-adapters');
-  const selector = new UnifiedRouteSelector(params.selectorOptions || {});
+  const selector = new UnifiedRouteSelector({ healthRegistry: SHARED_HEALTH_REGISTRY, ...params.selectorOptions });
 
-  const aggregated = aggregateAllCandidates(params.adapterOptions || {});
+  const aggregated = params.candidates ? { candidates: params.candidates, unconnectedSources: [] }
+    : aggregateAllCandidates(params.adapterOptions || {});
   const candidates = params.candidates || aggregated.candidates;
 
   const taskProfile = {
@@ -530,10 +509,11 @@ async function selectOptimalRoute(params = {}) {
     complexity: params.complexity || 'standard',
     requiredCapabilities: params.requiredCapabilities || ['general_code'],
     costCeiling: params.costCeiling !== undefined ? params.costCeiling : null,
-    contextSize: params.contextSize !== undefined ? params.contextSize : UNKNOWN,
-    tokenBudget: params.tokenBudget !== undefined ? params.tokenBudget : UNKNOWN,
-    turnBudget: params.turnBudget !== undefined ? params.turnBudget : UNKNOWN,
-    expectedDuration: params.expectedDuration !== undefined ? params.expectedDuration : UNKNOWN,
+    contextSize: params.contextSize,
+    tokenBudget: params.tokenBudget,
+    turnBudget: params.turnBudget,
+    expectedDuration: params.expectedDuration,
+    deadlineMs: params.deadlineMs,
     acceptanceCriteria: params.acceptanceCriteria || [],
     instructions: params.instructions || '',
   };
@@ -553,8 +533,7 @@ module.exports = {
   UnifiedRouteSelector,
   WEIGHT_PROFILES,
   ROLE_FALLBACK_PROFILE,
-  CLAUDE_FAMILY_PATTERN,
-  WORKER_REVIEWER_ROLES,
+  SHARED_HEALTH_REGISTRY,
   SHARED_JEV_CACHE,
   advisoryNamesIdentity,
   harnessEnforcesTokens,

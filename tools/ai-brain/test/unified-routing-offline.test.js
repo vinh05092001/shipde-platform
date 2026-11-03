@@ -138,11 +138,11 @@ describe('Criterion 2: Hai đường chung quota không được tính ngân sá
     });
 
     const linkedIdentities = linkSharedQuotaScopes([route9Router, routeAgyPool], {
-      'vinh1032007@gmail.com': 'quota::google::vinh1032007@gmail.com',
+      [JSON.stringify(['antigravity', 'vinh1032007@gmail.com'])]: 'quota::antigravity::shared',
     });
 
-    assert.equal(linkedIdentities[0].quotaScopeId, 'quota::google::vinh1032007@gmail.com');
-    assert.equal(linkedIdentities[1].quotaScopeId, 'quota::google::vinh1032007@gmail.com');
+    assert.equal(linkedIdentities[0].quotaScopeId, 'quota::antigravity::shared');
+    assert.equal(linkedIdentities[1].quotaScopeId, 'quota::antigravity::shared');
 
     const health = new ScopedHealthRegistry();
 
@@ -308,7 +308,7 @@ describe('Criterion 7: Combo không làm mất identity hoặc vượt ràng bu�
     assert.equal(expanded.comboBranches[0].outboundModelId, 'gemini-3.8-flash');
     assert.equal(expanded.comboBranches[1].outboundModelId, 'claude-opus-4-6-thinking');
 
-    const selector = new UnifiedRouteSelector();
+    const selector = new UnifiedRouteSelector({ excludedModelPatterns: { reviewer: [/claude/i] } });
     const taskProfileForReviewer = {
       taskId: 'TASK-AI-REVIEW-01',
       role: 'reviewer',
@@ -317,7 +317,7 @@ describe('Criterion 7: Combo không làm mất identity hoặc vượt ràng bu�
 
     const evaluation = selector.evaluateAdmission(expanded, taskProfileForReviewer);
     assert.equal(evaluation.admitted, false, 'Combo containing Claude branch must fail admission for reviewer role');
-    assert.equal(evaluation.rejectionReason, 'COMBO_CONTAINS_CLAUDE_BRANCH_BARRED_FOR_ROLE');
+    assert.equal(evaluation.rejectionReason, 'MODEL_EXCLUDED_BY_ROLE_POLICY');
   });
 });
 
@@ -334,6 +334,7 @@ describe('Criterion 8: Candidate từ cả ba đường đều có thể đượ
             endpoint: 'https://api.deepseek.com/v1',
             models: ['deepseek-chat'],
             credentialEnv: 'DEEPSEEK_API_KEY',
+            capabilities: ['general_code'],
           },
         ],
         env: { DEEPSEEK_API_KEY: 'test-key' },
@@ -343,7 +344,7 @@ describe('Criterion 8: Candidate từ cả ba đường đều có thể đượ
         connections: [{ connectionId: 'c1', provider: 'antigravity', accountRef: 'u1', enabled: true }],
       },
       agy: {
-        lanes: [{ laneId: 'agy01', accountRef: 'lane1@corp.com', quotaExhausted: false }],
+        lanes: [{ laneId: 'agy01', accountRef: 'lane1@corp.com', quotaExhausted: false, rows: [{ modelId: 'gemini-3.8-flash', remainingPercent: 40 }] }],
         models: ['gemini-3.8-flash'],
       },
     });
@@ -597,7 +598,7 @@ describe('Codex Finding 5: Consuming Connections & Linking Shared Quota Scopes',
       },
       direct: { sources: [] },
       agy: {
-        lanes: [{ laneId: 'agy01', accountRef: 'shared@google.com', quotaExhausted: false }],
+        lanes: [{ laneId: 'agy01', accountRef: 'shared@google.com', quotaExhausted: false, rows: [{ modelId: 'gemini-3.8-flash', remainingPercent: 40 }] }],
         models: ['gemini-3.8-flash'],
       },
     });
@@ -705,7 +706,7 @@ describe('Codex Finding 8: Combo Branch Evaluation for Health and Capabilities',
     const evalResult = selector.evaluateAdmission(comboExpanded, { requiredCapabilities: ['code'] });
 
     assert.equal(evalResult.admitted, false, 'Combo must be rejected when all branches are exhausted');
-    assert.equal(evalResult.rejectionReason, 'COMBO_ALL_BRANCHES_UNHEALTHY_OR_EXHAUSTED');
+    assert.match(evalResult.rejectionReason, /^COMBO_BRANCH_REJECTED_/);
   });
 });
 
@@ -785,5 +786,222 @@ describe('Codex Finding 11: Budget Precedence & Production Bridge', () => {
     const routingApi = require('../routing');
     assert.equal(typeof routingApi.selectOptimalRoute, 'function', 'routing.js must export selectOptimalRoute');
     assert.equal(typeof routingApi.UnifiedRouteSelector, 'function', 'routing.js must export UnifiedRouteSelector');
+  });
+});
+const regressionRoute = (overrides = {}) => createRouteIdentity({
+  harness: 'direct-http', sourceId: 'regression', gatewayId: 'direct',
+  upstreamProviderId: 'provider-a', accountRef: 'account-a', connectionId: 'connection-a',
+  configuredModelId: 'model-a', outboundModelId: 'model-a',
+  metadata: { capabilities: ['general_code'], estimatedCostUsd: 1, qualityScore: 70 },
+  ...overrides,
+});
+
+describe('Review 50c26d7 regressions', () => {
+  test('F01: missing discovery never reads fixtures or invents pool connections', () => {
+    const fs = require('node:fs');
+    const originalExists = fs.existsSync;
+    const originalRead = fs.readFileSync;
+    const reads = [];
+    try {
+      // Simulate a machine where only the repository test catalog exists.
+      fs.existsSync = (p) => { reads.push(String(p)); return String(p).includes('fixtures'); };
+      fs.readFileSync = () => JSON.stringify(['ag/fixture-only']);
+      assert.equal(load9RouterCandidates({ connections: [] }).candidates.length, 0);
+      assert.equal(reads.some((p) => p.includes('fixtures')), false);
+    } finally {
+      fs.existsSync = originalExists;
+      fs.readFileSync = originalRead;
+    }
+    const empty = load9RouterCandidates({ catalog: ['ag/live-model'], connections: [] });
+    assert.equal(empty.candidates.length, 0);
+    assert.equal(empty.unconnected[0].reason, 'NO_ENABLED_CONNECTIONS_DISCOVERED');
+  });
+
+  test('F02: provider and allowlist must both match', () => {
+    const result = load9RouterCandidates({
+      catalog: ['ag/allowed', 'ag/denied'],
+      connections: [
+        { provider: 'antigravity', connectionId: 'right', modelAllowlist: ['ag/allowed'] },
+        { provider: 'github', connectionId: 'wrong', modelAllowlist: ['ag/allowed'] },
+      ],
+    });
+    assert.deepEqual(result.candidates.map((c) => [c.connectionId, c.configuredModelId]), [['right', 'ag/allowed']]);
+  });
+
+  test('F03: all adapters preserve live evidence without inventing capabilities', () => {
+    const evidence = { capabilities: ['supplied-capability'], estimatedCostUsd: 0.25,
+      qualityScore: 83, latencyScore: 41, costScore: 66, pricing: { input: 0.1 } };
+    const results = [
+      load9RouterCandidates({ catalog: [{ id: 'ag/live', ...evidence }],
+        connections: [{ provider: 'antigravity', connectionId: 'c' }] }),
+      loadDirectProviderCandidates({ sources: [{ id: 's', accountRef: 'a', models: [{ id: 'live', ...evidence }] }], skipMissingCredentials: false }),
+      loadAgyPoolCandidates({ models: [{ id: 'live', ...evidence }],
+        lanes: [{ laneId: 'lane', rows: [{ modelId: 'live', remainingPercent: 10 }] }] }),
+    ];
+    const selector = new UnifiedRouteSelector();
+    const combo = expandComboIdentity(regressionRoute(), [{ id: 'ag/live', ...evidence }]);
+    assert.equal(combo.comboBranches[0].metadata.estimatedCostUsd, evidence.estimatedCostUsd);
+    assert.equal(combo.comboBranches[0].metadata.qualityScore, evidence.qualityScore);
+    for (const { candidates } of results) {
+      assert.equal(candidates.length, 1);
+      for (const [key, value] of Object.entries(evidence)) assert.deepEqual(candidates[0].metadata[key], value);
+      assert.equal(selector.evaluateAdmission(candidates[0], { requiredCapabilities: ['large_context_64k'] }).admitted, false);
+      assert.equal(selector.evaluateAdmission(candidates[0], { costCeiling: 0.5 }).admitted, true);
+      assert.equal(selector.scoreCandidate(candidates[0], {}, WEIGHT_PROFILES.BALANCED).breakdown.qualityScore, 83);
+    }
+    const unknowns = [
+      load9RouterCandidates({ catalog: ['ag/live'], connections: [{ provider: 'antigravity', connectionId: 'c' }] }),
+      loadDirectProviderCandidates({ sources: [{ id: 's', accountRef: 'a', models: ['live'] }], skipMissingCredentials: false }),
+      loadAgyPoolCandidates({ models: ['live'], lanes: [{ laneId: 'lane', rows: [{ modelId: 'live', remainingPercent: 10 }] }] }),
+    ];
+    for (const { candidates } of unknowns) {
+      assert.deepEqual(candidates[0].metadata.capabilities, []);
+      assert.equal(selector.evaluateAdmission(candidates[0], { requiredCapabilities: ['general_code'] }).admitted, false);
+      assert.equal(candidates[0].metadata.estimatedCostUsd, undefined);
+    }
+  });
+
+  test('F04: AGY admits only models with positive quota on that lane', () => {
+    const result = loadAgyPoolCandidates({ models: ['open', 'exhausted', 'unknown'], lanes: [
+      { laneId: 'lane-a', rows: [{ modelId: 'open', remainingPercent: 20 }, { modelId: 'exhausted', remainingPercent: 0 }] },
+      { laneId: 'lane-b', rows: [{ modelId: 'open', remainingPercent: 0 }, { modelId: 'exhausted', remainingPercent: 80 }] },
+    ] });
+    assert.deepEqual(result.candidates.map((c) => [c.accountRef, c.configuredModelId]), [['lane-a', 'open'], ['lane-b', 'exhausted']]);
+    assert.ok(result.unconnected.some((r) => r.reason === 'AGY_MODEL_QUOTA_UNKNOWN'));
+    assert.ok(result.unconnected.some((r) => r.reason === 'AGY_MODEL_QUOTA_EXHAUSTED'));
+    const windows = loadAgyPoolCandidates({ models: [{ id: 'scoped', quotaFamily: 'discovered-family' }],
+      lanes: [{ laneId: 'lane', rows: [
+        { family: 'discovered-family', remainingPercent: 50 },
+        { family: 'discovered-family', remainingPercent: 0 },
+      ] }] });
+    assert.equal(windows.candidates.length, 0, 'every quota window must permit the model');
+  });
+
+  test('F05: model-not-found is isolated to the failing account', () => {
+    const health = new ScopedHealthRegistry();
+    const a = regressionRoute();
+    const b = regressionRoute({ accountRef: 'account-b' });
+    health.recordFailure(a, { httpStatus: 404, message: 'model not found' });
+    assert.equal(health.evaluateHealth(a).healthy, false);
+    assert.equal(health.evaluateHealth(b).healthy, true);
+    assert.equal(health.evaluateHealth(regressionRoute({ connectionId: 'another-path' })).healthy, false);
+  });
+
+  test('F06: same email at different providers isolates auth and automatic quotas', () => {
+    const health = new ScopedHealthRegistry();
+    const a = regressionRoute({ accountRef: 'same@example.invalid' });
+    const b = regressionRoute({ upstreamProviderId: 'provider-b', accountRef: 'same@example.invalid' });
+    const aOtherPath = regressionRoute({ accountRef: a.accountRef, sourceId: 'other', quotaScopeId: 'another-scope' });
+    const linked = linkSharedQuotaScopes([a, b, aOtherPath]);
+    assert.equal(linked[0].quotaScopeId, linked[2].quotaScopeId);
+    assert.notEqual(linked[0].quotaScopeId, linked[1].quotaScopeId);
+    health.recordFailure(linked[0], { httpStatus: 401, message: 'unauthorized' });
+    assert.equal(health.evaluateHealth(linked[1]).healthy, true);
+    assert.equal(health.evaluateHealth(linked[2]).healthy, false);
+    health.recordFailure(linked[0], { httpStatus: 402, message: 'credit exhausted' });
+    assert.equal(health.evaluateHealth(regressionRoute({ upstreamProviderId: 'provider-b', quotaScopeId: linked[0].quotaScopeId })).healthy, true);
+    assert.equal(health.evaluateHealth(linked[1]).healthy, true);
+  });
+
+  test('F07: combo rejects any exhausted or over-ceiling executable branch', async () => {
+    const health = new ScopedHealthRegistry();
+    const selector = new UnifiedRouteSelector({ healthRegistry: health });
+    const good = regressionRoute();
+    const bad = regressionRoute({ accountRef: 'bad', quotaScopeId: 'bad-quota' });
+    const combo = regressionRoute({ isCombo: true, comboBranches: [good, bad] });
+    health.recordFailure(bad, { httpStatus: 402, message: 'credit exhausted' });
+    assert.equal((await selector.selectRoute([combo], {})).status, 'BLOCKED');
+    const expensive = regressionRoute({ metadata: { estimatedCostUsd: 3 } });
+    const priceyCombo = regressionRoute({ isCombo: true, comboBranches: [good, expensive] });
+    assert.equal(selector.evaluateAdmission(priceyCombo, { costCeiling: 2 }).admitted, false);
+    const affordable = regressionRoute({ isCombo: true, comboBranches: [good] });
+    assert.equal(selector.evaluateAdmission(affordable, { costCeiling: 2 }).admitted, true);
+    const unknown = regressionRoute({ metadata: {} });
+    assert.equal(selector.evaluateAdmission(regressionRoute({ isCombo: true, comboBranches: [good, unknown] }), { costCeiling: 2 }).admitted, false);
+  });
+
+  test('F08: convenience wrapper preserves context fallback and deadline', async () => {
+    const base = { candidates: [regressionRoute()], contextSize: 123, deadlineMs: 456 };
+    const result = await selectOptimalRoute(base);
+    assert.equal(result.budgetContract.tokenBudget, 123);
+    assert.equal(result.budgetContract.deadlineMs, 456);
+    assert.equal((await selectOptimalRoute({ ...base, tokenBudget: 0 })).budgetContract.tokenBudget, 0);
+  });
+
+  test('F09: convenience calls retain default health state across selections', async () => {
+    const { SHARED_HEALTH_REGISTRY } = require('../unified-selector');
+    const route = regressionRoute({ accountRef: 'F09-only', configuredModelId: 'F09' });
+    assert.equal((await selectOptimalRoute({ candidates: [route] })).status, 'ADMITTED_AND_SELECTED');
+    SHARED_HEALTH_REGISTRY.recordFailure(route, { message: 'getaddrinfo ENOTFOUND regression.invalid' });
+    try {
+      assert.equal((await selectOptimalRoute({ candidates: [route] })).status, 'BLOCKED');
+    } finally {
+      SHARED_HEALTH_REGISTRY.routes.delete(route.candidateKey);
+    }
+  });
+
+  test('F10: Claude allowed by default; caller role policy covers single and combo routes', () => {
+    const claude = regressionRoute({ configuredModelId: 'claude-sonnet', outboundModelId: 'claude-sonnet' });
+    const combo = regressionRoute({ isCombo: true, comboBranches: [regressionRoute(), claude] });
+    for (const role of ['writer', 'repair', 'reviewer', 'security-review']) {
+      assert.equal(new UnifiedRouteSelector().evaluateAdmission(claude, { role }).admitted, true);
+      assert.equal(new UnifiedRouteSelector().evaluateAdmission(combo, { role }).admitted, true);
+      const selector = new UnifiedRouteSelector({ excludedModelPatterns: { [role]: [/claude/gi] } });
+      assert.equal(selector.evaluateAdmission(claude, { role }).admitted, false);
+      assert.equal(selector.evaluateAdmission(combo, { role }).admitted, false);
+      assert.equal(selector.evaluateAdmission(combo, { role }).admitted, false);
+      assert.equal(selector.evaluateAdmission(claude, { role: 'researcher' }).admitted, true);
+    }
+  });
+
+  test('F11: adjacent colon and percent components round-trip without collisions', () => {
+    const a = regressionRoute({ accountRef: 'x:', quotaScopeId: ':y', sourceId: '%3A::\u241f' });
+    const b = regressionRoute({ accountRef: 'x', quotaScopeId: '::y', sourceId: a.sourceId });
+    assert.notEqual(a.candidateKey, b.candidateKey);
+    for (const route of [a, b]) {
+      const parsed = parseRouteIdentity(route.candidateKey);
+      assert.equal(parsed.accountRef, route.accountRef);
+      assert.equal(parsed.quotaScopeId, route.quotaScopeId);
+      assert.equal(parsed.sourceId, route.sourceId);
+      assert.equal(parsed.candidateKey, route.candidateKey);
+    }
+  });
+
+  test('F12: DNS cooldown blocks only failed route and expires on classified time', () => {
+    const health = new ScopedHealthRegistry();
+    const route = regressionRoute();
+    const now = Date.now();
+    const failure = health.recordFailure(route, { message: 'getaddrinfo ENOTFOUND regression.invalid' }, now);
+    assert.equal(failure.scope, HealthScope.NETWORK);
+    assert.equal(health.evaluateHealth(route, now + 1).healthy, false);
+    assert.equal(health.evaluateHealth(regressionRoute({ connectionId: 'other' }), now + 1).healthy, true);
+    assert.equal(health.evaluateHealth(route, failure.resetsAt + 1).healthy, true);
+  });
+
+  test('F13: advisory cache varies with evidence and deadline and caches exceptions', async () => {
+    let calls = 0;
+    const selector = new UnifiedRouteSelector({ jevCache: new Map(), jevAsk: async () => { calls++; throw new Error('offline failure'); } });
+    const routes = [regressionRoute(), regressionRoute({ accountRef: 'second' })];
+    const profile = { deadlineMs: 10 };
+    const first = await selector.selectRoute(routes, profile);
+    const repeated = await selector.selectRoute(routes, profile);
+    assert.equal(first.jev.outcome, 'ERROR');
+    assert.equal(repeated.jev.reason, 'JEV_CACHE_HIT');
+    assert.equal(calls, 1);
+    await selector.selectRoute(routes, { deadlineMs: 11 });
+    assert.equal(calls, 2);
+    const changed = regressionRoute({ metadata: { qualityScore: 99, estimatedCostUsd: 2 } });
+    await selector.selectRoute([changed, routes[1]], profile);
+    assert.equal(calls, 3);
+  });
+
+  test('F14: zero ceiling accepts only known zero-cost routes', () => {
+    const selector = new UnifiedRouteSelector();
+    for (const cost of [3, undefined, null, UNKNOWN]) {
+      assert.equal(selector.evaluateAdmission(regressionRoute({ metadata: { estimatedCostUsd: cost } }), { costCeiling: 0 }).admitted, false);
+    }
+    const free = regressionRoute({ metadata: { estimatedCostUsd: 0 } });
+    assert.equal(selector.evaluateAdmission(free, { costCeiling: 0 }).admitted, true);
+    assert.equal(selector.evaluateAdmission(regressionRoute(), { costCeiling: null }).admitted, true);
   });
 });

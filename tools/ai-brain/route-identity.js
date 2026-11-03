@@ -45,14 +45,14 @@ function escapePart(str) {
   if (str === null || str === undefined) return '';
   return String(str)
     .replace(/%/g, '%25')
-    .replace(/::/g, '%3A%3A')
+    .replace(/:/g, '%3A')
     .replace(/\u241f/g, '%241F');
 }
 
 function unescapePart(str) {
   if (str === null || str === undefined) return '';
   return String(str)
-    .replace(/%3A%3A/g, '::')
+    .replace(/%3A/g, ':')
     .replace(/%241F/g, '\u241f')
     .replace(/%25/g, '%');
 }
@@ -275,7 +275,8 @@ function parseRouteIdentity(key, defaults = {}) {
 }
 
 /**
- * Links shared quota scopes across routes that share the same underlying account.
+ * Links shared quota scopes across routes that share the same provider/account.
+ * Explicit accountLinks keys are JSON.stringify([upstreamProviderId, realAccountRef]).
  */
 function linkSharedQuotaScopes(identities, accountLinks) {
   if (!Array.isArray(identities)) return [];
@@ -290,12 +291,11 @@ function linkSharedQuotaScopes(identities, accountLinks) {
   if (links.size === 0) {
     const accountOccurrences = new Map();
     for (const id of identities) {
-      const realAcc = id.metadata?.realAccountRef || id.accountRef;
+      const account = id.metadata?.realAccountRef || id.accountRef;
+      const realAcc = JSON.stringify([id.upstreamProviderId, account]);
       if (
-        realAcc &&
-        realAcc !== UNKNOWN &&
-        realAcc !== '*' &&
-        !String(realAcc).startsWith('unknown')
+        account && account !== UNKNOWN && account !== '*' &&
+        !String(account).startsWith('unknown')
       ) {
         if (!accountOccurrences.has(realAcc)) {
           accountOccurrences.set(realAcc, []);
@@ -307,7 +307,7 @@ function linkSharedQuotaScopes(identities, accountLinks) {
       if (ids.length > 1) {
         // Shared account detected across multiple candidate routes
         const prov = ids[0].upstreamProviderId || 'shared';
-        const canonicalScope = `quota::${prov}::${acc}`;
+        const canonicalScope = `quota::${prov}::${ids[0].metadata?.realAccountRef || ids[0].accountRef}`;
         links.set(acc, canonicalScope);
       }
     }
@@ -316,7 +316,7 @@ function linkSharedQuotaScopes(identities, accountLinks) {
   return identities.map((id) => {
     const realAcc = id.metadata?.realAccountRef || id.accountRef;
     const targetScope =
-      links.get(realAcc) || links.get(id.accountRef) || links.get(id.connectionId);
+      links.get(JSON.stringify([id.upstreamProviderId, realAcc]));
     if (targetScope && targetScope !== id.quotaScopeId) {
       return createRouteIdentity({
         ...id,
@@ -337,7 +337,7 @@ function linkSharedQuotaScopes(identities, accountLinks) {
  */
 function expandComboIdentity(comboIdentity, constituentModels, candidateAccountMap = {}) {
   if (!comboIdentity) return null;
-  const parent = typeof comboIdentity.candidateKey ? comboIdentity : createRouteIdentity(comboIdentity);
+  const parent = comboIdentity.candidateKey ? comboIdentity : createRouteIdentity(comboIdentity);
 
   const branches = (constituentModels || []).map((m, index) => {
     const modelStr = typeof m === 'string' ? m : m.modelId || m.configuredModelId || m.id;
@@ -354,17 +354,19 @@ function expandComboIdentity(comboIdentity, constituentModels, candidateAccountM
       outboundModelId,
       accountRef: eligibleAccounts.length === 1 ? eligibleAccounts[0].accountRef : UNKNOWN,
       connectionId: eligibleAccounts.length === 1 ? eligibleAccounts[0].connectionId : UNKNOWN,
-      quotaScopeId: `quota::${upstreamProviderId}::${eligibleAccounts.length === 1 ? eligibleAccounts[0].accountRef : 'pool'}`,
+      quotaScopeId: eligibleAccounts.length === 1 ? eligibleAccounts[0].quotaScopeId : UNKNOWN,
       isCombo: false,
       metadata: {
         parentCombo: parent.configuredModelId,
         branchIndex: index + 1,
         totalCandidatesForProvider: eligibleAccounts.length,
-        capabilities: m.capabilities || [],
+        ...(typeof m === 'object' ? m : {}),
+        ...(typeof m === 'object' ? m.metadata : {}),
+        capabilities: m.capabilities ?? m.metadata?.capabilities ?? [],
         candidateAccounts: eligibleAccounts.map((a) => ({
           connectionId: a.connectionId || UNKNOWN,
           accountRef: a.accountRef || UNKNOWN,
-          priority: a.priority ?? 999,
+          priority: a.priority ?? UNKNOWN,
         })),
       },
     });

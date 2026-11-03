@@ -36,6 +36,26 @@ const PREFIX_PROVIDER_MAP = Object.freeze({
   groq: 'groq',
 });
 
+// Preserve discovered evidence; absence is never a capability or ranking claim.
+function modelId(model) {
+  return typeof model === 'string' ? model.trim() : String(model?.id || model?.modelId || model?.model || model?.configuredModelId || '').trim();
+}
+
+function modelEvidence(model, options, source = {}) {
+  const id = modelId(model);
+  const evidence = typeof model === 'object' && model ? model : {};
+  const metadata = {
+    ...source.metadata,
+    ...evidence,
+    ...evidence.metadata,
+    ...options.modelMetadata?.[id],
+  };
+  return {
+    ...metadata,
+    capabilities: options.modelCapabilities?.[id] ?? metadata.capabilities ?? source.capabilities ?? [],
+  };
+}
+
 /**
  * Loads candidates from 9Router configuration / SQLite / Catalog.
  * Consumes connections and maps models to specific enabled connections.
@@ -55,7 +75,6 @@ function load9RouterCandidates(options = {}) {
         options.catalogPath,
         path.join(process.env.APPDATA || '', '9router', 'model-catalog.json'),
         path.join(process.env.USERPROFILE || '', '.9router', 'model-catalog.json'),
-        path.join(__dirname, 'test', 'fixtures', 'sources', '9router', 'models.json'),
       ].filter(Boolean);
 
       for (const p of candidatesPaths) {
@@ -65,7 +84,7 @@ function load9RouterCandidates(options = {}) {
             rawCatalog = content;
             break;
           } else if (content && content.models && typeof content.models === 'object') {
-            rawCatalog = Array.isArray(content.models) ? content.models : Object.keys(content.models);
+            rawCatalog = Array.isArray(content.models) ? content.models : Object.entries(content.models).map(([id, evidence]) => ({ ...evidence, id }));
             break;
           }
         }
@@ -116,9 +135,12 @@ function load9RouterCandidates(options = {}) {
   }
 
   const connectionList = Array.isArray(connections) ? connections : [];
+  if (connectionList.length === 0) {
+    return { candidates, unconnected: [{ sourceId: '9router', reason: 'NO_ENABLED_CONNECTIONS_DISCOVERED' }] };
+  }
 
   for (const rawModel of rawCatalog) {
-    const m = String(rawModel).trim();
+    const m = modelId(rawModel);
     // Rule: Tách metadata "default" khỏi model cụ thể
     if (!m || m.toLowerCase() === 'default') continue;
 
@@ -132,11 +154,8 @@ function load9RouterCandidates(options = {}) {
       const matchingConnections = connectionList.filter((conn) => {
         if (conn.enabled === false) return false;
         const connProv = String(conn.provider || conn.prefix || '').toLowerCase();
-        return (
-          connProv === provider.toLowerCase() ||
-          (prefix && connProv === prefix.toLowerCase()) ||
-          (conn.modelAllowlist && Array.isArray(conn.modelAllowlist) && conn.modelAllowlist.includes(m))
-        );
+        return (connProv === provider.toLowerCase() || (prefix && connProv === prefix.toLowerCase())) &&
+          (!Array.isArray(conn.modelAllowlist) || conn.modelAllowlist.includes(m));
       });
 
       if (matchingConnections.length === 0) {
@@ -167,31 +186,11 @@ function load9RouterCandidates(options = {}) {
               connectionId: connId,
               accountRef: accRef,
               prefix,
-              capabilities: options.modelCapabilities?.[m] || ['general_code', 'tool_call'],
+              ...modelEvidence(rawModel, options),
             },
           })
         );
       }
-    } else {
-      // In tests or single-gateway environments without multi-connection metadata:
-      // If connections were explicitly omitted, produce route with gateway-level identity
-      candidates.push(
-        createRouteIdentity({
-          harness: options.harness || 'direct-http',
-          sourceId: '9router',
-          gatewayId: '9router',
-          upstreamProviderId: provider,
-          configuredModelId: m,
-          outboundModelId: outbound,
-          accountRef: '9router-pool',
-          connectionId: UNKNOWN,
-          quotaScopeId: `quota::9router::${prefix || 'direct'}`,
-          metadata: {
-            prefix,
-            capabilities: options.modelCapabilities?.[m] || ['general_code', 'tool_call'],
-          },
-        })
-      );
     }
   }
 
@@ -253,10 +252,11 @@ function loadDirectProviderCandidates(options = {}) {
       continue;
     }
 
-    for (const m of models) {
-      if (String(m).toLowerCase() === 'default') continue;
+    for (const rawModel of models) {
+      const m = modelId(rawModel);
+      if (!m || String(m).toLowerCase() === 'default') continue;
 
-      const accRef = src.accountRef || src.id;
+      const accRef = src.accountRef || UNKNOWN;
       const connId = src.id;
       const prov = src.provider || src.id;
 
@@ -273,7 +273,7 @@ function loadDirectProviderCandidates(options = {}) {
           quotaScopeId: `quota::${prov}::${accRef}`,
           metadata: {
             endpoint: src.endpoint,
-            capabilities: options.modelCapabilities?.[m] || src.capabilities || ['general_code', 'tool_call'],
+            ...modelEvidence(rawModel, options, src),
           },
         })
       );
@@ -299,13 +299,10 @@ function loadAgyPoolCandidates(options = {}) {
       if (!lanes && typeof agyPool.discoverAccounts === 'function') {
         const accountIds = agyPool.discoverAccounts();
         lanes = accountIds.map((laneId) => {
-          let quotaExhausted = false;
-          let realAccountRef = laneId;
+          let quota;
+          let realAccountRef = UNKNOWN;
           try {
-            const quota = typeof agyPool.quotaReading === 'function' ? agyPool.quotaReading(laneId) : null;
-            if (quota && (!quota.available || quota.rows?.every((r) => r.remainingPercent === 0))) {
-              quotaExhausted = true;
-            }
+            quota = typeof agyPool.quotaReading === 'function' ? agyPool.quotaReading(laneId) : null;
             if (quota && quota.account && quota.account.email) {
               realAccountRef = quota.account.email;
             }
@@ -313,7 +310,7 @@ function loadAgyPoolCandidates(options = {}) {
           return {
             laneId,
             accountRef: realAccountRef,
-            quotaExhausted,
+            quota,
           };
         });
       }
@@ -342,9 +339,25 @@ function loadAgyPoolCandidates(options = {}) {
       continue;
     }
 
-    for (const m of models) {
-      if (String(m).toLowerCase() === 'default') continue;
+    for (const rawModel of models) {
+      const m = modelId(rawModel);
+      if (!m || String(m).toLowerCase() === 'default') continue;
 
+      const rows = lane.quota?.rows || lane.rows || [];
+      const evidence = modelEvidence(rawModel, options);
+      const matchingRows = rows.filter((r) => modelId(r) === m ||
+        (Array.isArray(r.models) && r.models.includes(m)) ||
+        (evidence.quotaFamily && r.family === evidence.quotaFamily));
+      const exhausted = matchingRows.some((r) => r.disabled === true ||
+        (r.remainingPercent != null && Number.isFinite(Number(r.remainingPercent)) && Number(r.remainingPercent) <= 0));
+      const known = matchingRows.length > 0 && matchingRows.every((r) =>
+        r.known !== false && r.remainingPercent != null && r.remainingPercent !== '' &&
+        Number.isFinite(Number(r.remainingPercent)));
+      if (lane.quota?.available === false || exhausted || !known) {
+        unconnected.push({ sourceId: 'agy-pool', laneId: lane.laneId, configuredModelId: m,
+          reason: exhausted ? 'AGY_MODEL_QUOTA_EXHAUSTED' : 'AGY_MODEL_QUOTA_UNKNOWN' });
+        continue;
+      }
       candidates.push(
         createRouteIdentity({
           harness: 'agy-pool',
@@ -359,7 +372,7 @@ function loadAgyPoolCandidates(options = {}) {
           metadata: {
             laneId: lane.laneId,
             realAccountRef: lane.accountRef,
-            capabilities: ['general_code', 'tool_call', 'large_context_64k'],
+            ...modelEvidence(rawModel, options),
           },
         })
       );
