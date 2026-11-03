@@ -655,7 +655,7 @@ test('cross_stage_same_fingerprint_retry_preserves_schema', () => {
   assert.equal(chain[1].verdict, 'PASS');
 });
 
-test('retry_with_late_item_id_preserves_schema', () => {
+test('retry_with_late_item_id_refused_without_placeholder_migration', () => {
   const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
   const r1 = ledger.record('writer', {
     attemptId: 'a1',
@@ -670,16 +670,13 @@ test('retry_with_late_item_id_preserves_schema', () => {
     retryLayer: 'pipeline',
     ms: 200,
   });
-  assert.equal(r2.ok, true);
+  assert.equal(r2.ok, false);
+  assert.equal(r2.cause, Cause.NO_PROGRESS);
 
   const state = ledger.load();
   assert.equal(state.goal.attempts, 1);
-  assert.equal(state.items['T'].spent.attempts, 1);
-
-  const runs = ledger.getRuns();
-  assert.equal(runs.length, 2);
-  const chainT = ledger.getChain('T');
-  assert.equal(chainT.length, 2);
+  assert.equal(state.items['a1'].spent.attempts, 1);
+  assert.equal(Object.hasOwn(state.items, 'T'), false);
 });
 
 test('run-ledger output loads through ProgressLedger.load without LEDGER_CORRUPT', () => {
@@ -736,6 +733,21 @@ test('retry_with_late_goal_id_counts_goal_attempt', () => {
   assert.equal(state.items['ITEM-T'].spent.attempts, 1);
   assert.equal(state.goal.attempts, 1);
   assert.equal(ledger.getRuns('ITEM-T').length, 2);
+
+  // A third retry layer with the same goal continues to count the attempt once
+  const r3 = ledger.record('writer', {
+    itemId: 'ITEM-T',
+    attemptId: 'a1',
+    retryLayer: 'cli',
+    goalId: 'G',
+    ms: 50,
+  });
+  assert.equal(r3.ok, true);
+
+  const state2 = ledger.load();
+  assert.equal(state2.goals['G'].attempts, 1);
+  assert.equal(state2.items['ITEM-T'].spent.attempts, 1);
+  assert.equal(state2.goal.attempts, 1);
 });
 
 test('known_token_in_flight_completion_tracks_unknown_tokens', () => {
@@ -951,25 +963,50 @@ test('uppercase_http_scheme_masks_userinfo', () => {
   assert.equal(content.includes('pass123'), false);
 });
 
-test('prototype_named_item_cannot_bypass_attempt_cap', () => {
+test('prototype_named_item_id_is_refused', () => {
   const ledger = new RunLedger({
     file: path.join(tmpDir(), 'ledger.json'),
     limits: { item: { attempts: 1 } },
   });
-  // First record with __proto__ as the item id must succeed and persist an own entry.
-  const r1 = ledger.record('writer', { itemId: '__proto__', attemptId: 'a1', ms: 100 });
-  assert.equal(r1.ok, true);
+  assert.throws(
+    () => ledger.record('writer', { itemId: '__proto__', attemptId: 'a1', ms: 100 }),
+    /RUN_LEDGER_REFUSED: invalid itemId __proto__/
+  );
+  assert.throws(
+    () => ledger.record('writer', { itemId: 'constructor', attemptId: 'a1', ms: 100 }),
+    /RUN_LEDGER_REFUSED: invalid itemId constructor/
+  );
+  assert.throws(
+    () => ledger.record('writer', { itemId: 'prototype', attemptId: 'a1', ms: 100 }),
+    /RUN_LEDGER_REFUSED: invalid itemId prototype/
+  );
+  assert.throws(
+    () => ledger.admit('__proto__', 'writer', 'f1'),
+    /RUN_LEDGER_REFUSED: invalid itemId __proto__/
+  );
+});
 
-  const state1 = ledger.load();
-  assert.equal(Object.hasOwn(state1.items, '__proto__'), true);
-  assert.equal(state1.items['__proto__'].spent.attempts, 1);
+test('item A/B same attempt id cap=1 refuses B and leaves A exhausted', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 } },
+  });
+  // Item A uses attempt a1. With cap=1, A is now exhausted.
+  const rA = ledger.record('writer', { itemId: 'ITEM-A', attemptId: 'a1', ms: 100 });
+  assert.equal(rA.ok, true);
 
-  // A second distinct attempt on the same item must be refused (cap=1).
-  const r2 = ledger.record('writer', { itemId: '__proto__', attemptId: 'a2', ms: 100 });
-  assert.equal(r2.ok, false);
-  assert.equal(r2.cause, Cause.ATTEMPTS_EXHAUSTED);
+  // Item B attempts to reuse attempt a1 -> refused because a1 is owned by Item A.
+  const rB = ledger.record('writer', { itemId: 'ITEM-B', attemptId: 'a1', ms: 200 });
+  assert.equal(rB.ok, false);
+  assert.equal(rB.cause, Cause.NO_PROGRESS);
 
-  // Verify the item still has only 1 attempt.
-  const state2 = ledger.load();
-  assert.equal(state2.items['__proto__'].spent.attempts, 1);
+  // Item A remains exhausted and cannot perform another attempt.
+  const rA2 = ledger.record('writer', { itemId: 'ITEM-A', attemptId: 'a2', ms: 50 });
+  assert.equal(rA2.ok, false);
+  assert.equal(rA2.cause, Cause.ATTEMPTS_EXHAUSTED);
+
+  const state = ledger.load();
+  assert.equal(state.items['ITEM-A'].spent.attempts, 1);
+  assert.equal(Object.hasOwn(state.items, 'ITEM-B'), false);
+  assert.equal(state.goal.attempts, 1);
 });

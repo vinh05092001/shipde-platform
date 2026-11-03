@@ -6,16 +6,26 @@ const { ProgressLedger, Cause, fingerprint } = require('./work-guard');
 
 const VALID_STAGES = new Set(['writer', 'reviewer', 'repair', 'fallback', 'review']);
 const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
+const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function maskCredentials(v) {
   if (!v) return v;
   if (typeof v === 'string') {
-    // Strip the whole userinfo section: a credential may sit in the username as well
-    // as in the password, so masking only the password would persist the username one.
-    // Use new URL() first (handles any scheme case); fall back to a case-insensitive
-    // regex for strings that look like URLs but cannot be parsed.
-    const masked = v.replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
-    return masked.replace(/([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)[^@/\s]*@/gi, '$1');
+    let s = v.replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
+    const sm = s.match(/^([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)/);
+    try {
+      const u = new URL(s);
+      if (u.username || u.password) {
+        u.username = '';
+        u.password = '';
+      }
+      let res = u.toString();
+      if (!s.endsWith('/') && res.endsWith('/')) res = res.slice(0, -1);
+      if (sm) res = res.replace(/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//, sm[1]);
+      return res;
+    } catch (_) {
+      return s.replace(/([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)[^@/\s]*@/gi, '$1');
+    }
   }
   if (Array.isArray(v)) {
     return v.map((item) => maskCredentials(item));
@@ -65,6 +75,7 @@ class RunLedger {
     this.limits = o.limits || this.progressLedger.limits || {};
     this.progressLedger.limits = this.limits;
     this.now = o.now || this.progressLedger.now || (() => Date.now());
+    this.progressLedger.now = this.now;
     if (this.file) {
       const d = path.dirname(this.file);
       if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
@@ -96,60 +107,49 @@ class RunLedger {
       stage = arg1;
       opts = {};
     }
-    if (opts.reserve) {
-      const actualFp =
-        fp ||
-        opts.fp ||
-        opts.fingerprint ||
-        (opts.headSha
-          ? fingerprint({ headSha: opts.headSha, baseSha: opts.baseSha, inputs: opts.inputs })
-          : null);
-      if (itemId && stage && actualFp) {
-        this.progressLedger.limits = this.limits;
-        const res = this.progressLedger.admit(itemId, stage, actualFp, opts);
-        if (res && res.ok && opts.goalId) {
-          this.progressLedger.locked(() => {
-            const s = this.progressLedger.load();
-            const it = s.items && s.items[itemId];
-            const stObj = it && it.stages && it.stages[stage];
-            const cur = stObj && stObj.fps && stObj.fps[actualFp];
-            // If the goal was already charged to this entry (either this call set it
-            // or a concurrent record already set it), just persist and return.
-            if (cur && cur.goalId === opts.goalId) {
-              writeJson(this.file, s);
-              return;
-            }
-            // No fp entry: the admission may have been reconciled away; nothing to charge.
-            if (!cur) {
-              writeJson(this.file, s);
-              return;
-            }
-            // Annotate the fp entry with the goalId regardless of its outcome, so
-            // subsequent calls won't double-charge.
-            cur.goalId = opts.goalId;
-            s.goals = s.goals || {};
-            const gAcc = s.goals[opts.goalId] || {
-              attempts: 0,
-              ms: 0,
-              tokens: 0,
-              tokensUnknown: 0,
-              unknownTokens: 0,
-            };
-            gAcc.attempts = (gAcc.attempts || 0) + 1;
-            s.goals[opts.goalId] = gAcc;
-            writeJson(this.file, s);
-          });
-        }
-        return res;
+    if (itemId && FORBIDDEN_IDS.has(itemId)) {
+      throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + itemId);
+    }
+    this.progressLedger.limits = this.limits;
+    const actualFp =
+      fp ||
+      (opts.headSha
+        ? fingerprint({ headSha: opts.headSha, baseSha: opts.baseSha, inputs: opts.inputs })
+        : '__probe__' + (opts.attemptId || ''));
+
+    if (itemId && stage) {
+      const res = this.progressLedger.admit(itemId, stage, actualFp, opts);
+      if (res && res.ok && opts.reserve && opts.goalId) {
+        this.progressLedger.locked(() => {
+          const s = this.progressLedger.load();
+          const it = s.items && s.items[itemId];
+          const stObj = it && it.stages && it.stages[stage];
+          const cur = stObj && stObj.fps && stObj.fps[actualFp];
+          if (cur && cur.goalId === opts.goalId) return;
+          const alreadyChargedInRuns =
+            s.goals &&
+            s.goals[opts.goalId] &&
+            (s.runs || []).some((r) => r.goalId === opts.goalId && r.itemId === itemId);
+          if (alreadyChargedInRuns) return;
+          if (cur) cur.goalId = opts.goalId;
+          s.goals = s.goals || Object.create(null);
+          const gAcc = s.goals[opts.goalId] || {
+            attempts: 0,
+            ms: 0,
+            tokens: 0,
+            tokensUnknown: 0,
+            unknownTokens: 0,
+          };
+          gAcc.attempts = (gAcc.attempts || 0) + 1;
+          s.goals[opts.goalId] = gAcc;
+          writeJson(this.file, s);
+        });
       }
+      return res;
     }
     const s = this.progressLedger.load();
-    const it = (itemId && s.items && s.items[itemId]) || {};
-    if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
     const over = exceeded(s.goal, this.limits.goal);
     if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
-    const own = exceeded(it.spent || {}, this.limits.item);
-    if (own) return { ok: false, cause: limitCause(own), limit: own };
     return { ok: true };
   }
 
@@ -190,123 +190,34 @@ class RunLedger {
     ) {
       throw new Error('RUN_LEDGER_REFUSED: invalid tokens');
     }
+
+    const attemptKey = String(opts.attemptId || opts.jobId);
+    let itemId = opts.itemId;
+    if (itemId && FORBIDDEN_IDS.has(itemId)) {
+      throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + itemId);
+    }
+
     return this.progressLedger.locked(() => {
+      this.progressLedger.limits = this.limits;
       const s = this.progressLedger.load();
-      const attemptKey = opts.attemptId || opts.jobId;
-      let itemId = opts.itemId;
+
       if (!itemId && attemptKey && s.runs) {
         const priorRun = s.runs.find((r) => r.attemptId === attemptKey && r.itemId);
         if (priorRun) itemId = priorRun.itemId;
       }
-      // A placeholder is an item created from this attempt alone with no explicit
-      // itemId in any prior run that named it. A real item named by jobId that
-      // holds only other attempts is not a placeholder; migrating it would
-      // transfer another item's budget and chain on an identifier coincidence.
-      const isPlaceholder = (key) => {
-        const cand = key && Object.hasOwn(s.items, key) ? s.items[key] : null;
-        if (!cand) return false;
-        const keys = Object.keys(cand.seenAttempts || {});
-        const chain = (cand.runs || []).map((r) => r.attemptId);
-        // If any global run or any item run explicitly names this key as its itemId,
-        // then it is an established item, not a placeholder created from an attempt key.
-        const namedExplicitly = (s.runs || []).some((r) => r.itemId === key);
-        return (
-          !namedExplicitly &&
-          (keys.length === 0 || (keys.length === 1 && keys[0] === attemptKey)) &&
-          chain.every((a) => a === attemptKey)
-        );
-      };
-      const prevPlaceholderKey =
-        itemId &&
-        ((opts.attemptId !== itemId && opts.attemptId && isPlaceholder(opts.attemptId)
-          ? opts.attemptId
-          : null) ||
-          (opts.jobId !== itemId && opts.jobId && isPlaceholder(opts.jobId) ? opts.jobId : null));
-      if (prevPlaceholderKey && Object.hasOwn(s.items, prevPlaceholderKey)) {
-        const placeholder = s.items[prevPlaceholderKey];
-        delete s.items[prevPlaceholderKey];
-        if (!Object.hasOwn(s.items, itemId)) {
-          s.items[itemId] = placeholder;
-        } else {
-          const dest = s.items[itemId];
-          dest.spent = dest.spent || {
-            attempts: 0,
-            ms: 0,
-            tokens: 0,
-            tokensUnknown: 0,
-            unknownTokens: 0,
-          };
-          const plSpent = placeholder.spent || {};
-          for (const k of ['attempts', 'ms', 'tokens', 'tokensUnknown', 'unknownTokens']) {
-            dest.spent[k] = (dest.spent[k] || 0) + (plSpent[k] || 0);
-          }
-          dest.stages = dest.stages || {};
-          for (const [stName, stData] of Object.entries(placeholder.stages || {})) {
-            dest.stages[stName] = dest.stages[stName] || { fps: {} };
-            dest.stages[stName].fps = Object.assign(
-              dest.stages[stName].fps || {},
-              stData.fps || {}
-            );
-          }
-          dest.seenAttempts = Object.assign(
-            dest.seenAttempts || {},
-            placeholder.seenAttempts || {}
-          );
-          dest.runs = (dest.runs || []).concat(placeholder.runs || []);
-        }
-        for (const r of s.items[itemId].runs || []) {
-          if (r.attemptId === attemptKey) r.itemId = itemId;
-        }
-        for (const r of s.runs || []) {
-          if (r.attemptId === attemptKey) r.itemId = itemId;
-        }
+
+      const targetItemId = itemId || attemptKey;
+      if (FORBIDDEN_IDS.has(targetItemId)) {
+        throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + targetItemId);
       }
 
-      const itemKey = itemId || attemptKey;
-      const it = (itemKey && Object.hasOwn(s.items, itemKey) && s.items[itemKey]) || {
-        spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
-        stages: {},
-      };
-      it.spent = it.spent || {
-        attempts: 0,
-        ms: 0,
-        tokens: 0,
-        tokensUnknown: 0,
-        unknownTokens: 0,
-      };
-      it.spent.attempts = it.spent.attempts || 0;
-      it.spent.ms = it.spent.ms || 0;
-      it.spent.tokens = it.spent.tokens || 0;
-      it.spent.tokensUnknown = it.spent.tokensUnknown || 0;
-      it.spent.unknownTokens = it.spent.unknownTokens || 0;
-      it.stages = it.stages || {};
-      it.seenAttempts = it.seenAttempts || {};
-      s.seenAttempts = s.seenAttempts || {};
-
-      s.goal = s.goal || {
-        attempts: 0,
-        ms: 0,
-        tokens: 0,
-        tokensUnknown: 0,
-        unknownTokens: 0,
-      };
-      s.goal.attempts = s.goal.attempts || 0;
-      s.goal.ms = s.goal.ms || 0;
-      s.goal.tokens = s.goal.tokens || 0;
-      s.goal.tokensUnknown = s.goal.tokensUnknown || 0;
-      s.goal.unknownTokens = s.goal.unknownTokens || 0;
-
-      const isNew =
-        !Object.hasOwn(it.seenAttempts, attemptKey) && !Object.hasOwn(s.seenAttempts, attemptKey);
-      // The attempt is already charged to another item: charging it here as well would
-      // either double the budget or leave this item's attempts below its own records.
-      if (!isNew && itemId) {
-        const owner = Object.keys(s.items || {}).find(
-          (k) =>
-            k !== itemId && Object.hasOwn((s.items[k] && s.items[k].seenAttempts) || {}, attemptKey)
+      if (itemId && s.runs) {
+        const otherOwner = s.runs.find(
+          (r) => r.attemptId === attemptKey && r.itemId && r.itemId !== itemId
         );
-        if (owner)
+        if (otherOwner) {
           return { ok: false, cause: Cause.NO_PROGRESS, reason: 'attempt-owned-by-other-item' };
+        }
       }
 
       const runReviewSha = opts.reviewSha || opts.headSha || null;
@@ -315,10 +226,10 @@ class RunLedger {
         opts.fingerprint ||
         (runReviewSha
           ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs })
-          : attemptKey
-            ? 'att-' + attemptKey
-            : 'fp-' + ((s.runs && s.runs.length) || 0));
-      const prev = ((it.stages[st] || {}).fps || {})[fp];
+          : 'att-' + attemptKey);
+
+      const it = s.items[targetItemId] || null;
+      const prev = it && it.stages && it.stages[st] && it.stages[st].fps && it.stages[st].fps[fp];
       const reserved = Boolean(
         prev &&
         prev.outcome === 'IN_FLIGHT' &&
@@ -326,88 +237,157 @@ class RunLedger {
         (!prev.attemptId || prev.attemptId === attemptKey)
       );
 
-      const consumesAttempt = isNew && !reserved;
+      const isExistingAttempt =
+        !reserved &&
+        (s.runs || []).some((r) => r.attemptId === attemptKey && (!itemId || r.itemId === itemId));
 
-      if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
+      const consumesAttempt = !isExistingAttempt && !reserved;
+
+      if (it && it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
       const over = exceeded(s.goal, this.limits.goal, { ignoreAttempts: !consumesAttempt });
       if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
-      const own = exceeded(it.spent, this.limits.item, { ignoreAttempts: !consumesAttempt });
+      const own = exceeded((it && it.spent) || {}, this.limits.item, {
+        ignoreAttempts: !consumesAttempt,
+      });
       if (own) return { ok: false, cause: limitCause(own), limit: own };
 
-      Object.defineProperty(it.seenAttempts, attemptKey, {
-        value: true,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-      Object.defineProperty(s.seenAttempts, attemptKey, {
-        value: true,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
       const ms = Number(opts.ms) || 0;
       const hasTokens = Number.isFinite(opts.tokens);
       const tokens = hasTokens ? opts.tokens : 'UNKNOWN';
       const tokenEnforcement = hasTokens ? opts.tokenEnforcement || 'ENFORCED' : 'UNENFORCED';
-      const prevImputed = prev && prev.imputedTokens !== undefined ? Number(prev.imputedTokens) : 0;
-      const prevHasKnownTokens = Boolean(
-        (prev && prev.hasTokens) ||
-        (prev &&
-          (s.runs || []).some((r) => r.attemptId === attemptKey && Number.isFinite(r.tokens)))
-      );
-      const prevHasUnknownCredit = Boolean(reserved && !prevHasKnownTokens);
-      for (const acc of [it.spent, s.goal]) {
-        if (consumesAttempt) acc.attempts += 1;
-        acc.ms += ms;
-        if (hasTokens) {
-          acc.tokens += tokens;
-          if (prevHasUnknownCredit) {
-            acc.unknownTokens = Math.max(0, (acc.unknownTokens || 0) - prevImputed);
-            acc.tokensUnknown = Math.max(0, (acc.tokensUnknown || 0) - 1);
+      const runVerdict = String(opts.verdict || opts.outcome || 'DONE');
+
+      if (!isExistingAttempt) {
+        if (runVerdict === 'IN_FLIGHT') {
+          const perAttemptTokens =
+            this.limits.item && this.limits.item.tokens ? this.limits.item.tokens : 0;
+          const curState = this.progressLedger.load();
+          const curIt = curState.items[targetItemId] || {
+            spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+            stages: {},
+          };
+          curIt.spent = curIt.spent || {
+            attempts: 0,
+            ms: 0,
+            tokens: 0,
+            tokensUnknown: 0,
+            unknownTokens: 0,
+          };
+          curIt.stages = curIt.stages || {};
+          curState.items[targetItemId] = curIt;
+          for (const acc of [curIt.spent, curState.goal]) {
+            acc.attempts = (acc.attempts || 0) + 1;
+            acc.ms = (acc.ms || 0) + ms;
+            if (hasTokens) {
+              acc.tokens = (acc.tokens || 0) + tokens;
+            } else {
+              acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+              acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
+            }
           }
+          const curSt = curIt.stages[st] || { fps: {} };
+          curSt.fps = curSt.fps || {};
+          curSt.fps[fp] = {
+            outcome: 'IN_FLIGHT',
+            pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
+            at: this.now(),
+            imputedTokens: hasTokens ? 0 : perAttemptTokens,
+            attemptId: attemptKey,
+            hasTokens,
+          };
+          if (opts.goalId) curSt.fps[fp].goalId = opts.goalId;
+          curIt.stages[st] = curSt;
+          writeJson(this.file, curState);
         } else {
-          if (!prevHasUnknownCredit) {
-            acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+          this.progressLedger.recordUnlocked(targetItemId, st, fp, runVerdict, {
+            ms,
+            tokens: hasTokens ? opts.tokens : undefined,
+          });
+          const curState = this.progressLedger.load();
+          const curIt = curState.items[targetItemId];
+          const curFp = curIt && curIt.stages[st] && curIt.stages[st].fps[fp];
+          if (curFp) {
+            curFp.attemptId = attemptKey;
+            if (opts.goalId) curFp.goalId = opts.goalId;
+            if (
+              reserved &&
+              (s.runs || []).some((r) => r.attemptId === attemptKey && Number.isFinite(r.tokens)) &&
+              !hasTokens
+            ) {
+              curIt.spent.tokensUnknown = (curIt.spent.tokensUnknown || 0) + 1;
+              curState.goal.tokensUnknown = (curState.goal.tokensUnknown || 0) + 1;
+            }
+            writeJson(this.file, curState);
           }
         }
+      } else {
+        const curState = this.progressLedger.load();
+        const curIt = curState.items[targetItemId];
+        if (curIt) {
+          curIt.spent.ms += ms;
+          curState.goal.ms += ms;
+          if (hasTokens) {
+            curIt.spent.tokens += tokens;
+            curState.goal.tokens += tokens;
+          }
+          if (curIt.stages) {
+            for (const [sName, stageObj] of Object.entries(curIt.stages)) {
+              if (stageObj && stageObj.fps) {
+                for (const [oldFp, rec] of Object.entries(stageObj.fps)) {
+                  if ((sName !== st || oldFp !== fp) && rec && rec.attemptId === attemptKey) {
+                    delete stageObj.fps[oldFp];
+                  }
+                }
+              }
+            }
+          }
+          const curSt = curIt.stages[st] || { fps: {} };
+          curSt.fps = curSt.fps || {};
+          curSt.fps[fp] = {
+            outcome: runVerdict,
+            attemptId: attemptKey,
+            at: this.now(),
+            imputedTokens: hasTokens ? 0 : 0,
+          };
+          if (opts.goalId) curSt.fps[fp].goalId = opts.goalId;
+          curIt.stages[st] = curSt;
+          writeJson(this.file, curState);
+        }
       }
+
+      const updatedState = this.progressLedger.load();
+
       if (opts.goalId) {
-        s.goals = s.goals || {};
-        const gAcc = s.goals[opts.goalId] || {
+        updatedState.goals = updatedState.goals || Object.create(null);
+        const gAcc = updatedState.goals[opts.goalId] || {
           attempts: 0,
           ms: 0,
           tokens: 0,
           tokensUnknown: 0,
           unknownTokens: 0,
         };
-        gAcc.attempts = gAcc.attempts || 0;
-        gAcc.ms = gAcc.ms || 0;
-        gAcc.tokens = gAcc.tokens || 0;
-        gAcc.tokensUnknown = gAcc.tokensUnknown || 0;
-        gAcc.unknownTokens = gAcc.unknownTokens || 0;
-        // Charged when the item was first charged to this goal (a reservation admitted
-        // under it) or the item charged it later (a run already recorded for it). A
-        // retry that only now names the goal counts the existing attempt once here.
         const goalAlreadyCharged =
           Boolean(reserved && prev && prev.goalId === opts.goalId) ||
-          (s.runs || []).some((r) => r.attemptId === attemptKey && r.goalId === opts.goalId);
-        if (!goalAlreadyCharged) gAcc.attempts += 1;
-        gAcc.ms += ms;
-        if (hasTokens) gAcc.tokens += tokens;
+          (updatedState.runs || []).some(
+            (r) => r.attemptId === attemptKey && r.goalId === opts.goalId
+          );
+        if (!goalAlreadyCharged) gAcc.attempts = (gAcc.attempts || 0) + 1;
+        gAcc.ms = (gAcc.ms || 0) + ms;
+        if (hasTokens) gAcc.tokens = (gAcc.tokens || 0) + tokens;
         else gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
-        s.goals[opts.goalId] = gAcc;
+        updatedState.goals[opts.goalId] = gAcc;
       }
+
       const run = {
         decisionId: opts.decisionId || null,
         jobId: opts.jobId || null,
-        attemptId: opts.attemptId || opts.jobId || null,
+        attemptId: attemptKey,
         launch: opts.launch !== undefined ? opts.launch : null,
         exit: opts.exit !== undefined ? opts.exit : null,
         reviewSha: runReviewSha,
         verdict: opts.verdict || opts.outcome || null,
         stage: st,
-        itemId: itemId || null,
+        itemId: targetItemId,
         goalId: opts.goalId || null,
         retryLayer: opts.retryLayer || null,
         ms,
@@ -416,74 +396,37 @@ class RunLedger {
         route: maskCredentials(opts.route || opts.routeIdentity || null),
         at: this.now(),
       };
-      s.runs = s.runs || [];
-      s.runs.push(run);
-      it.runs = it.runs || [];
-      it.runs.push(run);
-      it.stages[st] = it.stages[st] || { fps: {} };
-      it.stages[st].fps = it.stages[st].fps || {};
-      if (!isNew) {
-        for (const stageObj of Object.values(it.stages)) {
-          if (stageObj && stageObj.fps) {
-            for (const [oldFp, rec] of Object.entries(stageObj.fps)) {
-              if (rec && rec.attemptId === attemptKey) {
-                delete stageObj.fps[oldFp];
-              }
-            }
-          }
-        }
+
+      updatedState.runs = updatedState.runs || [];
+      updatedState.runs.push(run);
+
+      updatedState.chains = updatedState.chains || Object.create(null);
+      updatedState.chains[targetItemId] = updatedState.chains[targetItemId] || [];
+      updatedState.chains[targetItemId].push(run);
+
+      if (updatedState.items && updatedState.items[targetItemId]) {
+        updatedState.items[targetItemId].runs = updatedState.chains[targetItemId];
       }
-      const runVerdict = String(run.verdict || 'DONE');
-      const fpsRecord = {
-        outcome: runVerdict,
-        attemptId: attemptKey,
-        at: this.now(),
-      };
-      if (runVerdict === 'IN_FLIGHT') {
-        fpsRecord.pid =
-          Number.isInteger(opts.pid) && opts.pid > 0
-            ? opts.pid
-            : prev && Number.isInteger(prev.pid) && prev.pid > 0
-              ? prev.pid
-              : process.pid;
-        fpsRecord.imputedTokens =
-          opts.imputedTokens !== undefined &&
-          Number.isFinite(opts.imputedTokens) &&
-          opts.imputedTokens >= 0
-            ? opts.imputedTokens
-            : prev && prev.imputedTokens !== undefined && Number.isFinite(prev.imputedTokens)
-              ? prev.imputedTokens
-              : 0;
-        fpsRecord.hasTokens = hasTokens;
-      } else if (reserved && prev && prev.imputedTokens !== undefined) {
-        fpsRecord.imputedTokens = hasTokens ? 0 : prev.imputedTokens;
-      }
-      if (opts.goalId) {
-        fpsRecord.goalId = opts.goalId;
-      }
-      it.stages[st].fps[fp] = fpsRecord;
-      if (itemKey) {
-        // Use Object.defineProperty so that a key like '__proto__' creates an own
-        // property instead of mutating the object's prototype.
-        Object.defineProperty(s.items, itemKey, {
-          value: it,
-          enumerable: true,
-          writable: true,
-          configurable: true,
-        });
-      }
-      writeJson(this.file, s);
+
+      writeJson(this.file, updatedState);
       return { ok: true, run };
     });
   }
 
   getRuns(itemId) {
     const s = this.progressLedger.load();
-    return (itemId ? s.items[itemId] && s.items[itemId].runs : s.runs) || [];
+    if (itemId) {
+      if (s.chains && s.chains[itemId]) return s.chains[itemId];
+      if (s.items && s.items[itemId] && s.items[itemId].runs) return s.items[itemId].runs;
+      return [];
+    }
+    return s.runs || [];
   }
+
   getChain(itemId) {
     return this.getRuns(itemId);
   }
+
   getSummary(itemId) {
     const s = this.progressLedger.load();
     return itemId
@@ -496,9 +439,11 @@ class RunLedger {
         }
       : s.goal;
   }
+
   block(itemId, reason) {
     return this.progressLedger.block(itemId, reason);
   }
+
   unblock(itemId) {
     return this.progressLedger.unblock(itemId);
   }
