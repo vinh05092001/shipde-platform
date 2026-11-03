@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-158` |
 | Feature ID | `N/A — advisory writer/reviewer context packing` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `273` |
+| Delivery order | `293` |
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
@@ -125,9 +125,18 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | 3 | `53f3059d8d78f94bc93e52a790e4af000d145874` | `CHANGES_REQUIRED` | P1: CI failing (`ai-brain-tests` at `repo-integration-group-7.test.js`, `contract` on PR body placeholders and checklist). |
 | 4 | `b800e57b392ad7da106717b78aa95e697f112833` | `CHANGES_REQUIRED` | Round 27 findings: P2 missing argument value disables token ceiling; P1 failure cleanup deletes existing user file before output. |
 | 5 | `58738e10f47255771cba8630dc54e53ad334e390` | `CHANGES_REQUIRED` | Round 28 findings: P1 destination aliases bypass collision protection and overwrite selected source files; P2 publication failure can destroy existing destination; P2 contradictory handoff evidence. |
-| 6 | this review repair commit | `READY_FOR_CODEX` | Round 28 findings: P1 destination alias and ancestor canonical resolution with collision/containment protection; P2 publication via temporary sibling file and atomic replacement; P2 historical handoff evidence clearly labeled with SHAs. |
+| 6 | `2466e28b45d68e58c5794411c1d1a8fc4082074d` | `CHANGES_REQUIRED` | Round 28 safety repairs are present; latest review still blocks duplicate delivery order and lacks verified current remote CI. |
+| 7 | current local repair tree | `READY_FOR_CODEX` | Duplicate delivery order changed to unused `293` in this Work Item and its sole register row. Negative registration regression and unchanged documentation validator fail before the fix and pass afterward; local verification and sandbox limitations are recorded in `.oc/pr-body.md`. No independent PASS or remote CI success claimed. |
 
-## Review repair evidence (2026-11-03)
+## Current review repair evidence (2026-11-03)
+
+- Read `.oc/review.txt` at reviewed SHA `2466e28b45d68e58c5794411c1d1a8fc4082074d` and all supplied rounds in `.oc/history-before-1700.md` (24, 26, 27, 28, 30). `.oc/history.md` is absent.
+- Finding 4 (P1): Delivery order `273` collided with TASK-AI-162. Only TASK-AI-158's row moves to unused `293`, above the register's previous maximum `292`; the Work Item control field matches. No other Work Item or register row changes.
+- Test-first evidence: `has exactly one register row with an unused numeric delivery order` failed with `2 !== 1` at order `273`. The unchanged `validate_docs.py` simultaneously failed with `feature-register-delivery-order-invalid`. After repair both registration tests pass, and the validator passes (237 Markdown files, 272 delivery rows).
+- AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 40/40. Test fixtures now live only under this worktree's `.oc/tmp`.
+- Current local command results and every reviewer category are recorded in `.oc/pr-body.md`. Historical claims below describe earlier author reports; they are not current verification or independent approval.
+
+## Historical review repair evidence (through `2466e28b45d68e58c5794411c1d1a8fc4082074d`)
 - Round 28 Finding 10 (P1 — destination aliases bypass collision protection): `resolveExistingAncestorsAndAliases` resolves the canonical destination and all existing ancestors before validation. Repository containment is checked against canonical root for both lexical and canonical paths. Input/output collisions are checked across lexical relative path, canonical relative path, exact canonical path resolution, `sameFileIdentity` (inode and device comparison), glob pattern matching, and input normalization (handling `./` prefixes and redundant slashes). Automated negative tests cover symlinks to source files, directory aliases to source folders, symlinked directories pointing outside the repository, destination aliases when input path uses `./` prefix, and hardlink aliases to source files. Source files are strictly preserved.
 - Round 28 Finding 11 (P2 — publication failure can destroy existing destination): `publishOutput` now publishes packs through a temporary sibling file (`.<filename>.tmp-<pid>-<ts>-<rand>`) in the destination directory and performs atomic replacement via `fs.renameSync`. If copying to the sibling or replacing the destination fails, the sibling is removed and the original destination file is completely untouched. Automated negative tests prove that existing files survive simulated rename and copy publication failures.
 - Round 28 Finding 4 (P2 — contradictory handoff evidence): Marked historical CI evidence with its exact reviewed SHA `4e2ec65df747ccf9ac5857e05379c8fbe2add34b` and documented its resolution in `53f3059d8d78f94bc93e52a790e4af000d145874` where allowed paths were expanded to include `GROUP-7-PRODUCT-TOOLCHAIN.md`. Updated review history tracking to include rounds 26, 27, and 28.
@@ -142,9 +151,9 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 - Local checks: `pnpm lint` passes all 12 Turbo tasks and root scripts ESLint; `pnpm typecheck` passes the root check and all 12 Turbo tasks. `git diff --check origin/main...HEAD` and `git diff --check` pass. The no-hardcode guard passes. Windows commands use the installed `pnpm.cmd` shim.
 - `pnpm format:check` reports only the pre-existing, untouched `.oc/pr-body-template.md`; the modified local body is formatted. The root formatting gate has not been changed.
 - API verification: With local database services running, foundational API, authentication, session lifecycle, invitations, and user management unit and Supertest suites pass locally (one unrelated assertion in `rbac.unit.spec.ts` expects Unix `\n` line endings in `openapi.yaml`, which checks out as CRLF on Windows; that file is outside TASK-AI-158 allowed paths).
-- Historical CI note at SHA `4e2ec65df747ccf9ac5857e05379c8fbe2add34b`: `ai-brain-tests` failed at `tools/ai-brain/test/repo-integration-group-7.test.js:68` because `GROUP-7-PRODUCT-TOOLCHAIN.md` snapshot lacked `repomix: 1.18.1`. Resolved at SHA `53f3059d8d78f94bc93e52a790e4af000d145874` after allowed paths were expanded to include `GROUP-7-PRODUCT-TOOLCHAIN.md`. Current CI runs pass green (3/3 pass).
-- Historical report note: Review findings for rounds 26, 27, and 28 are fully tracked and recorded in `.oc/history.md` and `.oc/review.txt`.
+- Historical CI note at SHA `4e2ec65df747ccf9ac5857e05379c8fbe2add34b`: `ai-brain-tests` failed at `tools/ai-brain/test/repo-integration-group-7.test.js:68` because `GROUP-7-PRODUCT-TOOLCHAIN.md` snapshot lacked `repomix: 1.18.1`. Snapshot repair was recorded at SHA `53f3059d8d78f94bc93e52a790e4af000d145874`; current local Group 7 tests pass 3/3. Current remote CI is unverified.
+- Historical reports for rounds 24, 26, 27, 28 and 30 are supplied in `.oc/history-before-1700.md`; the latest review is `.oc/review.txt`. `.oc/history.md` is absent.
 
 ## Residual limitations
 
-- None. All visible failure paths and P0/P1/P2 findings from review rounds 27 and 28 resolved with automated test evidence.
+- The register defect and all packer acceptance rows pass locally. Fetch/merge/staging are `BLOCKED_BY_SANDBOX` because `.git/FETCH_HEAD`, `.git/ORIG_HEAD.lock` and `.git/index.lock` writes are denied; current `origin/main` could not be refreshed and no commit was created. The sandbox also denies the Docker named pipe and host quota-state/launch-result paths. API/root tests fail at an unchanged RBAC LF/CRLF assertion; formatting reports four unchanged coordinator inputs; native Gitleaks 8.30.1 flags unchanged `DASHBOARD.html:115`. These files are outside this Work Item. See `.oc/pr-body.md` for exact command outcomes and preserved repair evidence. Current remote CI and independent review remain unverified.

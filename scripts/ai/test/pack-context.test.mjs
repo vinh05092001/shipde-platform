@@ -4,7 +4,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -24,6 +23,40 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+const TEST_TMP = path.join(REPO_ROOT, '.oc', 'tmp');
+fs.mkdirSync(TEST_TMP, { recursive: true });
+
+describe('TASK-AI-158 delivery registration', () => {
+  const register = fs.readFileSync(
+    path.join(REPO_ROOT, 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'),
+    'utf8',
+  );
+  const itemRows = register.split(/\r?\n/).filter((line) =>
+    /^"\d+","S00","AI workflow","TASK-AI-158",/.test(line),
+  );
+
+  test('has exactly one register row with an unused numeric delivery order', () => {
+    assert.equal(itemRows.length, 1, 'TASK-AI-158 must have exactly one register row');
+    const order = itemRows[0].match(/^"(\d+)"/)[1];
+    const orders = [...register.matchAll(/^"(\d+)"/gm)].map((match) => match[1]);
+    assert.equal(
+      orders.filter((value) => value === order).length,
+      1,
+      `TASK-AI-158 delivery order ${order} is already assigned to another Work Item`,
+    );
+  });
+
+  test('Work Item delivery order matches its register row', () => {
+    assert.equal(itemRows.length, 1);
+    const workItem = fs.readFileSync(
+      path.join(REPO_ROOT, 'docs/product-spec/work-items/TASK-AI-158.md'),
+      'utf8',
+    );
+    const order = workItem.match(/^\| Delivery order \| `(\d+)` \|\r?$/m);
+    assert.ok(order, 'Work Item must declare a numeric delivery order');
+    assert.equal(order[1], itemRows[0].match(/^"(\d+)"/)[1]);
+  });
+});
 
 function linkRepomixPackage(root) {
   const realPkg = path.join(REPO_ROOT, 'node_modules', 'repomix');
@@ -37,7 +70,7 @@ function linkRepomixPackage(root) {
 }
 
 function createFixtureRoot() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-ctx-'));
+  const root = fs.mkdtempSync(path.join(TEST_TMP, 'pack-ctx-'));
   const srcDir = path.join(root, 'src');
   fs.mkdirSync(srcDir, { recursive: true });
   fs.writeFileSync(path.join(srcDir, 'hello.js'), 'export const hello = "hello";\n'.repeat(40));
@@ -544,7 +577,7 @@ describe('failure cleanup and destination safety', () => {
 
   test('rejects destination inside symlinked directory pointing outside repository root', async () => {
     const fixture = createFixtureRoot();
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-pack-'));
+    const outside = fs.mkdtempSync(path.join(TEST_TMP, 'outside-pack-'));
     const symOutside = path.join(fixture, 'sym_outside');
 
     fs.symlinkSync(outside, symOutside, process.platform === 'win32' ? 'junction' : 'dir');
@@ -686,7 +719,7 @@ describe('failure cleanup and destination safety', () => {
 
 describe('publishOutput unit suite', () => {
   test('atomically publishes pack via sibling temp file and rename', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-test-'));
+    const tmpDir = fs.mkdtempSync(path.join(TEST_TMP, 'pub-test-'));
     try {
       const tempPack = path.join(tmpDir, 'source-pack.xml');
       const targetOut = path.join(tmpDir, 'dest', 'final-output.xml');
@@ -704,7 +737,7 @@ describe('publishOutput unit suite', () => {
   });
 
   test('preserves target and cleans sibling temp when rename fails', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-test-'));
+    const tmpDir = fs.mkdtempSync(path.join(TEST_TMP, 'pub-test-'));
     try {
       const tempPack = path.join(tmpDir, 'source-pack.xml');
       const targetOut = path.join(tmpDir, 'dest', 'final-output.xml');
@@ -731,7 +764,7 @@ describe('publishOutput unit suite', () => {
   });
 
   test('preserves target and cleans sibling temp when copyFile fails', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-test-'));
+    const tmpDir = fs.mkdtempSync(path.join(TEST_TMP, 'pub-test-'));
     try {
       const tempPack = path.join(tmpDir, 'source-pack.xml');
       const targetOut = path.join(tmpDir, 'dest', 'final-output.xml');
@@ -767,7 +800,7 @@ describe('destination alias and collision unit suite', () => {
   });
 
   test('validateOutputPath rejects exact hard link collision with input file', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'alias-test-'));
+    const tmpDir = fs.mkdtempSync(path.join(TEST_TMP, 'alias-test-'));
     try {
       const srcFile = path.join(tmpDir, 'source.js');
       const hardLink = path.join(tmpDir, 'alias.xml');
