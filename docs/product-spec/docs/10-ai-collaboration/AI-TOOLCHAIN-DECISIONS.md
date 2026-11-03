@@ -1,5 +1,21 @@
 # Ship Dễ AI Toolchain Decisions
 
+## Shared author pre-push check (TASK-AI-162)
+
+Operator approved on 2026-11-02. Every writer lane (Gemini, Claude, 9Router and directly assigned Codex authors) runs `pnpm ai:check` before committing/pushing and pastes its summary in the PR. This local helper calls the existing CI gate scripts; **CI remains the authority**, and a local PASS is not independent review or permission to merge.
+
+The checker runs `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm security:secrets`, `git diff --check origin/main...HEAD`, then tests, sequentially and failing fast. It pins the existing incremental scripts' base to `origin/main`, including their existing working-tree checks. It does not fetch; keep that ref current before starting work. Missing dependencies, Git history or native Gitleaks fail the relevant gate.
+
+For tests, pnpm's since filter selects workspaces changed from the merge-base of `origin/main` and `HEAD`, plus their dependents. Before narrowing tests, the checker verifies that these workspace directories cover every committed, staged and unstaged changed path, including deletions and both sides of renames. Root/shared changes, untracked files, an empty selection, incomplete metadata or unavailable filtering conservatively fall back to full `pnpm test`.
+
+When Turbo's affected dry-run contains runnable tests for every selected workspace, the checker uses `turbo run test --affected` to preserve its build graph. Empty, non-runnable or incomplete task sets require full tests, as does a successful probe with missing or malformed output. Only valid JSON with an optional Turbo version banner is accepted; a failed Turbo process may use the already verified pnpm filter. A failing test command is a failure, never a fallback trigger. Lint, typecheck and secrets retain their existing scope. The whitespace command checks committed changes; authors should also check their staged diff before committing.
+
+The summary has one PASS/FAIL line per executed gate followed by `PASS ai:check` or `FAIL ai:check`; failure exits nonzero. Child output and exception text are suppressed because any gate can print sensitive source or environment data. The failed gate's name identifies the command to diagnose locally; never paste raw secrets or environment values into PR evidence.
+
+Local hook installation remains optional and explicit: after `pnpm install --frozen-lockfile`, run `pnpm lefthook install`. Installed pre-push hooks invoke the shared command by default. The supported exception is the explicit, hook-only variable `SHIPDE_SKIP_AI_CHECK=1`; record why the local hook was skipped in PR evidence and still run the author checklist. Direct `pnpm ai:check` ignores the skip variable. Existing pre-commit and no-hardcode hooks are unchanged. No CI workflow, gate configuration, allowlist, baseline or Semgrep rule is relaxed.
+
+On PowerShell systems that block `.ps1` shims, use `pnpm.cmd` for the same commands. Offline regression tests: `node --test tools/ai-brain/test/task-ai-162-prepush-check.test.js` (also discovered by the existing `pnpm test:brain` command).
+
 ## Objective
 
 Use the lowest-cost capable author without reducing business completeness, UI quality, security or evidence. GitHub artifacts are the shared memory; no agent framework may replace the approved product specification, Work Item or independent review.
@@ -559,3 +575,37 @@ The action connects to an OpenAI-compatible endpoint using credentials provided 
 - `PR_AGENT_MODEL`: The model name to execute reviews and suggestions (e.g., `gpt-4o`, `gpt-4o-mini`, or provider model ID).
 
 If any of these secrets are absent, or if the Pull Request originates from a fork, `.github/workflows/pr-agent.yml` skips execution cleanly, posts an informational notice, and completes successfully without failing.
+
+## Affected-only PR CI caching and merge queue (TASK-AI-165)
+
+Operator explicitly approved modifying `.github/` for this item on 2026-11-02.
+
+### What Changed
+1. **Affected-only PR CI with Turborepo**:
+   - In `.github/workflows/current-application.yml`, configured `actions/checkout` with `fetch-depth: 0`, cached pnpm store (`pnpm/action-setup` before `actions/setup-node` with `cache: pnpm`), and restored Turborepo filesystem cache via `actions/cache@v4` on `.turbo`.
+   - On `pull_request` events, runs `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}`, followed by root scripts linting (`pnpm exec eslint scripts`).
+   - On `push` to `main` and on `merge_group` events, executes full non-affected runs (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`) to guarantee complete mainline integrity.
+   - Preserves all required status check job names (`application-gate`, `contract`) and required verification steps (Prisma client generation, migrations, database services, integration tests, contract verification, secrets scanning, ast-grep, formatting negative proofs).
+2. **Merge queue triggers**:
+   - Added `merge_group` trigger to both workflows that provide required status checks:
+     - `.github/workflows/current-application.yml` (provides required status check `application-gate`)
+     - `.github/workflows/feature-contract-gate.yml` (provides required status check `contract`)
+   - Added `push: branches: [main]` trigger to `.github/workflows/current-application.yml` to ensure Turborepo cache is populated on main and master runs are validated.
+
+### Expected Effect
+- **Substantially faster PR verification**: Rather than running full lint, typecheck, test, and build across all monorepo packages, PR CI runs only against packages directly affected by the PR diff relative to the PR base commit (`TURBO_SCM_BASE`), reducing CI duration and worker waiting times.
+- **Cache reuse**: Monorepo package outputs and hashes are cached in `.turbo`, allowing unchanged dependencies to be restored instantly.
+- **Concurrent agent PR throughput**: GitHub Merge Queue allows concurrent agent PRs to be queued and validated in parallel against speculative merged results without serial human rebase bottlenecks.
+- **Zero weakening of required gates**: Required status checks (`application-gate` and `contract`) remain strictly enforced with identical names.
+
+### Operator Step to Enable Merge Queue in Branch Protection
+To enable the merge queue in GitHub repository settings (not executed by this PR):
+1. Navigate to repository settings on GitHub: **Settings > Branches**.
+2. Under **Branch protection rules**, edit the rule for branch `main`.
+3. Check the box **Require merge queue**.
+4. Configure merge queue parameters:
+   - **Merge method**: Squash and merge.
+   - **Build concurrency**: 2 to 5 (adjust based on GitHub Actions concurrency limit).
+   - **Minimum / Maximum pull requests to merge**: 1 to 5.
+   - **Status checks**: Ensure required checks `contract` and `application-gate` are selected.
+5. Save changes.
