@@ -567,7 +567,7 @@ Operator explicitly approved modifying `.github/` for this item on 2026-11-02.
 ### What Changed
 1. **Affected-only PR CI with Turborepo**:
    - In `.github/workflows/current-application.yml`, configured `actions/checkout` with `fetch-depth: 0`, cached pnpm store (`pnpm/action-setup` before `actions/setup-node` with `cache: pnpm`), and restored Turborepo filesystem cache via `actions/cache@v4` on `.turbo`.
-   - On `pull_request` events, runs `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}`, followed by root scripts linting (`eslint scripts`).
+   - On `pull_request` events, runs `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}`, followed by root scripts linting (`pnpm exec eslint scripts`).
    - On `push` to `main` and on `merge_group` events, executes full non-affected runs (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`) to guarantee complete mainline integrity.
    - Preserves all required status check job names (`application-gate`, `contract`) and required verification steps (Prisma client generation, migrations, database services, integration tests, contract verification, secrets scanning, ast-grep, formatting negative proofs).
 2. **Merge queue triggers**:

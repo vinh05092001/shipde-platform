@@ -105,7 +105,7 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "Running affected tasks against PR base: ${{ github.event.pull_request.base.sha }}"
             TURBO_SCM_BASE="${{ github.event.pull_request.base.sha }}" pnpm exec turbo run lint typecheck test build --affected
-            eslint scripts
+            pnpm exec eslint scripts
           else
             echo "Running full tasks on ${{ github.event_name }}"
             pnpm lint

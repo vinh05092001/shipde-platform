@@ -53,7 +53,7 @@ Bounded single vertical delivery of CI configuration, workflow triggers, archite
   - `actions/checkout` with `fetch-depth: 0`
   - pnpm store caching (`pnpm/action-setup` before `actions/setup-node` with `cache: pnpm`)
   - Turborepo caching (`actions/cache@v4` on `.turbo` keyed by `${{ runner.os }}-turbo-${{ github.sha }}`)
-  - On `pull_request`: run `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}` and `eslint scripts`
+  - On `pull_request`: run `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}` and `pnpm exec eslint scripts`
   - On `push` to `main` and on `merge_group`: keep full non-affected runs (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`)
   - Added triggers: `push: branches: [main]` and `merge_group`
   - Preserved required status check job name `application-gate` and all verification proofs
@@ -137,7 +137,8 @@ git diff --check origin/main...HEAD
 
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
-| 1 | pending | READY_FOR_CODEX | Initial author delivery |
+| 1 | `5cd2b56` | CHANGES_REQUIRED | Initial PR CI failure (eslint: command not found) |
+| 2 | pending | READY_FOR_CODEX | Resolved Finding 1 by invoking `pnpm exec eslint scripts` |
 
 ## Residual limitations
 
