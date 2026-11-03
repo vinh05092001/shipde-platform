@@ -147,4 +147,98 @@ CI workflows, gate configurations, .github/.
     assert.ok(formatted.includes('GOAL: Reject empty scope'));
     assert.ok(formatted.includes('VERIFY: guard.spec.ts'));
   });
+
+  it('omits tenant/RBAC self-check in CI prompt', () => {
+    const rendered = renderTask('task-fix', 'TASK-AI-165', {
+      workItemContent: ciWorkItemMd,
+      pr: '#505',
+    });
+
+    assert.ok(!rendered.includes('tenant scope'), 'Does not include tenant scope in self-check');
+    assert.ok(!rendered.includes('RBAC'), 'Does not include RBAC in self-check');
+    assert.ok(!rendered.includes('cross-tenant'), 'Does not include cross-tenant in self-check');
+  });
+
+  it('detects auth/tenant without false positive on lowercase words', () => {
+    // 1. Lowercase "pass" in constitution note should not trigger touchesTenantAuth
+    const workItemWithLowercasePass = `# TASK-DOC-01 — Documentation updates
+## Control
+| Field | Value |
+| Work Item ID | TASK-DOC-01 |
+| Allowed paths | docs/** |
+## Business outcome
+Docs update.
+## In scope
+Update architecture documentation.
+## Constitution check
+- [x] Tenant scope and RBAC: all unit tests pass locally without change.
+`;
+    const metaPass = extractWorkItemMeta(workItemWithLowercasePass);
+    const scopePass = evaluateWorkItemScope(metaPass);
+    assert.equal(scopePass.touchesTenantAuth, false, 'Lowercase "pass" in note must not trigger touchesTenantAuth');
+
+    // 2. Uppercase "PASS" denotes check verdict and triggers touchesTenantAuth
+    const workItemWithUpperPass = `# TASK-DOC-02 — Explicit auth check
+## Constitution check
+- [x] Tenant scope and RBAC: PASS
+`;
+    const metaUpper = extractWorkItemMeta(workItemWithUpperPass);
+    const scopeUpper = evaluateWorkItemScope(metaUpper);
+    assert.equal(scopeUpper.touchesTenantAuth, true, 'Uppercase PASS in note triggers touchesTenantAuth');
+
+    // 3. Word "author" in scope must not trigger touchesTenantAuth
+    const workItemWithAuthor = `# TASK-DOC-03 — Author header tool
+## In scope
+Render author header and template placeholders.
+`;
+    const metaAuthor = extractWorkItemMeta(workItemWithAuthor);
+    const scopeAuthor = evaluateWorkItemScope(metaAuthor);
+    assert.equal(scopeAuthor.touchesTenantAuth, false, '"author" in scope must not trigger touchesTenantAuth');
+  });
+
+  it('treats negated .github as not permitted', () => {
+    // 1. Negated .github in inScope
+    const workItemNegatedScope = `# TASK-CFG-01 — Config cleanup
+## Control
+| Field | Value |
+| Work Item ID | TASK-CFG-01 |
+| Allowed paths | scripts/** |
+## In scope
+Refactor scripts; do not touch .github/ workflows.
+`;
+    const metaScope = extractWorkItemMeta(workItemNegatedScope);
+    const scopeScope = evaluateWorkItemScope(metaScope);
+    assert.equal(scopeScope.permitsGithub, false, 'Negated .github in inScope is not permitted');
+    assert.ok(scopeScope.githubScopeRule.includes('.github/'), 'Scope rule must forbid .github/');
+
+    // 2. Negated .github in allowedPaths
+    const workItemNegatedAllowed = `# TASK-CFG-02 — Path restriction
+## Control
+| Field | Value |
+| Work Item ID | TASK-CFG-02 |
+| Allowed paths | scripts/**, !.github/** |
+`;
+    const metaAllowed = extractWorkItemMeta(workItemNegatedAllowed);
+    const scopeAllowed = evaluateWorkItemScope(metaAllowed);
+    assert.equal(scopeAllowed.permitsGithub, false, 'Negated .github in allowedPaths is not permitted');
+    assert.ok(scopeAllowed.githubScopeRule.includes('.github/'), 'Scope rule must forbid .github/');
+  });
+
+  it('renders all 4 fields with UNKNOWN for missing fields when finding is raw string', () => {
+    // Raw string with partial fields
+    const partialRaw = 'WHERE: scripts/ai/select-reviewer.mjs:94\nWRONG: Upstream comparison skipped';
+    const formattedPartial = formatFindings(partialRaw);
+    assert.ok(formattedPartial.includes('WHERE: scripts/ai/select-reviewer.mjs:94'));
+    assert.ok(formattedPartial.includes('WRONG: Upstream comparison skipped'));
+    assert.ok(formattedPartial.includes('GOAL: UNKNOWN'));
+    assert.ok(formattedPartial.includes('VERIFY: UNKNOWN'));
+
+    // Bare text string without labels
+    const bareRaw = 'Shop ID read from body instead of authenticated token';
+    const formattedBare = formatFindings(bareRaw);
+    assert.ok(formattedBare.includes('WHERE: UNKNOWN'));
+    assert.ok(formattedBare.includes('WRONG: Shop ID read from body instead of authenticated token'));
+    assert.ok(formattedBare.includes('GOAL: UNKNOWN'));
+    assert.ok(formattedBare.includes('VERIFY: UNKNOWN'));
+  });
 });

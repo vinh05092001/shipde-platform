@@ -97,18 +97,30 @@ export function evaluateWorkItemScope(meta = {}) {
   const combined = [meta.title || '', meta.businessOutcome || '', inScope, allowed].join(' ');
 
   // 1. .github scope permission check
-  const permitsGithub = /\.github/i.test(allowed) || /\.github/i.test(inScope);
+  // Must be non-negated in allowedPaths or inScope
+  const hasAllowedGithub =
+    /\.github/i.test(allowed) && !/(?:^|[\s,])!\s*[^,\n]*\.github/i.test(allowed);
+  const hasInScopeGithub =
+    /\.github/i.test(inScope) &&
+    !/\b(?:no|not|never|excluding|exclude|except|without|do\s+not(?:\s+touch)?)\b[^.\n;]*\.github/i.test(inScope);
+  const permitsGithub = Boolean(hasAllowedGithub || hasInScopeGithub);
 
   // 2. Tenant / RBAC scope check
   let touchesTenantAuth = false;
-  const tenantMatch = constitution.match(/tenant\s+scope\s+and\s+rbac:\s*([^\r\n]+)/i);
+  const tenantMatch =
+    constitution.match(/tenant\s+scope(?:\s+and\s+rbac)?:\s*([^\r\n]+)/i) ||
+    constitution.match(/\*\*tenant\s+scope\*\*:\s*([^\r\n]+)/i);
+
   if (tenantMatch) {
-    const note = tenantMatch[1].toLowerCase();
+    const rawNote = tenantMatch[1].trim();
+    const note = rawNote.toLowerCase();
     if (
       note.includes('not applicable') ||
       note.includes('n/a') ||
       note.includes('no product routes') ||
-      note.includes('test not applicable')
+      note.includes('test not applicable') ||
+      note.includes('no tenant logic') ||
+      note.includes('preserved')
     ) {
       touchesTenantAuth = false;
     } else if (
@@ -117,12 +129,13 @@ export function evaluateWorkItemScope(meta = {}) {
       note.includes('tested') ||
       note.includes('negative test') ||
       note.includes('covered') ||
-      note.includes('pass')
+      /\bPASS\b/.test(rawNote) // Only uppercase PASS denotes check verdict; lowercase 'pass' must not falsely match
     ) {
       touchesTenantAuth = true;
     }
   } else {
-    touchesTenantAuth = /\b(cross-tenant|multi-tenant|tenant-id|tenancy|rbac|user-role|auth-guard)\b/i.test(combined);
+    // Only detect tenant/auth from specific domain keywords (do not match common words like 'author')
+    touchesTenantAuth = /\b(cross-tenant|multi-tenant|tenant-id|tenancy|rbac|user-role|auth-guard|authentication|authorization)\b/i.test(combined);
   }
 
   const githubScopeRule = permitsGithub
@@ -149,10 +162,27 @@ export function formatFinding(f) {
   if (typeof f === 'string') {
     const trimmed = f.trim();
     if (!trimmed) return '';
-    if (trimmed.includes('WHERE:') && trimmed.includes('WRONG:')) {
-      return trimmed;
+
+    const hasWhere = /(?:^|\n)WHERE:\s*/i.test(trimmed);
+    const hasWrong = /(?:^|\n)WRONG:\s*/i.test(trimmed);
+    const hasGoal = /(?:^|\n)GOAL:\s*/i.test(trimmed);
+    const hasVerify = /(?:^|\n)VERIFY:\s*/i.test(trimmed);
+
+    if (hasWhere || hasWrong || hasGoal || hasVerify) {
+      const getField = (label, nextLabels) => {
+        const pattern = new RegExp(`(?:^|\\n)${label}:\\s*([\\s\\S]*?)(?=(?:\\n(?:${nextLabels.join('|')}):)|$)`, 'i');
+        const match = trimmed.match(pattern);
+        return match ? match[1].trim() : 'UNKNOWN';
+      };
+      const where = getField('WHERE', ['WRONG', 'GOAL', 'VERIFY']);
+      const wrong = getField('WRONG', ['WHERE', 'GOAL', 'VERIFY']);
+      const goal = getField('GOAL', ['WHERE', 'WRONG', 'VERIFY']);
+      const verify = getField('VERIFY', ['WHERE', 'WRONG', 'GOAL']);
+
+      return `WHERE: ${where || 'UNKNOWN'}\nWRONG: ${wrong || 'UNKNOWN'}\nGOAL: ${goal || 'UNKNOWN'}\nVERIFY: ${verify || 'UNKNOWN'}`;
     }
-    return `WHERE: UNKNOWN\nWRONG: ${trimmed}\nGOAL: Correct the issue\nVERIFY: Add negative test proving the fix`;
+
+    return `WHERE: UNKNOWN\nWRONG: ${trimmed}\nGOAL: UNKNOWN\nVERIFY: UNKNOWN`;
   }
   const where =
     f.where ||
@@ -177,7 +207,12 @@ export function formatFindings(findings) {
   }
   if (typeof findings === 'string') {
     const trimmed = findings.trim();
-    return trimmed.length > 0 ? trimmed : '(No open findings)';
+    if (!trimmed) return '(No open findings)';
+    if (trimmed.includes('\n\n')) {
+      const blocks = trimmed.split(/\n\s*\n/);
+      return blocks.map(formatFinding).filter(Boolean).join('\n\n');
+    }
+    return formatFinding(trimmed);
   }
   return formatFinding(findings);
 }
@@ -245,7 +280,13 @@ export function renderTask(templateName, workItemRef, options = {}) {
     BUSINESS_OUTCOME: meta.businessOutcome || 'UNKNOWN',
   };
 
-  return renderTemplate(templateContent, replacements);
+  let rendered = renderTemplate(templateContent, replacements);
+
+  if (!scopeEval.touchesTenantAuth) {
+    rendered = rendered.replace(/tenant scope,\s*RBAC\/empty-scope deny,\s*/gi, '');
+  }
+
+  return rendered;
 }
 
 // CLI invocation handling

@@ -25,17 +25,55 @@ const norm = (val) => String(val === undefined || val === null ? '' : val).trim(
 export function parseCandidate(candidate) {
   if (!candidate) return null;
   if (typeof candidate === 'object') {
-    const key = candidate.candidateKey || '';
-    const parts = key.includes('::') ? key.split('::') : [];
+    const rawKey = candidate.candidateKey || candidate.key || '';
+    const hasKey = typeof rawKey === 'string' && rawKey.trim().length > 0;
+    const parts = hasKey && rawKey.includes('::') ? rawKey.split('::') : [];
+    if (hasKey && parts.length !== 7) {
+      return null;
+    }
+
+    // Check for conflicting key/field identities before selection
+    if (hasKey && parts.length === 7) {
+      if (candidate.harness && parts[0] && norm(candidate.harness) !== norm(parts[0])) return null;
+      if (candidate.accessPath && parts[1] && norm(candidate.accessPath) !== norm(parts[1])) return null;
+      if (candidate.gateway && parts[2] && norm(candidate.gateway) !== norm(parts[2])) return null;
+      if (candidate.upstream && parts[3] && norm(candidate.upstream) !== norm(parts[3])) return null;
+      const candAccount = candidate.account || candidate.accountId;
+      if (candAccount && parts[4] && norm(candAccount) !== norm(parts[4])) return null;
+      if (candidate.quotaScope && parts[5] && norm(candidate.quotaScope) !== norm(parts[5])) return null;
+      const candModel = candidate.modelId || candidate.model;
+      if (candModel && parts[6] && norm(candModel) !== norm(parts[6])) return null;
+    }
+
+    const harness = candidate.harness || parts[0] || 'UNKNOWN';
+    const accessPath = candidate.accessPath || parts[1] || 'UNKNOWN';
+    const gateway = candidate.gateway || parts[2] || 'UNKNOWN';
+    const upstream = candidate.upstream || parts[3] || 'UNKNOWN';
+    const account = candidate.account || candidate.accountId || parts[4] || 'UNKNOWN';
+    const quotaScope = candidate.quotaScope || parts[5] || 'UNKNOWN';
+    const modelId = candidate.modelId || candidate.model || parts[6] || 'UNKNOWN';
+
+    const candidateKey = hasKey
+      ? rawKey
+      : candidateKeyFromParts({
+          harness,
+          accessPath,
+          gateway,
+          upstream,
+          account,
+          quotaScope,
+          modelId,
+        });
+
     return {
-      harness: candidate.harness || parts[0] || '',
-      accessPath: candidate.accessPath || parts[1] || '',
-      gateway: candidate.gateway || parts[2] || '',
-      upstream: candidate.upstream || parts[3] || '',
-      account: candidate.account || candidate.accountId || parts[4] || '',
-      quotaScope: candidate.quotaScope || parts[5] || '',
-      modelId: candidate.modelId || candidate.model || parts[6] || '',
-      candidateKey: key || candidateKeyFromParts(candidate),
+      harness,
+      accessPath,
+      gateway,
+      upstream,
+      account,
+      quotaScope,
+      modelId,
+      candidateKey,
       qualifiedRoles: Array.isArray(candidate.qualifiedRoles) ? candidate.qualifiedRoles : ['reviewer'],
     };
   }
@@ -43,13 +81,13 @@ export function parseCandidate(candidate) {
     const parts = candidate.split('::');
     if (parts.length === 7) {
       return {
-        harness: parts[0],
-        accessPath: parts[1],
-        gateway: parts[2],
-        upstream: parts[3],
-        account: parts[4],
-        quotaScope: parts[5],
-        modelId: parts[6],
+        harness: parts[0] || 'UNKNOWN',
+        accessPath: parts[1] || 'UNKNOWN',
+        gateway: parts[2] || 'UNKNOWN',
+        upstream: parts[3] || 'UNKNOWN',
+        account: parts[4] || 'UNKNOWN',
+        quotaScope: parts[5] || 'UNKNOWN',
+        modelId: parts[6] || 'UNKNOWN',
         candidateKey: candidate,
         qualifiedRoles: ['reviewer'],
       };
@@ -60,13 +98,13 @@ export function parseCandidate(candidate) {
 
 export function candidateKeyFromParts(c = {}) {
   return [
-    c.harness || '',
-    c.accessPath || '',
-    c.gateway || '',
-    c.upstream || '',
-    c.account || c.accountId || '',
-    c.quotaScope || '',
-    c.modelId || c.model || '',
+    c.harness || 'UNKNOWN',
+    c.accessPath || 'UNKNOWN',
+    c.gateway || 'UNKNOWN',
+    c.upstream || 'UNKNOWN',
+    c.account || c.accountId || 'UNKNOWN',
+    c.quotaScope || 'UNKNOWN',
+    c.modelId || c.model || 'UNKNOWN',
   ].join('::');
 }
 
@@ -91,28 +129,40 @@ export function checkIndependence(writerParsed, reviewerParsed) {
   // Upstream independence
   const writerUpstream = norm(writerParsed.upstream);
   const reviewerUpstream = norm(reviewerParsed.upstream);
-  if (writerUpstream && reviewerUpstream && writerUpstream === reviewerUpstream) {
+  if (!writerUpstream || writerUpstream === 'unknown' || !reviewerUpstream || reviewerUpstream === 'unknown') {
+    return { independent: false, reason: 'UNVERIFIED_UPSTREAM: upstream is missing or UNKNOWN' };
+  }
+  if (writerUpstream === reviewerUpstream) {
     return { independent: false, reason: `SAME_UPSTREAM: reviewer shares upstream '${reviewerParsed.upstream}'` };
   }
 
   // Model independence
   const writerModel = norm(writerParsed.modelId);
   const reviewerModel = norm(reviewerParsed.modelId);
-  if (writerModel && reviewerModel && writerModel === reviewerModel) {
+  if (!writerModel || writerModel === 'unknown' || !reviewerModel || reviewerModel === 'unknown') {
+    return { independent: false, reason: 'UNVERIFIED_MODEL: modelId is missing or UNKNOWN' };
+  }
+  if (writerModel === reviewerModel) {
     return { independent: false, reason: `SAME_MODEL: reviewer shares modelId '${reviewerParsed.modelId}'` };
   }
 
   // Gateway independence
   const writerGateway = norm(writerParsed.gateway);
   const reviewerGateway = norm(reviewerParsed.gateway);
-  if (writerGateway && reviewerGateway && writerGateway === reviewerGateway) {
+  if (!writerGateway || writerGateway === 'unknown' || !reviewerGateway || reviewerGateway === 'unknown') {
+    return { independent: false, reason: 'UNVERIFIED_GATEWAY: gateway is missing or UNKNOWN' };
+  }
+  if (writerGateway === reviewerGateway) {
     return { independent: false, reason: `SAME_GATEWAY: reviewer shares gateway '${reviewerParsed.gateway}'` };
   }
 
   // Account independence
   const writerAccount = norm(writerParsed.account);
   const reviewerAccount = norm(reviewerParsed.account);
-  if (writerAccount && reviewerAccount && writerAccount === reviewerAccount) {
+  if (!writerAccount || writerAccount === 'unknown' || !reviewerAccount || reviewerAccount === 'unknown') {
+    return { independent: false, reason: 'UNVERIFIED_ACCOUNT: account is missing or UNKNOWN' };
+  }
+  if (writerAccount === reviewerAccount) {
     return { independent: false, reason: `SAME_ACCOUNT: reviewer shares account '${reviewerParsed.account}'` };
   }
 

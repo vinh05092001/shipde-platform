@@ -134,4 +134,58 @@ describe('select-reviewer', () => {
     assert.equal(result.status, 'BLOCKED');
     assert.ok(result.reason.includes('chưa nối'));
   });
+
+  it('blocks reviewer with missing upstream', () => {
+    const reviewerMissingUpstream = {
+      harness: 'cli-harness-b',
+      accessPath: 'path-alt',
+      gateway: 'gw-two',
+      // upstream is omitted
+      account: 'acc-reviewer-02',
+      quotaScope: 'scope-b',
+      modelId: 'synthetic-model-y',
+      qualifiedRoles: ['reviewer'],
+    };
+
+    const result = selectReviewer({
+      writer: writerCandidate,
+      candidates: [reviewerMissingUpstream],
+    });
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.reviewer, null);
+  });
+
+  it('blocks conflicting candidate identity', () => {
+    const writer = {
+      harness: 'cli-harness-w',
+      accessPath: 'path-direct',
+      gateway: 'gw-w',
+      upstream: 'up-w',
+      account: 'acc-w',
+      quotaScope: 'scope-w',
+      modelId: 'model-w',
+      candidateKey: 'cli-harness-w::path-direct::gw-w::up-w::acc-w::scope-w::model-w',
+    };
+
+    const conflictingReviewer = {
+      candidateKey: 'r::direct::gw-r::up-w::acc-w::q-r::model-r',
+      harness: 'r',
+      accessPath: 'direct',
+      gateway: 'gw-r',
+      upstream: 'up-r', // conflicts with up-w in candidateKey
+      account: 'acc-r',  // conflicts with acc-w in candidateKey
+      quotaScope: 'q-r',
+      modelId: 'model-r',
+      qualifiedRoles: ['reviewer'],
+    };
+
+    const result = selectReviewer({
+      writer,
+      candidates: [conflictingReviewer],
+    });
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.reviewer, null);
+  });
 });
