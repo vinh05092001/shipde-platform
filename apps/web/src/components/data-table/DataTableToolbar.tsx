@@ -51,15 +51,16 @@ export interface DataTableToolbarProps {
  * searchValue prop changes or an explicit filter reset occurs.
  *
  * BR-UI-01: the committed URL is the single source of truth; the local draft
- * is only the debounced input text. The ONLY change that may be treated as a
- * mere acknowledgment of this toolbar's own request is one matching
+ * is only the debounced input text. Changes that may be treated as mere
+ * acknowledgments of this toolbar's own requests are: one matching
  * `lastSentSearch` — the last value the toolbar itself dispatched to the
- * router — and that is not an already-cancelled request (`staleSearchValue`).
- * Every other committed change (external Link navigation, Back/Forward, or a
- * commit superseded by newer local typing) is authoritative: the draft
- * resynchronizes to the URL value and any unsent debounced search is
- * cancelled, so it can never override the navigation (Round 39 findings 2 and
- * 4, Round 40 finding 2).
+ * router — and, while a newer intent is still unsent, a commit of an earlier
+ * value found in `sentSearchLog` — the values this toolbar dispatched but has
+ * not seen committed yet (Round 41 finding 6). Every other committed change
+ * (external Link navigation, Back/Forward, or a commit superseded by newer
+ * local typing) is authoritative: the draft resynchronizes to the URL value
+ * and any unsent debounced search is cancelled, so it can never override the
+ * navigation (Round 39 findings 2 and 4, Round 40 finding 2).
  *
  * Finding 4 P1: `resetEvent` marks changes driven by an explicit filter reset.
  */
@@ -68,7 +69,8 @@ export function computeToolbarDraftOnPropChange(
   incomingSearchValue: string | undefined | null,
   prevSearchValue: string | undefined | null,
   lastSentSearch: string | undefined | null,
-  resetEvent = false
+  resetEvent = false,
+  sentSearchLog: string[] = []
 ): {
   nextDraft: string;
   nextPrevSearchValue: string;
@@ -109,6 +111,20 @@ export function computeToolbarDraftOnPropChange(
     };
   }
 
+  // Round 41 finding 6: an acknowledgment of an EARLIER owned request while a
+  // newer intent still exists locally (a later owned dispatch that has not
+  // committed, or unsent draft text newer than the last dispatch). Preserve
+  // the newest draft and keep its timer; the intermediate commit must not be
+  // misread as external (which would restore the older value and discard the
+  // newer search intent).
+  if (currentDraft !== lastSent && sentSearchLog.indexOf(incoming) !== -1) {
+    return {
+      nextDraft: currentDraft,
+      nextPrevSearchValue: incoming,
+      shouldCancelDebounce: false,
+    };
+  }
+
   // The committed URL differs from what this toolbar last dispatched: an
   // external navigation, Back/Forward, or a cancelled intermediate edit
   // committed late. The URL wins — restore the displayed value and discard
@@ -118,6 +134,18 @@ export function computeToolbarDraftOnPropChange(
     nextPrevSearchValue: incoming,
     shouldCancelDebounce: true,
   };
+}
+
+/**
+ * Prunes the owned dispatched-request log after a commit. When the committed
+ * value was dispatched by this toolbar, everything at or before it is now
+ * acknowledged (removed); later owned entries remain pending (Round 41
+ * finding 6). A value never dispatched here clears the log entirely.
+ */
+export function advanceSentSearchLog(sentSearchLog: string[], committed: string): string[] {
+  const idx = sentSearchLog.indexOf(committed);
+  if (idx === -1) return [];
+  return sentSearchLog.slice(idx + 1);
 }
 
 export function createDebouncedSearch(
@@ -164,9 +192,16 @@ export function DataTableToolbar({
   const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
   const [prevResetEpoch, setPrevResetEpoch] = React.useState(resetEpoch);
 
-  // Last search value this toolbar dispatched to the router. Only a commit of
-  // this value acknowledges the toolbar's own request (Finding 2 P1).
+  // Last search value this toolbar dispatched to the router. A commit of this
+  // value, or of an earlier still-unacknowledged entry of `sentSearchLogRef`,
+  // acknowledges the toolbar's own request (Finding 2 P1, Round 41 finding 6).
   const [lastSentSearch, setLastSentSearch] = React.useState(searchValue);
+
+  // Values dispatched by this toolbar whose commits have not arrived yet,
+  // oldest first. Lets a late acknowledgment of an earlier own request be
+  // recognized instead of being misread as external navigation (finding 6).
+  const [sentSearchLog, setSentSearchLog] = React.useState<string[]>([]);
+  const [authoritativeCommitToken, setAuthoritativeCommitToken] = React.useState(0);
 
   // Keep the latest callback without ever replacing the debounce object, so a
   // timer scheduled before a parent rerender is never abandoned (Finding 3 P1).
@@ -190,6 +225,9 @@ export function DataTableToolbar({
     if (debouncedSearchRef.current === null) {
       debouncedSearchRef.current = createDebouncedSearch((val) => {
         if (draftRef.current !== val) return;
+        // Record this dispatched value as owned-but-unacknowledged so its
+        // later commit is recognized as our own acknowledgment (finding 6).
+        setSentSearchLog((prev) => [...prev, val]);
         setLastSentSearch(val);
         searchCallbackRef.current?.(val);
       }, debounceMs);
@@ -197,31 +235,73 @@ export function DataTableToolbar({
     return debouncedSearchRef.current;
   };
 
+  // Cancel unsent debounced text ONLY when the prop-synchronization pass
+  // classified a commit as authoritative (external Link, Back/Forward, or a
+  // commit superseded by newer local typing). Round 41 finding 1: this must
+  // not run in the effect's cleanup, because a cleanup fires on every
+  // dep change — including the toolbar's OWN acknowledgment — where it would
+  // wrongly discard the newer unsent draft's timer. Acknowledgments (latest or
+  // intermediate) keep the newer timer alive so it still dispatches (BR-UI-01).
   React.useEffect(() => {
-    if (searchValue !== lastSentSearch) {
+    if (authoritativeCommitToken > 0) {
       debouncedSearchRef.current?.cancel();
     }
+  }, [authoritativeCommitToken]);
+
+  // Drop a scheduled debounce when the toolbar unmounts.
+  React.useEffect(() => {
     return () => {
       debouncedSearchRef.current?.cancel();
     };
-  }, [searchValue, lastSentSearch]);
+  }, []);
+
+  // Authoritative browser history navigation (Back/Forward) discards unsent
+  // search intent even when the committed search value itself is unchanged
+  // (Round 41 finding 2, BR-UI-01): the render follows the URL, not the
+  // abandoned draft. location already holds the history entry's URL here.
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      debouncedSearchRef.current?.cancel();
+      setSentSearchLog([]);
+      const authoritative = new URLSearchParams(window.location.search).get('search') || '';
+      draftRef.current = authoritative;
+      setDraftSearch(authoritative);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
 
   // Synchronize draft when the committed searchValue prop changes or an
-  // explicit filter reset is triggered. Any unsent debounced edit is discarded
-  // on authoritative changes (its timer self-cancels via the draft guard) so it
-  // can never override the navigation (Findings 2 & 4 P1, BR-UI-01).
+  // explicit filter reset is triggered. Unsent debounced edits are discarded
+  // only on AUTHORITATIVE changes (the cancel effect below) so they can never
+  // override the navigation, while acknowledgments of this toolbar's own
+  // requests — latest or intermediate — preserve the newer draft (Findings 2 &
+  // 4 P1, Round 41 findings 1 and 6, BR-UI-01).
   if (searchValue !== prevSearchValue || resetEpoch !== prevResetEpoch) {
     const result = computeToolbarDraftOnPropChange(
       draftSearch,
       searchValue,
       prevSearchValue,
       lastSentSearch,
-      resetEpoch !== prevResetEpoch
+      resetEpoch !== prevResetEpoch,
+      sentSearchLog
     );
     setPrevSearchValue(result.nextPrevSearchValue);
     setPrevResetEpoch(resetEpoch);
+    if (resetEpoch !== prevResetEpoch) {
+      // Explicit reset: the toolbar abandons all of its queued own requests.
+      setSentSearchLog([]);
+    } else {
+      // Commit acknowledged this toolbar's value (up to it, if intermediate)
+      // or was external (never dispatched here) and clears the log.
+      setSentSearchLog(advanceSentSearchLog(sentSearchLog, searchValue || ''));
+    }
     if (result.shouldCancelDebounce) {
       setLastSentSearch(result.nextDraft);
+      setAuthoritativeCommitToken((token) => token + 1);
     }
     if (result.nextDraft !== draftSearch) {
       setDraftSearch(result.nextDraft);

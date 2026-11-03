@@ -49,6 +49,12 @@ interface DataTableFacetedFilterProps {
  * Preserves optimistic selections when multiple selections happen in the same
  * dropdown before committed search params update, and drops pending selections
  * on browser history navigation (popstate) or explicit external filter resets.
+ *
+ * Round 41 finding 3: `externalUrlEvent` marks that the URL itself advanced
+ * without a popstate (an external Link navigation) while this facet's
+ * committed value stayed the same. The committed URL is authoritative: the
+ * display shows exactly its selected filters and cancelled optimistic
+ * selections are discarded.
  */
 export function computeOptimisticFacetSelection(
   currentOptimistic: Set<string>,
@@ -56,7 +62,8 @@ export function computeOptimisticFacetSelection(
   prevCommitted: Set<string>,
   pendingSelections: string[],
   historyEvent = false,
-  resetEvent = false
+  resetEvent = false,
+  externalUrlEvent = false
 ): {
   nextOptimistic: Set<string>;
   nextPending: string[];
@@ -90,6 +97,28 @@ export function computeOptimisticFacetSelection(
   // Explicit browser history or external navigation must always take precedence
   // and discard cancelled intent, before any intermediate acknowledgment matching (Round 14 / Finding 8 P1).
   if (historyEvent) {
+    return {
+      nextOptimistic: new Set(incomingCommitted),
+      nextPending: [],
+      wasIgnoredDueToPending: false,
+    };
+  }
+
+  // Round 41 finding 3: an external Link navigation committed other URL params
+  // while this facet's committed value stayed the same (no popstate, incoming
+  // equals previous). The unchanged-value fast path must not let a cancelled
+  // optimistic selection survive an authoritative external navigation: display
+  // exactly the committed filters and discard queued intent.
+  if (externalUrlEvent && incomingStr === prevStr) {
+    const currentStr = Array.from(currentOptimistic).sort().join('.');
+    if (currentStr === incomingStr && pendingSelections.length === 0) {
+      // Already exactly the committed selection: keep the same Set identity.
+      return {
+        nextOptimistic: currentOptimistic,
+        nextPending: pendingSelections,
+        wasIgnoredDueToPending: false,
+      };
+    }
     return {
       nextOptimistic: new Set(incomingCommitted),
       nextPending: [],
@@ -161,6 +190,12 @@ export function DataTableFacetedFilter({
   const [popstateEpoch, setPopstateEpoch] = useState(0);
   const prevPopstateEpochRef = useRef(0);
 
+  // Last URL search string observed by this facet. The committed URL is the
+  // single source of truth (BR-UI-01): when it advances without a popstate
+  // (an external Link navigation), this facet treats it as authoritative even
+  // if its own committed value is unchanged (Round 41 finding 3).
+  const lastSeenLocationSearchRef = useRef<string | null>(null);
+
   // Authoritative browser history navigation (Back/Forward) cancels queued intent (BR-UI-01, Finding 3 P1)
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -192,13 +227,29 @@ export function DataTableFacetedFilter({
       resetEpoch !== prevResetEpochRef.current;
     prevResetEpochRef.current = resetEpoch;
 
+    // An external Link navigation advances window.location.search WITHOUT a
+    // popstate and without changing this facet's committed value. Recognize
+    // that the URL itself moved so the committed URL can override cancelled
+    // optimistic selections (Round 41 finding 3, BR-UI-01).
+    let externalUrlEvent = false;
+    if (typeof window !== 'undefined' && window.location) {
+      const currentSearch = window.location.search || '';
+      if (lastSeenLocationSearchRef.current === null) {
+        lastSeenLocationSearchRef.current = currentSearch;
+      } else if (lastSeenLocationSearchRef.current !== currentSearch) {
+        externalUrlEvent = true;
+        lastSeenLocationSearchRef.current = currentSearch;
+      }
+    }
+
     const res = computeOptimisticFacetSelection(
       optimisticValues,
       selectedValues,
       prevCommittedRef.current,
       pendingSelectionsRef.current,
       historyEvent,
-      resetEvent
+      resetEvent,
+      externalUrlEvent
     );
     prevCommittedRef.current = selectedValues;
     pendingSelectionsRef.current = res.nextPending;

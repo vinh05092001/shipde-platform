@@ -28,7 +28,7 @@
 
 'use client';
 
-import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
@@ -89,9 +89,27 @@ export function isCompatibleSubset(committedStr: string, targetStr: string): boo
   const committed = new URLSearchParams(committedStr);
   const target = new URLSearchParams(targetStr);
   for (const [key, value] of committed.entries()) {
-    if (target.get(key) !== value) {
+    const targetValue = target.get(key);
+    if (targetValue === null) {
       return false;
     }
+    if (targetValue === value) {
+      continue;
+    }
+    // A facet value is a dot-joined multi-selection (e.g. status=FAILED or
+    // status=FAILED.DELIVERED). A commit of an earlier same-facet selection is
+    // a compatible intermediate acknowledgment when every segment it carries
+    // is still present in the newer pending target, so the newer selection is
+    // preserved instead of treated as a conflict (Round 41 finding 5).
+    const committedSegments = value.split('.').filter(Boolean);
+    const targetSegments = targetValue.split('.').filter(Boolean);
+    if (
+      committedSegments.length > 0 &&
+      committedSegments.every((segment) => targetSegments.includes(segment))
+    ) {
+      continue;
+    }
+    return false;
   }
   return true;
 }
@@ -169,6 +187,22 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     pendingNavigationRef.current = null;
     return { baseline: committedParams, base: committedParams };
   }, [committedParams]);
+
+  // Authoritative browser history navigation (Back/Forward) discards any
+  // uncommitted pending intent so a subsequent edit composes from the history
+  // entry the user actually landed on, never resurrecting cancelled queued
+  // filters — even when that entry's params are a subset of the pending target
+  // (Round 41 finding 4, BR-UI-01).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      pendingNavigationRef.current = null;
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
 
   // Search params state with validation & fallback
   const page = useMemo(() => {
