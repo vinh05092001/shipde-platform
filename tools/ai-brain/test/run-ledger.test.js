@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { RunLedger, maskCredentials, Cause } = require('../run-ledger');
+const { fingerprint } = require('../work-guard');
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'run-ledger-test-'));
 
@@ -32,7 +33,7 @@ test('chain writer->review->repair->review computes correct total spent and link
 
 test('missing tokens yields UNKNOWN, tokenEnforcement UNENFORCED, no zero or money conversion', () => {
   const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
-  const res = ledger.record('writer', { itemId: 'TASK-2', ms: 300 });
+  const res = ledger.record('writer', { itemId: 'TASK-2', attemptId: 'att-2', ms: 300 });
   assert.equal(res.ok, true);
   assert.equal(res.run.tokens, 'UNKNOWN');
   assert.equal(res.run.tokenEnforcement, 'UNENFORCED');
@@ -45,19 +46,19 @@ test('missing tokens yields UNKNOWN, tokenEnforcement UNENFORCED, no zero or mon
 
 test('exceeding attempt or deadline budget cap refuses admission and record', () => {
   const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json'), limits: { item: { attempts: 2, ms: 2000, tokens: 100 } } });
-  assert.equal(ledger.record('writer', { itemId: 'TASK-3', ms: 500 }).ok, true);
-  assert.equal(ledger.record('review', { itemId: 'TASK-3', ms: 600 }).ok, true);
+  assert.equal(ledger.record('writer', { itemId: 'TASK-3', attemptId: 'att-3a', ms: 500 }).ok, true);
+  assert.equal(ledger.record('review', { itemId: 'TASK-3', attemptId: 'att-3b', ms: 600 }).ok, true);
 
   const aOver = ledger.admit('repair', { itemId: 'TASK-3' });
   assert.equal(aOver.ok, false);
   assert.equal(aOver.cause, Cause.ATTEMPTS_EXHAUSTED);
 
-  const rOver = ledger.record('repair', { itemId: 'TASK-3', ms: 100 });
+  const rOver = ledger.record('repair', { itemId: 'TASK-3', attemptId: 'att-3c', ms: 100 });
   assert.equal(rOver.ok, false);
   assert.equal(rOver.cause, Cause.ATTEMPTS_EXHAUSTED);
 
   const ledger2 = new RunLedger({ file: path.join(tmpDir(), 'ledger2.json'), limits: { item: { ms: 1000 } } });
-  ledger2.record('writer', { itemId: 'TASK-3', ms: 1200 });
+  ledger2.record('writer', { itemId: 'TASK-3', attemptId: 'att-3d', ms: 1200 });
   assert.equal(ledger2.admit('review', { itemId: 'TASK-3' }).cause, Cause.TIME_EXHAUSTED);
 });
 
@@ -88,10 +89,104 @@ test('route identity masks credentials', () => {
   assert.equal(masked.provider, 'anthropic');
 });
 
+test('route identity masks credentials recursively in providers array', () => {
+  const masked = maskCredentials({
+    providers: [
+      { name: 'anthropic', apiKey: 'x' },
+      { name: 'deepseek', endpoint: 'https://user:pass123@api.deepseek.com', secret: 'secret_val' },
+    ],
+  });
+  assert.equal(masked.providers[0].apiKey, '[REDACTED]');
+  assert.equal(masked.providers[0].name, 'anthropic');
+  assert.equal(masked.providers[1].secret, '[REDACTED]');
+  assert.equal(masked.providers[1].endpoint, 'https://user:***@api.deepseek.com');
+  const serialized = JSON.stringify(masked);
+  assert.equal(serialized.includes('"x"'), false);
+  assert.equal(serialized.includes('pass123'), false);
+  assert.equal(serialized.includes('secret_val'), false);
+});
+
+test('record missing both jobId and attemptId throws RUN_LEDGER_REFUSED', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  assert.throws(
+    () => ledger.record('writer', { itemId: 'TASK-NOID', ms: 100 }),
+    /RUN_LEDGER_REFUSED: missing jobId or attemptId/
+  );
+  assert.throws(
+    () => ledger.record('writer', { itemId: 'TASK-NOID', retryLayer: 'pipeline', ms: 100 }),
+    /RUN_LEDGER_REFUSED: missing jobId or attemptId/
+  );
+});
+
+test('two retry layers with same attemptId and cap=1 are both recorded, accumulate ms, keep verdicts and stay at 1 attempt', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json'), limits: { item: { attempts: 1 } } });
+  const rGateway = ledger.record('writer', {
+    itemId: 'TASK-CAP1',
+    attemptId: 'a1',
+    retryLayer: 'gateway',
+    ms: 150,
+    verdict: 'RETRY',
+  });
+  assert.equal(rGateway.ok, true);
+
+  const rCli = ledger.record('writer', {
+    itemId: 'TASK-CAP1',
+    attemptId: 'a1',
+    retryLayer: 'cli',
+    ms: 250,
+    verdict: 'DONE',
+  });
+  assert.equal(rCli.ok, true);
+
+  const spent = ledger.getSummary('TASK-CAP1');
+  assert.equal(spent.attempts, 1);
+  assert.equal(spent.ms, 400);
+
+  const runs = ledger.getRuns('TASK-CAP1');
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].retryLayer, 'gateway');
+  assert.equal(runs[0].verdict, 'RETRY');
+  assert.equal(runs[1].retryLayer, 'cli');
+  assert.equal(runs[1].verdict, 'DONE');
+
+  // A new attempt beyond cap=1 is refused
+  const rNew = ledger.record('writer', {
+    itemId: 'TASK-CAP1',
+    attemptId: 'a2',
+    retryLayer: 'gateway',
+    ms: 50,
+  });
+  assert.equal(rNew.ok, false);
+  assert.equal(rNew.cause, Cause.ATTEMPTS_EXHAUSTED);
+});
+
+test('ProgressLedger.admit with reserve:true followed by record for same fingerprint counts 1 attempt total', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json'), limits: { item: { attempts: 2 } } });
+  const fp = fingerprint({ headSha: 'sha-res-abc' });
+
+  const aRes = ledger.progressLedger.admit('TASK-RES', 'writer', fp, { reserve: true, pid: process.pid });
+  assert.equal(aRes.ok, true);
+  assert.equal(ledger.getSummary('TASK-RES').attempts, 1);
+
+  const rRec = ledger.record('writer', {
+    itemId: 'TASK-RES',
+    attemptId: 'att-res-1',
+    fp,
+    ms: 500,
+    verdict: 'DONE',
+  });
+  assert.equal(rRec.ok, true);
+  assert.equal(ledger.getSummary('TASK-RES').attempts, 1);
+
+  // Because attempts is 1 and limit is 2, reviewer is admitted (not blocked early)
+  const aReviewer = ledger.admit('reviewer', { itemId: 'TASK-RES' });
+  assert.equal(aReviewer.ok, true);
+});
+
 test('no file writes outside os.tmpdir()', () => {
   const dir = tmpDir();
   const ledger = new RunLedger({ file: path.join(dir, 'sub', 'ledger.json') });
-  ledger.record('writer', { itemId: 'TASK-5', ms: 50 });
+  ledger.record('writer', { itemId: 'TASK-5', attemptId: 'att-5', ms: 50 });
 
   const normTmp = os.tmpdir().toLowerCase().replace(/\\/g, '/');
   const checkDir = (d) => {
