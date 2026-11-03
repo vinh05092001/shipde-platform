@@ -132,9 +132,8 @@ function checkWorkspace(o) {
   const id = String(o.workItemId || '').toLowerCase();
   // The whole id, bounded: TASK-AI-16 must not accept feat/task-ai-165-ci.
   const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const fits = o.branchPattern
-    ? o.branchPattern.test(branch)
-    : id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
+  const matchesId = id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
+  const fits = matchesId && (o.branchPattern ? o.branchPattern.test(branch) : true);
   if (!fits) return { ok: false, cause: Cause.WRONG_BRANCH, branch };
   const head = git(['rev-parse', 'HEAD'], o.cwd);
   return {
@@ -677,7 +676,8 @@ function lockHolder(file) {
 /** Returns { ok, owner } or { ok:false, cause, holder }. */
 function acquireLock(file, owner, o) {
   const alive = (o && o.pidAlive) || pidAlive;
-  if (!owner || !owner.jobId) throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
+  if (!owner || !owner.jobId || typeof owner.jobId !== 'string')
+    throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
   const pid = owner.pid === undefined ? process.pid : owner.pid;
   // 0 and negative pids name process groups; liveness of one owner cannot be proven from them.
   if (!Number.isInteger(pid) || pid <= 0)
@@ -793,7 +793,7 @@ async function runWithCleanup(fn, cleanup) {
   // Unsupported built-ins or custom class instances with private fields are preserved as-is.
   let copy;
   if (Array.isArray(out)) {
-    copy = Array.from(out);
+    copy = [];
   } else if (out instanceof Date) {
     copy = new Date(out.getTime());
   } else if (out instanceof RegExp) {

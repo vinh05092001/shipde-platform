@@ -1066,3 +1066,45 @@ test('frozen result getters are not evaluated during cleanup annotation', async 
   assert.equal(r.exitCode, 7);
   assert.match(r.cleanupError, /cleanup failed/);
 });
+
+test('custom branch pattern cannot admit another Work Item', () => {
+  const r = g.checkWorkspace({
+    cwd: '/w',
+    workItemId: 'TASK-AI-165',
+    branchPattern: /^(feat|fix)\//,
+    git: okGit('feat/task-ai-155-web-data-table'),
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.cause, g.Cause.WRONG_BRANCH);
+});
+
+test('lock acquisition rejects non-string jobId', () => {
+  const f = path.join(tmp(), 'lock');
+  assert.throws(
+    () => g.acquireLock(f, { jobId: 123 }),
+    /WORK_GUARD_REFUSED: lock owner needs jobId/
+  );
+});
+
+test('frozen array getters are not evaluated during cleanup annotation', async () => {
+  const workerArr = Object.freeze(
+    Object.defineProperty([{ exitCode: 7 }], '1', {
+      get() {
+        throw new Error('getter evaluated');
+      },
+      enumerable: true,
+      configurable: true,
+    })
+  );
+
+  const r = await g.runWithCleanup(
+    async () => workerArr,
+    async () => {
+      throw new Error('cleanup failed');
+    }
+  );
+
+  assert.equal(Array.isArray(r), true);
+  assert.equal(r[0].exitCode, 7);
+  assert.match(r.cleanupError, /cleanup failed/);
+});
