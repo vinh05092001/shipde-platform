@@ -62,6 +62,9 @@ export function computeOptimisticFacetSelection(
   nextPending: string[];
   wasIgnoredDueToPending: boolean;
 } {
+  const incomingStr = Array.from(incomingCommitted).sort().join('.');
+  const prevStr = Array.from(prevCommitted).sort().join('.');
+
   if (resetEvent) {
     // The reset itself is a pending acknowledgment target (''). A selection
     // made before that reset commits stays queued after it, so the later empty
@@ -83,6 +86,19 @@ export function computeOptimisticFacetSelection(
     };
   }
 
+  // An acknowledgment of an intermediate pending selection (such as the empty
+  // target of an earlier reset with newer facet selections queued after it)
+  // retains subsequent optimistic intent even across navigation events (Round 12 P2).
+  const pendingIdx = pendingSelections.indexOf(incomingStr);
+  if (pendingIdx !== -1 && pendingIdx < pendingSelections.length - 1) {
+    const nextPending = pendingSelections.slice(pendingIdx + 1);
+    return {
+      nextOptimistic: currentOptimistic,
+      nextPending,
+      wasIgnoredDueToPending: true,
+    };
+  }
+
   if (historyEvent) {
     return {
       nextOptimistic: new Set(incomingCommitted),
@@ -90,9 +106,6 @@ export function computeOptimisticFacetSelection(
       wasIgnoredDueToPending: false,
     };
   }
-
-  const incomingStr = Array.from(incomingCommitted).sort().join('.');
-  const prevStr = Array.from(prevCommitted).sort().join('.');
 
   if (incomingStr === prevStr) {
     return {
@@ -102,7 +115,6 @@ export function computeOptimisticFacetSelection(
     };
   }
 
-  const pendingIdx = pendingSelections.indexOf(incomingStr);
   if (pendingIdx !== -1) {
     const nextPending = pendingSelections.slice(pendingIdx + 1);
     if (nextPending.length === 0) {

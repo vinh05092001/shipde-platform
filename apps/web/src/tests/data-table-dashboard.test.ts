@@ -3164,6 +3164,19 @@ async function runTestSuite() {
   );
   assert.deepStrictEqual(toolbarAfterExternal.nextPendingEdits, []);
 
+  // Negative proof: without the navigationEvent signal, the toolbar mistakenly treats the older URL as an acknowledgment of an in-flight edit
+  const toolbarMistaken = computeToolbarDraftOnPropChange('Ng', 'N', '', ['N', 'Ng'], false);
+  assert.strictEqual(
+    toolbarMistaken.nextDraft,
+    'Ng',
+    'Round 12/13 P1 negative proof: without navigationEvent signal, toolbar mistakenly keeps newer draft'
+  );
+  assert.strictEqual(
+    toolbarMistaken.wasIgnoredDueToPendingEdits,
+    true,
+    'Round 12/13 P1 negative proof: toolbar treats older URL as pending edit acknowledgment instead of external navigation'
+  );
+
   // 14.3 P2: reset -> newer facet selection -> empty reset acknowledgment
   // must keep the newer selection.
   const resetThenSelect = computeOptimisticFacetSelection(
@@ -3192,6 +3205,37 @@ async function runTestSuite() {
     Array.from(acknowledgedReset.nextOptimistic),
     [],
     'Round 12 P2: a reset with no newer facet selection must still clear'
+  );
+
+  // 14.3b P2: reset -> newer facet selection -> empty reset acknowledgment across popstate navigation
+  const resetWithHistoryEvent = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    ['', 'DELIVERED'],
+    true,
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(resetWithHistoryEvent.nextOptimistic),
+    ['DELIVERED'],
+    'Round 13 P2: intermediate reset acknowledgment preserves newer facet selection even across history popstate events'
+  );
+  assert.strictEqual(resetWithHistoryEvent.wasIgnoredDueToPending, true);
+
+  // Negative proof: history popstate without queued pending selections correctly resets optimistic facets
+  const historyResetCleared = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    [],
+    true,
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(historyResetCleared.nextOptimistic),
+    [],
+    'Round 13 P2 negative proof: history navigation without queued selections correctly resets optimistic facets'
   );
 
   // 14.4 P2: disabled navigation must not activate, and must stay focusable.

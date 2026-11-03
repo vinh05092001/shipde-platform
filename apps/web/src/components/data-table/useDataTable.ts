@@ -117,9 +117,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   const router = useRouter();
   const pathname = usePathname() || '';
 
-  const activeSearchParams =
-    props.searchParams !== undefined ? props.searchParams : nextSearchParams;
-
   const [isPending, startTransition] = useTransition();
 
   // Explicit browser history navigation signal (Review item 3): increments on
@@ -132,6 +129,16 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  const activeSearchParams = useMemo(() => {
+    if (props.searchParams !== undefined) {
+      return props.searchParams;
+    }
+    if (typeof window !== 'undefined' && historyEpoch > 0) {
+      return new URLSearchParams(window.location.search);
+    }
+    return nextSearchParams;
+  }, [props.searchParams, historyEpoch, nextSearchParams]);
 
   // Filter reset signal (Finding 4 P1): increments when resetFilters is called.
   const [resetEpoch, setResetEpoch] = useState(0);
