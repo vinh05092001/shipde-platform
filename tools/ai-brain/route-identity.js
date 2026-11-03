@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 'use strict';
 
 /**
@@ -315,7 +316,11 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     const [prov, account] = JSON.parse(key);
     // Auto-detect if not already explicitly mapped
     if (!links.has(key) && !links.has(account) && ids.length > 1) {
-      const canonicalScope = `quota::${prov}::${ids[0].metadata?.realAccountRef || ids[0].accountRef}`;
+      const rawAccount = ids[0].metadata?.realAccountRef || ids[0].accountRef;
+      const safeAccount = String(rawAccount).includes('@')
+        ? crypto.createHash('sha256').update(String(rawAccount).toLowerCase()).digest('hex').slice(0, 10)
+        : rawAccount;
+      const canonicalScope = `quota::${prov}::${safeAccount}`;
       links.set(key, canonicalScope);
     }
   }

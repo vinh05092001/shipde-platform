@@ -418,7 +418,8 @@ class ScopedHealthRegistry {
 
         const candQuotaKey = quotaHealthKey(dummyId);
         const candQuotaRec = this.quotaScopes.get(candQuotaKey) || (cand.quotaScopeId && cand.quotaScopeId !== 'UNKNOWN' ? this.quotaScopes.get(cand.quotaScopeId) : null);
-        const candQuotaBlocked = candQuotaRec && candQuotaRec.exhausted && (!candQuotaRec.resetsAt || now <= candQuotaRec.resetsAt);
+        // Elapsed resetAt requires fresh probe evidence; it does NOT treat the account as recovered
+        const candQuotaBlocked = Boolean(candQuotaRec && candQuotaRec.exhausted);
 
         const candModelKey = accountModelHealthKey(dummyId);
         const candModelRec = this.accountModels.get(candModelKey);
@@ -428,15 +429,24 @@ class ScopedHealthRegistry {
           anyHealthy = true;
           break;
         }
-        lastFailure = candRec || candQuotaRec || candModelRec;
+        if (candQuotaBlocked && candQuotaRec && candQuotaRec.resetsAt && now > candQuotaRec.resetsAt) {
+          lastFailure = {
+            category: ErrorCategory.QUOTA_CREDIT,
+            scope: HealthScope.QUOTA_SCOPE,
+            reason: 'RESET_ELAPSED_PROBE_NEEDED',
+            resetsAt: null,
+          };
+        } else {
+          lastFailure = candRec || (candQuotaBlocked ? { category: ErrorCategory.QUOTA_CREDIT, scope: HealthScope.QUOTA_SCOPE, reason: candQuotaRec?.reason || 'QUOTA_EXHAUSTED' } : null) || candModelRec;
+        }
       }
       if (!anyHealthy) {
         return {
           healthy: false,
-          blockedBy: HealthScope.ACCOUNT,
+          blockedBy: lastFailure?.scope || HealthScope.ACCOUNT,
           category: lastFailure?.category || ErrorCategory.AUTH,
           reason: lastFailure?.reason || 'ALL_CANDIDATE_ACCOUNTS_UNHEALTHY',
-          resetsAt: lastFailure?.resetsAt,
+          resetsAt: lastFailure?.resetsAt || null,
         };
       }
     }

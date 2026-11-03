@@ -23,11 +23,15 @@ const { createRouteIdentity, linkSharedQuotaScopes, PREFIX_PROVIDER_MAP, UNKNOWN
 
 // Using shared PREFIX_PROVIDER_MAP imported from ./route-identity
 
-function modelFamily(model) {
+function modelQuotaGroup(model) {
   const m = String(model || '').toLowerCase();
-  if (m.includes('gemini')) return 'gemini';
-  if (m.includes('claude') || m.includes('gpt')) return 'claude-gpt';
-  return null;
+  if (/argon/i.test(m)) return 'argon';
+  if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet') || (m && !/^gemini/i.test(m))) return 'external';
+  return 'gemini';
+}
+
+function modelFamily(model) {
+  return modelQuotaGroup(model);
 }
 
 function readLaneIdentityEmail(laneId, options) {
@@ -71,10 +75,12 @@ function modelEvidence(model, options, source = {}) {
     ...evidence.metadata,
     ...options.modelMetadata?.[id],
   };
-  const inferredFamily = modelFamily(id);
-  const quotaFamily = evidence.quotaFamily || metadata.quotaFamily || inferredFamily || undefined;
+  const inferredGroup = modelQuotaGroup(id);
+  const quotaGroup = evidence.quotaGroup || metadata.quotaGroup || inferredGroup || undefined;
+  const quotaFamily = evidence.quotaFamily || metadata.quotaFamily || (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup);
   return {
     ...metadata,
+    ...(quotaGroup ? { quotaGroup } : {}),
     ...(quotaFamily ? { quotaFamily } : {}),
     capabilities: options.modelCapabilities?.[id] ?? metadata.capabilities ?? source.capabilities ?? [],
   };
@@ -378,10 +384,14 @@ function loadAgyPoolCandidates(options = {}) {
 
       const rows = lane.quota?.rows || lane.rows || [];
       const evidence = modelEvidence(rawModel, options);
-      const fam = evidence.quotaFamily || modelFamily(m);
-      const matchingRows = rows.filter((r) => modelId(r) === m ||
-        (Array.isArray(r.models) && r.models.includes(m)) ||
-        (fam && r.family === fam));
+      const targetGroup = evidence.quotaGroup || modelQuotaGroup(m);
+      const matchingRows = rows.filter((r) => {
+        if (modelId(r) === m) return true;
+        if (Array.isArray(r.models) && r.models.includes(m)) return true;
+        if (r.group && r.group === targetGroup) return true;
+        if (r.family && (r.family === targetGroup || (targetGroup === 'external' && r.family === 'claude-gpt'))) return true;
+        return false;
+      });
       const exhausted = matchingRows.some((r) => r.disabled === true ||
         (r.remainingPercent != null && Number.isFinite(Number(r.remainingPercent)) && Number(r.remainingPercent) <= 0));
       const known = matchingRows.length > 0 && matchingRows.every((r) =>
@@ -392,7 +402,7 @@ function loadAgyPoolCandidates(options = {}) {
           reason: exhausted ? 'AGY_MODEL_QUOTA_EXHAUSTED' : 'AGY_MODEL_QUOTA_UNKNOWN' });
         continue;
       }
-      const quotaScopeKey = fam ? `agy-quota::${lane.laneId}::${fam}` : `agy-quota::${lane.laneId}::${m}`;
+      const quotaScopeKey = `agy-quota::${lane.laneId}::${targetGroup}`;
       candidates.push(
         createRouteIdentity({
           harness: 'agy-pool',
@@ -401,13 +411,13 @@ function loadAgyPoolCandidates(options = {}) {
           upstreamProviderId: 'antigravity',
           configuredModelId: m,
           outboundModelId: m,
-          accountRef: laneEmail !== UNKNOWN ? laneEmail : lane.laneId,
+          accountRef: lane.laneId,
           connectionId: lane.laneId,
           quotaScopeId: quotaScopeKey,
           metadata: {
             laneId: lane.laneId,
             realAccountRef: laneEmail,
-            quotaFamily: fam || undefined,
+            quotaGroup: targetGroup,
             ...evidence,
           },
         })

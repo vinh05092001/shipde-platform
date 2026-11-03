@@ -1043,7 +1043,7 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
     const geminiCandidate = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
     const claudeCandidate = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
     assert.ok(geminiCandidate.quotaScopeId.includes('gemini'));
-    assert.ok(claudeCandidate.quotaScopeId.includes('claude-gpt'));
+    assert.ok(claudeCandidate.quotaScopeId.includes('external') || claudeCandidate.quotaScopeId.includes('claude-gpt'));
     assert.notEqual(geminiCandidate.quotaScopeId, claudeCandidate.quotaScopeId);
 
     // Record quota exhaustion for Gemini candidate
@@ -1121,8 +1121,9 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
     const candidate1 = pool.candidates.find(c => c.connectionId === 'lane-with-email');
     const candidate2 = pool.candidates.find(c => c.connectionId === 'lane-no-email');
 
-    assert.equal(candidate1.accountRef, 'realuser@gmail.com');
+    assert.equal(candidate1.accountRef, 'lane-with-email');
     assert.equal(candidate1.metadata.realAccountRef, 'realuser@gmail.com');
+    assert.ok(!candidate1.candidateKey.includes('@'), 'candidateKey must not contain @');
     assert.equal(candidate2.accountRef, 'lane-no-email');
     assert.equal(candidate2.metadata.realAccountRef, UNKNOWN);
 
@@ -1206,5 +1207,124 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
 
     assert.equal(health.evaluateHealth(route1, now).healthy, false);
     assert.equal(health.evaluateHealth(route2, now).healthy, true);
+  });
+
+  test('CR01 (Claude P1): Real agy02 5-row shape admits Flash and rejects Argon', () => {
+    const pool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash', 'gemini-4-argon', 'claude-3-7-sonnet'],
+      lanes: [
+        {
+          laneId: 'agy02',
+          rows: [
+            { group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 50 },
+            { group: 'gemini', family: 'gemini', window: 'fiveHour', remainingPercent: 80 },
+            { group: 'external', family: 'claude-gpt', window: 'weekly', remainingPercent: 1 },
+            { group: 'external', family: 'claude-gpt', window: 'fiveHour', remainingPercent: 100 },
+            { group: 'argon', family: 'argon', window: 'weekly', remainingPercent: 0 },
+          ]
+        }
+      ]
+    });
+
+    const flash = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    const claude = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    const argon = pool.candidates.find(c => c.configuredModelId === 'gemini-4-argon');
+
+    assert.ok(flash, 'Flash must be admitted because Gemini weekly quota is 50%');
+    assert.ok(claude, 'Claude must be admitted because external quota is positive');
+    assert.equal(argon, undefined, 'Argon must be rejected because Argon weekly quota is 0%');
+
+    const argonUnconnected = pool.unconnected.find(u => u.configuredModelId === 'gemini-4-argon');
+    assert.ok(argonUnconnected);
+    assert.equal(argonUnconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
+  });
+
+  test('CR02 (Claude P1): Multi-account combo with elapsed resetAt is not admitted without fresh evidence', () => {
+    const health = new ScopedHealthRegistry();
+    const selector = new UnifiedRouteSelector({ healthRegistry: health });
+
+    const branchA = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'src-9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: UNKNOWN,
+      connectionId: UNKNOWN,
+      metadata: {
+        candidateAccounts: [
+          { accountRef: 'acc1', connectionId: 'conn-1', quotaScopeId: 'quota::anthropic::acc1' },
+          { accountRef: 'acc2', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' }
+        ]
+      }
+    });
+
+    const combo = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'src-9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'combo',
+      configuredModelId: 'combo/fast',
+      accountRef: UNKNOWN,
+      isCombo: true,
+      comboBranches: [branchA]
+    });
+
+    const now = Date.now();
+    // Record quota exhaustion with resetAt in the past
+    health.recordFailure(
+      { accountRef: 'acc1', connectionId: 'conn-1', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc1' },
+      { message: 'insufficient_quota', resetAt: new Date(now - 10000).toISOString() },
+      now - 20000
+    );
+    health.recordFailure(
+      { accountRef: 'acc2', connectionId: 'conn-2', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc2' },
+      { message: 'insufficient_quota', resetAt: new Date(now - 10000).toISOString() },
+      now - 20000
+    );
+
+    // Both accounts exhausted with elapsed reset -> evaluateHealth must be false and combo rejected
+    const evalResult = health.evaluateHealth(branchA, now);
+    assert.equal(evalResult.healthy, false);
+    assert.equal(evalResult.blockedBy, 'quota_scope');
+    assert.equal(selector.evaluateAdmission(combo, {}, null).admitted, false);
+  });
+
+  test('CR03 (Claude P2): Lane identity real email is masked and never appears in candidateKey or quotaScope', () => {
+    const pool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash'],
+      lanes: [
+        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 100 }] }
+      ],
+      readLaneIdentity: () => ({ email: 'secret_user@domain.com' })
+    });
+
+    const cand = pool.candidates[0];
+    assert.ok(cand);
+    assert.equal(cand.accountRef, 'agy01');
+    assert.equal(cand.metadata.realAccountRef, 'secret_user@domain.com');
+    assert.ok(!cand.candidateKey.includes('@'), 'candidateKey must never contain @');
+    assert.ok(!cand.candidateKey.includes('secret_user'), 'candidateKey must not contain raw email username');
+
+    // Also verify after shared linking
+    const nineRouterRoute = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'secret_user@domain.com',
+      metadata: { realAccountRef: 'secret_user@domain.com' },
+      connectionId: 'conn-1',
+      configuredModelId: 'gemini-2.5-flash',
+      quotaScopeId: 'dummy-scope'
+    });
+
+    const linked = linkSharedQuotaScopes([cand, nineRouterRoute]);
+    const linkedAgy = linked.find(c => c.connectionId === cand.connectionId);
+    const linked9r = linked.find(c => c.connectionId === nineRouterRoute.connectionId);
+
+    assert.equal(linkedAgy.quotaScopeId, linked9r.quotaScopeId);
+    assert.ok(!linkedAgy.quotaScopeId.includes('@'), 'linked quotaScopeId must not contain @');
+    assert.ok(!linkedAgy.candidateKey.includes('@'), 'linked candidateKey must not contain @');
   });
 });
