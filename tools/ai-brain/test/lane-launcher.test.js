@@ -208,3 +208,42 @@ test('launch cho phép job mới khi job cũ đã có result và lock giải ph�
   assert.strictEqual(l2.ok, true);
   assert.notStrictEqual(l2.job.jobId, l1.job.jobId);
 });
+
+test('redacts-comma-containing-unquoted-api-key', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-unquoted-comma-key' };
+  const rawStderr = 'api_key=FAKE_PREFIX,FAKE_SUFFIX';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_PREFIX'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_SUFFIX'), false);
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr.includes('FAKE_PREFIX'), false);
+  assert.strictEqual(persisted.stderr.includes('FAKE_SUFFIX'), false);
+});
+
+test('cleanup-rejects-supplied-job-without-jobId', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const killed = [];
+  let killCalled = false;
+  const mockKill = (pid) => {
+    killCalled = true;
+    killed.push(pid);
+  };
+
+  const jobA = { jobId: 'job-A', pidTree: [100, 101] };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(jobA, null, 2));
+
+  const jobB = { name: 'job-B', pidTree: [200] };
+  const res = cleanup(dir, jobB, { kill: mockKill });
+
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.killed, []);
+  assert.strictEqual(killCalled, false);
+});

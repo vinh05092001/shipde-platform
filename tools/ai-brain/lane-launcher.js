@@ -18,7 +18,7 @@ function redactStderr(text) {
   return String(text)
     .replace(/(Bearer\s+)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s'"]+)/gi, '$1[REDACTED]')
     .replace(
-      /((?:['"]?[\w.-]*(?:key|token|secret)[\w.-]*['"]?)\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s,;}"'>]+)/gi,
+      /((?:['"]?[\w.-]*(?:key|token|secret)[\w.-]*['"]?)\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s'"]+)/gi,
       (match, prefix, quote) =>
         quote ? `${prefix}${quote}[REDACTED]${quote}` : `${prefix}[REDACTED]`
     );
@@ -103,8 +103,11 @@ function cleanup(lane, job, options = {}) {
     stored = null;
   }
   if (!stored || !stored.jobId) return { ok: true, killed: [] };
-  if (job && job.jobId && job.jobId !== stored.jobId) {
-    return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
+  if (job) {
+    const suppliedId = typeof job === 'string' ? job : job.jobId;
+    if (!suppliedId || suppliedId !== stored.jobId) {
+      return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
+    }
   }
   const list = stored.pidTree || stored.pids || (stored.pid ? [stored.pid] : []);
   const pids = Array.isArray(list) ? list : [list];
