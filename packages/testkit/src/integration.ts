@@ -18,6 +18,7 @@ import { PrismaClient } from '@prisma/client';
 import { S3Client, HeadBucketCommand, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { assertValidLivenessResponse, assertValidReadinessResponse } from './index';
 import { QUEUE_SMOKE_EVENT_TYPE } from '@shipde/contracts';
+import { skipLocalDbTest, LOCAL_DB_INFRASTRUCTURE_REASON } from './database';
 
 const ROOT_DIR = process.cwd();
 
@@ -201,6 +202,8 @@ function validateAndParseStructuredLogs(
 }
 
 async function main() {
+  if (skipLocalDbTest('foundation Redis/MinIO/worker integration', LOCAL_DB_INFRASTRUCTURE_REASON))
+    return;
   console.log('====================================================');
   console.log('Starting Ship Dễ Foundation Integration Tests (TASK-FOUND-03)');
   console.log('====================================================');

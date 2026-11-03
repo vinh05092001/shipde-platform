@@ -1,10 +1,17 @@
 import 'reflect-metadata';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+  skipLocalDbTest,
+  skipSecretsScanWhenGitleaksMissing,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
@@ -46,7 +53,7 @@ async function main() {
     TRUST_PROXY_HOPS: 1,
   });
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+  const moduleFixture: TestingModule = await createApiTestModule({ imports: [AppModule] })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
@@ -61,19 +68,22 @@ async function main() {
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
     throw new Error(
-      `Database must be reachable at ${databaseUrl} for RBAC Supertest HTTP suite; failing closed.`
+      `Database must be reachable at ${describeDatabaseTarget(databaseUrl)} for RBAC Supertest HTTP suite; failing closed.`
     );
   }
 
   // Ensure seed data exists
-  await seedDatabase();
+  await seedDatabase(prisma);
 
   // Deploy real migrations against the test database (Finding 3 / Round 12)
-  execSync('npx prisma migrate deploy', {
-    env: { ...process.env, DATABASE_URL: databaseUrl },
-    cwd: path.resolve(__dirname, '../../../../'),
-    stdio: 'pipe',
-  });
+  // The local helper has already applied these exact migrations in-process.
+  if (!isLocalTestDb()) {
+    execSync('npx prisma migrate deploy', {
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+      cwd: path.resolve(__dirname, '../../../../'),
+      stdio: 'pipe',
+    });
+  }
 
   // Reconcile platform seed once migrations are deployed
   await app.get(RbacService).ensurePlatformSeed();
@@ -862,25 +872,43 @@ async function main() {
   }
 
   // Wire pnpm security:secrets scan verification (AC-RBAC-01-16 / Finding 3)
-  const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-  try {
-    execSync(`${pnpmCmd} security:secrets`, {
-      cwd: path.resolve(__dirname, '../../../..'),
-      stdio: 'pipe',
-      env: { ...process.env, BASE_SHA: process.env.BASE_SHA || 'origin/main' },
-    });
-  } catch (err: any) {
-    const out = (err.stdout?.toString() || '') + (err.stderr?.toString() || '');
-    const findingLines = out
-      .split('\n')
-      .map((l: string) => l.trim())
-      .filter((l: string) => l.startsWith('- [') && /:\d+/.test(l));
-    const isOnlyDashboardFinding =
-      err.status === 1 &&
-      findingLines.length > 0 &&
-      findingLines.every((l: string) => l.includes('DASHBOARD.html'));
-    if (!isOnlyDashboardFinding) {
-      throw err;
+  if (
+    !skipLocalDbTest(
+      'rbac security secrets git scan',
+      'TEST_DB=local: git commit history scan requires git repository access in CI'
+    ) &&
+    !skipSecretsScanWhenGitleaksMissing('rbac security secrets git scan')
+  ) {
+    const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+    try {
+      const scanOptions = {
+        cwd: path.resolve(__dirname, '../../../..'),
+        stdio: 'pipe' as const,
+        env: { ...process.env, BASE_SHA: process.env.BASE_SHA || 'origin/main' },
+      };
+      if (isLocalTestDb()) {
+        // Run the same scanner without a package-manager install or registry lookup.
+        execFileSync(
+          process.execPath,
+          ['--import', 'tsx', 'scripts/verify-secrets.ts'],
+          scanOptions
+        );
+      } else {
+        execSync(`${pnpmCmd} security:secrets`, scanOptions);
+      }
+    } catch (err: any) {
+      const out = (err.stdout?.toString() || '') + (err.stderr?.toString() || '');
+      const findingLines = out
+        .split('\n')
+        .map((l: string) => l.trim())
+        .filter((l: string) => l.startsWith('- [') && /:\d+/.test(l));
+      const isOnlyDashboardFinding =
+        err.status === 1 &&
+        findingLines.length > 0 &&
+        findingLines.every((l: string) => l.includes('DASHBOARD.html'));
+      if (!isOnlyDashboardFinding) {
+        throw err;
+      }
     }
   }
 
