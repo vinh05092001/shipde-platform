@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { runResearch } from '../research.mjs';
+import { defaultRetrieve, runResearch } from '../research.mjs';
 
 const fixture = fileURLToPath(new URL('./fixtures/agent-reach.mjs', import.meta.url));
 const script = fileURLToPath(new URL('../research.mjs', import.meta.url));
@@ -902,142 +902,143 @@ test('PR contract validation: .oc/pr-body.md contains no placeholders and satisf
   }
 });
 
-test('dns_rebinding_never_contacts_private_destination', async () => {
+// In-process public listener reached through the pinned (loopback) address the
+// test resolver returns, so no external network is needed. It records every
+// hit and can answer with a late redirect.
+async function startPublicServer(redirectTo) {
   const { createServer } = await import('node:http');
-  let privateRequests = 0;
-  const privateServer = createServer((req, res) => {
-    privateRequests++;
-    res.end('private data');
+  const hits = [];
+  const server = createServer((req, res) => {
+    hits.push(req.url);
+    if (redirectTo !== undefined && hits.length >= redirectTo.after) {
+      res.writeHead(302, { location: redirectTo.location });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end(redirectTo?.body ?? 'public content');
   });
-  await new Promise((resolve) => privateServer.listen(0, '127.0.0.1', resolve));
-  const port = privateServer.address().port;
+  await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
+  return { server, hits, port: server.address().port };
+}
 
+// A separate-process listener for the private destination so that a zero-hit
+// assertion is proof of transport behavior, not a blocked event loop.
+async function startPrivateProbe(root) {
+  const ref = join(root, 'private-listener.mjs');
+  const hits = join(root, 'private-hits');
+  writeFileSync(
+    ref,
+    `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+const [counter] = process.argv.slice(2);
+const server = createServer((req, res) => {
+  appendFileSync(counter, req.url + '\\n');
+  res.end('private content');
+});
+server.listen(0, '127.0.0.1', () => {
+  process.stdout.write(String(server.address().port) + '\\n');
+});
+`
+  );
+  const proc = spawn(process.execPath, [ref, hits]);
+  const port = await new Promise((resolvePort, rejectPort) => {
+    proc.stdout.once('data', (chunk) => resolvePort(Number(String(chunk).trim())));
+    proc.once('exit', (code) => rejectPort(new Error(`listener exited ${code}`)));
+  });
+  return { proc, hits, port };
+}
+
+test('DNS rebinding between check and connect is refused', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-rebinding-'));
+  const marker = join(root, 'cli-calls');
+  const privateProbe = await startPrivateProbe(root);
+  // The host resolves public for the preflight, then private while the actual
+  // retrieval is being connected.
+  let lookups = 0;
+  const rebindingResolver = async () => (++lookups === 1 ? ['93.184.216.34'] : ['127.0.0.1']);
   try {
-    let callCount = 0;
-    const rebindingResolver = async () => {
-      callCount++;
-      return callCount === 1 ? ['93.184.216.34'] : ['127.0.0.1'];
-    };
-
-    const result = await invoke(
-      ['web', 'read', `http://rebind.example.com:${port}/secret`],
-      'ok',
-      process.env,
-      '-',
-      { resolveHost: rebindingResolver }
+    const result = await runResearch(
+      ['web', 'read', `http://rebind.example.com:${privateProbe.port}/secret`],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'retrieve-target', marker],
+        resolveHost: rebindingResolver,
+      }
     );
 
-    assert.notEqual(result.exitCode, 0, 'Must be refused');
-    assert.equal(privateRequests, 0, 'Private listener must receive zero requests');
-    assert.doesNotMatch(emitted(result), /private data/);
+    assert.notEqual(result.code, 0, 'Must be refused');
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.equal(existsSync(marker), false, 'CLI must not be launched for retrieval');
+    assert.doesNotMatch(result.stdout + result.stderr, /private content/);
   } finally {
-    privateServer.close();
+    privateProbe.proc.kill();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('redirect to private address during retrieval is refused', async () => {
-  const { createServer } = await import('node:http');
-  let privateRequests = 0;
-  const privateServer = createServer((req, res) => {
-    privateRequests++;
-    res.end('private content');
-  });
-  await new Promise((resolve) => privateServer.listen(0, '127.0.0.1', resolve));
-  const privatePort = privateServer.address().port;
-
   const root = mkdtempSync(join(tmpdir(), 'shipde-research-redirect-refusal-'));
-  const marker = join(root, 'marker');
+  const privateProbe = await startPrivateProbe(root);
+  // The public server answers 200 and only the retrieval connection sees 302 to
+  // loopback. connectTo pins the transport to this local server so the boundary
+  // is exercised offline; validation, redirect following and hop re-validation
+  // all run for real.
+  const publicServer = await startPublicServer({
+    after: 1,
+    location: `http://127.0.0.1:${privateProbe.port}/secret`,
+  });
   try {
-    const redirectRetrieve = async () => {
-      return {
-        status: 302,
-        headers: { location: `http://127.0.0.1:${privatePort}/secret` },
-        location: `http://127.0.0.1:${privatePort}/secret`,
-      };
-    };
-
-    const result = await invoke(
-      ['web', 'read', 'https://docs.example.com/doc'],
-      'ok',
-      process.env,
-      marker,
-      { retrieve: redirectRetrieve }
+    await assert.rejects(
+      defaultRetrieve(`http://docs.example.com:${publicServer.port}/doc`, {
+        resolveHost: async () => ['93.184.216.34'],
+        connectTo: '127.0.0.1',
+      }),
+      /Research refused: (?:destination resolves to a private or restricted address|public HTTP\(S\) URLs without credentials only)/
     );
-
-    assert.notEqual(result.exitCode, 0, 'Must be refused');
-    assert.equal(privateRequests, 0, 'Private listener must receive zero requests');
-    assert.equal(existsSync(marker), false, 'CLI must not be launched');
-    assert.doesNotMatch(emitted(result), /private content/);
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.ok(publicServer.hits.length > 0, 'public destination was actually retrieved');
   } finally {
-    privateServer.close();
+    publicServer.server.close();
+    privateProbe.proc.kill();
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('cli_redirect_after_both_preflights_never_contacts_private_destination', async () => {
-  const { createServer } = await import('node:http');
-  let privateRequests = 0;
-  const privateServer = createServer((req, res) => {
-    privateRequests++;
-    res.end('private content');
-  });
-  await new Promise((resolve) => privateServer.listen(0, '127.0.0.1', resolve));
-  const privatePort = privateServer.address().port;
-
   const root = mkdtempSync(join(tmpdir(), 'shipde-research-cli-redirect-'));
-  const fixturePath = join(root, 'cli-retrieval-fixture.mjs');
-  writeFileSync(
-    fixturePath,
-    `#!/usr/bin/env node
-import http from 'node:http';
-const argv = process.argv.slice(2);
-if (argv[0] === 'version') {
-  console.log(JSON.stringify({ ok: true, result: { version: '1.6.1' } }));
-} else {
-  const target = argv[2];
-  http.get(target, (res) => {
-    let loc = res.headers.location;
-    if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
-      http.get(loc, (pRes) => {
-        let body = '';
-        pRes.on('data', c => body += c);
-        pRes.on('end', () => {
-          console.log(JSON.stringify({ ok: true, items: [{ title: 'Doc', url: loc, text: body }] }));
-        });
-      });
-    } else {
-      let body = '';
-      res.on('data', c => body += c);
-      res.on('end', () => {
-        console.log(JSON.stringify({ ok: true, items: [{ title: 'Doc', url: target, text: body }] }));
-      });
-    }
+  const marker = join(root, 'cli-calls');
+  const privateProbe = await startPrivateProbe(root);
+  const publicServer = await startPublicServer({
+    after: 1,
+    location: `http://127.0.0.1:${privateProbe.port}/secret`,
   });
-}
-`
-  );
-
   try {
-    const changingRetrieve = async () => {
-      return {
-        status: 302,
-        headers: { location: `http://127.0.0.1:${privatePort}/secret` },
-        location: `http://127.0.0.1:${privatePort}/secret`,
-      };
-    };
-
-    const result = await runResearch(['web', 'read', 'https://docs.example.com/doc'], {
-      binary: process.execPath,
-      prefixArgs: [fixturePath],
-      resolveHost: defaultTestResolver,
-      retrieve: changingRetrieve,
-    });
+    // Both wrapper preflights pass (injected public transport), and the actual
+    // retrieval uses the real boundary pinned to the local server, which then
+    // redirects to loopback. The wrapper must refuse and never echo private text.
+    const preflight = async () => ({ status: 200, headers: {}, body: 'public' });
+    const result = await runResearch(
+      ['web', 'read', `http://docs.example.com:${publicServer.port}/doc`],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'retrieve-target', marker],
+        resolveHost: defaultTestResolver,
+        fetchUrl: preflight,
+        connectTo: '127.0.0.1',
+      }
+    );
 
     assert.notEqual(result.code, 0, 'Must be refused');
-    assert.equal(privateRequests, 0, 'Private listener must receive zero requests');
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    // The only CLI call left is the version probe; it never receives the target.
+    const calls = existsSync(marker) ? readFileSync(marker, 'utf8').trim() : '';
+    assert.doesNotMatch(calls, /docs.example.com/, 'CLI must not receive the retrieval target');
     assert.doesNotMatch(result.stdout + result.stderr, /private content/);
   } finally {
-    privateServer.close();
+    publicServer.server.close();
+    privateProbe.proc.kill();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -1209,82 +1210,137 @@ test('serialized_client_secret_is_redacted', async () => {
   assert.match(emitted(result), /\[REDACTED\]/);
 });
 
-test('default_transport_ignores_startup_authenticated_proxy', async () => {
-  const { createServer } = await import('node:http');
-  let proxyRequests = 0;
-  let proxyAuth = null;
-  const proxyServer = createServer((req, res) => {
-    proxyRequests++;
-    proxyAuth = req.headers['proxy-authorization'] || null;
-    res.writeHead(407, { 'Proxy-Authenticate': 'Basic' });
-    res.end();
-  });
-  await new Promise((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
-  const proxyPort = proxyServer.address().port;
+test('serialized_session_id_is_redacted', async () => {
+  const env = { ...process.env };
+  delete env.SESSION_ID;
+  delete env.SESSION;
+  for (const budget of [20000, 200]) {
+    const result = await invoke(
+      ['web', 'search', 'docs', '--max-chars', String(budget)],
+      'json-session-id',
+      env
+    );
+    assert.equal(result.exitCode, 0);
+    assert.doesNotMatch(emitted(result), /fixture-session-secret/);
+    assert.ok(emitted(result).length <= budget);
+  }
+  const full = await invoke(['web', 'search', 'docs'], 'json-session-id', env);
+  assert.match(full.stdout, /session_id.{0,4}:.{0,4}\[REDACTED\]/);
+});
 
-  try {
-    const researchScript = fileURLToPath(new URL('../research.mjs', import.meta.url)).replace(/\\/g, '/');
-    const childCode = `
-      import { runResearch } from 'file:///${researchScript}';
-      const dummyResolver = async () => ['93.184.216.34'];
-      const p = runResearch(['web', 'read', 'http://docs.example.com/doc'], {
-        resolveHost: dummyResolver,
-      });
-      setTimeout(() => process.exit(0), 200);
-      try {
-        await p;
-      } catch {}
-    `;
-    spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
-      env: {
-        ...process.env,
-        NODE_USE_ENV_PROXY: '1',
-        HTTP_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
-        HTTPS_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
-      },
-      encoding: 'utf8',
-      timeout: 5000,
+// A separate-process proxy that answers 407 so that any traffic through it is
+// observable while the parent keeps a live event loop for the test process.
+async function startProxyFlightRecorder(ref) {
+  writeFileSync(
+    ref,
+    `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+const [log] = process.argv.slice(2);
+const server = createServer((req, res) => {
+  appendFileSync(log, (req.headers['proxy-authorization'] || 'none') + '\\n');
+  res.writeHead(407, { 'Proxy-Authenticate': 'Basic' });
+  res.end();
+});
+server.listen(0, '127.0.0.1', () => {
+  process.stdout.write(String(server.address().port) + '\\n');
+});
+`
+  );
+}
+
+const waitForPort = (child) =>
+  new Promise((resolvePort, rejectPort) => {
+    child.stdout.once('data', (chunk) => resolvePort(Number(String(chunk).trim())));
+    child.once('exit', (code) => rejectPort(new Error(`listener exited ${code}`)));
+  });
+
+const readProxyHits = (log) => (existsSync(log) ? readFileSync(log, 'utf8').trim() : '');
+
+test('default_transport_ignores_startup_authenticated_proxy', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-proxy-default-'));
+  const proxyRef = join(root, 'proxy.mjs');
+  const proxyLog = join(root, 'proxy-hits');
+  const researchScript = fileURLToPath(new URL('../research.mjs', import.meta.url)).replace(/\\/g, '/');
+  // The child startup inherits the authenticated proxy env; its own retrieval
+  // must still bypass it. The process exits only after runResearch settles.
+  const childCode = `
+    import { runResearch } from 'file:///${researchScript}';
+    const dummyResolver = async () => ['93.184.216.34'];
+    const result = await runResearch(['web', 'read', 'https://docs.example.com/doc'], {
+      resolveHost: dummyResolver,
+      binary: process.execPath,
+      prefixArgs: ['--version'],
     });
-    assert.equal(proxyRequests, 0, 'Proxy must receive zero requests');
-    assert.equal(proxyAuth, null, 'Proxy must receive no proxy authorization');
+    process.stdout.write('SETTLED:' + result.code);
+  `;
+  await startProxyFlightRecorder(proxyRef);
+  const proxyProc = spawn(process.execPath, [proxyRef, proxyLog]);
+  const proxyPort = await waitForPort(proxyProc);
+  try {
+    const child = await new Promise((resolveChild) => {
+      const proc = spawn(process.execPath, ['--input-type=module', '-e', childCode], {
+        env: {
+          ...process.env,
+          NODE_USE_ENV_PROXY: '1',
+          HTTP_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+          HTTPS_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+        },
+      });
+      let stdout = '';
+      proc.stdout.on('data', (chunk) => (stdout += chunk));
+      proc.once('exit', (code) => resolveChild({ code, stdout }));
+    });
+    assert.equal(child.code, 0);
+    assert.match(child.stdout, /^SETTLED:1$/, 'child retrieval must settle non-successfully');
+    assert.equal(readProxyHits(proxyLog), '', 'Proxy must receive zero requests');
   } finally {
-    proxyServer.close();
+    proxyProc.kill();
+    rmSync(root, { recursive: true, force: true });
   }
 });
-test('inherited proxy env is never used', async () => {
-  const { createServer } = await import('node:http');
-  let proxyRequests = 0;
-  const proxyServer = createServer((req, res) => {
-    proxyRequests++;
-    res.writeHead(407, { 'Proxy-Authenticate': 'Basic' });
-    res.end();
-  });
-  await new Promise((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
-  const proxyPort = proxyServer.address().port;
 
-  try {
-    const researchScript = fileURLToPath(new URL('../research.mjs', import.meta.url)).replace(/\\/g, '/');
-    const childCode = `
-      import { runResearch } from 'file:///${researchScript}';
-      const dummyResolver = async () => ['93.184.216.34'];
-      const p = runResearch(['web', 'read', 'https://docs.example.com/doc'], {
-        resolveHost: dummyResolver,
-      });
-      setTimeout(() => process.exit(0), 200);
-      try { await p; } catch {}
-    `;
-    spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
-      env: {
-        ...process.env,
-        NODE_USE_ENV_PROXY: '1',
-        HTTPS_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
-        HTTP_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
-      },
-      encoding: 'utf8',
-      timeout: 5000,
+test('inherited proxy env is never used', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-proxy-rev-'));
+  const proxyRef = join(root, 'proxy.mjs');
+  const proxyLog = join(root, 'proxy-hits');
+  await startProxyFlightRecorder(proxyRef);
+  const proxyProc = spawn(process.execPath, [proxyRef, proxyLog]);
+  const proxyPort = await waitForPort(proxyProc);
+  const proxyUrl = `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`;
+  const researchScript = fileURLToPath(new URL('../research.mjs', import.meta.url)).replace(/\\/g, '/');
+  const childCode = `
+    import { runResearch } from 'file:///${researchScript}';
+    const dummyResolver = async () => ['93.184.216.34'];
+    const result = await runResearch(['web', 'read', 'https://docs.example.com/doc'], {
+      resolveHost: dummyResolver,
+      binary: process.execPath,
+      prefixArgs: ['--version'],
     });
-    assert.equal(proxyRequests, 0, 'Proxy must receive zero connections');
+    process.stdout.write('SETTLED:' + result.code);
+  `;
+  try {
+    const child = await new Promise((resolveChild) => {
+      const proc = spawn(process.execPath, ['--input-type=module', '-e', childCode], {
+        env: {
+          ...process.env,
+          NODE_USE_ENV_PROXY: '1',
+          HTTP_PROXY: proxyUrl,
+          HTTPS_PROXY: proxyUrl,
+          http_proxy: proxyUrl,
+          https_proxy: proxyUrl,
+          ALL_PROXY: proxyUrl,
+        },
+      });
+      let stdout = '';
+      proc.stdout.on('data', (chunk) => (stdout += chunk));
+      proc.once('exit', (code) => resolveChild({ code, stdout }));
+    });
+    assert.equal(child.code, 0);
+    assert.match(child.stdout, /^SETTLED:1$/, 'child retrieval must have settled with a refusal');
+    assert.equal(readProxyHits(proxyLog), '', 'Proxy must receive zero requests');
   } finally {
-    proxyServer.close();
+    proxyProc.kill();
+    rmSync(root, { recursive: true, force: true });
   }
 });

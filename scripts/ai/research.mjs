@@ -334,104 +334,154 @@ async function defaultResolveHost(hostname) {
   }
 }
 
-async function defaultRetrieve(url, { method = 'GET', resolveHost = defaultResolveHost } = {}) {
-  const parsed = new URL(url);
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Research refused: unsupported protocol.');
-  }
-  const client = parsed.protocol === 'https:' ? https : http;
+const MAX_REDIRECT_HOPS = 5;
+const RETRIEVAL_TIMEOUT_MS = 10000;
+const PRIVATE_DESTINATION = 'Research refused: destination resolves to a private or restricted address.';
+const REDIRECT_VERIFY_FAILED = 'Research refused: unable to verify destination redirects.';
+const UNSUPPORTED_SCHEME = 'Research refused: unsupported protocol.';
+const UNFOLLOWABLE_REDIRECT = 'Research refused: destination redirect has no usable public location.';
+const TOO_MANY_REDIRECTS = 'Research refused: too many redirects.';
+const RETRIEVAL_TIMEOUT = 'Research refused: retrieval timed out.';
 
+function unpinHost(hostname) {
+  let h = hostname || '';
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  return h;
+}
+
+function isRefusedMessage(message) {
+  return typeof message === 'string' && message.startsWith('Research refused:');
+}
+
+// Resolve once and refuse the whole set if any address is private or restricted.
+// The caller then connects to exactly one of these addresses, so the address
+// that was validated is the address that is actually connected to.
+async function resolvePublicAddresses(url, resolveHost) {
+  const parsed = new URL(url);
+  refuseEmbeddedCredentials(url);
+  validatePublicUrl(url);
+  const host = unpinHost(parsed.hostname);
+  const ips = isIP(host)
+    ? [host]
+    : await resolveHost(host).catch(() => {
+        throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
+      });
+  if (!ips || !Array.isArray(ips) || ips.length === 0) {
+    throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
+  }
+  for (const ip of ips) {
+    if (isPrivateHost(ip) || isPrivateIPv4(ip)) throw new Error(PRIVATE_DESTINATION);
+  }
+  return { parsed, addresses: ips };
+}
+
+// One request to one already-validated hop. The `lookup` hook never consults DNS:
+// it returns the pinned address chosen above, so a rebinding answer between the
+// check and the connect can never redirect the connection. Redirects are never
+// followed automatically; the caller inspects and validates each hop first.
+function requestOnce(url, { method, address, timeoutMs = RETRIEVAL_TIMEOUT_MS }) {
   return new Promise((resolvePromise, rejectPromise) => {
+    const parsed = new URL(url);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      rejectPromise(new Error(UNSUPPORTED_SCHEME));
+      return;
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const expectedFamily = isIPv6(address) ? 6 : 4;
     let settled = false;
-    let req;
-    const timeoutId = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        if (req) req.destroy(new Error('Research refused: timeout verifying destination.'));
-        rejectPromise(new Error('Research refused: unable to verify destination redirects.'));
-      }
-    }, 10000);
 
     const onDone = (err, result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutId);
-      if (err) rejectPromise(err);
+      if (err) rejectPromise(isRefusedMessage(err.message) ? err : new Error(REDIRECT_VERIFY_FAILED));
       else resolvePromise(result);
     };
 
+    let req;
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      if (req) req.destroy(new Error(RETRIEVAL_TIMEOUT));
+      onDone(new Error(RETRIEVAL_TIMEOUT));
+    }, timeoutMs);
+
     try {
+      // A dedicated agent per request: the global (possibly proxy-aware) agent
+      // is never consulted, so inherited proxy settings cannot be used.
       const agent =
         parsed.protocol === 'https:'
           ? new https.Agent({ keepAlive: false })
           : new http.Agent({ keepAlive: false });
-      req = client.request(
-        parsed,
-        {
-          method,
-          agent,
-          lookup: async (hostname, options, callback) => {
-            try {
-              let h = hostname;
-              if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
-              let ips;
-              if (isIP(h)) {
-                ips = [h];
-              } else {
-                ips = await resolveHost(h);
-              }
-              if (!ips || !Array.isArray(ips) || ips.length === 0) {
-                return callback(new Error(`Research refused: cannot resolve host "${hostname}".`));
-              }
-              for (const ip of ips) {
-                if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
-                  return callback(
-                    new Error('Research refused: destination resolves to a private or restricted address.')
-                  );
-                }
-              }
-              const chosen = ips[0];
-              const family = isIPv6(chosen) ? 6 : 4;
-              if (options && options.all) {
-                return callback(
-                  null,
-                  ips.map((addr) => ({ address: addr, family: isIPv6(addr) ? 6 : 4 }))
-                );
-              }
-              return callback(null, chosen, family);
-            } catch (err) {
-              return callback(err);
-            }
-          },
-        },
-        (res) => {
-          const location = res.headers.location;
-          const chunks = [];
-          res.on('data', (chunk) => {
-            chunks.push(chunk);
+      const requestOptions = {
+        method,
+        agent,
+        headers: { connection: 'close' },
+        // Node 24 requires the array form of the lookup result; the boxed
+        // (address, family) form yields "Invalid IP address" and never connects.
+        lookup: (_hostname, _options, callback) =>
+          callback(null, [{ address, family: expectedFamily }]),
+      };
+      req = client.request(parsed, requestOptions, (res) => {
+        const location = res.headers.location;
+        const chunks = [];
+        res.on('data', (chunk) => {
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          onDone(null, {
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            location: Array.isArray(location) ? location[0] : location,
+            body: res.statusCode === 200 ? Buffer.concat(chunks).toString('utf8') : undefined,
           });
-          res.on('end', () => {
-            const body = res.statusCode === 200 ? Buffer.concat(chunks).toString('utf8') : undefined;
-            onDone(null, {
-              status: res.statusCode ?? 0,
-              headers: res.headers,
-              location: Array.isArray(location) ? location[0] : location,
-              body,
-            });
-          });
-          res.on('error', (err) => onDone(err));
-        }
-      );
-
-      req.on('error', (err) => {
-        onDone(new Error(err.message || 'Research refused: unable to verify destination redirects.'));
+        });
+        res.on('error', (err) => onDone(err));
       });
-
+      req.on('error', (err) => onDone(err));
       req.end();
-    } catch (err) {
-      onDone(new Error(err.message || 'Research refused: unable to verify destination redirects.'));
+    } catch {
+      onDone(new Error(REDIRECT_VERIFY_FAILED));
     }
   });
+}
+
+// The network boundary lives on the retrieval itself: every hop is resolved and
+// validated before its connection is opened, and redirects are followed
+// manually up to MAX_REDIRECT_HOPS, so a late private redirect is refused
+// before any private content is read.
+//
+// `connectTo` is a test-only seam (never set by production callers): it replaces
+// the pinned address with a local listener so the boundary can be exercised
+// offline. Validation still runs on the resolved addresses, and the redirect
+// hops below are still validated before each connection.
+export async function defaultRetrieve(
+  url,
+  {
+    method = 'GET',
+    resolveHost = defaultResolveHost,
+    maxHops = MAX_REDIRECT_HOPS,
+    connectTo,
+  } = {}
+) {
+  let current = String(url);
+  for (let hops = 0; ; hops++) {
+    const { addresses } = await resolvePublicAddresses(current, resolveHost);
+    const pinned = connectTo ?? addresses[0];
+    const response = await requestOnce(current, { method, address: pinned });
+    const location = response.location;
+    if (response.status >= 300 && response.status < 400 && location) {
+      if (hops + 1 > maxHops) throw new Error(TOO_MANY_REDIRECTS);
+      let next;
+      try {
+        next = new URL(location, current).href;
+      } catch {
+        throw new Error(UNFOLLOWABLE_REDIRECT);
+      }
+      current = next;
+      continue;
+    }
+    return response;
+  }
 }
 
 const defaultFetchUrl = defaultRetrieve;
@@ -734,7 +784,7 @@ function redact(value, envValues = []) {
     .replace(/\b(Bearer|Basic)\s+[^\s"<>]+/gi, '$1 [REDACTED]')
     .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@')
     .replace(
-      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?|secret(?:[_-]?key)?)|(?:%[0-9a-fA-F]{2})+[a-z0-9_-]*|api[_-]?key|access[_-]?key|client[_-]?secret|password|passwd|auth(?:orization)?|credential|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
+      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?|secret(?:[_-]?key)?)|(?:%[0-9a-fA-F]{2})+[a-z0-9_-]*|api[_-]?key|access[_-]?key|client[_-]?secret|session(?:[_-]?id)?|password|passwd|auth(?:orization)?|credential|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
       '$1[REDACTED]'
     )
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g, '[REDACTED]')
@@ -776,6 +826,9 @@ export async function runResearch(
     resolveHost = defaultResolveHost,
     fetchUrl = defaultFetchUrl,
     retrieve,
+    // Test-only seam: pin the retrieval connection to a local listener while the
+    // resolver still validates the public addresses. Never used in production.
+    connectTo,
   } = {}
 ) {
   const envValues = [
@@ -854,6 +907,22 @@ export async function runResearch(
         }
       }
     }
+    // Read targets are retrieved in-process so the public-destination boundary
+    // is enforced on the retrieval connection itself (pinned address, manual
+    // redirects, per-hop re-validation). The CLI never re-fetches that URL.
+    let fetched;
+    if (request.action !== 'search' && request.urls && request.urls.length > 0) {
+      try {
+        fetched = await defaultRetrieve(request.urls[0], { resolveHost, connectTo });
+      } catch (err) {
+        return fail(redact(err.message || 'Research refused: unable to retrieve.', envValues));
+      }
+      if (fetched.status !== 200) {
+        return fail(
+          'Research refused: public access failed (UPSTREAM_ERROR). Use another public source; no login or automatic retry.'
+        );
+      }
+    }
     const result = invoke(request.cliArgs);
     if (result.error || result.signal)
       return fail('Research refused: Agent-Reach failed or exceeded its timeout/output buffer.');
@@ -865,6 +934,23 @@ export async function runResearch(
     }
     if (!payload || typeof payload.ok !== 'boolean')
       return fail('Research refused: invalid Agent-Reach response.');
+    // For read targets the CLI is only a post-processor: its own item content is
+    // discarded and replaced with the text this process already fetched under
+    // the boundary, so any transport the CLI performed can never surface.
+    if (fetched) {
+      const processed = Array.isArray(payload.items) && payload.items.length > 0 ? payload.items[0] : {};
+      payload = {
+        ...payload,
+        ok: true,
+        items: [
+          {
+            title: typeof processed.title === 'string' ? processed.title : '',
+            url: request.urls[0],
+            text: fetched.body ?? '',
+          },
+        ],
+      };
+    }
     if (Array.isArray(payload?.items)) {
       for (const item of payload.items) {
         if (item?.url && typeof item.url === 'string') {

@@ -16,6 +16,15 @@ if (argv[0] === 'version') {
     );
 } else if (mode === 'plain') {
   console.log('Not the pinned JSON CLI');
+} else if (mode === 'retrieve-target') {
+  // Agent-Reach post-processes the public URL the wrapper already retrieved in
+  // process. It never fetches anything itself, so it cannot be redirected.
+  console.log(
+    JSON.stringify({
+      ok: true,
+      items: [{ title: 'document', url: argv[argv.length - 1], text: 'public content' }],
+    })
+  );
 } else if (mode === 'failure' || mode === 'login' || mode === 'secret-code') {
   console.error('Cookie: session=fixture-cookie; Authorization: Bearer fixture-token');
   console.log(
@@ -96,6 +105,9 @@ if (argv[0] === 'version') {
   }
   if (mode === 'json-client-secret') {
     text = JSON.stringify({ client_secret: 'fixture-oauth-secret' });
+  }
+  if (mode === 'json-session-id') {
+    text = JSON.stringify({ session_id: 'fixture-session-secret' });
   }
   if (mode === 'ipv6-encoded-secret') {
     text = 'https://[2606:4700::1111]/?%74oken=fixture-encoded-token';
