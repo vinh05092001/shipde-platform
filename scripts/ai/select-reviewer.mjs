@@ -78,7 +78,7 @@ export function canonicalIdentity(candidate) {
 
   // If candidate object has fields, each present field must strictly match key
   if (obj) {
-    for (const prop of ['gateway', 'upstream', 'account', 'model']) {
+    for (const prop of ['gateway', 'upstream', 'account', 'accountId', 'model', 'modelId']) {
       if (Object.hasOwn(obj, prop)) {
         const val = obj[prop];
         if (val === null || val === undefined || String(val).trim() === '') {
@@ -93,12 +93,16 @@ export function canonicalIdentity(candidate) {
     if (obj.upstream !== undefined && obj.upstream !== null && norm(obj.upstream) !== upstreamNorm) {
       return null;
     }
-    const objAccount = obj.account !== undefined && obj.account !== null ? obj.account : obj.accountId;
-    if (objAccount !== undefined && objAccount !== null && norm(objAccount) !== accountNorm) {
+    if (obj.account !== undefined && obj.account !== null && norm(obj.account) !== accountNorm) {
       return null;
     }
-    const objModel = obj.modelId !== undefined && obj.modelId !== null ? obj.modelId : obj.model;
-    if (objModel !== undefined && objModel !== null && norm(objModel) !== modelNorm) {
+    if (obj.accountId !== undefined && obj.accountId !== null && norm(obj.accountId) !== accountNorm) {
+      return null;
+    }
+    if (obj.model !== undefined && obj.model !== null && norm(obj.model) !== modelNorm) {
+      return null;
+    }
+    if (obj.modelId !== undefined && obj.modelId !== null && norm(obj.modelId) !== modelNorm) {
       return null;
     }
 

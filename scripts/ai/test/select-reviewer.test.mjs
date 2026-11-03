@@ -281,4 +281,43 @@ describe('select-reviewer', () => {
     assert.equal(result.status, 'BLOCKED');
     assert.equal(result.reviewer, null);
   });
+
+  it('blocks explicit null modelId and accountId', () => {
+    const resultModel = selectReviewer({
+      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
+      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
+      resolveCandidate: (c) => ({ ...c, modelId: null }),
+    });
+    assert.equal(resultModel.status, 'BLOCKED');
+    assert.equal(resultModel.reviewer, null);
+
+    const resultAccount = selectReviewer({
+      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
+      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
+      resolveCandidate: (c) => ({ ...c, accountId: null }),
+    });
+    assert.equal(resultAccount.status, 'BLOCKED');
+    assert.equal(resultAccount.reviewer, null);
+
+    const resultEmptyModel = selectReviewer({
+      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
+      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
+      resolveCandidate: (c) => ({ ...c, modelId: '' }),
+    });
+    assert.equal(resultEmptyModel.status, 'BLOCKED');
+    assert.equal(resultEmptyModel.reviewer, null);
+
+    const resultEmptyAccount = selectReviewer({
+      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
+      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
+      resolveCandidate: (c) => ({ ...c, accountId: '  ' }),
+    });
+    assert.equal(resultEmptyAccount.status, 'BLOCKED');
+    assert.equal(resultEmptyAccount.reviewer, null);
+
+    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', modelId: null }), null);
+    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', accountId: null }), null);
+    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', modelId: '' }), null);
+    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', accountId: '' }), null);
+  });
 });
