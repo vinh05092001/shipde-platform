@@ -90,6 +90,10 @@ Numbered implementation sequence ordered API/backend before UI, with the failing
 - [ ] `T04` Implement UI screens and state transitions to pass `T03`.
 - [ ] `T05` Run full verification suite, verify no hardcoded production values, and attach evidence.
 
+## Author checklist
+
+- [ ] Run pnpm ai:check and paste its summary in the PR.
+
 ## Verification commands
 
 List exact repository commands. All must run from a clean checkout.
