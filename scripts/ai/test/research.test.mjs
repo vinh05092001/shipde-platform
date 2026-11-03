@@ -310,3 +310,22 @@ test('short environment values are redacted when emitted as values', () => {
   assert.equal(result.exitCode, 0);
   assert.equal(emitted(result).includes('xyz'), false);
 });
+
+test('boolean and common non-secret environment values do not corrupt payload booleans', () => {
+  const result = invoke(['github', 'search', 'docs'], 'environment', {
+    ...process.env,
+    GIT_EDITOR: 'false',
+    CI: 'true',
+    TEST_ZERO: '0',
+    TEST_ONE: '1',
+    PYTHONIOENCODING: 'utf-8',
+  });
+  assert.equal(result.exitCode, 0);
+  const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, true);
+  const info = payload(result);
+  assert.equal(info.credentialConfig, false);
+  assert.equal(info.ytdlpConfig, false);
+  assert.equal(info.isolatedCwd, true);
+});
+

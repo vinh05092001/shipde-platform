@@ -19,6 +19,11 @@ const ACTIONS = new Map([
   ['youtube transcript', ['subtitle', 'yt-dlp']],
 ]);
 const SENSITIVE = /cookie|token|secret|password|authorization|api[_-]?key|environment|^env$/i;
+// Only values of credential-shaped variables are scrubbed verbatim; scrubbing
+// every inherited value would corrupt ordinary output (e.g. the word "true").
+const SENSITIVE_ENV =
+  /cookie|token|secret|password|passwd|authorization|auth|credential|private|proxy|api[_-]?key|access[_-]?key/i;
+const NON_SECRET_ENV_VALUES = new Set(['true', 'false', '0', '1', 'utf-8', 'utf8']);
 const PUBLIC_ERROR_CODES = new Set([
   'BAD_INPUT',
   'TIMEOUT',
@@ -258,7 +263,10 @@ export function runResearch(
     const envValues = [
       ...new Set(
         [...Object.values(env), ...Object.values(childEnv)].filter(
-          (value) => typeof value === 'string' && value.length > 0
+          (value) =>
+            typeof value === 'string' &&
+            value.length > 0 &&
+            !NON_SECRET_ENV_VALUES.has(value.toLowerCase().trim())
         )
       ),
     ].sort((a, b) => b.length - a.length);
