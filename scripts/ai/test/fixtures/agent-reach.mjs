@@ -80,7 +80,7 @@ if (argv[0] === 'version') {
       'C++ examples and Rust macros\n' +
       'npm i react@18.2.0 --save\n' +
       'host: docs.example.com\n' +
-      'GH_TOKEN=test-fixture-token-not-a-real-secret';
+      'GH_TOKEN=test-not-a-key';
   }
   if (mode === 'spaced-name') {
     // Returned URL with a space-encoded separator before a sensitive name.

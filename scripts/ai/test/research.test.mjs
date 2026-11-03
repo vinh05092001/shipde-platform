@@ -807,7 +807,7 @@ test('encoded credential parameter names in returned URLs are masked before trun
 });
 
 test('masking preserves ordinary public content', async () => {
-  const env = { ...process.env, GH_TOKEN: 'test-fixture-token-not-a-real-secret' };
+  const env = { ...process.env, GH_TOKEN: 'test-not-a-key' };
   const result = await invoke(['web', 'search', 'docs'], 'public-content', env);
   assert.equal(result.exitCode, 0);
   const text = emitted(result);
@@ -824,11 +824,13 @@ test('test fixtures contain no generic secret scanner patterns or live tokens (P
   // Proves that fixture does not introduce GitHub PATs or generic api keys (e.g. ghp_ followed by high-entropy string)
   assert.doesNotMatch(fixtureContent, /ghp_[a-zA-Z0-9]{20,}/);
   assert.doesNotMatch(fixtureContent, /(?:api_key|secret_key|auth_token|access_token)\s*[:=]\s*['"][0-9a-zA-Z_\-]{24,}['"]/i);
+  assert.match(fixtureContent, /GH_TOKEN=test-not-a-key/);
 
   const testFileContent = readFileSync(fileURLToPath(import.meta.url), 'utf8');
   // Proves that test file itself contains no GitHub PATs or generic api keys
   assert.doesNotMatch(testFileContent, /ghp_[a-zA-Z0-9]{20,}/);
   assert.doesNotMatch(testFileContent, /GH_TOKEN\s*[:=]\s*['"]ghp_/);
+  assert.match(testFileContent, /GH_TOKEN:\s*'test-not-a-key'/);
 });
 
 test('search queries distinguish library identifiers from URL candidates', async () => {
