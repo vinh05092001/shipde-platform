@@ -575,3 +575,37 @@ The action connects to an OpenAI-compatible endpoint using credentials provided 
 - `PR_AGENT_MODEL`: The model name to execute reviews and suggestions (e.g., `gpt-4o`, `gpt-4o-mini`, or provider model ID).
 
 If any of these secrets are absent, or if the Pull Request originates from a fork, `.github/workflows/pr-agent.yml` skips execution cleanly, posts an informational notice, and completes successfully without failing.
+
+## Affected-only PR CI caching and merge queue (TASK-AI-165)
+
+Operator explicitly approved modifying `.github/` for this item on 2026-11-02.
+
+### What Changed
+1. **Affected-only PR CI with Turborepo**:
+   - In `.github/workflows/current-application.yml`, configured `actions/checkout` with `fetch-depth: 0`, cached pnpm store (`pnpm/action-setup` before `actions/setup-node` with `cache: pnpm`), and restored Turborepo filesystem cache via `actions/cache@v4` on `.turbo`.
+   - On `pull_request` events, runs `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}`, followed by root scripts linting (`pnpm exec eslint scripts`).
+   - On `push` to `main` and on `merge_group` events, executes full non-affected runs (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`) to guarantee complete mainline integrity.
+   - Preserves all required status check job names (`application-gate`, `contract`) and required verification steps (Prisma client generation, migrations, database services, integration tests, contract verification, secrets scanning, ast-grep, formatting negative proofs).
+2. **Merge queue triggers**:
+   - Added `merge_group` trigger to both workflows that provide required status checks:
+     - `.github/workflows/current-application.yml` (provides required status check `application-gate`)
+     - `.github/workflows/feature-contract-gate.yml` (provides required status check `contract`)
+   - Added `push: branches: [main]` trigger to `.github/workflows/current-application.yml` to ensure Turborepo cache is populated on main and master runs are validated.
+
+### Expected Effect
+- **Substantially faster PR verification**: Rather than running full lint, typecheck, test, and build across all monorepo packages, PR CI runs only against packages directly affected by the PR diff relative to the PR base commit (`TURBO_SCM_BASE`), reducing CI duration and worker waiting times.
+- **Cache reuse**: Monorepo package outputs and hashes are cached in `.turbo`, allowing unchanged dependencies to be restored instantly.
+- **Concurrent agent PR throughput**: GitHub Merge Queue allows concurrent agent PRs to be queued and validated in parallel against speculative merged results without serial human rebase bottlenecks.
+- **Zero weakening of required gates**: Required status checks (`application-gate` and `contract`) remain strictly enforced with identical names.
+
+### Operator Step to Enable Merge Queue in Branch Protection
+To enable the merge queue in GitHub repository settings (not executed by this PR):
+1. Navigate to repository settings on GitHub: **Settings > Branches**.
+2. Under **Branch protection rules**, edit the rule for branch `main`.
+3. Check the box **Require merge queue**.
+4. Configure merge queue parameters:
+   - **Merge method**: Squash and merge.
+   - **Build concurrency**: 2 to 5 (adjust based on GitHub Actions concurrency limit).
+   - **Minimum / Maximum pull requests to merge**: 1 to 5.
+   - **Status checks**: Ensure required checks `contract` and `application-gate` are selected.
+5. Save changes.
