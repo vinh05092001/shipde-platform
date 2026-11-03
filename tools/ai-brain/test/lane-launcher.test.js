@@ -322,3 +322,20 @@ test('redactStderr replaces only lines containing credentials, preserves safe li
   ].join('\n');
   assert.strictEqual(saved.stderr, expected);
 });
+
+test('redacts-standalone-key-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-A' };
+  const rawStderr = '--key=FAKE_ONLY';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr, '[REDACTED LINE: credential]');
+  assert.strictEqual(saved.stderr.includes('FAKE_ONLY'), false);
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr, '[REDACTED LINE: credential]');
+  assert.strictEqual(persisted.stderr.includes('FAKE_ONLY'), false);
+});

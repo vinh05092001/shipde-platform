@@ -14,7 +14,7 @@ function getLockPath(lane) {
 }
 
 const CREDENTIAL_LINE_RE =
-  /(?:api[-_]?key|apikey|token|secret|password|authorization|bearer)/i;
+  /(?:api[-_]?key|apikey|key|token|secret|password|authorization|bearer)/i;
 
 function redactStderr(text) {
   if (!text) return '';
