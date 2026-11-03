@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-165` |
 | Feature ID | `N/A — CI performance optimization and merge queue automation` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `273` |
+| Delivery order | `292` |
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
