@@ -43,7 +43,7 @@ jobs:
 
           while IFS= read -r -d '' path; do
             case "$path" in
-              .agents/*|.github/*|docs/*|scripts/ai/*|AGENTS.md|README.md|.gitignore)
+              .agents/*|.github/*|.oc/*|docs/*|scripts/ai/*|AGENTS.md|README.md|.gitignore)
                 ;;
               *)
                 application=true
@@ -162,6 +162,7 @@ jobs:
           GITLEAKS_VERSION="8.24.0"
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
+      - run: pnpm build
       - name: Run Foundation Integration Tests
         run: pnpm test:integration
       - run: pnpm test:e2e

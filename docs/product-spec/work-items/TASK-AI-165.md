@@ -138,7 +138,9 @@ git diff --check origin/main...HEAD
 | Review round | Commit | Verdict | Findings resolved |
 |---|---|---|---|
 | 1 | `5cd2b56` | CHANGES_REQUIRED | Initial PR CI failure (eslint: command not found) |
-| 2 | pending | READY_FOR_CODEX | Resolved Finding 1 by invoking `pnpm exec eslint scripts` |
+| 3 | `48435c5` | CHANGES_REQUIRED | CI failing: worker build missing @shipde/config |
+| 31 | `3a61b28` | CHANGES_REQUIRED | Unverified CI execution and formerly failing build path |
+| 32 | pending | READY_FOR_CODEX | Resolved Finding 9: added `.oc/*` to scope detection ignored paths, restored `pnpm build` before integration tests with Turborepo caching |
 
 ## Residual limitations
 
