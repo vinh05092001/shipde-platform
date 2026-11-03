@@ -1,0 +1,41 @@
+{
+  "jcodemunch": {
+    "command": "${CTX_TOOLS_ROOT}/.venv/Scripts/python.exe",
+    "args": [
+      "-m",
+      "jcodemunch_mcp",
+      "serve",
+      "--transport",
+      "stdio",
+      "--freshness-mode",
+      "relaxed",
+      "--watcher=false"
+    ],
+    "env": {
+      "JCODEMUNCH_USE_AI_SUMMARIES": "false",
+      "CODE_INDEX_PATH": "${CTX_TOOLS_ROOT}/jcodemunch-index"
+    }
+  },
+  "serena": {
+    "command": "${CTX_TOOLS_ROOT}/.venv-serena/Scripts/serena.exe",
+    "args": [
+      "start-mcp-server",
+      "--context",
+      "codex",
+      "--agent-interface",
+      "tools",
+      "--transport",
+      "stdio",
+      "--enable-web-dashboard",
+      "false",
+      "--enable-gui-log-window",
+      "false",
+      "--open-web-dashboard",
+      "false",
+      "--project-from-cwd"
+    ],
+    "env": {
+      "SERENA_HOME": "${CTX_TOOLS_ROOT}/serena-home"
+    }
+  }
+}
