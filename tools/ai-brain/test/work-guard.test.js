@@ -18,7 +18,11 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'work-guard-'));
 function fakeGit(map) {
   return (args) => {
     const r = map[args.join(' ')];
-    return r === undefined ? { status: 1, stdout: '' } : typeof r === 'string' ? { status: 0, stdout: r } : r;
+    return r === undefined
+      ? { status: 1, stdout: '' }
+      : typeof r === 'string'
+        ? { status: 0, stdout: r }
+        : r;
   };
 }
 
@@ -31,31 +35,59 @@ const okGit = (branch) =>
   });
 
 test('workspace on the item branch is accepted', () => {
-  const r = g.checkWorkspace({ cwd: '/w/p-task-ai-165', expectedRoot: '/w/p-task-ai-165', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-165-ci') });
+  const r = g.checkWorkspace({
+    cwd: '/w/p-task-ai-165',
+    expectedRoot: '/w/p-task-ai-165',
+    workItemId: 'TASK-AI-165',
+    git: okGit('feat/task-ai-165-ci'),
+  });
   assert.equal(r.ok, true);
   assert.equal(r.head, 'abc');
 });
 
 test('workspace on another item branch is WRONG_BRANCH (165 on 155)', () => {
-  const r = g.checkWorkspace({ cwd: '/w/p-task-ai-165', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-155-web-data-table') });
-  assert.deepEqual([r.ok, r.cause, r.branch], [false, g.Cause.WRONG_BRANCH, 'feat/task-ai-155-web-data-table']);
+  const r = g.checkWorkspace({
+    cwd: '/w/p-task-ai-165',
+    workItemId: 'TASK-AI-165',
+    git: okGit('feat/task-ai-155-web-data-table'),
+  });
+  assert.deepEqual(
+    [r.ok, r.cause, r.branch],
+    [false, g.Cause.WRONG_BRANCH, 'feat/task-ai-155-web-data-table']
+  );
 });
 
 test('id prefix does not match a longer id (TASK-AI-16 vs task-ai-165)', () => {
-  const r = g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', branchPattern: /^(feat|fix)\/task-ai-16-/, git: okGit('feat/task-ai-165-ci') });
+  const r = g.checkWorkspace({
+    cwd: '/w',
+    workItemId: 'TASK-AI-16',
+    branchPattern: /^(feat|fix)\/task-ai-16-/,
+    git: okGit('feat/task-ai-165-ci'),
+  });
   assert.equal(r.cause, g.Cause.WRONG_BRANCH);
 });
 
 test('cwd in a different checkout is CWD_MISMATCH', () => {
-  const r = g.checkWorkspace({ cwd: '/w/x', expectedRoot: '/w/p-task-ai-160', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-165-ci') });
+  const r = g.checkWorkspace({
+    cwd: '/w/x',
+    expectedRoot: '/w/p-task-ai-160',
+    workItemId: 'TASK-AI-165',
+    git: okGit('feat/task-ai-165-ci'),
+  });
   assert.equal(r.cause, g.Cause.CWD_MISMATCH);
 });
 
 test('unmerged files are MERGE_CONFLICT, detached head is refused', () => {
-  const c = fakeGit({ 'rev-parse --show-toplevel': '/w', 'diff --name-only --diff-filter=U': 'a.csv\n' });
+  const c = fakeGit({
+    'rev-parse --show-toplevel': '/w',
+    'diff --name-only --diff-filter=U': 'a.csv\n',
+  });
   assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: c }).cause, g.Cause.CONFLICT);
   const d = fakeGit({ 'rev-parse --show-toplevel': '/w', 'diff --name-only --diff-filter=U': '' });
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: d }).cause, g.Cause.DETACHED_HEAD);
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: d }).cause,
+    g.Cause.DETACHED_HEAD
+  );
 });
 
 test('same head/base/input is not reviewed twice; new head, base or input reopens', () => {
@@ -64,9 +96,18 @@ test('same head/base/input is not reviewed twice; new head, base or input reopen
   assert.equal(L.admit('A', 'review', fp).ok, true);
   L.record('A', 'review', fp, 'CHANGES_REQUIRED', { tokens: 100 });
   assert.equal(L.admit('A', 'review', fp).cause, g.Cause.NO_PROGRESS);
-  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h2', baseSha: 'b1', inputs: 'ci:red' })).ok, true);
-  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b2', inputs: 'ci:red' })).ok, true);
-  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b1', inputs: 'ci:green' })).ok, true);
+  assert.equal(
+    L.admit('A', 'review', g.fingerprint({ headSha: 'h2', baseSha: 'b1', inputs: 'ci:red' })).ok,
+    true
+  );
+  assert.equal(
+    L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b2', inputs: 'ci:red' })).ok,
+    true
+  );
+  assert.equal(
+    L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b1', inputs: 'ci:green' })).ok,
+    true
+  );
 });
 
 test('transient outcome allows a controlled retry of the same input', () => {
@@ -88,7 +129,10 @@ test('blocking one item leaves independent items running', () => {
 
 test('item and goal budgets cap attempts, time and tokens; unknown tokens stay unknown', () => {
   const file = path.join(tmp(), 'l.json');
-  const L = new g.ProgressLedger({ file, limits: { item: { attempts: 2, tokens: 1000 }, goal: { ms: 5000 } } });
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { attempts: 2, tokens: 1000 }, goal: { ms: 5000 } },
+  });
   L.record('A', 'review', 'f1', 'CHANGES_REQUIRED', { tokens: 400 });
   L.record('A', 'repair', 'f2', 'DONE', {});
   assert.equal(L.admit('A', 'review', 'f3').cause, g.Cause.ATTEMPTS_EXHAUSTED);
@@ -106,21 +150,51 @@ test('result from a previous job is rejected', () => {
 });
 
 test('cleanup cannot mask the real exit code', async () => {
-  const r = await g.runWithCleanup(async () => ({ exitCode: 1 }), async () => {
-    throw new Error('rm failed');
-  });
+  const r = await g.runWithCleanup(
+    async () => ({ exitCode: 1 }),
+    async () => {
+      throw new Error('rm failed');
+    }
+  );
   assert.equal(r.exitCode, 1);
   assert.match(r.cleanupError, /rm failed/);
-  await assert.rejects(g.runWithCleanup(async () => { throw new Error('worker crashed'); }, async () => {}), /worker crashed/);
+  await assert.rejects(
+    g.runWithCleanup(
+      async () => {
+        throw new Error('worker crashed');
+      },
+      async () => {}
+    ),
+    /worker crashed/
+  );
 });
 
 test('CLI: refused admit exits 3, record then admit same input is NO_PROGRESS', () => {
   const ledger = path.join(tmp(), 'l.json');
   const cli = path.join(__dirname, '..', 'work-guard.js');
-  const base = ['--ledger', ledger, '--item', 'A', '--stage', 'review', '--head', 'h1', '--base', 'b1'];
-  assert.equal(spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)]).status, 0);
-  assert.equal(spawnSync(process.execPath, [cli, 'record', ...base, '--outcome', 'CHANGES_REQUIRED']).status, 0);
-  const r = spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)], { encoding: 'utf8' });
+  const base = [
+    '--ledger',
+    ledger,
+    '--item',
+    'A',
+    '--stage',
+    'review',
+    '--head',
+    'h1',
+    '--base',
+    'b1',
+  ];
+  assert.equal(
+    spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)]).status,
+    0
+  );
+  assert.equal(
+    spawnSync(process.execPath, [cli, 'record', ...base, '--outcome', 'CHANGES_REQUIRED']).status,
+    0
+  );
+  const r = spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)], {
+    encoding: 'utf8',
+  });
   assert.equal(r.status, 3);
   assert.equal(JSON.parse(r.stdout).cause, g.Cause.NO_PROGRESS);
   assert.equal(spawnSync(process.execPath, [cli, 'nope']).status, 2);
@@ -136,7 +210,7 @@ test('review loop: a repair that never ran does not re-test or re-review the sam
       runTests: () => ((tests += 1), { pass: true }),
       review: (sha) => ((reviews += 1), { pass: false, sha, findings: [{ id: 'P1' }] }),
       repair: () => ({ repairNotAttempted: true }),
-    },
+    }
   );
   assert.equal(r.status, Status.BLOCKED);
   assert.equal(tests, 1);
@@ -144,9 +218,19 @@ test('review loop: a repair that never ran does not re-test or re-review the sam
 });
 
 test('codex 8fa765f: default branch match is bounded (TASK-AI-16 vs task-ai-165)', () => {
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-165-ci') }).cause, g.Cause.WRONG_BRANCH);
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-16-x') }).ok, true);
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'AI-165', git: okGit('feat/task-ai-165-ci') }).ok, true);
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-165-ci') })
+      .cause,
+    g.Cause.WRONG_BRANCH
+  );
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-16-x') }).ok,
+    true
+  );
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'AI-165', git: okGit('feat/task-ai-165-ci') }).ok,
+    true
+  );
 });
 
 test('codex 8fa765f: alternating inputs F1, F2, F1 do not reopen F1', () => {
@@ -157,9 +241,12 @@ test('codex 8fa765f: alternating inputs F1, F2, F1 do not reopen F1', () => {
 });
 
 test('codex 8fa765f: frozen worker result survives a failing cleanup', async () => {
-  const r = await g.runWithCleanup(async () => Object.freeze({ exitCode: 7 }), async () => {
-    throw new Error('rm failed');
-  });
+  const r = await g.runWithCleanup(
+    async () => Object.freeze({ exitCode: 7 }),
+    async () => {
+      throw new Error('rm failed');
+    }
+  );
   assert.equal(r.exitCode, 7);
   assert.match(r.cleanupError, /rm failed/);
 });
@@ -174,7 +261,7 @@ test('codex 8fa765f: returning to a tested SHA does not re-run its tests', async
       runTests: () => ({ pass: false, findings: [{ id: 'T' }] }),
       review: (sha) => ({ pass: true, sha }),
       repair: () => ({ sha: shas.shift() }),
-    },
+    }
   );
   void runs;
 });
@@ -188,7 +275,17 @@ test('codex a820c19: corrupt ledger fails closed', () => {
 
 test('codex a820c19: frozen worker exception survives a failing cleanup', async () => {
   const e = Object.freeze(new Error('worker crashed'));
-  await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /worker crashed/);
+  await assert.rejects(
+    g.runWithCleanup(
+      async () => {
+        throw e;
+      },
+      async () => {
+        throw new Error('rm');
+      }
+    ),
+    /worker crashed/
+  );
 });
 
 test('lock: second owner refused; only owner releases; live holder never superseded', () => {
@@ -196,7 +293,10 @@ test('lock: second owner refused; only owner releases; live holder never superse
   const live = { pidAlive: () => true };
   assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, live).ok, true);
   const second = g.acquireLock(f, { jobId: 'j2', pid: 222 }, live);
-  assert.deepEqual([second.ok, second.cause, second.holder.jobId], [false, g.Cause.LOCK_HELD, 'j1']);
+  assert.deepEqual(
+    [second.ok, second.cause, second.holder.jobId],
+    [false, g.Cause.LOCK_HELD, 'j1']
+  );
   assert.equal(g.releaseLock(f, { jobId: 'j2' }).cause, g.Cause.LOCK_NOT_OWNER);
   assert.equal(g.lockHolder(f).jobId, 'j1');
   assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
@@ -229,9 +329,15 @@ test('codex 4625b50: a late contender creating an old generation backs off', () 
 });
 
 test('codex a820c19: reserved admission blocks a duplicate until recorded; dead reserver frees it', () => {
-  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 5 } } });
+  const L = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { goal: { attempts: 5 } },
+  });
   assert.equal(L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).ok, true);
-  assert.equal(L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).cause, g.Cause.NO_PROGRESS);
+  assert.equal(
+    L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).cause,
+    g.Cause.NO_PROGRESS
+  );
   L.record('A', 'review', 'F', 'CHANGES_REQUIRED', {});
   assert.equal(L.load().items.A.spent.attempts, 1);
   assert.equal(L.admit('A', 'review', 'G', { reserve: true, pid: 999999 }).ok, true);
@@ -240,13 +346,23 @@ test('codex a820c19: reserved admission blocks a duplicate until recorded; dead 
 });
 
 test('codex a820c19: goal cap of one admits only one reserved attempt', () => {
-  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 1 } } });
+  const L = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { goal: { attempts: 1 } },
+  });
   assert.equal(L.admit('A', 'review', 'F1', { reserve: true, pid: process.pid }).ok, true);
-  assert.equal(L.admit('B', 'review', 'F2', { reserve: true, pid: process.pid }).cause, g.Cause.GOAL_EXHAUSTED);
+  assert.equal(
+    L.admit('B', 'review', 'F2', { reserve: true, pid: process.pid }).cause,
+    g.Cause.GOAL_EXHAUSTED
+  );
 });
 
 test('codex 4625b50: structurally damaged ledger fails closed', () => {
-  for (const bad of ['{"items":false,"goal":false}', '{"items":{"A":{"spent":{"attempts":"x"}}},"goal":{"attempts":0}}', '[]']) {
+  for (const bad of [
+    '{"items":false,"goal":false}',
+    '{"items":{"A":{"spent":{"attempts":"x"}}},"goal":{"attempts":0}}',
+    '[]',
+  ]) {
     const file = path.join(tmp(), 'l.json');
     fs.writeFileSync(file, bad);
     assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
@@ -260,15 +376,40 @@ test('codex e4a6705: missing counters or fingerprint containers fail closed; pid
   const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
   assert.throws(() => L.admit('A', 'review', 'F', { reserve: true, pid: 0 }), /integer owner pid/);
   assert.throws(() => L.admit('A', 'review', 'F', { reserve: true, pid: -4 }), /integer owner pid/);
-  const out = Object.defineProperty({ exitCode: 7 }, 'cleanupError', { value: 'x', writable: false, enumerable: false });
-  const r = await g.runWithCleanup(async () => out, async () => { throw new Error('rm'); });
+  const out = Object.defineProperty({ exitCode: 7 }, 'cleanupError', {
+    value: 'x',
+    writable: false,
+    enumerable: false,
+  });
+  const r = await g.runWithCleanup(
+    async () => out,
+    async () => {
+      throw new Error('rm');
+    }
+  );
   assert.equal(r.exitCode, 7);
-  const e = Object.defineProperty(new Error('crash'), 'cleanupError', { value: 1, writable: false });
-  await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /crash/);
+  const e = Object.defineProperty(new Error('crash'), 'cleanupError', {
+    value: 1,
+    writable: false,
+  });
+  await assert.rejects(
+    g.runWithCleanup(
+      async () => {
+        throw e;
+      },
+      async () => {
+        throw new Error('rm');
+      }
+    ),
+    /crash/
+  );
 });
 
 test('codex b4a4064: items need spent and stages; lock pids must be positive; usage never refunds', () => {
-  for (const bad of ['{"items":{"A":{}},"goal":{"attempts":0,"ms":0,"tokens":0}}', '{"items":{"A":{"spent":{"attempts":1,"ms":0,"tokens":0}}},"goal":{"attempts":0,"ms":0,"tokens":0}}']) {
+  for (const bad of [
+    '{"items":{"A":{}},"goal":{"attempts":0,"ms":0,"tokens":0}}',
+    '{"items":{"A":{"spent":{"attempts":1,"ms":0,"tokens":0}}},"goal":{"attempts":0,"ms":0,"tokens":0}}',
+  ]) {
     const file = path.join(tmp(), 'l.json');
     fs.writeFileSync(file, bad);
     assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
@@ -276,7 +417,10 @@ test('codex b4a4064: items need spent and stages; lock pids must be positive; us
   const f = path.join(tmp(), 'lane.lock');
   assert.throws(() => g.acquireLock(f, { jobId: 'n', pid: -99999999 }), /positive pid/);
   fs.writeFileSync(f + '.g1', JSON.stringify({ jobId: 'bad', pid: -5, at: 1 }));
-  assert.equal(g.acquireLock(f, { jobId: 'j', pid: 7 }, { pidAlive: () => false }).cause, g.Cause.LOCK_HELD);
+  assert.equal(
+    g.acquireLock(f, { jobId: 'j', pid: 7 }, { pidAlive: () => false }).cause,
+    g.Cause.LOCK_HELD
+  );
   const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
   assert.throws(() => L.record('A', 'review', 'F', 'X', { ms: -100 }), /invalid usage/);
   assert.throws(() => L.record('A', 'review', 'F', 'X', { tokens: -100 }), /invalid usage/);
@@ -293,7 +437,12 @@ test('codex ee9ce83: a generation already taken and released cannot be reacquire
   const late = g.acquireLock(f, { jobId: 'C', pid: 3 }, live);
   assert.equal(late.ok, true); // C takes g2, never g1
   assert.equal(g.lockHolder(f).jobId, 'C');
-  const r = await g.runWithCleanup(async () => Object.create({ exitCode: 7 }), async () => { throw new Error('rm'); });
+  const r = await g.runWithCleanup(
+    async () => Object.create({ exitCode: 7 }),
+    async () => {
+      throw new Error('rm');
+    }
+  );
   assert.equal(r.exitCode, 7);
   assert.match(r.cleanupError, /rm/);
 });

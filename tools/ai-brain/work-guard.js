@@ -67,7 +67,11 @@ function checkWorkspace(o) {
   }
   const unmerged = git(['diff', '--name-only', '--diff-filter=U'], o.cwd);
   if (unmerged && unmerged.status === 0 && String(unmerged.stdout).trim() !== '') {
-    return { ok: false, cause: Cause.CONFLICT, files: String(unmerged.stdout).trim().split(/\r?\n/) };
+    return {
+      ok: false,
+      cause: Cause.CONFLICT,
+      files: String(unmerged.stdout).trim().split(/\r?\n/),
+    };
   }
   const br = git(['symbolic-ref', '--quiet', '--short', 'HEAD'], o.cwd);
   if (!br || br.status !== 0) return { ok: false, cause: Cause.DETACHED_HEAD };
@@ -80,7 +84,12 @@ function checkWorkspace(o) {
     : id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
   if (!fits) return { ok: false, cause: Cause.WRONG_BRANCH, branch };
   const head = git(['rev-parse', 'HEAD'], o.cwd);
-  return { ok: true, root, branch, head: head && head.status === 0 ? String(head.stdout).trim() : null };
+  return {
+    ok: true,
+    root,
+    branch,
+    head: head && head.status === 0 ? String(head.stdout).trim() : null,
+  };
 }
 
 function fingerprint(parts) {
@@ -180,7 +189,8 @@ class ProgressLedger {
     // Every fingerprint keeps its outcome, so alternating inputs (F1, F2, F1) cannot loop.
     const seen = ((it.stages || {})[stage] || {}).fps || {};
     const prior = seen[fp];
-    const deadFlight = prior && prior.outcome === 'IN_FLIGHT' && Number.isInteger(prior.pid) && !pidAlive(prior.pid);
+    const deadFlight =
+      prior && prior.outcome === 'IN_FLIGHT' && Number.isInteger(prior.pid) && !pidAlive(prior.pid);
     if (prior && !TRANSIENT.has(prior.outcome) && !deadFlight) {
       return { ok: false, cause: Cause.NO_PROGRESS, outcome: prior.outcome };
     }
@@ -190,7 +200,9 @@ class ProgressLedger {
       if (!Number.isInteger(opts.pid) || opts.pid <= 0) {
         throw new Error('WORK_GUARD_REFUSED: reserve needs an integer owner pid');
       }
-      const t = it.spent ? it : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
+      const t = it.spent
+        ? it
+        : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
       t.stages = t.stages || {};
       t.spent.attempts += 1;
       s.goal.attempts += 1;
@@ -216,8 +228,10 @@ class ProgressLedger {
     it.stages = it.stages || {};
     const u = usage || {};
     // Usage only ever adds: negative or non-finite values would refund a spent budget.
-    if (u.ms !== undefined && !isCount(Number(u.ms))) throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
-    if (u.tokens !== undefined && !isCount(u.tokens)) throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
+    if (u.ms !== undefined && !isCount(Number(u.ms)))
+      throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
+    if (u.tokens !== undefined && !isCount(u.tokens))
+      throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
     for (const acc of [it.spent, s.goal]) {
@@ -296,7 +310,11 @@ function exceeded(spent, lim) {
 }
 
 function limitCause(k) {
-  return k === 'ms' ? Cause.TIME_EXHAUSTED : k === 'tokens' ? Cause.TOKENS_EXHAUSTED : Cause.ATTEMPTS_EXHAUSTED;
+  return k === 'ms'
+    ? Cause.TIME_EXHAUSTED
+    : k === 'tokens'
+      ? Cause.TOKENS_EXHAUSTED
+      : Cause.ATTEMPTS_EXHAUSTED;
 }
 
 function pidAlive(pid) {
@@ -347,7 +365,8 @@ function acquireLock(file, owner, o) {
   if (!owner || !owner.jobId) throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
   const pid = owner.pid === undefined ? process.pid : owner.pid;
   // 0 and negative pids name process groups; liveness of one owner cannot be proven from them.
-  if (!Number.isInteger(pid) || pid <= 0) throw new Error('WORK_GUARD_REFUSED: lock owner needs a positive pid');
+  if (!Number.isInteger(pid) || pid <= 0)
+    throw new Error('WORK_GUARD_REFUSED: lock owner needs a positive pid');
   const gens = lockGenerations(file);
   const top = gens[gens.length - 1];
   if (top && !top.released) {
@@ -360,7 +379,9 @@ function acquireLock(file, owner, o) {
   const gen = top ? top.gen + 1 : 1;
   const mine = file + '.g' + gen;
   try {
-    fs.writeFileSync(mine, JSON.stringify({ jobId: owner.jobId, pid, at: Date.now() }), { flag: 'wx' });
+    fs.writeFileSync(mine, JSON.stringify({ jobId: owner.jobId, pid, at: Date.now() }), {
+      flag: 'wx',
+    });
   } catch (e) {
     if (e.code !== 'EEXIST') throw e;
     return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
@@ -394,7 +415,8 @@ function releaseLock(file, owner) {
 
 function acceptResult(job, result) {
   if (!result || !result.jobId) return { ok: false, cause: Cause.JOB_UNBOUND };
-  if (!job || result.jobId !== job.jobId) return { ok: false, cause: Cause.JOB_MISMATCH, got: result.jobId };
+  if (!job || result.jobId !== job.jobId)
+    return { ok: false, cause: Cause.JOB_MISMATCH, got: result.jobId };
   return { ok: true };
 }
 
@@ -427,7 +449,10 @@ async function runWithCleanup(fn, cleanup) {
     const note = String(cleanupError.message || cleanupError);
     // Never mutate the worker's result: a TypeError here would replace the real exit code.
     // Inherit from the result so inherited and non-enumerable fields (exitCode) stay readable.
-    return Object.defineProperty(Object.create(out), 'cleanupError', { value: note, enumerable: true });
+    return Object.defineProperty(Object.create(out), 'cleanupError', {
+      value: note,
+      enumerable: true,
+    });
   }
   return out;
 }
@@ -470,7 +495,10 @@ if (require.main === module) {
       const r = checkWorkspace({ cwd: a.cwd, expectedRoot: a.root, workItemId: a.item, git });
       out(r, r.ok ? 0 : 3);
     }
-    const ledger = new ProgressLedger({ file: a.ledger, limits: a.limits ? JSON.parse(a.limits) : undefined });
+    const ledger = new ProgressLedger({
+      file: a.ledger,
+      limits: a.limits ? JSON.parse(a.limits) : undefined,
+    });
     if (cmd === 'block') {
       ledger.block(a.item, a.reason);
       out({ ok: true }, 0);
@@ -481,7 +509,10 @@ if (require.main === module) {
       out(r, r.ok ? 0 : 3);
     }
     if (cmd === 'record') {
-      const usage = { ms: a.ms === undefined ? 0 : Number(a.ms), tokens: a.tokens === undefined ? undefined : Number(a.tokens) };
+      const usage = {
+        ms: a.ms === undefined ? 0 : Number(a.ms),
+        tokens: a.tokens === undefined ? undefined : Number(a.tokens),
+      };
       ledger.record(a.item, a.stage, fp, a.outcome, usage);
       out({ ok: true }, 0);
     }
