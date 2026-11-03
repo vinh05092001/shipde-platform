@@ -49,8 +49,10 @@ if (argv[0] === 'version') {
         cookie: 'fixture-quoted-cookie',
         api_key: 'fixture-quoted-key',
         refresh_token: 'fixture-quoted-token',
+        access_key: 'fixture-access-key',
+        passwd: 'fixture-passwd',
       }) +
-      '\nBasic fixture-basic-token\nhttps://reader:fixture-url-password@docs.example.com/reference';
+      '\nBasic fixture-basic-token\nhttps://reader:fixture-url-password@docs.example.com/reference\naccess_key=fixture-access-key\npasswd=fixture-passwd';
   }
   if (mode === 'environment') {
     text = JSON.stringify({
@@ -72,7 +74,11 @@ if (argv[0] === 'version') {
             cookie: 'fixture-cookie',
             env: 'fixture-private-env-value',
             ...(mode === 'quoted-secrets'
-              ? { 'fixture-private-env-value': 'public metadata' }
+              ? {
+                  'fixture-private-env-value': 'public metadata',
+                  access_key: 'fixture-access-key',
+                  passwd: 'fixture-passwd',
+                }
               : {}),
           },
         },

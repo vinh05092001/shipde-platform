@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { isIP, isIPv4, isIPv6 } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +19,8 @@ const ACTIONS = new Map([
   ['reddit search', ['search', 'public-web']],
   ['youtube transcript', ['subtitle', 'yt-dlp']],
 ]);
-const SENSITIVE = /cookie|token|secret|password|authorization|api[_-]?key|environment|^env$/i;
+const SENSITIVE =
+  /cookie|token|secret|password|passwd|authorization|auth|credential|api[_-]?key|access[_-]?key|environment|^env$/i;
 // Only values of credential-shaped variables are scrubbed verbatim; scrubbing
 // every inherited value would corrupt ordinary output (e.g. the word "true").
 const SENSITIVE_ENV =
@@ -43,21 +45,109 @@ const refused = (message, maxChars = 20000) => ({
   stderr: truncate(`${message}\n`, maxChars),
 });
 
+function isPrivateIPv4(ip) {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) return false;
+  const [a, b, c, d] = parts;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)) || (b === 88 && c === 99)))
+    return true;
+  if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) return true;
+  if (a === 203 && b === 0 && c === 113) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+function isPrivateHost(host) {
+  let h = host.toLowerCase().trim();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  if (h.endsWith('.')) h = h.slice(0, -1);
+  if (!h || h === 'localhost') return true;
+  if (!h.includes('.') && !isIP(h)) return true;
+  if (
+    /\.(localhost|local|internal|lan|home|corp|arpa|priv|private|test|invalid|example)$/i.test(h)
+  )
+    return true;
+  if (isIPv4(h)) return isPrivateIPv4(h);
+  if (isIPv6(h)) {
+    if (h === '::1' || h === '::') return true;
+    if (/^f[cd]/i.test(h) || /^fe[89ab]/i.test(h) || /^ff/i.test(h) || /^::ffff:/i.test(h))
+      return true;
+    if (/^(100::|2001:db8:|2001:10:)/i.test(h)) return true;
+    return false;
+  }
+  const match = h.match(/\b(?:\d{1,3}[.-]){3}\d{1,3}\b/);
+  if (match && isPrivateIPv4(match[0].replace(/-/g, '.'))) return true;
+  return false;
+}
+
+function validatePublicUrl(candidate) {
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error('Research refused: invalid public URL.');
+  }
+  if (
+    !['https:', 'http:'].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    [...url.searchParams.keys()].some((key) => SENSITIVE.test(key)) ||
+    isPrivateHost(url.hostname)
+  ) {
+    throw new Error('Research refused: public HTTP(S) URLs without credentials only.');
+  }
+
+  for (const [key, val] of url.searchParams.entries()) {
+    if (SENSITIVE.test(key)) {
+      throw new Error('Research refused: public HTTP(S) URLs without credentials only.');
+    }
+    if (val && typeof val === 'string') {
+      const trimmed = val.trim();
+      if (
+        /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ||
+        trimmed.startsWith('//') ||
+        /^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:\/|\?|$)/i.test(trimmed) ||
+        /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:\/|\?|$)/.test(trimmed) ||
+        /^localhost(?::\d+)?(?:\/|\?|$)/i.test(trimmed) ||
+        /^\[[a-fA-F0-9:]+\](?::\d+)?(?:\/|\?|$)/i.test(trimmed)
+      ) {
+        const dest = trimmed.startsWith('//')
+          ? `${url.protocol}${trimmed}`
+          : trimmed.includes('://')
+            ? trimmed
+            : `https://${trimmed}`;
+        validatePublicUrl(dest);
+      }
+    }
+  }
+
+  const embeddedInPath = url.pathname.match(/[a-z][a-z0-9+.-]*:\/\/[^\s/]+/gi);
+  if (embeddedInPath) {
+    for (const embedded of embeddedInPath) {
+      validatePublicUrl(embedded);
+    }
+  }
+}
+
 function parse(argv) {
   const args = argv[0] === '--' ? argv.slice(1) : [...argv];
   let maxChars = 20000;
-  let budgetSeen = false;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] !== '--max-chars' && !args[i].startsWith('--max-chars=')) continue;
-    const inline = args[i].startsWith('--max-chars=');
-    const value = inline ? args[i].slice('--max-chars='.length) : args[i + 1];
-    if (budgetSeen || !positiveInteger(value ?? ''))
-      throw new Error('Research refused: --max-chars requires one positive safe integer.');
-    budgetSeen = true;
-    maxChars = Number(value);
-    args.splice(i--, inline ? 1 : 2);
-  }
   try {
+    let budgetSeen = false;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] !== '--max-chars' && !args[i].startsWith('--max-chars=')) continue;
+      const inline = args[i].startsWith('--max-chars=');
+      const value = inline ? args[i].slice('--max-chars='.length) : args[i + 1];
+      if (budgetSeen || !positiveInteger(value ?? ''))
+        throw new Error('Research refused: --max-chars requires one positive safe integer.');
+      budgetSeen = true;
+      maxChars = Number(value);
+      args.splice(i--, inline ? 1 : 2);
+    }
     const [channel, action, ...rest] = args;
     const policy = ACTIONS.get(`${channel} ${action}`);
     if (!policy)
@@ -93,24 +183,31 @@ function parse(argv) {
       throw new Error('Research refused: supply a query or one public target.');
     // Search text may contain URLs alongside prose. Read targets also accept
     // upstream's schemeless forms, which still must not carry credentials.
-    const urls =
-      action === 'search'
-        ? (target.match(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s]+/g) ?? [])
-        : [target.includes('://') ? target : `https://${target}`];
-    for (const candidate of urls) {
-      let url;
-      try {
-        url = new URL(candidate);
-      } catch {
-        throw new Error('Research refused: invalid public URL.');
+    const urls = [];
+    if (action === 'search') {
+      for (const token of target.split(/\s+/)) {
+        if (
+          token.includes('://') ||
+          token.includes('@') ||
+          token.includes('?') ||
+          /^(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3}|localhost|\[[a-fA-F0-9:]+\])(?::\d+)?(?:\/.*)?$/i.test(
+            token
+          )
+        ) {
+          urls.push(token.includes('://') ? token : `https://${token}`);
+        }
       }
-      if (
-        !['https:', 'http:'].includes(url.protocol) ||
-        url.username ||
-        url.password ||
-        [...url.searchParams.keys()].some((key) => SENSITIVE.test(key))
-      )
-        throw new Error('Research refused: public HTTP(S) URLs without credentials only.');
+    } else {
+      if (channel === 'github' && /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(target)) {
+        // Safe GitHub repository path (owner/repo)
+      } else if (channel === 'youtube' && /^[a-zA-Z0-9_-]{11}$/.test(target)) {
+        // Safe YouTube 11-char video ID
+      } else {
+        urls.push(target.includes('://') ? target : `https://${target}`);
+      }
+    }
+    for (const candidate of urls) {
+      validatePublicUrl(candidate);
     }
     return { maxChars, cliArgs: [channel, policy[0], target, ...options, '--backend', policy[1]] };
   } catch (error) {
@@ -156,7 +253,7 @@ function redact(value, envValues) {
     .replace(/\b(Bearer|Basic)\s+[^\s"<>]+/gi, '$1 [REDACTED]')
     .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@')
     .replace(
-      /((?:token|api[_-]?key|password|secret(?:[_-]?key)?|cookies?|authorization)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
+      /((?:token|api[_-]?key|access[_-]?key|password|passwd|auth(?:orization)?|credential|secret(?:[_-]?key)?|cookies?)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
       '$1[REDACTED]'
     )
     .replace(/\b[A-Z][A-Z0-9_]{2,}\s*=\s*[^\n]+/g, '[REDACTED]');

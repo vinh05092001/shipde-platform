@@ -107,7 +107,7 @@ test('refuses management, mutation, login channels, unsafe options and malformed
         `--max-chars=${n}`,
       ]),
       ['web', 'search', 'query', '--max-chars'],
-      ['web', 'search', 'query', '--max-chars', '10', '--max-chars', '20'],
+      ['web', 'search', 'query', '--max-chars', '100', '--max-chars', '200'],
     ]) {
       const result = invoke(args, 'ok', process.env, marker);
       assert.notEqual(result.exitCode, 0);
@@ -247,7 +247,7 @@ test('unverifiable CLI version returns the pinned install hint without raw outpu
   assert.equal(emitted(result).includes('fixture-version-cookie'), false);
 });
 
-test('quoted credentials, Basic auth, URL userinfo and environment-valued keys are redacted', () => {
+test('quoted credentials, Basic auth, URL userinfo, access_key, passwd and environment-valued keys are redacted', () => {
   const env = { ...process.env, PRIVATE_RESEARCH_VALUE: 'fixture-private-env-value' };
   const result = invoke(['web', 'search', 'docs'], 'quoted-secrets', env);
   assert.equal(result.exitCode, 0);
@@ -255,6 +255,8 @@ test('quoted credentials, Basic auth, URL userinfo and environment-valued keys a
     'fixture-quoted-cookie',
     'fixture-quoted-key',
     'fixture-quoted-token',
+    'fixture-access-key',
+    'fixture-passwd',
     'fixture-basic-token',
     'fixture-url-password',
     'fixture-private-env-value',
@@ -327,4 +329,83 @@ test('boolean and common non-secret environment values do not corrupt payload bo
   assert.equal(info.credentialConfig, false);
   assert.equal(info.ytdlpConfig, false);
   assert.equal(info.isolatedCwd, true);
+});
+
+test('private address and unsafe redirect targets are refused before launch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-private-target-'));
+  const marker = join(root, 'calls');
+  try {
+    for (const args of [
+      ['web', 'read', 'http://127.0.0.1:8080/private'],
+      ['web', 'read', 'http://169.254.169.254/latest/meta-data/'],
+      ['web', 'read', 'http://localhost:8080/private'],
+      ['web', 'read', 'http://[::1]:8080/private'],
+      ['web', 'read', 'http://10.0.0.1/private'],
+      ['web', 'read', 'http://192.168.1.1/private'],
+      ['web', 'read', 'http://172.16.0.1/private'],
+      ['web', 'read', 'http://metadata.google.internal/'],
+      ['web', 'read', 'http://127.0.0.1.nip.io/'],
+      ['web', 'read', '127.0.0.1:8080/private'],
+      ['web', 'read', 'localhost/private'],
+      ['web', 'read', 'https://example.com/redirect?to=http://127.0.0.1:8080/private'],
+      ['web', 'read', 'https://example.com/redirect?url=http://169.254.169.254/latest/meta-data/'],
+      ['web', 'read', 'https://example.com/redirect?to=http://localhost:3000'],
+      ['web', 'read', 'https://example.com/redirect?to=https://user:private-input@example.com'],
+      ['web', 'read', 'https://example.com/redirect?to=https://docs.example.com?token=private-input'],
+      ['web', 'read', 'https://example.com/redirect?to=http://[::1]:8080/private'],
+      ['web', 'read', 'https://example.com/redirect?to=http%3A%2F%2F127.0.0.1%3A8080%2Fprivate'],
+      ['web', 'search', 'http://127.0.0.1:8080/private'],
+      ['web', 'search', 'http://169.254.169.254/latest/meta-data/'],
+      ['web', 'search', '127.0.0.1:8080/private'],
+      ['web', 'search', 'localhost:8080/private'],
+    ]) {
+      const result = invoke(args, 'ok', process.env, marker);
+      assert.notEqual(result.exitCode, 0);
+      assert.match(emitted(result), /refused/i);
+      assert.doesNotMatch(emitted(result), /private-input/);
+    }
+    assert.equal(existsSync(marker), false);
+  } finally {
+    assert.equal(dirname(marker), root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('schemeless credential URLs and sensitive keys (passwd, access_key) in search and read are refused before launch', () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-cred-target-'));
+  const marker = join(root, 'calls');
+  try {
+    for (const args of [
+      ['web', 'search', 'docs.example.com?token=private-input'],
+      ['web', 'search', 'docs.example.com?passwd=private-input'],
+      ['web', 'search', 'docs.example.com?access_key=private-input'],
+      ['web', 'search', 'lookup docs.example.com?token=private-input'],
+      ['web', 'search', 'reader:private-input@example.com'],
+      ['web', 'read', 'https://example.com?passwd=private-input'],
+      ['web', 'read', 'https://example.com?access_key=private-input'],
+      ['web', 'read', 'example.com?passwd=private-input'],
+      ['web', 'read', 'example.com?access_key=private-input'],
+    ]) {
+      const result = invoke(args, 'ok', process.env, marker);
+      assert.notEqual(result.exitCode, 0);
+      assert.match(emitted(result), /refused/i);
+      assert.doesNotMatch(emitted(result), /private-input/);
+    }
+    assert.equal(existsSync(marker), false);
+  } finally {
+    assert.equal(dirname(marker), root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('duplicate budget validation honors the selected small budget', () => {
+  for (const args of [
+    ['web', 'search', 'docs', '--max-chars', '3', '--max-chars', '4'],
+    ['web', 'search', 'docs', '--max-chars=3', '--max-chars=4'],
+    ['web', 'search', 'docs', '--max-chars', '3', '--max-chars', 'invalid'],
+  ]) {
+    const result = invoke(args);
+    assert.notEqual(result.exitCode, 0);
+    assert.ok(emitted(result).length <= 3);
+  }
 });

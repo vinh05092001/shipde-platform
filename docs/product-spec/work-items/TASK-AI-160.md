@@ -72,7 +72,7 @@ Posting, mutation, login, account import, cookies, API keys, private research, a
 - [x] Audit & sensitive data: sanitized arguments/environment/output; no credential file reads.
 - [x] VND integer arithmetic: N/A — no money calculations.
 - [x] Carrier reconciliation: N/A — no carrier commands or external mutations.
-- [x] Tests at the lowest useful level: 32 executable-fixture tests pass without network. This run reproduced three failures before fixing URL-containing search queries, schemeless credential URLs and short environment-value redaction, plus a regression fix preventing common non-secret environment values (like GIT_EDITOR=false) from corrupting boolean payload fields. The draft implementation was already present; no claim is made about its original test-first history.
+- [x] Tests at the lowest useful level: 35 executable-fixture tests pass without network. This run reproduced four failures before fixing public-only target boundary enforcement, schemeless credential URL query handling, sensitive access_key/passwd masking, and duplicate budget validation.
 - [ ] When external API/library behaviour is uncertain, research it with pnpm ai:research and cite the URL.
 
 ## UI states
@@ -119,7 +119,7 @@ git diff --check origin/main...HEAD
 
 Verification results are recorded in `.oc/pr-body.md`; no remote CI or independent PASS is claimed by this author.
 
-On Windows the commands use `pnpm.cmd`. In this run, frozen installation passed with all eight workspace projects already up to date; lint and typecheck each passed all 12 tasks. The fixture suite passes 32 tests. The initial formatting check found only a pre-existing formatting issue in `.oc-codex-task.md`; it was corrected without changing its instructions. Final check results, including the explicit working-file hardcode scan, are recorded in `.oc/pr-body.md`. `git diff --check origin/main...HEAD` checks the existing HEAD, not these uncommitted changes, so working-tree whitespace and new-file LF checks are recorded separately.
+On Windows the commands use `pnpm.cmd`. In this run, frozen installation passed with all eight workspace projects already up to date; lint and typecheck each passed all 12 tasks. The fixture suite passes 35 tests. The initial formatting check found only a pre-existing formatting issue in `.oc-codex-task.md`; it was corrected without changing its instructions. Final check results, including the explicit working-file hardcode scan, are recorded in `.oc/pr-body.md`. `git diff --check origin/main...HEAD` checks the existing HEAD, not these uncommitted changes, so working-tree whitespace and new-file LF checks are recorded separately.
 
 ## Codex review record
 
@@ -127,6 +127,7 @@ On Windows the commands use `pnpm.cmd`. In this run, frozen installation passed 
 | ------------ | ------------------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Round 1      | Uncommitted working tree; coordinator must supply the new exact SHA | `READY_FOR_CODEX` — independent review not run | .oc/review.txt absent (no prior findings); resolved worker boolean env corruption; pruned `.serena/.gitignore` |
 | Round 8      | `916b67331477f7646bdbc06c2b67207d0112e7b7`                          | `CHANGES_REQUIRED`                             | Resolved duplicate delivery order (272 -> 273), fixing CI failures in ai-brain-tests, contract, and validate     |
+| Round 9      | `a885a9c0f5335e8945125c5639b54b50e00d59d8`                          | `READY_FOR_CODEX`                              | Resolved P1 finding 4 (public-only target boundary & redirects), P1 finding 7 (credential-bearing search URLs & passwd/access_key masking), and P2 finding 10 (duplicate budget validation under small limit) |
 
 ## Residual limitations
 
