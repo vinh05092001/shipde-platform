@@ -43,6 +43,8 @@ const {
   linkSharedQuotaScopes,
   expandComboIdentity,
   UNKNOWN,
+  getPrivateEmail,
+  registerPrivateEmail,
 } = require('../route-identity');
 
 const {
@@ -1122,10 +1124,11 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
     const candidate2 = pool.candidates.find(c => c.connectionId === 'lane-no-email');
 
     assert.equal(candidate1.accountRef, 'lane-with-email');
-    assert.equal(candidate1.metadata.realAccountRef, 'realuser@gmail.com');
+    assert.ok(!candidate1.metadata.realAccountRef || !candidate1.metadata.realAccountRef.includes('@'), 'candidate1 metadata must not contain raw email');
+    assert.equal(getPrivateEmail(candidate1.accountRef), 'realuser@gmail.com');
     assert.ok(!candidate1.candidateKey.includes('@'), 'candidateKey must not contain @');
     assert.equal(candidate2.accountRef, 'lane-no-email');
-    assert.equal(candidate2.metadata.realAccountRef, UNKNOWN);
+    assert.equal(getPrivateEmail(candidate2.accountRef), null);
 
     // candidate1 links with 9router route sharing real email, candidate2 does not link with laneId
     const nineRouterRoute = createRouteIdentity({
@@ -1302,7 +1305,8 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
     const cand = pool.candidates[0];
     assert.ok(cand);
     assert.equal(cand.accountRef, 'agy01');
-    assert.equal(cand.metadata.realAccountRef, 'secret_user@domain.com');
+    assert.ok(!cand.metadata.realAccountRef || !cand.metadata.realAccountRef.includes('@'), 'cand metadata must not contain raw email');
+    assert.equal(getPrivateEmail(cand.accountRef), 'secret_user@domain.com');
     assert.ok(!cand.candidateKey.includes('@'), 'candidateKey must never contain @');
     assert.ok(!cand.candidateKey.includes('secret_user'), 'candidateKey must not contain raw email username');
 
@@ -1313,7 +1317,7 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
       gatewayId: '9router',
       upstreamProviderId: 'antigravity',
       accountRef: 'secret_user@domain.com',
-      metadata: { realAccountRef: 'secret_user@domain.com' },
+      metadata: { laneId: 'conn-1' },
       connectionId: 'conn-1',
       configuredModelId: 'gemini-2.5-flash',
       quotaScopeId: 'dummy-scope'
@@ -1326,5 +1330,339 @@ describe('Review dd2dad3 regressions (7 findings)', () => {
     assert.equal(linkedAgy.quotaScopeId, linked9r.quotaScopeId);
     assert.ok(!linkedAgy.quotaScopeId.includes('@'), 'linked quotaScopeId must not contain @');
     assert.ok(!linkedAgy.candidateKey.includes('@'), 'linked candidateKey must not contain @');
+  });
+});
+
+describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
+  test('Finding 1: Explicit quotaFamily: argon and parsed group membership override name inference and reject on 0% Argon', () => {
+    const pool = loadAgyPoolCandidates({
+      models: [
+        { id: 'gemini-experimental', quotaFamily: 'argon' },
+        'gemini-2.5-flash'
+      ],
+      lanes: [
+        {
+          laneId: 'agy01',
+          rows: [
+            { group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 50 },
+            { group: 'argon', family: 'argon', window: 'weekly', remainingPercent: 0 }
+          ]
+        }
+      ]
+    });
+
+    const expCand = pool.candidates.find(c => c.configuredModelId === 'gemini-experimental');
+    assert.equal(expCand, undefined, 'gemini-experimental with quotaFamily: argon must not be admitted using Gemini 50%');
+    const expUnconnected = pool.unconnected.find(u => u.configuredModelId === 'gemini-experimental');
+    assert.ok(expUnconnected);
+    assert.equal(expUnconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
+
+    const flashCand = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    assert.ok(flashCand, 'gemini-2.5-flash must be admitted under Gemini 50%');
+
+    // Part B: Parsed group membership preserves models in group and rejects opaque model on Argon 0%
+    const fixtureDoc = {
+      groups: [
+        { id: 'argon', name: 'Argon Experimental', models: ['opaque-argon-preview'], weekly: { remainingPercent: 0 } },
+        { id: 'external', name: 'External 3P', weekly: { remainingPercent: 80 } }
+      ]
+    };
+    const { parseFixtureGroups } = require('../agy-quota');
+    const parsedRows = parseFixtureGroups(fixtureDoc);
+
+    const pool2 = loadAgyPoolCandidates({
+      models: ['opaque-argon-preview', 'claude-3-7-sonnet'],
+      lanes: [
+        {
+          laneId: 'agy02',
+          rows: parsedRows
+        }
+      ]
+    });
+
+    const opaqueCand = pool2.candidates.find(c => c.configuredModelId === 'opaque-argon-preview');
+    assert.equal(opaqueCand, undefined, 'opaque-argon-preview must not be admitted against external quota');
+    const opaqueUnconnected = pool2.unconnected.find(u => u.configuredModelId === 'opaque-argon-preview');
+    assert.ok(opaqueUnconnected);
+    assert.equal(opaqueUnconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
+
+    const claudeCand = pool2.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    assert.ok(claudeCand, 'claude-3-7-sonnet admitted under external 80%');
+  });
+
+  test('Finding 2: Auto-linking preserves quota group so Gemini exhaustion never blocks Claude', () => {
+    const health = new ScopedHealthRegistry();
+
+    const agyGemini = createRouteIdentity({
+      harness: 'agy-pool',
+      sourceId: 'agy-pool',
+      gatewayId: 'direct',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'user@corp.com',
+      connectionId: 'agy01',
+      configuredModelId: 'gemini-2.5-flash',
+      quotaScopeId: 'agy-quota::agy01::gemini',
+      metadata: { quotaGroup: 'gemini', laneId: 'agy01' }
+    });
+
+    const agyClaude = createRouteIdentity({
+      harness: 'agy-pool',
+      sourceId: 'agy-pool',
+      gatewayId: 'direct',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'user@corp.com',
+      connectionId: 'agy01',
+      configuredModelId: 'claude-3-7-sonnet',
+      quotaScopeId: 'agy-quota::agy01::external',
+      metadata: { quotaGroup: 'external', laneId: 'agy01' }
+    });
+
+    const routerGemini = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'user@corp.com',
+      connectionId: 'conn-1',
+      configuredModelId: 'ag/gemini-2.5-flash',
+      quotaScopeId: 'quota::antigravity::conn-1',
+      metadata: { quotaGroup: 'gemini', connectionId: 'conn-1' }
+    });
+
+    const routerClaude = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'user@corp.com',
+      connectionId: 'conn-2',
+      configuredModelId: 'ag/claude-3-7-sonnet',
+      quotaScopeId: 'quota::antigravity::conn-2',
+      metadata: { quotaGroup: 'external', connectionId: 'conn-2' }
+    });
+
+    const linked = linkSharedQuotaScopes([agyGemini, agyClaude, routerGemini, routerClaude]);
+    const lAgyGemini = linked.find(c => c.connectionId === 'agy01' && c.configuredModelId === 'gemini-2.5-flash');
+    const lRouterGemini = linked.find(c => c.connectionId === 'conn-1');
+    const lAgyClaude = linked.find(c => c.connectionId === 'agy01' && c.configuredModelId === 'claude-3-7-sonnet');
+    const lRouterClaude = linked.find(c => c.connectionId === 'conn-2');
+
+    assert.equal(lAgyGemini.quotaScopeId, lRouterGemini.quotaScopeId);
+    assert.ok(lAgyGemini.quotaScopeId.includes('gemini'));
+    assert.equal(lAgyClaude.quotaScopeId, lRouterClaude.quotaScopeId);
+    assert.ok(lAgyClaude.quotaScopeId.includes('external'));
+    assert.notEqual(lAgyGemini.quotaScopeId, lAgyClaude.quotaScopeId);
+
+    // Record Gemini exhaustion
+    health.recordFailure(lAgyGemini, { message: 'insufficient_quota' });
+
+    // Gemini routes are blocked
+    assert.equal(health.evaluateHealth(lAgyGemini).healthy, false);
+    assert.equal(health.evaluateHealth(lRouterGemini).healthy, false);
+
+    // Claude routes MUST REMAIN HEALTHY!
+    assert.equal(health.evaluateHealth(lAgyClaude).healthy, true);
+    assert.equal(health.evaluateHealth(lRouterClaude).healthy, true);
+  });
+
+  test('Finding 3: No raw email appears in returned identities, metadata, keys, scopes or logs', async () => {
+    const rawEmail = 'sensitive_dev@shipde.vn';
+    const selector = new UnifiedRouteSelector();
+
+    const pool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash'],
+      lanes: [
+        { laneId: 'agy03', rows: [{ group: 'gemini', family: 'gemini', window: 'weekly', remainingPercent: 90 }] }
+      ],
+      readLaneIdentity: () => ({ email: rawEmail })
+    });
+
+    const cand = pool.candidates[0];
+    assert.ok(cand);
+    assert.ok(!cand.accountRef.includes('@'), 'accountRef must not contain @');
+    assert.ok(!cand.candidateKey.includes('@'), 'candidateKey must not contain @');
+    assert.ok(!cand.quotaScopeId.includes('@'), 'quotaScopeId must not contain @');
+    assert.ok(!cand.candidateKey.includes('sensitive_dev'), 'candidateKey must not contain email username');
+
+    for (const [k, v] of Object.entries(cand.metadata)) {
+      if (typeof v === 'string') {
+        assert.ok(!v.includes('@'), `metadata.${k} must not contain @`);
+        assert.ok(!v.includes('sensitive_dev'), `metadata.${k} must not contain username`);
+      }
+    }
+
+    const loaded9r = load9RouterCandidates({
+      catalog: ['ag/gemini-2.5-flash'],
+      connections: [
+        { connectionId: 'c_test', provider: 'antigravity', accountRef: rawEmail }
+      ]
+    });
+    const cand9r = loaded9r.candidates[0];
+    assert.ok(cand9r);
+    assert.ok(!cand9r.accountRef.includes('@'), '9r accountRef must not contain @');
+    assert.ok(!cand9r.candidateKey.includes('@'), '9r candidateKey must not contain @');
+    assert.ok(!cand9r.quotaScopeId.includes('@'), '9r quotaScopeId must not contain @');
+
+    const linked = linkSharedQuotaScopes([cand, cand9r]);
+    for (const item of linked) {
+      assert.ok(!item.candidateKey.includes('@'), 'linked candidateKey must not contain @');
+      assert.ok(!item.quotaScopeId.includes('@'), 'linked quotaScopeId must not contain @');
+      if (item.metadata?.originalQuotaScope) {
+        assert.ok(!item.metadata.originalQuotaScope.includes('@'), 'originalQuotaScope must not contain @');
+      }
+    }
+
+    const selection = await selector.selectRoute(linked, {
+      role: 'writer',
+      requiredCapabilities: ['general_code']
+    });
+
+    const serialized = JSON.stringify(selection);
+    assert.ok(!serialized.includes('@'), 'Serialized selection output must never contain @');
+    assert.ok(!serialized.includes('sensitive_dev'), 'Serialized selection output must never contain email username');
+  });
+
+  test('Finding 4: Multi-account combo evaluation blocks when candidate accounts fail 404 or are actively locked', () => {
+    const health = new ScopedHealthRegistry();
+    const now = Date.now();
+
+    const branch = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'src-9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: UNKNOWN,
+      connectionId: UNKNOWN,
+      metadata: {
+        candidateAccounts: [
+          { accountRef: 'acc1', connectionId: 'conn-1', quotaScopeId: 'quota::anthropic::acc1' },
+          { accountRef: 'acc2', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' }
+        ]
+      }
+    });
+
+    // Case A: Both candidate accounts permanently fail 404 (MODEL_NOT_FOUND)
+    health.recordFailure(
+      { accountRef: 'acc1', connectionId: 'conn-1', upstreamProviderId: 'anthropic', outboundModelId: 'claude-3-5-sonnet', candidateKey: 'k1' },
+      { httpStatus: 404, message: 'Model claude-3-5-sonnet not found' },
+      now
+    );
+    health.recordFailure(
+      { accountRef: 'acc2', connectionId: 'conn-2', upstreamProviderId: 'anthropic', outboundModelId: 'claude-3-5-sonnet', candidateKey: 'k2' },
+      { httpStatus: 404, message: 'Model claude-3-5-sonnet not found' },
+      now
+    );
+
+    const eval404 = health.evaluateHealth(branch, now);
+    assert.equal(eval404.healthy, false, 'Multi-account branch must be unhealthy when both accounts permanently fail 404');
+    assert.equal(eval404.category, ErrorCategory.MODEL_NOT_FOUND);
+
+    // Case B: Both accounts actively locked with per-connection locks
+    const health2 = new ScopedHealthRegistry();
+    health2.setModelLock('anthropic', 'claude-3-5-sonnet', 'conn-1', now + 60000);
+    health2.setModelLock('anthropic', 'claude-3-5-sonnet', 'conn-2', now + 60000);
+
+    const evalLock = health2.evaluateHealth(branch, now);
+    assert.equal(evalLock.healthy, false, 'Multi-account branch must be unhealthy when both accounts are actively locked');
+    assert.equal(evalLock.blockedBy, 'model_lock');
+  });
+
+  test('Finding 5: Expired connection lock is cleaned up without shadowing or deleting active wildcard lock', () => {
+    const health = new ScopedHealthRegistry();
+    const now = Date.now();
+
+    // Active wildcard lock for provider and model
+    health.setModelLock('anthropic', 'claude-3-5-sonnet', '*', now + 60000);
+
+    // Expired connection lock on connection conn-1
+    health.setModelLock('anthropic', 'claude-3-5-sonnet', 'conn-1', now - 10000);
+
+    const routeConn1 = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: 'user1',
+      connectionId: 'conn-1'
+    });
+
+    const routeConn2 = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: 'user2',
+      connectionId: 'conn-2'
+    });
+
+    const evalConn1 = health.evaluateHealth(routeConn1, now);
+    assert.equal(evalConn1.healthy, false, 'conn-1 must be blocked by the active wildcard lock');
+    assert.equal(evalConn1.blockedBy, 'model_lock');
+
+    const evalConn2 = health.evaluateHealth(routeConn2, now);
+    assert.equal(evalConn2.healthy, false, 'conn-2 must still be blocked by wildcard lock');
+    assert.equal(evalConn2.blockedBy, 'model_lock');
+  });
+
+  test('Finding 6: Unchecked metadata.viableBranches cannot bypass admission or return failed executable branch', async () => {
+    const health = new ScopedHealthRegistry();
+    const selector = new UnifiedRouteSelector({ healthRegistry: health });
+
+    const healthyBranch = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'openai',
+      configuredModelId: 'gpt-4o',
+      accountRef: 'user-healthy',
+      connectionId: 'conn-h',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.01 }
+    });
+
+    const failedBranch = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: 'user-failed',
+      connectionId: 'conn-f',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.05 }
+    });
+
+    health.recordFailure(failedBranch, { message: 'insufficient_quota' });
+
+    const comboCandidate = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'combo',
+      configuredModelId: 'combo/custom',
+      accountRef: UNKNOWN,
+      isCombo: true,
+      comboBranches: [healthyBranch],
+      metadata: {
+        viableBranches: [failedBranch],
+        capabilities: ['general_code'],
+        estimatedCostUsd: 0.06
+      }
+    });
+
+    const admission = selector.evaluateAdmission(comboCandidate, {
+      role: 'writer',
+      requiredCapabilities: ['general_code']
+    });
+    assert.equal(admission.admitted, false, 'Combo must not be admitted when viableBranches has an unhealthy branch');
+    assert.ok(admission.rejectionReason.startsWith('COMBO_BRANCH_REJECTED_'));
+
+    const selection = await selector.selectRoute([comboCandidate], {
+      role: 'writer',
+      requiredCapabilities: ['general_code']
+    });
+    assert.equal(selection.status, 'BLOCKED', 'Combo must not be selected');
+    assert.notEqual(selection.status, 'ADMITTED_AND_SELECTED');
   });
 });

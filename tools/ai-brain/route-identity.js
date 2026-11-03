@@ -66,6 +66,84 @@ function unescapePart(str) {
 /**
  * Distinguishes the primary execution pathway of a route.
  */
+const PRIVATE_ACCOUNT_EMAIL_MAP = new Map();
+
+function hashEmail(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 10);
+}
+
+function registerPrivateEmail(key, email) {
+  if (!key || !email) return;
+  const k = String(key).trim();
+  const e = String(email).trim().toLowerCase();
+  if (e.includes('@')) {
+    PRIVATE_ACCOUNT_EMAIL_MAP.set(k, e);
+    PRIVATE_ACCOUNT_EMAIL_MAP.set(k.toLowerCase(), e);
+    const hash = hashEmail(e);
+    PRIVATE_ACCOUNT_EMAIL_MAP.set(hash, e);
+    PRIVATE_ACCOUNT_EMAIL_MAP.set(e, hash);
+  }
+}
+
+function getPrivateEmail(key) {
+  if (!key) return null;
+  const k = String(key).trim();
+  return PRIVATE_ACCOUNT_EMAIL_MAP.get(k) || PRIVATE_ACCOUNT_EMAIL_MAP.get(k.toLowerCase()) || null;
+}
+
+function maskEmailsInString(str) {
+  if (!str || typeof str !== 'string') return str;
+  return str.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, (match) => {
+    registerPrivateEmail(hashEmail(match), match);
+    return hashEmail(match);
+  });
+}
+
+function sanitizeMetadata(meta) {
+  if (!meta || typeof meta !== 'object') return meta;
+  const out = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (k === 'realAccountRef' || k === 'accountRef' || k === 'originalQuotaScope') {
+      if (typeof v === 'string' && v.includes('@')) {
+        registerPrivateEmail(hashEmail(v), v);
+        out[k] = hashEmail(v);
+      } else {
+        out[k] = v;
+      }
+    } else if (typeof v === 'string' && v.includes('@')) {
+      registerPrivateEmail(hashEmail(v), v);
+      out[k] = maskEmailsInString(v);
+    } else if (Array.isArray(v)) {
+      out[k] = v.map((item) => (typeof item === 'object' ? sanitizeMetadata(item) : typeof item === 'string' && item.includes('@') ? (registerPrivateEmail(hashEmail(item), item), hashEmail(item)) : item));
+    } else if (v && typeof v === 'object') {
+      out[k] = sanitizeMetadata(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function getQuotaGroup(id) {
+  if (id?.metadata?.quotaGroup) return id.metadata.quotaGroup;
+  if (id?.metadata?.quotaFamily) {
+    const f = String(id.metadata.quotaFamily).toLowerCase();
+    if (f.includes('argon')) return 'argon';
+    if (f.includes('gemini')) return 'gemini';
+    if (f.includes('claude') || f.includes('gpt') || f.includes('3p') || f.includes('external')) return 'external';
+    return f;
+  }
+  const m = String(id?.outboundModelId || id?.configuredModelId || '').toLowerCase();
+  if (/argon/i.test(m)) return 'argon';
+  if (m.includes('gemini')) return 'gemini';
+  const prov = String(id?.upstreamProviderId || id?.sourceId || '').toLowerCase();
+  if (prov.includes('antigravity') || prov.includes('agy')) {
+    if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet')) return 'external';
+    return 'external';
+  }
+  return undefined;
+}
 function distinguishPathway(identity) {
   if (!identity) return UNKNOWN;
   const h = String(identity.harness || '').toLowerCase();
@@ -144,8 +222,16 @@ function createRouteIdentity(input) {
   const upstreamProviderId = input.upstreamProviderId || input.upstream || parsedProvider;
   const outboundModelId = input.outboundModelId || parsedOutbound;
 
-  const connectionId = input.connectionId ? String(input.connectionId).trim() : UNKNOWN;
-  const accountRef = input.accountRef || input.account || input.accountId || UNKNOWN;
+  let connectionId = input.connectionId ? String(input.connectionId).trim() : UNKNOWN;
+  if (typeof connectionId === 'string' && connectionId.includes('@')) {
+    registerPrivateEmail(connectionId, connectionId);
+    connectionId = hashEmail(connectionId);
+  }
+  let accountRef = input.accountRef || input.account || input.accountId || UNKNOWN;
+  if (typeof accountRef === 'string' && accountRef.includes('@')) {
+    registerPrivateEmail(accountRef, accountRef);
+    accountRef = hashEmail(accountRef);
+  }
 
   let quotaScopeId = input.quotaScopeId || input.quotaScope;
   if (!quotaScopeId) {
@@ -157,7 +243,10 @@ function createRouteIdentity(input) {
       quotaScopeId = `quota::${upstreamProviderId}::${accountRef}`;
     }
   }
-
+  if (typeof quotaScopeId === 'string' && quotaScopeId.includes('@')) {
+    quotaScopeId = maskEmailsInString(quotaScopeId);
+  }
+  const sanitizedMeta = sanitizeMetadata(input.metadata || {});
   const jobId = input.jobId ? String(input.jobId).trim() : UNKNOWN;
   const attemptId = input.attemptId ? String(input.attemptId).trim() : UNKNOWN;
 
@@ -178,7 +267,7 @@ function createRouteIdentity(input) {
     attemptId,
     isCombo,
     comboBranches,
-    metadata: input.metadata || {},
+    metadata: sanitizedMeta,
   };
 
   identity.pathway = distinguishPathway(identity);
@@ -293,10 +382,24 @@ function linkSharedQuotaScopes(identities, accountLinks) {
         ? new Map(Object.entries(accountLinks))
         : new Map();
 
+  function resolveRealAccount(id) {
+    const fromPrivate =
+      getPrivateEmail(id.accountRef) ||
+      getPrivateEmail(id.connectionId) ||
+      getPrivateEmail(id.metadata?.laneId) ||
+      getPrivateEmail(id.metadata?.connectionId);
+    if (fromPrivate) return fromPrivate;
+    if (id.harness === 'agy-pool' || id.pathway === 'AGY_POOL') {
+      return UNKNOWN;
+    }
+    const rawAcc = id.metadata?.realAccountRef || id.accountRef;
+    return getPrivateEmail(rawAcc) || rawAcc;
+  }
+
   // Auto-detect identical accounts for any account not explicitly mapped in links
   const accountOccurrences = new Map();
   for (const id of identities) {
-    const account = id.metadata?.realAccountRef || id.accountRef;
+    const account = resolveRealAccount(id);
     if (
       account &&
       account !== UNKNOWN &&
@@ -304,7 +407,8 @@ function linkSharedQuotaScopes(identities, accountLinks) {
       !String(account).startsWith('unknown')
     ) {
       const prov = id.upstreamProviderId || 'shared';
-      const key = JSON.stringify([prov, account]);
+      const qGroup = getQuotaGroup(id);
+      const key = qGroup ? JSON.stringify([prov, account, qGroup]) : JSON.stringify([prov, account]);
       if (!accountOccurrences.has(key)) {
         accountOccurrences.set(key, []);
       }
@@ -313,42 +417,58 @@ function linkSharedQuotaScopes(identities, accountLinks) {
   }
 
   for (const [key, ids] of accountOccurrences.entries()) {
-    const [prov, account] = JSON.parse(key);
+    const parsedKey = JSON.parse(key);
+    const [prov, account, qGroup] = parsedKey;
+    const baseKey = JSON.stringify([prov, account]);
     // Auto-detect if not already explicitly mapped
-    if (!links.has(key) && !links.has(account) && ids.length > 1) {
-      const rawAccount = ids[0].metadata?.realAccountRef || ids[0].accountRef;
-      const safeAccount = String(rawAccount).includes('@')
-        ? crypto.createHash('sha256').update(String(rawAccount).toLowerCase()).digest('hex').slice(0, 10)
-        : rawAccount;
-      const canonicalScope = `quota::${prov}::${safeAccount}`;
+    if (!links.has(key) && !links.has(baseKey) && !links.has(account) && ids.length > 1) {
+      const safeAccount = String(account).includes('@')
+        ? hashEmail(account)
+        : account;
+      const canonicalScope = qGroup
+        ? `quota::${prov}::${safeAccount}::${qGroup}`
+        : `quota::${prov}::${safeAccount}`;
       links.set(key, canonicalScope);
     }
   }
 
   return identities.map((id) => {
-    const realAcc = id.metadata?.realAccountRef || id.accountRef;
+    const realAcc = resolveRealAccount(id);
     const prov = id.upstreamProviderId || 'shared';
-    const key = JSON.stringify([prov, realAcc]);
+    const qGroup = getQuotaGroup(id);
+    const groupKey = qGroup ? JSON.stringify([prov, realAcc, qGroup]) : null;
+    const baseKey = JSON.stringify([prov, realAcc]);
+    const safeAcc = String(realAcc).includes('@') ? hashEmail(realAcc) : realAcc;
+    const safeBaseKey = JSON.stringify([prov, safeAcc]);
+    const safeGroupKey = qGroup ? JSON.stringify([prov, safeAcc, qGroup]) : null;
+
     const targetScope =
-      links.get(key) ||
+      (groupKey && links.get(groupKey)) ||
+      (safeGroupKey && links.get(safeGroupKey)) ||
+      links.get(baseKey) ||
+      links.get(safeBaseKey) ||
       links.get(realAcc) ||
+      links.get(safeAcc) ||
       links.get(id.accountRef) ||
       links.get(id.connectionId);
+
     if (targetScope && targetScope !== id.quotaScopeId) {
+      const safeOrigScope = typeof id.quotaScopeId === 'string' && id.quotaScopeId.includes('@')
+        ? maskEmailsInString(id.quotaScopeId)
+        : id.quotaScopeId;
       return createRouteIdentity({
         ...id,
         quotaScopeId: targetScope,
         metadata: {
           ...id.metadata,
           linkedQuotaScope: true,
-          originalQuotaScope: id.quotaScopeId,
+          originalQuotaScope: safeOrigScope,
         },
       });
     }
     return id;
   });
 }
-
 function expandComboIdentity(comboIdentity, constituentModels, candidateAccountMap = {}) {
   if (!comboIdentity) return null;
   const parent = comboIdentity.candidateKey ? comboIdentity : createRouteIdentity(comboIdentity);
@@ -408,4 +528,9 @@ module.exports = {
   parseRouteIdentity,
   linkSharedQuotaScopes,
   expandComboIdentity,
+  registerPrivateEmail,
+  getPrivateEmail,
+  hashEmail,
+  maskEmailsInString,
+  getQuotaGroup,
 };

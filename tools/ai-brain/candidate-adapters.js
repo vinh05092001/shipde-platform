@@ -19,15 +19,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { createRouteIdentity, linkSharedQuotaScopes, PREFIX_PROVIDER_MAP, UNKNOWN } = require('./route-identity');
+const { createRouteIdentity, linkSharedQuotaScopes, PREFIX_PROVIDER_MAP, UNKNOWN, registerPrivateEmail, hashEmail } = require('./route-identity');
 
 // Using shared PREFIX_PROVIDER_MAP imported from ./route-identity
 
 function modelQuotaGroup(model) {
   const m = String(model || '').toLowerCase();
   if (/argon/i.test(m)) return 'argon';
-  if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet') || (m && !/^gemini/i.test(m))) return 'external';
-  return 'gemini';
+  if (m.includes('gemini')) return 'gemini';
+  if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet')) return 'external';
+  return 'external';
 }
 
 function modelFamily(model) {
@@ -76,8 +77,13 @@ function modelEvidence(model, options, source = {}) {
     ...options.modelMetadata?.[id],
   };
   const inferredGroup = modelQuotaGroup(id);
-  const quotaGroup = evidence.quotaGroup || metadata.quotaGroup || inferredGroup || undefined;
-  const quotaFamily = evidence.quotaFamily || metadata.quotaFamily || (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup);
+  const explicitGroup = evidence.quotaGroup || metadata.quotaGroup;
+  const explicitFamily = evidence.quotaFamily || metadata.quotaFamily;
+  const familyToGroup = explicitFamily
+    ? (/argon/i.test(explicitFamily) ? 'argon' : /claude|gpt|3p|external/i.test(explicitFamily) ? 'external' : /gemini/i.test(explicitFamily) ? 'gemini' : explicitFamily)
+    : undefined;
+  const quotaGroup = explicitGroup || familyToGroup || inferredGroup || undefined;
+  const quotaFamily = explicitFamily || (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup);
   return {
     ...metadata,
     ...(quotaGroup ? { quotaGroup } : {}),
@@ -204,7 +210,12 @@ function load9RouterCandidates(options = {}) {
       }
 
       for (const conn of matchingConnections) {
-        const accRef = conn.accountRef || conn.connectionId || UNKNOWN;
+        const rawAcc = conn.accountRef || conn.connectionId || UNKNOWN;
+        if (typeof rawAcc === 'string' && rawAcc.includes('@')) {
+          registerPrivateEmail(conn.connectionId, rawAcc);
+          registerPrivateEmail(hashEmail(rawAcc), rawAcc);
+        }
+        const accRef = typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
         const connId = conn.connectionId || UNKNOWN;
         candidates.push(
           createRouteIdentity({
@@ -291,7 +302,12 @@ function loadDirectProviderCandidates(options = {}) {
       const m = modelId(rawModel);
       if (!m || String(m).toLowerCase() === 'default') continue;
 
-      const accRef = src.accountRef || UNKNOWN;
+      const rawAcc = src.accountRef || UNKNOWN;
+      if (typeof rawAcc === 'string' && rawAcc.includes('@')) {
+        registerPrivateEmail(src.id, rawAcc);
+        registerPrivateEmail(hashEmail(rawAcc), rawAcc);
+      }
+      const accRef = typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
       const connId = src.id;
       const prov = src.provider || src.id;
 
@@ -377,6 +393,10 @@ function loadAgyPoolCandidates(options = {}) {
     } else {
       laneEmail = readLaneIdentityEmail(lane.laneId, options);
     }
+    if (laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')) {
+      registerPrivateEmail(lane.laneId, laneEmail);
+      registerPrivateEmail(hashEmail(laneEmail), laneEmail);
+    }
 
     for (const rawModel of models) {
       const m = modelId(rawModel);
@@ -384,7 +404,18 @@ function loadAgyPoolCandidates(options = {}) {
 
       const rows = lane.quota?.rows || lane.rows || [];
       const evidence = modelEvidence(rawModel, options);
-      const targetGroup = evidence.quotaGroup || modelQuotaGroup(m);
+      const membershipRow = rows.find((r) => Array.isArray(r.models) && r.models.includes(m));
+      const membershipGroup = membershipRow?.group || (membershipRow?.family ? (/argon/i.test(membershipRow.family) ? 'argon' : membershipRow.family === 'claude-gpt' ? 'external' : membershipRow.family) : null);
+      const laneGroups = Array.isArray(lane.quota?.groups) ? lane.quota.groups : Array.isArray(lane.groups) ? lane.groups : [];
+      const membershipFromGroup = laneGroups.find((g) => Array.isArray(g.models) && g.models.includes(m));
+      const parsedGroup = membershipGroup || membershipFromGroup?.id || membershipFromGroup?.group;
+
+      const targetGroup = (evidence.quotaFamily ? (/argon/i.test(evidence.quotaFamily) ? 'argon' : /claude|gpt|3p|external/i.test(evidence.quotaFamily) ? 'external' : 'gemini') : null)
+        || (evidence.quotaGroup && evidence.quotaGroup !== 'gemini' && evidence.quotaGroup !== 'external' ? evidence.quotaGroup : null)
+        || evidence.quotaGroup
+        || parsedGroup
+        || modelQuotaGroup(m);
+
       const matchingRows = rows.filter((r) => {
         if (modelId(r) === m) return true;
         if (Array.isArray(r.models) && r.models.includes(m)) return true;
@@ -416,7 +447,6 @@ function loadAgyPoolCandidates(options = {}) {
           quotaScopeId: quotaScopeKey,
           metadata: {
             laneId: lane.laneId,
-            realAccountRef: laneEmail,
             quotaGroup: targetGroup,
             ...evidence,
           },

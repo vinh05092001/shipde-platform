@@ -135,7 +135,8 @@ class UnifiedRouteSelector {
     // 3. Combo Constituent Branch Health & Capabilities Check (Finding 8)
     if (id.isCombo) {
       const branches = Array.isArray(id.comboBranches) ? id.comboBranches : [];
-      if (branches.length === 0) {
+      const viableBranches = Array.isArray(id.metadata?.viableBranches) ? id.metadata.viableBranches : [];
+      if (branches.length === 0 && viableBranches.length === 0) {
         return {
           admitted: false,
           rejectionReason: 'COMBO_HAS_NO_CONSTITUENT_BRANCHES',
@@ -145,6 +146,13 @@ class UnifiedRouteSelector {
       // Reject the whole combo if any executable branch fails admission. Retaining
       // a rejected branch would let downstream execution bypass these gates.
       for (const branch of branches) {
+        const evaluation = this.evaluateAdmission(branch, profile, authorCandidate);
+        if (!evaluation.admitted) {
+          return { admitted: false, rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason };
+        }
+      }
+
+      for (const branch of viableBranches) {
         const evaluation = this.evaluateAdmission(branch, profile, authorCandidate);
         if (!evaluation.admitted) {
           return { admitted: false, rejectionReason: 'COMBO_BRANCH_REJECTED_' + evaluation.rejectionReason };
@@ -427,10 +435,15 @@ class UnifiedRouteSelector {
     const selectedEntry = scoredList[0];
     let chosenCandidate = selectedEntry.candidate;
     if (chosenCandidate.isCombo && Array.isArray(chosenCandidate.metadata?.viableBranches)) {
-      chosenCandidate = createRouteIdentity({
-        ...chosenCandidate,
-        comboBranches: chosenCandidate.metadata.viableBranches,
-      });
+      const validatedViable = chosenCandidate.metadata.viableBranches.filter(
+        (b) => this.evaluateAdmission(b, profile, options.authorCandidate || null).admitted
+      );
+      if (validatedViable.length > 0) {
+        chosenCandidate = createRouteIdentity({
+          ...chosenCandidate,
+          comboBranches: validatedViable,
+        });
+      }
     }
 
     // 4. Context & Budget Interface (Finding 11)

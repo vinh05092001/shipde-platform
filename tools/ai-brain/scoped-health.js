@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 'use strict';
 
 /**
@@ -257,7 +258,10 @@ function accountHealthKey(id) {
   const realAccount = id.metadata?.realAccountRef;
   const account = realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef;
   const observed = account && account !== 'UNKNOWN' ? account : id.connectionId;
-  return JSON.stringify([id.upstreamProviderId, observed && observed !== 'UNKNOWN' ? observed : id.candidateKey]);
+  const safeObserved = typeof observed === 'string' && observed.includes('@')
+    ? crypto.createHash('sha256').update(observed.trim().toLowerCase()).digest('hex').slice(0, 10)
+    : observed;
+  return JSON.stringify([id.upstreamProviderId, safeObserved && safeObserved !== 'UNKNOWN' ? safeObserved : id.candidateKey]);
 }
 
 function quotaHealthKey(id) {
@@ -423,13 +427,38 @@ class ScopedHealthRegistry {
 
         const candModelKey = accountModelHealthKey(dummyId);
         const candModelRec = this.accountModels.get(candModelKey);
-        const candModelBlocked = candModelRec && candModelRec.resetsAt && now < candModelRec.resetsAt;
+        const candModelBlocked = Boolean(candModelRec && (candModelRec.isPermanent || (candModelRec.resetsAt && now < candModelRec.resetsAt)));
 
-        if (!candBlocked && !candQuotaBlocked && !candModelBlocked) {
+        // Per-connection and wildcard model locks
+        const candLockKey = modelLockHealthKey(dummyId.upstreamProviderId, dummyId.outboundModelId, dummyId.connectionId);
+        const candWildcardKey = modelLockHealthKey(dummyId.upstreamProviderId, dummyId.outboundModelId, '*');
+        let candConnLock = this.modelLocks.get(candLockKey);
+        if (candConnLock && now > candConnLock) {
+          this.modelLocks.delete(candLockKey);
+          candConnLock = null;
+        }
+        let candWildcardLock = this.modelLocks.get(candWildcardKey);
+        if (candWildcardLock && now > candWildcardLock) {
+          this.modelLocks.delete(candWildcardKey);
+          candWildcardLock = null;
+        }
+        const candLockUntil = (candConnLock && now <= candConnLock ? candConnLock : null) || (candWildcardLock && now <= candWildcardLock ? candWildcardLock : null);
+        const candLockBlocked = Boolean(candLockUntil);
+
+        if (!candBlocked && !candQuotaBlocked && !candModelBlocked && !candLockBlocked) {
           anyHealthy = true;
           break;
         }
-        if (candQuotaBlocked && candQuotaRec && candQuotaRec.resetsAt && now > candQuotaRec.resetsAt) {
+        if (candLockBlocked) {
+          lastFailure = {
+            category: ErrorCategory.RATE_LIMIT,
+            scope: 'model_lock',
+            reason: 'MODEL_LOCK_ACTIVE',
+            resetsAt: candLockUntil,
+          };
+        } else if (candModelBlocked) {
+          lastFailure = candModelRec;
+        } else if (candQuotaBlocked && candQuotaRec && candQuotaRec.resetsAt && now > candQuotaRec.resetsAt) {
           lastFailure = {
             category: ErrorCategory.QUOTA_CREDIT,
             scope: HealthScope.QUOTA_SCOPE,
@@ -437,7 +466,7 @@ class ScopedHealthRegistry {
             resetsAt: null,
           };
         } else {
-          lastFailure = candRec || (candQuotaBlocked ? { category: ErrorCategory.QUOTA_CREDIT, scope: HealthScope.QUOTA_SCOPE, reason: candQuotaRec?.reason || 'QUOTA_EXHAUSTED' } : null) || candModelRec;
+          lastFailure = candRec || (candQuotaBlocked ? { category: ErrorCategory.QUOTA_CREDIT, scope: HealthScope.QUOTA_SCOPE, reason: candQuotaRec?.reason || 'QUOTA_EXHAUSTED' } : null);
         }
       }
       if (!anyHealthy) {
@@ -515,19 +544,30 @@ class ScopedHealthRegistry {
     // 7. Check Model Lock
     const lockKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, id.connectionId);
     const wildcardKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, '*');
-    const lockUntil = this.modelLocks.get(lockKey) || this.modelLocks.get(wildcardKey);
-    if (lockUntil) {
-      if (now <= lockUntil) {
-        return {
-          healthy: false,
-          blockedBy: 'model_lock',
-          category: ErrorCategory.RATE_LIMIT,
-          reason: 'MODEL_LOCK_ACTIVE',
-          resetsAt: lockUntil,
-        };
-      }
+
+    let connLockUntil = this.modelLocks.get(lockKey);
+    if (connLockUntil && now > connLockUntil) {
       this.modelLocks.delete(lockKey);
+      connLockUntil = null;
+    }
+    let wildcardLockUntil = this.modelLocks.get(wildcardKey);
+    if (wildcardLockUntil && now > wildcardLockUntil) {
       this.modelLocks.delete(wildcardKey);
+      wildcardLockUntil = null;
+    }
+
+    const activeLockUntil =
+      (connLockUntil && now <= connLockUntil ? connLockUntil : null) ||
+      (wildcardLockUntil && now <= wildcardLockUntil ? wildcardLockUntil : null);
+
+    if (activeLockUntil) {
+      return {
+        healthy: false,
+        blockedBy: 'model_lock',
+        category: ErrorCategory.RATE_LIMIT,
+        reason: 'MODEL_LOCK_ACTIVE',
+        resetsAt: activeLockUntil,
+      };
     }
 
     // 8. If quota reset elapsed, candidate requires probe before dispatch!

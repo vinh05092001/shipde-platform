@@ -161,6 +161,9 @@ function parseFixtureGroups(doc) {
     const groupName = isArgon ? 'argon' : (isExternal ? 'external' : 'gemini');
     const family = isArgon ? 'argon' : (mapFamily(group.id || group.family || group.name) || groupName);
     if (!family) continue;
+    const groupModels = Array.isArray(group.models)
+      ? group.models.map((m) => (typeof m === 'string' ? m.trim() : String(m?.id || m?.modelId || m || '').trim()))
+      : undefined;
     for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
       const windowValue = group[key];
       if (!windowValue || typeof windowValue !== 'object') continue;
@@ -185,6 +188,7 @@ function parseFixtureGroups(doc) {
       rows.push({
         group: group.id || groupName,
         family,
+        ...(groupModels ? { models: groupModels } : {}),
         window: mapWindow(key) || key,
         remainingPercent,
         known,
