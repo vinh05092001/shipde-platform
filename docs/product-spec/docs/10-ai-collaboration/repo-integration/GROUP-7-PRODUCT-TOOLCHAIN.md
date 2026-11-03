@@ -121,6 +121,7 @@ Work Item: `GOAL-AUTOCLAW-REPOS-8`. Uses [the existing five-state contract](../R
       "openapi-typescript": "^7.13.0",
       "prettier": "^3.9.6",
       "prisma": "^6.19.2",
+      "repomix": "1.18.1",
       "tsx": "^4.21.0",
       "turbo": "^2.4.4",
       "typescript": "^5"
@@ -165,6 +166,7 @@ Work Item: `GOAL-AUTOCLAW-REPOS-8`. Uses [the existing five-state contract](../R
       "openapi-typescript": "^7.13.0",
       "prettier": "^3.9.6",
       "prisma": "^6.19.2",
+      "repomix": "1.18.1",
       "tsx": "^4.21.0",
       "turbo": "^2.4.4",
       "typescript": "^5"
@@ -194,6 +196,7 @@ Work Item: `GOAL-AUTOCLAW-REPOS-8`. Uses [the existing five-state contract](../R
       "openapi-typescript": "^7.13.0",
       "prettier": "^3.9.6",
       "prisma": "^6.19.2",
+      "repomix": "1.18.1",
       "tsx": "^4.21.0",
       "turbo": "^2.4.4",
       "typescript": "^5"
