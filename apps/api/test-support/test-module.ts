@@ -32,6 +32,8 @@ export function createApiTestModule(metadata: ModuleMetadata): TestingModuleBuil
           database ??= createLocalTestDatabase(PrismaService);
           const db = await database;
           db.prisma.onModuleDestroy = db.close;
+          const originalCheckReadiness = db.prisma.checkReadiness.bind(db.prisma);
+          db.prisma.checkReadiness = (timeoutMs = 15_000) => originalCheckReadiness(timeoutMs);
           return db.prisma;
         },
       })
