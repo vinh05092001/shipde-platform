@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { checkWorkItemReady } from '../ready-check.mjs';
 
 const valid = readFileSync(new URL('fixtures/ready-check/valid.md', import.meta.url), 'utf8');
@@ -134,6 +136,37 @@ test('rejects Unchanged behaviour table rows with missing or surplus cells', () 
     assert.equal(result.ok, false);
     assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
   }
+});
+
+test('rejects an unproved Unchanged behaviour table beside a proved bullet', () => {
+  const result = checkWorkItemReady(
+    withBehaviour(
+      `${provedBehaviour}\n\n| Behaviour | Regression test |\n| --- | --- |\n| Existing diagnostics stay masked | |`
+    )
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
+});
+
+test('rejects commented Unchanged behaviour beside an empty code span', () => {
+  const result = checkWorkItemReady(
+    withBehaviour(
+      '- ` ` <!-- Existing CLI input remains read-only; regression test: ready-cli-does-not-write -->'
+    )
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
+});
+
+test('dependency-free CLI accepts a valid Work Item after production install', () => {
+  const scriptPath = fileURLToPath(new URL('../ready-check.mjs', import.meta.url));
+  const fixturePath = fileURLToPath(new URL('fixtures/ready-check/valid.md', import.meta.url));
+  const result = spawnSync(process.execPath, [scriptPath, fixturePath], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /PASS: Work Item is ready for authoring/);
 });
 
 for (const label of ['**regression test**:', 'regression **proof**:', '*regression command*:']) {

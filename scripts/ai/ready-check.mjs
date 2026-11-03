@@ -2,9 +2,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import MarkdownIt from 'markdown-it';
-
-const md = new MarkdownIt({ html: true });
+let md = null;
+try {
+  const { default: MarkdownIt } = await import('markdown-it');
+  md = new MarkdownIt({ html: true });
+} catch {
+  md = null;
+}
 const CLARIFICATION = /\[NEEDS\s+CLARIFICATION(?:\s*:[^\]]*)?\s*\]/gi;
 
 function tableCells(line) {
@@ -23,6 +27,10 @@ function tableCells(line) {
   if (text.startsWith('|')) cells.shift();
   if (text.endsWith('|') && cells.at(-1) === '') cells.pop();
   return cells.map((cell) => cell.trim());
+}
+
+function isTableSeparator(cells) {
+  return cells.every((cell) => /^:?-+:?$/.test(cell));
 }
 
 function concrete(value) {
@@ -171,6 +179,122 @@ function extractTables(tokens) {
   return tables;
 }
 
+function parseMarkdownFallback(text) {
+  const lines = text.split('\n');
+  const tokens = [];
+  let inFence = false;
+  let fenceChar = '';
+  let fenceLen = 0;
+  let inComment = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+
+    if (inFence) {
+      tokens.push({ type: 'fence', content: rawLine });
+      const closerMatch = trimmed.match(/^(`{3,}|~{3,})$/);
+      if (closerMatch && closerMatch[1][0] === fenceChar && closerMatch[1].length >= fenceLen) {
+        inFence = false;
+      }
+      continue;
+    }
+
+    const fenceOpen = rawLine.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})/);
+    if (fenceOpen) {
+      inFence = true;
+      fenceChar = fenceOpen[1][0];
+      fenceLen = fenceOpen[1].length;
+      tokens.push({ type: 'fence', content: rawLine });
+      continue;
+    }
+
+    if (inComment) {
+      tokens.push({ type: 'html_block', content: rawLine });
+      if (rawLine.includes('-->')) inComment = false;
+      continue;
+    }
+    if (rawLine.includes('<!--') && !rawLine.includes('-->')) {
+      inComment = true;
+      tokens.push({ type: 'html_block', content: rawLine });
+      continue;
+    }
+
+    const headingMatch = rawLine.match(/^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      tokens.push({ type: 'heading_open', tag: `h${level}`, map: [i, i + 1] });
+      tokens.push({ type: 'inline', content: headingMatch[2].trim() });
+      tokens.push({ type: 'heading_close', tag: `h${level}` });
+      continue;
+    }
+
+    const cells = tableCells(rawLine);
+    if (cells && i + 1 < lines.length) {
+      const nextCells = tableCells(lines[i + 1]);
+      if (nextCells && isTableSeparator(nextCells) && nextCells.length === cells.length) {
+        const headerLine = i;
+        const headerCells = cells;
+        i += 1;
+        const rows = [];
+        let j = i + 1;
+        for (; j < lines.length; j++) {
+          const rowCells = tableCells(lines[j]);
+          if (!rowCells) break;
+          rows.push({ line: j, cells: rowCells });
+        }
+        i = j - 1;
+
+        tokens.push({ type: 'table_open', map: [headerLine, j] });
+        tokens.push({ type: 'thead_open' });
+        tokens.push({ type: 'tr_open', map: [headerLine, headerLine + 1] });
+        for (const cell of headerCells) {
+          tokens.push({ type: 'th_open' });
+          tokens.push({ type: 'inline', content: cell });
+          tokens.push({ type: 'th_close' });
+        }
+        tokens.push({ type: 'tr_close' });
+        tokens.push({ type: 'thead_close' });
+
+        for (const row of rows) {
+          tokens.push({ type: 'tr_open', map: [row.line, row.line + 1] });
+          for (const cell of row.cells) {
+            tokens.push({ type: 'td_open' });
+            tokens.push({ type: 'inline', content: cell });
+            tokens.push({ type: 'td_close' });
+          }
+          tokens.push({ type: 'tr_close' });
+        }
+        tokens.push({ type: 'table_close' });
+        continue;
+      }
+    }
+
+    if (rawLine.includes('<!--') && rawLine.includes('-->')) {
+      tokens.push({ type: 'html_block', content: rawLine });
+      const withoutComment = rawLine.replace(/<!--[\s\S]*?-->/g, '').trim();
+      if (withoutComment) {
+        tokens.push({
+          type: 'inline',
+          content: withoutComment,
+          children: [{ type: 'text', content: withoutComment }],
+        });
+      }
+      continue;
+    }
+
+    if (trimmed) {
+      tokens.push({
+        type: 'inline',
+        content: rawLine,
+        children: [{ type: 'text', content: rawLine }],
+      });
+    }
+  }
+
+  return tokens;
+}
+
 const IGNORED_SOURCE_BLOCKS = new Set(['fence', 'code_block', 'html_block']);
 const IGNORED_SOURCE_INLINES = new Set(['html_inline']);
 
@@ -188,7 +312,7 @@ export function checkWorkItemReady(content) {
     );
   }
 
-  const tokens = md.parse(text, {});
+  const tokens = md ? md.parse(text, {}) : parseMarkdownFallback(text);
 
   const allSections = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -302,13 +426,12 @@ export function checkWorkItemReady(content) {
       listLines.push(lines[l]);
     }
 
-    const hasListEntries = listLines.some((l) => l.trim());
-    let ok = false;
-    if (hasListEntries) {
-      ok = checkListBehaviours(listLines);
-    } else if (foundTable) {
-      ok = tableValid;
-    }
+    const listText = listLines.join('\n').replace(/<!--[\s\S]*?-->/g, '');
+    const entryLines = listText.split('\n');
+    const hasListEntries = entryLines.some((l) => l.trim());
+    const listOk = hasListEntries ? checkListBehaviours(entryLines) : true;
+    const tableOk = foundTable ? tableValid : true;
+    const ok = (hasListEntries || foundTable) && listOk && tableOk;
 
     if (!ok) {
       report(
