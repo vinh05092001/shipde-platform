@@ -15,6 +15,34 @@ const g = require('../work-guard');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'work-guard-'));
 
+// Windows/macOS compare paths case-insensitively; a Linux filesystem does not, and
+// the checkout-comparison test needs both behaviours on whatever host runs it.
+function withCaseInsensitiveFs(value, fn) {
+  const prev = process.env.WORK_GUARD_CASE_INSENSITIVE;
+  if (value === undefined) delete process.env.WORK_GUARD_CASE_INSENSITIVE;
+  else process.env.WORK_GUARD_CASE_INSENSITIVE = value;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.WORK_GUARD_CASE_INSENSITIVE;
+    else process.env.WORK_GUARD_CASE_INSENSITIVE = prev;
+  }
+}
+
+// A git stub that can make the conflict inspection itself fail, not just report
+// conflicts: an inspection that never ran is not evidence of a clean tree.
+function gitFailingDiff() {
+  const map = {
+    'rev-parse --show-toplevel': { status: 0, stdout: '/w/p-task-ai-165\n' },
+    'symbolic-ref --quiet --short HEAD': { status: 0, stdout: 'feat/task-ai-165-ci\n' },
+    'rev-parse HEAD': { status: 0, stdout: 'abc\n' },
+  };
+  return (args) => {
+    if (args.join(' ') === 'diff --name-only --diff-filter=U') return { status: 128, stdout: '' };
+    return map[args.join(' ')] || { status: 1, stdout: '' };
+  };
+}
+
 function fakeGit(map) {
   return (args) => {
     const r = map[args.join(' ')];
@@ -252,18 +280,36 @@ test('codex 8fa765f: frozen worker result survives a failing cleanup', async () 
 });
 
 test('codex 8fa765f: returning to a tested SHA does not re-run its tests', async () => {
-  const { runReviewLoop } = require('../review-loop');
-  const runs = [];
+  const { runReviewLoop, Status } = require('../review-loop');
   const shas = ['s2', 's1', 's3'];
-  await runReviewLoop(
+  const tested = [];
+  const reviewed = [];
+  const r = await runReviewLoop(
     { sha: 's1', budget: 3 },
     {
-      runTests: () => ({ pass: false, findings: [{ id: 'T' }] }),
-      review: (sha) => ({ pass: true, sha }),
+      runTests: () => {
+        // shas[0] is the SHA the upcoming repair will produce; once the queue is
+        // empty the next repair returns no SHA and the loop stops.
+        const sha = shas.length ? shas[0] : 'no-more';
+        tested.push(sha);
+        return { pass: false, findings: [{ id: 'T' }] };
+      },
+      review: (sha) => {
+        reviewed.push(sha);
+        return { pass: true, sha };
+      },
       repair: () => ({ sha: shas.shift() }),
     }
   );
-  void runs;
+  // s1 is the entry SHA and is tested once; s2 once for the first repair. Returning
+  // to s1 buys no second test run of s1, and the final repair with no SHA stops the
+  // loop even though its tests were bought first (they are never run again).
+  assert.deepEqual(tested, ['s2', 's1', 'no-more']);
+  assert.equal(tested.filter((s) => s === 's1').length, 1);
+  // No SHA ever passed tests, so no review was bought at all.
+  assert.deepEqual(reviewed, []);
+  assert.equal(r.status, Status.BLOCKED);
+  assert.equal(r.repairCount, 4);
 });
 
 test('codex a820c19: corrupt ledger fails closed', () => {
@@ -445,4 +491,177 @@ test('codex ee9ce83: a generation already taken and released cannot be reacquire
   );
   assert.equal(r.exitCode, 7);
   assert.match(r.cleanupError, /rm/);
+});
+
+test('round 2 #4: a failed conflict inspection refuses admission instead of passing', () => {
+  const cwd = '/w/p-task-ai-165';
+  const item = 'TASK-AI-165';
+  // `git diff --name-only --diff-filter=U` exits nonzero (index locked, corrupt repo,
+  // git crashed): the guard cannot prove the tree is clean, so AC-AI-167-01 refuses.
+  const r = g.checkWorkspace({ cwd, expectedRoot: cwd, workItemId: item, git: gitFailingDiff() });
+  assert.equal(r.ok, false);
+  assert.equal(r.cause, g.Cause.CONFLICT_UNKNOWN);
+  // A git stub that returns nothing at all for the inspection is refused too.
+  const silent = fakeGit({
+    'rev-parse --show-toplevel': cwd + '\n',
+    'symbolic-ref --quiet --short HEAD': 'feat/task-ai-165-ci\n',
+    'rev-parse HEAD': 'abc\n',
+  });
+  assert.equal(
+    g.checkWorkspace({ cwd, expectedRoot: cwd, workItemId: item, git: silent }).cause,
+    g.Cause.CONFLICT_UNKNOWN
+  );
+  // Control: a successful inspection with no unmerged files still admits.
+  assert.equal(
+    g.checkWorkspace({ cwd, expectedRoot: cwd, workItemId: item, git: okGit(item) }).ok,
+    true
+  );
+});
+
+test('round 2 #5: unknown token usage counts toward the token caps', () => {
+  const file = path.join(tmp(), 'l.json');
+  // A token-only cap, no attempt cap: only the token budget can ever refuse.
+  const L = new g.ProgressLedger({ file, limits: { item: { tokens: 3000 } } });
+  L.record('A', 'repair', 'f1', 'TIMEOUT', {});
+  L.record('A', 'repair', 'f2', 'TIMEOUT', {});
+  // Each unobserved attempt is charged the per-attempt cap (3000); the item cap is spent.
+  assert.equal(L.admit('A', 'repair', 'f3').cause, g.Cause.TOKENS_EXHAUSTED);
+  const s = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(s.items.A.spent.tokensUnknown, 2);
+  // The third admission is refused before it is charged, so the cap stops at 3000.
+  assert.equal(s.items.A.spent.unknownTokens, 3000);
+  assert.equal(s.items.A.spent.tokens, 0);
+
+  // A reservation that is never recorded cannot dodge the same cap.
+  const L2 = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { goal: { tokens: 3000 } },
+  });
+  L2.admit('A', 'review', 'f1', { reserve: true, pid: process.pid });
+  assert.equal(L2.admit('B', 'review', 'f2').cause, g.Cause.GOAL_EXHAUSTED);
+  // A recorded reservation is not charged twice: its known usage replaces the imputation.
+  const L3 = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { item: { tokens: 3000 } },
+  });
+  L3.admit('A', 'review', 'f1', { reserve: true, pid: process.pid });
+  L3.record('A', 'review', 'f1', 'CHANGES_REQUIRED', { tokens: 10 });
+  const s3 = JSON.parse(fs.readFileSync(L3.file, 'utf8'));
+  assert.equal(s3.items.A.spent.tokens, 10);
+  assert.equal(s3.items.A.spent.unknownTokens, 0);
+  assert.equal(L3.admit('A', 'review', 'f2').ok, true);
+  // An unknown usage that is recorded without a cap is still only a count.
+  const L4 = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  L4.record('A', 'review', 'f1', 'TIMEOUT', {});
+  assert.equal(L4.load().items.A.spent.unknownTokens, 0);
+  assert.throws(() => L4.record('A', 'review', 'f2', 'X', { tokens: -1 }), /invalid usage/);
+});
+
+test('round 2 #6: worker own properties survive failing cleanup across JSON serialization and spread', async () => {
+  const workerResult = { jobId: 'job-99', exitCode: 7, count: 42 };
+  const r = await g.runWithCleanup(
+    async () => workerResult,
+    async () => {
+      throw new Error('rmdir failed');
+    }
+  );
+  assert.equal(r.jobId, 'job-99');
+  assert.equal(r.exitCode, 7);
+  assert.equal(r.count, 42);
+  assert.match(r.cleanupError, /rmdir failed/);
+
+  // Serialized handoff via JSON.stringify retains worker fields and cleanupError
+  const serialized = JSON.parse(JSON.stringify(r));
+  assert.equal(serialized.jobId, 'job-99');
+  assert.equal(serialized.exitCode, 7);
+  assert.equal(serialized.count, 42);
+  assert.match(serialized.cleanupError, /rmdir failed/);
+
+  // Object spread retains worker fields and cleanupError
+  const spread = { ...r };
+  assert.equal(spread.jobId, 'job-99');
+  assert.equal(spread.exitCode, 7);
+  assert.equal(spread.count, 42);
+  assert.match(spread.cleanupError, /rmdir failed/);
+});
+
+test('round 2 #7: falsy worker exceptions are not swallowed', async () => {
+  for (const falsy of [null, undefined, false, 0, '']) {
+    let threw = false;
+    try {
+      await g.runWithCleanup(
+        async () => {
+          throw falsy;
+        },
+        async () => {}
+      );
+    } catch (e) {
+      threw = true;
+      assert.strictEqual(e, falsy);
+    }
+    assert.strictEqual(threw, true, `Expected worker throwing ${JSON.stringify(falsy)} to throw`);
+  }
+});
+
+test('round 2 #14: unexpected liveness errors treat lock as held', () => {
+  const file = path.join(tmp(), 'lock');
+  fs.writeFileSync(file + '.g1', JSON.stringify({ jobId: 'j1', pid: 99999, at: Date.now() }));
+
+  const origKill = process.kill;
+  try {
+    // Non-ESRCH error (e.g. EPERM or any unexpected system failure)
+    process.kill = () => {
+      const err = new Error('unexpected system error');
+      err.code = 'EUNKNOWN';
+      throw err;
+    };
+    const r = g.acquireLock(file, { jobId: 'j2', pid: 88888 });
+    assert.equal(r.ok, false);
+    assert.equal(r.cause, g.Cause.LOCK_HELD);
+
+    // Proven dead (ESRCH) allows superseding lock
+    process.kill = () => {
+      const err = new Error('no such process');
+      err.code = 'ESRCH';
+      throw err;
+    };
+    const r2 = g.acquireLock(file, { jobId: 'j2', pid: 88888 });
+    assert.equal(r2.ok, true);
+  } finally {
+    process.kill = origKill;
+  }
+});
+
+test('round 2 #15: checkout comparison respects filesystem case-sensitivity', () => {
+  const git = (args) => {
+    if (args.join(' ') === 'rev-parse --show-toplevel') return { status: 0, stdout: '/w/Item\n' };
+    if (args.join(' ') === 'diff --name-only --diff-filter=U') return { status: 0, stdout: '' };
+    if (args.join(' ') === 'symbolic-ref --quiet --short HEAD')
+      return { status: 0, stdout: 'feat/item-1\n' };
+    if (args.join(' ') === 'rev-parse HEAD') return { status: 0, stdout: 'abc\n' };
+    return { status: 1, stdout: '' };
+  };
+
+  // Case-sensitive filesystem: /w/Item !== /w/item -> CWD_MISMATCH
+  withCaseInsensitiveFs('0', () => {
+    const r = g.checkWorkspace({
+      cwd: '/w/item',
+      expectedRoot: '/w/item',
+      workItemId: 'item-1',
+      git,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.cause, g.Cause.CWD_MISMATCH);
+  });
+
+  // Case-insensitive filesystem: /w/Item === /w/item -> accepted
+  withCaseInsensitiveFs('1', () => {
+    const r = g.checkWorkspace({
+      cwd: '/w/item',
+      expectedRoot: '/w/item',
+      workItemId: 'item-1',
+      git,
+    });
+    assert.equal(r.ok, true);
+  });
 });

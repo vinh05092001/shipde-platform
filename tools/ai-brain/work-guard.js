@@ -27,6 +27,7 @@ const crypto = require('node:crypto');
 const Cause = Object.freeze({
   CWD_MISMATCH: 'CWD_MISMATCH',
   NOT_A_CHECKOUT: 'NOT_A_CHECKOUT',
+  CONFLICT_UNKNOWN: 'CONFLICT_INSPECTION_FAILED',
   DETACHED_HEAD: 'DETACHED_HEAD',
   WRONG_BRANCH: 'WRONG_BRANCH',
   CONFLICT: 'MERGE_CONFLICT',
@@ -46,8 +47,22 @@ const Cause = Object.freeze({
 // the environment, not in the work, so the input is not proven unproductive.
 const TRANSIENT = new Set(['TIMEOUT', 'RATE_LIMIT', 'NETWORK', 'LAUNCH_FAILED', 'NOT_ATTEMPTED']);
 
+// Paths only compare case-insensitively where the filesystem does. Windows and
+// macOS are case-insensitive by default (`/w/Item` and `/w/item` are one
+// checkout); elsewhere they are distinct checkouts and folding would accept a
+// wrong workspace. WORK_GUARD_CASE_INSENSITIVE=1/0 states the caller's fact.
+function caseInsensitiveFs() {
+  const forced = process.env.WORK_GUARD_CASE_INSENSITIVE;
+  if (forced === '0' || forced === 'false') return false;
+  if (forced === '1' || forced === 'true') return true;
+  return process.platform === 'win32' || process.platform === 'darwin';
+}
+
 function norm(p) {
-  return path.resolve(String(p)).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const abs = path.resolve(String(p)).replace(/\\/g, '/');
+  // A root such as 'C:\' keeps its one trailing slash; /+ would strip it into 'C:'.
+  const trimmed = abs.length > 1 ? abs.replace(/\/+$/, '') || '/' : abs;
+  return caseInsensitiveFs() ? trimmed.toLowerCase() : trimmed;
 }
 
 /**
@@ -65,8 +80,14 @@ function checkWorkspace(o) {
   if (o.expectedRoot && norm(root) !== norm(o.expectedRoot)) {
     return { ok: false, cause: Cause.CWD_MISMATCH, root };
   }
+  // An inspection that did not succeed proves nothing. Only a successful `git diff`
+  // with an empty name list proves "no unmerged files"; a missing result or a
+  // nonzero status is refused, so a broken git can never admit a conflicted tree.
   const unmerged = git(['diff', '--name-only', '--diff-filter=U'], o.cwd);
-  if (unmerged && unmerged.status === 0 && String(unmerged.stdout).trim() !== '') {
+  if (!unmerged || unmerged.status !== 0) {
+    return { ok: false, cause: Cause.CONFLICT_UNKNOWN };
+  }
+  if (String(unmerged.stdout).trim() !== '') {
     return {
       ok: false,
       cause: Cause.CONFLICT,
@@ -182,15 +203,28 @@ class ProgressLedger {
     const s = this.load();
     const it = s.items[itemId] || {};
     if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
-    const over = exceeded(s.goal, this.limits.goal);
+    const lim = this.limits || {};
+    const over = exceeded(s.goal, lim.goal);
     if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
-    const own = exceeded(it.spent || {}, this.limits.item);
+    const own = exceeded(it.spent || {}, lim.item);
     if (own) return { ok: false, cause: limitCause(own), limit: own };
+    // A token cap is enforced over observed *and* imputed tokens. Usage that could not
+    // be observed is charged at the per-attempt cap, so repeated unobserved attempts
+    // reach the cap instead of running free.
+    const ownTokens = exceeded(tokenSpend(it.spent || {}), lim.item);
+    if (ownTokens) return { ok: false, cause: limitCause(ownTokens), limit: ownTokens };
+    const goalTokens = exceeded(tokenSpend(s.goal), lim.goal);
+    if (goalTokens) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: goalTokens };
     // Every fingerprint keeps its outcome, so alternating inputs (F1, F2, F1) cannot loop.
     const seen = ((it.stages || {})[stage] || {}).fps || {};
     const prior = seen[fp];
     const deadFlight =
-      prior && prior.outcome === 'IN_FLIGHT' && Number.isInteger(prior.pid) && !pidAlive(prior.pid);
+      prior &&
+      prior.outcome === 'IN_FLIGHT' &&
+      Number.isInteger(prior.pid) &&
+      // A reservation is released only on proven death: an uncertain liveness answer
+      // keeps the work held, exactly as an uncertain lock holder keeps the lock.
+      pidProvenDead(prior.pid);
     if (prior && !TRANSIENT.has(prior.outcome) && !deadFlight) {
       return { ok: false, cause: Cause.NO_PROGRESS, outcome: prior.outcome };
     }
@@ -206,6 +240,15 @@ class ProgressLedger {
       t.stages = t.stages || {};
       t.spent.attempts += 1;
       s.goal.attempts += 1;
+      // The attempt is charged now with an unknown cost, so a reservation that is never
+      // recorded still counts toward the token caps at the conservative per-attempt cap.
+      const perAttempt = {
+        tokens: (lim.item && lim.item.tokens) || (lim.goal && lim.goal.tokens) || 0,
+      };
+      for (const acc of [t.spent, s.goal]) {
+        acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+        acc.unknownTokens = (acc.unknownTokens || 0) + tokenCost({ tokens: NaN }, perAttempt);
+      }
       const st = t.stages[stage] || { fps: {} };
       st.fps = st.fps || {};
       st.fps[fp] = { outcome: 'IN_FLIGHT', pid: opts.pid, at: this.now() };
@@ -230,15 +273,24 @@ class ProgressLedger {
     // Usage only ever adds: negative or non-finite values would refund a spent budget.
     if (u.ms !== undefined && !isCount(Number(u.ms)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
-    if (u.tokens !== undefined && !isCount(u.tokens))
+    if (u.tokens !== undefined && !isCount(Number(u.tokens)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
+    const knownTokens = u.tokens !== undefined && Number.isFinite(Number(u.tokens));
     for (const acc of [it.spent, s.goal]) {
       if (!reserved) acc.attempts += 1;
       acc.ms += Number(u.ms) || 0;
-      if (Number.isFinite(u.tokens)) acc.tokens += u.tokens;
-      else acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+      // A reservation already charged this attempt as unknown; the real usage replaces
+      // that imputation instead of charging the same attempt twice.
+      const imputed = reserved ? acc.unknownTokens || 0 : 0;
+      if (knownTokens) {
+        acc.tokens += Number(u.tokens);
+        acc.unknownTokens = 0;
+      } else {
+        acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+        acc.unknownTokens = imputed + tokenCost(u, this.limits.item);
+      }
     }
     const st = it.stages[stage] || { fps: {} };
     st.fps = st.fps || {};
@@ -279,8 +331,32 @@ function validSpent(v) {
   return (
     isObj(v) &&
     ['attempts', 'ms', 'tokens'].every((k) => isCount(v[k])) &&
-    (v.tokensUnknown === undefined || isCount(v.tokensUnknown))
+    (v.tokensUnknown === undefined || isCount(v.tokensUnknown)) &&
+    (v.unknownTokens === undefined || isCount(v.unknownTokens))
   );
+}
+
+// A usage whose tokens could not be observed is charged the per-attempt token cap,
+// which is the most that attempt was allowed to spend. With no token cap there is
+// nothing to charge. `usage.tokens === undefined` means the attempt spent nothing
+// observable (no tokens field at all); an explicit non-finite count is unknown usage.
+function tokenCost(u, lim) {
+  // Only a missing or non-finite count is imputed; a negative count is refused by record().
+  if (u.tokens !== undefined && Number.isFinite(Number(u.tokens))) {
+    const n = Number(u.tokens);
+    return n < 0 ? 0 : n;
+  }
+  return Number(lim && lim.tokens) > 0 ? Number(lim.tokens) : 0;
+}
+
+/** Tokens counted against a cap: observed tokens plus imputed unknown usage. */
+function countedTokens(spent) {
+  return (spent.tokens || 0) + (spent.unknownTokens || 0);
+}
+
+/** The tokens sub-budget of an accumulator, as countedTokens sees it. */
+function tokenSpend(spent) {
+  return { tokens: countedTokens(spent) };
 }
 
 /** Any structural damage fails closed: a damaged ledger must never read as empty. */
@@ -317,12 +393,31 @@ function limitCause(k) {
       : Cause.ATTEMPTS_EXHAUSTED;
 }
 
+/**
+ * Overall (negative) liveness of a pid. Fail-closed: a probe that cannot prove
+ * death (EPERM, EINVAL, any unexpected error) reports the pid as alive, so a lock
+ * or reservation is never taken on a guess. Only ESRCH proves the owner is gone.
+ */
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    return e.code === 'EPERM';
+    return !(e && e.code === 'ESRCH');
+  }
+}
+
+/**
+ * Positive proof of death, used where an uncertain answer must keep the work
+ * held (a reservation whose owner may still be running). Anything other than
+ * ESRCH — including an unexpected error — means "not proven dead".
+ */
+function pidProvenDead(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return Boolean(e && e.code === 'ESRCH');
   }
 }
 
@@ -420,13 +515,21 @@ function acceptResult(job, result) {
   return { ok: true };
 }
 
-/** Run fn, then cleanup; the result (and its exit code) is fn's, whatever cleanup does. */
+/**
+ * Run fn, then cleanup; the result (and its exit code) is fn's, whatever cleanup does.
+ *
+ * The worker is watched through a flag, not through the thrown value: a worker may
+ * throw `null`, `undefined`, `0` or `''`, and treating a falsy exception as success
+ * would turn a crash into a result.
+ */
 async function runWithCleanup(fn, cleanup) {
   let out;
+  let threw = false;
   let err;
   try {
     out = await fn();
   } catch (e) {
+    threw = true;
     err = e;
   }
   let cleanupError = null;
@@ -435,7 +538,7 @@ async function runWithCleanup(fn, cleanup) {
   } catch (e) {
     cleanupError = e;
   }
-  if (err) {
+  if (threw) {
     if (cleanupError) {
       try {
         err.cleanupError = cleanupError;
@@ -445,16 +548,23 @@ async function runWithCleanup(fn, cleanup) {
     }
     throw err;
   }
-  if (cleanupError && out && typeof out === 'object') {
-    const note = String(cleanupError.message || cleanupError);
-    // Never mutate the worker's result: a TypeError here would replace the real exit code.
-    // Inherit from the result so inherited and non-enumerable fields (exitCode) stay readable.
-    return Object.defineProperty(Object.create(out), 'cleanupError', {
-      value: note,
-      enumerable: true,
-    });
+  if (!cleanupError || out === null || typeof out !== 'object') return out;
+  const note = String(cleanupError.message || cleanupError);
+  // Never mutate the worker's result: a TypeError here would replace the real exit code.
+  // A new object keeps the worker's own properties as *own* properties, so JSON.stringify
+  // and object spread still carry jobId/exitCode, and it inherits from the result so
+  // fields held on a prototype (exitCode on a class instance) stay readable.
+  const copy = Object.create(out);
+  for (const key of Reflect.ownKeys(out)) {
+    if (key === 'cleanupError') continue;
+    const d = Object.getOwnPropertyDescriptor(out, key);
+    if (d) Object.defineProperty(copy, key, d);
   }
-  return out;
+  return Object.defineProperty(copy, 'cleanupError', {
+    value: note,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 module.exports = {
