@@ -643,4 +643,3 @@ To enable the merge queue in GitHub repository settings (not executed by this PR
    - **Minimum / Maximum pull requests to merge**: 1 to 5.
    - **Status checks**: Ensure required checks `contract` and `application-gate` are selected.
 5. Save changes.
-

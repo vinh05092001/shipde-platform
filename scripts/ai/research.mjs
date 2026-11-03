@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
+import { lookup } from 'node:dns/promises';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { isIP, isIPv4, isIPv6 } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -20,11 +21,11 @@ const ACTIONS = new Map([
   ['youtube transcript', ['subtitle', 'yt-dlp']],
 ]);
 const SENSITIVE =
-  /cookie|token|secret|password|passwd|authorization|auth|credential|api[_-]?key|access[_-]?key|environment|^env$/i;
+  /(?:cookie|token|secret|password|passwd|authorization|auth|credential|environment|^env$|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
 // Only values of credential-shaped variables are scrubbed verbatim; scrubbing
 // every inherited value would corrupt ordinary output (e.g. the word "true").
 const SENSITIVE_ENV =
-  /cookie|token|secret|password|passwd|authorization|auth|credential|private|proxy|api[_-]?key|access[_-]?key/i;
+  /(?:cookie|token|secret|password|passwd|authorization|auth|credential|private|proxy|api[_-]?key|access[_-]?key|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
 const NON_SECRET_ENV_VALUES = new Set(['true', 'false', '0', '1', 'utf-8', 'utf8']);
 const PUBLIC_ERROR_CODES = new Set([
   'BAD_INPUT',
@@ -170,7 +171,130 @@ function validatePublicUrl(candidate) {
   }
 }
 
-function parse(argv) {
+function extractSearchUrls(target) {
+  const urls = [];
+  const schemelessRegex =
+    /^(?:[^\s:@]+:[^\s:@]+@)?(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3}|localhost|\[[a-fA-F0-9:]+\])(?::\d+)?(?:\/[^\s]*)?(?:\?[^\s]*)?(?:#[^\s]*)?$/i;
+
+  for (const rawToken of target.split(/\s+/)) {
+    let token = rawToken.trim();
+    token = token.replace(/^["'`(<[{\\]+/, '').replace(/["'`)>\]},;.]+$/, '');
+    if (
+      token.startsWith('[') &&
+      token.endsWith(']') &&
+      !/^\[[a-fA-F0-9:]+\](?::\d+)?(?:\/.*)?$/i.test(token)
+    ) {
+      token = token.slice(1, -1);
+    }
+    if (token.includes('://')) {
+      urls.push(token);
+    } else if (schemelessRegex.test(token)) {
+      urls.push(`https://${token}`);
+    }
+  }
+
+  // Also catch unspaced punctuation like `lookup(docs.example.com?token=123)`
+  const embeddedSchemes = target.match(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'`()<>[\]{}]+/gi) || [];
+  for (const u of embeddedSchemes) {
+    if (!urls.includes(u)) urls.push(u);
+  }
+  const embeddedSchemeless =
+    target.match(
+      /(?:[a-zA-Z0-9_-]+:[^\s:@]+@)?(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:\/[^\s"'`()<>[\]{}]*)?(?:\?[^\s"'`()<>[\]{}]*)?(?:#[^\s"'`()<>[\]{}]*)?/gi
+    ) || [];
+  for (const u of embeddedSchemeless) {
+    const candidate = `https://${u}`;
+    if (!urls.includes(u) && !urls.includes(candidate)) urls.push(candidate);
+  }
+
+  return urls;
+}
+
+async function defaultResolveHost(hostname) {
+  if (isIP(hostname)) return [hostname];
+  try {
+    const results = await lookup(hostname, { all: true, verbatim: true });
+    return results.map((r) => r.address);
+  } catch {
+    throw new Error(`Research refused: cannot resolve host "${hostname}". Public HTTP(S) URLs only.`);
+  }
+}
+
+async function defaultFetchUrl(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    let res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    if (res.status === 405) {
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    }
+    return {
+      status: res.status,
+      headers: {
+        location: res.headers.get('location'),
+      },
+    };
+  } catch {
+    throw new Error('Research refused: unable to verify destination redirects.');
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function validateDestinationSafety(
+  targetUrl,
+  { resolveHost = defaultResolveHost, fetchUrl = defaultFetchUrl, isFetch = false } = {}
+) {
+  let current = targetUrl;
+  let hops = 0;
+  const maxHops = 5;
+
+  while (hops <= maxHops) {
+    validatePublicUrl(current);
+    const parsed = new URL(current);
+
+    const ips = await resolveHost(parsed.hostname);
+    if (!ips || !Array.isArray(ips) || ips.length === 0) {
+      throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
+    }
+    for (const ip of ips) {
+      if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
+        throw new Error('Research refused: destination resolves to a private or restricted address.');
+      }
+    }
+
+    if (!isFetch) {
+      break;
+    }
+
+    let resp;
+    try {
+      resp = await fetchUrl(current);
+    } catch (err) {
+      throw new Error(err.message || 'Research refused: unable to verify destination redirects.');
+    }
+
+    if (resp && resp.status >= 300 && resp.status < 400 && resp.headers?.location) {
+      hops++;
+      if (hops > maxHops) {
+        throw new Error('Research refused: too many redirects.');
+      }
+      current = new URL(resp.headers.location, current).href;
+    } else {
+      break;
+    }
+  }
+}
+
+async function parse(argv, { resolveHost, fetchUrl }) {
   const args = argv[0] === '--' ? argv.slice(1) : [...argv];
   let maxChars = 20000;
   try {
@@ -222,17 +346,7 @@ function parse(argv) {
     // upstream's schemeless forms, which still must not carry credentials.
     const urls = [];
     if (action === 'search') {
-      for (const token of target.split(/\s+/)) {
-        if (token.includes('://')) {
-          urls.push(token);
-        } else if (
-          /^(?:[^\s:@]+:[^\s:@]+@)?(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3}|localhost|\[[a-fA-F0-9:]+\])(?::\d+)?(?:\/[^\s]*)?(?:\?[^\s]*)?(?:#[^\s]*)?$/i.test(
-            token
-          )
-        ) {
-          urls.push(`https://${token}`);
-        }
-      }
+      urls.push(...extractSearchUrls(target));
     } else {
       if (channel === 'github' && /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_.-]+$/.test(target)) {
         // Safe GitHub repository path (owner/repo)
@@ -243,7 +357,11 @@ function parse(argv) {
       }
     }
     for (const candidate of urls) {
-      validatePublicUrl(candidate);
+      await validateDestinationSafety(candidate, {
+        resolveHost,
+        fetchUrl,
+        isFetch: action !== 'search',
+      });
     }
     return { maxChars, cliArgs: [channel, policy[0], target, ...options, '--backend', policy[1]] };
   } catch (error) {
@@ -289,7 +407,7 @@ function redact(value, envValues) {
     .replace(/\b(Bearer|Basic)\s+[^\s"<>]+/gi, '$1 [REDACTED]')
     .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@')
     .replace(
-      /((?:token|api[_-]?key|access[_-]?key|password|passwd|auth(?:orization)?|credential|secret(?:[_-]?key)?|cookies?)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
+      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?)|api[_-]?key|access[_-]?key|password|passwd|auth(?:orization)?|credential|secret(?:[_-]?key)?|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
       '$1[REDACTED]'
     )
     .replace(/\b[A-Z][A-Z0-9_]{2,}\s*=\s*[^\n]+/g, '[REDACTED]');
@@ -318,13 +436,20 @@ function truncate(text, budget) {
 
 // Explicit executable injection is for offline tests; CLI users cannot override
 // the production binary or environment through arguments or environment flags.
-export function runResearch(
+export async function runResearch(
   argv,
-  { binary = 'agent-reach', prefixArgs = [], command, env = process.env } = {}
+  {
+    binary = 'agent-reach',
+    prefixArgs = [],
+    command,
+    env = process.env,
+    resolveHost = defaultResolveHost,
+    fetchUrl = defaultFetchUrl,
+  } = {}
 ) {
   let request;
   try {
-    request = parse(argv);
+    request = await parse(argv, { resolveHost, fetchUrl });
   } catch (error) {
     return refused(error.message, error.maxChars);
   }
@@ -430,7 +555,7 @@ export function runResearch(
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const result = runResearch(process.argv.slice(2));
+  const result = await runResearch(process.argv.slice(2));
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

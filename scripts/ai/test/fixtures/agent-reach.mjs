@@ -40,7 +40,7 @@ if (argv[0] === 'version') {
   if (mode === 'short-env') text = 'The environment value is xyz.';
   if (mode === 'secrets') {
     text =
-      'Cookie: session=fixture-cookie\nAuthorization: Bearer fixture-token\napi_key=fixture-api-key\nfixture-private-env-value\nhttps://docs.example.com?token=fixture-url-token&topic=api';
+      'Cookie: session=fixture-cookie\nAuthorization: Bearer fixture-token\napi_key=fixture-api-key\nfixture-private-env-value\nhttps://docs.example.com?token=fixture-url-token&topic=api\nhttps://maps.googleapis.com/maps/api/geocode/json?address=Hanoi&key=fixture-google-key\nhttps://storage.azure.com/container/blob.txt?sv=2020-08-04&sp=r&sig=fixture-azure-sig\nhttps://s3.amazonaws.com/bucket/obj?X-Amz-Signature=fixture-aws-sig\nsignature=fixture-sig-value';
     console.error('fixture-private-env-value');
   }
   if (mode === 'quoted-secrets') {
@@ -51,6 +51,9 @@ if (argv[0] === 'version') {
         refresh_token: 'fixture-quoted-token',
         access_key: 'fixture-access-key',
         passwd: 'fixture-passwd',
+        key: 'fixture-quoted-single-key',
+        sig: 'fixture-quoted-single-sig',
+        signature: 'fixture-quoted-single-signature',
       }) +
       '\nBasic fixture-basic-token\nhttps://reader:fixture-url-password@docs.example.com/reference\naccess_key=fixture-access-key\npasswd=fixture-passwd';
   }
@@ -78,6 +81,8 @@ if (argv[0] === 'version') {
                   'fixture-private-env-value': 'public metadata',
                   access_key: 'fixture-access-key',
                   passwd: 'fixture-passwd',
+                  key: 'fixture-quoted-single-key',
+                  sig: 'fixture-quoted-single-sig',
                 }
               : {}),
           },
