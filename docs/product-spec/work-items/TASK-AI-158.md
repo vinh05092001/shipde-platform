@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-158` |
 | Feature ID | `N/A — advisory writer/reviewer context packing` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `272` |
+| Delivery order | `273` |
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
