@@ -412,8 +412,44 @@ class UnifiedRouteSelector {
 
     const weights = WEIGHT_PROFILES[chosenProfileKey] || WEIGHT_PROFILES.BALANCED;
 
-    // 3. Score & Rank Admitted Candidates using determined weights (Controller Ranking)
-    const scoredList = admitted.map((c) => {
+    // 3. Post-await Re-validation Gate (Finding 6)
+    // If JEV or any await changes health, re-validate candidates before ranking and selection!
+    const revalidatedCandidates = [];
+    for (const c of admitted) {
+      let candidateToCheck = c;
+      if (c.isCombo && Array.isArray(c.metadata?.viableBranches)) {
+        const validatedViable = c.metadata.viableBranches.filter(
+          (b) => this.evaluateAdmission(b, profile, authorCandidate).admitted
+        );
+        if (validatedViable.length > 0) {
+          candidateToCheck = createRouteIdentity({
+            ...c,
+            comboBranches: validatedViable,
+          });
+        } else {
+          // All viable branches have failed during await
+          continue;
+        }
+      }
+      const evalPost = this.evaluateAdmission(candidateToCheck, profile, authorCandidate);
+      if (evalPost.admitted) {
+        revalidatedCandidates.push(candidateToCheck);
+      }
+    }
+
+    if (revalidatedCandidates.length === 0) {
+      return {
+        status: 'BLOCKED',
+        reason: 'NO_ELIGIBLE_CANDIDATE_ADMITTED',
+        totalCandidatesChecked: (candidates || []).length,
+        admittedCount: 0,
+        rejectionReasons: cappedRejections,
+        chosen: null,
+      };
+    }
+
+    // 4. Score & Rank Re-validated Candidates using determined weights (Controller Ranking)
+    const scoredList = revalidatedCandidates.map((c) => {
       const scoring = this.scoreCandidate(c, profile, weights);
       return {
         candidate: c,
@@ -431,20 +467,9 @@ class UnifiedRouteSelector {
 
     scoredList.sort((a, b) => b.score - a.score || a.candidateKey.localeCompare(b.candidateKey));
 
-    // Controller selects highest-scoring candidate from ranking
+    // Controller selects highest-scoring admitted and healthy candidate from ranking
     const selectedEntry = scoredList[0];
-    let chosenCandidate = selectedEntry.candidate;
-    if (chosenCandidate.isCombo && Array.isArray(chosenCandidate.metadata?.viableBranches)) {
-      const validatedViable = chosenCandidate.metadata.viableBranches.filter(
-        (b) => this.evaluateAdmission(b, profile, options.authorCandidate || null).admitted
-      );
-      if (validatedViable.length > 0) {
-        chosenCandidate = createRouteIdentity({
-          ...chosenCandidate,
-          comboBranches: validatedViable,
-        });
-      }
-    }
+    const chosenCandidate = selectedEntry.candidate;
 
     // 4. Context & Budget Interface (Finding 11)
     // Explicit token budget takes precedence over contextSize

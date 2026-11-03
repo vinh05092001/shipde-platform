@@ -76,14 +76,15 @@ function modelEvidence(model, options, source = {}) {
     ...evidence.metadata,
     ...options.modelMetadata?.[id],
   };
-  const inferredGroup = modelQuotaGroup(id);
   const explicitGroup = evidence.quotaGroup || metadata.quotaGroup;
   const explicitFamily = evidence.quotaFamily || metadata.quotaFamily;
   const familyToGroup = explicitFamily
     ? (/argon/i.test(explicitFamily) ? 'argon' : /claude|gpt|3p|external/i.test(explicitFamily) ? 'external' : /gemini/i.test(explicitFamily) ? 'gemini' : explicitFamily)
     : undefined;
-  const quotaGroup = explicitGroup || familyToGroup || inferredGroup || undefined;
-  const quotaFamily = explicitFamily || (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup);
+  // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily).
+  // Do NOT inject inferred group into evidence here so parsed group membership in lane quota is reachable!
+  const quotaGroup = explicitGroup || familyToGroup;
+  const quotaFamily = explicitFamily || (quotaGroup ? (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup) : undefined);
   return {
     ...metadata,
     ...(quotaGroup ? { quotaGroup } : {}),
@@ -393,9 +394,15 @@ function loadAgyPoolCandidates(options = {}) {
     } else {
       laneEmail = readLaneIdentityEmail(lane.laneId, options);
     }
+    const safeAccountHash = laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')
+      ? hashEmail(laneEmail)
+      : UNKNOWN;
+
     if (laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')) {
       registerPrivateEmail(lane.laneId, laneEmail);
-      registerPrivateEmail(hashEmail(laneEmail), laneEmail);
+      registerPrivateEmail(safeAccountHash, laneEmail);
+      // Bindings are per (lane, account) and never rewritten for existing identities
+      registerPrivateEmail(lane.laneId + '::' + safeAccountHash, laneEmail);
     }
 
     for (const rawModel of models) {
@@ -404,22 +411,31 @@ function loadAgyPoolCandidates(options = {}) {
 
       const rows = lane.quota?.rows || lane.rows || [];
       const evidence = modelEvidence(rawModel, options);
+
+      // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily, then parsed group membership).
+      // Name inference ONLY when no data exists, and it never overrides data.
+      const explicitGroup = rawModel.quotaGroup || rawModel.metadata?.quotaGroup || options.modelMetadata?.[m]?.quotaGroup || evidence.quotaGroup;
+      const explicitFamily = rawModel.quotaFamily || rawModel.metadata?.quotaFamily || options.modelMetadata?.[m]?.quotaFamily || evidence.quotaFamily;
+      const explicitGroupFromFamily = explicitFamily
+        ? (/argon/i.test(explicitFamily) ? 'argon' : /claude|gpt|3p|external/i.test(explicitFamily) ? 'external' : /gemini/i.test(explicitFamily) ? 'gemini' : explicitFamily)
+        : null;
+      const explicitDataGroup = explicitGroup || explicitGroupFromFamily;
+
       const membershipRow = rows.find((r) => Array.isArray(r.models) && r.models.includes(m));
-      const membershipGroup = membershipRow?.group || (membershipRow?.family ? (/argon/i.test(membershipRow.family) ? 'argon' : membershipRow.family === 'claude-gpt' ? 'external' : membershipRow.family) : null);
+      const membershipGroup = membershipRow?.group || (membershipRow?.family ? (/argon/i.test(membershipRow.family) ? 'argon' : /claude|gpt|3p|external/i.test(membershipRow.family) ? 'external' : /gemini/i.test(membershipRow.family) ? 'gemini' : membershipRow.family) : null);
       const laneGroups = Array.isArray(lane.quota?.groups) ? lane.quota.groups : Array.isArray(lane.groups) ? lane.groups : [];
       const membershipFromGroup = laneGroups.find((g) => Array.isArray(g.models) && g.models.includes(m));
-      const parsedGroup = membershipGroup || membershipFromGroup?.id || membershipFromGroup?.group;
+      const parsedGroupFromLane = membershipFromGroup?.id || membershipFromGroup?.group;
+      const parsedGroup = membershipGroup || (parsedGroupFromLane ? (/argon/i.test(parsedGroupFromLane) ? 'argon' : /claude|gpt|3p|external/i.test(parsedGroupFromLane) ? 'external' : /gemini/i.test(parsedGroupFromLane) ? 'gemini' : parsedGroupFromLane) : null);
 
-      const targetGroup = (evidence.quotaFamily ? (/argon/i.test(evidence.quotaFamily) ? 'argon' : /claude|gpt|3p|external/i.test(evidence.quotaFamily) ? 'external' : 'gemini') : null)
-        || (evidence.quotaGroup && evidence.quotaGroup !== 'gemini' && evidence.quotaGroup !== 'external' ? evidence.quotaGroup : null)
-        || evidence.quotaGroup
-        || parsedGroup
-        || modelQuotaGroup(m);
+      const targetGroup = explicitDataGroup || parsedGroup || modelQuotaGroup(m);
+      const targetFamily = explicitFamily || (targetGroup === 'external' ? 'claude-gpt' : targetGroup);
 
       const matchingRows = rows.filter((r) => {
         if (modelId(r) === m) return true;
         if (Array.isArray(r.models) && r.models.includes(m)) return true;
-        if (r.group && r.group === targetGroup) return true;
+        const rowGroup = r.group || (r.family ? (/argon/i.test(r.family) ? 'argon' : /claude|gpt|3p|external/i.test(r.family) ? 'external' : /gemini/i.test(r.family) ? 'gemini' : r.family) : null);
+        if (rowGroup && rowGroup === targetGroup) return true;
         if (r.family && (r.family === targetGroup || (targetGroup === 'external' && r.family === 'claude-gpt'))) return true;
         return false;
       });
@@ -447,8 +463,11 @@ function loadAgyPoolCandidates(options = {}) {
           quotaScopeId: quotaScopeKey,
           metadata: {
             laneId: lane.laneId,
-            quotaGroup: targetGroup,
+            realAccountRef: safeAccountHash !== UNKNOWN ? safeAccountHash : undefined,
             ...evidence,
+            accountRef: lane.laneId,
+            quotaGroup: targetGroup,
+            quotaFamily: targetFamily,
           },
         })
       );

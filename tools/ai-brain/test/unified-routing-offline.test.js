@@ -45,6 +45,7 @@ const {
   UNKNOWN,
   getPrivateEmail,
   registerPrivateEmail,
+  hashEmail,
 } = require('../route-identity');
 
 const {
@@ -1664,5 +1665,330 @@ describe('Codex Review f5807d4 regressions (6 P1 findings)', () => {
     });
     assert.equal(selection.status, 'BLOCKED', 'Combo must not be selected');
     assert.notEqual(selection.status, 'ADMITTED_AND_SELECTED');
+  });
+});
+
+describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
+  test('Finding 1: Explicit quotaGroup: experimental overrides model name and rejects on 0% experimental quota', () => {
+    // Lane has 80% Gemini quota, but 0% experimental quota
+    const pool = loadAgyPoolCandidates({
+      models: [
+        { id: 'gemini-2.5-flash', quotaGroup: 'experimental' }
+      ],
+      lanes: [
+        {
+          laneId: 'agy01',
+          rows: [
+            { group: 'gemini', family: 'gemini', remainingPercent: 80, known: true },
+            { group: 'experimental', family: 'experimental', remainingPercent: 0, known: true }
+          ]
+        }
+      ]
+    });
+
+    // Explicit quotaGroup: 'experimental' must NOT be admitted against 80% Gemini quota!
+    const cand = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    assert.equal(cand, undefined, 'Model with 0% experimental quota must not be admitted');
+
+    const unconnected = pool.unconnected.find(u => u.configuredModelId === 'gemini-2.5-flash');
+    assert.ok(unconnected, 'Should be reported in unconnected');
+    assert.equal(unconnected.reason, 'AGY_MODEL_QUOTA_EXHAUSTED');
+
+    // And if experimental quota is positive (e.g. 50%), it is admitted against ::experimental, NOT ::gemini
+    const pool2 = loadAgyPoolCandidates({
+      models: [
+        { id: 'gemini-2.5-flash', quotaGroup: 'experimental' }
+      ],
+      lanes: [
+        {
+          laneId: 'agy01',
+          rows: [
+            { group: 'gemini', family: 'gemini', remainingPercent: 80, known: true },
+            { group: 'experimental', family: 'experimental', remainingPercent: 50, known: true }
+          ]
+        }
+      ]
+    });
+
+    const cand2 = pool2.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    assert.ok(cand2, 'Model admitted when experimental quota is positive');
+    assert.equal(cand2.quotaScopeId, 'agy-quota::agy01::experimental', 'Quota scope must be experimental, not gemini');
+    assert.equal(cand2.metadata.quotaGroup, 'experimental');
+  });
+
+  test('Finding 2: Parsed Argon membership isolates opaque-v3 quota scope from external/Claude', () => {
+    const health = new ScopedHealthRegistry();
+
+    // Lane has parsed Argon membership for opaque-v3 (80%) and external (0%)
+    const pool = loadAgyPoolCandidates({
+      models: ['opaque-v3', 'claude-3-7-sonnet'],
+      lanes: [
+        {
+          laneId: 'agy01',
+          rows: [
+            { group: 'argon', family: 'argon', models: ['opaque-v3'], remainingPercent: 80, known: true },
+            { group: 'external', family: 'claude-gpt', models: ['claude-3-7-sonnet'], remainingPercent: 0, known: true }
+          ]
+        }
+      ]
+    });
+
+    // 1. External 0% must NOT reject the available Argon model
+    const opaqueCand = pool.candidates.find(c => c.configuredModelId === 'opaque-v3');
+    assert.ok(opaqueCand, 'opaque-v3 must be admitted under Argon 80% quota even if external is 0%');
+    assert.equal(opaqueCand.quotaScopeId, 'agy-quota::agy01::argon', 'opaque-v3 must have argon quota scope');
+    assert.equal(opaqueCand.metadata.quotaGroup, 'argon');
+
+    const claudeCand = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    assert.equal(claudeCand, undefined, 'Claude must be rejected because external is 0%');
+
+    // 2. Claude exhaustion must NOT block Argon when both have positive quota initially
+    const pool2 = loadAgyPoolCandidates({
+      models: ['opaque-v3', 'claude-3-7-sonnet'],
+      lanes: [
+        {
+          laneId: 'agy01',
+          rows: [
+            { group: 'argon', family: 'argon', models: ['opaque-v3'], remainingPercent: 80, known: true },
+            { group: 'external', family: 'claude-gpt', models: ['claude-3-7-sonnet'], remainingPercent: 80, known: true }
+          ]
+        }
+      ]
+    });
+    const candArgon = pool2.candidates.find(c => c.configuredModelId === 'opaque-v3');
+    const candClaude = pool2.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    assert.ok(candArgon);
+    assert.ok(candClaude);
+    assert.equal(candArgon.quotaScopeId, 'agy-quota::agy01::argon');
+    assert.equal(candClaude.quotaScopeId, 'agy-quota::agy01::external');
+
+    // Record Claude exhaustion
+    health.recordFailure(candClaude, { message: 'insufficient_quota' });
+    assert.equal(health.evaluateHealth(candClaude).healthy, false, 'Claude is exhausted');
+    assert.equal(health.evaluateHealth(candArgon).healthy, true, 'Argon model MUST REMAIN HEALTHY when Claude is exhausted');
+  });
+
+  test('Finding 3: AGY 401 blocks linked 9router candidate for the same account without leaking email', () => {
+    const health = new ScopedHealthRegistry();
+    const sharedEmail = 'shared_dev@shipde.vn';
+
+    const agyPool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash'],
+      lanes: [
+        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }] }
+      ],
+      readLaneIdentity: () => ({ email: sharedEmail })
+    });
+    const agyCandidate = agyPool.candidates[0];
+    assert.ok(agyCandidate);
+    assert.ok(!agyCandidate.accountRef.includes('@'));
+    assert.ok(!agyCandidate.candidateKey.includes('@'));
+
+    const loaded9r = load9RouterCandidates({
+      catalog: ['ag/gemini-2.5-flash'],
+      connections: [
+        { connectionId: 'c1', provider: 'antigravity', accountRef: sharedEmail }
+      ]
+    });
+    const routerCandidate = loaded9r.candidates[0];
+    assert.ok(routerCandidate);
+    assert.ok(!routerCandidate.accountRef.includes('@'));
+    assert.ok(!routerCandidate.candidateKey.includes('@'));
+
+    // Both routes are healthy initially
+    assert.equal(health.evaluateHealth(agyCandidate).healthy, true);
+    assert.equal(health.evaluateHealth(routerCandidate).healthy, true);
+
+    // Record 401 Auth failure against AGY candidate
+    health.recordFailure(agyCandidate, { httpStatus: 401, message: 'Unauthorized: authentication failed' });
+
+    // AGY candidate is blocked
+    const agyEval = health.evaluateHealth(agyCandidate);
+    assert.equal(agyEval.healthy, false);
+    assert.equal(agyEval.category, ErrorCategory.AUTH);
+
+    // Linked 9router candidate sharing the same account MUST ALSO BE BLOCKED!
+    const routerEval = health.evaluateHealth(routerCandidate);
+    assert.equal(routerEval.healthy, false, 'Linked 9router candidate must be blocked on shared account AUTH failure');
+    assert.equal(routerEval.category, ErrorCategory.AUTH);
+  });
+
+  test('Finding 4: Metadata property names with syntheticEmail are sanitized in successful selection', async () => {
+    const syntheticEmail = 'leaked_internal@company.com';
+    const selector = new UnifiedRouteSelector();
+
+    const candidate = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      configuredModelId: 'ag/gemini-2.5-flash',
+      accountRef: syntheticEmail,
+      metadata: {
+        capabilities: ['general_code', 'fast_response'],
+        estimatedCostUsd: 0.002,
+        byAccount: {
+          [syntheticEmail]: { quotaUsed: 42, activeUsers: 3 }
+        }
+      }
+    });
+
+    // Check identity metadata
+    assert.ok(!candidate.accountRef.includes('@'));
+    assert.ok(!candidate.metadata.byAccount[syntheticEmail], 'Property name syntheticEmail must not exist in metadata.byAccount');
+    const safeHash = hashEmail(syntheticEmail);
+    assert.ok(candidate.metadata.byAccount[safeHash], 'Sanitized hash property name must exist in metadata.byAccount');
+
+    // Run selection with requiredCapabilities matching the candidate
+    const selection = await selector.selectRoute([candidate], {
+      role: 'writer',
+      requiredCapabilities: ['general_code']
+    });
+
+    // Must successfully reach ADMITTED_AND_SELECTED
+    assert.equal(selection.status, 'ADMITTED_AND_SELECTED', 'Selection must succeed, not return BLOCKED');
+    assert.equal(selection.chosen, candidate.candidateKey);
+
+    // Serialize full selection (identities, ranking, breakdown)
+    const serialized = JSON.stringify(selection);
+    assert.ok(!serialized.includes('@'), 'Serialized selection output must not contain @');
+    assert.ok(!serialized.includes('leaked_internal'), 'Serialized selection output must not contain email username');
+  });
+
+  test('Finding 5: Reloading a lane from account A to B does not rebind frozen candidate A to router B', () => {
+    const emailA = 'accountA@company.com';
+    const emailB = 'accountB@company.com';
+
+    // 1. Load lane agy01 with Account A
+    const poolA = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash'],
+      lanes: [
+        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }] }
+      ],
+      readLaneIdentity: () => ({ email: emailA })
+    });
+    const candA = poolA.candidates[0];
+    assert.ok(candA);
+
+    // 2. Reload lane agy01 with Account B
+    const poolB = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash'],
+      lanes: [
+        { laneId: 'agy01', rows: [{ group: 'gemini', family: 'gemini', remainingPercent: 80, known: true }] }
+      ],
+      readLaneIdentity: () => ({ email: emailB })
+    });
+    const candB = poolB.candidates[0];
+    assert.ok(candB);
+
+    // 3. Create 9router routes for Account A and Account B
+    const routerA = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: emailA,
+      connectionId: 'conn-A',
+      configuredModelId: 'ag/gemini-2.5-flash',
+      quotaScopeId: 'quota::antigravity::conn-A',
+      metadata: { quotaGroup: 'gemini' }
+    });
+
+    const routerB = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: emailB,
+      connectionId: 'conn-B',
+      configuredModelId: 'ag/gemini-2.5-flash',
+      quotaScopeId: 'quota::antigravity::conn-B',
+      metadata: { quotaGroup: 'gemini' }
+    });
+
+    // 4. Link shared quota scopes across all candidates
+    const linked = linkSharedQuotaScopes([candA, candB, routerA, routerB]);
+
+    const linkedCandA = linked.find(c => c.connectionId === 'agy01' && c.metadata.realAccountRef === hashEmail(emailA));
+    const linkedCandB = linked.find(c => c.connectionId === 'agy01' && c.metadata.realAccountRef === hashEmail(emailB));
+    const linkedRouterA = linked.find(c => c.connectionId === 'conn-A');
+    const linkedRouterB = linked.find(c => c.connectionId === 'conn-B');
+
+    assert.ok(linkedCandA, 'Candidate A must exist in linked pool');
+    assert.ok(linkedCandB, 'Candidate B must exist in linked pool');
+    assert.ok(linkedRouterA, 'Router A must exist in linked pool');
+    assert.ok(linkedRouterB, 'Router B must exist in linked pool');
+
+    // Candidate A must link to Router A (Account A), NOT Router B!
+    assert.equal(linkedCandA.quotaScopeId, linkedRouterA.quotaScopeId, 'Candidate A must link with Router A');
+    assert.notEqual(linkedCandA.quotaScopeId, linkedRouterB.quotaScopeId, 'Candidate A must NOT link with Router B');
+
+    // Candidate B must link to Router B (Account B)
+    assert.equal(linkedCandB.quotaScopeId, linkedRouterB.quotaScopeId, 'Candidate B must link with Router B');
+    assert.notEqual(linkedCandA.quotaScopeId, linkedCandB.quotaScopeId, 'Candidate A and B must have distinct quota scopes');
+  });
+
+  test('Finding 6: Branch exhausted during awaited JEV causes selector to re-validate and pick healthy alternative', async () => {
+    const health = new ScopedHealthRegistry();
+
+    const failedBranch = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: 'user-fail',
+      connectionId: 'conn-f',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.05, qualityScore: 95 }
+    });
+
+    // Combo candidate has higher score (quality 95) but its executable viable branch will fail during JEV
+    const comboCandidate = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'combo',
+      configuredModelId: 'combo/custom',
+      accountRef: UNKNOWN,
+      isCombo: true,
+      comboBranches: [failedBranch],
+      metadata: {
+        viableBranches: [failedBranch],
+        capabilities: ['general_code'],
+        estimatedCostUsd: 0.05,
+        qualityScore: 95
+      }
+    });
+
+    // Healthy alternative single route has slightly lower score (quality 80)
+    const healthyAlternative = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'openai',
+      configuredModelId: 'gpt-4o',
+      accountRef: 'user-healthy',
+      connectionId: 'conn-h',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.02, qualityScore: 80 }
+    });
+
+    // JEV function that simulates an async delay during which failedBranch becomes exhausted!
+    const jevAsk = async (question) => {
+      // Simulate failure occurring during JEV async evaluation
+      health.recordFailure(failedBranch, { message: 'insufficient_quota' });
+      return { choice: 'QUALITY_FIRST', confidence: 0.9 };
+    };
+
+    const selector = new UnifiedRouteSelector({ healthRegistry: health, jevAsk });
+
+    const selection = await selector.selectRoute([comboCandidate, healthyAlternative], {
+      role: 'writer',
+      requiredCapabilities: ['general_code']
+    });
+
+    // Must NOT retain the failed combo candidate or return ADMITTED_AND_SELECTED with failed branch!
+    assert.equal(selection.status, 'ADMITTED_AND_SELECTED');
+    assert.equal(selection.chosen, healthyAlternative.candidateKey, 'Selector must pick healthyAlternative when combo branch failed during JEV');
+    assert.notEqual(selection.chosen, comboCandidate.candidateKey, 'Selector must NOT retain failed combo');
   });
 });

@@ -67,10 +67,11 @@ function unescapePart(str) {
  * Distinguishes the primary execution pathway of a route.
  */
 const PRIVATE_ACCOUNT_EMAIL_MAP = new Map();
+const PRIVATE_SALT = 'shipde-route-identity-salt-v1';
 
 function hashEmail(email) {
   const normalized = String(email || '').trim().toLowerCase();
-  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 10);
+  return crypto.createHash('sha256').update(PRIVATE_SALT + '::' + normalized).digest('hex').slice(0, 10);
 }
 
 function registerPrivateEmail(key, email) {
@@ -78,6 +79,7 @@ function registerPrivateEmail(key, email) {
   const k = String(key).trim();
   const e = String(email).trim().toLowerCase();
   if (e.includes('@')) {
+    // Bindings are per (lane, account) and never rewritten for existing identities.
     PRIVATE_ACCOUNT_EMAIL_MAP.set(k, e);
     PRIVATE_ACCOUNT_EMAIL_MAP.set(k.toLowerCase(), e);
     const hash = hashEmail(e);
@@ -104,22 +106,33 @@ function sanitizeMetadata(meta) {
   if (!meta || typeof meta !== 'object') return meta;
   const out = {};
   for (const [k, v] of Object.entries(meta)) {
-    if (k === 'realAccountRef' || k === 'accountRef' || k === 'originalQuotaScope') {
+    // Property names (keys) must be sanitized so email addresses are never copied into keys
+    const safeKey = typeof k === 'string' && k.includes('@')
+      ? maskEmailsInString(k)
+      : k;
+
+    if (safeKey === 'realAccountRef' || safeKey === 'accountRef' || safeKey === 'originalQuotaScope') {
       if (typeof v === 'string' && v.includes('@')) {
         registerPrivateEmail(hashEmail(v), v);
-        out[k] = hashEmail(v);
+        out[safeKey] = hashEmail(v);
       } else {
-        out[k] = v;
+        out[safeKey] = v;
       }
     } else if (typeof v === 'string' && v.includes('@')) {
       registerPrivateEmail(hashEmail(v), v);
-      out[k] = maskEmailsInString(v);
+      out[safeKey] = maskEmailsInString(v);
     } else if (Array.isArray(v)) {
-      out[k] = v.map((item) => (typeof item === 'object' ? sanitizeMetadata(item) : typeof item === 'string' && item.includes('@') ? (registerPrivateEmail(hashEmail(item), item), hashEmail(item)) : item));
+      out[safeKey] = v.map((item) =>
+        typeof item === 'object'
+          ? sanitizeMetadata(item)
+          : typeof item === 'string' && item.includes('@')
+            ? (registerPrivateEmail(hashEmail(item), item), hashEmail(item))
+            : item
+      );
     } else if (v && typeof v === 'object') {
-      out[k] = sanitizeMetadata(v);
+      out[safeKey] = sanitizeMetadata(v);
     } else {
-      out[k] = v;
+      out[safeKey] = v;
     }
   }
   return out;
@@ -383,16 +396,21 @@ function linkSharedQuotaScopes(identities, accountLinks) {
         : new Map();
 
   function resolveRealAccount(id) {
+    // Link by private salted hash, NEVER by lane id alone
+    const realRef = id.metadata?.realAccountRef;
+    if (realRef && realRef !== UNKNOWN) {
+      const fromReal = getPrivateEmail(realRef);
+      if (fromReal) return fromReal;
+      return realRef;
+    }
     const fromPrivate =
       getPrivateEmail(id.accountRef) ||
-      getPrivateEmail(id.connectionId) ||
-      getPrivateEmail(id.metadata?.laneId) ||
-      getPrivateEmail(id.metadata?.connectionId);
+      (id.metadata?.laneId && id.accountRef ? getPrivateEmail(id.metadata.laneId + '::' + id.accountRef) : null);
     if (fromPrivate) return fromPrivate;
     if (id.harness === 'agy-pool' || id.pathway === 'AGY_POOL') {
       return UNKNOWN;
     }
-    const rawAcc = id.metadata?.realAccountRef || id.accountRef;
+    const rawAcc = id.accountRef;
     return getPrivateEmail(rawAcc) || rawAcc;
   }
 

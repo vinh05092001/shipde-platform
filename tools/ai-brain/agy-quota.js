@@ -158,8 +158,9 @@ function parseFixtureGroups(doc) {
     const gname = String(group.name || '');
     const isArgon = gid === 'argon' || /argon/i.test(gname);
     const isExternal = gid === 'external' || /claude|gpt|3p/i.test(gname) || /claude|gpt|3p/i.test(gid);
-    const groupName = isArgon ? 'argon' : (isExternal ? 'external' : 'gemini');
-    const family = isArgon ? 'argon' : (mapFamily(group.id || group.family || group.name) || groupName);
+    const isGemini = gid === 'gemini' || /gemini/i.test(gname);
+    const groupName = isArgon ? 'argon' : (isExternal ? 'external' : (isGemini ? 'gemini' : (group.id || gname)));
+    const family = isArgon ? 'argon' : (mapFamily(group.id || group.family || group.name) || group.family || group.id || groupName);
     if (!family) continue;
     const groupModels = Array.isArray(group.models)
       ? group.models.map((m) => (typeof m === 'string' ? m.trim() : String(m?.id || m?.modelId || m || '').trim()))

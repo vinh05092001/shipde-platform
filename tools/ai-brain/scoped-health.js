@@ -19,6 +19,8 @@ const crypto = require('crypto');
  *   preventing unverified dispatch without telemetry.
  */
 
+const { hashEmail, getPrivateEmail } = require('./route-identity');
+
 const ErrorCategory = Object.freeze({
   AUTH: 'AUTH',
   PERMISSION: 'PERMISSION',
@@ -256,10 +258,11 @@ function parseResetHint(text, now = Date.now()) {
  */
 function accountHealthKey(id) {
   const realAccount = id.metadata?.realAccountRef;
-  const account = realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef;
-  const observed = account && account !== 'UNKNOWN' ? account : id.connectionId;
+  const fromPrivate = (realAccount && realAccount !== 'UNKNOWN' ? getPrivateEmail(realAccount) : null)
+    || (id.accountRef && id.accountRef !== 'UNKNOWN' ? getPrivateEmail(id.accountRef) : null);
+  const observed = fromPrivate || (realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef);
   const safeObserved = typeof observed === 'string' && observed.includes('@')
-    ? crypto.createHash('sha256').update(observed.trim().toLowerCase()).digest('hex').slice(0, 10)
+    ? hashEmail(observed)
     : observed;
   return JSON.stringify([id.upstreamProviderId, safeObserved && safeObserved !== 'UNKNOWN' ? safeObserved : id.candidateKey]);
 }
