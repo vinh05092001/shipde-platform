@@ -118,12 +118,13 @@ async function runSessionSupertestSuite() {
   const prisma = app.get(PrismaService);
   const sessionService = app.get(SessionService);
 
-  const dbStatus = await prisma.checkReadiness();
+  const dbStatus =
+    process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     if (process.env.CI || isLocalTestDb()) {
-      throw new Error(`Database must be reachable in CI at ${databaseUrl}`);
+      throw new Error('Database must be reachable in CI environment or TEST_DB=local');
     }
-    console.warn(`⚠️ PostgreSQL not reachable at ${databaseUrl}. Skipping session tests.`);
+    console.warn('⚠️ PostgreSQL not reachable. Skipping session tests.');
     await app.close();
     console.log('🎉 Session Supertest suite skipped offline safely!');
     return;

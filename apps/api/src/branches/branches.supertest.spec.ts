@@ -70,14 +70,13 @@ async function runBranchesSupertestSuite() {
 
   const prisma = app.get(PrismaService);
 
-  const dbStatus = await prisma.checkReadiness();
+  const dbStatus =
+    process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     if (process.env.CI || isLocalTestDb()) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+      throw new Error('Database must be reachable in CI environment or TEST_DB=local');
     }
-    console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Branches Supertest tests.`
-    );
+    console.warn('⚠️ PostgreSQL is not reachable. Skipping live Branches Supertest tests.');
     await app.close();
     console.log('🎉 Branches Supertest suite skipped offline safely!');
     return;

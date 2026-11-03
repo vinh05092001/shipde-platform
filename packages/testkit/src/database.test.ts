@@ -67,14 +67,72 @@ test('local runner keeps production mode for child suites instead of relabelling
   );
 });
 
-test('TASK-AI-163 delivery stays within allowed paths', () => {
-  const rootDir = fileURLToPath(new URL('../../../', import.meta.url));
-  // Compare diff against origin/main (including uncommitted working tree changes)
-  const diffOutput = execFileSync(
-    'git',
-    ['-c', 'safe.directory=*', 'diff', '--name-only', 'origin/main'],
-    { cwd: rootDir, encoding: 'utf8' }
-  ).trim();
+export function isTaskAi163DeliveryScope(
+  options: {
+    rootDir?: string;
+    branch?: string;
+    changedFiles?: readonly string[];
+  } = {}
+): boolean {
+  const root = options.rootDir ?? fileURLToPath(new URL('../../../', import.meta.url));
+  const branch =
+    options.branch ??
+    process.env.GITHUB_HEAD_REF ??
+    process.env.GITHUB_REF_NAME ??
+    (() => {
+      try {
+        return execFileSync('git', ['-c', 'safe.directory=*', 'branch', '--show-current'], {
+          cwd: root,
+          encoding: 'utf8',
+        }).trim();
+      } catch {
+        return '';
+      }
+    })();
+
+  if (branch && branch !== 'HEAD') {
+    return /task-ai-163/i.test(branch);
+  }
+
+  if (options.changedFiles) {
+    return options.changedFiles.some((f) => f.includes('TASK-AI-163.md'));
+  }
+
+  try {
+    const diffFiles = execFileSync(
+      'git',
+      ['-c', 'safe.directory=*', 'diff', '--name-only', 'origin/main'],
+      { cwd: root, encoding: 'utf8' }
+    );
+    return diffFiles.includes('TASK-AI-163.md');
+  } catch {
+    return false;
+  }
+}
+
+export function verifyTaskAi163DeliveryScope(
+  options: {
+    rootDir?: string;
+    branch?: string;
+    changedFiles?: string[];
+    registerContent?: string;
+    originRegisterContent?: string;
+  } = {}
+): { audited: boolean; passed: boolean } {
+  const root = options.rootDir ?? fileURLToPath(new URL('../../../', import.meta.url));
+  const changedFiles =
+    options.changedFiles ??
+    execFileSync('git', ['-c', 'safe.directory=*', 'diff', '--name-only', 'origin/main'], {
+      cwd: root,
+      encoding: 'utf8',
+    })
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+
+  if (!isTaskAi163DeliveryScope({ rootDir: root, branch: options.branch, changedFiles })) {
+    return { audited: false, passed: true };
+  }
 
   const allowedPatterns = [
     /^packages\/testkit\//,
@@ -90,7 +148,6 @@ test('TASK-AI-163 delivery stays within allowed paths', () => {
     /^\.oc\/tmp\//,
   ];
 
-  const changedFiles = diffOutput.split(/\r?\n/).filter(Boolean);
   for (const file of changedFiles) {
     const normalized = file.replaceAll('\\', '/');
     const isAllowed = allowedPatterns.some((pattern) => pattern.test(normalized));
@@ -99,16 +156,18 @@ test('TASK-AI-163 delivery stays within allowed paths', () => {
 
   const registerRelPath =
     'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
-  const registerFullPath = resolve(rootDir, registerRelPath);
-  const currentRegister = readFileSync(registerFullPath, 'utf8')
+  const registerFullPath = resolve(root, registerRelPath);
+  const currentRegister = (options.registerContent ?? readFileSync(registerFullPath, 'utf8'))
     .replaceAll('\r\n', '\n')
     .trimEnd()
     .split('\n');
 
-  const originRegisterRaw = execFileSync(
-    'git',
-    ['-c', 'safe.directory=*', 'show', `origin/main:${registerRelPath}`],
-    { cwd: rootDir, encoding: 'utf8' }
+  const originRegisterRaw = (
+    options.originRegisterContent ??
+    execFileSync('git', ['-c', 'safe.directory=*', 'show', `origin/main:${registerRelPath}`], {
+      cwd: root,
+      encoding: 'utf8',
+    })
   )
     .replaceAll('\r\n', '\n')
     .trimEnd()
@@ -125,6 +184,47 @@ test('TASK-AI-163 delivery stays within allowed paths', () => {
 
   const task163Rows = currentRegister.filter(isTask163);
   assert.equal(task163Rows.length, 1, 'Delivery register must have exactly one TASK-AI-163 row');
+
+  return { audited: true, passed: true };
+}
+
+test('TASK-AI-163 delivery stays within allowed paths', (t) => {
+  const result = verifyTaskAi163DeliveryScope();
+  if (!result.audited) {
+    t.skip('Skipping TASK-AI-163 delivery scope audit for other Work Items / default checkout');
+  }
+});
+
+test("default testkit accepts another Work Item's allowed changes", () => {
+  // AC-AI-163-07: A subsequent PR modifying apps/web/src/app/page.tsx or another Work Item
+  // must not fail the normal testkit command.
+  const unrelatedDelta = ['apps/web/src/app/page.tsx'];
+
+  // 1. Outside TASK-AI-163 delivery, the scope audit does not audit or fail unrelated deltas
+  const otherWorkItemResult = verifyTaskAi163DeliveryScope({
+    branch: 'feat/feat-web-profile',
+    changedFiles: unrelatedDelta,
+  });
+  assert.equal(
+    otherWorkItemResult.audited,
+    false,
+    'Unrelated Work Item must not be audited under TASK-AI-163 scope'
+  );
+  assert.equal(otherWorkItemResult.passed, true, 'Unrelated Work Item must pass without failure');
+
+  // 2. Negative assertion: within TASK-AI-163, the exact same delta fails the scope audit
+  assert.throws(
+    () => {
+      verifyTaskAi163DeliveryScope({
+        branch: 'feat/task-ai-163-agent-local-db-tests',
+        changedFiles: unrelatedDelta,
+        registerContent: '"296","S00","AI workflow","TASK-AI-163"',
+        originRegisterContent: '',
+      });
+    },
+    /outside TASK-AI-163 allowed paths/,
+    'TASK-AI-163 delivery must reject changes outside its allowed paths'
+  );
 });
 
 test('local readiness failure omits caller credentials', () => {
@@ -155,6 +255,69 @@ test('local readiness failure omits caller credentials', () => {
   assert.equal(diagnostics.includes(fixturePassword), false, 'Must not echo the caller password');
   assert.equal(diagnostics.includes('synthetic-host.invalid'), false, 'Must not echo the host');
   assert.match(diagnostics, /reachable/i, 'Failure must still explain the readiness failure');
+});
+
+test('all local readiness failures redact caller credentials', () => {
+  const apiDir = fileURLToPath(new URL('../../../apps/api', import.meta.url));
+  const require = createRequire(import.meta.url);
+  const tsxHref = pathToFileURL(require.resolve('tsx')).href;
+  const fixtureUser = 'fixture_user';
+  const fixturePassword = 'fixture-not-a-real-password';
+  const fixtureHost = 'synthetic-host.invalid';
+  const sensitiveUrl = `postgresql://${fixtureUser}:${fixturePassword}@${fixtureHost}:5432/db`;
+
+  const affectedSuites = [
+    'src/branches/branches.supertest.spec.ts',
+    'src/auth/admin-shops.supertest.spec.ts',
+    'src/auth/auth.supertest.spec.ts',
+    'src/onboarding/onboarding.supertest.spec.ts',
+    'src/search/search.supertest.spec.ts',
+    'src/session/session.supertest.spec.ts',
+    'src/shops/shops.supertest.spec.ts',
+    'src/warehouses/warehouses.supertest.spec.ts',
+  ];
+
+  for (const suite of affectedSuites) {
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      TEST_DB: 'local',
+      DATABASE_URL: sensitiveUrl,
+      TEST_FORCE_READINESS: 'down',
+    };
+    delete childEnv.CI;
+
+    const res = spawnSync(process.execPath, ['--import', tsxHref, suite], {
+      cwd: apiDir,
+      env: childEnv,
+      encoding: 'utf8',
+      timeout: 180_000,
+      windowsHide: true,
+    });
+
+    assert.notEqual(
+      res.status,
+      0,
+      `Readiness failure in ${suite} must remain a failure (BR-LOCAL-04)`
+    );
+    const diagnostics = `${res.stdout || ''}\n${res.stderr || ''}`;
+    assert.equal(
+      diagnostics.includes(sensitiveUrl),
+      false,
+      `${suite} must not echo the caller URL`
+    );
+    assert.equal(
+      diagnostics.includes(fixtureUser),
+      false,
+      `${suite} must not echo the caller username`
+    );
+    assert.equal(
+      diagnostics.includes(fixturePassword),
+      false,
+      `${suite} must not echo the caller password`
+    );
+    assert.equal(diagnostics.includes(fixtureHost), false, `${suite} must not echo the host`);
+    assert.match(diagnostics, /reachable/i, `${suite} failure must explain readiness failure`);
+  }
 });
 
 test('rbac secrets scan is named-skipped while the Gitleaks binary is unavailable', () => {
