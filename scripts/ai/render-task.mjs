@@ -27,6 +27,10 @@ const WORK_ITEMS_DIR = path.join(REPO_ROOT, 'docs', 'product-spec', 'work-items'
  * Parses markdown table and headings from a Work Item document.
  */
 export function extractWorkItemMeta(markdownText = '') {
+  if (typeof markdownText === 'string') {
+    markdownText = markdownText.replace(/\r\n/g, '\n');
+  }
+
   const meta = {
     workItemId: 'UNKNOWN',
     featureId: 'UNKNOWN',
@@ -98,11 +102,21 @@ export function evaluateWorkItemScope(meta = {}) {
 
   // 1. .github scope permission check
   // Must be non-negated in allowedPaths or inScope
-  const hasAllowedGithub =
-    /\.github/i.test(allowed) && !/(?:^|[\s,])!\s*[^,\n]*\.github/i.test(allowed);
+  const allowedTokens = allowed
+    .split(/[\s,]+/)
+    .map((s) => s.trim().replace(/^[`'"]+|[`'"]+$/g, ''))
+    .filter(Boolean);
+
+  const hasAllowedGithub = allowedTokens.some(
+    (token) =>
+      /\.github/i.test(token) &&
+      !token.startsWith('!') &&
+      !/!\s*[`'"]*\.github/i.test(token)
+  );
   const hasInScopeGithub =
     /\.github/i.test(inScope) &&
-    !/\b(?:no|not|never|excluding|exclude|except|without|do\s+not(?:\s+touch)?)\b[^.\n;]*\.github/i.test(inScope);
+    !/\b(?:no|not|never|excluding|exclude|except|without|do\s+not(?:\s+touch)?)\b[^.\n;]*\.github/i.test(inScope) &&
+    !/(?:^|[\s,`'"])!\s*[`'"]*[^,\n;]*\.github/i.test(inScope);
   const permitsGithub = Boolean(hasAllowedGithub || hasInScopeGithub);
 
   // 2. Tenant / RBAC scope check
@@ -119,8 +133,7 @@ export function evaluateWorkItemScope(meta = {}) {
       note.includes('n/a') ||
       note.includes('no product routes') ||
       note.includes('test not applicable') ||
-      note.includes('no tenant logic') ||
-      note.includes('preserved')
+      note.includes('no tenant logic')
     ) {
       touchesTenantAuth = false;
     } else if (
@@ -129,9 +142,12 @@ export function evaluateWorkItemScope(meta = {}) {
       note.includes('tested') ||
       note.includes('negative test') ||
       note.includes('covered') ||
+      note.includes('preserved') ||
       /\bPASS\b/.test(rawNote) // Only uppercase PASS denotes check verdict; lowercase 'pass' must not falsely match
     ) {
       touchesTenantAuth = true;
+    } else {
+      touchesTenantAuth = /\b(cross-tenant|multi-tenant|tenant-id|tenancy|rbac|user-role|auth-guard|authentication|authorization)\b/i.test(combined);
     }
   } else {
     // Only detect tenant/auth from specific domain keywords (do not match common words like 'author')
@@ -160,6 +176,7 @@ export function evaluateWorkItemScope(meta = {}) {
 export function formatFinding(f) {
   if (!f) return '';
   if (typeof f === 'string') {
+    f = f.replace(/\r\n/g, '\n');
     const trimmed = f.trim();
     if (!trimmed) return '';
 
@@ -169,29 +186,43 @@ export function formatFinding(f) {
     const hasVerify = /(?:^|\n)VERIFY:\s*/i.test(trimmed);
 
     if (hasWhere || hasWrong || hasGoal || hasVerify) {
-      const getField = (label, nextLabels) => {
-        const pattern = new RegExp(`(?:^|\\n)${label}:\\s*([\\s\\S]*?)(?=(?:\\n(?:${nextLabels.join('|')}):)|$)`, 'i');
-        const match = trimmed.match(pattern);
-        return match ? match[1].trim() : 'UNKNOWN';
-      };
-      const where = getField('WHERE', ['WRONG', 'GOAL', 'VERIFY']);
-      const wrong = getField('WRONG', ['WHERE', 'GOAL', 'VERIFY']);
-      const goal = getField('GOAL', ['WHERE', 'WRONG', 'VERIFY']);
-      const verify = getField('VERIFY', ['WHERE', 'WRONG', 'GOAL']);
+      const lines = trimmed.split('\n');
+      const fields = { WHERE: '', WRONG: '', GOAL: '', VERIFY: '' };
+      let currentField = null;
+
+      for (const line of lines) {
+        const headerMatch = line.match(/^(WHERE|WRONG|GOAL|VERIFY):\s*(.*)$/i);
+        if (headerMatch) {
+          currentField = headerMatch[1].toUpperCase();
+          fields[currentField] = headerMatch[2] ? headerMatch[2].trim() : '';
+        } else if (currentField) {
+          if (fields[currentField].length > 0) {
+            fields[currentField] += '\n' + line;
+          } else {
+            fields[currentField] = line.trim();
+          }
+        }
+      }
+
+      const where = fields.WHERE ? fields.WHERE.trim() : 'UNKNOWN';
+      const wrong = fields.WRONG ? fields.WRONG.trim() : 'UNKNOWN';
+      const goal = fields.GOAL ? fields.GOAL.trim() : 'UNKNOWN';
+      const verify = fields.VERIFY ? fields.VERIFY.trim() : 'UNKNOWN';
 
       return `WHERE: ${where || 'UNKNOWN'}\nWRONG: ${wrong || 'UNKNOWN'}\nGOAL: ${goal || 'UNKNOWN'}\nVERIFY: ${verify || 'UNKNOWN'}`;
     }
 
     return `WHERE: UNKNOWN\nWRONG: ${trimmed}\nGOAL: UNKNOWN\nVERIFY: UNKNOWN`;
   }
+  const normStr = (val) => (typeof val === 'string' ? val.replace(/\r\n/g, '\n').trim() : '');
   const where =
-    f.where ||
+    normStr(f.where) ||
     (f.file
       ? `${f.file}${f.line ? `:${f.line}` : ''}${f.function ? ` (${f.function})` : ''}`
       : 'UNKNOWN');
-  const wrong = f.wrong || f.summary || f.description || 'UNKNOWN';
-  const goal = f.goal || f.expected || 'UNKNOWN';
-  const verify = f.verify || f.test || 'UNKNOWN';
+  const wrong = normStr(f.wrong) || normStr(f.summary) || normStr(f.description) || 'UNKNOWN';
+  const goal = normStr(f.goal) || normStr(f.expected) || 'UNKNOWN';
+  const verify = normStr(f.verify) || normStr(f.test) || 'UNKNOWN';
 
   return `WHERE: ${where}\nWRONG: ${wrong}\nGOAL: ${goal}\nVERIFY: ${verify}`;
 }
@@ -206,6 +237,7 @@ export function formatFindings(findings) {
     return findings.map(formatFinding).filter(Boolean).join('\n\n');
   }
   if (typeof findings === 'string') {
+    findings = findings.replace(/\r\n/g, '\n');
     const trimmed = findings.trim();
     if (!trimmed) return '(No open findings)';
     if (trimmed.includes('\n\n')) {
@@ -221,7 +253,7 @@ export function formatFindings(findings) {
  * Replaces {{PLACEHOLDERS}} with provided key-value replacements.
  */
 export function renderTemplate(templateText, replacements = {}) {
-  let result = templateText;
+  let result = typeof templateText === 'string' ? templateText.replace(/\r\n/g, '\n') : '';
   for (const [key, value] of Object.entries(replacements)) {
     const re = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
     result = result.replace(re, value !== undefined && value !== null ? String(value) : 'UNKNOWN');
@@ -235,11 +267,11 @@ export function renderTemplate(templateText, replacements = {}) {
 export function loadWorkItem(workItemRef) {
   if (!workItemRef) return '';
   if (fs.existsSync(workItemRef)) {
-    return fs.readFileSync(workItemRef, 'utf8');
+    return fs.readFileSync(workItemRef, 'utf8').replace(/\r\n/g, '\n');
   }
   const resolvedPath = path.join(WORK_ITEMS_DIR, workItemRef.endsWith('.md') ? workItemRef : `${workItemRef}.md`);
   if (fs.existsSync(resolvedPath)) {
-    return fs.readFileSync(resolvedPath, 'utf8');
+    return fs.readFileSync(resolvedPath, 'utf8').replace(/\r\n/g, '\n');
   }
   return '';
 }
@@ -251,7 +283,7 @@ export function loadTemplate(templateName) {
   const fileName = templateName.endsWith('.md') ? templateName : `${templateName}.md`;
   const directPath = path.isAbsolute(templateName) ? templateName : path.join(TEMPLATES_DIR, fileName);
   if (fs.existsSync(directPath)) {
-    return fs.readFileSync(directPath, 'utf8');
+    return fs.readFileSync(directPath, 'utf8').replace(/\r\n/g, '\n');
   }
   throw new Error(`Template not found: ${templateName} (searched at ${directPath})`);
 }

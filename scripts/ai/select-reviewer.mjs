@@ -266,12 +266,72 @@ export function selectReviewer(options = {}) {
 
   // Deterministic selection: pick the first eligible independent candidate
   const chosen = eligible[0];
+  let resolved = chosen;
+  const resolver =
+    (typeof options.resolveCandidate === 'function' && options.resolveCandidate) ||
+    (typeof options.resolveReviewer === 'function' && options.resolveReviewer) ||
+    (typeof options.resolve === 'function' && options.resolve) ||
+    (typeof options.resolver === 'function' && options.resolver) ||
+    (options.selectionApi && typeof options.selectionApi.resolveCandidate === 'function'
+      ? (c) => options.selectionApi.resolveCandidate(c)
+      : null);
+
+  if (resolver) {
+    resolved = resolver(chosen);
+  } else if (typeof chosen.resolve === 'function') {
+    resolved = chosen.resolve();
+  }
+
+  if (typeof resolved === 'string') {
+    resolved = parseCandidate(resolved);
+  }
+
+  const resolvedUpstream =
+    resolved && typeof resolved.upstream === 'string'
+      ? resolved.upstream.trim()
+      : (resolved && resolved.upstream ? String(resolved.upstream).trim() : '');
+
+  if (!resolved || !resolvedUpstream || norm(resolvedUpstream) === 'unknown') {
+    return {
+      ok: false,
+      status: 'BLOCKED',
+      verdict: 'BLOCKED',
+      reviewer: null,
+      candidatesEvaluated: rawPool.length,
+      candidatesEligible: eligible.length,
+      reason: 'UNVERIFIED_UPSTREAM: chosen reviewer upstream is empty after resolve',
+    };
+  }
+
+  if (resolver || typeof chosen.resolve === 'function') {
+    const checkAfterResolve = checkIndependence(writerParsed, resolved);
+    if (!checkAfterResolve.independent) {
+      return {
+        ok: false,
+        status: 'BLOCKED',
+        verdict: 'BLOCKED',
+        reviewer: null,
+        candidatesEvaluated: rawPool.length,
+        candidatesEligible: eligible.length,
+        reason: `INDEPENDENCE_VIOLATION_AFTER_RESOLVE: ${checkAfterResolve.reason}`,
+      };
+    }
+  }
+
   return {
     ok: true,
     status: 'SELECTED',
-    reviewer: chosen,
-    candidateKey: chosen.candidateKey,
+    reviewer: resolved,
+    candidateKey: resolved.candidateKey || chosen.candidateKey,
     candidatesEvaluated: rawPool.length,
     candidatesEligible: eligible.length,
   };
+}
+
+export function resolveReviewer(candidate, resolver) {
+  if (typeof resolver === 'function') {
+    const res = resolver(candidate);
+    return typeof res === 'string' ? parseCandidate(res) : res;
+  }
+  return parseCandidate(candidate);
 }

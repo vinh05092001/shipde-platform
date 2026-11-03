@@ -241,4 +241,62 @@ Refactor scripts; do not touch .github/ workflows.
     assert.ok(formattedBare.includes('GOAL: UNKNOWN'));
     assert.ok(formattedBare.includes('VERIFY: UNKNOWN'));
   });
+
+  it('preserves both CRLF findings', () => {
+    const raw = 'WHERE: a:1\r\nWRONG: bug 1\r\nGOAL: fix 1\r\nVERIFY: test 1\r\n\r\nWHERE: b:2\r\nWRONG: bug 2\r\nGOAL: fix 2\r\nVERIFY: test 2';
+    assert.equal((formatFindings(raw).match(/^WHERE:/gm) || []).length, 2);
+  });
+
+  it('treats "!.github/**" including inside backticks as forbidden, not permitted', () => {
+    const workItemWithBacktickNegated = `# TASK-CFG-03 — Backtick negated github
+## Control
+| Field | Value |
+| Work Item ID | TASK-CFG-03 |
+| Allowed paths | \`scripts/**\`, \`!.github/**\` |
+`;
+    const metaBacktick = extractWorkItemMeta(workItemWithBacktickNegated);
+    const scopeBacktick = evaluateWorkItemScope(metaBacktick);
+    assert.equal(scopeBacktick.permitsGithub, false, 'Backtick-wrapped !.github/** must be forbidden');
+    assert.ok(scopeBacktick.githubScopeRule.includes('.github/'), 'Must forbid .github/');
+
+    const workItemWithQuoteNegated = `# TASK-CFG-04 — Quote negated github
+## Control
+| Field | Value |
+| Work Item ID | TASK-CFG-04 |
+| Allowed paths | '!.github/**' |
+`;
+    const metaQuote = extractWorkItemMeta(workItemWithQuoteNegated);
+    const scopeQuote = evaluateWorkItemScope(metaQuote);
+    assert.equal(scopeQuote.permitsGithub, false, 'Quote-wrapped !.github/** must be forbidden');
+    assert.ok(scopeQuote.githubScopeRule.includes('.github/'), 'Must forbid .github/');
+  });
+
+  it('ensures "preserved" does not turn off tenant auth check', () => {
+    const workItemPreserved = `# TASK-AUTH-01 — Preserved tenant boundary
+## Control
+| Field | Value |
+| Work Item ID | TASK-AUTH-01 |
+| Allowed paths | apps/api/** |
+## Constitution check
+- [x] Tenant scope and RBAC: existing tenant isolation preserved across all endpoints.
+`;
+    const meta = extractWorkItemMeta(workItemPreserved);
+    const scope = evaluateWorkItemScope(meta);
+    assert.equal(scope.touchesTenantAuth, true, '"preserved" must not disable tenant auth check');
+    assert.ok(scope.tenantRbacRequirement.includes('cross-tenant access must be denied'));
+  });
+
+  it('records UNKNOWN for empty WHERE and does not swallow WRONG', () => {
+    const raw = 'WHERE:\nWRONG: Shop ID read from body instead of token\nGOAL: Fix\nVERIFY: Test';
+    const formatted = formatFindings(raw);
+    assert.ok(formatted.includes('WHERE: UNKNOWN'), 'Empty WHERE must record UNKNOWN');
+    assert.ok(formatted.includes('WRONG: Shop ID read from body instead of token'), 'Must not swallow WRONG');
+    assert.ok(formatted.includes('GOAL: Fix'), 'Must preserve GOAL');
+    assert.ok(formatted.includes('VERIFY: Test'), 'Must preserve VERIFY');
+
+    const rawWithSpace = 'WHERE: \nWRONG: Invalid scope\nGOAL: UNKNOWN\nVERIFY: UNKNOWN';
+    const formattedSpace = formatFindings(rawWithSpace);
+    assert.ok(formattedSpace.includes('WHERE: UNKNOWN'));
+    assert.ok(formattedSpace.includes('WRONG: Invalid scope'));
+  });
 });

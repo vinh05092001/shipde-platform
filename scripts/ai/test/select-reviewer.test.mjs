@@ -188,4 +188,29 @@ describe('select-reviewer', () => {
     assert.equal(result.status, 'BLOCKED');
     assert.equal(result.reviewer, null);
   });
+
+  it('blocks when chosen reviewer upstream is empty after resolve', () => {
+    const reviewer = {
+      harness: 'cli-harness-b',
+      accessPath: 'path-alt',
+      gateway: 'gw-two',
+      upstream: 'upstream-beta',
+      account: 'acc-reviewer-02',
+      quotaScope: 'scope-b',
+      modelId: 'synthetic-model-y',
+      qualifiedRoles: ['reviewer'],
+    };
+
+    const result = selectReviewer({
+      writer: writerCandidate,
+      candidates: [reviewer],
+      resolveCandidate: (chosen) => ({ ...chosen, upstream: '' }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.verdict, 'BLOCKED');
+    assert.equal(result.reviewer, null);
+    assert.ok(result.reason.includes('UNVERIFIED_UPSTREAM') || result.reason.includes('upstream is empty'));
+  });
 });
