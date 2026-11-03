@@ -9,12 +9,31 @@ import sys
 import tomllib
 
 
-def load_servers(template_path: Path, ctx_tools_root: str) -> dict:
-    """Render MCP template using the resolved CTX_TOOLS_ROOT."""
-    template_text = template_path.read_text(encoding="utf-8")
+def load_servers(config_dir: Path, ctx_tools_root: str) -> dict:
+    """Load and render MCP servers from toolkit.json or fallback to mcp-entries.template.json."""
     normalized_root = str(Path(ctx_tools_root).resolve()).replace("\\", "/")
-    rendered = template_text.replace("${CTX_TOOLS_ROOT}", normalized_root)
-    return json.loads(rendered)
+    toolkit_path = config_dir / "toolkit.json"
+    template_path = config_dir / "mcp-entries.template.json"
+
+    if toolkit_path.exists():
+        data = json.loads(toolkit_path.read_text(encoding="utf-8"))
+        tools = data.get("tools", [])
+        servers = {}
+        for tool in tools:
+            if tool.get("type") == "mcp":
+                cmd = tool.get("command", "").replace("${CTX_TOOLS_ROOT}", normalized_root)
+                args = [a.replace("${CTX_TOOLS_ROOT}", normalized_root) for a in tool.get("args", [])]
+                env = {k: v.replace("${CTX_TOOLS_ROOT}", normalized_root) for k, v in tool.get("env", {}).items()}
+                servers[tool["id"]] = {"command": cmd, "args": args, "env": env}
+        if servers:
+            return servers
+
+    if template_path.exists():
+        template_text = template_path.read_text(encoding="utf-8")
+        rendered = template_text.replace("${CTX_TOOLS_ROOT}", normalized_root)
+        return json.loads(rendered)
+
+    raise FileNotFoundError(f"Neither toolkit.json nor mcp-entries.template.json found in {config_dir}")
 
 
 def save_verified(path: Path, original: bytes, updated: bytes, parser, backup_date: str) -> None:
@@ -127,12 +146,13 @@ def main() -> int:
     args = parser.parse_args()
 
     apply = args.apply
-    template_path = Path(__file__).resolve().parent / "mcp-entries.template.json"
-    if not template_path.exists():
-        print(f"Error: Template not found at {template_path}", file=sys.stderr)
+    config_dir = Path(__file__).resolve().parent
+    try:
+        servers = load_servers(config_dir, args.ctx_tools_root)
+    except Exception as err:
+        print(f"Error loading MCP servers: {err}", file=sys.stderr)
         return 1
 
-    servers = load_servers(template_path, args.ctx_tools_root)
     opencode_entries = {
         name: {
             "type": "local",
