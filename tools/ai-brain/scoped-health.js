@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Ship Dễ — Scoped Health & Failure Classification (PATCH 1)
+ * Ship Dễ — Scoped Health & Failure Classification (PATCH 1 - Fixed per Codex Review)
  *
  * Implements strict fault scoping without cross-contamination:
  * - Error classes:
@@ -10,16 +10,12 @@
  * - Scopes:
  *     gateway, account, quota_scope, model, route, network, local
  *
- * Rules enforced:
- * 1. Scope accuracy:
- *    - Model/no-channel: applies only to the specific route/model.
- *    - Account auth: applies only to the specific account.
- *    - Quota: applies to the defined quota scope (shared across linked accounts).
- *    - Gateway connection refused: applies to the gateway, never killing direct upstreams.
- * 2. DNS/network errors NEVER become AUTH or require login.
- * 3. Expired resetAt NEVER magically resets quota to 100% full (marked RESET_ELAPSED_PROBE_NEEDED).
- * 4. Expired modelLock (now > lockedUntil) is cleared immediately.
- * 5. Two accounts sharing a model are isolated: Account A's failure never bans Account B.
+ * Fixes for Codex Review:
+ * - Rate limits (429) scoped to specific account/connection on that model, preventing
+ *   Account A's 429 from blocking Account B on the same model.
+ * - Elapsed quota reset (now > resetsAt) does NOT return healthy: true early;
+ *   it completes model/route/lock checks and marks candidate as requiresProbe: true,
+ *   preventing unverified dispatch without telemetry.
  */
 
 const ErrorCategory = Object.freeze({
@@ -167,7 +163,7 @@ function classifyError(input, now = Date.now()) {
     };
   }
 
-  // 7. RATE_LIMIT: Transient 429
+  // 7. RATE_LIMIT: Transient 429 (scoped to model/account)
   if (status === 429) {
     const parsedReset = parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
     const cooldownMs = parsedReset ? Math.max(0, parsedReset - now) : 5 * 60 * 1000;
@@ -239,7 +235,6 @@ function parseRetryAfter(val, now = Date.now()) {
 
 function parseResetHint(text, now = Date.now()) {
   if (!text) return null;
-  // Match "resets in 62h28m31s" or "reset after 5m" or "try again in 15h 27m"
   const m = text.match(/(?:resets? (?:in|after)|try again in)\s+([0-9hms\s]+)/i);
   if (!m) return null;
   const str = m[1];
@@ -257,14 +252,14 @@ function parseResetHint(text, now = Date.now()) {
 
 /**
  * Scoped Health Registry.
- * Holds scoped health observations in memory without touching real operational logs.
  */
 class ScopedHealthRegistry {
   constructor() {
     this.gateways = new Map(); // gatewayId -> { category, resetsAt, reason }
     this.accounts = new Map(); // accountRef / connectionId -> { category, resetsAt, reason }
     this.quotaScopes = new Map(); // quotaScopeId -> { status, resetsAt, reason, exhausted }
-    this.models = new Map(); // upstreamProviderId::outboundModelId -> { category, resetsAt, reason }
+    this.catalogueModels = new Map(); // upstreamProviderId::outboundModelId -> { category, resetsAt, reason } (global catalogue 404)
+    this.accountModels = new Map(); // upstreamProviderId::outboundModelId::accountRef -> { category, resetsAt, reason } (rate limits)
     this.routes = new Map(); // candidateKey -> { category, resetsAt, reason }
     this.modelLocks = new Map(); // upstreamProviderId::outboundModelId::connectionId -> lockedUntil
   }
@@ -311,14 +306,28 @@ class ScopedHealthRegistry {
         break;
 
       case HealthScope.MODEL:
-        const modelKey = `${identity.upstreamProviderId || 'unknown'}::${identity.outboundModelId || 'unknown'}`;
-        this.models.set(modelKey, {
-          category: classification.category,
-          resetsAt: classification.resetsAt,
-          reason: classification.reason,
-          isPermanent: classification.isPermanent,
-          recordedAt: now,
-        });
+        const baseKey = `${identity.upstreamProviderId || 'unknown'}::${identity.outboundModelId || 'unknown'}`;
+        if (classification.category === ErrorCategory.MODEL_NOT_FOUND) {
+          // Model does not exist in catalogue: global for provider/model
+          this.catalogueModels.set(baseKey, {
+            category: classification.category,
+            resetsAt: classification.resetsAt,
+            reason: classification.reason,
+            isPermanent: true,
+            recordedAt: now,
+          });
+        } else {
+          // Rate limits or transient model errors: SCOPED TO ACCOUNT/CONNECTION!
+          // Account A's 429 does not block Account B!
+          const accKey = identity.accountRef !== 'UNKNOWN' ? identity.accountRef : (identity.connectionId || '*');
+          const accountModelKey = `${baseKey}::${accKey}`;
+          this.accountModels.set(accountModelKey, {
+            category: classification.category,
+            resetsAt: classification.resetsAt,
+            reason: classification.reason,
+            recordedAt: now,
+          });
+        }
         break;
 
       case HealthScope.ROUTE:
@@ -332,13 +341,19 @@ class ScopedHealthRegistry {
         }
         break;
 
-      case HealthScope.NETWORK:
-        // Transient network drops do not penalize account, model or quota!
+      case HealthScope.LOCAL:
+        if (identity.candidateKey && classification.cooldownMs > 0) {
+          this.routes.set(identity.candidateKey, {
+            category: classification.category,
+            resetsAt: classification.resetsAt,
+            reason: classification.reason,
+            recordedAt: now,
+          });
+        }
         break;
 
-      case HealthScope.LOCAL:
+      case HealthScope.NETWORK:
       default:
-        // Local task failures do not penalize infrastructure
         break;
     }
 
@@ -347,6 +362,8 @@ class ScopedHealthRegistry {
 
   evaluateHealth(routeIdentity, now = Date.now()) {
     const id = routeIdentity || {};
+    let quotaProbeNeeded = false;
+    let quotaResetAt = null;
 
     // 1. Check Gateway
     if (id.gatewayId && id.gatewayId !== 'direct' && id.gatewayId !== 'none') {
@@ -384,42 +401,51 @@ class ScopedHealthRegistry {
       const qRec = this.quotaScopes.get(id.quotaScopeId);
       if (qRec && qRec.exhausted) {
         if (qRec.resetsAt && now > qRec.resetsAt) {
-          // Rule 5: Qua resetAt KHÔNG tự đặt quota đầy!
+          // Reset time has elapsed: mark probe needed, DO NOT return early healthy!
+          // We must still check Model and Lock!
+          quotaProbeNeeded = true;
+          quotaResetAt = qRec.resetsAt;
+        } else {
+          // Actively exhausted
           return {
-            healthy: true,
-            quotaStatus: 'RESET_ELAPSED_PROBE_NEEDED',
-            staleQuota: true,
+            healthy: false,
+            blockedBy: HealthScope.QUOTA_SCOPE,
+            category: ErrorCategory.QUOTA_CREDIT,
+            reason: qRec.reason,
             resetsAt: qRec.resetsAt,
-            note: 'Reset time has elapsed; requires fresh telemetry before full budget can be assumed.',
           };
         }
-        // Still actively exhausted
-        return {
-          healthy: false,
-          blockedBy: HealthScope.QUOTA_SCOPE,
-          category: ErrorCategory.QUOTA_CREDIT,
-          reason: qRec.reason,
-          resetsAt: qRec.resetsAt,
-        };
       }
     }
 
-    // 4. Check Model
-    const modelKey = `${id.upstreamProviderId || 'unknown'}::${id.outboundModelId || 'unknown'}`;
-    const mRec = this.models.get(modelKey);
-    if (mRec) {
-      if (mRec.isPermanent || (mRec.resetsAt && now < mRec.resetsAt)) {
-        return {
-          healthy: false,
-          blockedBy: HealthScope.MODEL,
-          category: mRec.category,
-          reason: mRec.reason,
-          resetsAt: mRec.resetsAt,
-        };
-      }
+    // 4. Check Catalogue Model (global model not found)
+    const baseModelKey = `${id.upstreamProviderId || 'unknown'}::${id.outboundModelId || 'unknown'}`;
+    const catRec = this.catalogueModels.get(baseModelKey);
+    if (catRec && (catRec.isPermanent || (catRec.resetsAt && now < catRec.resetsAt))) {
+      return {
+        healthy: false,
+        blockedBy: HealthScope.MODEL,
+        category: catRec.category,
+        reason: catRec.reason,
+        resetsAt: catRec.resetsAt,
+      };
     }
 
-    // 5. Check Specific Route
+    // 5. Check Account-scoped Model (rate limits on this specific account)
+    const accKey = id.accountRef !== 'UNKNOWN' ? id.accountRef : (id.connectionId || '*');
+    const accountModelKey = `${baseModelKey}::${accKey}`;
+    const accModelRec = this.accountModels.get(accountModelKey);
+    if (accModelRec && accModelRec.resetsAt && now < accModelRec.resetsAt) {
+      return {
+        healthy: false,
+        blockedBy: HealthScope.MODEL,
+        category: accModelRec.category,
+        reason: accModelRec.reason,
+        resetsAt: accModelRec.resetsAt,
+      };
+    }
+
+    // 6. Check Specific Route
     if (id.candidateKey) {
       const rRec = this.routes.get(id.candidateKey);
       if (rRec && rRec.resetsAt && now < rRec.resetsAt) {
@@ -433,8 +459,8 @@ class ScopedHealthRegistry {
       }
     }
 
-    // 6. Check Model Lock (e.g. from 9router providerConnections)
-    const lockKey = `${modelKey}::${id.connectionId || '*'}`;
+    // 7. Check Model Lock
+    const lockKey = `${baseModelKey}::${id.connectionId || '*'}`;
     const lockUntil = this.modelLocks.get(lockKey);
     if (lockUntil) {
       if (now <= lockUntil) {
@@ -446,8 +472,19 @@ class ScopedHealthRegistry {
           resetsAt: lockUntil,
         };
       }
-      // Rule 5: Model lock expired is NO LONGER locked!
       this.modelLocks.delete(lockKey);
+    }
+
+    // 8. If quota reset elapsed, candidate requires probe before dispatch!
+    if (quotaProbeNeeded) {
+      return {
+        healthy: false,
+        requiresProbe: true,
+        quotaStatus: 'RESET_ELAPSED_PROBE_NEEDED',
+        staleQuota: true,
+        resetsAt: quotaResetAt,
+        reason: 'QUOTA_RESET_ELAPSED_REQUIRES_FRESH_TELEMETRY',
+      };
     }
 
     return { healthy: true, status: 'AVAILABLE' };
@@ -456,6 +493,19 @@ class ScopedHealthRegistry {
   setModelLock(upstreamProviderId, outboundModelId, connectionId, lockedUntilMs) {
     const key = `${upstreamProviderId}::${outboundModelId}::${connectionId || '*'}`;
     this.modelLocks.set(key, lockedUntilMs);
+  }
+
+  getStateHash() {
+    const state = {
+      gateways: [...this.gateways.entries()],
+      accounts: [...this.accounts.entries()],
+      quotaScopes: [...this.quotaScopes.entries()],
+      catalogueModels: [...this.catalogueModels.entries()],
+      accountModels: [...this.accountModels.entries()],
+      routes: [...this.routes.entries()],
+      modelLocks: [...this.modelLocks.entries()],
+    };
+    return JSON.stringify(state);
   }
 }
 

@@ -5,9 +5,21 @@
  *
  * Implements the shared unified route selection contract:
  * 1. Candidate Aggregation across 3 pathways (9router, direct, AGY pool).
- * 2. Strict Admission Gating before Ranking.
- * 3. Contract-compliant JEV Advisory with context-aware hashing and deterministic fallback.
- * 4. Task-scoped Context & Structured Budget Interface.
+ * 2. Strict Admission Gating before Ranking:
+ *    - Barred model families (Claude worker/reviewer policy).
+ *    - Reviewer independence from author provider/domain.
+ *    - Combo constituent branch health and capabilities.
+ *    - Quota and route health (including unprobed reset elapsed routes).
+ *    - Strict cost ceiling check (rejects unknown-cost candidates).
+ * 3. Contract-compliant JEV Advisory:
+ *    - JEV advises weight profile trade-offs ONLY, never route identities.
+ *    - Responses containing route identities are rejected as IDENTITY_PROHIBITED.
+ *    - Context-aware caching with task instructions, criteria, budgets, and health state hash.
+ *    - Deterministic per-role fallback when JEV is undecided or fails.
+ * 4. Task-scoped Context & Structured Budget Interface:
+ *    - Explicit tokenBudget precedence over contextSize.
+ *    - No hardcoded magic numbers for budgets.
+ *    - Token enforcement truthfully marked UNENFORCED_AT_SELECTION unless bound by runner adapter.
  */
 
 const crypto = require('crypto');
@@ -35,6 +47,26 @@ const ROLE_FALLBACK_PROFILE = Object.freeze({
 });
 
 /**
+ * Checks if response from advisory illegally names a candidate identity.
+ * Reused from jev.js contract.
+ */
+function advisoryNamesIdentity(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  const prohibited = [
+    'model',
+    'modelId',
+    'provider',
+    'account',
+    'accountId',
+    'gateway',
+    'upstream',
+    'candidate',
+    'candidateKey',
+  ];
+  return prohibited.some((field) => raw[field] !== undefined && raw[field] !== null);
+}
+
+/**
  * Checks if harness natively enforces token limits.
  */
 function harnessEnforcesTokens(harness) {
@@ -43,23 +75,26 @@ function harnessEnforcesTokens(harness) {
 }
 
 /**
- * Computes deterministic MD5 hash of any JSON-serializable object.
+ * Computes deterministic SHA-256 hash of any JSON-serializable object.
  */
 function hashObject(obj) {
   return crypto.createHash('sha256').update(JSON.stringify(obj || {})).digest('hex').slice(0, 16);
 }
 
+// Module-level persistent cache across selection calls
+const SHARED_JEV_CACHE = new Map();
+
 class UnifiedRouteSelector {
   constructor(options = {}) {
     this.healthRegistry = options.healthRegistry || new ScopedHealthRegistry();
-    this.jevCache = new Map(); // cacheKey -> { chosen, confidence, outcome, timestamp }
+    this.jevCache = options.jevCache || SHARED_JEV_CACHE;
     this.jevAsk = options.jevAsk || null;
     this.minConfidence = options.minConfidence || 0.6;
   }
 
   /**
    * Admission Gate: Evaluates candidate suitability against task profile and policy.
-   * Returns { admitted: boolean, rejectionReason?: string, scoreBreakdown?: object }
+   * Returns { admitted: boolean, rejectionReason?: string, resetsAt?: number, staleQuota?: boolean }
    */
   evaluateAdmission(candidate, profile, authorCandidate = null) {
     const id = candidate;
@@ -68,8 +103,8 @@ class UnifiedRouteSelector {
     // 1. Policy Bar: AGENTS.md Claude exclusion for worker/reviewer
     if (WORKER_REVIEWER_ROLES.has(role)) {
       if (id.isCombo) {
-        // If combo, verify ALL constituent branches
-        const hasForbiddenBranch = id.comboBranches.some(
+        const branches = Array.isArray(id.comboBranches) ? id.comboBranches : [];
+        const hasForbiddenBranch = branches.some(
           (b) => CLAUDE_FAMILY_PATTERN.test(b.outboundModelId) || CLAUDE_FAMILY_PATTERN.test(b.configuredModelId)
         );
         if (hasForbiddenBranch) {
@@ -93,17 +128,18 @@ class UnifiedRouteSelector {
 
     // 2. Reviewer Independence Policy: Reviewer cannot share author's provider or failure domain
     if (role === 'reviewer' && authorCandidate) {
-      const authorProv = authorCandidate.upstreamProviderId || '';
-      const revProv = id.upstreamProviderId || '';
-      if (authorProv && revProv && authorProv.toLowerCase() === revProv.toLowerCase()) {
+      const authorProv = String(authorCandidate.upstreamProviderId || '').toLowerCase();
+      const revProv = String(id.upstreamProviderId || '').toLowerCase();
+      if (authorProv && revProv && authorProv === revProv) {
         return {
           admitted: false,
           rejectionReason: 'REVIEWER_SHARES_AUTHOR_UPSTREAM_PROVIDER',
         };
       }
       if (id.isCombo) {
-        const sharesBranch = id.comboBranches.some(
-          (b) => (b.upstreamProviderId || '').toLowerCase() === authorProv.toLowerCase()
+        const branches = Array.isArray(id.comboBranches) ? id.comboBranches : [];
+        const sharesBranch = branches.some(
+          (b) => String(b.upstreamProviderId || '').toLowerCase() === authorProv
         );
         if (sharesBranch) {
           return {
@@ -114,36 +150,76 @@ class UnifiedRouteSelector {
       }
     }
 
-    // 3. Required Capabilities Match
-    const requiredCaps = profile.requiredCapabilities || [];
-    const modelCaps = id.metadata?.capabilities || [];
-    for (const cap of requiredCaps) {
-      if (!modelCaps.includes(cap)) {
+    // 3. Combo Constituent Branch Health & Capabilities Check (Finding 8)
+    if (id.isCombo) {
+      const branches = Array.isArray(id.comboBranches) ? id.comboBranches : [];
+      if (branches.length === 0) {
         return {
           admitted: false,
-          rejectionReason: `MISSING_REQUIRED_CAPABILITY_${cap.toUpperCase()}`,
+          rejectionReason: 'COMBO_HAS_NO_CONSTITUENT_BRANCHES',
         };
+      }
+
+      const requiredCaps = profile.requiredCapabilities || [];
+      const viableBranches = branches.filter((branch) => {
+        // Branch must be healthy
+        const bHealth = this.healthRegistry.evaluateHealth(branch);
+        if (!bHealth.healthy) return false;
+        // Branch must have required capabilities
+        const bCaps = branch.metadata?.capabilities || [];
+        return requiredCaps.every((cap) => bCaps.includes(cap));
+      });
+
+      if (viableBranches.length === 0) {
+        return {
+          admitted: false,
+          rejectionReason: 'COMBO_ALL_BRANCHES_UNHEALTHY_OR_EXHAUSTED',
+        };
+      }
+    } else {
+      // Required Capabilities Match for single route
+      const requiredCaps = profile.requiredCapabilities || [];
+      const modelCaps = id.metadata?.capabilities || [];
+      for (const cap of requiredCaps) {
+        if (!modelCaps.includes(cap)) {
+          return {
+            admitted: false,
+            rejectionReason: `MISSING_REQUIRED_CAPABILITY_${cap.toUpperCase()}`,
+          };
+        }
       }
     }
 
-    // 4. Route Health & Cooldown Check
+    // 4. Route Health & Cooldown Check (Finding 3 & 4)
     const health = this.healthRegistry.evaluateHealth(id);
     if (!health.healthy) {
       return {
         admitted: false,
-        rejectionReason: `ROUTE_HEALTH_BLOCKED_${health.blockedBy?.toUpperCase()}_${health.category}`,
+        rejectionReason: health.reason
+          ? `ROUTE_HEALTH_BLOCKED_${health.reason}`
+          : `ROUTE_HEALTH_BLOCKED_${health.blockedBy?.toUpperCase()}_${health.category}`,
         resetsAt: health.resetsAt,
       };
     }
 
-    // 5. Cost Ceiling Check
-    const estCost = Number(id.metadata?.estimatedCostUsd ?? 0);
+    // 5. Cost Ceiling Check (Finding 2)
+    // Strictly reject candidates with unknown cost when a cost ceiling is set
     const ceiling = Number(profile.costCeiling);
-    if (Number.isFinite(ceiling) && ceiling > 0 && estCost > ceiling) {
-      return {
-        admitted: false,
-        rejectionReason: 'COST_EXCEEDS_TASK_CEILING',
-      };
+    if (Number.isFinite(ceiling) && ceiling > 0) {
+      const rawCost = id.metadata?.estimatedCostUsd;
+      if (rawCost === undefined || rawCost === null || rawCost === UNKNOWN) {
+        return {
+          admitted: false,
+          rejectionReason: 'UNKNOWN_COST_REJECTED_BY_CEILING',
+        };
+      }
+      const estCost = Number(rawCost);
+      if (!Number.isFinite(estCost) || estCost > ceiling) {
+        return {
+          admitted: false,
+          rejectionReason: 'COST_EXCEEDS_TASK_CEILING',
+        };
+      }
     }
 
     return {
@@ -153,48 +229,58 @@ class UnifiedRouteSelector {
   }
 
   /**
-   * Scores an admitted candidate based on task profile and weight profile.
+   * Scores an admitted candidate based on known metadata and weight profile.
+   * Does NOT invent default scores (50/60/70) or boost by model name regex.
+   * Excludes unknown dimensions and renormalizes weights (per AGENTS.md / ranking.js).
    */
   scoreCandidate(candidate, profile, weights) {
     const id = candidate;
     const meta = id.metadata || {};
 
-    // Quality: model intelligence index or prior score (default 50)
-    let quality = Number(meta.qualityScore || meta.intelligenceIndex || 50);
-    
-    // Task complexity matching: light tasks should use light models with high score
-    const complexity = String(profile.complexity || 'standard').toLowerCase();
-    const isLightTask = ['trivial', 'simple', 'short'].includes(complexity);
-    const isLightModel = meta.isLightweight === true || /flash|mini|nano|small/i.test(id.outboundModelId);
+    // Quality: from live evidence / priors / metadata
+    const qualityRaw = meta.qualityScore !== undefined ? meta.qualityScore : meta.intelligenceIndex;
+    const hasQuality = qualityRaw !== undefined && qualityRaw !== null && Number.isFinite(Number(qualityRaw));
+    const quality = hasQuality ? Number(qualityRaw) : null;
 
-    if (isLightTask && isLightModel) {
-      quality = Math.max(quality, 80); // light model is optimal for light task
+    // Latency: from priors / evidence
+    const latencyRaw = meta.latencyScore;
+    const hasLatency = latencyRaw !== undefined && latencyRaw !== null && Number.isFinite(Number(latencyRaw));
+    const latency = hasLatency ? Number(latencyRaw) : null;
+
+    // Cost: from metadata / pricing
+    const costRaw = meta.costScore;
+    const hasCost = costRaw !== undefined && costRaw !== null && Number.isFinite(Number(costRaw));
+    const cost = hasCost ? Number(costRaw) : null;
+
+    // Renormalize weights over dimensions that are known
+    let totalKnownWeight = 0;
+    if (hasQuality) totalKnownWeight += weights.quality;
+    if (hasLatency) totalKnownWeight += weights.latency;
+    if (hasCost) totalKnownWeight += weights.cost;
+
+    let weightedScore = 0;
+    if (totalKnownWeight > 0) {
+      let subtotal = 0;
+      if (hasQuality) subtotal += quality * weights.quality;
+      if (hasLatency) subtotal += latency * weights.latency;
+      if (hasCost) subtotal += cost * weights.cost;
+      weightedScore = Math.round(subtotal / totalKnownWeight);
     }
-
-    // Latency score (0-100, default 60)
-    const latency = Number(meta.latencyScore || 60);
-
-    // Cost score: lower cost = higher score (0-100)
-    const cost = Number(meta.costScore || 70);
 
     // Penalties
     let penalty = 0;
     if (meta.staleQuota) penalty += 15; // Unknown/stale quota penalty
     if (meta.currentWorkload > 0) penalty += Math.min(30, meta.currentWorkload * 10);
 
-    const weightedScore = Math.max(
-      0,
-      Math.round(
-        (quality * weights.quality + latency * weights.latency + cost * weights.cost) / 100 - penalty
-      )
-    );
+    const finalScore = Math.max(0, weightedScore - penalty);
 
     return {
-      totalScore: weightedScore,
+      totalScore: finalScore,
       breakdown: {
-        qualityScore: quality,
-        latencyScore: latency,
-        costScore: cost,
+        qualityScore: hasQuality ? quality : UNKNOWN,
+        latencyScore: hasLatency ? latency : UNKNOWN,
+        costScore: hasCost ? cost : UNKNOWN,
+        renormalizedWeightTotal: totalKnownWeight,
         penalty,
         weights,
       },
@@ -203,7 +289,7 @@ class UnifiedRouteSelector {
 
   /**
    * Core Selection Pipeline:
-   * Admission -> Scoring -> JEV Advisory -> Budget Binding
+   * Admission -> Weight Determination (JEV Advisory or Fallback) -> Ranking -> Controller Selection -> Budget Binding
    */
   async selectRoute(candidates, taskProfile, options = {}) {
     const profile = taskProfile || {};
@@ -239,12 +325,108 @@ class UnifiedRouteSelector {
       };
     }
 
-    // 2. Determine Weight Profile
+    // 2. Weight Profile Trade-off Determination (JEV Advisory or Deterministic Fallback)
     const role = String(profile.role || 'writer').toLowerCase();
     const fallbackProfileKey = ROLE_FALLBACK_PROFILE[role] || 'BALANCED';
-    const weights = WEIGHT_PROFILES[fallbackProfileKey];
+    let chosenProfileKey = fallbackProfileKey;
 
-    // 3. Score & Rank Admitted Candidates
+    let jevOutcome = 'SKIPPED';
+    let jevReason = 'NOT_CALLED';
+    let jevConfidence = UNKNOWN;
+
+    // Rule: "Không gọi khi dưới hai lựa chọn."
+    if (admitted.length >= 2 && typeof this.jevAsk === 'function') {
+      // Context-aware composite cache key including criteria, instructions, budgets, and health state hash
+      const cacheKey = hashObject({
+        taskId: profile.taskId,
+        role: profile.role,
+        complexity: profile.complexity,
+        instructions: profile.instructions || '',
+        acceptanceCriteria: profile.acceptanceCriteria || [],
+        requiredCapabilities: profile.requiredCapabilities || [],
+        costCeiling: profile.costCeiling,
+        tokenBudget: profile.tokenBudget,
+        turnBudget: profile.turnBudget,
+        expectedDuration: profile.expectedDuration,
+        contextSize: profile.contextSize,
+        healthStateHash: this.healthRegistry.getStateHash(),
+        candidates: admitted.map((x) => x.candidateKey).sort(),
+      });
+
+      const cached = this.jevCache.get(cacheKey);
+      if (cached) {
+        chosenProfileKey = cached.chosenProfileKey || fallbackProfileKey;
+        jevOutcome = cached.outcome;
+        jevReason = 'JEV_CACHE_HIT';
+        jevConfidence = cached.confidence;
+      } else {
+        try {
+          const weightOptions = Object.keys(WEIGHT_PROFILES);
+          const jevQuestion = {
+            kind: 'select-weight-profile',
+            prompt: `Select weight profile trade-off for task ${profile.taskId} (role: ${profile.role}, complexity: ${profile.complexity})`,
+            options: weightOptions,
+            evidence: JSON.stringify({
+              taskId: profile.taskId,
+              role: profile.role,
+              complexity: profile.complexity,
+              requiredCapabilities: profile.requiredCapabilities || [],
+              costCeiling: profile.costCeiling,
+              expectedDuration: profile.expectedDuration,
+            }),
+          };
+
+          const jevResponse = await this.jevAsk(jevQuestion);
+
+          // AGENTS.md / jev.js Contract: JEV is prohibited from naming candidate identities!
+          if (advisoryNamesIdentity(jevResponse)) {
+            jevOutcome = 'UNDECIDED';
+            jevReason = 'IDENTITY_PROHIBITED';
+            jevConfidence = 0;
+            chosenProfileKey = fallbackProfileKey;
+          } else if (
+            jevResponse &&
+            jevResponse.choice &&
+            WEIGHT_PROFILES[jevResponse.choice] &&
+            jevResponse.confidence >= this.minConfidence
+          ) {
+            jevOutcome = 'DECIDED';
+            jevReason = 'JEV_ADVISORY_ACCEPTED';
+            jevConfidence = jevResponse.confidence;
+            chosenProfileKey = jevResponse.choice;
+          } else {
+            // Rule: "JEV lỗi/undecided phải có fallback xác định được và được ghi log."
+            jevOutcome = 'UNDECIDED';
+            jevReason = 'JEV_LOW_CONFIDENCE_OR_UNDECIDED_DETERMINISTIC_FALLBACK';
+            jevConfidence = jevResponse ? jevResponse.confidence ?? UNKNOWN : UNKNOWN;
+            chosenProfileKey = fallbackProfileKey;
+          }
+
+          this.jevCache.set(cacheKey, {
+            chosenProfileKey,
+            confidence: jevConfidence,
+            outcome: jevOutcome,
+            timestamp: Date.now(),
+          });
+        } catch (err) {
+          jevOutcome = 'ERROR';
+          jevReason = `JEV_CALL_FAILED_${err.message || 'EXCEPTION'}_DETERMINISTIC_FALLBACK`;
+          chosenProfileKey = fallbackProfileKey;
+        }
+      }
+    } else if (admitted.length < 2) {
+      jevOutcome = 'SKIPPED';
+      jevReason = 'SINGLE_ELIGIBLE_CANDIDATE_NO_JEV_CALL';
+      chosenProfileKey = fallbackProfileKey;
+    } else {
+      jevOutcome = 'UNDECIDED';
+      jevReason = 'JEV_UNCONFIGURED_DETERMINISTIC_FALLBACK';
+      chosenProfileKey = fallbackProfileKey;
+    }
+
+    const weights = WEIGHT_PROFILES[chosenProfileKey] || WEIGHT_PROFILES.BALANCED;
+
+    // 3. Score & Rank Admitted Candidates using determined weights (Controller Ranking)
     const scoredList = admitted.map((c) => {
       const scoring = this.scoreCandidate(c, profile, weights);
       return {
@@ -263,86 +445,41 @@ class UnifiedRouteSelector {
 
     scoredList.sort((a, b) => b.score - a.score || a.candidateKey.localeCompare(b.candidateKey));
 
-    // 4. JEV Advisory Integration
-    let selectedEntry = scoredList[0];
-    let jevOutcome = 'SKIPPED';
-    let jevReason = 'NOT_CALLED';
-    let jevConfidence = UNKNOWN;
-
-    // Rule: "Không gọi khi dưới hai lựa chọn."
-    if (scoredList.length >= 2 && typeof this.jevAsk === 'function') {
-      const topN = scoredList.slice(0, Math.min(5, scoredList.length));
-      
-      // Context-aware composite cache key
-      const cacheKey = hashObject({
-        profile: {
-          taskId: profile.taskId,
-          role: profile.role,
-          complexity: profile.complexity,
-          requiredCapabilities: profile.requiredCapabilities,
-        },
-        candidates: topN.map((x) => x.candidateKey),
-        healthEpoch: Date.now() - (Date.now() % (60 * 1000)), // 1-minute bucketed health state
-      });
-
-      const cached = this.jevCache.get(cacheKey);
-      if (cached) {
-        jevOutcome = cached.outcome;
-        jevReason = 'JEV_CACHE_HIT';
-        jevConfidence = cached.confidence;
-        const match = topN.find((x) => x.candidateKey === cached.chosen);
-        if (match) selectedEntry = match;
-      } else {
-        try {
-          const prompt = `Select the optimal route for task ${profile.taskId} (role: ${profile.role}, complexity: ${profile.complexity}). Options: ${topN.map((x) => x.candidateKey).join(', ')}`;
-          const jevResponse = await this.jevAsk({
-            kind: 'select-route',
-            prompt,
-            options: topN.map((x) => x.candidateKey),
-            context: { profile, options: topN },
-          });
-
-          if (
-            jevResponse &&
-            jevResponse.choice &&
-            jevResponse.confidence >= this.minConfidence &&
-            topN.some((x) => x.candidateKey === jevResponse.choice)
-          ) {
-            jevOutcome = 'DECIDED';
-            jevReason = 'JEV_ADVISORY_ACCEPTED';
-            jevConfidence = jevResponse.confidence;
-            selectedEntry = topN.find((x) => x.candidateKey === jevResponse.choice) || selectedEntry;
-          } else {
-            // Rule: "JEV lỗi/undecided phải có fallback xác định được và được ghi log."
-            jevOutcome = 'UNDECIDED';
-            jevReason = 'JEV_LOW_CONFIDENCE_OR_UNDECIDED_DETERMINISTIC_FALLBACK';
-            jevConfidence = jevResponse ? jevResponse.confidence ?? UNKNOWN : UNKNOWN;
-          }
-
-          this.jevCache.set(cacheKey, {
-            chosen: selectedEntry.candidateKey,
-            confidence: jevConfidence,
-            outcome: jevOutcome,
-            timestamp: Date.now(),
-          });
-        } catch (err) {
-          jevOutcome = 'ERROR';
-          jevReason = `JEV_CALL_FAILED_${err.message || 'EXCEPTION'}_DETERMINISTIC_FALLBACK`;
-        }
-      }
-    } else if (scoredList.length < 2) {
-      jevOutcome = 'SKIPPED';
-      jevReason = 'SINGLE_ELIGIBLE_CANDIDATE_NO_JEV_CALL';
-    }
-
-    // 5. Context & Budget Interface
+    // Controller selects highest-scoring candidate from ranking
+    const selectedEntry = scoredList[0];
     const chosenCandidate = selectedEntry.candidate;
-    const tokenBudget = profile.contextSize || profile.tokenBudget || 32000;
-    const turnBudget = profile.turnBudget || 15;
-    const deadlineMs = profile.expectedDuration || 300000;
-    const tokenEnforcement = harnessEnforcesTokens(chosenCandidate.harness)
-      ? 'ENFORCED_BY_RUNNER'
-      : 'UNENFORCED_BY_HARNESS';
+
+    // 4. Context & Budget Interface (Finding 11)
+    // Explicit token budget takes precedence over contextSize
+    const tokenBudget =
+      profile.tokenBudget !== undefined
+        ? profile.tokenBudget
+        : profile.contextSize !== undefined
+          ? profile.contextSize
+          : UNKNOWN;
+
+    // Do not invent magic numbers when unsupplied
+    const turnBudget =
+      profile.turnBudget !== undefined
+        ? profile.turnBudget
+        : chosenCandidate.metadata?.turnBudget !== undefined
+          ? chosenCandidate.metadata.turnBudget
+          : UNKNOWN;
+
+    const deadlineMs =
+      profile.expectedDuration !== undefined
+        ? profile.expectedDuration
+        : profile.deadlineMs !== undefined
+          ? profile.deadlineMs
+          : UNKNOWN;
+
+    // Truthful token enforcement status: cannot claim enforced without runner adapter
+    const tokenEnforcement =
+      options.runnerEnforcesTokens === true
+        ? 'ENFORCED_BY_RUNNER'
+        : !harnessEnforcesTokens(chosenCandidate.harness)
+          ? 'UNENFORCED_BY_HARNESS'
+          : 'UNENFORCED_AT_SELECTION';
 
     return {
       status: 'ADMITTED_AND_SELECTED',
@@ -352,6 +489,8 @@ class UnifiedRouteSelector {
       totalAdmitted: admitted.length,
       totalRejected: rejections.length,
       rejectionReasons: cappedRejections,
+      weightProfileUsed: chosenProfileKey,
+      weights,
       jev: {
         outcome: jevOutcome,
         reason: jevReason,
@@ -376,7 +515,7 @@ class UnifiedRouteSelector {
 }
 
 /**
- * Convenience entry point for runtime / pipeline callers (e.g. route.js).
+ * Convenience entry point for runtime / pipeline callers (e.g. routing.js, cli.js).
  */
 async function selectOptimalRoute(params = {}) {
   const { aggregateAllCandidates } = require('./candidate-adapters');
@@ -390,16 +529,18 @@ async function selectOptimalRoute(params = {}) {
     role: params.role || 'writer',
     complexity: params.complexity || 'standard',
     requiredCapabilities: params.requiredCapabilities || ['general_code'],
-    costCeiling: params.costCeiling || null,
-    contextSize: params.contextSize || 32000,
-    turnBudget: params.turnBudget || 15,
-    expectedDuration: params.expectedDuration || 300000,
+    costCeiling: params.costCeiling !== undefined ? params.costCeiling : null,
+    contextSize: params.contextSize !== undefined ? params.contextSize : UNKNOWN,
+    tokenBudget: params.tokenBudget !== undefined ? params.tokenBudget : UNKNOWN,
+    turnBudget: params.turnBudget !== undefined ? params.turnBudget : UNKNOWN,
+    expectedDuration: params.expectedDuration !== undefined ? params.expectedDuration : UNKNOWN,
     acceptanceCriteria: params.acceptanceCriteria || [],
     instructions: params.instructions || '',
   };
 
   const result = await selector.selectRoute(candidates, taskProfile, {
     authorCandidate: params.authorCandidate || null,
+    runnerEnforcesTokens: params.runnerEnforcesTokens === true,
   });
 
   return {
@@ -413,6 +554,9 @@ module.exports = {
   WEIGHT_PROFILES,
   ROLE_FALLBACK_PROFILE,
   CLAUDE_FAMILY_PATTERN,
+  WORKER_REVIEWER_ROLES,
+  SHARED_JEV_CACHE,
+  advisoryNamesIdentity,
   harnessEnforcesTokens,
   selectOptimalRoute,
 };

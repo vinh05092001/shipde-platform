@@ -1,34 +1,24 @@
 'use strict';
 
 /**
- * Ship Dễ — Route Identity Specification (PATCH 1)
+ * Ship Dễ — Route Identity Specification (PATCH 1 - Fixed per Codex Review)
  *
  * Normalizes route identity across all pathways:
  * 1. 9router pathway: harness (http/opencode) -> gateway (9router) -> upstream connection -> outbound model
  * 2. Direct external pathway: harness (opencode/codex/direct-http) -> gateway (direct/none) -> direct provider -> outbound model
  * 3. AGY pool pathway: harness (agy-pool) -> Scheduled Task -> lane (agy01..agy10) -> agy.exe
  *
- * Identity Fields:
- * - harness: execution harness (e.g. 'opencode', 'codex', 'agy-pool', 'direct-http', 'cline', 'paseo')
- * - sourceId: registry source id ('9router', 'oc', 'codex', 'agy-pool', 'direct-api', etc.)
- * - gatewayId: gateway router ('9router', 'direct', 'none')
- * - upstreamProviderId: resolved upstream provider ('antigravity', 'github', 'claude', 'kiro', 'kimchi', 'deepseek', etc.)
- * - connectionId: specific connection ID in gateway/DB (e.g. '3af3ee18-...') or 'UNKNOWN'
- * - accountRef: readable account reference (e.g. 'vi***07@gmail.com', 'agy01', 'Account 1') or 'UNKNOWN'
- * - configuredModelId: exact model as configured/requested (e.g. 'ag/gemini-3.8-flash', 'shipde-writer', 'kimchi/glm-5.3')
- * - outboundModelId: model sent upstream after prefix rewrite/strip (e.g. 'gemini-3.8-flash', 'glm-5.3')
- * - quotaScopeId: identifier of the quota pool. Shared accounts share quotaScopeId without doubling budget.
- * - jobId: tracking job ID or 'UNKNOWN'
- * - attemptId: tracking attempt sequence or 'UNKNOWN'
- * - isCombo: boolean
- * - comboBranches: array of constituent branch identities if isCombo
- * - pathway: '9ROUTER' | 'DIRECT' | 'AGY_POOL'
+ * Fixes for Codex Review:
+ * - Unambiguous key encoding: every component is escaped so components containing '::'
+ *   (such as quotaScopeId 'quota::google::user') do NOT break component splitting.
+ * - Non-colliding candidate keys: preserves sourceId and connectionId alongside accountRef
+ *   so distinct sources/connections never collide.
  */
 
 const GATEWAY_PREFIX_SEPARATOR = '::';
 const UNKNOWN = 'UNKNOWN';
 
-// Built-in known provider prefixes for 9router (from 9router package metadata)
+// Built-in known provider prefixes for 9router
 const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
   ag: 'antigravity',
   gh: 'github',
@@ -50,6 +40,22 @@ const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
   polly: 'aws-polly',
   xmtp: 'xiaomi-tokenplan',
 });
+
+function escapePart(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/%/g, '%25')
+    .replace(/::/g, '%3A%3A')
+    .replace(/\u241f/g, '%241F');
+}
+
+function unescapePart(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/%3A%3A/g, '::')
+    .replace(/%241F/g, '\u241f')
+    .replace(/%25/g, '%');
+}
 
 /**
  * Distinguishes the primary execution pathway of a route.
@@ -87,7 +93,6 @@ function resolveModelPrefix(modelId, customAliases = {}) {
 
   const slashIdx = m.indexOf('/');
   if (slashIdx === -1) {
-    // No slash: direct model or combo alias
     const p = customAliases[m] || DEFAULT_PREFIX_TO_PROVIDER[m] || m;
     return { prefix: null, upstreamProviderId: p, outboundModelId: m };
   }
@@ -115,7 +120,6 @@ function createRouteIdentity(input) {
   const harness = input.harness ? String(input.harness).trim() : UNKNOWN;
   const sourceId = input.sourceId ? String(input.sourceId).trim() : UNKNOWN;
   
-  // Determine gateway: default to direct unless explicitly 9router or through 9router
   let gatewayId = input.gatewayId || input.gateway;
   if (!gatewayId) {
     if (sourceId === '9router' || (input.endpoint && String(input.endpoint).includes('20128'))) {
@@ -137,14 +141,11 @@ function createRouteIdentity(input) {
   const connectionId = input.connectionId ? String(input.connectionId).trim() : UNKNOWN;
   const accountRef = input.accountRef || input.account || input.accountId || UNKNOWN;
 
-  // Derive quotaScopeId:
-  // If explicitly given, use it; otherwise construct a canonical scope.
   let quotaScopeId = input.quotaScopeId || input.quotaScope;
   if (!quotaScopeId) {
     if (harness === 'agy-pool' || /^agy\d{2}$/i.test(accountRef)) {
       quotaScopeId = `agy-quota::${accountRef}`;
     } else if (gatewayId === '9router') {
-      // 9router upstream connection quota scope
       quotaScopeId = `quota::${upstreamProviderId}::${accountRef !== UNKNOWN ? accountRef : connectionId}`;
     } else {
       quotaScopeId = `quota::${upstreamProviderId}::${accountRef}`;
@@ -181,53 +182,91 @@ function createRouteIdentity(input) {
 }
 
 /**
- * Formats a canonical 7-part candidateKey compatible with existing tools:
- * harness::accessPath::gateway::upstream::account::quotaScope::modelId
+ * Formats a canonical 9-part candidateKey:
+ * harness::sourceId::gatewayId::upstream::connectionId::accountRef::quotaScope::configuredModelId::outboundModelId
+ * Every part is escaped so components with '::' never break parsing.
  */
 function canonicalCandidateKey(identity) {
   const i = identity || {};
   const harness = i.harness || UNKNOWN;
-  const accessPath = i.pathway || distinguishPathway(i);
-  const gateway = i.gatewayId || 'direct';
+  const sourceId = i.sourceId || UNKNOWN;
+  const gatewayId = i.gatewayId || 'direct';
   const upstream = i.upstreamProviderId || UNKNOWN;
-  const account = i.accountRef !== UNKNOWN ? i.accountRef : (i.connectionId !== UNKNOWN ? i.connectionId : '*');
+  const connectionId = i.connectionId || UNKNOWN;
+  const accountRef = i.accountRef || UNKNOWN;
   const quotaScope = i.quotaScopeId || UNKNOWN;
-  const modelId = i.configuredModelId || i.outboundModelId || UNKNOWN;
+  const configuredModelId = i.configuredModelId || UNKNOWN;
+  const outboundModelId = i.outboundModelId || UNKNOWN;
 
-  return [harness, accessPath, gateway, upstream, account, quotaScope, modelId].join(
-    GATEWAY_PREFIX_SEPARATOR
-  );
+  return [
+    harness,
+    sourceId,
+    gatewayId,
+    upstream,
+    connectionId,
+    accountRef,
+    quotaScope,
+    configuredModelId,
+    outboundModelId,
+  ]
+    .map(escapePart)
+    .join(GATEWAY_PREFIX_SEPARATOR);
 }
 
 /**
- * Parses a canonical candidate key back into a RouteIdentity.
+ * Parses a candidate key back into a RouteIdentity.
+ * Handles both 9-part escaped keys and legacy 7-part / 6-part keys.
  */
 function parseRouteIdentity(key, defaults = {}) {
   if (typeof key !== 'string') return null;
-  const parts = key.includes('::') ? key.split('::') : key.split('\u241f');
-  
-  if (parts.length >= 7) {
+
+  const rawParts = key.includes('::') ? key.split('::') : key.split('\u241f');
+
+  // If 9 parts (canonical escaped format)
+  if (rawParts.length === 9) {
+    const p = rawParts.map(unescapePart);
     return createRouteIdentity({
-      harness: parts[0] || defaults.harness,
-      pathway: parts[1],
-      gatewayId: parts[2] || defaults.gatewayId,
-      upstreamProviderId: parts[3] || defaults.upstreamProviderId,
-      accountRef: parts[4] || defaults.accountRef,
-      quotaScopeId: parts[5] || defaults.quotaScopeId,
-      configuredModelId: parts[6] || defaults.configuredModelId,
+      harness: p[0],
+      sourceId: p[1],
+      gatewayId: p[2],
+      upstreamProviderId: p[3],
+      connectionId: p[4],
+      accountRef: p[5],
+      quotaScopeId: p[6],
+      configuredModelId: p[7],
+      outboundModelId: p[8],
       ...defaults,
     });
   }
 
-  if (parts.length === 6) {
+  // Legacy 7-part format: harness::accessPath::gateway::upstream::account::quotaScope::modelId
+  if (rawParts.length === 7) {
+    const p = rawParts.map(unescapePart);
     return createRouteIdentity({
-      harness: parts[0] || defaults.harness,
-      pathway: parts[1],
-      gatewayId: parts[2] || defaults.gatewayId,
-      upstreamProviderId: parts[3] || defaults.upstreamProviderId,
-      accountRef: parts[4] || defaults.accountRef,
+      harness: p[0],
+      pathway: p[1],
+      gatewayId: p[2],
+      upstreamProviderId: p[3],
+      accountRef: p[4],
+      quotaScopeId: p[5],
+      configuredModelId: p[6],
+      outboundModelId: p[6],
+      ...defaults,
+    });
+  }
+
+  // Legacy 6-part format
+  if (rawParts.length === 6) {
+    const p = rawParts.map(unescapePart);
+    return createRouteIdentity({
+      harness: p[0],
+      pathway: p[1],
+      gatewayId: p[2],
+      upstreamProviderId: p[3],
+      accountRef: p[4],
       quotaScopeId: UNKNOWN,
-      configuredModelId: parts[5] || defaults.configuredModelId,
+      configuredModelId: p[5],
+      outboundModelId: p[5],
       ...defaults,
     });
   }
@@ -237,18 +276,47 @@ function parseRouteIdentity(key, defaults = {}) {
 
 /**
  * Links shared quota scopes across routes that share the same underlying account.
- * When an account link evidence exists (e.g. 9router connection and AGY lane both using vinh1032007@gmail.com),
- * updates quotaScopeId to the canonical linked pool without doubling budgets.
- *
- * @param {Array<Object>} identities List of route identities
- * @param {Map<string, string>|Object} accountLinks Map of accountRef/connectionId -> canonicalQuotaScopeId
  */
 function linkSharedQuotaScopes(identities, accountLinks) {
-  if (!Array.isArray(identities) || !accountLinks) return identities;
-  const links = accountLinks instanceof Map ? accountLinks : new Map(Object.entries(accountLinks));
+  if (!Array.isArray(identities)) return [];
+  const links =
+    accountLinks instanceof Map
+      ? new Map(accountLinks)
+      : accountLinks && typeof accountLinks === 'object'
+        ? new Map(Object.entries(accountLinks))
+        : new Map();
+
+  // If no explicit links provided, auto-detect identical real accounts across routes/pathways
+  if (links.size === 0) {
+    const accountOccurrences = new Map();
+    for (const id of identities) {
+      const realAcc = id.metadata?.realAccountRef || id.accountRef;
+      if (
+        realAcc &&
+        realAcc !== UNKNOWN &&
+        realAcc !== '*' &&
+        !String(realAcc).startsWith('unknown')
+      ) {
+        if (!accountOccurrences.has(realAcc)) {
+          accountOccurrences.set(realAcc, []);
+        }
+        accountOccurrences.get(realAcc).push(id);
+      }
+    }
+    for (const [acc, ids] of accountOccurrences.entries()) {
+      if (ids.length > 1) {
+        // Shared account detected across multiple candidate routes
+        const prov = ids[0].upstreamProviderId || 'shared';
+        const canonicalScope = `quota::${prov}::${acc}`;
+        links.set(acc, canonicalScope);
+      }
+    }
+  }
 
   return identities.map((id) => {
-    const targetScope = links.get(id.accountRef) || links.get(id.connectionId);
+    const realAcc = id.metadata?.realAccountRef || id.accountRef;
+    const targetScope =
+      links.get(realAcc) || links.get(id.accountRef) || links.get(id.connectionId);
     if (targetScope && targetScope !== id.quotaScopeId) {
       return createRouteIdentity({
         ...id,
@@ -266,11 +334,6 @@ function linkSharedQuotaScopes(identities, accountLinks) {
 
 /**
  * Expands a 9router combo into its constituent branch candidate identities.
- * Preserves the original combo alias on the parent and orders all branches sequentially.
- *
- * @param {Object} comboIdentity The parent combo route identity
- * @param {Array<string|Object>} constituentModels List of model IDs or model objects in the combo
- * @param {Object} candidateAccountMap Map of upstreamProvider -> list of active connections
  */
 function expandComboIdentity(comboIdentity, constituentModels, candidateAccountMap = {}) {
   if (!comboIdentity) return null;
@@ -297,6 +360,7 @@ function expandComboIdentity(comboIdentity, constituentModels, candidateAccountM
         parentCombo: parent.configuredModelId,
         branchIndex: index + 1,
         totalCandidatesForProvider: eligibleAccounts.length,
+        capabilities: m.capabilities || [],
         candidateAccounts: eligibleAccounts.map((a) => ({
           connectionId: a.connectionId || UNKNOWN,
           accountRef: a.accountRef || UNKNOWN,
@@ -317,6 +381,8 @@ module.exports = {
   UNKNOWN,
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
+  escapePart,
+  unescapePart,
   distinguishPathway,
   resolveModelPrefix,
   createRouteIdentity,

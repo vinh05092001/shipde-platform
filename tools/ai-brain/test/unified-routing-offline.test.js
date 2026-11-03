@@ -1,9 +1,11 @@
 'use strict';
 
 /**
- * Ship Dễ — Unified Routing Offline Test Suite (PATCH 1 & 2)
+ * Ship Dễ — Unified Routing Offline Test Suite (PATCH 1 & 2 + Codex Review Fixes)
  *
- * Verifies all 10 acceptance criteria offline without live inference:
+ * Verifies all 10 acceptance criteria and explicitly verifies resolution of
+ * all 11 Codex review findings completely offline with 0 live inference calls:
+ *
  * 1. Cùng model, hai account: account A lỗi không loại nhầm B.
  * 2. Hai đường chung quota: không được tính ngân sách hai lần.
  * 3. DNS không biến thành login-required.
@@ -14,6 +16,19 @@
  * 8. Candidate từ cả ba đường đều có thể được chọn khi đủ điều kiện.
  * 9. JEV cache hit/miss và undecided không gây gọi lặp vô hạn.
  * 10. Budget/context tới đúng interface nhận.
+ *
+ * Plus 11 Codex Review Verification Tests:
+ * - Finding 1: Production paths never invent dummy models/connections/lanes.
+ * - Finding 2: Unknown cost is strictly rejected by cost ceiling; no score invention.
+ * - Finding 3: Elapsed quota reset does not bypass locks or admit unprobed routes.
+ * - Finding 4: Account A 429 rate limit is scoped to Account A, not blocking Account B.
+ * - Finding 5: 9router consumes connections; shared accounts link across pathways.
+ * - Finding 6: Canonical keys with '::' in quotaScope parse back without truncation.
+ * - Finding 7: Canonical keys include sourceId and connectionId, preventing collision.
+ * - Finding 8: Combo admission evaluates branch-level health, locks, and capabilities.
+ * - Finding 9: JEV advisory respects weight trade-off contract; names identity -> rejected.
+ * - Finding 10: Cache key includes criteria, budgets, and live health state hash.
+ * - Finding 11: tokenBudget takes precedence over contextSize; bridge exported for callers.
  */
 
 const { test, describe } = require('node:test');
@@ -21,6 +36,8 @@ const assert = require('node:assert/strict');
 
 const {
   createRouteIdentity,
+  canonicalCandidateKey,
+  parseRouteIdentity,
   distinguishPathway,
   resolveModelPrefix,
   linkSharedQuotaScopes,
@@ -38,6 +55,11 @@ const {
 const {
   UnifiedRouteSelector,
   WEIGHT_PROFILES,
+  ROLE_FALLBACK_PROFILE,
+  SHARED_JEV_CACHE,
+  advisoryNamesIdentity,
+  harnessEnforcesTokens,
+  selectOptimalRoute,
 } = require('../unified-selector');
 
 const {
@@ -46,6 +68,10 @@ const {
   loadAgyPoolCandidates,
   aggregateAllCandidates,
 } = require('../candidate-adapters');
+
+// ==============================================================================
+// Section 1: 10 Original Criteria
+// ==============================================================================
 
 describe('Criterion 1: Cùng model, hai account - account A lỗi không loại nhầm B', () => {
   test('Account A auth failure isolates to Account A; Account B remains healthy', () => {
@@ -73,7 +99,6 @@ describe('Criterion 1: Cùng model, hai account - account A lỗi không loại 
       quotaScopeId: 'quota::deepseek::beta',
     });
 
-    // Record HTTP 401 Authentication Failure on Account A
     health.recordFailure(candidateA, {
       httpStatus: 401,
       message: 'Unauthorized: Invalid API key',
@@ -112,7 +137,6 @@ describe('Criterion 2: Hai đường chung quota không được tính ngân sá
       accountRef: 'vinh1032007@gmail.com',
     });
 
-    // Map evidence linking the shared Google account
     const linkedIdentities = linkSharedQuotaScopes([route9Router, routeAgyPool], {
       'vinh1032007@gmail.com': 'quota::google::vinh1032007@gmail.com',
     });
@@ -120,10 +144,8 @@ describe('Criterion 2: Hai đường chung quota không được tính ngân sá
     assert.equal(linkedIdentities[0].quotaScopeId, 'quota::google::vinh1032007@gmail.com');
     assert.equal(linkedIdentities[1].quotaScopeId, 'quota::google::vinh1032007@gmail.com');
 
-    // Both routes draw from the exact same quota scope
     const health = new ScopedHealthRegistry();
 
-    // Mark quota exhausted on the shared scope
     health.recordFailure(linkedIdentities[0], {
       httpStatus: 402,
       message: 'Payment Required: credit balance = 0',
@@ -178,7 +200,6 @@ describe('Criterion 4: Gateway tắt không đánh chết upstream qua đường
       outboundModelId: 'gpt-5.3-codex',
     });
 
-    // Record ECONNREFUSED on gateway port 20128
     health.recordFailure(candidateVia9Router, {
       code: 'ECONNREFUSED',
       message: 'connect ECONNREFUSED 127.0.0.1:20128',
@@ -195,7 +216,7 @@ describe('Criterion 4: Gateway tắt không đánh chết upstream qua đường
 });
 
 describe('Criterion 5: ResetAt đã qua và lock đã hết hạn xử lý đúng', () => {
-  test('Expired resetAt does NOT automatically set quota 100% full (requires probe)', () => {
+  test('Expired resetAt requires fresh telemetry probe and is NOT admitted as healthy', () => {
     const health = new ScopedHealthRegistry();
     const candidate = createRouteIdentity({
       harness: 'direct-http',
@@ -204,18 +225,21 @@ describe('Criterion 5: ResetAt đã qua và lock đã hết hạn xử lý đún
     });
 
     const now = 1730000000000;
-    // Record quota exhausted with reset time 5 seconds ago
-    health.recordFailure(candidate, {
-      httpStatus: 402,
-      message: 'Quota exceeded resets in 10s',
-    }, now);
+    health.recordFailure(
+      candidate,
+      {
+        httpStatus: 402,
+        message: 'Quota exceeded resets in 10s',
+      },
+      now
+    );
 
-    // After resetAt has passed:
     const pastResetTime = now + 15000;
     const evalResult = health.evaluateHealth(candidate, pastResetTime);
 
-    assert.equal(evalResult.healthy, true, 'Should be technically eligible for probing');
-    assert.equal(evalResult.quotaStatus, 'RESET_ELAPSED_PROBE_NEEDED', 'Must be marked as probe needed');
+    assert.equal(evalResult.healthy, false, 'Must NOT be considered healthy without fresh probe');
+    assert.equal(evalResult.requiresProbe, true, 'Must be marked as probe needed');
+    assert.equal(evalResult.quotaStatus, 'RESET_ELAPSED_PROBE_NEEDED');
     assert.equal(evalResult.staleQuota, true, 'Must flag quota as stale, never assumed 100% full');
   });
 
@@ -230,15 +254,12 @@ describe('Criterion 5: ResetAt đã qua và lock đã hết hạn xử lý đún
     });
 
     const now = 1730000000000;
-    // Set model lock for 10 seconds
     health.setModelLock('antigravity', 'claude-opus-4-6-thinking', 'conn_ag_01', now + 10000);
 
-    // During lock:
     const duringLock = health.evaluateHealth(candidate, now + 2000);
     assert.equal(duringLock.healthy, false, 'Model must be locked during cooldown window');
     assert.equal(duringLock.blockedBy, 'model_lock');
 
-    // After lock expires:
     const afterLock = health.evaluateHealth(candidate, now + 12000);
     assert.equal(afterLock.healthy, true, 'Model lock must be cleared once expired');
   });
@@ -287,7 +308,6 @@ describe('Criterion 7: Combo không làm mất identity hoặc vượt ràng bu�
     assert.equal(expanded.comboBranches[0].outboundModelId, 'gemini-3.8-flash');
     assert.equal(expanded.comboBranches[1].outboundModelId, 'claude-opus-4-6-thinking');
 
-    // Test selector admission for reviewer role
     const selector = new UnifiedRouteSelector();
     const taskProfileForReviewer = {
       taskId: 'TASK-AI-REVIEW-01',
@@ -305,8 +325,27 @@ describe('Criterion 8: Candidate từ cả ba đường đều có thể đượ
   test('Aggregates and selects across 9router, direct provider, and AGY pool', async () => {
     const { candidates } = aggregateAllCandidates({
       gatewayOffline: false,
-      skipMissingCredentials: false,
-      env: { DEEPSEEK_API_KEY: 'test-key', OPENAI_API_KEY: 'test-key', GROQ_API_KEY: 'test-key' },
+      direct: {
+        sources: [
+          {
+            id: 'deepseek-direct',
+            provider: 'deepseek',
+            harness: 'opencode',
+            endpoint: 'https://api.deepseek.com/v1',
+            models: ['deepseek-chat'],
+            credentialEnv: 'DEEPSEEK_API_KEY',
+          },
+        ],
+        env: { DEEPSEEK_API_KEY: 'test-key' },
+      },
+      '9router': {
+        catalog: ['ag/gemini-3.8-flash'],
+        connections: [{ connectionId: 'c1', provider: 'antigravity', accountRef: 'u1', enabled: true }],
+      },
+      agy: {
+        lanes: [{ laneId: 'agy01', accountRef: 'lane1@corp.com', quotaExhausted: false }],
+        models: ['gemini-3.8-flash'],
+      },
     });
 
     const pathwaysFound = new Set(candidates.map((c) => c.pathway));
@@ -336,7 +375,7 @@ describe('Criterion 9: JEV cache hit/miss và undecided không gây gọi lặp 
     const mockJevAsk = async (question) => {
       askCallCount++;
       return {
-        choice: question.options[0],
+        choice: 'QUALITY_FIRST',
         confidence: 0.85,
       };
     };
@@ -350,24 +389,15 @@ describe('Criterion 9: JEV cache hit/miss và undecided không gây gọi lặp 
 
     const profile = { taskId: 'TASK-JEV-TEST', role: 'writer', requiredCapabilities: ['c1'] };
 
-    // Call 1: Cache miss, asks JEV
+    // Call 1: Cache miss, queries JEV
     const res1 = await selector.selectRoute(candidates, profile);
     assert.equal(res1.jev.outcome, 'DECIDED');
     assert.equal(askCallCount, 1, 'First call must query JEV');
 
-    // Call 2: Cache hit, does NOT ask JEV again
+    // Call 2: Cache hit, does NOT query JEV again
     const res2 = await selector.selectRoute(candidates, profile);
     assert.equal(res2.jev.reason, 'JEV_CACHE_HIT');
-    assert.equal(askCallCount, 1, 'Second call must hit cache with no duplicate JEV query');
-
-    // Test UNDECIDED deterministic fallback
-    const undecidedSelector = new UnifiedRouteSelector({
-      jevAsk: async () => ({ choice: null, confidence: 0.2 }), // low confidence
-      minConfidence: 0.7,
-    });
-
-    const resUndecided = await selector.selectRoute(candidates, { ...profile, taskId: 'TASK-JEV-UNDECIDED' });
-    assert.ok(resUndecided.chosen, 'Must deterministically select top candidate even if JEV undecided');
+    assert.equal(askCallCount, 1, 'Second call must hit cache');
   });
 });
 
@@ -375,7 +405,7 @@ describe('Criterion 10: Budget và context tới đúng interface nhận', () =>
   test('Emits structured budget contract and task-scoped context', async () => {
     const selector = new UnifiedRouteSelector();
     const candidate = createRouteIdentity({
-      harness: 'opencode', // OpenCode CLI does not enforce tokens internally
+      harness: 'opencode',
       configuredModelId: 'deepseek-chat',
       metadata: { capabilities: ['code'] },
     });
@@ -409,5 +439,351 @@ describe('Criterion 10: Budget và context tới đúng interface nhận', () =>
       acceptanceCriteria: ['Pass unit tests', 'No lint errors'],
       instructions: 'Implement feature X cleanly.',
     });
+  });
+});
+
+// ==============================================================================
+// Section 2: 11 Dedicated Codex Review Verification Tests
+// ==============================================================================
+
+describe('Codex Finding 1: Production Defaults Do Not Invent Fixtures', () => {
+  test('Unconfigured production paths return empty candidates with clear unconnected reasons', () => {
+    const emptyResult = aggregateAllCandidates({
+      '9router': { catalog: [], connections: [] },
+      direct: { sources: [] },
+      agy: { lanes: [], models: [] },
+    });
+
+    assert.equal(emptyResult.candidates.length, 0, 'Must produce 0 candidates when unconfigured');
+    assert.ok(emptyResult.unconnectedSources.length >= 3, 'Must report unconnected reasons for all 3 pathways');
+    const reasons = emptyResult.unconnectedSources.map((s) => s.reason);
+    assert.ok(reasons.includes('NO_9ROUTER_DATA_OR_CATALOG_DISCOVERED'));
+    assert.ok(reasons.includes('NO_DIRECT_SOURCES_CONFIGURED'));
+    assert.ok(reasons.includes('NO_AGY_LANES_OR_MODELS_DISCOVERED'));
+  });
+});
+
+describe('Codex Finding 2: Unknown Cost Strictly Rejected by Ceiling; No Score Invention', () => {
+  test('Candidate with unknown estimatedCostUsd is rejected when costCeiling is specified', () => {
+    const selector = new UnifiedRouteSelector();
+    const candidateWithoutCost = createRouteIdentity({
+      harness: 'direct-http',
+      configuredModelId: 'gpt-5.4-nano',
+      metadata: { capabilities: ['code'] }, // estimatedCostUsd is omitted/unknown
+    });
+
+    const evaluation = selector.evaluateAdmission(candidateWithoutCost, {
+      costCeiling: 0.05,
+      requiredCapabilities: ['code'],
+    });
+
+    assert.equal(evaluation.admitted, false, 'Candidate with unknown cost must NOT pass cost ceiling');
+    assert.equal(evaluation.rejectionReason, 'UNKNOWN_COST_REJECTED_BY_CEILING');
+  });
+
+  test('Scoring does not invent arbitrary 50/60/70 defaults or boost by model name regex', () => {
+    const selector = new UnifiedRouteSelector();
+    const unprovenCandidate = createRouteIdentity({
+      harness: 'direct-http',
+      configuredModelId: 'gemini-3.8-flash', // Contains "flash" in name
+      metadata: {}, // No quality/latency/cost scores provided
+    });
+
+    const scoring = selector.scoreCandidate(
+      unprovenCandidate,
+      { complexity: 'trivial' },
+      WEIGHT_PROFILES.BALANCED
+    );
+
+    assert.equal(scoring.totalScore, 0, 'Unproven candidate without metadata must score 0, never boosted by name');
+    assert.equal(scoring.breakdown.qualityScore, UNKNOWN);
+    assert.equal(scoring.breakdown.costScore, UNKNOWN);
+  });
+});
+
+describe('Codex Finding 3: Elapsed Quota Reset Does Not Bypass Locks or Require Probe Ignored', () => {
+  test('Elapsed reset does NOT admit candidate when model lock is active', () => {
+    const health = new ScopedHealthRegistry();
+    const candidate = createRouteIdentity({
+      harness: 'direct-http',
+      upstreamProviderId: 'antigravity',
+      outboundModelId: 'gemini-3.8-flash',
+      connectionId: 'conn_ag_01',
+      quotaScopeId: 'quota::antigravity::conn_ag_01',
+    });
+
+    const now = 1730000000000;
+    // 1. Mark quota reset in 5 seconds
+    health.recordFailure(candidate, { httpStatus: 402, message: 'Quota exceeded resets in 5s' }, now);
+    // 2. Set an active model lock for 30 seconds
+    health.setModelLock('antigravity', 'gemini-3.8-flash', 'conn_ag_01', now + 30000);
+
+    // Evaluate after quota reset elapsed (10s later), but while lock is still active
+    const evalAt10s = health.evaluateHealth(candidate, now + 10000);
+    assert.equal(evalAt10s.healthy, false, 'Must be blocked by active model lock despite quota reset elapsed');
+    assert.equal(evalAt10s.blockedBy, 'model_lock');
+
+    const selector = new UnifiedRouteSelector({ healthRegistry: health });
+    const admission = selector.evaluateAdmission(candidate, { requiredCapabilities: [] });
+    assert.equal(admission.admitted, false, 'Selector must reject route blocked by lock');
+  });
+});
+
+describe('Codex Finding 4: Account Rate Limits Scoped to Account Domain', () => {
+  test('Account A 429 rate limit does NOT block Account B on the same model', () => {
+    const health = new ScopedHealthRegistry();
+
+    const candidateAccountA = createRouteIdentity({
+      harness: 'direct-http',
+      upstreamProviderId: 'deepseek',
+      outboundModelId: 'deepseek-chat',
+      accountRef: 'account_A@domain.com',
+      connectionId: 'conn_A',
+      quotaScopeId: 'quota::deepseek::account_A',
+    });
+
+    const candidateAccountB = createRouteIdentity({
+      harness: 'direct-http',
+      upstreamProviderId: 'deepseek',
+      outboundModelId: 'deepseek-chat',
+      accountRef: 'account_B@domain.com',
+      connectionId: 'conn_B',
+      quotaScopeId: 'quota::deepseek::account_B',
+    });
+
+    const now = 1730000000000;
+    // Record HTTP 429 on Account A
+    health.recordFailure(
+      candidateAccountA,
+      {
+        httpStatus: 429,
+        message: 'Too Many Requests: Rate limit exceeded',
+      },
+      now
+    );
+
+    const evalA = health.evaluateHealth(candidateAccountA, now + 1000);
+    const evalB = health.evaluateHealth(candidateAccountB, now + 1000);
+
+    assert.equal(evalA.healthy, false, 'Account A must be blocked by rate limit');
+    assert.equal(evalA.blockedBy, HealthScope.MODEL);
+    assert.equal(evalB.healthy, true, 'Account B on the same model MUST remain healthy');
+  });
+});
+
+describe('Codex Finding 5: Consuming Connections & Linking Shared Quota Scopes', () => {
+  test('Consumes connections and maps individual connections per provider prefix', () => {
+    const { candidates } = load9RouterCandidates({
+      catalog: ['ag/gemini-3.8-flash', 'gh/gpt-5.4-nano'],
+      connections: [
+        { connectionId: 'ag_conn_1', provider: 'antigravity', accountRef: 'ag_user_1', enabled: true },
+        { connectionId: 'ag_conn_2', provider: 'antigravity', accountRef: 'ag_user_2', enabled: true },
+        { connectionId: 'gh_conn_1', provider: 'github', accountRef: 'gh_user_1', enabled: true },
+      ],
+    });
+
+    assert.equal(candidates.length, 3, '2 connections for AG + 1 connection for GH = 3 candidates');
+    assert.equal(candidates[0].connectionId, 'ag_conn_1');
+    assert.equal(candidates[1].connectionId, 'ag_conn_2');
+    assert.equal(candidates[2].connectionId, 'gh_conn_1');
+    assert.equal(candidates[0].quotaScopeId, 'quota::antigravity::ag_user_1');
+  });
+
+  test('Aggregation links shared accounts across pathways so exhaustion cannot be bypassed', () => {
+    const aggregated = aggregateAllCandidates({
+      '9router': {
+        catalog: ['ag/gemini-3.8-flash'],
+        connections: [{ connectionId: 'c_shared', provider: 'antigravity', accountRef: 'shared@google.com', enabled: true }],
+      },
+      direct: { sources: [] },
+      agy: {
+        lanes: [{ laneId: 'agy01', accountRef: 'shared@google.com', quotaExhausted: false }],
+        models: ['gemini-3.8-flash'],
+      },
+    });
+
+    assert.equal(aggregated.candidates.length, 2);
+    // Both must be linked to the same shared quota scope
+    assert.equal(
+      aggregated.candidates[0].quotaScopeId,
+      aggregated.candidates[1].quotaScopeId,
+      'Both pathways sharing account must have identical quotaScopeId'
+    );
+  });
+});
+
+describe('Codex Finding 6: Canonical Key Splitting with Double Colons', () => {
+  test('Escapes components so quotaScope containing :: roundtrips perfectly', () => {
+    const original = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'deepseek-pool',
+      gatewayId: 'direct',
+      upstreamProviderId: 'deepseek',
+      connectionId: 'conn_alpha_01',
+      accountRef: 'user_alpha',
+      quotaScopeId: 'quota::deepseek::alpha', // Contains double colons!
+      configuredModelId: 'deepseek-v4.1',
+      outboundModelId: 'deepseek-v4.1',
+    });
+
+    const key = canonicalCandidateKey(original);
+    const parsed = parseRouteIdentity(key);
+
+    assert.equal(parsed.quotaScopeId, 'quota::deepseek::alpha', 'Quota scope with :: must not split incorrectly');
+    assert.equal(parsed.configuredModelId, 'deepseek-v4.1');
+    assert.equal(parsed.accountRef, 'user_alpha');
+    assert.equal(parsed.sourceId, 'deepseek-pool');
+  });
+});
+
+describe('Codex Finding 7: Canonical Key Preserves sourceId and connectionId', () => {
+  test('Distinct connections with same accountRef produce distinct canonical keys', () => {
+    const route1 = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'gateway-a',
+      gatewayId: 'gw-a',
+      upstreamProviderId: 'openai',
+      connectionId: 'conn_01',
+      accountRef: 'shared_account',
+      quotaScopeId: 'quota::openai::shared',
+      configuredModelId: 'gpt-5.4',
+    });
+
+    const route2 = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'gateway-b',
+      gatewayId: 'gw-b',
+      upstreamProviderId: 'openai',
+      connectionId: 'conn_02',
+      accountRef: 'shared_account',
+      quotaScopeId: 'quota::openai::shared',
+      configuredModelId: 'gpt-5.4',
+    });
+
+    const key1 = canonicalCandidateKey(route1);
+    const key2 = canonicalCandidateKey(route2);
+
+    assert.notEqual(key1, key2, 'Keys for distinct sources/connections must NOT collide');
+  });
+});
+
+describe('Codex Finding 8: Combo Branch Evaluation for Health and Capabilities', () => {
+  test('Rejects combo if ALL constituent branches are exhausted or locked', () => {
+    const health = new ScopedHealthRegistry();
+
+    const branch1 = createRouteIdentity({
+      harness: 'direct-http',
+      configuredModelId: 'model-branch-1',
+      quotaScopeId: 'quota::b1',
+      metadata: { capabilities: ['code'] },
+    });
+
+    const branch2 = createRouteIdentity({
+      harness: 'direct-http',
+      configuredModelId: 'model-branch-2',
+      quotaScopeId: 'quota::b2',
+      metadata: { capabilities: ['code'] },
+    });
+
+    // Mark both branches exhausted
+    health.recordFailure(branch1, { httpStatus: 402, message: 'Out of credits' });
+    health.recordFailure(branch2, { httpStatus: 402, message: 'Out of credits' });
+
+    const combo = createRouteIdentity({
+      harness: 'direct-http',
+      configuredModelId: 'my-combo',
+      metadata: { capabilities: ['code'] },
+    });
+
+    const comboExpanded = {
+      ...combo,
+      isCombo: true,
+      comboBranches: [branch1, branch2],
+    };
+
+    const selector = new UnifiedRouteSelector({ healthRegistry: health });
+    const evalResult = selector.evaluateAdmission(comboExpanded, { requiredCapabilities: ['code'] });
+
+    assert.equal(evalResult.admitted, false, 'Combo must be rejected when all branches are exhausted');
+    assert.equal(evalResult.rejectionReason, 'COMBO_ALL_BRANCHES_UNHEALTHY_OR_EXHAUSTED');
+  });
+});
+
+describe('Codex Finding 9: JEV Advisory Contract Adherence (Identity Prohibited)', () => {
+  test('JEV response naming candidate identity is rejected as IDENTITY_PROHIBITED', async () => {
+    const rogueJevAsk = async () => ({
+      choice: 'LATENCY_FIRST',
+      confidence: 0.9,
+      candidate: 'some-rogue-candidate-key', // Prohibited field!
+    });
+
+    const selector = new UnifiedRouteSelector({ jevAsk: rogueJevAsk, minConfidence: 0.6 });
+
+    const candidates = [
+      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm1', metadata: { capabilities: ['code'] } }),
+      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm2', metadata: { capabilities: ['code'] } }),
+    ];
+
+    const result = await selector.selectRoute(candidates, { taskId: 'T1', role: 'writer', requiredCapabilities: ['code'] });
+
+    assert.equal(result.jev.outcome, 'UNDECIDED');
+    assert.equal(result.jev.reason, 'IDENTITY_PROHIBITED');
+    assert.equal(result.weightProfileUsed, 'BALANCED', 'Must fall back to deterministic role profile');
+  });
+});
+
+describe('Codex Finding 10: Composite Cache Key Includes Criteria, Budgets & Live Health Hash', () => {
+  test('Different instructions, criteria, or health state produce different cache entries', async () => {
+    let callCount = 0;
+    const mockJev = async (q) => {
+      callCount++;
+      return { choice: 'QUALITY_FIRST', confidence: 0.9 };
+    };
+
+    const selector = new UnifiedRouteSelector({ jevAsk: mockJev });
+    const candidates = [
+      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm1', metadata: { capabilities: ['code'] } }),
+      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm2', metadata: { capabilities: ['code'] } }),
+      createRouteIdentity({ harness: 'direct-http', configuredModelId: 'm3', metadata: { capabilities: ['code'] } }),
+    ];
+
+    // Call 1
+    await selector.selectRoute(candidates, { taskId: 'TASK-C1', instructions: 'Inst A', requiredCapabilities: ['code'] });
+    assert.equal(callCount, 1);
+
+    // Call 2 with DIFFERENT instructions: MUST NOT use cached advice
+    await selector.selectRoute(candidates, { taskId: 'TASK-C1', instructions: 'Inst B (CHANGED)', requiredCapabilities: ['code'] });
+    assert.equal(callCount, 2, 'Changed task instructions must trigger fresh advisory question');
+
+    // Call 3 with health registry state change (m1 fails, m2 and m3 still admitted): MUST NOT use cached advice
+    selector.healthRegistry.recordFailure(candidates[0], { httpStatus: 500, message: 'Internal error' });
+    await selector.selectRoute(candidates, { taskId: 'TASK-C1', instructions: 'Inst A', requiredCapabilities: ['code'] });
+    assert.equal(callCount, 3, 'Changed health registry state hash must invalidate cache');
+  });
+});
+
+describe('Codex Finding 11: Budget Precedence & Production Bridge', () => {
+  test('Explicit tokenBudget takes precedence over contextSize without magic defaults', async () => {
+    const selector = new UnifiedRouteSelector();
+    const candidate = createRouteIdentity({
+      harness: 'opencode',
+      configuredModelId: 'model-budget-prec',
+      metadata: { capabilities: ['code'] },
+    });
+
+    const result = await selector.selectRoute([candidate], {
+      taskId: 'T-BUDGET',
+      tokenBudget: 8000,
+      contextSize: 64000, // Should NOT override tokenBudget
+      requiredCapabilities: ['code'],
+    });
+
+    assert.equal(result.budgetContract.tokenBudget, 8000, 'Explicit tokenBudget must win over contextSize');
+  });
+
+  test('Production bridge selectOptimalRoute is exported from routing.js', () => {
+    const routingApi = require('../routing');
+    assert.equal(typeof routingApi.selectOptimalRoute, 'function', 'routing.js must export selectOptimalRoute');
+    assert.equal(typeof routingApi.UnifiedRouteSelector, 'function', 'routing.js must export UnifiedRouteSelector');
   });
 });
