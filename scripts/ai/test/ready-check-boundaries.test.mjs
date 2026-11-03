@@ -302,3 +302,45 @@ test('rejects an empty acceptance matrix beside a complete matrix', () => {
   assert.equal(result.ok, false);
   assert.ok(result.problems.some((problem) => problem.includes('Acceptance matrix')));
 });
+
+test('rejects blank Proof after an inline-code comment token', () => {
+  const text = `${valid}\n\`<!--\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects blank Proof after a complete backtick code span', () => {
+  const text = `${valid}\n\`\`\`example\`\`\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects source inside a blockquote fence nested under a list', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n- > ~~~text\n  > https://example.com/spec\n  > ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects fenced source after literal quote text in a quoted list', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n> - ~~~text\n>   > literal content\n>   https://example.com/spec\n>   ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects blank Proof after an inner list fence ends', () => {
+  const text = `${valid}\n- - ~~~text\n    Example only.\n\n  ## Acceptance recovery\n\n  | AC | Proof |\n  | --- | --- |\n  | AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects source inside a tab-separated list fence', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n-\t~~~text\n    https://example.com/spec\n    ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
