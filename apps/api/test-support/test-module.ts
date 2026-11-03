@@ -12,7 +12,12 @@ import { StorageService } from '../src/storage/storage.service';
 import { APP_CONFIG } from '../src/config.token';
 import { RateLimitService } from '../src/auth/rate-limit.service';
 
-export { isLocalTestDb, skipLocalDbTest, LOCAL_DB_CONNECTION_REASON } from '@shipde/testkit';
+export {
+  isLocalTestDb,
+  skipLocalDbTest,
+  LOCAL_DB_CONNECTION_REASON,
+  skipSecretsScanWhenGitleaksMissing,
+} from '@shipde/testkit';
 
 /** Test-only override: production PrismaService and default CI providers are unchanged. */
 export function createApiTestModule(metadata: ModuleMetadata): TestingModuleBuilder {

@@ -3,6 +3,7 @@ import {
   createApiTestModule,
   isLocalTestDb,
   skipLocalDbTest,
+  skipSecretsScanWhenGitleaksMissing,
 } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as path from 'node:path';
@@ -874,7 +875,8 @@ async function main() {
     !skipLocalDbTest(
       'rbac security secrets git scan',
       'TEST_DB=local: git commit history scan requires git repository access in CI'
-    )
+    ) &&
+    !skipSecretsScanWhenGitleaksMissing('rbac security secrets git scan')
   ) {
     const pnpmCmd = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
     try {

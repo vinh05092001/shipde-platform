@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,40 @@ export const LOCAL_DB_CONNECTION_REASON =
 export function skipLocalDbTest(name: string, reason = LOCAL_DB_CONCURRENCY_REASON): boolean {
   if (!isLocalTestDb()) return false;
   console.log(`SHIPDE_TEST_SKIP ${JSON.stringify({ name, reason })}`);
+  return true;
+}
+
+export function isGitleaksBinaryAvailable(env: NodeJS.ProcessEnv = process.env): boolean {
+  const pathVal = env.PATH ?? env.Path;
+  if (!pathVal) return false;
+  try {
+    execFileSync('gitleaks', ['version'], {
+      stdio: 'ignore',
+      shell: false,
+      env,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface SkipSecretsScanOptions {
+  probe?: (env?: NodeJS.ProcessEnv) => boolean;
+  log?: (line: string) => void;
+  env?: NodeJS.ProcessEnv;
+}
+
+export function skipSecretsScanWhenGitleaksMissing(
+  name = 'rbac security secrets git scan',
+  options: SkipSecretsScanOptions = {}
+): boolean {
+  const probe = options.probe ?? (() => isGitleaksBinaryAvailable(options.env));
+  const log = options.log ?? console.log;
+  if (probe(options.env)) return false;
+  const reason =
+    'Gitleaks CLI binary is unavailable; commit history scan is enforced by the pnpm security:secrets CI workflow step';
+  log(`SHIPDE_TEST_SKIP ${JSON.stringify({ name, reason })}`);
   return true;
 }
 

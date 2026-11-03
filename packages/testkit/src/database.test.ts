@@ -6,7 +6,13 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PrismaClient } from '@prisma/client';
-import { createLocalTestDatabase, isLocalTestDb, type LocalTestDatabase } from './database.js';
+import {
+  createLocalTestDatabase,
+  isGitleaksBinaryAvailable,
+  isLocalTestDb,
+  type LocalTestDatabase,
+  skipSecretsScanWhenGitleaksMissing,
+} from './database.js';
 
 test('local DB selection is explicit and does not change the default PostgreSQL mode', () => {
   assert.equal(isLocalTestDb({}), false);
@@ -149,6 +155,60 @@ test('local readiness failure omits caller credentials', () => {
   assert.equal(diagnostics.includes(fixturePassword), false, 'Must not echo the caller password');
   assert.equal(diagnostics.includes('synthetic-host.invalid'), false, 'Must not echo the host');
   assert.match(diagnostics, /reachable/i, 'Failure must still explain the readiness failure');
+});
+
+test('rbac secrets scan is named-skipped while the Gitleaks binary is unavailable', () => {
+  // Round 84 P1: the CI test step runs before the "Install Pinned Gitleaks" step, so the
+  // in-suite scan died with exit code 2 and failed @shipde/api#test (current-application).
+  const lines: string[] = [];
+  const skipped = skipSecretsScanWhenGitleaksMissing('rbac security secrets git scan', {
+    probe: () => false,
+    log: (line) => lines.push(line),
+  });
+  assert.equal(skipped, true, 'The in-suite scan must skip when the Gitleaks CLI is missing');
+  assert.equal(lines.length, 1, 'Exactly one machine-readable skip line must be recorded');
+  assert.ok(lines[0].startsWith('SHIPDE_TEST_SKIP '), 'The skip must use the named skip marker');
+  const payload = JSON.parse(lines[0].slice('SHIPDE_TEST_SKIP '.length));
+  assert.equal(payload.name, 'rbac security secrets git scan');
+  assert.match(
+    payload.reason,
+    /security:secrets/,
+    'The reason must name the enforcing workflow step instead of hiding the omission'
+  );
+});
+
+test('rbac secrets scan still runs whenever the Gitleaks binary is available', () => {
+  const lines: string[] = [];
+  const skipped = skipSecretsScanWhenGitleaksMissing('rbac security secrets git scan', {
+    probe: () => true,
+    log: (line) => lines.push(line),
+  });
+  assert.equal(skipped, false, 'A provisioned Gitleaks CLI must keep running the scan');
+  assert.deepEqual(lines, [], 'No skip may be recorded while the scan can run');
+});
+
+test('the Gitleaks probe fails closed when the binary is not on PATH', () => {
+  assert.equal(
+    isGitleaksBinaryAvailable({ PATH: '' }),
+    false,
+    'An environment without PATH must report the binary as missing'
+  );
+});
+
+test('rbac suite guards its secrets scan with the Gitleaks availability check', () => {
+  const specPath = fileURLToPath(
+    new URL('../../../apps/api/src/rbac/rbac.supertest.spec.ts', import.meta.url)
+  );
+  const source = readFileSync(specPath, 'utf8');
+  assert.ok(
+    source.includes('skipSecretsScanWhenGitleaksMissing('),
+    'The CI test step runs before "Install Pinned Gitleaks"; the suite must record the named skip there instead of hard-failing'
+  );
+  assert.match(
+    source,
+    /isOnlyDashboardFinding[\s\S]*throw err;/,
+    'A real scan failure must still throw; only the missing-binary precondition may skip'
+  );
 });
 
 describe('Prisma 6 with the complete repository migration history', { concurrency: false }, () => {
