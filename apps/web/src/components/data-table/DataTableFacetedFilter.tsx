@@ -158,12 +158,32 @@ export function DataTableFacetedFilter({
   const prevResetEpochRef = useRef<number | undefined>(resetEpoch);
   const prevIsOpenRef = useRef(false);
 
+  const [popstateEpoch, setPopstateEpoch] = useState(0);
+  const prevPopstateEpochRef = useRef(0);
+
+  // Authoritative browser history navigation (Back/Forward) cancels queued intent (BR-UI-01, Finding 3 P1)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      pendingSelectionsRef.current = [];
+      setPopstateEpoch((epoch) => epoch + 1);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
   // Synchronize optimistic state with prop changes
   useEffect(() => {
+    const popstateEvent = popstateEpoch !== prevPopstateEpochRef.current;
+    prevPopstateEpochRef.current = popstateEpoch;
+
     const historyEvent =
-      historyEpoch !== undefined &&
-      prevHistoryEpochRef.current !== undefined &&
-      historyEpoch !== prevHistoryEpochRef.current;
+      popstateEvent ||
+      (historyEpoch !== undefined &&
+        prevHistoryEpochRef.current !== undefined &&
+        historyEpoch !== prevHistoryEpochRef.current);
     prevHistoryEpochRef.current = historyEpoch;
 
     const resetEvent =
@@ -185,7 +205,7 @@ export function DataTableFacetedFilter({
     if (res.nextOptimistic !== optimisticValues) {
       setOptimisticValues(res.nextOptimistic);
     }
-  }, [selectedValues, historyEpoch, resetEpoch, optimisticValues]);
+  }, [selectedValues, historyEpoch, resetEpoch, optimisticValues, popstateEpoch]);
 
   // Restore trigger focus on dropdown close (Finding 14 P2)
   useEffect(() => {
@@ -206,13 +226,15 @@ export function DataTableFacetedFilter({
         setIsOpen(false);
       }
     }
-    if (isOpen) {
+    if (typeof document !== 'undefined' && isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
       document.addEventListener('keydown', handleKeyDown);
     }
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('mousedown', handleClickOutside);
+        document.removeEventListener('keydown', handleKeyDown);
+      }
     };
   }, [isOpen]);
 

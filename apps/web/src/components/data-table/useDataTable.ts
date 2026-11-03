@@ -83,6 +83,19 @@ export function normalizeParamsString(params: URLSearchParams | string | null | 
   return sorted.toString();
 }
 
+export function isCompatibleSubset(committedStr: string, targetStr: string): boolean {
+  if (!committedStr) return true;
+  if (!targetStr) return false;
+  const committed = new URLSearchParams(committedStr);
+  const target = new URLSearchParams(targetStr);
+  for (const [key, value] of committed.entries()) {
+    if (target.get(key) !== value) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function parseSortParam(sortParam: string | null): ColumnSort | null {
   if (!sortParam) return null;
   const parts = sortParam.split('.');
@@ -121,12 +134,9 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   const routerSearchParams =
     props.searchParams !== undefined ? props.searchParams : nextSearchParams;
 
-  // Pending navigation intent: the last query string this hook pushed, with
-  // the committed baseline it was composed from. While it is unacknowledged,
-  // successive table edits compose onto it, so a fast second edit never drops
-  // the first (BR-UI-01). The intent ends when the committed URL acknowledges
-  // it or when an external navigation commits a different URL — then the
-  // committed URL wins.
+  // Pending navigation intent: the query string this hook pushed, with
+  // the committed baseline it was composed from. Intermediate acknowledgments
+  // advance the baseline while preserving newer pending intent (BR-UI-01, Finding 4 P1).
   const pendingNavigationRef = useRef<{ baseline: string; target: string } | null>(null);
 
   const committedParams = normalizeParamsString(routerSearchParams);
@@ -138,9 +148,25 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // a navigation still unacknowledged, else onto the committed URL.
   const getNextQueryBase = useCallback(() => {
     const pending = pendingNavigationRef.current;
-    if (pending && committedParams === pending.baseline && committedParams !== pending.target) {
+    if (!pending) {
+      return { baseline: committedParams, base: committedParams };
+    }
+    if (committedParams === pending.target) {
+      pendingNavigationRef.current = null;
+      return { baseline: committedParams, base: committedParams };
+    }
+    if (committedParams === pending.baseline) {
       return { baseline: committedParams, base: pending.target };
     }
+    // Intermediate acknowledgment: if committedParams is a compatible subset of
+    // the pending target (e.g. status=FAILED committed while carrier=GHN is still pending),
+    // advance baseline and preserve the pending target (Finding 4 P1).
+    if (isCompatibleSubset(committedParams, pending.target)) {
+      pending.baseline = committedParams;
+      return { baseline: committedParams, base: pending.target };
+    }
+    // Conflicting or external navigation: committed URL wins
+    pendingNavigationRef.current = null;
     return { baseline: committedParams, base: committedParams };
   }, [committedParams]);
 
@@ -239,9 +265,16 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   const navigate = useCallback(
     (queryString: string) => {
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
+      const normalizedTarget = normalizeParamsString(queryString);
+      const prev = pendingNavigationRef.current;
+      const currentBaseline =
+        prev &&
+        (prev.baseline === committedParams || isCompatibleSubset(committedParams, prev.target))
+          ? prev.baseline
+          : committedParams;
       pendingNavigationRef.current = {
-        baseline: committedParams,
-        target: normalizeParamsString(queryString),
+        baseline: currentBaseline,
+        target: normalizedTarget,
       };
       if (onNavigate) {
         onNavigate(targetUrl);

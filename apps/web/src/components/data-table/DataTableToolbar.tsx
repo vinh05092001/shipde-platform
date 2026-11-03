@@ -68,8 +68,7 @@ export function computeToolbarDraftOnPropChange(
   incomingSearchValue: string | undefined | null,
   prevSearchValue: string | undefined | null,
   lastSentSearch: string | undefined | null,
-  resetEvent = false,
-  staleSearchValue: string | undefined | null = undefined
+  resetEvent = false
 ): {
   nextDraft: string;
   nextPrevSearchValue: string;
@@ -78,21 +77,6 @@ export function computeToolbarDraftOnPropChange(
   const incoming = incomingSearchValue || '';
   const prev = prevSearchValue || '';
   const lastSent = lastSentSearch || '';
-
-  // A commit of a request that was already cancelled by a newer authoritative
-  // navigation (e.g. the external Link committed "N", then the older "Ng"
-  // request lands). The URL did not move to that value now, so it is not an
-  // acknowledgment: ignore it and keep the displayed value (Round 40 finding
-  // 2). A committed URL that moved to a value never dispatched is still a
-  // foreign external navigation and is handled below.
-  const stale = staleSearchValue || '';
-  if (stale !== '' && incoming !== prev && incoming === stale) {
-    return {
-      nextDraft: prev || currentDraft,
-      nextPrevSearchValue: incoming,
-      shouldCancelDebounce: false,
-    };
-  }
 
   if (resetEvent) {
     // Explicit filter reset: apply the reset's target value ('') immediately.
@@ -183,9 +167,6 @@ export function DataTableToolbar({
   // Last search value this toolbar dispatched to the router. Only a commit of
   // this value acknowledges the toolbar's own request (Finding 2 P1).
   const [lastSentSearch, setLastSentSearch] = React.useState(searchValue);
-  // A dispatched value cancelled by a newer authoritative navigation; its late
-  // commit must not resynchronize the draft (Round 40 finding 2).
-  const [staleSearch, setStaleSearch] = React.useState<string | undefined>(undefined);
 
   // Keep the latest callback without ever replacing the debounce object, so a
   // timer scheduled before a parent rerender is never abandoned (Finding 3 P1).
@@ -217,11 +198,13 @@ export function DataTableToolbar({
   };
 
   React.useEffect(() => {
-    debouncedSearchRef.current?.cancel();
+    if (searchValue !== lastSentSearch) {
+      debouncedSearchRef.current?.cancel();
+    }
     return () => {
       debouncedSearchRef.current?.cancel();
     };
-  }, [searchValue]);
+  }, [searchValue, lastSentSearch]);
 
   // Synchronize draft when the committed searchValue prop changes or an
   // explicit filter reset is triggered. Any unsent debounced edit is discarded
@@ -233,18 +216,12 @@ export function DataTableToolbar({
       searchValue,
       prevSearchValue,
       lastSentSearch,
-      resetEpoch !== prevResetEpoch,
-      staleSearch
+      resetEpoch !== prevResetEpoch
     );
     setPrevSearchValue(result.nextPrevSearchValue);
     setPrevResetEpoch(resetEpoch);
     if (result.shouldCancelDebounce) {
-      // The cancelled request must not be acknowledged if it commits later.
-      setStaleSearch(lastSentSearch !== result.nextDraft ? lastSentSearch : undefined);
       setLastSentSearch(result.nextDraft);
-    }
-    if (staleSearch && searchValue === staleSearch) {
-      setStaleSearch(undefined);
     }
     if (result.nextDraft !== draftSearch) {
       setDraftSearch(result.nextDraft);

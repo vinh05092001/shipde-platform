@@ -3900,6 +3900,201 @@ async function runTestSuite() {
     };
   }
 
+  // Mounted DataTableFacetedFilter harness
+  function renderMountedDataTableFacetedFilter(initialProps: any) {
+    let filterProps = { ...initialProps };
+    let filterElement: any = null;
+
+    const states: any[] = [];
+    const refs: any[] = [];
+    const memos: { val: any; deps: any[] | undefined }[] = [];
+    const effects: { fn: () => any; deps: any[] | undefined }[] = [];
+
+    let stateIdx = 0;
+    let refIdx = 0;
+    let memoIdx = 0;
+    let effectIdx = 0;
+
+    const dispatcher = {
+      useState(initialValue: any) {
+        const idx = stateIdx++;
+        if (idx >= states.length) {
+          states.push(typeof initialValue === 'function' ? initialValue() : initialValue);
+        }
+        const setState = (action: any) => {
+          states[idx] = typeof action === 'function' ? action(states[idx]) : action;
+          runRender();
+        };
+        return [states[idx], setState];
+      },
+      useRef(initialValue: any) {
+        const idx = refIdx++;
+        if (idx >= refs.length) {
+          refs.push({ current: initialValue });
+        }
+        return refs[idx];
+      },
+      useMemo(fn: () => any, deps: any[] | undefined) {
+        const idx = memoIdx++;
+        if (idx >= memos.length) {
+          const val = fn();
+          memos.push({ val, deps });
+          return val;
+        }
+        const prev = memos[idx];
+        let changed = !deps || !prev.deps || deps.length !== prev.deps.length;
+        if (!changed && deps && prev.deps) {
+          for (let i = 0; i < deps.length; i++) {
+            if (!Object.is(deps[i], prev.deps[i])) {
+              changed = true;
+              break;
+            }
+          }
+        }
+        if (changed) {
+          prev.val = fn();
+          prev.deps = deps;
+        }
+        return prev.val;
+      },
+      useEffect(fn: () => any, deps: any[] | undefined) {
+        const idx = effectIdx++;
+        if (idx >= effects.length) {
+          effects.push({ fn, deps });
+          fn();
+        } else {
+          const prev = effects[idx];
+          let changed = !deps || !prev.deps || deps.length !== prev.deps.length;
+          if (!changed && deps && prev.deps) {
+            for (let i = 0; i < deps.length; i++) {
+              if (!Object.is(deps[i], prev.deps[i])) {
+                changed = true;
+                break;
+              }
+            }
+          }
+          if (changed) {
+            prev.fn = fn;
+            prev.deps = deps;
+            fn();
+          }
+        }
+      },
+    };
+
+    let isRendering = false;
+    let needsRerender = false;
+
+    function runRender() {
+      if (isRendering) {
+        needsRerender = true;
+        return;
+      }
+      isRendering = true;
+      try {
+        do {
+          needsRerender = false;
+          stateIdx = 0;
+          refIdx = 0;
+          memoIdx = 0;
+          effectIdx = 0;
+          const prevDispatcher = ReactSharedInternals.H;
+          ReactSharedInternals.H = dispatcher;
+          try {
+            filterElement = DataTableFacetedFilter(filterProps);
+          } finally {
+            ReactSharedInternals.H = prevDispatcher;
+          }
+        } while (needsRerender);
+      } finally {
+        isRendering = false;
+      }
+    }
+
+    function findRenderedProps(
+      el: any,
+      propName: string,
+      matches: (props: any) => boolean
+    ): any | null {
+      if (!el || typeof el !== 'object') return null;
+      const nodes = Array.isArray(el) ? el : [el];
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const props = (node as any).props;
+        if (!props) continue;
+        if (props[propName] && matches(props)) return props;
+        const nested = findRenderedProps(props.children, propName, matches);
+        if (nested) return nested;
+      }
+      return null;
+    }
+
+    runRender();
+
+    return {
+      rerender(newProps?: any) {
+        if (newProps) {
+          filterProps = { ...filterProps, ...newProps };
+        }
+        runRender();
+      },
+      open() {
+        const trigger = findRenderedProps(filterElement, 'onClick', (p) => p.type === 'button');
+        assert.ok(trigger, 'Filter trigger button must be rendered');
+        trigger.onClick();
+      },
+      toggle(value: string) {
+        const options: any[] = [];
+        function collectOptions(el: any) {
+          if (!el || typeof el !== 'object') return;
+          const nodes = Array.isArray(el) ? el : [el];
+          for (const node of nodes) {
+            if (!node || typeof node !== 'object') continue;
+            if (node.props?.role === 'option') options.push(node.props);
+            if (node.props?.children) collectOptions(node.props.children);
+          }
+        }
+        collectOptions(filterElement);
+        const optIdx = filterProps.options.findIndex(
+          (o: any) => o.value === value || o.label === value
+        );
+        assert.ok(optIdx !== -1 && options[optIdx], `Option ${value} must be found`);
+        options[optIdx].onClick();
+      },
+      badgeCount(): number {
+        const badge = findRenderedProps(
+          filterElement,
+          'className',
+          (p) => typeof p.className === 'string' && p.className.includes('tabular-nums')
+        );
+        if (!badge) return 0;
+        return Number(badge.children);
+      },
+      selectedAriaCount(): number {
+        const trigger = findRenderedProps(filterElement, 'aria-label', (p) => p.type === 'button');
+        const match = trigger?.['aria-label']?.match(/(\d+) đã chọn/);
+        return match ? parseInt(match[1], 10) : 0;
+      },
+      isOptionSelected(value: string): boolean {
+        const options: any[] = [];
+        function collectOptions(el: any) {
+          if (!el || typeof el !== 'object') return;
+          const nodes = Array.isArray(el) ? el : [el];
+          for (const node of nodes) {
+            if (!node || typeof node !== 'object') continue;
+            if (node.props?.role === 'option') options.push(node.props);
+            if (node.props?.children) collectOptions(node.props.children);
+          }
+        }
+        collectOptions(filterElement);
+        const optIdx = filterProps.options.findIndex(
+          (o: any) => o.value === value || o.label === value
+        );
+        return optIdx !== -1 && options[optIdx] ? Boolean(options[optIdx]['aria-selected']) : false;
+      },
+    };
+  }
+
   const waitMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   // 19.2 Finding 2 (P1): external Link cancels pending search draft
@@ -3925,12 +4120,15 @@ async function runTestSuite() {
       'external Link cancels pending search draft: textbox resyncs to the committed URL'
     );
 
-    // Negative control: a commit of the toolbar's OWN last dispatched value
-    // must not overwrite a newer unsent draft nor cancel its debounce.
+    // Finding 1 (P1): mounted own acknowledgment preserves newer debounce
     const ownAckDispatches: string[] = [];
+    let settledSearchUrl = '';
     const ownAckToolbar = renderMountedDataTableToolbar({
       searchValue: '',
-      onSearchChange: (val: string) => ownAckDispatches.push(val),
+      onSearchChange: (val: string) => {
+        ownAckDispatches.push(val);
+        settledSearchUrl = val ? `?search=${val}` : '';
+      },
       debounceMs: 60,
     });
     ownAckToolbar.type('N');
@@ -3940,39 +4138,41 @@ async function runTestSuite() {
     assert.strictEqual(
       ownAckToolbar.inputValue(),
       'Ngu',
-      'Negative control: own acknowledgment preserves the newer unsent draft'
+      'mounted own acknowledgment preserves newer debounce: draft remains Ngu'
     );
     await waitMs(90);
     assert.deepStrictEqual(
       ownAckDispatches,
       ['N', 'Ngu'],
-      'Negative control: own acknowledgment must not cancel the pending debounce'
+      'mounted own acknowledgment preserves newer debounce: emissions equal ["N", "Ngu"]'
     );
+    assert.ok(
+      settledSearchUrl.includes('search=Ngu'),
+      'mounted own acknowledgment preserves newer debounce: settled URL contains search=Ngu'
+    );
+    console.log('   ✅ Finding 1 (P1): mounted own acknowledgment preserves newer debounce');
 
-    // Round 40 Finding 2 (P1): the external Link to "?search=N" does not
-    // cancel the toolbar's in-flight "Ng" request; that request commits AFTER
-    // the Link. The stale "Ng" commit must NOT be treated as an older
-    // acknowledgment — the URL the user selected ("N") is authoritative.
-    const raceDispatches: string[] = [];
-    const round40 = renderMountedDataTableToolbar({
+    // Finding 2 (P1): authoritative navigation can revisit cancelled search
+    const revisitDispatches: string[] = [];
+    const revisitToolbar = renderMountedDataTableToolbar({
       searchValue: '',
-      onSearchChange: (val: string) => raceDispatches.push(val),
+      onSearchChange: (val: string) => revisitDispatches.push(val),
       debounceMs: 10,
     });
-    round40.type('N');
+    revisitToolbar.type('N');
     await waitMs(30);
-    round40.type('Ng');
+    revisitToolbar.type('Ng');
     await waitMs(30);
-    assert.deepStrictEqual(raceDispatches, ['N', 'Ng'], 'Both held search edits dispatched');
-    round40.rerender({ searchValue: 'N' }); // external Link commits ?search=N
-    assert.strictEqual(round40.inputValue(), 'N', 'External Link commit restores "N"');
-    round40.rerender({ searchValue: 'Ng' }); // the older "Ng" request lands afterwards
+    assert.deepStrictEqual(revisitDispatches, ['N', 'Ng'], 'Both values dispatched');
+    revisitToolbar.rerender({ searchValue: 'N' }); // commit external N
+    assert.strictEqual(revisitToolbar.inputValue(), 'N', 'External N commit restores textbox to N');
+    revisitToolbar.rerender({ searchValue: 'Ng' }); // commit authoritative Ng
     assert.strictEqual(
-      round40.inputValue(),
-      'N',
-      'external Link cancels pending search draft: a late commit of the cancelled "Ng" request must not restore it'
+      revisitToolbar.inputValue(),
+      'Ng',
+      'authoritative navigation can revisit cancelled search: textbox equals Ng'
     );
-    console.log('   ✅ Finding 2 (P1): external Link cancels pending search draft');
+    console.log('   ✅ Finding 2 (P1): authoritative navigation can revisit cancelled search');
   }
 
   // 19.3 Finding 3 (P1): clear cancels debounce across callback replacement
@@ -4018,6 +4218,114 @@ async function runTestSuite() {
       'Back cancels unsent debounced search: the abandoned timer must not override Back'
     );
     console.log('   ✅ Finding 4 (P1): Back cancels unsent debounced search');
+  }
+
+  // 19.5 Finding 3 (P1): mounted Back cancels overlapping facet selections
+  {
+    // Step 1: create the existing FAILED history entry
+    let currentPopstateListener: (() => void) | null = null;
+    const prevWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      location: { search: '?status=FAILED' },
+      addEventListener: (event: string, fn: () => void) => {
+        if (event === 'popstate') currentPopstateListener = fn;
+      },
+      removeEventListener: () => {},
+    };
+
+    // User is on empty status initially (Storybook supplies no historyEpoch)
+    const facetFilter = renderMountedDataTableFacetedFilter({
+      title: 'Trạng thái',
+      options: [
+        { label: 'Thất bại', value: 'FAILED' },
+        { label: 'Đã giao', value: 'DELIVERED' },
+      ],
+      selectedValues: new Set<string>(), // committed empty status
+      onSelect: () => {},
+    });
+
+    // Step 2: Queue both edits under held navigation (FAILED then DELIVERED)
+    facetFilter.open();
+    facetFilter.toggle('FAILED');
+    facetFilter.toggle('DELIVERED');
+    assert.strictEqual(facetFilter.badgeCount(), 2, 'Two selections queued optimistically');
+
+    // Step 3: Navigate Back -> restores existing FAILED history entry
+    if (currentPopstateListener) (currentPopstateListener as any)();
+    (globalThis as any).window.location.search = '?status=FAILED';
+    facetFilter.rerender({ selectedValues: new Set(['FAILED']) });
+
+    // Step 4: Assert only FAILED is selected and badge reports 1
+    assert.strictEqual(
+      facetFilter.badgeCount(),
+      1,
+      'mounted Back cancels overlapping facet selections: badge reports one selection'
+    );
+    assert.strictEqual(
+      facetFilter.selectedAriaCount(),
+      1,
+      'mounted Back cancels overlapping facet selections: aria-label reports 1 đã chọn'
+    );
+    assert.strictEqual(facetFilter.isOptionSelected('FAILED'), true, 'FAILED remains selected');
+    assert.strictEqual(
+      facetFilter.isOptionSelected('DELIVERED'),
+      false,
+      'DELIVERED is cancelled and unselected'
+    );
+    console.log('   ✅ Finding 3 (P1): mounted Back cancels overlapping facet selections');
+
+    (globalThis as any).window = prevWindow;
+  }
+
+  // 19.6 Finding 4 (P1): pending facets survive intermediate acknowledgment
+  {
+    const capturedQueries: string[] = [];
+    let currentControlledParams = new URLSearchParams('per_page=5');
+    const hook = renderMountedDataTableHook({
+      contextSearchParams: currentControlledParams,
+      onNavigate: (url: string) => {
+        capturedQueries.push(url);
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        { id: 'status', title: 'Trạng thái', options: [] },
+        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
+      ],
+      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    });
+
+    // Step 1: queue both facets under held navigation
+    hook.current.setFilter('status', ['FAILED']);
+    hook.current.setFilter('carrier', ['GHN']);
+    assert.strictEqual(capturedQueries.length, 2, 'Two facet queries captured');
+
+    // Step 2: commit the first captured query while the second remains pending
+    const firstQueryParamString = capturedQueries[0].split('?')[1] ?? '';
+    currentControlledParams = new URLSearchParams(firstQueryParamString);
+    hook.rerender({ contextSearchParams: currentControlledParams });
+
+    // Step 3: set search
+    hook.current.setSearch('Ng');
+    assert.strictEqual(capturedQueries.length, 3, 'Third query captured');
+
+    // Step 4: assert the third query contains FAILED, GHN and Ng
+    const thirdQueryParams = new URLSearchParams(capturedQueries[2].split('?')[1] ?? '');
+    assert.strictEqual(
+      thirdQueryParams.get('status'),
+      'FAILED',
+      'pending facets survive intermediate acknowledgment: third query contains FAILED'
+    );
+    assert.strictEqual(
+      thirdQueryParams.get('carrier'),
+      'GHN',
+      'pending facets survive intermediate acknowledgment: third query contains GHN'
+    );
+    assert.strictEqual(
+      thirdQueryParams.get('search'),
+      'Ng',
+      'pending facets survive intermediate acknowledgment: third query contains Ng'
+    );
+    console.log('   ✅ Finding 4 (P1): pending facets survive intermediate acknowledgment');
   }
 
   console.log(
