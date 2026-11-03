@@ -898,10 +898,11 @@ async function main(): Promise<void> {
       await request(app.getHttpServer()).get('/api/v1/test-rls/orders').expect(401);
 
       // Negative HTTP test: token with empty scope must deny tenant context establishment
+      const sIdEmpty = randomUUID();
       const { token: tokenEmptyScope } = signAccessToken(
         {
           sub: uIdA,
-          sid: sIdA,
+          sid: sIdEmpty,
           mid: merchantA,
           role: RoleEnum.OWNER,
           st: 'ACTIVE',
@@ -910,6 +911,17 @@ async function main(): Promise<void> {
         tokenSecret,
         3600
       );
+      await admin.deviceSession.create({
+        data: {
+          id: sIdEmpty,
+          user_id: uIdA,
+          merchant_id: merchantA,
+          session_token_hash: createHash('sha256').update(tokenEmptyScope).digest('hex'),
+          device_id: `test-device-empty-${suffix}`,
+          status: SessionStatusEnum.ACTIVE,
+          expires_at: new Date(Date.now() + 3600 * 1000),
+        },
+      });
       const httpResEmptyScope = await request(app.getHttpServer())
         .get('/api/v1/test-rls/orders')
         .set('Authorization', `Bearer ${tokenEmptyScope}`)
