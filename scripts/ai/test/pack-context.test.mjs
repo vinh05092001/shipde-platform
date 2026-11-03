@@ -107,6 +107,46 @@ describe('parseArgs', () => {
     );
   });
 
+  test('throws when flag value is missing or another flag', () => {
+    assert.throws(
+      () => parseArgs(['--paths', 'src/**', '--out', '--max-tokens', '100']),
+      /--out requires a value/,
+    );
+    assert.throws(
+      () => parseArgs(['--paths', '--out', 'out.xml']),
+      /--paths requires a value/,
+    );
+    assert.throws(
+      () => parseArgs(['--paths', 'src/**', '--out', 'out.xml', '--max-tokens']),
+      /--max-tokens requires a positive integer value/,
+    );
+  });
+
+  test('throws on unexpected positional arguments', () => {
+    assert.throws(
+      () => parseArgs(['--paths', 'src/**', '--out', 'out.xml', 'extra']),
+      /Unexpected positional argument/,
+    );
+    assert.throws(
+      () => parseArgs(['extra', '--paths', 'src/**', '--out', 'out.xml']),
+      /Unexpected positional argument/,
+    );
+  });
+
+  test('throws on duplicate flags', () => {
+    assert.throws(
+      () => parseArgs(['--paths', 'src/**', '--paths', 'other/**', '--out', 'out.xml']),
+      /--paths can only be specified once/,
+    );
+    assert.throws(
+      () => parseArgs(['--paths', 'src/**', '--out', 'out.xml', '--out', 'other.xml']),
+      /--out can only be specified once/,
+    );
+    assert.throws(
+      () => parseArgs(['--paths', 'src/**', '--out', 'out.xml', '--max-tokens', '100', '--max-tokens', '200']),
+      /--max-tokens can only be specified once/,
+    );
+  });
   test('trims and filters empty path segments', () => {
     const result = parseArgs(['--paths', ' apps/** , , packages/** ', '--out', 'x.xml']);
     assert.deepStrictEqual(result.paths, ['apps/**', 'packages/**']);
@@ -310,6 +350,108 @@ describe('repomix security check', () => {
       assert.match(errors.join('\n'), /security check found suspicious content/i);
       const printed = `${logs.join('\n')}\n${errors.join('\n')}`;
       assert.equal(printed.includes(secret), false);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+});
+
+describe('failure cleanup and destination safety', () => {
+  test('preserves an existing output file when repomix fails to launch', async () => {
+    const fixture = createFixtureRoot();
+    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingContent = '<existing>User Content</existing>\n';
+    fs.writeFileSync(existingOut, existingContent, 'utf8');
+
+    // Remove repomix to cause launch failure
+    const pkgDir = path.join(fixture, 'node_modules', 'repomix');
+    fs.rmSync(pkgDir, { recursive: true, force: true });
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(
+        ['--paths', 'src/**', '--out', 'existing-output.xml'],
+        {
+          root: fixture,
+          log: (line) => logs.push(line),
+          logError: (line) => errors.push(line),
+        },
+      );
+      assert.equal(code, 1);
+      assert.equal(fs.existsSync(existingOut), true);
+      assert.equal(fs.readFileSync(existingOut, 'utf8'), existingContent);
+      assert.match(errors.join('\n'), /repomix not found/);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
+  test('preserves an existing output file when token budget is exceeded', async () => {
+    const fixture = createFixtureRoot();
+    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingContent = '<existing>User Content</existing>\n';
+    fs.writeFileSync(existingOut, existingContent, 'utf8');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(
+        ['--paths', 'src/**', '--out', 'existing-output.xml', '--max-tokens', '1'],
+        {
+          root: fixture,
+          log: (line) => logs.push(line),
+          logError: (line) => errors.push(line),
+        },
+      );
+      assert.equal(code, 1);
+      assert.equal(fs.existsSync(existingOut), true);
+      assert.equal(fs.readFileSync(existingOut, 'utf8'), existingContent);
+      assert.match(errors.join('\n'), /exceeds --max-tokens 1/);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+  test('rejects unsafe output destinations and input/output collisions', async () => {
+    const fixture = createFixtureRoot();
+    const logs = [];
+    const errors = [];
+    try {
+      // Destination is directory
+      const codeDir = await main(['--paths', 'src/**', '--out', 'src'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(codeDir, 1);
+      assert.match(errors.join('\n'), /directory/i);
+
+      // Destination outside root
+      const codeOut = await main(['--paths', 'src/**', '--out', '../outside.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(codeOut, 1);
+      assert.match(errors.join('\n'), /outside the repository root/i);
+
+      // Destination is inside .git
+      const codeGit = await main(['--paths', 'src/**', '--out', '.git/pack.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(codeGit, 1);
+      assert.match(errors.join('\n'), /inside \.git/i);
+
+      // Destination is input/output collision: output file is an existing source file in paths
+      const codeCollision = await main(['--paths', 'src/**', '--out', 'src/hello.js'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(codeCollision, 1);
+      assert.match(errors.join('\n'), /collision/i);
     } finally {
       cleanupDir(fixture);
     }

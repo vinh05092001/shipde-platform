@@ -42,18 +42,46 @@ export function parseArgs(argv) {
   let out = null;
   let maxTokens = null;
 
+  const isFlag = (val) => typeof val === 'string' && val.startsWith('-') && !/^-\d+$/.test(val);
+
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--') {
       continue;
-    } else if (arg === '--paths' && i + 1 < argv.length) {
-      paths = argv[++i]
+    } else if (arg === '--paths') {
+      if (paths !== null) {
+        throw new Error('--paths can only be specified once');
+      }
+      if (i + 1 >= argv.length || isFlag(argv[i + 1])) {
+        throw new Error('--paths requires a value');
+      }
+      const raw = argv[++i];
+      paths = raw
         .split(',')
         .map((p) => p.trim())
         .filter(Boolean);
-    } else if (arg === '--out' && i + 1 < argv.length) {
-      out = argv[++i];
-    } else if (arg === '--max-tokens' && i + 1 < argv.length) {
+      if (paths.length === 0) {
+        throw new Error('--paths is required (comma-separated globs)');
+      }
+    } else if (arg === '--out') {
+      if (out !== null) {
+        throw new Error('--out can only be specified once');
+      }
+      if (i + 1 >= argv.length || isFlag(argv[i + 1])) {
+        throw new Error('--out requires a value');
+      }
+      const raw = argv[++i];
+      if (raw.trim() === '') {
+        throw new Error('--out requires a non-empty file path');
+      }
+      out = raw;
+    } else if (arg === '--max-tokens') {
+      if (maxTokens !== null) {
+        throw new Error('--max-tokens can only be specified once');
+      }
+      if (i + 1 >= argv.length || isFlag(argv[i + 1])) {
+        throw new Error('--max-tokens requires a positive integer value');
+      }
       const raw = argv[++i];
       const n = Number(raw);
       if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
@@ -62,6 +90,8 @@ export function parseArgs(argv) {
       maxTokens = n;
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown flag: ${arg}`);
+    } else {
+      throw new Error(`Unexpected positional argument: ${arg}`);
     }
   }
 
@@ -73,6 +103,56 @@ export function parseArgs(argv) {
   }
 
   return { paths, out, maxTokens };
+}
+
+export function validateOutputPath(root, outArg, inputPaths = []) {
+  if (!outArg || typeof outArg !== 'string' || outArg.trim() === '') {
+    throw new Error('--out destination is required');
+  }
+
+  const resolved = path.resolve(root, outArg);
+  const rel = path.relative(root, resolved);
+
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Unsafe output destination: "${outArg}" resolves outside the repository root`);
+  }
+
+  const segments = rel.split(/[/\\]/);
+  if (segments.includes('.git')) {
+    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
+  }
+
+  if (outArg.endsWith('/') || outArg.endsWith('\\')) {
+    throw new Error(`Unsafe output destination: "${outArg}" cannot be a directory`);
+  }
+
+  if (fs.existsSync(resolved)) {
+    const stat = fs.statSync(resolved);
+    if (stat.isDirectory()) {
+      throw new Error(`Unsafe output destination: "${outArg}" is an existing directory`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Unsafe output destination: "${outArg}" must be a regular file`);
+    }
+  }
+
+  const normRel = rel.replace(/\\/g, '/');
+  for (const p of inputPaths) {
+    const normP = p.replace(/\\/g, '/');
+    const resolvedP = path.resolve(root, p);
+    if (resolvedP === resolved || normP === normRel) {
+      throw new Error(
+        `Input/output collision: output destination "${outArg}" is also specified as an input path`,
+      );
+    }
+    if (path.matchesGlob && path.matchesGlob(normRel, normP)) {
+      throw new Error(
+        `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
+      );
+    }
+  }
+
+  return resolved;
 }
 
 export function estimateTokens(byteLength) {
@@ -120,29 +200,27 @@ export function buildFocusedConfig(baseConfig, paths, outputFile) {
   };
 }
 
-function writeTempConfig(root, paths, outputFile) {
-  const config = buildFocusedConfig(loadBaseConfig(root), paths, outputFile);
-  const tmpDir = fs.mkdtempSync(path.join(root, '.repomix-tmp-'));
-  const tmpPath = path.join(tmpDir, 'config.json');
-  fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf8');
-  return { tmpDir, tmpPath };
-}
-
 function combinedOutput(err) {
   const stderr = err.stderr ? err.stderr.toString() : '';
   const stdout = err.stdout ? err.stdout.toString() : '';
   return `${stdout}\n${stderr}\n${err.message || ''}`;
 }
 
-function runRepomix({ root, paths, outputFile, maxTokens }) {
+function runRepomix({ root, paths, maxTokens }) {
   const entry = resolveRepomixEntry(root);
-  const { tmpDir, tmpPath } = writeTempConfig(root, paths, outputFile);
-  const args = [entry, '--config', tmpPath];
-  if (maxTokens !== null) {
-    args.push('--token-budget', String(maxTokens));
-  }
+  const tmpDir = fs.mkdtempSync(path.join(root, '.repomix-tmp-'));
+  const tempOutputFile = path.join(tmpDir, 'repomix-output.xml');
+  const tmpConfigPath = path.join(tmpDir, 'config.json');
 
   try {
+    const config = buildFocusedConfig(loadBaseConfig(root), paths, tempOutputFile);
+    fs.writeFileSync(tmpConfigPath, JSON.stringify(config, null, 2), 'utf8');
+
+    const args = [entry, '--config', tmpConfigPath];
+    if (maxTokens !== null) {
+      args.push('--token-budget', String(maxTokens));
+    }
+
     const stdout = execFileSync(process.execPath, args, {
       cwd: root,
       encoding: 'utf8',
@@ -153,33 +231,26 @@ function runRepomix({ root, paths, outputFile, maxTokens }) {
     if (looksLikeSecretFailure(stdout)) {
       throw new Error('secret-check');
     }
+    if (!fs.existsSync(tempOutputFile)) {
+      throw new Error('output-missing');
+    }
+    return { tmpDir, tempOutputFile };
   } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
     if (err.message === 'secret-check') throw err;
+    if (err.message === 'output-missing') throw err;
     const text = combinedOutput(err);
     if (looksLikeSecretFailure(text)) throw new Error('secret-check');
     if (looksLikeBudgetFailure(text)) throw new Error('token-budget');
     const error = new Error('repomix-failed');
     error.exitCode = err.status ?? null;
-    // Child-process output is intentionally not retained in logs: it can
-    // contain packed file paths, contents or detected secret material.
     throw error;
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
-  return null;
 }
 
 function countFiles(content) {
   const matches = content.match(/<file\b/g);
   return matches ? matches.length : 0;
-}
-
-function removeOutput(outputPath) {
-  try {
-    fs.rmSync(outputPath, { force: true });
-  } catch {
-    // best-effort
-  }
 }
 
 export async function main(argv, options = {}) {
@@ -198,17 +269,22 @@ export async function main(argv, options = {}) {
     return 1;
   }
 
-  const outputPath = path.resolve(root, args.out);
-
+  let outputPath;
   try {
-    runRepomix({
+    outputPath = validateOutputPath(root, args.out, args.paths);
+  } catch (err) {
+    logError(`[pack-context] ERROR: ${err.message}`);
+    return 1;
+  }
+
+  let repomixResult;
+  try {
+    repomixResult = runRepomix({
       root,
       paths: args.paths,
-      outputFile: outputPath,
       maxTokens: args.maxTokens,
     });
   } catch (err) {
-    removeOutput(outputPath);
     if (err.message === 'secret-check') {
       logError('[pack-context] FAIL: repomix security check found suspicious content.');
       logError('[pack-context] Review the flagged files before packing.');
@@ -221,10 +297,22 @@ export async function main(argv, options = {}) {
       logError('[pack-context] Narrow --paths or raise the limit.');
       return 1;
     }
-    logError(
-      `[pack-context] ERROR: repomix failed${err.exitCode !== null ? ` (exit code ${err.exitCode})` : ''}.`,
-    );
+    const detail =
+      err.exitCode !== null && err.exitCode !== undefined
+        ? ` (exit code ${err.exitCode})`
+        : err.message && err.message !== 'repomix-failed'
+          ? `: ${err.message}`
+          : '';
+    logError(`[pack-context] ERROR: repomix failed${detail}.`);
     return 1;
+  }
+
+  const { tmpDir, tempOutputFile } = repomixResult;
+  try {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.copyFileSync(tempOutputFile, outputPath);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
   if (!fs.existsSync(outputPath)) {

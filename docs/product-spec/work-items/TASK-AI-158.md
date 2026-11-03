@@ -123,9 +123,12 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | 1 | the `[TASK-AI-158] Pack focused repo context with repomix` commit (exact SHA recorded in `.oc/pr-body.md`) | `READY_FOR_CODEX` | N/A — first submission |
 | 2 | `4e2ec65df747ccf9ac5857e05379c8fbe2add34b` | `CHANGES_REQUIRED` | `.env.example` exception; failed CI; previous P0/P1 report unavailable. Local repair evidence follows; no independent PASS is claimed. |
 | 3 | `53f3059d8d78f94bc93e52a790e4af000d145874` | `CHANGES_REQUIRED` | P1: CI failing (`ai-brain-tests` at `repo-integration-group-7.test.js`, `contract` on PR body placeholders and checklist). |
-| 4 | pending commit | `READY_FOR_CODEX` | Snapshot sync in `GROUP-7-PRODUCT-TOOLCHAIN.md` resolves `ai-brain-tests`; PR body template placeholders cleared and checklist verified. |
+| 4 | `b800e57b392ad7da106717b78aa95e697f112833` | `CHANGES_REQUIRED` | Round 27 findings: P2 missing argument value disables token ceiling; P1 failure cleanup deletes existing user file before output. |
+| 5 | this review repair commit | `READY_FOR_CODEX` | P2: Validated flag values (missing/flag-valued arguments throw), rejected unexpected positional arguments and duplicate flags. P1: Confined cleanup strictly to temporary invocation-owned output; added destination and input/output collision validation; verified existing files survive launch/budget failures. |
 
 ## Review repair evidence (2026-11-03)
+- Round 27 Finding 4 (P2 — missing argument value): `parseArgs` now strictly validates all flag values. When a flag (`--paths`, `--out`, `--max-tokens`) is followed by end-of-arguments or another flag (e.g. `--paths src/** --out --max-tokens 100`), it throws a descriptive required-value error instead of silently adopting the next flag name as a value. Duplicate flags and unexpected positional arguments throw immediately. Automated negative tests cover all cases.
+- Round 27 Finding 10 (P1 — failure cleanup deletes existing file): `pack-context.mjs` no longer resolves an unrestricted `--out` and removes it in catch blocks. Destination paths are validated via `validateOutputPath` (confined to repo root, not `.git`, not directory, regular file, and no input/output collision where `--out` matches `--paths` inputs). Repomix writes to a temporary output file inside an invocation-owned `.repomix-tmp-*` directory. If execution fails for any reason (launch failure, missing binary, token budget exceeded, detected secret), only the invocation's temporary output is cleaned up; the pre-existing user output path is never touched. On success, the temporary output is copied to destination. Automated negative tests prove existing files survive launch failures and budget overruns, and unsafe destinations / input-output collisions are rejected.
 
 - P1 (CI failing — `ai-brain-tests`): Root devDependency `repomix: 1.18.1` caused `tools/ai-brain/test/repo-integration-group-7.test.js:68` to fail because `GROUP-7-PRODUCT-TOOLCHAIN.md` devDependencies snapshots (`prisma`, `turbo`, `lefthook`) lacked `repomix: 1.18.1`. Synced the snapshots to match root `package.json:devDependencies`. `repo-integration-group-7.test.js` passes 3/3 (negative proof: without `repomix` in `GROUP-7-PRODUCT-TOOLCHAIN.md`, test fails with ERR_ASSERTION).
 - P1 (CI failing — `contract`): PR contract validator (`validate_pr_contract.py`) flagged required template placeholders (`<...>` in CLI argument documentation) and unchecked mandatory checklist items in PR body. Cleaned all placeholders, completed mandatory checklist items, and verified PR contract compliance locally.
@@ -142,4 +145,4 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 
 ## Residual limitations
 
-- None. All visible failure paths and P1 findings from review round 26 resolved with automated test evidence.
+- None. All visible failure paths and P0/P1/P2 findings from review round 27 resolved with automated test evidence.
