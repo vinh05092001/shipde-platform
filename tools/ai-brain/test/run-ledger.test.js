@@ -1010,3 +1010,227 @@ test('item A/B same attempt id cap=1 refuses B and leaves A exhausted', () => {
   assert.equal(Object.hasOwn(state.items, 'ITEM-B'), false);
   assert.equal(state.goal.attempts, 1);
 });
+
+test('default_fingerprint_reservation_completes_once', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 } },
+  });
+  const adm = ledger.admit({
+    itemId: 'T',
+    stage: 'writer',
+    attemptId: 'a1',
+    reserve: true,
+    pid: process.pid,
+  });
+  assert.equal(adm.ok, true);
+
+  const rec = ledger.record({
+    itemId: 'T',
+    stage: 'writer',
+    attemptId: 'a1',
+    ms: 100,
+  });
+  assert.equal(rec.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['T'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 1);
+});
+
+test('repeated_in_flight_record_counts_once', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 } },
+  });
+  const r1 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    fp: 'F',
+    outcome: 'IN_FLIGHT',
+    ms: 50,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    fp: 'F',
+    outcome: 'IN_FLIGHT',
+    ms: 50,
+  });
+  assert.equal(r2.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['T'].spent.attempts, 1);
+  assert.equal(state.items['T'].spent.ms, 100);
+  assert.equal(state.goal.attempts, 1);
+  assert.equal(state.goal.ms, 100);
+});
+
+test('completed_retry_tracks_unknown_tokens', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', {
+    itemId: 'ITEM-R',
+    attemptId: 'a1',
+    retryLayer: 'pipeline',
+    tokens: 100,
+    ms: 50,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'ITEM-R',
+    attemptId: 'a1',
+    retryLayer: 'cli',
+    ms: 50,
+  });
+  assert.equal(r2.ok, true);
+  assert.equal(r2.run.tokens, 'UNKNOWN');
+  assert.equal(r2.run.tokenEnforcement, 'UNENFORCED');
+
+  const state = ledger.load();
+  assert.equal(state.items['ITEM-R'].spent.tokens, 100);
+  assert.equal(state.items['ITEM-R'].spent.tokensUnknown, 1);
+  assert.equal(state.goal.tokens, 100);
+  assert.equal(state.goal.tokensUnknown, 1);
+});
+
+test('second_reservation_for_same_item_charges_goal', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    goalId: 'G',
+    ms: 100,
+    tokens: 10,
+  });
+  assert.equal(r1.ok, true);
+
+  const adm = ledger.admit({
+    itemId: 'T',
+    stage: 'repair',
+    attemptId: 'a2',
+    goalId: 'G',
+    reserve: true,
+    pid: process.pid,
+  });
+  assert.equal(adm.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['T'].spent.attempts, 2);
+  assert.equal(state.goal.attempts, 2);
+  assert.equal(state.goals['G'].attempts, 2);
+});
+
+test('completion_inherits_reserved_goal', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const adm = ledger.admit({
+    itemId: 'T',
+    stage: 'writer',
+    fp: 'F',
+    goalId: 'G',
+    reserve: true,
+    pid: process.pid,
+  });
+  assert.equal(adm.ok, true);
+
+  const rec = ledger.record('writer', {
+    itemId: 'T',
+    fp: 'F',
+    attemptId: 'a1',
+    ms: 100,
+    tokens: 10,
+  });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.run.goalId, 'G');
+
+  const state = ledger.load();
+  assert.equal(state.goals['G'].ms, 100);
+  assert.equal(state.goals['G'].tokens, 10);
+  assert.equal(state.goals['G'].attempts, 1);
+});
+
+test('cross_stage_in_flight_retry_preserves_schema', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', {
+    itemId: 'T-CROSS',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'IN_FLIGHT',
+    pid: 12345,
+    ms: 50,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('fallback', {
+    itemId: 'T-CROSS',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'IN_FLIGHT',
+    ms: 50,
+  });
+  assert.equal(r2.ok, true);
+
+  const loaded = ledger.progressLedger.load();
+  assert.equal(loaded.items['T-CROSS'].spent.attempts, 1);
+  const fallbackFp = loaded.items['T-CROSS'].stages['fallback'].fps['F'];
+  assert.equal(fallbackFp.outcome, 'IN_FLIGHT');
+  assert.equal(Number.isInteger(fallbackFp.pid) && fallbackFp.pid > 0, true);
+});
+
+test('prototype_named_goal_is_refused_without_mutation', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+  const r1 = ledger.record('writer', {
+    itemId: 'ITEM-1',
+    attemptId: 'a1',
+    goalId: 'G',
+    ms: 100,
+    tokens: 10,
+  });
+  assert.equal(r1.ok, true);
+
+  const beforeProtoDesc = Object.getOwnPropertyDescriptor(Object.prototype, 'attempts');
+  assert.equal(beforeProtoDesc, undefined);
+
+  const fileContentBefore = fs.readFileSync(file, 'utf8');
+
+  assert.throws(
+    () =>
+      ledger.record('writer', {
+        itemId: 'ITEM-2',
+        attemptId: 'a2',
+        goalId: '__proto__',
+        ms: 100,
+      }),
+    /RUN_LEDGER_REFUSED: invalid goalId __proto__/
+  );
+
+  assert.throws(
+    () =>
+      ledger.record('writer', {
+        itemId: 'ITEM-3',
+        attemptId: 'a3',
+        goalId: 'constructor',
+        ms: 100,
+      }),
+    /RUN_LEDGER_REFUSED: invalid goalId constructor/
+  );
+  assert.throws(
+    () =>
+      ledger.record('writer', {
+        itemId: 'ITEM-4',
+        attemptId: 'a4',
+        goalId: 'prototype',
+        ms: 100,
+      }),
+    /RUN_LEDGER_REFUSED: invalid goalId prototype/
+  );
+
+  assert.equal(Object.prototype.attempts, undefined);
+  assert.equal(Object.getOwnPropertyDescriptor(Object.prototype, 'attempts'), undefined);
+
+  const fileContentAfter = fs.readFileSync(file, 'utf8');
+  assert.equal(fileContentAfter, fileContentBefore);
+});
