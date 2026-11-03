@@ -33,9 +33,11 @@ test('review 1: ported components pass the actual application accessibility scan
     // Verify the actual scanner still rejects a hidden interactive control.
     const forbidden = join(scratch, 'hidden-button.tsx');
     writeFileSync(forbidden, '<button aria-hidden="true">Thử lại</button>');
-    assert.ok(scanFileForA11y(forbidden).includes(
-      'Found interactive element incorrectly marked with aria-hidden="true"'
-    ));
+    assert.ok(
+      scanFileForA11y(forbidden).includes(
+        'Found interactive element incorrectly marked with aria-hidden="true"'
+      )
+    );
   } finally {
     // scratch is the exact directory returned by mkdtemp, inside the OS tempdir.
     assert.equal(dirname(resolve(scratch)), resolve(tmpdir()));
@@ -68,7 +70,13 @@ test('review 6: delivery register has one row per Work Item', () => {
 
 test('review 5: void gate findings remain outside the PR delta', () => {
   const changed = execFileSync('git', ['diff', '--name-only', 'origin/main...HEAD'], {
-    cwd: root, encoding: 'utf8',
-  }).trim().split('\n');
-  assert.deepEqual(changed.filter((file) => file.startsWith('.github/') || file === '.gitleaksignore'), []);
+    cwd: root,
+    encoding: 'utf8',
+  })
+    .trim()
+    .split('\n');
+  assert.deepEqual(
+    changed.filter((file) => file.startsWith('.github/') || file === '.gitleaksignore'),
+    []
+  );
 });

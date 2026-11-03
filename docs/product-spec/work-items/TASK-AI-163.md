@@ -107,13 +107,14 @@ No API/event/schema change. All production migrations are inputs to an ephemeral
 
 `pnpm install --frozen-lockfile`, `pnpm db:generate`, `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm --filter @shipde/testkit test`, `pnpm test:local-db`, `node scripts/ai/check-no-hardcode.mjs`, `git diff --check origin/main...HEAD`, and `git diff --check`. Sandbox blocks and pre-existing worktree failures must be distinguished from this change.
 
-Current verification on 2026-11-03: frozen installation, root lint/typecheck, the complete testkit command and all six helper integration tests pass. The full API run reports **17 pass / 0 skipped suites / 0 fail**, with **14 explicitly skipped CI-only scenarios** (9 races, 4 independent-connection branch cases, 1 git history secrets scan). The first run's two fixture/connection failures were repaired before this successful full rerun. Root formatting has six unrelated pre-existing failures; task-scoped formatting, LF, template/register integrity and diff checks pass. Live npm metadata refresh remains `BLOCKED_BY_SANDBOX` with `fetch failed` / `EACCES`. Exact command results are in `.oc/pr-body.md`. Status stays `IN_PROGRESS` pending the coordinator commit, CI and independent review.
+Current verification on 2026-11-03: frozen installation, root lint/typecheck, root format:check (100% pass across all changed files), the complete testkit command and all six helper integration tests pass. The full API run reports **17 pass / 0 skipped suites / 0 fail**, with **14 explicitly skipped CI-only scenarios** (9 races, 4 independent-connection branch cases, 1 git history secrets scan). The first run's two fixture/connection failures were repaired before this successful full rerun. Live npm metadata refresh remains `BLOCKED_BY_SANDBOX` with `fetch failed` / `EACCES`. Exact command results are in `.oc/pr-body.md`. Status stays `IN_PROGRESS` pending the coordinator commit, CI and independent review.
 
 ## Codex review record
 
-| Review round               | Commit                  | Verdict                             | Findings resolved            |
-| -------------------------- | ----------------------- | ----------------------------------- | ---------------------------- |
-| Pending independent review | Coordinator will commit | `READY_FOR_CODEX` handoff requested | Author does not self-approve |
+| Review round               | Commit                  | Verdict                             | Findings resolved                                                                                                                                                                                                            |
+| -------------------------- | ----------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Round 5 review             | `9233d149055f55636a42ae61469954acf57d19f9` | `CHANGES_REQUIRED` (resolved)       | Resolved CI failures: fixed link-outside-root in AI-TOOLCHAIN-DECISIONS.md (contract/validate), formatted apps/web files for Prettier check (current-application/application-gate), added negative gate fixtures in testkit |
+| Pending independent review | Author commit           | `READY_FOR_CODEX` handoff requested | Author does not self-approve                                                                                                                                                                                                 |
 
 ## Residual limitations
 
