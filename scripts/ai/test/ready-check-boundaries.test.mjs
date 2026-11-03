@@ -241,6 +241,18 @@ test('accepts real source outside a fenced example', () => {
   assert.deepEqual(checkWorkItemReady(text), { ok: true, problems: [] });
 });
 
+test('rejects source links inside minimally or deeply indented fenced examples', () => {
+  for (const snippet of [
+    '- Example:\n\n ~~~text\n https://example.com/spec\n ~~~',
+    '- Example:\n ~~~text\n https://example.com/spec\n ~~~',
+    '        ```text\n        https://example.com/spec\n        ```',
+  ]) {
+    const result = checkWorkItemReady(valid.replace(source, snippet));
+    assert.equal(result.ok, false);
+    assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+  }
+});
+
 test('rejects blank Proof after a blockquote ends an unclosed fenced example', () => {
   const text = `${valid}\n> ~~~text\n> Example only.\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
   const result = checkWorkItemReady(text);
