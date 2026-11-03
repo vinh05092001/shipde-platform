@@ -42,5 +42,10 @@ pre-commit:
 
 pre-push:
   commands:
+    # Optional local guard; CI remains authoritative. Explicit hook-only opt-out.
+    ai-check:
+      skip:
+        - run: node -e "process.exit(Number(process.env.SHIPDE_SKIP_AI_CHECK !== '1'))"
+      run: pnpm ai:check
     no-hardcode:
       run: node scripts/ai/check-no-hardcode.mjs
