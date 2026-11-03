@@ -14,6 +14,43 @@ if (argv[0] === 'version') {
         result: { version: mode === 'wrong-version' ? '1.5.0' : '1.6.1' },
       })
     );
+} else if (mode === 'read-html') {
+  // A read channel that hands back a public but wrong media type: the watch
+  // page HTML. It must never be presented as the requested result.
+  console.log(
+    JSON.stringify({
+      ok: true,
+      items: [
+        {
+          title: 'watch page',
+          url: argv[argv.length - 1],
+          text: '<html><body>fixture-watch-page-html</body></html>',
+        },
+      ],
+    })
+  );
+} else if (mode === 'transcript') {
+  // yt-dlp post-processing returns the captions for the transcript action.
+  console.log(
+    JSON.stringify({
+      ok: true,
+      items: [
+        {
+          title: 'captions',
+          url: argv[argv.length - 1],
+          text: 'fixture-caption-line-one\nfixture-caption-line-two',
+        },
+      ],
+    })
+  );
+} else if (mode === 'failure-zero') {
+  // Upstream reports a failure payload but still exits zero.
+  console.log(
+    JSON.stringify({
+      ok: false,
+      error: { code: 'TIMEOUT', token: 'fixture-upstream-secret' },
+    })
+  );
 } else if (mode === 'plain') {
   console.log('Not the pinned JSON CLI');
 } else if (mode === 'retrieve-target') {

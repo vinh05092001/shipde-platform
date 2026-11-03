@@ -454,6 +454,10 @@ function requestOnce(url, { method, address, timeoutMs = RETRIEVAL_TIMEOUT_MS })
 // the pinned address with a local listener so the boundary can be exercised
 // offline. Validation still runs on the resolved addresses, and the redirect
 // hops below are still validated before each connection.
+//
+// `request` is a test-only seam (never set by production callers): each hop is
+// still resolved, validated and re-checked before `request` is asked to
+// fetch it, so a test transport cannot widen the boundary.
 export async function defaultRetrieve(
   url,
   {
@@ -461,13 +465,16 @@ export async function defaultRetrieve(
     resolveHost = defaultResolveHost,
     maxHops = MAX_REDIRECT_HOPS,
     connectTo,
+    request,
   } = {}
 ) {
   let current = String(url);
   for (let hops = 0; ; hops++) {
     const { addresses } = await resolvePublicAddresses(current, resolveHost);
     const pinned = connectTo ?? addresses[0];
-    const response = await requestOnce(current, { method, address: pinned });
+    const response = request
+      ? await request(current, { method, address: pinned })
+      : await requestOnce(current, { method, address: pinned });
     const location = response.location;
     if (response.status >= 300 && response.status < 400 && location) {
       if (hops + 1 > maxHops) throw new Error(TOO_MANY_REDIRECTS);
@@ -829,6 +836,10 @@ export async function runResearch(
     // Test-only seam: pin the retrieval connection to a local listener while the
     // resolver still validates the public addresses. Never used in production.
     connectTo,
+    // Test-only seam: answer the in-process read retrieval offline. The read
+    // boundary (resolve, reject private, re-validate every redirect hop) is
+    // still the code under test; only the final socket connect is replaced.
+    fetchText,
   } = {}
 ) {
   const envValues = [
@@ -913,7 +924,7 @@ export async function runResearch(
     let fetched;
     if (request.action !== 'search' && request.urls && request.urls.length > 0) {
       try {
-        fetched = await defaultRetrieve(request.urls[0], { resolveHost, connectTo });
+        fetched = await defaultRetrieve(request.urls[0], { resolveHost, connectTo, request: fetchText });
       } catch (err) {
         return fail(redact(err.message || 'Research refused: unable to retrieve.', envValues));
       }
@@ -936,9 +947,23 @@ export async function runResearch(
       return fail('Research refused: invalid Agent-Reach response.');
     // For read targets the CLI is only a post-processor: its own item content is
     // discarded and replaced with the text this process already fetched under
-    // the boundary, so any transport the CLI performed can never surface.
-    if (fetched) {
-      const processed = Array.isArray(payload.items) && payload.items.length > 0 ? payload.items[0] : {};
+    // the boundary, so any transport the CLI performed can never surface. A
+    // payload that failed or a non-zero child exit stays a failure: an exit
+    // status never turns an upstream failure into successful research.
+    if (fetched && (payload.ok !== true || result.status !== 0)) {
+      const errorCode = PUBLIC_ERROR_CODES.has(payload.error?.code)
+        ? payload.error.code
+        : 'UPSTREAM_ERROR';
+      return fail(
+        `Research refused: public access failed (${errorCode}). Use another public source; no login or automatic retry.`
+      );
+    }
+    // Only a read produces its content through this in-process fetch. A subtitle
+    // transcript is the CLI's own post-processed result and must survive: the
+    // fetch above only proves the watch-page destination is public.
+    if (fetched && request.cliArgs[1] === 'read') {
+      const processed =
+        Array.isArray(payload.items) && payload.items.length > 0 ? payload.items[0] : {};
       payload = {
         ...payload,
         ok: true,
