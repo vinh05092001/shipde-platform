@@ -140,6 +140,7 @@ On Windows, `pnpm.cmd` selects the same pnpm CLI if PowerShell blocks its `.ps1`
 | Round 43     | `d1294b10416ed052f2718add1dd7c1001c22c61f` | CHANGES_REQUIRED | Finding 1: delivery order 292 collided with merged TASK-AI-165 (#501); TASK-AI-164 moves to unused order 293. Register uniqueness and portable contract tests verified green. |
 | Round 44     | `a52c6cf075c72b12fc7faaf064755ab75956e96c` | CHANGES_REQUIRED | Finding 1: blockquote-fenced example stays active after blockquote ends, hiding subsequent content. Fix: track blockquote prefix at fence open, implicitly close when prefix no longer matches. Regression: `rejects blank Proof after a blockquote ends an unclosed fenced example`. |
 | Round 45     | `65a4214cff7c2a72b3f4f9ad71f67c0928ec3726` | CHANGES_REQUIRED | Finding 1 (CI failing): application-gate Prettier check failed on `.oc/pr-body.md`. Formatted `.oc/pr-body.md` with Prettier; verified `pnpm format:check` passes.                                                                                                                    |
+| Round 70     | `3f50af5016aff1a9b1ab6b143e583b49d40e41ee` | CHANGES_REQUIRED | Finding 1: Prettier format in `.oc/pr-body.md`. Finding 2: unclosed fence inside list container ends when list ends, exposing subsequent table with blank Proof. Finding 3: commented source URL immediately after blockquote fence ends is stripped before URL check. |
 
 ## Residual limitations
 

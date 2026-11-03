@@ -247,3 +247,17 @@ test('rejects blank Proof after a blockquote ends an unclosed fenced example', (
   assert.equal(result.ok, false);
   assert.ok(result.problems.some((problem) => problem.includes('Proof')));
 });
+
+test('rejects blank Proof after a list ends an unclosed fenced example', () => {
+  const text = `${valid}\n- ~~~text\n  Example only.\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects commented source immediately after a blockquote fence ends', () => {
+  const replacement = '> ~~~text\n> Example only.\n<!--\nhttps://example.com/spec\n-->';
+  const result = checkWorkItemReady(valid.replace(source, replacement));
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});

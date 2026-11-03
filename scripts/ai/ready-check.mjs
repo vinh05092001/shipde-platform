@@ -6,13 +6,60 @@ import { fileURLToPath } from 'node:url';
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
 const CLARIFICATION = /\[NEEDS\s+CLARIFICATION(?:\s*:[^\]]*)?\s*\]/gi;
 
+function getIndent(str) {
+  let count = 0;
+  for (const ch of str) {
+    if (ch === ' ') count += 1;
+    else if (ch === '\t') count += 4;
+    else break;
+  }
+  return count;
+}
+
 // Keep line numbers stable; comment tokens inside fenced examples stay literal.
 function documentLines(text) {
   let fence;
   let fenceQuotePrefix;
+  let fenceListIndent;
+  let currentListIndent = 0;
   let comment = false;
   const uncommented = [];
   const lines = text.split('\n').map((raw) => {
+    // Extract blockquote prefix (sequence of > markers) from the current line.
+    const quoteMatch = raw.match(/^((?:[ \t]*>)*)/);
+    const lineQuotePrefix = quoteMatch ? quoteMatch[1].replace(/[ \t]/g, '') : '';
+    const afterQuote = raw.slice(quoteMatch ? quoteMatch[0].length : 0);
+
+    // If inside a fence, check whether its container context still holds.
+    // Exiting the opener's blockquote or list context ends the fence implicitly.
+    if (fence) {
+      if (fenceQuotePrefix && !lineQuotePrefix.startsWith(fenceQuotePrefix)) {
+        fence = undefined;
+        fenceQuotePrefix = undefined;
+        fenceListIndent = undefined;
+      } else if (fenceListIndent !== undefined && afterQuote.trim()) {
+        const lineIndent = getIndent(afterQuote.match(/^[ \t]*/)[0]);
+        if (HEADING.test(afterQuote) || lineIndent < fenceListIndent) {
+          fence = undefined;
+          fenceQuotePrefix = undefined;
+          fenceListIndent = undefined;
+        }
+      }
+    }
+
+    const listMatch = afterQuote.match(/^([ \t]*)([-*+]|\d+[.)])([ \t]+)/);
+    if (!fence) {
+      if (listMatch) {
+        currentListIndent =
+          getIndent(listMatch[1]) + listMatch[2].length + getIndent(listMatch[3]);
+      } else if (afterQuote.trim()) {
+        const lineIndent = getIndent(afterQuote.match(/^[ \t]*/)[0]);
+        if (HEADING.test(afterQuote) || lineIndent < currentListIndent) {
+          currentListIndent = 0;
+        }
+      }
+    }
+
     let line = raw;
     if (!fence) {
       line = '';
@@ -29,15 +76,7 @@ function documentLines(text) {
       }
     }
     uncommented.push(line);
-    // Extract blockquote prefix (sequence of > markers) from the current line.
-    const quoteMatch = line.match(/^((?:[ \t]*>)*)/);
-    const lineQuotePrefix = quoteMatch ? quoteMatch[1].replace(/[ \t]/g, '') : '';
-    // If inside a fence, check whether the blockquote context still holds.
-    // A line outside the opener's blockquote context ends the fence implicitly.
-    if (fence && fenceQuotePrefix && !lineQuotePrefix.startsWith(fenceQuotePrefix)) {
-      fence = undefined;
-      fenceQuotePrefix = undefined;
-    }
+
     const marker = line.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})(.*)$/);
     if (fence) {
       if (
@@ -48,12 +87,24 @@ function documentLines(text) {
       ) {
         fence = undefined;
         fenceQuotePrefix = undefined;
+        fenceListIndent = undefined;
       }
       return '';
     }
     if (marker) {
       fence = marker[1];
       fenceQuotePrefix = lineQuotePrefix || undefined;
+      if (listMatch) {
+        fenceListIndent =
+          getIndent(listMatch[1]) + listMatch[2].length + getIndent(listMatch[3]);
+      } else if (currentListIndent > 0) {
+        fenceListIndent = Math.max(
+          currentListIndent,
+          getIndent(afterQuote.match(/^[ \t]*/)[0])
+        );
+      } else {
+        fenceListIndent = undefined;
+      }
       return '';
     }
     return line;
