@@ -1,10 +1,15 @@
 import 'reflect-metadata';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
@@ -31,6 +36,7 @@ async function runInvitationsSupertestSuite() {
     path.resolve(__dirname, '../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -89,7 +95,7 @@ async function runInvitationsSupertestSuite() {
   };
 
   const mockDeliveryAdapter = new MockVerificationDeliveryAdapter();
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   })
     .overrideProvider(APP_CONFIG)
@@ -108,7 +114,7 @@ async function runInvitationsSupertestSuite() {
   if (dbStatus !== 'up') {
     await app.close();
     throw new Error(
-      `[FAIL_CLOSED] PostgreSQL database is not reachable at ${databaseUrl}. Live DB supertest requires a running database.`
+      `[FAIL_CLOSED] PostgreSQL database is not reachable at ${describeDatabaseTarget(databaseUrl)}. Live DB supertest requires a running database.`
     );
   }
 
