@@ -96,7 +96,6 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | AC-AI-158-02 | Argument parsing | `--paths`, `--out` and `--max-tokens` parse; missing or invalid arguments throw | unit: `scripts/ai/test/pack-context.test.mjs` |
 | AC-AI-158-03 | Token limit | A fixture pack over `--max-tokens` exits non-zero and removes the output; stdout has no file contents | unit: `scripts/ai/test/pack-context.test.mjs` |
 | AC-AI-158-04 | Secret check and advisory note | Security check failure is non-zero; toolchain doc states purpose, usage, no secrets/`.env`, advisory only | unit + docs-inspection |
-| AC-AI-158-05 | Shared code-context MCP setup | Versioned MCP template, multi-client attachment script (agy, opencode, codex, claude), smoke test and README under `tools/ctx-tools` with dry-run and backup safety | unit: `tools/ctx-tools/test_attach.py` + smoke test + docs-inspection |
 
 ## Task breakdown
 

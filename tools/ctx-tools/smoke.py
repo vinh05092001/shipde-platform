@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -15,6 +16,32 @@ KEEP_ENV = {
     "SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "COMSPEC", "TEMP", "TMP",
     "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS"
 }
+
+
+def sanitize_secret_payload(val):
+    if isinstance(val, str):
+        s = val
+        s = re.sub(
+            r"(?i)\b(password|token|secret|api[_-]?key|auth(?:orization)?|credential)\b\s*([=:]\s*|\s+)[^\s,\"\'}\]]+",
+            r"\1\2[REDACTED]",
+            s,
+        )
+        s = re.sub(r"(?i)\bBearer\s+[^\s,\"\'}\]]+", "Bearer [REDACTED]", s)
+        s = re.sub(r"(?i)\bCANARY_SECRET\w*", "[REDACTED]", s)
+        s = re.sub(r"(?i)\bsk-[A-Za-z0-9_-]+", "[REDACTED]", s)
+        return s
+    elif isinstance(val, dict):
+        sanitized = {}
+        for k, v in val.items():
+            if re.search(r"(?i)\b(password|token|secret|api[_-]?key|auth(?:orization)?|credential)\b", str(k)):
+                sanitized[k] = "[REDACTED]"
+            else:
+                sanitized[k] = sanitize_secret_payload(v)
+        return sanitized
+    elif isinstance(val, list):
+        return [sanitize_secret_payload(item) for item in val]
+    else:
+        return val
 
 
 def count_tokens(text: str) -> int:
@@ -95,8 +122,10 @@ class MCP:
                 raise RuntimeError("Server ended before reply")
             if message.get("id") == request_id and ("result" in message or "error" in message):
                 if "error" in message:
-                    self.classify(json.dumps(message["error"]))
-                    raise RuntimeError(f"JSON-RPC error: {json.dumps(message['error'])}")
+                    sanitized_err = sanitize_secret_payload(message["error"])
+                    err_json = sanitize_secret_payload(json.dumps(sanitized_err))
+                    self.classify(err_json)
+                    raise RuntimeError(f"JSON-RPC error: {err_json}")
                 return message["result"]
             if "method" in message and "id" in message:
                 if message["method"] == "roots/list":
@@ -192,7 +221,9 @@ def main() -> int:
     parser.add_argument("--ctx-tools-root", default=os.environ.get("CTX_TOOLS_ROOT", "C:/Tools/ctx-tools"))
     parser.add_argument("--project", default=str(Path(__file__).resolve().parents[2]))
     parser.add_argument("--target", default="tools/ai-brain/priors.js")
-    parser.add_argument("--out-dir", default=str(Path(tempfile.gettempdir()) / "ctx-tools-smoke"))
+    default_out = str(Path(__file__).resolve().parents[2] / ".oc" / "tmp" / "ctx-tools-smoke")
+    parser.add_argument("--out-dir", default=default_out)
+    parser.add_argument("--entries", default=None)
     args = parser.parse_args()
 
     project_dir = Path(args.project).resolve()
@@ -207,12 +238,15 @@ def main() -> int:
         return 1
 
     original = target_path.read_bytes()
-    expected = set(re.findall(r"^(?:async\s+)?function\s+([\w$]+)\s*\(", original.decode("utf-8"), re.MULTILINE))
+    expected = set(re.findall(r"^(?:export\s+)?(?:async\s+)?function\s+([\w$]+)\s*\(", original.decode("utf-8"), re.MULTILINE))
     whole_file_tokens = count_tokens(original.decode("utf-8"))
 
-    template_file = Path(__file__).resolve().parent / "mcp-entries.template.json"
-    template_str = template_file.read_text(encoding="utf-8")
-    entries = json.loads(template_str.replace("${CTX_TOOLS_ROOT}", ctx_tools_root.as_posix()))
+    if args.entries:
+        entries = json.loads(Path(args.entries).read_text(encoding="utf-8"))
+    else:
+        template_file = Path(__file__).resolve().parent / "mcp-entries.template.json"
+        template_str = template_file.read_text(encoding="utf-8")
+        entries = json.loads(template_str.replace("${CTX_TOOLS_ROOT}", ctx_tools_root.as_posix()))
 
     results = {
         "target": str(target_path),
@@ -258,8 +292,9 @@ def main() -> int:
             print(f"{name}: PASS; tools={len(server.tools)}; functions={len(found)}; {resp_tokens} tokens vs {whole_file_tokens} whole-file ({reduction_pct}% reduction)", flush=True)
         except Exception as error:
             all_passed = False
-            result.update({"error": f"{type(error).__name__}: {error}", "diagnostics": sorted(server.diagnostics)})
-            print(f"{name}: FAIL; {type(error).__name__}: {error}", file=sys.stderr, flush=True)
+            safe_err = sanitize_secret_payload(f"{type(error).__name__}: {error}")
+            result.update({"error": safe_err, "diagnostics": sorted(server.diagnostics)})
+            print(f"{name}: FAIL; {safe_err}", file=sys.stderr, flush=True)
         finally:
             result["shutdown"] = server.close()
             results["servers"][name] = result

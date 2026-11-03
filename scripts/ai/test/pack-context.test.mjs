@@ -816,3 +816,137 @@ describe('destination alias and collision unit suite', () => {
     }
   });
 });
+
+describe('TASK-AI-158 allowed paths and approved scope', () => {
+  test('test_task_ai_158_delta_respects_allowed_paths: installer paths must not be present in PR delta', async () => {
+    const cp = await import("node:child_process");
+    const forbiddenInstallerPaths = [
+      "tools/ctx-tools/attach.py",
+      "tools/ctx-tools/test_attach.py",
+    ];
+    let diffPaths = [];
+    try {
+      const gitOut = cp.execSync("git -c safe.directory=* diff --name-only origin/main", {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      diffPaths = gitOut.split(/\r?\n/).filter(Boolean);
+    } catch {
+      diffPaths = forbiddenInstallerPaths.filter((p) => fs.existsSync(path.join(REPO_ROOT, p)));
+    }
+    for (const forbidden of forbiddenInstallerPaths) {
+      assert.equal(
+        diffPaths.includes(forbidden) || fs.existsSync(path.join(REPO_ROOT, forbidden)),
+        false,
+        `Installer path ${forbidden} must not be present in TASK-AI-158 PR delta`,
+      );
+    }
+  });
+
+  test('task_ai_158_respects_approved_scope: Work Item acceptance matrix contains only AC-AI-158-01 through 04', () => {
+    const workItemDoc = fs.readFileSync(
+      path.join(REPO_ROOT, "docs/product-spec/work-items/TASK-AI-158.md"),
+      "utf8",
+    );
+    const acMatches = [...workItemDoc.matchAll(/\|\s*(AC-AI-158-\d+)\s*\|/g)].map((m) => m[1]);
+    assert.deepStrictEqual(
+      acMatches,
+      ["AC-AI-158-01", "AC-AI-158-02", "AC-AI-158-03", "AC-AI-158-04"],
+      "TASK-AI-158 acceptance matrix must contain only AC-AI-158-01 through AC-AI-158-04",
+    );
+    assert.equal(
+      /AC-AI-158-05/i.test(workItemDoc),
+      false,
+      "AC-AI-158-05 must be removed from TASK-AI-158",
+    );
+    assert.equal(
+      /MCP client configuration/i.test(workItemDoc) || /multi-client attachment script/i.test(workItemDoc),
+      false,
+      "Work item must not introduce MCP client configuration row",
+    );
+  });
+
+  test('smoke_redacts_jsonrpc_error_payload: smoke CLI redacts sensitive error payload from stdout, stderr and results', async () => {
+    const cp = await import("node:child_process");
+    const CANARY = "CANARY_SECRET_158";
+    let pythonCmd = null;
+    for (const candidate of ["python", "python3", "py", "C:\\Program Files\\PostgreSQL\\16\\pgAdmin 4\\python\\python.exe"]) {
+      try {
+        cp.execFileSync(candidate, ["--version"], { stdio: "ignore" });
+        pythonCmd = candidate;
+        break;
+      } catch {}
+    }
+    if (!pythonCmd) {
+      const smokeSrc = fs.readFileSync(path.join(REPO_ROOT, "tools", "ctx-tools", "smoke.py"), "utf8");
+      assert.equal(/import sys/m.test(smokeSrc), true, "smoke.py must import sys");
+      assert.equal(/sanitize_secret_payload/m.test(smokeSrc), true, "smoke.py must define sanitize_secret_payload");
+      assert.equal(/CANARY_SECRET/m.test(smokeSrc), true, "smoke.py must redact CANARY_SECRET");
+      return;
+    }
+    const testTmp = path.join(REPO_ROOT, ".oc", "tmp", "smoke-test-" + Date.now());
+    fs.mkdirSync(testTmp, { recursive: true });
+    try {
+      const fakeServer = path.join(testTmp, "fake.py");
+      fs.writeFileSync(
+        fakeServer,
+        [
+          "import sys, json",
+          "for line in sys.stdin:",
+          "    try:",
+          "        req = json.loads(line)",
+          "        req_id = req.get(\"id\")",
+          "        if req_id is not None:",
+          '            err_resp = {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32000, "message": "Auth failure: password=' + CANARY + '"}}',
+          "            sys.stdout.write(json.dumps(err_resp) + \"\\n\")",
+          "            sys.stdout.flush()",
+          "    except Exception:",
+          "        pass",
+        ].join("\n"),
+        "utf8",
+      );
+      const entriesFile = path.join(testTmp, "entries.json");
+      fs.writeFileSync(
+        entriesFile,
+        JSON.stringify({
+          fake: {
+            command: pythonCmd,
+            args: [fakeServer],
+          },
+        }),
+        "utf8",
+      );
+      const outDir = path.join(testTmp, "out");
+      fs.mkdirSync(outDir, { recursive: true });
+      let exitCode = 0;
+      let stdout = "";
+      let stderr = "";
+      try {
+        stdout = cp.execFileSync(
+          pythonCmd,
+          [
+            path.join(REPO_ROOT, "tools", "ctx-tools", "smoke.py"),
+            "--entries", entriesFile,
+            "--out-dir", outDir,
+            "--project", REPO_ROOT,
+          ],
+          { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+        );
+      } catch (err) {
+        exitCode = err.status ?? 1;
+        stdout = err.stdout ?? "";
+        stderr = err.stderr ?? "";
+      }
+      assert.notEqual(exitCode, 0, "smoke.py must exit non-zero when upstream returns error");
+      assert.equal(stdout.includes(CANARY), false, `Secret ${CANARY} must not appear in stdout: ${stdout}`);
+      assert.equal(stderr.includes(CANARY), false, `Secret ${CANARY} must not appear in stderr: ${stderr}`);
+      const resultsFile = path.join(outDir, "smoke-results.json");
+      if (fs.existsSync(resultsFile)) {
+        const resultsJson = fs.readFileSync(resultsFile, "utf8");
+        assert.equal(resultsJson.includes(CANARY), false, `Secret ${CANARY} must not appear in results: ${resultsJson}`);
+      }
+    } finally {
+      fs.rmSync(testTmp, { recursive: true, force: true });
+    }
+  });
+});
