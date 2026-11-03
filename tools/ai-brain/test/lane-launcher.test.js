@@ -145,9 +145,7 @@ test('stderr không còn chuỗi key (regex key/token/Bearer), lưu exitCode, du
     }
   );
   assert.strictEqual(savedJson.stderr.includes('secret'), false);
-  const parsedJson = JSON.parse(savedJson.stderr);
-  assert.strictEqual(parsedJson.api_key, '[REDACTED]');
-  assert.strictEqual(parsedJson.token, '[REDACTED]');
+  assert.strictEqual(savedJson.stderr, '[REDACTED LINE: credential]');
 
   const dirty =
     'Error: Bearer secret-tok-999; api_key="secret-key-888"; token=tok-777; --key=key-666';
@@ -246,4 +244,81 @@ test('cleanup-rejects-supplied-job-without-jobId', (t) => {
   assert.strictEqual(res.ok, false);
   assert.deepStrictEqual(res.killed, []);
   assert.strictEqual(killCalled, false);
+});
+
+test('redacts-following-quoted-token-after-unquoted-key', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-A' };
+  const rawStderr = 'api_key=FAKE_FIRST,token="FAKE_SECOND"';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_FIRST'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_SECOND'), false);
+  assert.strictEqual(saved.stderr, '[REDACTED LINE: credential]');
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr.includes('FAKE_FIRST'), false);
+  assert.strictEqual(persisted.stderr.includes('FAKE_SECOND'), false);
+  assert.strictEqual(persisted.stderr, '[REDACTED LINE: credential]');
+});
+
+test('cleanup-rejects-empty-job-identifier', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const killed = [];
+  let killCalled = false;
+  const mockKill = (pid) => {
+    killCalled = true;
+    killed.push(pid);
+  };
+
+  const jobA = { jobId: 'job-A', pidTree: [100, 101] };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(jobA, null, 2));
+
+  const resEmptyStr = cleanup(dir, '', { kill: mockKill });
+  assert.strictEqual(resEmptyStr.ok, false);
+  assert.strictEqual(resEmptyStr.cause, 'JOB_MISMATCH');
+  assert.deepStrictEqual(resEmptyStr.killed, []);
+  assert.strictEqual(killCalled, false);
+
+  const resEmptyObj = cleanup(dir, { jobId: '' }, { kill: mockKill });
+  assert.strictEqual(resEmptyObj.ok, false);
+  assert.strictEqual(resEmptyObj.cause, 'JOB_MISMATCH');
+  assert.deepStrictEqual(resEmptyObj.killed, []);
+  assert.strictEqual(killCalled, false);
+  assert.deepStrictEqual(killed, []);
+});
+
+test('redactStderr replaces only lines containing credentials, preserves safe lines', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-multiline' };
+  const rawStderr = [
+    'INFO: process started successfully',
+    'DEBUG: api_key=super_secret_123 in config',
+    'WARN: high memory usage detected',
+    'ERROR: token="another_secret_456" expired',
+    'INFO: process terminating normally',
+  ].join('\n');
+
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+  assert.strictEqual(saved.stderr.includes('super_secret_123'), false);
+  assert.strictEqual(saved.stderr.includes('another_secret_456'), false);
+  assert.strictEqual(saved.stderr.includes('INFO: process started successfully'), true);
+  assert.strictEqual(saved.stderr.includes('WARN: high memory usage detected'), true);
+  assert.strictEqual(saved.stderr.includes('INFO: process terminating normally'), true);
+
+  const expected = [
+    'INFO: process started successfully',
+    '[REDACTED LINE: credential]',
+    'WARN: high memory usage detected',
+    '[REDACTED LINE: credential]',
+    'INFO: process terminating normally',
+  ].join('\n');
+  assert.strictEqual(saved.stderr, expected);
 });

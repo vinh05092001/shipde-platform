@@ -13,15 +13,24 @@ function getLockPath(lane) {
   return path.join(toLaneDir(lane), 'lock');
 }
 
+const CREDENTIAL_LINE_RE =
+  /(?:api[-_]?key|apikey|token|secret|password|authorization|bearer)/i;
+
 function redactStderr(text) {
   if (!text) return '';
-  return String(text)
-    .replace(/(Bearer\s+)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s'"]+)/gi, '$1[REDACTED]')
-    .replace(
-      /((?:['"]?[\w.-]*(?:key|token|secret)[\w.-]*['"]?)\s*[:=]\s*)(?:(['"])(?:\\.|(?!\2)[^\\])*\2|[^\s'"]+)/gi,
-      (match, prefix, quote) =>
-        quote ? `${prefix}${quote}[REDACTED]${quote}` : `${prefix}[REDACTED]`
-    );
+  const lines = String(text).split('\n');
+  return lines
+    .map((line) => {
+      const hasCR = line.endsWith('\r');
+      const cleanLine = hasCR ? line.slice(0, -1) : line;
+      if (CREDENTIAL_LINE_RE.test(cleanLine)) {
+        return hasCR
+          ? '[REDACTED LINE: credential]\r'
+          : '[REDACTED LINE: credential]';
+      }
+      return line;
+    })
+    .join('\n');
 }
 
 function launch(lane, job, options = {}) {
@@ -95,6 +104,10 @@ function cleanup(lane, job, options = {}) {
         process.kill(pid);
       } catch (_) {}
     });
+  const suppliedId = typeof job === 'string' ? job : (job && job.jobId);
+  if (!suppliedId || typeof suppliedId !== 'string') {
+    return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
+  }
   const dir = toLaneDir(lane);
   let stored = null;
   try {
@@ -103,11 +116,8 @@ function cleanup(lane, job, options = {}) {
     stored = null;
   }
   if (!stored || !stored.jobId) return { ok: true, killed: [] };
-  if (job) {
-    const suppliedId = typeof job === 'string' ? job : job.jobId;
-    if (!suppliedId || suppliedId !== stored.jobId) {
-      return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
-    }
+  if (suppliedId !== stored.jobId) {
+    return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
   }
   const list = stored.pidTree || stored.pids || (stored.pid ? [stored.pid] : []);
   const pids = Array.isArray(list) ? list : [list];
