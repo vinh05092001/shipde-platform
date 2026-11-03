@@ -146,6 +146,7 @@ N/A — headless developer tool and AI delivery runtime module.
 | 2 | `63c0c6c` | CHANGES_REQUIRED | Resolved round 1 findings; required sync limits override on reserve, distinguishing reservations from in-flight records, and counting goal attempts on reserve |
 | 3 | `ba2df83` | PASS | All review findings resolved; clean test pass across all 13 test scenarios |
 | 4 | `7fdb45f` | CHANGES_REQUIRED | P1: ai-brain-tests failure following origin/main TASK-AI-167 merge; resolved validateLedger schema compatibility and counter integrity across repeated writes |
+| 5 | `5d56ede` | CHANGES_REQUIRED | P1: contract gate failure due to template placeholder in PR body; resolved by removing angle-bracket placeholder in .oc/pr-body.md and asserting zero template placeholders in PR contract |
 
 
 ## Residual limitations

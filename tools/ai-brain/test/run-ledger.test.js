@@ -849,3 +849,16 @@ test('job_id_collision_does_not_migrate_real_item', () => {
     ['new-a']
   );
 });
+
+test('pr_body_contains_no_template_placeholders', () => {
+  const prBodyPath = path.resolve(__dirname, '../../../.oc/pr-body.md');
+  if (fs.existsSync(prBodyPath)) {
+    const body = fs.readFileSync(prBodyPath, 'utf8');
+    const placeholders = body.match(/<[^>\n]+>/g);
+    assert.equal(
+      placeholders,
+      null,
+      `PR body still contains template placeholders: ${JSON.stringify(placeholders)}`
+    );
+  }
+});
