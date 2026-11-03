@@ -362,7 +362,7 @@ class ProgressLedger {
     it.stages = it.stages || {};
     const u = usage || {};
     // Usage only ever adds: negative or non-finite values would refund a spent budget.
-    if (u.ms !== undefined && !isCount(Number(u.ms)))
+    if (u.ms !== undefined && (typeof u.ms !== 'number' || !isCount(u.ms)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
     if (u.tokens !== undefined && (typeof u.tokens !== 'number' || !isCount(u.tokens)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
@@ -375,12 +375,12 @@ class ProgressLedger {
         ? Number(prev.imputedTokens)
         : perAttemptTokens
       : 0;
-    const suppliedMs = u.ms !== undefined ? Number(u.ms) : 0;
+    const suppliedMs = typeof u.ms === 'number' ? u.ms : 0;
     const elapsedMs =
       reserved && prev && Number.isFinite(prev.at) && prev.at >= 0
         ? Math.max(0, this.now() - prev.at)
         : 0;
-    const consumedMs = Math.max(suppliedMs, elapsedMs);
+    const consumedMs = u.ms !== undefined ? Math.max(suppliedMs, elapsedMs) : elapsedMs;
     for (const acc of [it.spent, s.goal]) {
       if (!reserved) acc.attempts += 1;
       acc.ms += consumedMs;
@@ -540,16 +540,28 @@ function validateLedger(s, file) {
     throw new Error('LEDGER_CORRUPT: ' + file);
   };
   if (!isObj(s) || !isObj(s.items) || !validSpent(s.goal)) bad();
+  let totalInFlightTokens = 0;
   for (const it of Object.values(s.items)) {
     if (!isObj(it)) bad();
     if (!validSpent(it.spent)) bad();
     if (it.blocked !== undefined && typeof it.blocked !== 'string') bad();
     if (!isObj(it.stages)) bad();
+    let itemInFlightTokens = 0;
     for (const st of Object.values(it.stages)) {
       if (!isObj(st) || !isObj(st.fps)) bad();
-      for (const r of Object.values(st.fps)) if (!isObj(r) || typeof r.outcome !== 'string') bad();
+      for (const r of Object.values(st.fps)) {
+        if (!isObj(r) || typeof r.outcome !== 'string') bad();
+        if (r.outcome === 'IN_FLIGHT') {
+          if (!Number.isInteger(r.pid) || r.pid <= 0) bad();
+          if (r.imputedTokens === undefined || !isCount(r.imputedTokens)) bad();
+          itemInFlightTokens += r.imputedTokens;
+        }
+      }
     }
+    if (it.spent.unknownTokens < itemInFlightTokens) bad();
+    totalInFlightTokens += itemInFlightTokens;
   }
+  if (s.goal.unknownTokens < totalInFlightTokens) bad();
 }
 
 function exceeded(spent, lim) {
@@ -673,8 +685,9 @@ function releaseLock(file, owner) {
     return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder: lockHolder(file) };
   }
   const gens = lockGenerations(file).filter((g) => !g.released);
-  const own = gens.find((g) => {
-    if (owner.gen !== undefined && g.gen !== owner.gen) return false;
+  const candidates =
+    owner.gen !== undefined ? gens.filter((g) => g.gen === owner.gen) : [...gens].reverse();
+  const own = candidates.find((g) => {
     const meta = readJson(g.path, null);
     return Boolean(meta && meta.jobId && meta.jobId === owner.jobId);
   });
@@ -840,7 +853,7 @@ if (require.main === module) {
     }
     if (cmd === 'record') {
       const usage = {
-        ms: a.ms === undefined ? 0 : Number(a.ms),
+        ms: a.ms === undefined ? undefined : Number(a.ms),
         tokens: a.tokens === undefined ? undefined : Number(a.tokens),
       };
       ledger.record(a.item, a.stage, fp, a.outcome, usage);

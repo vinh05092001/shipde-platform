@@ -841,10 +841,24 @@ test('round 4 #4: completing a reservation without elapsed usage accounts for el
   // Time passes to t=7000 (elapsed 6000ms > 5000ms cap)
   virtualNow = 7000;
 
-  // Complete attempt with empty usage {} (or without ms)
-  L.record('A', 'repair', 'f1', 'DONE', {});
+  // Passing null, false, or '' as ms must throw WORK_GUARD_REFUSED: invalid usage.ms
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: null }),
+    /WORK_GUARD_REFUSED: invalid usage\.ms/
+  );
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: false }),
+    /WORK_GUARD_REFUSED: invalid usage\.ms/
+  );
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: '' }),
+    /WORK_GUARD_REFUSED: invalid usage\.ms/
+  );
 
-  // The reservation elapsed 6000ms, which must be accounted for
+  // Complete attempt with explicit ms: 0 or empty usage {}
+  L.record('A', 'repair', 'f1', 'DONE', { ms: 0 });
+
+  // The reservation elapsed 6000ms, which must be accounted for even if ms: 0 was passed
   const s = L.load();
   assert.equal(s.items.A.spent.ms >= 6000, true);
 
@@ -879,12 +893,31 @@ test('round 4 #6: structurally damaged ledger missing unknownTokens fails closed
   const L = new g.ProgressLedger({ file, limits: { goal: { tokens: 3000 } } });
   assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
 
-  // Delete goal.unknownTokens from ledger file
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  delete raw.goal.unknownTokens;
-  fs.writeFileSync(file, JSON.stringify(raw));
+  // 1. Delete goal.unknownTokens from ledger file
+  const raw1 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw1.goal.unknownTokens;
+  fs.writeFileSync(file, JSON.stringify(raw1));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
 
-  // Loading / admit must fail closed with LEDGER_CORRUPT
+  // 2. Missing imputedTokens on IN_FLIGHT fingerprint record
+  const raw2 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw2.goal.unknownTokens = 3000;
+  delete raw2.items.A.stages.repair.fps.f1.imputedTokens;
+  fs.writeFileSync(file, JSON.stringify(raw2));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
+
+  // 3. Counter inconsistency: goal.unknownTokens less than outstanding in-flight imputed tokens
+  const raw3 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw3.items.A.stages.repair.fps.f1.imputedTokens = 3000;
+  raw3.goal.unknownTokens = 0;
+  fs.writeFileSync(file, JSON.stringify(raw3));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
+
+  // 4. Counter inconsistency: item.spent.unknownTokens less than item in-flight imputed tokens
+  const raw4 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw4.goal.unknownTokens = 3000;
+  raw4.items.A.spent.unknownTokens = 0;
+  fs.writeFileSync(file, JSON.stringify(raw4));
   assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
 });
 
