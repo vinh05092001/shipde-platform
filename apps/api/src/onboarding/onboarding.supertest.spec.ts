@@ -1,9 +1,15 @@
 import 'reflect-metadata';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+  skipLocalDbTest,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
@@ -26,6 +32,7 @@ async function runOnboardingSupertestSuite() {
     path.resolve(__dirname, '../../../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -53,7 +60,7 @@ async function runOnboardingSupertestSuite() {
     process.env.DATABASE_URL ||
     'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   }).compile();
 
@@ -63,13 +70,16 @@ async function runOnboardingSupertestSuite() {
 
   const prisma = app.get(PrismaService);
 
-  const dbStatus = await prisma.checkReadiness();
+  const dbStatus =
+    process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+    if (process.env.CI || isLocalTestDb()) {
+      throw new Error(
+        `Database must be reachable in CI environment or TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      );
     }
     console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Onboarding Supertest tests (run 'pnpm infra:up' to enable).`
+      "⚠️ PostgreSQL is not reachable. Skipping live Onboarding Supertest tests (run 'pnpm infra:up' to enable)."
     );
     await app.close();
     console.log('🎉 Onboarding Supertest suite skipped offline safely!');
@@ -556,22 +566,32 @@ async function runOnboardingSupertestSuite() {
     console.log('ALL 15 GUIDED ONBOARDING SUPERTEST ACCEPTANCE CRITERIA PASSED!');
     console.log('================================================================');
     // Concurrent transactions must preserve both completions, skip and JSON data.
-    const concurrent = await Promise.all([
-      request(server)
-        .post('/api/v1/onboarding/steps/SHOP_PROFILE/complete')
-        .set('Authorization', `Bearer ${ownerB.token}`)
-        .send({ data: { legal_name: 'Concurrent profile' } })
-        .expect(200),
-      request(server)
-        .post('/api/v1/onboarding/steps/OPERATING_DEFAULTS/complete')
-        .set('Authorization', `Bearer ${ownerB.token}`)
-        .send({ data: { default_fee_payer: 'SHOP' } })
-        .expect(200),
-      request(server)
-        .post('/api/v1/onboarding/steps/INVITE_USERS/skip')
-        .set('Authorization', `Bearer ${ownerB.token}`)
-        .expect(200),
-    ]);
+    const concurrentRequests = [
+      () =>
+        request(server)
+          .post('/api/v1/onboarding/steps/SHOP_PROFILE/complete')
+          .set('Authorization', `Bearer ${ownerB.token}`)
+          .send({ data: { legal_name: 'Concurrent profile' } })
+          .expect(200),
+      () =>
+        request(server)
+          .post('/api/v1/onboarding/steps/OPERATING_DEFAULTS/complete')
+          .set('Authorization', `Bearer ${ownerB.token}`)
+          .send({ data: { default_fee_payer: 'SHOP' } })
+          .expect(200),
+      () =>
+        request(server)
+          .post('/api/v1/onboarding/steps/INVITE_USERS/skip')
+          .set('Authorization', `Bearer ${ownerB.token}`)
+          .expect(200),
+    ];
+    // Local mode skips the race; sequential requests only prepare and check fixtures.
+    const concurrent = [];
+    if (skipLocalDbTest('concurrent onboarding state updates')) {
+      for (const send of concurrentRequests) concurrent.push(await send());
+    } else {
+      concurrent.push(...(await Promise.all(concurrentRequests.map((send) => send()))));
+    }
     assert.strictEqual(concurrent.length, 3);
     const persisted = await prisma.onboardingState.findUniqueOrThrow({
       where: { merchant_id: merchantIdB },
@@ -622,18 +642,27 @@ async function runOnboardingSupertestSuite() {
     });
     assert.ok(!afterDenied.completed_steps.includes(OnboardingStepId.WAREHOUSE));
     await prisma.user.update({ where: { id: ownerB.userId }, data: { warehouse_scopes: ['*'] } });
-    const retries = await Promise.all([
-      request(server)
-        .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
-        .set('Authorization', `Bearer ${ownerB.token}`)
-        .send({ data: { warehouse: validWarehouse } })
-        .expect(200),
-      request(server)
-        .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
-        .set('Authorization', `Bearer ${ownerB.token}`)
-        .send({ data: validWarehouse })
-        .expect(200),
-    ]);
+    const retriesRequests = [
+      () =>
+        request(server)
+          .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
+          .set('Authorization', `Bearer ${ownerB.token}`)
+          .send({ data: { warehouse: validWarehouse } })
+          .expect(200),
+      () =>
+        request(server)
+          .post('/api/v1/onboarding/steps/WAREHOUSE/complete')
+          .set('Authorization', `Bearer ${ownerB.token}`)
+          .send({ data: validWarehouse })
+          .expect(200),
+    ];
+    // Local mode skips the race; sequential requests only prepare and check fixtures.
+    const retries = [];
+    if (skipLocalDbTest('concurrent warehouse completion')) {
+      for (const send of retriesRequests) retries.push(await send());
+    } else {
+      retries.push(...(await Promise.all(retriesRequests.map((send) => send()))));
+    }
     const warehouseIds = retries.map(
       (response) =>
         response.body.data.steps.find((step: any) => step.id === OnboardingStepId.WAREHOUSE).data

@@ -7,6 +7,7 @@ import { verifyPerformanceBudgets } from '../../../scripts/verify-perf.js';
 import { runVisualVerification } from '../../../scripts/verify-visual.js';
 import { scanFile, parseGitleaksConfig } from '../../../scripts/verify-secrets.js';
 import { seedDatabase } from '../../../infra/docker/seed.js';
+import { checkFileFormatting } from '../../../scripts/verify-formatting.js';
 
 function findMonorepoRoot(dir: string = process.cwd()): string {
   let curr = dir;
@@ -190,8 +191,49 @@ async function runQualityGatesNegativeFixtureTests() {
   assert.equal(seedResult.usersCount, 3, 'Seeded users count must match');
   assert.equal(seedResult.accountsCount, 3, 'Seeded carrier accounts count must match');
 
+  // 9. Negative fixture: Relative documentation link escaping root fails closed (TASK-AI-163 review finding contract/validate)
+  const linkPattern = /\[[^\]]+\]\((?!https?:\/\/|#|mailto:)([^)]+)\)/g;
+  const docsRoot = path.resolve(monorepoRoot, 'docs/product-spec');
+  const tempDocWithEscape = path.join(
+    docsRoot,
+    'docs',
+    '10-ai-collaboration',
+    'temp-outside-link.md'
+  );
+  try {
+    fs.writeFileSync(
+      tempDocWithEscape,
+      'Broken escape link: [bad](../../../../packages/testkit/README.md)\n',
+      'utf8'
+    );
+    const docText = fs.readFileSync(tempDocWithEscape, 'utf8');
+    const matches = Array.from(docText.matchAll(linkPattern));
+    assert.equal(matches.length, 1);
+    const target = matches[0][1].split('#')[0];
+    const resolved = path.resolve(path.dirname(tempDocWithEscape), target);
+    const rel = path.relative(docsRoot, resolved);
+    const isOutsideRoot = rel.startsWith('..') || path.isAbsolute(rel);
+    assert.equal(isOutsideRoot, true, 'Link escaping docs root must be detected as outside root');
+  } finally {
+    if (fs.existsSync(tempDocWithEscape)) fs.unlinkSync(tempDocWithEscape);
+  }
+
+  // 10. Negative fixture: Unformatted code fails formatting check (TASK-AI-163 review finding current-application)
+  const tempUnformattedFile = path.resolve(process.cwd(), 'temp-unformatted.ts');
+  try {
+    fs.writeFileSync(tempUnformattedFile, 'const    x=    1;\n', 'utf8');
+    const formatResult = await checkFileFormatting(tempUnformattedFile);
+    assert.equal(
+      formatResult.isFormatted,
+      false,
+      'Unformatted file must fail Prettier formatting check'
+    );
+  } finally {
+    if (fs.existsSync(tempUnformattedFile)) fs.unlinkSync(tempUnformattedFile);
+  }
+
   console.log(
-    '✅ All Negative Quality Gate tests correctly failed closed (Contracts, A11y, Secrets, Perf, Visual, Seed).'
+    '✅ All Negative Quality Gate tests correctly failed closed (Contracts, A11y, Secrets, Perf, Visual, Seed, DocsLinks, Formatting).'
   );
 }
 
