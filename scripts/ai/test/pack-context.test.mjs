@@ -489,6 +489,34 @@ describe('failure cleanup and destination safety', () => {
     }
   });
 
+  test('rejects destination alias symlink when input path uses ./ prefix and preserves source', async () => {
+    const fixture = createFixtureRoot();
+    const srcHello = path.join(fixture, 'src', 'hello.js');
+    const originalHello = fs.readFileSync(srcHello, 'utf8');
+    const contextXml = path.join(fixture, 'context.xml');
+
+    try {
+      fs.symlinkSync(srcHello, contextXml, 'file');
+    } catch {
+      fs.linkSync(srcHello, contextXml);
+    }
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', './src/**', '--out', 'context.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /collision/i);
+      assert.equal(fs.readFileSync(srcHello, 'utf8'), originalHello);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
   test('rejects directory alias pointing to selected source dir and preserves source', async () => {
     const fixture = createFixtureRoot();
     const srcDir = path.join(fixture, 'src');

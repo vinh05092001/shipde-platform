@@ -211,13 +211,16 @@ export function validateOutputPath(root, outArg, inputPaths = []) {
 
   for (const p of inputPaths) {
     const normP = p.replace(/\\/g, '/');
+    const cleanP = normP.replace(/^\.\//, '').replace(/\/+/g, '/');
     const resolvedP = path.resolve(root, p);
 
     if (
       resolvedP === resolvedLexical ||
       resolvedP === canonicalTarget ||
       normP === normRelLexical ||
-      normP === normRelCanonical
+      normP === normRelCanonical ||
+      cleanP === normRelLexical ||
+      cleanP === normRelCanonical
     ) {
       throw new Error(
         `Input/output collision: output destination "${outArg}" is also specified as an input path`,
@@ -242,7 +245,9 @@ export function validateOutputPath(root, outArg, inputPaths = []) {
     if (path.matchesGlob) {
       if (
         path.matchesGlob(normRelLexical, normP) ||
-        path.matchesGlob(normRelCanonical, normP)
+        path.matchesGlob(normRelCanonical, normP) ||
+        path.matchesGlob(normRelLexical, cleanP) ||
+        path.matchesGlob(normRelCanonical, cleanP)
       ) {
         throw new Error(
           `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
