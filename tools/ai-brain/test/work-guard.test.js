@@ -528,8 +528,8 @@ test('round 2 #5: unknown token usage counts toward the token caps', () => {
   assert.equal(L.admit('A', 'repair', 'f3').cause, g.Cause.TOKENS_EXHAUSTED);
   const s = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(s.items.A.spent.tokensUnknown, 2);
-  // The third admission is refused before it is charged, so the cap stops at 3000.
-  assert.equal(s.items.A.spent.unknownTokens, 3000);
+  // Two unreserved attempts accumulated 3000 each; the third is refused before charge.
+  assert.equal(s.items.A.spent.unknownTokens, 6000);
   assert.equal(s.items.A.spent.tokens, 0);
 
   // A reservation that is never recorded cannot dodge the same cap.
@@ -664,4 +664,164 @@ test('round 2 #15: checkout comparison respects filesystem case-sensitivity', ()
     });
     assert.equal(r.ok, true);
   });
+});
+
+test('round 3 #4: goal-only token caps impute unknown usage and refuse excess attempts', () => {
+  const file = path.join(tmp(), 'l.json');
+  // Goal-only token cap: 3000 tokens, no item cap
+  const L = new g.ProgressLedger({ file, limits: { goal: { tokens: 3000 } } });
+  L.record('A', 'repair', 'f1', 'TIMEOUT', {});
+  // With conservative imputation under goal cap (3000 tokens), 1 unobserved attempt hits the cap
+  const res = L.admit('A', 'repair', 'f2');
+  assert.equal(res.ok, false);
+  assert.equal(res.cause, g.Cause.GOAL_EXHAUSTED);
+  assert.equal(L.load().goal.unknownTokens, 3000);
+});
+
+test("round 3 #5: recording one attempt does not erase another attempt's unresolved token charges", () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { tokens: 1000 }, goal: { tokens: 3000 } },
+  });
+  // Reserve attempts for A and B
+  assert.equal(L.admit('A', 'repair', 'fA', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.admit('B', 'repair', 'fB', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.load().goal.unknownTokens, 2000);
+
+  // Record A with known usage
+  L.record('A', 'repair', 'fA', 'DONE', { tokens: 500 });
+  const s = L.load();
+  assert.equal(s.items.A.spent.tokens, 500);
+  assert.equal(s.items.A.spent.unknownTokens, 0);
+  // B remains unresolved, so goal must retain B's 1000 imputed tokens
+  assert.equal(s.goal.tokens, 500);
+  assert.equal(s.goal.unknownTokens, 1000);
+
+  // Unreserved unknown attempts must accumulate rather than replace
+  L.record('C', 'repair', 'fC1', 'TIMEOUT', {});
+  assert.equal(L.load().goal.unknownTokens, 2000); // 1000 from B + 1000 from C1
+  L.record('C', 'repair', 'fC2', 'TIMEOUT', {});
+  assert.equal(L.load().goal.unknownTokens, 3000); // 1000 from B + 1000 from C1 + 1000 from C2
+  // Goal cap of 3000 is now reached (500 known + 3000 unknown = 3500 >= 3000)
+  assert.equal(L.admit('D', 'repair', 'fD').cause, g.Cause.GOAL_EXHAUSTED);
+});
+
+test('round 3 #6: elapsed-time caps account for unresolved reservations and repeated crashes', () => {
+  const file = path.join(tmp(), 'l.json');
+  let currentTime = 1000;
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { ms: 5000 }, goal: { ms: 10000 } },
+    now: () => currentTime,
+  });
+
+  // Reserve attempt for A with a dead pid at t = 1000
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: 999999 }).ok, true);
+
+  // Advance time past the item time cap (5000ms) to t = 7000
+  currentTime = 7000;
+
+  // Next admission for item A must account for elapsed time of unresolved reservation and be refused
+  const rA = L.admit('A', 'repair', 'f2');
+  assert.equal(rA.ok, false);
+  assert.equal(rA.cause, g.Cause.TIME_EXHAUSTED);
+
+  // Unresolvable reservation (missing/invalid at) must refuse admission
+  const s = L.load();
+  s.items.A.stages.repair.fps.f1.at = NaN;
+  fs.writeFileSync(file, JSON.stringify(s));
+  const rInvalid = L.admit('A', 'repair', 'f3');
+  assert.equal(rInvalid.ok, false);
+  assert.equal(rInvalid.cause, g.Cause.TIME_EXHAUSTED);
+});
+
+test('round 3 #11 / #15: checkout comparison detects actual filesystem case-sensitivity via inode probe', () => {
+  const dir = tmp();
+  // An existing path on disk can be probed for case sensitivity
+  const isCaseInsensitive = g.probeCaseInsensitive(dir);
+  assert.equal(typeof isCaseInsensitive, 'boolean');
+
+  // Verify that on this filesystem, norm matches probe
+  const upper = path.join(dir, 'UPPER_DIR');
+  const lower = path.join(dir, 'upper_dir');
+  fs.mkdirSync(upper);
+  if (isCaseInsensitive) {
+    // Both point to the same directory
+    assert.equal(g.norm(upper), g.norm(lower));
+  } else {
+    // Distinct paths
+    assert.notEqual(g.norm(upper), g.norm(lower));
+  }
+});
+
+test('round 3 #12: contenders preserve earlier lock generations and release markers', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+  assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, live).ok, true);
+  assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
+
+  // Generation 1 release marker exists
+  assert.equal(fs.existsSync(f + '.g1.released'), true);
+
+  // Acquire generation 2
+  assert.equal(g.acquireLock(f, { jobId: 'j2', pid: 222 }, live).ok, true);
+
+  // Generation 1 release marker must NOT have been unlinked
+  assert.equal(fs.existsSync(f + '.g1.released'), true);
+
+  // Dead generation superseding must also preserve earlier generations
+  const dead = { pidAlive: (p) => p !== 222 };
+  assert.equal(g.acquireLock(f, { jobId: 'j3', pid: 333 }, dead).ok, true);
+  assert.equal(fs.existsSync(f + '.g1.released'), true);
+  assert.equal(fs.existsSync(f + '.g2'), true);
+});
+
+test('round 3 #13: unknown completion does not double-charge reserved attempt', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { tokens: 3000 } },
+  });
+  // Reserve attempt: charged 3000 imputed tokens
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.load().items.A.spent.unknownTokens, 3000);
+
+  // Record unknown completion: must retain the 3000 charge, NOT become 6000
+  L.record('A', 'repair', 'f1', 'TIMEOUT', {});
+  const s = L.load();
+  assert.equal(s.items.A.spent.unknownTokens, 3000);
+  assert.equal(s.items.A.spent.tokensUnknown, 1);
+});
+
+test('round 3 #14: cleanup annotation preserves built-in types including Array, Date and RegExp', async () => {
+  const failingCleanup = async () => {
+    throw new Error('cleanup failed');
+  };
+
+  // Array preservation
+  const arr = [{ id: 1 }, { id: 2 }];
+  const resArr = await g.runWithCleanup(async () => arr, failingCleanup);
+  assert.equal(Array.isArray(resArr), true);
+  assert.equal(resArr.length, 2);
+  assert.equal(resArr[0].id, 1);
+  assert.match(resArr.cleanupError, /cleanup failed/);
+  // JSON serialization of array stays an array
+  assert.equal(JSON.stringify(resArr), JSON.stringify(arr));
+
+  // Date preservation
+  const date = new Date('2026-11-03T18:00:00.000Z');
+  const resDate = await g.runWithCleanup(async () => date, failingCleanup);
+  assert.equal(resDate instanceof Date, true);
+  assert.equal(resDate.toISOString(), '2026-11-03T18:00:00.000Z');
+  assert.equal(resDate.getTime(), date.getTime());
+  assert.match(resDate.cleanupError, /cleanup failed/);
+  assert.equal(JSON.stringify(resDate), JSON.stringify(date));
+
+  // RegExp preservation
+  const regex = /^test-[0-9]+$/i;
+  const resRegex = await g.runWithCleanup(async () => regex, failingCleanup);
+  assert.equal(resRegex instanceof RegExp, true);
+  assert.equal(resRegex.test('test-123'), true);
+  assert.match(resRegex.cleanupError, /cleanup failed/);
 });

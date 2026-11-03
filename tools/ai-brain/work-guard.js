@@ -47,22 +47,54 @@ const Cause = Object.freeze({
 // the environment, not in the work, so the input is not proven unproductive.
 const TRANSIENT = new Set(['TIMEOUT', 'RATE_LIMIT', 'NETWORK', 'LAUNCH_FAILED', 'NOT_ATTEMPTED']);
 
-// Paths only compare case-insensitively where the filesystem does. Windows and
-// macOS are case-insensitive by default (`/w/Item` and `/w/item` are one
-// checkout); elsewhere they are distinct checkouts and folding would accept a
-// wrong workspace. WORK_GUARD_CASE_INSENSITIVE=1/0 states the caller's fact.
-function caseInsensitiveFs() {
+// Paths only compare case-insensitively where the filesystem does. Probing the
+// filesystem via inode matching establishes the actual semantics on disk (handling
+// both case-sensitive and default case-insensitive APFS on macOS).
+// WORK_GUARD_CASE_INSENSITIVE=1/0 overrides with the caller's explicit fact.
+function probeCaseInsensitive(p) {
+  try {
+    let cur = path.resolve(String(p));
+    while (cur) {
+      if (fs.existsSync(cur)) {
+        const base = path.basename(cur);
+        if (base && /[a-zA-Z]/.test(base)) {
+          const toggled = base.replace(/[a-zA-Z]/, (c) =>
+            c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
+          );
+          const alt = path.join(path.dirname(cur), toggled);
+          try {
+            const s1 = fs.statSync(cur);
+            const s2 = fs.statSync(alt);
+            return s1.dev === s2.dev && s1.ino === s2.ino;
+          } catch (e) {
+            if (e && e.code === 'ENOENT') return false;
+          }
+        }
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function caseInsensitiveFs(p) {
   const forced = process.env.WORK_GUARD_CASE_INSENSITIVE;
   if (forced === '0' || forced === 'false') return false;
   if (forced === '1' || forced === 'true') return true;
-  return process.platform === 'win32' || process.platform === 'darwin';
+  if (p) {
+    const probed = probeCaseInsensitive(p);
+    if (typeof probed === 'boolean') return probed;
+  }
+  return process.platform === 'win32';
 }
 
 function norm(p) {
   const abs = path.resolve(String(p)).replace(/\\/g, '/');
   // A root such as 'C:\' keeps its one trailing slash; /+ would strip it into 'C:'.
   const trimmed = abs.length > 1 ? abs.replace(/\/+$/, '') || '/' : abs;
-  return caseInsensitiveFs() ? trimmed.toLowerCase() : trimmed;
+  return caseInsensitiveFs(p) ? trimmed.toLowerCase() : trimmed;
 }
 
 /**
@@ -199,11 +231,51 @@ class ProgressLedger {
     return this.locked(() => this.admitUnlocked(itemId, stage, fp, opts || {}));
   }
 
+  settleDeadFlights(s) {
+    let changed = false;
+    for (const item of Object.values((s && s.items) || {})) {
+      if (!isObj(item) || !isObj(item.stages)) continue;
+      for (const st of Object.values(item.stages)) {
+        if (!isObj(st) || !isObj(st.fps)) continue;
+        for (const r of Object.values(st.fps)) {
+          if (r && r.outcome === 'IN_FLIGHT' && Number.isInteger(r.pid) && pidProvenDead(r.pid)) {
+            if (Number.isFinite(r.at) && r.at >= 0) {
+              const elapsed = Math.max(0, this.now() - r.at);
+              item.spent = item.spent || { attempts: 0, ms: 0, tokens: 0 };
+              item.spent.ms = (item.spent.ms || 0) + elapsed;
+              s.goal.ms = (s.goal.ms || 0) + elapsed;
+              r.outcome = 'TIMEOUT';
+              r.at = this.now();
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    if (changed) {
+      writeJson(this.file, s);
+    }
+  }
+
   admitUnlocked(itemId, stage, fp, opts) {
     const s = this.load();
     const it = s.items[itemId] || {};
     if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
     const lim = this.limits || {};
+
+    this.settleDeadFlights(s);
+
+    const goalFlight = inFlightGoalMs(s.items, this.now());
+    if (!Number.isFinite(goalFlight)) return { ok: false, cause: Cause.GOAL_EXHAUSTED };
+    const itemFlight = inFlightMs(it, this.now());
+    if (!Number.isFinite(itemFlight)) return { ok: false, cause: Cause.TIME_EXHAUSTED };
+
+    const goalTimeOver = exceeded({ ms: (s.goal.ms || 0) + goalFlight }, lim.goal);
+    if (goalTimeOver) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: goalTimeOver };
+
+    const itemTimeOver = exceeded({ ms: ((it.spent && it.spent.ms) || 0) + itemFlight }, lim.item);
+    if (itemTimeOver) return { ok: false, cause: Cause.TIME_EXHAUSTED, limit: itemTimeOver };
+
     const over = exceeded(s.goal, lim.goal);
     if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
     const own = exceeded(it.spent || {}, lim.item);
@@ -242,16 +314,19 @@ class ProgressLedger {
       s.goal.attempts += 1;
       // The attempt is charged now with an unknown cost, so a reservation that is never
       // recorded still counts toward the token caps at the conservative per-attempt cap.
-      const perAttempt = {
-        tokens: (lim.item && lim.item.tokens) || (lim.goal && lim.goal.tokens) || 0,
-      };
+      const perAttemptTokens = getPerAttemptTokens(lim);
       for (const acc of [t.spent, s.goal]) {
         acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
-        acc.unknownTokens = (acc.unknownTokens || 0) + tokenCost({ tokens: NaN }, perAttempt);
+        acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
       }
       const st = t.stages[stage] || { fps: {} };
       st.fps = st.fps || {};
-      st.fps[fp] = { outcome: 'IN_FLIGHT', pid: opts.pid, at: this.now() };
+      st.fps[fp] = {
+        outcome: 'IN_FLIGHT',
+        pid: opts.pid,
+        at: this.now(),
+        imputedTokens: perAttemptTokens,
+      };
       t.stages[stage] = st;
       s.items[itemId] = t;
       writeJson(this.file, s);
@@ -278,23 +353,36 @@ class ProgressLedger {
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
     const knownTokens = u.tokens !== undefined && Number.isFinite(Number(u.tokens));
+    const perAttemptTokens = getPerAttemptTokens(this.limits);
+    const prevImputed = reserved
+      ? prev.imputedTokens !== undefined
+        ? Number(prev.imputedTokens)
+        : perAttemptTokens
+      : 0;
     for (const acc of [it.spent, s.goal]) {
       if (!reserved) acc.attempts += 1;
       acc.ms += Number(u.ms) || 0;
-      // A reservation already charged this attempt as unknown; the real usage replaces
-      // that imputation instead of charging the same attempt twice.
-      const imputed = reserved ? acc.unknownTokens || 0 : 0;
       if (knownTokens) {
         acc.tokens += Number(u.tokens);
-        acc.unknownTokens = 0;
+        if (reserved) {
+          acc.unknownTokens = Math.max(0, (acc.unknownTokens || 0) - prevImputed);
+          acc.tokensUnknown = Math.max(0, (acc.tokensUnknown || 0) - 1);
+        }
       } else {
-        acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
-        acc.unknownTokens = imputed + tokenCost(u, this.limits.item);
+        if (!reserved) {
+          acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+          acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
+        }
+        // If reserved, the attempt was already charged in admit(); preserve its charge.
       }
     }
     const st = it.stages[stage] || { fps: {} };
     st.fps = st.fps || {};
-    st.fps[fp] = { outcome: String(outcome), at: this.now() };
+    st.fps[fp] = {
+      outcome: String(outcome),
+      at: this.now(),
+      imputedTokens: knownTokens ? 0 : reserved ? prevImputed : perAttemptTokens,
+    };
     it.stages[stage] = st;
     s.items[itemId] = it;
     writeJson(this.file, s);
@@ -336,6 +424,46 @@ function validSpent(v) {
   );
 }
 
+function inFlightMs(itemOrStages, now) {
+  let ms = 0;
+  const stages = (itemOrStages && itemOrStages.stages) || itemOrStages;
+  if (!isObj(stages)) return 0;
+  for (const st of Object.values(stages)) {
+    if (!isObj(st) || !isObj(st.fps)) continue;
+    for (const r of Object.values(st.fps)) {
+      if (r && r.outcome === 'IN_FLIGHT') {
+        if (!Number.isFinite(r.at) || r.at < 0) {
+          return Infinity;
+        }
+        ms += Math.max(0, now - r.at);
+      }
+    }
+  }
+  return ms;
+}
+
+function inFlightGoalMs(items, now) {
+  let ms = 0;
+  if (!isObj(items)) return 0;
+  for (const it of Object.values(items)) {
+    const m = inFlightMs(it, now);
+    if (!Number.isFinite(m)) return Infinity;
+    ms += m;
+  }
+  return ms;
+}
+
+function getPerAttemptTokens(limits) {
+  const lim = limits || {};
+  if (lim.item && Number.isFinite(lim.item.tokens) && lim.item.tokens > 0) {
+    return lim.item.tokens;
+  }
+  if (lim.goal && Number.isFinite(lim.goal.tokens) && lim.goal.tokens > 0) {
+    return lim.goal.tokens;
+  }
+  return 0;
+}
+
 // A usage whose tokens could not be observed is charged the per-attempt token cap,
 // which is the most that attempt was allowed to spend. With no token cap there is
 // nothing to charge. `usage.tokens === undefined` means the attempt spent nothing
@@ -346,7 +474,7 @@ function tokenCost(u, lim) {
     const n = Number(u.tokens);
     return n < 0 ? 0 : n;
   }
-  return Number(lim && lim.tokens) > 0 ? Number(lim.tokens) : 0;
+  return getPerAttemptTokens(lim && (lim.item || lim.goal) ? lim : { item: lim });
 }
 
 /** Tokens counted against a cap: observed tokens plus imputed unknown usage. */
@@ -488,15 +616,8 @@ function acquireLock(file, owner, o) {
     fs.unlinkSync(mine);
     return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
   }
-  for (const g of after) {
-    if (g.gen < gen) {
-      try {
-        fs.unlinkSync(g.path);
-      } catch (_) {
-        /* superseded generation already gone */
-      }
-    }
-  }
+  // Superseded earlier generations and release markers are preserved: dead owners
+  // are superseded through exclusive creation of the next generation, never deletion (BR-LOOP-04).
   return { ok: true, owner: Object.assign({}, owner, { gen }) };
 }
 
@@ -551,20 +672,42 @@ async function runWithCleanup(fn, cleanup) {
   if (!cleanupError || out === null || typeof out !== 'object') return out;
   const note = String(cleanupError.message || cleanupError);
   // Never mutate the worker's result: a TypeError here would replace the real exit code.
-  // A new object keeps the worker's own properties as *own* properties, so JSON.stringify
-  // and object spread still carry jobId/exitCode, and it inherits from the result so
-  // fields held on a prototype (exitCode on a class instance) stay readable.
-  const copy = Object.create(out);
+  // Preserving built-in types (Array, Date, RegExp, Map, Set, Buffer) maintains JSON serialization
+  // and internal slots; class instances and plain objects inherit prototype fields.
+  let copy;
+  if (Array.isArray(out)) {
+    copy = Array.from(out);
+  } else if (out instanceof Date) {
+    copy = new Date(out.getTime());
+  } else if (out instanceof RegExp) {
+    copy = new RegExp(out.source, out.flags);
+  } else if (out instanceof Map) {
+    copy = new Map(out);
+  } else if (out instanceof Set) {
+    copy = new Set(out);
+  } else if (typeof Buffer !== 'undefined' && Buffer.isBuffer(out)) {
+    copy = Buffer.from(out);
+  } else {
+    copy = Object.create(out);
+  }
   for (const key of Reflect.ownKeys(out)) {
     if (key === 'cleanupError') continue;
     const d = Object.getOwnPropertyDescriptor(out, key);
-    if (d) Object.defineProperty(copy, key, d);
+    if (d) {
+      try {
+        Object.defineProperty(copy, key, d);
+      } catch (_) {}
+    }
   }
-  return Object.defineProperty(copy, 'cleanupError', {
-    value: note,
-    enumerable: true,
-    configurable: true,
-  });
+  try {
+    Object.defineProperty(copy, 'cleanupError', {
+      value: note,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  } catch (_) {}
+  return copy;
 }
 
 module.exports = {
@@ -578,6 +721,8 @@ module.exports = {
   lockHolder,
   acceptResult,
   runWithCleanup,
+  probeCaseInsensitive,
+  norm,
 };
 
 // CLI for shell runtimes (pipeline scripts, Hermes): JSON on stdout, exit 0 when
