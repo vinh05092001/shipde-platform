@@ -425,6 +425,10 @@ class UnifiedRouteSelector {
           candidateToCheck = createRouteIdentity({
             ...c,
             comboBranches: validatedViable,
+            metadata: {
+              ...(c.metadata || {}),
+              viableBranches: validatedViable,
+            },
           });
         } else {
           // All viable branches have failed during await

@@ -1992,3 +1992,118 @@ describe('Codex Review fa72284 regressions (6 P1 findings)', () => {
     assert.notEqual(selection.chosen, comboCandidate.candidateKey, 'Selector must NOT retain failed combo');
   });
 });
+
+describe('Review fb8826b regressions', () => {
+  test('401 on model A blocks model B on same connection when accountRef UNKNOWN', () => {
+    const health = new ScopedHealthRegistry();
+
+    const modelA = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'ag/claude-3-5-sonnet',
+      accountRef: UNKNOWN,
+      connectionId: 'conn-shared-auth',
+      metadata: { capabilities: ['general_code'] }
+    });
+
+    const modelB = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'ag/claude-3-7-sonnet',
+      accountRef: UNKNOWN,
+      connectionId: 'conn-shared-auth',
+      metadata: { capabilities: ['general_code'] }
+    });
+
+    assert.equal(health.evaluateHealth(modelA).healthy, true);
+    assert.equal(health.evaluateHealth(modelB).healthy, true);
+
+    health.recordFailure(modelA, { httpStatus: 401, message: 'Unauthorized: Invalid API key' });
+
+    const evalA = health.evaluateHealth(modelA);
+    assert.equal(evalA.healthy, false);
+    assert.equal(evalA.category, ErrorCategory.AUTH);
+
+    const evalB = health.evaluateHealth(modelB);
+    assert.equal(evalB.healthy, false, 'Model B on same connection must be blocked when model A fails 401');
+    assert.equal(evalB.category, ErrorCategory.AUTH);
+  });
+
+  test('combo selects healthy branch B when A exhausts during JEV await', async () => {
+    const health = new ScopedHealthRegistry();
+
+    const branchA = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'ag/claude-3-5-sonnet',
+      accountRef: 'user-branch-a',
+      connectionId: 'conn-a',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.04, qualityScore: 90 }
+    });
+
+    const branchB = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'openai',
+      configuredModelId: 'gpt-4o',
+      accountRef: 'user-branch-b',
+      connectionId: 'conn-b',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.03, qualityScore: 85 }
+    });
+
+    const comboCandidate = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'combo',
+      configuredModelId: 'combo/multi',
+      accountRef: UNKNOWN,
+      isCombo: true,
+      comboBranches: [branchA, branchB],
+      metadata: {
+        viableBranches: [branchA, branchB],
+        capabilities: ['general_code'],
+        estimatedCostUsd: 0.04,
+        qualityScore: 90
+      }
+    });
+
+    const singleRoute = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'deepseek',
+      configuredModelId: 'deepseek-chat',
+      accountRef: 'user-single',
+      connectionId: 'conn-s',
+      metadata: { capabilities: ['general_code'], estimatedCostUsd: 0.01, qualityScore: 80 }
+    });
+
+    const jevAsk = async () => {
+      health.recordFailure(branchA, { message: 'insufficient_quota' });
+      health.recordFailure(singleRoute, { message: 'insufficient_quota' });
+      return { choice: 'QUALITY_FIRST', confidence: 0.9 };
+    };
+
+    const selector = new UnifiedRouteSelector({ healthRegistry: health, jevAsk });
+
+    const selection = await selector.selectRoute([comboCandidate, singleRoute], {
+      role: 'writer',
+      requiredCapabilities: ['general_code']
+    });
+
+    assert.equal(selection.status, 'ADMITTED_AND_SELECTED', 'Selection must succeed through healthy branch B');
+    assert.equal(selection.chosen, comboCandidate.candidateKey);
+    assert.equal(selection.identity.comboBranches.length, 1);
+    assert.equal(selection.identity.comboBranches[0].configuredModelId, branchB.configuredModelId);
+    assert.equal(selection.identity.metadata.viableBranches.length, 1);
+    assert.equal(selection.identity.metadata.viableBranches[0].configuredModelId, branchB.configuredModelId);
+  });
+});

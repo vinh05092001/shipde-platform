@@ -260,7 +260,8 @@ function accountHealthKey(id) {
   const realAccount = id.metadata?.realAccountRef;
   const fromPrivate = (realAccount && realAccount !== 'UNKNOWN' ? getPrivateEmail(realAccount) : null)
     || (id.accountRef && id.accountRef !== 'UNKNOWN' ? getPrivateEmail(id.accountRef) : null);
-  const observed = fromPrivate || (realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef);
+  const account = fromPrivate || (realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef);
+  const observed = account && account !== 'UNKNOWN' ? account : id.connectionId;
   const safeObserved = typeof observed === 'string' && observed.includes('@')
     ? hashEmail(observed)
     : observed;
