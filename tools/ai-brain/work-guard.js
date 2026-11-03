@@ -366,7 +366,9 @@ function acquireLock(file, owner, o) {
     return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
   }
   const after = lockGenerations(file);
-  if (after.some((g) => g.gen > gen)) {
+  // A higher generation, or a tombstone of this one (it was taken and released while we
+  // paused), means another owner already used this number: back off.
+  if (after.some((g) => g.gen > gen || (g.gen === gen && g.released))) {
     fs.unlinkSync(mine);
     return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
   }
@@ -424,7 +426,8 @@ async function runWithCleanup(fn, cleanup) {
   if (cleanupError && out && typeof out === 'object') {
     const note = String(cleanupError.message || cleanupError);
     // Never mutate the worker's result: a TypeError here would replace the real exit code.
-    return Object.assign({}, out, { cleanupError: note });
+    // Inherit from the result so inherited and non-enumerable fields (exitCode) stay readable.
+    return Object.defineProperty(Object.create(out), 'cleanupError', { value: note, enumerable: true });
   }
   return out;
 }

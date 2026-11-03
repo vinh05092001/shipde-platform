@@ -282,3 +282,18 @@ test('codex b4a4064: items need spent and stages; lock pids must be positive; us
   assert.throws(() => L.record('A', 'review', 'F', 'X', { tokens: -100 }), /invalid usage/);
   assert.throws(() => L.record('A', 'review', 'F', 'X', { tokens: Infinity }), /invalid usage/);
 });
+
+test('codex ee9ce83: a generation already taken and released cannot be reacquired; inherited exit code survives', async () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+  g.acquireLock(f, { jobId: 'B', pid: 2 }, live);
+  g.releaseLock(f, { jobId: 'B' }); // g1.released
+  // A paused after choosing g1, now creates it
+  fs.writeFileSync(f + '.g1', JSON.stringify({ jobId: 'A', pid: 1, at: 1 }));
+  const late = g.acquireLock(f, { jobId: 'C', pid: 3 }, live);
+  assert.equal(late.ok, true); // C takes g2, never g1
+  assert.equal(g.lockHolder(f).jobId, 'C');
+  const r = await g.runWithCleanup(async () => Object.create({ exitCode: 7 }), async () => { throw new Error('rm'); });
+  assert.equal(r.exitCode, 7);
+  assert.match(r.cleanupError, /rm/);
+});
