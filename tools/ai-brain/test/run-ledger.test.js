@@ -12,10 +12,54 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'run-ledger-test-'));
 
 test('chain writer->review->repair->review computes correct total spent and links', () => {
   const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
-  const r1 = ledger.record('writer', { itemId: 'TASK-1', decisionId: 'd1', jobId: 'j1', attemptId: 'a1', launch: 10, exit: 0, reviewSha: 'sha-w1', verdict: 'DONE', ms: 1200, tokens: 500 });
-  const r2 = ledger.record('review', { itemId: 'TASK-1', decisionId: 'd2', jobId: 'j2', attemptId: 'a2', launch: 20, exit: 0, reviewSha: 'sha-w1', verdict: 'CHANGES_REQUIRED', ms: 800, tokens: 300 });
-  const r3 = ledger.record('repair', { itemId: 'TASK-1', decisionId: 'd3', jobId: 'j3', attemptId: 'a3', launch: 30, exit: 0, reviewSha: 'sha-w2', verdict: 'DONE', ms: 1500, tokens: 700 });
-  const r4 = ledger.record('reviewer', { itemId: 'TASK-1', decisionId: 'd4', jobId: 'j4', attemptId: 'a4', launch: 40, exit: 0, reviewSha: 'sha-w2', verdict: 'PASS', ms: 600, tokens: 200 });
+  const r1 = ledger.record('writer', {
+    itemId: 'TASK-1',
+    decisionId: 'd1',
+    jobId: 'j1',
+    attemptId: 'a1',
+    launch: 10,
+    exit: 0,
+    reviewSha: 'sha-w1',
+    verdict: 'DONE',
+    ms: 1200,
+    tokens: 500,
+  });
+  const r2 = ledger.record('review', {
+    itemId: 'TASK-1',
+    decisionId: 'd2',
+    jobId: 'j2',
+    attemptId: 'a2',
+    launch: 20,
+    exit: 0,
+    reviewSha: 'sha-w1',
+    verdict: 'CHANGES_REQUIRED',
+    ms: 800,
+    tokens: 300,
+  });
+  const r3 = ledger.record('repair', {
+    itemId: 'TASK-1',
+    decisionId: 'd3',
+    jobId: 'j3',
+    attemptId: 'a3',
+    launch: 30,
+    exit: 0,
+    reviewSha: 'sha-w2',
+    verdict: 'DONE',
+    ms: 1500,
+    tokens: 700,
+  });
+  const r4 = ledger.record('reviewer', {
+    itemId: 'TASK-1',
+    decisionId: 'd4',
+    jobId: 'j4',
+    attemptId: 'a4',
+    launch: 40,
+    exit: 0,
+    reviewSha: 'sha-w2',
+    verdict: 'PASS',
+    ms: 600,
+    tokens: 200,
+  });
 
   assert.equal(r1.ok && r2.ok && r3.ok && r4.ok, true);
   const spent = ledger.getSummary('TASK-1');
@@ -25,10 +69,15 @@ test('chain writer->review->repair->review computes correct total spent and link
 
   const chain = ledger.getChain('TASK-1');
   assert.equal(chain.length, 4);
-  assert.deepEqual(chain.map((c) => [c.decisionId, c.attemptId, c.reviewSha, c.verdict]), [
-    ['d1', 'a1', 'sha-w1', 'DONE'], ['d2', 'a2', 'sha-w1', 'CHANGES_REQUIRED'],
-    ['d3', 'a3', 'sha-w2', 'DONE'], ['d4', 'a4', 'sha-w2', 'PASS'],
-  ]);
+  assert.deepEqual(
+    chain.map((c) => [c.decisionId, c.attemptId, c.reviewSha, c.verdict]),
+    [
+      ['d1', 'a1', 'sha-w1', 'DONE'],
+      ['d2', 'a2', 'sha-w1', 'CHANGES_REQUIRED'],
+      ['d3', 'a3', 'sha-w2', 'DONE'],
+      ['d4', 'a4', 'sha-w2', 'PASS'],
+    ]
+  );
 });
 
 test('missing tokens yields UNKNOWN, tokenEnforcement UNENFORCED, no zero or money conversion', () => {
@@ -45,9 +94,18 @@ test('missing tokens yields UNKNOWN, tokenEnforcement UNENFORCED, no zero or mon
 });
 
 test('exceeding attempt or deadline budget cap refuses admission and record', () => {
-  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json'), limits: { item: { attempts: 2, ms: 2000, tokens: 100 } } });
-  assert.equal(ledger.record('writer', { itemId: 'TASK-3', attemptId: 'att-3a', ms: 500 }).ok, true);
-  assert.equal(ledger.record('review', { itemId: 'TASK-3', attemptId: 'att-3b', ms: 600 }).ok, true);
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 2, ms: 2000, tokens: 100 } },
+  });
+  assert.equal(
+    ledger.record('writer', { itemId: 'TASK-3', attemptId: 'att-3a', ms: 500 }).ok,
+    true
+  );
+  assert.equal(
+    ledger.record('review', { itemId: 'TASK-3', attemptId: 'att-3b', ms: 600 }).ok,
+    true
+  );
 
   const aOver = ledger.admit('repair', { itemId: 'TASK-3' });
   assert.equal(aOver.ok, false);
@@ -57,7 +115,10 @@ test('exceeding attempt or deadline budget cap refuses admission and record', ()
   assert.equal(rOver.ok, false);
   assert.equal(rOver.cause, Cause.ATTEMPTS_EXHAUSTED);
 
-  const ledger2 = new RunLedger({ file: path.join(tmpDir(), 'ledger2.json'), limits: { item: { ms: 1000 } } });
+  const ledger2 = new RunLedger({
+    file: path.join(tmpDir(), 'ledger2.json'),
+    limits: { item: { ms: 1000 } },
+  });
   ledger2.record('writer', { itemId: 'TASK-3', attemptId: 'att-3d', ms: 1200 });
   assert.equal(ledger2.admit('review', { itemId: 'TASK-3' }).cause, Cause.TIME_EXHAUSTED);
 });
@@ -66,21 +127,35 @@ test('retryLayer pipeline|cli|gateway counts attempt once across layers', () => 
   const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
   ledger.record('writer', { itemId: 'TASK-4', attemptId: 'att-x', retryLayer: 'gateway', ms: 100 });
   ledger.record('writer', { itemId: 'TASK-4', attemptId: 'att-x', retryLayer: 'cli', ms: 200 });
-  ledger.record('writer', { itemId: 'TASK-4', attemptId: 'att-x', retryLayer: 'pipeline', ms: 300 });
+  ledger.record('writer', {
+    itemId: 'TASK-4',
+    attemptId: 'att-x',
+    retryLayer: 'pipeline',
+    ms: 300,
+  });
 
   const spent = ledger.getSummary('TASK-4');
   assert.equal(spent.attempts, 1);
   assert.equal(spent.ms, 600);
 
   const runs = ledger.getRuns('TASK-4');
-  assert.deepEqual(runs.map((r) => r.retryLayer), ['gateway', 'cli', 'pipeline']);
-  assert.throws(() => ledger.record('writer', { itemId: 'TASK-4', retryLayer: 'unknown' }), /invalid retryLayer/);
+  assert.deepEqual(
+    runs.map((r) => r.retryLayer),
+    ['gateway', 'cli', 'pipeline']
+  );
+  assert.throws(
+    () => ledger.record('writer', { itemId: 'TASK-4', retryLayer: 'unknown' }),
+    /invalid retryLayer/
+  );
 });
 
 test('route identity masks credentials', () => {
   const masked = maskCredentials({
-    provider: 'anthropic', apiKey: 'sk-ant-api03-abcdefghijklmn', secret: 'mysecret',
-    token: 'jwt.token.here', endpoint: 'https://user:pass123@api.anthropic.com/v1',
+    provider: 'anthropic',
+    apiKey: 'sk-ant-api03-abcdefghijklmn',
+    secret: 'mysecret',
+    token: 'jwt.token.here',
+    endpoint: 'https://user:pass123@api.anthropic.com/v1',
   });
   assert.equal(masked.apiKey, '[REDACTED]');
   assert.equal(masked.secret, '[REDACTED]');
@@ -119,7 +194,10 @@ test('record missing both jobId and attemptId throws RUN_LEDGER_REFUSED', () => 
 });
 
 test('two retry layers with same attemptId and cap=1 are both recorded, accumulate ms, keep verdicts and stay at 1 attempt', () => {
-  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json'), limits: { item: { attempts: 1 } } });
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 } },
+  });
   const rGateway = ledger.record('writer', {
     itemId: 'TASK-CAP1',
     attemptId: 'a1',
@@ -161,10 +239,16 @@ test('two retry layers with same attemptId and cap=1 are both recorded, accumula
 });
 
 test('ProgressLedger.admit with reserve:true followed by record for same fingerprint counts 1 attempt total', () => {
-  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json'), limits: { item: { attempts: 2 } } });
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 2 } },
+  });
   const fp = fingerprint({ headSha: 'sha-res-abc' });
 
-  const aRes = ledger.progressLedger.admit('TASK-RES', 'writer', fp, { reserve: true, pid: process.pid });
+  const aRes = ledger.progressLedger.admit('TASK-RES', 'writer', fp, {
+    reserve: true,
+    pid: process.pid,
+  });
   assert.equal(aRes.ok, true);
   assert.equal(ledger.getSummary('TASK-RES').attempts, 1);
 
@@ -239,7 +323,10 @@ test('distinct_attempts_cannot_reuse_in_flight_credit', () => {
     });
     results.push(res);
   }
-  assert.deepEqual(results.map((r) => r.ok), [true, true, false, false]);
+  assert.deepEqual(
+    results.map((r) => r.ok),
+    [true, true, false, false]
+  );
   assert.equal(results[2].cause, Cause.ATTEMPTS_EXHAUSTED);
   assert.equal(results[3].cause, Cause.ATTEMPTS_EXHAUSTED);
   assert.equal(ledger.getSummary('TASK-FLIGHT').attempts, 2);

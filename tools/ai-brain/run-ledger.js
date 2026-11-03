@@ -10,7 +10,9 @@ const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
 function maskCredentials(v) {
   if (!v) return v;
   if (typeof v === 'string') {
-    return v.replace(/(https?:\/\/)([^:@]+):([^@]+)@/g, '$1$2:***@').replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
+    return v
+      .replace(/(https?:\/\/)([^:@]+):([^@]+)@/g, '$1$2:***@')
+      .replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
   }
   if (Array.isArray(v)) {
     return v.map((item) => maskCredentials(item));
@@ -44,13 +46,18 @@ function exceeded(spent, lim, opts = {}) {
 }
 
 function limitCause(k) {
-  return k === 'ms' ? Cause.TIME_EXHAUSTED : k === 'tokens' ? Cause.TOKENS_EXHAUSTED : Cause.ATTEMPTS_EXHAUSTED;
+  return k === 'ms'
+    ? Cause.TIME_EXHAUSTED
+    : k === 'tokens'
+      ? Cause.TOKENS_EXHAUSTED
+      : Cause.ATTEMPTS_EXHAUSTED;
 }
 
 class RunLedger {
   constructor(o = {}) {
     if (typeof o === 'string') o = { file: o };
-    this.progressLedger = o instanceof ProgressLedger ? o : (o.progressLedger || new ProgressLedger(o));
+    this.progressLedger =
+      o instanceof ProgressLedger ? o : o.progressLedger || new ProgressLedger(o);
     this.file = this.progressLedger.file;
     this.limits = o.limits || this.progressLedger.limits || {};
     this.progressLedger.limits = this.limits;
@@ -61,21 +68,39 @@ class RunLedger {
     }
   }
 
-  load() { return this.progressLedger.load(); }
+  load() {
+    return this.progressLedger.load();
+  }
 
   admit(arg1, arg2, arg3, arg4) {
     let itemId, stage, fp, opts;
     if (typeof arg1 === 'string' && typeof arg2 === 'string' && typeof arg3 === 'string') {
-      itemId = arg1; stage = arg2; fp = arg3; opts = arg4 || {};
+      itemId = arg1;
+      stage = arg2;
+      fp = arg3;
+      opts = arg4 || {};
     } else if (typeof arg1 === 'object' && arg1 !== null) {
-      opts = arg1; stage = opts.stage; itemId = opts.itemId; fp = opts.fp || opts.fingerprint;
+      opts = arg1;
+      stage = opts.stage;
+      itemId = opts.itemId;
+      fp = opts.fp || opts.fingerprint;
     } else if (typeof arg2 === 'object' && arg2 !== null) {
-      stage = arg1; opts = arg2; itemId = opts.itemId; fp = opts.fp || opts.fingerprint;
+      stage = arg1;
+      opts = arg2;
+      itemId = opts.itemId;
+      fp = opts.fp || opts.fingerprint;
     } else {
-      stage = arg1; opts = {};
+      stage = arg1;
+      opts = {};
     }
     if (opts.reserve) {
-      const actualFp = fp || opts.fp || opts.fingerprint || (opts.headSha ? fingerprint({ headSha: opts.headSha, baseSha: opts.baseSha, inputs: opts.inputs }) : null);
+      const actualFp =
+        fp ||
+        opts.fp ||
+        opts.fingerprint ||
+        (opts.headSha
+          ? fingerprint({ headSha: opts.headSha, baseSha: opts.baseSha, inputs: opts.inputs })
+          : null);
       if (itemId && stage && actualFp) {
         this.progressLedger.limits = this.limits;
         return this.progressLedger.admit(itemId, stage, actualFp, opts);
@@ -93,11 +118,19 @@ class RunLedger {
 
   record(arg1, arg2, arg3) {
     let stage, opts;
-    if (typeof arg1 === 'object' && arg1 !== null) { opts = arg1; stage = opts.stage; }
-    else if (typeof arg2 === 'object' && arg2 !== null && !arg3) { stage = arg1; opts = arg2; }
-    else if (typeof arg1 === 'string' && typeof arg2 === 'string') {
-      stage = arg2; opts = Object.assign({ itemId: arg1 }, typeof arg3 === 'object' ? arg3 : {});
-    } else { stage = arg1; opts = arg2 || {}; }
+    if (typeof arg1 === 'object' && arg1 !== null) {
+      opts = arg1;
+      stage = opts.stage;
+    } else if (typeof arg2 === 'object' && arg2 !== null && !arg3) {
+      stage = arg1;
+      opts = arg2;
+    } else if (typeof arg1 === 'string' && typeof arg2 === 'string') {
+      stage = arg2;
+      opts = Object.assign({ itemId: arg1 }, typeof arg3 === 'object' ? arg3 : {});
+    } else {
+      stage = arg1;
+      opts = arg2 || {};
+    }
     const st = String(stage || '').toLowerCase();
     if (!VALID_STAGES.has(st)) throw new Error('RUN_LEDGER_REFUSED: invalid stage ' + stage);
     if (opts.retryLayer && !VALID_RETRY_LAYERS.has(opts.retryLayer)) {
@@ -109,7 +142,10 @@ class RunLedger {
     return this.progressLedger.locked(() => {
       const s = this.progressLedger.load();
       const itemId = opts.itemId;
-      const it = (itemId && s.items[itemId]) || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
+      const it = (itemId && s.items[itemId]) || {
+        spent: { attempts: 0, ms: 0, tokens: 0 },
+        stages: {},
+      };
       it.spent = it.spent || { attempts: 0, ms: 0, tokens: 0 };
       it.stages = it.stages || {};
       it.seenAttempts = it.seenAttempts || {};
@@ -118,7 +154,12 @@ class RunLedger {
       const isNew = !it.seenAttempts[attemptKey];
 
       const runReviewSha = opts.reviewSha || opts.headSha || null;
-      const fp = opts.fp || opts.fingerprint || (runReviewSha ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs }) : ('fp-' + ((s.runs && s.runs.length) || 0)));
+      const fp =
+        opts.fp ||
+        opts.fingerprint ||
+        (runReviewSha
+          ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs })
+          : 'fp-' + ((s.runs && s.runs.length) || 0));
       const prev = ((it.stages[st] || {}).fps || {})[fp];
       const reserved = Boolean(
         prev &&
@@ -141,7 +182,7 @@ class RunLedger {
       const ms = Number(opts.ms) || 0;
       const hasTokens = Number.isFinite(opts.tokens);
       const tokens = hasTokens ? opts.tokens : 'UNKNOWN';
-      const tokenEnforcement = hasTokens ? (opts.tokenEnforcement || 'ENFORCED') : 'UNENFORCED';
+      const tokenEnforcement = hasTokens ? opts.tokenEnforcement || 'ENFORCED' : 'UNENFORCED';
       for (const acc of [it.spent, s.goal]) {
         if (consumesAttempt) acc.attempts += 1;
         acc.ms += ms;
@@ -158,17 +199,34 @@ class RunLedger {
         s.goals[opts.goalId] = gAcc;
       }
       const run = {
-        decisionId: opts.decisionId || null, jobId: opts.jobId || null, attemptId: opts.attemptId || opts.jobId || null,
-        launch: opts.launch !== undefined ? opts.launch : null, exit: opts.exit !== undefined ? opts.exit : null,
-        reviewSha: runReviewSha, verdict: opts.verdict || opts.outcome || null,
-        stage: st, itemId: itemId || null, goalId: opts.goalId || null, retryLayer: opts.retryLayer || null,
-        ms, tokens, tokenEnforcement, route: maskCredentials(opts.route || opts.routeIdentity || null), at: this.now(),
+        decisionId: opts.decisionId || null,
+        jobId: opts.jobId || null,
+        attemptId: opts.attemptId || opts.jobId || null,
+        launch: opts.launch !== undefined ? opts.launch : null,
+        exit: opts.exit !== undefined ? opts.exit : null,
+        reviewSha: runReviewSha,
+        verdict: opts.verdict || opts.outcome || null,
+        stage: st,
+        itemId: itemId || null,
+        goalId: opts.goalId || null,
+        retryLayer: opts.retryLayer || null,
+        ms,
+        tokens,
+        tokenEnforcement,
+        route: maskCredentials(opts.route || opts.routeIdentity || null),
+        at: this.now(),
       };
-      s.runs = s.runs || []; s.runs.push(run);
-      it.runs = it.runs || []; it.runs.push(run);
+      s.runs = s.runs || [];
+      s.runs.push(run);
+      it.runs = it.runs || [];
+      it.runs.push(run);
       it.stages[st] = it.stages[st] || { fps: {} };
       it.stages[st].fps = it.stages[st].fps || {};
-      it.stages[st].fps[fp] = { outcome: String(run.verdict || 'DONE'), attemptId: attemptKey, at: this.now() };
+      it.stages[st].fps[fp] = {
+        outcome: String(run.verdict || 'DONE'),
+        attemptId: attemptKey,
+        at: this.now(),
+      };
       if (itemId) s.items[itemId] = it;
       writeJson(this.file, s);
       return { ok: true, run };
@@ -177,15 +235,23 @@ class RunLedger {
 
   getRuns(itemId) {
     const s = this.progressLedger.load();
-    return (itemId ? (s.items[itemId] && s.items[itemId].runs) : s.runs) || [];
+    return (itemId ? s.items[itemId] && s.items[itemId].runs : s.runs) || [];
   }
-  getChain(itemId) { return this.getRuns(itemId); }
+  getChain(itemId) {
+    return this.getRuns(itemId);
+  }
   getSummary(itemId) {
     const s = this.progressLedger.load();
-    return itemId ? ((s.items[itemId] && s.items[itemId].spent) || { attempts: 0, ms: 0, tokens: 0 }) : s.goal;
+    return itemId
+      ? (s.items[itemId] && s.items[itemId].spent) || { attempts: 0, ms: 0, tokens: 0 }
+      : s.goal;
   }
-  block(itemId, reason) { return this.progressLedger.block(itemId, reason); }
-  unblock(itemId) { return this.progressLedger.unblock(itemId); }
+  block(itemId, reason) {
+    return this.progressLedger.block(itemId, reason);
+  }
+  unblock(itemId) {
+    return this.progressLedger.unblock(itemId);
+  }
 }
 
 module.exports = { RunLedger, maskCredentials, VALID_STAGES, VALID_RETRY_LAYERS, Cause };
