@@ -18,11 +18,30 @@ const CREDENTIAL_LINE_RE = /(?:api[-_]?key|apikey|key|token|secret|password|auth
 function redactStderr(text) {
   if (!text) return '';
   const lines = String(text).split('\n');
+  let expectingValue = false;
   return lines
     .map((line) => {
       const hasCR = line.endsWith('\r');
       const cleanLine = hasCR ? line.slice(0, -1) : line;
+      const trimmed = cleanLine.trim();
+
+      if (expectingValue) {
+        if (!trimmed) {
+          return line;
+        }
+        expectingValue = false;
+        if (CREDENTIAL_LINE_RE.test(cleanLine)) {
+          if (trimmed.endsWith(':') || trimmed.endsWith('=') || /^--?[\w-]+$/.test(trimmed)) {
+            expectingValue = true;
+          }
+        }
+        return hasCR ? '[REDACTED LINE: credential]\r' : '[REDACTED LINE: credential]';
+      }
+
       if (CREDENTIAL_LINE_RE.test(cleanLine)) {
+        if (trimmed.endsWith(':') || trimmed.endsWith('=') || /^--?[\w-]+$/.test(trimmed)) {
+          expectingValue = true;
+        }
         return hasCR ? '[REDACTED LINE: credential]\r' : '[REDACTED LINE: credential]';
       }
       return line;
@@ -45,7 +64,11 @@ function launch(lane, job, options = {}) {
   }
   const jobId = `job-${crypto.randomUUID()}`;
   const attemptId = `att-${crypto.randomUUID()}`;
-  const pid = options.pid !== undefined ? options.pid : (job && job.pid) || process.pid;
+  const pid =
+    options.pid !== undefined ? options.pid : job && job.pid !== undefined ? job.pid : process.pid;
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error('LANE_LAUNCHER_REFUSED: positive pid required');
+  }
   const locked = acquireLaneLock(lane, { jobId, pid }, options);
   if (!locked.ok) return locked;
   const jobData = Object.assign({}, job, { jobId, attemptId, pid, launchedAt: Date.now() });
@@ -82,6 +105,16 @@ function saveResult(lane, job, outcome = {}) {
   const dir = toLaneDir(lane);
   fs.mkdirSync(dir, { recursive: true });
   const jobId = (job && job.jobId) || outcome.jobId;
+  const jobFile = path.join(dir, 'job.json');
+  if (fs.existsSync(jobFile)) {
+    let active;
+    try {
+      active = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+    } catch (_) {}
+    if (active && active.jobId && jobId && active.jobId !== jobId) {
+      return null;
+    }
+  }
   const result = Object.assign({}, outcome, {
     jobId,
     exitCode: outcome.exitCode !== undefined ? outcome.exitCode : 0,

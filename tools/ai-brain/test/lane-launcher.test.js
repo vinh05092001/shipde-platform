@@ -339,3 +339,64 @@ test('redacts-standalone-key-line', (t) => {
   assert.strictEqual(persisted.stderr, '[REDACTED LINE: credential]');
   assert.strictEqual(persisted.stderr.includes('FAKE_ONLY'), false);
 });
+
+test('launch-rejects-zero-job-pid', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  assert.throws(() => launch(dir, { pid: 0 }), /positive pid required/);
+
+  const lockPath = path.join(dir, 'lock');
+  const jobFile = path.join(dir, 'job.json');
+  assert.strictEqual(fs.existsSync(lockPath), false);
+  assert.strictEqual(fs.existsSync(jobFile), false);
+});
+
+test('late-result-preserves-active-completion', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Complete and release A
+  const resA = launch(dir, { name: 'job-A' });
+  assert.strictEqual(resA.ok, true);
+  saveResult(dir, resA.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resA.job);
+
+  // Launch and complete/release B
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  saveResult(dir, resB.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resB.job);
+
+  // Then deliver A's delayed result
+  saveResult(dir, resA.job, { exitCode: 1, stderr: 'late result' });
+
+  // Assert B's result remains readable
+  const readB = readResult(dir, resB.job);
+  assert.ok(readB);
+  assert.strictEqual(readB.jobId, resB.job.jobId);
+  assert.strictEqual(readB.exitCode, 0);
+
+  // Assert launching C succeeds
+  const resC = launch(dir, { name: 'job-C' });
+  assert.strictEqual(resC.ok, true);
+  assert.ok(resC.job.jobId);
+});
+
+test('redacts-json-credential-value-on-next-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-json-next-line' };
+  const rawStderr = '{\n"api_key":\n"FAKE_CREDENTIAL"\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_CREDENTIAL'), false);
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr.includes('FAKE_CREDENTIAL'), false);
+
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
+});
