@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,5 +96,21 @@ test('review 5: void gate findings remain outside the PR delta', () => {
   assert.deepEqual(
     changed.filter((file) => file.startsWith('.github/') || file === '.gitleaksignore'),
     []
+  );
+});
+
+test('review 9: PR body contains zero template placeholders matching contract gate regex', () => {
+  // Negative test: verify that the regex accurately detects forbidden placeholders
+  const sampleWithPlaceholder = 'This is a sample with <placeholder> and <br>';
+  assert.deepEqual(sampleWithPlaceholder.match(/<[^>\n]+>/g), ['<placeholder>', '<br>']);
+
+  const prBodyPath = join(root, '.oc/pr-body.md');
+  assert.ok(existsSync(prBodyPath), '.oc/pr-body.md must exist');
+  const prBody = readFileSync(prBodyPath, 'utf8');
+  const matches = prBody.match(/<[^>\n]+>/g);
+  assert.equal(
+    matches,
+    null,
+    `PR body contains required template placeholders: ${JSON.stringify(matches)}`
   );
 });
