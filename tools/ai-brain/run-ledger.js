@@ -53,6 +53,7 @@ class RunLedger {
     this.progressLedger = o instanceof ProgressLedger ? o : (o.progressLedger || new ProgressLedger(o));
     this.file = this.progressLedger.file;
     this.limits = o.limits || this.progressLedger.limits || {};
+    this.progressLedger.limits = this.limits;
     this.now = o.now || this.progressLedger.now || (() => Date.now());
     if (this.file) {
       const d = path.dirname(this.file);
@@ -76,6 +77,7 @@ class RunLedger {
     if (opts.reserve) {
       const actualFp = fp || opts.fp || opts.fingerprint || (opts.headSha ? fingerprint({ headSha: opts.headSha, baseSha: opts.baseSha, inputs: opts.inputs }) : null);
       if (itemId && stage && actualFp) {
+        this.progressLedger.limits = this.limits;
         return this.progressLedger.admit(itemId, stage, actualFp, opts);
       }
     }
@@ -118,7 +120,12 @@ class RunLedger {
       const runReviewSha = opts.reviewSha || opts.headSha || null;
       const fp = opts.fp || opts.fingerprint || (runReviewSha ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs }) : ('fp-' + ((s.runs && s.runs.length) || 0)));
       const prev = ((it.stages[st] || {}).fps || {})[fp];
-      const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
+      const reserved = Boolean(
+        prev &&
+        prev.outcome === 'IN_FLIGHT' &&
+        Number.isInteger(prev.pid) &&
+        (!prev.attemptId || prev.attemptId === attemptKey)
+      );
 
       const consumesAttempt = isNew && !reserved;
 
@@ -144,7 +151,7 @@ class RunLedger {
       if (opts.goalId) {
         s.goals = s.goals || {};
         const gAcc = s.goals[opts.goalId] || { attempts: 0, ms: 0, tokens: 0 };
-        if (consumesAttempt) gAcc.attempts += 1;
+        if (isNew) gAcc.attempts += 1;
         gAcc.ms += ms;
         if (hasTokens) gAcc.tokens += tokens;
         else gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
@@ -161,7 +168,7 @@ class RunLedger {
       it.runs = it.runs || []; it.runs.push(run);
       it.stages[st] = it.stages[st] || { fps: {} };
       it.stages[st].fps = it.stages[st].fps || {};
-      it.stages[st].fps[fp] = { outcome: String(run.verdict || 'DONE'), at: this.now() };
+      it.stages[st].fps[fp] = { outcome: String(run.verdict || 'DONE'), attemptId: attemptKey, at: this.now() };
       if (itemId) s.items[itemId] = it;
       writeJson(this.file, s);
       return { ok: true, run };

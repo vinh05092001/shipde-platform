@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { RunLedger, maskCredentials, Cause } = require('../run-ledger');
-const { fingerprint } = require('../work-guard');
+const { ProgressLedger, fingerprint } = require('../work-guard');
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'run-ledger-test-'));
 
@@ -197,4 +197,75 @@ test('no file writes outside os.tmpdir()', () => {
     }
   };
   checkDir(dir);
+});
+
+test('reserve_honors_run_ledger_limit_override', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const progressLedger = new ProgressLedger({ file });
+  const ledger = new RunLedger({ progressLedger, limits: { item: { attempts: 1 } } });
+
+  const r1 = ledger.admit('TASK-T', 'writer', 'F1', { reserve: true, pid: process.pid });
+  assert.equal(r1.ok, true);
+
+  const rec = ledger.record('writer', {
+    itemId: 'TASK-T',
+    attemptId: 'a1',
+    fp: 'F1',
+    ms: 100,
+    verdict: 'DONE',
+  });
+  assert.equal(rec.ok, true);
+  assert.equal(ledger.getSummary('TASK-T').attempts, 1);
+
+  const r2 = ledger.admit('TASK-T', 'reviewer', 'F2', { reserve: true, pid: process.pid });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.cause, Cause.ATTEMPTS_EXHAUSTED);
+  assert.equal(ledger.getSummary('TASK-T').attempts, 1);
+});
+
+test('distinct_attempts_cannot_reuse_in_flight_credit', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 2 } },
+  });
+  const results = [];
+  for (const attemptId of ['a1', 'a2', 'a3', 'a4']) {
+    const res = ledger.record('writer', {
+      itemId: 'TASK-FLIGHT',
+      attemptId,
+      fp: 'F-SHARED',
+      verdict: 'IN_FLIGHT',
+      ms: 100,
+    });
+    results.push(res);
+  }
+  assert.deepEqual(results.map((r) => r.ok), [true, true, false, false]);
+  assert.equal(results[2].cause, Cause.ATTEMPTS_EXHAUSTED);
+  assert.equal(results[3].cause, Cause.ATTEMPTS_EXHAUSTED);
+  assert.equal(ledger.getSummary('TASK-FLIGHT').attempts, 2);
+  assert.equal(ledger.getRuns('TASK-FLIGHT').length, 2);
+});
+
+test('reserve followed by record with goalId tracks attempt in goals', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 2 } },
+  });
+  const rRes = ledger.admit('TASK-GOAL', 'writer', 'F-GOAL', { reserve: true, pid: process.pid });
+  assert.equal(rRes.ok, true);
+
+  const rRec = ledger.record('writer', {
+    itemId: 'TASK-GOAL',
+    goalId: 'GOAL-G',
+    attemptId: 'a1',
+    fp: 'F-GOAL',
+    ms: 100,
+    verdict: 'DONE',
+  });
+  assert.equal(rRec.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['TASK-GOAL'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 1);
+  assert.equal(state.goals['GOAL-G'].attempts, 1);
 });
