@@ -72,7 +72,7 @@ Posting, mutation, login, account import, cookies, API keys, private research, a
 - [x] Audit & sensitive data: sanitized arguments/environment/output; no credential file reads.
 - [x] VND integer arithmetic: N/A — no money calculations.
 - [x] Carrier reconciliation: N/A — no carrier commands or external mutations.
-- [x] Tests at the lowest useful level: 35 executable-fixture tests pass without network. This run reproduced four failures before fixing public-only target boundary enforcement, schemeless credential URL query handling, sensitive access_key/passwd masking, and duplicate budget validation.
+- [x] Tests at the lowest useful level: 37 executable-fixture tests pass without network. This run reproduced failures before fixing public-only target boundary enforcement, schemeless credential URL query handling, credential-bearing URL fragment refusal, normal question queries with question marks, sensitive access_key/passwd masking, duplicate budget validation, and automated PR contract gate compliance.
 - [ ] When external API/library behaviour is uncertain, research it with pnpm ai:research and cite the URL.
 
 ## UI states
@@ -119,7 +119,7 @@ git diff --check origin/main...HEAD
 
 Verification results are recorded in `.oc/pr-body.md`; no remote CI or independent PASS is claimed by this author.
 
-On Windows the commands use `pnpm.cmd`. In this run, frozen installation passed with all eight workspace projects already up to date; lint and typecheck each passed all 12 tasks. The fixture suite passes 35 tests. The initial formatting check found only a pre-existing formatting issue in `.oc-codex-task.md`; it was corrected without changing its instructions. Final check results, including the explicit working-file hardcode scan, are recorded in `.oc/pr-body.md`. `git diff --check origin/main...HEAD` checks the existing HEAD, not these uncommitted changes, so working-tree whitespace and new-file LF checks are recorded separately.
+On Windows the commands use `pnpm.cmd`. In this run, frozen installation passed with all eight workspace projects already up to date; lint and typecheck each passed all 12 tasks. The fixture suite passes 37 tests. The initial formatting check found only a pre-existing formatting issue in `.oc-codex-task.md`; it was corrected without changing its instructions. Final check results, including the explicit working-file hardcode scan, are recorded in `.oc/pr-body.md`. `git diff --check origin/main...HEAD` checks the existing HEAD, not these uncommitted changes, so working-tree whitespace and new-file LF checks are recorded separately.
 
 ## Codex review record
 
@@ -129,9 +129,10 @@ On Windows the commands use `pnpm.cmd`. In this run, frozen installation passed 
 | Round 8      | `916b67331477f7646bdbc06c2b67207d0112e7b7`                          | `CHANGES_REQUIRED`                             | Resolved duplicate delivery order (272 -> 273), fixing CI failures in ai-brain-tests, contract, and validate     |
 | Round 9      | `a885a9c0f5335e8945125c5639b54b50e00d59d8`                          | `READY_FOR_CODEX`                              | Resolved P1 finding 4 (public-only target boundary & redirects), P1 finding 7 (credential-bearing search URLs & passwd/access_key masking), and P2 finding 10 (duplicate budget validation under small limit) |
 | Round 10     | `8db478367802fa4d8509299db5f0940de4ed1e79`                          | `CHANGES_REQUIRED`                             | Resolved delivery order collision with TASK-AI-162 (#499) merged into main (273 -> 274), fixing CI failures in ai-brain-tests, contract, and validate |
+| Round 15     | `b8b23f5e49b8c8daa68351b90fca36bf59bd9ebb`                          | `CHANGES_REQUIRED`                             | Resolved PR body template placeholder failure in contract gate by removing HTML break tags and adding automated contract gate validation; resolved credential-bearing URL fragments and normal question search syntax |
 
 ## Residual limitations
 
 Anonymous services may be rate-limited or blocked; captionless videos return failure rather than keyed transcription. Operator owns installation and retries or uses another approved public source. Live Agent-Reach network execution is not claimed by offline fixture evidence.
 
-The shared Git metadata is read-only under the operator's sandbox decision. No Git write or commit is attempted in this run. The coordinator commits the working tree with `[TASK-AI-160] Read-only web research for agents via Agent-Reach` and supplies the exact SHA for independent review. Work Item/register remain `IN_PROGRESS` as requested. Host installation, live research execution, commit hooks, remote CI and independent review are not claimed by local fixture checks.
+Live DNS resolution and HTTP redirect destination enforcement at the CLI wrapper boundary (Finding 4): NEEDS_DECISION. The Work Item specification requires offline wrapper execution without network access during testing and delegates live fetching to the upstream Agent-Reach binary. Synchronous/asynchronous DNS resolution or pre-flight HTTP redirect crawling in the Node wrapper would require network access, which violates offline test execution and the wrapper boundary. Upstream Agent-Reach operates in an isolated child process without credentials or local cookies. Resolving remote destinations at runtime requires an architecture decision from the operator.

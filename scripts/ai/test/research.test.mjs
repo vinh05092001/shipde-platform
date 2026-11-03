@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runResearch } from '../research.mjs';
@@ -381,6 +381,14 @@ test('schemeless credential URLs and sensitive keys (passwd, access_key) in sear
       ['web', 'search', 'docs.example.com?access_key=private-input'],
       ['web', 'search', 'lookup docs.example.com?token=private-input'],
       ['web', 'search', 'reader:private-input@example.com'],
+      ['web', 'search', 'https://docs.example.com/#access_token=private-input'],
+      ['web', 'search', 'docs.example.com/#access_token=private-input'],
+      ['web', 'read', 'https://docs.example.com/#access_token=private-input'],
+      ['web', 'read', 'docs.example.com/#access_token=private-input'],
+      ['web', 'read', 'https://example.com/#passwd=private-input'],
+      ['web', 'read', 'https://example.com/#access_key=private-input'],
+      ['web', 'read', 'https://example.com/#http://169.254.169.254/latest/meta-data/'],
+      ['web', 'read', 'https://example.com/#http://127.0.0.1:8080/private'],
       ['web', 'read', 'https://example.com?passwd=private-input'],
       ['web', 'read', 'https://example.com?access_key=private-input'],
       ['web', 'read', 'example.com?passwd=private-input'],
@@ -407,5 +415,51 @@ test('duplicate budget validation honors the selected small budget', () => {
     const result = invoke(args);
     assert.notEqual(result.exitCode, 0);
     assert.ok(emitted(result).length <= 3);
+  }
+});
+
+test('normal question search queries with question marks are not rejected as unsafe URLs', () => {
+  const query = 'How does pagination work?';
+  const result = invoke(['web', 'search', query]);
+  assert.equal(result.exitCode, 0);
+  assert.equal(payload(result).argv[2], query);
+});
+
+test('PR contract validation: .oc/pr-body.md contains no placeholders and satisfies contract gate', () => {
+  const prBodyPath = resolve(fileURLToPath(new URL('../../../.oc/pr-body.md', import.meta.url)));
+  assert.ok(existsSync(prBodyPath), '.oc/pr-body.md must exist');
+  const body = readFileSync(prBodyPath, 'utf8');
+
+  // Must not contain template placeholders <...>
+  const placeholders = body.match(/<[^>\n]+>/g);
+  assert.equal(placeholders, null, `PR body must not contain placeholders: ${placeholders}`);
+
+  // Must not contain TBD or TODO
+  assert.equal(/\b(?:TBD|TODO)\b/.test(body), false, 'PR body must not contain TBD/TODO');
+
+  // Must not contain unchecked items
+  assert.equal(body.includes('- [ ]'), false, 'PR body must not contain unchecked items');
+
+  // Must contain READY_FOR_CODEX marker
+  assert.ok(body.includes('Review status: READY_FOR_CODEX'), 'PR body must have READY_FOR_CODEX');
+
+  // Must reference TASK-AI-160
+  assert.ok(body.includes('TASK-AI-160'), 'PR body must reference TASK-AI-160');
+
+  // Must contain all 10 required headings
+  const requiredHeadings = [
+    '## Work Item',
+    '## Source requirements',
+    '## Scope integrity',
+    '## Implementation',
+    '## Acceptance evidence',
+    '## Verification',
+    '## Safety and recovery',
+    '## Documentation and traceability',
+    '## Risks and limitations',
+    '## Codex review',
+  ];
+  for (const heading of requiredHeadings) {
+    assert.ok(body.includes(heading), `PR body must include heading: ${heading}`);
   }
 });

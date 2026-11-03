@@ -131,6 +131,43 @@ function validatePublicUrl(candidate) {
       validatePublicUrl(embedded);
     }
   }
+
+  if (url.hash) {
+    const rawHash = url.hash.replace(/^#/, '');
+    if (SENSITIVE.test(rawHash)) {
+      throw new Error('Research refused: public HTTP(S) URLs without credentials only.');
+    }
+    const hashParams = new URLSearchParams(rawHash);
+    for (const [key, val] of hashParams.entries()) {
+      if (SENSITIVE.test(key)) {
+        throw new Error('Research refused: public HTTP(S) URLs without credentials only.');
+      }
+      if (val && typeof val === 'string') {
+        const trimmed = val.trim();
+        if (
+          /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ||
+          trimmed.startsWith('//') ||
+          /^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:\/|\?|$)/i.test(trimmed) ||
+          /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:\/|\?|$)/.test(trimmed) ||
+          /^localhost(?::\d+)?(?:\/|\?|$)/i.test(trimmed) ||
+          /^\[[a-fA-F0-9:]+\](?::\d+)?(?:\/|\?|$)/i.test(trimmed)
+        ) {
+          const dest = trimmed.startsWith('//')
+            ? `${url.protocol}${trimmed}`
+            : trimmed.includes('://')
+              ? trimmed
+              : `https://${trimmed}`;
+          validatePublicUrl(dest);
+        }
+      }
+    }
+    const embeddedInHash = rawHash.match(/[a-z][a-z0-9+.-]*:\/\/[^\s/]+/gi);
+    if (embeddedInHash) {
+      for (const embedded of embeddedInHash) {
+        validatePublicUrl(embedded);
+      }
+    }
+  }
 }
 
 function parse(argv) {
@@ -186,15 +223,14 @@ function parse(argv) {
     const urls = [];
     if (action === 'search') {
       for (const token of target.split(/\s+/)) {
-        if (
-          token.includes('://') ||
-          token.includes('@') ||
-          token.includes('?') ||
-          /^(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3}|localhost|\[[a-fA-F0-9:]+\])(?::\d+)?(?:\/.*)?$/i.test(
+        if (token.includes('://')) {
+          urls.push(token);
+        } else if (
+          /^(?:[^\s:@]+:[^\s:@]+@)?(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3}|localhost|\[[a-fA-F0-9:]+\])(?::\d+)?(?:\/[^\s]*)?(?:\?[^\s]*)?(?:#[^\s]*)?$/i.test(
             token
           )
         ) {
-          urls.push(token.includes('://') ? token : `https://${token}`);
+          urls.push(`https://${token}`);
         }
       }
     } else {
