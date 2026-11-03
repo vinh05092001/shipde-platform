@@ -71,7 +71,10 @@ export interface UseDataTableReturn {
 
 export function normalizeParamsString(params: URLSearchParams | string | null | undefined): string {
   if (!params) return '';
-  const sp = typeof params === 'string' ? new URLSearchParams(params) : new URLSearchParams(params.toString());
+  const sp =
+    typeof params === 'string'
+      ? new URLSearchParams(params)
+      : new URLSearchParams(params.toString());
   const entries: [string, string][] = [];
   sp.forEach((value, key) => {
     entries.push([key, value]);

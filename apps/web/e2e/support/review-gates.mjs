@@ -33,9 +33,11 @@ test('review 1: ported components pass the actual application accessibility scan
     // Verify the actual scanner still rejects a hidden interactive control.
     const forbidden = join(scratch, 'hidden-button.tsx');
     writeFileSync(forbidden, '<button aria-hidden="true">Thử lại</button>');
-    assert.ok(scanFileForA11y(forbidden).includes(
-      'Found interactive element incorrectly marked with aria-hidden="true"'
-    ));
+    assert.ok(
+      scanFileForA11y(forbidden).includes(
+        'Found interactive element incorrectly marked with aria-hidden="true"'
+      )
+    );
   } finally {
     // scratch is the exact directory returned by mkdtemp, inside the OS tempdir.
     assert.equal(dirname(resolve(scratch)), resolve(tmpdir()));
@@ -66,9 +68,33 @@ test('review 6: delivery register has one row per Work Item', () => {
   assert.equal(new Set(ids).size, ids.length, 'No duplicate Work Item rows');
 });
 
+test('review 7: delivery register orders are unique and non-colliding', () => {
+  const entries = rows(source(register)).slice(1);
+  const orders = entries.map((row) => row.split(',')[0].replaceAll('"', '')).filter(Boolean);
+  assert.equal(
+    new Set(orders).size,
+    orders.length,
+    'All delivery orders in FEATURE-DELIVERY-REGISTER.csv must be strictly unique'
+  );
+  assert.ok(
+    orders.every((order) => /^\d+$/.test(order)),
+    'All delivery orders must be digits'
+  );
+  const taskRow = entries.find(isTask);
+  assert.ok(taskRow, 'TASK-AI-155 row must exist');
+  const taskOrder = taskRow.split(',')[0].replaceAll('"', '');
+  assert.equal(taskOrder, '274', 'TASK-AI-155 must be assigned unique delivery order 274');
+});
+
 test('review 5: void gate findings remain outside the PR delta', () => {
   const changed = execFileSync('git', ['diff', '--name-only', 'origin/main...HEAD'], {
-    cwd: root, encoding: 'utf8',
-  }).trim().split('\n');
-  assert.deepEqual(changed.filter((file) => file.startsWith('.github/') || file === '.gitleaksignore'), []);
+    cwd: root,
+    encoding: 'utf8',
+  })
+    .trim()
+    .split('\n');
+  assert.deepEqual(
+    changed.filter((file) => file.startsWith('.github/') || file === '.gitleaksignore'),
+    []
+  );
 });

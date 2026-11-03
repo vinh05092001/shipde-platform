@@ -125,7 +125,9 @@ export function DataTableFacetedFilter({
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // Optimistic facet selections queue (Finding 4 P1)
-  const [optimisticValues, setOptimisticValues] = useState<Set<string>>(() => new Set(selectedValues));
+  const [optimisticValues, setOptimisticValues] = useState<Set<string>>(
+    () => new Set(selectedValues)
+  );
   const pendingSelectionsRef = useRef<string[]>([]);
   const prevCommittedRef = useRef<Set<string>>(selectedValues);
   const prevHistoryEpochRef = useRef<number | undefined>(historyEpoch);

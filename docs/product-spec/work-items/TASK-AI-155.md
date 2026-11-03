@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-155` |
 | Feature ID | `N/A — reusable UI data table components and dashboard shell pattern` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `272` |
+| Delivery order | `274` |
 | Dependencies | `TASK-AI-151` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
@@ -154,6 +154,8 @@ git diff --check origin/main...HEAD
 | 3 | `cac4b77c` | `CHANGES_REQUIRED` | Addressed round 2 review findings |
 | 4 | `fcfccad8` | `CHANGES_REQUIRED` | Addressed round 3 review findings. Reviewer reported: P1 #1 application gates fail; P1 #2 simulated browser acceptance; P1 #3 navigation collision with acknowledgment detection; P1 #8 overlapping updates lose changes; P1 #6 out-of-scope removal of FEAT-COM-09. |
 | 5 | `05010d77` | `CHANGES_REQUIRED` | Addressed round 5 review findings: (1) Overlapping facet selections accumulation in DataTableFacetedFilter; (2) Dedicated 403 Forbidden state with role="alert" in DataTable and Storybook simulation; (3) Production handleDrawerKeyDown focus trap and restoration for mobile drawer; (4) Connected primary actions with fixture export and demo creation; (5) Explicit unauthenticated state in DashboardHeader; (6) Select-all current-page membership validation; (7) Selection-cell padding stopPropagation; (8) Localized Vietnamese column labels in DataTableViewOptions; (9) Sticky table header; (10) Complete dropdown focus restoration and arrow-key keyboard navigation. |
+| 6 | `95492a20` | `CHANGES_REQUIRED` | Addressed round 6 review findings: (1) Staggered commit FIFO pending query queue; (2) Facet reset clearing pending selections under unchanged committed values; (3) Permission-filtered navigation contract denying absent/empty permissions; (4) Bounded vertical scroll container for sticky table header; (5) View options focus restoration and arrow keys; (6) Corrected same-facet option accessible name; (7) Out-of-range deep link clamping; (8) Isolated showcase operational badge. |
+| 7 | `4afbe4d8` | `CHANGES_REQUIRED` | Addressed round 7 CI failure findings: (1) Reassigned delivery order to unique sequential 274 in register and work item, eliminating duplicate 272 collision with TASK-AI-161; (2) Prettier-formatted all modified files and PR markdown documentation to pass formatting gate; (3) Cleanly merged origin/main with zero conflict markers. |
 
 ## Residual limitations
 
@@ -164,10 +166,11 @@ git diff --check origin/main...HEAD
 - Scope: Reusable server-driven data table and responsive dashboard shell components under `apps/web`.
 - Verification results:
   - `pnpm lint`: PASS (0 errors, 12 turbo tasks green).
-  - `pnpm --filter @shipde/web typecheck`: PASS (`tsc --noEmit` exits 0).
-  - `pnpm exec tsc -p tsconfig.json --noEmit`: PASS (exits 0).
-  - `pnpm --filter @shipde/web test`: PASS (12/12 data-table & dashboard shell suites pass 100%, 57/57 comprehensive audit rules pass).
-  - `node --test apps/web/e2e/support/review-gates.mjs`: PASS (5/5 review gate tests pass).
+  - `pnpm typecheck`: PASS (0 errors, 12 turbo tasks green).
+  - `pnpm --filter @shipde/web test`: PASS (13/13 data-table & dashboard shell suites pass 100%, 57/57 comprehensive audit rules pass).
+  - `node --test apps/web/e2e/support/review-gates.mjs`: PASS (6/6 review gate tests pass, including delivery order uniqueness).
+  - `pnpm format:check`: PASS (28/28 files pass Prettier).
   - `pnpm exec tsx scripts/verify-a11y.ts`: PASS (A11y scanner exits 0).
+  - `pnpm security:secrets`: PASS (Gitleaks scanner exits 0 with 0 secret violations).
   - `node scripts/ai/check-no-hardcode.mjs`: PASS (0 hardcoded credentials/secrets found).
   - `git diff --check origin/main...HEAD`: PASS (zero whitespace/conflict errors).

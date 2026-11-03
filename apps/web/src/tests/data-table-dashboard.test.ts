@@ -587,7 +587,8 @@ async function runTestSuite() {
     columns: testColumns,
     keyExtractor: (item: FixtureShipment) => item.id,
     loading: false,
-    forbidden: 'Bạn không có quyền xem hoặc thao tác trên danh sách vận đơn này. (Lỗi 403 Forbidden)',
+    forbidden:
+      'Bạn không có quyền xem hoặc thao tác trên danh sách vận đơn này. (Lỗi 403 Forbidden)',
     forbiddenTitle: 'Không có quyền truy cập',
     forbiddenActionLabel: 'Yêu cầu quyền truy cập',
     onForbiddenAction: () => {
@@ -608,10 +609,7 @@ async function runTestSuite() {
     forbiddenHtml.includes('Yêu cầu quyền truy cập'),
     'Forbidden state must render action button'
   );
-  assert.ok(
-    forbiddenHtml.includes('role="alert"'),
-    'Forbidden state must declare role="alert"'
-  );
+  assert.ok(forbiddenHtml.includes('role="alert"'), 'Forbidden state must declare role="alert"');
   assert.ok(
     forbiddenHtml.includes('aria-live="assertive"'),
     'Forbidden state must declare aria-live="assertive"'
@@ -642,7 +640,9 @@ async function runTestSuite() {
     true,
     'Clicking forbidden action button must invoke onForbiddenAction callback'
   );
-  console.log('   ✅ Forbidden (403) state verified with role="alert", explanation, and recovery action');
+  console.log(
+    '   ✅ Forbidden (403) state verified with role="alert", explanation, and recovery action'
+  );
 
   // ---------------------------------------------------------------------------
   // 5. DATA TABLE — COLUMN HEADER SORT CONTROLS & ARIA ATTRIBUTES (Finding 7)
@@ -1122,10 +1122,7 @@ async function runTestSuite() {
       onToggleColumn: () => {},
     })
   );
-  assert.ok(
-    viewOptionsHtml.includes('Cột hiển thị'),
-    'View options trigger must be rendered'
-  );
+  assert.ok(viewOptionsHtml.includes('Cột hiển thị'), 'View options trigger must be rendered');
   assert.ok(
     viewOptionsHtml.includes('Tùy chọn hiển thị cột'),
     'Trigger must declare title and aria-label'
@@ -1414,7 +1411,11 @@ async function runTestSuite() {
   );
   assert.strictEqual(tabHandled, true, 'handleDrawerKeyDown must handle Tab on last element');
   assert.strictEqual(tabPrevented, true, 'Tab on last element must call preventDefault()');
-  assert.strictEqual(drawerFocusables[0].focused, true, 'Focus must wrap to first element in drawer');
+  assert.strictEqual(
+    drawerFocusables[0].focused,
+    true,
+    'Focus must wrap to first element in drawer'
+  );
 
   // Test 2: Shift+Tab on first element -> wraps to last via production handleDrawerKeyDown
   let shiftTabPrevented = false;
@@ -1431,9 +1432,21 @@ async function runTestSuite() {
     drawerFocusables[0],
     closeDrawerCb
   );
-  assert.strictEqual(shiftTabHandled, true, 'handleDrawerKeyDown must handle Shift+Tab on first element');
-  assert.strictEqual(shiftTabPrevented, true, 'Shift+Tab on first element must call preventDefault()');
-  assert.strictEqual(drawerFocusables[2].focused, true, 'Focus must wrap to last element in drawer');
+  assert.strictEqual(
+    shiftTabHandled,
+    true,
+    'handleDrawerKeyDown must handle Shift+Tab on first element'
+  );
+  assert.strictEqual(
+    shiftTabPrevented,
+    true,
+    'Shift+Tab on first element must call preventDefault()'
+  );
+  assert.strictEqual(
+    drawerFocusables[2].focused,
+    true,
+    'Focus must wrap to last element in drawer'
+  );
 
   // Negative test: Tab on intermediate element does NOT wrap
   let intermediateTabPrevented = false;
@@ -1494,7 +1507,11 @@ async function runTestSuite() {
     closeDrawerCb
   );
   assert.strictEqual(otherKeyHandled, false, 'Negative test: Enter key must not be intercepted');
-  assert.strictEqual(otherKeyPrevented, false, 'Negative test: preventDefault must not be called on Enter');
+  assert.strictEqual(
+    otherKeyPrevented,
+    false,
+    'Negative test: preventDefault must not be called on Enter'
+  );
 
   // Focus recovery on drawer close: restores focus to previous active element
   const fakeTriggerButton = {
@@ -1842,7 +1859,8 @@ async function runTestSuite() {
       useContext(context: any) {
         if (context === AppRouterContext) return mockRouter;
         if (context === PathnameContext) return '/storybook';
-        if (context === SearchParamsContext) return hookProps.searchParams || new URLSearchParams('');
+        if (context === SearchParamsContext)
+          return hookProps.searchParams || new URLSearchParams('');
         return context?._currentValue ?? null;
       },
       use(usable: any) {
@@ -2224,8 +2242,15 @@ async function runTestSuite() {
   if (!isAllPage2SelectedCorrect) {
     page2Items.forEach((item) => selectionState.add(item.id));
   }
-  assert.strictEqual(selectionState.size, 6, 'Selection must now contain all 6 items across pages 1 and 2');
-  assert.ok(selectionState.has('fix-1') && selectionState.has('fix-4'), 'Both page 1 and page 2 items must be selected');
+  assert.strictEqual(
+    selectionState.size,
+    6,
+    'Selection must now contain all 6 items across pages 1 and 2'
+  );
+  assert.ok(
+    selectionState.has('fix-1') && selectionState.has('fix-4'),
+    'Both page 1 and page 2 items must be selected'
+  );
 
   // Clicking select-all again on page 2 deselects only page 2 items, preserving page 1 selections
   const isAllPage2SelectedNow =
@@ -2611,7 +2636,9 @@ async function runTestSuite() {
     'Negative proof: Out-of-range deep link must NOT produce inverted range 21-8'
   );
   assert.ok(
-    outOfRangePaginationHtml.includes('Trang <span class="font-semibold">1</span> / <span>1</span>'),
+    outOfRangePaginationHtml.includes(
+      'Trang <span class="font-semibold">1</span> / <span>1</span>'
+    ),
     'Finding 12: Page index must clamp to safe page count (Trang 1 / 1)'
   );
 

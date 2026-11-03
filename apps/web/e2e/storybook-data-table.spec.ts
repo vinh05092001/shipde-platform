@@ -57,7 +57,9 @@ test('mounted /storybook table restores state on real browser back/forward', asy
   // toolbar must resynchronize to the URL — the newer "GHTK" draft must NOT
   // survive navigation (Review item 3).
   await page.goBack();
-  await page.waitForURL((url) => url.searchParams.get('page') === '2' && !url.searchParams.has('search'));
+  await page.waitForURL(
+    (url) => url.searchParams.get('page') === '2' && !url.searchParams.has('search')
+  );
   await expect(search).toHaveValue('');
   await expect(page.getByText(new RegExp(`^Trang 2 / 2$`))).toBeVisible();
 
@@ -144,7 +146,9 @@ test('mounted reset filters clears search and facet filters but retains default 
   await expect(resetButton).toBeVisible();
   await resetButton.click();
 
-  await page.waitForURL((url) => !url.searchParams.has('search') && !url.searchParams.has('status'));
+  await page.waitForURL(
+    (url) => !url.searchParams.has('search') && !url.searchParams.has('status')
+  );
   await expect(search).toHaveValue('');
   await expect(resetButton).not.toBeVisible();
 });

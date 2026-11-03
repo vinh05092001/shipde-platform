@@ -145,7 +145,8 @@ export function DataTableViewOptions<TData = any>({
           <div className="max-h-56 overflow-y-auto space-y-0.5 py-1 custom-scrollbar">
             {toggleableColumns.map((column, idx) => {
               const isVisible = !hiddenColumns.has(column.id);
-              const title = column.title || (typeof column.header === 'string' ? column.header : column.id);
+              const title =
+                column.title || (typeof column.header === 'string' ? column.header : column.id);
 
               return (
                 <button

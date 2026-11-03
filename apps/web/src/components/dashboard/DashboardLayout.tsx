@@ -53,7 +53,11 @@ export const DEFAULT_NAV_SECTIONS: NavSection[] = [
         title: 'Bàn làm việc (Dashboard)',
         href: '/',
         icon: LayoutDashboard,
-        permissions: ['order:view_create', 'reconciliation:run_review_audit', 'shipment:track_exceptions'],
+        permissions: [
+          'order:view_create',
+          'reconciliation:run_review_audit',
+          'shipment:track_exceptions',
+        ],
       },
     ],
   },

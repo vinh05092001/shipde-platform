@@ -12,12 +12,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
-import {
-  Download,
-  Plus,
-  RefreshCw,
-  Sparkles,
-} from 'lucide-react';
+import { Download, Plus, RefreshCw, Sparkles } from 'lucide-react';
 import {
   DataTable,
   DataTableColumnHeader,
@@ -47,7 +42,8 @@ function StorybookContent() {
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
   // Fixture shipments state allowing interactive test creations
-  const [fixtureShipmentsList, setFixtureShipmentsList] = useState<FixtureShipment[]>(FIXTURE_SHIPMENTS);
+  const [fixtureShipmentsList, setFixtureShipmentsList] =
+    useState<FixtureShipment[]>(FIXTURE_SHIPMENTS);
 
   // Row selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -522,7 +518,9 @@ function StorybookContent() {
                 : 'bg-[var(--bg-app)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            {simulatedError ? 'Đang bật Error (Nhấn để tắt)' : 'Mô phỏng Trạng thái Lỗi (Error 500)'}
+            {simulatedError
+              ? 'Đang bật Error (Nhấn để tắt)'
+              : 'Mô phỏng Trạng thái Lỗi (Error 500)'}
           </button>
 
           <button
@@ -534,9 +532,7 @@ function StorybookContent() {
                 : 'bg-[var(--bg-app)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            {simulatedForbidden
-              ? 'Đang bật Cấm (Nhấn để tắt)'
-              : 'Mô phỏng Bị cấm (Forbidden 403)'}
+            {simulatedForbidden ? 'Đang bật Cấm (Nhấn để tắt)' : 'Mô phỏng Bị cấm (Forbidden 403)'}
           </button>
         </div>
       </div>
