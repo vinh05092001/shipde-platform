@@ -273,3 +273,32 @@ test('rejects commented source immediately after a blockquote fence ends', () =>
   assert.equal(result.ok, false);
   assert.ok(result.problems.some((problem) => problem.includes('source-document')));
 });
+
+test('rejects acceptance matrix supplied by a heading inside a list fence', () => {
+  const withoutAcceptance = valid.replace(/\n## Acceptance matrix[\s\S]*$/, '');
+  const text = `${withoutAcceptance}\n- ~~~text\n  ## Acceptance matrix\n  | AC | Proof |\n  | --- | --- |\n  | AC-01 | example-test |\n  ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Acceptance matrix')));
+});
+
+test('rejects fenced source with less indentation than its opener', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n- Example:\n\n    ~~~text\n  https://example.com/spec\n    ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects fenced source after a literal blockquote-prefixed marker', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n> ~~~text\n>> ~~~\n> https://example.com/spec\n> ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects an empty acceptance matrix beside a complete matrix', () => {
+  const text = `${valid}\n## Acceptance matrix\n\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Acceptance matrix')));
+});

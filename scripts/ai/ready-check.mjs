@@ -39,7 +39,7 @@ function documentLines(text) {
         fenceListIndent = undefined;
       } else if (fenceListIndent !== undefined && afterQuote.trim()) {
         const lineIndent = getIndent(afterQuote.match(/^[ \t]*/)[0]);
-        if (HEADING.test(afterQuote) || lineIndent < fenceListIndent) {
+        if (lineIndent < fenceListIndent) {
           fence = undefined;
           fenceQuotePrefix = undefined;
           fenceListIndent = undefined;
@@ -77,31 +77,28 @@ function documentLines(text) {
     }
     uncommented.push(line);
 
-    const marker = line.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})(.*)$/);
     if (fence) {
-      if (
-        marker &&
-        marker[1][0] === fence[0] &&
-        marker[1].length >= fence.length &&
-        !marker[2].trim()
-      ) {
-        fence = undefined;
-        fenceQuotePrefix = undefined;
-        fenceListIndent = undefined;
+      if (lineQuotePrefix === (fenceQuotePrefix || '')) {
+        const closerMatch = afterQuote.match(/^[ \t]*(`{3,}|~{3,})[ \t]*$/);
+        if (
+          closerMatch &&
+          closerMatch[1][0] === fence[0] &&
+          closerMatch[1].length >= fence.length
+        ) {
+          fence = undefined;
+          fenceQuotePrefix = undefined;
+          fenceListIndent = undefined;
+        }
       }
       return '';
     }
-    if (marker) {
-      fence = marker[1];
+
+    const openMatch = line.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})(.*)$/);
+    if (openMatch) {
+      fence = openMatch[1];
       fenceQuotePrefix = lineQuotePrefix || undefined;
-      if (listMatch) {
-        fenceListIndent =
-          getIndent(listMatch[1]) + listMatch[2].length + getIndent(listMatch[3]);
-      } else if (currentListIndent > 0) {
-        fenceListIndent = Math.max(
-          currentListIndent,
-          getIndent(afterQuote.match(/^[ \t]*/)[0])
-        );
+      if (currentListIndent > 0) {
+        fenceListIndent = currentListIndent;
       } else {
         fenceListIndent = undefined;
       }
@@ -306,9 +303,12 @@ export function checkWorkItemReady(content) {
   }
 
   const acceptance = allSections.filter((section) => /^acceptance\b/.test(section.title));
+  if (!acceptance.length) {
+    report(0, 'missing Acceptance matrix with rows and a Proof column');
+  }
+  const sectionTableCount = new Map(acceptance.map((section) => [section, 0]));
   const inAcceptance = (index) =>
     acceptance.some((section) => index > section.index && index < section.end);
-  let tables = 0;
   for (let i = 0; i < lines.length - 1; i++) {
     if (!inAcceptance(i)) continue;
     const header = tableCells(lines[i]);
@@ -316,7 +316,11 @@ export function checkWorkItemReady(content) {
     if (!header?.length || separator?.length !== header.length || !isTableSeparator(separator)) {
       continue;
     }
-    tables++;
+    for (const section of acceptance) {
+      if (i > section.index && i < section.end) {
+        sectionTableCount.set(section, sectionTableCount.get(section) + 1);
+      }
+    }
     const proofColumns = header.flatMap((cell, index) =>
       cell.replace(/[`*_]/g, '').toLowerCase() === 'proof' ? [index] : []
     );
@@ -335,7 +339,11 @@ export function checkWorkItemReady(content) {
     if (cursor === i + 2) report(i, 'acceptance table must contain at least one row with Proof');
     i = cursor - 1;
   }
-  if (!tables) report(0, 'missing Acceptance matrix with rows and a Proof column');
+  for (const section of acceptance) {
+    if (!sectionTableCount.get(section)) {
+      report(section.index, 'missing Acceptance matrix with rows and a Proof column');
+    }
+  }
 
   return { ok: problems.length === 0, problems };
 }
