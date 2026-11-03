@@ -163,16 +163,29 @@ export function resolveExistingAncestorsAndAliases(root, outArg) {
   return { resolvedLexical, canonicalTarget };
 }
 
-export function validateOutputPath(root, outArg, inputPaths = []) {
+export const ALLOWED_OUTPUT_DIR = '.context-packs';
+export const DEFAULT_OUTPUT_FILE = path.join(ALLOWED_OUTPUT_DIR, 'context.xml');
+
+export function validateOutputPath(root, outArg = DEFAULT_OUTPUT_FILE, inputPaths = []) {
   if (!outArg || typeof outArg !== 'string' || outArg.trim() === '') {
-    throw new Error('--out destination is required');
+    outArg = DEFAULT_OUTPUT_FILE;
   }
 
   if (outArg.endsWith('/') || outArg.endsWith('\\')) {
     throw new Error(`Unsafe output destination: "${outArg}" cannot be a directory`);
   }
 
-  const { resolvedLexical, canonicalTarget } = resolveExistingAncestorsAndAliases(root, outArg);
+  const resolvedLexical = path.resolve(root, outArg);
+  if (fs.existsSync(resolvedLexical) && fs.statSync(resolvedLexical).isDirectory()) {
+    throw new Error(`Unsafe output destination: "${outArg}" is an existing directory`);
+  }
+
+  const rawSegments = outArg.split(/[/\\]/);
+  if (rawSegments.some((seg) => seg.toLowerCase() === '.git')) {
+    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
+  }
+
+  const { canonicalTarget } = resolveExistingAncestorsAndAliases(root, outArg);
   const canonicalRoot = fs.existsSync(root) ? fs.realpathSync(root) : path.resolve(root);
 
   const relLexical = path.relative(root, resolvedLexical);
@@ -193,6 +206,56 @@ export function validateOutputPath(root, outArg, inputPaths = []) {
   const segmentsCanonical = relCanonical.split(/[/\\]/);
   if (segmentsCanonical.some((seg) => seg.toLowerCase() === '.git')) {
     throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
+  }
+
+  // ALLOWLIST: Destination parent must resolve inside ONE fixed output directory (.context-packs)
+  const allowedDir = path.resolve(root, ALLOWED_OUTPUT_DIR);
+  fs.mkdirSync(allowedDir, { recursive: true });
+  const canonicalAllowedDir = fs.realpathSync(allowedDir);
+
+  const parentLexical = path.dirname(resolvedLexical);
+  let curr = parentLexical;
+  const missingSegments = [];
+  while (!fs.existsSync(curr) && path.dirname(curr) !== curr) {
+    missingSegments.unshift(path.basename(curr));
+    curr = path.dirname(curr);
+  }
+  let canonicalParent;
+  try {
+    const canonicalAncestor = fs.realpathSync(curr);
+    canonicalParent =
+      missingSegments.length > 0
+        ? path.join(canonicalAncestor, ...missingSegments)
+        : canonicalAncestor;
+  } catch {
+    throw new Error(`Unsafe output destination: "${outArg}" parent could not be resolved`);
+  }
+
+  const isCaseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
+  const normAllowed = isCaseInsensitive ? canonicalAllowedDir.toLowerCase() : canonicalAllowedDir;
+  const normParent = isCaseInsensitive ? canonicalParent.toLowerCase() : canonicalParent;
+  const relToAllowed = path.relative(normAllowed, normParent);
+
+  const isInsideAllowed =
+    relToAllowed === '' || (!relToAllowed.startsWith('..') && !path.isAbsolute(relToAllowed));
+  if (!isInsideAllowed) {
+    throw new Error(
+      `Unsafe output destination: "${outArg}" must resolve inside ${ALLOWED_OUTPUT_DIR}`,
+    );
+  }
+
+  const targetParentCanonical = path.dirname(canonicalTarget);
+  const normTargetParent = isCaseInsensitive
+    ? targetParentCanonical.toLowerCase()
+    : targetParentCanonical;
+  const relTargetToAllowed = path.relative(normAllowed, normTargetParent);
+  const isTargetInsideAllowed =
+    relTargetToAllowed === '' ||
+    (!relTargetToAllowed.startsWith('..') && !path.isAbsolute(relTargetToAllowed));
+  if (!isTargetInsideAllowed) {
+    throw new Error(
+      `Unsafe output destination: "${outArg}" must resolve inside ${ALLOWED_OUTPUT_DIR}`,
+    );
   }
 
   let targetStat = null;

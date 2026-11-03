@@ -72,10 +72,45 @@ def is_sensitive_key(name: str) -> bool:
     return False
 
 
+JSONRPC_ERROR_CATEGORIES = {
+    -32700: "Parse error",
+    -32600: "Invalid Request",
+    -32601: "Method not found",
+    -32602: "Invalid params",
+    -32603: "Internal error",
+}
+
+
+def error_category_from_code(code: int) -> str:
+    """Return fixed category string chosen strictly from error code."""
+    if not isinstance(code, int):
+        return "Unknown error"
+    if code in JSONRPC_ERROR_CATEGORIES:
+        return JSONRPC_ERROR_CATEGORIES[code]
+    if -32099 <= code <= -32000:
+        return "Server error"
+    return "Application error"
+
+
+class JsonRpcError(RuntimeError):
+    def __init__(self, code: int, category: str):
+        super().__init__(f"JSON-RPC error: code={code}, category={category}")
+        self.code = code
+        self.category = category
+
+
 def sanitize_secret_payload(val):
-    """Redact sensitive names and values recursively, before anything is printed or written."""
+    """Allowlist output: for JSON-RPC error, record ONLY code (int) and fixed category string."""
+    if isinstance(val, dict):
+        if "code" in val and isinstance(val.get("code"), int):
+            code = val["code"]
+            return {"code": code, "category": error_category_from_code(code)}
+        return {
+            k: REDACTED if is_sensitive_key(k) else sanitize_secret_payload(v)
+            for k, v in val.items()
+        }
     if isinstance(val, str):
-        s = _AUTH_HEADER_RE.sub(r"\1" + REDACTED + r"\2", val)
+        s = _AUTH_HEADER_RE.sub("Authorization: " + REDACTED, val)
         s = _BASIC_RE.sub("Basic " + REDACTED, s)
         s = _BEARER_RE.sub("Bearer " + REDACTED, s)
         s = _CANARY_RE.sub(REDACTED, s)
@@ -88,11 +123,6 @@ def sanitize_secret_payload(val):
                 s,
             )
         return s
-    if isinstance(val, dict):
-        return {
-            k: REDACTED if is_sensitive_key(k) else sanitize_secret_payload(v)
-            for k, v in val.items()
-        }
     if isinstance(val, (list, tuple)):
         return [sanitize_secret_payload(item) for item in val]
     return val
@@ -176,10 +206,13 @@ class MCP:
                 raise RuntimeError("Server ended before reply")
             if message.get("id") == request_id and ("result" in message or "error" in message):
                 if "error" in message:
-                    sanitized_err = sanitize_secret_payload(message["error"])
-                    err_json = sanitize_secret_payload(json.dumps(sanitized_err))
-                    self.classify(err_json)
-                    raise RuntimeError(f"JSON-RPC error: {err_json}")
+                    raw_err = message["error"]
+                    code = raw_err.get("code") if isinstance(raw_err, dict) else None
+                    if not isinstance(code, int):
+                        code = -32603
+                    category = error_category_from_code(code)
+                    self.classify(category)
+                    raise JsonRpcError(code=code, category=category)
                 return message["result"]
             if "method" in message and "id" in message:
                 if message["method"] == "roots/list":
@@ -337,6 +370,8 @@ def main() -> int:
             reduction_pct = round((1 - resp_tokens / whole_file_tokens) * 100, 1)
             result.update({
                 "status": "PASS",
+                "tool_names": sorted(server.tools.keys()),
+                "tool_count": len(server.tools),
                 "function_count": len(found),
                 "response_tokens": resp_tokens,
                 "whole_file_tokens": whole_file_tokens,
@@ -344,10 +379,29 @@ def main() -> int:
                 "token_comparison": f"{resp_tokens} MCP tokens vs {whole_file_tokens} whole file tokens ({reduction_pct}% reduction)",
             })
             print(f"{name}: PASS; tools={len(server.tools)}; functions={len(found)}; {resp_tokens} tokens vs {whole_file_tokens} whole-file ({reduction_pct}% reduction)", flush=True)
+        except JsonRpcError as error:
+            all_passed = False
+            safe_err = f"JSON-RPC error: code={error.code}, category={error.category}"
+            result.update({
+                "status": "FAIL",
+                "error": {
+                    "code": error.code,
+                    "category": error.category,
+                },
+                "diagnostics": sorted(server.diagnostics),
+            })
+            print(f"{name}: FAIL; {safe_err}", file=sys.stderr, flush=True)
         except Exception as error:
             all_passed = False
-            safe_err = sanitize_secret_payload(f"{type(error).__name__}: {error}")
-            result.update({"error": safe_err, "diagnostics": sorted(server.diagnostics)})
+            safe_err = f"{type(error).__name__}"
+            result.update({
+                "status": "FAIL",
+                "error": {
+                    "code": -32603,
+                    "category": "Internal error",
+                },
+                "diagnostics": sorted(server.diagnostics),
+            })
             print(f"{name}: FAIL; {safe_err}", file=sys.stderr, flush=True)
         finally:
             result["shutdown"] = server.close()

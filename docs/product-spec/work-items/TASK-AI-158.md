@@ -136,16 +136,20 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | 9 | `d55d4573927712cecff7a88a3d6472579504a8f5` | `CHANGES_REQUIRED` | Round 89 finding: P1 — CI failing (`ai-brain-tests`, `application-gate`, `current-application`). |
 | 10 | current local repair tree | `READY_FOR_CODEX` | Synchronized toolchain devDependency snapshots, verified no-hardcode guard, delivery order 294, and added CI pipeline integrity test (44/44 pass). Residual sandbox limitations recorded in `.oc/pr-body.md`. |
 
-## Current review repair evidence (2026-11-03)
+## Current review repair evidence (2026-11-04)
 
-- Read `.oc/review.txt` at reviewed SHA `d55d4573927712cecff7a88a3d6472579504a8f5` and review history in `.oc/history.md`.
-- Finding 1 (P1): CI failing (`ai-brain-tests`, `application-gate`, `current-application`).
 - CI: see PR checks at the reviewed SHA. Local commands verified:
-  - `ai-brain-tests`: `check-no-hardcode.mjs` passes with 0 violations; `repomix: 1.18.1` in root `package.json` matches all 3 snapshots in `GROUP-7-PRODUCT-TOOLCHAIN.md` (which caused `repo-integration-group-7.test.js` to fail in earlier rounds); `tools/ai-brain/test/context-pack-repomix.test.js` passes 3/3; `tools/ai-brain/test/work-guard.test.js` passes 53/53.
-  - `current-application`: `pnpm build` completes all 8 packages successfully (Next.js, API, Worker, Contracts, UI, Config, Testkit); `pnpm lint` passes 12/12 Turbo tasks and root scripts; `pnpm typecheck` passes 12/12 Turbo tasks; `@shipde/worker` tests pass; `pnpm security:secrets` passes with 0 secret violations on commit history and working tree; `git diff --check origin/main...HEAD` passes with 0 whitespace errors.
-  - `application-gate`: All application tasks build and typecheck cleanly; delivery order `294` in `FEATURE-DELIVERY-REGISTER.csv` matches `TASK-AI-158.md` with no duplicate orders.
-- Automated test-first proof: Added `test_ci_pipeline_gates_and_toolchain_sync: ai-brain-tests and current-application integrity checks pass fail-closed` in `scripts/ai/test/pack-context.test.mjs` verifying toolchain synchronization, no-hardcode guard execution, and register row integrity. All 45 tests pass.
-- AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision, case-variant .git pointer protection and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 45/45. Test fixtures live only under this worktree's `.oc/tmp`.
+  - `python tools/ctx-tools/test_smoke.py`: 7/7 tests pass (JSON-RPC error payload allowlisting and credential sanitization verified).
+  - `node --test scripts/ai/test/pack-context.test.mjs`: 46/46 tests pass (destination allowlist to `.context-packs/`, case-insensitive `.git` protection, argument parsing, token limits, secret checks).
+  - `node scripts/ai/check-no-hardcode.mjs`: passes with 0 violations.
+  - `python docs/product-spec/scripts/validate_docs.py`: passes with 0 errors.
+  - `pnpm format:check`: passes.
+  - `pnpm security:secrets`: passes with 0 secret violations on commit history and working tree.
+  - `git diff --check origin/main...HEAD`: passes with 0 whitespace errors.
+- Automated test-first proof:
+  - `tools/ctx-tools/test_smoke.py`: `test_rpc_error_allowlist_records_only_code_and_category` verifies JSON-RPC errors record only code and category, never server message or data.
+  - `scripts/ai/test/pack-context.test.mjs`: `destination allowlist: refuses .GIT, refuses docs/x.md, accepts default/allowed path` verifies destination allowlisting to `.context-packs/`.
+- AC-AI-158-01 through AC-AI-158-04, AC-AI-158-ctx-01 through AC-AI-158-ctx-03 pass locally.
 - Current local command results and every reviewer category are recorded in `.oc/pr-body.md`. Historical claims below describe earlier author reports; they are not current verification or independent approval.
 
 ## Historical review repair evidence (through `2466e28b45d68e58c5794411c1d1a8fc4082074d`)

@@ -179,8 +179,8 @@ class TestSmokeRedaction(unittest.TestCase):
                         results_json = results_file.read_text(encoding="utf-8")
 
                     self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
-                    self.assertIn("[REDACTED]", proc.stderr, f"redaction marker missing: {proc.stderr}")
-                    self.assertIn("[REDACTED]", results_json, f"redaction marker missing: {results_json}")
+                    self.assertIn("Internal error", proc.stderr, f"category missing: {proc.stderr}")
+                    self.assertIn("Internal error", results_json, f"category missing: {results_json}")
                     secret = credential if case_name == "camel_case_access_token" else password
                     self.assertNotIn(secret, proc.stderr, "credential value leaked in stderr")
                     self.assertNotIn(secret, results_json, "credential value leaked in smoke-results.json")
@@ -363,7 +363,7 @@ class TestSmokeRedaction(unittest.TestCase):
             for leaked in ("smoke-test-value", "refresh-not-real", "not-a-key", "camel-not-real", "cred-not-real"):
                 self.assertNotIn(leaked, combined, f"credential value {leaked} leaked")
             self.assertNotIn('"x"', combined, "client_secret value x leaked")
-            self.assertIn("[REDACTED]", combined, "redaction marker missing")
+            self.assertIn("Internal error", combined, "category missing")
 
     def test_basic_authorization_error_is_fully_redacted(self):
         """Review 2: Basic authorization error payload must be fully redacted."""
@@ -439,9 +439,81 @@ class TestSmokeRedaction(unittest.TestCase):
             self.assertNotIn("smoke-test-token", proc.stderr, "access_token leaked in stderr")
             self.assertNotIn("dXNlcjpwYXNz", results_json, "encoded credential leaked in smoke-results.json")
             self.assertNotIn("smoke-test-token", results_json, "access_token leaked in smoke-results.json")
-            self.assertIn("[REDACTED]", proc.stderr, "redaction marker missing from stderr")
+            self.assertIn("Internal error", proc.stderr, "category missing from stderr")
             if results_json:
-                self.assertIn("[REDACTED]", results_json, "redaction marker missing from smoke-results.json")
+                self.assertIn("Internal error", results_json, "category missing from smoke-results.json")
+
+    def test_rpc_error_allowlist_records_only_code_and_category(self):
+        """Root cause #2: error payload is allowlisted to code and category only; message/data never stored/printed."""
+        tmp_base = REPO_ROOT / ".oc" / "tmp"
+        tmp_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            fake_server_script = tmp_path / "fake_mcp_server.py"
+            fake_server_script.write_text(
+                'import sys, json\n'
+                'for line in sys.stdin:\n'
+                '    try:\n'
+                '        req = json.loads(line)\n'
+                '        req_id = req.get("id")\n'
+                '        if req_id is not None:\n'
+                '            err_resp = {\n'
+                '                "jsonrpc": "2.0",\n'
+                '                "id": req_id,\n'
+                '                "error": {"code": -32603, "message": "Authorization: Basic dXNlcjpwYXNz", "data": {"access_token": "t"}}\n'
+                '            }\n'
+                '            sys.stdout.write(json.dumps(err_resp) + "\\n")\n'
+                '            sys.stdout.flush()\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding="utf-8",
+            )
+
+            entries_file = tmp_path / "entries.json"
+            entries_file.write_text(
+                json.dumps({
+                    "fake_server": {
+                        "command": PYTHON_EXE,
+                        "args": [str(fake_server_script)],
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            out_dir = tmp_path / "out"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    PYTHON_EXE,
+                    str(SMOKE_SCRIPT),
+                    "--entries", str(entries_file),
+                    "--out-dir", str(out_dir),
+                    "--project", str(REPO_ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            results_json = ""
+            results_file = out_dir / "smoke-results.json"
+            if results_file.exists():
+                results_json = results_file.read_text(encoding="utf-8")
+
+            self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
+            self.assertNotIn("dXNlcjpwYXNz", proc.stderr, "dXNlcjpwYXNz leaked in stderr")
+            self.assertNotIn("dXNlcjpwYXNz", results_json, "dXNlcjpwYXNz leaked in smoke-results.json")
+            self.assertNotIn('"t"', proc.stderr, 't" leaked in stderr')
+            self.assertNotIn('"t"', results_json, 't" leaked in smoke-results.json')
+            self.assertIn("-32603", proc.stderr, "code must be in stderr")
+            self.assertIn("Internal error", proc.stderr, "category must be in stderr")
+            if results_json:
+                data = json.loads(results_json)
+                server_err = data["servers"]["fake_server"]["error"]
+                self.assertEqual(server_err, {"code": -32603, "category": "Internal error"})
+
 
 
 if __name__ == "__main__":

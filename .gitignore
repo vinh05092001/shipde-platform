@@ -44,6 +44,7 @@ k6-api.log
 # Repomix output (advisory context packing)
 repomix-output.xml
 .repomix-tmp-*/
+.context-packs/
 
 # Serena per-machine state; only .serena/project.yml is shared
 .serena/memories/

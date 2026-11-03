@@ -285,13 +285,13 @@ describe('main — token limit', () => {
     const errors = [];
     try {
       for (const paths of ['', ' , , ']) {
-        const code = await main(['--paths', paths, '--out', 'output.xml'], {
+        const code = await main(['--paths', paths, '--out', '.context-packs/output.xml'], {
           root: fixture,
           log: (line) => logs.push(line),
           logError: (line) => errors.push(line),
         });
         assert.equal(code, 1);
-        assert.equal(fs.existsSync(path.join(fixture, 'output.xml')), false);
+        assert.equal(fs.existsSync(path.join(fixture, '.context-packs', 'output.xml')), false);
       }
       assert.equal(logs.length, 0);
       assert.match(errors.join('\n'), /--paths is required/);
@@ -307,7 +307,7 @@ describe('main — token limit', () => {
     const errors = [];
     try {
       const code = await main(
-        ['--paths', 'src/**', '--out', 'output.xml', '--max-tokens', '1'],
+        ['--paths', 'src/**', '--out', '.context-packs/output.xml', '--max-tokens', '1'],
         {
           root: fixture,
           log: (line) => logs.push(line),
@@ -315,7 +315,7 @@ describe('main — token limit', () => {
         },
       );
       assert.equal(code, 1);
-      assert.equal(fs.existsSync(path.join(fixture, 'output.xml')), false);
+      assert.equal(fs.existsSync(path.join(fixture, '.context-packs', 'output.xml')), false);
       assert.match(errors.join('\n'), /exceeds --max-tokens 1/);
       const printed = `${logs.join('\n')}\n${errors.join('\n')}`;
       assert.equal(printed.includes('export const hello'), false);
@@ -329,19 +329,19 @@ describe('main — token limit', () => {
     const logs = [];
     const errors = [];
     try {
-      const code = await main(['--paths', 'src/**', '--out', 'output.xml'], {
+      const code = await main(['--paths', 'src/**', '--out', '.context-packs/output.xml'], {
         root: fixture,
         log: (line) => logs.push(line),
         logError: (line) => errors.push(line),
       });
       assert.equal(errors.join('\n'), '');
       assert.equal(code, 0);
-      const output = fs.readFileSync(path.join(fixture, 'output.xml'), 'utf8');
+      const output = fs.readFileSync(path.join(fixture, '.context-packs', 'output.xml'), 'utf8');
       const fileSection = output.split('<files>')[1] || '';
       assert.match(fileSection, /hello\.js/);
       assert.match(fileSection, /world\.js/);
       assert.match(fileSection, /export const hello/);
-      assert.match(logs.join('\n'), /OK: 2 files, ~\d+ tokens, output\.xml/);
+      assert.match(logs.join('\n'), /OK: 2 files, ~\d+ tokens, \.context-packs[/\\]output\.xml/);
       assert.equal(logs.join('\n').includes('export const hello'), false);
     } finally {
       cleanupDir(fixture);
@@ -382,14 +382,14 @@ describe('environment file exclusion', () => {
           // Harmless markers prove exclusion without relying on secretlint detection.
           fs.writeFileSync(filePath, `context_marker=${markers[index]}\n`);
         }
-        const code = await main(['--paths', paths, '--out', 'output.xml'], {
+        const code = await main(['--paths', paths, '--out', '.context-packs/output.xml'], {
           root: fixture,
           log: (line) => logs.push(line),
           logError: (line) => errors.push(line),
         });
         assert.equal(errors.join('\n'), '');
         assert.equal(code, 0);
-        const output = fs.readFileSync(path.join(fixture, 'output.xml'), 'utf8');
+        const output = fs.readFileSync(path.join(fixture, '.context-packs', 'output.xml'), 'utf8');
         assert.match(output, /export const hello/);
         assert.match(output, /export const world/);
         const printed = `${logs.join('\n')}\n${errors.join('\n')}`;
@@ -418,13 +418,13 @@ describe('repomix security check', () => {
         path.join(fixture, 'src', 'tokens.js'),
         `const tok = "${secret}";\n`,
       );
-      const code = await main(['--paths', 'src/**', '--out', 'output.xml'], {
+      const code = await main(['--paths', 'src/**', '--out', '.context-packs/output.xml'], {
         root: fixture,
         log: (line) => logs.push(line),
         logError: (line) => errors.push(line),
       });
       assert.equal(code, 1);
-      assert.equal(fs.existsSync(path.join(fixture, 'output.xml')), false);
+      assert.equal(fs.existsSync(path.join(fixture, '.context-packs', 'output.xml')), false);
       assert.match(errors.join('\n'), /security check found suspicious content/i);
       const printed = `${logs.join('\n')}\n${errors.join('\n')}`;
       assert.equal(printed.includes(secret), false);
@@ -437,7 +437,8 @@ describe('repomix security check', () => {
 describe('failure cleanup and destination safety', () => {
   test('preserves an existing output file when repomix fails to launch', async () => {
     const fixture = createFixtureRoot();
-    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingOut = path.join(fixture, '.context-packs', 'existing-output.xml');
+    fs.mkdirSync(path.dirname(existingOut), { recursive: true });
     const existingContent = '<existing>User Content</existing>\n';
     fs.writeFileSync(existingOut, existingContent, 'utf8');
 
@@ -449,7 +450,7 @@ describe('failure cleanup and destination safety', () => {
     const errors = [];
     try {
       const code = await main(
-        ['--paths', 'src/**', '--out', 'existing-output.xml'],
+        ['--paths', 'src/**', '--out', '.context-packs/existing-output.xml'],
         {
           root: fixture,
           log: (line) => logs.push(line),
@@ -467,7 +468,8 @@ describe('failure cleanup and destination safety', () => {
 
   test('preserves an existing output file when token budget is exceeded', async () => {
     const fixture = createFixtureRoot();
-    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingOut = path.join(fixture, '.context-packs', 'existing-output.xml');
+    fs.mkdirSync(path.dirname(existingOut), { recursive: true });
     const existingContent = '<existing>User Content</existing>\n';
     fs.writeFileSync(existingOut, existingContent, 'utf8');
 
@@ -475,7 +477,7 @@ describe('failure cleanup and destination safety', () => {
     const errors = [];
     try {
       const code = await main(
-        ['--paths', 'src/**', '--out', 'existing-output.xml', '--max-tokens', '1'],
+        ['--paths', 'src/**', '--out', '.context-packs/existing-output.xml', '--max-tokens', '1'],
         {
           root: fixture,
           log: (line) => logs.push(line),
@@ -529,7 +531,7 @@ describe('failure cleanup and destination safety', () => {
         logError: (line) => errors.push(line),
       });
       assert.equal(codeCollision, 1);
-      assert.match(errors.join('\n'), /collision/i);
+      assert.match(errors.join('\n'), /collision|must resolve inside \.context-packs/i);
     } finally {
       cleanupDir(fixture);
     }
@@ -539,7 +541,8 @@ describe('failure cleanup and destination safety', () => {
     const fixture = createFixtureRoot();
     const srcHello = path.join(fixture, 'src', 'hello.js');
     const originalHello = fs.readFileSync(srcHello, 'utf8');
-    const contextXml = path.join(fixture, 'context.xml');
+    const contextXml = path.join(fixture, '.context-packs', 'context.xml');
+    fs.mkdirSync(path.dirname(contextXml), { recursive: true });
 
     try {
       fs.symlinkSync(srcHello, contextXml, 'file');
@@ -550,13 +553,13 @@ describe('failure cleanup and destination safety', () => {
     const logs = [];
     const errors = [];
     try {
-      const code = await main(['--paths', 'src/**', '--out', 'context.xml'], {
+      const code = await main(['--paths', 'src/**', '--out', '.context-packs/context.xml'], {
         root: fixture,
         log: (line) => logs.push(line),
         logError: (line) => errors.push(line),
       });
       assert.equal(code, 1);
-      assert.match(errors.join('\n'), /collision/i);
+      assert.match(errors.join('\n'), /collision|must resolve inside \.context-packs/i);
       assert.equal(fs.readFileSync(srcHello, 'utf8'), originalHello);
     } finally {
       cleanupDir(fixture);
@@ -567,7 +570,8 @@ describe('failure cleanup and destination safety', () => {
     const fixture = createFixtureRoot();
     const srcHello = path.join(fixture, 'src', 'hello.js');
     const originalHello = fs.readFileSync(srcHello, 'utf8');
-    const contextXml = path.join(fixture, 'context.xml');
+    const contextXml = path.join(fixture, '.context-packs', 'context.xml');
+    fs.mkdirSync(path.dirname(contextXml), { recursive: true });
 
     try {
       fs.symlinkSync(srcHello, contextXml, 'file');
@@ -578,13 +582,13 @@ describe('failure cleanup and destination safety', () => {
     const logs = [];
     const errors = [];
     try {
-      const code = await main(['--paths', './src/**', '--out', 'context.xml'], {
+      const code = await main(['--paths', './src/**', '--out', '.context-packs/context.xml'], {
         root: fixture,
         log: (line) => logs.push(line),
         logError: (line) => errors.push(line),
       });
       assert.equal(code, 1);
-      assert.match(errors.join('\n'), /collision/i);
+      assert.match(errors.join('\n'), /collision|must resolve inside \.context-packs/i);
       assert.equal(fs.readFileSync(srcHello, 'utf8'), originalHello);
     } finally {
       cleanupDir(fixture);
@@ -609,7 +613,7 @@ describe('failure cleanup and destination safety', () => {
         logError: (line) => errors.push(line),
       });
       assert.equal(code, 1);
-      assert.match(errors.join('\n'), /collision/i);
+      assert.match(errors.join('\n'), /collision|must resolve inside \.context-packs/i);
       assert.equal(fs.readFileSync(srcHello, 'utf8'), originalHello);
     } finally {
       cleanupDir(fixture);
@@ -644,7 +648,8 @@ describe('failure cleanup and destination safety', () => {
 
   test('preserves existing output file when publication fails', async () => {
     const fixture = createFixtureRoot();
-    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingOut = path.join(fixture, '.context-packs', 'existing-output.xml');
+    fs.mkdirSync(path.dirname(existingOut), { recursive: true });
     const existingContent = '<existing>User Content</existing>\n';
     fs.writeFileSync(existingOut, existingContent, 'utf8');
 
@@ -652,7 +657,7 @@ describe('failure cleanup and destination safety', () => {
     const errors = [];
     try {
       const code = await main(
-        ['--paths', 'src/**', '--out', 'existing-output.xml'],
+        ['--paths', 'src/**', '--out', '.context-packs/existing-output.xml'],
         {
           root: fixture,
           rename: () => {
@@ -673,7 +678,8 @@ describe('failure cleanup and destination safety', () => {
 
   test('preserves existing output file when publication copy fails', async () => {
     const fixture = createFixtureRoot();
-    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingOut = path.join(fixture, '.context-packs', 'existing-output.xml');
+    fs.mkdirSync(path.dirname(existingOut), { recursive: true });
     const existingContent = '<existing>User Content</existing>\n';
     fs.writeFileSync(existingOut, existingContent, 'utf8');
 
@@ -681,7 +687,7 @@ describe('failure cleanup and destination safety', () => {
     const errors = [];
     try {
       const code = await main(
-        ['--paths', 'src/**', '--out', 'existing-output.xml'],
+        ['--paths', 'src/**', '--out', '.context-packs/existing-output.xml'],
         {
           root: fixture,
           copyFile: () => {
@@ -752,6 +758,29 @@ describe('failure cleanup and destination safety', () => {
       });
       assert.equal(code, 1);
       assert.match(errors.join('\n'), /inside \.git/i);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
+  test('destination allowlist: refuses .GIT, refuses docs/x.md, accepts default/allowed path', async () => {
+    const fixture = createFixtureRoot();
+    try {
+      // 1. --out .GIT refused
+      assert.throws(
+        () => validateOutputPath(fixture, '.GIT'),
+        /inside \.git|inside \.context-packs/i,
+      );
+
+      // 2. --out docs/x.md refused
+      assert.throws(
+        () => validateOutputPath(fixture, 'docs/x.md'),
+        /inside \.context-packs/i,
+      );
+
+      // 3. default/allowed path accepted
+      const allowedDest = validateOutputPath(fixture, '.context-packs/test-pack.xml');
+      assert.ok(allowedDest.includes('.context-packs'));
     } finally {
       cleanupDir(fixture);
     }
@@ -867,12 +896,14 @@ describe('destination alias and collision unit suite', () => {
     const tmpDir = fs.mkdtempSync(path.join(TEST_TMP, 'alias-test-'));
     try {
       const srcFile = path.join(tmpDir, 'source.js');
-      const hardLink = path.join(tmpDir, 'alias.xml');
+      const packsDir = path.join(tmpDir, '.context-packs');
+      fs.mkdirSync(packsDir, { recursive: true });
+      const hardLink = path.join(packsDir, 'alias.xml');
       fs.writeFileSync(srcFile, 'export const a = 1;\n', 'utf8');
       fs.linkSync(srcFile, hardLink);
 
       assert.throws(
-        () => validateOutputPath(tmpDir, 'alias.xml', ['source.js']),
+        () => validateOutputPath(tmpDir, '.context-packs/alias.xml', ['source.js']),
         /Input\/output collision/,
       );
     } finally {
