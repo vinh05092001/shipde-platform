@@ -78,6 +78,15 @@ export function canonicalIdentity(candidate) {
 
   // If candidate object has fields, each present field must strictly match key
   if (obj) {
+    for (const prop of ['gateway', 'upstream', 'account', 'model']) {
+      if (Object.hasOwn(obj, prop)) {
+        const val = obj[prop];
+        if (val === null || val === undefined || String(val).trim() === '') {
+          return null;
+        }
+      }
+    }
+
     if (obj.gateway !== undefined && obj.gateway !== null && norm(obj.gateway) !== gatewayNorm) {
       return null;
     }

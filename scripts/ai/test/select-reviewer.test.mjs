@@ -270,4 +270,15 @@ describe('select-reviewer', () => {
     assert.equal(result.status, 'BLOCKED');
     assert.equal(result.reviewer, null);
   });
+
+  it('blocks resolved reviewer with explicit null upstream', () => {
+    const result = selectReviewer({
+      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
+      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
+      resolveCandidate: (c) => ({ ...c, upstream: null }),
+    });
+
+    assert.equal(result.status, 'BLOCKED');
+    assert.equal(result.reviewer, null);
+  });
 });
