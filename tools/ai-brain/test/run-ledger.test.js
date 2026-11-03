@@ -356,3 +356,24 @@ test('reserve followed by record with goalId tracks attempt in goals', () => {
   assert.equal(state.goal.attempts, 1);
   assert.equal(state.goals['GOAL-G'].attempts, 1);
 });
+
+test('persisted ledger preserves full counter schema and passes validateLedger across repeated writes', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  ledger.record('writer', { itemId: 'TASK-SCHEMA', attemptId: 'a1', ms: 100 });
+  const raw1 = JSON.parse(fs.readFileSync(ledger.file, 'utf8'));
+  for (const k of ['attempts', 'ms', 'tokens', 'tokensUnknown', 'unknownTokens']) {
+    assert.equal(typeof raw1.items['TASK-SCHEMA'].spent[k], 'number');
+    assert.equal(typeof raw1.goal[k], 'number');
+  }
+  // Subsequent record loads and validates without corrupt error
+  const rec2 = ledger.record('reviewer', {
+    itemId: 'TASK-SCHEMA',
+    attemptId: 'a2',
+    ms: 200,
+    tokens: 100,
+  });
+  assert.equal(rec2.ok, true);
+  const loaded = ledger.load();
+  assert.equal(loaded.items['TASK-SCHEMA'].spent.attempts, 2);
+  assert.equal(loaded.goal.attempts, 2);
+});

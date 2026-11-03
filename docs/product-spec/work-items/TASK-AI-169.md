@@ -112,6 +112,7 @@ N/A — headless developer tool and AI delivery runtime module.
 | AC-AI-169-11 | Limit override synchronization | Reservations honor RunLedger limit override on underlying ProgressLedger | `unit test: tools/ai-brain/test/run-ledger.test.js` |
 | AC-AI-169-12 | Distinct attempt reservation isolation | Distinct attempt IDs cannot reuse in-flight reservation credit; excess attempts rejected | `unit test: tools/ai-brain/test/run-ledger.test.js` |
 | AC-AI-169-13 | Goal tracking on reservation and record | Reserve followed by record with goalId correctly tracks attempts in goal and per-goal rollups | `unit test: tools/ai-brain/test/run-ledger.test.js` |
+| AC-AI-169-14 | ProgressLedger validateLedger schema compatibility | Preserves full counter schema (attempts, ms, tokens, tokensUnknown, unknownTokens), enforces attempts >= itemRecordCount, and sets valid pid/imputedTokens for IN_FLIGHT records | `unit test: tools/ai-brain/test/run-ledger.test.js` |
 
 ## Task breakdown
 
@@ -119,9 +120,10 @@ N/A — headless developer tool and AI delivery runtime module.
 - [x] `T02` Implement `RunLedger`, `maskCredentials`, `VALID_STAGES`, and `VALID_RETRY_LAYERS` in `tools/ai-brain/run-ledger.js`.
 - [x] `T03` Address initial Codex review (commit 63c0c6c): recursive masking in arrays, mandatory jobId/attemptId, retry deduplication before cap check, and in-flight reservation completion.
 - [x] `T04` Address second Codex review (commit ba2df83): sync limit overrides on reserve, distinguish reservations from in-flight records, and count goal attempts on reserve.
-- [x] `T05` Create Work Item specification `docs/product-spec/work-items/TASK-AI-169.md` and add delivery register row in `FEATURE-DELIVERY-REGISTER.csv`.
-- [x] `T06` Prepare `.oc/pr-body.md` following PR template.
-- [x] `T07` Run repository verification suite (`format:check`, `lint`, `test:brain`, `security:secrets`).
+- [x] `T05` Address post-merge review (commit 7fdb45f): satisfy ProgressLedger `validateLedger` counter invariants and IN_FLIGHT pid/imputedTokens metadata.
+- [x] `T06` Create Work Item specification `docs/product-spec/work-items/TASK-AI-169.md` and add delivery register row in `FEATURE-DELIVERY-REGISTER.csv`.
+- [x] `T07` Prepare `.oc/pr-body.md` following PR template.
+- [x] `T08` Run repository verification suite (`format:check`, `lint`, `test:brain`, `security:secrets`).
 
 ## Author checklist
 
@@ -143,6 +145,8 @@ N/A — headless developer tool and AI delivery runtime module.
 | 1 | `c62675f` | CHANGES_REQUIRED | Initial implementation; required recursive masking in arrays, mandatory jobId/attemptId, dedup before cap, completion of in-flight reservations |
 | 2 | `63c0c6c` | CHANGES_REQUIRED | Resolved round 1 findings; required sync limits override on reserve, distinguishing reservations from in-flight records, and counting goal attempts on reserve |
 | 3 | `ba2df83` | PASS | All review findings resolved; clean test pass across all 13 test scenarios |
+| 4 | `7fdb45f` | CHANGES_REQUIRED | P1: ai-brain-tests failure following origin/main TASK-AI-167 merge; resolved validateLedger schema compatibility and counter integrity across repeated writes |
+
 
 ## Residual limitations
 

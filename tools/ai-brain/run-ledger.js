@@ -143,12 +143,36 @@ class RunLedger {
       const s = this.progressLedger.load();
       const itemId = opts.itemId;
       const it = (itemId && s.items[itemId]) || {
-        spent: { attempts: 0, ms: 0, tokens: 0 },
+        spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
         stages: {},
       };
-      it.spent = it.spent || { attempts: 0, ms: 0, tokens: 0 };
+      it.spent = it.spent || {
+        attempts: 0,
+        ms: 0,
+        tokens: 0,
+        tokensUnknown: 0,
+        unknownTokens: 0,
+      };
+      it.spent.attempts = it.spent.attempts || 0;
+      it.spent.ms = it.spent.ms || 0;
+      it.spent.tokens = it.spent.tokens || 0;
+      it.spent.tokensUnknown = it.spent.tokensUnknown || 0;
+      it.spent.unknownTokens = it.spent.unknownTokens || 0;
       it.stages = it.stages || {};
       it.seenAttempts = it.seenAttempts || {};
+
+      s.goal = s.goal || {
+        attempts: 0,
+        ms: 0,
+        tokens: 0,
+        tokensUnknown: 0,
+        unknownTokens: 0,
+      };
+      s.goal.attempts = s.goal.attempts || 0;
+      s.goal.ms = s.goal.ms || 0;
+      s.goal.tokens = s.goal.tokens || 0;
+      s.goal.tokensUnknown = s.goal.tokensUnknown || 0;
+      s.goal.unknownTokens = s.goal.unknownTokens || 0;
 
       const attemptKey = opts.attemptId || opts.jobId;
       const isNew = !it.seenAttempts[attemptKey];
@@ -159,7 +183,9 @@ class RunLedger {
         opts.fingerprint ||
         (runReviewSha
           ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs })
-          : 'fp-' + ((s.runs && s.runs.length) || 0));
+          : attemptKey
+            ? 'att-' + attemptKey
+            : 'fp-' + ((s.runs && s.runs.length) || 0));
       const prev = ((it.stages[st] || {}).fps || {})[fp];
       const reserved = Boolean(
         prev &&
@@ -183,15 +209,36 @@ class RunLedger {
       const hasTokens = Number.isFinite(opts.tokens);
       const tokens = hasTokens ? opts.tokens : 'UNKNOWN';
       const tokenEnforcement = hasTokens ? opts.tokenEnforcement || 'ENFORCED' : 'UNENFORCED';
+      const prevImputed = prev && prev.imputedTokens !== undefined ? Number(prev.imputedTokens) : 0;
       for (const acc of [it.spent, s.goal]) {
         if (consumesAttempt) acc.attempts += 1;
         acc.ms += ms;
-        if (hasTokens) acc.tokens += tokens;
-        else acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+        if (hasTokens) {
+          acc.tokens += tokens;
+          if (reserved) {
+            acc.unknownTokens = Math.max(0, (acc.unknownTokens || 0) - prevImputed);
+            acc.tokensUnknown = Math.max(0, (acc.tokensUnknown || 0) - 1);
+          }
+        } else {
+          if (!reserved) {
+            acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+          }
+        }
       }
       if (opts.goalId) {
         s.goals = s.goals || {};
-        const gAcc = s.goals[opts.goalId] || { attempts: 0, ms: 0, tokens: 0 };
+        const gAcc = s.goals[opts.goalId] || {
+          attempts: 0,
+          ms: 0,
+          tokens: 0,
+          tokensUnknown: 0,
+          unknownTokens: 0,
+        };
+        gAcc.attempts = gAcc.attempts || 0;
+        gAcc.ms = gAcc.ms || 0;
+        gAcc.tokens = gAcc.tokens || 0;
+        gAcc.tokensUnknown = gAcc.tokensUnknown || 0;
+        gAcc.unknownTokens = gAcc.unknownTokens || 0;
         if (isNew) gAcc.attempts += 1;
         gAcc.ms += ms;
         if (hasTokens) gAcc.tokens += tokens;
@@ -222,11 +269,31 @@ class RunLedger {
       it.runs.push(run);
       it.stages[st] = it.stages[st] || { fps: {} };
       it.stages[st].fps = it.stages[st].fps || {};
-      it.stages[st].fps[fp] = {
-        outcome: String(run.verdict || 'DONE'),
+      const runVerdict = String(run.verdict || 'DONE');
+      const fpsRecord = {
+        outcome: runVerdict,
         attemptId: attemptKey,
         at: this.now(),
       };
+      if (runVerdict === 'IN_FLIGHT') {
+        fpsRecord.pid =
+          Number.isInteger(opts.pid) && opts.pid > 0
+            ? opts.pid
+            : prev && Number.isInteger(prev.pid) && prev.pid > 0
+              ? prev.pid
+              : process.pid;
+        fpsRecord.imputedTokens =
+          opts.imputedTokens !== undefined &&
+          Number.isFinite(opts.imputedTokens) &&
+          opts.imputedTokens >= 0
+            ? opts.imputedTokens
+            : prev && prev.imputedTokens !== undefined && Number.isFinite(prev.imputedTokens)
+              ? prev.imputedTokens
+              : 0;
+      } else if (reserved && prev && prev.imputedTokens !== undefined) {
+        fpsRecord.imputedTokens = hasTokens ? 0 : prev.imputedTokens;
+      }
+      it.stages[st].fps[fp] = fpsRecord;
       if (itemId) s.items[itemId] = it;
       writeJson(this.file, s);
       return { ok: true, run };
@@ -243,7 +310,13 @@ class RunLedger {
   getSummary(itemId) {
     const s = this.progressLedger.load();
     return itemId
-      ? (s.items[itemId] && s.items[itemId].spent) || { attempts: 0, ms: 0, tokens: 0 }
+      ? (s.items[itemId] && s.items[itemId].spent) || {
+          attempts: 0,
+          ms: 0,
+          tokens: 0,
+          tokensUnknown: 0,
+          unknownTokens: 0,
+        }
       : s.goal;
   }
   block(itemId, reason) {
