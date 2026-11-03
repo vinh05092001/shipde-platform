@@ -756,6 +756,29 @@ describe('failure cleanup and destination safety', () => {
       cleanupDir(fixture);
     }
   });
+
+  test('rejects_case_variant_git_pointer_on_windows: case-variant .git pointer output refused and preserved byte-for-byte', async () => {
+    const fixture = createFixtureRoot();
+    const gitFile = path.join(fixture, '.git');
+    const gitPointerContent = 'gitdir: /fake/worktree/.git/worktrees/p-task-ai-158\n';
+    fs.writeFileSync(gitFile, gitPointerContent, 'utf8');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', 'src/**', '--out', '.GIT'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /inside \.git/i);
+      assert.equal(fs.existsSync(gitFile), true);
+      assert.equal(fs.readFileSync(gitFile, 'utf8'), gitPointerContent);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
 });
 
 describe('publishOutput unit suite', () => {

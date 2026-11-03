@@ -365,6 +365,84 @@ class TestSmokeRedaction(unittest.TestCase):
             self.assertNotIn('"x"', combined, "client_secret value x leaked")
             self.assertIn("[REDACTED]", combined, "redaction marker missing")
 
+    def test_basic_authorization_error_is_fully_redacted(self):
+        """Review 2: Basic authorization error payload must be fully redacted."""
+        sys.path.insert(0, str(THIS_DIR))
+        try:
+            from smoke import sanitize_secret_payload
+        finally:
+            sys.path.pop(0)
+
+        raw_auth = "Authorization: Basic dXNlcjpwYXNz"
+        sanitized = sanitize_secret_payload(raw_auth)
+        self.assertEqual(sanitized, "Authorization: [REDACTED]")
+
+        tmp_base = REPO_ROOT / ".oc" / "tmp"
+        tmp_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            fake_server_script = tmp_path / "fake_mcp_server.py"
+            fake_server_script.write_text(
+                'import sys, json\n'
+                'for line in sys.stdin:\n'
+                '    try:\n'
+                '        req = json.loads(line)\n'
+                '        req_id = req.get("id")\n'
+                '        if req_id is not None:\n'
+                '            err_resp = {\n'
+                '                "jsonrpc": "2.0",\n'
+                '                "id": req_id,\n'
+                '                "error": {"code": -32603, "message": "Authorization: Basic dXNlcjpwYXNz", "data": {"access_token": "smoke-test-token"}}\n'
+                '            }\n'
+                '            sys.stdout.write(json.dumps(err_resp) + "\\n")\n'
+                '            sys.stdout.flush()\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding="utf-8",
+            )
+
+            entries_file = tmp_path / "entries.json"
+            entries_file.write_text(
+                json.dumps({
+                    "fake_server": {
+                        "command": PYTHON_EXE,
+                        "args": [str(fake_server_script)],
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            out_dir = tmp_path / "out"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    PYTHON_EXE,
+                    str(SMOKE_SCRIPT),
+                    "--entries", str(entries_file),
+                    "--out-dir", str(out_dir),
+                    "--project", str(REPO_ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            results_json = ""
+            results_file = out_dir / "smoke-results.json"
+            if results_file.exists():
+                results_json = results_file.read_text(encoding="utf-8")
+
+            self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
+            self.assertNotIn("dXNlcjpwYXNz", proc.stderr, "encoded credential leaked in stderr")
+            self.assertNotIn("smoke-test-token", proc.stderr, "access_token leaked in stderr")
+            self.assertNotIn("dXNlcjpwYXNz", results_json, "encoded credential leaked in smoke-results.json")
+            self.assertNotIn("smoke-test-token", results_json, "access_token leaked in smoke-results.json")
+            self.assertIn("[REDACTED]", proc.stderr, "redaction marker missing from stderr")
+            if results_json:
+                self.assertIn("[REDACTED]", results_json, "redaction marker missing from smoke-results.json")
+
 
 if __name__ == "__main__":
     unittest.main()

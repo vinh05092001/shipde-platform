@@ -43,6 +43,11 @@ _TEXT_SPACE_ASSIGNMENT_RE = re.compile(
     rf"([\"']?(?:[A-Za-z0-9_.\-]*{_KEY_SEPARATORS})?(?:{_WORD_ALT})s?[\"']?\s+)(?![\[\"']?REDACTED)[^\s,\"'}}\]\]\\\\]+",
     re.IGNORECASE,
 )
+_AUTH_HEADER_RE = re.compile(
+    r"(?i)([\"']?\bAuthorization[\"']?\s*(?:[:=]|\s)\s*[\"']?)(?!\s*\[?REDACTED)(?:[A-Za-z0-9_-]+\s+)?[^\s,\"'}\]:]+([\"']?)",
+    re.IGNORECASE,
+)
+_BASIC_RE = re.compile(r"(?i)\bBasic\s+(?!\s*\[?REDACTED)[A-Za-z0-9+/=]{8,}")
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[^\s,\"'}\]]+")
 _CANARY_RE = re.compile(r"(?i)\bCANARY_SECRET\w*")
 _SK_RE = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]+")
@@ -70,7 +75,9 @@ def is_sensitive_key(name: str) -> bool:
 def sanitize_secret_payload(val):
     """Redact sensitive names and values recursively, before anything is printed or written."""
     if isinstance(val, str):
-        s = _BEARER_RE.sub("Bearer " + REDACTED, val)
+        s = _AUTH_HEADER_RE.sub(r"\1" + REDACTED + r"\2", val)
+        s = _BASIC_RE.sub("Basic " + REDACTED, s)
+        s = _BEARER_RE.sub("Bearer " + REDACTED, s)
         s = _CANARY_RE.sub(REDACTED, s)
         s = _SK_RE.sub(REDACTED, s)
         for pattern in (_TEXT_ASSIGNMENT_RE, _TEXT_SPACE_ASSIGNMENT_RE):

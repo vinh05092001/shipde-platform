@@ -140,12 +140,12 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 
 - Read `.oc/review.txt` at reviewed SHA `d55d4573927712cecff7a88a3d6472579504a8f5` and review history in `.oc/history.md`.
 - Finding 1 (P1): CI failing (`ai-brain-tests`, `application-gate`, `current-application`).
-- Verified and reproduced all CI gates locally:
+- CI: see PR checks at the reviewed SHA. Local commands verified:
   - `ai-brain-tests`: `check-no-hardcode.mjs` passes with 0 violations; `repomix: 1.18.1` in root `package.json` matches all 3 snapshots in `GROUP-7-PRODUCT-TOOLCHAIN.md` (which caused `repo-integration-group-7.test.js` to fail in earlier rounds); `tools/ai-brain/test/context-pack-repomix.test.js` passes 3/3; `tools/ai-brain/test/work-guard.test.js` passes 53/53.
   - `current-application`: `pnpm build` completes all 8 packages successfully (Next.js, API, Worker, Contracts, UI, Config, Testkit); `pnpm lint` passes 12/12 Turbo tasks and root scripts; `pnpm typecheck` passes 12/12 Turbo tasks; `@shipde/worker` tests pass; `pnpm security:secrets` passes with 0 secret violations on commit history and working tree; `git diff --check origin/main...HEAD` passes with 0 whitespace errors.
   - `application-gate`: All application tasks build and typecheck cleanly; delivery order `294` in `FEATURE-DELIVERY-REGISTER.csv` matches `TASK-AI-158.md` with no duplicate orders.
-- Automated test-first proof: Added `test_ci_pipeline_gates_and_toolchain_sync: ai-brain-tests and current-application integrity checks pass fail-closed` in `scripts/ai/test/pack-context.test.mjs` verifying toolchain synchronization, no-hardcode guard execution, and register row integrity. All 44 tests pass.
-- AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 44/44. Test fixtures live only under this worktree's `.oc/tmp`.
+- Automated test-first proof: Added `test_ci_pipeline_gates_and_toolchain_sync: ai-brain-tests and current-application integrity checks pass fail-closed` in `scripts/ai/test/pack-context.test.mjs` verifying toolchain synchronization, no-hardcode guard execution, and register row integrity. All 45 tests pass.
+- AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision, case-variant .git pointer protection and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 45/45. Test fixtures live only under this worktree's `.oc/tmp`.
 - Current local command results and every reviewer category are recorded in `.oc/pr-body.md`. Historical claims below describe earlier author reports; they are not current verification or independent approval.
 
 ## Historical review repair evidence (through `2466e28b45d68e58c5794411c1d1a8fc4082074d`)

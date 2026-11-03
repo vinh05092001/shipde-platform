@@ -181,7 +181,7 @@ export function validateOutputPath(root, outArg, inputPaths = []) {
   }
 
   const segmentsLexical = relLexical.split(/[/\\]/);
-  if (segmentsLexical.includes('.git')) {
+  if (segmentsLexical.some((seg) => seg.toLowerCase() === '.git')) {
     throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
   }
 
@@ -191,7 +191,7 @@ export function validateOutputPath(root, outArg, inputPaths = []) {
   }
 
   const segmentsCanonical = relCanonical.split(/[/\\]/);
-  if (segmentsCanonical.includes('.git')) {
+  if (segmentsCanonical.some((seg) => seg.toLowerCase() === '.git')) {
     throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
   }
 
