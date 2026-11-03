@@ -15,34 +15,88 @@ function getLockPath(lane) {
 
 const CREDENTIAL_LINE_RE = /(?:api[-_]?key|apikey|key|token|secret|password|authorization|bearer)/i;
 
+const CREDENTIAL_GLOBAL_RE = new RegExp(CREDENTIAL_LINE_RE.source, 'gi');
+const REDACTED_LINE = '[REDACTED LINE: credential]';
+
+// Net count of JSON-style openers minus closers, ignoring brackets inside quoted strings.
+function bracketDelta(text) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{' || ch === '[') depth += 1;
+    else if (ch === '}' || ch === ']') depth -= 1;
+  }
+  return depth;
+}
+
+// What a credential-bearing line leaves for the lines after it: nothing, a pending
+// value (key without its value, e.g. `"api_key":` or `"api_key"`) or an open
+// container (`"secret": {`) whose lines must stay masked until it closes.
+function trailingState(trimmed) {
+  let lastEnd = -1;
+  for (const m of trimmed.matchAll(CREDENTIAL_GLOBAL_RE)) lastEnd = m.index + m[0].length;
+  if (lastEnd < 0) return { pending: false, depth: 0 };
+  const rest = trimmed.slice(lastEnd);
+  const opener = /^[\w-]*["'`]?\s*[:=]\s*([[{].*)$/.exec(rest);
+  if (opener) {
+    const depth = bracketDelta(opener[1]);
+    return { pending: false, depth: depth > 0 ? depth : 0 };
+  }
+  const pending =
+    /[:=]$/.test(trimmed) ||
+    /^--?[\w-]+$/.test(trimmed) ||
+    /^[\w-]*["'`]\s*$/.test(rest) ||
+    /\bbearer$/i.test(trimmed);
+  return { pending, depth: 0 };
+}
+
+// State after the first non-blank line that follows a pending credential key.
+function valueState(trimmed) {
+  if (/^[:=]+$/.test(trimmed)) return { pending: true, depth: 0 };
+  const opener = /^[:=]?\s*([[{].*)$/.exec(trimmed);
+  if (opener) {
+    const depth = bracketDelta(opener[1]);
+    if (depth > 0) return { pending: false, depth };
+  }
+  return trailingState(trimmed);
+}
+
 function redactStderr(text) {
   if (!text) return '';
   const lines = String(text).split('\n');
-  let expectingValue = false;
+  let pending = false;
+  let depth = 0;
   return lines
     .map((line) => {
       const hasCR = line.endsWith('\r');
       const cleanLine = hasCR ? line.slice(0, -1) : line;
       const trimmed = cleanLine.trim();
+      const masked = hasCR ? `${REDACTED_LINE}\r` : REDACTED_LINE;
 
-      if (expectingValue) {
+      if (depth > 0) {
+        depth = Math.max(0, depth + bracketDelta(trimmed));
+        return masked;
+      }
+
+      if (pending) {
         if (!trimmed) {
           return line;
         }
-        expectingValue = false;
-        if (CREDENTIAL_LINE_RE.test(cleanLine)) {
-          if (trimmed.endsWith(':') || trimmed.endsWith('=') || /^--?[\w-]+$/.test(trimmed)) {
-            expectingValue = true;
-          }
-        }
-        return hasCR ? '[REDACTED LINE: credential]\r' : '[REDACTED LINE: credential]';
+        ({ pending, depth } = valueState(trimmed));
+        return masked;
       }
 
       if (CREDENTIAL_LINE_RE.test(cleanLine)) {
-        if (trimmed.endsWith(':') || trimmed.endsWith('=') || /^--?[\w-]+$/.test(trimmed)) {
-          expectingValue = true;
-        }
-        return hasCR ? '[REDACTED LINE: credential]\r' : '[REDACTED LINE: credential]';
+        ({ pending, depth } = trailingState(trimmed));
+        return masked;
       }
       return line;
     })
@@ -111,7 +165,9 @@ function saveResult(lane, job, outcome = {}) {
     try {
       active = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
     } catch (_) {}
-    if (active && active.jobId && jobId && active.jobId !== jobId) {
+    // A result not bound to the active job (stale or missing jobId) is discarded so it
+    // cannot overwrite the active job's completion.
+    if (active && active.jobId && active.jobId !== jobId) {
       return null;
     }
   }

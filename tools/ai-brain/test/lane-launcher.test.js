@@ -400,3 +400,74 @@ test('redacts-json-credential-value-on-next-line', (t) => {
   const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
   assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
 });
+
+test('launch-rejects-negative-and-null-job-pid', (t) => {
+  for (const bad of [-1, null, 1.5, '42']) {
+    const dir = makeTempLane();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    assert.throws(() => launch(dir, { pid: bad }), /positive pid required/);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'lock')), false);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'job.json')), false);
+  }
+});
+
+test('late-result-without-jobid-cannot-overwrite-active-completion', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  saveResult(dir, resB.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resB.job);
+
+  // An unbound late result (no jobId on job nor outcome) must be discarded.
+  assert.strictEqual(saveResult(dir, {}, { exitCode: 1, stderr: 'late' }), null);
+  assert.strictEqual(saveResult(dir, undefined, { exitCode: 1 }), null);
+
+  const readB = readResult(dir, resB.job);
+  assert.ok(readB);
+  assert.strictEqual(readB.jobId, resB.job.jobId);
+  assert.strictEqual(launch(dir, { name: 'job-C' }).ok, true);
+});
+
+test('redacts-json-credential-value-after-separator-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-json-separator-line' };
+  const rawStderr =
+    '{\n"api_key"\n:\n"FAKE_CREDENTIAL"\n}\r\n{\r\n"token"\r\n\r\n=\r\n"FAKE_CREDENTIAL"\r\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+  assert.strictEqual(saved.stderr.includes('FAKE_CREDENTIAL'), false);
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
+  // Structural lines that carry no credential are preserved.
+  assert.ok(saved.stderr.startsWith('{\n'));
+  assert.ok(saved.stderr.endsWith('}'));
+});
+
+test('redacts-json-credential-nested-object-and-array-values', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-json-nested' };
+  const rawStderr = [
+    '{',
+    '"secret": {',
+    '"value": "FAKE_CREDENTIAL_A",',
+    '"inner": { "v": "FAKE_CREDENTIAL_B" }',
+    '},',
+    '"api_key":',
+    '[',
+    '"FAKE_CREDENTIAL_C"',
+    '],',
+    '"status": "safe-visible"',
+    '}',
+  ].join('\n');
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+  assert.strictEqual(/FAKE_CREDENTIAL/.test(saved.stderr), false);
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(/FAKE_CREDENTIAL/.test(rawResult), false);
+  // Masking stops after the credential value closes.
+  assert.ok(saved.stderr.includes('"status": "safe-visible"'));
+});
