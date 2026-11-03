@@ -23,7 +23,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Faceted filter dropdown with multi-select checkboxes and count badges.
+ * Faceted filter dropdown with multi-select checkboxes, count badges,
+ * optimistic selection accumulation, and accessible listbox keyboard navigation.
  */
 
 'use client';
@@ -38,6 +39,72 @@ interface DataTableFacetedFilterProps {
   selectedValues?: Set<string>;
   onSelect: (values: string[]) => void;
   className?: string;
+  historyEpoch?: number;
+}
+
+/**
+ * Computes the synchronized optimistic selection for faceted filter when
+ * committed selectedValues prop or historyEpoch changes (Finding 4 P1).
+ * Preserves optimistic selections when multiple selections happen in the same
+ * dropdown before committed search params update, and drops pending selections
+ * on browser history navigation (popstate) or external filter resets.
+ */
+export function computeOptimisticFacetSelection(
+  currentOptimistic: Set<string>,
+  incomingCommitted: Set<string>,
+  prevCommitted: Set<string>,
+  pendingSelections: string[],
+  historyEvent = false
+): {
+  nextOptimistic: Set<string>;
+  nextPending: string[];
+  wasIgnoredDueToPending: boolean;
+} {
+  if (historyEvent) {
+    return {
+      nextOptimistic: new Set(incomingCommitted),
+      nextPending: [],
+      wasIgnoredDueToPending: false,
+    };
+  }
+
+  const incomingStr = Array.from(incomingCommitted).sort().join('.');
+  const prevStr = Array.from(prevCommitted).sort().join('.');
+
+  if (incomingStr === prevStr) {
+    return {
+      nextOptimistic: currentOptimistic,
+      nextPending: pendingSelections,
+      wasIgnoredDueToPending: false,
+    };
+  }
+
+  const pendingIdx = pendingSelections.indexOf(incomingStr);
+  if (pendingIdx !== -1) {
+    const nextPending = pendingSelections.slice(pendingIdx + 1);
+    if (nextPending.length === 0) {
+      // All pending selections acknowledged
+      return {
+        nextOptimistic: new Set(incomingCommitted),
+        nextPending,
+        wasIgnoredDueToPending: false,
+      };
+    } else {
+      // User made newer selections; preserve current optimistic values
+      return {
+        nextOptimistic: currentOptimistic,
+        nextPending,
+        wasIgnoredDueToPending: true,
+      };
+    }
+  }
+
+  // External change (e.g. resetFilters)
+  return {
+    nextOptimistic: new Set(incomingCommitted),
+    nextPending: [],
+    wasIgnoredDueToPending: false,
+  };
 }
 
 export function DataTableFacetedFilter({
@@ -46,10 +113,50 @@ export function DataTableFacetedFilter({
   selectedValues = new Set(),
   onSelect,
   className = '',
+  historyEpoch,
 }: DataTableFacetedFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Optimistic facet selections queue (Finding 4 P1)
+  const [optimisticValues, setOptimisticValues] = useState<Set<string>>(() => new Set(selectedValues));
+  const pendingSelectionsRef = useRef<string[]>([]);
+  const prevCommittedRef = useRef<Set<string>>(selectedValues);
+  const prevHistoryEpochRef = useRef<number | undefined>(historyEpoch);
+  const prevIsOpenRef = useRef(false);
+
+  // Synchronize optimistic state with prop changes
+  useEffect(() => {
+    const historyEvent =
+      historyEpoch !== undefined &&
+      prevHistoryEpochRef.current !== undefined &&
+      historyEpoch !== prevHistoryEpochRef.current;
+    prevHistoryEpochRef.current = historyEpoch;
+
+    const res = computeOptimisticFacetSelection(
+      optimisticValues,
+      selectedValues,
+      prevCommittedRef.current,
+      pendingSelectionsRef.current,
+      historyEvent
+    );
+    prevCommittedRef.current = selectedValues;
+    pendingSelectionsRef.current = res.nextPending;
+    if (res.nextOptimistic !== optimisticValues) {
+      setOptimisticValues(res.nextOptimistic);
+    }
+  }, [selectedValues, historyEpoch, optimisticValues]);
+
+  // Restore trigger focus on dropdown close (Finding 14 P2)
+  useEffect(() => {
+    if (prevIsOpenRef.current && !isOpen) {
+      triggerRef.current?.focus();
+    }
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -78,28 +185,65 @@ export function DataTableFacetedFilter({
     return options.filter((opt) => opt.label.toLowerCase().includes(q));
   }, [options, searchQuery]);
 
+  // Reset option refs when options change
+  useEffect(() => {
+    optionRefs.current = optionRefs.current.slice(0, filteredOptions.length);
+  }, [filteredOptions]);
+
   const handleToggle = (value: string) => {
-    const next = new Set(selectedValues);
+    const next = new Set(optimisticValues);
     if (next.has(value)) {
       next.delete(value);
     } else {
       next.add(value);
     }
+    setOptimisticValues(next);
+    const serialized = Array.from(next).sort().join('.');
+    pendingSelectionsRef.current.push(serialized);
     onSelect(Array.from(next));
   };
 
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
+    const next = new Set<string>();
+    setOptimisticValues(next);
+    pendingSelectionsRef.current.push('');
     onSelect([]);
   };
 
-  const selectedCount = selectedValues.size;
+  const handleOptionKeyDown = (e: React.KeyboardEvent, index: number, value: string) => {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      handleToggle(value);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextIdx = (index + 1) % filteredOptions.length;
+      optionRefs.current[nextIdx]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevIdx = (index - 1 + filteredOptions.length) % filteredOptions.length;
+      optionRefs.current[prevIdx]?.focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      optionRefs.current[0]?.focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      optionRefs.current[filteredOptions.length - 1]?.focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setIsOpen(false);
+    }
+  };
+
+  const selectedCount = optimisticValues.size;
 
   return (
     <div className={`relative inline-block ${className}`} ref={containerRef}>
       <button
+        ref={triggerRef}
         type="button"
         aria-label={`Bộ lọc ${title}: ${selectedCount > 0 ? `${selectedCount} đã chọn` : 'chưa chọn'}`}
+        title={`Bộ lọc ${title}: ${selectedCount > 0 ? `${selectedCount} đã chọn` : 'chưa chọn'}`}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
         onClick={() => setIsOpen((prev) => !prev)}
@@ -135,6 +279,12 @@ export function DataTableFacetedFilter({
                 placeholder={`Tìm ${title.toLowerCase()}...`}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown' && filteredOptions.length > 0) {
+                    e.preventDefault();
+                    optionRefs.current[0]?.focus();
+                  }
+                }}
                 aria-label={`Tìm kiếm tùy chọn ${title}`}
                 className="w-full h-7 px-2 text-xs rounded-[4px] border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--border-focus)]"
               />
@@ -151,23 +301,21 @@ export function DataTableFacetedFilter({
                 Không tìm thấy tùy chọn nào
               </div>
             ) : (
-              filteredOptions.map((option) => {
-                const isSelected = selectedValues.has(option.value);
+              filteredOptions.map((option, optIdx) => {
+                const isSelected = optimisticValues.has(option.value);
                 const Icon = option.icon;
 
                 return (
                   <div
                     key={option.value}
+                    ref={(el) => {
+                      optionRefs.current[optIdx] = el;
+                    }}
                     role="option"
                     aria-selected={isSelected}
                     tabIndex={0}
                     onClick={() => handleToggle(option.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === ' ' || e.key === 'Enter') {
-                        e.preventDefault();
-                        handleToggle(option.value);
-                      }
-                    }}
+                    onKeyDown={(e) => handleOptionKeyDown(e, optIdx, option.value)}
                     className={`flex items-center justify-between px-2 py-1.5 rounded-[4px] text-xs cursor-pointer select-none transition-colors ${
                       isSelected
                         ? 'bg-[var(--primary-subtle)] text-[var(--primary)] font-medium'
@@ -213,6 +361,7 @@ export function DataTableFacetedFilter({
               <button
                 type="button"
                 onClick={handleClear}
+                title="Xóa bộ lọc này"
                 className="w-full flex items-center justify-center gap-1.5 py-1 text-xs text-[var(--text-muted)] hover:text-[var(--primary)] hover:bg-[var(--bg-subtle)] rounded-[4px] transition-colors cursor-pointer"
               >
                 <X className="w-3 h-3" aria-hidden="true" />

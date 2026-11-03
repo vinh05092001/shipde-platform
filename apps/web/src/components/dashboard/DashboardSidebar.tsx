@@ -114,6 +114,7 @@ export function DashboardSidebar({
             type="button"
             onClick={onCloseMobile}
             aria-label="Đóng thanh điều hướng"
+            title="Đóng thanh điều hướng"
             className="p-1.5 rounded-[6px] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" aria-hidden="true" />
@@ -179,6 +180,7 @@ export function DashboardSidebar({
             type="button"
             onClick={onToggleCollapse}
             aria-label={isCollapsed ? 'Mở rộng thanh điều hướng' : 'Thu gọn thanh điều hướng'}
+            title={isCollapsed ? 'Mở rộng thanh điều hướng' : 'Thu gọn thanh điều hướng'}
             className="w-full flex items-center justify-center gap-2 p-2 rounded-[8px] text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
           >
             {isCollapsed ? (

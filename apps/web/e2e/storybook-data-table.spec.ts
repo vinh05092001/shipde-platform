@@ -228,3 +228,60 @@ test('review 4: mounted successive facets retain earlier changes during delayed 
     page.getByRole('button', { name: 'Bộ lọc Hãng vận chuyển: 1 đã chọn' })
   ).toBeVisible();
 });
+
+test('review 4 / finding 4 P1: mounted overlapping selections in the same facet dropdown accumulate without losing prior selections', async ({
+  page,
+}) => {
+  await page.goto('/storybook');
+  const held = await holdTableNavigation(page);
+  try {
+    // Open Status facet dropdown
+    await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
+
+    // Select first option: Giao thất bại (FAILED)
+    await page.getByRole('option', { name: /Giao thất bại/ }).click();
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('status')?.includes('FAILED')))
+      .toBe(true);
+
+    // In the same dropdown, before first request commits, select second option: Đã giao hàng (DELIVERED)
+    await page.getByRole('option', { name: /Đã giao hàng/ }).click();
+    await expect
+      .poll(() =>
+        held.requests.some((url) => {
+          const s = url.searchParams.get('status');
+          return s && s.includes('FAILED') && s.includes('DELIVERED');
+        })
+      )
+      .toBe(true);
+  } finally {
+    await held.finish();
+  }
+
+  await page.waitForURL((url) => {
+    const s = url.searchParams.get('status');
+    return Boolean(s && s.includes('FAILED') && s.includes('DELIVERED'));
+  });
+
+  await expect(page.getByRole('button', { name: 'Bộ lọc Trạng thái: 2 đã chọn' })).toBeVisible();
+});
+
+test('review 3 P2: mobile drawer focus trap wraps focus and restores focus to hamburger trigger', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto('/storybook');
+
+  const hamburger = page.getByRole('button', { name: 'Mở thanh điều hướng' });
+  await expect(hamburger).toBeVisible();
+  await hamburger.focus();
+  await hamburger.click();
+
+  const closeButton = page.getByRole('button', { name: 'Đóng thanh điều hướng' });
+  await expect(closeButton).toBeVisible();
+
+  // Test Escape key closes drawer and restores focus to hamburger trigger
+  await page.keyboard.press('Escape');
+  await expect(closeButton).not.toBeVisible();
+  await expect(hamburger).toBeFocused();
+});

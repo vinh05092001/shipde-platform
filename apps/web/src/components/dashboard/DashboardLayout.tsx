@@ -131,6 +131,61 @@ export function handleDesktopBreakpointResize(
   return false;
 }
 
+/**
+ * Focus trapping and keyboard navigation handler for mobile drawer overlay (Finding 3 / Finding 7).
+ * Exercises production behavior for Tab, Shift+Tab wrapping, and Escape dismissal.
+ */
+export function handleDrawerKeyDown(
+  e: { key: string; shiftKey?: boolean; preventDefault: () => void },
+  drawerElement:
+    | HTMLElement
+    | {
+        querySelectorAll: (selector: string) => ArrayLike<any>;
+        contains: (el: any) => boolean;
+      }
+    | null,
+  activeElement: any,
+  closeMobileNav: () => void
+): boolean {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeMobileNav();
+    return true;
+  }
+
+  if (e.key === 'Tab' && drawerElement) {
+    const focusables = Array.from(
+      (drawerElement as HTMLElement).querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    );
+
+    if (focusables.length === 0) {
+      e.preventDefault();
+      return true;
+    }
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    if (e.shiftKey) {
+      if (activeElement === first || !drawerElement.contains(activeElement)) {
+        e.preventDefault();
+        last.focus();
+        return true;
+      }
+    } else {
+      if (activeElement === last || !drawerElement.contains(activeElement)) {
+        e.preventDefault();
+        first.focus();
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export function DashboardLayout({
   children,
   navSections = DEFAULT_NAV_SECTIONS,
@@ -191,45 +246,7 @@ export function DashboardLayout({
     }, 10);
 
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        closeMobileNav();
-        return;
-      }
-
-      if (e.key === 'Tab' && drawerRef.current) {
-        const focusables = Array.from(
-          drawerRef.current.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-          )
-        );
-
-        if (focusables.length === 0) {
-          e.preventDefault();
-          return;
-        }
-
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-
-        if (e.shiftKey) {
-          if (
-            document.activeElement === first ||
-            !drawerRef.current.contains(document.activeElement)
-          ) {
-            e.preventDefault();
-            last.focus();
-          }
-        } else {
-          if (
-            document.activeElement === last ||
-            !drawerRef.current.contains(document.activeElement)
-          ) {
-            e.preventDefault();
-            first.focus();
-          }
-        }
-      }
+      handleDrawerKeyDown(e, drawerRef.current, document.activeElement, closeMobileNav);
     }
 
     window.addEventListener('keydown', handleKeyDown);

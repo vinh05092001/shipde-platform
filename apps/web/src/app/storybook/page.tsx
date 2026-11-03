@@ -1,21 +1,23 @@
 /**
- * Storybook / Showcase Test Page for Reusable Data Table & Dashboard Shell.
+ * Storybook / Component Showcase test preview page.
  *
  * Demonstrates:
- * - DashboardLayout with DashboardSidebar & DashboardHeader
- * - PageHeader with breadcrumbs and action buttons
- * - Server-driven DataTable with URL search params (sort, filter, faceted filter, pagination)
- * - Interactive state toggles: Loading, Empty, Error, and Normal
- * - Keyboard accessibility and Vietnamese labels
- *
- * NOTE: All data on this page is mock fixture data for demonstration and testing.
- * Complies with BR-UI-01 (URL State Sync), BR-UI-02 (State Completeness),
- * BR-UI-03 (Accessibility), BR-UI-04 (Vietnamese), and BR-UI-05 (Fixture Isolation).
+ * - Server-driven DataTable with normal loaded, skeleton loading, empty, and error states
+ * - Responsive DashboardLayout shell with collapsible desktop sidebar and mobile overlay
+ * - Complete URL search params synchronization (pagination, sorting, search, faceted filters)
+ * - Vietnamese localization and WCAG AA accessibility compliance
+ * - Strict fixture isolation with [FIXTURE DATA] notice and fix- IDs (BR-UI-05)
  */
 
 'use client';
 
 import React, { useState, useMemo, Suspense } from 'react';
+import {
+  Download,
+  Plus,
+  RefreshCw,
+  Sparkles,
+} from 'lucide-react';
 import {
   DataTable,
   DataTableColumnHeader,
@@ -25,22 +27,33 @@ import {
   DataTableViewOptions,
   ColumnDef,
   useDataTable,
-} from '@/components/data-table';
-import { DashboardLayout, PageHeader } from '@/components/dashboard';
-import { Download, Plus, RefreshCw, Sparkles } from 'lucide-react';
-import { FIXTURE_SHIPMENTS, FixtureShipment, STATUS_OPTIONS, CARRIER_OPTIONS } from './fixtures';
+} from '../../components/data-table';
+import { DashboardLayout, PageHeader } from '../../components/dashboard';
+import {
+  FIXTURE_SHIPMENTS,
+  STATUS_OPTIONS,
+  CARRIER_OPTIONS,
+  FixtureShipment,
+} from './fixtures';
 
 function StorybookContent() {
-  // State simulation toggles (isolated to simulator bar)
+  // State simulation for interactive showcase verification
   const [simulatedLoading, setSimulatedLoading] = useState(false);
-  const [simulatedError, setSimulatedError] = useState(false);
   const [simulatedEmpty, setSimulatedEmpty] = useState(false);
+  const [simulatedError, setSimulatedError] = useState(false);
+  const [simulatedForbidden, setSimulatedForbidden] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
-  // Local column visibility & selection state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  // Fixture shipments state allowing interactive test creations
+  const [fixtureShipmentsList, setFixtureShipmentsList] = useState<FixtureShipment[]>(FIXTURE_SHIPMENTS);
 
-  // Server-driven URL synchronization via useDataTable (BR-UI-01)
+  // Row selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+
+  // Hidden columns state for column visibility toggle
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => new Set());
+
+  // URL state synchronization via useDataTable hook
   const {
     pageIndex,
     pageSize,
@@ -71,7 +84,7 @@ function StorybookContent() {
   const filteredData = useMemo(() => {
     if (simulatedEmpty) return [];
 
-    let list = [...FIXTURE_SHIPMENTS];
+    let list = [...fixtureShipmentsList];
 
     // Search filter
     if (searchValue.trim()) {
@@ -109,7 +122,7 @@ function StorybookContent() {
     });
 
     return list;
-  }, [simulatedEmpty, searchValue, selectedStatus, selectedCarriers, sort]);
+  }, [simulatedEmpty, fixtureShipmentsList, searchValue, selectedStatus, selectedCarriers, sort]);
 
   const pageCount = Math.max(1, Math.ceil(filteredData.length / pageSize));
 
@@ -119,11 +132,12 @@ function StorybookContent() {
     return filteredData.slice(start, start + pageSize);
   }, [filteredData, pageIndex, pageSize]);
 
-  // Column definitions
+  // Column definitions with Vietnamese localized title (Finding 12 P2 / BR-UI-04)
   const columns: ColumnDef<FixtureShipment>[] = useMemo(
     () => [
       {
         id: 'trackingCode',
+        title: 'Mã vận đơn',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
@@ -144,6 +158,7 @@ function StorybookContent() {
       },
       {
         id: 'carrier',
+        title: 'Hãng vận chuyển',
         header: 'Hãng vận chuyển',
         cell: ({ row }) => {
           let badgeColor = 'bg-blue-50 text-blue-700 border-blue-200';
@@ -162,10 +177,11 @@ function StorybookContent() {
       },
       {
         id: 'recipientName',
+        title: 'Khách hàng',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
-            title="Người nhận"
+            title="Khách hàng"
             sort={sort}
             onSort={(id, desc) => setSort(id, desc)}
             onHide={(id) => setHiddenColumns((prev) => new Set(prev).add(id))}
@@ -182,11 +198,12 @@ function StorybookContent() {
       },
       {
         id: 'status',
+        title: 'Trạng thái',
         header: 'Trạng thái',
         cell: ({ row }) => {
           switch (row.status) {
             case 'DELIVERED':
-              return <span className="badge-ok">Giao thành công</span>;
+              return <span className="badge-ok">Đã giao hàng</span>;
             case 'IN_TRANSIT':
               return <span className="badge-info">Đang giao hàng</span>;
             case 'PENDING':
@@ -202,6 +219,7 @@ function StorybookContent() {
       },
       {
         id: 'codAmount',
+        title: 'Thu hộ COD',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
@@ -220,6 +238,7 @@ function StorybookContent() {
       },
       {
         id: 'feeAmount',
+        title: 'Cước phí',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
@@ -238,6 +257,7 @@ function StorybookContent() {
       },
       {
         id: 'createdAt',
+        title: 'Ngày tạo',
         header: ({ column }) => (
           <DataTableColumnHeader
             column={column}
@@ -269,12 +289,65 @@ function StorybookContent() {
     });
   };
 
+  // Select-all verifies current page membership instead of raw counts (Finding 10 P2)
+  const isAllCurrentPageSelected =
+    paginatedData.length > 0 && paginatedData.every((item) => selectedIds.has(item.id));
+
   const handleSelectAll = () => {
-    if (selectedIds.size === paginatedData.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(paginatedData.map((d) => d.id)));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (isAllCurrentPageSelected) {
+        paginatedData.forEach((item) => next.delete(item.id));
+      } else {
+        paginatedData.forEach((item) => next.add(item.id));
+      }
+      return next;
+    });
+  };
+
+  // Explicit fixture interactions for primary buttons (Finding 4 P2)
+  const handleExportExcel = () => {
+    const csvRows = [
+      'Mã vận đơn,Mã đơn hàng,Người nhận,Số điện thoại,Hãng,Thu hộ COD,Cước phí,Trạng thái,Ngày tạo',
+      ...filteredData.map(
+        (item) =>
+          `"${item.trackingCode}","${item.orderNumber}","${item.recipientName}","${item.recipientPhone}","${item.carrier}",${item.codAmount},${item.feeAmount},"${item.status}","${item.createdAt}"`
+      ),
+    ];
+    const csvContent =
+      'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csvRows.join('\n'));
+    if (typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.setAttribute('href', csvContent);
+      link.setAttribute('download', 'fixture_shipments.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
+    setActionFeedback(
+      `[FIXTURE] Đã xuất thành công ${filteredData.length} bản ghi sang file fixture_shipments.csv`
+    );
+  };
+
+  const handleCreateDemoShipment = () => {
+    const nextIdx = fixtureShipmentsList.length + 1;
+    const newOrder: FixtureShipment = {
+      id: `fix-ship-${String(nextIdx).padStart(3, '0')}`,
+      trackingCode: `VN${Math.floor(100000000 + Math.random() * 900000000)}`,
+      orderNumber: `ORD-DEMO-${Date.now().toString().slice(-4)}`,
+      recipientName: 'Khách Thử Nghiệm',
+      recipientPhone: '0987***999',
+      carrier: 'GHN',
+      codAmount: 250000,
+      feeAmount: 22000,
+      weightGrams: 500,
+      status: 'PENDING',
+      createdAt: new Date().toISOString().slice(0, 10),
+    };
+    setFixtureShipmentsList((prev) => [newOrder, ...prev]);
+    setActionFeedback(
+      `[FIXTURE] Đã tạo đơn thử nghiệm mới: ${newOrder.trackingCode} (${newOrder.orderNumber})`
+    );
   };
 
   return (
@@ -299,20 +372,45 @@ function StorybookContent() {
         </div>
       </div>
 
+      {/* Action Feedback Notice */}
+      {actionFeedback && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="p-3 rounded-[8px] bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center justify-between gap-2"
+        >
+          <span>{actionFeedback}</span>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            title="Đóng thông báo"
+            className="text-emerald-700 hover:text-emerald-900 p-0.5 cursor-pointer font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Page Header */}
       <PageHeader
         title="Thư viện linh kiện (Storybook / Component Showcase)"
         description="Mẫu kiểm thử tương tác và xác thực các linh kiện Data Table và Dashboard Shell với dữ liệu mẫu (Fixtures)."
-        breadcrumbs={[
-          { label: 'Hệ thống', href: '/settings' },
-          { label: 'Linh kiện mẫu', active: true },
-        ]}
         actions={
           <div className="flex items-center gap-2">
-            <button type="button" className="btn-secondary !text-xs !min-h-[34px] !py-1.5 !px-3">
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              title="Xuất file Excel dữ liệu mẫu (Fixture demo)"
+              className="btn-secondary !text-xs !min-h-[34px] !py-1.5 !px-3 cursor-pointer"
+            >
               <Download className="w-3.5 h-3.5 mr-1" aria-hidden="true" /> Xuất Excel
             </button>
-            <button type="button" className="btn-primary !text-xs !min-h-[34px] !py-1.5 !px-3">
+            <button
+              type="button"
+              onClick={handleCreateDemoShipment}
+              title="Tạo đơn thử nghiệm mẫu (Fixture demo)"
+              className="btn-primary !text-xs !min-h-[34px] !py-1.5 !px-3 cursor-pointer"
+            >
               <Plus className="w-3.5 h-3.5 mr-1" aria-hidden="true" /> Tạo đơn thử nghiệm
             </button>
           </div>
@@ -333,9 +431,10 @@ function StorybookContent() {
               setSimulatedLoading(false);
               setSimulatedError(false);
               setSimulatedEmpty(false);
+              setSimulatedForbidden(false);
             }}
             className={`px-3 py-1.5 rounded-[6px] text-xs font-medium border cursor-pointer transition-colors ${
-              !simulatedLoading && !simulatedError && !simulatedEmpty
+              !simulatedLoading && !simulatedError && !simulatedEmpty && !simulatedForbidden
                 ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
                 : 'bg-[var(--bg-app)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-subtle)]'
             }`}
@@ -376,9 +475,21 @@ function StorybookContent() {
                 : 'bg-[var(--bg-app)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-subtle)]'
             }`}
           >
-            {simulatedError
-              ? 'Đang bật Error (Nhấn để tắt)'
-              : 'Mô phỏng Trạng thái Lỗi (Error 500)'}
+            {simulatedError ? 'Đang bật Error (Nhấn để tắt)' : 'Mô phỏng Trạng thái Lỗi (Error 500)'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSimulatedForbidden((prev) => !prev)}
+            className={`px-3 py-1.5 rounded-[6px] text-xs font-medium border cursor-pointer transition-colors ${
+              simulatedForbidden
+                ? 'bg-[var(--status-risk-text)] text-white border-[var(--status-risk-border)]'
+                : 'bg-[var(--bg-app)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-subtle)]'
+            }`}
+          >
+            {simulatedForbidden
+              ? 'Đang bật Cấm (Nhấn để tắt)'
+              : 'Mô phỏng Bị cấm (Forbidden 403)'}
           </button>
         </div>
       </div>
@@ -396,6 +507,13 @@ function StorybookContent() {
             : null
         }
         onRetry={() => setSimulatedError(false)}
+        forbidden={
+          simulatedForbidden
+            ? 'Lỗi 403: Bạn không có quyền xem hoặc thao tác trên danh sách vận đơn này. Vui lòng liên hệ quản trị viên để được cấp quyền.'
+            : null
+        }
+        forbiddenActionLabel="Thử lại"
+        onForbiddenAction={() => setSimulatedForbidden(false)}
         selectedIds={selectedIds}
         onToggleSelect={handleToggleSelect}
         onSelectAll={handleSelectAll}
@@ -419,12 +537,14 @@ function StorybookContent() {
                   options={STATUS_OPTIONS}
                   selectedValues={new Set(selectedStatus)}
                   onSelect={(vals) => setFilter('status', vals)}
+                  historyEpoch={historyEpoch}
                 />
                 <DataTableFacetedFilter
                   title="Hãng vận chuyển"
                   options={CARRIER_OPTIONS}
                   selectedValues={new Set(selectedCarriers)}
                   onSelect={(vals) => setFilter('carrier', vals)}
+                  historyEpoch={historyEpoch}
                 />
               </>
             }

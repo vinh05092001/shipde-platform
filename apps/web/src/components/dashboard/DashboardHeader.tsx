@@ -23,8 +23,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  *
- * Top application header for the dashboard shell.
- * Includes mobile menu trigger, shop/branch context, global search trigger,
+ * Top application header with mobile menu trigger, shop context, search trigger,
  * and user profile navigation menu.
  */
 
@@ -36,7 +35,7 @@ import { LogOut, Menu, Search, Store, User } from 'lucide-react';
 import { DashboardUser } from './types';
 
 export interface DashboardHeaderProps {
-  currentUser?: DashboardUser;
+  currentUser?: DashboardUser | null;
   shopName?: string;
   onToggleMobileNav?: () => void;
   isMobileNavOpen?: boolean;
@@ -70,6 +69,10 @@ export interface ShortcutKeyEvent {
     | null;
 }
 
+/**
+ * Creates the global keyboard listener for Ctrl+K search shortcut (Finding 6).
+ * Safe against uppercase 'K', modifier combinations, and inputs.
+ */
 export function createGlobalShortcutHandler({
   showSearch = true,
   onTrigger,
@@ -77,7 +80,7 @@ export function createGlobalShortcutHandler({
   return function handleGlobalKeyDown(event: KeyboardEvent | ShortcutKeyEvent) {
     if (showSearch === false) return;
     if ((event.ctrlKey || event.metaKey) && (event.key === 'k' || event.key === 'K')) {
-      const target = event.target as any;
+      const target = (event as any).target;
       const isEditable =
         target &&
         (target.tagName === 'INPUT' ||
@@ -94,38 +97,49 @@ export function createGlobalShortcutHandler({
 
 export function DashboardHeader({
   currentUser,
-  shopName = 'Ship Dễ Store',
+  shopName = 'Ship Dễ — Shop Demo',
   onToggleMobileNav,
   isMobileNavOpen = false,
-  onSignOut,
   actions,
-  className = '',
   onSearchClick,
   searchHref = '/search',
   onProfileClick,
   profileHref = '/settings/profile',
+  onSignOut,
   showSearch = true,
+  className = '',
 }: DashboardHeaderProps) {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const prevUserMenuOpenRef = useRef(false);
+
+  // Restore trigger focus on user menu close (Finding 14 P2)
+  useEffect(() => {
+    if (prevUserMenuOpenRef.current && !isUserMenuOpen) {
+      userMenuTriggerRef.current?.focus();
+    }
+    prevUserMenuOpenRef.current = isUserMenuOpen;
+  }, [isUserMenuOpen]);
 
   const handleSearchActivation = useCallback(() => {
     if (onSearchClick) {
       onSearchClick();
-    } else if (searchHref && typeof window !== 'undefined') {
+    } else if (typeof window !== 'undefined' && searchHref) {
       window.location.href = searchHref;
     }
   }, [onSearchClick, searchHref]);
 
-  // Global Ctrl + K / Cmd + K shortcut
+  // Register Ctrl+K global keyboard listener
   useEffect(() => {
-    if (showSearch === false) return;
-    const handleGlobalKeyDown = createGlobalShortcutHandler({
+    if (!showSearch) return;
+
+    const handler = createGlobalShortcutHandler({
       showSearch,
       onTrigger: handleSearchActivation,
     });
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, [handleSearchActivation, showSearch]);
 
   // Close user profile dropdown on click outside or escape key
@@ -153,11 +167,15 @@ export function DashboardHeader({
   const initials = currentUser?.name
     ? currentUser.name
         .split(' ')
-        .map((n) => n[0])
+        .map((n: string) => n[0])
         .slice(-2)
         .join('')
         .toUpperCase()
-    : 'SD';
+    : '--';
+
+  const userMenuLabel = currentUser
+    ? `Menu tài khoản của ${currentUser.name}`
+    : 'Menu tài khoản (Chưa đăng nhập)';
 
   return (
     <header
@@ -170,6 +188,7 @@ export function DashboardHeader({
             type="button"
             onClick={onToggleMobileNav}
             aria-label="Mở thanh điều hướng"
+            title="Mở thanh điều hướng"
             aria-expanded={isMobileNavOpen}
             className="lg:hidden p-2 rounded-[8px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] transition-colors cursor-pointer"
           >
@@ -194,6 +213,7 @@ export function DashboardHeader({
               type="button"
               onClick={handleSearchActivation}
               aria-label="Tìm kiếm nhanh toàn hệ thống (Ctrl + K)"
+              title="Tìm kiếm nhanh toàn hệ thống (Ctrl + K)"
               className="w-full h-9 pl-9 pr-3 text-xs rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg-app)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-secondary)] cursor-pointer text-left flex items-center justify-between transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
             >
               <div className="flex items-center gap-2 truncate">
@@ -215,9 +235,11 @@ export function DashboardHeader({
         {/* User profile dropdown */}
         <div className="relative" ref={userMenuRef}>
           <button
+            ref={userMenuTriggerRef}
             type="button"
             onClick={() => setIsUserMenuOpen((prev) => !prev)}
             aria-label="Menu tài khoản cá nhân"
+            title={userMenuLabel}
             aria-expanded={isUserMenuOpen}
             aria-haspopup="menu"
             className="flex items-center gap-2 p-1.5 rounded-[8px] hover:bg-[var(--bg-subtle)] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
@@ -227,10 +249,10 @@ export function DashboardHeader({
             </div>
             <div className="hidden sm:block text-left text-xs leading-tight">
               <div className="font-semibold text-[var(--text-primary)] max-w-[120px] truncate">
-                {currentUser?.name || 'Tài khoản Ship Dễ'}
+                {currentUser?.name || 'Chưa đăng nhập'}
               </div>
               <div className="text-[11px] text-[var(--text-muted)] max-w-[120px] truncate">
-                {currentUser?.role || 'Người dùng'}
+                {currentUser?.role || 'Khách'}
               </div>
             </div>
           </button>
@@ -241,34 +263,51 @@ export function DashboardHeader({
               aria-label="Menu tài khoản"
               className="absolute right-0 top-full mt-2 w-56 rounded-[10px] bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xl py-1 z-40 animate-in fade-in zoom-in-95 duration-100"
             >
-              <div className="px-3 py-2 border-b border-[var(--border-subtle)]">
-                <div className="font-semibold text-xs text-[var(--text-primary)] truncate">
-                  {currentUser?.name || 'Tài khoản'}
+              {currentUser ? (
+                <div className="px-3 py-2 border-b border-[var(--border-subtle)]">
+                  <div className="font-semibold text-xs text-[var(--text-primary)] truncate">
+                    {currentUser.name}
+                  </div>
+                  {currentUser.email && (
+                    <div className="text-[11px] text-[var(--text-muted)] truncate">
+                      {currentUser.email}
+                    </div>
+                  )}
+                  {currentUser.role && (
+                    <div className="mt-1">
+                      <span className="badge-ok !text-[10px] !py-0.5 !px-1.5">
+                        {currentUser.role}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="text-[11px] text-[var(--text-muted)] truncate">
-                  {currentUser?.email || 'user@shipde.net'}
+              ) : (
+                <div className="px-3 py-2.5 border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)] text-center">
+                  <div className="font-semibold text-xs text-[var(--text-secondary)]">
+                    Chưa đăng nhập
+                  </div>
+                  <div className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                    Thông tin tài khoản không khả dụng
+                  </div>
                 </div>
-                <div className="mt-1">
-                  <span className="badge-ok !text-[10px] !py-0.5 !px-1.5">
-                    {currentUser?.role || 'Chủ Shop'}
-                  </span>
-                </div>
-              </div>
+              )}
 
-              <div className="py-1">
-                <Link
-                  href={profileHref}
-                  role="menuitem"
-                  onClick={() => {
-                    setIsUserMenuOpen(false);
-                    onProfileClick?.();
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
-                >
-                  <User className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
-                  <span>Hồ sơ tài khoản</span>
-                </Link>
-              </div>
+              {currentUser && (
+                <div className="py-1">
+                  <Link
+                    href={profileHref}
+                    role="menuitem"
+                    onClick={() => {
+                      setIsUserMenuOpen(false);
+                      onProfileClick?.();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
+                  >
+                    <User className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
+                    <span>Hồ sơ tài khoản</span>
+                  </Link>
+                </div>
+              )}
 
               {onSignOut && (
                 <>

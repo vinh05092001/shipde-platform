@@ -80,6 +80,7 @@ export function DataTableViewOptions<TData = any>({
       <button
         type="button"
         aria-label="Tùy chọn hiển thị cột"
+        title="Tùy chọn hiển thị cột"
         aria-expanded={isOpen}
         aria-haspopup="menu"
         onClick={() => setIsOpen((prev) => !prev)}
@@ -102,7 +103,7 @@ export function DataTableViewOptions<TData = any>({
           <div className="max-h-56 overflow-y-auto space-y-0.5 py-1">
             {toggleableColumns.map((column) => {
               const isVisible = !hiddenColumns.has(column.id);
-              const title = typeof column.header === 'string' ? column.header : column.id;
+              const title = column.title || (typeof column.header === 'string' ? column.header : column.id);
 
               return (
                 <button

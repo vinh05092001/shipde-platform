@@ -39,6 +39,7 @@ export interface ColumnSort {
 export interface ColumnDef<TData = any> {
   id: string;
   header: string | ((props: { column: ColumnDef<any> }) => React.ReactNode);
+  title?: string;
   accessorKey?: keyof TData | string;
   cell?: (props: { row: TData; index: number }) => React.ReactNode;
   enableSorting?: boolean;
@@ -84,6 +85,11 @@ export interface DataTableProps<TData = any> {
   loading?: boolean;
   error?: Error | string | null;
   onRetry?: () => void;
+  forbidden?: boolean | string | null;
+  forbiddenTitle?: string;
+  forbiddenDescription?: string;
+  forbiddenActionLabel?: string;
+  onForbiddenAction?: () => void;
   emptyTitle?: string;
   emptyDescription?: string;
   emptyActionLabel?: string;

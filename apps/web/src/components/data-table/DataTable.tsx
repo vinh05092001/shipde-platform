@@ -31,7 +31,7 @@
 'use client';
 
 import React from 'react';
-import { AlertCircle, FileQuestion, RefreshCw } from 'lucide-react';
+import { AlertCircle, FileQuestion, RefreshCw, ShieldAlert } from 'lucide-react';
 import { DataTableProps } from './types';
 
 export function isInteractiveControl(
@@ -54,6 +54,11 @@ export function DataTable<TData = any>({
   loading = false,
   error = null,
   onRetry,
+  forbidden = null,
+  forbiddenTitle = 'Không có quyền truy cập',
+  forbiddenDescription = 'Bạn không có quyền xem hoặc thao tác trên danh sách dữ liệu này. Vui lòng liên hệ quản trị viên để được cấp quyền.',
+  forbiddenActionLabel,
+  onForbiddenAction,
   emptyTitle = 'Không tìm thấy dữ liệu',
   emptyDescription = 'Không có bản ghi nào phù hợp với điều kiện tìm kiếm hoặc bộ lọc hiện tại.',
   emptyActionLabel,
@@ -97,6 +102,7 @@ export function DataTable<TData = any>({
             <button
               type="button"
               onClick={onRetry}
+              title="Thử lại tải dữ liệu"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] text-xs font-semibold bg-[var(--bg-card)] border border-[var(--status-risk-border)] hover:bg-[var(--bg-subtle)] text-[var(--text-primary)] transition-colors cursor-pointer shrink-0"
             >
               <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
@@ -114,7 +120,7 @@ export function DataTable<TData = any>({
             role="table"
             aria-busy={loading}
           >
-            <thead className="bg-[var(--bg-subtle)] border-b border-[var(--border-subtle)] text-[11px] select-none">
+            <thead className="sticky top-0 z-10 bg-[var(--bg-subtle)] border-b border-[var(--border-subtle)] text-[11px] select-none">
               <tr role="row">
                 {hasSelection && (
                   <th
@@ -127,6 +133,7 @@ export function DataTable<TData = any>({
                       checked={isAllSelected}
                       onChange={onSelectAll}
                       aria-label="Chọn tất cả các dòng trên trang này"
+                      title="Chọn tất cả các dòng trên trang này"
                       className="w-3.5 h-3.5 rounded-[3px] border-[var(--border-strong)] text-[var(--primary)] focus:ring-[var(--border-focus)] cursor-pointer align-middle"
                     />
                   </th>
@@ -194,6 +201,39 @@ export function DataTable<TData = any>({
                     ))}
                   </tr>
                 ))
+              ) : forbidden ? (
+                // Forbidden (403 Permission Denied) State
+                <tr role="row">
+                  <td
+                    colSpan={displayedColumns.length + (hasSelection ? 1 : 0)}
+                    className="py-12 px-4 text-center"
+                  >
+                    <div
+                      className="flex flex-col items-center justify-center max-w-sm mx-auto"
+                      role="alert"
+                      aria-live="assertive"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-[var(--status-risk-bg)] border border-[var(--status-risk-border)] flex items-center justify-center text-[var(--status-risk-text)] mb-3">
+                        <ShieldAlert className="w-6 h-6 stroke-[1.5]" aria-hidden="true" />
+                      </div>
+                      <div className="font-semibold text-sm text-[var(--text-primary)] mb-1">
+                        {forbiddenTitle}
+                      </div>
+                      <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-4">
+                        {typeof forbidden === 'string' ? forbidden : forbiddenDescription}
+                      </p>
+                      {forbiddenActionLabel && onForbiddenAction && (
+                        <button
+                          type="button"
+                          onClick={onForbiddenAction}
+                          className="btn-secondary !text-xs !min-h-[34px] !py-1.5 !px-3"
+                        >
+                          {forbiddenActionLabel}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
               ) : data.length === 0 ? (
                 // Empty State
                 <tr role="row">
@@ -258,6 +298,7 @@ export function DataTable<TData = any>({
                         <td
                           className="px-3 py-3 text-center align-middle"
                           onClick={(e) => {
+                            e.stopPropagation();
                             if (e.target === e.currentTarget) {
                               onToggleSelect?.(id, (e.nativeEvent as MouseEvent).shiftKey);
                             }
@@ -277,6 +318,7 @@ export function DataTable<TData = any>({
                               e.stopPropagation();
                             }}
                             aria-label={`Chọn hàng có mã ${id}`}
+                            title={`Chọn hàng có mã ${id}`}
                             className="w-3.5 h-3.5 rounded-[3px] border-[var(--border-strong)] text-[var(--primary)] focus:ring-[var(--border-focus)] cursor-pointer align-middle"
                           />
                         </td>

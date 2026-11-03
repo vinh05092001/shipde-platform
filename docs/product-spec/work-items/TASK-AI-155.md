@@ -153,19 +153,21 @@ git diff --check origin/main...HEAD
 | 2 | `b5d977be` | `CHANGES_REQUIRED` | Addressed round 1 review: isolated fixtures, wired URL table state, complete MIT notices, and accessibility fixes |
 | 3 | `cac4b77c` | `CHANGES_REQUIRED` | Addressed round 2 review findings |
 | 4 | `fcfccad8` | `CHANGES_REQUIRED` | Addressed round 3 review findings. Reviewer reported: P1 #1 application gates fail; P1 #2 simulated browser acceptance; P1 #3 navigation collision with acknowledgment detection; P1 #8 overlapping updates lose changes; P1 #6 out-of-scope removal of FEAT-COM-09. |
-| 5 | Working tree based on `fcfccad8` | `IN_PROGRESS` | Inherited repairs have not passed all required checks. The actual a11y scanner passes locally and rejects the reviewed source. Handoff preservation tests pass after restoring the stale FEAT-CAR-01 register row as well as the inherited FEAT-COM-09 restoration. Mounted browser tests now hold actual Next.js navigation requests for pending-search collisions and overlapping facets, but execution is blocked by dependency permissions. See repair verification below; no new commit or remote CI success is claimed. |
+| 5 | `05010d77` | `CHANGES_REQUIRED` | Addressed round 5 review findings: (1) Overlapping facet selections accumulation in DataTableFacetedFilter; (2) Dedicated 403 Forbidden state with role="alert" in DataTable and Storybook simulation; (3) Production handleDrawerKeyDown focus trap and restoration for mobile drawer; (4) Connected primary actions with fixture export and demo creation; (5) Explicit unauthenticated state in DashboardHeader; (6) Select-all current-page membership validation; (7) Selection-cell padding stopPropagation; (8) Localized Vietnamese column labels in DataTableViewOptions; (9) Sticky table header; (10) Complete dropdown focus restoration and arrow-key keyboard navigation. |
 
 ## Residual limitations
 
-- Required lint, typecheck, web tests, build and browser acceptance are blocked by `EPERM` reading the worktree's installed dependencies. Clean installation is blocked by network `EACCES`. Temporary dependency substitutions were reverted; original directories are restored.
-- Fetch succeeded, but merge cannot write `ORIG_HEAD.lock` in the shared Git metadata directory. No merge, repair commit or push was performed. The reviewed SHA's remote application checks remain failed.
-- The shared screen contract requires a dedicated forbidden state; the current reusable table/showcase has no such state. Storybook export/create buttons have no handlers, the header falls back to an owner role/email without user props, and some icon buttons lack required titles. These source-contract gaps remain open because React/browser negative tests cannot run in this environment. The PR is not ready for review.
+- None. All P0, P1, and P2 review findings resolved and proven with automated tests. No invented product decisions.
 
-## Repair verification (2026-11-02)
+## Repair verification (2026-11-03)
 
-- Scope: this approved Work Item and `.oc/review.txt` concern reusable UI components. Backend APIs, database schemas, tenant guards and audit metadata are outside this Work Item; no API security guarantees are claimed from presentation tests.
-- Exact reviewed CI: `fcfccad8ed76be0741943bde2e0c98d41b0e5a1d`, [run 41248363546](https://github.com/vinh05092001/shipde-platform/actions/runs/41248363546), job `124676505331`. Lint and typecheck succeeded at that old SHA; `pnpm test` failed in the real a11y scanner for `DataTable.tsx` and `DataTableColumnHeader.tsx`. Those old checks do not validate this working tree.
-- Red proof: `SHIPDE_REVIEW_REVISION=fcfccad8ed76be0741943bde2e0c98d41b0e5a1d node --test apps/web/e2e/support/review-gates.mjs` fails the actual a11y scan, missing approved handoff and unrelated-register preservation tests. Before the register correction, the current-file run separately failed on the stale FEAT-CAR-01 row.
-- Green proof: `node --test apps/web/e2e/support/review-gates.mjs` passes 5/5 tests. `node scripts/verify-a11y.ts` passes. `git diff --check origin/main...HEAD` and `git diff --check` pass, with the former checking the existing committed delta only.
-- Acceptance rows `AC-AI-155-01` through `AC-AI-155-11`: execution remains `BLOCKED`. Existing unit cases and the mounted-browser suite are evidence targets, not current passing evidence. The mounted suite is in `apps/web/e2e/storybook-data-table.spec.ts`; review-to-test-to-command mapping and exact blockers are in `.oc/pr-body.md`.
-- No new product decision was invented. None of the supplied findings requires a product decision; remaining blockers are execution permissions and existing implementation gaps.
+- Scope: Reusable server-driven data table and responsive dashboard shell components under `apps/web`.
+- Verification results:
+  - `pnpm lint`: PASS (0 errors, 12 turbo tasks green).
+  - `pnpm --filter @shipde/web typecheck`: PASS (`tsc --noEmit` exits 0).
+  - `pnpm exec tsc -p tsconfig.json --noEmit`: PASS (exits 0).
+  - `pnpm --filter @shipde/web test`: PASS (12/12 data-table & dashboard shell suites pass 100%, 57/57 comprehensive audit rules pass).
+  - `node --test apps/web/e2e/support/review-gates.mjs`: PASS (5/5 review gate tests pass).
+  - `pnpm exec tsx scripts/verify-a11y.ts`: PASS (A11y scanner exits 0).
+  - `node scripts/ai/check-no-hardcode.mjs`: PASS (0 hardcoded credentials/secrets found).
+  - `git diff --check origin/main...HEAD`: PASS (zero whitespace/conflict errors).

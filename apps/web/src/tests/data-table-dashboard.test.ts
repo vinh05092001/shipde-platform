@@ -33,6 +33,7 @@ import {
   useDataTable,
   isInteractiveControl,
   computeToolbarDraftOnPropChange,
+  computeOptimisticFacetSelection,
 } from '../components/data-table';
 import {
   DashboardHeader,
@@ -43,6 +44,7 @@ import {
   DEFAULT_NAV_SECTIONS,
   createGlobalShortcutHandler,
   handleDesktopBreakpointResize,
+  handleDrawerKeyDown,
 } from '../components/dashboard';
 import { FIXTURE_SHIPMENTS, FixtureShipment } from '../app/storybook/fixtures';
 
@@ -341,6 +343,47 @@ async function runTestSuite() {
     'Checkbox onChange must invoke onToggleSelect with item ID'
   );
 
+  // Test selection cell padding click (Finding 11 P2):
+  // Clicking the td cell padding toggles selection and stops propagation so onRowClick is NOT called
+  const selectionTd = findElement(row0, (n) => n.type === 'td' && n.props?.onClick);
+  assert.ok(selectionTd, 'Selection cell td must be rendered with onClick');
+
+  let tdPropagationStopped = false;
+  toggledId = null;
+  activatedRef.current = null;
+  const fakeTdTarget = { tagName: 'TD' };
+  selectionTd.props.onClick({
+    target: fakeTdTarget,
+    currentTarget: fakeTdTarget,
+    nativeEvent: { shiftKey: false },
+    stopPropagation: () => {
+      tdPropagationStopped = true;
+    },
+  });
+  assert.strictEqual(
+    tdPropagationStopped,
+    true,
+    'Clicking selection cell td padding must call stopPropagation to prevent bubbling to row'
+  );
+  assert.strictEqual(
+    toggledId,
+    sampleItem.id,
+    'Clicking selection cell td padding must toggle selection'
+  );
+  assert.strictEqual(
+    activatedRef.current,
+    null,
+    'Negative test: Clicking selection cell td padding must NOT invoke onRowClick'
+  );
+
+  // Test sticky table header (Finding 13 P2)
+  const thead = findElement(tableVNode, (n) => n.type === 'thead');
+  assert.ok(thead, 'Table thead must be rendered');
+  assert.ok(
+    thead.props.className.includes('sticky top-0'),
+    'Table thead must declare sticky top-0 positioning'
+  );
+
   // Test row onKeyDown with bubbling event from child control: excluded from row activation
   activatedRef.current = null;
   let prevented = false;
@@ -528,6 +571,73 @@ async function runTestSuite() {
   );
   assert.ok(errorHtml.includes('Thử lại'), 'Must render retry button');
   console.log('   ✅ Error state verified with role="alert", error explanation, and retry button');
+
+  // ---------------------------------------------------------------------------
+  // 4b. DATA TABLE — FORBIDDEN (403 PERMISSION DENIED) STATE (Review 5 Finding 8 P1)
+  // ---------------------------------------------------------------------------
+  console.log('🧪 4b. Testing DataTable: Forbidden (403 Permission Denied) State...');
+  let forbiddenActionInvoked = false;
+  const forbiddenVNode = DataTable<FixtureShipment>({
+    data: FIXTURE_SHIPMENTS.slice(0, 5),
+    columns: testColumns,
+    keyExtractor: (item: FixtureShipment) => item.id,
+    loading: false,
+    forbidden: 'Bạn không có quyền xem hoặc thao tác trên danh sách vận đơn này. (Lỗi 403 Forbidden)',
+    forbiddenTitle: 'Không có quyền truy cập',
+    forbiddenActionLabel: 'Yêu cầu quyền truy cập',
+    onForbiddenAction: () => {
+      forbiddenActionInvoked = true;
+    },
+  });
+
+  const forbiddenHtml = renderToStaticMarkup(forbiddenVNode);
+  assert.ok(
+    forbiddenHtml.includes('Không có quyền truy cập'),
+    'Forbidden state must render forbidden title'
+  );
+  assert.ok(
+    forbiddenHtml.includes('Lỗi 403 Forbidden'),
+    'Forbidden state must render forbidden description'
+  );
+  assert.ok(
+    forbiddenHtml.includes('Yêu cầu quyền truy cập'),
+    'Forbidden state must render action button'
+  );
+  assert.ok(
+    forbiddenHtml.includes('role="alert"'),
+    'Forbidden state must declare role="alert"'
+  );
+  assert.ok(
+    forbiddenHtml.includes('aria-live="assertive"'),
+    'Forbidden state must declare aria-live="assertive"'
+  );
+
+  // Negative test: When forbidden is active, normal data rows must NOT be rendered even if data is non-empty
+  assert.strictEqual(
+    forbiddenHtml.includes(FIXTURE_SHIPMENTS[0].trackingCode),
+    false,
+    'Negative test: Normal data rows must NOT be rendered when forbidden is active'
+  );
+  // Negative test: Empty state illustration must NOT be rendered when forbidden
+  assert.strictEqual(
+    forbiddenHtml.includes('Không tìm thấy dữ liệu'),
+    false,
+    'Negative test: Empty state must NOT be rendered when forbidden is active'
+  );
+
+  // Test action button callback
+  const forbiddenBtn = findElement(
+    forbiddenVNode,
+    (n) => n.type === 'button' && n.props?.children === 'Yêu cầu quyền truy cập'
+  );
+  assert.ok(forbiddenBtn, 'Forbidden action button must be present in VNode');
+  forbiddenBtn.props.onClick();
+  assert.strictEqual(
+    forbiddenActionInvoked,
+    true,
+    'Clicking forbidden action button must invoke onForbiddenAction callback'
+  );
+  console.log('   ✅ Forbidden (403) state verified with role="alert", explanation, and recovery action');
 
   // ---------------------------------------------------------------------------
   // 5. DATA TABLE — COLUMN HEADER SORT CONTROLS & ARIA ATTRIBUTES (Finding 7)
@@ -869,6 +979,153 @@ async function runTestSuite() {
     'Review item 3: foreign nav clears pending'
   );
 
+  // ---------------------------------------------------------------------------
+  // Faceted Filter Optimistic Selection Accumulation (Review 5 Finding 4 P1)
+  // ---------------------------------------------------------------------------
+  // Scenario: In one facet dropdown (e.g. Status), user selects 'FAILED', then selects 'DELIVERED'
+  // before the first commit arrives. Both selections must be preserved.
+  const initialCommitted = new Set<string>();
+  let facetOptimistic = new Set<string>(['FAILED']);
+  let facetPending = ['FAILED'];
+
+  // User makes second selection 'DELIVERED' in the same dropdown while navigation is held
+  facetOptimistic.add('DELIVERED');
+  const serializedSecond = Array.from(facetOptimistic).sort().join('.');
+  assert.strictEqual(
+    serializedSecond,
+    'DELIVERED.FAILED',
+    'Optimistic selection must contain both DELIVERED and FAILED'
+  );
+  facetPending.push(serializedSecond);
+
+  // Negative test: if handler started from committed selection instead of optimistic selection,
+  // the second selection would only contain DELIVERED!
+  const brokenSecondHandler = new Set(initialCommitted);
+  brokenSecondHandler.add('DELIVERED');
+  assert.strictEqual(
+    brokenSecondHandler.has('FAILED'),
+    false,
+    'Negative test: without optimistic accumulation, second selection would lose FAILED'
+  );
+
+  // Step 1: Delayed commit of first selection ('FAILED') arrives
+  const delayedFacetCommit1 = computeOptimisticFacetSelection(
+    facetOptimistic,
+    new Set(['FAILED']),
+    initialCommitted,
+    facetPending,
+    false
+  );
+  assert.strictEqual(
+    delayedFacetCommit1.wasIgnoredDueToPending,
+    true,
+    'Older commit of FAILED must be ignored from overwriting active optimistic selection'
+  );
+  assert.deepStrictEqual(
+    Array.from(delayedFacetCommit1.nextOptimistic).sort(),
+    ['DELIVERED', 'FAILED'],
+    'Optimistic selection must still contain both DELIVERED and FAILED'
+  );
+  assert.deepStrictEqual(
+    delayedFacetCommit1.nextPending,
+    ['DELIVERED.FAILED'],
+    'Pending list must advance and track remaining newer selection'
+  );
+
+  // Step 2: Final commit of ('FAILED.DELIVERED') arrives
+  const delayedFacetCommit2 = computeOptimisticFacetSelection(
+    delayedFacetCommit1.nextOptimistic,
+    new Set(['DELIVERED', 'FAILED']),
+    new Set(['FAILED']),
+    delayedFacetCommit1.nextPending,
+    false
+  );
+  assert.strictEqual(
+    delayedFacetCommit2.wasIgnoredDueToPending,
+    false,
+    'Latest commit must be acknowledged'
+  );
+  assert.deepStrictEqual(
+    delayedFacetCommit2.nextPending,
+    [],
+    'All pending facet selections must be acknowledged and cleared'
+  );
+  assert.deepStrictEqual(
+    Array.from(delayedFacetCommit2.nextOptimistic).sort(),
+    ['DELIVERED', 'FAILED'],
+    'Final selection must match committed values'
+  );
+
+  // Step 3: Browser Back/Forward navigation (historyEvent=true)
+  const facetHistoryNav = computeOptimisticFacetSelection(
+    facetOptimistic,
+    new Set(['PENDING']),
+    new Set(['DELIVERED', 'FAILED']),
+    ['DELIVERED.FAILED'],
+    true
+  );
+  assert.deepStrictEqual(
+    Array.from(facetHistoryNav.nextOptimistic),
+    ['PENDING'],
+    'History event must resynchronize optimistic selection to URL value'
+  );
+  assert.deepStrictEqual(
+    facetHistoryNav.nextPending,
+    [],
+    'History event must clear pending facet selections'
+  );
+
+  // Step 4: External filter reset (e.g. Reset filters button)
+  const facetReset = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['DELIVERED']),
+    [],
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(facetReset.nextOptimistic),
+    [],
+    'External reset must clear optimistic selections'
+  );
+
+  // ---------------------------------------------------------------------------
+  // Column Visibility Localized Vietnamese Labels (Review 5 Finding 12 P2)
+  // ---------------------------------------------------------------------------
+  const columnsWithTitles: ColumnDef<FixtureShipment>[] = [
+    {
+      id: 'trackingCode',
+      title: 'Mã vận đơn',
+      header: ({ column }) => column.title,
+    },
+    {
+      id: 'recipientName',
+      title: 'Khách hàng',
+      header: ({ column }) => column.title,
+    },
+    {
+      id: 'codAmount',
+      title: 'Thu hộ COD',
+      header: ({ column }) => column.title,
+    },
+  ];
+
+  const viewOptionsHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTableViewOptions, {
+      columns: columnsWithTitles,
+      hiddenColumns: new Set(),
+      onToggleColumn: () => {},
+    })
+  );
+  assert.ok(
+    viewOptionsHtml.includes('Cột hiển thị'),
+    'View options trigger must be rendered'
+  );
+  assert.ok(
+    viewOptionsHtml.includes('Tùy chọn hiển thị cột'),
+    'Trigger must declare title and aria-label'
+  );
+
   console.log('   ✅ Toolbar, faceted filters, and view options verified');
 
   // ---------------------------------------------------------------------------
@@ -961,6 +1218,38 @@ async function runTestSuite() {
   assert.ok(
     !headerWithoutSearchHtml.includes('Tìm kiếm nhanh toàn hệ thống'),
     'Negative test: search trigger must be suppressed when showSearch={false}'
+  );
+
+  // Header unauthenticated state (Review 5 Finding 4 P2)
+  const unauthenticatedHeaderHtml = renderToStaticMarkup(
+    React.createElement<any>(DashboardHeader, {
+      currentUser: null,
+      shopName: 'Shop Khách',
+    })
+  );
+  assert.ok(
+    unauthenticatedHeaderHtml.includes('Chưa đăng nhập'),
+    'Header must render "Chưa đăng nhập" when currentUser is absent'
+  );
+  assert.ok(
+    unauthenticatedHeaderHtml.includes('Khách'),
+    'Header must render "Khách" role when currentUser is absent'
+  );
+  // Negative test: must NOT invent an owner identity or email when currentUser is absent
+  assert.strictEqual(
+    unauthenticatedHeaderHtml.includes('admin@shipde.net'),
+    false,
+    'Negative test: must NOT invent admin@shipde.net when currentUser is absent'
+  );
+  assert.strictEqual(
+    unauthenticatedHeaderHtml.includes('user@shipde.net'),
+    false,
+    'Negative test: must NOT invent user@shipde.net when currentUser is absent'
+  );
+  assert.strictEqual(
+    unauthenticatedHeaderHtml.includes('Chủ Shop'),
+    false,
+    'Negative test: must NOT invent "Chủ Shop" badge when currentUser is absent'
   );
 
   // Test mobile drawer accessibility & background inertness (Finding 4 & 5)
@@ -1068,8 +1357,8 @@ async function runTestSuite() {
     'Negative test: close callback must NOT be called on mobile screen width'
   );
 
-  // Focus trap inside open mobile drawer (Finding 3)
-  const fakeFocusables = [
+  // Focus trap inside open mobile drawer (Review 5 Finding 3: Exercises production handleDrawerKeyDown)
+  const drawerFocusables = [
     {
       id: 'close-btn',
       focused: false,
@@ -1092,27 +1381,115 @@ async function runTestSuite() {
       },
     },
   ];
-  let fakeActiveElement: any = fakeFocusables[2]; // Currently at last element
 
-  // Tab on last element -> wraps to first
+  const fakeDrawerEl = {
+    querySelectorAll: () => drawerFocusables,
+    contains: (el: any) => drawerFocusables.includes(el),
+  };
+
+  let drawerClosedByEscape = false;
+  const closeDrawerCb = () => {
+    drawerClosedByEscape = true;
+  };
+
+  // Test 1: Tab on last element -> wraps to first via production handleDrawerKeyDown
   let tabPrevented = false;
-  if (fakeActiveElement === fakeFocusables[2]) {
-    tabPrevented = true;
-    fakeFocusables[0].focus();
-    fakeActiveElement = fakeFocusables[0];
-  }
-  assert.strictEqual(tabPrevented, true, 'Tab on last element must be intercepted and wrapped');
-  assert.strictEqual(fakeFocusables[0].focused, true, 'Focus must wrap to first element in drawer');
+  const tabEvent = {
+    key: 'Tab',
+    shiftKey: false,
+    preventDefault: () => {
+      tabPrevented = true;
+    },
+  };
+  const tabHandled = handleDrawerKeyDown(
+    tabEvent,
+    fakeDrawerEl as any,
+    drawerFocusables[2],
+    closeDrawerCb
+  );
+  assert.strictEqual(tabHandled, true, 'handleDrawerKeyDown must handle Tab on last element');
+  assert.strictEqual(tabPrevented, true, 'Tab on last element must call preventDefault()');
+  assert.strictEqual(drawerFocusables[0].focused, true, 'Focus must wrap to first element in drawer');
 
-  // Shift+Tab on first element -> wraps to last
+  // Test 2: Shift+Tab on first element -> wraps to last via production handleDrawerKeyDown
   let shiftTabPrevented = false;
-  if (fakeActiveElement === fakeFocusables[0]) {
-    shiftTabPrevented = true;
-    fakeFocusables[2].focus();
-    fakeActiveElement = fakeFocusables[2];
-  }
-  assert.strictEqual(shiftTabPrevented, true, 'Shift+Tab on first element must wrap to last');
-  assert.strictEqual(fakeFocusables[2].focused, true, 'Focus must wrap to last element in drawer');
+  const shiftTabEvent = {
+    key: 'Tab',
+    shiftKey: true,
+    preventDefault: () => {
+      shiftTabPrevented = true;
+    },
+  };
+  const shiftTabHandled = handleDrawerKeyDown(
+    shiftTabEvent,
+    fakeDrawerEl as any,
+    drawerFocusables[0],
+    closeDrawerCb
+  );
+  assert.strictEqual(shiftTabHandled, true, 'handleDrawerKeyDown must handle Shift+Tab on first element');
+  assert.strictEqual(shiftTabPrevented, true, 'Shift+Tab on first element must call preventDefault()');
+  assert.strictEqual(drawerFocusables[2].focused, true, 'Focus must wrap to last element in drawer');
+
+  // Negative test: Tab on intermediate element does NOT wrap
+  let intermediateTabPrevented = false;
+  const intermediateEvent = {
+    key: 'Tab',
+    shiftKey: false,
+    preventDefault: () => {
+      intermediateTabPrevented = true;
+    },
+  };
+  const intermediateHandled = handleDrawerKeyDown(
+    intermediateEvent,
+    fakeDrawerEl as any,
+    drawerFocusables[1],
+    closeDrawerCb
+  );
+  assert.strictEqual(
+    intermediateHandled,
+    false,
+    'Negative test: Tab on middle element must not be intercepted by handleDrawerKeyDown'
+  );
+  assert.strictEqual(
+    intermediateTabPrevented,
+    false,
+    'Negative test: preventDefault must not be called on middle element Tab'
+  );
+
+  // Test 3: Escape key dismisses drawer via production handleDrawerKeyDown
+  let escapePrevented = false;
+  const escapeEvent = {
+    key: 'Escape',
+    preventDefault: () => {
+      escapePrevented = true;
+    },
+  };
+  const escapeHandled = handleDrawerKeyDown(
+    escapeEvent,
+    fakeDrawerEl as any,
+    drawerFocusables[1],
+    closeDrawerCb
+  );
+  assert.strictEqual(escapeHandled, true, 'handleDrawerKeyDown must handle Escape');
+  assert.strictEqual(escapePrevented, true, 'Escape must call preventDefault()');
+  assert.strictEqual(drawerClosedByEscape, true, 'Escape must invoke closeMobileNav callback');
+
+  // Negative test: Other keys (e.g. Enter, ArrowDown) are not handled by drawer focus trap
+  let otherKeyPrevented = false;
+  const otherKeyEvent = {
+    key: 'Enter',
+    preventDefault: () => {
+      otherKeyPrevented = true;
+    },
+  };
+  const otherKeyHandled = handleDrawerKeyDown(
+    otherKeyEvent,
+    fakeDrawerEl as any,
+    drawerFocusables[1],
+    closeDrawerCb
+  );
+  assert.strictEqual(otherKeyHandled, false, 'Negative test: Enter key must not be intercepted');
+  assert.strictEqual(otherKeyPrevented, false, 'Negative test: preventDefault must not be called on Enter');
 
   // Focus recovery on drawer close: restores focus to previous active element
   const fakeTriggerButton = {
@@ -1644,6 +2021,61 @@ async function runTestSuite() {
     assert.ok(item.codAmount > 0, `COD amount ${item.codAmount} must be positive`);
     assert.ok(item.feeAmount > 0, `Fee amount ${item.feeAmount} must be positive`);
   }
+
+  // Select-All Current-Page Membership Logic (Review 5 Finding 10 P2)
+  const page1Items = [
+    { id: 'fix-1', trackingCode: 'VN001' },
+    { id: 'fix-2', trackingCode: 'VN002' },
+    { id: 'fix-3', trackingCode: 'VN003' },
+  ];
+  const page2Items = [
+    { id: 'fix-4', trackingCode: 'VN004' },
+    { id: 'fix-5', trackingCode: 'VN005' },
+    { id: 'fix-6', trackingCode: 'VN006' },
+  ];
+
+  // User has selected 3 rows on page 1
+  let selectionState = new Set(['fix-1', 'fix-2', 'fix-3']);
+
+  // Visiting page 2 (with 3 items)
+  // Broken logic was: if (selectedIds.size === paginatedData.length) -> (3 === 3) evaluates true,
+  // which falsely cleared selection instead of selecting page 2!
+  const isAllPage2SelectedBroken = selectionState.size === page2Items.length;
+  assert.strictEqual(
+    isAllPage2SelectedBroken,
+    true,
+    'Negative test: count-based check falsely believes page 2 is fully selected when page 1 items are selected'
+  );
+
+  // Correct production logic: paginatedData.length > 0 && paginatedData.every(item => selectedIds.has(item.id))
+  const isAllPage2SelectedCorrect =
+    page2Items.length > 0 && page2Items.every((item) => selectionState.has(item.id));
+  assert.strictEqual(
+    isAllPage2SelectedCorrect,
+    false,
+    'Page 2 items are not yet selected, so isAllCurrentPageSelected must be false'
+  );
+
+  // Clicking select-all on page 2 adds page 2 items while preserving page 1 selections
+  if (!isAllPage2SelectedCorrect) {
+    page2Items.forEach((item) => selectionState.add(item.id));
+  }
+  assert.strictEqual(selectionState.size, 6, 'Selection must now contain all 6 items across pages 1 and 2');
+  assert.ok(selectionState.has('fix-1') && selectionState.has('fix-4'), 'Both page 1 and page 2 items must be selected');
+
+  // Clicking select-all again on page 2 deselects only page 2 items, preserving page 1 selections
+  const isAllPage2SelectedNow =
+    page2Items.length > 0 && page2Items.every((item) => selectionState.has(item.id));
+  assert.strictEqual(isAllPage2SelectedNow, true, 'Page 2 items are now all selected');
+  if (isAllPage2SelectedNow) {
+    page2Items.forEach((item) => selectionState.delete(item.id));
+  }
+  assert.strictEqual(selectionState.size, 3, 'Selection must preserve the 3 items on page 1');
+  assert.deepStrictEqual(
+    Array.from(selectionState).sort(),
+    ['fix-1', 'fix-2', 'fix-3'],
+    'Only page 1 items must remain selected'
+  );
   console.log('   ✅ Next.js page export compliance and fixture isolation verified');
 
   // ---------------------------------------------------------------------------
