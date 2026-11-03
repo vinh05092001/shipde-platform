@@ -91,6 +91,12 @@ if (argv[0] === 'version') {
   if (mode === 'bare-pat') {
     text = 'Here is the token: ' + 'ghp_' + 'A'.repeat(36) + ' in text.';
   }
+  if (mode === 'bare-openai') {
+    text = 'Here is the key: ' + 'sk-' + 'A'.repeat(48) + ' in text.';
+  }
+  if (mode === 'json-client-secret') {
+    text = JSON.stringify({ client_secret: 'fixture-oauth-secret' });
+  }
   if (mode === 'ipv6-encoded-secret') {
     text = 'https://[2606:4700::1111]/?%74oken=fixture-encoded-token';
   }

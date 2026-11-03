@@ -935,7 +935,46 @@ test('dns_rebinding_never_contacts_private_destination', async () => {
   }
 });
 
-test('cli_retrieval_revalidates_changed_redirects', async () => {
+test('redirect to private address during retrieval is refused', async () => {
+  const { createServer } = await import('node:http');
+  let privateRequests = 0;
+  const privateServer = createServer((req, res) => {
+    privateRequests++;
+    res.end('private content');
+  });
+  await new Promise((resolve) => privateServer.listen(0, '127.0.0.1', resolve));
+  const privatePort = privateServer.address().port;
+
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-redirect-refusal-'));
+  const marker = join(root, 'marker');
+  try {
+    const redirectRetrieve = async () => {
+      return {
+        status: 302,
+        headers: { location: `http://127.0.0.1:${privatePort}/secret` },
+        location: `http://127.0.0.1:${privatePort}/secret`,
+      };
+    };
+
+    const result = await invoke(
+      ['web', 'read', 'https://docs.example.com/doc'],
+      'ok',
+      process.env,
+      marker,
+      { retrieve: redirectRetrieve }
+    );
+
+    assert.notEqual(result.exitCode, 0, 'Must be refused');
+    assert.equal(privateRequests, 0, 'Private listener must receive zero requests');
+    assert.equal(existsSync(marker), false, 'CLI must not be launched');
+    assert.doesNotMatch(emitted(result), /private content/);
+  } finally {
+    privateServer.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cli_redirect_after_both_preflights_never_contacts_private_destination', async () => {
   const { createServer } = await import('node:http');
   let privateRequests = 0;
   const privateServer = createServer((req, res) => {
@@ -979,12 +1018,7 @@ if (argv[0] === 'version') {
   );
 
   try {
-    let transportCalls = 0;
     const changingRetrieve = async () => {
-      transportCalls++;
-      if (transportCalls === 1) {
-        return { status: 200, headers: {}, body: 'public' };
-      }
       return {
         status: 302,
         headers: { location: `http://127.0.0.1:${privatePort}/secret` },
@@ -1041,7 +1075,6 @@ test('preflight_ignores_authenticated_environment_proxy', async () => {
     proxyServer.close();
   }
 });
-
 test('bare_credential_patterns_are_redacted', async () => {
   const pat = 'ghp_' + 'A'.repeat(36);
   const result = await invoke(['web', 'search', 'docs'], 'bare-pat');
@@ -1116,4 +1149,142 @@ test('public_ipv6_literal_skips_dns', async () => {
   );
   assert.equal(result.exitCode, 0);
   assert.equal(dnsLookupCalled, false, 'public IPv6 literal must skip DNS lookup');
+});
+
+test('camel_case_api_key_target_is_refused_before_launch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-camel-key-'));
+  const marker = join(root, 'calls');
+  let transportCalls = 0;
+  const transport = async () => {
+    transportCalls++;
+    return { status: 200, headers: {} };
+  };
+  try {
+    const result = await invoke(
+      ['web', 'read', 'https://docs.example.com/?apiKey=fixture-account-key'],
+      'ok',
+      process.env,
+      marker,
+      { retrieve: transport, fetchUrl: transport }
+    );
+    assert.notEqual(result.exitCode, 0, 'Must be refused');
+    assert.equal(transportCalls, 0, 'Transport must not be called');
+    assert.equal(existsSync(marker), false, 'CLI must not be launched');
+    assert.doesNotMatch(emitted(result), /fixture-account-key/, 'Credential must not be echoed');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('inherited_session_value_is_redacted', async () => {
+  const env = {
+    ...process.env,
+    SESSION_ID: 'fixture-private-env-value',
+  };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
+  const result = await invoke(['web', 'read', 'https://docs.example.com/reference'], 'secrets', env);
+  assert.equal(result.exitCode, 0);
+  assert.doesNotMatch(result.stdout, /fixture-private-env-value/);
+  assert.doesNotMatch(result.stderr, /fixture-private-env-value/);
+});
+
+test('bare_openai_credential_is_redacted_before_truncation', async () => {
+  const secretKey = 'sk-' + 'A'.repeat(48);
+  for (const budget of [20000, 200]) {
+    const result = await invoke(
+      ['web', 'search', 'docs', '--max-chars', String(budget)],
+      'bare-openai'
+    );
+    assert.equal(result.exitCode, 0);
+    assert.doesNotMatch(emitted(result), new RegExp(secretKey));
+    assert.match(emitted(result), /\[REDACTED\]/);
+  }
+});
+
+test('serialized_client_secret_is_redacted', async () => {
+  const result = await invoke(['web', 'search', 'docs'], 'json-client-secret');
+  assert.equal(result.exitCode, 0);
+  assert.doesNotMatch(emitted(result), /fixture-oauth-secret/);
+  assert.match(emitted(result), /\[REDACTED\]/);
+});
+
+test('default_transport_ignores_startup_authenticated_proxy', async () => {
+  const { createServer } = await import('node:http');
+  let proxyRequests = 0;
+  let proxyAuth = null;
+  const proxyServer = createServer((req, res) => {
+    proxyRequests++;
+    proxyAuth = req.headers['proxy-authorization'] || null;
+    res.writeHead(407, { 'Proxy-Authenticate': 'Basic' });
+    res.end();
+  });
+  await new Promise((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
+  const proxyPort = proxyServer.address().port;
+
+  try {
+    const researchScript = fileURLToPath(new URL('../research.mjs', import.meta.url)).replace(/\\/g, '/');
+    const childCode = `
+      import { runResearch } from 'file:///${researchScript}';
+      const dummyResolver = async () => ['93.184.216.34'];
+      const p = runResearch(['web', 'read', 'http://docs.example.com/doc'], {
+        resolveHost: dummyResolver,
+      });
+      setTimeout(() => process.exit(0), 200);
+      try {
+        await p;
+      } catch {}
+    `;
+    spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
+      env: {
+        ...process.env,
+        NODE_USE_ENV_PROXY: '1',
+        HTTP_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+        HTTPS_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+      },
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    assert.equal(proxyRequests, 0, 'Proxy must receive zero requests');
+    assert.equal(proxyAuth, null, 'Proxy must receive no proxy authorization');
+  } finally {
+    proxyServer.close();
+  }
+});
+test('inherited proxy env is never used', async () => {
+  const { createServer } = await import('node:http');
+  let proxyRequests = 0;
+  const proxyServer = createServer((req, res) => {
+    proxyRequests++;
+    res.writeHead(407, { 'Proxy-Authenticate': 'Basic' });
+    res.end();
+  });
+  await new Promise((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
+  const proxyPort = proxyServer.address().port;
+
+  try {
+    const researchScript = fileURLToPath(new URL('../research.mjs', import.meta.url)).replace(/\\/g, '/');
+    const childCode = `
+      import { runResearch } from 'file:///${researchScript}';
+      const dummyResolver = async () => ['93.184.216.34'];
+      const p = runResearch(['web', 'read', 'https://docs.example.com/doc'], {
+        resolveHost: dummyResolver,
+      });
+      setTimeout(() => process.exit(0), 200);
+      try { await p; } catch {}
+    `;
+    spawnSync(process.execPath, ['--input-type=module', '-e', childCode], {
+      env: {
+        ...process.env,
+        NODE_USE_ENV_PROXY: '1',
+        HTTPS_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+        HTTP_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+      },
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    assert.equal(proxyRequests, 0, 'Proxy must receive zero connections');
+  } finally {
+    proxyServer.close();
+  }
 });

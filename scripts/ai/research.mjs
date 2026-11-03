@@ -23,11 +23,11 @@ const ACTIONS = new Map([
   ['youtube transcript', ['subtitle', 'yt-dlp']],
 ]);
 const SENSITIVE =
-  /(?:cookie|token|secret|password|passwd|authorization|auth|credential|environment|^env$|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
+  /(?:cookie|token|secret|password|passwd|authorization|auth|credential|session|environment|^env$|api[_-]?key|access[_-]?key|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
 // Only values of credential-shaped variables are scrubbed verbatim; scrubbing
 // every inherited value would corrupt ordinary output (e.g. the word "true").
 const SENSITIVE_ENV =
-  /(?:cookie|token|secret|password|passwd|authorization|auth|credential|private|proxy|api[_-]?key|access[_-]?key|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
+  /(?:cookie|token|secret|password|passwd|authorization|auth|credential|session|private|proxy|api[_-]?key|access[_-]?key|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
 const NON_SECRET_ENV_VALUES = new Set(['true', 'false', '0', '1', 'utf-8', 'utf8']);
 const PUBLIC_ERROR_CODES = new Set([
   'BAD_INPUT',
@@ -361,10 +361,15 @@ async function defaultRetrieve(url, { method = 'GET', resolveHost = defaultResol
     };
 
     try {
+      const agent =
+        parsed.protocol === 'https:'
+          ? new https.Agent({ keepAlive: false })
+          : new http.Agent({ keepAlive: false });
       req = client.request(
         parsed,
         {
           method,
+          agent,
           lookup: async (hostname, options, callback) => {
             try {
               let h = hostname;
@@ -729,11 +734,12 @@ function redact(value, envValues = []) {
     .replace(/\b(Bearer|Basic)\s+[^\s"<>]+/gi, '$1 [REDACTED]')
     .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@')
     .replace(
-      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?)|(?:%[0-9a-fA-F]{2})+[a-z0-9_-]*|api[_-]?key|access[_-]?key|password|passwd|auth(?:orization)?|credential|secret(?:[_-]?key)?|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
+      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?|secret(?:[_-]?key)?)|(?:%[0-9a-fA-F]{2})+[a-z0-9_-]*|api[_-]?key|access[_-]?key|client[_-]?secret|password|passwd|auth(?:orization)?|credential|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
       '$1[REDACTED]'
     )
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g, '[REDACTED]')
     .replace(/\bgithub_pat_[A-Za-z0-9_]{82}\b/g, '[REDACTED]')
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED]')
     .replace(/\b[A-Z][A-Z0-9_]{2,}\s*=\s*[^\n]+/g, '[REDACTED]');
   for (const secret of envValues) {
     // Short values match whole words so an environment value such as "1"
