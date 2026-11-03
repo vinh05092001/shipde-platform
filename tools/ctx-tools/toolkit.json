@@ -21,7 +21,7 @@
     {
       "id": "jcodemunch",
       "version": "1.108.401",
-      "caller": "tools/ctx-tools/attach.py",
+      "caller": "tools/ctx-tools/mcp-entries.template.json",
       "type": "mcp",
       "when_to_use": "Tra cứu cấu trúc file, file outline, danh sách hàm/symbol AST bằng giao thức MCP thay vì đọc toàn bộ file (~75% token reduction).",
       "when_not_to_use": "Không bật file watcher (--watcher=false); không dùng AI summaries; không thay thế đọc kỹ mã khi chỉnh sửa logic.",
@@ -44,7 +44,7 @@
     {
       "id": "serena",
       "version": "v2.1.0",
-      "caller": "tools/ctx-tools/attach.py",
+      "caller": "tools/ctx-tools/mcp-entries.template.json",
       "type": "mcp",
       "when_to_use": "Tra cứu ngữ nghĩa code chuyên sâu, tìm định nghĩa symbol (find_symbol), symbol overview (get_symbols_overview) qua language server (~95% token reduction).",
       "when_not_to_use": "Không bật web dashboard, GUI log window hay tự mở trình duyệt; không dùng khi MCP server chưa được khởi tạo.",

@@ -105,6 +105,86 @@ class TestSmokeRedaction(unittest.TestCase):
                     f"Secret {CANARY} leaked in smoke-results.json: {results_json}",
                 )
 
+    def test_rpc_error_credentials_never_reach_diagnostics(self):
+        """Credential shapes (camelCase keys, quoted password) must never reach stderr or smoke-results.json."""
+        credential = "opaque-credential-158"
+        password = "smoke-test-password-158"
+        cases = {
+            "camel_case_access_token": (
+                '{"code": -32603, "message": "request failed", '
+                '"data": {"accessToken": "%s"}}' % credential
+            ),
+            "quoted_password_in_message": (
+                '{"code": -32603, '
+                '"message": "Auth failure: \\"password\\": \\"%s\\""}' % password
+            ),
+        }
+        tmp_base = REPO_ROOT / ".oc" / "tmp"
+        tmp_base.mkdir(parents=True, exist_ok=True)
+        for case_name, error_body in cases.items():
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
+                    tmp_path = Path(tmp_dir)
+
+                    fake_server_script = tmp_path / "fake_mcp_server.py"
+                    fake_server_script.write_text(
+                        'import sys, json\n'
+                        'for line in sys.stdin:\n'
+                        '    try:\n'
+                        '        req = json.loads(line)\n'
+                        '        req_id = req.get("id")\n'
+                        '        if req_id is not None:\n'
+                        '            err_resp = {\n'
+                        '                "jsonrpc": "2.0",\n'
+                        '                "id": req_id,\n'
+                        f'                "error": {error_body},\n'
+                        '            }\n'
+                        '            sys.stdout.write(json.dumps(err_resp) + "\\n")\n'
+                        '            sys.stdout.flush()\n'
+                        '    except Exception:\n'
+                        '        pass\n',
+                        encoding="utf-8",
+                    )
+
+                    entries_file = tmp_path / "entries.json"
+                    entries_file.write_text(
+                        json.dumps({
+                            "fake_server": {
+                                "command": PYTHON_EXE,
+                                "args": [str(fake_server_script)],
+                            }
+                        }),
+                        encoding="utf-8",
+                    )
+
+                    out_dir = tmp_path / "out"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+
+                    proc = subprocess.run(
+                        [
+                            PYTHON_EXE,
+                            str(SMOKE_SCRIPT),
+                            "--entries", str(entries_file),
+                            "--out-dir", str(out_dir),
+                            "--project", str(REPO_ROOT),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                    )
+
+                    results_json = ""
+                    results_file = out_dir / "smoke-results.json"
+                    if results_file.exists():
+                        results_json = results_file.read_text(encoding="utf-8")
+
+                    self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
+                    self.assertIn("[REDACTED]", proc.stderr, f"redaction marker missing: {proc.stderr}")
+                    self.assertIn("[REDACTED]", results_json, f"redaction marker missing: {results_json}")
+                    secret = credential if case_name == "camel_case_access_token" else password
+                    self.assertNotIn(secret, proc.stderr, "credential value leaked in stderr")
+                    self.assertNotIn(secret, results_json, "credential value leaked in smoke-results.json")
+
     def test_rpc_access_token_never_reaches_diagnostics(self):
         """Underscore-joined secret keys in JSON-RPC error data must be redacted before printing."""
         tmp_base = REPO_ROOT / ".oc" / "tmp"

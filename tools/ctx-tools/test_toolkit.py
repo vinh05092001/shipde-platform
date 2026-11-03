@@ -1,15 +1,18 @@
-"""Unit tests for tools/ctx-tools: toolkit.json registry, prompt-block.js, and MCP attachment."""
+"""Unit tests for tools/ctx-tools: toolkit.json registry, prompt-block.js, and the shipped MCP template."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 TOOLS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TOOLS_DIR.parents[1]
 TOOLKIT_PATH = TOOLS_DIR / "toolkit.json"
 PROMPT_BLOCK_SCRIPT = TOOLS_DIR / "prompt-block.js"
-ATTACH_SCRIPT = TOOLS_DIR / "attach.py"
+MCP_TEMPLATE_PATH = TOOLS_DIR / "mcp-entries.template.json"
+TEST_SUITE_SCRIPT = TOOLS_DIR / "test_toolkit.py"
 
 FORBIDDEN_APP_LIBRARIES = {
     "nestjs", "nest", "@nestjs/core", "prisma", "@prisma/client",
@@ -87,19 +90,39 @@ class TestToolkitRegistry(unittest.TestCase):
                 f"Prompt block missing registered tool ID: {tool['id']}"
             )
 
-    def test_attach_dry_run_covers_all_mcp_tools_for_all_clients(self):
-        from attach import load_servers
-        servers = load_servers(TOOLS_DIR, "C:/Tools/ctx-tools")
+    def test_mcp_tools_match_versioned_template(self):
+        """Every MCP tool in toolkit.json is defined by the shipped versioned entries template."""
+        self.assertTrue(MCP_TEMPLATE_PATH.exists(), f"Missing {MCP_TEMPLATE_PATH}")
+        template = json.loads(MCP_TEMPLATE_PATH.read_text(encoding="utf-8"))
 
         mcp_tools = [t for t in self.tools if t.get("type") == "mcp"]
         self.assertGreaterEqual(len(mcp_tools), 2, "Expected at least jcodemunch and serena MCP servers")
 
         for mcp in mcp_tools:
-            self.assertIn(mcp["id"], servers, f"load_servers did not load MCP tool: {mcp['id']}")
-            entry = servers[mcp["id"]]
+            self.assertIn(mcp["id"], template, f"MCP template does not define tool: {mcp['id']}")
+            entry = template[mcp["id"]]
             self.assertIn("command", entry)
             self.assertIn("args", entry)
             self.assertIn("env", entry)
+            self.assertTrue(entry["command"].startswith("${CTX_TOOLS_ROOT}"), "Template must keep a portable safe root")
+            self.assertIn("${CTX_TOOLS_ROOT}", entry["env"].get("CODE_INDEX_PATH", entry["env"].get("SERENA_HOME", "${CTX_TOOLS_ROOT}")))
+
+    def test_toolkit_suite_without_attach(self):
+        """The toolkit suite passes in a checkout without an obsolete `attach` module."""
+        if os.environ.get("CTX_TOOLS_NO_ATTACH_CHILD") == "1":
+            return  # child re-execution already proves the suite passes without attach
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            env = dict(os.environ)
+            env["CTX_TOOLS_NO_ATTACH_CHILD"] = "1"
+            env["PYTHONPATH"] = tmp_dir
+            res = subprocess.run(
+                [sys.executable, str(TEST_SUITE_SCRIPT)],
+                capture_output=True,
+                text=True,
+                cwd=tmp_dir,
+                env=env,
+            )
+        self.assertEqual(res.returncode, 0, f"test_toolkit.py failed without attach: {res.stdout}\n{res.stderr}")
 
 
 if __name__ == "__main__":

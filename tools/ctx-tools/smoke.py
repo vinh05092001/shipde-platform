@@ -18,18 +18,31 @@ KEEP_ENV = {
 }
 
 
-SENSITIVE_KEY_RE = re.compile(
-    r"(?i)(?:^|[_-])(token|secret|key|password|authorization|cookie|credential)s?(?:[_-]|$)"
-)
+SENSITIVE_WORDS = ("token", "secret", "key", "password", "authorization", "cookie", "credential")
+SENSITIVE_WORD_RE = "|".join(SENSITIVE_WORDS)
+_PART_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[0-9]+")
+
+
+def is_sensitive_key(name: str) -> bool:
+    """True when an underscore/hyphen/camelCase-separated part is a sensitive word (or ends with one)."""
+    parts = []
+    for chunk in re.split(r"[_\-\s.]+", str(name)):
+        parts.extend(_PART_RE.findall(chunk))
+    for part in parts:
+        low = part.lower()
+        if low in SENSITIVE_WORDS or (low.endswith("s") and low[:-1] in SENSITIVE_WORDS):
+            return True
+    return False
 
 
 def sanitize_secret_payload(val):
     if isinstance(val, str):
         s = val
         s = re.sub(
-            r"(?i)(?:^|[_\W-])([a-zA-Z0-9_-]*(?:password|token|secret|key|auth(?:orization)?|cookie|credential)[a-zA-Z0-9_-]*)\s*([=:]\s*|\s+)[^\s,\"\'}\]]+",
-            r"\1\2[REDACTED]",
+            rf"([\"']?\b[a-zA-Z0-9_.-]*(?:{SENSITIVE_WORD_RE})[a-zA-Z0-9_.-]*[\"']?\s*[=:]\s*[\"']?)[^\s,\"'\}}\]]+",
+            r"\1[REDACTED]",
             s,
+            flags=re.IGNORECASE,
         )
         s = re.sub(r"(?i)\bBearer\s+[^\s,\"\'}\]]+", "Bearer [REDACTED]", s)
         s = re.sub(r"(?i)\bCANARY_SECRET\w*", "[REDACTED]", s)
@@ -38,7 +51,7 @@ def sanitize_secret_payload(val):
     elif isinstance(val, dict):
         sanitized = {}
         for k, v in val.items():
-            if SENSITIVE_KEY_RE.search(str(k)):
+            if is_sensitive_key(k):
                 sanitized[k] = "[REDACTED]"
             else:
                 sanitized[k] = sanitize_secret_payload(v)
