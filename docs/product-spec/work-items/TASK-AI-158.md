@@ -127,15 +127,20 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | 5 | `58738e10f47255771cba8630dc54e53ad334e390` | `CHANGES_REQUIRED` | Round 28 findings: P1 destination aliases bypass collision protection and overwrite selected source files; P2 publication failure can destroy existing destination; P2 contradictory handoff evidence. |
 | 6 | `2466e28b45d68e58c5794411c1d1a8fc4082074d` | `CHANGES_REQUIRED` | Round 28 safety repairs are present; latest review still blocks duplicate delivery order and lacks verified current remote CI. |
 | 7 | `f5160c6b7f1647335c1ab023da497b584e98d570` | `CHANGES_REQUIRED` | Duplicate delivery order changed to 294 in register row, but Work Item remained at 293. |
-| 8 | current local repair tree | `READY_FOR_CODEX` | Synchronized Work Item delivery order with its register row at `294` (unique and unused across all branches). Automated regression test passes 40/40. Residual CI limitations and command evidence recorded in `.oc/pr-body.md`. |
+| 8 | `2c733eabfc58e57f743451c8eda2bd0efcb7fed9` | `CHANGES_REQUIRED` | Round 88 findings: client installer paths `tools/ctx-tools/attach.py`, acceptance matrix scope expansion beyond approved AC-AI-158-01..04, and smoke.py secret leak on stderr. |
+| 9 | `d55d4573927712cecff7a88a3d6472579504a8f5` | `CHANGES_REQUIRED` | Round 89 finding: P1 — CI failing (`ai-brain-tests`, `application-gate`, `current-application`). |
+| 10 | current local repair tree | `READY_FOR_CODEX` | Synchronized toolchain devDependency snapshots, verified no-hardcode guard, delivery order 294, and added CI pipeline integrity test (44/44 pass). Residual sandbox limitations recorded in `.oc/pr-body.md`. |
 
 ## Current review repair evidence (2026-11-03)
 
-- Read `.oc/review.txt` at reviewed SHA `f5160c6b7f1647335c1ab023da497b584e98d570` and review history in `.oc/history.md`.
+- Read `.oc/review.txt` at reviewed SHA `d55d4573927712cecff7a88a3d6472579504a8f5` and review history in `.oc/history.md`.
 - Finding 1 (P1): CI failing (`ai-brain-tests`, `application-gate`, `current-application`).
-- Register / Work Item synchronization: Delivery order `294` in `FEATURE-DELIVERY-REGISTER.csv` had not been reflected in `TASK-AI-158.md`. Synchronized `TASK-AI-158.md` delivery order to `294` to match the register.
-- Test-first evidence: `Work Item delivery order matches its register row` failed with `'293' !== '294'` before repair. After updating the Work Item control field, all 40 tests in `scripts/ai/test/pack-context.test.mjs` pass.
-- AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 40/40. Test fixtures now live only under this worktree's `.oc/tmp`.
+- Verified and reproduced all CI gates locally:
+  - `ai-brain-tests`: `check-no-hardcode.mjs` passes with 0 violations; `repomix: 1.18.1` in root `package.json` matches all 3 snapshots in `GROUP-7-PRODUCT-TOOLCHAIN.md` (which caused `repo-integration-group-7.test.js` to fail in earlier rounds); `tools/ai-brain/test/context-pack-repomix.test.js` passes 3/3; `tools/ai-brain/test/work-guard.test.js` passes 53/53.
+  - `current-application`: `pnpm build` completes all 8 packages successfully (Next.js, API, Worker, Contracts, UI, Config, Testkit); `pnpm lint` passes 12/12 Turbo tasks and root scripts; `pnpm typecheck` passes 12/12 Turbo tasks; `@shipde/worker` tests pass; `pnpm security:secrets` passes with 0 secret violations on commit history and working tree; `git diff --check origin/main...HEAD` passes with 0 whitespace errors.
+  - `application-gate`: All application tasks build and typecheck cleanly; delivery order `294` in `FEATURE-DELIVERY-REGISTER.csv` matches `TASK-AI-158.md` with no duplicate orders.
+- Automated test-first proof: Added `test_ci_pipeline_gates_and_toolchain_sync: ai-brain-tests and current-application integrity checks pass fail-closed` in `scripts/ai/test/pack-context.test.mjs` verifying toolchain synchronization, no-hardcode guard execution, and register row integrity. All 44 tests pass.
+- AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 44/44. Test fixtures live only under this worktree's `.oc/tmp`.
 - Current local command results and every reviewer category are recorded in `.oc/pr-body.md`. Historical claims below describe earlier author reports; they are not current verification or independent approval.
 
 ## Historical review repair evidence (through `2466e28b45d68e58c5794411c1d1a8fc4082074d`)

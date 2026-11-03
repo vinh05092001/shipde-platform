@@ -56,6 +56,47 @@ describe('TASK-AI-158 delivery registration', () => {
     assert.ok(order, 'Work Item must declare a numeric delivery order');
     assert.equal(order[1], itemRows[0].match(/^"(\d+)"/)[1]);
   });
+
+  test('test_ci_pipeline_gates_and_toolchain_sync: ai-brain-tests and current-application integrity checks pass fail-closed', async () => {
+    const cp = await import("node:child_process");
+
+    // 1. Toolchain snapshot sync (prevents ai-brain-tests failure in repo-integration-group-7)
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+    const toolchainDoc = fs.readFileSync(
+      path.join(REPO_ROOT, "docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-7-PRODUCT-TOOLCHAIN.md"),
+      "utf8",
+    );
+    const repomixVer = pkg.devDependencies?.repomix;
+    assert.equal(repomixVer, "1.18.1", "Root package.json must pin repomix to 1.18.1");
+    const repomixMatches = [...toolchainDoc.matchAll(/"repomix":\s*"1\.18\.1"/g)];
+    assert.equal(
+      repomixMatches.length,
+      3,
+      "GROUP-7-PRODUCT-TOOLCHAIN.md must include repomix: 1.18.1 in all 3 dependency snapshots",
+    );
+
+    // 2. Controller no-hardcode guard (ai-brain-tests pre-push requirement)
+    const hardcodeRes = cp.spawnSync(
+      process.execPath,
+      [path.join(REPO_ROOT, "scripts", "ai", "check-no-hardcode.mjs")],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+    assert.equal(
+      hardcodeRes.status,
+      0,
+      `check-no-hardcode.mjs must pass with exit code 0:\n${hardcodeRes.stderr || hardcodeRes.stdout}`,
+    );
+
+    // 3. Feature delivery register integrity (contract requirement)
+    const registerContent = fs.readFileSync(
+      path.join(REPO_ROOT, "docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv"),
+      "utf8",
+    );
+    const rows = registerContent.split(/\r?\n/).filter(Boolean);
+    const ai158Rows = rows.filter((r) => r.includes('"TASK-AI-158"'));
+    assert.equal(ai158Rows.length, 1, "Register must have exactly one row for TASK-AI-158");
+    assert.ok(ai158Rows[0].startsWith('"294"'), "TASK-AI-158 row must have delivery order 294");
+  });
 });
 
 function linkRepomixPackage(root) {
