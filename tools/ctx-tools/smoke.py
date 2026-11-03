@@ -18,11 +18,16 @@ KEEP_ENV = {
 }
 
 
+SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(?:^|[_-])(token|secret|key|password|authorization|cookie|credential)s?(?:[_-]|$)"
+)
+
+
 def sanitize_secret_payload(val):
     if isinstance(val, str):
         s = val
         s = re.sub(
-            r"(?i)\b(password|token|secret|api[_-]?key|auth(?:orization)?|credential)\b\s*([=:]\s*|\s+)[^\s,\"\'}\]]+",
+            r"(?i)(?:^|[_\W-])([a-zA-Z0-9_-]*(?:password|token|secret|key|auth(?:orization)?|cookie|credential)[a-zA-Z0-9_-]*)\s*([=:]\s*|\s+)[^\s,\"\'}\]]+",
             r"\1\2[REDACTED]",
             s,
         )
@@ -33,7 +38,7 @@ def sanitize_secret_payload(val):
     elif isinstance(val, dict):
         sanitized = {}
         for k, v in val.items():
-            if re.search(r"(?i)\b(password|token|secret|api[_-]?key|auth(?:orization)?|credential)\b", str(k)):
+            if SENSITIVE_KEY_RE.search(str(k)):
                 sanitized[k] = "[REDACTED]"
             else:
                 sanitized[k] = sanitize_secret_payload(v)

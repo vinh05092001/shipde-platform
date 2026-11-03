@@ -105,6 +105,77 @@ class TestSmokeRedaction(unittest.TestCase):
                     f"Secret {CANARY} leaked in smoke-results.json: {results_json}",
                 )
 
+    def test_rpc_access_token_never_reaches_diagnostics(self):
+        """Underscore-joined secret keys in JSON-RPC error data must be redacted before printing."""
+        tmp_base = REPO_ROOT / ".oc" / "tmp"
+        tmp_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            fake_server_script = tmp_path / "fake_mcp_server.py"
+            fake_server_script.write_text(
+                'import sys, json\n'
+                'for line in sys.stdin:\n'
+                '    try:\n'
+                '        req = json.loads(line)\n'
+                '        req_id = req.get("id")\n'
+                '        if req_id is not None:\n'
+                '            err_resp = {\n'
+                '                "jsonrpc": "2.0",\n'
+                '                "id": req_id,\n'
+                '                "error": {"code": -32603, "message": "request failed",\n'
+                '                          "data": {"access_token": "smoke-test-value",\n'
+                '                                   "nested": {"client_secret": "x"}}},\n'
+                '            }\n'
+                '            sys.stdout.write(json.dumps(err_resp) + "\\n")\n'
+                '            sys.stdout.flush()\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding="utf-8",
+            )
+
+            entries_file = tmp_path / "entries.json"
+            entries_file.write_text(
+                json.dumps({
+                    "fake_server": {
+                        "command": PYTHON_EXE,
+                        "args": [str(fake_server_script)],
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            out_dir = tmp_path / "out"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    PYTHON_EXE,
+                    str(SMOKE_SCRIPT),
+                    "--entries", str(entries_file),
+                    "--out-dir", str(out_dir),
+                    "--project", str(REPO_ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            results_json = ""
+            results_file = out_dir / "smoke-results.json"
+            if results_file.exists():
+                results_json = results_file.read_text(encoding="utf-8")
+
+            self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
+            self.assertIn("JSON-RPC error", proc.stderr, f"secret-bearing response must be exercised: {proc.stderr}")
+            self.assertNotIn("smoke-test-value", proc.stderr, "access_token value leaked in stderr")
+            self.assertNotIn("smoke-test-value", results_json, "access_token value leaked in smoke-results.json")
+            self.assertNotIn("test-not-a-secret", proc.stderr, "client_secret value leaked in stderr")
+            self.assertNotIn("test-not-a-secret", results_json, "client_secret value leaked in smoke-results.json")
+            self.assertNotIn('"client_secret": "x"', proc.stderr, "client_secret value leaked in stderr")
+            self.assertNotIn('"client_secret": "x"', results_json, "client_secret value leaked in smoke-results.json")
+            self.assertNotIn('"x"', proc.stderr, "client_secret value leaked in stderr")
+
 
 if __name__ == "__main__":
     unittest.main()

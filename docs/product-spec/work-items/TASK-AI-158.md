@@ -11,7 +11,7 @@
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `package.json`; `pnpm-lock.yaml`; `repomix.config.json`; `.gitignore`; `scripts/ai/pack-context.mjs`; `scripts/ai/test/pack-context.test.mjs`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-7-PRODUCT-TOOLCHAIN.md`; `docs/product-spec/work-items/TASK-AI-158.md`; `.oc/pr-body.md` |
+| Allowed paths | `package.json`; `pnpm-lock.yaml`; `repomix.config.json`; `.gitignore`; `AGENTS.md`; `scripts/ai/pack-context.mjs`; `scripts/ai/test/pack-context.test.mjs`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`; `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-7-PRODUCT-TOOLCHAIN.md`; `docs/product-spec/work-items/TASK-AI-158.md`; `.oc/pr-body.md`; `tools/ai-brain/context-pack.js`; `tools/ai-brain/test/context-pack-repomix.test.js`; `tools/ai-brain/toolkit.json`; `tools/ctx-tools/prompt-block.js`; `tools/ctx-tools/**` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-158-repomix-context` |
 | Pull Request | `N/A — local authoring stage` |
@@ -32,6 +32,7 @@ Writers and reviewers can pack only the files a prompt needs (a Pull Request dif
 
 ## Preconditions and dependencies
 
+- HUMAN-DECISION 2026-11-03 "fold ctx-tools into TASK-AI-158, no new Work Item": fold ctx-tools MCP infrastructure into TASK-AI-158.
 - Operator approval granted on 2026-11-01 to adopt `yamadashy/repomix` (MIT).
 - Branch `feat/task-ai-158-repomix-context` tracks `origin/main`.
 - `TASK-FOUND-04` is merged; root pnpm workspace commands are authoritative.
@@ -56,6 +57,7 @@ One vertical tooling slice: config, script, test, lockfile and documentation. Ad
 - Root script `ai:pack`.
 - `node:test` coverage for argument parsing and the token-limit failure on a small fixture directory.
 - Toolchain decision note: purpose, usage, secrets exclusion, advisory only.
+- Folded ctx-tools MCP work per HUMAN-DECISION 2026-11-03 "fold ctx-tools into TASK-AI-158, no new Work Item": `tools/ctx-tools/**`, `tools/ai-brain/toolkit.json`, `prompt-block.js`, and the `AGENTS.md` pointer.
 - This Work Item and exactly one register row.
 
 ## Out of scope
@@ -96,6 +98,9 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | AC-AI-158-02 | Argument parsing | `--paths`, `--out` and `--max-tokens` parse; missing or invalid arguments throw | unit: `scripts/ai/test/pack-context.test.mjs` |
 | AC-AI-158-03 | Token limit | A fixture pack over `--max-tokens` exits non-zero and removes the output; stdout has no file contents | unit: `scripts/ai/test/pack-context.test.mjs` |
 | AC-AI-158-04 | Secret check and advisory note | Security check failure is non-zero; toolchain doc states purpose, usage, no secrets/`.env`, advisory only | unit + docs-inspection |
+| AC-AI-158-ctx-01 | Versioned MCP entries template | Versioned template with jcodemunch and serena definitions and safe roots | unit: `tools/ctx-tools/test_smoke.py` |
+| AC-AI-158-ctx-02 | attach.py dry-run by default | Attachment script defaults to dry-run preview without mutating configs | unit: `tools/ctx-tools/test_smoke.py` |
+| AC-AI-158-ctx-03 | smoke.py never prints credential values | Sensitive keys and error payloads are sanitized recursively so credentials and tokens never appear in stdout, stderr, or results JSON | unit: `tools/ctx-tools/test_smoke.py` |
 
 ## Task breakdown
 
