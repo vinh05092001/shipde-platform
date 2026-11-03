@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import {
+  describeDatabaseTarget,
   createApiTestModule,
   isLocalTestDb,
   skipLocalDbTest,
@@ -67,7 +68,7 @@ async function main() {
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
     throw new Error(
-      `Database must be reachable at ${databaseUrl} for RBAC Supertest HTTP suite; failing closed.`
+      `Database must be reachable at ${describeDatabaseTarget(databaseUrl)} for RBAC Supertest HTTP suite; failing closed.`
     );
   }
 

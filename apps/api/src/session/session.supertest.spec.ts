@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import {
+  describeDatabaseTarget,
   createApiTestModule,
   isLocalTestDb,
   skipLocalDbTest,
@@ -122,7 +123,9 @@ async function runSessionSupertestSuite() {
     process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     if (process.env.CI || isLocalTestDb()) {
-      throw new Error('Database must be reachable in CI environment or TEST_DB=local');
+      throw new Error(
+        `Database must be reachable in CI environment or TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      );
     }
     console.warn('⚠️ PostgreSQL not reachable. Skipping session tests.');
     await app.close();

@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { createApiTestModule, isLocalTestDb } from '../../test-support/test-module';
+import {
+  createApiTestModule,
+  describeDatabaseTarget,
+  isLocalTestDb,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -269,7 +273,10 @@ async function runCarrierCatalogSupertestSuite() {
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     const isCi = Boolean(process.env.CI) || isLocalTestDb();
-    const failureMsg = buildDatabaseReadinessFailureMessage(databaseUrl, isCi);
+    // BR-LOCAL-06: TEST_DB=local names only the masked host:port/db target, never the username.
+    const failureMsg = isLocalTestDb()
+      ? `Database must be reachable for TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      : buildDatabaseReadinessFailureMessage(databaseUrl, isCi);
     if (isCi) {
       throw new Error(failureMsg);
     }

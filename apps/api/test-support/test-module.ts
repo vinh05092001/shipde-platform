@@ -13,6 +13,7 @@ import { APP_CONFIG } from '../src/config.token';
 import { RateLimitService } from '../src/auth/rate-limit.service';
 
 export {
+  describeDatabaseTarget,
   isLocalTestDb,
   skipLocalDbTest,
   LOCAL_DB_CONNECTION_REASON,

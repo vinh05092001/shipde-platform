@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { createApiTestModule, isLocalTestDb } from '../../test-support/test-module';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -131,7 +135,9 @@ async function runAuthLoginSupertestSuite() {
     process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     if (process.env.CI || isLocalTestDb()) {
-      throw new Error('Database must be reachable in CI environment or TEST_DB=local');
+      throw new Error(
+        `Database must be reachable in CI environment or TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      );
     }
     console.warn(
       "⚠️ PostgreSQL is not reachable. Skipping live Login Supertest tests (run 'pnpm infra:up' to enable)."

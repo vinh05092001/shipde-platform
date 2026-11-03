@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { createApiTestModule } from '../../test-support/test-module';
+import { describeDatabaseTarget, createApiTestModule } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
@@ -155,7 +155,7 @@ export async function runUsersSupertestSuite() {
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
     throw new Error(
-      `Database must be reachable at ${databaseUrl} for Users Supertest HTTP suite; failing closed.`
+      `Database must be reachable at ${describeDatabaseTarget(databaseUrl)} for Users Supertest HTTP suite; failing closed.`
     );
   }
 

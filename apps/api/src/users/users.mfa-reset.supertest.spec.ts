@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { createApiTestModule, isLocalTestDb } from '../../test-support/test-module';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { TestingModule } from '@nestjs/testing';
 import { RoleEnum } from '@prisma/client';
@@ -63,7 +67,9 @@ async function main() {
 
   if ((await prisma.checkReadiness()) !== 'up') {
     if (process.env.CI || isLocalTestDb())
-      throw new Error('Database must be reachable in CI or TEST_DB=local');
+      throw new Error(
+        `Database must be reachable in CI or TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      );
     console.warn('PostgreSQL not reachable; skipping MFA reset idempotency suite.');
     await app.close();
     return;

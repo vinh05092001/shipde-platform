@@ -8,6 +8,23 @@ export function isLocalTestDb(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.TEST_DB === 'local';
 }
 
+/**
+ * Masked database target for readiness diagnostics (BR-LOCAL-06): `host:port/db` only.
+ * Built from `new URL()` parts so username, password and query are never included;
+ * unparseable input fails closed to a fixed marker instead of echoing the raw string.
+ */
+export function describeDatabaseTarget(url: string | undefined): string {
+  try {
+    const parsed = new URL(url ?? '');
+    // Opaque URLs (no authority) keep credentials in the path; never describe them.
+    if (!parsed.hostname) return '[unparseable database URL]';
+    const port = parsed.port ? `:${parsed.port}` : '';
+    return `${parsed.hostname}${port}${parsed.pathname}`;
+  } catch {
+    return '[unparseable database URL]';
+  }
+}
+
 export const LOCAL_DB_CONCURRENCY_REASON =
   'TEST_DB=local: PGlite has one connection; overlapping transactions and locking require PostgreSQL in CI';
 export const LOCAL_DB_INFRASTRUCTURE_REASON =

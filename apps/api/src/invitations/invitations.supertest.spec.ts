@@ -1,5 +1,9 @@
 import 'reflect-metadata';
-import { createApiTestModule, isLocalTestDb } from '../../test-support/test-module';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { test } from 'node:test';
 import * as fs from 'node:fs';
@@ -110,7 +114,7 @@ async function runInvitationsSupertestSuite() {
   if (dbStatus !== 'up') {
     await app.close();
     throw new Error(
-      `[FAIL_CLOSED] PostgreSQL database is not reachable at ${databaseUrl}. Live DB supertest requires a running database.`
+      `[FAIL_CLOSED] PostgreSQL database is not reachable at ${describeDatabaseTarget(databaseUrl)}. Live DB supertest requires a running database.`
     );
   }
 

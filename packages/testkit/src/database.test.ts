@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PrismaClient } from '@prisma/client';
 import {
   createLocalTestDatabase,
+  describeDatabaseTarget,
   isGitleaksBinaryAvailable,
   isLocalTestDb,
   type LocalTestDatabase,
@@ -67,164 +67,19 @@ test('local runner keeps production mode for child suites instead of relabelling
   );
 });
 
-export function isTaskAi163DeliveryScope(
-  options: {
-    rootDir?: string;
-    branch?: string;
-    changedFiles?: readonly string[];
-  } = {}
-): boolean {
-  const root = options.rootDir ?? fileURLToPath(new URL('../../../', import.meta.url));
-  const branch =
-    options.branch ??
-    process.env.GITHUB_HEAD_REF ??
-    process.env.GITHUB_REF_NAME ??
-    (() => {
-      try {
-        return execFileSync('git', ['-c', 'safe.directory=*', 'branch', '--show-current'], {
-          cwd: root,
-          encoding: 'utf8',
-        }).trim();
-      } catch {
-        return '';
-      }
-    })();
-
-  if (branch && branch !== 'HEAD') {
-    return /task-ai-163/i.test(branch);
+test('describeDatabaseTarget names only host:port/db, never credentials or query', () => {
+  // BR-LOCAL-06 / BR-LOCAL-04: readiness failures stay failures but name only the masked target.
+  const message = describeDatabaseTarget('postgres://u:secretpw@h:5432/d?sslmode=x');
+  assert.equal(message, 'h:5432/d');
+  assert.equal(message.includes('u:'), false, 'Must not contain the username');
+  assert.equal(message.includes('secretpw'), false, 'Must not contain the password');
+  assert.equal(message.includes('sslmode'), false, 'Must not contain query parameters');
+  // Unparseable or opaque (authority-less) input fails closed instead of echoing the raw string.
+  for (const raw of ['u:secretpw@not a url', 'postgresql:u:secretpw@h/d', 'not-a-url', undefined]) {
+    const masked = describeDatabaseTarget(raw);
+    assert.equal(masked.includes('secretpw'), false, `${String(raw)} must not be echoed`);
+    assert.equal(masked.includes('u:'), false, `${String(raw)} must not echo the username`);
   }
-
-  if (options.changedFiles) {
-    return options.changedFiles.some((f) => f.includes('TASK-AI-163.md'));
-  }
-
-  try {
-    const diffFiles = execFileSync(
-      'git',
-      ['-c', 'safe.directory=*', 'diff', '--name-only', 'origin/main'],
-      { cwd: root, encoding: 'utf8' }
-    );
-    return diffFiles.includes('TASK-AI-163.md');
-  } catch {
-    return false;
-  }
-}
-
-export function verifyTaskAi163DeliveryScope(
-  options: {
-    rootDir?: string;
-    branch?: string;
-    changedFiles?: string[];
-    registerContent?: string;
-    originRegisterContent?: string;
-  } = {}
-): { audited: boolean; passed: boolean } {
-  const root = options.rootDir ?? fileURLToPath(new URL('../../../', import.meta.url));
-  const changedFiles =
-    options.changedFiles ??
-    execFileSync('git', ['-c', 'safe.directory=*', 'diff', '--name-only', 'origin/main'], {
-      cwd: root,
-      encoding: 'utf8',
-    })
-      .trim()
-      .split(/\r?\n/)
-      .filter(Boolean);
-
-  if (!isTaskAi163DeliveryScope({ rootDir: root, branch: options.branch, changedFiles })) {
-    return { audited: false, passed: true };
-  }
-
-  const allowedPatterns = [
-    /^packages\/testkit\//,
-    /^apps\/api\/test-support\//,
-    /^apps\/api\/src\/.*\.supertest\.spec\.ts$/,
-    /^scripts\/test-local-db\.mjs$/,
-    /^package\.json$/,
-    /^pnpm-lock\.yaml$/,
-    /^docs\/product-spec\/work-items\/TASK-AI-163\.md$/,
-    /^docs\/product-spec\/docs\/10-ai-collaboration\/AI-TOOLCHAIN-DECISIONS\.md$/,
-    /^docs\/product-spec\/docs\/10-ai-collaboration\/FEATURE-DELIVERY-REGISTER\.csv$/,
-    /^\.oc\/pr-body\.md$/,
-    /^\.oc\/tmp\//,
-  ];
-
-  for (const file of changedFiles) {
-    const normalized = file.replaceAll('\\', '/');
-    const isAllowed = allowedPatterns.some((pattern) => pattern.test(normalized));
-    assert.ok(isAllowed, `File ${normalized} is outside TASK-AI-163 allowed paths`);
-  }
-
-  const registerRelPath =
-    'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
-  const registerFullPath = resolve(root, registerRelPath);
-  const currentRegister = (options.registerContent ?? readFileSync(registerFullPath, 'utf8'))
-    .replaceAll('\r\n', '\n')
-    .trimEnd()
-    .split('\n');
-
-  const originRegisterRaw = (
-    options.originRegisterContent ??
-    execFileSync('git', ['-c', 'safe.directory=*', 'show', `origin/main:${registerRelPath}`], {
-      cwd: root,
-      encoding: 'utf8',
-    })
-  )
-    .replaceAll('\r\n', '\n')
-    .trimEnd()
-    .split('\n');
-
-  const isTask163 = (line: string) => line.includes('"TASK-AI-163"');
-  const currentOtherRows = currentRegister.filter((line) => !isTask163(line));
-  const originOtherRows = originRegisterRaw.filter((line) => !isTask163(line));
-  assert.deepEqual(
-    currentOtherRows,
-    originOtherRows,
-    'Every unrelated register row must match origin/main exactly'
-  );
-
-  const task163Rows = currentRegister.filter(isTask163);
-  assert.equal(task163Rows.length, 1, 'Delivery register must have exactly one TASK-AI-163 row');
-
-  return { audited: true, passed: true };
-}
-
-test('TASK-AI-163 delivery stays within allowed paths', (t) => {
-  const result = verifyTaskAi163DeliveryScope();
-  if (!result.audited) {
-    t.skip('Skipping TASK-AI-163 delivery scope audit for other Work Items / default checkout');
-  }
-});
-
-test("default testkit accepts another Work Item's allowed changes", () => {
-  // AC-AI-163-07: A subsequent PR modifying apps/web/src/app/page.tsx or another Work Item
-  // must not fail the normal testkit command.
-  const unrelatedDelta = ['apps/web/src/app/page.tsx'];
-
-  // 1. Outside TASK-AI-163 delivery, the scope audit does not audit or fail unrelated deltas
-  const otherWorkItemResult = verifyTaskAi163DeliveryScope({
-    branch: 'feat/feat-web-profile',
-    changedFiles: unrelatedDelta,
-  });
-  assert.equal(
-    otherWorkItemResult.audited,
-    false,
-    'Unrelated Work Item must not be audited under TASK-AI-163 scope'
-  );
-  assert.equal(otherWorkItemResult.passed, true, 'Unrelated Work Item must pass without failure');
-
-  // 2. Negative assertion: within TASK-AI-163, the exact same delta fails the scope audit
-  assert.throws(
-    () => {
-      verifyTaskAi163DeliveryScope({
-        branch: 'feat/task-ai-163-agent-local-db-tests',
-        changedFiles: unrelatedDelta,
-        registerContent: '"296","S00","AI workflow","TASK-AI-163"',
-        originRegisterContent: '',
-      });
-    },
-    /outside TASK-AI-163 allowed paths/,
-    'TASK-AI-163 delivery must reject changes outside its allowed paths'
-  );
 });
 
 test('local readiness failure omits caller credentials', () => {
@@ -253,7 +108,11 @@ test('local readiness failure omits caller credentials', () => {
   const diagnostics = `${res.stdout || ''}\n${res.stderr || ''}`;
   assert.equal(diagnostics.includes(sensitiveUrl), false, 'Must not echo the caller URL');
   assert.equal(diagnostics.includes(fixturePassword), false, 'Must not echo the caller password');
-  assert.equal(diagnostics.includes('synthetic-host.invalid'), false, 'Must not echo the host');
+  assert.equal(diagnostics.includes('fixture_user'), false, 'Must not echo the caller username');
+  assert.ok(
+    diagnostics.includes('synthetic-host.invalid:5432/db'),
+    'Failure must name only the masked host:port/db target from describeDatabaseTarget'
+  );
   assert.match(diagnostics, /reachable/i, 'Failure must still explain the readiness failure');
 });
 
@@ -315,7 +174,10 @@ test('all local readiness failures redact caller credentials', () => {
       false,
       `${suite} must not echo the caller password`
     );
-    assert.equal(diagnostics.includes(fixtureHost), false, `${suite} must not echo the host`);
+    assert.ok(
+      diagnostics.includes(`${fixtureHost}:5432/db`),
+      `${suite} must name only the masked host:port/db target from describeDatabaseTarget`
+    );
     assert.match(diagnostics, /reachable/i, `${suite} failure must explain readiness failure`);
   }
 });

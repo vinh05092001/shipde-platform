@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { createApiTestModule } from '../../test-support/test-module';
+import { describeDatabaseTarget, createApiTestModule } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
@@ -64,7 +64,7 @@ async function main() {
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
     throw new Error(
-      `Database must be reachable at ${databaseUrl} for RBAC-02 Supertest suite; failing closed.`
+      `Database must be reachable at ${describeDatabaseTarget(databaseUrl)} for RBAC-02 Supertest suite; failing closed.`
     );
   }
 
