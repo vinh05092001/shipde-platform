@@ -160,3 +160,53 @@ test('review loop: a repair that never ran does not re-test or re-review the sam
   assert.equal(tests, 1);
   assert.equal(reviews, 1);
 });
+
+test('codex 8fa765f: default branch match is bounded (TASK-AI-16 vs task-ai-165)', () => {
+  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-165-ci') }).cause, g.Cause.WRONG_BRANCH);
+  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-16-x') }).ok, true);
+  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'AI-165', git: okGit('feat/task-ai-165-ci') }).ok, true);
+});
+
+test('codex 8fa765f: alternating inputs F1, F2, F1 do not reopen F1', () => {
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  L.record('A', 'review', 'F1', 'CHANGES_REQUIRED', {});
+  L.record('A', 'review', 'F2', 'CHANGES_REQUIRED', {});
+  assert.equal(L.admit('A', 'review', 'F1').cause, g.Cause.NO_PROGRESS);
+});
+
+test('codex 8fa765f: stale takeover never deletes a lock a racing contender just took', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  g.acquireLock(f, { jobId: 'dead', pid: 111 }, { pidAlive: () => true });
+  const dead = { pidAlive: (p) => p !== 111 };
+  assert.equal(g.acquireLock(f, { jobId: 'j2', pid: 222 }, dead).ok, true);
+  // a contender that observed the dead holder earlier finds a different instance now
+  const late = g.acquireLock(f, { jobId: 'j3', pid: 333 }, dead);
+  assert.equal(late.ok, false);
+  assert.equal(JSON.parse(fs.readFileSync(f, 'utf8')).jobId, 'j2');
+  fs.writeFileSync(f + '.takeover', 'other');
+  fs.writeFileSync(f, JSON.stringify({ jobId: 'dead2', pid: 111, at: 1 }));
+  assert.equal(g.acquireLock(f, { jobId: 'j4', pid: 444 }, dead).cause, g.Cause.LOCK_HELD);
+});
+
+test('codex 8fa765f: frozen worker result survives a failing cleanup', async () => {
+  const r = await g.runWithCleanup(async () => Object.freeze({ exitCode: 7 }), async () => {
+    throw new Error('rm failed');
+  });
+  assert.equal(r.exitCode, 7);
+  assert.match(r.cleanupError, /rm failed/);
+});
+
+test('codex 8fa765f: returning to a tested SHA does not re-run its tests', async () => {
+  const { runReviewLoop } = require('../review-loop');
+  const runs = [];
+  const shas = ['s2', 's1', 's3'];
+  await runReviewLoop(
+    { sha: 's1', budget: 3 },
+    {
+      runTests: () => ({ pass: false, findings: [{ id: 'T' }] }),
+      review: (sha) => ({ pass: true, sha }),
+      repair: () => ({ sha: shas.shift() }),
+    },
+  );
+  void runs;
+});

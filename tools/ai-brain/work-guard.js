@@ -73,7 +73,11 @@ function checkWorkspace(o) {
   if (!br || br.status !== 0) return { ok: false, cause: Cause.DETACHED_HEAD };
   const branch = String(br.stdout).trim();
   const id = String(o.workItemId || '').toLowerCase();
-  const fits = o.branchPattern ? o.branchPattern.test(branch) : id !== '' && branch.toLowerCase().includes(id);
+  // The whole id, bounded: TASK-AI-16 must not accept feat/task-ai-165-ci.
+  const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const fits = o.branchPattern
+    ? o.branchPattern.test(branch)
+    : id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
   if (!fits) return { ok: false, cause: Cause.WRONG_BRANCH, branch };
   const head = git(['rev-parse', 'HEAD'], o.cwd);
   return { ok: true, root, branch, head: head && head.status === 0 ? String(head.stdout).trim() : null };
@@ -130,9 +134,10 @@ class ProgressLedger {
     if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
     const own = exceeded(it.spent || {}, this.limits.item);
     if (own) return { ok: false, cause: limitCause(own), limit: own };
-    const last = (it.stages || {})[stage];
-    if (last && last.fp === fp && !TRANSIENT.has(last.outcome)) {
-      return { ok: false, cause: Cause.NO_PROGRESS, outcome: last.outcome };
+    // Every fingerprint keeps its outcome, so alternating inputs (F1, F2, F1) cannot loop.
+    const seen = ((it.stages || {})[stage] || {}).fps || {};
+    if (seen[fp] && !TRANSIENT.has(seen[fp].outcome)) {
+      return { ok: false, cause: Cause.NO_PROGRESS, outcome: seen[fp].outcome };
     }
     return { ok: true };
   }
@@ -150,7 +155,10 @@ class ProgressLedger {
       if (Number.isFinite(u.tokens)) acc.tokens += u.tokens;
       else acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
     }
-    it.stages[stage] = { fp, outcome: String(outcome), at: this.now() };
+    const st = it.stages[stage] || { fps: {} };
+    st.fps = st.fps || {};
+    st.fps[fp] = { outcome: String(outcome), at: this.now() };
+    it.stages[stage] = st;
     s.items[itemId] = it;
     writeJson(this.file, s);
   }
@@ -204,13 +212,26 @@ function acquireLock(file, owner, o) {
       if (e.code !== 'EEXIST') throw e;
       const holder = readJson(file, null);
       // Stale only when the holder pid is provably dead; unreadable or live holders keep the lock.
+      // Takeover is serialised by a second exclusive file, and the lock is removed only if it is
+      // still the exact instance observed dead, so a racing contender cannot delete a new owner.
       if (holder && Number.isInteger(holder.pid) && !alive(holder.pid) && i === 0) {
+        const guard = file + '.takeover';
         try {
-          fs.unlinkSync(file);
+          fs.writeFileSync(guard, String(owner.jobId), { flag: 'wx' });
         } catch (_) {
-          /* another process took it over; retry decides */
+          return { ok: false, cause: Cause.LOCK_HELD, holder };
         }
-        continue;
+        try {
+          const again = readJson(file, null);
+          if (!again || again.jobId !== holder.jobId || again.at !== holder.at) {
+            return { ok: false, cause: Cause.LOCK_HELD, holder: again };
+          }
+          fs.unlinkSync(file);
+          fs.writeFileSync(file, body, { flag: 'wx' });
+          return { ok: true, owner };
+        } finally {
+          fs.unlinkSync(guard);
+        }
       }
       return { ok: false, cause: Cause.LOCK_HELD, holder };
     }
@@ -252,7 +273,12 @@ async function runWithCleanup(fn, cleanup) {
     if (cleanupError) err.cleanupError = cleanupError;
     throw err;
   }
-  if (cleanupError && out && typeof out === 'object') out.cleanupError = String(cleanupError.message || cleanupError);
+  if (cleanupError && out && typeof out === 'object') {
+    const note = String(cleanupError.message || cleanupError);
+    // Never mutate a frozen result: a TypeError here would replace the real exit code.
+    if (Object.isExtensible(out)) out.cleanupError = note;
+    else return Object.assign({}, out, { cleanupError: note });
+  }
   return out;
 }
 
