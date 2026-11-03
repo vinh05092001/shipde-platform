@@ -402,7 +402,10 @@ test('the direct command cannot be skipped using the hook exception', () => {
 
 test('delivery register assigns unique sequential delivery order without collision between TASK-AI-162 and TASK-AI-161', () => {
   const registerText = readFileSync(
-    join(__dirname, '../../../docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'),
+    join(
+      __dirname,
+      '../../../docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'
+    ),
     'utf8'
   );
   const lines = registerText.split(/\r?\n/).filter((l) => l.trim().length > 0);
