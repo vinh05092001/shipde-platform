@@ -12,9 +12,10 @@ function maskCredentials(v) {
   if (typeof v === 'string') {
     // Strip the whole userinfo section: a credential may sit in the username as well
     // as in the password, so masking only the password would persist the username one.
-    return v
-      .replace(/(https?:\/\/)[^@/\s]*@/g, '$1')
-      .replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
+    // Use new URL() first (handles any scheme case); fall back to a case-insensitive
+    // regex for strings that look like URLs but cannot be parsed.
+    const masked = v.replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
+    return masked.replace(/([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)[^@/\s]*@/gi, '$1');
   }
   if (Array.isArray(v)) {
     return v.map((item) => maskCredentials(item));
@@ -112,11 +113,20 @@ class RunLedger {
             const it = s.items && s.items[itemId];
             const stObj = it && it.stages && it.stages[stage];
             const cur = stObj && stObj.fps && stObj.fps[actualFp];
-            if (!cur || cur.outcome !== 'IN_FLIGHT' || cur.goalId === opts.goalId) {
-              if (cur && !cur.goalId) cur.goalId = opts.goalId;
+            // If the goal was already charged to this entry (either this call set it
+            // or a concurrent record already set it), just persist and return.
+            if (cur && cur.goalId === opts.goalId) {
               writeJson(this.file, s);
               return;
             }
+            // No fp entry: the admission may have been reconciled away; nothing to charge.
+            if (!cur) {
+              writeJson(this.file, s);
+              return;
+            }
+            // Annotate the fp entry with the goalId regardless of its outcome, so
+            // subsequent calls won't double-charge.
+            cur.goalId = opts.goalId;
             s.goals = s.goals || {};
             const gAcc = s.goals[opts.goalId] || {
               attempts: 0,
@@ -127,9 +137,6 @@ class RunLedger {
             };
             gAcc.attempts = (gAcc.attempts || 0) + 1;
             s.goals[opts.goalId] = gAcc;
-            if (cur) {
-              cur.goalId = opts.goalId;
-            }
             writeJson(this.file, s);
           });
         }
@@ -191,15 +198,20 @@ class RunLedger {
         const priorRun = s.runs.find((r) => r.attemptId === attemptKey && r.itemId);
         if (priorRun) itemId = priorRun.itemId;
       }
-      // A placeholder is an item created from this attempt alone. A real item named by
-      // jobId that holds only other attempts is not a placeholder; migrating it would
+      // A placeholder is an item created from this attempt alone with no explicit
+      // itemId in any prior run that named it. A real item named by jobId that
+      // holds only other attempts is not a placeholder; migrating it would
       // transfer another item's budget and chain on an identifier coincidence.
       const isPlaceholder = (key) => {
         const cand = key && Object.hasOwn(s.items, key) ? s.items[key] : null;
         if (!cand) return false;
         const keys = Object.keys(cand.seenAttempts || {});
         const chain = (cand.runs || []).map((r) => r.attemptId);
+        // If any global run or any item run explicitly names this key as its itemId,
+        // then it is an established item, not a placeholder created from an attempt key.
+        const namedExplicitly = (s.runs || []).some((r) => r.itemId === key);
         return (
+          !namedExplicitly &&
           (keys.length === 0 || (keys.length === 1 && keys[0] === attemptKey)) &&
           chain.every((a) => a === attemptKey)
         );
@@ -450,7 +462,16 @@ class RunLedger {
         fpsRecord.goalId = opts.goalId;
       }
       it.stages[st].fps[fp] = fpsRecord;
-      if (itemKey) s.items[itemKey] = it;
+      if (itemKey) {
+        // Use Object.defineProperty so that a key like '__proto__' creates an own
+        // property instead of mutating the object's prototype.
+        Object.defineProperty(s.items, itemKey, {
+          value: it,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
       writeJson(this.file, s);
       return { ok: true, run };
     });

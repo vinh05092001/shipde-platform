@@ -862,3 +862,114 @@ test('pr_body_contains_no_template_placeholders', () => {
     );
   }
 });
+
+// --- TASK-AI-169 P1 review findings (second CHANGES_REQUIRED round) ---
+
+test('established_item_named_like_attempt_cannot_migrate', () => {
+  // cap=1 so that a second distinct attempt on ITEM-A is refused
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 } },
+  });
+  // Record ITEM-A with attemptId 'a1'. The item key equals the attempt id here so
+  // that isPlaceholder('a1') would previously see only one seenAttempt and migrate.
+  const rA = ledger.record('writer', { itemId: 'ITEM-A', attemptId: 'a1', ms: 100 });
+  assert.equal(rA.ok, true);
+
+  // Attempt to record ITEM-B with the same attempt 'a1'. This must be refused because
+  // 'a1' is already owned by ITEM-A.
+  const rB = ledger.record('writer', { itemId: 'ITEM-B', attemptId: 'a1', ms: 200 });
+  assert.equal(rB.ok, false);
+
+  const state = ledger.load();
+  // ITEM-A retains its budget intact.
+  assert.equal(state.items['ITEM-A'].spent.attempts, 1);
+  assert.deepEqual(
+    ledger.getChain('ITEM-A').map((r) => r.attemptId),
+    ['a1']
+  );
+  // ITEM-B must not exist.
+  assert.equal(Object.hasOwn(state.items, 'ITEM-B'), false);
+  assert.equal(state.goal.attempts, 1);
+
+  // A second attempt on ITEM-A must be refused (budget exhausted, not reset).
+  const rA2 = ledger.record('writer', { itemId: 'ITEM-A', attemptId: 'a2', ms: 50 });
+  assert.equal(rA2.ok, false);
+  assert.equal(rA2.cause, Cause.ATTEMPTS_EXHAUSTED);
+});
+
+test('concurrent_completion_without_goal_preserves_reserved_goal_charge', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledgerA = new RunLedger({ file });
+  const ledgerB = new RunLedger({ file });
+
+  const origAdmit = ledgerA.progressLedger.admit.bind(ledgerA.progressLedger);
+  ledgerA.progressLedger.admit = (itemId, stage, fp, opts) => {
+    const res = origAdmit(itemId, stage, fp, opts);
+    // Concurrent completion — deliberately omits goalId so the completing record
+    // does NOT charge goals.G. The admit callback must detect this and charge it.
+    const rB = ledgerB.record('writer', {
+      itemId: 'TASK-CONCUR-NOGID',
+      attemptId: 'att-b1',
+      fp: 'fp-ng1',
+      ms: 100,
+      verdict: 'DONE',
+      // no goalId
+    });
+    assert.equal(rB.ok, true);
+    return res;
+  };
+
+  const resA = ledgerA.admit('TASK-CONCUR-NOGID', 'writer', 'fp-ng1', {
+    reserve: true,
+    pid: process.pid,
+    goalId: 'G',
+  });
+  assert.equal(resA.ok, true);
+
+  const state = ledgerA.load();
+  assert.equal(state.items['TASK-CONCUR-NOGID'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 1);
+  // The goal must be charged exactly once even though the completing record had no goalId.
+  assert.equal(state.goals['G'].attempts, 1);
+});
+
+test('uppercase_http_scheme_masks_userinfo', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const endpoint = 'HTTPS://user:pass123@api.example/v1';
+  const rec = ledger.record('writer', {
+    itemId: 'TASK-MASK-UC',
+    attemptId: 'a1',
+    route: { endpoint },
+    ms: 100,
+  });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.run.route.endpoint, 'HTTPS://api.example/v1');
+
+  const content = fs.readFileSync(ledger.file, 'utf8');
+  assert.equal(content.includes('user:pass123'), false);
+  assert.equal(content.includes('pass123'), false);
+});
+
+test('prototype_named_item_cannot_bypass_attempt_cap', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 } },
+  });
+  // First record with __proto__ as the item id must succeed and persist an own entry.
+  const r1 = ledger.record('writer', { itemId: '__proto__', attemptId: 'a1', ms: 100 });
+  assert.equal(r1.ok, true);
+
+  const state1 = ledger.load();
+  assert.equal(Object.hasOwn(state1.items, '__proto__'), true);
+  assert.equal(state1.items['__proto__'].spent.attempts, 1);
+
+  // A second distinct attempt on the same item must be refused (cap=1).
+  const r2 = ledger.record('writer', { itemId: '__proto__', attemptId: 'a2', ms: 100 });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.cause, Cause.ATTEMPTS_EXHAUSTED);
+
+  // Verify the item still has only 1 attempt.
+  const state2 = ledger.load();
+  assert.equal(state2.items['__proto__'].spent.attempts, 1);
+});
