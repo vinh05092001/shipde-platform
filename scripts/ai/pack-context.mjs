@@ -105,54 +105,178 @@ export function parseArgs(argv) {
   return { paths, out, maxTokens };
 }
 
+export function sameFileIdentity(statA, statB) {
+  return (
+    Boolean(statA) &&
+    Boolean(statB) &&
+    typeof statA.ino === 'number' &&
+    typeof statB.ino === 'number' &&
+    statA.ino !== 0 &&
+    statB.ino !== 0 &&
+    statA.ino === statB.ino &&
+    statA.dev === statB.dev
+  );
+}
+
+export function resolveExistingAncestorsAndAliases(root, outArg) {
+  const resolvedLexical = path.resolve(root, outArg);
+  let curr = resolvedLexical;
+  const nonExistingSegments = [];
+
+  while (true) {
+    let exists = false;
+    let isLink = false;
+    try {
+      const lstat = fs.lstatSync(curr);
+      exists = true;
+      isLink = lstat.isSymbolicLink();
+    } catch {
+      // path does not exist
+    }
+
+    if (exists || isLink) {
+      break;
+    }
+
+    const parent = path.dirname(curr);
+    if (parent === curr) {
+      break;
+    }
+    nonExistingSegments.unshift(path.basename(curr));
+    curr = parent;
+  }
+
+  let canonicalExisting;
+  try {
+    canonicalExisting = fs.realpathSync(curr);
+  } catch {
+    throw new Error(
+      `Unsafe output destination: "${outArg}" points through an invalid or broken link`,
+    );
+  }
+
+  const canonicalTarget =
+    nonExistingSegments.length > 0
+      ? path.join(canonicalExisting, ...nonExistingSegments)
+      : canonicalExisting;
+
+  return { resolvedLexical, canonicalTarget };
+}
+
 export function validateOutputPath(root, outArg, inputPaths = []) {
   if (!outArg || typeof outArg !== 'string' || outArg.trim() === '') {
     throw new Error('--out destination is required');
-  }
-
-  const resolved = path.resolve(root, outArg);
-  const rel = path.relative(root, resolved);
-
-  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
-    throw new Error(`Unsafe output destination: "${outArg}" resolves outside the repository root`);
-  }
-
-  const segments = rel.split(/[/\\]/);
-  if (segments.includes('.git')) {
-    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
   }
 
   if (outArg.endsWith('/') || outArg.endsWith('\\')) {
     throw new Error(`Unsafe output destination: "${outArg}" cannot be a directory`);
   }
 
-  if (fs.existsSync(resolved)) {
-    const stat = fs.statSync(resolved);
-    if (stat.isDirectory()) {
+  const { resolvedLexical, canonicalTarget } = resolveExistingAncestorsAndAliases(root, outArg);
+  const canonicalRoot = fs.existsSync(root) ? fs.realpathSync(root) : path.resolve(root);
+
+  const relLexical = path.relative(root, resolvedLexical);
+  if (relLexical === '' || relLexical.startsWith('..') || path.isAbsolute(relLexical)) {
+    throw new Error(`Unsafe output destination: "${outArg}" resolves outside the repository root`);
+  }
+
+  const segmentsLexical = relLexical.split(/[/\\]/);
+  if (segmentsLexical.includes('.git')) {
+    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
+  }
+
+  const relCanonical = path.relative(canonicalRoot, canonicalTarget);
+  if (relCanonical === '' || relCanonical.startsWith('..') || path.isAbsolute(relCanonical)) {
+    throw new Error(`Unsafe output destination: "${outArg}" resolves outside the repository root`);
+  }
+
+  const segmentsCanonical = relCanonical.split(/[/\\]/);
+  if (segmentsCanonical.includes('.git')) {
+    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
+  }
+
+  let targetStat = null;
+  if (fs.existsSync(canonicalTarget)) {
+    targetStat = fs.statSync(canonicalTarget);
+    if (targetStat.isDirectory()) {
       throw new Error(`Unsafe output destination: "${outArg}" is an existing directory`);
     }
-    if (!stat.isFile()) {
+    if (!targetStat.isFile()) {
       throw new Error(`Unsafe output destination: "${outArg}" must be a regular file`);
     }
   }
 
-  const normRel = rel.replace(/\\/g, '/');
+  const normRelLexical = relLexical.replace(/\\/g, '/');
+  const normRelCanonical = relCanonical.replace(/\\/g, '/');
+
   for (const p of inputPaths) {
     const normP = p.replace(/\\/g, '/');
     const resolvedP = path.resolve(root, p);
-    if (resolvedP === resolved || normP === normRel) {
+
+    if (
+      resolvedP === resolvedLexical ||
+      resolvedP === canonicalTarget ||
+      normP === normRelLexical ||
+      normP === normRelCanonical
+    ) {
       throw new Error(
         `Input/output collision: output destination "${outArg}" is also specified as an input path`,
       );
     }
-    if (path.matchesGlob && path.matchesGlob(normRel, normP)) {
-      throw new Error(
-        `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
-      );
+
+    if (targetStat && fs.existsSync(resolvedP)) {
+      const pCanonical = fs.realpathSync(resolvedP);
+      if (pCanonical === canonicalTarget) {
+        throw new Error(
+          `Input/output collision: output destination "${outArg}" is also specified as an input path`,
+        );
+      }
+      const pStat = fs.statSync(resolvedP);
+      if (sameFileIdentity(targetStat, pStat)) {
+        throw new Error(
+          `Input/output collision: output destination "${outArg}" is also specified as an input path`,
+        );
+      }
+    }
+
+    if (path.matchesGlob) {
+      if (
+        path.matchesGlob(normRelLexical, normP) ||
+        path.matchesGlob(normRelCanonical, normP)
+      ) {
+        throw new Error(
+          `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
+        );
+      }
+    }
+
+    if (
+      targetStat &&
+      typeof fs.globSync === 'function' &&
+      (normP.includes('*') || normP.includes('?'))
+    ) {
+      try {
+        const matches = fs.globSync(p, { cwd: root });
+        for (const m of matches) {
+          const mPath = path.resolve(root, m);
+          if (fs.existsSync(mPath)) {
+            const mStat = fs.statSync(mPath);
+            if (sameFileIdentity(targetStat, mStat)) {
+              throw new Error(
+                `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
+              );
+            }
+          }
+        }
+      } catch (err) {
+        if (err.message && err.message.includes('Input/output collision')) {
+          throw err;
+        }
+      }
     }
   }
 
-  return resolved;
+  return canonicalTarget;
 }
 
 export function estimateTokens(byteLength) {
@@ -253,6 +377,33 @@ function countFiles(content) {
   return matches ? matches.length : 0;
 }
 
+export function publishOutput(
+  tempOutputFile,
+  outputPath,
+  { copyFile = fs.copyFileSync, rename = fs.renameSync } = {},
+) {
+  const targetDir = path.dirname(outputPath);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const siblingTemp = path.join(
+    targetDir,
+    `.${path.basename(outputPath)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  let published = false;
+  try {
+    copyFile(tempOutputFile, siblingTemp);
+    rename(siblingTemp, outputPath);
+    published = true;
+  } finally {
+    if (!published && fs.existsSync(siblingTemp)) {
+      try {
+        fs.rmSync(siblingTemp, { force: true });
+      } catch {
+        // ignore cleanup error
+      }
+    }
+  }
+}
+
 export async function main(argv, options = {}) {
   const root = options.root ? path.resolve(options.root) : REPO_ROOT;
   const log = options.log || ((line) => console.log(line));
@@ -309,8 +460,10 @@ export async function main(argv, options = {}) {
 
   const { tmpDir, tempOutputFile } = repomixResult;
   try {
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    fs.copyFileSync(tempOutputFile, outputPath);
+    publishOutput(tempOutputFile, outputPath, options);
+  } catch (err) {
+    logError(`[pack-context] ERROR: failed to publish output: ${err.message}`);
+    return 1;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

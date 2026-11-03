@@ -14,7 +14,11 @@ import {
   looksLikeSecretFailure,
   main,
   parseArgs,
+  publishOutput,
+  resolveExistingAncestorsAndAliases,
   resolveRepomixEntry,
+  sameFileIdentity,
+  validateOutputPath,
 } from '../pack-context.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -454,6 +458,300 @@ describe('failure cleanup and destination safety', () => {
       assert.match(errors.join('\n'), /collision/i);
     } finally {
       cleanupDir(fixture);
+    }
+  });
+
+  test('rejects destination alias symlink to selected source file and preserves source', async () => {
+    const fixture = createFixtureRoot();
+    const srcHello = path.join(fixture, 'src', 'hello.js');
+    const originalHello = fs.readFileSync(srcHello, 'utf8');
+    const contextXml = path.join(fixture, 'context.xml');
+
+    try {
+      fs.symlinkSync(srcHello, contextXml, 'file');
+    } catch {
+      fs.linkSync(srcHello, contextXml);
+    }
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', 'src/**', '--out', 'context.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /collision/i);
+      assert.equal(fs.readFileSync(srcHello, 'utf8'), originalHello);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
+  test('rejects directory alias pointing to selected source dir and preserves source', async () => {
+    const fixture = createFixtureRoot();
+    const srcDir = path.join(fixture, 'src');
+    const srcHello = path.join(srcDir, 'hello.js');
+    const originalHello = fs.readFileSync(srcHello, 'utf8');
+    const symSrc = path.join(fixture, 'sym_src');
+
+    fs.symlinkSync(srcDir, symSrc, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', 'src/**', '--out', 'sym_src/hello.js'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /collision/i);
+      assert.equal(fs.readFileSync(srcHello, 'utf8'), originalHello);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
+  test('rejects destination inside symlinked directory pointing outside repository root', async () => {
+    const fixture = createFixtureRoot();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-pack-'));
+    const symOutside = path.join(fixture, 'sym_outside');
+
+    fs.symlinkSync(outside, symOutside, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', 'src/**', '--out', 'sym_outside/pack.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /outside the repository root/i);
+      assert.equal(fs.existsSync(path.join(outside, 'pack.xml')), false);
+    } finally {
+      try {
+        fs.rmSync(outside, { recursive: true, force: true });
+      } catch {}
+      cleanupDir(fixture);
+    }
+  });
+
+  test('preserves existing output file when publication fails', async () => {
+    const fixture = createFixtureRoot();
+    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingContent = '<existing>User Content</existing>\n';
+    fs.writeFileSync(existingOut, existingContent, 'utf8');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(
+        ['--paths', 'src/**', '--out', 'existing-output.xml'],
+        {
+          root: fixture,
+          rename: () => {
+            throw new Error('simulated rename failure');
+          },
+          log: (line) => logs.push(line),
+          logError: (line) => errors.push(line),
+        },
+      );
+      assert.equal(code, 1);
+      assert.equal(fs.existsSync(existingOut), true);
+      assert.equal(fs.readFileSync(existingOut, 'utf8'), existingContent);
+      assert.match(errors.join('\n'), /failed to publish output/i);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
+  test('preserves existing output file when publication copy fails', async () => {
+    const fixture = createFixtureRoot();
+    const existingOut = path.join(fixture, 'existing-output.xml');
+    const existingContent = '<existing>User Content</existing>\n';
+    fs.writeFileSync(existingOut, existingContent, 'utf8');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(
+        ['--paths', 'src/**', '--out', 'existing-output.xml'],
+        {
+          root: fixture,
+          copyFile: () => {
+            throw new Error('simulated copy failure');
+          },
+          log: (line) => logs.push(line),
+          logError: (line) => errors.push(line),
+        },
+      );
+      assert.equal(code, 1);
+      assert.equal(fs.existsSync(existingOut), true);
+      assert.equal(fs.readFileSync(existingOut, 'utf8'), existingContent);
+      assert.match(errors.join('\n'), /failed to publish output/i);
+      const remainingTmp = fs.readdirSync(fixture).filter((f) => f.includes('tmp'));
+      assert.equal(remainingTmp.length, 0);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+
+  test('rejects broken link as output destination', async () => {
+    const fixture = createFixtureRoot();
+    const brokenLink = path.join(fixture, 'broken_dir');
+    try {
+      fs.symlinkSync(
+        path.join(fixture, 'non_existent_target'),
+        brokenLink,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+    } catch {
+      // If OS denies broken link creation, skip
+      return;
+    }
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', 'src/**', '--out', 'broken_dir/out.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /invalid or broken link|outside the repository root/i);
+    } finally {
+      try {
+        fs.unlinkSync(brokenLink);
+      } catch {}
+      cleanupDir(fixture);
+    }
+  });
+
+  test('rejects symlinked directory pointing into .git', async () => {
+    const fixture = createFixtureRoot();
+    const gitDir = path.join(fixture, '.git');
+    fs.mkdirSync(gitDir, { recursive: true });
+    const symGit = path.join(fixture, 'sym_git');
+
+    fs.symlinkSync(gitDir, symGit, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const logs = [];
+    const errors = [];
+    try {
+      const code = await main(['--paths', 'src/**', '--out', 'sym_git/pack.xml'], {
+        root: fixture,
+        log: (line) => logs.push(line),
+        logError: (line) => errors.push(line),
+      });
+      assert.equal(code, 1);
+      assert.match(errors.join('\n'), /inside \.git/i);
+    } finally {
+      cleanupDir(fixture);
+    }
+  });
+});
+
+describe('publishOutput unit suite', () => {
+  test('atomically publishes pack via sibling temp file and rename', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-test-'));
+    try {
+      const tempPack = path.join(tmpDir, 'source-pack.xml');
+      const targetOut = path.join(tmpDir, 'dest', 'final-output.xml');
+      fs.writeFileSync(tempPack, '<pack>Clean Content</pack>\n', 'utf8');
+
+      publishOutput(tempPack, targetOut);
+
+      assert.equal(fs.existsSync(targetOut), true);
+      assert.equal(fs.readFileSync(targetOut, 'utf8'), '<pack>Clean Content</pack>\n');
+      const destFiles = fs.readdirSync(path.dirname(targetOut));
+      assert.deepStrictEqual(destFiles, ['final-output.xml']);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves target and cleans sibling temp when rename fails', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-test-'));
+    try {
+      const tempPack = path.join(tmpDir, 'source-pack.xml');
+      const targetOut = path.join(tmpDir, 'dest', 'final-output.xml');
+      fs.mkdirSync(path.dirname(targetOut), { recursive: true });
+      fs.writeFileSync(tempPack, '<pack>New Content</pack>\n', 'utf8');
+      fs.writeFileSync(targetOut, '<pack>Original Content</pack>\n', 'utf8');
+
+      assert.throws(
+        () =>
+          publishOutput(tempPack, targetOut, {
+            rename: () => {
+              throw new Error('EPERM: rename locked');
+            },
+          }),
+        /rename locked/,
+      );
+
+      assert.equal(fs.readFileSync(targetOut, 'utf8'), '<pack>Original Content</pack>\n');
+      const destFiles = fs.readdirSync(path.dirname(targetOut));
+      assert.deepStrictEqual(destFiles, ['final-output.xml']);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves target and cleans sibling temp when copyFile fails', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pub-test-'));
+    try {
+      const tempPack = path.join(tmpDir, 'source-pack.xml');
+      const targetOut = path.join(tmpDir, 'dest', 'final-output.xml');
+      fs.mkdirSync(path.dirname(targetOut), { recursive: true });
+      fs.writeFileSync(tempPack, '<pack>New Content</pack>\n', 'utf8');
+      fs.writeFileSync(targetOut, '<pack>Original Content</pack>\n', 'utf8');
+
+      assert.throws(
+        () =>
+          publishOutput(tempPack, targetOut, {
+            copyFile: () => {
+              throw new Error('ENOSPC: disk full');
+            },
+          }),
+        /disk full/,
+      );
+
+      assert.equal(fs.readFileSync(targetOut, 'utf8'), '<pack>Original Content</pack>\n');
+      const destFiles = fs.readdirSync(path.dirname(targetOut));
+      assert.deepStrictEqual(destFiles, ['final-output.xml']);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('destination alias and collision unit suite', () => {
+  test('sameFileIdentity identifies same inode and device', () => {
+    assert.equal(sameFileIdentity({ ino: 123, dev: 456 }, { ino: 123, dev: 456 }), true);
+    assert.equal(sameFileIdentity({ ino: 123, dev: 456 }, { ino: 124, dev: 456 }), false);
+    assert.equal(sameFileIdentity({ ino: 0, dev: 456 }, { ino: 0, dev: 456 }), false);
+    assert.equal(sameFileIdentity(null, { ino: 123, dev: 456 }), false);
+  });
+
+  test('validateOutputPath rejects exact hard link collision with input file', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'alias-test-'));
+    try {
+      const srcFile = path.join(tmpDir, 'source.js');
+      const hardLink = path.join(tmpDir, 'alias.xml');
+      fs.writeFileSync(srcFile, 'export const a = 1;\n', 'utf8');
+      fs.linkSync(srcFile, hardLink);
+
+      assert.throws(
+        () => validateOutputPath(tmpDir, 'alias.xml', ['source.js']),
+        /Input\/output collision/,
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });
