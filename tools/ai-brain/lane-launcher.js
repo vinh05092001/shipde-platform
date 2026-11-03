@@ -13,8 +13,7 @@ function getLockPath(lane) {
   return path.join(toLaneDir(lane), 'lock');
 }
 
-const CREDENTIAL_LINE_RE =
-  /(?:api[-_]?key|apikey|key|token|secret|password|authorization|bearer)/i;
+const CREDENTIAL_LINE_RE = /(?:api[-_]?key|apikey|key|token|secret|password|authorization|bearer)/i;
 
 function redactStderr(text) {
   if (!text) return '';
@@ -24,9 +23,7 @@ function redactStderr(text) {
       const hasCR = line.endsWith('\r');
       const cleanLine = hasCR ? line.slice(0, -1) : line;
       if (CREDENTIAL_LINE_RE.test(cleanLine)) {
-        return hasCR
-          ? '[REDACTED LINE: credential]\r'
-          : '[REDACTED LINE: credential]';
+        return hasCR ? '[REDACTED LINE: credential]\r' : '[REDACTED LINE: credential]';
       }
       return line;
     })
@@ -104,7 +101,7 @@ function cleanup(lane, job, options = {}) {
         process.kill(pid);
       } catch (_) {}
     });
-  const suppliedId = typeof job === 'string' ? job : (job && job.jobId);
+  const suppliedId = typeof job === 'string' ? job : job && job.jobId;
   if (!suppliedId || typeof suppliedId !== 'string') {
     return { ok: false, cause: 'JOB_MISMATCH', killed: [] };
   }
