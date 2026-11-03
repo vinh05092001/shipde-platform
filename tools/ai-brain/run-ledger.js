@@ -12,7 +12,7 @@ function maskCredentials(v) {
   if (typeof v === 'string') {
     return v
       .replace(/(https?:\/\/)([^:@/]+):([^@/]+)@/g, '$1$2:***@')
-      .replace(/(https?:\/\/)([^:@/]+)@/g, '$1')
+      .replace(/(https?:\/\/)([^:@/]+):?@/g, '$1')
       .replace(/(sk-[a-zA-Z0-9_-]{4})[a-zA-Z0-9_-]+/g, '$1***');
   }
   if (Array.isArray(v)) {
@@ -108,6 +108,14 @@ class RunLedger {
         if (res && res.ok && opts.goalId) {
           this.progressLedger.locked(() => {
             const s = this.progressLedger.load();
+            const it = s.items && s.items[itemId];
+            const stObj = it && it.stages && it.stages[stage];
+            const cur = stObj && stObj.fps && stObj.fps[actualFp];
+            if (cur && (cur.goalId === opts.goalId || cur.outcome !== 'IN_FLIGHT')) {
+              if (cur && !cur.goalId) cur.goalId = opts.goalId;
+              writeJson(this.file, s);
+              return;
+            }
             s.goals = s.goals || {};
             const gAcc = s.goals[opts.goalId] || {
               attempts: 0,
@@ -118,10 +126,8 @@ class RunLedger {
             };
             gAcc.attempts = (gAcc.attempts || 0) + 1;
             s.goals[opts.goalId] = gAcc;
-            const it = s.items && s.items[itemId];
-            const stObj = it && it.stages && it.stages[stage];
-            if (stObj && stObj.fps && stObj.fps[actualFp]) {
-              stObj.fps[actualFp].goalId = opts.goalId;
+            if (cur) {
+              cur.goalId = opts.goalId;
             }
             writeJson(this.file, s);
           });
@@ -168,11 +174,74 @@ class RunLedger {
     ) {
       throw new Error('RUN_LEDGER_REFUSED: invalid ms');
     }
+    if (
+      opts.tokens !== undefined &&
+      (typeof opts.tokens === 'number'
+        ? !Number.isFinite(opts.tokens) || opts.tokens < 0
+        : opts.tokens < 0)
+    ) {
+      throw new Error('RUN_LEDGER_REFUSED: invalid tokens');
+    }
     return this.progressLedger.locked(() => {
       const s = this.progressLedger.load();
-      const itemId = opts.itemId;
-      const itemKey = opts.itemId || opts.attemptId || opts.jobId;
-      const it = (itemKey && s.items[itemKey]) || {
+      const attemptKey = opts.attemptId || opts.jobId;
+      let itemId = opts.itemId;
+      if (!itemId && attemptKey && s.runs) {
+        const priorRun = s.runs.find((r) => r.attemptId === attemptKey && r.itemId);
+        if (priorRun) itemId = priorRun.itemId;
+      }
+      const prevPlaceholderKey =
+        itemId &&
+        ((opts.attemptId &&
+          opts.attemptId !== itemId &&
+          Object.hasOwn(s.items, opts.attemptId) &&
+          opts.attemptId) ||
+          (opts.jobId &&
+            opts.jobId !== itemId &&
+            Object.hasOwn(s.items, opts.jobId) &&
+            opts.jobId));
+      if (prevPlaceholderKey && Object.hasOwn(s.items, prevPlaceholderKey)) {
+        const placeholder = s.items[prevPlaceholderKey];
+        delete s.items[prevPlaceholderKey];
+        if (!Object.hasOwn(s.items, itemId)) {
+          s.items[itemId] = placeholder;
+        } else {
+          const dest = s.items[itemId];
+          dest.spent = dest.spent || {
+            attempts: 0,
+            ms: 0,
+            tokens: 0,
+            tokensUnknown: 0,
+            unknownTokens: 0,
+          };
+          const plSpent = placeholder.spent || {};
+          for (const k of ['attempts', 'ms', 'tokens', 'tokensUnknown', 'unknownTokens']) {
+            dest.spent[k] = (dest.spent[k] || 0) + (plSpent[k] || 0);
+          }
+          dest.stages = dest.stages || {};
+          for (const [stName, stData] of Object.entries(placeholder.stages || {})) {
+            dest.stages[stName] = dest.stages[stName] || { fps: {} };
+            dest.stages[stName].fps = Object.assign(
+              dest.stages[stName].fps || {},
+              stData.fps || {}
+            );
+          }
+          dest.seenAttempts = Object.assign(
+            dest.seenAttempts || {},
+            placeholder.seenAttempts || {}
+          );
+          dest.runs = (dest.runs || []).concat(placeholder.runs || []);
+        }
+        for (const r of s.items[itemId].runs || []) {
+          if (r.attemptId === attemptKey) r.itemId = itemId;
+        }
+        for (const r of s.runs || []) {
+          if (r.attemptId === attemptKey) r.itemId = itemId;
+        }
+      }
+
+      const itemKey = itemId || attemptKey;
+      const it = (itemKey && Object.hasOwn(s.items, itemKey) && s.items[itemKey]) || {
         spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
         stages: {},
       };
@@ -205,7 +274,6 @@ class RunLedger {
       s.goal.tokensUnknown = s.goal.tokensUnknown || 0;
       s.goal.unknownTokens = s.goal.unknownTokens || 0;
 
-      const attemptKey = opts.attemptId || opts.jobId;
       const isNew =
         !Object.hasOwn(it.seenAttempts, attemptKey) && !Object.hasOwn(s.seenAttempts, attemptKey);
 
@@ -280,11 +348,7 @@ class RunLedger {
         gAcc.tokens = gAcc.tokens || 0;
         gAcc.tokensUnknown = gAcc.tokensUnknown || 0;
         gAcc.unknownTokens = gAcc.unknownTokens || 0;
-        const goalAlreadyCharged = Boolean(
-          reserved &&
-          prev &&
-          (prev.goalId === opts.goalId || (gAcc.attempts >= it.spent.attempts && gAcc.attempts > 0))
-        );
+        const goalAlreadyCharged = Boolean(reserved && prev && prev.goalId === opts.goalId);
         if (isNew && !goalAlreadyCharged) gAcc.attempts += 1;
         gAcc.ms += ms;
         if (hasTokens) gAcc.tokens += tokens;
@@ -319,7 +383,7 @@ class RunLedger {
         for (const stageObj of Object.values(it.stages)) {
           if (stageObj && stageObj.fps) {
             for (const [oldFp, rec] of Object.entries(stageObj.fps)) {
-              if (rec && rec.attemptId === attemptKey && oldFp !== fp) {
+              if (rec && rec.attemptId === attemptKey) {
                 delete stageObj.fps[oldFp];
               }
             }
