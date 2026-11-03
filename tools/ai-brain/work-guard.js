@@ -376,6 +376,16 @@ class ProgressLedger {
         : perAttemptTokens
       : 0;
     const suppliedMs = typeof u.ms === 'number' ? u.ms : 0;
+    if (
+      reserved &&
+      (!prev ||
+        prev.at === undefined ||
+        typeof prev.at !== 'number' ||
+        !Number.isFinite(prev.at) ||
+        prev.at < 0)
+    ) {
+      throw new Error('LEDGER_CORRUPT: ' + this.file);
+    }
     const elapsedMs =
       reserved && prev && Number.isFinite(prev.at) && prev.at >= 0
         ? Math.max(0, this.now() - prev.at)
@@ -540,13 +550,19 @@ function validateLedger(s, file) {
     throw new Error('LEDGER_CORRUPT: ' + file);
   };
   if (!isObj(s) || !isObj(s.items) || !validSpent(s.goal)) bad();
-  let totalInFlightTokens = 0;
+  let sumAttempts = 0;
+  let sumMs = 0;
+  let sumTokens = 0;
+  let sumTokensUnknown = 0;
+  let sumUnknownTokens = 0;
+  let totalImputedTokens = 0;
   for (const it of Object.values(s.items)) {
     if (!isObj(it)) bad();
     if (!validSpent(it.spent)) bad();
     if (it.blocked !== undefined && typeof it.blocked !== 'string') bad();
     if (!isObj(it.stages)) bad();
-    let itemInFlightTokens = 0;
+    let itemImputedTokens = 0;
+    let itemRecordCount = 0;
     for (const st of Object.values(it.stages)) {
       if (!isObj(st) || !isObj(st.fps)) bad();
       for (const r of Object.values(st.fps)) {
@@ -554,14 +570,31 @@ function validateLedger(s, file) {
         if (r.outcome === 'IN_FLIGHT') {
           if (!Number.isInteger(r.pid) || r.pid <= 0) bad();
           if (r.imputedTokens === undefined || !isCount(r.imputedTokens)) bad();
-          itemInFlightTokens += r.imputedTokens;
+          if (r.at === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at) || r.at < 0)
+            bad();
         }
+        if (r.imputedTokens !== undefined) {
+          if (!isCount(r.imputedTokens)) bad();
+          itemImputedTokens += r.imputedTokens;
+        }
+        itemRecordCount += 1;
       }
     }
-    if (it.spent.unknownTokens < itemInFlightTokens) bad();
-    totalInFlightTokens += itemInFlightTokens;
+    if (it.spent.attempts < itemRecordCount) bad();
+    if (it.spent.unknownTokens < itemImputedTokens) bad();
+    sumAttempts += it.spent.attempts;
+    sumMs += it.spent.ms;
+    sumTokens += it.spent.tokens;
+    sumTokensUnknown += it.spent.tokensUnknown;
+    sumUnknownTokens += it.spent.unknownTokens;
+    totalImputedTokens += itemImputedTokens;
   }
-  if (s.goal.unknownTokens < totalInFlightTokens) bad();
+  if (s.goal.attempts !== sumAttempts) bad();
+  if (s.goal.ms !== sumMs) bad();
+  if (s.goal.tokens !== sumTokens) bad();
+  if (s.goal.tokensUnknown !== sumTokensUnknown) bad();
+  if (s.goal.unknownTokens !== sumUnknownTokens) bad();
+  if (s.goal.unknownTokens < totalImputedTokens) bad();
 }
 
 function exceeded(spent, lim) {
@@ -772,7 +805,7 @@ async function runWithCleanup(fn, cleanup) {
   } else if (typeof Buffer !== 'undefined' && Buffer.isBuffer(out)) {
     copy = Buffer.from(out);
   } else if (isPlainObject(out)) {
-    copy = Object.assign(Object.getPrototypeOf(out) === null ? Object.create(null) : {}, out);
+    copy = Object.create(Object.getPrototypeOf(out));
   } else if (isInheritedObject(out)) {
     copy = Object.create(Object.getPrototypeOf(out));
   } else {

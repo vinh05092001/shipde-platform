@@ -996,3 +996,73 @@ test('round 4 #14: cleanup annotation preserves unsupported built-ins and privat
   assert.equal(resWorker.exitCode, 42);
   assert.equal(resWorker.cleanupError, 'cleanup failed');
 });
+
+test('completed unknown charges cannot disappear from goal budget', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({ file, limits: { goal: { tokens: 3000 } } });
+
+  // Reserve A/F1 and record TIMEOUT with {}
+  assert.equal(L.admit('A', 'repair', 'F1', { reserve: true, pid: process.pid }).ok, true);
+  L.record('A', 'repair', 'F1', 'TIMEOUT', {});
+
+  // Overwrite the goal counter with zero
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(raw.goal.unknownTokens, 3000);
+  raw.goal.unknownTokens = 0;
+  fs.writeFileSync(file, JSON.stringify(raw));
+
+  // Assert that B/F2 admission throws LEDGER_CORRUPT
+  assert.throws(() => L.admit('B', 'repair', 'F2'), /LEDGER_CORRUPT/);
+});
+
+test('completion rejects reservation with missing start time', () => {
+  let virtualNow = 1000;
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { ms: 5000 } },
+    now: () => virtualNow,
+  });
+
+  // Reserve A/F1 at t=1000 with an item time cap of 5000 ms
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+
+  // Time passes to t=7000
+  virtualNow = 7000;
+
+  // Delete persisted reservation's at
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw.items.A.stages.repair.fps.f1.at;
+  fs.writeFileSync(file, JSON.stringify(raw));
+
+  // Assert that completion throws LEDGER_CORRUPT before replacing the reservation
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: 0, tokens: 0 }),
+    /LEDGER_CORRUPT/
+  );
+
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.items.A.stages.repair.fps.f1.outcome, 'IN_FLIGHT');
+});
+
+test('frozen result getters are not evaluated during cleanup annotation', async () => {
+  const workerResult = Object.freeze(
+    Object.defineProperty({ exitCode: 7 }, 'throwingGetter', {
+      get() {
+        throw new Error('getter evaluated');
+      },
+      enumerable: true,
+      configurable: true,
+    })
+  );
+
+  const r = await g.runWithCleanup(
+    async () => workerResult,
+    async () => {
+      throw new Error('cleanup failed');
+    }
+  );
+
+  assert.equal(r.exitCode, 7);
+  assert.match(r.cleanupError, /cleanup failed/);
+});
