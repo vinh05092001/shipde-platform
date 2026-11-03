@@ -1005,3 +1005,206 @@ describe('Review 50c26d7 regressions', () => {
     assert.equal(selector.evaluateAdmission(regressionRoute(), { costCeiling: null }).admitted, true);
   });
 });
+
+describe('Review dd2dad3 regressions (7 findings)', () => {
+  test('R01 (Finding 1): AGY discovery with string models matches family quota and does not reject healthy lanes', () => {
+    const pool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+      lanes: [
+        {
+          laneId: 'lane-alpha',
+          rows: [
+            { family: 'gemini', remainingPercent: 80, windowMinutes: 60 }
+          ],
+        }
+      ]
+    });
+    assert.equal(pool.candidates.length, 2);
+    assert.equal(pool.unconnected.length, 0);
+    assert.equal(pool.candidates[0].configuredModelId, 'gemini-2.5-flash');
+    assert.equal(pool.candidates[1].configuredModelId, 'gemini-2.5-pro');
+  });
+
+  test('R02 (Finding 2): AGY quota scope is keyed per lane and model family so Gemini exhaustion does not block Claude/GPT', () => {
+    const health = new ScopedHealthRegistry();
+    const pool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash', 'claude-3-7-sonnet'],
+      lanes: [
+        {
+          laneId: 'lane-alpha',
+          rows: [
+            { family: 'gemini', remainingPercent: 50, windowMinutes: 60 },
+            { family: 'claude-gpt', remainingPercent: 90, windowMinutes: 60 }
+          ]
+        }
+      ]
+    });
+    assert.equal(pool.candidates.length, 2);
+    const geminiCandidate = pool.candidates.find(c => c.configuredModelId === 'gemini-2.5-flash');
+    const claudeCandidate = pool.candidates.find(c => c.configuredModelId === 'claude-3-7-sonnet');
+    assert.ok(geminiCandidate.quotaScopeId.includes('gemini'));
+    assert.ok(claudeCandidate.quotaScopeId.includes('claude-gpt'));
+    assert.notEqual(geminiCandidate.quotaScopeId, claudeCandidate.quotaScopeId);
+
+    // Record quota exhaustion for Gemini candidate
+    health.recordFailure(geminiCandidate, { message: 'insufficient_quota' });
+    assert.equal(health.evaluateHealth(geminiCandidate).healthy, false);
+    // Claude candidate on the same lane remains healthy
+    assert.equal(health.evaluateHealth(claudeCandidate).healthy, true);
+  });
+
+  test('R03 (Finding 3): Combo with multiple candidate accounts is unhealthy when all accounts fail auth', () => {
+    const health = new ScopedHealthRegistry();
+    const selector = new UnifiedRouteSelector({ healthRegistry: health });
+
+    const branchA = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'src-9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'anthropic',
+      configuredModelId: 'claude-3-5-sonnet',
+      accountRef: UNKNOWN,
+      connectionId: UNKNOWN,
+      metadata: {
+        candidateAccounts: [
+          { accountRef: 'acc1@corp.com', connectionId: 'conn-1', quotaScopeId: 'quota::anthropic::acc1' },
+          { accountRef: 'acc2@corp.com', connectionId: 'conn-2', quotaScopeId: 'quota::anthropic::acc2' }
+        ]
+      }
+    });
+
+    const combo = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: 'src-9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'combo',
+      configuredModelId: 'combo/fast',
+      accountRef: UNKNOWN,
+      isCombo: true,
+      comboBranches: [branchA]
+    });
+
+    assert.equal(health.evaluateHealth(branchA).healthy, true);
+    assert.equal(selector.evaluateAdmission(combo).admitted, true);
+
+    // Record permanent 401 failure on first account
+    health.recordFailure(
+      { accountRef: 'acc1@corp.com', connectionId: 'conn-1', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc1' },
+      { status: 401, message: 'unauthorized' }
+    );
+    // acc2 is still healthy, so branchA should still be healthy
+    assert.equal(health.evaluateHealth(branchA).healthy, true);
+
+    // Record permanent 401 failure on second account
+    health.recordFailure(
+      { accountRef: 'acc2@corp.com', connectionId: 'conn-2', upstreamProviderId: 'anthropic', quotaScopeId: 'quota::anthropic::acc2' },
+      { status: 401, message: 'unauthorized' }
+    );
+    // Now ALL executable candidate accounts for branchA have permanent 401 failures -> branchA becomes unhealthy
+    assert.equal(health.evaluateHealth(branchA).healthy, false);
+    assert.equal(selector.evaluateAdmission(combo).admitted, false);
+  });
+
+  test('R04 (Finding 4): AGY lane identity reads real email and leaves UNKNOWN when missing, never using laneId', () => {
+    const pool = loadAgyPoolCandidates({
+      models: ['gemini-2.5-flash'],
+      lanes: [
+        { laneId: 'lane-with-email', rows: [{ family: 'gemini', remainingPercent: 100 }] },
+        { laneId: 'lane-no-email', rows: [{ family: 'gemini', remainingPercent: 100 }] }
+      ],
+      readLaneIdentity: (laneId) => {
+        if (laneId === 'lane-with-email') return { label: 'realuser@gmail.com' };
+        return { label: laneId };
+      }
+    });
+
+    const candidate1 = pool.candidates.find(c => c.connectionId === 'lane-with-email');
+    const candidate2 = pool.candidates.find(c => c.connectionId === 'lane-no-email');
+
+    assert.equal(candidate1.accountRef, 'realuser@gmail.com');
+    assert.equal(candidate1.metadata.realAccountRef, 'realuser@gmail.com');
+    assert.equal(candidate2.accountRef, 'lane-no-email');
+    assert.equal(candidate2.metadata.realAccountRef, UNKNOWN);
+
+    // candidate1 links with 9router route sharing real email, candidate2 does not link with laneId
+    const nineRouterRoute = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'realuser@gmail.com',
+      connectionId: 'conn-google-1',
+      configuredModelId: 'gemini-2.5-flash'
+    });
+    const nineRouterFakeRoute = createRouteIdentity({
+      harness: 'direct-http',
+      sourceId: '9router',
+      gatewayId: '9router',
+      upstreamProviderId: 'antigravity',
+      accountRef: 'lane-no-email',
+      connectionId: 'conn-google-2',
+      configuredModelId: 'gemini-2.5-flash'
+    });
+
+    const linked = linkSharedQuotaScopes([candidate1, candidate2, nineRouterRoute, nineRouterFakeRoute]);
+    const linkedC1 = linked.find(c => c.connectionId === candidate1.connectionId);
+    const linked9R = linked.find(c => c.connectionId === nineRouterRoute.connectionId);
+    const linkedC2 = linked.find(c => c.connectionId === candidate2.connectionId);
+    const linked9RFake = linked.find(c => c.connectionId === nineRouterFakeRoute.connectionId);
+
+    assert.equal(linkedC1.quotaScopeId, linked9R.quotaScopeId);
+    assert.notEqual(linkedC2.quotaScopeId, linked9RFake.quotaScopeId);
+  });
+
+  test('R05 (Finding 5): Shared PREFIX_PROVIDER_MAP maps cl -> cline and gcli -> grok-cli consistently', () => {
+    assert.equal(resolveModelPrefix('cl/deepseek-chat').upstreamProviderId, 'cline');
+    assert.equal(resolveModelPrefix('gcli/grok-2').upstreamProviderId, 'grok-cli');
+
+    const loaded = load9RouterCandidates({
+      catalog: ['cl/deepseek-chat', 'gcli/grok-2'],
+      connections: [
+        { connectionId: 'c-cline', provider: 'cline', accountRef: 'cl-user' },
+        { connectionId: 'c-grok', provider: 'grok-cli', accountRef: 'grok-user' }
+      ]
+    });
+    assert.equal(loaded.candidates.length, 2);
+    assert.equal(loaded.candidates[0].upstreamProviderId, 'cline');
+    assert.equal(loaded.candidates[1].upstreamProviderId, 'grok-cli');
+  });
+
+  test('R06 (Finding 6): Supplying explicit links does not suppress auto-detection for other shared accounts', () => {
+    const routeOpenAI1 = regressionRoute({ upstreamProviderId: 'openai', accountRef: 'user1@corp.com', connectionId: 'c1' });
+    const routeOpenAI2 = regressionRoute({ upstreamProviderId: 'openai', accountRef: 'user1@corp.com', connectionId: 'c2' });
+    const routeDeepseek1 = regressionRoute({ upstreamProviderId: 'deepseek', accountRef: 'corp@deepseek.com', connectionId: 'd1' });
+    const routeDeepseek2 = regressionRoute({ upstreamProviderId: 'deepseek', accountRef: 'corp@deepseek.com', connectionId: 'd2' });
+
+    const explicitLinks = {
+      [JSON.stringify(['openai', 'user1@corp.com'])]: 'explicit-shared-openai-quota'
+    };
+
+    const linked = linkSharedQuotaScopes([routeOpenAI1, routeOpenAI2, routeDeepseek1, routeDeepseek2], explicitLinks);
+    const resO1 = linked.find(r => r.connectionId === routeOpenAI1.connectionId);
+    const resO2 = linked.find(r => r.connectionId === routeOpenAI2.connectionId);
+    const resD1 = linked.find(r => r.connectionId === routeDeepseek1.connectionId);
+    const resD2 = linked.find(r => r.connectionId === routeDeepseek2.connectionId);
+
+    assert.equal(resO1.quotaScopeId, 'explicit-shared-openai-quota');
+    assert.equal(resO2.quotaScopeId, 'explicit-shared-openai-quota');
+    assert.equal(resD1.quotaScopeId, resD2.quotaScopeId);
+    assert.ok(resD1.quotaScopeId.includes('shared-quota::deepseek') || resD1.quotaScopeId.includes('quota::deepseek'));
+  });
+
+  test('R07 (Finding 7): Model lock keys prevent delimiter collision for (p, m, b::c) vs (p, m::b, c)', () => {
+    const health = new ScopedHealthRegistry();
+    const provider = 'test-prov';
+    const now = Date.now();
+
+    health.setModelLock(provider, 'm', 'b::c', now + 60000, 'testing');
+
+    const route1 = regressionRoute({ upstreamProviderId: provider, configuredModelId: 'm', outboundModelId: 'm', connectionId: 'b::c' });
+    const route2 = regressionRoute({ upstreamProviderId: provider, configuredModelId: 'm::b', outboundModelId: 'm::b', connectionId: 'c' });
+
+    assert.equal(health.evaluateHealth(route1, now).healthy, false);
+    assert.equal(health.evaluateHealth(route2, now).healthy, true);
+  });
+});

@@ -39,7 +39,12 @@ const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
   jina: 'jina-ai',
   polly: 'aws-polly',
   xmtp: 'xiaomi-tokenplan',
+  openai: 'openai',
+  cerebras: 'cerebras',
+  tokenrouter: 'tokenrouter',
 });
+
+const PREFIX_PROVIDER_MAP = DEFAULT_PREFIX_TO_PROVIDER;
 
 function escapePart(str) {
   if (str === null || str === undefined) return '';
@@ -287,36 +292,43 @@ function linkSharedQuotaScopes(identities, accountLinks) {
         ? new Map(Object.entries(accountLinks))
         : new Map();
 
-  // If no explicit links provided, auto-detect identical real accounts across routes/pathways
-  if (links.size === 0) {
-    const accountOccurrences = new Map();
-    for (const id of identities) {
-      const account = id.metadata?.realAccountRef || id.accountRef;
-      const realAcc = JSON.stringify([id.upstreamProviderId, account]);
-      if (
-        account && account !== UNKNOWN && account !== '*' &&
-        !String(account).startsWith('unknown')
-      ) {
-        if (!accountOccurrences.has(realAcc)) {
-          accountOccurrences.set(realAcc, []);
-        }
-        accountOccurrences.get(realAcc).push(id);
+  // Auto-detect identical accounts for any account not explicitly mapped in links
+  const accountOccurrences = new Map();
+  for (const id of identities) {
+    const account = id.metadata?.realAccountRef || id.accountRef;
+    if (
+      account &&
+      account !== UNKNOWN &&
+      account !== '*' &&
+      !String(account).startsWith('unknown')
+    ) {
+      const prov = id.upstreamProviderId || 'shared';
+      const key = JSON.stringify([prov, account]);
+      if (!accountOccurrences.has(key)) {
+        accountOccurrences.set(key, []);
       }
+      accountOccurrences.get(key).push(id);
     }
-    for (const [acc, ids] of accountOccurrences.entries()) {
-      if (ids.length > 1) {
-        // Shared account detected across multiple candidate routes
-        const prov = ids[0].upstreamProviderId || 'shared';
-        const canonicalScope = `quota::${prov}::${ids[0].metadata?.realAccountRef || ids[0].accountRef}`;
-        links.set(acc, canonicalScope);
-      }
+  }
+
+  for (const [key, ids] of accountOccurrences.entries()) {
+    const [prov, account] = JSON.parse(key);
+    // Auto-detect if not already explicitly mapped
+    if (!links.has(key) && !links.has(account) && ids.length > 1) {
+      const canonicalScope = `quota::${prov}::${ids[0].metadata?.realAccountRef || ids[0].accountRef}`;
+      links.set(key, canonicalScope);
     }
   }
 
   return identities.map((id) => {
     const realAcc = id.metadata?.realAccountRef || id.accountRef;
+    const prov = id.upstreamProviderId || 'shared';
+    const key = JSON.stringify([prov, realAcc]);
     const targetScope =
-      links.get(JSON.stringify([id.upstreamProviderId, realAcc]));
+      links.get(key) ||
+      links.get(realAcc) ||
+      links.get(id.accountRef) ||
+      links.get(id.connectionId);
     if (targetScope && targetScope !== id.quotaScopeId) {
       return createRouteIdentity({
         ...id,
@@ -332,9 +344,6 @@ function linkSharedQuotaScopes(identities, accountLinks) {
   });
 }
 
-/**
- * Expands a 9router combo into its constituent branch candidate identities.
- */
 function expandComboIdentity(comboIdentity, constituentModels, candidateAccountMap = {}) {
   if (!comboIdentity) return null;
   const parent = comboIdentity.candidateKey ? comboIdentity : createRouteIdentity(comboIdentity);
@@ -367,6 +376,7 @@ function expandComboIdentity(comboIdentity, constituentModels, candidateAccountM
           connectionId: a.connectionId || UNKNOWN,
           accountRef: a.accountRef || UNKNOWN,
           priority: a.priority ?? UNKNOWN,
+          quotaScopeId: a.quotaScopeId || `quota::${upstreamProviderId}::${a.accountRef || a.connectionId || UNKNOWN}`,
         })),
       },
     });
@@ -383,6 +393,7 @@ module.exports = {
   UNKNOWN,
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
+  PREFIX_PROVIDER_MAP,
   escapePart,
   unescapePart,
   distinguishPathway,

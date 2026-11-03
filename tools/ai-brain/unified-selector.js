@@ -94,9 +94,9 @@ class UnifiedRouteSelector {
    * Admission Gate: Evaluates candidate suitability against task profile and policy.
    * Returns { admitted: boolean, rejectionReason?: string, resetsAt?: number, staleQuota?: boolean }
    */
-  evaluateAdmission(candidate, profile, authorCandidate = null) {
+  evaluateAdmission(candidate, profile = {}, authorCandidate = null) {
     const id = candidate;
-    const role = String(profile.role || 'writer').toLowerCase();
+    const role = String(profile?.role || 'writer').toLowerCase();
 
     // Model restrictions belong to the caller's role policy, including combo branches.
     const patterns = this.excludedModelPatterns[role] || [];
@@ -425,7 +425,13 @@ class UnifiedRouteSelector {
 
     // Controller selects highest-scoring candidate from ranking
     const selectedEntry = scoredList[0];
-    const chosenCandidate = selectedEntry.candidate;
+    let chosenCandidate = selectedEntry.candidate;
+    if (chosenCandidate.isCombo && Array.isArray(chosenCandidate.metadata?.viableBranches)) {
+      chosenCandidate = createRouteIdentity({
+        ...chosenCandidate,
+        comboBranches: chosenCandidate.metadata.viableBranches,
+      });
+    }
 
     // 4. Context & Budget Interface (Finding 11)
     // Explicit token budget takes precedence over contextSize

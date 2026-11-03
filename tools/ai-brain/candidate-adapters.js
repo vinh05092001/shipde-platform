@@ -19,22 +19,43 @@
 
 const fs = require('fs');
 const path = require('path');
-const { createRouteIdentity, linkSharedQuotaScopes, UNKNOWN } = require('./route-identity');
+const { createRouteIdentity, linkSharedQuotaScopes, PREFIX_PROVIDER_MAP, UNKNOWN } = require('./route-identity');
 
-const PREFIX_PROVIDER_MAP = Object.freeze({
-  ag: 'antigravity',
-  gh: 'github',
-  kimchi: 'kimchi',
-  cf: 'cloudflare-ai',
-  gcli: 'google',
-  cl: 'anthropic',
-  kgw: 'kgw',
-  tokenrouter: 'tokenrouter',
-  mistral: 'mistral',
-  openai: 'openai',
-  cerebras: 'cerebras',
-  groq: 'groq',
-});
+// Using shared PREFIX_PROVIDER_MAP imported from ./route-identity
+
+function modelFamily(model) {
+  const m = String(model || '').toLowerCase();
+  if (m.includes('gemini')) return 'gemini';
+  if (m.includes('claude') || m.includes('gpt')) return 'claude-gpt';
+  return null;
+}
+
+function readLaneIdentityEmail(laneId, options) {
+  if (typeof options?.readLaneIdentity === 'function') {
+    const res = options.readLaneIdentity(laneId);
+    const em = typeof res === 'string' ? res : (res?.email || res?.label);
+    if (typeof em === 'string' && em.includes('@') && em !== laneId) return em.trim();
+  }
+  if (options?.laneIdentities && options.laneIdentities[laneId]) {
+    const em = options.laneIdentities[laneId];
+    if (typeof em === 'string' && em.includes('@') && em !== laneId) return em.trim();
+  }
+  try {
+    const agyPool = require('./agy-pool-runtime');
+    const dir = typeof agyPool.accountDir === 'function' ? agyPool.accountDir(laneId, options) : null;
+    if (dir) {
+      const idFile = path.join(dir, 'identity.json');
+      if (fs.existsSync(idFile)) {
+        const doc = JSON.parse(fs.readFileSync(idFile, 'utf8'));
+        const email = doc.email || doc.label;
+        if (typeof email === 'string' && email.includes('@') && email !== laneId) {
+          return email.trim();
+        }
+      }
+    }
+  } catch {}
+  return UNKNOWN;
+}
 
 // Preserve discovered evidence; absence is never a capability or ranking claim.
 function modelId(model) {
@@ -50,8 +71,11 @@ function modelEvidence(model, options, source = {}) {
     ...evidence.metadata,
     ...options.modelMetadata?.[id],
   };
+  const inferredFamily = modelFamily(id);
+  const quotaFamily = evidence.quotaFamily || metadata.quotaFamily || inferredFamily || undefined;
   return {
     ...metadata,
+    ...(quotaFamily ? { quotaFamily } : {}),
     capabilities: options.modelCapabilities?.[id] ?? metadata.capabilities ?? source.capabilities ?? [],
   };
 }
@@ -154,8 +178,13 @@ function load9RouterCandidates(options = {}) {
       const matchingConnections = connectionList.filter((conn) => {
         if (conn.enabled === false) return false;
         const connProv = String(conn.provider || conn.prefix || '').toLowerCase();
-        return (connProv === provider.toLowerCase() || (prefix && connProv === prefix.toLowerCase())) &&
-          (!Array.isArray(conn.modelAllowlist) || conn.modelAllowlist.includes(m));
+        const resolvedConnProv = PREFIX_PROVIDER_MAP[connProv] || connProv;
+        const provMatch =
+          connProv === provider.toLowerCase() ||
+          resolvedConnProv === provider.toLowerCase() ||
+          (prefix && connProv === prefix.toLowerCase()) ||
+          (prefix && PREFIX_PROVIDER_MAP[prefix] && connProv === PREFIX_PROVIDER_MAP[prefix].toLowerCase());
+        return provMatch && (!Array.isArray(conn.modelAllowlist) || conn.modelAllowlist.includes(m));
       });
 
       if (matchingConnections.length === 0) {
@@ -297,16 +326,13 @@ function loadAgyPoolCandidates(options = {}) {
     try {
       const agyPool = require('./agy-pool-runtime');
       if (!lanes && typeof agyPool.discoverAccounts === 'function') {
-        const accountIds = agyPool.discoverAccounts();
+        const accountIds = agyPool.discoverAccounts(options);
         lanes = accountIds.map((laneId) => {
           let quota;
-          let realAccountRef = UNKNOWN;
           try {
-            quota = typeof agyPool.quotaReading === 'function' ? agyPool.quotaReading(laneId) : null;
-            if (quota && quota.account && quota.account.email) {
-              realAccountRef = quota.account.email;
-            }
+            quota = typeof agyPool.quotaReading === 'function' ? agyPool.quotaReading(laneId, options) : null;
           } catch {}
+          const realAccountRef = readLaneIdentityEmail(laneId, options);
           return {
             laneId,
             accountRef: realAccountRef,
@@ -339,15 +365,23 @@ function loadAgyPoolCandidates(options = {}) {
       continue;
     }
 
+    let laneEmail = UNKNOWN;
+    if (lane.accountRef && lane.accountRef !== lane.laneId && lane.accountRef !== UNKNOWN && String(lane.accountRef).includes('@')) {
+      laneEmail = lane.accountRef;
+    } else {
+      laneEmail = readLaneIdentityEmail(lane.laneId, options);
+    }
+
     for (const rawModel of models) {
       const m = modelId(rawModel);
       if (!m || String(m).toLowerCase() === 'default') continue;
 
       const rows = lane.quota?.rows || lane.rows || [];
       const evidence = modelEvidence(rawModel, options);
+      const fam = evidence.quotaFamily || modelFamily(m);
       const matchingRows = rows.filter((r) => modelId(r) === m ||
         (Array.isArray(r.models) && r.models.includes(m)) ||
-        (evidence.quotaFamily && r.family === evidence.quotaFamily));
+        (fam && r.family === fam));
       const exhausted = matchingRows.some((r) => r.disabled === true ||
         (r.remainingPercent != null && Number.isFinite(Number(r.remainingPercent)) && Number(r.remainingPercent) <= 0));
       const known = matchingRows.length > 0 && matchingRows.every((r) =>
@@ -358,6 +392,7 @@ function loadAgyPoolCandidates(options = {}) {
           reason: exhausted ? 'AGY_MODEL_QUOTA_EXHAUSTED' : 'AGY_MODEL_QUOTA_UNKNOWN' });
         continue;
       }
+      const quotaScopeKey = fam ? `agy-quota::${lane.laneId}::${fam}` : `agy-quota::${lane.laneId}::${m}`;
       candidates.push(
         createRouteIdentity({
           harness: 'agy-pool',
@@ -366,13 +401,14 @@ function loadAgyPoolCandidates(options = {}) {
           upstreamProviderId: 'antigravity',
           configuredModelId: m,
           outboundModelId: m,
-          accountRef: lane.laneId,
+          accountRef: laneEmail !== UNKNOWN ? laneEmail : lane.laneId,
           connectionId: lane.laneId,
-          quotaScopeId: `agy-quota::${lane.laneId}`,
+          quotaScopeId: quotaScopeKey,
           metadata: {
             laneId: lane.laneId,
-            realAccountRef: lane.accountRef,
-            ...modelEvidence(rawModel, options),
+            realAccountRef: laneEmail,
+            quotaFamily: fam || undefined,
+            ...evidence,
           },
         })
       );

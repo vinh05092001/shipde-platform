@@ -47,7 +47,7 @@ const HealthScope = Object.freeze({
  */
 function classifyError(input, now = Date.now()) {
   const i = input || {};
-  const status = Number(i.httpStatus || i.status || 0);
+  const status = Number(i.httpStatus || i.status || i.statusCode || 0);
   const code = String(i.code || '').trim().toUpperCase();
   const text = [
     String(i.message || ''),
@@ -264,6 +264,10 @@ function quotaHealthKey(id) {
   return JSON.stringify([id.upstreamProviderId, id.quotaScopeId]);
 }
 
+function modelLockHealthKey(provider, model, connectionId) {
+  return JSON.stringify([String(provider || 'unknown'), String(model || 'unknown'), String(connectionId || '*')]);
+}
+
 function accountModelHealthKey(id) {
   return JSON.stringify([accountHealthKey(id), id.outboundModelId]);
 }
@@ -396,6 +400,47 @@ class ScopedHealthRegistry {
       }
     }
 
+    // Check Multi-account Combo Candidate Accounts
+    const candidateAccounts = Array.isArray(id.metadata?.candidateAccounts) ? id.metadata.candidateAccounts : [];
+    if (candidateAccounts.length > 0) {
+      let anyHealthy = false;
+      let lastFailure = null;
+      for (const cand of candidateAccounts) {
+        const dummyId = {
+          ...id,
+          accountRef: cand.accountRef,
+          connectionId: cand.connectionId,
+          quotaScopeId: cand.quotaScopeId || id.quotaScopeId,
+        };
+        const candAccKey = accountHealthKey(dummyId);
+        const candRec = this.accounts.get(candAccKey) || (cand.accountRef && cand.accountRef !== 'UNKNOWN' ? this.accounts.get(cand.accountRef) : null);
+        const candBlocked = candRec && (candRec.isPermanent || (candRec.resetsAt && now < candRec.resetsAt));
+
+        const candQuotaKey = quotaHealthKey(dummyId);
+        const candQuotaRec = this.quotaScopes.get(candQuotaKey) || (cand.quotaScopeId && cand.quotaScopeId !== 'UNKNOWN' ? this.quotaScopes.get(cand.quotaScopeId) : null);
+        const candQuotaBlocked = candQuotaRec && candQuotaRec.exhausted && (!candQuotaRec.resetsAt || now <= candQuotaRec.resetsAt);
+
+        const candModelKey = accountModelHealthKey(dummyId);
+        const candModelRec = this.accountModels.get(candModelKey);
+        const candModelBlocked = candModelRec && candModelRec.resetsAt && now < candModelRec.resetsAt;
+
+        if (!candBlocked && !candQuotaBlocked && !candModelBlocked) {
+          anyHealthy = true;
+          break;
+        }
+        lastFailure = candRec || candQuotaRec || candModelRec;
+      }
+      if (!anyHealthy) {
+        return {
+          healthy: false,
+          blockedBy: HealthScope.ACCOUNT,
+          category: lastFailure?.category || ErrorCategory.AUTH,
+          reason: lastFailure?.reason || 'ALL_CANDIDATE_ACCOUNTS_UNHEALTHY',
+          resetsAt: lastFailure?.resetsAt,
+        };
+      }
+    }
+
     // 3. Check Quota Scope
     if (id.quotaScopeId && id.quotaScopeId !== 'UNKNOWN') {
       const qRec = this.quotaScopes.get(quotaHealthKey(id));
@@ -458,8 +503,9 @@ class ScopedHealthRegistry {
     }
 
     // 7. Check Model Lock
-    const lockKey = `${baseModelKey}::${id.connectionId || '*'}`;
-    const lockUntil = this.modelLocks.get(lockKey);
+    const lockKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, id.connectionId);
+    const wildcardKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, '*');
+    const lockUntil = this.modelLocks.get(lockKey) || this.modelLocks.get(wildcardKey);
     if (lockUntil) {
       if (now <= lockUntil) {
         return {
@@ -471,6 +517,7 @@ class ScopedHealthRegistry {
         };
       }
       this.modelLocks.delete(lockKey);
+      this.modelLocks.delete(wildcardKey);
     }
 
     // 8. If quota reset elapsed, candidate requires probe before dispatch!
@@ -489,7 +536,7 @@ class ScopedHealthRegistry {
   }
 
   setModelLock(upstreamProviderId, outboundModelId, connectionId, lockedUntilMs) {
-    const key = `${upstreamProviderId}::${outboundModelId}::${connectionId || '*'}`;
+    const key = modelLockHealthKey(upstreamProviderId, outboundModelId, connectionId);
     this.modelLocks.set(key, lockedUntilMs);
   }
 
