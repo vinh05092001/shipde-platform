@@ -328,4 +328,3 @@ test('boolean and common non-secret environment values do not corrupt payload bo
   assert.equal(info.ytdlpConfig, false);
   assert.equal(info.isolatedCwd, true);
 });
-
