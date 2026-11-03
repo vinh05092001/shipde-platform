@@ -839,160 +839,106 @@ async function runTestSuite() {
     'Negative test: multiword search draft must not trim trailing space to "Nguyễn"'
   );
 
-  // Finding 5: Continuous typing & delayed search updates (P1 defense)
-  // Step 1: User types "N", local draft is "N", pending edits recorded as ["N"]
-  let typingDraft = 'N';
-  let pendingEditsList = ['N'];
-  let currentPropSearch = '';
-
-  // Step 2: User types "Ng" before "N" arrives from router transition
-  typingDraft = 'Ng';
-  pendingEditsList.push('Ng');
-
-  // Step 3: Delayed commit of "N" arrives while user already typed "Ng"
-  const delayedCommit1 = computeToolbarDraftOnPropChange(
-    typingDraft,
-    'N',
-    currentPropSearch,
-    pendingEditsList,
-    false
-  );
-  // Negative test: delayed "N" acknowledgment must NEVER overwrite newer draft "Ng"
+  // Finding 5 / TASK-AI-155 repair Finding 2: continuous typing & delayed
+  // search updates without a historyEpoch signal. Only a commit of the LAST
+  // value this toolbar itself dispatched is an acknowledgment of its own
+  // request; every other committed change is authoritative URL state that
+  // resynchronizes the draft and cancels unsent edits (BR-UI-01).
+  // Step 1: User typed "N" (dispatched), then typed "Ng" (not dispatched yet).
+  // Step 2: Delayed acknowledgment of the toolbar's own "N" arrives.
+  const delayedCommit1 = computeToolbarDraftOnPropChange('Ng', 'N', '', 'N');
+  // Negative test: own delayed acknowledgment must NEVER overwrite newer draft "Ng"
   assert.strictEqual(
     delayedCommit1.nextDraft,
     'Ng',
-    'Negative test: delayed commit of "N" must NOT overwrite newer user draft "Ng"'
+    'Negative test: delayed own acknowledgment of "N" must NOT overwrite newer user draft "Ng"'
   );
   assert.strictEqual(
-    delayedCommit1.wasIgnoredDueToPendingEdits,
-    true,
-    'Delayed older edit must be ignored from overwriting active draft'
+    delayedCommit1.shouldCancelDebounce,
+    false,
+    'Own acknowledgment must not cancel the still-unsent "Ng" debounce'
   );
-  assert.deepStrictEqual(
-    delayedCommit1.nextPendingEdits,
-    ['Ng'],
-    'Delayed "N" acknowledgment must slice pending list to remaining newer edits ["Ng"]'
+  assert.strictEqual(
+    delayedCommit1.nextPrevSearchValue,
+    'N',
+    'Own acknowledgment advances the committed baseline'
   );
 
-  // Update states with result of first commit
-  currentPropSearch = delayedCommit1.nextPrevSearchValue;
-  pendingEditsList = delayedCommit1.nextPendingEdits;
-
-  // Step 4: Final commit of "Ng" arrives matching latest draft
-  const delayedCommit2 = computeToolbarDraftOnPropChange(
-    typingDraft,
-    'Ng',
-    currentPropSearch,
-    pendingEditsList,
-    false
-  );
+  // Step 3: Final commit of "Ng" arrives matching the last dispatched value
+  const delayedCommit2 = computeToolbarDraftOnPropChange('Ng', 'Ng', 'N', 'Ng');
   assert.strictEqual(
     delayedCommit2.nextDraft,
     'Ng',
     'Final commit "Ng" must synchronize draft with committed value'
   );
   assert.strictEqual(
-    delayedCommit2.wasIgnoredDueToPendingEdits,
+    delayedCommit2.shouldCancelDebounce,
     false,
-    'Latest edit acknowledgment must not be ignored'
-  );
-  assert.deepStrictEqual(
-    delayedCommit2.nextPendingEdits,
-    [],
-    'All pending local edits must be acknowledged and cleared'
+    'Latest edit acknowledgment must not be treated as authoritative'
   );
 
-  // Step 5: External value change (e.g. user clicks Reset button, which pushes
-  // a new URL rather than firing a history popstate)
-  const externalNav = computeToolbarDraftOnPropChange('Ng', '', 'Ng', [], false);
+  // Step 4: External value change (e.g. external Link navigation clears search)
+  // — the committed URL diverges from the toolbar's own last dispatched value.
+  const externalNav = computeToolbarDraftOnPropChange('Ng', '', 'Ng', 'Ng');
   assert.strictEqual(
     externalNav.nextDraft,
     '',
     'External value change must reset/synchronize input draft'
   );
   assert.strictEqual(
-    externalNav.wasIgnoredDueToPendingEdits,
-    false,
-    'External value change must take precedence and not be ignored'
+    externalNav.shouldCancelDebounce,
+    true,
+    'Authoritative URL change must cancel unsent debounced search'
   );
 
-  // Negative test: No-op prop changes (incoming === prev) must not mutate draft or pending edits
-  const noopProp = computeToolbarDraftOnPropChange('TestDraft', 'Ng', 'Ng', ['Pending1'], false);
+  // Negative test: No-op prop changes (incoming === prev) must not mutate draft
+  const noopProp = computeToolbarDraftOnPropChange('TestDraft', 'Ng', 'Ng', 'N');
   assert.strictEqual(noopProp.nextDraft, 'TestDraft', 'No-op prop change must preserve draft');
-  assert.deepStrictEqual(
-    noopProp.nextPendingEdits,
-    ['Pending1'],
-    'No-op must preserve pending edits'
+  assert.strictEqual(
+    noopProp.shouldCancelDebounce,
+    false,
+    'No-op must not cancel a pending debounce'
   );
 
-  // Review item 3: browser Back/Forward must be distinguished from edit
-  // acknowledgments. Collision scenario: draft "Ngu", committed "N", pending
-  // edits ["Ng","Ngu"]; browser Back lands on an EXISTING "Ng" history entry.
-  // The incoming "Ng" matches an older pending edit but is NOT its
-  // acknowledgment — it is navigation, so the draft must resync to the URL.
-  const navCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', ['Ng', 'Ngu'], true);
+  // Review item 3 / repair Finding 2: browser Back lands on an EXISTING "Ng"
+  // history entry while both "Ng" and "Ngu" were dispatched (last dispatched
+  // "Ngu"). The incoming "Ng" is NOT the acknowledgment of the newest dispatch
+  // — it is authoritative navigation, so the draft must resync to the URL.
+  const navCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', 'Ngu');
   assert.strictEqual(
     navCollision.nextDraft,
     'Ng',
     'Review item 3: Back to an existing "Ng" entry must resynchronize draft to the URL value'
   );
-  assert.deepStrictEqual(
-    navCollision.nextPendingEdits,
-    [],
-    'Review item 3: navigation must discard pending edit tracking'
-  );
   assert.strictEqual(
-    navCollision.wasIgnoredDueToPendingEdits,
-    false,
-    'Review item 3: navigation must not be reported as an ignored pending edit'
+    navCollision.shouldCancelDebounce,
+    true,
+    'Review item 3: authoritative navigation must cancel unsent edits'
   );
 
-  // Negative control: the SAME incoming value arriving as an ordered
-  // acknowledgment (no navigation) must preserve the newer "Ngu" draft.
-  const ackCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', ['Ng', 'Ngu'], false);
+  // Negative control: the SAME incoming "Ng" arriving as acknowledgment of the
+  // toolbar's own last dispatch "Ng" (unsent newer draft "Ngu") must preserve
+  // the newer draft and keep the timer alive.
+  const ackCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', 'Ng');
   assert.strictEqual(
     ackCollision.nextDraft,
     'Ngu',
-    'Review item 3 negative control: ordered acknowledgment must NOT be mistaken for navigation'
-  );
-  assert.deepStrictEqual(
-    ackCollision.nextPendingEdits,
-    ['Ngu'],
-    'Review item 3 negative control: newer pending edits must remain tracked'
+    'Review item 3 negative control: own acknowledgment must NOT be mistaken for navigation'
   );
   assert.strictEqual(
-    ackCollision.wasIgnoredDueToPendingEdits,
-    true,
-    'Review item 3 negative control: stale acknowledgment must be reported as ignored'
+    ackCollision.shouldCancelDebounce,
+    false,
+    'Review item 3 negative control: own acknowledgment keeps the pending debounce'
   );
 
-  // Negative test: navigation must resync even when the committed search value
-  // is unchanged (epoch advanced, value identical, e.g. Back to same search on
-  // a different page) — the pending draft must not survive navigation.
-  const navSameValue = computeToolbarDraftOnPropChange('Ngu', 'N', 'N', ['Ng', 'Ngu'], true);
-  assert.strictEqual(
-    navSameValue.nextDraft,
-    'N',
-    'Review item 3: navigation with unchanged search value must still resync draft to URL'
-  );
-  assert.deepStrictEqual(
-    navSameValue.nextPendingEdits,
-    [],
-    'Review item 3: navigation with unchanged search value must clear pending edits'
-  );
-
-  // Negative test: navigation to a value never typed locally must resync draft.
-  const navForeign = computeToolbarDraftOnPropChange('Ngu', 'XYZ', 'N', ['Ng', 'Ngu'], true);
+  // Navigation to a value never typed locally must resync draft.
+  const navForeign = computeToolbarDraftOnPropChange('Ngu', 'XYZ', 'N', 'Ngu');
   assert.strictEqual(
     navForeign.nextDraft,
     'XYZ',
     'Review item 3: navigation to a foreign value must resync draft to the URL value'
   );
-  assert.deepStrictEqual(
-    navForeign.nextPendingEdits,
-    [],
-    'Review item 3: foreign nav clears pending'
-  );
+  assert.strictEqual(navForeign.shouldCancelDebounce, true, 'Foreign nav cancels unsent edits');
 
   // ---------------------------------------------------------------------------
   // Faceted Filter Optimistic Selection Accumulation (Review 5 Finding 4 P1)
@@ -2732,8 +2678,7 @@ async function runTestSuite() {
     draftBeforeReset,
     committedBeforeReset, // 'GHN' is still in-flight/held from parent
     committedBeforeReset, // prev is 'GHN'
-    [],
-    false, // not history
+    committedBeforeReset, // last dispatched is 'GHN'
     true // resetEvent!
   );
 
@@ -2742,10 +2687,15 @@ async function runTestSuite() {
     '',
     'Finding 11: resetEvent must immediately clear search draft to empty string'
   );
-  assert.deepStrictEqual(
-    resetEpochChangeResult.nextPendingEdits,
-    [''],
-    'Finding 11: resetEvent must track empty string in pending edits while navigation is in-flight'
+  assert.strictEqual(
+    resetEpochChangeResult.shouldCancelDebounce,
+    true,
+    'Finding 11: resetEvent must cancel unsent debounced search'
+  );
+  assert.strictEqual(
+    resetEpochChangeResult.nextPrevSearchValue,
+    'GHN',
+    'Finding 11: resetEvent with still-held old search retains prev so the cleared commit is not mistaken'
   );
 
   // Negative test: verify that without resetEvent handling, the old implementation would have restored 'GHN'
@@ -2753,8 +2703,7 @@ async function runTestSuite() {
     draftBeforeReset,
     committedBeforeReset,
     committedBeforeReset,
-    [],
-    false,
+    committedBeforeReset,
     false // without resetEvent
   );
   assert.strictEqual(
@@ -2764,12 +2713,12 @@ async function runTestSuite() {
   );
 
   // Subsequent re-render while reset navigation is still in-flight
+  // (the reset's target '' became the last intent once applied)
   const subsequentHeldRenderResult = computeToolbarDraftOnPropChange(
     resetEpochChangeResult.nextDraft, // ''
     committedBeforeReset, // 'GHN' still held
     resetEpochChangeResult.nextPrevSearchValue, // 'GHN'
-    resetEpochChangeResult.nextPendingEdits, // ['']
-    false,
+    '', // reset target '' is now the toolbar's last intent
     false
   );
   assert.strictEqual(
@@ -2778,13 +2727,13 @@ async function runTestSuite() {
     'Finding 11: draft must stably remain empty while reset navigation is held in-flight'
   );
 
-  // When reset navigation finally commits, incoming becomes ''
+  // When reset navigation finally commits, incoming becomes '' — acknowledgment
+  // of the reset's own empty target
   const committedResetResult = computeToolbarDraftOnPropChange(
     '',
     '', // committed URL search param is now ''
     'GHN', // prev was 'GHN'
-    [''], // pending edit ['']
-    false,
+    '', // reset already dispatched the empty target
     false
   );
   assert.strictEqual(
@@ -2792,10 +2741,10 @@ async function runTestSuite() {
     '',
     'Finding 11: committed reset aligns draft with empty string'
   );
-  assert.deepStrictEqual(
-    committedResetResult.nextPendingEdits,
-    [],
-    'Finding 11: acknowledged reset clears pending edits queue'
+  assert.strictEqual(
+    committedResetResult.shouldCancelDebounce,
+    false,
+    'Finding 11: acknowledgment of the reset target must not be reported as authoritative'
   );
 
   // 13.11 Round 10 Finding 8 P2: Column header sorting menu portalled and not clipped
@@ -3132,25 +3081,31 @@ async function runTestSuite() {
     `Round 12 P1: a later edit must compose from the externally selected search, not the cancelled newer draft (got: ${afterExternal})`
   );
   assert.strictEqual(afterExternalParams.get('status'), 'FAILED');
-  const toolbarAfterExternal = computeToolbarDraftOnPropChange('Ng', 'N', '', ['N', 'Ng'], true);
+  const toolbarAfterExternal = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng');
   assert.strictEqual(
     toolbarAfterExternal.nextDraft,
     'N',
     'Round 12 P1: toolbar must drop the newer draft when the navigation is external'
   );
-  assert.deepStrictEqual(toolbarAfterExternal.nextPendingEdits, []);
-
-  // Negative proof: without the navigationEvent signal, the toolbar mistakenly treats the older URL as an acknowledgment of an in-flight edit
-  const toolbarMistaken = computeToolbarDraftOnPropChange('Ng', 'N', '', ['N', 'Ng'], false);
   assert.strictEqual(
-    toolbarMistaken.nextDraft,
-    'Ng',
-    'Round 12/13 P1 negative proof: without navigationEvent signal, toolbar mistakenly keeps newer draft'
+    toolbarAfterExternal.shouldCancelDebounce,
+    true,
+    'Round 12 P1: external navigation must cancel unsent debounced edits'
+  );
+
+  // Negative proof: an acknowledgment of the toolbar's OWN last dispatched
+  // value must never be mistaken for external navigation — it keeps the
+  // newer unsent draft and its debounce timer.
+  const toolbarOwnAckKeepsNewerDraft = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'N');
+  assert.strictEqual(
+    toolbarOwnAckKeepsNewerDraft.nextDraft,
+    'Ngu',
+    'Round 12/13 P1 negative proof: own acknowledgment must not overwrite a newer unsent draft'
   );
   assert.strictEqual(
-    toolbarMistaken.wasIgnoredDueToPendingEdits,
-    true,
-    'Round 12/13 P1 negative proof: toolbar treats older URL as pending edit acknowledgment instead of external navigation'
+    toolbarOwnAckKeepsNewerDraft.shouldCancelDebounce,
+    false,
+    'Round 12/13 P1 negative proof: own acknowledgment must not cancel the pending debounce'
   );
 
   // 14.3 P2: reset -> newer facet selection -> empty reset acknowledgment
@@ -3310,27 +3265,32 @@ async function runTestSuite() {
     'N',
     'Round 14 Finding 4 P1: Table searchValue must follow committed URL search=N'
   );
-  // Toolbar receiving the new committed search value clears draft and aligns with incoming 'N'
+  // Toolbar's last dispatched value is 'Ng'; the committed 'N' cannot be its
+  // own request acknowledgment, so the draft aligns with incoming 'N'
   const round14Toolbar = computeToolbarDraftOnPropChange(
     'Ng',
     round14Hook.current.searchValue,
     '',
-    ['N', 'Ng'],
-    true
+    'Ng'
   );
   assert.strictEqual(
     round14Toolbar.nextDraft,
     'N',
     'Round 14 Finding 4 P1: Toolbar must drop the newer draft when navigation is external'
   );
-  assert.deepStrictEqual(round14Toolbar.nextPendingEdits, []);
+  assert.strictEqual(
+    round14Toolbar.shouldCancelDebounce,
+    true,
+    'Round 14 Finding 4 P1: external navigation cancels unsent debounced edits'
+  );
 
-  // Negative proof: without external navigation signal, toolbar mistakenly keeps 'Ng'
-  const round14ToolbarMistaken = computeToolbarDraftOnPropChange('Ng', 'N', '', ['N', 'Ng'], false);
+  // Negative proof: an acknowledgment of the toolbar's own last dispatch 'N'
+  // keeps a newer unsent draft 'Ngu'
+  const round14ToolbarMistaken = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'N');
   assert.strictEqual(
     round14ToolbarMistaken.nextDraft,
-    'Ng',
-    'Round 14 Finding 4 P1 negative proof: without navigation signal, toolbar mistakenly retains draft'
+    'Ngu',
+    'Round 14 Finding 4 P1 negative proof: own acknowledgment keeps newer unsent draft'
   );
 
   // 15.2 Phase 1(h) Finding 8 (NEW P1): History navigation resets cancelled facet selections
@@ -3502,35 +3462,28 @@ async function runTestSuite() {
   // 16. Round 37 Review Findings (P1 & P2 CI Failures Resolution)
   console.log('🧪 16. Testing Round 37 Review Findings...');
 
-  // 16.1 Finding 1 (P1): External Next.js navigation commit resets toolbar draft via historyEpoch signal
-  const toolbarDraftBeforeExternalNav = computeToolbarDraftOnPropChange(
-    'Ng',
-    'N',
-    '',
-    ['Ng'],
-    true, // navigationEvent = true triggered by historyEpoch bump on cancelled edit commit
-    false
-  );
+  // 16.1 Finding 1 (P1): External Next.js navigation commit resets toolbar draft.
+  // The toolbar last dispatched 'Ng', so a commit of 'N' can only be an
+  // external navigation — the draft must resync to the URL.
+  const toolbarDraftBeforeExternalNav = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng', false);
   assert.strictEqual(
     toolbarDraftBeforeExternalNav.nextDraft,
     'N',
     'Round 37 Finding 1 P1: External Link navigation commit resets draft from Ng to N'
   );
-  assert.deepStrictEqual(toolbarDraftBeforeExternalNav.nextPendingEdits, []);
-
-  // Negative test: without navigationEvent, toolbar treats 'N' as older acknowledgment or pending mismatch and retains 'Ng'
-  const toolbarDraftNegative = computeToolbarDraftOnPropChange(
-    'Ng',
-    'N',
-    '',
-    ['N', 'Ng'],
-    false, // missing navigationEvent
-    false
+  assert.strictEqual(
+    toolbarDraftBeforeExternalNav.shouldCancelDebounce,
+    true,
+    'Round 37 Finding 1 P1: external commit cancels unsent debounced edits'
   );
+
+  // Negative test: commit of the toolbar's own last dispatched 'N' is an
+  // acknowledgment of its own request and must keep the newer draft 'Ngu'
+  const toolbarDraftNegative = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'N', false);
   assert.strictEqual(
     toolbarDraftNegative.nextDraft,
-    'Ng',
-    'Round 37 Finding 1 P1 negative proof: without navigation event signal, toolbar retains newer draft Ng'
+    'Ngu',
+    'Round 37 Finding 1 P1 negative proof: own acknowledgment retains newer draft'
   );
 
   // 16.2 Finding 1 (P2): Real router acknowledgment (historyEvent=false) preserves facet selection after reset
@@ -3737,8 +3690,338 @@ async function runTestSuite() {
   assert.strictEqual(debounceCalls.length, 2, '(4) Clear updates search immediately');
   assert.strictEqual(debounceCalls[1], '', '(4) Clear resets search to empty');
 
+  // ---------------------------------------------------------------------------
+  // 19. ROUND 39 REVIEW FINDINGS 1–4 (P1): pending composition & debounce cancelation
+  // ---------------------------------------------------------------------------
+  console.log('🧪 19. Testing Round 39 Review Findings 1–4 (P1)...');
+
+  // 19.1 Finding 1 (P1): pending facet edits compose before commit
+  {
+    const composedNavigations: string[] = [];
+    const composeHook = renderMountedDataTableHook({
+      contextSearchParams: new URLSearchParams('per_page=5'),
+      // Navigation held: committed params never change until released.
+      onNavigate: (url: string) => {
+        composedNavigations.push(url);
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        { id: 'status', title: 'Trạng thái', options: [] },
+        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
+      ],
+      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    });
+
+    composeHook.current.setFilter('status', ['FAILED']);
+    composeHook.current.setFilter('carrier', ['GHN']);
+    composeHook.current.setSearch('Ng');
+    assert.strictEqual(composedNavigations.length, 3, 'Three held navigations recorded');
+
+    const firstRequest = new URLSearchParams(composedNavigations[0].split('?')[1] ?? '');
+    assert.strictEqual(firstRequest.get('status'), 'FAILED');
+
+    const secondRequest = new URLSearchParams(composedNavigations[1].split('?')[1] ?? '');
+    assert.strictEqual(
+      secondRequest.get('carrier'),
+      'GHN',
+      'pending facet edits compose before commit: carrier selection applied'
+    );
+    assert.strictEqual(
+      secondRequest.get('status'),
+      'FAILED',
+      'pending facet edits compose before commit: earlier pending status=FAILED retained'
+    );
+
+    const thirdRequest = new URLSearchParams(composedNavigations[2].split('?')[1] ?? '');
+    assert.strictEqual(thirdRequest.get('search'), 'Ng');
+    assert.strictEqual(
+      thirdRequest.get('status'),
+      'FAILED',
+      'A third edit preserves the first pending intent'
+    );
+    assert.strictEqual(
+      thirdRequest.get('carrier'),
+      'GHN',
+      'A third edit preserves the second pending intent (settled URL contains both)'
+    );
+
+    // Once a composed target commits (acknowledgment), later edits compose
+    // from the committed URL unchanged.
+    composeHook.rerender({
+      contextSearchParams: new URLSearchParams(composedNavigations[2].split('?')[1] ?? ''),
+    });
+    composeHook.current.setPagination(2);
+    const settledRequest = new URLSearchParams(
+      composedNavigations[3].split('?')[1] ?? composedNavigations[3]
+    );
+    assert.strictEqual(settledRequest.get('page'), '2');
+    assert.strictEqual(settledRequest.get('status'), 'FAILED');
+    assert.strictEqual(settledRequest.get('carrier'), 'GHN');
+    assert.strictEqual(settledRequest.get('search'), 'Ng');
+    console.log('   ✅ Finding 1 (P1): pending facet edits compose before commit');
+  }
+
+  // Mounted DataTableToolbar harness: real component function driven by the
+  // same fake dispatcher used for hooks, with a rerender loop so drafts,
+  // debounce timers and prop-change synchronization behave like the live page.
+  function renderMountedDataTableToolbar(initialProps: any) {
+    let toolbarProps = { ...initialProps };
+    let toolbarElement: any = null;
+
+    const states: any[] = [];
+    const refs: any[] = [];
+    const effects: { fn: () => any; deps: any[] | undefined }[] = [];
+
+    let stateIdx = 0;
+    let refIdx = 0;
+    let effectIdx = 0;
+
+    const dispatcher = {
+      useState(initialValue: any) {
+        const idx = stateIdx++;
+        if (idx >= states.length) {
+          states.push(typeof initialValue === 'function' ? initialValue() : initialValue);
+        }
+        const setState = (action: any) => {
+          states[idx] = typeof action === 'function' ? action(states[idx]) : action;
+          runRender();
+        };
+        return [states[idx], setState];
+      },
+      useRef(initialValue: any) {
+        const idx = refIdx++;
+        if (idx >= refs.length) {
+          refs.push({ current: initialValue });
+        }
+        return refs[idx];
+      },
+      useEffect(fn: () => any, deps: any[] | undefined) {
+        const idx = effectIdx++;
+        if (idx >= effects.length) {
+          effects.push({ fn, deps });
+          fn();
+        } else {
+          const prev = effects[idx];
+          let changed = !deps || !prev.deps || deps.length !== prev.deps.length;
+          if (!changed && deps && prev.deps) {
+            for (let i = 0; i < deps.length; i++) {
+              if (!Object.is(deps[i], prev.deps[i])) {
+                changed = true;
+                break;
+              }
+            }
+          }
+          if (changed) {
+            prev.fn = fn;
+            prev.deps = deps;
+            fn();
+          }
+        }
+      },
+    };
+
+    let isRendering = false;
+    let needsRerender = false;
+
+    function runRender() {
+      if (isRendering) {
+        needsRerender = true;
+        return;
+      }
+      isRendering = true;
+      try {
+        do {
+          needsRerender = false;
+          stateIdx = 0;
+          refIdx = 0;
+          effectIdx = 0;
+          const prevDispatcher = ReactSharedInternals.H;
+          ReactSharedInternals.H = dispatcher;
+          try {
+            toolbarElement = DataTableToolbar(toolbarProps);
+          } finally {
+            ReactSharedInternals.H = prevDispatcher;
+          }
+        } while (needsRerender);
+      } finally {
+        isRendering = false;
+      }
+    }
+
+    function findRenderedProps(
+      el: any,
+      propName: string,
+      matches: (props: any) => boolean
+    ): any | null {
+      if (!el || typeof el !== 'object') return null;
+      const nodes = Array.isArray(el) ? el : [el];
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const props = (node as any).props;
+        if (!props) continue;
+        if (props[propName] && matches(props)) return props;
+        const nested = findRenderedProps(props.children, propName, matches);
+        if (nested) return nested;
+      }
+      return null;
+    }
+
+    const searchInputProps = () =>
+      findRenderedProps(toolbarElement, 'onChange', (p) => p.type === 'text');
+    const clearButtonProps = () =>
+      findRenderedProps(
+        toolbarElement,
+        'onClick',
+        (p) => p['aria-label'] === 'Xóa nội dung tìm kiếm'
+      );
+
+    runRender();
+
+    return {
+      rerender(newProps?: any) {
+        if (newProps) {
+          toolbarProps = { ...toolbarProps, ...newProps };
+        }
+        runRender();
+      },
+      type(value: string) {
+        const props = searchInputProps();
+        assert.ok(props, 'Toolbar must render the search input');
+        props.onChange({ target: { value } });
+      },
+      inputValue(): string {
+        return searchInputProps().value;
+      },
+      clickClear() {
+        const props = clearButtonProps();
+        assert.ok(props, 'Toolbar must render the clear search button');
+        props.onClick();
+      },
+    };
+  }
+
+  const waitMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  // 19.2 Finding 2 (P1): external Link cancels pending search draft
+  {
+    const dispatches: string[] = [];
+    const toolbar = renderMountedDataTableToolbar({
+      searchValue: '',
+      onSearchChange: (val: string) => dispatches.push(val),
+      debounceMs: 10,
+    });
+    toolbar.type('N');
+    await waitMs(30);
+    toolbar.type('Ng');
+    await waitMs(30);
+    assert.deepStrictEqual(dispatches, ['N', 'Ng'], 'Both held search edits dispatched');
+    assert.strictEqual(toolbar.inputValue(), 'Ng');
+
+    // External Link navigation commits the older "?search=N" URL.
+    toolbar.rerender({ searchValue: 'N' });
+    assert.strictEqual(
+      toolbar.inputValue(),
+      'N',
+      'external Link cancels pending search draft: textbox resyncs to the committed URL'
+    );
+
+    // Negative control: a commit of the toolbar's OWN last dispatched value
+    // must not overwrite a newer unsent draft nor cancel its debounce.
+    const ownAckDispatches: string[] = [];
+    const ownAckToolbar = renderMountedDataTableToolbar({
+      searchValue: '',
+      onSearchChange: (val: string) => ownAckDispatches.push(val),
+      debounceMs: 60,
+    });
+    ownAckToolbar.type('N');
+    await waitMs(90); // 'N' dispatched; now type newer unsent text
+    ownAckToolbar.type('Ngu');
+    ownAckToolbar.rerender({ searchValue: 'N' }); // delayed ack of the toolbar's own request
+    assert.strictEqual(
+      ownAckToolbar.inputValue(),
+      'Ngu',
+      'Negative control: own acknowledgment preserves the newer unsent draft'
+    );
+    await waitMs(90);
+    assert.deepStrictEqual(
+      ownAckDispatches,
+      ['N', 'Ngu'],
+      'Negative control: own acknowledgment must not cancel the pending debounce'
+    );
+
+    // Round 40 Finding 2 (P1): the external Link to "?search=N" does not
+    // cancel the toolbar's in-flight "Ng" request; that request commits AFTER
+    // the Link. The stale "Ng" commit must NOT be treated as an older
+    // acknowledgment — the URL the user selected ("N") is authoritative.
+    const raceDispatches: string[] = [];
+    const round40 = renderMountedDataTableToolbar({
+      searchValue: '',
+      onSearchChange: (val: string) => raceDispatches.push(val),
+      debounceMs: 10,
+    });
+    round40.type('N');
+    await waitMs(30);
+    round40.type('Ng');
+    await waitMs(30);
+    assert.deepStrictEqual(raceDispatches, ['N', 'Ng'], 'Both held search edits dispatched');
+    round40.rerender({ searchValue: 'N' }); // external Link commits ?search=N
+    assert.strictEqual(round40.inputValue(), 'N', 'External Link commit restores "N"');
+    round40.rerender({ searchValue: 'Ng' }); // the older "Ng" request lands afterwards
+    assert.strictEqual(
+      round40.inputValue(),
+      'N',
+      'external Link cancels pending search draft: a late commit of the cancelled "Ng" request must not restore it'
+    );
+    console.log('   ✅ Finding 2 (P1): external Link cancels pending search draft');
+  }
+
+  // 19.3 Finding 3 (P1): clear cancels debounce across callback replacement
+  {
+    const emissions: string[] = [];
+    const toolbar = renderMountedDataTableToolbar({
+      searchValue: '',
+      onSearchChange: (val: string) => emissions.push(`first:${val}`),
+      debounceMs: 40,
+    });
+    toolbar.type('An'); // schedules debounced 'An'
+    // Parent rerender (e.g. loading simulator toggle) supplies a new callback.
+    toolbar.rerender({ onSearchChange: (val: string) => emissions.push(`second:${val}`) });
+    toolbar.clickClear();
+    await waitMs(90);
+    assert.ok(
+      !emissions.some((e) => e.endsWith(':An')),
+      `clear cancels debounce across callback replacement: abandoned timer must not resend "An" (emissions: ${JSON.stringify(emissions)})`
+    );
+    assert.deepStrictEqual(
+      emissions,
+      ['second:'],
+      'Only the immediate empty clear is emitted, through the current callback'
+    );
+    console.log('   ✅ Finding 3 (P1): clear cancels debounce across callback replacement');
+  }
+
+  // 19.4 Finding 4 (P1): Back cancels unsent debounced search
+  {
+    const emissions: string[] = [];
+    const stableCallback = (val: string) => emissions.push(val);
+    const toolbar = renderMountedDataTableToolbar({
+      searchValue: 'N',
+      onSearchChange: stableCallback,
+      debounceMs: 40,
+    });
+    toolbar.type('Ng'); // unsent debounce pending
+    toolbar.rerender({ searchValue: '' }); // Back restores empty committed search
+    assert.strictEqual(toolbar.inputValue(), '', 'Back restores the committed empty search');
+    await waitMs(90);
+    assert.ok(
+      !emissions.includes('Ng'),
+      'Back cancels unsent debounced search: the abandoned timer must not override Back'
+    );
+    console.log('   ✅ Finding 4 (P1): Back cancels unsent debounced search');
+  }
+
   console.log(
-    '   ✅ Round 6, 8, 9, 10, 11, 12, 14, 37 & 38 review findings proven and verified with unit test suites'
+    '   ✅ Round 6, 8, 9, 10, 11, 12, 14, 37, 38 & 39 review findings proven and verified with unit test suites'
   );
 
   console.log('\n================================================================');

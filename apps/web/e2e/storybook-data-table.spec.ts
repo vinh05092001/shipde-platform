@@ -560,6 +560,71 @@ test('review 12 P1: external same-page navigation to an older pending search can
   }
 });
 
+test('pending facet edits compose before commit', async ({ page }) => {
+  // Round 39 Finding 1 P1: select status=FAILED, then carrier=GHN while the
+  // first navigation is still held. The carrier request — and the settled
+  // URL — must contain BOTH parameters (BR-UI-01, AC-AI-155-07).
+  await page.goto('/storybook');
+  const held = await holdTableNavigation(page);
+  try {
+    await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
+    await page.getByRole('option', { name: /Giao thất bại/ }).click();
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'FAILED'))
+      .toBe(true);
+    await page.getByRole('button', { name: /^Bộ lọc Hãng vận chuyển:/ }).click();
+    await page.getByRole('option', { name: /GHN/ }).click();
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('carrier') === 'GHN'))
+      .toBe(true);
+    const carrierRequest = held.requests.find((url) => url.searchParams.get('carrier') === 'GHN')!;
+    expect(carrierRequest.searchParams.get('status')).toBe('FAILED');
+  } finally {
+    await held.finish();
+  }
+  await page.waitForURL(
+    (url) =>
+      url.searchParams.get('status') === 'FAILED' && url.searchParams.get('carrier') === 'GHN'
+  );
+  await expect(page.getByRole('button', { name: 'Bộ lọc Trạng thái: 1 đã chọn' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Bộ lọc Hãng vận chuyển: 1 đã chọn' })
+  ).toBeVisible();
+});
+
+test('external Link cancels pending search draft', async ({ page }) => {
+  // Round 39 Finding 2 P1: hold searches "N" then "Ng" (both dispatched), then
+  // commit the external Link navigation to ?search=N. The textbox AND the
+  // settled URL must show "N" — the newer "Ng" draft is cancelled intent.
+  await page.goto('/storybook');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toBeVisible();
+
+  const held = await holdTableNavigation(page);
+  try {
+    await search.fill('N');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'N'))
+      .toBe(true);
+    await search.fill('Ng');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'Ng'))
+      .toBe(true);
+    await expect(search).toHaveValue('Ng');
+
+    const requestsBeforeLink = held.requests.length;
+    await page.getByRole('link', { name: 'Mô phỏng điều hướng ngoài: search=N' }).click();
+    await expect.poll(() => held.requests.length).toBeGreaterThan(requestsBeforeLink);
+    held.releaseLatest();
+    held.releaseOne((url) => url.searchParams.get('search') === 'N');
+    await expect(search).toHaveValue('N');
+  } finally {
+    await held.finish();
+  }
+  await expect(search).toHaveValue(/N/);
+  await expect.poll(() => new URL(page.url()).searchParams.get('search')).toMatch(/^N/);
+});
+
 test('review 12 P2: a facet selected after reset survives the empty reset acknowledgment', async ({
   page,
 }) => {

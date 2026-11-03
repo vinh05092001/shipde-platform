@@ -42,24 +42,24 @@ export interface DataTableToolbarProps {
   onResetFilters?: () => void;
   className?: string;
   debounceMs?: number;
-  // useDataTable historyEpoch: optional for backwards compatibility
-  historyEpoch?: number;
   // useDataTable resetEpoch: increments on explicit filter resets.
   resetEpoch?: number;
 }
 
 /**
- * Computes the synchronized draft for the search input when external/committed
- * searchValue prop changes (Finding 5).
- * Distinguishes acknowledgments of older local edits from external navigation.
+ * Computes the synchronized draft for the search input when the committed
+ * searchValue prop changes or an explicit filter reset occurs.
  *
- * Review item 3: `navigationEvent` marks changes driven by a real browser
- * history navigation (Back/Forward popstate, surfaced as useDataTable
- * `historyEpoch`). Such a change is NEVER an acknowledgment of a pending
- * local edit, even when the incoming value happens to match an older pending
- * edit (e.g. draft "Ngu", committed "N", pending ["Ng","Ngu"] and Back to an
- * existing "Ng" entry): the draft resynchronizes to the URL value and the
- * pending edit tracking is discarded.
+ * BR-UI-01: the committed URL is the single source of truth; the local draft
+ * is only the debounced input text. The ONLY change that may be treated as a
+ * mere acknowledgment of this toolbar's own request is one matching
+ * `lastSentSearch` — the last value the toolbar itself dispatched to the
+ * router — and that is not an already-cancelled request (`staleSearchValue`).
+ * Every other committed change (external Link navigation, Back/Forward, or a
+ * commit superseded by newer local typing) is authoritative: the draft
+ * resynchronizes to the URL value and any unsent debounced search is
+ * cancelled, so it can never override the navigation (Round 39 findings 2 and
+ * 4, Round 40 finding 2).
  *
  * Finding 4 P1: `resetEvent` marks changes driven by an explicit filter reset.
  */
@@ -67,40 +67,42 @@ export function computeToolbarDraftOnPropChange(
   currentDraft: string,
   incomingSearchValue: string | undefined | null,
   prevSearchValue: string | undefined | null,
-  pendingEdits: string[],
-  navigationEvent = false,
-  resetEvent = false
+  lastSentSearch: string | undefined | null,
+  resetEvent = false,
+  staleSearchValue: string | undefined | null = undefined
 ): {
   nextDraft: string;
   nextPrevSearchValue: string;
-  nextPendingEdits: string[];
-  wasIgnoredDueToPendingEdits: boolean;
+  shouldCancelDebounce: boolean;
 } {
   const incoming = incomingSearchValue || '';
   const prev = prevSearchValue || '';
+  const lastSent = lastSentSearch || '';
 
-  if (resetEvent) {
-    // Explicit filter reset: apply the reset's target value ('') immediately.
-    // If incoming still contains the old committed search text, retain prev
-    // and enqueue '' as a pending edit so that delayed reset navigation
-    // does not repopulate the old search text while in-flight (Finding 11 P2).
-    const isOldSearchPendingClear = incoming !== '';
+  // A commit of a request that was already cancelled by a newer authoritative
+  // navigation (e.g. the external Link committed "N", then the older "Ng"
+  // request lands). The URL did not move to that value now, so it is not an
+  // acknowledgment: ignore it and keep the displayed value (Round 40 finding
+  // 2). A committed URL that moved to a value never dispatched is still a
+  // foreign external navigation and is handled below.
+  const stale = staleSearchValue || '';
+  if (stale !== '' && incoming !== prev && incoming === stale) {
     return {
-      nextDraft: '',
-      nextPrevSearchValue: isOldSearchPendingClear ? prev : '',
-      nextPendingEdits: isOldSearchPendingClear ? [''] : [],
-      wasIgnoredDueToPendingEdits: false,
+      nextDraft: prev || currentDraft,
+      nextPrevSearchValue: incoming,
+      shouldCancelDebounce: false,
     };
   }
 
-  if (navigationEvent) {
-    // Explicit browser/history navigation: resynchronize draft to incoming URL value
-    // and drop pending edit tracking. Never treat as an acknowledgment.
+  if (resetEvent) {
+    // Explicit filter reset: apply the reset's target value ('') immediately.
+    // If incoming still contains the old committed search text, retain prev so
+    // the delayed cleared commit is recognized as the reset's own target and
+    // does not repopulate the old search text while in-flight (Finding 11 P2).
     return {
-      nextDraft: incoming,
-      nextPrevSearchValue: incoming,
-      nextPendingEdits: [],
-      wasIgnoredDueToPendingEdits: false,
+      nextDraft: '',
+      nextPrevSearchValue: incoming !== '' ? prev : '',
+      shouldCancelDebounce: true,
     };
   }
 
@@ -108,40 +110,30 @@ export function computeToolbarDraftOnPropChange(
     return {
       nextDraft: currentDraft,
       nextPrevSearchValue: prev,
-      nextPendingEdits: pendingEdits,
-      wasIgnoredDueToPendingEdits: false,
+      shouldCancelDebounce: false,
     };
   }
 
-  const pendingIdx = pendingEdits.indexOf(incoming);
-  if (pendingIdx !== -1) {
-    const nextPending = pendingEdits.slice(pendingIdx + 1);
-    if (nextPending.length === 0) {
-      // All pending local edits are acknowledged; align draft with incoming
-      return {
-        nextDraft: incoming,
-        nextPrevSearchValue: incoming,
-        nextPendingEdits: nextPending,
-        wasIgnoredDueToPendingEdits: false,
-      };
-    } else {
-      // User typed newer edits, ignore older acknowledgment to avoid overwriting newer draft
-      return {
-        nextDraft: currentDraft,
-        nextPrevSearchValue: incoming,
-        nextPendingEdits: nextPending,
-        wasIgnoredDueToPendingEdits: true,
-      };
-    }
-  } else {
-    // External navigation: reset draft and clear pending edits
+  if (incoming === lastSent) {
+    // Acknowledgment of this toolbar's own latest dispatched request: keep the
+    // draft (the user may have typed newer text while the request was in
+    // flight) and keep its debounce timer alive.
     return {
-      nextDraft: incoming,
+      nextDraft: currentDraft,
       nextPrevSearchValue: incoming,
-      nextPendingEdits: [],
-      wasIgnoredDueToPendingEdits: false,
+      shouldCancelDebounce: false,
     };
   }
+
+  // The committed URL differs from what this toolbar last dispatched: an
+  // external navigation, Back/Forward, or a cancelled intermediate edit
+  // committed late. The URL wins — restore the displayed value and discard
+  // unsent local edits.
+  return {
+    nextDraft: incoming,
+    nextPrevSearchValue: incoming,
+    shouldCancelDebounce: true,
+  };
 }
 
 export function createDebouncedSearch(
@@ -181,69 +173,101 @@ export function DataTableToolbar({
   onResetFilters,
   className = '',
   debounceMs = 300,
-  historyEpoch = 0,
   resetEpoch = 0,
 }: DataTableToolbarProps) {
   // Maintain an immediately updated input draft to preserve spaces and avoid pending-navigation lag
   const [prevSearchValue, setPrevSearchValue] = React.useState(searchValue);
   const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
-  const [pendingEdits, setPendingEdits] = React.useState<string[]>([]);
-  const [prevHistoryEpoch, setPrevHistoryEpoch] = React.useState(historyEpoch);
   const [prevResetEpoch, setPrevResetEpoch] = React.useState(resetEpoch);
 
-  const debouncedSearchRef = React.useRef(createDebouncedSearch(onSearchChange, debounceMs));
+  // Last search value this toolbar dispatched to the router. Only a commit of
+  // this value acknowledges the toolbar's own request (Finding 2 P1).
+  const [lastSentSearch, setLastSentSearch] = React.useState(searchValue);
+  // A dispatched value cancelled by a newer authoritative navigation; its late
+  // commit must not resynchronize the draft (Round 40 finding 2).
+  const [staleSearch, setStaleSearch] = React.useState<string | undefined>(undefined);
+
+  // Keep the latest callback without ever replacing the debounce object, so a
+  // timer scheduled before a parent rerender is never abandoned (Finding 3 P1).
+  const searchCallbackRef = React.useRef(onSearchChange);
   React.useEffect(() => {
-    debouncedSearchRef.current = createDebouncedSearch(onSearchChange, debounceMs);
-  }, [onSearchChange, debounceMs]);
+    searchCallbackRef.current = onSearchChange;
+  }, [onSearchChange]);
+
+  // Latest draft, mirrored in a ref so a firing debounce timer can detect
+  // that an authoritative navigation already replaced it and stay silent
+  // instead of overriding the URL (Finding 4 P1).
+  const draftRef = React.useRef(searchValue || '');
+  React.useEffect(() => {
+    draftRef.current = draftSearch;
+  }, [draftSearch]);
+
+  // Single debounce object, created lazily in event handlers and never
+  // replaced, so scheduled timers always belong to the live object.
+  const debouncedSearchRef = React.useRef<ReturnType<typeof createDebouncedSearch> | null>(null);
+  const getDebouncedSearch = () => {
+    if (debouncedSearchRef.current === null) {
+      debouncedSearchRef.current = createDebouncedSearch((val) => {
+        if (draftRef.current !== val) return;
+        setLastSentSearch(val);
+        searchCallbackRef.current?.(val);
+      }, debounceMs);
+    }
+    return debouncedSearchRef.current;
+  };
 
   React.useEffect(() => {
+    debouncedSearchRef.current?.cancel();
     return () => {
-      debouncedSearchRef.current.cancel();
+      debouncedSearchRef.current?.cancel();
     };
-  }, []);
+  }, [searchValue]);
 
-  // Synchronize draft when external/committed searchValue prop changes, a
-  // browser history navigation (Back/Forward) occurs, or an explicit filter reset is triggered.
-  if (
-    searchValue !== prevSearchValue ||
-    historyEpoch !== prevHistoryEpoch ||
-    resetEpoch !== prevResetEpoch
-  ) {
+  // Synchronize draft when the committed searchValue prop changes or an
+  // explicit filter reset is triggered. Any unsent debounced edit is discarded
+  // on authoritative changes (its timer self-cancels via the draft guard) so it
+  // can never override the navigation (Findings 2 & 4 P1, BR-UI-01).
+  if (searchValue !== prevSearchValue || resetEpoch !== prevResetEpoch) {
     const result = computeToolbarDraftOnPropChange(
       draftSearch,
       searchValue,
       prevSearchValue,
-      pendingEdits,
-      historyEpoch !== prevHistoryEpoch,
-      resetEpoch !== prevResetEpoch
+      lastSentSearch,
+      resetEpoch !== prevResetEpoch,
+      staleSearch
     );
     setPrevSearchValue(result.nextPrevSearchValue);
-    setPrevHistoryEpoch(historyEpoch);
     setPrevResetEpoch(resetEpoch);
-    setPendingEdits(result.nextPendingEdits);
+    if (result.shouldCancelDebounce) {
+      // The cancelled request must not be acknowledged if it commits later.
+      setStaleSearch(lastSentSearch !== result.nextDraft ? lastSentSearch : undefined);
+      setLastSentSearch(result.nextDraft);
+    }
+    if (staleSearch && searchValue === staleSearch) {
+      setStaleSearch(undefined);
+    }
     if (result.nextDraft !== draftSearch) {
       setDraftSearch(result.nextDraft);
     }
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const nextVal = e.target.value;
-    setDraftSearch(nextVal);
-    setPendingEdits((prev) => [...prev, nextVal]);
-    debouncedSearchRef.current.type(nextVal);
+    draftRef.current = e.target.value;
+    setDraftSearch(e.target.value);
+    getDebouncedSearch().type(e.target.value);
   };
 
   const handleClear = () => {
-    debouncedSearchRef.current.cancel();
+    draftRef.current = '';
     setDraftSearch('');
-    setPendingEdits((prev) => [...prev, '']);
-    onSearchChange?.('');
+    getDebouncedSearch().clear();
   };
 
   const handleReset = () => {
-    debouncedSearchRef.current.cancel();
+    draftRef.current = '';
+    getDebouncedSearch().cancel();
+    setLastSentSearch('');
     setDraftSearch('');
-    setPendingEdits(['']);
     onResetFilters?.();
   };
 

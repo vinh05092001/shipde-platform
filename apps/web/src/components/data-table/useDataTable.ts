@@ -28,7 +28,7 @@
 
 'use client';
 
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
@@ -118,9 +118,31 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // Filter reset signal (Finding 4 P1): increments when resetFilters is called.
   const [resetEpoch, setResetEpoch] = useState(0);
 
-  // Table state is a pure function of the committed router search params (BR-UI-01)
-  const activeSearchParams =
+  const routerSearchParams =
     props.searchParams !== undefined ? props.searchParams : nextSearchParams;
+
+  // Pending navigation intent: the last query string this hook pushed, with
+  // the committed baseline it was composed from. While it is unacknowledged,
+  // successive table edits compose onto it, so a fast second edit never drops
+  // the first (BR-UI-01). The intent ends when the committed URL acknowledges
+  // it or when an external navigation commits a different URL — then the
+  // committed URL wins.
+  const pendingNavigationRef = useRef<{ baseline: string; target: string } | null>(null);
+
+  const committedParams = normalizeParamsString(routerSearchParams);
+
+  // Table state is a pure function of the committed router search params (BR-UI-01)
+  const activeSearchParams = routerSearchParams;
+
+  // Next query string for a table action: composes onto the pending intent of
+  // a navigation still unacknowledged, else onto the committed URL.
+  const getNextQueryBase = useCallback(() => {
+    const pending = pendingNavigationRef.current;
+    if (pending && committedParams === pending.baseline && committedParams !== pending.target) {
+      return { baseline: committedParams, base: pending.target };
+    }
+    return { baseline: committedParams, base: committedParams };
+  }, [committedParams]);
 
   // Search params state with validation & fallback
   const page = useMemo(() => {
@@ -195,10 +217,11 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // Column visibility local state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
 
-  // URL query builder: composes against committed router search parameters
+  // URL query builder: composes against committed router search parameters,
+  // or against the pending intent of a navigation that has not committed yet
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
-      const newSearchParams = new URLSearchParams(activeSearchParams?.toString() ?? '');
+      const newSearchParams = new URLSearchParams(getNextQueryBase().base);
 
       for (const [key, value] of Object.entries(params)) {
         if (value === null || value === undefined || value === '') {
@@ -210,12 +233,16 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
       return newSearchParams.toString();
     },
-    [activeSearchParams]
+    [getNextQueryBase]
   );
 
   const navigate = useCallback(
     (queryString: string) => {
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
+      pendingNavigationRef.current = {
+        baseline: committedParams,
+        target: normalizeParamsString(queryString),
+      };
       if (onNavigate) {
         onNavigate(targetUrl);
         return;
@@ -230,7 +257,7 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
         }
       }
     },
-    [onNavigate, pathname, router]
+    [committedParams, onNavigate, pathname, router]
   );
 
   const setPagination = useCallback(
