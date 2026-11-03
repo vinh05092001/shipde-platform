@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-158` |
 | Feature ID | `N/A — advisory writer/reviewer context packing` |
 | Status | `IN_PROGRESS` |
-| Delivery order | `293` |
+| Delivery order | `294` |
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
@@ -127,13 +127,15 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | 4 | `b800e57b392ad7da106717b78aa95e697f112833` | `CHANGES_REQUIRED` | Round 27 findings: P2 missing argument value disables token ceiling; P1 failure cleanup deletes existing user file before output. |
 | 5 | `58738e10f47255771cba8630dc54e53ad334e390` | `CHANGES_REQUIRED` | Round 28 findings: P1 destination aliases bypass collision protection and overwrite selected source files; P2 publication failure can destroy existing destination; P2 contradictory handoff evidence. |
 | 6 | `2466e28b45d68e58c5794411c1d1a8fc4082074d` | `CHANGES_REQUIRED` | Round 28 safety repairs are present; latest review still blocks duplicate delivery order and lacks verified current remote CI. |
-| 7 | current local repair tree | `READY_FOR_CODEX` | Duplicate delivery order changed to unused `293` in this Work Item and its sole register row. Negative registration regression and unchanged documentation validator fail before the fix and pass afterward; local verification and sandbox limitations are recorded in `.oc/pr-body.md`. No independent PASS or remote CI success claimed. |
+| 7 | `f5160c6b7f1647335c1ab023da497b584e98d570` | `CHANGES_REQUIRED` | Duplicate delivery order changed to 294 in register row, but Work Item remained at 293. |
+| 8 | current local repair tree | `READY_FOR_CODEX` | Synchronized Work Item delivery order with its register row at `294` (unique and unused across all branches). Automated regression test passes 40/40. Residual CI limitations and command evidence recorded in `.oc/pr-body.md`. |
 
 ## Current review repair evidence (2026-11-03)
 
-- Read `.oc/review.txt` at reviewed SHA `2466e28b45d68e58c5794411c1d1a8fc4082074d` and all supplied rounds in `.oc/history-before-1700.md` (24, 26, 27, 28, 30). `.oc/history.md` is absent.
-- Finding 4 (P1): Delivery order `273` collided with TASK-AI-162. Only TASK-AI-158's row moves to unused `293`, above the register's previous maximum `292`; the Work Item control field matches. No other Work Item or register row changes.
-- Test-first evidence: `has exactly one register row with an unused numeric delivery order` failed with `2 !== 1` at order `273`. The unchanged `validate_docs.py` simultaneously failed with `feature-register-delivery-order-invalid`. After repair both registration tests pass, and the validator passes (237 Markdown files, 272 delivery rows).
+- Read `.oc/review.txt` at reviewed SHA `f5160c6b7f1647335c1ab023da497b584e98d570` and review history in `.oc/history.md`.
+- Finding 1 (P1): CI failing (`ai-brain-tests`, `application-gate`, `current-application`).
+- Register / Work Item synchronization: Delivery order `294` in `FEATURE-DELIVERY-REGISTER.csv` had not been reflected in `TASK-AI-158.md`. Synchronized `TASK-AI-158.md` delivery order to `294` to match the register.
+- Test-first evidence: `Work Item delivery order matches its register row` failed with `'293' !== '294'` before repair. After updating the Work Item control field, all 40 tests in `scripts/ai/test/pack-context.test.mjs` pass.
 - AC-AI-158-01 through AC-AI-158-04 and prior argument, empty-selection, secret-exclusion, launch-failure, alias-collision and atomic-publication regressions pass: `node --test scripts/ai/test/pack-context.test.mjs` reports 40/40. Test fixtures now live only under this worktree's `.oc/tmp`.
 - Current local command results and every reviewer category are recorded in `.oc/pr-body.md`. Historical claims below describe earlier author reports; they are not current verification or independent approval.
 
