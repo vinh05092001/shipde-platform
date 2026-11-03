@@ -807,7 +807,7 @@ test('encoded credential parameter names in returned URLs are masked before trun
 });
 
 test('masking preserves ordinary public content', async () => {
-  const env = { ...process.env, GH_TOKEN: 'ghp_fixturepat1234567890abcdef' };
+  const env = { ...process.env, GH_TOKEN: 'test-fixture-token-not-a-real-secret' };
   const result = await invoke(['web', 'search', 'docs'], 'public-content', env);
   assert.equal(result.exitCode, 0);
   const text = emitted(result);
@@ -817,6 +817,13 @@ test('masking preserves ordinary public content', async () => {
     assert.ok(text.includes(keep), `must keep ${keep}`);
   }
   assert.equal(text.includes(env.GH_TOKEN), false);
+});
+
+test('test fixtures contain no generic secret scanner patterns or live tokens (P1 secret-scan)', () => {
+  const content = readFileSync(fixture, 'utf8');
+  // Proves that fixture does not introduce GitHub PATs or generic api keys (e.g. ghp_ followed by high-entropy string)
+  assert.doesNotMatch(content, /ghp_[a-zA-Z0-9]{20,}/);
+  assert.doesNotMatch(content, /(?:api_key|secret_key|auth_token|access_token)\s*[:=]\s*['"][0-9a-zA-Z_\-]{24,}['"]/i);
 });
 
 test('search queries distinguish library identifiers from URL candidates', async () => {
