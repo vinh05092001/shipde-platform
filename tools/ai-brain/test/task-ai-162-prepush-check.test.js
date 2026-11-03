@@ -399,3 +399,29 @@ test('the direct command cannot be skipped using the hook exception', () => {
     else process.env.SHIPDE_SKIP_AI_CHECK = previous;
   }
 });
+
+test('delivery register assigns unique sequential delivery order without collision between TASK-AI-162 and TASK-AI-161', () => {
+  const registerText = readFileSync(
+    join(__dirname, '../../../docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv'),
+    'utf8'
+  );
+  const lines = registerText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const rows = lines.slice(1).map((line) => {
+    const match = line.match(/^"(\d+)",(?:"[^"]*",){2}"([^"]+)"/);
+    return { order: match ? match[1] : null, workItemId: match ? match[2] : null };
+  });
+  const orders = rows.map((r) => r.order).filter(Boolean);
+  assert.equal(
+    orders.length,
+    new Set(orders).size,
+    'Delivery orders in register must be strictly unique to prevent validate_docs failure'
+  );
+  const item162 = rows.find((r) => r.workItemId === 'TASK-AI-162');
+  const item161 = rows.find((r) => r.workItemId === 'TASK-AI-161');
+  assert.ok(item162 && item161, 'Both TASK-AI-161 and TASK-AI-162 must exist');
+  assert.notEqual(
+    item162.order,
+    item161.order,
+    'TASK-AI-162 and TASK-AI-161 must not collide on the same delivery order'
+  );
+});

@@ -7,7 +7,7 @@
 | Work Item ID | `TASK-AI-162` |
 | Feature ID | N/A — shared author tooling |
 | Status | `IN_PROGRESS` |
-| Delivery order | `272` |
+| Delivery order | `273` |
 | Dependencies | None — existing root gates and Lefthook are on origin/main |
 | Assigned author | Codex — direct operator assignment, 2026-11-02 |
 | Risk | LOW |
