@@ -2,19 +2,19 @@
 
 ## Control
 
-| Field | Value |
-|---|---|
-| Work Item ID | `TASK-AI-164` |
-| Feature ID | `N/A — AI delivery workflow` |
-| Status | `IN_PROGRESS` |
-| Delivery order | `273` |
-| Dependencies | None; existing template and Node.js workspace are available at the starting HEAD. |
-| Assigned author | `Codex — operator-assigned implementation task, 2026-11-02` |
-| Risk | `LOW` |
-| Allowed paths | `scripts/ai/ready-check.mjs`; `scripts/ai/test/ready-check*.test.mjs`; `scripts/ai/test/fixtures/ready-check/`; root `package.json` scripts; `docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md`; `docs/product-spec/docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md`; one row in `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; this Work Item; `.oc/pr-body.md`; `.oc/tmp/` evidence |
-| Reviewer | `Codex — fresh independent task` |
-| Branch | `feat/task-ai-164-definition-of-ready` |
-| Pull Request | Sandbox repair of the current branch; the coordinator commits the working tree and prepares the remote Pull Request handoff. No Git writes or push are permitted in this session. |
+| Field           | Value                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Work Item ID    | `TASK-AI-164`                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Feature ID      | `N/A — AI delivery workflow`                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Status          | `IN_PROGRESS`                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Delivery order  | `292`                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Dependencies    | None; existing template and Node.js workspace are available at the starting HEAD.                                                                                                                                                                                                                                                                                                                                                      |
+| Assigned author | `Codex — operator-assigned implementation task, 2026-11-02`                                                                                                                                                                                                                                                                                                                                                                            |
+| Risk            | `LOW`                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Allowed paths   | `scripts/ai/ready-check.mjs`; `scripts/ai/test/ready-check*.test.mjs`; `scripts/ai/test/fixtures/ready-check/`; root `package.json` scripts; `docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md`; `docs/product-spec/docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md`; one row in `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; this Work Item; `.oc/pr-body.md`; `.oc/tmp/` evidence |
+| Reviewer        | `Codex — fresh independent task`                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Branch          | `feat/task-ai-164-definition-of-ready`                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Pull Request    | Repair of the current branch. The operator authorizes fetch, merge and a local commit on 2026-11-03; no push. If the sandbox blocks Git writes, the coordinator commits the verified working tree.                                                                                                                                                                                                                                     |
 
 ## Business outcome
 
@@ -43,7 +43,7 @@ The operator approved the four failure conditions, document additions and sandbo
 
 ## Author boundary
 
-Codex implements this bounded local script and documentation change under the explicit operator assignment. It does not independently approve its own work. The latest sandbox handoff instruction prohibits Git writes, including fetch, merge and commit. The coordinator owns the commit and remote handoff; independent review and remote CI remain required.
+Codex implements this bounded local script and documentation change under the explicit operator assignment. It does not independently approve its own work. The operator's 2026-11-03 instruction supersedes the earlier Git-write prohibition and authorizes fetching, merging and committing locally on the existing branch, without rebasing, resetting, forcing or pushing. Sandbox-blocked actions must be recorded with their exact errors; the coordinator owns any blocked commit and the remote handoff. Independent review and remote CI remain required.
 
 ## Slice sizing rule
 
@@ -57,7 +57,7 @@ One Work Item, branch and eventual PR. Keep the implementation focused on parsin
 
 ## Out of scope
 
-Existing Work Item rewrites; `.github/`; gate configurations; allowlists; baselines; semgrep rules; controller routing changes; package dependencies; production application behavior; executing Proof commands or fetching source links from the checker; history rewrite, force operations, pushes, and all Git writes in this sandbox session.
+Existing Work Item rewrites; `.github/`; gate configurations; allowlists; baselines; semgrep rules; controller routing changes; package dependencies; production application behavior; executing Proof commands or fetching source links from the checker; history rewrite, force operations and pushes.
 
 ## Unchanged behaviour
 
@@ -81,7 +81,7 @@ Existing Work Item rewrites; `.github/`; gate configurations; allowlists; baseli
 - [x] Audit & sensitive data: Diagnostics identify rules and line numbers without echoing Work Item contents; no credentials are needed.
 - [x] VND integer arithmetic: N/A; no money behavior.
 - [x] Carrier reconciliation: N/A; no carrier effects.
-- [x] Tests at the lowest useful level, test-first where executable: the review regressions reproduced both P1 findings at the reviewed SHA (4 failures), and the expanded suite exposed 21 failures in the starting working tree before repair. All 87 checker and CLI tests pass after repair; logs are in `.oc/tmp/task-ai-164-review/`.
+- [x] Tests at the lowest useful level, test-first where executable: prior rounds reproduced the behaviour-proof and placeholder-proof failures before repair. Round 42 reproduces the delivery-order collision with the production documentation validator and the missing committed PR-evidence fixture before repair. Current results and red/green logs are in `.oc/pr-body.md` and `.oc/tmp/`.
 
 ## UI states
 
@@ -93,15 +93,15 @@ None for application APIs, events, jobs, persistence or migrations. The new root
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required | Proof |
-|---|---|---|---|---|
-| AC-READY-01 | Fully prepared Work Item | CLI exits 0 and leaves file bytes unchanged | unit and CLI fixture | `CLI accepts a Work Item path without mutating the file` |
-| AC-READY-02 | Clarification markers or unresolved Open questions | Fails anywhere in the file; unresolved questions return to planning | unit fixtures | `node --test --test-name-pattern="rejects marker anywhere\|nonempty Open questions" scripts/ai/test/ready-check.test.mjs` |
-| AC-READY-03 | Missing, empty or placeholder Proof; nested acceptance table | Each affected table or row fails; absent or empty matrices fail | unit fixtures | `node --test --test-name-pattern="Proof\|acceptance\|dashes" scripts/ai/test/ready-check.test.mjs scripts/ai/test/ready-check-boundaries.test.mjs` |
-| AC-READY-04 | Empty, missing, commented, placeholder or unproved unchanged behaviour | Fails without borrowing proof from another entry or section; complete mixed formats pass | unit fixtures | `node --test --test-name-pattern="Unchanged behaviour\|unchanged behaviour" scripts/ai/test/ready-check.test.mjs scripts/ai/test/ready-check-boundaries.test.mjs` |
-| AC-READY-05 | Missing source reference or supported source links | Fails without a source; repository and HTTP(S) references pass offline | unit fixtures | `node --test --test-name-pattern="source" scripts/ai/test/ready-check.test.mjs` |
-| AC-READY-06 | Multiple problems or invalid CLI input | One diagnostic line per problem, exit 1, no stack trace | CLI fixtures | `node --test --test-name-pattern="CLI" scripts/ai/test/ready-check.test.mjs` |
-| AC-READY-07 | Prepared task and documented handoff | TASK-AI-164 passes; workflow requires passing before READY_FOR_AUTHOR and sends failures to planning | CLI and docs-inspection | `pnpm ai:ready docs/product-spec/work-items/TASK-AI-164.md` |
+| AC/Test ID  | Scenario                                                               | Expected result                                                                                      | Evidence required       | Proof                                                                                                                                                             |
+| ----------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AC-READY-01 | Fully prepared Work Item                                               | CLI exits 0 and leaves file bytes unchanged                                                          | unit and CLI fixture    | `CLI accepts a Work Item path without mutating the file`                                                                                                          |
+| AC-READY-02 | Clarification markers or unresolved Open questions                     | Fails anywhere in the file; unresolved questions return to planning                                  | unit fixtures           | `node --test --test-name-pattern="rejects marker anywhere\|nonempty Open questions" scripts/ai/test/ready-check.test.mjs`                                         |
+| AC-READY-03 | Missing, empty or placeholder Proof; nested acceptance table           | Each affected table or row fails; absent or empty matrices fail                                      | unit fixtures           | `node --test --test-name-pattern="Proof\|acceptance\|dashes" scripts/ai/test/ready-check.test.mjs scripts/ai/test/ready-check-boundaries.test.mjs`                |
+| AC-READY-04 | Empty, missing, commented, placeholder or unproved unchanged behaviour | Fails without borrowing proof from another entry or section; complete mixed formats pass             | unit fixtures           | `node --test --test-name-pattern="Unchanged behaviour\|unchanged behaviour" scripts/ai/test/ready-check.test.mjs scripts/ai/test/ready-check-boundaries.test.mjs` |
+| AC-READY-05 | Missing source reference or supported source links                     | Fails without a source; repository and HTTP(S) references pass offline                               | unit fixtures           | `node --test --test-name-pattern="source" scripts/ai/test/ready-check.test.mjs`                                                                                   |
+| AC-READY-06 | Multiple problems or invalid CLI input                                 | One diagnostic line per problem, exit 1, no stack trace                                              | CLI fixtures            | `node --test --test-name-pattern="CLI" scripts/ai/test/ready-check.test.mjs`                                                                                      |
+| AC-READY-07 | Prepared task and documented handoff                                   | TASK-AI-164 passes; workflow requires passing before READY_FOR_AUTHOR and sends failures to planning | CLI and docs-inspection | `pnpm ai:ready docs/product-spec/work-items/TASK-AI-164.md`                                                                                                       |
 
 ## Task breakdown
 
@@ -132,11 +132,12 @@ On Windows, `pnpm.cmd` selects the same pnpm CLI if PowerShell blocks its `.ps1`
 
 ## Codex review record
 
-| Review round | Commit | Verdict | Findings resolved |
-|---|---|---|---|
-| Round 1 | `300c08e7eaf6039cc8c995a26a7f2f8af0a64588` | CHANGES_REQUIRED | Findings 4 and 5 were open at this SHA; both are reproduced by the recorded negative tests. |
-| Round 24 | `d7ee09fcf0d52d70e7e8293bbf04c78384014111` | CHANGES_REQUIRED | Finding 1 (CI contract failure): PR contract validation failed due to missing sections, placeholder tokens, and missing READY_FOR_CODEX in `.oc/pr-body.md`. Resolved and verified with regression tests. |
+| Review round | Commit                                     | Verdict          | Findings resolved                                                                                                                                                                                                                                                                                     |
+| ------------ | ------------------------------------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Round 1      | `300c08e7eaf6039cc8c995a26a7f2f8af0a64588` | CHANGES_REQUIRED | Findings 4 and 5 were open at this SHA; both are reproduced by the recorded negative tests.                                                                                                                                                                                                           |
+| Round 24     | `d7ee09fcf0d52d70e7e8293bbf04c78384014111` | CHANGES_REQUIRED | Finding 1 (CI contract failure): PR contract validation failed due to missing sections, placeholder tokens, and missing READY_FOR_CODEX in `.oc/pr-body.md`. Resolved and verified with regression tests.                                                                                             |
+| Round 42     | `283f93b338424cbc07d2024d67879fd8e7a398cf` | CHANGES_REQUIRED | Finding 1: delivery order 273 collided with the merged register row; only this item moves to unused order 292. Contract regressions use the real validator and committed evidence. Full brain and application verification results, including environment blockers, are recorded in `.oc/pr-body.md`. |
 
 ## Residual limitations
 
-The checker establishes document readiness, not semantic completeness or successful execution of the declared proofs. The planner and independent reviewer retain those responsibilities. The complete check results, sandbox errors and pre-existing formatting failures are recorded in `.oc/pr-body.md`. Foreign TASK-AI-155 files were removed in commit `d7ee09f`, aligning git diff to strictly carry only TASK-AI-164. This repair changes only TASK-AI-164 files and evidence. The coordinator owns Git writes, remote CI and independent review after this sandbox handoff; no independent PASS or merge is claimed here. No product decision is needed to fix the review findings.
+The checker establishes document readiness, not semantic completeness or successful execution of the declared proofs. The planner and independent reviewer retain those responsibilities. Current check results and sandbox errors are recorded in `.oc/pr-body.md`. Foreign files were removed in the earlier scope repair; this repair changes only TASK-AI-164 files and evidence. The initial fetch failed with `cannot open '.git/FETCH_HEAD': Permission denied`, so verification uses the existing `origin/main` reference. Brain tests encounter a host quota-lock permission error and Docker access is denied; those checks are not claimed green. The coordinator owns any sandbox-blocked commit, remote CI and independent review. No independent PASS or merge is claimed here. No product decision is needed for these bounded fixes.
