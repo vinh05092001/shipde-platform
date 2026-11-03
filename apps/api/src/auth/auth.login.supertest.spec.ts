@@ -127,13 +127,14 @@ async function runAuthLoginSupertestSuite() {
   const prisma = app.get(PrismaService);
   const rateLimitService = app.get(RateLimitService);
 
-  const dbStatus = await prisma.checkReadiness();
+  const dbStatus =
+    process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
     if (process.env.CI || isLocalTestDb()) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+      throw new Error('Database must be reachable in CI environment or TEST_DB=local');
     }
     console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Login Supertest tests (run 'pnpm infra:up' to enable).`
+      "⚠️ PostgreSQL is not reachable. Skipping live Login Supertest tests (run 'pnpm infra:up' to enable)."
     );
     await app.close();
     console.log('🎉 Login supertest suite skipped offline safely!');

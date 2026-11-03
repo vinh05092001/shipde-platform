@@ -11,6 +11,11 @@ mkdirSync(temporaryDirectory, { recursive: true });
 const require = createRequire(import.meta.url);
 const tsx = pathToFileURL(require.resolve('tsx')).href;
 
+if (process.env.NODE_ENV === 'production') {
+  console.error('Local test database runner is forbidden in production (NODE_ENV=production)');
+  process.exit(1);
+}
+
 function discover(directory) {
   return readdirSync(directory, { withFileTypes: true })
     .flatMap((entry) => {
@@ -37,7 +42,7 @@ for (const file of files) {
     env: {
       ...process.env,
       TEST_DB: 'local',
-      NODE_ENV: 'test',
+      NODE_ENV: process.env.NODE_ENV || 'test',
       TEMP: temporaryDirectory,
       TMP: temporaryDirectory,
       TMPDIR: temporaryDirectory,
