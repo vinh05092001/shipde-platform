@@ -83,18 +83,37 @@ export function normalizeParamsString(params: URLSearchParams | string | null | 
   return sorted.toString();
 }
 
-export function isCompatibleSubset(committedStr: string, targetStr: string): boolean {
+export function isCompatibleSubset(
+  committedStr: string,
+  targetStr: string,
+  baselineStr?: string
+): boolean {
   if (!committedStr) return true;
-  if (!targetStr) return false;
+  if (!targetStr && !baselineStr) return false;
   const committed = new URLSearchParams(committedStr);
   const target = new URLSearchParams(targetStr);
+  const baseline = baselineStr ? new URLSearchParams(baselineStr) : null;
   for (const [key, value] of committed.entries()) {
     const targetValue = target.get(key);
-    if (targetValue === null) {
-      return false;
-    }
     if (targetValue === value) {
       continue;
+    }
+    // If targetValue is null, check if this is an intermediate facet removal from baseline (Finding 6 P1).
+    if (targetValue === null) {
+      if (baseline) {
+        const baselineValue = baseline.get(key);
+        if (baselineValue) {
+          const committedSegments = value.split('.').filter(Boolean);
+          const baselineSegments = baselineValue.split('.').filter(Boolean);
+          if (
+            committedSegments.length > 0 &&
+            committedSegments.every((segment) => baselineSegments.includes(segment))
+          ) {
+            continue;
+          }
+        }
+      }
+      return false;
     }
     // A facet value is a dot-joined multi-selection (e.g. status=FAILED or
     // status=FAILED.DELIVERED). A commit of an earlier same-facet selection is
@@ -159,6 +178,15 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const committedParams = normalizeParamsString(routerSearchParams);
 
+  // If the committed params reached the pending target, the navigation has settled.
+  // Invalidate pending intent once committed so subsequent external navigation
+  // cannot match a stale baseline and resurrect settled filters (Finding 5 P1).
+  useEffect(() => {
+    if (pendingNavigationRef.current && committedParams === pendingNavigationRef.current.target) {
+      pendingNavigationRef.current = null;
+    }
+  }, [committedParams]);
+
   // Table state is a pure function of the committed router search params (BR-UI-01)
   const activeSearchParams = routerSearchParams;
 
@@ -177,9 +205,10 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
       return { baseline: committedParams, base: pending.target };
     }
     // Intermediate acknowledgment: if committedParams is a compatible subset of
-    // the pending target (e.g. status=FAILED committed while carrier=GHN is still pending),
-    // advance baseline and preserve the pending target (Finding 4 P1).
-    if (isCompatibleSubset(committedParams, pending.target)) {
+    // the pending target (e.g. status=FAILED committed while carrier=GHN is still pending, Finding 4 P1;
+    // or status=FAILED committed while status removal is pending, Finding 6 P1),
+    // advance baseline and preserve the pending target.
+    if (isCompatibleSubset(committedParams, pending.target, pending.baseline)) {
       pending.baseline = committedParams;
       return { baseline: committedParams, base: pending.target };
     }
@@ -197,6 +226,9 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
     if (typeof window === 'undefined') return;
     const handlePopState = () => {
       pendingNavigationRef.current = null;
+      if (typeof window !== 'undefined' && (window as any).__shipde_table_queries) {
+        (window as any).__shipde_table_queries.clear();
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => {
@@ -303,13 +335,21 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
       const prev = pendingNavigationRef.current;
       const currentBaseline =
         prev &&
-        (prev.baseline === committedParams || isCompatibleSubset(committedParams, prev.target))
+        (prev.baseline === committedParams ||
+          isCompatibleSubset(committedParams, prev.target, prev.baseline))
           ? prev.baseline
           : committedParams;
       pendingNavigationRef.current = {
         baseline: currentBaseline,
         target: normalizedTarget,
       };
+      if (typeof window !== 'undefined') {
+        const globalAny = window as any;
+        if (!globalAny.__shipde_table_queries) {
+          globalAny.__shipde_table_queries = new Set<string>();
+        }
+        globalAny.__shipde_table_queries.add(normalizedTarget);
+      }
       if (onNavigate) {
         onNavigate(targetUrl);
         return;
@@ -398,6 +438,9 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const resetFilters = useCallback(() => {
     setResetEpoch((epoch) => epoch + 1);
+    if (typeof window !== 'undefined' && (window as any).__shipde_table_queries) {
+      (window as any).__shipde_table_queries.clear();
+    }
     const keysToRemove: Record<string, null> = {
       page: null,
       sort: null,

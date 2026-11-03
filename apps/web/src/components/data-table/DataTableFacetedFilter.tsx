@@ -32,6 +32,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Check, PlusCircle, X } from 'lucide-react';
 import { DataTableFilterOption } from './types';
+import { normalizeParamsString } from './useDataTable';
 
 interface DataTableFacetedFilterProps {
   title: string;
@@ -237,8 +238,14 @@ export function DataTableFacetedFilter({
       if (lastSeenLocationSearchRef.current === null) {
         lastSeenLocationSearchRef.current = currentSearch;
       } else if (lastSeenLocationSearchRef.current !== currentSearch) {
-        externalUrlEvent = true;
         lastSeenLocationSearchRef.current = currentSearch;
+        const normalized = normalizeParamsString(currentSearch);
+        const tableQueries = (window as any).__shipde_table_queries as Set<string> | undefined;
+        // If the URL change was dispatched by this table, it is an acknowledgment
+        // of a table control, not an external navigation (Finding 3 P1).
+        if (!tableQueries || !tableQueries.has(normalized)) {
+          externalUrlEvent = true;
+        }
       }
     }
 

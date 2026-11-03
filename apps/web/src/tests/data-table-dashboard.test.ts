@@ -4131,12 +4131,12 @@ async function runTestSuite() {
     assert.deepStrictEqual(dispatches, ['N', 'Ng'], 'Both held search edits dispatched');
     assert.strictEqual(toolbar.inputValue(), 'Ng');
 
-    // External Link navigation commits the older "?search=N" URL.
+    // Finding 2 (P1): owned intermediate acknowledgment of N while Ng is held preserves Ng
     toolbar.rerender({ searchValue: 'N' });
     assert.strictEqual(
       toolbar.inputValue(),
-      'N',
-      'external Link cancels pending search draft: textbox resyncs to the committed URL'
+      'Ng',
+      'owned intermediate acknowledgment preserves latest dispatched draft: textbox remains Ng'
     );
 
     // Finding 1 (P1): mounted own acknowledgment preserves newer debounce
@@ -4183,7 +4183,8 @@ async function runTestSuite() {
     revisitToolbar.type('Ng');
     await waitMs(30);
     assert.deepStrictEqual(revisitDispatches, ['N', 'Ng'], 'Both values dispatched');
-    revisitToolbar.rerender({ searchValue: 'N' }); // commit external N
+    revisitToolbar.type('Ngu'); // newer unsent intent
+    revisitToolbar.rerender({ searchValue: 'N' }); // commit external N cancelling unsent intent
     assert.strictEqual(revisitToolbar.inputValue(), 'N', 'External N commit restores textbox to N');
     revisitToolbar.rerender({ searchValue: 'Ng' }); // commit authoritative Ng
     assert.strictEqual(
@@ -4437,8 +4438,48 @@ async function runTestSuite() {
     }
   }
 
-  // 19.9 Round 41 finding 6 (P1): owned intermediate search acknowledgment preserves newer draft
+  // 19.9 Finding 1 & 2 (P1): owned intermediate acknowledgment vs external Link draft cancellation
   {
+    // Finding 1 (P1): mounted external Link cancels unsent draft after owned dispatches
+    const externalLinkDispatches: string[] = [];
+    let externalSettledUrl = '';
+    const externalLinkToolbar = renderMountedDataTableToolbar({
+      searchValue: '',
+      onSearchChange: (val: string) => {
+        externalLinkDispatches.push(val);
+        externalSettledUrl = val ? `?search=${val}` : '';
+      },
+      debounceMs: 50,
+    });
+    externalLinkToolbar.type('N');
+    await waitMs(80); // own 'N' request dispatched
+    externalLinkToolbar.type('Ng');
+    await waitMs(80); // own 'Ng' request dispatched; both 'N' and 'Ng' held
+    externalLinkToolbar.type('Ngu'); // newer unsent draft
+    // Commit the external Storybook Link to ?search=N before debounce expiry
+    externalSettledUrl = '?search=N';
+    externalLinkToolbar.rerender({ searchValue: 'N' });
+    assert.strictEqual(
+      externalLinkToolbar.inputValue(),
+      'N',
+      'mounted external Link cancels unsent draft after owned dispatches: textbox resyncs to N'
+    );
+    await waitMs(80); // expire the debounce
+    assert.deepStrictEqual(
+      externalLinkDispatches,
+      ['N', 'Ng'],
+      'mounted external Link cancels unsent draft after owned dispatches: emissions equal exactly ["N", "Ng"]'
+    );
+    assert.strictEqual(
+      externalSettledUrl,
+      '?search=N',
+      'mounted external Link cancels unsent draft after owned dispatches: URL equals N'
+    );
+    console.log(
+      '   ✅ Finding 1 (P1): mounted external Link cancels unsent draft after owned dispatches'
+    );
+
+    // Finding 2 (P1): owned intermediate acknowledgment preserves latest dispatched draft
     const ownedIntermediateEmissions: string[] = [];
     const ownedIntermediateToolbar = renderMountedDataTableToolbar({
       searchValue: '',
@@ -4448,48 +4489,54 @@ async function runTestSuite() {
     ownedIntermediateToolbar.type('N');
     await waitMs(80); // own 'N' request dispatched
     ownedIntermediateToolbar.type('Ng');
-    await waitMs(80); // own 'Ng' request dispatched; 'N' commit still pending
-    ownedIntermediateToolbar.type('Ngu'); // newer unsent draft
-    // Acknowledgment of the toolbar's FIRST request while 'Ng' remains pending.
+    await waitMs(80); // own 'Ng' request dispatched; textbox is exactly 'Ng' (no unsent draft)
+    assert.strictEqual(ownedIntermediateToolbar.inputValue(), 'Ng');
+    // Acknowledge the toolbar's FIRST request while 'Ng' remains held
     ownedIntermediateToolbar.rerender({ searchValue: 'N' });
     assert.strictEqual(
       ownedIntermediateToolbar.inputValue(),
-      'Ngu',
-      'owned intermediate search acknowledgment preserves newer draft: textbox remains Ngu'
+      'Ng',
+      'owned intermediate acknowledgment preserves latest dispatched draft: textbox remains exactly Ng'
     );
     await waitMs(80);
     assert.deepStrictEqual(
       ownedIntermediateEmissions,
-      ['N', 'Ng', 'Ngu'],
-      'owned intermediate search acknowledgment preserves newer draft: emissions equal ["N", "Ng", "Ngu"]'
+      ['N', 'Ng'],
+      'owned intermediate acknowledgment preserves latest dispatched draft: emissions equal ["N", "Ng"]'
+    );
+    console.log(
+      '   ✅ Finding 2 (P1): owned intermediate acknowledgment preserves latest dispatched draft'
     );
 
     // Helper-level proofs at the exact classification point.
-    const ownedIntermediateAck = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'Ng', false, [
+    const externalLinkCollidingAck = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'Ng', false, [
+      'N',
+      'Ng',
+    ]);
+    assert.strictEqual(
+      externalLinkCollidingAck.nextDraft,
+      'N',
+      'helper: external navigation colliding with earlier owned request discards unsent draft'
+    );
+    assert.strictEqual(
+      externalLinkCollidingAck.shouldCancelDebounce,
+      true,
+      'helper: external navigation colliding with earlier owned request cancels debounce'
+    );
+
+    const ownedIntermediateAck = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng', false, [
       'N',
       'Ng',
     ]);
     assert.strictEqual(
       ownedIntermediateAck.nextDraft,
-      'Ngu',
-      'helper: acknowledgment of an earlier owned request preserves the newer unsent draft'
+      'Ng',
+      'helper: intermediate acknowledgment of earlier owned request preserves latest dispatched draft'
     );
     assert.strictEqual(
       ownedIntermediateAck.shouldCancelDebounce,
       false,
-      'helper: acknowledgment of an earlier owned request must not cancel the newer debounce'
-    );
-    const unownedIntermediateValue = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'Ng', false, [
-      'Ng',
-    ]);
-    assert.strictEqual(
-      unownedIntermediateValue.nextDraft,
-      'N',
-      'helper: a committed value never dispatched by this toolbar is external and the URL wins'
-    );
-    assert.strictEqual(unownedIntermediateValue.shouldCancelDebounce, true);
-    console.log(
-      '   ✅ Round 41 finding 6 (P1): owned intermediate search acknowledgment preserves newer draft'
+      'helper: intermediate acknowledgment of earlier owned request must not cancel debounce'
     );
   }
 
@@ -4701,6 +4748,237 @@ async function runTestSuite() {
     console.log(
       '   ✅ Round 41 finding 5 (P1): same-facet intent survives intermediate acknowledgment'
     );
+  }
+
+  // 19.13 Finding 4 (P1): mounted unchanged-search Back invalidates last owned dispatch
+  {
+    const prevWindow = (globalThis as any).window;
+    let backPopstateListener: (() => void) | null = null;
+    (globalThis as any).window = {
+      location: { search: '?search=GHTK&sort=codAmount.asc' },
+      addEventListener: (event: string, fn: () => void) => {
+        if (event === 'popstate') backPopstateListener = fn;
+      },
+      removeEventListener: () => {},
+    };
+    try {
+      const emissions: string[] = [];
+      let settledUrl = '?search=GHTK&sort=codAmount.asc';
+      const toolbar = renderMountedDataTableToolbar({
+        searchValue: 'GHTK',
+        onSearchChange: (val: string) => {
+          emissions.push(val);
+          settledUrl = val ? `?search=${val}` : '';
+        },
+        debounceMs: 50,
+      });
+
+      // User dispatches held search N from the ascending GHTK entry
+      toolbar.type('N');
+      await waitMs(80); // 'N' emitted/dispatched; remains held
+      assert.deepStrictEqual(emissions, ['N']);
+
+      // Back to descending GHTK history entry while search remains GHTK
+      (globalThis as any).window.location.search = '?search=GHTK&sort=codAmount.desc';
+      assert.ok(backPopstateListener, 'Toolbar must register popstate listener');
+      (backPopstateListener as any)();
+      assert.strictEqual(toolbar.inputValue(), 'GHTK');
+
+      // Subsequently commit the external Link to ?search=N
+      (globalThis as any).window.location.search = '?search=N';
+      settledUrl = '?search=N';
+      toolbar.rerender({ searchValue: 'N' });
+      assert.strictEqual(
+        toolbar.inputValue(),
+        'N',
+        'mounted unchanged-search Back invalidates last owned dispatch: textbox equals N'
+      );
+      assert.strictEqual(
+        settledUrl,
+        '?search=N',
+        'mounted unchanged-search Back invalidates last owned dispatch: URL equals N'
+      );
+      console.log(
+        '   ✅ Finding 4 (P1): mounted unchanged-search Back invalidates last owned dispatch'
+      );
+    } finally {
+      (globalThis as any).window = prevWindow;
+    }
+  }
+
+  // 19.14 Finding 5 (P1): mounted external Link after settled facet does not resurrect filters
+  {
+    const capturedQueries: string[] = [];
+    let currentControlledParams = new URLSearchParams('search=N');
+    const hook = renderMountedDataTableHook({
+      contextSearchParams: currentControlledParams,
+      onNavigate: (url: string) => {
+        capturedQueries.push(url);
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        { id: 'status', title: 'Trạng thái', options: [] },
+        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
+      ],
+      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    });
+
+    // Step 1: select FAILED and wait for its URL commit
+    hook.current.setFilter('status', ['FAILED']);
+    assert.strictEqual(capturedQueries.length, 1);
+    currentControlledParams = new URLSearchParams('search=N&status=FAILED');
+    hook.rerender({ contextSearchParams: currentControlledParams });
+
+    // Step 2: commit the external Storybook Link back to ?search=N
+    currentControlledParams = new URLSearchParams('search=N');
+    hook.rerender({ contextSearchParams: currentControlledParams });
+
+    // Step 3: selecting carrier GHN afterward must compose from search=N without resurrecting status=FAILED
+    hook.current.setFilter('carrier', ['GHN']);
+    assert.strictEqual(capturedQueries.length, 2);
+    const params = new URLSearchParams(capturedQueries[1].split('?')[1] ?? '');
+    assert.strictEqual(
+      params.get('search'),
+      'N',
+      'mounted external Link after settled facet does not resurrect filters: search equals N'
+    );
+    assert.strictEqual(
+      params.get('carrier'),
+      'GHN',
+      'mounted external Link after settled facet does not resurrect filters: carrier equals GHN'
+    );
+    assert.strictEqual(
+      params.get('status'),
+      null,
+      'mounted external Link after settled facet does not resurrect filters: status is absent'
+    );
+    console.log(
+      '   ✅ Finding 5 (P1): mounted external Link after settled facet does not resurrect filters'
+    );
+  }
+
+  // 19.15 Finding 6 (P1): pending facet removal survives intermediate acknowledgment
+  {
+    const capturedQueries: string[] = [];
+    let currentControlledParams = new URLSearchParams('status=FAILED.DELIVERED');
+    const hook = renderMountedDataTableHook({
+      contextSearchParams: currentControlledParams,
+      onNavigate: (url: string) => {
+        capturedQueries.push(url);
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        { id: 'status', title: 'Trạng thái', options: [] },
+        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
+      ],
+      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    });
+
+    // Step 1: from committed status=FAILED.DELIVERED, queue status=FAILED, then queue removal of status entirely
+    hook.current.setFilter('status', ['FAILED']);
+    hook.current.setFilter('status', []);
+    assert.strictEqual(capturedQueries.length, 2, 'Two deselection queries captured');
+
+    // Step 2: acknowledge the first request (status=FAILED) while the removal remains pending
+    currentControlledParams = new URLSearchParams('status=FAILED');
+    hook.rerender({ contextSearchParams: currentControlledParams });
+
+    // Step 3: select carrier GHN
+    hook.current.setFilter('carrier', ['GHN']);
+    assert.strictEqual(capturedQueries.length, 3, 'Third query captured');
+    const nextQuery = capturedQueries[2];
+    const params = new URLSearchParams(nextQuery.split('?')[1] ?? '');
+    assert.strictEqual(
+      params.get('carrier'),
+      'GHN',
+      'pending facet removal survives intermediate acknowledgment: carrier equals GHN'
+    );
+    assert.strictEqual(
+      params.get('status'),
+      null,
+      'pending facet removal survives intermediate acknowledgment: status is absent'
+    );
+    console.log('   ✅ Finding 6 (P1): pending facet removal survives intermediate acknowledgment');
+  }
+
+  // 19.16 Finding 3 (P1): mounted status acknowledgment preserves pending carrier selection
+  {
+    const prevWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      location: { search: '' },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    try {
+      const capturedQueries: string[] = [];
+      let currentControlledParams = new URLSearchParams('');
+      const hook = renderMountedDataTableHook({
+        contextSearchParams: currentControlledParams,
+        onNavigate: (url: string) => {
+          capturedQueries.push(url);
+        },
+        defaultPageSize: 10,
+        filterableColumns: [
+          { id: 'status', title: 'Trạng thái', options: [] },
+          { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
+        ],
+        searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+      });
+
+      // Mount faceted filter for carrier connected to hook
+      const carrierFilter = renderMountedDataTableFacetedFilter({
+        title: 'Hãng vận chuyển',
+        options: [
+          { label: 'Giao Hàng Nhanh', value: 'GHN' },
+          { label: 'Giao Hàng Tiết Kiệm', value: 'GHTK' },
+        ],
+        selectedValues: new Set<string>(hook.current.filters.carrier || []),
+        onSelect: (vals: string[]) => hook.current.setFilter('carrier', vals),
+      });
+
+      // Step 1: from empty filters, queue status=FAILED, then carrier=GHN
+      hook.current.setFilter('status', ['FAILED']);
+      carrierFilter.open();
+      carrierFilter.toggle('GHN');
+      assert.strictEqual(capturedQueries.length, 2, 'Two requests queued');
+      assert.strictEqual(carrierFilter.isOptionSelected('GHN'), true);
+
+      // Step 2: acknowledge the status request while the carrier request remains held
+      const statusQuery = capturedQueries[0].split('?')[1] ?? '';
+      (globalThis as any).window.location.search = `?${statusQuery}`;
+      currentControlledParams = new URLSearchParams(statusQuery);
+      hook.rerender({ contextSearchParams: currentControlledParams });
+      carrierFilter.rerender({
+        selectedValues: new Set<string>(hook.current.filters.carrier || []),
+      });
+
+      // Step 3: assert GHN remains selected in carrier filter
+      assert.strictEqual(
+        carrierFilter.isOptionSelected('GHN'),
+        true,
+        'mounted status acknowledgment preserves pending carrier selection: GHN remains selected'
+      );
+
+      // Step 4: select GHTK in carrier filter
+      carrierFilter.toggle('GHTK');
+      assert.strictEqual(capturedQueries.length, 3, 'Third request sent');
+      const thirdParams = new URLSearchParams(capturedQueries[2].split('?')[1] ?? '');
+      assert.strictEqual(
+        thirdParams.get('status'),
+        'FAILED',
+        'mounted status acknowledgment preserves pending carrier selection: status equals FAILED'
+      );
+      const carrierSegments = (thirdParams.get('carrier') || '').split('.');
+      assert.ok(
+        carrierSegments.includes('GHN') && carrierSegments.includes('GHTK'),
+        'mounted status acknowledgment preserves pending carrier selection: carrier contains both GHN and GHTK'
+      );
+      console.log(
+        '   ✅ Finding 3 (P1): mounted status acknowledgment preserves pending carrier selection'
+      );
+    } finally {
+      (globalThis as any).window = prevWindow;
+    }
   }
 
   console.log(

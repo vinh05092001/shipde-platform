@@ -111,13 +111,13 @@ export function computeToolbarDraftOnPropChange(
     };
   }
 
-  // Round 41 finding 6: an acknowledgment of an EARLIER owned request while a
-  // newer intent still exists locally (a later owned dispatch that has not
-  // committed, or unsent draft text newer than the last dispatch). Preserve
-  // the newest draft and keep its timer; the intermediate commit must not be
-  // misread as external (which would restore the older value and discard the
-  // newer search intent).
-  if (currentDraft !== lastSent && sentSearchLog.indexOf(incoming) !== -1) {
+  // Intermediate acknowledgment of an earlier owned request while the latest
+  // dispatched request is still pending and no newer unsent text is drafted
+  // (currentDraft === lastSent, Finding 2 P1). Preserve the latest dispatched intent.
+  // If the user typed newer unsent draft (currentDraft !== lastSent), an authoritative
+  // external navigation colliding with an earlier owned request (e.g. Link to ?search=N)
+  // discards cancelled unsent intent and resyncs to the URL (Finding 1 P1).
+  if (currentDraft === lastSent && sentSearchLog.indexOf(incoming) !== -1) {
     return {
       nextDraft: currentDraft,
       nextPrevSearchValue: incoming,
@@ -267,6 +267,8 @@ export function DataTableToolbar({
       const authoritative = new URLSearchParams(window.location.search).get('search') || '';
       draftRef.current = authoritative;
       setDraftSearch(authoritative);
+      setLastSentSearch(authoritative);
+      setPrevSearchValue(authoritative);
     };
     window.addEventListener('popstate', handlePopState);
     return () => {
@@ -291,12 +293,12 @@ export function DataTableToolbar({
     );
     setPrevSearchValue(result.nextPrevSearchValue);
     setPrevResetEpoch(resetEpoch);
-    if (resetEpoch !== prevResetEpoch) {
-      // Explicit reset: the toolbar abandons all of its queued own requests.
+    if (resetEpoch !== prevResetEpoch || result.shouldCancelDebounce) {
+      // Explicit reset or authoritative external navigation: the toolbar abandons
+      // all of its cancelled own requests and invalidates ownership markers (Finding 1 & 4 P1).
       setSentSearchLog([]);
     } else {
-      // Commit acknowledged this toolbar's value (up to it, if intermediate)
-      // or was external (never dispatched here) and clears the log.
+      // Commit acknowledged this toolbar's value (up to it, if intermediate).
       setSentSearchLog(advanceSentSearchLog(sentSearchLog, searchValue || ''));
     }
     if (result.shouldCancelDebounce) {
