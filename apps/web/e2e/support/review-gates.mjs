@@ -187,3 +187,20 @@ test('review 36: AppShell.tsx has zero unused eslint-disable directives', () => 
     'AppShell.tsx must not contain the unused eslint-disable directive on setup-scoped setNavigation'
   );
 });
+
+test('review 37: storybook-data-table.spec.ts does not use synthetic popstate for router acknowledgment and releases external link navigation', () => {
+  const specContent = source('apps/web/e2e/storybook-data-table.spec.ts').toString('utf8');
+  assert.equal(
+    specContent.includes("new PopStateEvent('popstate')"),
+    false,
+    'Synthetic popstate events must not be dispatched to simulate Next.js router acknowledgment'
+  );
+  assert.ok(
+    specContent.includes('held.releaseLatest()'),
+    'Link navigation request must be released so Next.js commits the external navigation'
+  );
+  assert.ok(
+    specContent.includes("held.releaseOne((url) => !url.searchParams.has('status'))"),
+    'Empty reset request must be acknowledged via router release'
+  );
+});

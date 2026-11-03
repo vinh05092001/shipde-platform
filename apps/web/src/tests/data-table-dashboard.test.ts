@@ -3539,8 +3539,74 @@ async function runTestSuite() {
 
   console.log('   ✅ Round 14 review findings proven');
 
+  // 16. Round 37 Review Findings (P1 & P2 CI Failures Resolution)
+  console.log('🧪 16. Testing Round 37 Review Findings...');
+
+  // 16.1 Finding 1 (P1): External Next.js navigation commit resets toolbar draft via historyEpoch signal
+  const toolbarDraftBeforeExternalNav = computeToolbarDraftOnPropChange(
+    'Ng',
+    'N',
+    '',
+    ['Ng'],
+    true, // navigationEvent = true triggered by historyEpoch bump on cancelled edit commit
+    false
+  );
+  assert.strictEqual(
+    toolbarDraftBeforeExternalNav.nextDraft,
+    'N',
+    'Round 37 Finding 1 P1: External Link navigation commit resets draft from Ng to N'
+  );
+  assert.deepStrictEqual(toolbarDraftBeforeExternalNav.nextPendingEdits, []);
+
+  // Negative test: without navigationEvent, toolbar treats 'N' as older acknowledgment or pending mismatch and retains 'Ng'
+  const toolbarDraftNegative = computeToolbarDraftOnPropChange(
+    'Ng',
+    'N',
+    '',
+    ['N', 'Ng'],
+    false, // missing navigationEvent
+    false
+  );
+  assert.strictEqual(
+    toolbarDraftNegative.nextDraft,
+    'Ng',
+    'Round 37 Finding 1 P1 negative proof: without navigation event signal, toolbar retains newer draft Ng'
+  );
+
+  // 16.2 Finding 1 (P2): Real router acknowledgment (historyEvent=false) preserves facet selection after reset
+  const facetResetAckRealRouter = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    ['', 'DELIVERED'],
+    false, // historyEvent = false (real Next.js router commit, NOT a popstate event)
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(facetResetAckRealRouter.nextOptimistic),
+    ['DELIVERED'],
+    'Round 37 Finding 1 P2: Real router acknowledgment preserves DELIVERED facet selection'
+  );
+
+  // Negative test: synthetic popstate event triggers historyEvent=true, which mistakenly resets optimistic facets to incoming URL
+  const facetResetAckSyntheticPopstate = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    ['', 'DELIVERED'],
+    true, // synthetic popstate
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(facetResetAckSyntheticPopstate.nextOptimistic),
+    [],
+    'Round 37 Finding 1 P2 negative proof: synthetic popstate mistakenly clears newer facet selection'
+  );
+
+  console.log('   ✅ Round 37 review findings proven');
+
   console.log(
-    '   ✅ Round 6, 8, 9, 10, 11, 12 & 14 review findings proven and verified with unit test suites'
+    '   ✅ Round 6, 8, 9, 10, 11, 12, 14 & 37 review findings proven and verified with unit test suites'
   );
 
   console.log('\n================================================================');

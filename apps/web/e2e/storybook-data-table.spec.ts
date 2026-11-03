@@ -14,10 +14,9 @@ const PAGE_SIZE_LABEL = 'Chọn số dòng hiển thị mỗi trang';
 // for pending-navigation behavior. The React tree remains mounted throughout.
 async function holdTableNavigation(page: Page) {
   const requests: URL[] = [];
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const heldRoutes: Array<{ url: URL; resolve: () => void }> = [];
+  let isReleased = false;
+
   await page.route('**/storybook?**', async (route) => {
     const url = new URL(route.request().url());
     if (!url.searchParams.has('_rsc')) {
@@ -25,13 +24,34 @@ async function holdTableNavigation(page: Page) {
       return;
     }
     requests.push(url);
-    await released;
+    if (isReleased) {
+      await route.continue();
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      heldRoutes.push({ url, resolve });
+    });
     await route.continue();
   });
   return {
     requests,
+    releaseOne: (predicate?: (url: URL) => boolean) => {
+      const idx = predicate ? heldRoutes.findIndex((r) => predicate(r.url)) : 0;
+      if (idx !== -1 && heldRoutes[idx]) {
+        const [target] = heldRoutes.splice(idx, 1);
+        target.resolve();
+      }
+    },
+    releaseLatest: () => {
+      const target = heldRoutes.pop();
+      if (target) target.resolve();
+    },
     finish: async () => {
-      release();
+      isReleased = true;
+      while (heldRoutes.length > 0) {
+        const target = heldRoutes.shift();
+        if (target) target.resolve();
+      }
       await page.unrouteAll({ behavior: 'wait' });
     },
   };
@@ -493,6 +513,8 @@ test('review 12 P1: external same-page navigation to an older pending search can
     // edit and keep the newer "Ng" draft.
     // Round 14 / Finding 4 P1: test an actual Next.js navigation via Link without synthetic popstate.
     await page.getByRole('link', { name: 'Mô phỏng điều hướng ngoài: search=N' }).click();
+    await expect.poll(() => held.requests.length).toBe(3);
+    held.releaseLatest();
     await expect(search).toHaveValue('N');
 
     await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
@@ -528,10 +550,9 @@ test('review 12 P2: a facet selected after reset survives the empty reset acknow
       .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'DELIVERED'))
       .toBe(true);
 
-    await page.evaluate(() => {
-      window.history.pushState(window.history.state, '', '/storybook');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    });
+    // Round 14 / Finding 8 P2: Acknowledge the empty reset request via the mounted Next.js router.
+    // The subsequent facet selection (DELIVERED) queued while reset was in flight survives the acknowledgment.
+    held.releaseOne((url) => !url.searchParams.has('status'));
     await expect(page.getByRole('button', { name: 'Bộ lọc Trạng thái: 1 đã chọn' })).toBeVisible();
   } finally {
     await held.finish();
