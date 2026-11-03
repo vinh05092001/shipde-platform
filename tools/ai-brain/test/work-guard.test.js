@@ -15,10 +15,42 @@ const g = require('../work-guard');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'work-guard-'));
 
+// Windows/macOS compare paths case-insensitively; a Linux filesystem does not, and
+// the checkout-comparison test needs both behaviours on whatever host runs it.
+function withCaseInsensitiveFs(value, fn) {
+  const prev = process.env.WORK_GUARD_CASE_INSENSITIVE;
+  if (value === undefined) delete process.env.WORK_GUARD_CASE_INSENSITIVE;
+  else process.env.WORK_GUARD_CASE_INSENSITIVE = value;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env.WORK_GUARD_CASE_INSENSITIVE;
+    else process.env.WORK_GUARD_CASE_INSENSITIVE = prev;
+  }
+}
+
+// A git stub that can make the conflict inspection itself fail, not just report
+// conflicts: an inspection that never ran is not evidence of a clean tree.
+function gitFailingDiff() {
+  const map = {
+    'rev-parse --show-toplevel': { status: 0, stdout: '/w/p-task-ai-165\n' },
+    'symbolic-ref --quiet --short HEAD': { status: 0, stdout: 'feat/task-ai-165-ci\n' },
+    'rev-parse HEAD': { status: 0, stdout: 'abc\n' },
+  };
+  return (args) => {
+    if (args.join(' ') === 'diff --name-only --diff-filter=U') return { status: 128, stdout: '' };
+    return map[args.join(' ')] || { status: 1, stdout: '' };
+  };
+}
+
 function fakeGit(map) {
   return (args) => {
     const r = map[args.join(' ')];
-    return r === undefined ? { status: 1, stdout: '' } : typeof r === 'string' ? { status: 0, stdout: r } : r;
+    return r === undefined
+      ? { status: 1, stdout: '' }
+      : typeof r === 'string'
+        ? { status: 0, stdout: r }
+        : r;
   };
 }
 
@@ -31,31 +63,59 @@ const okGit = (branch) =>
   });
 
 test('workspace on the item branch is accepted', () => {
-  const r = g.checkWorkspace({ cwd: '/w/p-task-ai-165', expectedRoot: '/w/p-task-ai-165', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-165-ci') });
+  const r = g.checkWorkspace({
+    cwd: '/w/p-task-ai-165',
+    expectedRoot: '/w/p-task-ai-165',
+    workItemId: 'TASK-AI-165',
+    git: okGit('feat/task-ai-165-ci'),
+  });
   assert.equal(r.ok, true);
   assert.equal(r.head, 'abc');
 });
 
 test('workspace on another item branch is WRONG_BRANCH (165 on 155)', () => {
-  const r = g.checkWorkspace({ cwd: '/w/p-task-ai-165', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-155-web-data-table') });
-  assert.deepEqual([r.ok, r.cause, r.branch], [false, g.Cause.WRONG_BRANCH, 'feat/task-ai-155-web-data-table']);
+  const r = g.checkWorkspace({
+    cwd: '/w/p-task-ai-165',
+    workItemId: 'TASK-AI-165',
+    git: okGit('feat/task-ai-155-web-data-table'),
+  });
+  assert.deepEqual(
+    [r.ok, r.cause, r.branch],
+    [false, g.Cause.WRONG_BRANCH, 'feat/task-ai-155-web-data-table']
+  );
 });
 
 test('id prefix does not match a longer id (TASK-AI-16 vs task-ai-165)', () => {
-  const r = g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', branchPattern: /^(feat|fix)\/task-ai-16-/, git: okGit('feat/task-ai-165-ci') });
+  const r = g.checkWorkspace({
+    cwd: '/w',
+    workItemId: 'TASK-AI-16',
+    branchPattern: /^(feat|fix)\/task-ai-16-/,
+    git: okGit('feat/task-ai-165-ci'),
+  });
   assert.equal(r.cause, g.Cause.WRONG_BRANCH);
 });
 
 test('cwd in a different checkout is CWD_MISMATCH', () => {
-  const r = g.checkWorkspace({ cwd: '/w/x', expectedRoot: '/w/p-task-ai-160', workItemId: 'TASK-AI-165', git: okGit('feat/task-ai-165-ci') });
+  const r = g.checkWorkspace({
+    cwd: '/w/x',
+    expectedRoot: '/w/p-task-ai-160',
+    workItemId: 'TASK-AI-165',
+    git: okGit('feat/task-ai-165-ci'),
+  });
   assert.equal(r.cause, g.Cause.CWD_MISMATCH);
 });
 
 test('unmerged files are MERGE_CONFLICT, detached head is refused', () => {
-  const c = fakeGit({ 'rev-parse --show-toplevel': '/w', 'diff --name-only --diff-filter=U': 'a.csv\n' });
+  const c = fakeGit({
+    'rev-parse --show-toplevel': '/w',
+    'diff --name-only --diff-filter=U': 'a.csv\n',
+  });
   assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: c }).cause, g.Cause.CONFLICT);
   const d = fakeGit({ 'rev-parse --show-toplevel': '/w', 'diff --name-only --diff-filter=U': '' });
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: d }).cause, g.Cause.DETACHED_HEAD);
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'X', git: d }).cause,
+    g.Cause.DETACHED_HEAD
+  );
 });
 
 test('same head/base/input is not reviewed twice; new head, base or input reopens', () => {
@@ -64,9 +124,18 @@ test('same head/base/input is not reviewed twice; new head, base or input reopen
   assert.equal(L.admit('A', 'review', fp).ok, true);
   L.record('A', 'review', fp, 'CHANGES_REQUIRED', { tokens: 100 });
   assert.equal(L.admit('A', 'review', fp).cause, g.Cause.NO_PROGRESS);
-  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h2', baseSha: 'b1', inputs: 'ci:red' })).ok, true);
-  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b2', inputs: 'ci:red' })).ok, true);
-  assert.equal(L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b1', inputs: 'ci:green' })).ok, true);
+  assert.equal(
+    L.admit('A', 'review', g.fingerprint({ headSha: 'h2', baseSha: 'b1', inputs: 'ci:red' })).ok,
+    true
+  );
+  assert.equal(
+    L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b2', inputs: 'ci:red' })).ok,
+    true
+  );
+  assert.equal(
+    L.admit('A', 'review', g.fingerprint({ headSha: 'h1', baseSha: 'b1', inputs: 'ci:green' })).ok,
+    true
+  );
 });
 
 test('transient outcome allows a controlled retry of the same input', () => {
@@ -88,7 +157,10 @@ test('blocking one item leaves independent items running', () => {
 
 test('item and goal budgets cap attempts, time and tokens; unknown tokens stay unknown', () => {
   const file = path.join(tmp(), 'l.json');
-  const L = new g.ProgressLedger({ file, limits: { item: { attempts: 2, tokens: 1000 }, goal: { ms: 5000 } } });
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { attempts: 2, tokens: 1000 }, goal: { ms: 5000 } },
+  });
   L.record('A', 'review', 'f1', 'CHANGES_REQUIRED', { tokens: 400 });
   L.record('A', 'repair', 'f2', 'DONE', {});
   assert.equal(L.admit('A', 'review', 'f3').cause, g.Cause.ATTEMPTS_EXHAUSTED);
@@ -106,21 +178,51 @@ test('result from a previous job is rejected', () => {
 });
 
 test('cleanup cannot mask the real exit code', async () => {
-  const r = await g.runWithCleanup(async () => ({ exitCode: 1 }), async () => {
-    throw new Error('rm failed');
-  });
+  const r = await g.runWithCleanup(
+    async () => ({ exitCode: 1 }),
+    async () => {
+      throw new Error('rm failed');
+    }
+  );
   assert.equal(r.exitCode, 1);
   assert.match(r.cleanupError, /rm failed/);
-  await assert.rejects(g.runWithCleanup(async () => { throw new Error('worker crashed'); }, async () => {}), /worker crashed/);
+  await assert.rejects(
+    g.runWithCleanup(
+      async () => {
+        throw new Error('worker crashed');
+      },
+      async () => {}
+    ),
+    /worker crashed/
+  );
 });
 
 test('CLI: refused admit exits 3, record then admit same input is NO_PROGRESS', () => {
   const ledger = path.join(tmp(), 'l.json');
   const cli = path.join(__dirname, '..', 'work-guard.js');
-  const base = ['--ledger', ledger, '--item', 'A', '--stage', 'review', '--head', 'h1', '--base', 'b1'];
-  assert.equal(spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)]).status, 0);
-  assert.equal(spawnSync(process.execPath, [cli, 'record', ...base, '--outcome', 'CHANGES_REQUIRED']).status, 0);
-  const r = spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)], { encoding: 'utf8' });
+  const base = [
+    '--ledger',
+    ledger,
+    '--item',
+    'A',
+    '--stage',
+    'review',
+    '--head',
+    'h1',
+    '--base',
+    'b1',
+  ];
+  assert.equal(
+    spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)]).status,
+    0
+  );
+  assert.equal(
+    spawnSync(process.execPath, [cli, 'record', ...base, '--outcome', 'CHANGES_REQUIRED']).status,
+    0
+  );
+  const r = spawnSync(process.execPath, [cli, 'admit', ...base, '--pid', String(process.pid)], {
+    encoding: 'utf8',
+  });
   assert.equal(r.status, 3);
   assert.equal(JSON.parse(r.stdout).cause, g.Cause.NO_PROGRESS);
   assert.equal(spawnSync(process.execPath, [cli, 'nope']).status, 2);
@@ -136,7 +238,7 @@ test('review loop: a repair that never ran does not re-test or re-review the sam
       runTests: () => ((tests += 1), { pass: true }),
       review: (sha) => ((reviews += 1), { pass: false, sha, findings: [{ id: 'P1' }] }),
       repair: () => ({ repairNotAttempted: true }),
-    },
+    }
   );
   assert.equal(r.status, Status.BLOCKED);
   assert.equal(tests, 1);
@@ -144,9 +246,19 @@ test('review loop: a repair that never ran does not re-test or re-review the sam
 });
 
 test('codex 8fa765f: default branch match is bounded (TASK-AI-16 vs task-ai-165)', () => {
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-165-ci') }).cause, g.Cause.WRONG_BRANCH);
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-16-x') }).ok, true);
-  assert.equal(g.checkWorkspace({ cwd: '/w', workItemId: 'AI-165', git: okGit('feat/task-ai-165-ci') }).ok, true);
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-165-ci') })
+      .cause,
+    g.Cause.WRONG_BRANCH
+  );
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'TASK-AI-16', git: okGit('feat/task-ai-16-x') }).ok,
+    true
+  );
+  assert.equal(
+    g.checkWorkspace({ cwd: '/w', workItemId: 'AI-165', git: okGit('feat/task-ai-165-ci') }).ok,
+    true
+  );
 });
 
 test('codex 8fa765f: alternating inputs F1, F2, F1 do not reopen F1', () => {
@@ -157,26 +269,47 @@ test('codex 8fa765f: alternating inputs F1, F2, F1 do not reopen F1', () => {
 });
 
 test('codex 8fa765f: frozen worker result survives a failing cleanup', async () => {
-  const r = await g.runWithCleanup(async () => Object.freeze({ exitCode: 7 }), async () => {
-    throw new Error('rm failed');
-  });
+  const r = await g.runWithCleanup(
+    async () => Object.freeze({ exitCode: 7 }),
+    async () => {
+      throw new Error('rm failed');
+    }
+  );
   assert.equal(r.exitCode, 7);
   assert.match(r.cleanupError, /rm failed/);
 });
 
 test('codex 8fa765f: returning to a tested SHA does not re-run its tests', async () => {
-  const { runReviewLoop } = require('../review-loop');
-  const runs = [];
+  const { runReviewLoop, Status } = require('../review-loop');
   const shas = ['s2', 's1', 's3'];
-  await runReviewLoop(
+  const tested = [];
+  const reviewed = [];
+  const r = await runReviewLoop(
     { sha: 's1', budget: 3 },
     {
-      runTests: () => ({ pass: false, findings: [{ id: 'T' }] }),
-      review: (sha) => ({ pass: true, sha }),
+      runTests: () => {
+        // shas[0] is the SHA the upcoming repair will produce; once the queue is
+        // empty the next repair returns no SHA and the loop stops.
+        const sha = shas.length ? shas[0] : 'no-more';
+        tested.push(sha);
+        return { pass: false, findings: [{ id: 'T' }] };
+      },
+      review: (sha) => {
+        reviewed.push(sha);
+        return { pass: true, sha };
+      },
       repair: () => ({ sha: shas.shift() }),
-    },
+    }
   );
-  void runs;
+  // s1 is the entry SHA and is tested once; s2 once for the first repair. Returning
+  // to s1 buys no second test run of s1, and the final repair with no SHA stops the
+  // loop even though its tests were bought first (they are never run again).
+  assert.deepEqual(tested, ['s2', 's1', 'no-more']);
+  assert.equal(tested.filter((s) => s === 's1').length, 1);
+  // No SHA ever passed tests, so no review was bought at all.
+  assert.deepEqual(reviewed, []);
+  assert.equal(r.status, Status.BLOCKED);
+  assert.equal(r.repairCount, 4);
 });
 
 test('codex a820c19: corrupt ledger fails closed', () => {
@@ -188,7 +321,17 @@ test('codex a820c19: corrupt ledger fails closed', () => {
 
 test('codex a820c19: frozen worker exception survives a failing cleanup', async () => {
   const e = Object.freeze(new Error('worker crashed'));
-  await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /worker crashed/);
+  await assert.rejects(
+    g.runWithCleanup(
+      async () => {
+        throw e;
+      },
+      async () => {
+        throw new Error('rm');
+      }
+    ),
+    /worker crashed/
+  );
 });
 
 test('lock: second owner refused; only owner releases; live holder never superseded', () => {
@@ -196,7 +339,10 @@ test('lock: second owner refused; only owner releases; live holder never superse
   const live = { pidAlive: () => true };
   assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, live).ok, true);
   const second = g.acquireLock(f, { jobId: 'j2', pid: 222 }, live);
-  assert.deepEqual([second.ok, second.cause, second.holder.jobId], [false, g.Cause.LOCK_HELD, 'j1']);
+  assert.deepEqual(
+    [second.ok, second.cause, second.holder.jobId],
+    [false, g.Cause.LOCK_HELD, 'j1']
+  );
   assert.equal(g.releaseLock(f, { jobId: 'j2' }).cause, g.Cause.LOCK_NOT_OWNER);
   assert.equal(g.lockHolder(f).jobId, 'j1');
   assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
@@ -229,9 +375,15 @@ test('codex 4625b50: a late contender creating an old generation backs off', () 
 });
 
 test('codex a820c19: reserved admission blocks a duplicate until recorded; dead reserver frees it', () => {
-  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 5 } } });
+  const L = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { goal: { attempts: 5 } },
+  });
   assert.equal(L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).ok, true);
-  assert.equal(L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).cause, g.Cause.NO_PROGRESS);
+  assert.equal(
+    L.admit('A', 'review', 'F', { reserve: true, pid: process.pid }).cause,
+    g.Cause.NO_PROGRESS
+  );
   L.record('A', 'review', 'F', 'CHANGES_REQUIRED', {});
   assert.equal(L.load().items.A.spent.attempts, 1);
   assert.equal(L.admit('A', 'review', 'G', { reserve: true, pid: 999999 }).ok, true);
@@ -240,13 +392,23 @@ test('codex a820c19: reserved admission blocks a duplicate until recorded; dead 
 });
 
 test('codex a820c19: goal cap of one admits only one reserved attempt', () => {
-  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json'), limits: { goal: { attempts: 1 } } });
+  const L = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { goal: { attempts: 1 } },
+  });
   assert.equal(L.admit('A', 'review', 'F1', { reserve: true, pid: process.pid }).ok, true);
-  assert.equal(L.admit('B', 'review', 'F2', { reserve: true, pid: process.pid }).cause, g.Cause.GOAL_EXHAUSTED);
+  assert.equal(
+    L.admit('B', 'review', 'F2', { reserve: true, pid: process.pid }).cause,
+    g.Cause.GOAL_EXHAUSTED
+  );
 });
 
 test('codex 4625b50: structurally damaged ledger fails closed', () => {
-  for (const bad of ['{"items":false,"goal":false}', '{"items":{"A":{"spent":{"attempts":"x"}}},"goal":{"attempts":0}}', '[]']) {
+  for (const bad of [
+    '{"items":false,"goal":false}',
+    '{"items":{"A":{"spent":{"attempts":"x"}}},"goal":{"attempts":0}}',
+    '[]',
+  ]) {
     const file = path.join(tmp(), 'l.json');
     fs.writeFileSync(file, bad);
     assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
@@ -260,15 +422,40 @@ test('codex e4a6705: missing counters or fingerprint containers fail closed; pid
   const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
   assert.throws(() => L.admit('A', 'review', 'F', { reserve: true, pid: 0 }), /integer owner pid/);
   assert.throws(() => L.admit('A', 'review', 'F', { reserve: true, pid: -4 }), /integer owner pid/);
-  const out = Object.defineProperty({ exitCode: 7 }, 'cleanupError', { value: 'x', writable: false, enumerable: false });
-  const r = await g.runWithCleanup(async () => out, async () => { throw new Error('rm'); });
+  const out = Object.defineProperty({ exitCode: 7 }, 'cleanupError', {
+    value: 'x',
+    writable: false,
+    enumerable: false,
+  });
+  const r = await g.runWithCleanup(
+    async () => out,
+    async () => {
+      throw new Error('rm');
+    }
+  );
   assert.equal(r.exitCode, 7);
-  const e = Object.defineProperty(new Error('crash'), 'cleanupError', { value: 1, writable: false });
-  await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /crash/);
+  const e = Object.defineProperty(new Error('crash'), 'cleanupError', {
+    value: 1,
+    writable: false,
+  });
+  await assert.rejects(
+    g.runWithCleanup(
+      async () => {
+        throw e;
+      },
+      async () => {
+        throw new Error('rm');
+      }
+    ),
+    /crash/
+  );
 });
 
 test('codex b4a4064: items need spent and stages; lock pids must be positive; usage never refunds', () => {
-  for (const bad of ['{"items":{"A":{}},"goal":{"attempts":0,"ms":0,"tokens":0}}', '{"items":{"A":{"spent":{"attempts":1,"ms":0,"tokens":0}}},"goal":{"attempts":0,"ms":0,"tokens":0}}']) {
+  for (const bad of [
+    '{"items":{"A":{}},"goal":{"attempts":0,"ms":0,"tokens":0}}',
+    '{"items":{"A":{"spent":{"attempts":1,"ms":0,"tokens":0}}},"goal":{"attempts":0,"ms":0,"tokens":0}}',
+  ]) {
     const file = path.join(tmp(), 'l.json');
     fs.writeFileSync(file, bad);
     assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
@@ -276,7 +463,10 @@ test('codex b4a4064: items need spent and stages; lock pids must be positive; us
   const f = path.join(tmp(), 'lane.lock');
   assert.throws(() => g.acquireLock(f, { jobId: 'n', pid: -99999999 }), /positive pid/);
   fs.writeFileSync(f + '.g1', JSON.stringify({ jobId: 'bad', pid: -5, at: 1 }));
-  assert.equal(g.acquireLock(f, { jobId: 'j', pid: 7 }, { pidAlive: () => false }).cause, g.Cause.LOCK_HELD);
+  assert.equal(
+    g.acquireLock(f, { jobId: 'j', pid: 7 }, { pidAlive: () => false }).cause,
+    g.Cause.LOCK_HELD
+  );
   const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
   assert.throws(() => L.record('A', 'review', 'F', 'X', { ms: -100 }), /invalid usage/);
   assert.throws(() => L.record('A', 'review', 'F', 'X', { tokens: -100 }), /invalid usage/);
@@ -293,7 +483,628 @@ test('codex ee9ce83: a generation already taken and released cannot be reacquire
   const late = g.acquireLock(f, { jobId: 'C', pid: 3 }, live);
   assert.equal(late.ok, true); // C takes g2, never g1
   assert.equal(g.lockHolder(f).jobId, 'C');
-  const r = await g.runWithCleanup(async () => Object.create({ exitCode: 7 }), async () => { throw new Error('rm'); });
+  const r = await g.runWithCleanup(
+    async () => Object.create({ exitCode: 7 }),
+    async () => {
+      throw new Error('rm');
+    }
+  );
   assert.equal(r.exitCode, 7);
   assert.match(r.cleanupError, /rm/);
+});
+
+test('round 2 #4: a failed conflict inspection refuses admission instead of passing', () => {
+  const cwd = '/w/p-task-ai-165';
+  const item = 'TASK-AI-165';
+  // `git diff --name-only --diff-filter=U` exits nonzero (index locked, corrupt repo,
+  // git crashed): the guard cannot prove the tree is clean, so AC-AI-167-01 refuses.
+  const r = g.checkWorkspace({ cwd, expectedRoot: cwd, workItemId: item, git: gitFailingDiff() });
+  assert.equal(r.ok, false);
+  assert.equal(r.cause, g.Cause.CONFLICT_UNKNOWN);
+  // A git stub that returns nothing at all for the inspection is refused too.
+  const silent = fakeGit({
+    'rev-parse --show-toplevel': cwd + '\n',
+    'symbolic-ref --quiet --short HEAD': 'feat/task-ai-165-ci\n',
+    'rev-parse HEAD': 'abc\n',
+  });
+  assert.equal(
+    g.checkWorkspace({ cwd, expectedRoot: cwd, workItemId: item, git: silent }).cause,
+    g.Cause.CONFLICT_UNKNOWN
+  );
+  // Control: a successful inspection with no unmerged files still admits.
+  assert.equal(
+    g.checkWorkspace({ cwd, expectedRoot: cwd, workItemId: item, git: okGit(item) }).ok,
+    true
+  );
+});
+
+test('round 2 #5: unknown token usage counts toward the token caps', () => {
+  const file = path.join(tmp(), 'l.json');
+  // A token-only cap, no attempt cap: only the token budget can ever refuse.
+  const L = new g.ProgressLedger({ file, limits: { item: { tokens: 3000 } } });
+  L.record('A', 'repair', 'f1', 'TIMEOUT', {});
+  L.record('A', 'repair', 'f2', 'TIMEOUT', {});
+  // Each unobserved attempt is charged the per-attempt cap (3000); the item cap is spent.
+  assert.equal(L.admit('A', 'repair', 'f3').cause, g.Cause.TOKENS_EXHAUSTED);
+  const s = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(s.items.A.spent.tokensUnknown, 2);
+  // Two unreserved attempts accumulated 3000 each; the third is refused before charge.
+  assert.equal(s.items.A.spent.unknownTokens, 6000);
+  assert.equal(s.items.A.spent.tokens, 0);
+
+  // A reservation that is never recorded cannot dodge the same cap.
+  const L2 = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { goal: { tokens: 3000 } },
+  });
+  L2.admit('A', 'review', 'f1', { reserve: true, pid: process.pid });
+  assert.equal(L2.admit('B', 'review', 'f2').cause, g.Cause.GOAL_EXHAUSTED);
+  // A recorded reservation is not charged twice: its known usage replaces the imputation.
+  const L3 = new g.ProgressLedger({
+    file: path.join(tmp(), 'l.json'),
+    limits: { item: { tokens: 3000 } },
+  });
+  L3.admit('A', 'review', 'f1', { reserve: true, pid: process.pid });
+  L3.record('A', 'review', 'f1', 'CHANGES_REQUIRED', { tokens: 10 });
+  const s3 = JSON.parse(fs.readFileSync(L3.file, 'utf8'));
+  assert.equal(s3.items.A.spent.tokens, 10);
+  assert.equal(s3.items.A.spent.unknownTokens, 0);
+  assert.equal(L3.admit('A', 'review', 'f2').ok, true);
+  // An unknown usage that is recorded without a cap is still only a count.
+  const L4 = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  L4.record('A', 'review', 'f1', 'TIMEOUT', {});
+  assert.equal(L4.load().items.A.spent.unknownTokens, 0);
+  assert.throws(() => L4.record('A', 'review', 'f2', 'X', { tokens: -1 }), /invalid usage/);
+});
+
+test('round 2 #6: worker own properties survive failing cleanup across JSON serialization and spread', async () => {
+  const workerResult = { jobId: 'job-99', exitCode: 7, count: 42 };
+  const r = await g.runWithCleanup(
+    async () => workerResult,
+    async () => {
+      throw new Error('rmdir failed');
+    }
+  );
+  assert.equal(r.jobId, 'job-99');
+  assert.equal(r.exitCode, 7);
+  assert.equal(r.count, 42);
+  assert.match(r.cleanupError, /rmdir failed/);
+
+  // Serialized handoff via JSON.stringify retains worker fields and cleanupError
+  const serialized = JSON.parse(JSON.stringify(r));
+  assert.equal(serialized.jobId, 'job-99');
+  assert.equal(serialized.exitCode, 7);
+  assert.equal(serialized.count, 42);
+  assert.match(serialized.cleanupError, /rmdir failed/);
+
+  // Object spread retains worker fields and cleanupError
+  const spread = { ...r };
+  assert.equal(spread.jobId, 'job-99');
+  assert.equal(spread.exitCode, 7);
+  assert.equal(spread.count, 42);
+  assert.match(spread.cleanupError, /rmdir failed/);
+});
+
+test('round 2 #7: falsy worker exceptions are not swallowed', async () => {
+  for (const falsy of [null, undefined, false, 0, '']) {
+    let threw = false;
+    try {
+      await g.runWithCleanup(
+        async () => {
+          throw falsy;
+        },
+        async () => {}
+      );
+    } catch (e) {
+      threw = true;
+      assert.strictEqual(e, falsy);
+    }
+    assert.strictEqual(threw, true, `Expected worker throwing ${JSON.stringify(falsy)} to throw`);
+  }
+});
+
+test('round 2 #14: unexpected liveness errors treat lock as held', () => {
+  const file = path.join(tmp(), 'lock');
+  fs.writeFileSync(file + '.g1', JSON.stringify({ jobId: 'j1', pid: 99999, at: Date.now() }));
+
+  const origKill = process.kill;
+  try {
+    // Non-ESRCH error (e.g. EPERM or any unexpected system failure)
+    process.kill = () => {
+      const err = new Error('unexpected system error');
+      err.code = 'EUNKNOWN';
+      throw err;
+    };
+    const r = g.acquireLock(file, { jobId: 'j2', pid: 88888 });
+    assert.equal(r.ok, false);
+    assert.equal(r.cause, g.Cause.LOCK_HELD);
+
+    // Proven dead (ESRCH) allows superseding lock
+    process.kill = () => {
+      const err = new Error('no such process');
+      err.code = 'ESRCH';
+      throw err;
+    };
+    const r2 = g.acquireLock(file, { jobId: 'j2', pid: 88888 });
+    assert.equal(r2.ok, true);
+  } finally {
+    process.kill = origKill;
+  }
+});
+
+test('round 2 #15: checkout comparison respects filesystem case-sensitivity', () => {
+  const git = (args) => {
+    if (args.join(' ') === 'rev-parse --show-toplevel') return { status: 0, stdout: '/w/Item\n' };
+    if (args.join(' ') === 'diff --name-only --diff-filter=U') return { status: 0, stdout: '' };
+    if (args.join(' ') === 'symbolic-ref --quiet --short HEAD')
+      return { status: 0, stdout: 'feat/item-1\n' };
+    if (args.join(' ') === 'rev-parse HEAD') return { status: 0, stdout: 'abc\n' };
+    return { status: 1, stdout: '' };
+  };
+
+  // Case-sensitive filesystem: /w/Item !== /w/item -> CWD_MISMATCH
+  withCaseInsensitiveFs('0', () => {
+    const r = g.checkWorkspace({
+      cwd: '/w/item',
+      expectedRoot: '/w/item',
+      workItemId: 'item-1',
+      git,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.cause, g.Cause.CWD_MISMATCH);
+  });
+
+  // Case-insensitive filesystem: /w/Item === /w/item -> accepted
+  withCaseInsensitiveFs('1', () => {
+    const r = g.checkWorkspace({
+      cwd: '/w/item',
+      expectedRoot: '/w/item',
+      workItemId: 'item-1',
+      git,
+    });
+    assert.equal(r.ok, true);
+  });
+});
+
+test('round 3 #4: goal-only token caps impute unknown usage and refuse excess attempts', () => {
+  const file = path.join(tmp(), 'l.json');
+  // Goal-only token cap: 3000 tokens, no item cap
+  const L = new g.ProgressLedger({ file, limits: { goal: { tokens: 3000 } } });
+  L.record('A', 'repair', 'f1', 'TIMEOUT', {});
+  // With conservative imputation under goal cap (3000 tokens), 1 unobserved attempt hits the cap
+  const res = L.admit('A', 'repair', 'f2');
+  assert.equal(res.ok, false);
+  assert.equal(res.cause, g.Cause.GOAL_EXHAUSTED);
+  assert.equal(L.load().goal.unknownTokens, 3000);
+});
+
+test("round 3 #5: recording one attempt does not erase another attempt's unresolved token charges", () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { tokens: 1000 }, goal: { tokens: 3000 } },
+  });
+  // Reserve attempts for A and B
+  assert.equal(L.admit('A', 'repair', 'fA', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.admit('B', 'repair', 'fB', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.load().goal.unknownTokens, 2000);
+
+  // Record A with known usage
+  L.record('A', 'repair', 'fA', 'DONE', { tokens: 500 });
+  const s = L.load();
+  assert.equal(s.items.A.spent.tokens, 500);
+  assert.equal(s.items.A.spent.unknownTokens, 0);
+  // B remains unresolved, so goal must retain B's 1000 imputed tokens
+  assert.equal(s.goal.tokens, 500);
+  assert.equal(s.goal.unknownTokens, 1000);
+
+  // Unreserved unknown attempts must accumulate rather than replace
+  L.record('C', 'repair', 'fC1', 'TIMEOUT', {});
+  assert.equal(L.load().goal.unknownTokens, 2000); // 1000 from B + 1000 from C1
+  L.record('C', 'repair', 'fC2', 'TIMEOUT', {});
+  assert.equal(L.load().goal.unknownTokens, 3000); // 1000 from B + 1000 from C1 + 1000 from C2
+  // Goal cap of 3000 is now reached (500 known + 3000 unknown = 3500 >= 3000)
+  assert.equal(L.admit('D', 'repair', 'fD').cause, g.Cause.GOAL_EXHAUSTED);
+});
+
+test('round 3 #6: elapsed-time caps account for unresolved reservations and repeated crashes', () => {
+  const file = path.join(tmp(), 'l.json');
+  let currentTime = 1000;
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { ms: 5000 }, goal: { ms: 10000 } },
+    now: () => currentTime,
+  });
+
+  // Reserve attempt for A with a dead pid at t = 1000
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: 999999 }).ok, true);
+
+  // Advance time past the item time cap (5000ms) to t = 7000
+  currentTime = 7000;
+
+  // Next admission for item A must account for elapsed time of unresolved reservation and be refused
+  const rA = L.admit('A', 'repair', 'f2');
+  assert.equal(rA.ok, false);
+  assert.equal(rA.cause, g.Cause.TIME_EXHAUSTED);
+
+  // Unresolvable reservation (missing/invalid at) must refuse admission
+  const s = L.load();
+  s.items.A.stages.repair.fps.f1.at = NaN;
+  fs.writeFileSync(file, JSON.stringify(s));
+  const rInvalid = L.admit('A', 'repair', 'f3');
+  assert.equal(rInvalid.ok, false);
+  assert.equal(rInvalid.cause, g.Cause.TIME_EXHAUSTED);
+});
+
+test('round 3 #11 / #15: checkout comparison detects actual filesystem case-sensitivity via inode probe', () => {
+  const dir = tmp();
+  // An existing path on disk can be probed for case sensitivity
+  const isCaseInsensitive = g.probeCaseInsensitive(dir);
+  assert.equal(typeof isCaseInsensitive, 'boolean');
+
+  // Verify that on this filesystem, norm matches probe
+  const upper = path.join(dir, 'UPPER_DIR');
+  const lower = path.join(dir, 'upper_dir');
+  fs.mkdirSync(upper);
+  if (isCaseInsensitive) {
+    // Both point to the same directory
+    assert.equal(g.norm(upper), g.norm(lower));
+  } else {
+    // Distinct paths
+    assert.notEqual(g.norm(upper), g.norm(lower));
+  }
+});
+
+test('round 3 #12: contenders preserve earlier lock generations and release markers', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+  assert.equal(g.acquireLock(f, { jobId: 'j1', pid: 111 }, live).ok, true);
+  assert.equal(g.releaseLock(f, { jobId: 'j1' }).ok, true);
+
+  // Generation 1 release marker exists
+  assert.equal(fs.existsSync(f + '.g1.released'), true);
+
+  // Acquire generation 2
+  assert.equal(g.acquireLock(f, { jobId: 'j2', pid: 222 }, live).ok, true);
+
+  // Generation 1 release marker must NOT have been unlinked
+  assert.equal(fs.existsSync(f + '.g1.released'), true);
+
+  // Dead generation superseding must also preserve earlier generations
+  const dead = { pidAlive: (p) => p !== 222 };
+  assert.equal(g.acquireLock(f, { jobId: 'j3', pid: 333 }, dead).ok, true);
+  assert.equal(fs.existsSync(f + '.g1.released'), true);
+  assert.equal(fs.existsSync(f + '.g2'), true);
+});
+
+test('round 3 #13: unknown completion does not double-charge reserved attempt', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { tokens: 3000 } },
+  });
+  // Reserve attempt: charged 3000 imputed tokens
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+  assert.equal(L.load().items.A.spent.unknownTokens, 3000);
+
+  // Record unknown completion: must retain the 3000 charge, NOT become 6000
+  L.record('A', 'repair', 'f1', 'TIMEOUT', {});
+  const s = L.load();
+  assert.equal(s.items.A.spent.unknownTokens, 3000);
+  assert.equal(s.items.A.spent.tokensUnknown, 1);
+});
+
+test('round 3 #14: cleanup annotation preserves built-in types including Array, Date and RegExp', async () => {
+  const failingCleanup = async () => {
+    throw new Error('cleanup failed');
+  };
+
+  // Array preservation
+  const arr = [{ id: 1 }, { id: 2 }];
+  const resArr = await g.runWithCleanup(async () => arr, failingCleanup);
+  assert.equal(Array.isArray(resArr), true);
+  assert.equal(resArr.length, 2);
+  assert.equal(resArr[0].id, 1);
+  assert.match(resArr.cleanupError, /cleanup failed/);
+  // JSON serialization of array stays an array
+  assert.equal(JSON.stringify(resArr), JSON.stringify(arr));
+
+  // Date preservation
+  const date = new Date('2026-11-03T18:00:00.000Z');
+  const resDate = await g.runWithCleanup(async () => date, failingCleanup);
+  assert.equal(resDate instanceof Date, true);
+  assert.equal(resDate.toISOString(), '2026-11-03T18:00:00.000Z');
+  assert.equal(resDate.getTime(), date.getTime());
+  assert.match(resDate.cleanupError, /cleanup failed/);
+  assert.equal(JSON.stringify(resDate), JSON.stringify(date));
+
+  // RegExp preservation
+  const regex = /^test-[0-9]+$/i;
+  const resRegex = await g.runWithCleanup(async () => regex, failingCleanup);
+  assert.equal(resRegex instanceof RegExp, true);
+  assert.equal(resRegex.test('test-123'), true);
+  assert.match(resRegex.cleanupError, /cleanup failed/);
+});
+
+test('round 4 #4: completing a reservation without elapsed usage accounts for elapsed time', () => {
+  let virtualNow = 1000;
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { ms: 5000 } },
+    now: () => virtualNow,
+  });
+
+  // Reserve attempt at t=1000
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+
+  // Time passes to t=7000 (elapsed 6000ms > 5000ms cap)
+  virtualNow = 7000;
+
+  // Passing null, false, or '' as ms must throw WORK_GUARD_REFUSED: invalid usage.ms
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: null }),
+    /WORK_GUARD_REFUSED: invalid usage\.ms/
+  );
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: false }),
+    /WORK_GUARD_REFUSED: invalid usage\.ms/
+  );
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: '' }),
+    /WORK_GUARD_REFUSED: invalid usage\.ms/
+  );
+
+  // Complete attempt with explicit ms: 0 or empty usage {}
+  L.record('A', 'repair', 'f1', 'DONE', { ms: 0 });
+
+  // The reservation elapsed 6000ms, which must be accounted for even if ms: 0 was passed
+  const s = L.load();
+  assert.equal(s.items.A.spent.ms >= 6000, true);
+
+  // Another fingerprint must now be refused due to TIME_EXHAUSTED
+  const res = L.admit('A', 'repair', 'f2');
+  assert.equal(res.ok, false);
+  assert.equal(res.cause, g.Cause.TIME_EXHAUSTED);
+});
+
+test('round 4 #5: null/false/empty token usage is rejected as invalid usage.tokens', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({ file, limits: { item: { tokens: 3000 } } });
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+
+  // Passing null, false, or '' as tokens must throw WORK_GUARD_REFUSED: invalid usage.tokens
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'TIMEOUT', { tokens: null }),
+    /WORK_GUARD_REFUSED: invalid usage\.tokens/
+  );
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'TIMEOUT', { tokens: false }),
+    /WORK_GUARD_REFUSED: invalid usage\.tokens/
+  );
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'TIMEOUT', { tokens: '' }),
+    /WORK_GUARD_REFUSED: invalid usage\.tokens/
+  );
+});
+
+test('round 4 #6: structurally damaged ledger missing unknownTokens fails closed on admission', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({ file, limits: { goal: { tokens: 3000 } } });
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+
+  // 1. Delete goal.unknownTokens from ledger file
+  const raw1 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw1.goal.unknownTokens;
+  fs.writeFileSync(file, JSON.stringify(raw1));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
+
+  // 2. Missing imputedTokens on IN_FLIGHT fingerprint record
+  const raw2 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw2.goal.unknownTokens = 3000;
+  delete raw2.items.A.stages.repair.fps.f1.imputedTokens;
+  fs.writeFileSync(file, JSON.stringify(raw2));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
+
+  // 3. Counter inconsistency: goal.unknownTokens less than outstanding in-flight imputed tokens
+  const raw3 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw3.items.A.stages.repair.fps.f1.imputedTokens = 3000;
+  raw3.goal.unknownTokens = 0;
+  fs.writeFileSync(file, JSON.stringify(raw3));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
+
+  // 4. Counter inconsistency: item.spent.unknownTokens less than item in-flight imputed tokens
+  const raw4 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  raw4.goal.unknownTokens = 3000;
+  raw4.items.A.spent.unknownTokens = 0;
+  fs.writeFileSync(file, JSON.stringify(raw4));
+  assert.throws(() => L.admit('B', 'repair', 'f2'), /LEDGER_CORRUPT/);
+});
+
+test('round 4 #12: release specifies generation and does not release older generation when jobId is reused', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+
+  // Acquire generation 1 with jobId 'j1'
+  const r1 = g.acquireLock(f, { jobId: 'j1', pid: 111 }, live);
+  assert.equal(r1.ok, true);
+  assert.equal(r1.owner.gen, 1);
+
+  // Dead gen 1 superseded by generation 2 using the same jobId 'j1'
+  const deadGen1 = { pidAlive: (p) => p !== 111 };
+  const r2 = g.acquireLock(f, { jobId: 'j1', pid: 222 }, deadGen1);
+  assert.equal(r2.ok, true);
+  assert.equal(r2.owner.gen, 2);
+
+  // Release generation 2 owner
+  const rel = g.releaseLock(f, r2.owner);
+  assert.equal(rel.ok, true);
+
+  // Gen 2 must be released (.g2.released) and Gen 1 must NOT be released (.g1 remains unreleased)
+  assert.equal(fs.existsSync(f + '.g2.released'), true);
+  assert.equal(fs.existsSync(f + '.g1'), true);
+  assert.equal(fs.existsSync(f + '.g1.released'), false);
+});
+
+test('round 4 #13: invalid release owner or unreadable lock metadata cannot release lock', () => {
+  const f = path.join(tmp(), 'lane.lock');
+  const live = { pidAlive: () => true };
+  const r = g.acquireLock(f, { jobId: 'j1', pid: 111 }, live);
+  assert.equal(r.ok, true);
+
+  // Passing {} or owner without jobId must be refused
+  const relInvalid = g.releaseLock(f, {});
+  assert.equal(relInvalid.ok, false);
+  assert.equal(relInvalid.cause, g.Cause.LOCK_NOT_OWNER);
+
+  // Passing owner with undefined jobId must be refused
+  const relNoJobId = g.releaseLock(f, { gen: 1 });
+  assert.equal(relNoJobId.ok, false);
+  assert.equal(relNoJobId.cause, g.Cause.LOCK_NOT_OWNER);
+
+  // Unreadable lock file metadata cannot be released even if owner matches undefined
+  fs.writeFileSync(f + '.g1', '{corrupt json');
+  const relCorruptEmpty = g.releaseLock(f, {});
+  assert.equal(relCorruptEmpty.ok, false);
+  assert.equal(relCorruptEmpty.cause, g.Cause.LOCK_NOT_OWNER);
+});
+
+test('round 4 #14: cleanup annotation preserves unsupported built-ins and private-field instances', async () => {
+  const failingCleanup = async () => {
+    throw new Error('cleanup failed');
+  };
+
+  // Uint8Array preservation
+  const u8 = new Uint8Array([10, 20, 30]);
+  const resU8 = await g.runWithCleanup(async () => u8, failingCleanup);
+  assert.equal(resU8.byteLength, 3);
+  assert.equal(resU8[0], 10);
+  assert.equal(resU8.cleanupError, 'cleanup failed');
+
+  // Private-field class instance preservation
+  class WorkerResult {
+    #code;
+    constructor(c) {
+      this.#code = c;
+    }
+    get exitCode() {
+      return this.#code;
+    }
+  }
+  const workerObj = new WorkerResult(42);
+  const resWorker = await g.runWithCleanup(async () => workerObj, failingCleanup);
+  assert.equal(resWorker.exitCode, 42);
+  assert.equal(resWorker.cleanupError, 'cleanup failed');
+});
+
+test('completed unknown charges cannot disappear from goal budget', () => {
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({ file, limits: { goal: { tokens: 3000 } } });
+
+  // Reserve A/F1 and record TIMEOUT with {}
+  assert.equal(L.admit('A', 'repair', 'F1', { reserve: true, pid: process.pid }).ok, true);
+  L.record('A', 'repair', 'F1', 'TIMEOUT', {});
+
+  // Overwrite the goal counter with zero
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(raw.goal.unknownTokens, 3000);
+  raw.goal.unknownTokens = 0;
+  fs.writeFileSync(file, JSON.stringify(raw));
+
+  // Assert that B/F2 admission throws LEDGER_CORRUPT
+  assert.throws(() => L.admit('B', 'repair', 'F2'), /LEDGER_CORRUPT/);
+});
+
+test('completion rejects reservation with missing start time', () => {
+  let virtualNow = 1000;
+  const file = path.join(tmp(), 'l.json');
+  const L = new g.ProgressLedger({
+    file,
+    limits: { item: { ms: 5000 } },
+    now: () => virtualNow,
+  });
+
+  // Reserve A/F1 at t=1000 with an item time cap of 5000 ms
+  assert.equal(L.admit('A', 'repair', 'f1', { reserve: true, pid: process.pid }).ok, true);
+
+  // Time passes to t=7000
+  virtualNow = 7000;
+
+  // Delete persisted reservation's at
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw.items.A.stages.repair.fps.f1.at;
+  fs.writeFileSync(file, JSON.stringify(raw));
+
+  // Assert that completion throws LEDGER_CORRUPT before replacing the reservation
+  assert.throws(
+    () => L.record('A', 'repair', 'f1', 'DONE', { ms: 0, tokens: 0 }),
+    /LEDGER_CORRUPT/
+  );
+
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.items.A.stages.repair.fps.f1.outcome, 'IN_FLIGHT');
+});
+
+test('frozen result getters are not evaluated during cleanup annotation', async () => {
+  const workerResult = Object.freeze(
+    Object.defineProperty({ exitCode: 7 }, 'throwingGetter', {
+      get() {
+        throw new Error('getter evaluated');
+      },
+      enumerable: true,
+      configurable: true,
+    })
+  );
+
+  const r = await g.runWithCleanup(
+    async () => workerResult,
+    async () => {
+      throw new Error('cleanup failed');
+    }
+  );
+
+  assert.equal(r.exitCode, 7);
+  assert.match(r.cleanupError, /cleanup failed/);
+});
+
+test('custom branch pattern cannot admit another Work Item', () => {
+  const r = g.checkWorkspace({
+    cwd: '/w',
+    workItemId: 'TASK-AI-165',
+    branchPattern: /^(feat|fix)\//,
+    git: okGit('feat/task-ai-155-web-data-table'),
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.cause, g.Cause.WRONG_BRANCH);
+});
+
+test('lock acquisition rejects non-string jobId', () => {
+  const f = path.join(tmp(), 'lock');
+  assert.throws(
+    () => g.acquireLock(f, { jobId: 123 }),
+    /WORK_GUARD_REFUSED: lock owner needs jobId/
+  );
+});
+
+test('frozen array getters are not evaluated during cleanup annotation', async () => {
+  const workerArr = Object.freeze(
+    Object.defineProperty([{ exitCode: 7 }], '1', {
+      get() {
+        throw new Error('getter evaluated');
+      },
+      enumerable: true,
+      configurable: true,
+    })
+  );
+
+  const r = await g.runWithCleanup(
+    async () => workerArr,
+    async () => {
+      throw new Error('cleanup failed');
+    }
+  );
+
+  assert.equal(Array.isArray(r), true);
+  assert.equal(r[0].exitCode, 7);
+  assert.match(r.cleanupError, /cleanup failed/);
 });

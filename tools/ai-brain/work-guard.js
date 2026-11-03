@@ -27,6 +27,7 @@ const crypto = require('node:crypto');
 const Cause = Object.freeze({
   CWD_MISMATCH: 'CWD_MISMATCH',
   NOT_A_CHECKOUT: 'NOT_A_CHECKOUT',
+  CONFLICT_UNKNOWN: 'CONFLICT_INSPECTION_FAILED',
   DETACHED_HEAD: 'DETACHED_HEAD',
   WRONG_BRANCH: 'WRONG_BRANCH',
   CONFLICT: 'MERGE_CONFLICT',
@@ -46,8 +47,54 @@ const Cause = Object.freeze({
 // the environment, not in the work, so the input is not proven unproductive.
 const TRANSIENT = new Set(['TIMEOUT', 'RATE_LIMIT', 'NETWORK', 'LAUNCH_FAILED', 'NOT_ATTEMPTED']);
 
+// Paths only compare case-insensitively where the filesystem does. Probing the
+// filesystem via inode matching establishes the actual semantics on disk (handling
+// both case-sensitive and default case-insensitive APFS on macOS).
+// WORK_GUARD_CASE_INSENSITIVE=1/0 overrides with the caller's explicit fact.
+function probeCaseInsensitive(p) {
+  try {
+    let cur = path.resolve(String(p));
+    while (cur) {
+      if (fs.existsSync(cur)) {
+        const base = path.basename(cur);
+        if (base && /[a-zA-Z]/.test(base)) {
+          const toggled = base.replace(/[a-zA-Z]/, (c) =>
+            c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
+          );
+          const alt = path.join(path.dirname(cur), toggled);
+          try {
+            const s1 = fs.statSync(cur);
+            const s2 = fs.statSync(alt);
+            return s1.dev === s2.dev && s1.ino === s2.ino;
+          } catch (e) {
+            if (e && e.code === 'ENOENT') return false;
+          }
+        }
+      }
+      const parent = path.dirname(cur);
+      if (parent === cur) break;
+      cur = parent;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function caseInsensitiveFs(p) {
+  const forced = process.env.WORK_GUARD_CASE_INSENSITIVE;
+  if (forced === '0' || forced === 'false') return false;
+  if (forced === '1' || forced === 'true') return true;
+  if (p) {
+    const probed = probeCaseInsensitive(p);
+    if (typeof probed === 'boolean') return probed;
+  }
+  return process.platform === 'win32';
+}
+
 function norm(p) {
-  return path.resolve(String(p)).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const abs = path.resolve(String(p)).replace(/\\/g, '/');
+  // A root such as 'C:\' keeps its one trailing slash; /+ would strip it into 'C:'.
+  const trimmed = abs.length > 1 ? abs.replace(/\/+$/, '') || '/' : abs;
+  return caseInsensitiveFs(p) ? trimmed.toLowerCase() : trimmed;
 }
 
 /**
@@ -65,9 +112,19 @@ function checkWorkspace(o) {
   if (o.expectedRoot && norm(root) !== norm(o.expectedRoot)) {
     return { ok: false, cause: Cause.CWD_MISMATCH, root };
   }
+  // An inspection that did not succeed proves nothing. Only a successful `git diff`
+  // with an empty name list proves "no unmerged files"; a missing result or a
+  // nonzero status is refused, so a broken git can never admit a conflicted tree.
   const unmerged = git(['diff', '--name-only', '--diff-filter=U'], o.cwd);
-  if (unmerged && unmerged.status === 0 && String(unmerged.stdout).trim() !== '') {
-    return { ok: false, cause: Cause.CONFLICT, files: String(unmerged.stdout).trim().split(/\r?\n/) };
+  if (!unmerged || unmerged.status !== 0) {
+    return { ok: false, cause: Cause.CONFLICT_UNKNOWN };
+  }
+  if (String(unmerged.stdout).trim() !== '') {
+    return {
+      ok: false,
+      cause: Cause.CONFLICT,
+      files: String(unmerged.stdout).trim().split(/\r?\n/),
+    };
   }
   const br = git(['symbolic-ref', '--quiet', '--short', 'HEAD'], o.cwd);
   if (!br || br.status !== 0) return { ok: false, cause: Cause.DETACHED_HEAD };
@@ -75,12 +132,16 @@ function checkWorkspace(o) {
   const id = String(o.workItemId || '').toLowerCase();
   // The whole id, bounded: TASK-AI-16 must not accept feat/task-ai-165-ci.
   const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const fits = o.branchPattern
-    ? o.branchPattern.test(branch)
-    : id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
+  const matchesId = id !== '' && new RegExp('(^|[/-])' + esc + '(-|$)', 'i').test(branch);
+  const fits = matchesId && (o.branchPattern ? o.branchPattern.test(branch) : true);
   if (!fits) return { ok: false, cause: Cause.WRONG_BRANCH, branch };
   const head = git(['rev-parse', 'HEAD'], o.cwd);
-  return { ok: true, root, branch, head: head && head.status === 0 ? String(head.stdout).trim() : null };
+  return {
+    ok: true,
+    root,
+    branch,
+    head: head && head.status === 0 ? String(head.stdout).trim() : null,
+  };
 }
 
 function fingerprint(parts) {
@@ -138,7 +199,11 @@ class ProgressLedger {
         throw new Error('LEDGER_CORRUPT: ' + this.file);
       }
     }
-    if (raw === null) return { items: {}, goal: { attempts: 0, ms: 0, tokens: 0 } };
+    if (raw === null)
+      return {
+        items: {},
+        goal: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+      };
     validateLedger(s, this.file);
     return s;
   }
@@ -169,18 +234,72 @@ class ProgressLedger {
     return this.locked(() => this.admitUnlocked(itemId, stage, fp, opts || {}));
   }
 
+  settleDeadFlights(s) {
+    let changed = false;
+    for (const item of Object.values((s && s.items) || {})) {
+      if (!isObj(item) || !isObj(item.stages)) continue;
+      for (const st of Object.values(item.stages)) {
+        if (!isObj(st) || !isObj(st.fps)) continue;
+        for (const r of Object.values(st.fps)) {
+          if (r && r.outcome === 'IN_FLIGHT' && Number.isInteger(r.pid) && pidProvenDead(r.pid)) {
+            if (Number.isFinite(r.at) && r.at >= 0) {
+              const elapsed = Math.max(0, this.now() - r.at);
+              item.spent = item.spent || { attempts: 0, ms: 0, tokens: 0 };
+              item.spent.ms = (item.spent.ms || 0) + elapsed;
+              s.goal.ms = (s.goal.ms || 0) + elapsed;
+              r.outcome = 'TIMEOUT';
+              r.at = this.now();
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    if (changed) {
+      writeJson(this.file, s);
+    }
+  }
+
   admitUnlocked(itemId, stage, fp, opts) {
     const s = this.load();
     const it = s.items[itemId] || {};
     if (it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
-    const over = exceeded(s.goal, this.limits.goal);
+    const lim = this.limits || {};
+
+    this.settleDeadFlights(s);
+
+    const goalFlight = inFlightGoalMs(s.items, this.now());
+    if (!Number.isFinite(goalFlight)) return { ok: false, cause: Cause.GOAL_EXHAUSTED };
+    const itemFlight = inFlightMs(it, this.now());
+    if (!Number.isFinite(itemFlight)) return { ok: false, cause: Cause.TIME_EXHAUSTED };
+
+    const goalTimeOver = exceeded({ ms: (s.goal.ms || 0) + goalFlight }, lim.goal);
+    if (goalTimeOver) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: goalTimeOver };
+
+    const itemTimeOver = exceeded({ ms: ((it.spent && it.spent.ms) || 0) + itemFlight }, lim.item);
+    if (itemTimeOver) return { ok: false, cause: Cause.TIME_EXHAUSTED, limit: itemTimeOver };
+
+    const over = exceeded(s.goal, lim.goal);
     if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
-    const own = exceeded(it.spent || {}, this.limits.item);
+    const own = exceeded(it.spent || {}, lim.item);
     if (own) return { ok: false, cause: limitCause(own), limit: own };
+    // A token cap is enforced over observed *and* imputed tokens. Usage that could not
+    // be observed is charged at the per-attempt cap, so repeated unobserved attempts
+    // reach the cap instead of running free.
+    const ownTokens = exceeded(tokenSpend(it.spent || {}), lim.item);
+    if (ownTokens) return { ok: false, cause: limitCause(ownTokens), limit: ownTokens };
+    const goalTokens = exceeded(tokenSpend(s.goal), lim.goal);
+    if (goalTokens) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: goalTokens };
     // Every fingerprint keeps its outcome, so alternating inputs (F1, F2, F1) cannot loop.
     const seen = ((it.stages || {})[stage] || {}).fps || {};
     const prior = seen[fp];
-    const deadFlight = prior && prior.outcome === 'IN_FLIGHT' && Number.isInteger(prior.pid) && !pidAlive(prior.pid);
+    const deadFlight =
+      prior &&
+      prior.outcome === 'IN_FLIGHT' &&
+      Number.isInteger(prior.pid) &&
+      // A reservation is released only on proven death: an uncertain liveness answer
+      // keeps the work held, exactly as an uncertain lock holder keeps the lock.
+      pidProvenDead(prior.pid);
     if (prior && !TRANSIENT.has(prior.outcome) && !deadFlight) {
       return { ok: false, cause: Cause.NO_PROGRESS, outcome: prior.outcome };
     }
@@ -190,13 +309,30 @@ class ProgressLedger {
       if (!Number.isInteger(opts.pid) || opts.pid <= 0) {
         throw new Error('WORK_GUARD_REFUSED: reserve needs an integer owner pid');
       }
-      const t = it.spent ? it : Object.assign(it, { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: it.stages || {} });
+      const t = it.spent
+        ? it
+        : Object.assign(it, {
+            spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+            stages: it.stages || {},
+          });
       t.stages = t.stages || {};
       t.spent.attempts += 1;
       s.goal.attempts += 1;
+      // The attempt is charged now with an unknown cost, so a reservation that is never
+      // recorded still counts toward the token caps at the conservative per-attempt cap.
+      const perAttemptTokens = getPerAttemptTokens(lim);
+      for (const acc of [t.spent, s.goal]) {
+        acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+        acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
+      }
       const st = t.stages[stage] || { fps: {} };
       st.fps = st.fps || {};
-      st.fps[fp] = { outcome: 'IN_FLIGHT', pid: opts.pid, at: this.now() };
+      st.fps[fp] = {
+        outcome: 'IN_FLIGHT',
+        pid: opts.pid,
+        at: this.now(),
+        imputedTokens: perAttemptTokens,
+      };
       t.stages[stage] = st;
       s.items[itemId] = t;
       writeJson(this.file, s);
@@ -211,24 +347,73 @@ class ProgressLedger {
 
   recordUnlocked(itemId, stage, fp, outcome, usage) {
     const s = this.load();
-    const it = s.items[itemId] || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
-    it.spent = it.spent || { attempts: 0, ms: 0, tokens: 0 };
+    const it = s.items[itemId] || {
+      spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+      stages: {},
+    };
+    it.spent = it.spent || {
+      attempts: 0,
+      ms: 0,
+      tokens: 0,
+      tokensUnknown: 0,
+      unknownTokens: 0,
+    };
     it.stages = it.stages || {};
     const u = usage || {};
     // Usage only ever adds: negative or non-finite values would refund a spent budget.
-    if (u.ms !== undefined && !isCount(Number(u.ms))) throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
-    if (u.tokens !== undefined && !isCount(u.tokens)) throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
+    if (u.ms !== undefined && (typeof u.ms !== 'number' || !isCount(u.ms)))
+      throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
+    if (u.tokens !== undefined && (typeof u.tokens !== 'number' || !isCount(u.tokens)))
+      throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
+    const knownTokens = typeof u.tokens === 'number' && Number.isFinite(u.tokens);
+    const perAttemptTokens = getPerAttemptTokens(this.limits);
+    const prevImputed = reserved
+      ? prev.imputedTokens !== undefined
+        ? Number(prev.imputedTokens)
+        : perAttemptTokens
+      : 0;
+    const suppliedMs = typeof u.ms === 'number' ? u.ms : 0;
+    if (
+      reserved &&
+      (!prev ||
+        prev.at === undefined ||
+        typeof prev.at !== 'number' ||
+        !Number.isFinite(prev.at) ||
+        prev.at < 0)
+    ) {
+      throw new Error('LEDGER_CORRUPT: ' + this.file);
+    }
+    const elapsedMs =
+      reserved && prev && Number.isFinite(prev.at) && prev.at >= 0
+        ? Math.max(0, this.now() - prev.at)
+        : 0;
+    const consumedMs = u.ms !== undefined ? Math.max(suppliedMs, elapsedMs) : elapsedMs;
     for (const acc of [it.spent, s.goal]) {
       if (!reserved) acc.attempts += 1;
-      acc.ms += Number(u.ms) || 0;
-      if (Number.isFinite(u.tokens)) acc.tokens += u.tokens;
-      else acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+      acc.ms += consumedMs;
+      if (knownTokens) {
+        acc.tokens += Number(u.tokens);
+        if (reserved) {
+          acc.unknownTokens = Math.max(0, (acc.unknownTokens || 0) - prevImputed);
+          acc.tokensUnknown = Math.max(0, (acc.tokensUnknown || 0) - 1);
+        }
+      } else {
+        if (!reserved) {
+          acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+          acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
+        }
+        // If reserved, the attempt was already charged in admit(); preserve its charge.
+      }
     }
     const st = it.stages[stage] || { fps: {} };
     st.fps = st.fps || {};
-    st.fps[fp] = { outcome: String(outcome), at: this.now() };
+    st.fps[fp] = {
+      outcome: String(outcome),
+      at: this.now(),
+      imputedTokens: knownTokens ? 0 : reserved ? prevImputed : perAttemptTokens,
+    };
     it.stages[stage] = st;
     s.items[itemId] = it;
     writeJson(this.file, s);
@@ -240,7 +425,18 @@ class ProgressLedger {
 
   blockUnlocked(itemId, reason) {
     const s = this.load();
-    const it = s.items[itemId] || { spent: { attempts: 0, ms: 0, tokens: 0 }, stages: {} };
+    const it = s.items[itemId] || {
+      spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
+      stages: {},
+    };
+    it.spent = it.spent || {
+      attempts: 0,
+      ms: 0,
+      tokens: 0,
+      tokensUnknown: 0,
+      unknownTokens: 0,
+    };
+    it.stages = it.stages || {};
     it.blocked = String(reason);
     s.items[itemId] = it;
     writeJson(this.file, s);
@@ -260,13 +456,91 @@ class ProgressLedger {
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isCount = (v) => Number.isFinite(v) && v >= 0;
 
+const isPlainObject = (v) => {
+  if (v === null || typeof v !== 'object') return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === null || proto === Object.prototype;
+};
+
+const isInheritedObject = (v) => {
+  if (v === null || typeof v !== 'object') return false;
+  const proto = Object.getPrototypeOf(v);
+  if (!proto) return false;
+  return (
+    (proto.constructor === Object || !proto.constructor) &&
+    (!v.constructor || v.constructor === Object)
+  );
+};
+
 // Persisted counters are mandatory: a missing counter would read as zero and reopen a spent budget.
 function validSpent(v) {
   return (
     isObj(v) &&
-    ['attempts', 'ms', 'tokens'].every((k) => isCount(v[k])) &&
-    (v.tokensUnknown === undefined || isCount(v.tokensUnknown))
+    ['attempts', 'ms', 'tokens', 'tokensUnknown', 'unknownTokens'].every((k) => isCount(v[k]))
   );
+}
+
+function inFlightMs(itemOrStages, now) {
+  let ms = 0;
+  const stages = (itemOrStages && itemOrStages.stages) || itemOrStages;
+  if (!isObj(stages)) return 0;
+  for (const st of Object.values(stages)) {
+    if (!isObj(st) || !isObj(st.fps)) continue;
+    for (const r of Object.values(st.fps)) {
+      if (r && r.outcome === 'IN_FLIGHT') {
+        if (!Number.isFinite(r.at) || r.at < 0) {
+          return Infinity;
+        }
+        ms += Math.max(0, now - r.at);
+      }
+    }
+  }
+  return ms;
+}
+
+function inFlightGoalMs(items, now) {
+  let ms = 0;
+  if (!isObj(items)) return 0;
+  for (const it of Object.values(items)) {
+    const m = inFlightMs(it, now);
+    if (!Number.isFinite(m)) return Infinity;
+    ms += m;
+  }
+  return ms;
+}
+
+function getPerAttemptTokens(limits) {
+  const lim = limits || {};
+  if (lim.item && Number.isFinite(lim.item.tokens) && lim.item.tokens > 0) {
+    return lim.item.tokens;
+  }
+  if (lim.goal && Number.isFinite(lim.goal.tokens) && lim.goal.tokens > 0) {
+    return lim.goal.tokens;
+  }
+  return 0;
+}
+
+// A usage whose tokens could not be observed is charged the per-attempt token cap,
+// which is the most that attempt was allowed to spend. With no token cap there is
+// nothing to charge. `usage.tokens === undefined` means the attempt spent nothing
+// observable (no tokens field at all); an explicit non-finite count is unknown usage.
+function tokenCost(u, lim) {
+  // Only a missing or non-finite count is imputed; a negative count is refused by record().
+  if (u.tokens !== undefined && Number.isFinite(Number(u.tokens))) {
+    const n = Number(u.tokens);
+    return n < 0 ? 0 : n;
+  }
+  return getPerAttemptTokens(lim && (lim.item || lim.goal) ? lim : { item: lim });
+}
+
+/** Tokens counted against a cap: observed tokens plus imputed unknown usage. */
+function countedTokens(spent) {
+  return (spent.tokens || 0) + (spent.unknownTokens || 0);
+}
+
+/** The tokens sub-budget of an accumulator, as countedTokens sees it. */
+function tokenSpend(spent) {
+  return { tokens: countedTokens(spent) };
 }
 
 /** Any structural damage fails closed: a damaged ledger must never read as empty. */
@@ -275,16 +549,51 @@ function validateLedger(s, file) {
     throw new Error('LEDGER_CORRUPT: ' + file);
   };
   if (!isObj(s) || !isObj(s.items) || !validSpent(s.goal)) bad();
+  let sumAttempts = 0;
+  let sumMs = 0;
+  let sumTokens = 0;
+  let sumTokensUnknown = 0;
+  let sumUnknownTokens = 0;
+  let totalImputedTokens = 0;
   for (const it of Object.values(s.items)) {
     if (!isObj(it)) bad();
     if (!validSpent(it.spent)) bad();
     if (it.blocked !== undefined && typeof it.blocked !== 'string') bad();
     if (!isObj(it.stages)) bad();
+    let itemImputedTokens = 0;
+    let itemRecordCount = 0;
     for (const st of Object.values(it.stages)) {
       if (!isObj(st) || !isObj(st.fps)) bad();
-      for (const r of Object.values(st.fps)) if (!isObj(r) || typeof r.outcome !== 'string') bad();
+      for (const r of Object.values(st.fps)) {
+        if (!isObj(r) || typeof r.outcome !== 'string') bad();
+        if (r.outcome === 'IN_FLIGHT') {
+          if (!Number.isInteger(r.pid) || r.pid <= 0) bad();
+          if (r.imputedTokens === undefined || !isCount(r.imputedTokens)) bad();
+          if (r.at === undefined || typeof r.at !== 'number' || !Number.isFinite(r.at) || r.at < 0)
+            bad();
+        }
+        if (r.imputedTokens !== undefined) {
+          if (!isCount(r.imputedTokens)) bad();
+          itemImputedTokens += r.imputedTokens;
+        }
+        itemRecordCount += 1;
+      }
     }
+    if (it.spent.attempts < itemRecordCount) bad();
+    if (it.spent.unknownTokens < itemImputedTokens) bad();
+    sumAttempts += it.spent.attempts;
+    sumMs += it.spent.ms;
+    sumTokens += it.spent.tokens;
+    sumTokensUnknown += it.spent.tokensUnknown;
+    sumUnknownTokens += it.spent.unknownTokens;
+    totalImputedTokens += itemImputedTokens;
   }
+  if (s.goal.attempts !== sumAttempts) bad();
+  if (s.goal.ms !== sumMs) bad();
+  if (s.goal.tokens !== sumTokens) bad();
+  if (s.goal.tokensUnknown !== sumTokensUnknown) bad();
+  if (s.goal.unknownTokens !== sumUnknownTokens) bad();
+  if (s.goal.unknownTokens < totalImputedTokens) bad();
 }
 
 function exceeded(spent, lim) {
@@ -296,15 +605,38 @@ function exceeded(spent, lim) {
 }
 
 function limitCause(k) {
-  return k === 'ms' ? Cause.TIME_EXHAUSTED : k === 'tokens' ? Cause.TOKENS_EXHAUSTED : Cause.ATTEMPTS_EXHAUSTED;
+  return k === 'ms'
+    ? Cause.TIME_EXHAUSTED
+    : k === 'tokens'
+      ? Cause.TOKENS_EXHAUSTED
+      : Cause.ATTEMPTS_EXHAUSTED;
 }
 
+/**
+ * Overall (negative) liveness of a pid. Fail-closed: a probe that cannot prove
+ * death (EPERM, EINVAL, any unexpected error) reports the pid as alive, so a lock
+ * or reservation is never taken on a guess. Only ESRCH proves the owner is gone.
+ */
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
   } catch (e) {
-    return e.code === 'EPERM';
+    return !(e && e.code === 'ESRCH');
+  }
+}
+
+/**
+ * Positive proof of death, used where an uncertain answer must keep the work
+ * held (a reservation whose owner may still be running). Anything other than
+ * ESRCH — including an unexpected error — means "not proven dead".
+ */
+function pidProvenDead(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (e) {
+    return Boolean(e && e.code === 'ESRCH');
   }
 }
 
@@ -344,10 +676,12 @@ function lockHolder(file) {
 /** Returns { ok, owner } or { ok:false, cause, holder }. */
 function acquireLock(file, owner, o) {
   const alive = (o && o.pidAlive) || pidAlive;
-  if (!owner || !owner.jobId) throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
+  if (!owner || !owner.jobId || typeof owner.jobId !== 'string')
+    throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
   const pid = owner.pid === undefined ? process.pid : owner.pid;
   // 0 and negative pids name process groups; liveness of one owner cannot be proven from them.
-  if (!Number.isInteger(pid) || pid <= 0) throw new Error('WORK_GUARD_REFUSED: lock owner needs a positive pid');
+  if (!Number.isInteger(pid) || pid <= 0)
+    throw new Error('WORK_GUARD_REFUSED: lock owner needs a positive pid');
   const gens = lockGenerations(file);
   const top = gens[gens.length - 1];
   if (top && !top.released) {
@@ -360,7 +694,9 @@ function acquireLock(file, owner, o) {
   const gen = top ? top.gen + 1 : 1;
   const mine = file + '.g' + gen;
   try {
-    fs.writeFileSync(mine, JSON.stringify({ jobId: owner.jobId, pid, at: Date.now() }), { flag: 'wx' });
+    fs.writeFileSync(mine, JSON.stringify({ jobId: owner.jobId, pid, at: Date.now() }), {
+      flag: 'wx',
+    });
   } catch (e) {
     if (e.code !== 'EEXIST') throw e;
     return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
@@ -372,21 +708,22 @@ function acquireLock(file, owner, o) {
     fs.unlinkSync(mine);
     return { ok: false, cause: Cause.LOCK_HELD, holder: lockHolder(file) };
   }
-  for (const g of after) {
-    if (g.gen < gen) {
-      try {
-        fs.unlinkSync(g.path);
-      } catch (_) {
-        /* superseded generation already gone */
-      }
-    }
-  }
+  // Superseded earlier generations and release markers are preserved: dead owners
+  // are superseded through exclusive creation of the next generation, never deletion (BR-LOOP-04).
   return { ok: true, owner: Object.assign({}, owner, { gen }) };
 }
 
 function releaseLock(file, owner) {
+  if (!owner || !owner.jobId || typeof owner.jobId !== 'string') {
+    return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder: lockHolder(file) };
+  }
   const gens = lockGenerations(file).filter((g) => !g.released);
-  const own = owner && gens.find((g) => (readJson(g.path, {}) || {}).jobId === owner.jobId);
+  const candidates =
+    owner.gen !== undefined ? gens.filter((g) => g.gen === owner.gen) : [...gens].reverse();
+  const own = candidates.find((g) => {
+    const meta = readJson(g.path, null);
+    return Boolean(meta && meta.jobId && meta.jobId === owner.jobId);
+  });
   if (!own) return { ok: false, cause: Cause.LOCK_NOT_OWNER, holder: lockHolder(file) };
   fs.renameSync(own.path, own.path + '.released');
   return { ok: true };
@@ -394,17 +731,26 @@ function releaseLock(file, owner) {
 
 function acceptResult(job, result) {
   if (!result || !result.jobId) return { ok: false, cause: Cause.JOB_UNBOUND };
-  if (!job || result.jobId !== job.jobId) return { ok: false, cause: Cause.JOB_MISMATCH, got: result.jobId };
+  if (!job || result.jobId !== job.jobId)
+    return { ok: false, cause: Cause.JOB_MISMATCH, got: result.jobId };
   return { ok: true };
 }
 
-/** Run fn, then cleanup; the result (and its exit code) is fn's, whatever cleanup does. */
+/**
+ * Run fn, then cleanup; the result (and its exit code) is fn's, whatever cleanup does.
+ *
+ * The worker is watched through a flag, not through the thrown value: a worker may
+ * throw `null`, `undefined`, `0` or `''`, and treating a falsy exception as success
+ * would turn a crash into a result.
+ */
 async function runWithCleanup(fn, cleanup) {
   let out;
+  let threw = false;
   let err;
   try {
     out = await fn();
   } catch (e) {
+    threw = true;
     err = e;
   }
   let cleanupError = null;
@@ -413,7 +759,7 @@ async function runWithCleanup(fn, cleanup) {
   } catch (e) {
     cleanupError = e;
   }
-  if (err) {
+  if (threw) {
     if (cleanupError) {
       try {
         err.cleanupError = cleanupError;
@@ -423,13 +769,66 @@ async function runWithCleanup(fn, cleanup) {
     }
     throw err;
   }
-  if (cleanupError && out && typeof out === 'object') {
-    const note = String(cleanupError.message || cleanupError);
-    // Never mutate the worker's result: a TypeError here would replace the real exit code.
-    // Inherit from the result so inherited and non-enumerable fields (exitCode) stay readable.
-    return Object.defineProperty(Object.create(out), 'cleanupError', { value: note, enumerable: true });
+  if (!cleanupError || out === null || typeof out !== 'object') return out;
+  const note = String(cleanupError.message || cleanupError);
+
+  // If the result is extensible, directly define cleanupError to preserve internal slots,
+  // private fields and prototype getters without any wrapping.
+  if (Object.isExtensible(out)) {
+    try {
+      Object.defineProperty(out, 'cleanupError', {
+        value: note,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      return out;
+    } catch (_) {
+      /* fallback below if defineProperty fails */
+    }
   }
-  return out;
+
+  // Never mutate the worker's result if not possible: a TypeError here would replace the real exit code.
+  // Preserving built-in types (Array, Date, RegExp, Map, Set, Buffer) and plain objects maintains JSON serialization.
+  // Unsupported built-ins or custom class instances with private fields are preserved as-is.
+  let copy;
+  if (Array.isArray(out)) {
+    copy = [];
+  } else if (out instanceof Date) {
+    copy = new Date(out.getTime());
+  } else if (out instanceof RegExp) {
+    copy = new RegExp(out.source, out.flags);
+  } else if (out instanceof Map) {
+    copy = new Map(out);
+  } else if (out instanceof Set) {
+    copy = new Set(out);
+  } else if (typeof Buffer !== 'undefined' && Buffer.isBuffer(out)) {
+    copy = Buffer.from(out);
+  } else if (isPlainObject(out)) {
+    copy = Object.create(Object.getPrototypeOf(out));
+  } else if (isInheritedObject(out)) {
+    copy = Object.create(Object.getPrototypeOf(out));
+  } else {
+    return out;
+  }
+  for (const key of Reflect.ownKeys(out)) {
+    if (key === 'cleanupError') continue;
+    const d = Object.getOwnPropertyDescriptor(out, key);
+    if (d) {
+      try {
+        Object.defineProperty(copy, key, d);
+      } catch (_) {}
+    }
+  }
+  try {
+    Object.defineProperty(copy, 'cleanupError', {
+      value: note,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  } catch (_) {}
+  return copy;
 }
 
 module.exports = {
@@ -443,6 +842,8 @@ module.exports = {
   lockHolder,
   acceptResult,
   runWithCleanup,
+  probeCaseInsensitive,
+  norm,
 };
 
 // CLI for shell runtimes (pipeline scripts, Hermes): JSON on stdout, exit 0 when
@@ -470,7 +871,10 @@ if (require.main === module) {
       const r = checkWorkspace({ cwd: a.cwd, expectedRoot: a.root, workItemId: a.item, git });
       out(r, r.ok ? 0 : 3);
     }
-    const ledger = new ProgressLedger({ file: a.ledger, limits: a.limits ? JSON.parse(a.limits) : undefined });
+    const ledger = new ProgressLedger({
+      file: a.ledger,
+      limits: a.limits ? JSON.parse(a.limits) : undefined,
+    });
     if (cmd === 'block') {
       ledger.block(a.item, a.reason);
       out({ ok: true }, 0);
@@ -481,7 +885,10 @@ if (require.main === module) {
       out(r, r.ok ? 0 : 3);
     }
     if (cmd === 'record') {
-      const usage = { ms: a.ms === undefined ? 0 : Number(a.ms), tokens: a.tokens === undefined ? undefined : Number(a.tokens) };
+      const usage = {
+        ms: a.ms === undefined ? undefined : Number(a.ms),
+        tokens: a.tokens === undefined ? undefined : Number(a.tokens),
+      };
       ledger.record(a.item, a.stage, fp, a.outcome, usage);
       out({ ok: true }, 0);
     }
