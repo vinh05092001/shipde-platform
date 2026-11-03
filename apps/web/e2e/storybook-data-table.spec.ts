@@ -491,10 +491,8 @@ test('review 12 P1: external same-page navigation to an older pending search can
     // Another same-page Next.js navigation chooses the older "?search=N" URL.
     // Query equality would treat it as an acknowledgment of the cancelled "N"
     // edit and keep the newer "Ng" draft.
-    await page.evaluate(() => {
-      window.history.pushState(window.history.state, '', '/storybook?search=N');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    });
+    // Round 14 / Finding 4 P1: test an actual Next.js navigation via Link without synthetic popstate.
+    await page.getByRole('link', { name: 'Mô phỏng điều hướng ngoài: search=N' }).click();
     await expect(search).toHaveValue('N');
 
     await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();

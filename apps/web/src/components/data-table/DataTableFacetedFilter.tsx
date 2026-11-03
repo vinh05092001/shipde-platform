@@ -66,39 +66,29 @@ export function computeOptimisticFacetSelection(
   const prevStr = Array.from(prevCommitted).sort().join('.');
 
   if (resetEvent) {
-    // The reset itself is a pending acknowledgment target (''). A selection
-    // made before that reset commits stays queued after it, so the later empty
-    // commit is an acknowledgment rather than an external change that would
-    // erase the newer facet (Round 12 P2).
+    // If newer facet selections are already queued after an empty reset target,
+    // preserve them (Round 12 P2).
     const resetIdx = pendingSelections.indexOf('');
-    const nextPending = resetIdx === -1 ? [] : pendingSelections.slice(resetIdx + 1);
-    if (nextPending.length > 0) {
+    if (resetIdx !== -1 && resetIdx < pendingSelections.length - 1) {
       return {
         nextOptimistic: currentOptimistic,
-        nextPending,
+        nextPending: pendingSelections.slice(resetIdx + 1),
         wasIgnoredDueToPending: true,
       };
     }
+    // Otherwise, toolbar reset initiates clearing the filter. If current committed
+    // state is non-empty, the empty commit ('') is pending acknowledgment so
+    // subsequent selections made while reset is in-flight survive the empty commit (Round 14 / Finding 8 P2).
+    const isOldPendingClear = incomingStr !== '';
     return {
       nextOptimistic: new Set<string>(),
-      nextPending: [],
+      nextPending: isOldPendingClear ? [''] : [],
       wasIgnoredDueToPending: false,
     };
   }
 
-  // An acknowledgment of an intermediate pending selection (such as the empty
-  // target of an earlier reset with newer facet selections queued after it)
-  // retains subsequent optimistic intent even across navigation events (Round 12 P2).
-  const pendingIdx = pendingSelections.indexOf(incomingStr);
-  if (pendingIdx !== -1 && pendingIdx < pendingSelections.length - 1) {
-    const nextPending = pendingSelections.slice(pendingIdx + 1);
-    return {
-      nextOptimistic: currentOptimistic,
-      nextPending,
-      wasIgnoredDueToPending: true,
-    };
-  }
-
+  // Explicit browser history or external navigation must always take precedence
+  // and discard cancelled intent, before any intermediate acknowledgment matching (Round 14 / Finding 8 P1).
   if (historyEvent) {
     return {
       nextOptimistic: new Set(incomingCommitted),
@@ -115,6 +105,7 @@ export function computeOptimisticFacetSelection(
     };
   }
 
+  const pendingIdx = pendingSelections.indexOf(incomingStr);
   if (pendingIdx !== -1) {
     const nextPending = pendingSelections.slice(pendingIdx + 1);
     if (nextPending.length === 0) {
@@ -134,7 +125,7 @@ export function computeOptimisticFacetSelection(
     }
   }
 
-  // External change (e.g. resetFilters)
+  // External change (e.g. unqueued reset commit or external URL navigation)
   return {
     nextOptimistic: new Set(incomingCommitted),
     nextPending: [],

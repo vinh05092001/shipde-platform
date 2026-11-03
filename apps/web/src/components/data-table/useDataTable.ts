@@ -179,9 +179,11 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
       if (idx !== -1) {
         // Intermediate uncancelled request acknowledged! Retain subsequent pending intent (Finding 10 P1)
         pendingNavigationsRef.current = pendingNavigationsRef.current.slice(idx + 1);
+        prevHistoryEpochRef.current = historyEpoch;
       } else {
-        // External navigation or commit of a cancelled edit (Round 12 P1)
+        // External navigation or commit of a cancelled edit (Round 12/14 P1)
         pendingNavigationsRef.current = [];
+        setHistoryEpoch((epoch) => epoch + 1);
       }
     }
   }, [currentCommittedNorm, historyEpoch]);

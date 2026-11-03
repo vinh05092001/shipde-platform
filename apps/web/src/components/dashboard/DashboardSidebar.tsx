@@ -29,7 +29,7 @@
 
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronLeft, ChevronRight, Package, X } from 'lucide-react';
@@ -74,6 +74,37 @@ export function suppressDisabledNavigation(
   return true;
 }
 
+/**
+ * Resolves the most specific matching navigation destination requiring path-segment boundaries
+ * so multiple destinations never become active simultaneously (Round 14 / Finding 12 P2).
+ */
+export function resolveActiveDestination(
+  navSections: NavSection[],
+  pathname: string | null | undefined
+): string | null {
+  if (!pathname) return null;
+  const currentPath = pathname.split('?')[0].split('#')[0];
+  let bestMatch: string | null = null;
+  let bestLength = -1;
+
+  for (const section of navSections) {
+    for (const item of section.items) {
+      const href = item.href;
+      if (!href || href === '#') continue;
+      const itemPath = href.split('?')[0].split('#')[0];
+      const matches =
+        currentPath === itemPath ||
+        (itemPath !== '/' &&
+          currentPath.startsWith(itemPath.endsWith('/') ? itemPath : itemPath + '/'));
+      if (matches && itemPath.length > bestLength) {
+        bestMatch = href;
+        bestLength = itemPath.length;
+      }
+    }
+  }
+  return bestMatch;
+}
+
 export function DashboardSidebar({
   navSections,
   isCollapsed = false,
@@ -83,6 +114,10 @@ export function DashboardSidebar({
   className = '',
 }: DashboardSidebarProps) {
   const pathname = usePathname();
+  const activeHref = useMemo(
+    () => resolveActiveDestination(navSections, pathname),
+    [navSections, pathname]
+  );
 
   const renderBadge = (item: NavItem) => {
     if (item.badge === undefined || item.badge === null) return null;
@@ -170,9 +205,7 @@ export function DashboardSidebar({
 
               <div className="space-y-0.5">
                 {section.items.map((item) => {
-                  const isActive =
-                    pathname === item.href ||
-                    (item.href !== '/' && pathname?.startsWith(item.href));
+                  const isActive = activeHref === item.href;
                   const Icon = item.icon;
 
                   return (

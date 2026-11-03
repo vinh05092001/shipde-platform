@@ -266,7 +266,6 @@ export function DataTableColumnHeader<TData = any>({
     <div
       ref={containerRef}
       className={`relative inline-flex items-center gap-1 ${className}`}
-      aria-sort={ariaSort}
       data-sort={ariaSort}
     >
       <button

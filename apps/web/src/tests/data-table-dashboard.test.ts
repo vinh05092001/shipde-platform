@@ -47,6 +47,7 @@ import {
   handleDrawerKeyDown,
   handleMobileNavigationClick,
   suppressDisabledNavigation,
+  resolveActiveDestination,
   filterNavSectionsByPermissions,
   isNavItemPermitted,
   maskEmail,
@@ -666,8 +667,8 @@ async function runTestSuite() {
     })
   );
   assert.ok(
-    headerAscHtml.includes('aria-sort="ascending"'),
-    'Header container must render aria-sort="ascending"'
+    !headerAscHtml.includes('aria-sort'),
+    'DataTableColumnHeader generic div must NOT render aria-sort attribute (Finding 10)'
   );
   assert.ok(
     headerAscHtml.includes('data-sort="ascending"'),
@@ -692,8 +693,8 @@ async function runTestSuite() {
     })
   );
   assert.ok(
-    headerDescHtml.includes('aria-sort="descending"'),
-    'Header container must render aria-sort="descending"'
+    !headerDescHtml.includes('aria-sort'),
+    'DataTableColumnHeader generic div must NOT render aria-sort attribute (Finding 10)'
   );
   assert.ok(
     headerDescHtml.includes('data-sort="descending"'),
@@ -714,8 +715,8 @@ async function runTestSuite() {
     })
   );
   assert.ok(
-    headerUnsortedHtml.includes('aria-sort="none"'),
-    'Header container must render aria-sort="none"'
+    !headerUnsortedHtml.includes('aria-sort'),
+    'DataTableColumnHeader generic div must NOT render aria-sort attribute (Finding 10)'
   );
   assert.ok(
     headerUnsortedHtml.includes('data-sort="none"'),
@@ -1890,19 +1891,34 @@ async function runTestSuite() {
       useDebugValue() {},
     };
 
-    function runRender() {
-      stateIdx = 0;
-      refIdx = 0;
-      memoIdx = 0;
-      effectIdx = 0;
+    let isRendering = false;
+    let needsRerender = false;
 
-      const prevDispatcher = ReactSharedInternals.H;
-      ReactSharedInternals.H = dispatcher;
+    function runRender() {
+      if (isRendering) {
+        needsRerender = true;
+        return;
+      }
+      isRendering = true;
       try {
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        hookResult = useDataTable(hookProps);
+        do {
+          needsRerender = false;
+          stateIdx = 0;
+          refIdx = 0;
+          memoIdx = 0;
+          effectIdx = 0;
+
+          const prevDispatcher = ReactSharedInternals.H;
+          ReactSharedInternals.H = dispatcher;
+          try {
+            // eslint-disable-next-line react-hooks/rules-of-hooks
+            hookResult = useDataTable(hookProps);
+          } finally {
+            ReactSharedInternals.H = prevDispatcher;
+          }
+        } while (needsRerender);
       } finally {
-        ReactSharedInternals.H = prevDispatcher;
+        isRendering = false;
       }
     }
 
@@ -3045,8 +3061,8 @@ async function runTestSuite() {
   );
   assert.deepStrictEqual(
     heldResetFacetResult.nextPending,
-    [],
-    'Finding 8: resetEvent must clear pending selections queue'
+    [''],
+    'Round 14 Finding 8 P2: resetEvent enqueues empty target to preserve subsequent selections against empty commit'
   );
   assert.strictEqual(
     heldResetFacetResult.wasIgnoredDueToPending,
@@ -3207,21 +3223,21 @@ async function runTestSuite() {
     'Round 12 P2: a reset with no newer facet selection must still clear'
   );
 
-  // 14.3b P2: reset -> newer facet selection -> empty reset acknowledgment across popstate navigation
-  const resetWithHistoryEvent = computeOptimisticFacetSelection(
+  // 14.3b P2: reset -> newer facet selection -> empty reset acknowledgment in real lifecycle
+  const resetWithAcknowledgment = computeOptimisticFacetSelection(
     new Set(['DELIVERED']),
     new Set(),
     new Set(['FAILED']),
     ['', 'DELIVERED'],
-    true,
+    false,
     false
   );
   assert.deepStrictEqual(
-    Array.from(resetWithHistoryEvent.nextOptimistic),
+    Array.from(resetWithAcknowledgment.nextOptimistic),
     ['DELIVERED'],
-    'Round 13 P2: intermediate reset acknowledgment preserves newer facet selection even across history popstate events'
+    'Round 13/14 P2: intermediate reset acknowledgment preserves newer facet selection'
   );
-  assert.strictEqual(resetWithHistoryEvent.wasIgnoredDueToPending, true);
+  assert.strictEqual(resetWithAcknowledgment.wasIgnoredDueToPending, true);
 
   // Negative proof: history popstate without queued pending selections correctly resets optimistic facets
   const historyResetCleared = computeOptimisticFacetSelection(
@@ -3309,8 +3325,222 @@ async function runTestSuite() {
 
   console.log('   ✅ Round 12 review findings proven');
 
+  // 15. ROUND 14 REVIEW FINDINGS (Findings 4, 8, 10, 11, 12)
+  console.log('🧪 15. Testing Round 14 Review Findings (P1 & P2)...');
+
+  // 15.1 Phase 1(d) Finding 4 (NEW P1): External Next.js navigation signals toolbar to clear newer draft
+  const round14CollisionNavigations: string[] = [];
+  const round14Hook = renderMountedDataTableHook({
+    searchParams: new URLSearchParams(''),
+    onNavigate: (url: string) => {
+      round14CollisionNavigations.push(url);
+    },
+    defaultPageSize: 10,
+    searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+  });
+  round14Hook.current.setSearch('N');
+  round14Hook.current.setSearch('Ng');
+  const initialEpoch = round14Hook.current.historyEpoch;
+
+  // External Next.js navigation commits ?search=N (which was cancelled by subsequent 'Ng')
+  round14Hook.rerender({
+    searchParams: new URLSearchParams('search=N'),
+  });
+  assert.ok(
+    round14Hook.current.historyEpoch > initialEpoch,
+    'Round 14 Finding 4 P1: External navigation or cancelled commit must increment historyEpoch'
+  );
+  // Toolbar receiving the new historyEpoch clears draft and aligns with incoming 'N'
+  const round14Toolbar = computeToolbarDraftOnPropChange(
+    'Ng',
+    round14Hook.current.searchValue,
+    '',
+    ['N', 'Ng'],
+    true
+  );
+  assert.strictEqual(
+    round14Toolbar.nextDraft,
+    'N',
+    'Round 14 Finding 4 P1: Toolbar must drop the newer draft when navigation is external'
+  );
+  assert.deepStrictEqual(round14Toolbar.nextPendingEdits, []);
+
+  // Negative proof: without external navigation signal, toolbar mistakenly keeps 'Ng'
+  const round14ToolbarMistaken = computeToolbarDraftOnPropChange('Ng', 'N', '', ['N', 'Ng'], false);
+  assert.strictEqual(
+    round14ToolbarMistaken.nextDraft,
+    'Ng',
+    'Round 14 Finding 4 P1 negative proof: without navigation signal, toolbar mistakenly retains draft'
+  );
+
+  // 15.2 Phase 1(h) Finding 8 (NEW P1): History navigation resets cancelled facet selections
+  // With pending selections FAILED then DELIVERED.FAILED, Back to an existing FAILED entry resets optimistic facets
+  const historyBackFacet = computeOptimisticFacetSelection(
+    new Set(['FAILED', 'DELIVERED']),
+    new Set(['FAILED']),
+    new Set(['FAILED', 'DELIVERED']),
+    ['FAILED', 'DELIVERED.FAILED'],
+    true, // historyEvent = true (Back/Forward)
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(historyBackFacet.nextOptimistic),
+    ['FAILED'],
+    'Round 14 Finding 8 P1: History navigation must discard cancelled facet intent and reset to incoming URL'
+  );
+  assert.deepStrictEqual(
+    historyBackFacet.nextPending,
+    [],
+    'Round 14 Finding 8 P1: History navigation must clear pending selections queue'
+  );
+
+  // Negative proof: if acknowledgment matching were evaluated before historyEvent, cancelled DELIVERED would be retained
+  const mistakenIntermediateMatch = computeOptimisticFacetSelection(
+    new Set(['FAILED', 'DELIVERED']),
+    new Set(['FAILED']),
+    new Set(['FAILED', 'DELIVERED']),
+    ['FAILED', 'DELIVERED.FAILED'],
+    false, // simulated defect: historyEvent ignored/false
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(mistakenIntermediateMatch.nextOptimistic).sort(),
+    ['DELIVERED', 'FAILED'],
+    'Round 14 Finding 8 P1 negative proof: acknowledgment matching without historyEvent keeps cancelled selection'
+  );
+
+  // 15.3 Phase 1(h) Finding 8 (P2): Toolbar reset enqueues empty target to preserve subsequent selection
+  // Step 1: Toolbar reset is triggered while status=FAILED is committed
+  const toolbarResetStep1 = computeOptimisticFacetSelection(
+    new Set(['FAILED']),
+    new Set(['FAILED']),
+    new Set(['FAILED']),
+    [],
+    false,
+    true // resetEvent = true
+  );
+  assert.deepStrictEqual(
+    Array.from(toolbarResetStep1.nextOptimistic),
+    [],
+    'Round 14 Finding 8 P2: Toolbar reset must immediately clear optimistic facets'
+  );
+  assert.deepStrictEqual(
+    toolbarResetStep1.nextPending,
+    [''],
+    'Round 14 Finding 8 P2: Toolbar reset must enqueue empty target in pending queue'
+  );
+
+  // Step 2: User selects DELIVERED while reset is held (pending queue becomes ['', 'DELIVERED'])
+  // Step 3: Empty reset commits arrive (incomingCommitted is empty)
+  const toolbarResetStep3 = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    ['', 'DELIVERED'],
+    false,
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(toolbarResetStep3.nextOptimistic),
+    ['DELIVERED'],
+    'Round 14 Finding 8 P2: Facet selected after toolbar reset survives the empty reset commit'
+  );
+  assert.strictEqual(toolbarResetStep3.wasIgnoredDueToPending, true);
+
+  // Negative proof: without enqueuing '', pending queue is only ['DELIVERED'], so empty commit clears it
+  const toolbarResetWithoutQueue = computeOptimisticFacetSelection(
+    new Set(['DELIVERED']),
+    new Set(),
+    new Set(['FAILED']),
+    ['DELIVERED'], // missing '' target
+    false,
+    false
+  );
+  assert.deepStrictEqual(
+    Array.from(toolbarResetWithoutQueue.nextOptimistic),
+    [],
+    'Round 14 Finding 8 P2 negative proof: without enqueued reset target, subsequent selection is wiped by empty commit'
+  );
+
+  // 15.4 Phase 2 Finding 10 (P2): DataTableColumnHeader container div does NOT assign aria-sort
+  const colHeaderStandaloneHtml = renderToStaticMarkup(
+    React.createElement<any>(DataTableColumnHeader, {
+      column: { id: 'trackingCode', enableSorting: true },
+      title: 'Mã vận đơn',
+      sort: { id: 'trackingCode', desc: false },
+      onSort: () => {},
+    })
+  );
+  assert.ok(
+    !colHeaderStandaloneHtml.includes('aria-sort'),
+    'Round 14 Finding 10 P2: Generic div in DataTableColumnHeader must NOT render aria-sort'
+  );
+  assert.ok(
+    colHeaderStandaloneHtml.includes('data-sort="ascending"'),
+    'Round 14 Finding 10 P2: Generic div in DataTableColumnHeader must retain data-sort'
+  );
+
+  // 15.5 Phase 2 Finding 11 (P2): DashboardHeader account menu keyboard behavior
+  const accountMenuHtml = renderToStaticMarkup(
+    React.createElement<any>(DashboardHeader, {
+      currentUser: { name: 'Nguyễn Văn A', email: 'vana@shipde.vn', role: 'Quản trị viên' },
+      defaultUserMenuOpen: true,
+      onSignOut: () => {},
+    })
+  );
+  assert.ok(
+    accountMenuHtml.includes('role="menu"'),
+    'Round 14 Finding 11 P2: Account menu must render role="menu"'
+  );
+  assert.ok(
+    accountMenuHtml.includes('role="menuitem"'),
+    'Round 14 Finding 11 P2: Account menu items must render role="menuitem"'
+  );
+  assert.ok(
+    accountMenuHtml.includes('tabindex="0"'),
+    'Round 14 Finding 11 P2: Account menu items must be keyboard focusable with tabindex="0"'
+  );
+
+  // 15.6 Phase 2 Finding 12 (P2): Multiple sidebar destinations resolution and path-segment boundaries
+  const testNavSections: NavSection[] = [
+    {
+      title: 'Cài đặt',
+      items: [
+        { title: 'Cài đặt chung', href: '/settings' },
+        { title: 'Phân quyền & Thành viên', href: '/settings/users' },
+        { title: 'Đơn hàng', href: '/order' },
+      ],
+    },
+  ];
+
+  // Specific match: /settings/users must match only /settings/users, NOT /settings
+  const activeOnUsers = resolveActiveDestination(testNavSections, '/settings/users');
+  assert.strictEqual(
+    activeOnUsers,
+    '/settings/users',
+    'Round 14 Finding 12 P2: /settings/users must resolve to the most specific matching destination'
+  );
+
+  // Path-segment boundary: /orders must NOT match /order
+  const activeOnOrders = resolveActiveDestination(testNavSections, '/orders');
+  assert.strictEqual(
+    activeOnOrders,
+    null,
+    'Round 14 Finding 12 P2: /orders must NOT match /order without path-segment boundary'
+  );
+
+  // Exact match: /settings matches /settings
+  const activeOnSettings = resolveActiveDestination(testNavSections, '/settings');
+  assert.strictEqual(
+    activeOnSettings,
+    '/settings',
+    'Round 14 Finding 12 P2: /settings matches /settings exactly'
+  );
+
+  console.log('   ✅ Round 14 review findings proven');
+
   console.log(
-    '   ✅ Round 6, 8, 9, 10, 11 & 12 review findings proven and verified with unit test suites'
+    '   ✅ Round 6, 8, 9, 10, 11, 12 & 14 review findings proven and verified with unit test suites'
   );
 
   console.log('\n================================================================');

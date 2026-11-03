@@ -130,6 +130,7 @@ export function DashboardHeader({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const prevUserMenuOpenRef = useRef(false);
+  const menuItemRefs = useRef<(HTMLElement | null)[]>([]);
 
   // Restore trigger focus on user menu close (Finding 14 P2)
   useEffect(() => {
@@ -138,6 +139,52 @@ export function DashboardHeader({
     }
     prevUserMenuOpenRef.current = isUserMenuOpen;
   }, [isUserMenuOpen]);
+
+  // Focus first menu item on open (Round 14 / Finding 11 P2)
+  useEffect(() => {
+    if (isUserMenuOpen) {
+      const timer = setTimeout(() => {
+        const first = menuItemRefs.current.find(Boolean);
+        first?.focus();
+      }, 10);
+      return () => clearTimeout(timer);
+    }
+  }, [isUserMenuOpen]);
+
+  const handleTriggerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      setIsUserMenuOpen(true);
+    }
+  };
+
+  const handleMenuItemKeyDown = (e: React.KeyboardEvent, index: number) => {
+    const activeItems = menuItemRefs.current.filter((item): item is HTMLElement => item !== null);
+    const total = activeItems.length;
+    if (total === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const nextIdx = (index + 1) % total;
+      activeItems[nextIdx]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevIdx = (index - 1 + total) % total;
+      activeItems[prevIdx]?.focus();
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      activeItems[0]?.focus();
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      activeItems[total - 1]?.focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setIsUserMenuOpen(false);
+      userMenuTriggerRef.current?.focus();
+    } else if (e.key === 'Tab') {
+      setIsUserMenuOpen(false);
+    }
+  };
 
   const handleSearchActivation = useCallback(() => {
     if (onSearchClick) {
@@ -255,6 +302,7 @@ export function DashboardHeader({
             ref={userMenuTriggerRef}
             type="button"
             onClick={() => setIsUserMenuOpen((prev) => !prev)}
+            onKeyDown={handleTriggerKeyDown}
             aria-label="Menu tài khoản cá nhân"
             title={userMenuLabel}
             aria-expanded={isUserMenuOpen}
@@ -315,12 +363,17 @@ export function DashboardHeader({
               {currentUser && (
                 <div className="py-1">
                   <Link
+                    ref={(el) => {
+                      menuItemRefs.current[0] = el;
+                    }}
                     href={profileHref}
                     role="menuitem"
+                    tabIndex={0}
                     onClick={() => {
                       setIsUserMenuOpen(false);
                       onProfileClick?.();
                     }}
+                    onKeyDown={(e) => handleMenuItemKeyDown(e, 0)}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
                   >
                     <User className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
@@ -334,12 +387,18 @@ export function DashboardHeader({
                   <div className="h-px bg-[var(--border-subtle)] my-1" />
                   <div className="py-1">
                     <button
+                      ref={(el) => {
+                        const signOutIdx = currentUser ? 1 : 0;
+                        menuItemRefs.current[signOutIdx] = el;
+                      }}
                       type="button"
                       role="menuitem"
+                      tabIndex={0}
                       onClick={() => {
                         setIsUserMenuOpen(false);
                         onSignOut();
                       }}
+                      onKeyDown={(e) => handleMenuItemKeyDown(e, currentUser ? 1 : 0)}
                       className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--status-risk-text)] hover:bg-[var(--status-risk-bg)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--status-risk-border)]"
                     >
                       <LogOut className="w-3.5 h-3.5" aria-hidden="true" />

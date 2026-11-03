@@ -12,6 +12,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
+import Link from 'next/link';
 import { Download, Plus, RefreshCw, Sparkles } from 'lucide-react';
 import {
   DataTable,
@@ -534,6 +535,13 @@ function StorybookContent() {
           >
             {simulatedForbidden ? 'Đang bật Cấm (Nhấn để tắt)' : 'Mô phỏng Bị cấm (Forbidden 403)'}
           </button>
+
+          <Link
+            href="/storybook?search=N"
+            className="px-3 py-1.5 rounded-[6px] text-xs font-medium border cursor-pointer transition-colors bg-[var(--bg-app)] text-[var(--text-secondary)] border-[var(--border-subtle)] hover:bg-[var(--bg-subtle)]"
+          >
+            Mô phỏng điều hướng ngoài: search=N
+          </Link>
         </div>
       </div>
 
