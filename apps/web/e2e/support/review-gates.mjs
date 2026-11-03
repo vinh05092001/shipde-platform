@@ -83,7 +83,7 @@ test('review 7: delivery register orders are unique and non-colliding', () => {
   const taskRow = entries.find(isTask);
   assert.ok(taskRow, 'TASK-AI-155 row must exist');
   const taskOrder = taskRow.split(',')[0].replaceAll('"', '');
-  assert.equal(taskOrder, '274', 'TASK-AI-155 must be assigned unique delivery order 274');
+  assert.equal(taskOrder, '293', 'TASK-AI-155 must be assigned unique delivery order 293');
 });
 
 test('review 5: void gate findings remain outside the PR delta', () => {
@@ -173,4 +173,17 @@ test('review 10: PR body files pass complete validate_pr_contract gate logic', (
       `${rel} must declare READY_FOR_CODEX`
     );
   }
+});
+
+test('review 36: AppShell.tsx has zero unused eslint-disable directives', () => {
+  const appShellContent = source('apps/web/src/components/shell/AppShell.tsx').toString('utf8');
+  // Finding 1 (Round 36): unused eslint-disable directive at line 274:7
+  // "react-hooks/set-state-in-effect" was unused before setNavigation({ token, targets: [], setupOnly: true })
+  const unusedDirectivePattern =
+    /\/\/\s*eslint-disable-next-line\s+react-hooks\/set-state-in-effect[^\n]*\n\s*setNavigation\(\{\s*token,\s*targets:\s*\[\],\s*setupOnly:\s*true\s*\}\);/;
+  assert.equal(
+    unusedDirectivePattern.test(appShellContent),
+    false,
+    'AppShell.tsx must not contain the unused eslint-disable directive on setup-scoped setNavigation'
+  );
 });
