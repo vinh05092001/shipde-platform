@@ -27,9 +27,59 @@ const invoke = async (args, mode = 'ok', env = process.env, marker = '-', option
     env,
     resolveHost: options.resolveHost || defaultTestResolver,
     fetchUrl: options.fetchUrl || defaultTestTransport,
+    retrieve: options.retrieve,
     ...options,
   });
   return { ...result, exitCode: result.code };
+};
+
+// The retrieval transport keeps its own resolver so a test can prove that the
+// address the wrapper approved is the address actually connected to.
+const retrievalTransport = (retrieve, resolveEnteredHost = defaultTestResolver) => ({
+  resolveEnteredHost,
+  retrieve,
+});
+
+// Resolves public content first and a private address on every later lookup: the
+// classic DNS-rebinding shape a single preflight resolution cannot catch.
+const rebindingResolver = () => {
+  let lookups = 0;
+  return async () => {
+    lookups++;
+    return lookups === 1 ? ['93.184.216.34'] : ['127.0.0.1'];
+  };
+};
+
+const received = [];
+const retrievalTransports = {
+  // The entered host resolves to a private address at the transport.
+  rebindingEnteredHost: retrievalTransport(async (url) => {
+    received.push(url);
+    return { status: 200, body: 'public' };
+  }, rebindingResolver),
+  // The entered host is public but the redirect target resolves privately.
+  rebindingAfterRedirect: retrievalTransport(async (url) => {
+    received.push(url);
+    return url.includes('rebind.example.com')
+      ? { status: 302, location: 'https://rebind2.example.com/doc' }
+      : { status: 200, body: 'public' };
+  }, rebindingResolver),
+  // A public response for one method and a private redirect for the next.
+  headThenPrivateGet: retrievalTransport(async (url, { method }) =>
+    method === 'GET'
+      ? { status: 302, location: 'http://169.254.169.254/latest/meta-data/' }
+      : { status: 200, body: 'public document' }
+  ),
+  // A redirect loop must be cut off, not followed forever.
+  redirectLoop: retrievalTransport(async () => ({
+    status: 302,
+    location: 'https://public.example.com/loop',
+  })),
+  // A redirect to a credentialed public destination is refused.
+  credentialRedirect: retrievalTransport(async () => ({
+    status: 302,
+    location: 'https://docs.example.com/?token=fixture-transport-token',
+  })),
 };
 const emitted = (result) => result.stdout + result.stderr;
 const payload = (result) => JSON.parse(JSON.parse(result.stdout).items[0].text);
@@ -448,90 +498,48 @@ test('destination safety follows redirect chains and refuses private or credenti
   const root = mkdtempSync(join(tmpdir(), 'shipde-research-redirect-dest-'));
   const marker = join(root, 'calls');
   try {
-    // 1. Redirect to private IPv4 / metadata
-    const r1 = await invoke(
-      ['web', 'read', 'https://public.example.com/redirect-meta'],
-      'ok',
-      process.env,
-      marker,
+    // Redirect chains are judged by the transport that performs retrieval, so
+    // the injected transport below is the only place the hops are observed.
+    const redirects = [
+      // 1. Redirect to private IPv4 / metadata
+      { location: 'http://169.254.169.254/latest/meta-data/', secret: null },
+      // 2. Redirect to private loopback
+      { location: 'http://127.0.0.1:8080/private', secret: null },
+      // 3. Multi-hop redirect: hop 1 -> hop 2 -> private IP
+      { location: 'https://public.example.com/hop2', next: 'http://10.0.0.1/admin' },
+      // 4. Redirect to credential-bearing URL
+      { location: 'https://docs.example.com?token=fixture-secret', secret: 'fixture-secret' },
+      // 5. Redirect to FQDN resolving to private address
       {
-        fetchUrl: async () => ({
-          status: 302,
-          headers: { location: 'http://169.254.169.254/latest/meta-data/' },
-        }),
-      }
-    );
-    assert.notEqual(r1.exitCode, 0);
-    assert.match(emitted(r1), /refused/i);
-
-    // 2. Redirect to private loopback
-    const r2 = await invoke(
-      ['web', 'read', 'https://public.example.com/redirect-local'],
-      'ok',
-      process.env,
-      marker,
-      {
-        fetchUrl: async () => ({
-          status: 301,
-          headers: { location: 'http://127.0.0.1:8080/private' },
-        }),
-      }
-    );
-    assert.notEqual(r2.exitCode, 0);
-    assert.match(emitted(r2), /refused/i);
-
-    // 3. Multi-hop redirect: hop 1 -> hop 2 -> private IP
-    const r3 = await invoke(
-      ['web', 'read', 'https://public.example.com/hop1'],
-      'ok',
-      process.env,
-      marker,
-      {
-        fetchUrl: async (u) => {
-          if (u.includes('hop1')) {
-            return { status: 302, headers: { location: 'https://public.example.com/hop2' } };
-          }
-          return { status: 302, headers: { location: 'http://10.0.0.1/admin' } };
-        },
-      }
-    );
-    assert.notEqual(r3.exitCode, 0);
-    assert.match(emitted(r3), /refused/i);
-
-    // 4. Redirect to credential-bearing URL
-    const r4 = await invoke(
-      ['web', 'read', 'https://public.example.com/redirect-token'],
-      'ok',
-      process.env,
-      marker,
-      {
-        fetchUrl: async () => ({
-          status: 302,
-          headers: { location: 'https://docs.example.com?token=fixture-secret' },
-        }),
-      }
-    );
-    assert.notEqual(r4.exitCode, 0);
-    assert.match(emitted(r4), /refused/i);
-    assert.doesNotMatch(emitted(r4), /fixture-secret/);
-
-    // 5. Redirect to FQDN resolving to private address
-    const r5 = await invoke(
-      ['web', 'read', 'https://public.example.com/redirect-fqdn'],
-      'ok',
-      process.env,
-      marker,
-      {
-        fetchUrl: async () => ({
-          status: 302,
-          headers: { location: 'https://backend.internal.example/api' },
-        }),
+        location: 'https://backend.internal.example/api',
         resolveHost: async (h) =>
           h === 'backend.internal.example' ? ['172.16.0.5'] : ['93.184.216.34'],
-      }
-    );
-    assert.notEqual(r5.exitCode, 0);
-    assert.match(emitted(r5), /refused/i);
+      },
+      // 6. Redirect to IPv6 loopback
+      { location: 'http://[::1]:8080/private' },
+      // 7. Too many redirects
+      { location: 'https://public.example.com/again', loop: true },
+    ];
+    for (const hop of redirects) {
+      const r = await invoke(
+        ['web', 'read', 'https://public.example.com/start'],
+        'ok',
+        process.env,
+        marker,
+        {
+          retrieve: retrievalTransport(
+            async (u) => ({
+              status: 302,
+              location: u.includes('/start') ? hop.location : hop.next || hop.location,
+            }),
+            hop.resolveHost || defaultTestResolver
+          ),
+        }
+      );
+      assert.notEqual(r.exitCode, 0, `redirect ${hop.location} must be refused`);
+      assert.match(emitted(r), /refused/i);
+      if (hop.secret) assert.doesNotMatch(emitted(r), new RegExp(hop.secret));
+    }
 
     assert.equal(existsSync(marker), false);
   } finally {
@@ -668,6 +676,161 @@ test('duplicate budget validation honors the selected small budget', async () =>
     const result = await invoke(args);
     assert.notEqual(result.exitCode, 0);
     assert.ok(emitted(result).length <= 3);
+  }
+});
+
+test('retrieval transport refuses a destination that rebinds to a private address after preflight', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-rebind-'));
+  const marker = join(root, 'calls');
+  try {
+    for (const transportName of ['rebindingEnteredHost', 'rebindingAfterRedirect']) {
+      const result = await invoke(
+        ['web', 'read', 'https://rebind.example.com/doc'],
+        'ok',
+        process.env,
+        marker,
+        { retrieve: retrievalTransports[transportName] }
+      );
+      assert.notEqual(result.exitCode, 0, `${transportName} must be refused`);
+      assert.match(emitted(result), /refused/i);
+      assert.doesNotMatch(emitted(result), /private-input|rebind\.example\.com/);
+    }
+    // The transport is reached only through the wrapper's approved hop, so a
+    // refused destination never yields a successful research payload.
+    assert.equal(existsSync(marker), false);
+  } finally {
+    assert.equal(dirname(marker), root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('retrieval transport cannot answer public for one method and redirect privately for the next', async () => {
+  const result = await invoke(['web', 'read', 'https://public.example.com/document'], 'ok', process.env, '-', {
+    retrieve: retrievalTransports.headThenPrivateGet,
+  });
+  assert.notEqual(result.exitCode, 0);
+  assert.match(emitted(result), /refused/i);
+  assert.doesNotMatch(emitted(result), /169\.254\.169\.254/);
+});
+
+test('retrieval transport refuses redirect loops and credentialed redirect destinations', async () => {
+  for (const [name, secret] of [
+    ['redirectLoop', null],
+    ['credentialRedirect', 'fixture-transport-token'],
+  ]) {
+    const result = await invoke(
+      ['web', 'read', 'https://public.example.com/start'],
+      'ok',
+      process.env,
+      '-',
+      { retrieve: retrievalTransports[name] }
+    );
+    assert.notEqual(result.exitCode, 0, `${name} must be refused`);
+    assert.match(emitted(result), /refused/i);
+    if (secret) assert.doesNotMatch(emitted(result), new RegExp(secret));
+  }
+});
+
+test('credential-bearing IPv6 search URLs keep their delimiters and are refused before launch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-ipv6-cred-'));
+  const marker = join(root, 'calls');
+  try {
+    for (const query of [
+      'reader:private-input@[::1]',
+      'reader:private-input@[2606:4700::1111]',
+      '(reader:private-input@[2606:4700::1111])',
+      'lookup https://reader:private-input@[2606:4700::1111]/docs',
+      'reader:private-input@[::1]/path',
+    ]) {
+      const result = await invoke(['web', 'search', query], 'ok', process.env, marker);
+      assert.notEqual(result.exitCode, 0, `${query} must be refused`);
+      assert.match(emitted(result), /URLs without credentials only/);
+      assert.doesNotMatch(emitted(result), /private-input/);
+    }
+    // A public IPv6 literal without credentials remains a legitimate source.
+    const allowed = await invoke(['web', 'search', 'reference https://[2606:4700::1111]/docs']);
+    assert.equal(allowed.exitCode, 0);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    assert.equal(dirname(marker), root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('credential-bearing bare userinfo is refused in read and search, including single-label hosts', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-bare-userinfo-'));
+  const marker = join(root, 'calls');
+  try {
+    for (const args of [
+      ['web', 'search', 'SECRETVALUE@intranet?token=private-input'],
+      ['web', 'search', 'reader:private-input@intranet'],
+      ['web', 'search', 'shopee?token=private-input'],
+      ['web', 'read', 'intranet?token=private-input'],
+      ['web', 'read', 'reader:private-input@intranet'],
+    ]) {
+      const result = await invoke(args, 'ok', process.env, marker);
+      assert.notEqual(result.exitCode, 0, `${args.join(' ')} must be refused`);
+      assert.match(emitted(result), /refused/i);
+      assert.doesNotMatch(emitted(result), /SECRETVALUE/);
+    }
+    assert.equal(existsSync(marker), false);
+  } finally {
+    assert.equal(dirname(marker), root);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('encoded credential parameter names in returned URLs are masked before truncation', async () => {
+  for (const budget of [20000, 120]) {
+    const result = await invoke(
+      ['web', 'search', 'docs', '--max-chars', String(budget)],
+      'encoded-secret'
+    );
+    assert.equal(result.exitCode, 0);
+    assert.ok(emitted(result).length <= budget);
+    assert.doesNotMatch(
+      emitted(result),
+      /fixture-encoded-token|fixture-encoded-access-key|fixture-encoded-signature|fixture-double-encoded-token|fixture-encoded-fragment-token/
+    );
+    // The public, non-sensitive parts of the returned URL survive.
+    assert.match(emitted(result), /public\.example\.org/);
+  }
+  for (const budget of [20000, 120]) {
+    const result = await invoke(
+      ['web', 'search', 'docs', '--max-chars', String(budget)],
+      'spaced-name'
+    );
+    assert.equal(result.exitCode, 0);
+    assert.ok(emitted(result).length <= budget);
+    assert.doesNotMatch(emitted(result), /fixture-spaced-secret|fixture-tab-secret/);
+  }
+});
+
+test('masking preserves ordinary public content', async () => {
+  const env = { ...process.env, GH_TOKEN: 'ghp_fixturepat1234567890abcdef' };
+  const result = await invoke(['web', 'search', 'docs'], 'public-content', env);
+  assert.equal(result.exitCode, 0);
+  const text = emitted(result);
+  // API slugs, search operators, library mentions and version numbers are real
+  // research evidence, not credentials: over-broad masking would corrupt them.
+  for (const keep of ['?api=v3', 'C++ examples', 'react@18.2.0', 'host: docs.example.com']) {
+    assert.ok(text.includes(keep), `must keep ${keep}`);
+  }
+  assert.equal(text.includes(env.GH_TOKEN), false);
+});
+
+test('search queries distinguish library identifiers from URL candidates', async () => {
+  for (const query of [
+    'React.useEffect cleanup',
+    'useEffect cleanup in React.js',
+    'Node.js streams',
+    'Vue.js 3 watch',
+    'How does pagination work?',
+    'dns spec 1.1.1.1',
+  ]) {
+    const result = await invoke(['web', 'search', query]);
+    assert.equal(result.exitCode, 0, `${query} must be forwardable`);
+    assert.equal(payload(result).argv[2], query);
   }
 });
 

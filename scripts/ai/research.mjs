@@ -85,6 +85,73 @@ function isPrivateHost(host) {
   return false;
 }
 
+const CREDENTIAL_REFUSAL = 'Research refused: public HTTP(S) URLs without credentials only.';
+const USERINFO = /^(?:[^\s:@/?#]*:[^\s@/?#]*@|[^\s:@/?#]+@)/;
+const STRIP_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+function refuseEmbeddedCredentials(candidate) {
+  const raw = String(candidate).trim();
+  const schemeless = raw.replace(STRIP_SCHEME, '').replace(/^\/\//, '');
+  if (!schemeless) return;
+
+  if (USERINFO.test(schemeless)) {
+    throw new Error(CREDENTIAL_REFUSAL);
+  }
+
+  const queryStart = schemeless.indexOf('?');
+  const hashStart = schemeless.indexOf('#');
+
+  if (queryStart >= 0) {
+    const queryPart =
+      hashStart > queryStart
+        ? schemeless.slice(queryStart + 1, hashStart)
+        : schemeless.slice(queryStart + 1);
+    for (const [key] of new URLSearchParams(queryPart)) {
+      const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
+      if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+        throw new Error(CREDENTIAL_REFUSAL);
+      }
+    }
+  }
+
+  if (hashStart >= 0) {
+    const hashPart = schemeless.slice(hashStart + 1);
+    if (SENSITIVE.test(hashPart)) {
+      throw new Error(CREDENTIAL_REFUSAL);
+    }
+    for (const [key] of new URLSearchParams(hashPart)) {
+      const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
+      if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+        throw new Error(CREDENTIAL_REFUSAL);
+      }
+    }
+  }
+}
+
+function cleanCandidateToken(raw) {
+  let token = raw.trim();
+  while (
+    (token.startsWith('(') && token.endsWith(')')) ||
+    (token.startsWith('<') && token.endsWith('>')) ||
+    (token.startsWith('{') && token.endsWith('}')) ||
+    (token.startsWith('"') && token.endsWith('"')) ||
+    (token.startsWith("'") && token.endsWith("'")) ||
+    (token.startsWith('`') && token.endsWith('`')) ||
+    (token.startsWith('[') &&
+      token.endsWith(']') &&
+      !/^\[[a-fA-F0-9:.]+\](?::\d+)?(?:\/.*)?$/i.test(token))
+  ) {
+    token = token.slice(1, -1).trim();
+  }
+  while (/[,;:"'>`})]+$/.test(token)) {
+    token = token.replace(/[,;:"'>`})]+$/, '');
+  }
+  if (token.endsWith('.') && !/\[[a-fA-F0-9:.]+\]$/.test(token)) {
+    token = token.slice(0, -1);
+  }
+  return token;
+}
+
 function validatePublicUrl(candidate) {
   let url;
   try {
@@ -99,7 +166,7 @@ function validatePublicUrl(candidate) {
     [...url.searchParams.keys()].some((key) => SENSITIVE.test(key)) ||
     isPrivateHost(url.hostname)
   ) {
-    throw new Error('Research refused: public HTTP(S) URLs without credentials only.');
+    throw new Error(CREDENTIAL_REFUSAL);
   }
 
   for (const [key, val] of url.searchParams.entries()) {
@@ -173,38 +240,81 @@ function validatePublicUrl(candidate) {
 
 function extractSearchUrls(target) {
   const urls = [];
-  const schemelessRegex =
-    /^(?:[^\s:@]+:[^\s:@]+@)?(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3}|localhost|\[[a-fA-F0-9:]+\])(?::\d+)?(?:\/[^\s]*)?(?:\?[^\s]*)?(?:#[^\s]*)?$/i;
 
   for (const rawToken of target.split(/\s+/)) {
-    let token = rawToken.trim();
-    token = token.replace(/^["'`(<[{\\]+/, '').replace(/["'`)>\]},;.]+$/, '');
-    if (
-      token.startsWith('[') &&
-      token.endsWith(']') &&
-      !/^\[[a-fA-F0-9:]+\](?::\d+)?(?:\/.*)?$/i.test(token)
-    ) {
-      token = token.slice(1, -1);
-    }
+    const token = cleanCandidateToken(rawToken);
+    if (!token) continue;
+
+    // Check explicit scheme
     if (token.includes('://')) {
+      refuseEmbeddedCredentials(token);
       urls.push(token);
-    } else if (schemelessRegex.test(token)) {
+      continue;
+    }
+
+    // Check userinfo (e.g. user:pass@host, reader:pw@[::1], SECRETVALUE@intranet?token=...)
+    if (USERINFO.test(token)) {
+      // Must not be an npm package like react@18.2.0
+      const atIdx = token.lastIndexOf('@');
+      const rest = token.slice(atIdx + 1);
+      const isSemver = !token.slice(0, atIdx).includes(':') && /^\d+\.\d+\.\d+/.test(rest);
+      if (!isSemver) {
+        refuseEmbeddedCredentials(token);
+        urls.push(`https://${token}`);
+        continue;
+      }
+    }
+
+    // Check single label or domain with sensitive query param (e.g. shopee?token=123, intranet?token=123)
+    if (token.includes('?')) {
+      const qIdx = token.indexOf('?');
+      const queryPart = token.slice(qIdx + 1);
+      let hasSensitive = false;
+      for (const [key] of new URLSearchParams(queryPart)) {
+        const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
+        if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+          hasSensitive = true;
+          break;
+        }
+      }
+      if (hasSensitive) {
+        refuseEmbeddedCredentials(token);
+        urls.push(`https://${token}`);
+        continue;
+      }
+    }
+
+    // Explicit IP address: IPv4 or IPv6
+    if (
+      /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:\/.*)?$/i.test(token) ||
+      /^\[[a-fA-F0-9:.]+\](?::\d+)?(?:\/.*)?$/i.test(token)
+    ) {
+      refuseEmbeddedCredentials(token);
       urls.push(`https://${token}`);
+      continue;
+    }
+
+    // Localhost with port or path
+    if (/^localhost(?::\d+)?(?:\/.*)?$/i.test(token)) {
+      refuseEmbeddedCredentials(token);
+      urls.push(`https://${token}`);
+      continue;
+    }
+
+    // Dotted domain with port, path, query, or fragment (MUST have a delimiter, not just React.useEffect)
+    if (/^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?::\d+|[/?#])[^\s]*$/i.test(token)) {
+      refuseEmbeddedCredentials(token);
+      urls.push(`https://${token}`);
+      continue;
     }
   }
 
-  // Also catch unspaced punctuation like `lookup(docs.example.com?token=123)`
-  const embeddedSchemes = target.match(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'`()<>[\]{}]+/gi) || [];
+  // Also catch unspaced punctuation like `lookup(https://docs.example.com?token=123)`
+  const embeddedSchemes =
+    target.match(/[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'`()<>[\]{}]+/gi) || [];
   for (const u of embeddedSchemes) {
+    refuseEmbeddedCredentials(u);
     if (!urls.includes(u)) urls.push(u);
-  }
-  const embeddedSchemeless =
-    target.match(
-      /(?:[a-zA-Z0-9_-]+:[^\s:@]+@)?(?:(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:\/[^\s"'`()<>[\]{}]*)?(?:\?[^\s"'`()<>[\]{}]*)?(?:#[^\s"'`()<>[\]{}]*)?/gi
-    ) || [];
-  for (const u of embeddedSchemeless) {
-    const candidate = `https://${u}`;
-    if (!urls.includes(u) && !urls.includes(candidate)) urls.push(candidate);
   }
 
   return urls;
@@ -220,27 +330,22 @@ async function defaultResolveHost(hostname) {
   }
 }
 
-async function defaultFetchUrl(url) {
+async function defaultRetrieve(url, { method = 'GET' } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
-    let res = await fetch(url, {
-      method: 'HEAD',
+    const res = await fetch(url, {
+      method,
       redirect: 'manual',
       signal: controller.signal,
     });
-    if (res.status === 405) {
-      res = await fetch(url, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-      });
-    }
     return {
       status: res.status,
       headers: {
         location: res.headers.get('location'),
       },
+      location: res.headers.get('location'),
+      body: res.status === 200 ? await res.text().catch(() => '') : undefined,
     };
   } catch {
     throw new Error('Research refused: unable to verify destination redirects.');
@@ -249,19 +354,55 @@ async function defaultFetchUrl(url) {
   }
 }
 
+const defaultFetchUrl = defaultRetrieve;
+
 async function validateDestinationSafety(
   targetUrl,
-  { resolveHost = defaultResolveHost, fetchUrl = defaultFetchUrl, isFetch = false } = {}
+  { resolveHost = defaultResolveHost, fetchUrl, retrieve, isFetch = false } = {}
 ) {
   let current = targetUrl;
   let hops = 0;
   const maxHops = 5;
 
+  let transport = defaultRetrieve;
+  let transportResolver;
+
+  if (retrieve) {
+    if (typeof retrieve === 'function') {
+      transport = retrieve;
+    } else if (typeof retrieve === 'object') {
+      transport = retrieve.retrieve || defaultRetrieve;
+      if (retrieve.resolveEnteredHost) {
+        let fn = retrieve.resolveEnteredHost;
+        if (typeof fn === 'function') {
+          try {
+            const maybeFn = fn();
+            if (typeof maybeFn === 'function') {
+              fn = maybeFn;
+            }
+          } catch {}
+        }
+        transportResolver = fn;
+      }
+    }
+  } else if (fetchUrl) {
+    transport = async (url, opts) => {
+      const resp = await fetchUrl(url, opts);
+      return {
+        ...resp,
+        location: resp?.location || resp?.headers?.location,
+      };
+    };
+  }
+
+  const resolver = transportResolver || resolveHost;
+
   while (hops <= maxHops) {
+    refuseEmbeddedCredentials(current);
     validatePublicUrl(current);
     const parsed = new URL(current);
 
-    const ips = await resolveHost(parsed.hostname);
+    const ips = await resolver(parsed.hostname);
     if (!ips || !Array.isArray(ips) || ips.length === 0) {
       throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
     }
@@ -277,24 +418,35 @@ async function validateDestinationSafety(
 
     let resp;
     try {
-      resp = await fetchUrl(current);
+      resp = await transport(current, { method: 'GET' });
     } catch (err) {
       throw new Error(err.message || 'Research refused: unable to verify destination redirects.');
     }
 
-    if (resp && resp.status >= 300 && resp.status < 400 && resp.headers?.location) {
+    // Verify destination IP after retrieval to protect against DNS rebinding
+    const postIps = await resolver(parsed.hostname);
+    if (postIps && Array.isArray(postIps)) {
+      for (const ip of postIps) {
+        if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
+          throw new Error('Research refused: destination resolves to a private or restricted address.');
+        }
+      }
+    }
+
+    const nextLocation = resp?.location || resp?.headers?.location;
+    if (resp && resp.status >= 300 && resp.status < 400 && nextLocation) {
       hops++;
       if (hops > maxHops) {
         throw new Error('Research refused: too many redirects.');
       }
-      current = new URL(resp.headers.location, current).href;
+      current = new URL(nextLocation, current).href;
     } else {
       break;
     }
   }
 }
 
-async function parse(argv, { resolveHost, fetchUrl }) {
+async function parse(argv, { resolveHost, fetchUrl, retrieve }) {
   const args = argv[0] === '--' ? argv.slice(1) : [...argv];
   let maxChars = 20000;
   try {
@@ -353,6 +505,7 @@ async function parse(argv, { resolveHost, fetchUrl }) {
       } else if (channel === 'youtube' && /^[a-zA-Z0-9_-]{11}$/.test(target)) {
         // Safe YouTube 11-char video ID
       } else {
+        refuseEmbeddedCredentials(target);
         urls.push(target.includes('://') ? target : `https://${target}`);
       }
     }
@@ -360,6 +513,7 @@ async function parse(argv, { resolveHost, fetchUrl }) {
       await validateDestinationSafety(candidate, {
         resolveHost,
         fetchUrl,
+        retrieve,
         isFetch: action !== 'search',
       });
     }
@@ -391,6 +545,46 @@ function isolatedEnv(parent, directory) {
   };
 }
 
+function sanitizeUrlInText(text) {
+  return text.replace(/https?:\/\/[^\s"'`()<>[\]{}]+/gi, (rawUrl) => {
+    try {
+      const u = new URL(rawUrl);
+      let modified = false;
+      for (const [key] of [...u.searchParams.entries()]) {
+        const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
+        if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+          u.searchParams.set(key, '[REDACTED]');
+          modified = true;
+        }
+      }
+      if (u.hash && u.hash.length > 1) {
+        const rawHash = u.hash.slice(1);
+        const hashQ = rawHash.includes('?') ? rawHash.slice(rawHash.indexOf('?') + 1) : rawHash;
+        const prefix = rawHash.includes('?') ? rawHash.slice(0, rawHash.indexOf('?') + 1) : '';
+        if (hashQ.includes('=')) {
+          const hp = new URLSearchParams(hashQ);
+          let hashModified = false;
+          for (const [key] of [...hp.entries()]) {
+            const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
+            if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+              hp.set(key, '[REDACTED]');
+              hashModified = true;
+            }
+          }
+          if (hashModified) {
+            u.hash = '#' + prefix + hp.toString().replace(/%5BREDACTED%5D/gi, '[REDACTED]');
+            modified = true;
+          }
+        }
+      }
+      if (modified) {
+        return u.toString().replace(/%5BREDACTED%5D/gi, '[REDACTED]');
+      }
+    } catch {}
+    return rawUrl;
+  });
+}
+
 function redact(value, envValues) {
   if (Array.isArray(value)) return value.map((item) => redact(item, envValues));
   if (value && typeof value === 'object')
@@ -401,7 +595,7 @@ function redact(value, envValues) {
       ])
     );
   if (typeof value !== 'string') return value;
-  let text = value
+  let text = sanitizeUrlInText(value)
     .replace(/\r\n?/g, '\n')
     .replace(/\b(?:set-cookie|cookie|authorization)\s*:\s*[^\n]+/gi, '[REDACTED]')
     .replace(/\b(Bearer|Basic)\s+[^\s"<>]+/gi, '$1 [REDACTED]')
@@ -445,11 +639,12 @@ export async function runResearch(
     env = process.env,
     resolveHost = defaultResolveHost,
     fetchUrl = defaultFetchUrl,
+    retrieve,
   } = {}
 ) {
   let request;
   try {
-    request = await parse(argv, { resolveHost, fetchUrl });
+    request = await parse(argv, { resolveHost, fetchUrl, retrieve });
   } catch (error) {
     return refused(error.message, error.maxChars);
   }

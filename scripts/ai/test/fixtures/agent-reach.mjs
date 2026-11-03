@@ -65,13 +65,39 @@ if (argv[0] === 'version') {
       isolatedCwd: process.cwd() === homedir(),
     });
   }
+  if (mode === 'encoded-secret') {
+    // Returned URL with percent-encoded sensitive parameter names.
+    text =
+      'https://public.example.org/?%74oken=fixture-encoded-token\n' +
+      'https://public.example.org/?%61ccess_key=fixture-encoded-access-key\n' +
+      'https://public.example.org/?sig%6Eature=fixture-encoded-signature\n' +
+      'https://public.example.org/?t%6Fk%65n=fixture-double-encoded-token\n' +
+      'https://public.example.org/#%74oken=fixture-encoded-fragment-token';
+  }
+  if (mode === 'public-content') {
+    text =
+      'https://api.example.org/v2/search?api=v3&page=2\n' +
+      'C++ examples and Rust macros\n' +
+      'npm i react@18.2.0 --save\n' +
+      'host: docs.example.com\n' +
+      'GH_TOKEN=ghp_fixturepat1234567890abcdef';
+  }
+  if (mode === 'spaced-name') {
+    // Returned URL with a space-encoded separator before a sensitive name.
+    text =
+      'https://public.example.org/?api%20key=fixture-spaced-secret\n' +
+      'https://public.example.org/?refresh%09token=fixture-tab-secret';
+  }
   console.log(
     JSON.stringify({
       ok: true,
       items: [
         {
           title: 'Reference',
-          url: 'https://docs.example.com',
+          url:
+            mode === 'encoded-secret' || mode === 'spaced-name'
+              ? 'https://public.example.org'
+              : 'https://docs.example.com',
           text,
           raw: {
             cookie: 'fixture-cookie',
