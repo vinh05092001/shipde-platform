@@ -123,7 +123,36 @@ function redactStderr(text) {
       const masked = hasCR ? `${REDACTED_LINE}\r` : REDACTED_LINE;
 
       if (depth > 0) {
-        depth = Math.max(0, depth + bracketDelta(trimmed));
+        let currentDepth = depth;
+        let inString = false;
+        let escaped = false;
+        let closeIndex = -1;
+        for (let i = 0; i < trimmed.length; i++) {
+          const ch = trimmed[i];
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+          }
+          if (ch === '"') {
+            inString = true;
+          } else if (ch === '{' || ch === '[') {
+            currentDepth += 1;
+          } else if (ch === '}' || ch === ']') {
+            currentDepth -= 1;
+            if (currentDepth === 0) {
+              closeIndex = i;
+              break;
+            }
+          }
+        }
+        if (closeIndex !== -1) {
+          const rest = trimmed.slice(closeIndex + 1).trim();
+          ({ pending, depth } = trailingState(rest));
+        } else {
+          depth = currentDepth;
+        }
         return masked;
       }
 

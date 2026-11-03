@@ -616,3 +616,19 @@ test('redacts-json-credential-nested-object-and-array-values', (t) => {
   // Masking stops after the credential value closes.
   assert.ok(saved.stderr.includes('"status": "safe-visible"'));
 });
+
+test('redacts-pending-key-on-credential-container-closing-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-closing-line-pending-key' };
+  const rawStderr = '{\n"secret": {\n"value": "FAKE_A"\n}, "api_key":\n"FAKE_B"\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_A'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_B'), false);
+
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_A'), false);
+  assert.strictEqual(rawResult.includes('FAKE_B'), false);
+});
