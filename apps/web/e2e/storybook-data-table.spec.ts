@@ -512,9 +512,12 @@ test('review 12 P1: external same-page navigation to an older pending search can
     // Query equality would treat it as an acknowledgment of the cancelled "N"
     // edit and keep the newer "Ng" draft.
     // Round 14 / Finding 4 P1: test an actual Next.js navigation via Link without synthetic popstate.
+    const requestsBeforeLink = held.requests.length;
     await page.getByRole('link', { name: 'Mô phỏng điều hướng ngoài: search=N' }).click();
-    await expect.poll(() => held.requests.length).toBe(3);
+    // Wait for the link navigation request(s) to be intercepted (may include RSC prefetch)
+    await expect.poll(() => held.requests.length).toBeGreaterThan(requestsBeforeLink);
     held.releaseLatest();
+    held.releaseOne((url) => url.searchParams.get('search') === 'N');
     await expect(search).toHaveValue('N');
 
     await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();

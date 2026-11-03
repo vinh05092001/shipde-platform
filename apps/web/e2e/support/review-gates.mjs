@@ -204,3 +204,16 @@ test('review 37: storybook-data-table.spec.ts does not use synthetic popstate fo
     'Empty reset request must be acknowledged via router release'
   );
 });
+
+test('review 38: storybook-data-table.spec.ts accommodates RSC link prefetch without hardcoding exact request count', () => {
+  const specContent = source('apps/web/e2e/storybook-data-table.spec.ts').toString('utf8');
+  assert.equal(
+    specContent.includes('.toBe(3)'),
+    false,
+    'held.requests count must not assert exact 3 because Next.js RSC link prefetch can add requests'
+  );
+  assert.ok(
+    specContent.includes('toBeGreaterThan'),
+    'held.requests must use toBeGreaterThan to verify link navigation request arrival'
+  );
+});
