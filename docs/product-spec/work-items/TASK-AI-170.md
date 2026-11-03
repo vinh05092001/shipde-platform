@@ -7,12 +7,12 @@
 | Work Item ID | `TASK-AI-170` |
 | Feature ID | N/A — AI workflow dispatch prompts and reviewer selection |
 | Status | `READY_FOR_CODEX` |
-| Delivery order | `293` |
+| Delivery order | `303` |
 | Dependencies | `TASK-AI-162`, `TASK-AI-165` |
 | Assigned author | GEMINI |
 | Risk | LOW |
 | Allowed paths | `scripts/ai/templates/author-header.md`, `scripts/ai/templates/review-contract.md`, `scripts/ai/templates/task-fix.md`, `scripts/ai/templates/task-prbody.md`, `scripts/ai/templates/pr-body.md`, `scripts/ai/render-task.mjs`, `scripts/ai/select-reviewer.mjs`, `scripts/ai/test/render-task.test.mjs`, `scripts/ai/test/select-reviewer.test.mjs`, `docs/product-spec/work-items/TASK-AI-170.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
-| Reviewer | Codex — fresh independent task |
+| Reviewer | Codex PASS eafc4f8 |
 | Branch | `feat/task-ai-170-dispatch-prompts` |
 | Pull Request | `UNKNOWN` |
 
@@ -104,4 +104,9 @@ None. Internal AI workflow scripts and markdown templates.
 
 - [x] Unit tests pass via `node --test scripts/ai/test/render-task.test.mjs scripts/ai/test/select-reviewer.test.mjs`.
 - [x] No hardcoded models/accounts/limits (`scripts/ai/check-no-hardcode.mjs` passes).
-- [x] Register row added with delivery_order = 293.
+- [x] Register row added with delivery_order = 303.
+
+## Review record
+
+- Codex review: PASS at commit `eafc4f8`.
+- Follow-up in `dbce7e3`: treat explicitly empty modelId and accountId as invalid.
