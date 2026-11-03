@@ -256,6 +256,115 @@ class TestSmokeRedaction(unittest.TestCase):
             self.assertNotIn('"client_secret": "x"', results_json, "client_secret value leaked in smoke-results.json")
             self.assertNotIn('"x"', proc.stderr, "client_secret value leaked in stderr")
 
+    def test_sanitize_redacts_nested_sensitive_keys_in_memory(self):
+        """AC-AI-158-ctx-03: the sanitizer itself redacts nested dict/list keys before any print path."""
+        sys.path.insert(0, str(THIS_DIR))
+        try:
+            from smoke import sanitize_secret_payload
+        finally:
+            sys.path.pop(0)
+
+        payload = {
+            "access_token": "smoke-test-value",
+            "refresh_token": "refresh-not-real",
+            "api_key": "not-a-key",
+            "API-KEY": "not-a-key",
+            "clientSecret": "smoke-test-camel",
+            "nested": {
+                "client_secret": "x",
+                "items": [{"Authorization": "Bearer not-real"}, {"cookie": "session-not-real"}],
+            },
+            "message": "Auth failure: password smoke-test-password",
+            "tool_count": 7,
+            "author": "tester",
+            "monkey": "harmless",
+            "s": 1,
+        }
+        sanitized = sanitize_secret_payload(payload)
+
+        self.assertNotIn("smoke-test-value", json.dumps(sanitized))
+        self.assertNotIn("refresh-not-real", json.dumps(sanitized))
+        self.assertNotIn("not-a-key", json.dumps(sanitized))
+        self.assertNotIn("smoke-test-camel", json.dumps(sanitized))
+        self.assertNotIn('"x"', json.dumps(sanitized))
+        self.assertNotIn("not-real", json.dumps(sanitized))
+        self.assertEqual(sanitized["tool_count"], 7)
+        self.assertEqual(sanitized["author"], "tester")
+        self.assertEqual(sanitized["monkey"], "harmless")
+        self.assertEqual(sanitized["s"], 1)
+
+    def test_smoke_end_to_end_nested_credentials_never_printed(self):
+        """AC-AI-158-ctx-03: nested credential keys in JSON-RPC error data never reach stderr or results JSON."""
+        tmp_base = REPO_ROOT / ".oc" / "tmp"
+        tmp_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            fake_server_script = tmp_path / "fake_mcp_server.py"
+            fake_server_script.write_text(
+                'import sys, json\n'
+                'for line in sys.stdin:\n'
+                '    try:\n'
+                '        req = json.loads(line)\n'
+                '        req_id = req.get("id")\n'
+                '        if req_id is not None:\n'
+                '            err_resp = {\n'
+                '                "jsonrpc": "2.0",\n'
+                '                "id": req_id,\n'
+                '                "error": {"code": -32603, "message": "request failed",\n'
+                '                          "data": {"refresh_token": "refresh-not-real",\n'
+                '                                   "api_key": "not-a-key",\n'
+                '                                   "clientSecret": "camel-not-real",\n'
+                '                                   "nested": {"client_secret": "x", "items": [{"credential": "cred-not-real"}]},\n'
+                '                                   "access_token": "smoke-test-value"}},\n'
+                '            }\n'
+                '            sys.stdout.write(json.dumps(err_resp) + "\\n")\n'
+                '            sys.stdout.flush()\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding="utf-8",
+            )
+
+            entries_file = tmp_path / "entries.json"
+            entries_file.write_text(
+                json.dumps({
+                    "fake_server": {
+                        "command": PYTHON_EXE,
+                        "args": [str(fake_server_script)],
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            out_dir = tmp_path / "out"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    PYTHON_EXE,
+                    str(SMOKE_SCRIPT),
+                    "--entries", str(entries_file),
+                    "--out-dir", str(out_dir),
+                    "--project", str(REPO_ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            results_json = ""
+            results_file = out_dir / "smoke-results.json"
+            if results_file.exists():
+                results_json = results_file.read_text(encoding="utf-8")
+
+            self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
+            self.assertIn("JSON-RPC error", proc.stderr, f"secret-bearing response must be exercised: {proc.stderr}")
+            combined = proc.stdout + proc.stderr + results_json
+            for leaked in ("smoke-test-value", "refresh-not-real", "not-a-key", "camel-not-real", "cred-not-real"):
+                self.assertNotIn(leaked, combined, f"credential value {leaked} leaked")
+            self.assertNotIn('"x"', combined, "client_secret value x leaked")
+            self.assertIn("[REDACTED]", combined, "redaction marker missing")
+
 
 if __name__ == "__main__":
     unittest.main()

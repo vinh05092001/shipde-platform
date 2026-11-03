@@ -19,16 +19,48 @@ KEEP_ENV = {
 
 
 SENSITIVE_WORDS = ("token", "secret", "key", "password", "authorization", "cookie", "credential")
-SENSITIVE_WORD_RE = "|".join(SENSITIVE_WORDS)
+_WORD_ALT = "|".join(SENSITIVE_WORDS)
+_KEY_SEPARATORS = r"[_\-\s.]"
+# `true`/camelCase boundaries are folded to `_` before splitting, so `accessToken`
+# is matched like `access_token`.
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 _PART_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[0-9]+")
+
+# A sensitive word delimited on both sides (separator, start/end or camel boundary).
+# The lookarounds keep `monkey`, `tokenizer`, `author` and `cookies`-style noise out.
+_ASSIGNMENT_KEY_RE = re.compile(
+    rf"(?<![A-Za-z0-9])(?:{_WORD_ALT})s?(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+# Free-text credentials: `access_token=...`, `"password": "..."`, `api-key: ...`.
+_TEXT_ASSIGNMENT_RE = re.compile(
+    rf"([\"']?(?:[A-Za-z0-9_.\-]*{_KEY_SEPARATORS})?(?:{_WORD_ALT})s?[\"']?\s*[=:]\s*[\"']?)(?![\[\"']?REDACTED)[^\s,\"'}}\]\]\\\\]+",
+    re.IGNORECASE,
+)
+# Free-text credentials written as `key value` (`Auth failure: password hunter2`).
+_TEXT_SPACE_ASSIGNMENT_RE = re.compile(
+    rf"([\"']?(?:[A-Za-z0-9_.\-]*{_KEY_SEPARATORS})?(?:{_WORD_ALT})s?[\"']?\s+)(?![\[\"']?REDACTED)[^\s,\"'}}\]\]\\\\]+",
+    re.IGNORECASE,
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[^\s,\"'}\]]+")
+_CANARY_RE = re.compile(r"(?i)\bCANARY_SECRET\w*")
+_SK_RE = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]+")
+
+REDACTED = "[REDACTED]"
+
+
+def _split_parts(name: str):
+    """Split an underscore/hyphen/dot/whitespace/camelCase separated key into parts."""
+    parts = []
+    for chunk in re.split(rf"{_KEY_SEPARATORS}+", _CAMEL_BOUNDARY_RE.sub("_", str(name))):
+        parts.extend(_PART_RE.findall(chunk))
+    return parts
 
 
 def is_sensitive_key(name: str) -> bool:
-    """True when an underscore/hyphen/camelCase-separated part is a sensitive word (or ends with one)."""
-    parts = []
-    for chunk in re.split(r"[_\-\s.]+", str(name)):
-        parts.extend(_PART_RE.findall(chunk))
-    for part in parts:
+    """True when a `_`/`-`/`.`/camelCase-separated part of the key is a sensitive word (or its plural)."""
+    for part in _split_parts(name):
         low = part.lower()
         if low in SENSITIVE_WORDS or (low.endswith("s") and low[:-1] in SENSITIVE_WORDS):
             return True
@@ -36,30 +68,27 @@ def is_sensitive_key(name: str) -> bool:
 
 
 def sanitize_secret_payload(val):
+    """Redact sensitive names and values recursively, before anything is printed or written."""
     if isinstance(val, str):
-        s = val
-        s = re.sub(
-            rf"([\"']?\b[a-zA-Z0-9_.-]*(?:{SENSITIVE_WORD_RE})[a-zA-Z0-9_.-]*[\"']?\s*[=:]\s*[\"']?)[^\s,\"'\}}\]]+",
-            r"\1[REDACTED]",
-            s,
-            flags=re.IGNORECASE,
-        )
-        s = re.sub(r"(?i)\bBearer\s+[^\s,\"\'}\]]+", "Bearer [REDACTED]", s)
-        s = re.sub(r"(?i)\bCANARY_SECRET\w*", "[REDACTED]", s)
-        s = re.sub(r"(?i)\bsk-[A-Za-z0-9_-]+", "[REDACTED]", s)
+        s = _BEARER_RE.sub("Bearer " + REDACTED, val)
+        s = _CANARY_RE.sub(REDACTED, s)
+        s = _SK_RE.sub(REDACTED, s)
+        for pattern in (_TEXT_ASSIGNMENT_RE, _TEXT_SPACE_ASSIGNMENT_RE):
+            s = pattern.sub(
+                lambda m: m.group(1) + REDACTED
+                if _ASSIGNMENT_KEY_RE.search(m.group(1))
+                else m.group(0),
+                s,
+            )
         return s
-    elif isinstance(val, dict):
-        sanitized = {}
-        for k, v in val.items():
-            if is_sensitive_key(k):
-                sanitized[k] = "[REDACTED]"
-            else:
-                sanitized[k] = sanitize_secret_payload(v)
-        return sanitized
-    elif isinstance(val, list):
+    if isinstance(val, dict):
+        return {
+            k: REDACTED if is_sensitive_key(k) else sanitize_secret_payload(v)
+            for k, v in val.items()
+        }
+    if isinstance(val, (list, tuple)):
         return [sanitize_secret_payload(item) for item in val]
-    else:
-        return val
+    return val
 
 
 def count_tokens(text: str) -> int:

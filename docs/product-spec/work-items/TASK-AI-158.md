@@ -11,7 +11,7 @@
 | Dependencies | `TASK-FOUND-04` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
-| Allowed paths | `package.json`; `pnpm-lock.yaml`; `repomix.config.json`; `.gitignore`; `AGENTS.md`; `scripts/ai/pack-context.mjs`; `scripts/ai/test/pack-context.test.mjs`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`; `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-7-PRODUCT-TOOLCHAIN.md`; `docs/product-spec/work-items/TASK-AI-158.md`; `.oc/pr-body.md`; `tools/ai-brain/context-pack.js`; `tools/ai-brain/test/context-pack-repomix.test.js`; `tools/ai-brain/toolkit.json`; `tools/ctx-tools/prompt-block.js`; `tools/ctx-tools/**` |
+| Allowed paths | `package.json`; `pnpm-lock.yaml`; `repomix.config.json`; `.gitignore`; `AGENTS.md`; `scripts/ai/pack-context.mjs`; `scripts/ai/test/pack-context.test.mjs`; `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md`; `docs/product-spec/docs/10-ai-collaboration/repo-integration/GROUP-7-PRODUCT-TOOLCHAIN.md`; `docs/product-spec/work-items/TASK-AI-158.md`; `.oc/pr-body.md`; `tools/ai-brain/context-pack.js`; `tools/ai-brain/test/context-pack-repomix.test.js`; `tools/ai-brain/toolkit.json`; `prompt-block.js`; `tools/ctx-tools/prompt-block.js`; `tools/ctx-tools/**` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-158-repomix-context` |
 | Pull Request | `N/A — local authoring stage` |
