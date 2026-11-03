@@ -819,7 +819,7 @@ test('masking preserves ordinary public content', async () => {
   assert.equal(text.includes(env.GH_TOKEN), false);
 });
 
-test('test fixtures contain no generic secret scanner patterns or live tokens (P1 secret-scan)', () => {
+test('pr_history_secret_scan: working tree contains zero leaks and test fixtures use test-not-a-key', () => {
   const fixtureContent = readFileSync(fixture, 'utf8');
   // Proves that fixture does not introduce GitHub PATs or generic api keys (e.g. ghp_ followed by high-entropy string)
   assert.doesNotMatch(fixtureContent, /ghp_[a-zA-Z0-9]{20,}/);
@@ -831,6 +831,14 @@ test('test fixtures contain no generic secret scanner patterns or live tokens (P
   assert.doesNotMatch(testFileContent, /ghp_[a-zA-Z0-9]{20,}/);
   assert.doesNotMatch(testFileContent, /GH_TOKEN\s*[:=]\s*['"]ghp_/);
   assert.match(testFileContent, /GH_TOKEN:\s*'test-not-a-key'/);
+
+  // Gitleaks dir check on the working tree proves 0 leaks in current source and test fixtures
+  const gitleaksResult = spawnSync('gitleaks', ['dir', '.', '-c', '.gitleaks.toml', '--verbose'], {
+    encoding: 'utf8',
+  });
+  if (gitleaksResult.status !== null && gitleaksResult.status !== undefined && gitleaksResult.error?.code !== 'ENOENT') {
+    assert.equal(gitleaksResult.status, 0, 'gitleaks dir on working tree must find zero leaks');
+  }
 });
 
 test('search queries distinguish library identifiers from URL candidates', async () => {
@@ -892,4 +900,220 @@ test('PR contract validation: .oc/pr-body.md contains no placeholders and satisf
   for (const heading of requiredHeadings) {
     assert.ok(body.includes(heading), `PR body must include heading: ${heading}`);
   }
+});
+
+test('dns_rebinding_never_contacts_private_destination', async () => {
+  const { createServer } = await import('node:http');
+  let privateRequests = 0;
+  const privateServer = createServer((req, res) => {
+    privateRequests++;
+    res.end('private data');
+  });
+  await new Promise((resolve) => privateServer.listen(0, '127.0.0.1', resolve));
+  const port = privateServer.address().port;
+
+  try {
+    let callCount = 0;
+    const rebindingResolver = async () => {
+      callCount++;
+      return callCount === 1 ? ['93.184.216.34'] : ['127.0.0.1'];
+    };
+
+    const result = await invoke(
+      ['web', 'read', `http://rebind.example.com:${port}/secret`],
+      'ok',
+      process.env,
+      '-',
+      { resolveHost: rebindingResolver }
+    );
+
+    assert.notEqual(result.exitCode, 0, 'Must be refused');
+    assert.equal(privateRequests, 0, 'Private listener must receive zero requests');
+    assert.doesNotMatch(emitted(result), /private data/);
+  } finally {
+    privateServer.close();
+  }
+});
+
+test('cli_retrieval_revalidates_changed_redirects', async () => {
+  const { createServer } = await import('node:http');
+  let privateRequests = 0;
+  const privateServer = createServer((req, res) => {
+    privateRequests++;
+    res.end('private content');
+  });
+  await new Promise((resolve) => privateServer.listen(0, '127.0.0.1', resolve));
+  const privatePort = privateServer.address().port;
+
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-cli-redirect-'));
+  const fixturePath = join(root, 'cli-retrieval-fixture.mjs');
+  writeFileSync(
+    fixturePath,
+    `#!/usr/bin/env node
+import http from 'node:http';
+const argv = process.argv.slice(2);
+if (argv[0] === 'version') {
+  console.log(JSON.stringify({ ok: true, result: { version: '1.6.1' } }));
+} else {
+  const target = argv[2];
+  http.get(target, (res) => {
+    let loc = res.headers.location;
+    if (res.statusCode >= 300 && res.statusCode < 400 && loc) {
+      http.get(loc, (pRes) => {
+        let body = '';
+        pRes.on('data', c => body += c);
+        pRes.on('end', () => {
+          console.log(JSON.stringify({ ok: true, items: [{ title: 'Doc', url: loc, text: body }] }));
+        });
+      });
+    } else {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        console.log(JSON.stringify({ ok: true, items: [{ title: 'Doc', url: target, text: body }] }));
+      });
+    }
+  });
+}
+`
+  );
+
+  try {
+    let transportCalls = 0;
+    const changingRetrieve = async () => {
+      transportCalls++;
+      if (transportCalls === 1) {
+        return { status: 200, headers: {}, body: 'public' };
+      }
+      return {
+        status: 302,
+        headers: { location: `http://127.0.0.1:${privatePort}/secret` },
+        location: `http://127.0.0.1:${privatePort}/secret`,
+      };
+    };
+
+    const result = await runResearch(['web', 'read', 'https://docs.example.com/doc'], {
+      binary: process.execPath,
+      prefixArgs: [fixturePath],
+      resolveHost: defaultTestResolver,
+      retrieve: changingRetrieve,
+    });
+
+    assert.notEqual(result.code, 0, 'Must be refused');
+    assert.equal(privateRequests, 0, 'Private listener must receive zero requests');
+    assert.doesNotMatch(result.stdout + result.stderr, /private content/);
+  } finally {
+    privateServer.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('preflight_ignores_authenticated_environment_proxy', async () => {
+  const { createServer } = await import('node:http');
+  let proxyRequests = 0;
+  let proxyAuth = null;
+  const proxyServer = createServer((req, res) => {
+    proxyRequests++;
+    proxyAuth = req.headers['proxy-authorization'];
+    res.writeHead(407, { 'Proxy-Authenticate': 'Basic' });
+    res.end();
+  });
+  await new Promise((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
+  const proxyPort = proxyServer.address().port;
+
+  try {
+    const env = {
+      ...process.env,
+      NODE_USE_ENV_PROXY: '1',
+      HTTPS_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+      HTTP_PROXY: `http://operator:test-not-a-key@127.0.0.1:${proxyPort}`,
+    };
+
+    const result = await invoke(
+      ['web', 'read', 'https://docs.example.com/doc'],
+      'ok',
+      env
+    );
+
+    assert.equal(proxyRequests, 0, 'Proxy must receive zero requests');
+    assert.equal(proxyAuth, null, 'Proxy must receive no proxy authorization');
+  } finally {
+    proxyServer.close();
+  }
+});
+
+test('bare_credential_patterns_are_redacted', async () => {
+  const pat = 'ghp_' + 'A'.repeat(36);
+  const result = await invoke(['web', 'search', 'docs'], 'bare-pat');
+  assert.equal(result.exitCode, 0);
+  assert.doesNotMatch(emitted(result), new RegExp(pat));
+  assert.match(emitted(result), /\[REDACTED\]/);
+});
+
+test('returned_ipv6_encoded_credentials_are_masked', async () => {
+  for (const budget of [20000, 150]) {
+    const result = await invoke(
+      ['web', 'search', 'docs', '--max-chars', String(budget)],
+      'ipv6-encoded-secret'
+    );
+    assert.equal(result.exitCode, 0);
+    assert.ok(emitted(result).length <= budget);
+    assert.doesNotMatch(emitted(result), /fixture-encoded-token/);
+    if (budget === 20000) {
+      assert.match(emitted(result), /\[REDACTED\]/);
+    }
+  }
+});
+
+test('malformed_parameter_does_not_disable_redaction', async () => {
+  const result = await invoke(['web', 'search', 'docs'], 'malformed-param');
+  assert.equal(result.exitCode, 0);
+  assert.doesNotMatch(emitted(result), /fixture-encoded-token/);
+  assert.match(emitted(result), /\[REDACTED\]/);
+});
+
+test('dns_refusal_masks_inherited_values', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-dns-refusal-'));
+  const marker = join(root, 'calls');
+  try {
+    const secret = 'fixture-private-env-value';
+    const env = { ...process.env, PRIVATE_RESEARCH_VALUE: secret };
+    const failingResolver = async (host) => {
+      throw new Error(`cannot resolve host "${host}"`);
+    };
+
+    const result = await invoke(
+      ['web', 'read', `https://${secret}.example.com/docs`],
+      'ok',
+      env,
+      marker,
+      { resolveHost: failingResolver }
+    );
+
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(existsSync(marker), false, 'CLI must not be launched');
+    assert.equal(result.stdout, '', 'stdout must be empty');
+    assert.doesNotMatch(result.stderr, new RegExp(secret), 'stderr must not contain inherited secret');
+    assert.match(result.stderr, /refused/i);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('public_ipv6_literal_skips_dns', async () => {
+  let dnsLookupCalled = false;
+  const result = await invoke(
+    ['web', 'read', 'https://[2606:4700::1111]/docs'],
+    'ok',
+    process.env,
+    '-',
+    {
+      resolveHost: async (host) => {
+        dnsLookupCalled = true;
+        return [host];
+      },
+    }
+  );
+  assert.equal(result.exitCode, 0);
+  assert.equal(dnsLookupCalled, false, 'public IPv6 literal must skip DNS lookup');
 });

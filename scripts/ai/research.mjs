@@ -2,6 +2,8 @@
 import { spawnSync } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 import { isIP, isIPv4, isIPv6 } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -321,37 +323,110 @@ function extractSearchUrls(target) {
 }
 
 async function defaultResolveHost(hostname) {
-  if (isIP(hostname)) return [hostname];
+  let h = hostname;
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+  if (isIP(h)) return [h];
   try {
-    const results = await lookup(hostname, { all: true, verbatim: true });
+    const results = await lookup(h, { all: true, verbatim: true });
     return results.map((r) => r.address);
   } catch {
     throw new Error(`Research refused: cannot resolve host "${hostname}". Public HTTP(S) URLs only.`);
   }
 }
 
-async function defaultRetrieve(url, { method = 'GET' } = {}) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-  try {
-    const res = await fetch(url, {
-      method,
-      redirect: 'manual',
-      signal: controller.signal,
-    });
-    return {
-      status: res.status,
-      headers: {
-        location: res.headers.get('location'),
-      },
-      location: res.headers.get('location'),
-      body: res.status === 200 ? await res.text().catch(() => '') : undefined,
-    };
-  } catch {
-    throw new Error('Research refused: unable to verify destination redirects.');
-  } finally {
-    clearTimeout(timeoutId);
+async function defaultRetrieve(url, { method = 'GET', resolveHost = defaultResolveHost } = {}) {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('Research refused: unsupported protocol.');
   }
+  const client = parsed.protocol === 'https:' ? https : http;
+
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    let req;
+    const timeoutId = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        if (req) req.destroy(new Error('Research refused: timeout verifying destination.'));
+        rejectPromise(new Error('Research refused: unable to verify destination redirects.'));
+      }
+    }, 10000);
+
+    const onDone = (err, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (err) rejectPromise(err);
+      else resolvePromise(result);
+    };
+
+    try {
+      req = client.request(
+        parsed,
+        {
+          method,
+          lookup: async (hostname, options, callback) => {
+            try {
+              let h = hostname;
+              if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
+              let ips;
+              if (isIP(h)) {
+                ips = [h];
+              } else {
+                ips = await resolveHost(h);
+              }
+              if (!ips || !Array.isArray(ips) || ips.length === 0) {
+                return callback(new Error(`Research refused: cannot resolve host "${hostname}".`));
+              }
+              for (const ip of ips) {
+                if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
+                  return callback(
+                    new Error('Research refused: destination resolves to a private or restricted address.')
+                  );
+                }
+              }
+              const chosen = ips[0];
+              const family = isIPv6(chosen) ? 6 : 4;
+              if (options && options.all) {
+                return callback(
+                  null,
+                  ips.map((addr) => ({ address: addr, family: isIPv6(addr) ? 6 : 4 }))
+                );
+              }
+              return callback(null, chosen, family);
+            } catch (err) {
+              return callback(err);
+            }
+          },
+        },
+        (res) => {
+          const location = res.headers.location;
+          const chunks = [];
+          res.on('data', (chunk) => {
+            chunks.push(chunk);
+          });
+          res.on('end', () => {
+            const body = res.statusCode === 200 ? Buffer.concat(chunks).toString('utf8') : undefined;
+            onDone(null, {
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              location: Array.isArray(location) ? location[0] : location,
+              body,
+            });
+          });
+          res.on('error', (err) => onDone(err));
+        }
+      );
+
+      req.on('error', (err) => {
+        onDone(new Error(err.message || 'Research refused: unable to verify destination redirects.'));
+      });
+
+      req.end();
+    } catch (err) {
+      onDone(new Error(err.message || 'Research refused: unable to verify destination redirects.'));
+    }
+  });
 }
 
 const defaultFetchUrl = defaultRetrieve;
@@ -401,8 +476,24 @@ async function validateDestinationSafety(
     refuseEmbeddedCredentials(current);
     validatePublicUrl(current);
     const parsed = new URL(current);
+    let host = parsed.hostname;
+    if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
 
-    const ips = await resolver(parsed.hostname);
+    let ips;
+    if (isIP(host)) {
+      ips = [host];
+    } else {
+      try {
+        ips = await resolver(host);
+      } catch (err) {
+        const msg = err.message || '';
+        throw new Error(
+          msg.startsWith('Research refused:')
+            ? msg
+            : `Research refused: cannot resolve host "${parsed.hostname}".`
+        );
+      }
+    }
     if (!ips || !Array.isArray(ips) || ips.length === 0) {
       throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
     }
@@ -418,13 +509,13 @@ async function validateDestinationSafety(
 
     let resp;
     try {
-      resp = await transport(current, { method: 'GET' });
+      resp = await transport(current, { method: 'GET', resolveHost: resolver });
     } catch (err) {
       throw new Error(err.message || 'Research refused: unable to verify destination redirects.');
     }
 
     // Verify destination IP after retrieval to protect against DNS rebinding
-    const postIps = await resolver(parsed.hostname);
+    const postIps = isIP(host) ? [host] : await resolver(host);
     if (postIps && Array.isArray(postIps)) {
       for (const ip of postIps) {
         if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
@@ -517,7 +608,13 @@ async function parse(argv, { resolveHost, fetchUrl, retrieve }) {
         isFetch: action !== 'search',
       });
     }
-    return { maxChars, cliArgs: [channel, policy[0], target, ...options, '--backend', policy[1]] };
+    return {
+      maxChars,
+      action,
+      channel,
+      urls,
+      cliArgs: [channel, policy[0], target, ...options, '--backend', policy[1]],
+    };
   } catch (error) {
     error.maxChars = maxChars;
     throw error;
@@ -545,47 +642,78 @@ function isolatedEnv(parent, directory) {
   };
 }
 
-function sanitizeUrlInText(text) {
-  return text.replace(/https?:\/\/[^\s"'`()<>[\]{}]+/gi, (rawUrl) => {
+function safeDecode(str) {
+  try {
+    return decodeURIComponent(str);
+  } catch {
     try {
-      const u = new URL(rawUrl);
-      let modified = false;
-      for (const [key] of [...u.searchParams.entries()]) {
-        const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
-        if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
-          u.searchParams.set(key, '[REDACTED]');
-          modified = true;
+      return str.replace(/%([0-9a-fA-F]{2})/g, (m, hex) => {
+        try {
+          return String.fromCharCode(parseInt(hex, 16));
+        } catch {
+          return m;
         }
-      }
-      if (u.hash && u.hash.length > 1) {
-        const rawHash = u.hash.slice(1);
-        const hashQ = rawHash.includes('?') ? rawHash.slice(rawHash.indexOf('?') + 1) : rawHash;
-        const prefix = rawHash.includes('?') ? rawHash.slice(0, rawHash.indexOf('?') + 1) : '';
-        if (hashQ.includes('=')) {
-          const hp = new URLSearchParams(hashQ);
-          let hashModified = false;
-          for (const [key] of [...hp.entries()]) {
-            const decodedKey = decodeURIComponent(key).replace(/\s+/g, '_');
-            if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
-              hp.set(key, '[REDACTED]');
-              hashModified = true;
-            }
+      });
+    } catch {
+      return str;
+    }
+  }
+}
+
+function sanitizeUrlInText(text) {
+  return text.replace(
+    /https?:\/\/(?:\[[a-fA-F0-9:.]+\](?::\d+)?(?:[^\s"'`()<>[\]{}]*)?|[^\s"'`()<>[\]{}]+)/gi,
+    (rawUrl) => {
+      try {
+        const u = new URL(rawUrl);
+        let modified = false;
+        for (const [key] of [...u.searchParams.entries()]) {
+          let decodedKey;
+          try {
+            decodedKey = safeDecode(key).replace(/\s+/g, '_');
+          } catch {
+            decodedKey = key;
           }
-          if (hashModified) {
-            u.hash = '#' + prefix + hp.toString().replace(/%5BREDACTED%5D/gi, '[REDACTED]');
+          if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+            u.searchParams.set(key, '[REDACTED]');
             modified = true;
           }
         }
-      }
-      if (modified) {
-        return u.toString().replace(/%5BREDACTED%5D/gi, '[REDACTED]');
-      }
-    } catch {}
-    return rawUrl;
-  });
+        if (u.hash && u.hash.length > 1) {
+          const rawHash = u.hash.slice(1);
+          const hashQ = rawHash.includes('?') ? rawHash.slice(rawHash.indexOf('?') + 1) : rawHash;
+          const prefix = rawHash.includes('?') ? rawHash.slice(0, rawHash.indexOf('?') + 1) : '';
+          if (hashQ.includes('=')) {
+            const hp = new URLSearchParams(hashQ);
+            let hashModified = false;
+            for (const [key] of [...hp.entries()]) {
+              let decodedKey;
+              try {
+                decodedKey = safeDecode(key).replace(/\s+/g, '_');
+              } catch {
+                decodedKey = key;
+              }
+              if (SENSITIVE.test(key) || SENSITIVE.test(decodedKey)) {
+                hp.set(key, '[REDACTED]');
+                hashModified = true;
+              }
+            }
+            if (hashModified) {
+              u.hash = '#' + prefix + hp.toString().replace(/%5BREDACTED%5D/gi, '[REDACTED]');
+              modified = true;
+            }
+          }
+        }
+        if (modified) {
+          return u.toString().replace(/%5BREDACTED%5D/gi, '[REDACTED]');
+        }
+      } catch {}
+      return rawUrl;
+    }
+  );
 }
 
-function redact(value, envValues) {
+function redact(value, envValues = []) {
   if (Array.isArray(value)) return value.map((item) => redact(item, envValues));
   if (value && typeof value === 'object')
     return Object.fromEntries(
@@ -601,9 +729,11 @@ function redact(value, envValues) {
     .replace(/\b(Bearer|Basic)\s+[^\s"<>]+/gi, '$1 [REDACTED]')
     .replace(/(https?:\/\/)[^\s/@]+@/gi, '$1[REDACTED]@')
     .replace(
-      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?)|api[_-]?key|access[_-]?key|password|passwd|auth(?:orization)?|credential|secret(?:[_-]?key)?|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
+      /((?:(?<=[?&"'\s]|^)(?:(?:[a-z0-9_-]+[_-])?(?:token|key|sig(?:nature)?)|(?:%[0-9a-fA-F]{2})+[a-z0-9_-]*|api[_-]?key|access[_-]?key|password|passwd|auth(?:orization)?|credential|secret(?:[_-]?key)?|cookies?)\b)["']?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s&;,"'<>]+)/gi,
       '$1[REDACTED]'
     )
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g, '[REDACTED]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{82}\b/g, '[REDACTED]')
     .replace(/\b[A-Z][A-Z0-9_]{2,}\s*=\s*[^\n]+/g, '[REDACTED]');
   for (const secret of envValues) {
     // Short values match whole words so an environment value such as "1"
@@ -642,17 +772,31 @@ export async function runResearch(
     retrieve,
   } = {}
 ) {
+  const envValues = [
+    ...new Set(
+      Object.entries(env)
+        .filter(
+          ([k, value]) =>
+            SENSITIVE_ENV.test(k) &&
+            typeof value === 'string' &&
+            value.length > 0 &&
+            !NON_SECRET_ENV_VALUES.has(value.toLowerCase().trim())
+        )
+        .map(([, v]) => v)
+    ),
+  ].sort((a, b) => b.length - a.length);
+
   let request;
   try {
     request = await parse(argv, { resolveHost, fetchUrl, retrieve });
   } catch (error) {
-    return refused(error.message, error.maxChars);
+    return refused(redact(error.message, envValues), error.maxChars);
   }
   const fail = (message) => ({
     code: 1,
     exitCode: 1,
     stdout: '',
-    stderr: truncate(`${message}\n`, request.maxChars),
+    stderr: truncate(`${redact(message, envValues)}\n`, request.maxChars),
   });
   let directory;
   let researchTempRoot;
@@ -690,6 +834,20 @@ export async function runResearch(
       metadata.result?.version !== VERSION
     )
       return fail(`Research refused: Agent-Reach v${VERSION} is required.\n${INSTALL_HINT}`);
+    if (request.urls && request.urls.length > 0) {
+      for (const candidate of request.urls) {
+        try {
+          await validateDestinationSafety(candidate, {
+            resolveHost,
+            fetchUrl,
+            retrieve,
+            isFetch: request.action !== 'search',
+          });
+        } catch (err) {
+          return fail(redact(err.message, envValues));
+        }
+      }
+    }
     const result = invoke(request.cliArgs);
     if (result.error || result.signal)
       return fail('Research refused: Agent-Reach failed or exceeded its timeout/output buffer.');
@@ -701,6 +859,18 @@ export async function runResearch(
     }
     if (!payload || typeof payload.ok !== 'boolean')
       return fail('Research refused: invalid Agent-Reach response.');
+    if (Array.isArray(payload?.items)) {
+      for (const item of payload.items) {
+        if (item?.url && typeof item.url === 'string') {
+          try {
+            const itemUrl = new URL(item.url);
+            if (isPrivateHost(itemUrl.hostname)) {
+              return fail('Research refused: response points to a private destination.');
+            }
+          } catch {}
+        }
+      }
+    }
     if (/LOGIN|AUTH|NEED_SETUP/i.test(payload.error?.code ?? ''))
       return fail(
         'Research refused: this request needs login or account/tool setup. No operator account may be used.'
@@ -713,21 +883,27 @@ export async function runResearch(
         `Research refused: public access failed (${errorCode}). Use another public source; no login or automatic retry.`
       );
     }
-    const envValues = [
+    const combinedEnvValues = [
       ...new Set(
-        [...Object.values(env), ...Object.values(childEnv)].filter(
-          (value) =>
-            typeof value === 'string' &&
-            value.length > 0 &&
-            !NON_SECRET_ENV_VALUES.has(value.toLowerCase().trim())
-        )
+        [
+          ...envValues,
+          ...Object.entries(childEnv)
+            .filter(
+              ([k, value]) =>
+                SENSITIVE_ENV.test(k) &&
+                typeof value === 'string' &&
+                value.length > 0 &&
+                !NON_SECRET_ENV_VALUES.has(value.toLowerCase().trim())
+            )
+            .map(([, v]) => v),
+        ]
       ),
     ].sort((a, b) => b.length - a.length);
     return {
       code: 0,
       exitCode: 0,
       stdout: truncate(
-        JSON.stringify(redact(payload, envValues), null, 2) + '\n',
+        JSON.stringify(redact(payload, combinedEnvValues), null, 2) + '\n',
         request.maxChars
       ),
       stderr: '',

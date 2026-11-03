@@ -88,6 +88,15 @@ if (argv[0] === 'version') {
       'https://public.example.org/?api%20key=fixture-spaced-secret\n' +
       'https://public.example.org/?refresh%09token=fixture-tab-secret';
   }
+  if (mode === 'bare-pat') {
+    text = 'Here is the token: ' + 'ghp_' + 'A'.repeat(36) + ' in text.';
+  }
+  if (mode === 'ipv6-encoded-secret') {
+    text = 'https://[2606:4700::1111]/?%74oken=fixture-encoded-token';
+  }
+  if (mode === 'malformed-param') {
+    text = 'https://docs.example.com/?%74oken=fixture-encoded-token&bad%=x';
+  }
   console.log(
     JSON.stringify({
       ok: true,
