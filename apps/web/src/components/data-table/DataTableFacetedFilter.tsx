@@ -62,7 +62,15 @@ export function computeOptimisticFacetSelection(
   nextPending: string[];
   wasIgnoredDueToPending: boolean;
 } {
-  if (historyEvent || resetEvent) {
+  if (resetEvent) {
+    return {
+      nextOptimistic: new Set<string>(),
+      nextPending: [],
+      wasIgnoredDueToPending: false,
+    };
+  }
+
+  if (historyEvent) {
     return {
       nextOptimistic: new Set(incomingCommitted),
       nextPending: [],

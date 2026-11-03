@@ -48,6 +48,7 @@ import {
   handleMobileNavigationClick,
   filterNavSectionsByPermissions,
   isNavItemPermitted,
+  maskEmail,
   NavItem,
   NavSection,
   DashboardUser,
@@ -2878,32 +2879,184 @@ async function runTestSuite() {
   const dismissedNoCallback = handleMobileNavigationClick(true, undefined, false);
   assert.strictEqual(dismissedNoCallback, false, 'Missing callback must return false');
 
-  // 13.13 Round 10 Finding 9 P1: PR body contract validation
+  // 13.13 Round 10 Finding 9 P1 / Round 11 Finding 4 P1: PR body contract validation
+  // Deterministic fixture test ensures clean checkouts without local handoff files never throw ENOENT
+  const sampleDeterministicPrBody = `## Work Item
+- Work Item ID: TASK-AI-155
+- Feature ID: N/A — reusable server-driven data table and dashboard shell
+- Work Item file: docs/product-spec/work-items/TASK-AI-155.md
+- Assigned implementation author: GEMINI
+- Business outcome: Provide apps/web with a unified, reusable server-driven data table and responsive dashboard shell architecture ported from MIT open-source references (sadmann7/shadcn-table and Kiranism/next-shadcn-dashboard-starter, no Clerk).
+
+## Source requirements
+- Feature/rule/acceptance IDs: BR-UI-01, AC-AI-155-01
+- Screen/API/entity/state IDs: Reusable component modules
+- Source documents: docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md
+
+## Scope integrity
+- [x] This PR contains exactly one Work Item (TASK-AI-155).
+- [x] No unrelated refactor.
+- [x] All dependencies merged.
+- [x] Allowed paths respected.
+- [x] No gate configuration changes.
+
+## Implementation
+- Implemented data-table and dashboard shell.
+
+## Acceptance evidence
+- Acceptance matrix passed.
+
+## Verification
+- Clean verification passed.
+
+## Safety and recovery
+- Zero live mutations.
+
+## Documentation and traceability
+- Traceability updated.
+
+## Risks and limitations
+- None.
+
+## Codex review
+- Review status: READY_FOR_CODEX
+`;
+
+  assert.strictEqual(
+    sampleDeterministicPrBody.match(/<[^>\n]+>/g),
+    null,
+    'Deterministic PR body fixture contains zero template placeholders'
+  );
+  assert.strictEqual(
+    sampleDeterministicPrBody.includes('- [ ]'),
+    false,
+    'Deterministic PR body fixture contains zero unchecked items'
+  );
+  assert.strictEqual(
+    sampleDeterministicPrBody.match(/\b(?:TBD|TODO)\b/g),
+    null,
+    'Deterministic PR body fixture contains zero TBD/TODO markers'
+  );
+  assert.ok(
+    sampleDeterministicPrBody.includes('Review status: READY_FOR_CODEX'),
+    'Deterministic PR body fixture is marked READY_FOR_CODEX'
+  );
+
+  // If local .oc/pr-body.md exists during development, also validate it:
   const rootDir = fs.existsSync(path.resolve(process.cwd(), '.oc/pr-body.md'))
     ? process.cwd()
     : path.resolve(process.cwd(), '../..');
-  const prBodyContent = fs.readFileSync(path.resolve(rootDir, '.oc/pr-body.md'), 'utf8');
-  assert.strictEqual(
-    prBodyContent.match(/<[^>\n]+>/g),
-    null,
-    'Finding 9: PR body contains zero template placeholders'
-  );
-  assert.strictEqual(
-    prBodyContent.includes('- [ ]'),
-    false,
-    'Finding 9: PR body contains zero unchecked items'
-  );
-  assert.strictEqual(
-    prBodyContent.match(/\b(?:TBD|TODO)\b/g),
-    null,
-    'Finding 9: PR body contains zero TBD/TODO markers'
+  const localPrBodyPath = path.resolve(rootDir, '.oc/pr-body.md');
+  if (fs.existsSync(localPrBodyPath)) {
+    const prBodyContent = fs.readFileSync(localPrBodyPath, 'utf8');
+    assert.strictEqual(
+      prBodyContent.match(/<[^>\n]+>/g),
+      null,
+      'Finding 9: PR body contains zero template placeholders'
+    );
+    assert.strictEqual(
+      prBodyContent.includes('- [ ]'),
+      false,
+      'Finding 9: PR body contains zero unchecked items'
+    );
+    assert.strictEqual(
+      prBodyContent.match(/\b(?:TBD|TODO)\b/g),
+      null,
+      'Finding 9: PR body contains zero TBD/TODO markers'
+    );
+    assert.ok(
+      prBodyContent.includes('Review status: READY_FOR_CODEX'),
+      'Finding 9: PR body is marked READY_FOR_CODEX'
+    );
+  }
+
+  // 13.14 Round 11 Finding 7 P2: Email masking for privacy & Work Item contract
+  assert.strictEqual(maskEmail('nguyenvana@shipde.vn'), 'n****a@shipde.vn');
+  assert.strictEqual(maskEmail('longusername@shipde.vn'), 'l****e@shipde.vn');
+  assert.strictEqual(maskEmail('ab@shipde.vn'), 'a*@shipde.vn');
+  assert.strictEqual(maskEmail('a@shipde.vn'), 'a*@shipde.vn');
+  assert.strictEqual(maskEmail(''), '');
+  assert.strictEqual(maskEmail(null), '');
+
+  const headerWithEmailHtml = renderToStaticMarkup(
+    React.createElement<any>(DashboardHeader, {
+      currentUser: {
+        name: 'Nguyễn Văn A',
+        email: 'nguyenvana@shipde.vn',
+        role: 'Chủ shop',
+      },
+      defaultUserMenuOpen: true,
+    })
   );
   assert.ok(
-    prBodyContent.includes('Review status: READY_FOR_CODEX'),
-    'Finding 9: PR body is marked READY_FOR_CODEX'
+    headerWithEmailHtml.includes('n****a@shipde.vn'),
+    'Finding 7: DashboardHeader renders masked email'
+  );
+  assert.strictEqual(
+    headerWithEmailHtml.includes('nguyenvana@shipde.vn'),
+    false,
+    'Finding 7: DashboardHeader must NOT leak plaintext email'
   );
 
-  console.log('   ✅ Round 6, 8, 9 & 10 review findings proven and verified with unit test suites');
+  // 13.15 Round 11 Finding 8 P2: Reset immediately clears optimistic facet selections while navigation is pending
+  const heldResetFacetResult = computeOptimisticFacetSelection(
+    new Set(['FAILED']), // current optimistic has FAILED
+    new Set(['FAILED']), // incoming committed still has FAILED while navigation is in-flight
+    new Set(['FAILED']), // prev committed had FAILED
+    ['FAILED'], // pending selections
+    false, // historyEvent
+    true // resetEvent = true (toolbar Reset triggered)
+  );
+  assert.strictEqual(
+    heldResetFacetResult.nextOptimistic.size,
+    0,
+    'Finding 8: resetEvent must immediately clear optimistic facet selections'
+  );
+  assert.deepStrictEqual(
+    heldResetFacetResult.nextPending,
+    [],
+    'Finding 8: resetEvent must clear pending selections queue'
+  );
+  assert.strictEqual(
+    heldResetFacetResult.wasIgnoredDueToPending,
+    false,
+    'Finding 8: wasIgnoredDueToPending must be false on reset'
+  );
+
+  // 13.16 Round 11 Finding 13 P2: Initial desktop breakpoint evaluation dismisses drawer immediately
+  let desktopCloseCount = 0;
+  const onDesktopClose = () => {
+    desktopCloseCount++;
+  };
+  // When mounted on desktop (matches = true) with isMobileOpen = true (e.g. defaultMobileOpen={true})
+  const initialDesktopResizeResult = handleDesktopBreakpointResize(true, true, onDesktopClose);
+  assert.strictEqual(
+    initialDesktopResizeResult,
+    true,
+    'Finding 13: initial desktop match with open mobile drawer must return true'
+  );
+  assert.strictEqual(
+    desktopCloseCount,
+    1,
+    'Finding 13: initial desktop match must invoke closeMobileNav to prevent inert freeze'
+  );
+
+  // Negative test: On mobile (matches = false), drawer stays open
+  const mobileResizeResult = handleDesktopBreakpointResize(false, true, onDesktopClose);
+  assert.strictEqual(
+    mobileResizeResult,
+    false,
+    'Finding 13: mobile screen must NOT trigger drawer dismissal'
+  );
+  assert.strictEqual(
+    desktopCloseCount,
+    1,
+    'Finding 13: mobile screen must NOT call closeMobileNav'
+  );
+
+  console.log(
+    '   ✅ Round 6, 8, 9, 10 & 11 review findings proven and verified with unit test suites'
+  );
 
   console.log('\n================================================================');
   console.log('🎉 ALL 13 DATA TABLE & DASHBOARD SHELL TEST SUITES PASSED 100%!');

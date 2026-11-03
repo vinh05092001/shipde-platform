@@ -47,6 +47,22 @@ export interface DashboardHeaderProps {
   onProfileClick?: () => void;
   profileHref?: string;
   showSearch?: boolean;
+  defaultUserMenuOpen?: boolean;
+}
+
+/**
+ * Masks an email address for privacy and PII protection in accordance with BR-UI-03 & Work Item.
+ * E.g. 'nguyenvana@shipde.vn' -> 'n****a@shipde.vn'
+ */
+export function maskEmail(email?: string | null): string {
+  if (!email) return '';
+  if (!email.includes('@')) return email;
+  const [name, domain] = email.split('@');
+  if (!name || !domain) return '***';
+  if (name.length <= 2) {
+    return `${name[0]}*@${domain}`;
+  }
+  return `${name[0]}${'*'.repeat(Math.min(name.length - 2, 4))}${name[name.length - 1]}@${domain}`;
 }
 
 export interface GlobalShortcutOptions {
@@ -107,9 +123,10 @@ export function DashboardHeader({
   profileHref = '/settings/profile',
   onSignOut,
   showSearch = true,
+  defaultUserMenuOpen = false,
   className = '',
 }: DashboardHeaderProps) {
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(defaultUserMenuOpen);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const userMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const prevUserMenuOpenRef = useRef(false);
@@ -269,8 +286,11 @@ export function DashboardHeader({
                     {currentUser.name}
                   </div>
                   {currentUser.email && (
-                    <div className="text-[11px] text-[var(--text-muted)] truncate">
-                      {currentUser.email}
+                    <div
+                      className="text-[11px] text-[var(--text-muted)] truncate"
+                      data-testid="user-email"
+                    >
+                      {maskEmail(currentUser.email)}
                     </div>
                   )}
                   {currentUser.role && (

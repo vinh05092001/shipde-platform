@@ -369,7 +369,11 @@ test('review 6 / finding 8 P2: table thead remains sticky at top during vertical
 test('review 10 / finding 8 P2: column header sort menu is rendered via portal and not clipped on 1-row table', async ({
   page,
 }) => {
-  await page.goto('/storybook?search=SGHN0001');
+  // Use existing unique tracking code matching exactly 1 fixture row
+  await page.goto('/storybook?search=GHN982341201VN');
+  const rows = page.locator('tbody tr');
+  await expect(rows).toHaveCount(1);
+
   const codHeader = page.getByRole('button', { name: /^Sắp xếp theo Thu hộ COD:/ });
   await expect(codHeader).toBeVisible();
   await codHeader.click();
@@ -391,11 +395,11 @@ test('review 10 / finding 10 P2: mobile drawer navigation dismisses drawer upon 
   await page.setViewportSize({ width: 375, height: 667 });
   await page.goto('/storybook');
 
-  const hamburger = page.getByRole('button', { name: 'Mở menu điều hướng' });
+  const hamburger = page.getByRole('button', { name: 'Mở thanh điều hướng' });
   await expect(hamburger).toBeVisible();
   await hamburger.click();
 
-  const closeButton = page.getByRole('button', { name: 'Đóng menu' });
+  const closeButton = page.getByRole('button', { name: 'Đóng thanh điều hướng' });
   await expect(closeButton).toBeVisible();
 
   // Click on a navigation item inside the mobile drawer
@@ -414,20 +418,25 @@ test('review 10 / finding 11 P2: reset filters applies empty search immediately 
   const search = page.getByRole('textbox', { name: SEARCH_LABEL });
   await expect(search).toHaveValue('An');
 
-  const unblockHolder: { fn: (() => Promise<void>) | null } = { fn: null };
-  await page.route('**/storybook?**', async (route) => {
-    unblockHolder.fn = () => route.continue();
-  });
+  const held = await holdTableNavigation(page);
+  try {
+    const resetButton = page.getByRole('button', { name: 'Đặt lại tất cả bộ lọc' });
+    await expect(resetButton).toBeVisible();
+    await resetButton.click();
 
-  const resetButton = page.getByRole('button', { name: 'Đặt lại tất cả bộ lọc' });
-  await expect(resetButton).toBeVisible();
-  await resetButton.click();
+    // Assert request interception before checking pending behavior
+    await expect.poll(() => held.requests.length).toBeGreaterThan(0);
 
-  // Target value must be applied immediately, not temporarily restoring 'An' while reset navigation is in-flight
-  await expect(search).toHaveValue('');
-
-  if (unblockHolder.fn) {
-    await unblockHolder.fn();
+    // Target value must be applied immediately, not temporarily restoring 'An' while reset navigation is in-flight
+    await expect(search).toHaveValue('');
+  } finally {
+    await held.finish();
   }
-  await page.unroute('**/storybook?**');
+
+  // Verify committed reset URL
+  await page.waitForURL(
+    (url) => !url.searchParams.has('search') && !url.searchParams.has('status')
+  );
+  expect(page.url()).not.toContain('search=');
+  expect(page.url()).not.toContain('status=');
 });

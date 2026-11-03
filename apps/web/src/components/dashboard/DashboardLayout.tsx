@@ -329,6 +329,9 @@ export function DashboardLayout({
 
     const mql = window.matchMedia('(min-width: 1024px)');
 
+    // Evaluate initial breakpoint match immediately upon mount (Finding 13 P2)
+    handleDesktopBreakpointResize(mql.matches, isMobileOpen, closeMobileNav);
+
     function handleMediaChange(e: MediaQueryListEvent | MediaQueryList) {
       handleDesktopBreakpointResize(e.matches, isMobileOpen, closeMobileNav);
     }
