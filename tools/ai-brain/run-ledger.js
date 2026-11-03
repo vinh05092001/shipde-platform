@@ -6,7 +6,11 @@ const { ProgressLedger, Cause, fingerprint } = require('./work-guard');
 
 const VALID_STAGES = new Set(['writer', 'reviewer', 'repair', 'fallback', 'review']);
 const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
-const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isForbiddenId(id) {
+  if (!id || typeof id !== 'string') return false;
+  return id in Object.prototype || id === 'prototype';
+}
 
 function maskCredentials(v) {
   if (!v) return v;
@@ -19,12 +23,22 @@ function maskCredentials(v) {
         u.username = '';
         u.password = '';
       }
-      let res = u.toString();
+      for (const [k] of [...u.searchParams.entries()]) {
+        if (/key|secret|token|password|auth|credential/i.test(k)) {
+          u.searchParams.set(k, '[REDACTED]');
+        }
+      }
+      let res = u.toString().replace(/%5BREDACTED%5D/g, '[REDACTED]');
       if (!s.endsWith('/') && res.endsWith('/')) res = res.slice(0, -1);
       if (sm) res = res.replace(/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//, sm[1]);
       return res;
     } catch (_) {
-      return s.replace(/([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)[^@/\s]*@/gi, '$1');
+      let res = s.replace(/([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)[^@/\s]*@/gi, '$1');
+      res = res.replace(
+        /([?&](?:[^=&#\s]*?(?:key|secret|token|password|auth|credential)[^=&#\s]*)=)[^&#\s]*/gi,
+        '$1[REDACTED]'
+      );
+      return res;
     }
   }
   if (Array.isArray(v)) {
@@ -107,10 +121,10 @@ class RunLedger {
       stage = arg1;
       opts = {};
     }
-    if (itemId && FORBIDDEN_IDS.has(itemId)) {
+    if (itemId && isForbiddenId(itemId)) {
       throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + itemId);
     }
-    if (opts && opts.goalId && FORBIDDEN_IDS.has(opts.goalId)) {
+    if (opts && opts.goalId && isForbiddenId(opts.goalId)) {
       throw new Error('RUN_LEDGER_REFUSED: invalid goalId ' + opts.goalId);
     }
     this.progressLedger.limits = this.limits;
@@ -141,7 +155,7 @@ class RunLedger {
             if (itemGoalAttemptsInRuns >= itemSpentAttempts) return;
             if (cur) cur.goalId = opts.goalId;
             s.goals = s.goals || Object.create(null);
-            const gAcc = s.goals[opts.goalId] || {
+            const gAcc = (Object.hasOwn(s.goals, opts.goalId) && s.goals[opts.goalId]) || {
               attempts: 0,
               ms: 0,
               tokens: 0,
@@ -149,6 +163,37 @@ class RunLedger {
               unknownTokens: 0,
             };
             gAcc.attempts = (gAcc.attempts || 0) + 1;
+            const completionRuns = (s.runs || []).filter(
+              (r) =>
+                r.itemId === itemId &&
+                (!r.goalId || r.goalId === null) &&
+                (!attemptKey || r.attemptId === attemptKey)
+            );
+            for (const completionRun of completionRuns) {
+              completionRun.goalId = opts.goalId;
+              if (Number.isFinite(completionRun.ms)) {
+                gAcc.ms = (gAcc.ms || 0) + completionRun.ms;
+              }
+              if (Number.isFinite(completionRun.tokens)) {
+                gAcc.tokens = (gAcc.tokens || 0) + completionRun.tokens;
+              } else if (completionRun.tokens === 'UNKNOWN') {
+                gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
+              }
+              if (s.chains && s.chains[itemId]) {
+                for (const r of s.chains[itemId]) {
+                  if (r.attemptId === completionRun.attemptId && (!r.goalId || r.goalId === null)) {
+                    r.goalId = opts.goalId;
+                  }
+                }
+              }
+              if (it && it.runs) {
+                for (const r of it.runs) {
+                  if (r.attemptId === completionRun.attemptId && (!r.goalId || r.goalId === null)) {
+                    r.goalId = opts.goalId;
+                  }
+                }
+              }
+            }
             s.goals[opts.goalId] = gAcc;
           }
           writeJson(this.file, s);
@@ -202,10 +247,10 @@ class RunLedger {
 
     const attemptKey = String(opts.attemptId || opts.jobId);
     let itemId = opts.itemId;
-    if (itemId && FORBIDDEN_IDS.has(itemId)) {
+    if (itemId && isForbiddenId(itemId)) {
       throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + itemId);
     }
-    if (opts.goalId && FORBIDDEN_IDS.has(opts.goalId)) {
+    if (opts.goalId && isForbiddenId(opts.goalId)) {
       throw new Error('RUN_LEDGER_REFUSED: invalid goalId ' + opts.goalId);
     }
 
@@ -219,7 +264,7 @@ class RunLedger {
       }
 
       const targetItemId = itemId || attemptKey;
-      if (FORBIDDEN_IDS.has(targetItemId)) {
+      if (isForbiddenId(targetItemId)) {
         throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + targetItemId);
       }
 
@@ -233,14 +278,14 @@ class RunLedger {
       }
 
       const runReviewSha = opts.reviewSha || opts.headSha || null;
-      const fp =
+      let fp =
         opts.fp ||
         opts.fingerprint ||
         (runReviewSha
           ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs })
           : 'att-' + attemptKey);
 
-      const it = s.items[targetItemId] || null;
+      const it = (Object.hasOwn(s.items, targetItemId) && s.items[targetItemId]) || null;
       let prev = it && it.stages && it.stages[st] && it.stages[st].fps && it.stages[st].fps[fp];
       if (
         !prev &&
@@ -290,12 +335,16 @@ class RunLedger {
       const tokenEnforcement = hasTokens ? opts.tokenEnforcement || 'ENFORCED' : 'UNENFORCED';
       const runVerdict = String(opts.verdict || opts.outcome || 'DONE');
 
+      if (runVerdict !== 'IN_FLIGHT' && prev && prev.outcome === 'IN_FLIGHT' && !reserved) {
+        return { ok: false, cause: Cause.NO_PROGRESS, reason: 'in-flight-owned-by-other-attempt' };
+      }
+
       const effectiveGoalId =
         opts.goalId ||
         (prev && prev.goalId) ||
         ((s.runs || []).find((r) => r.attemptId === attemptKey && r.goalId) || {}).goalId ||
         null;
-      if (effectiveGoalId && FORBIDDEN_IDS.has(effectiveGoalId)) {
+      if (effectiveGoalId && isForbiddenId(effectiveGoalId)) {
         throw new Error('RUN_LEDGER_REFUSED: invalid goalId ' + effectiveGoalId);
       }
 
@@ -304,7 +353,8 @@ class RunLedger {
           const perAttemptTokens =
             this.limits.item && this.limits.item.tokens ? this.limits.item.tokens : 0;
           const curState = this.progressLedger.load();
-          const curIt = curState.items[targetItemId] || {
+          const curIt = (Object.hasOwn(curState.items, targetItemId) &&
+            curState.items[targetItemId]) || {
             spent: { attempts: 0, ms: 0, tokens: 0, tokensUnknown: 0, unknownTokens: 0 },
             stages: {},
           };

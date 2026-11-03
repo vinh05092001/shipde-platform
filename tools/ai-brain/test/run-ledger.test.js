@@ -925,6 +925,7 @@ test('concurrent_completion_without_goal_preserves_reserved_goal_charge', () => 
       attemptId: 'att-b1',
       fp: 'fp-ng1',
       ms: 100,
+      tokens: 10,
       verdict: 'DONE',
       // no goalId
     });
@@ -944,6 +945,12 @@ test('concurrent_completion_without_goal_preserves_reserved_goal_charge', () => 
   assert.equal(state.goal.attempts, 1);
   // The goal must be charged exactly once even though the completing record had no goalId.
   assert.equal(state.goals['G'].attempts, 1);
+  assert.equal(state.goals['G'].ms, 100);
+  assert.equal(state.goals['G'].tokens, 10);
+
+  const runs = ledgerA.getRuns('TASK-CONCUR-NOGID');
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].goalId, 'G');
 });
 
 test('uppercase_http_scheme_masks_userinfo', () => {
@@ -1233,4 +1240,151 @@ test('prototype_named_goal_is_refused_without_mutation', () => {
 
   const fileContentAfter = fs.readFileSync(file, 'utf8');
   assert.equal(fileContentAfter, fileContentBefore);
+});
+
+test('explicit_reservation_completes_by_attempt_id', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+  const res = ledger.admit('TASK-T', 'writer', 'F', {
+    reserve: true,
+    pid: process.pid,
+    attemptId: 'a1',
+  });
+  assert.equal(res.ok, true);
+
+  const rec = ledger.record('writer', {
+    itemId: 'TASK-T',
+    attemptId: 'a1',
+    ms: 100,
+    verdict: 'DONE',
+  });
+  assert.equal(rec.ok, true);
+
+  const summary = ledger.getSummary('TASK-T');
+  assert.equal(summary.attempts, 1);
+  const globalSummary = ledger.getSummary();
+  assert.equal(globalSummary.attempts, 1);
+});
+
+test('distinct_completion_cannot_hijack_in_flight_fingerprint', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({
+    file,
+    limits: { item: { attempts: 2 }, goal: { attempts: 2 } },
+  });
+  const r1 = ledger.record('writer', {
+    itemId: 'TASK-HIJACK',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'IN_FLIGHT',
+    ms: 100,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'TASK-HIJACK',
+    attemptId: 'a2',
+    fp: 'F',
+    verdict: 'DONE',
+    ms: 100,
+  });
+  assert.equal(r2.ok, false);
+
+  const state = ledger.load();
+  const st = state.items['TASK-HIJACK'].stages['writer'];
+  assert.equal(st.fps['F'].outcome, 'IN_FLIGHT');
+  assert.equal(st.fps['F'].attemptId, 'a1');
+
+  assert.equal(ledger.getSummary('TASK-HIJACK').attempts, 1);
+  assert.equal(ledger.getSummary().attempts, 1);
+});
+
+test('inherited_goal_name_is_refused_without_mutation', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+  const r1 = ledger.record('writer', {
+    itemId: 'ITEM-1',
+    attemptId: 'a1',
+    goalId: 'G',
+    ms: 100,
+    tokens: 10,
+    verdict: 'DONE',
+  });
+  assert.equal(r1.ok, true);
+
+  const fileBytesBefore = fs.readFileSync(file);
+  const protoAttemptsBefore = Object.getOwnPropertyDescriptor(
+    Object.prototype.toString,
+    'attempts'
+  );
+  assert.equal(protoAttemptsBefore, undefined);
+
+  assert.throws(
+    () =>
+      ledger.admit('ITEM-2', 'writer', 'F2', {
+        reserve: true,
+        pid: process.pid,
+        goalId: 'toString',
+      }),
+    /RUN_LEDGER_REFUSED: invalid goalId toString/
+  );
+
+  const fileBytesAfter = fs.readFileSync(file);
+  assert.deepEqual(fileBytesAfter, fileBytesBefore);
+  assert.equal(Object.prototype.toString.attempts, undefined);
+  assert.equal(Object.getOwnPropertyDescriptor(Object.prototype.toString, 'attempts'), undefined);
+});
+
+test('inherited_item_name_is_refused_without_mutation', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+  const r1 = ledger.record('writer', {
+    itemId: 'ITEM-1',
+    attemptId: 'a1',
+    ms: 100,
+    tokens: 10,
+    verdict: 'DONE',
+  });
+  assert.equal(r1.ok, true);
+
+  const globalSpentBefore = ledger.getSummary();
+  const protoSpentBefore = Object.getOwnPropertyDescriptor(Object.prototype.toString, 'spent');
+  const protoStagesBefore = Object.getOwnPropertyDescriptor(Object.prototype.toString, 'stages');
+  assert.equal(protoSpentBefore, undefined);
+  assert.equal(protoStagesBefore, undefined);
+
+  assert.throws(
+    () =>
+      ledger.record('writer', {
+        itemId: 'toString',
+        attemptId: 'a2',
+        verdict: 'IN_FLIGHT',
+        ms: 10,
+      }),
+    /RUN_LEDGER_REFUSED: invalid itemId toString/
+  );
+
+  const globalSpentAfter = ledger.getSummary();
+  assert.deepEqual(globalSpentAfter, globalSpentBefore);
+  assert.equal(Object.prototype.toString.spent, undefined);
+  assert.equal(Object.prototype.toString.stages, undefined);
+  assert.equal(Object.getOwnPropertyDescriptor(Object.prototype.toString, 'spent'), undefined);
+  assert.equal(Object.getOwnPropertyDescriptor(Object.prototype.toString, 'stages'), undefined);
+});
+
+test('masks_sensitive_url_query_credentials', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+  const endpoint = 'https://api.example/v1?api_key=privateValue';
+  const rec = ledger.record('writer', {
+    itemId: 'TASK-MASK-QUERY',
+    attemptId: 'a1',
+    route: { endpoint },
+    ms: 100,
+  });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.run.route.endpoint.includes('privateValue'), false);
+
+  const content = fs.readFileSync(ledger.file, 'utf8');
+  assert.equal(content.includes('privateValue'), false);
 });
