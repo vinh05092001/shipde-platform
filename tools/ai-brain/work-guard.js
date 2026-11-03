@@ -215,6 +215,9 @@ class ProgressLedger {
     it.spent = it.spent || { attempts: 0, ms: 0, tokens: 0 };
     it.stages = it.stages || {};
     const u = usage || {};
+    // Usage only ever adds: negative or non-finite values would refund a spent budget.
+    if (u.ms !== undefined && !isCount(Number(u.ms))) throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
+    if (u.tokens !== undefined && !isCount(u.tokens)) throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
     for (const acc of [it.spent, s.goal]) {
@@ -274,14 +277,12 @@ function validateLedger(s, file) {
   if (!isObj(s) || !isObj(s.items) || !validSpent(s.goal)) bad();
   for (const it of Object.values(s.items)) {
     if (!isObj(it)) bad();
-    if (it.spent !== undefined && !validSpent(it.spent)) bad();
+    if (!validSpent(it.spent)) bad();
     if (it.blocked !== undefined && typeof it.blocked !== 'string') bad();
-    if (it.stages !== undefined) {
-      if (!isObj(it.stages)) bad();
-      for (const st of Object.values(it.stages)) {
-        if (!isObj(st) || !isObj(st.fps)) bad();
-        for (const r of Object.values(st.fps)) if (!isObj(r) || typeof r.outcome !== 'string') bad();
-      }
+    if (!isObj(it.stages)) bad();
+    for (const st of Object.values(it.stages)) {
+      if (!isObj(st) || !isObj(st.fps)) bad();
+      for (const r of Object.values(st.fps)) if (!isObj(r) || typeof r.outcome !== 'string') bad();
     }
   }
 }
@@ -344,13 +345,15 @@ function lockHolder(file) {
 function acquireLock(file, owner, o) {
   const alive = (o && o.pidAlive) || pidAlive;
   if (!owner || !owner.jobId) throw new Error('WORK_GUARD_REFUSED: lock owner needs jobId');
-  const pid = owner.pid || process.pid;
+  const pid = owner.pid === undefined ? process.pid : owner.pid;
+  // 0 and negative pids name process groups; liveness of one owner cannot be proven from them.
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error('WORK_GUARD_REFUSED: lock owner needs a positive pid');
   const gens = lockGenerations(file);
   const top = gens[gens.length - 1];
   if (top && !top.released) {
     const holder = readJson(top.path, null);
     // Unreadable (being written) or live holders keep the lock; stale only when the pid is provably dead.
-    if (!holder || !Number.isInteger(holder.pid) || alive(holder.pid)) {
+    if (!holder || !Number.isInteger(holder.pid) || holder.pid <= 0 || alive(holder.pid)) {
       return { ok: false, cause: Cause.LOCK_HELD, holder };
     }
   }

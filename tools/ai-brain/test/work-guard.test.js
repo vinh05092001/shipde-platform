@@ -266,3 +266,19 @@ test('codex e4a6705: missing counters or fingerprint containers fail closed; pid
   const e = Object.defineProperty(new Error('crash'), 'cleanupError', { value: 1, writable: false });
   await assert.rejects(g.runWithCleanup(async () => { throw e; }, async () => { throw new Error('rm'); }), /crash/);
 });
+
+test('codex b4a4064: items need spent and stages; lock pids must be positive; usage never refunds', () => {
+  for (const bad of ['{"items":{"A":{}},"goal":{"attempts":0,"ms":0,"tokens":0}}', '{"items":{"A":{"spent":{"attempts":1,"ms":0,"tokens":0}}},"goal":{"attempts":0,"ms":0,"tokens":0}}']) {
+    const file = path.join(tmp(), 'l.json');
+    fs.writeFileSync(file, bad);
+    assert.throws(() => new g.ProgressLedger({ file }).admit('A', 'review', 'F'), /LEDGER_CORRUPT/);
+  }
+  const f = path.join(tmp(), 'lane.lock');
+  assert.throws(() => g.acquireLock(f, { jobId: 'n', pid: -99999999 }), /positive pid/);
+  fs.writeFileSync(f + '.g1', JSON.stringify({ jobId: 'bad', pid: -5, at: 1 }));
+  assert.equal(g.acquireLock(f, { jobId: 'j', pid: 7 }, { pidAlive: () => false }).cause, g.Cause.LOCK_HELD);
+  const L = new g.ProgressLedger({ file: path.join(tmp(), 'l.json') });
+  assert.throws(() => L.record('A', 'review', 'F', 'X', { ms: -100 }), /invalid usage/);
+  assert.throws(() => L.record('A', 'review', 'F', 'X', { tokens: -100 }), /invalid usage/);
+  assert.throws(() => L.record('A', 'review', 'F', 'X', { tokens: Infinity }), /invalid usage/);
+});
