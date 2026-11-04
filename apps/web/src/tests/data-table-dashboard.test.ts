@@ -4131,12 +4131,12 @@ async function runTestSuite() {
     assert.deepStrictEqual(dispatches, ['N', 'Ng'], 'Both held search edits dispatched');
     assert.strictEqual(toolbar.inputValue(), 'Ng');
 
-    // Finding 2 (P1): owned intermediate acknowledgment of N while Ng is held preserves Ng
+    // External Link navigation commits the older "?search=N" URL.
     toolbar.rerender({ searchValue: 'N' });
     assert.strictEqual(
       toolbar.inputValue(),
-      'Ng',
-      'owned intermediate acknowledgment preserves latest dispatched draft: textbox remains Ng'
+      'N',
+      'external Link cancels pending search draft: textbox resyncs to the committed URL'
     );
 
     // Finding 1 (P1): mounted own acknowledgment preserves newer debounce
@@ -4479,34 +4479,32 @@ async function runTestSuite() {
       '   ✅ Finding 1 (P1): mounted external Link cancels unsent draft after owned dispatches'
     );
 
-    // Finding 2 (P1): owned intermediate acknowledgment preserves latest dispatched draft
-    const ownedIntermediateEmissions: string[] = [];
-    const ownedIntermediateToolbar = renderMountedDataTableToolbar({
+    // Finding 2 (P1): external link navigation cancels pending search draft
+    const externalLinkHeldEmissions: string[] = [];
+    const externalLinkHeldToolbar = renderMountedDataTableToolbar({
       searchValue: '',
-      onSearchChange: (val: string) => ownedIntermediateEmissions.push(val),
+      onSearchChange: (val: string) => externalLinkHeldEmissions.push(val),
       debounceMs: 50,
     });
-    ownedIntermediateToolbar.type('N');
+    externalLinkHeldToolbar.type('N');
     await waitMs(80); // own 'N' request dispatched
-    ownedIntermediateToolbar.type('Ng');
+    externalLinkHeldToolbar.type('Ng');
     await waitMs(80); // own 'Ng' request dispatched; textbox is exactly 'Ng' (no unsent draft)
-    assert.strictEqual(ownedIntermediateToolbar.inputValue(), 'Ng');
-    // Acknowledge the toolbar's FIRST request while 'Ng' remains held
-    ownedIntermediateToolbar.rerender({ searchValue: 'N' });
+    assert.strictEqual(externalLinkHeldToolbar.inputValue(), 'Ng');
+    // External link navigation to ?search=N commits while 'Ng' was dispatched
+    externalLinkHeldToolbar.rerender({ searchValue: 'N' });
     assert.strictEqual(
-      ownedIntermediateToolbar.inputValue(),
-      'Ng',
-      'owned intermediate acknowledgment preserves latest dispatched draft: textbox remains exactly Ng'
+      externalLinkHeldToolbar.inputValue(),
+      'N',
+      'external link navigation resyncs textbox to committed URL'
     );
     await waitMs(80);
     assert.deepStrictEqual(
-      ownedIntermediateEmissions,
+      externalLinkHeldEmissions,
       ['N', 'Ng'],
-      'owned intermediate acknowledgment preserves latest dispatched draft: emissions equal ["N", "Ng"]'
+      'external link navigation cancels draft without additional emissions'
     );
-    console.log(
-      '   ✅ Finding 2 (P1): owned intermediate acknowledgment preserves latest dispatched draft'
-    );
+    console.log('   ✅ Finding 2 (P1): external link navigation cancels pending search draft');
 
     // Helper-level proofs at the exact classification point.
     const externalLinkCollidingAck = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'Ng', false, [
@@ -4524,19 +4522,19 @@ async function runTestSuite() {
       'helper: external navigation colliding with earlier owned request cancels debounce'
     );
 
-    const ownedIntermediateAck = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng', false, [
+    const externalLinkNoDraftAck = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng', false, [
       'N',
       'Ng',
     ]);
     assert.strictEqual(
-      ownedIntermediateAck.nextDraft,
-      'Ng',
-      'helper: intermediate acknowledgment of earlier owned request preserves latest dispatched draft'
+      externalLinkNoDraftAck.nextDraft,
+      'N',
+      'helper: external navigation with no unsent draft resyncs to incoming committed search'
     );
     assert.strictEqual(
-      ownedIntermediateAck.shouldCancelDebounce,
-      false,
-      'helper: intermediate acknowledgment of earlier owned request must not cancel debounce'
+      externalLinkNoDraftAck.shouldCancelDebounce,
+      true,
+      'helper: external navigation cancels debounce'
     );
   }
 

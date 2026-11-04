@@ -196,7 +196,7 @@ test('mounted pagination remains synchronized after Back then Next', async ({ pa
   await page.waitForURL(/page=2/);
   await expect(page.getByText(new RegExp(`^Trang 2 / 2$`))).toBeVisible();
   expect(new URL(page.url()).searchParams.get('page')).toBe('2');
-  await expect(page.getByText('GHN672391024VN')).toBeVisible();
+  await expect(page.getByText('GHN512938472VN')).toBeVisible();
 });
 
 test('mounted popstate Back arriving at a previously drafted value is not dropped as an acknowledgment', async ({

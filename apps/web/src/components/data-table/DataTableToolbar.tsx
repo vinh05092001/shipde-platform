@@ -111,20 +111,6 @@ export function computeToolbarDraftOnPropChange(
     };
   }
 
-  // Intermediate acknowledgment of an earlier owned request while the latest
-  // dispatched request is still pending and no newer unsent text is drafted
-  // (currentDraft === lastSent, Finding 2 P1). Preserve the latest dispatched intent.
-  // If the user typed newer unsent draft (currentDraft !== lastSent), an authoritative
-  // external navigation colliding with an earlier owned request (e.g. Link to ?search=N)
-  // discards cancelled unsent intent and resyncs to the URL (Finding 1 P1).
-  if (currentDraft === lastSent && sentSearchLog.indexOf(incoming) !== -1) {
-    return {
-      nextDraft: currentDraft,
-      nextPrevSearchValue: incoming,
-      shouldCancelDebounce: false,
-    };
-  }
-
   // The committed URL differs from what this toolbar last dispatched: an
   // external navigation, Back/Forward, or a cancelled intermediate edit
   // committed late. The URL wins — restore the displayed value and discard
