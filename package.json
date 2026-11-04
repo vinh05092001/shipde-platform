@@ -64,5 +64,8 @@
     "tsx": "^4.21.0",
     "turbo": "^2.4.4",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "fast-redact": "3.5.0"
   }
 }
