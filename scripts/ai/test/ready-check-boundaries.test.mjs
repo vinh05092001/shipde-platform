@@ -345,6 +345,13 @@ test('rejects blank Proof after an inline-code comment token', () => {
   assert.ok(result.problems.some((problem) => problem.includes('Proof')));
 });
 
+test('rejects blank Proof after a multiline code-span comment token', () => {
+  const text = `${valid}\n\`\n<!--\n\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
 test('rejects blank Proof after a complete backtick code span', () => {
   const text = `${valid}\n\`\`\`example\`\`\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
   const result = checkWorkItemReady(text);
@@ -430,13 +437,19 @@ test('rejects unproved behaviour separated from a proved paragraph by blocks', (
 
 test('accepts runnable Proof containing comparisons', () => {
   const result = checkWorkItemReady(
-    valid.replace('`preserves-existing-behaviour`', 'node -e "process.exit(1 < 2 && 3 > 2 ? 0 : 1)"')
+    valid.replace(
+      '`preserves-existing-behaviour`',
+      'node -e "process.exit(1 < 2 && 3 > 2 ? 0 : 1)"'
+    )
   );
   assert.deepEqual(result, { ok: true, problems: [] });
 });
 
 function runCliOnText(text) {
-  const tmpPath = join(tmpdir(), `ready-check-boundary-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+  const tmpPath = join(
+    tmpdir(),
+    `ready-check-boundary-${Date.now()}-${Math.random().toString(36).slice(2)}.md`
+  );
   writeFileSync(tmpPath, text, 'utf8');
   try {
     const scriptPath = fileURLToPath(new URL('../ready-check.mjs', import.meta.url));
@@ -459,6 +472,13 @@ test('production CLI rejects blank Proof after a blockquote fence ends', () => {
 
 test('production CLI rejects blank Proof after an inline-code comment token', () => {
   const text = `${valid}\n\`<!--\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = runCliOnText(text);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Proof/);
+});
+
+test('production CLI rejects blank Proof after a multiline code-span comment token', () => {
+  const text = `${valid}\n\`\n<!--\n\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
   const result = runCliOnText(text);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Proof/);

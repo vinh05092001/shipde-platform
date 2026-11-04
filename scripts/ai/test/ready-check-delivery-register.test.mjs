@@ -33,11 +33,10 @@ test('TASK-AI-164 delivery order does not collide with merged Work Items', () =>
   assert.ok(item164.order, 'TASK-AI-164 must have a valid delivery order');
 
   if (python) {
-    const result = spawnSync(
-      python,
-      ['-B', 'docs/product-spec/scripts/validate_docs.py'],
-      { cwd: root, encoding: 'utf8' }
-    );
+    const result = spawnSync(python, ['-B', 'docs/product-spec/scripts/validate_docs.py'], {
+      cwd: root,
+      encoding: 'utf8',
+    });
     assert.equal(result.error, undefined);
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }

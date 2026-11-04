@@ -1,10 +1,24 @@
 #!/usr/bin/env node
+/**
+ * Ready-check: Definition-of-ready validator for Work Items.
+ * Reference: github.com/DavidAnson/markdownlint — rule MD043 (required heading structure)
+ * and its token-based Markdown analysis approach using markdown-it.
+ * Licensed under the MIT License (David Anson).
+ */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import MarkdownIt from 'markdown-it';
 
 const md = new MarkdownIt({ html: true });
+const origHtmlBlock = md.block.ruler.__rules__.find((r) => r.name === 'html_block').fn;
+md.block.ruler.at('html_block', function (state, startLine, endLine, silent) {
+  const pos = state.bMarks[startLine] + state.tShift[startLine];
+  const lineText = state.src.slice(pos, state.eMarks[startLine]);
+  if (silent && /^<!--/.test(lineText)) return false;
+  return origHtmlBlock(state, startLine, endLine, silent);
+});
+
 const CLARIFICATION = /\[NEEDS\s+CLARIFICATION(?:\s*:[^\]]*)?\s*\]/gi;
 
 function tableCells(line) {

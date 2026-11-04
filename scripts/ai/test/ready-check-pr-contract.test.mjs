@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 
-const WORK_ITEM_PATTERN = /\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+|GOAL-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]+)\b/;
+const WORK_ITEM_PATTERN =
+  /\b(?:FEAT-[A-Z0-9-]+|TASK-FOUND-[0-9]+|TASK-AI-[0-9]+|GOAL-[A-Z0-9]+(?:-[A-Z0-9]+)*-[0-9]+)\b/;
 const REQUIRED_HEADINGS = [
   '## Work Item',
   '## Source requirements',
@@ -29,7 +30,9 @@ function validatePrContractJs({ title, body }) {
   const errors = [];
   const titleIds = title.match(new RegExp(WORK_ITEM_PATTERN.source, 'g')) || [];
   if (titleIds.length !== 1) {
-    errors.push('PR title must contain exactly one FEAT-*, TASK-FOUND-*, TASK-AI-* or GOAL-*-N Work Item ID');
+    errors.push(
+      'PR title must contain exactly one FEAT-*, TASK-FOUND-*, TASK-AI-* or GOAL-*-N Work Item ID'
+    );
   }
   const workItemId = titleIds.length === 1 ? titleIds[0] : '';
 
