@@ -1,7 +1,12 @@
 {
   "files": [
-    ".oc/history-pre-size-1505.md",
-    "AGENTS.md"
+    ".oc/check-syntax.json",
+    ".oc/context-pack.md",
+    ".oc/context-pack.md.manifest.json",
+    "AGENTS.md",
+    "tools/ai-brain/test/task-ai-166-refresh.test.js",
+    "tools/ai-brain/test/task-ai-166-review.test.js",
+    "tools/ai-brain/test/task-ai-166-runtime.test.js"
   ],
-  "createdAt": "2026-11-04T20:16:46.736Z"
+  "createdAt": "2026-11-04T21:46:05.108Z"
 }

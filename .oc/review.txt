@@ -1,24 +1,40 @@
 VERDICT: CHANGES_REQUIRED
+Reviewed SHA: 26bb377818ab0eba154c19add2ef701e5bdf8543
 
-1. **P1 — push gate refused this branch (SKIP p-task-ai-166 bad=0 g=0).** Fix before anything else:
-.oc/history-pre-size-1505.md:88: trailing whitespace.
-+4. **Phase 1 (d) — NEW P1: scheduled-lane discovery never awaits the production submission.**
-.oc/history-pre-size-1505.md:91: trailing whitespace.
-+5. **Phase 1 (d) — NEW P1: partial registry listings can advance global freshness.**
-.oc/history-pre-size-1505.md:94: trailing whitespace.
-+6. **Phase 1 (d) — NEW P1: lossy model filtering can manufacture disappearance evidence.**
-.oc/history-pre-size-1505.md:97: trailing whitespace.
-+7. **Phase 1 (d) — P1, prior acceptance-evidence finding NOT FIXED in full.**
-.oc/history-pre-size-1505.md:112: trailing whitespace.
-+9. **Phase 1 (f) — NEW P1: quota cooldown renews indefinitely from the same old log.**
-.oc/history-pre-size-1505.md:115: trailing whitespace.
-+10. **Phase 1 (g) — P1, prior unbounded-output finding NOT FIXED.**
-.oc/history-pre-size-1505.md:147: trailing whitespace.
-+13. **Phase 2 — NEW P1: fan-out authors can review their own combined output.**
-.oc/history-pre-size-1505.md:150: trailing whitespace.
-+14. **Phase 2 — NEW P1: a mixed finding block can hide an open P1 from the PASS guard.**
-.oc/history-pre-size-1505.md:153: trailing whitespace.
-+15. **Phase 2 — NEW P1: publication preflight permits already-committed private coordinator files.**
-.oc/history-pre-size-1505.md:156: trailing whitespace.
-+16. **Phase 2 — NEW P2: valid Controller goal items are rejected.**
-Commit subjects must contain AI-166; leftover conflict markers must be resolved.
+1. **P1 — CI failing:** application-gate, contract, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### contract (job 126858705865) — failing log lines
+```
+  Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+##[error]Process completed with exit code 1.
+```
+
+### current-application (job 126858805165) — failing log lines
+```
+================================================================
+Đã phát hiện và quét 52 tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:
+ - .oc/check-syntax.json
+❌ PHÁT HIỆN 5 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+ - .oc/context-pack.md
+ - .oc/context-pack.md.manifest.json
+--
+ - tools/ai-brain/test/task-ai-166-refresh.test.js
+ - tools/ai-brain/test/task-ai-166-review.test.js
+ - tools/ai-brain/test/task-ai-166-runtime.test.js
+[ELIFECYCLE] Command failed with exit code 1.
+##[error]Process completed with exit code 1.
+```
+
+### application-gate (job 126859940356) — failing log lines
+```
+env:
+  DETECT_RESULT: success
+  APPLICATION: true
+  APPLICATION_RESULT: failure
+Required application checks did not pass: failure
+##[error]Process completed with exit code 1.
+```

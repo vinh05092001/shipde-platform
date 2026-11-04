@@ -134,3 +134,45 @@ Reviewed SHA: b04c5e2c9b1be8d34bae56ee878d59ea05794a77
     ✔ login-required excluded (42.955458ms)
     ✔ the adapter writes the expected job.json and maps each result state (5.295537ms)
 ```
+
+## Round 116 review (pl-task-ai-166-116, writer was agy06:gemini-3.8-flash-high)
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: 26bb377818ab0eba154c19add2ef701e5bdf8543
+
+1. **P1 — CI failing:** application-gate, contract, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### contract (job 126858705865) — failing log lines
+```
+  Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+##[error]Process completed with exit code 1.
+```
+
+### current-application (job 126858805165) — failing log lines
+```
+================================================================
+Đã phát hiện và quét 52 tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:
+ - .oc/check-syntax.json
+❌ PHÁT HIỆN 5 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+ - .oc/context-pack.md
+ - .oc/context-pack.md.manifest.json
+--
+ - tools/ai-brain/test/task-ai-166-refresh.test.js
+ - tools/ai-brain/test/task-ai-166-review.test.js
+ - tools/ai-brain/test/task-ai-166-runtime.test.js
+[ELIFECYCLE] Command failed with exit code 1.
+##[error]Process completed with exit code 1.
+```
+
+### application-gate (job 126859940356) — failing log lines
+```
+env:
+  DETECT_RESULT: success
+  APPLICATION: true
+  APPLICATION_RESULT: failure
+Required application checks did not pass: failure
+##[error]Process completed with exit code 1.
+```
