@@ -7,40 +7,36 @@ import { runWithTenant } from './tenant-context';
 import { tenantRlsExtension } from './tenant-rls.extension';
 
 const POLICY_NAME = 'orders_tenant_isolation';
-const DEFAULT_DATABASE_URL =
-  'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
+const DEFAULT_URL = 'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
 
-function loadEnvFile(): void {
-  if (process.env.DATABASE_URL) return;
-  for (const p of [path.resolve('.env'), path.resolve('../../.env')]) {
-    if (!fs.existsSync(p)) continue;
-    for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
-      const m = line.trim().match(/^([^#=]+)=(.*)$/);
+function getDbUrl(): string {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  for (const f of ['.env', '../../.env'].map((p) => path.resolve(p))) {
+    if (!fs.existsSync(f)) continue;
+    for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
+      const m = l.trim().match(/^([^#=]+)=(.*)$/);
       if (m && !process.env[m[1].trim()]) {
         process.env[m[1].trim()] = m[2].trim().replace(/^['"]|['"]$/g, '');
       }
     }
     break;
   }
+  return process.env.DATABASE_URL || DEFAULT_URL;
 }
 
-function sanitizeDatabaseEndpoint(rawUrl: string): string {
+function endpoint(raw: string): string {
   try {
-    const u = new URL(rawUrl);
+    const u = new URL(raw);
     return `${u.protocol}//${u.username ? u.username + '@' : ''}${u.host || 'localhost'}/${u.pathname.replace(/^\//, '') || 'shipde_dev'}`;
   } catch {
-    return '[sanitized-database-endpoint]';
+    return '[sanitized-db-endpoint]';
   }
 }
 
-function resolveDatabaseUrl(): string {
-  return process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
-}
-
-function orderInput(merchantId: string, orderCode: string) {
+function orderData(mid: string, code: string) {
   return {
-    merchant_id: merchantId,
-    order_code: orderCode,
+    merchant_id: mid,
+    order_code: code,
     created_at: new Date('2026-10-31T00:00:00.000Z'),
     recipient_name: 'Tenant Probe',
     recipient_phone: '0900000000',
@@ -50,22 +46,19 @@ function orderInput(merchantId: string, orderCode: string) {
 }
 
 async function main(): Promise<void> {
-  loadEnvFile();
-  const databaseUrl = resolveDatabaseUrl();
-  const admin = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  const dbUrl = getDbUrl();
+  const admin = new PrismaClient({ datasources: { db: { url: dbUrl } } });
 
   try {
     await admin.$connect();
     await admin.$queryRaw`SELECT 1`;
   } catch {
-    const endpoint = sanitizeDatabaseEndpoint(databaseUrl);
+    const ep = endpoint(dbUrl);
     if (process.env.CI) {
       await admin.$disconnect().catch(() => {});
-      throw new Error(`PostgreSQL must be reachable for orders RLS in CI (${endpoint})`);
+      throw new Error(`PostgreSQL must be reachable for orders RLS in CI (${ep})`);
     }
-    console.warn(
-      `PostgreSQL is not reachable at ${endpoint}. Skipping orders RLS integration tests.`
-    );
+    console.warn(`PostgreSQL is not reachable at ${ep}. Skipping orders RLS integration tests.`);
     await admin.$disconnect().catch(() => {});
     return;
   }
@@ -86,13 +79,13 @@ async function main(): Promise<void> {
         `orders RLS DDL missing in CI (rls=${rlsOk}, policy=${policyRows.length > 0}); run pnpm db:migrate`
       );
     }
-    console.warn(`orders RLS DDL not applied locally. Skipping.`);
+    console.warn('orders RLS DDL not applied locally. Skipping.');
     await admin.$disconnect().catch(() => {});
     return;
   }
 
-  const probeSuffix = randomUUID().replace(/-/g, '').slice(0, 10).toLowerCase();
-  const PROBE_ROLE = `shipde_rls_probe_${probeSuffix}`;
+  const roleSuffix = randomUUID().replace(/-/g, '').slice(0, 10).toLowerCase();
+  const PROBE_ROLE = `shipde_rls_probe_${roleSuffix}`;
   const probePassword = randomUUID().replace(/-/g, '');
   const dbRows = await admin.$queryRaw<
     Array<{ current_database: string }>
@@ -113,7 +106,7 @@ async function main(): Promise<void> {
 
   await cleanupRole();
   for (const sql of [
-    `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`,
+    `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATERROLE NOREPLICATION`,
     `GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`,
     `GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`,
@@ -122,7 +115,7 @@ async function main(): Promise<void> {
     await admin.$executeRaw(Prisma.raw(sql));
   }
 
-  const probeUrl = new URL(databaseUrl);
+  const probeUrl = new URL(dbUrl);
   probeUrl.username = PROBE_ROLE;
   probeUrl.password = probePassword;
   const probe = new PrismaClient({ datasources: { db: { url: probeUrl.toString() } } });
@@ -139,16 +132,16 @@ async function main(): Promise<void> {
     await admin.merchant.create({
       data: { id: merchantB, name: `RLS B ${suffix}`, code: `rls-b-${suffix}` },
     });
-    const orderA = await admin.order.create({ data: orderInput(merchantA, `RLS-A-${suffix}`) });
-    const orderB = await admin.order.create({ data: orderInput(merchantB, `RLS-B-${suffix}`) });
+    const orderA = await admin.order.create({ data: orderData(merchantA, `RLS-A-${suffix}`) });
+    const orderB = await admin.order.create({ data: orderData(merchantB, `RLS-B-${suffix}`) });
 
     // AC-AI-154-01: Only own-tenant orders returned when merchant_id filter omitted
     await runWithTenant(merchantA, async () => {
-      const visible = await extended.order.findMany({
+      const rows = await extended.order.findMany({
         where: { id: { in: [orderA.id, orderB.id] } },
       });
       assert.deepEqual(
-        visible.map((r) => r.id),
+        rows.map((r) => r.id),
         [orderA.id]
       );
     });
@@ -164,7 +157,7 @@ async function main(): Promise<void> {
     // AC-AI-154-03: Cross-tenant create rejected by RLS WITH CHECK
     await assert.rejects(
       runWithTenant(merchantA, async () => {
-        await extended.order.create({ data: orderInput(merchantB, `RLS-CROSS-${suffix}`) });
+        await extended.order.create({ data: orderData(merchantB, `RLS-CROSS-${suffix}`) });
       }),
       (err: unknown) =>
         /row-level security|new row violates/i.test(
@@ -187,10 +180,10 @@ async function main(): Promise<void> {
     console.log('PASS: AC-AI-154-04');
 
     // AC-AI-154-05: Own-tenant create succeeds
-    const ownOrder = await runWithTenant(merchantA, async () =>
-      extended.order.create({ data: orderInput(merchantA, `RLS-OWN-${suffix}`) })
+    const own = await runWithTenant(merchantA, async () =>
+      extended.order.create({ data: orderData(merchantA, `RLS-OWN-${suffix}`) })
     );
-    assert.equal(ownOrder.merchant_id, merchantA);
+    assert.equal(own.merchant_id, merchantA);
     console.log('PASS: AC-AI-154-05');
 
     // AC-AI-154-06: Unscoped session succeeds under pilot fail-open
