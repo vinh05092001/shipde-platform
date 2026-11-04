@@ -25,12 +25,27 @@
 const crypto = require('crypto');
 const { createRouteIdentity, distinguishPathway, UNKNOWN } = require('./route-identity');
 const { ScopedHealthRegistry, ErrorCategory, HealthScope } = require('./scoped-health');
+const ROUTE_IDENTITY_DATA = require('../../config/route-identity.json');
 
-const WEIGHT_PROFILES = Object.freeze({
-  LATENCY_FIRST: { latency: 55, quality: 20, cost: 25 },
-  BALANCED: { latency: 34, quality: 33, cost: 33 },
-  QUALITY_FIRST: { latency: 10, quality: 65, cost: 25 },
-});
+const WEIGHT_DIMENSIONS = Object.freeze([...(ROUTE_IDENTITY_DATA.weightDimensions || [])]);
+
+function buildWeightProfile(values) {
+  const profile = {};
+  WEIGHT_DIMENSIONS.forEach((dimension, index) => {
+    profile[dimension] = values[index];
+  });
+  return Object.freeze(profile);
+}
+
+// Weight profiles are configuration, loaded from the versioned route identity data.
+const WEIGHT_PROFILES = Object.freeze(
+  Object.fromEntries(
+    Object.entries(ROUTE_IDENTITY_DATA.weightProfiles || {}).map(([name, values]) => [
+      name,
+      buildWeightProfile(values),
+    ])
+  )
+);
 
 const ROLE_FALLBACK_PROFILE = Object.freeze({
   writer: 'BALANCED',

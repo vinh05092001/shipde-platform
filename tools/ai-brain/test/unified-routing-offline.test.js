@@ -42,6 +42,8 @@ const {
   resolveModelPrefix,
   linkSharedQuotaScopes,
   expandComboIdentity,
+  DEFAULT_PREFIX_TO_PROVIDER,
+  getQuotaFamily,
   UNKNOWN,
   getPrivateEmail,
   registerPrivateEmail,
@@ -2599,5 +2601,38 @@ describe('Review fb8826b regressions', () => {
       selection.identity.metadata.viableBranches[0].configuredModelId,
       branchB.configuredModelId
     );
+  });
+});
+
+// ==============================================================================
+// TASK-AI-171: Route identity tables are data, not code literals
+// ==============================================================================
+
+describe('TASK-AI-171: versioned route identity data', () => {
+  const routeIdentityData = require('../../../config/route-identity.json');
+
+  test('prefix-to-provider aliases are loaded from the versioned data file', () => {
+    assert.equal(routeIdentityData.version, 1);
+    assert.deepEqual(DEFAULT_PREFIX_TO_PROVIDER, routeIdentityData.prefixToProvider);
+    assert.equal(DEFAULT_PREFIX_TO_PROVIDER.gcli, 'grok-cli');
+    assert.equal(DEFAULT_PREFIX_TO_PROVIDER.ollama, 'ollama');
+    assert.equal(DEFAULT_PREFIX_TO_PROVIDER.mistral, 'mistral');
+    assert.equal(resolveModelPrefix('gcli/grok-2').upstreamProviderId, 'grok-cli');
+  });
+
+  test('quota group to family mapping is loaded from the same data file', () => {
+    assert.equal(getQuotaFamily('external'), routeIdentityData.quotaFamilies.external);
+    assert.equal(getQuotaFamily('external'), 'claude-gpt');
+    assert.equal(getQuotaFamily('gemini'), 'gemini');
+  });
+
+  test('weight profiles are loaded from the same data file', () => {
+    const dimensions = routeIdentityData.weightDimensions;
+    for (const [name, values] of Object.entries(routeIdentityData.weightProfiles)) {
+      const expected = Object.fromEntries(
+        dimensions.map((dimension, index) => [dimension, values[index]])
+      );
+      assert.deepEqual(WEIGHT_PROFILES[name], expected);
+    }
   });
 });

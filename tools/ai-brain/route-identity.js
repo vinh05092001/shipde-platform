@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const ROUTE_IDENTITY_DATA = require('../../config/route-identity.json');
 ('use strict');
 
 /**
@@ -19,33 +20,22 @@ const crypto = require('crypto');
 const GATEWAY_PREFIX_SEPARATOR = '::';
 const UNKNOWN = 'UNKNOWN';
 
-// Built-in known provider prefixes for 9router
+// Known provider prefixes for 9router, loaded from the versioned route identity data.
 const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
-  ag: 'antigravity',
-  gh: 'github',
-  cc: 'claude',
-  kr: 'kiro',
-  gcli: 'grok-cli',
-  cl: 'cline',
-  cf: 'cloudflare-ai',
-  kgw: 'kilo-gateway',
-  nous: 'nous',
-  ollama: 'ollama',
-  mistral: 'mistral',
-  kimchi: 'kimchi',
-  qd: 'qoder',
-  bzl: 'bazaarlink',
-  groq: 'groq',
-  el: 'elevenlabs',
-  jina: 'jina-ai',
-  polly: 'aws-polly',
-  xmtp: 'xiaomi-tokenplan',
-  openai: 'openai',
-  cerebras: 'cerebras',
-  tokenrouter: 'tokenrouter',
+  ...ROUTE_IDENTITY_DATA.prefixToProvider,
 });
 
 const PREFIX_PROVIDER_MAP = DEFAULT_PREFIX_TO_PROVIDER;
+
+// Quota group -> quota family aliases, loaded from the same versioned data.
+const QUOTA_FAMILY_BY_GROUP = Object.freeze({
+  ...ROUTE_IDENTITY_DATA.quotaFamilies,
+});
+
+function getQuotaFamily(group) {
+  if (group === null || group === undefined) return group;
+  return QUOTA_FAMILY_BY_GROUP[group] || group;
+}
 
 function escapePart(str) {
   if (str === null || str === undefined) return '';
@@ -547,6 +537,8 @@ module.exports = {
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
   PREFIX_PROVIDER_MAP,
+  QUOTA_FAMILY_BY_GROUP,
+  getQuotaFamily,
   escapePart,
   unescapePart,
   distinguishPathway,

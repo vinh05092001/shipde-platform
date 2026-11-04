@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-04",
+  "note": "Versioned route identity data. Router prefixes, quota families and weight profiles are configuration, not code literals. Adapted from the data-driven model-group idea in LiteLLM Router (https://github.com/BerriAI/litellm, router.py).",
+  "prefixToProvider": {
+    "ag": "antigravity",
+    "gh": "github",
+    "cc": "claude",
+    "kr": "kiro",
+    "gcli": "grok-cli",
+    "cl": "cline",
+    "cf": "cloudflare-ai",
+    "kgw": "kilo-gateway",
+    "nous": "nous",
+    "ollama": "ollama",
+    "mistral": "mistral",
+    "kimchi": "kimchi",
+    "qd": "qoder",
+    "bzl": "bazaarlink",
+    "groq": "groq",
+    "el": "elevenlabs",
+    "jina": "jina-ai",
+    "polly": "aws-polly",
+    "xmtp": "xiaomi-tokenplan",
+    "openai": "openai",
+    "cerebras": "cerebras",
+    "tokenrouter": "tokenrouter"
+  },
+  "quotaFamilies": {
+    "external": "claude-gpt"
+  },
+  "weightDimensions": ["latency", "quality", "cost"],
+  "weightProfiles": {
+    "LATENCY_FIRST": [55, 20, 25],
+    "BALANCED": [34, 33, 33],
+    "QUALITY_FIRST": [10, 65, 25]
+  }
+}

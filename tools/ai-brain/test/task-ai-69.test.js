@@ -759,6 +759,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     assert.equal(directParsed.rows.length, 4);
     assert.deepEqual(directParsed.rows, [
       {
+        group: 'gemini',
         family: 'gemini',
         window: 'weekly',
         remainingPercent: 85,
@@ -767,6 +768,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         resetsAt: '2026-10-08T08:45:02Z',
       },
       {
+        group: 'gemini',
         family: 'gemini',
         window: 'fiveHour',
         remainingPercent: 100,
@@ -775,6 +777,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         resetsAt: '2026-10-02T01:26:02Z',
       },
       {
+        group: 'external',
         family: 'claude-gpt',
         window: 'weekly',
         remainingPercent: 100,
@@ -783,6 +786,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         resetsAt: '2026-10-08T20:26:02Z',
       },
       {
+        group: 'external',
         family: 'claude-gpt',
         window: 'fiveHour',
         remainingPercent: 100,

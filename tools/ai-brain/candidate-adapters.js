@@ -23,6 +23,7 @@ const {
   createRouteIdentity,
   linkSharedQuotaScopes,
   PREFIX_PROVIDER_MAP,
+  getQuotaFamily,
   UNKNOWN,
   registerPrivateEmail,
   hashEmail,
@@ -101,9 +102,7 @@ function modelEvidence(model, options, source = {}) {
   // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily).
   // Do NOT inject inferred group into evidence here so parsed group membership in lane quota is reachable!
   const quotaGroup = explicitGroup || familyToGroup;
-  const quotaFamily =
-    explicitFamily ||
-    (quotaGroup ? (quotaGroup === 'external' ? 'claude-gpt' : quotaGroup) : undefined);
+  const quotaFamily = explicitFamily || (quotaGroup ? getQuotaFamily(quotaGroup) : undefined);
   return {
     ...metadata,
     ...(quotaGroup ? { quotaGroup } : {}),
@@ -509,8 +508,7 @@ function loadAgyPoolCandidates(options = {}) {
           : null);
 
       const targetGroup = explicitDataGroup || parsedGroup || modelQuotaGroup(m);
-      const targetFamily =
-        explicitFamily || (targetGroup === 'external' ? 'claude-gpt' : targetGroup);
+      const targetFamily = explicitFamily || getQuotaFamily(targetGroup);
 
       const matchingRows = rows.filter((r) => {
         if (modelId(r) === m) return true;
@@ -527,10 +525,7 @@ function loadAgyPoolCandidates(options = {}) {
                   : r.family
             : null);
         if (rowGroup && rowGroup === targetGroup) return true;
-        if (
-          r.family &&
-          (r.family === targetGroup || (targetGroup === 'external' && r.family === 'claude-gpt'))
-        )
+        if (r.family && (r.family === targetGroup || r.family === getQuotaFamily(targetGroup)))
           return true;
         return false;
       });
