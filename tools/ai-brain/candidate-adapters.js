@@ -1,20 +1,12 @@
 'use strict';
 
 /**
- * Ship Dễ — Candidate Adapters (PATCH 2)
+ * Ship Dễ — Candidate Adapters
  *
  * Gathers candidate routes across 3 distinct pathways:
  * 1. 9router Adapter (via SQLite DB / model catalog / connections)
  * 2. Direct External Provider Adapter (OpenCode direct, Codex direct, Direct APIs)
  * 3. AGY Pool Adapter (Scheduled Task lanes agy01..agy10)
- *
- * Strict Rules:
- * - NO invented fixture defaults in production code paths.
- * - Exact model IDs, prefixes, and casing preserved (including multi-slash models).
- * - "default" metadata excluded from specific model candidates.
- * - Connections consumed to produce per-connection candidate routes.
- * - Shared accounts across pathways linked to unified quota scopes.
- * - Unconnected sources have explicit, observable reasons, never silently dropped.
  */
 
 const fs = require('fs');
@@ -23,94 +15,18 @@ const {
   createRouteIdentity,
   linkSharedQuotaScopes,
   PREFIX_PROVIDER_MAP,
-  getQuotaFamily,
   UNKNOWN,
   registerPrivateEmail,
   hashEmail,
 } = require('./route-identity');
-
-// Using shared PREFIX_PROVIDER_MAP imported from ./route-identity
-
-function modelQuotaGroup(model) {
-  const m = String(model || '').toLowerCase();
-  if (/argon/i.test(m)) return 'argon';
-  if (m.includes('gemini')) return 'gemini';
-  if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet'))
-    return 'external';
-  return 'external';
-}
-
-function modelFamily(model) {
-  return modelQuotaGroup(model);
-}
-
-function readLaneIdentityEmail(laneId, options) {
-  if (typeof options?.readLaneIdentity === 'function') {
-    const res = options.readLaneIdentity(laneId);
-    const em = typeof res === 'string' ? res : res?.email || res?.label;
-    if (typeof em === 'string' && em.includes('@') && em !== laneId) return em.trim();
-  }
-  if (options?.laneIdentities && options.laneIdentities[laneId]) {
-    const em = options.laneIdentities[laneId];
-    if (typeof em === 'string' && em.includes('@') && em !== laneId) return em.trim();
-  }
-  try {
-    const agyPool = require('./agy-pool-runtime');
-    const dir =
-      typeof agyPool.accountDir === 'function' ? agyPool.accountDir(laneId, options) : null;
-    if (dir) {
-      const idFile = path.join(dir, 'identity.json');
-      if (fs.existsSync(idFile)) {
-        const doc = JSON.parse(fs.readFileSync(idFile, 'utf8'));
-        const email = doc.email || doc.label;
-        if (typeof email === 'string' && email.includes('@') && email !== laneId) {
-          return email.trim();
-        }
-      }
-    }
-  } catch {}
-  return UNKNOWN;
-}
-
-// Preserve discovered evidence; absence is never a capability or ranking claim.
-function modelId(model) {
-  return typeof model === 'string'
-    ? model.trim()
-    : String(model?.id || model?.modelId || model?.model || model?.configuredModelId || '').trim();
-}
-
-function modelEvidence(model, options, source = {}) {
-  const id = modelId(model);
-  const evidence = typeof model === 'object' && model ? model : {};
-  const metadata = {
-    ...source.metadata,
-    ...evidence,
-    ...evidence.metadata,
-    ...options.modelMetadata?.[id],
-  };
-  const explicitGroup = evidence.quotaGroup || metadata.quotaGroup;
-  const explicitFamily = evidence.quotaFamily || metadata.quotaFamily;
-  const familyToGroup = explicitFamily
-    ? /argon/i.test(explicitFamily)
-      ? 'argon'
-      : /claude|gpt|3p|external/i.test(explicitFamily)
-        ? 'external'
-        : /gemini/i.test(explicitFamily)
-          ? 'gemini'
-          : explicitFamily
-    : undefined;
-  // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily).
-  // Do NOT inject inferred group into evidence here so parsed group membership in lane quota is reachable!
-  const quotaGroup = explicitGroup || familyToGroup;
-  const quotaFamily = explicitFamily || (quotaGroup ? getQuotaFamily(quotaGroup) : undefined);
-  return {
-    ...metadata,
-    ...(quotaGroup ? { quotaGroup } : {}),
-    ...(quotaFamily ? { quotaFamily } : {}),
-    capabilities:
-      options.modelCapabilities?.[id] ?? metadata.capabilities ?? source.capabilities ?? [],
-  };
-}
+const {
+  modelQuotaGroup,
+  modelFamily,
+  modelId,
+  modelEvidence,
+} = require('./candidate-adapters-common');
+const { loadDirectProviderCandidates } = require('./candidate-adapters-direct');
+const { readLaneIdentityEmail, loadAgyPoolCandidates } = require('./candidate-adapters-agy');
 
 /**
  * Loads candidates from 9Router configuration / SQLite / Catalog.
@@ -124,7 +40,6 @@ function load9RouterCandidates(options = {}) {
   let rawCatalog = options.catalog;
   let connections = options.connections;
 
-  // In production: discover from actual files on disk if options omitted
   if (!rawCatalog) {
     try {
       const candidatesPaths = [
@@ -182,7 +97,6 @@ function load9RouterCandidates(options = {}) {
     return { candidates, unconnected };
   }
 
-  // If no catalog discovered or empty: report unconnected reason, do NOT invent fake models!
   if (!rawCatalog || !Array.isArray(rawCatalog) || rawCatalog.length === 0) {
     unconnected.push({
       sourceId: '9router',
@@ -202,7 +116,6 @@ function load9RouterCandidates(options = {}) {
 
   for (const rawModel of rawCatalog) {
     const m = modelId(rawModel);
-    // Rule: Tách metadata "default" khỏi model cụ thể
     if (!m || m.toLowerCase() === 'default') continue;
 
     const slash = m.indexOf('/');
@@ -211,7 +124,6 @@ function load9RouterCandidates(options = {}) {
     const provider = (prefix && PREFIX_PROVIDER_MAP[prefix]) || prefix || '9router';
 
     if (connectionList.length > 0) {
-      // Consume connections: find matching connection(s) for this model's provider/prefix
       const matchingConnections = connectionList.filter((conn) => {
         if (conn.enabled === false) return false;
         const connProv = String(conn.provider || conn.prefix || '').toLowerCase();
@@ -274,315 +186,6 @@ function load9RouterCandidates(options = {}) {
 }
 
 /**
- * Loads direct external providers (OpenCode direct, Codex direct, direct APIs).
- * OpenCode is a harness, NOT a quota source.
- */
-function loadDirectProviderCandidates(options = {}) {
-  const candidates = [];
-  const unconnected = [];
-
-  let directSources = options.sources;
-
-  if (!directSources) {
-    try {
-      const sourcesApi = require('./sources');
-      const loaded = sourcesApi.loadSources();
-      const allSrcs = Array.isArray(loaded) ? loaded : loaded?.sources || [];
-      directSources = allSrcs.filter(
-        (s) => s && s.id !== '9router' && s.id !== 'agy-pool' && s.id !== 'agy-local' && s.endpoint
-      );
-    } catch {}
-  }
-
-  if (!directSources || directSources.length === 0) {
-    unconnected.push({
-      sourceId: 'direct',
-      gatewayId: 'direct',
-      reason: 'NO_DIRECT_SOURCES_CONFIGURED',
-    });
-    return { candidates, unconnected };
-  }
-
-  for (const src of directSources) {
-    const credEnv = src.credentialEnv || src.credential?.env;
-    const hasKey = credEnv ? Boolean(options.env?.[credEnv] || process.env[credEnv]) : false;
-
-    if (!hasKey && options.skipMissingCredentials !== false) {
-      unconnected.push({
-        sourceId: src.id,
-        gatewayId: 'direct',
-        upstreamProviderId: src.provider || src.id,
-        reason: credEnv ? `CREDENTIAL_ENV_UNSET_${credEnv}` : 'CREDENTIAL_MISSING',
-      });
-      continue;
-    }
-
-    const models = Array.isArray(src.models) ? src.models : [];
-    if (models.length === 0) {
-      unconnected.push({
-        sourceId: src.id,
-        gatewayId: 'direct',
-        upstreamProviderId: src.provider || src.id,
-        reason: 'NO_MODELS_DISCOVERED_FOR_SOURCE',
-      });
-      continue;
-    }
-
-    for (const rawModel of models) {
-      const m = modelId(rawModel);
-      if (!m || String(m).toLowerCase() === 'default') continue;
-
-      const rawAcc = src.accountRef || UNKNOWN;
-      if (typeof rawAcc === 'string' && rawAcc.includes('@')) {
-        registerPrivateEmail(src.id, rawAcc);
-        registerPrivateEmail(hashEmail(rawAcc), rawAcc);
-      }
-      const accRef =
-        typeof rawAcc === 'string' && rawAcc.includes('@') ? hashEmail(rawAcc) : rawAcc;
-      const connId = src.id;
-      const prov = src.provider || src.id;
-
-      candidates.push(
-        createRouteIdentity({
-          harness: src.harness || 'direct-http',
-          sourceId: src.id,
-          gatewayId: 'direct',
-          upstreamProviderId: prov,
-          configuredModelId: m,
-          outboundModelId: m,
-          accountRef: accRef,
-          connectionId: connId,
-          quotaScopeId: `quota::${prov}::${accRef}`,
-          metadata: {
-            endpoint: src.endpoint,
-            ...modelEvidence(rawModel, options, src),
-          },
-        })
-      );
-    }
-  }
-
-  return { candidates, unconnected };
-}
-
-/**
- * Loads AGY pool lanes (agy01..agy10 via Scheduled Task).
- */
-function loadAgyPoolCandidates(options = {}) {
-  const candidates = [];
-  const unconnected = [];
-
-  let lanes = options.lanes;
-  let models = options.models;
-
-  if (!lanes || !models) {
-    try {
-      const agyPool = require('./agy-pool-runtime');
-      if (!lanes && typeof agyPool.discoverAccounts === 'function') {
-        const accountIds = agyPool.discoverAccounts(options);
-        lanes = accountIds.map((laneId) => {
-          let quota;
-          try {
-            quota =
-              typeof agyPool.quotaReading === 'function'
-                ? agyPool.quotaReading(laneId, options)
-                : null;
-          } catch {}
-          const realAccountRef = readLaneIdentityEmail(laneId, options);
-          return {
-            laneId,
-            accountRef: realAccountRef,
-            quota,
-          };
-        });
-      }
-      if (!models && typeof agyPool.discoverPoolModels === 'function') {
-        models = agyPool.discoverPoolModels();
-      }
-    } catch {}
-  }
-
-  if (!lanes || lanes.length === 0 || !models || models.length === 0) {
-    unconnected.push({
-      sourceId: 'agy-pool',
-      gatewayId: 'direct',
-      reason: 'NO_AGY_LANES_OR_MODELS_DISCOVERED',
-    });
-    return { candidates, unconnected };
-  }
-
-  for (const lane of lanes) {
-    if (lane.quotaExhausted) {
-      unconnected.push({
-        sourceId: 'agy-pool',
-        laneId: lane.laneId,
-        reason: 'AGY_LANE_QUOTA_EXHAUSTED',
-      });
-      continue;
-    }
-
-    let laneEmail = UNKNOWN;
-    if (
-      lane.accountRef &&
-      lane.accountRef !== lane.laneId &&
-      lane.accountRef !== UNKNOWN &&
-      String(lane.accountRef).includes('@')
-    ) {
-      laneEmail = lane.accountRef;
-    } else {
-      laneEmail = readLaneIdentityEmail(lane.laneId, options);
-    }
-    const safeAccountHash =
-      laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')
-        ? hashEmail(laneEmail)
-        : UNKNOWN;
-
-    if (laneEmail && laneEmail !== UNKNOWN && String(laneEmail).includes('@')) {
-      registerPrivateEmail(lane.laneId, laneEmail);
-      registerPrivateEmail(safeAccountHash, laneEmail);
-      // Bindings are per (lane, account) and never rewritten for existing identities
-      registerPrivateEmail(lane.laneId + '::' + safeAccountHash, laneEmail);
-    }
-
-    for (const rawModel of models) {
-      const m = modelId(rawModel);
-      if (!m || String(m).toLowerCase() === 'default') continue;
-
-      const rows = lane.quota?.rows || lane.rows || [];
-      const evidence = modelEvidence(rawModel, options);
-
-      // RULE: Quota membership comes from data FIRST (explicit quotaGroup/quotaFamily, then parsed group membership).
-      // Name inference ONLY when no data exists, and it never overrides data.
-      const explicitGroup =
-        rawModel.quotaGroup ||
-        rawModel.metadata?.quotaGroup ||
-        options.modelMetadata?.[m]?.quotaGroup ||
-        evidence.quotaGroup;
-      const explicitFamily =
-        rawModel.quotaFamily ||
-        rawModel.metadata?.quotaFamily ||
-        options.modelMetadata?.[m]?.quotaFamily ||
-        evidence.quotaFamily;
-      const explicitGroupFromFamily = explicitFamily
-        ? /argon/i.test(explicitFamily)
-          ? 'argon'
-          : /claude|gpt|3p|external/i.test(explicitFamily)
-            ? 'external'
-            : /gemini/i.test(explicitFamily)
-              ? 'gemini'
-              : explicitFamily
-        : null;
-      const explicitDataGroup = explicitGroup || explicitGroupFromFamily;
-
-      const membershipRow = rows.find((r) => Array.isArray(r.models) && r.models.includes(m));
-      const membershipGroup =
-        membershipRow?.group ||
-        (membershipRow?.family
-          ? /argon/i.test(membershipRow.family)
-            ? 'argon'
-            : /claude|gpt|3p|external/i.test(membershipRow.family)
-              ? 'external'
-              : /gemini/i.test(membershipRow.family)
-                ? 'gemini'
-                : membershipRow.family
-          : null);
-      const laneGroups = Array.isArray(lane.quota?.groups)
-        ? lane.quota.groups
-        : Array.isArray(lane.groups)
-          ? lane.groups
-          : [];
-      const membershipFromGroup = laneGroups.find(
-        (g) => Array.isArray(g.models) && g.models.includes(m)
-      );
-      const parsedGroupFromLane = membershipFromGroup?.id || membershipFromGroup?.group;
-      const parsedGroup =
-        membershipGroup ||
-        (parsedGroupFromLane
-          ? /argon/i.test(parsedGroupFromLane)
-            ? 'argon'
-            : /claude|gpt|3p|external/i.test(parsedGroupFromLane)
-              ? 'external'
-              : /gemini/i.test(parsedGroupFromLane)
-                ? 'gemini'
-                : parsedGroupFromLane
-          : null);
-
-      const targetGroup = explicitDataGroup || parsedGroup || modelQuotaGroup(m);
-      const targetFamily = explicitFamily || getQuotaFamily(targetGroup);
-
-      const matchingRows = rows.filter((r) => {
-        if (modelId(r) === m) return true;
-        if (Array.isArray(r.models) && r.models.includes(m)) return true;
-        const rowGroup =
-          r.group ||
-          (r.family
-            ? /argon/i.test(r.family)
-              ? 'argon'
-              : /claude|gpt|3p|external/i.test(r.family)
-                ? 'external'
-                : /gemini/i.test(r.family)
-                  ? 'gemini'
-                  : r.family
-            : null);
-        if (rowGroup && rowGroup === targetGroup) return true;
-        if (r.family && (r.family === targetGroup || r.family === getQuotaFamily(targetGroup)))
-          return true;
-        return false;
-      });
-      const exhausted = matchingRows.some(
-        (r) =>
-          r.disabled === true ||
-          (r.remainingPercent != null &&
-            Number.isFinite(Number(r.remainingPercent)) &&
-            Number(r.remainingPercent) <= 0)
-      );
-      const known =
-        matchingRows.length > 0 &&
-        matchingRows.every(
-          (r) =>
-            r.known !== false &&
-            r.remainingPercent != null &&
-            r.remainingPercent !== '' &&
-            Number.isFinite(Number(r.remainingPercent))
-        );
-      if (lane.quota?.available === false || exhausted || !known) {
-        unconnected.push({
-          sourceId: 'agy-pool',
-          laneId: lane.laneId,
-          configuredModelId: m,
-          reason: exhausted ? 'AGY_MODEL_QUOTA_EXHAUSTED' : 'AGY_MODEL_QUOTA_UNKNOWN',
-        });
-        continue;
-      }
-      const quotaScopeKey = `agy-quota::${lane.laneId}::${targetGroup}`;
-      candidates.push(
-        createRouteIdentity({
-          harness: 'agy-pool',
-          sourceId: 'agy-pool',
-          gatewayId: 'direct',
-          upstreamProviderId: 'antigravity',
-          configuredModelId: m,
-          outboundModelId: m,
-          accountRef: lane.laneId,
-          connectionId: lane.laneId,
-          quotaScopeId: quotaScopeKey,
-          metadata: {
-            laneId: lane.laneId,
-            realAccountRef: safeAccountHash !== UNKNOWN ? safeAccountHash : undefined,
-            ...evidence,
-            accountRef: lane.laneId,
-            quotaGroup: targetGroup,
-            quotaFamily: targetFamily,
-          },
-        })
-      );
-    }
-  }
-
-  return { candidates, unconnected };
-}
-
-/**
  * Aggregates candidates from all three pathways into a unified pool.
  * Automatically links shared accounts across pathways to prevent quota bypass.
  */
@@ -594,7 +197,6 @@ function aggregateAllCandidates(options = {}) {
   const rawCandidates = [...c9.candidates, ...cDirect.candidates, ...cAgy.candidates];
   const unconnected = [...c9.unconnected, ...cDirect.unconnected, ...cAgy.unconnected];
 
-  // Link shared quota scopes across pathways
   const candidates = linkSharedQuotaScopes(rawCandidates, options.sharedAccountLinks);
 
   return {
@@ -615,5 +217,10 @@ module.exports = {
   loadDirectProviderCandidates,
   loadAgyPoolCandidates,
   aggregateAllCandidates,
+  readLaneIdentityEmail,
+  modelQuotaGroup,
+  modelFamily,
+  modelId,
+  modelEvidence,
   PREFIX_PROVIDER_MAP,
 };

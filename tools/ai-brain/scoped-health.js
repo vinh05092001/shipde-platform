@@ -1,8 +1,7 @@
-const crypto = require('crypto');
-('use strict');
+'use strict';
 
 /**
- * Ship Dễ — Scoped Health & Failure Classification (PATCH 1 - Fixed per Codex Review)
+ * Ship Dễ — Scoped Health & Failure Classification
  *
  * Implements strict fault scoping without cross-contamination:
  * - Error classes:
@@ -10,299 +9,33 @@ const crypto = require('crypto');
  *     NO_CHANNEL, NETWORK_DNS, TIMEOUT, TASK_FAILURE, GATEWAY_DOWN
  * - Scopes:
  *     gateway, account, quota_scope, model, route, network, local
- *
- * Fixes for Codex Review:
- * - Rate limits (429) scoped to specific account/connection on that model, preventing
- *   Account A's 429 from blocking Account B on the same model.
- * - Elapsed quota reset (now > resetsAt) does NOT return healthy: true early;
- *   it completes model/route/lock checks and marks candidate as requiresProbe: true,
- *   preventing unverified dispatch without telemetry.
  */
 
-const { hashEmail, getPrivateEmail } = require('./route-identity');
+const {
+  ErrorCategory,
+  HealthScope,
+  classifyError,
+  parseRetryAfter,
+  parseResetHint,
+} = require('./scoped-health-classifier');
 
-const ErrorCategory = Object.freeze({
-  AUTH: 'AUTH',
-  PERMISSION: 'PERMISSION',
-  QUOTA_CREDIT: 'QUOTA_CREDIT',
-  RATE_LIMIT: 'RATE_LIMIT',
-  MODEL_NOT_FOUND: 'MODEL_NOT_FOUND',
-  NO_CHANNEL: 'NO_CHANNEL',
-  NETWORK_DNS: 'NETWORK_DNS',
-  TIMEOUT: 'TIMEOUT',
-  TASK_FAILURE: 'TASK_FAILURE',
-  GATEWAY_DOWN: 'GATEWAY_DOWN',
-  UNKNOWN: 'UNKNOWN',
-});
-
-const HealthScope = Object.freeze({
-  GATEWAY: 'gateway',
-  ACCOUNT: 'account',
-  QUOTA_SCOPE: 'quota_scope',
-  MODEL: 'model',
-  ROUTE: 'route',
-  NETWORK: 'network',
-  LOCAL: 'local',
-});
-
-/**
- * Classifies a failure input into its true category, scope, and cooldown policy.
- */
-function classifyError(input, now = Date.now()) {
-  const i = input || {};
-  const status = Number(i.httpStatus || i.status || i.statusCode || 0);
-  const code = String(i.code || '')
-    .trim()
-    .toUpperCase();
-  const text = [
-    String(i.message || ''),
-    String(i.error || ''),
-    String(i.stderr || ''),
-    String(i.body || ''),
-    String(i.cause || ''),
-  ]
-    .filter(Boolean)
-    .join('\n');
-
-  const lowerText = text.toLowerCase();
-
-  // 1. GATEWAY_DOWN: Gateway process down / connection refused on port 20128
-  if (
-    code === 'ECONNREFUSED' &&
-    (lowerText.includes('20128') ||
-      String(i.endpoint || '').includes('20128') ||
-      i.gatewayId === '9router')
-  ) {
-    return {
-      category: ErrorCategory.GATEWAY_DOWN,
-      scope: HealthScope.GATEWAY,
-      cooldownMs: 60 * 1000,
-      resetsAt: now + 60 * 1000,
-      isPermanent: false,
-      reason: 'GATEWAY_CONNECTION_REFUSED_PORT_20128',
-    };
-  }
-
-  // 2. NETWORK_DNS: DNS resolution, socket drops, network drops
-  if (
-    code === 'ENOTFOUND' ||
-    code === 'EAI_AGAIN' ||
-    code === 'ECONNRESET' ||
-    code === 'EPIPE' ||
-    /getaddrinfo (enotfound|eai_again)|dns resolution failed|socket hang up|read econnreset/i.test(
-      text
-    )
-  ) {
-    return {
-      category: ErrorCategory.NETWORK_DNS,
-      scope: HealthScope.NETWORK,
-      cooldownMs: 30 * 1000,
-      resetsAt: now + 30 * 1000,
-      isPermanent: false,
-      reason: 'NETWORK_OR_DNS_TRANSIENT_FAILURE',
-    };
-  }
-
-  // 3. TIMEOUT: Launcher or HTTP request timeout
-  if (
-    i.timedOut === true ||
-    status === 504 ||
-    code === 'ETIMEDOUT' ||
-    /timed? ?out|request timed out|gateway timeout/i.test(text)
-  ) {
-    return {
-      category: ErrorCategory.TIMEOUT,
-      scope: HealthScope.LOCAL,
-      cooldownMs: 5 * 60 * 1000,
-      resetsAt: now + 5 * 60 * 1000,
-      isPermanent: false,
-      reason: 'REQUEST_OR_LAUNCHER_TIMEOUT',
-    };
-  }
-
-  // 4. AUTH: Account authentication invalid / unauthorized
-  if (
-    status === 401 ||
-    /invalid_api_key|invalid_token|authentication failed|unauthorized|bad credentials|token expired|login required/i.test(
-      text
-    )
-  ) {
-    return {
-      category: ErrorCategory.AUTH,
-      scope: HealthScope.ACCOUNT,
-      cooldownMs: null,
-      resetsAt: null,
-      isPermanent: true,
-      reason: 'ACCOUNT_AUTHENTICATION_FAILED',
-    };
-  }
-
-  // 5. PERMISSION: 403 Forbidden / Access denied
-  if (status === 403 && !/unsupported model|model not found|no channel/i.test(text)) {
-    return {
-      category: ErrorCategory.PERMISSION,
-      scope: HealthScope.ACCOUNT,
-      cooldownMs: null,
-      resetsAt: null,
-      isPermanent: true,
-      reason: 'ACCOUNT_PERMISSION_DENIED',
-    };
-  }
-
-  // 6. QUOTA_CREDIT: Out of credits, balance exhausted, monthly quota
-  if (
-    status === 402 ||
-    (status === 400 &&
-      /credit insufficient|balance=0|insufficient balance|balance is zero/i.test(text)) ||
-    /quota exceeded|quota reached|usage limit exceeded|insufficient_quota|monthly limit exceeded|out of credits|balance=0/i.test(
-      text
-    )
-  ) {
-    const parsedReset =
-      parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
-    const cooldownMs = parsedReset ? Math.max(0, parsedReset - now) : 60 * 60 * 1000;
-    return {
-      category: ErrorCategory.QUOTA_CREDIT,
-      scope: HealthScope.QUOTA_SCOPE,
-      cooldownMs,
-      resetsAt: parsedReset || now + cooldownMs,
-      isPermanent: false,
-      reason: 'QUOTA_OR_CREDIT_EXHAUSTED',
-    };
-  }
-
-  // 7. RATE_LIMIT: Transient 429 (scoped to model/account)
-  if (status === 429) {
-    const parsedReset =
-      parseResetHint(text, now) || (i.retryAfter ? parseRetryAfter(i.retryAfter, now) : null);
-    const cooldownMs = parsedReset ? Math.max(0, parsedReset - now) : 5 * 60 * 1000;
-    return {
-      category: ErrorCategory.RATE_LIMIT,
-      scope: HealthScope.MODEL,
-      cooldownMs,
-      resetsAt: parsedReset || now + cooldownMs,
-      isPermanent: false,
-      reason: 'MODEL_RATE_LIMIT_HIT',
-    };
-  }
-
-  // 8. MODEL_NOT_FOUND: 404 Model does not exist
-  if (status === 404 || /model not found|model does not exist|unsupported model/i.test(text)) {
-    return {
-      category: ErrorCategory.MODEL_NOT_FOUND,
-      scope: HealthScope.MODEL,
-      cooldownMs: null,
-      resetsAt: null,
-      isPermanent: true,
-      reason: 'MODEL_NOT_FOUND_IN_CATALOGUE',
-    };
-  }
-
-  // 9. NO_CHANNEL: 503 No channel available for this route right now
-  if (status === 503 && /no channel|channel not serving|no available channel/i.test(text)) {
-    return {
-      category: ErrorCategory.NO_CHANNEL,
-      scope: HealthScope.ROUTE,
-      cooldownMs: 10 * 60 * 1000,
-      resetsAt: now + 10 * 60 * 1000,
-      isPermanent: false,
-      reason: 'ROUTE_NO_AVAILABLE_CHANNEL',
-    };
-  }
-
-  // 10. TASK_FAILURE: Worker code error / exit failure
-  if (i.exitCode !== undefined && Number(i.exitCode) !== 0 && !status && !code) {
-    return {
-      category: ErrorCategory.TASK_FAILURE,
-      scope: HealthScope.LOCAL,
-      cooldownMs: 0,
-      resetsAt: null,
-      isPermanent: false,
-      reason: 'WORKER_TASK_EXECUTION_FAILURE',
-    };
-  }
-
-  return {
-    category: ErrorCategory.UNKNOWN,
-    scope: HealthScope.LOCAL,
-    cooldownMs: 60 * 1000,
-    resetsAt: now + 60 * 1000,
-    isPermanent: false,
-    reason: 'UNRECOGNIZED_FAILURE_SAFE_DEFAULT',
-  };
-}
-
-function parseRetryAfter(val, now = Date.now()) {
-  if (!val) return null;
-  const s = String(val).trim();
-  if (/^\d+$/.test(s)) {
-    return now + Number(s) * 1000;
-  }
-  const parsed = Date.parse(s);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseResetHint(text, now = Date.now()) {
-  if (!text) return null;
-  const m = text.match(/(?:resets? (?:in|after)|try again in)\s+([0-9hms\s]+)/i);
-  if (!m) return null;
-  const str = m[1];
-  let totalMs = 0;
-  const hours = str.match(/(\d+)\s*h/i);
-  const minutes = str.match(/(\d+)\s*m/i);
-  const seconds = str.match(/(\d+)\s*s/i);
-
-  if (hours) totalMs += Number(hours[1]) * 3600 * 1000;
-  if (minutes) totalMs += Number(minutes[1]) * 60 * 1000;
-  if (seconds) totalMs += Number(seconds[1]) * 1000;
-
-  return totalMs > 0 ? now + totalMs : null;
-}
-
-/**
- * Scoped Health Registry.
- */
-function accountHealthKey(id) {
-  const realAccount = id.metadata?.realAccountRef;
-  const fromPrivate =
-    (realAccount && realAccount !== 'UNKNOWN' ? getPrivateEmail(realAccount) : null) ||
-    (id.accountRef && id.accountRef !== 'UNKNOWN' ? getPrivateEmail(id.accountRef) : null);
-  const account =
-    fromPrivate || (realAccount && realAccount !== 'UNKNOWN' ? realAccount : id.accountRef);
-  const observed = account && account !== 'UNKNOWN' ? account : id.connectionId;
-  const safeObserved =
-    typeof observed === 'string' && observed.includes('@') ? hashEmail(observed) : observed;
-  return JSON.stringify([
-    id.upstreamProviderId,
-    safeObserved && safeObserved !== 'UNKNOWN' ? safeObserved : id.candidateKey,
-  ]);
-}
-
-function quotaHealthKey(id) {
-  return JSON.stringify([id.upstreamProviderId, id.quotaScopeId]);
-}
-
-function modelLockHealthKey(provider, model, connectionId) {
-  return JSON.stringify([
-    String(provider || 'unknown'),
-    String(model || 'unknown'),
-    String(connectionId || '*'),
-  ]);
-}
-
-function accountModelHealthKey(id) {
-  return JSON.stringify([accountHealthKey(id), id.outboundModelId]);
-}
+const {
+  accountHealthKey,
+  quotaHealthKey,
+  modelLockHealthKey,
+  accountModelHealthKey,
+  evaluateCandidateAccounts,
+} = require('./scoped-health-eval');
 
 class ScopedHealthRegistry {
   constructor() {
-    this.gateways = new Map(); // gatewayId -> { category, resetsAt, reason }
-    this.accounts = new Map(); // provider-qualified account -> { category, resetsAt, reason }
-    this.quotaScopes = new Map(); // provider-qualified quotaScopeId -> { status, resetsAt, reason, exhausted }
-    this.catalogueModels = new Map(); // upstreamProviderId::outboundModelId -> { category, resetsAt, reason } (global catalogue 404)
-    this.accountModels = new Map(); // provider/account/model tuple -> { category, resetsAt, reason, isPermanent }
-    this.routes = new Map(); // candidateKey -> { category, resetsAt, reason }
-    this.modelLocks = new Map(); // upstreamProviderId::outboundModelId::connectionId -> lockedUntil
+    this.gateways = new Map();
+    this.accounts = new Map();
+    this.quotaScopes = new Map();
+    this.catalogueModels = new Map();
+    this.accountModels = new Map();
+    this.routes = new Map();
+    this.modelLocks = new Map();
   }
 
   recordFailure(routeIdentity, failureInput, now = Date.now()) {
@@ -325,7 +58,7 @@ class ScopedHealthRegistry {
         }
         break;
 
-      case HealthScope.ACCOUNT:
+      case HealthScope.ACCOUNT: {
         const acc = accountHealthKey(identity);
         if (acc && acc !== 'UNKNOWN') {
           this.accounts.set(acc, {
@@ -337,6 +70,7 @@ class ScopedHealthRegistry {
           });
         }
         break;
+      }
 
       case HealthScope.QUOTA_SCOPE:
         if (identity.quotaScopeId && identity.quotaScopeId !== 'UNKNOWN') {
@@ -427,116 +161,9 @@ class ScopedHealthRegistry {
     }
 
     // Check Multi-account Combo Candidate Accounts
-    const candidateAccounts = Array.isArray(id.metadata?.candidateAccounts)
-      ? id.metadata.candidateAccounts
-      : [];
-    if (candidateAccounts.length > 0) {
-      let anyHealthy = false;
-      let lastFailure = null;
-      for (const cand of candidateAccounts) {
-        const dummyId = {
-          ...id,
-          accountRef: cand.accountRef,
-          connectionId: cand.connectionId,
-          quotaScopeId: cand.quotaScopeId || id.quotaScopeId,
-        };
-        const candAccKey = accountHealthKey(dummyId);
-        const candRec =
-          this.accounts.get(candAccKey) ||
-          (cand.accountRef && cand.accountRef !== 'UNKNOWN'
-            ? this.accounts.get(cand.accountRef)
-            : null);
-        const candBlocked =
-          candRec && (candRec.isPermanent || (candRec.resetsAt && now < candRec.resetsAt));
-
-        const candQuotaKey = quotaHealthKey(dummyId);
-        const candQuotaRec =
-          this.quotaScopes.get(candQuotaKey) ||
-          (cand.quotaScopeId && cand.quotaScopeId !== 'UNKNOWN'
-            ? this.quotaScopes.get(cand.quotaScopeId)
-            : null);
-        // Elapsed resetAt requires fresh probe evidence; it does NOT treat the account as recovered
-        const candQuotaBlocked = Boolean(candQuotaRec && candQuotaRec.exhausted);
-
-        const candModelKey = accountModelHealthKey(dummyId);
-        const candModelRec = this.accountModels.get(candModelKey);
-        const candModelBlocked = Boolean(
-          candModelRec &&
-          (candModelRec.isPermanent || (candModelRec.resetsAt && now < candModelRec.resetsAt))
-        );
-
-        // Per-connection and wildcard model locks
-        const candLockKey = modelLockHealthKey(
-          dummyId.upstreamProviderId,
-          dummyId.outboundModelId,
-          dummyId.connectionId
-        );
-        const candWildcardKey = modelLockHealthKey(
-          dummyId.upstreamProviderId,
-          dummyId.outboundModelId,
-          '*'
-        );
-        let candConnLock = this.modelLocks.get(candLockKey);
-        if (candConnLock && now > candConnLock) {
-          this.modelLocks.delete(candLockKey);
-          candConnLock = null;
-        }
-        let candWildcardLock = this.modelLocks.get(candWildcardKey);
-        if (candWildcardLock && now > candWildcardLock) {
-          this.modelLocks.delete(candWildcardKey);
-          candWildcardLock = null;
-        }
-        const candLockUntil =
-          (candConnLock && now <= candConnLock ? candConnLock : null) ||
-          (candWildcardLock && now <= candWildcardLock ? candWildcardLock : null);
-        const candLockBlocked = Boolean(candLockUntil);
-
-        if (!candBlocked && !candQuotaBlocked && !candModelBlocked && !candLockBlocked) {
-          anyHealthy = true;
-          break;
-        }
-        if (candLockBlocked) {
-          lastFailure = {
-            category: ErrorCategory.RATE_LIMIT,
-            scope: 'model_lock',
-            reason: 'MODEL_LOCK_ACTIVE',
-            resetsAt: candLockUntil,
-          };
-        } else if (candModelBlocked) {
-          lastFailure = candModelRec;
-        } else if (
-          candQuotaBlocked &&
-          candQuotaRec &&
-          candQuotaRec.resetsAt &&
-          now > candQuotaRec.resetsAt
-        ) {
-          lastFailure = {
-            category: ErrorCategory.QUOTA_CREDIT,
-            scope: HealthScope.QUOTA_SCOPE,
-            reason: 'RESET_ELAPSED_PROBE_NEEDED',
-            resetsAt: null,
-          };
-        } else {
-          lastFailure =
-            candRec ||
-            (candQuotaBlocked
-              ? {
-                  category: ErrorCategory.QUOTA_CREDIT,
-                  scope: HealthScope.QUOTA_SCOPE,
-                  reason: candQuotaRec?.reason || 'QUOTA_EXHAUSTED',
-                }
-              : null);
-        }
-      }
-      if (!anyHealthy) {
-        return {
-          healthy: false,
-          blockedBy: lastFailure?.scope || HealthScope.ACCOUNT,
-          category: lastFailure?.category || ErrorCategory.AUTH,
-          reason: lastFailure?.reason || 'ALL_CANDIDATE_ACCOUNTS_UNHEALTHY',
-          resetsAt: lastFailure?.resetsAt || null,
-        };
-      }
+    const candidateAccountsResult = evaluateCandidateAccounts(this, id, now);
+    if (candidateAccountsResult && !candidateAccountsResult.healthy) {
+      return candidateAccountsResult;
     }
 
     // 3. Check Quota Scope
@@ -544,12 +171,9 @@ class ScopedHealthRegistry {
       const qRec = this.quotaScopes.get(quotaHealthKey(id));
       if (qRec && qRec.exhausted) {
         if (qRec.resetsAt && now > qRec.resetsAt) {
-          // Reset time has elapsed: mark probe needed, DO NOT return early healthy!
-          // We must still check Model and Lock!
           quotaProbeNeeded = true;
           quotaResetAt = qRec.resetsAt;
         } else {
-          // Actively exhausted
           return {
             healthy: false,
             blockedBy: HealthScope.QUOTA_SCOPE,
@@ -632,7 +256,7 @@ class ScopedHealthRegistry {
       };
     }
 
-    // 8. If quota reset elapsed, candidate requires probe before dispatch!
+    // 8. If quota reset elapsed, candidate requires probe before dispatch
     if (quotaProbeNeeded) {
       return {
         healthy: false,

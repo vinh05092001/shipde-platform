@@ -1,211 +1,35 @@
-const crypto = require('crypto');
-const ROUTE_IDENTITY_DATA = require('../../config/route-identity.json');
-('use strict');
+'use strict';
 
 /**
- * Ship Dễ — Route Identity Specification (PATCH 1 - Fixed per Codex Review)
+ * Ship Dễ — Route Identity Specification
  *
  * Normalizes route identity across all pathways:
- * 1. 9router pathway: harness (http/opencode) -> gateway (9router) -> upstream connection -> outbound model
- * 2. Direct external pathway: harness (opencode/codex/direct-http) -> gateway (direct/none) -> direct provider -> outbound model
+ * 1. 9router pathway: harness -> gateway (9router) -> upstream connection -> outbound model
+ * 2. Direct external pathway: harness -> gateway (direct) -> direct provider -> outbound model
  * 3. AGY pool pathway: harness (agy-pool) -> Scheduled Task -> lane (agy01..agy10) -> agy.exe
- *
- * Fixes for Codex Review:
- * - Unambiguous key encoding: every component is escaped so components containing '::'
- *   (such as quotaScopeId 'quota::google::user') do NOT break component splitting.
- * - Non-colliding candidate keys: preserves sourceId and connectionId alongside accountRef
- *   so distinct sources/connections never collide.
  */
 
-const GATEWAY_PREFIX_SEPARATOR = '::';
-const UNKNOWN = 'UNKNOWN';
+const {
+  UNKNOWN,
+  GATEWAY_PREFIX_SEPARATOR,
+  DEFAULT_PREFIX_TO_PROVIDER,
+  PREFIX_PROVIDER_MAP,
+  QUOTA_FAMILY_BY_GROUP,
+  getQuotaFamily,
+  escapePart,
+  unescapePart,
+  distinguishPathway,
+  resolveModelPrefix,
+  registerPrivateEmail,
+  getPrivateEmail,
+  hashEmail,
+  maskEmailsInString,
+  sanitizeMetadata,
+  getQuotaGroup,
+} = require('./route-identity-utils');
 
-// Known provider prefixes for 9router, loaded from the versioned route identity data.
-const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
-  ...ROUTE_IDENTITY_DATA.prefixToProvider,
-});
+const { expandComboIdentity } = require('./route-identity-combo');
 
-const PREFIX_PROVIDER_MAP = DEFAULT_PREFIX_TO_PROVIDER;
-
-// Quota group -> quota family aliases, loaded from the same versioned data.
-const QUOTA_FAMILY_BY_GROUP = Object.freeze({
-  ...ROUTE_IDENTITY_DATA.quotaFamilies,
-});
-
-function getQuotaFamily(group) {
-  if (group === null || group === undefined) return group;
-  return QUOTA_FAMILY_BY_GROUP[group] || group;
-}
-
-function escapePart(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/%/g, '%25')
-    .replace(/:/g, '%3A')
-    .replace(/\u241f/g, '%241F');
-}
-
-function unescapePart(str) {
-  if (str === null || str === undefined) return '';
-  return String(str).replace(/%3A/g, ':').replace(/%241F/g, '\u241f').replace(/%25/g, '%');
-}
-
-/**
- * Distinguishes the primary execution pathway of a route.
- */
-const PRIVATE_ACCOUNT_EMAIL_MAP = new Map();
-const PRIVATE_SALT = 'shipde-route-identity-salt-v1';
-
-function hashEmail(email) {
-  const normalized = String(email || '')
-    .trim()
-    .toLowerCase();
-  return crypto
-    .createHash('sha256')
-    .update(PRIVATE_SALT + '::' + normalized)
-    .digest('hex')
-    .slice(0, 10);
-}
-
-function registerPrivateEmail(key, email) {
-  if (!key || !email) return;
-  const k = String(key).trim();
-  const e = String(email).trim().toLowerCase();
-  if (e.includes('@')) {
-    // Bindings are per (lane, account) and never rewritten for existing identities.
-    PRIVATE_ACCOUNT_EMAIL_MAP.set(k, e);
-    PRIVATE_ACCOUNT_EMAIL_MAP.set(k.toLowerCase(), e);
-    const hash = hashEmail(e);
-    PRIVATE_ACCOUNT_EMAIL_MAP.set(hash, e);
-    PRIVATE_ACCOUNT_EMAIL_MAP.set(e, hash);
-  }
-}
-
-function getPrivateEmail(key) {
-  if (!key) return null;
-  const k = String(key).trim();
-  return PRIVATE_ACCOUNT_EMAIL_MAP.get(k) || PRIVATE_ACCOUNT_EMAIL_MAP.get(k.toLowerCase()) || null;
-}
-
-function maskEmailsInString(str) {
-  if (!str || typeof str !== 'string') return str;
-  return str.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, (match) => {
-    registerPrivateEmail(hashEmail(match), match);
-    return hashEmail(match);
-  });
-}
-
-function sanitizeMetadata(meta) {
-  if (!meta || typeof meta !== 'object') return meta;
-  const out = {};
-  for (const [k, v] of Object.entries(meta)) {
-    // Property names (keys) must be sanitized so email addresses are never copied into keys
-    const safeKey = typeof k === 'string' && k.includes('@') ? maskEmailsInString(k) : k;
-
-    if (
-      safeKey === 'realAccountRef' ||
-      safeKey === 'accountRef' ||
-      safeKey === 'originalQuotaScope'
-    ) {
-      if (typeof v === 'string' && v.includes('@')) {
-        registerPrivateEmail(hashEmail(v), v);
-        out[safeKey] = hashEmail(v);
-      } else {
-        out[safeKey] = v;
-      }
-    } else if (typeof v === 'string' && v.includes('@')) {
-      registerPrivateEmail(hashEmail(v), v);
-      out[safeKey] = maskEmailsInString(v);
-    } else if (Array.isArray(v)) {
-      out[safeKey] = v.map((item) =>
-        typeof item === 'object'
-          ? sanitizeMetadata(item)
-          : typeof item === 'string' && item.includes('@')
-            ? (registerPrivateEmail(hashEmail(item), item), hashEmail(item))
-            : item
-      );
-    } else if (v && typeof v === 'object') {
-      out[safeKey] = sanitizeMetadata(v);
-    } else {
-      out[safeKey] = v;
-    }
-  }
-  return out;
-}
-
-function getQuotaGroup(id) {
-  if (id?.metadata?.quotaGroup) return id.metadata.quotaGroup;
-  if (id?.metadata?.quotaFamily) {
-    const f = String(id.metadata.quotaFamily).toLowerCase();
-    if (f.includes('argon')) return 'argon';
-    if (f.includes('gemini')) return 'gemini';
-    if (f.includes('claude') || f.includes('gpt') || f.includes('3p') || f.includes('external'))
-      return 'external';
-    return f;
-  }
-  const m = String(id?.outboundModelId || id?.configuredModelId || '').toLowerCase();
-  if (/argon/i.test(m)) return 'argon';
-  if (m.includes('gemini')) return 'gemini';
-  const prov = String(id?.upstreamProviderId || id?.sourceId || '').toLowerCase();
-  if (prov.includes('antigravity') || prov.includes('agy')) {
-    if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet'))
-      return 'external';
-    return 'external';
-  }
-  return undefined;
-}
-function distinguishPathway(identity) {
-  if (!identity) return UNKNOWN;
-  const h = String(identity.harness || '').toLowerCase();
-  const s = String(identity.sourceId || '').toLowerCase();
-  const g = String(identity.gatewayId || '').toLowerCase();
-  const acc = String(identity.accountRef || identity.account || '').toLowerCase();
-
-  // 1. AGY pool pathway
-  if (h === 'agy-pool' || s.startsWith('agy') || /^agy\d{2}$/i.test(acc)) {
-    return 'AGY_POOL';
-  }
-
-  // 2. 9router pathway
-  if (g === '9router' || s === '9router' || identity.isVia9Router === true) {
-    return '9ROUTER';
-  }
-
-  // 3. Direct external pathway (OpenCode direct, Codex direct, direct HTTP)
-  return 'DIRECT';
-}
-
-/**
- * Strips provider prefix if present, resolving upstream provider and outbound model.
- * Preserves multi-slash models (e.g. cf/@cf/meta/llama-3.3-70b-instruct-fp8-fast).
- */
-function resolveModelPrefix(modelId, customAliases = {}) {
-  const m = String(modelId || '').trim();
-  if (!m) {
-    return { prefix: null, upstreamProviderId: UNKNOWN, outboundModelId: UNKNOWN };
-  }
-
-  const slashIdx = m.indexOf('/');
-  if (slashIdx === -1) {
-    const p = customAliases[m] || DEFAULT_PREFIX_TO_PROVIDER[m] || m;
-    return { prefix: null, upstreamProviderId: p, outboundModelId: m };
-  }
-
-  const prefix = m.slice(0, slashIdx);
-  const remainder = m.slice(slashIdx + 1);
-  const resolvedProvider = customAliases[prefix] || DEFAULT_PREFIX_TO_PROVIDER[prefix] || prefix;
-
-  return {
-    prefix,
-    upstreamProviderId: resolvedProvider,
-    outboundModelId: remainder,
-  };
-}
-
-/**
- * Creates a normalized route identity object with all standard fields.
- * Any unobserved field is strictly initialized to UNKNOWN (never invented).
- */
 function createRouteIdentity(input) {
   if (!input || typeof input !== 'object') {
     throw new TypeError('Route identity input must be an object');
@@ -284,11 +108,6 @@ function createRouteIdentity(input) {
   return Object.freeze(identity);
 }
 
-/**
- * Formats a canonical 9-part candidateKey:
- * harness::sourceId::gatewayId::upstream::connectionId::accountRef::quotaScope::configuredModelId::outboundModelId
- * Every part is escaped so components with '::' never break parsing.
- */
 function canonicalCandidateKey(identity) {
   const i = identity || {};
   const harness = i.harness || UNKNOWN;
@@ -316,16 +135,11 @@ function canonicalCandidateKey(identity) {
     .join(GATEWAY_PREFIX_SEPARATOR);
 }
 
-/**
- * Parses a candidate key back into a RouteIdentity.
- * Handles both 9-part escaped keys and legacy 7-part / 6-part keys.
- */
 function parseRouteIdentity(key, defaults = {}) {
   if (typeof key !== 'string') return null;
 
   const rawParts = key.includes('::') ? key.split('::') : key.split('\u241f');
 
-  // If 9 parts (canonical escaped format)
   if (rawParts.length === 9) {
     const p = rawParts.map(unescapePart);
     return createRouteIdentity({
@@ -342,7 +156,6 @@ function parseRouteIdentity(key, defaults = {}) {
     });
   }
 
-  // Legacy 7-part format: harness::accessPath::gateway::upstream::account::quotaScope::modelId
   if (rawParts.length === 7) {
     const p = rawParts.map(unescapePart);
     return createRouteIdentity({
@@ -358,7 +171,6 @@ function parseRouteIdentity(key, defaults = {}) {
     });
   }
 
-  // Legacy 6-part format
   if (rawParts.length === 6) {
     const p = rawParts.map(unescapePart);
     return createRouteIdentity({
@@ -377,10 +189,6 @@ function parseRouteIdentity(key, defaults = {}) {
   return null;
 }
 
-/**
- * Links shared quota scopes across routes that share the same provider/account.
- * Explicit accountLinks keys are JSON.stringify([upstreamProviderId, realAccountRef]).
- */
 function linkSharedQuotaScopes(identities, accountLinks) {
   if (!Array.isArray(identities)) return [];
   const links =
@@ -391,7 +199,6 @@ function linkSharedQuotaScopes(identities, accountLinks) {
         : new Map();
 
   function resolveRealAccount(id) {
-    // Link by private salted hash, NEVER by lane id alone
     const realRef = id.metadata?.realAccountRef;
     if (realRef && realRef !== UNKNOWN) {
       const fromReal = getPrivateEmail(realRef);
@@ -411,7 +218,6 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     return getPrivateEmail(rawAcc) || rawAcc;
   }
 
-  // Auto-detect identical accounts for any account not explicitly mapped in links
   const accountOccurrences = new Map();
   for (const id of identities) {
     const account = resolveRealAccount(id);
@@ -437,7 +243,6 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     const parsedKey = JSON.parse(key);
     const [prov, account, qGroup] = parsedKey;
     const baseKey = JSON.stringify([prov, account]);
-    // Auto-detect if not already explicitly mapped
     if (!links.has(key) && !links.has(baseKey) && !links.has(account) && ids.length > 1) {
       const safeAccount = String(account).includes('@') ? hashEmail(account) : account;
       const canonicalScope = qGroup
@@ -485,52 +290,6 @@ function linkSharedQuotaScopes(identities, accountLinks) {
     return id;
   });
 }
-function expandComboIdentity(comboIdentity, constituentModels, candidateAccountMap = {}) {
-  if (!comboIdentity) return null;
-  const parent = comboIdentity.candidateKey ? comboIdentity : createRouteIdentity(comboIdentity);
-
-  const branches = (constituentModels || []).map((m, index) => {
-    const modelStr = typeof m === 'string' ? m : m.modelId || m.configuredModelId || m.id;
-    const { prefix, upstreamProviderId, outboundModelId } = resolveModelPrefix(modelStr);
-
-    const eligibleAccounts = candidateAccountMap[upstreamProviderId] || [];
-
-    return createRouteIdentity({
-      harness: parent.harness,
-      sourceId: parent.sourceId,
-      gatewayId: parent.gatewayId,
-      upstreamProviderId,
-      configuredModelId: modelStr,
-      outboundModelId,
-      accountRef: eligibleAccounts.length === 1 ? eligibleAccounts[0].accountRef : UNKNOWN,
-      connectionId: eligibleAccounts.length === 1 ? eligibleAccounts[0].connectionId : UNKNOWN,
-      quotaScopeId: eligibleAccounts.length === 1 ? eligibleAccounts[0].quotaScopeId : UNKNOWN,
-      isCombo: false,
-      metadata: {
-        parentCombo: parent.configuredModelId,
-        branchIndex: index + 1,
-        totalCandidatesForProvider: eligibleAccounts.length,
-        ...(typeof m === 'object' ? m : {}),
-        ...(typeof m === 'object' ? m.metadata : {}),
-        capabilities: m.capabilities ?? m.metadata?.capabilities ?? [],
-        candidateAccounts: eligibleAccounts.map((a) => ({
-          connectionId: a.connectionId || UNKNOWN,
-          accountRef: a.accountRef || UNKNOWN,
-          priority: a.priority ?? UNKNOWN,
-          quotaScopeId:
-            a.quotaScopeId ||
-            `quota::${upstreamProviderId}::${a.accountRef || a.connectionId || UNKNOWN}`,
-        })),
-      },
-    });
-  });
-
-  return createRouteIdentity({
-    ...parent,
-    isCombo: true,
-    comboBranches: branches,
-  });
-}
 
 module.exports = {
   UNKNOWN,
@@ -552,5 +311,6 @@ module.exports = {
   getPrivateEmail,
   hashEmail,
   maskEmailsInString,
+  sanitizeMetadata,
   getQuotaGroup,
 };

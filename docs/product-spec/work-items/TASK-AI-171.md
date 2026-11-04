@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-167` |
 | Assigned author | `AGY` |
 | Risk | `LOW` |
-| Allowed paths | `tools/ai-brain/route-identity.js`; `tools/ai-brain/scoped-health.js`; `tools/ai-brain/unified-selector.js`; `tools/ai-brain/candidate-adapters.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/test/unified-routing-offline.test.js`; `docs/product-spec/work-items/TASK-AI-171.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
+| Allowed paths | `tools/ai-brain/route-identity.js`; `tools/ai-brain/route-identity-utils.js`; `tools/ai-brain/route-identity-combo.js`; `tools/ai-brain/scoped-health.js`; `tools/ai-brain/scoped-health-classifier.js`; `tools/ai-brain/scoped-health-eval.js`; `tools/ai-brain/unified-selector.js`; `tools/ai-brain/unified-selector-admission.js`; `tools/ai-brain/unified-selector-jev.js`; `tools/ai-brain/candidate-adapters.js`; `tools/ai-brain/candidate-adapters-common.js`; `tools/ai-brain/candidate-adapters-direct.js`; `tools/ai-brain/candidate-adapters-agy.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/test/unified-routing-offline.test.js`; `docs/product-spec/work-items/TASK-AI-171.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/routing-core-selection` |
 | Pull Request | `N/A — authoring stage` |
@@ -126,20 +126,16 @@ N/A — Backend routing and AI brain toolchain; no user interface is modified.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| AC-AI-171-01 | Criterion 1: Cùng model, hai account | Account A auth failure isolates to Account A; Account B remains healthy | unit test (`unified-routing-offline.test.js:79`) |
-| AC-AI-171-02 | Criterion 2: Hai đường chung quota | Shared account across 9router and AGY pool shares single quota scope | unit test (`unified-routing-offline.test.js:121`) |
-| AC-AI-171-03 | Criterion 3: DNS không biến thành login-required | DNS failure is classified as NETWORK_DNS with transient cooldown, not AUTH | unit test (`unified-routing-offline.test.js:167`) |
-| AC-AI-171-04 | Criterion 4: Gateway tắt không đánh chết upstream qua đường trực tiếp | ECONNREFUSED on port 20128 blocks 9router gateway, leaving direct route healthy | unit test (`unified-routing-offline.test.js:184`) |
-| AC-AI-171-05 | Criterion 5: ResetAt đã qua và lock đã hết hạn | Expired resetAt requires fresh probe and does not bypass locks; expired lock cleared | unit test (`unified-routing-offline.test.js:221`) |
-| AC-AI-171-06 | Criterion 6: Model ID nhiều dấu slash | Preserves multiple slashes and casing without mutilation | unit test (`unified-routing-offline.test.js:271`) |
-| AC-AI-171-07 | Criterion 7: Combo identity và ràng buộc | Combo retains constituent branches and evaluates branch health/capabilities | unit test (`unified-routing-offline.test.js:289`) |
-| AC-AI-171-08 | Criterion 8: Candidate từ cả ba đường | Aggregates and selects across 9router, direct provider, and AGY pool | unit test (`unified-routing-offline.test.js:327`) |
-| AC-AI-171-09 | Criterion 9: JEV cache hit/miss và undecided | JEV advisory caches properly and falls back deterministically on UNDECIDED | unit test (`unified-routing-offline.test.js:375`) |
-| AC-AI-171-10 | Criterion 10: Budget và context interface | Emits structured budget contract with tokenBudget precedence | unit test (`unified-routing-offline.test.js:408`) |
-| AC-AI-171-11 | Codex Finding 1: Production defaults no fixtures | Unconfigured paths return empty candidates with clear unconnected reasons | unit test (`unified-routing-offline.test.js:453`) |
-| AC-AI-171-12 | Codex Finding 2: Unknown cost ceiling rejection | Candidate with unknown cost strictly rejected by ceiling; no score invention | unit test (`unified-routing-offline.test.js:470`) |
-| AC-AI-171-13 | Codex Findings 6, 7: Non-colliding keys & escaping | Colons escaped in keys, connectionId preserved, raw email masked | unit test (`unified-routing-offline.test.js:619`, `643`) |
-| AC-AI-171-14 | Codex Finding 9: JEV advisory contract | JEV naming candidate identity strictly rejected as IDENTITY_PROHIBITED | unit test (`unified-routing-offline.test.js:716`) |
+| AC-AI-171-01 | Criterion 1: Cùng model, hai account | Account A auth failure isolates to Account A; Account B remains healthy | unit test (`unified-routing-offline.test.js:26`) |
+| AC-AI-171-02 | Criterion 2: Hai đường chung quota | Shared account across 9router and AGY pool shares single quota scope | unit test (`unified-routing-offline.test.js:59`) |
+| AC-AI-171-03 | Criterion 3: DNS không biến thành login-required | DNS failure is classified as NETWORK_DNS with transient cooldown, not AUTH | unit test (`unified-routing-offline.test.js:93`) |
+| AC-AI-171-04 | Criterion 4: Gateway tắt không đánh chết upstream qua đường trực tiếp | ECONNREFUSED on port 20128 blocks 9router gateway, leaving direct route healthy | unit test (`unified-routing-offline.test.js:104`) |
+| AC-AI-171-05 | Criterion 5: ResetAt đã qua và lock đã hết hạn | Expired resetAt requires fresh probe and does not bypass locks; expired lock cleared | unit test (`unified-routing-offline.test.js:134`) |
+| AC-AI-171-06 | Criterion 6: Model ID nhiều dấu slash | Preserves multiple slashes and casing without mutilation | unit test (`unified-routing-offline.test.js:160`) |
+| AC-AI-171-07 | Criterion 7: Combo identity và ràng buộc | Combo retains constituent branches and evaluates branch health/capabilities | unit test (`unified-routing-offline.test.js:174`) |
+| AC-AI-171-08 | Criterion 8: Candidate từ cả ba đường | Aggregates and selects across 9router, direct provider, and AGY pool | unit test (`unified-routing-offline.test.js:202`) |
+| AC-AI-171-09 | Criterion 9: JEV cache hit/miss và undecided | JEV advisory caches properly and falls back deterministically on UNDECIDED | unit test (`unified-routing-offline.test.js:253`) |
+| AC-AI-171-10 | Criterion 10: Budget và context interface | Emits structured budget contract with tokenBudget precedence | unit test (`unified-routing-offline.test.js:286`) |
 
 ## Task breakdown
 
