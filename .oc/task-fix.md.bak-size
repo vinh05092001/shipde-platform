@@ -1,0 +1,40 @@
+ROLE: You are the AUTHOR for this Work Item under AGENTS.md. You do not review or declare PASS; Codex reviews independently. Never merge.
+SCOPE (strict):
+
+- If this file contains a section headed "root-cause" (or "root cause"), THAT SECTION OVERRIDES everything else: implement the redesign it describes, even if it restructures, shrinks or rewrites the named files; the findings in .oc/review.txt are symptoms the redesign must make disappear, do NOT patch them one by one. Otherwise: fix ONLY the P0/P1 findings listed in .oc/review.txt at the file:line each names; no unrelated refactor.
+- Touch only the files the findings name, plus the test file that proves each fix. Do not read the whole repo: read those files and their direct imports.
+- Each fix: first a test that fails without it, then the minimal fix, then run ONLY that test file (plus pnpm lint/typecheck if app code changed).
+- If a finding needs a product decision the specs do not make: write NEEDS_DECISION under Known limitations; do not invent.
+- If .oc/context-pack.md exists, use it as your context instead of exploring.
+- Before every commit run `pnpm security:secrets`; test fixtures must use obviously fake values (e.g. `test-not-a-key`), never key-shaped strings. Register row: delivery_order is assigned by the coordinator (see your row); never change it, and when merging main keep both rows.
+- TOKEN SAVING (keep meaning): if MCP tools jcodemunch/serena are available, look up functions/symbols/references with them instead of reading whole files (measured ~4-20x fewer tokens). Pipe long passing command output through `rtk` (e.g. `rtk pnpm lint`); for a FAILING test or evidence log use raw output, never compressed.
+
+---
+
+# TASK-AI-169 — root cause: run-ledger duplicates the ledger that work-guard already owns
+
+WHERE: tools/ai-brain/run-ledger.js (whole file: admit :115, record :203/:453, isPlaceholder migration, own goal rollups, maskCredentials :16).
+WRONG: 60 rounds of findings all come from run-ledger keeping a SECOND budget model on the same file as work-guard's ProgressLedger (merged in #503): placeholder migration moves exhausted budget between items; goal rollups race with work-guard's totals; `__proto__` item ids hit a plain object; regex URL masking misses `HTTPS://user:pass@`.
+GOAL (Work Item TASK-AI-169 "one budget ledger and execution chain"): run-ledger is a THIN adapter over ProgressLedger (tools/ai-brain/work-guard.js, PASSed, do NOT edit):
+
+- admission/caps/attempt counting/goal totals = call ProgressLedger reserve/record/admit only; delete isPlaceholder, migration, and any separate items/goals counters in run-ledger.
+- run-ledger only adds the execution-chain metadata (writer→review→repair links, layer, verdict) stored under its own key that the validator ignores, keyed with Object.create(null) or a Map, rejecting `__proto__`/`constructor`/`prototype` ids.
+- credential masking: parse with `new URL()` (scheme case-insensitive) and blank username/password; fall back to a case-insensitive regex for non-URL strings.
+  Expect the file to SHRINK substantially.
+  VERIFY: existing run-ledger tests stay green (rewrite ones that asserted the removed placeholder behaviour); add tests for the 4 reviewer scenarios above (item A/B same attempt id cap=1 → B refused or A still exhausted; late goal rollup counted once; `HTTPS://user:pass123@…` masked; `__proto__` item id refused). Run node --test tools/ai-brain/test/run-ledger.test.js tools/ai-brain/test/work-guard.test.js, pnpm test:brain, pnpm format:check, pnpm run security:secrets.
+
+## Required tools for this task (log each use in .oc/tools-used.txt, one line: tool + what for)
+- serena find_symbol + find_referencing_symbols for ProgressLedger (work-guard.js) and every RunLedger method — map callers before shrinking run-ledger.js.
+- rtk for long passing test output; raw output for failures.
+
+## Library to use (operator-approved 04/11; replaces hand-written code — pin an exact version, commit lockfile)
+- fast-redact (latest 3.x): `pnpm add -w fast-redact` for masking route endpoints/credentials in ledger metadata, with an explicit path allowlist; plus `new URL()` for userinfo. Delete the custom regex masking.
+
+- REUSE FIRST (operator 04/11): before writing any parser, sanitizer/redactor, URL/state sync, network guard, retry/queue, date/money/format helper or UI widget, search for a maintained library or an attached repo (manifest, context7.js, npm/GitHub) and USE it. Hand-write only if none fits, and say why in .oc/tools-used.txt ("no-lib: <reason>"). New dependencies are allowed when they are well-maintained (recent release, real user base, OSI licence), pinned to an exact version with the lockfile committed; never for auth/tenant/money logic without the Work Item naming it.
+
+## root-cause (reference implementation, 04/11) — adapt, do not invent
+Design reference (Python, read only): github.com/arieradle/shekel (per-run budget context, warn at threshold, raise at cap, tool-call counting) and github.com/darshjme/agent-budget (multi-scope per-session caps, thread-safe). Mirror their single-owner budget model: ONE ledger owner (our ProgressLedger) and thin wrappers; no second counter set.
+Clone read-only to C:/Users/gumac/AI/ref/<name> (git clone --depth 1), read the named parts, adapt to our files; respect licence and credit the source in a header comment; log reference + what was adapted in .oc/tools-used.txt.
+
+## root-cause (USE THE PACKAGE, 04/11 12:10) — masking
+`fast-redact@3.5.0` (MIT) is on npm: `pnpm add -w fast-redact@3.5.0`. Use it for ledger metadata masking with an explicit path list (e.g. ['*.endpoint','*.headers.authorization','*.apiKey','*.token']), plus `new URL()` to blank username/password in endpoint strings. Delete the hand-written regex masking. The ledger itself stays a thin adapter over ProgressLedger (sections above).

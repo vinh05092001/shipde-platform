@@ -1,0 +1,24 @@
+VERDICT: CHANGES_REQUIRED
+
+1. **P1 — push gate refused this branch (SKIP p-task-ai-169 bad=0 g=0).** Fix before anything else:
+.oc/history-before-root-0408.md:93: trailing whitespace.
++1. **WHERE:** tools/ai-brain/run-ledger.js:199 (`RunLedger.record`) — NEW P1  
+.oc/history-before-root-0408.md:94: trailing whitespace.
++   **WRONG:** With `item.attempts=1`, record `a1`, then record distinct `a2` with `force:true`; both succeed and the counter becomes 2.  
+.oc/history-before-root-0408.md:95: trailing whitespace.
++   **GOAL:** BR-LEDGER-08 requires excess distinct attempts to return `ATTEMPTS_EXHAUSTED`; the Work Item provides no caller-controlled budget bypass.  
+.oc/history-before-root-0408.md:98: trailing whitespace.
++2. **WHERE:** tools/ai-brain/run-ledger.js:208 (`RunLedger.record`) — NEW P1  
+.oc/history-before-root-0408.md:99: trailing whitespace.
++   **WRONG:** Record `a1` with `ms:800`, then `a2` with `ms:-600`; the persisted elapsed budget falls to 200, allowing additional execution against a 1000 ms cap.  
+.oc/history-before-root-0408.md:100: trailing whitespace.
++   **GOAL:** Shared elapsed accounting must accumulate execution time, never allow a negative measurement to restore budget.  
+.oc/history-before-root-0408.md:103: trailing whitespace.
++3. **WHERE:** tools/ai-brain/run-ledger.js:297 (`RunLedger.record`) — NEW P1  
+.oc/history-before-root-0408.md:104: trailing whitespace.
++   **WRONG:** Record `{attemptId:'a1', retryLayer:'gateway'}` without `itemId`, then the same identifier through `cli`; the temporary item’s deduplication state is never persisted, so global attempts becomes 2.  
+.oc/history-before-root-0408.md:105: trailing whitespace.
++   **GOAL:** BR-LEDGER-01 permits records identified by an attempt or job; BR-LEDGER-04 requires the same attempt to consume one budget attempt across layers.  
+.oc/history-before-root-0408.md:108: trailing whitespace.
++4. **WHERE:** tools/ai-brain/run-ledger.js:296 (`RunLedger.record`) — NEW P1  
+Commit subjects must contain AI-169; leftover conflict markers must be resolved.
