@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-167` |
 | Assigned author | `AGY` |
 | Risk | `LOW` |
-| Allowed paths | `tools/ai-brain/run-ledger.js`; `tools/ai-brain/test/run-ledger.test.js`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/work-items/TASK-AI-169.md`; `.oc/pr-body.md` |
+| Allowed paths | `tools/ai-brain/run-ledger.js`; `tools/ai-brain/run-ledger-helpers.js`; `tools/ai-brain/test/run-ledger.test.js`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `docs/product-spec/work-items/TASK-AI-169.md`; `.oc/pr-body.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/task-ai-169-run-ledger` |
 | Pull Request | `Set when opened` |
