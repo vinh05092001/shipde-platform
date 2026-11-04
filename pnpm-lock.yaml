@@ -17,9 +17,9 @@ importers:
 
   .:
     dependencies:
-      request-filtering-agent:
-        specifier: 3.2.1
-        version: 3.2.1
+      ssrf-guard:
+        specifier: 1.0.0
+        version: 1.0.0
     devDependencies:
       '@ast-grep/cli':
         specifier: 0.51.0
@@ -4012,10 +4012,6 @@ packages:
     resolution: {integrity: sha512-dYqgNSZbDwkaJ2ceRd9ojCGjBq+mOm9LmtXnAnEGyHhN/5R7iDW2TRw3h+o/jCFxus3P2LfWIIiwowAjANm7IA==}
     engines: {node: '>= 0.4'}
 
-  request-filtering-agent@3.2.1:
-    resolution: {integrity: sha512-NUz5G9n6GRSgB9JNurHCeeJX60s+qxL/DKTPjC6+fXrQ20w7iQy+ST6h4hKjeu1AjfH7FtIV+uw5eOq4CqWe8Q==}
-    engines: {node: '>=20.0.0'}
-
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
     engines: {node: '>=0.10.0'}
@@ -4222,6 +4218,10 @@ packages:
 
   sprintf-js@1.0.3:
     resolution: {integrity: sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==}
+
+  ssrf-guard@1.0.0:
+    resolution: {integrity: sha512-DpXh/QQIcyQqP8YtSL0fI0+0z7P02rBCBORj+YCh8UZd0qdGl/1xuQp15MAXjPHjpSdx+mML+iIwCSdRxfb1zQ==}
+    engines: {node: '>=24'}
 
   stable-hash@0.0.5:
     resolution: {integrity: sha512-+L3ccpzibovGXFK+Ap/f8LOS0ahMrHTf3xu7mMLSpEGU0EO9ucaysSylKo9eRDFNhWve/y275iPmIZ4z39a9iA==}
@@ -4518,6 +4518,10 @@ packages:
 
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+
+  undici@8.12.3:
+    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+    engines: {node: '>=22.19.0'}
 
   unique-string@2.0.0:
     resolution: {integrity: sha512-uNaeirEPvpZWSgzwsPGtU2zVSTrn/8L5q/IexZmH0eH6SA73CmAA5U4GwORTxQAZs95TAXLNqeLoPPNO5gZfWg==}
@@ -8645,10 +8649,6 @@ snapshots:
       gopd: 1.2.0
       set-function-name: 2.0.2
 
-  request-filtering-agent@3.2.1:
-    dependencies:
-      ipaddr.js: 2.5.0
-
   require-directory@2.1.1: {}
 
   require-from-string@2.0.2: {}
@@ -8939,6 +8939,11 @@ snapshots:
       jpeg-js: 0.4.4
 
   sprintf-js@1.0.3: {}
+
+  ssrf-guard@1.0.0:
+    dependencies:
+      ipaddr.js: 2.5.0
+      undici: 8.12.3
 
   stable-hash@0.0.5: {}
 
@@ -9301,6 +9306,8 @@ snapshots:
       which-boxed-primitive: 1.1.1
 
   undici-types@6.21.0: {}
+
+  undici@8.12.3: {}
 
   unique-string@2.0.0:
     dependencies:

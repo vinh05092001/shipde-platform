@@ -51,7 +51,7 @@
     "guard:status": "node tools/ai-guard/cli.js status"
   },
   "dependencies": {
-    "request-filtering-agent": "3.2.1"
+    "ssrf-guard": "1.0.0"
   },
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",

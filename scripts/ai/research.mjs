@@ -8,14 +8,12 @@ import { isIP, isIPv4, isIPv6 } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ipaddr from 'ipaddr.js';
-import { useAgent } from 'request-filtering-agent';
+import { isPrivateIp as ssrfGuardIsPrivateIp } from 'ssrf-guard';
+import { safeFetch, UnsafeUrlError } from 'ssrf-guard/node';
 
 // Network boundary references & attribution:
-// - Pinned-IP socket connection and per-hop manual redirect validation adapted from
-//   github.com/jonathanong/ssrf-guard (MIT license, Copyright (c) 2024 Jonathan Ong).
-// - Request filtering agent and connect-time IP validation adapted from
-//   github.com/azu/request-filtering-agent (MIT license, Copyright (c) 2020 azu).
+// - Pinned-IP safe fetch, socket connection and per-hop redirect validation using
+//   ssrf-guard@1.0.0 (MIT license, Copyright (c) 2024 Jonathan Ong).
 
 const VERSION = '1.6.1';
 const INSTALL_HINT = `uv tool install https://github.com/Panniantong/Agent-Reach/releases/download/v${VERSION}/agent-reach.zip\nSee https://github.com/Panniantong/Agent-Reach/blob/v${VERSION}/docs/install.md. Never install agent-reach from PyPI.\n`;
@@ -58,11 +56,7 @@ const refused = (message, maxChars = 20000) => ({
 
 function isPrivateIp(ip) {
   try {
-    let addr = ipaddr.parse(ip);
-    if (addr.kind() === 'ipv6' && addr.isIPv4MappedAddress()) {
-      addr = addr.toIPv4Address();
-    }
-    return addr.range() !== 'unicast';
+    return ssrfGuardIsPrivateIp(ip);
   } catch {
     return false;
   }
@@ -412,14 +406,11 @@ function requestOnce(url, { method, address, connectTo, timeoutMs = RETRIEVAL_TI
     }, timeoutMs);
 
     try {
-      // Pass an explicit fresh agent for every request via request-filtering-agent;
+      // Pass an explicit fresh agent for every request;
       // the global (possibly proxy-aware) agent is never consulted, so inherited
-      // proxy settings cannot be used, and connect-time IP filtering rejects private destinations.
-      const agentOptions = { keepAlive: false };
-      if (connectTo) {
-        agentOptions.allowIPAddressList = [connectTo];
-      }
-      const agent = useAgent(url, agentOptions);
+      // proxy settings cannot be used.
+      const AgentClass = parsed.protocol === 'https:' ? https.Agent : http.Agent;
+      const agent = new AgentClass({ keepAlive: false });
       const requestOptions = {
         method,
         agent,
@@ -474,8 +465,46 @@ export async function defaultRetrieve(
     maxHops = MAX_REDIRECT_HOPS,
     connectTo,
     request,
+    signal,
   } = {}
 ) {
+  refuseEmbeddedCredentials(url);
+  validatePublicUrl(url);
+
+  // In-process retrieval uses ssrf-guard safeFetch directly:
+  // it validates the URL, pins the socket to the validated IP, and re-validates each redirect hop.
+  if (!connectTo && !request && resolveHost === defaultResolveHost) {
+    try {
+      const res = await safeFetch(url, {
+        method,
+        maxRedirects: maxHops,
+        signal: signal ?? AbortSignal.timeout(RETRIEVAL_TIMEOUT_MS),
+      });
+      const body = res.status === 200 ? await res.text() : undefined;
+      return {
+        status: res.status,
+        headers: Object.fromEntries(res.headers.entries()),
+        location: res.headers.get('location') ?? undefined,
+        body,
+      };
+    } catch (err) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new Error(RETRIEVAL_TIMEOUT);
+      }
+      if (
+        err.name === 'UnsafeUrlError' ||
+        isRefusedMessage(err.message) ||
+        /private|blocked|not allowed/i.test(err.message)
+      ) {
+        throw new Error(PRIVATE_DESTINATION);
+      }
+      if (/too many redirects/i.test(err.message)) {
+        throw new Error(TOO_MANY_REDIRECTS);
+      }
+      throw new Error(REDIRECT_VERIFY_FAILED);
+    }
+  }
+
   let current = String(url);
   for (let hops = 0; ; hops++) {
     const { addresses } = await resolvePublicAddresses(current, resolveHost);

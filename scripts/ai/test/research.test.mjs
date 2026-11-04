@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import dns from 'node:dns';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { isIP } from 'node:net';
+import net, { isIP } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { safeFetch } from 'ssrf-guard/node';
 import { defaultRetrieve, runResearch } from '../research.mjs';
 
 const fixture = fileURLToPath(new URL('./fixtures/agent-reach.mjs', import.meta.url));
@@ -1000,6 +1002,56 @@ test('redirect to private address during retrieval is refused', async () => {
     assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
     assert.ok(publicServer.hits.length > 0, 'public destination was actually retrieved');
   } finally {
+    publicServer.server.close();
+    privateProbe.proc.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('302 to 127.0.0.1 is refused through ssrf-guard', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-ssrf-guard-302-'));
+  const privateProbe = await startPrivateProbe(root);
+  const publicServer = await startPublicServer({
+    after: 1,
+    location: `http://127.0.0.1:${privateProbe.port}/secret`,
+  });
+
+  const origLookup = dns.promises.lookup;
+  dns.promises.lookup = async (hostname, opts) => {
+    if (hostname === 'docs.example.com') {
+      return [{ address: '93.184.216.34', family: 4 }];
+    }
+    return origLookup(hostname, opts);
+  };
+
+  const origConnect = net.Socket.prototype.connect;
+  net.Socket.prototype.connect = function (...args) {
+    const opts = Array.isArray(args[0]) ? args[0][0] : args[0];
+    if (opts && typeof opts === 'object') {
+      opts.lookup = (_h, opt, cb) =>
+        opt.all
+          ? cb(null, [{ address: '127.0.0.1', family: 4 }])
+          : cb(null, '127.0.0.1', 4);
+    }
+    return origConnect.apply(this, args);
+  };
+
+  try {
+    await assert.rejects(
+      safeFetch(`http://docs.example.com:${publicServer.port}/doc`),
+      (err) => {
+        assert.ok(
+          err.name === 'UnsafeUrlError' || /private/i.test(err.message),
+          `Expected UnsafeUrlError or private IP refusal, got: ${err.message}`
+        );
+        return true;
+      }
+    );
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.ok(publicServer.hits.length > 0, 'public destination was actually retrieved');
+  } finally {
+    dns.promises.lookup = origLookup;
+    net.Socket.prototype.connect = origConnect;
     publicServer.server.close();
     privateProbe.proc.kill();
     rmSync(root, { recursive: true, force: true });
