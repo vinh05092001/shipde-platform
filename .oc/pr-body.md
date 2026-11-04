@@ -92,21 +92,25 @@
 | P1: Inherited item name refused without mutating Object.prototype (record:308)                                                | `inherited_item_name_is_refused_without_mutation`                                                 | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS                    |
 | P1: Concurrent completion without goalId preserves reserved goal charge with time and tokens (admit:142)                      | `concurrent_completion_without_goal_preserves_reserved_goal_charge`                               | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS                    |
 | P1: Mask sensitive query credentials in URL route endpoint (run-ledger.js:22)                                                 | `masks_sensitive_url_query_credentials`                                                           | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS (53/53 tests pass) |
+| P1: Distinct in-flight record overwrote existing reservation (run-ledger.js:338)                                              | `distinct_in_flight_record_cannot_overwrite_reservation`                                          | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS                    |
+| P1: Cross-stage execution continuation to fallback at attempt cap returned ATTEMPTS_EXHAUSTED (run-ledger.js:289)             | `reserved_attempt_can_continue_in_fallback_at_cap`                                                | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS                    |
+| P1: Reservation without attemptId captured unrelated prior runs of item into goal rollup (admit:166)                          | `reservation_without_attempt_id_does_not_capture_prior_runs`                                      | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS                    |
+| P1: Prototype-named fingerprint identifier mutated prototype, omitting IN_FLIGHT from JSON persistence (run-ledger.js:382)    | `prototype_named_fingerprint_is_refused_without_writes`                                           | `node --test tools/ai-brain/test/run-ledger.test.js` | PASS (57/57 tests pass) |
 
 ## Verification
 
-| Command                                                                                   | Result             | Evidence/notes                                                                                                                             |
-| ----------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| pnpm format:check                                                                         | PASS               | Codebase and spec formatting verified clean (14/14 files pass)                                                                             |
-| pnpm lint                                                                                 | BLOCKED_BY_SANDBOX | @shipde/testkit#build: TS2307 Cannot find module '@electric-sql/pglite' (out-of-scope package node_modules desync in sandbox worktree)     |
-| pnpm typecheck                                                                            | BLOCKED_BY_SANDBOX | @shipde/testkit#typecheck: TS2307 Cannot find module '@electric-sql/pglite' (out-of-scope package node_modules desync in sandbox worktree) |
-| node --test tools/ai-brain/test/run-ledger.test.js                                        | PASS               | 53/53 run-ledger tests pass (thin adapter over ProgressLedger; all reviewer scenarios verified)                                            |
-| node --test tools/ai-brain/test/work-guard.test.js                                        | PASS               | 53/53 work-guard tests pass                                                                                                                |
-| node --test tools/ai-brain/test/run-ledger.test.js tools/ai-brain/test/work-guard.test.js | PASS               | 106/106 tests pass total                                                                                                                   |
-| pnpm security:secrets                                                                     | PASS               | 0 secrets detected on commit history and working tree                                                                                      |
-| node scripts/ai/check-no-hardcode.mjs                                                     | PASS               | Zero forbidden production hardcodes detected                                                                                               |
-| git diff --check origin/main...HEAD                                                       | PASS               | Zero whitespace or merge conflict markers                                                                                                  |
-| pnpm test:brain                                                                           | BLOCKED_BY_SANDBOX | task-ai-136 integration tests require host pnpm executable (ENOENT); all 106 run-ledger+work-guard tests pass directly via node --test     |
+| Command                                                                                   | Result             | Evidence/notes                                                                                                                         |
+| ----------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| pnpm format:check                                                                         | PASS               | Codebase and spec formatting verified clean (14/14 files pass)                                                                         |
+| pnpm lint                                                                                 | PASS               | Turbo lint across 7 workspace packages + scripts passes cleanly (12/12 successful, 0 errors)                                           |
+| pnpm typecheck                                                                            | PASS               | TypeScript typecheck across all workspace packages passes cleanly (12/12 successful, 0 errors)                                         |
+| node --test tools/ai-brain/test/run-ledger.test.js                                        | PASS               | 57/57 run-ledger tests pass (all 4 review findings 1–4 verified)                                                                       |
+| node --test tools/ai-brain/test/work-guard.test.js                                        | PASS               | 53/53 work-guard tests pass                                                                                                            |
+| node --test tools/ai-brain/test/run-ledger.test.js tools/ai-brain/test/work-guard.test.js | PASS               | 110/110 tests pass total                                                                                                               |
+| pnpm security:secrets                                                                     | PASS               | 0 secrets detected on commit history and working tree                                                                                  |
+| node scripts/ai/check-no-hardcode.mjs                                                     | PASS               | Zero forbidden production hardcodes detected                                                                                           |
+| git diff --check origin/main...HEAD                                                       | PASS               | Zero whitespace or merge conflict markers                                                                                              |
+| pnpm test:brain                                                                           | BLOCKED_BY_SANDBOX | task-ai-136 integration tests require host pnpm executable (ENOENT); all 110 run-ledger+work-guard tests pass directly via node --test |
 
 - [x] Clean install completed.
 - [x] Lint/typecheck completed.
@@ -138,7 +142,7 @@ None
 ## Codex review
 
 - Review status: READY_FOR_CODEX
-- Reviewed commit: f27314e0a8a29eec77fa79ad80be0dc263ec1ab9 (Round 62: CHANGES_REQUIRED — 6 P1 findings fixed in this round)
+- Reviewed commit: 02d7d28a363c7098b21a97d6aac1d132b97bd681 (Round 63: CHANGES_REQUIRED — 4 P1 findings fixed in this round)
 - Verdict: READY_FOR_REVIEW
 
 - [x] The implementation author has stopped after opening/updating this PR and has not started another Work Item.

@@ -1388,3 +1388,157 @@ test('masks_sensitive_url_query_credentials', () => {
   const content = fs.readFileSync(ledger.file, 'utf8');
   assert.equal(content.includes('privateValue'), false);
 });
+
+test('distinct_in_flight_record_cannot_overwrite_reservation', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({
+    file,
+    limits: { item: { attempts: 2 }, goal: { attempts: 2 } },
+  });
+  const res = ledger.admit('TASK-T', 'writer', 'F', {
+    reserve: true,
+    pid: process.pid,
+    attemptId: 'a1',
+  });
+  assert.equal(res.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'TASK-T',
+    attemptId: 'a2',
+    fp: 'F',
+    verdict: 'IN_FLIGHT',
+    ms: 50,
+  });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.cause, Cause.NO_PROGRESS);
+
+  const state = ledger.load();
+  const rec = state.items['TASK-T'].stages['writer'].fps['F'];
+  assert.equal(rec.outcome, 'IN_FLIGHT');
+  assert.equal(rec.attemptId, 'a1');
+
+  const r1 = ledger.record('writer', {
+    itemId: 'TASK-T',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'DONE',
+    ms: 100,
+  });
+  assert.equal(r1.ok, true);
+
+  assert.equal(ledger.getSummary('TASK-T').attempts, 1);
+  assert.equal(ledger.getSummary().attempts, 1);
+});
+
+test('reserved_attempt_can_continue_in_fallback_at_cap', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({
+    file,
+    limits: { item: { attempts: 1 }, goal: { attempts: 1 } },
+  });
+  const res = ledger.admit('TASK-FB', 'writer', 'F', {
+    reserve: true,
+    pid: process.pid,
+    attemptId: 'a1',
+  });
+  assert.equal(res.ok, true);
+
+  const rec = ledger.record('fallback', {
+    itemId: 'TASK-FB',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'DONE',
+    ms: 100,
+  });
+  assert.equal(rec.ok, true);
+
+  assert.equal(ledger.getSummary('TASK-FB').attempts, 1);
+  assert.equal(ledger.getSummary().attempts, 1);
+
+  const reloaded = ledger.progressLedger.load();
+  assert.equal(reloaded.items['TASK-FB'].spent.attempts, 1);
+  assert.equal(reloaded.goal.attempts, 1);
+});
+
+test('reservation_without_attempt_id_does_not_capture_prior_runs', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+
+  const r1 = ledger.record('writer', {
+    itemId: 'TASK-PRIOR',
+    attemptId: 'a1',
+    ms: 100,
+    tokens: 10,
+    verdict: 'DONE',
+  });
+  assert.equal(r1.ok, true);
+
+  const res = ledger.admit('TASK-PRIOR', 'repair', 'F', {
+    reserve: true,
+    pid: process.pid,
+    goalId: 'G',
+  });
+  assert.equal(res.ok, true);
+
+  const stateAfterAdmit = ledger.load();
+  assert.equal(stateAfterAdmit.goals['G'].attempts, 1);
+  assert.equal(stateAfterAdmit.goals['G'].ms, 0);
+  assert.equal(stateAfterAdmit.goals['G'].tokens, 0);
+
+  const runsAfterAdmit = ledger.getRuns('TASK-PRIOR');
+  const a1Run = runsAfterAdmit.find((r) => r.attemptId === 'a1');
+  assert.equal(a1Run.goalId, null);
+
+  const rec = ledger.record('repair', {
+    itemId: 'TASK-PRIOR',
+    attemptId: 'a2',
+    fp: 'F',
+    ms: 50,
+    tokens: 5,
+    verdict: 'DONE',
+  });
+  assert.equal(rec.ok, true);
+
+  const stateAfterComplete = ledger.load();
+  assert.equal(stateAfterComplete.goals['G'].attempts, 1);
+  assert.equal(stateAfterComplete.goals['G'].ms, 50);
+  assert.equal(stateAfterComplete.goals['G'].tokens, 5);
+});
+
+test('prototype_named_fingerprint_is_refused_without_writes', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+  const seed = ledger.record('writer', {
+    itemId: 'TASK-SEED',
+    attemptId: 'a1',
+    ms: 100,
+    tokens: 10,
+    verdict: 'DONE',
+  });
+  assert.equal(seed.ok, true);
+
+  const fileBytesBefore = fs.readFileSync(file);
+  const summaryBefore = ledger.getSummary('TASK-SEED');
+  const globalSummaryBefore = ledger.getSummary();
+
+  assert.throws(
+    () =>
+      ledger.record('writer', {
+        itemId: 'TASK-SEED',
+        attemptId: 'a2',
+        fp: '__proto__',
+        verdict: 'IN_FLIGHT',
+        ms: 50,
+      }),
+    /RUN_LEDGER_REFUSED: invalid fingerprint __proto__/
+  );
+
+  const fileBytesAfter = fs.readFileSync(file);
+  assert.deepEqual(fileBytesAfter, fileBytesBefore);
+
+  const summaryAfter = ledger.getSummary('TASK-SEED');
+  assert.deepEqual(summaryAfter, summaryBefore);
+
+  const globalSummaryAfter = ledger.getSummary();
+  assert.deepEqual(globalSummaryAfter, globalSummaryBefore);
+});
