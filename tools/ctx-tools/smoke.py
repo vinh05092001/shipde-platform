@@ -7,303 +7,76 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import queue
 import re
-import subprocess
 import sys
-import tempfile
-import threading
-import time
 
-KEEP_ENV = {
-    "SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "COMSPEC", "TEMP", "TMP",
-    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROCESSOR_ARCHITECTURE", "NUMBER_OF_PROCESSORS"
-}
+try:
+    from ._sanitize import (
+        KEEP_ENV,
+        SENSITIVE_WORDS,
+        _WORD_ALT,
+        _KEY_SEPARATORS,
+        _CAMEL_BOUNDARY_RE,
+        _PART_RE,
+        _ASSIGNMENT_KEY_RE,
+        _TEXT_ASSIGNMENT_RE,
+        _TEXT_SPACE_ASSIGNMENT_RE,
+        _AUTH_HEADER_RE,
+        _BASIC_RE,
+        _BEARER_RE,
+        _CANARY_RE,
+        _SK_RE,
+        REDACTED,
+        _split_parts,
+        is_sensitive_key,
+        JSONRPC_ERROR_CATEGORIES,
+        error_category_from_code,
+        JsonRpcError,
+        sanitize_secret_payload,
+        count_tokens,
+    )
+    from ._mcp import MCP, functions_in
+except ImportError:
+    from _sanitize import (
+        KEEP_ENV,
+        SENSITIVE_WORDS,
+        _WORD_ALT,
+        _KEY_SEPARATORS,
+        _CAMEL_BOUNDARY_RE,
+        _PART_RE,
+        _ASSIGNMENT_KEY_RE,
+        _TEXT_ASSIGNMENT_RE,
+        _TEXT_SPACE_ASSIGNMENT_RE,
+        _AUTH_HEADER_RE,
+        _BASIC_RE,
+        _BEARER_RE,
+        _CANARY_RE,
+        _SK_RE,
+        REDACTED,
+        _split_parts,
+        is_sensitive_key,
+        JSONRPC_ERROR_CATEGORIES,
+        error_category_from_code,
+        JsonRpcError,
+        sanitize_secret_payload,
+        count_tokens,
+    )
+    from _mcp import MCP, functions_in
 
-
-SENSITIVE_WORDS = ("token", "secret", "key", "password", "authorization", "cookie", "credential")
-_WORD_ALT = "|".join(SENSITIVE_WORDS)
-_KEY_SEPARATORS = r"[_\-\s.]"
-# `true`/camelCase boundaries are folded to `_` before splitting, so `accessToken`
-# is matched like `access_token`.
-_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-_PART_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+|[0-9]+")
-
-# A sensitive word delimited on both sides (separator, start/end or camel boundary).
-# The lookarounds keep `monkey`, `tokenizer`, `author` and `cookies`-style noise out.
-_ASSIGNMENT_KEY_RE = re.compile(
-    rf"(?<![A-Za-z0-9])(?:{_WORD_ALT})s?(?![A-Za-z0-9])",
-    re.IGNORECASE,
-)
-
-# Free-text credentials: `access_token=...`, `"password": "..."`, `api-key: ...`.
-_TEXT_ASSIGNMENT_RE = re.compile(
-    rf"([\"']?(?:[A-Za-z0-9_.\-]*{_KEY_SEPARATORS})?(?:{_WORD_ALT})s?[\"']?\s*[=:]\s*[\"']?)(?![\[\"']?REDACTED)[^\s,\"'}}\]\]\\\\]+",
-    re.IGNORECASE,
-)
-# Free-text credentials written as `key value` (`Auth failure: password hunter2`).
-_TEXT_SPACE_ASSIGNMENT_RE = re.compile(
-    rf"([\"']?(?:[A-Za-z0-9_.\-]*{_KEY_SEPARATORS})?(?:{_WORD_ALT})s?[\"']?\s+)(?![\[\"']?REDACTED)[^\s,\"'}}\]\]\\\\]+",
-    re.IGNORECASE,
-)
-_AUTH_HEADER_RE = re.compile(
-    r"(?i)([\"']?\bAuthorization[\"']?\s*(?:[:=]|\s)\s*[\"']?)(?!\s*\[?REDACTED)(?:[A-Za-z0-9_-]+\s+)?[^\s,\"'}\]:]+([\"']?)",
-    re.IGNORECASE,
-)
-_BASIC_RE = re.compile(r"(?i)\bBasic\s+(?!\s*\[?REDACTED)[A-Za-z0-9+/=]{8,}")
-_BEARER_RE = re.compile(r"(?i)\bBearer\s+[^\s,\"'}\]]+")
-_CANARY_RE = re.compile(r"(?i)\bCANARY_SECRET\w*")
-_SK_RE = re.compile(r"(?i)\bsk-[A-Za-z0-9_-]+")
-
-REDACTED = "[REDACTED]"
-
-
-def _split_parts(name: str):
-    """Split an underscore/hyphen/dot/whitespace/camelCase separated key into parts."""
-    parts = []
-    for chunk in re.split(rf"{_KEY_SEPARATORS}+", _CAMEL_BOUNDARY_RE.sub("_", str(name))):
-        parts.extend(_PART_RE.findall(chunk))
-    return parts
-
-
-def is_sensitive_key(name: str) -> bool:
-    """True when a `_`/`-`/`.`/camelCase-separated part of the key is a sensitive word (or its plural)."""
-    for part in _split_parts(name):
-        low = part.lower()
-        if low in SENSITIVE_WORDS or (low.endswith("s") and low[:-1] in SENSITIVE_WORDS):
-            return True
-    return False
-
-
-JSONRPC_ERROR_CATEGORIES = {
-    -32700: "Parse error",
-    -32600: "Invalid Request",
-    -32601: "Method not found",
-    -32602: "Invalid params",
-    -32603: "Internal error",
-}
-
-
-def error_category_from_code(code: int) -> str:
-    """Return fixed category string chosen strictly from error code."""
-    if not isinstance(code, int):
-        return "Unknown error"
-    if code in JSONRPC_ERROR_CATEGORIES:
-        return JSONRPC_ERROR_CATEGORIES[code]
-    if -32099 <= code <= -32000:
-        return "Server error"
-    return "Application error"
-
-
-class JsonRpcError(RuntimeError):
-    def __init__(self, code: int, category: str):
-        super().__init__(f"JSON-RPC error: code={code}, category={category}")
-        self.code = code
-        self.category = category
-
-
-def sanitize_secret_payload(val):
-    """Allowlist output: for JSON-RPC error, record ONLY code (int) and fixed category string."""
-    if isinstance(val, dict):
-        if "code" in val and isinstance(val.get("code"), int):
-            code = val["code"]
-            return {"code": code, "category": error_category_from_code(code)}
-        return {
-            k: REDACTED if is_sensitive_key(k) else sanitize_secret_payload(v)
-            for k, v in val.items()
-        }
-    if isinstance(val, str):
-        s = _AUTH_HEADER_RE.sub("Authorization: " + REDACTED, val)
-        s = _BASIC_RE.sub("Basic " + REDACTED, s)
-        s = _BEARER_RE.sub("Bearer " + REDACTED, s)
-        s = _CANARY_RE.sub(REDACTED, s)
-        s = _SK_RE.sub(REDACTED, s)
-        for pattern in (_TEXT_ASSIGNMENT_RE, _TEXT_SPACE_ASSIGNMENT_RE):
-            s = pattern.sub(
-                lambda m: m.group(1) + REDACTED
-                if _ASSIGNMENT_KEY_RE.search(m.group(1))
-                else m.group(0),
-                s,
-            )
-        return s
-    if isinstance(val, (list, tuple)):
-        return [sanitize_secret_payload(item) for item in val]
-    return val
-
-
-def count_tokens(text: str) -> int:
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except Exception:
-        return max(1, len(text.encode("utf-8")) // 4)
-
-
-class MCP:
-    def __init__(self, name: str, entry: dict, project_dir: Path, ctx_tools_root: Path):
-        self.name = name
-        self.messages = queue.Queue()
-        self.counter = 0
-        self.diagnostics = set()
-        self.project_dir = project_dir
-        self.tools = {}
-
-        env = {k: v for k, v in os.environ.items() if k.upper() in KEEP_ENV}
-        env.update(entry.get("env", {}))
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
-        env["npm_config_cache"] = str(ctx_tools_root / "npm-cache")
-        env["JCODEMUNCH_CONTEXT_PROVIDERS"] = "0"
-
-        self.process = subprocess.Popen(
-            [entry["command"], *entry.get("args", [])],
-            cwd=project_dir,
-            env=env,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
-        threading.Thread(target=self.read_stdout, daemon=True).start()
-        threading.Thread(target=self.drain_stderr, daemon=True).start()
-
-    def read_stdout(self):
-        for line in self.process.stdout:
-            try:
-                self.messages.put(json.loads(line))
-            except json.JSONDecodeError:
-                self.diagnostics.add("non-json stdout")
-        self.messages.put(None)
-
-    def drain_stderr(self):
-        for line in self.process.stderr:
-            self.classify(line)
-
-    def classify(self, text: str):
-        for token in ("PermissionError", "Access is denied", "FileNotFoundError", "ModuleNotFoundError", "TimeoutError", "No active project"):
-            if token.lower() in text.lower():
-                self.diagnostics.add(token)
-
-    def send(self, message: dict):
-        self.process.stdin.write(json.dumps({"jsonrpc": "2.0", **message}) + "\n")
-        self.process.stdin.flush()
-
-    def request(self, method: str, params: dict, timeout: int = 180):
-        self.counter += 1
-        request_id = self.counter
-        self.send({"id": request_id, "method": method, "params": params})
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(method)
-            try:
-                message = self.messages.get(timeout=min(5, remaining))
-            except queue.Empty:
-                continue
-            if message is None:
-                raise RuntimeError("Server ended before reply")
-            if message.get("id") == request_id and ("result" in message or "error" in message):
-                if "error" in message:
-                    raw_err = message["error"]
-                    code = raw_err.get("code") if isinstance(raw_err, dict) else None
-                    if not isinstance(code, int):
-                        code = -32603
-                    category = error_category_from_code(code)
-                    self.classify(category)
-                    raise JsonRpcError(code=code, category=category)
-                return message["result"]
-            if "method" in message and "id" in message:
-                if message["method"] == "roots/list":
-                    self.send({"id": message["id"], "result": {"roots": [{"uri": self.project_dir.as_uri(), "name": self.project_dir.name}]}})
-                elif message["method"] == "ping":
-                    self.send({"id": message["id"], "result": {}})
-                else:
-                    self.send({"id": message["id"], "error": {"code": -32601, "message": "Unsupported client method"}})
-
-    def start(self):
-        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {"roots": {"listChanged": False}}, "clientInfo": {"name": "ctx-smoke", "version": "1.0"}})
-        self.send({"method": "notifications/initialized"})
-        tools = self.request("tools/list", {}).get("tools", [])
-        self.tools = {tool["name"]: tool for tool in tools}
-
-    def call(self, name: str, arguments: dict):
-        if name not in self.tools:
-            if self.name == "jcodemunch" and "order" in self.tools:
-                result = self.call("order", {"action": name, "args": arguments, "allow_state_change": name in ("index_folder", "index_repo")})
-                return result.get("result", result) if isinstance(result, dict) else result
-            raise RuntimeError(f"Required tool unavailable: {name}")
-        schema = self.tools[name].get("inputSchema", {})
-        allowed = schema.get("properties", {})
-        args = {k: v for k, v in arguments.items() if k in allowed}
-        result = self.request("tools/call", {"name": name, "arguments": args})
-        if result.get("isError"):
-            self.classify(json.dumps(result))
-            raise RuntimeError("MCP tool returned error")
-        if result.get("structuredContent") is not None:
-            sc = result["structuredContent"]
-            if isinstance(sc, dict) and "result" in sc and isinstance(sc["result"], str):
-                try:
-                    return json.loads(sc["result"])
-                except json.JSONDecodeError:
-                    pass
-            return sc
-        texts = [item["text"] for item in result.get("content", []) if item.get("type") == "text"]
-        for text in texts:
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                if text.startswith("#MUNCH"):
-                    return text
-                self.classify(text)
-        if texts:
-            return texts[0]
-        raise RuntimeError("No structured symbol result")
-
-    def close(self) -> str:
-        try:
-            self.process.stdin.close()
-            self.process.wait(timeout=10)
-            return "exited"
-        except Exception:
-            subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"], capture_output=True)
-            return "terminated"
-
-
-def functions_in(value, group=None) -> set:
-    found = set()
-    if isinstance(value, str):
-        if value.startswith("#MUNCH"):
-            for line in value.splitlines():
-                if line.startswith("s,"):
-                    parts = line.split(",")
-                    if len(parts) >= 4 and parts[3].lower() in ("function",):
-                        found.add(parts[2])
-        else:
-            try:
-                found.update(functions_in(json.loads(value), group))
-            except json.JSONDecodeError:
-                if group in ("Function", "function") and re.fullmatch(r"[A-Za-z_$][\w$]*", value):
-                    found.add(value)
-    elif isinstance(value, list):
-        for item in value:
-            found.update(functions_in(item, group))
-    elif isinstance(value, dict):
-        if "result" in value and len(value) == 1:
-            found.update(functions_in(value["result"], group))
-        kind = value.get("kind", group)
-        if kind in (12, "Function", "function"):
-            name = value.get("name") or value.get("name_path")
-            if isinstance(name, str):
-                found.add(re.sub(r"\[\d+\]$", "", name.split("/")[-1]))
-        for key, item in value.items():
-            if key != "result":
-                found.update(functions_in(item, key if key in ("Function", "function") else group))
-    return found
+__all__ = [
+    "KEEP_ENV",
+    "SENSITIVE_WORDS",
+    "REDACTED",
+    "is_sensitive_key",
+    "JSONRPC_ERROR_CATEGORIES",
+    "error_category_from_code",
+    "JsonRpcError",
+    "sanitize_secret_payload",
+    "count_tokens",
+    "MCP",
+    "functions_in",
+    "main",
+]
 
 
 def main() -> int:

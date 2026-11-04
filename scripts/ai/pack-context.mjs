@@ -5,29 +5,6 @@
  * Ship Dễ — Pack focused repo context with repomix (TASK-AI-158)
  *
  * Reference: github.com/yamadashy/repomix (MIT License) - options, security check and output path handling
- *
- * Produces a token-budgeted, secret-checked XML context file for writer and
- * reviewer prompts. Only the paths given via --paths are packed.
- *
- * Usage:
- *   node scripts/ai/pack-context.mjs --paths "apps/api/src/**,prisma/**" --out ctx.xml
- *   node scripts/ai/pack-context.mjs --paths "docs/**" --out ctx.xml --max-tokens 50000
- *
- * Exit codes:
- *   0  success
- *   1  argument error, repomix failure, secret detected, or token limit exceeded
- *
- * --max-tokens is a hard ceiling enforced by repomix's own tokenizer
- * (--token-budget): an over-budget pack fails non-zero and is never
- * truncated or left behind.
- *
- * The built-in repomix security check (secretlint) excludes files it flags
- * but still exits 0, so this wrapper treats any "suspicious file(s)
- * detected" report as a failure: the command exits non-zero and removes the
- * output file.
- *
- * File contents are never printed to stdout — only a summary line
- * (files packed, estimated tokens, output path).
  */
 
 import { execFileSync } from 'node:child_process';
@@ -35,372 +12,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parseArgs, sameFileIdentity } from './parse-args.mjs';
+import {
+  ALLOWED_OUTPUT_DIR,
+  DEFAULT_OUTPUT_FILE,
+  resolveExistingAncestorsAndAliases,
+  validateOutputPath,
+} from './output-path.mjs';
+import {
+  estimateTokens,
+  looksLikeSecretFailure,
+  looksLikeBudgetFailure,
+  resolveRepomixEntry,
+  loadBaseConfig,
+  buildFocusedConfig,
+  combinedOutput,
+} from './config.mjs';
+import { countFiles, publishOutput } from './publish.mjs';
+
+export {
+  parseArgs,
+  sameFileIdentity,
+  ALLOWED_OUTPUT_DIR,
+  DEFAULT_OUTPUT_FILE,
+  resolveExistingAncestorsAndAliases,
+  validateOutputPath,
+  estimateTokens,
+  looksLikeSecretFailure,
+  looksLikeBudgetFailure,
+  resolveRepomixEntry,
+  loadBaseConfig,
+  buildFocusedConfig,
+  combinedOutput,
+  countFiles,
+  publishOutput,
+};
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
-export function parseArgs(argv) {
-  let paths = null;
-  let out = null;
-  let maxTokens = null;
-
-  const isFlag = (val) => typeof val === 'string' && val.startsWith('-') && !/^-\d+$/.test(val);
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--') {
-      continue;
-    } else if (arg === '--paths') {
-      if (paths !== null) {
-        throw new Error('--paths can only be specified once');
-      }
-      if (i + 1 >= argv.length || isFlag(argv[i + 1])) {
-        throw new Error('--paths requires a value');
-      }
-      const raw = argv[++i];
-      paths = raw
-        .split(',')
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (paths.length === 0) {
-        throw new Error('--paths is required (comma-separated globs)');
-      }
-    } else if (arg === '--out') {
-      if (out !== null) {
-        throw new Error('--out can only be specified once');
-      }
-      if (i + 1 >= argv.length || isFlag(argv[i + 1])) {
-        throw new Error('--out requires a value');
-      }
-      const raw = argv[++i];
-      if (raw.trim() === '') {
-        throw new Error('--out requires a non-empty file path');
-      }
-      out = raw;
-    } else if (arg === '--max-tokens') {
-      if (maxTokens !== null) {
-        throw new Error('--max-tokens can only be specified once');
-      }
-      if (i + 1 >= argv.length || isFlag(argv[i + 1])) {
-        throw new Error('--max-tokens requires a positive integer value');
-      }
-      const raw = argv[++i];
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
-        throw new Error(`--max-tokens must be a positive integer, got: ${raw}`);
-      }
-      maxTokens = n;
-    } else if (arg.startsWith('-')) {
-      throw new Error(`Unknown flag: ${arg}`);
-    } else {
-      throw new Error(`Unexpected positional argument: ${arg}`);
-    }
-  }
-
-  if (!paths || paths.length === 0) {
-    throw new Error('--paths is required (comma-separated globs)');
-  }
-  if (!out) {
-    throw new Error('--out is required (output file path)');
-  }
-
-  return { paths, out, maxTokens };
-}
-
-export function sameFileIdentity(statA, statB) {
-  return (
-    Boolean(statA) &&
-    Boolean(statB) &&
-    typeof statA.ino === 'number' &&
-    typeof statB.ino === 'number' &&
-    statA.ino !== 0 &&
-    statB.ino !== 0 &&
-    statA.ino === statB.ino &&
-    statA.dev === statB.dev
-  );
-}
-
-export function resolveExistingAncestorsAndAliases(root, outArg) {
-  const resolvedLexical = path.resolve(root, outArg);
-  let curr = resolvedLexical;
-  const nonExistingSegments = [];
-
-  while (true) {
-    let exists = false;
-    let isLink = false;
-    try {
-      const lstat = fs.lstatSync(curr);
-      exists = true;
-      isLink = lstat.isSymbolicLink();
-    } catch {
-      // path does not exist
-    }
-
-    if (exists || isLink) {
-      break;
-    }
-
-    const parent = path.dirname(curr);
-    if (parent === curr) {
-      break;
-    }
-    nonExistingSegments.unshift(path.basename(curr));
-    curr = parent;
-  }
-
-  let canonicalExisting;
-  try {
-    canonicalExisting = fs.realpathSync(curr);
-  } catch {
-    throw new Error(
-      `Unsafe output destination: "${outArg}" points through an invalid or broken link`,
-    );
-  }
-
-  const canonicalTarget =
-    nonExistingSegments.length > 0
-      ? path.join(canonicalExisting, ...nonExistingSegments)
-      : canonicalExisting;
-
-  return { resolvedLexical, canonicalTarget };
-}
-
-export const ALLOWED_OUTPUT_DIR = '.context-packs';
-export const DEFAULT_OUTPUT_FILE = path.join(ALLOWED_OUTPUT_DIR, 'context.xml');
-
-export function validateOutputPath(root, outArg = DEFAULT_OUTPUT_FILE, inputPaths = []) {
-  if (!outArg || typeof outArg !== 'string' || outArg.trim() === '') {
-    outArg = DEFAULT_OUTPUT_FILE;
-  }
-
-  if (outArg.endsWith('/') || outArg.endsWith('\\')) {
-    throw new Error(`Unsafe output destination: "${outArg}" cannot be a directory`);
-  }
-
-  const resolvedLexical = path.resolve(root, outArg);
-  if (fs.existsSync(resolvedLexical) && fs.statSync(resolvedLexical).isDirectory()) {
-    throw new Error(`Unsafe output destination: "${outArg}" is an existing directory`);
-  }
-
-  const rawSegments = outArg.split(/[/\\]/);
-  if (rawSegments.some((seg) => seg.toLowerCase() === '.git')) {
-    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
-  }
-
-  const { canonicalTarget } = resolveExistingAncestorsAndAliases(root, outArg);
-  const canonicalRoot = fs.existsSync(root) ? fs.realpathSync(root) : path.resolve(root);
-
-  const relLexical = path.relative(root, resolvedLexical);
-  if (relLexical === '' || relLexical.startsWith('..') || path.isAbsolute(relLexical)) {
-    throw new Error(`Unsafe output destination: "${outArg}" resolves outside the repository root`);
-  }
-
-  const segmentsLexical = relLexical.split(/[/\\]/);
-  if (segmentsLexical.some((seg) => seg.toLowerCase() === '.git')) {
-    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
-  }
-
-  const relCanonical = path.relative(canonicalRoot, canonicalTarget);
-  if (relCanonical === '' || relCanonical.startsWith('..') || path.isAbsolute(relCanonical)) {
-    throw new Error(`Unsafe output destination: "${outArg}" resolves outside the repository root`);
-  }
-
-  const segmentsCanonical = relCanonical.split(/[/\\]/);
-  if (segmentsCanonical.some((seg) => seg.toLowerCase() === '.git')) {
-    throw new Error(`Unsafe output destination: "${outArg}" is inside .git`);
-  }
-
-  // ALLOWLIST: Destination parent must resolve inside ONE fixed output directory (.context-packs)
-  const allowedDir = path.resolve(root, ALLOWED_OUTPUT_DIR);
-  fs.mkdirSync(allowedDir, { recursive: true });
-  const canonicalAllowedDir = fs.realpathSync(allowedDir);
-
-  const parentLexical = path.dirname(resolvedLexical);
-  let curr = parentLexical;
-  const missingSegments = [];
-  while (!fs.existsSync(curr) && path.dirname(curr) !== curr) {
-    missingSegments.unshift(path.basename(curr));
-    curr = path.dirname(curr);
-  }
-  let canonicalParent;
-  try {
-    const canonicalAncestor = fs.realpathSync(curr);
-    canonicalParent =
-      missingSegments.length > 0
-        ? path.join(canonicalAncestor, ...missingSegments)
-        : canonicalAncestor;
-  } catch {
-    throw new Error(`Unsafe output destination: "${outArg}" parent could not be resolved`);
-  }
-
-  const isCaseInsensitive = process.platform === 'win32' || process.platform === 'darwin';
-  const normAllowed = isCaseInsensitive ? canonicalAllowedDir.toLowerCase() : canonicalAllowedDir;
-  const normParent = isCaseInsensitive ? canonicalParent.toLowerCase() : canonicalParent;
-  const relToAllowed = path.relative(normAllowed, normParent);
-
-  const isInsideAllowed =
-    relToAllowed === '' || (!relToAllowed.startsWith('..') && !path.isAbsolute(relToAllowed));
-  if (!isInsideAllowed) {
-    throw new Error(
-      `Unsafe output destination: "${outArg}" must resolve inside ${ALLOWED_OUTPUT_DIR}`,
-    );
-  }
-
-  const targetParentCanonical = path.dirname(canonicalTarget);
-  const normTargetParent = isCaseInsensitive
-    ? targetParentCanonical.toLowerCase()
-    : targetParentCanonical;
-  const relTargetToAllowed = path.relative(normAllowed, normTargetParent);
-  const isTargetInsideAllowed =
-    relTargetToAllowed === '' ||
-    (!relTargetToAllowed.startsWith('..') && !path.isAbsolute(relTargetToAllowed));
-  if (!isTargetInsideAllowed) {
-    throw new Error(
-      `Unsafe output destination: "${outArg}" must resolve inside ${ALLOWED_OUTPUT_DIR}`,
-    );
-  }
-
-  let targetStat = null;
-  if (fs.existsSync(canonicalTarget)) {
-    targetStat = fs.statSync(canonicalTarget);
-    if (targetStat.isDirectory()) {
-      throw new Error(`Unsafe output destination: "${outArg}" is an existing directory`);
-    }
-    if (!targetStat.isFile()) {
-      throw new Error(`Unsafe output destination: "${outArg}" must be a regular file`);
-    }
-  }
-
-  const normRelLexical = relLexical.replace(/\\/g, '/');
-  const normRelCanonical = relCanonical.replace(/\\/g, '/');
-
-  for (const p of inputPaths) {
-    const normP = p.replace(/\\/g, '/');
-    const cleanP = normP.replace(/^\.\//, '').replace(/\/+/g, '/');
-    const resolvedP = path.resolve(root, p);
-
-    if (
-      resolvedP === resolvedLexical ||
-      resolvedP === canonicalTarget ||
-      normP === normRelLexical ||
-      normP === normRelCanonical ||
-      cleanP === normRelLexical ||
-      cleanP === normRelCanonical
-    ) {
-      throw new Error(
-        `Input/output collision: output destination "${outArg}" is also specified as an input path`,
-      );
-    }
-
-    if (targetStat && fs.existsSync(resolvedP)) {
-      const pCanonical = fs.realpathSync(resolvedP);
-      if (pCanonical === canonicalTarget) {
-        throw new Error(
-          `Input/output collision: output destination "${outArg}" is also specified as an input path`,
-        );
-      }
-      const pStat = fs.statSync(resolvedP);
-      if (sameFileIdentity(targetStat, pStat)) {
-        throw new Error(
-          `Input/output collision: output destination "${outArg}" is also specified as an input path`,
-        );
-      }
-    }
-
-    if (path.matchesGlob) {
-      if (
-        path.matchesGlob(normRelLexical, normP) ||
-        path.matchesGlob(normRelCanonical, normP) ||
-        path.matchesGlob(normRelLexical, cleanP) ||
-        path.matchesGlob(normRelCanonical, cleanP)
-      ) {
-        throw new Error(
-          `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
-        );
-      }
-    }
-
-    if (
-      targetStat &&
-      typeof fs.globSync === 'function' &&
-      (normP.includes('*') || normP.includes('?'))
-    ) {
-      try {
-        const matches = fs.globSync(p, { cwd: root });
-        for (const m of matches) {
-          const mPath = path.resolve(root, m);
-          if (fs.existsSync(mPath)) {
-            const mStat = fs.statSync(mPath);
-            if (sameFileIdentity(targetStat, mStat)) {
-              throw new Error(
-                `Input/output collision: output destination "${outArg}" matches input pattern "${p}"`,
-              );
-            }
-          }
-        }
-      } catch (err) {
-        if (err.message && err.message.includes('Input/output collision')) {
-          throw err;
-        }
-      }
-    }
-  }
-
-  return canonicalTarget;
-}
-
-export function estimateTokens(byteLength) {
-  return Math.ceil(byteLength / 4);
-}
-
-export function looksLikeSecretFailure(text) {
-  return /suspicious file\(s\) detected/i.test(text);
-}
-
-export function looksLikeBudgetFailure(text) {
-  return /exceeds the token budget/i.test(text);
-}
-
-export function resolveRepomixEntry(root = REPO_ROOT) {
-  const entry = path.join(root, 'node_modules', 'repomix', 'bin', 'repomix.cjs');
-  if (!fs.existsSync(entry)) {
-    throw new Error(
-      'repomix not found. Run `pnpm install` to install the workspace devDependency.',
-    );
-  }
-  return entry;
-}
-
-function loadBaseConfig(root) {
-  const baseConfigPath = path.join(root, 'repomix.config.json');
-  if (!fs.existsSync(baseConfigPath)) return {};
-  return JSON.parse(fs.readFileSync(baseConfigPath, 'utf8'));
-}
-
-export function buildFocusedConfig(baseConfig, paths, outputFile) {
-  return {
-    ...baseConfig,
-    output: {
-      ...(baseConfig.output || {}),
-      filePath: outputFile,
-      style: 'xml',
-      removeComments: false,
-    },
-    include: paths,
-    security: {
-      ...(baseConfig.security || {}),
-      enableSecurityCheck: true,
-    },
-  };
-}
-
-function combinedOutput(err) {
-  const stderr = err.stderr ? err.stderr.toString() : '';
-  const stdout = err.stdout ? err.stdout.toString() : '';
-  return `${stdout}\n${stderr}\n${err.message || ''}`;
-}
-
-function runRepomix({ root, paths, maxTokens }) {
+export function runRepomix({ root, paths, maxTokens }) {
   const entry = resolveRepomixEntry(root);
   const tmpDir = fs.mkdtempSync(path.join(root, '.repomix-tmp-'));
   const tempOutputFile = path.join(tmpDir, 'repomix-output.xml');
@@ -439,38 +91,6 @@ function runRepomix({ root, paths, maxTokens }) {
     const error = new Error('repomix-failed');
     error.exitCode = err.status ?? null;
     throw error;
-  }
-}
-
-function countFiles(content) {
-  const matches = content.match(/<file\b/g);
-  return matches ? matches.length : 0;
-}
-
-export function publishOutput(
-  tempOutputFile,
-  outputPath,
-  { copyFile = fs.copyFileSync, rename = fs.renameSync } = {},
-) {
-  const targetDir = path.dirname(outputPath);
-  fs.mkdirSync(targetDir, { recursive: true });
-  const siblingTemp = path.join(
-    targetDir,
-    `.${path.basename(outputPath)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  );
-  let published = false;
-  try {
-    copyFile(tempOutputFile, siblingTemp);
-    rename(siblingTemp, outputPath);
-    published = true;
-  } finally {
-    if (!published && fs.existsSync(siblingTemp)) {
-      try {
-        fs.rmSync(siblingTemp, { force: true });
-      } catch {
-        // ignore cleanup error
-      }
-    }
   }
 }
 
