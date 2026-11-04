@@ -18,10 +18,7 @@ const DEFAULT_DATABASE_URL =
 
 function loadEnvFile(): void {
   if (process.env.DATABASE_URL) return;
-  for (const p of [
-    path.resolve(process.cwd(), '.env'),
-    path.resolve(process.cwd(), '../../.env'),
-  ]) {
+  for (const p of [path.resolve('.env'), path.resolve('../../.env')]) {
     if (!fs.existsSync(p)) continue;
     for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
       const m = line.trim().match(/^([^#=]+)=(.*)$/);
@@ -82,26 +79,23 @@ async function main(): Promise<void> {
     return;
   }
 
-  const rlsFlags = await admin.$queryRaw<
-    Array<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>
-  >`
-    SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'orders' AND c.relkind = 'r'
-  `;
-  const policyRows = await admin.$queryRaw<Array<{ policyname: string }>>`
-    SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'orders'
-  `;
+  const [rlsFlags, policyRows] = await Promise.all([
+    admin.$queryRaw<Array<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
+      SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'orders' AND c.relkind = 'r'
+    `,
+    admin.$queryRaw<Array<{ policyname: string }>>`
+      SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'orders' AND policyname = ${POLICY_NAME}
+    `,
+  ]);
   const rlsOk = rlsFlags[0]?.relrowsecurity && rlsFlags[0]?.relforcerowsecurity;
-  const policyOk = policyRows.some((row) => row.policyname === POLICY_NAME);
-  if (!rlsOk || !policyOk) {
+  if (!rlsOk || policyRows.length === 0) {
     if (process.env.CI) {
       await admin.$disconnect().catch(() => {});
       throw new Error(
-        `orders RLS DDL missing in CI (rls=${rlsOk}, policy=${policyOk}); run pnpm db:migrate`
+        `orders RLS DDL missing in CI (rls=${rlsOk}, policy=${policyRows.length > 0}); run pnpm db:migrate`
       );
     }
-    console.warn(
-      `orders RLS DDL not applied locally (rls=${rlsOk}, policy=${policyOk}). Skipping.`
-    );
+    console.warn(`orders RLS DDL not applied locally. Skipping.`);
     await admin.$disconnect().catch(() => {});
     return;
   }
@@ -115,43 +109,27 @@ async function main(): Promise<void> {
   const currentDb = dbRows[0]?.current_database || 'shipde_dev';
 
   const cleanupRole = async () => {
-    await admin
-      .$executeRaw(
-        Prisma.raw(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`)
-      )
-      .catch(() => {});
-    await admin
-      .$executeRaw(
-        Prisma.raw(`REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`)
-      )
-      .catch(() => {});
-    await admin
-      .$executeRaw(Prisma.raw(`REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`))
-      .catch(() => {});
-    await admin
-      .$executeRaw(
-        Prisma.raw(`REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`)
-      )
-      .catch(() => {});
-    await admin.$executeRaw(Prisma.raw(`DROP ROLE IF EXISTS ${PROBE_ROLE}`)).catch(() => {});
+    for (const sql of [
+      `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`,
+      `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`,
+      `REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`,
+      `REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`,
+      `DROP ROLE IF EXISTS ${PROBE_ROLE}`,
+    ]) {
+      await admin.$executeRaw(Prisma.raw(sql)).catch(() => {});
+    }
   };
 
   await cleanupRole();
-  await admin.$executeRaw(
-    Prisma.raw(
-      `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
-    )
-  );
-  await admin.$executeRaw(Prisma.raw(`GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`));
-  await admin.$executeRaw(Prisma.raw(`GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`));
-  await admin.$executeRaw(
-    Prisma.raw(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`
-    )
-  );
-  await admin.$executeRaw(
-    Prisma.raw(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`)
-  );
+  for (const sql of [
+    `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`,
+    `GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`,
+    `GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`,
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`,
+    `GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`,
+  ]) {
+    await admin.$executeRaw(Prisma.raw(sql));
+  }
 
   const probeUrl = new URL(databaseUrl);
   probeUrl.username = PROBE_ROLE;
