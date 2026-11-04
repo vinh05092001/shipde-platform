@@ -27,10 +27,19 @@ async function coordinatorTick(items, state, deps) {
   const save = async () => deps.save?.(state);
   await doRefresh(state, now, deps, save);
   for (const item of items) {
-    const current = (state.items[item.id] ||= { rounds: 0, failedWriters: [], writer: item.writer });
+    const current = (state.items[item.id] ||= {
+      rounds: 0,
+      failedWriters: [],
+      writer: item.writer,
+    });
     rememberAuthor(current, item.writer);
     rememberAuthor(current, current.writer);
-    if (['PASS', 'STUCK', 'LAUNCH_PENDING', 'LAUNCH_UNKNOWN', 'REVIEW_PENDING'].includes(current.status)) continue;
+    if (
+      ['PASS', 'STUCK', 'LAUNCH_PENDING', 'LAUNCH_UNKNOWN', 'REVIEW_PENDING'].includes(
+        current.status
+      )
+    )
+      continue;
     if (writerAlive(current.writer, { ...deps, now })) continue;
     if (current.lanes) {
       if (current.lanes.some((lane) => !rememberAuthor(current, lane.writer))) {
@@ -79,13 +88,38 @@ async function coordinatorTick(items, state, deps) {
       continue;
     }
     const prepared = await deps.prepare(item);
-    const reviewOut = await runReview(item, current, deps, state, candidates, observed, prepared, now, save);
+    const reviewOut = await runReview(
+      item,
+      current,
+      deps,
+      state,
+      candidates,
+      observed,
+      prepared,
+      now,
+      save
+    );
     if (!reviewOut) continue;
     const { result, sha } = reviewOut;
     applyVerdict(current, result, sha, now);
-    await deps.history(item, { ...result, round: current.rounds, writer: current.writer?.model || 'unknown' });
-    await deps.metrics({ time: new Date(now).toISOString(), item: item.id, pr: item.pr, round: current.rounds, sha, writer: current.writer?.model || 'unknown', verdict: result.verdict, tokens: result.tokens ?? null, ciRed: Boolean(result.ciRed) });
-    if (result.verdict === 'CHANGES_REQUIRED' && current.writer?.model) (current.failedWriters ||= []).push(current.writer.model);
+    await deps.history(item, {
+      ...result,
+      round: current.rounds,
+      writer: current.writer?.model || 'unknown',
+    });
+    await deps.metrics({
+      time: new Date(now).toISOString(),
+      item: item.id,
+      pr: item.pr,
+      round: current.rounds,
+      sha,
+      writer: current.writer?.model || 'unknown',
+      verdict: result.verdict,
+      tokens: result.tokens ?? null,
+      ciRed: Boolean(result.ciRed),
+    });
+    if (result.verdict === 'CHANGES_REQUIRED' && current.writer?.model)
+      (current.failedWriters ||= []).push(current.writer.model);
     await save();
     if (current.status === 'CHANGES_REQUIRED') {
       const lanes = item.fanout ? partitionFindings(result.findings) : [];
@@ -101,4 +135,21 @@ async function coordinatorTick(items, state, deps) {
   await save();
   return state;
 }
-module.exports = { POLICY, family, writerAlive, canReroute, quotaFromLog, chooseWriter, reviewPrompt, partitionFindings, unionRegister, protectedFile, privateFile, preflight, metricsSummary, metricsKey, validMetric, coordinatorTick };
+module.exports = {
+  POLICY,
+  family,
+  writerAlive,
+  canReroute,
+  quotaFromLog,
+  chooseWriter,
+  reviewPrompt,
+  partitionFindings,
+  unionRegister,
+  protectedFile,
+  privateFile,
+  preflight,
+  metricsSummary,
+  metricsKey,
+  validMetric,
+  coordinatorTick,
+};

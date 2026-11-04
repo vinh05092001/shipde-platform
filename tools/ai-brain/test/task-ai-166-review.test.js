@@ -36,8 +36,14 @@ function rig(overrides = {}) {
       push: async () => calls.push('push'),
       ci: async () => ({ state: 'green', sha: SHA }),
       candidates: async () => [writer],
-      launch: async () => { calls.push('launch'); return { pid: 12 }; },
-      review: async (w, r) => { calls.push(['review', r.family]); return { verdict: 'PASS', sha: SHA, findings: [] }; },
+      launch: async () => {
+        calls.push('launch');
+        return { pid: 12 };
+      },
+      review: async (w, r) => {
+        calls.push(['review', r.family]);
+        return { verdict: 'PASS', sha: SHA, findings: [] };
+      },
       save: async () => {},
       history: async () => {},
       metrics: async () => {},
@@ -60,7 +66,11 @@ function childFixture() {
     stderr: io(),
     unref: () => {},
     kill: () => {},
-    finish: () => { child.stdout.emit('end'); child.stderr.emit('end'); child.emit('close', 0); },
+    finish: () => {
+      child.stdout.emit('end');
+      child.stderr.emit('end');
+      child.emit('close', 0);
+    },
   });
 }
 
@@ -68,7 +78,10 @@ test('AC-166-05: publication preflight and git inspection validate branch identi
   const dir = temporary(t);
   const badRuntime = runtimeApi.createRuntime({
     config: {},
-    git: async (cwd, args) => ({ exitCode: 0, stdout: args[0] === 'rev-parse' ? SHA : 'feat/task-ai-999-other' }),
+    git: async (cwd, args) => ({
+      exitCode: 0,
+      stdout: args[0] === 'rev-parse' ? SHA : 'feat/task-ai-999-other',
+    }),
   });
   await assert.rejects(badRuntime.inspect(item), /ITEM_BRANCH_MISMATCH/);
   await assert.rejects(badRuntime.push(item, SHA), /ITEM_BRANCH_MISMATCH/);
@@ -78,7 +91,18 @@ test('AC-166-05: publication preflight and git inspection validate branch identi
     config: {},
     git: async (cwd, args) => ({
       exitCode: 0,
-      stdout: args[0] === 'branch' ? validBranch : args[0] === 'rev-parse' ? SHA : args[0] === 'rev-list' ? '0' : args[0] === 'log' ? '[TASK-AI-166] outcome' : args.includes('--name-only') ? '.oc/writer.log' : '',
+      stdout:
+        args[0] === 'branch'
+          ? validBranch
+          : args[0] === 'rev-parse'
+            ? SHA
+            : args[0] === 'rev-list'
+              ? '0'
+              : args[0] === 'log'
+                ? '[TASK-AI-166] outcome'
+                : args.includes('--name-only')
+                  ? '.oc/writer.log'
+                  : '',
     }),
   });
   await goodRuntime.push(item, SHA);
@@ -92,7 +116,14 @@ test('AC-166-05: publication preflight and git inspection validate branch identi
     config: {},
     git: async (cwd, args) => ({
       exitCode: args[0] === 'merge' && args[1] !== '--abort' ? 1 : 0,
-      stdout: args[0] === 'rev-list' ? '1' : args.includes('--diff-filter=U') ? register : args[0] === 'show' ? 'work_item_id,name\nTASK-AI-166,test' : '',
+      stdout:
+        args[0] === 'rev-list'
+          ? '1'
+          : args.includes('--diff-filter=U')
+            ? register
+            : args[0] === 'show'
+              ? 'work_item_id,name\nTASK-AI-166,test'
+              : '',
     }),
     hookedGit: async () => {},
   });
@@ -100,9 +131,13 @@ test('AC-166-05: publication preflight and git inspection validate branch identi
 });
 
 test('AC-166-06: two-phase review requires independent reviewer and prevents open findings from passing', async () => {
-  const result = runtimeApi.parseReview(`VERDICT: PASS\nReviewed SHA: ${SHA}\n1. P1 Open defect; previous issue FIXED`);
+  const result = runtimeApi.parseReview(
+    `VERDICT: PASS\nReviewed SHA: ${SHA}\n1. P1 Open defect; previous issue FIXED`
+  );
   const { deps } = rig({
-    candidates: async () => [{ model: 'reviewer', family: 'independent', harness: 'codex', score: 90 }],
+    candidates: async () => [
+      { model: 'reviewer', family: 'independent', harness: 'codex', score: 90 },
+    ],
     review: async () => result,
   });
   const state = stateFor();
@@ -111,7 +146,10 @@ test('AC-166-06: two-phase review requires independent reviewer and prevents ope
 });
 
 test('AC-166-07: quota refusal cooldown is bounded and cannot renew across ticks or restart', async () => {
-  const { deps } = rig({ inspect: async () => ({ sha: null, dirty: false }), logText: async () => 'RESOURCE_EXHAUSTED' });
+  const { deps } = rig({
+    inspect: async () => ({ sha: null, dirty: false }),
+    logText: async () => 'RESOURCE_EXHAUSTED',
+  });
   let state = stateFor({ writer: { ...writer, log: 'writer.log', reservedAt: NOW - 1000 } });
   await policy.coordinatorTick([item], state, deps);
   assert.equal(state.exhausted.length, 1);
@@ -133,10 +171,20 @@ test('AC-166-08: fan-out reserves launches durably before spawn and excludes all
     root: dir,
     config: {},
     git: async () => ({ exitCode: 0, stdout: 'feat/task-ai-166-test' }),
-    spawn: () => { beforeSpawn = JSON.parse(fs.readFileSync(path.join(dir, '.oc/coordinator/state.json'), 'utf8')); return child; },
+    spawn: () => {
+      beforeSpawn = JSON.parse(
+        fs.readFileSync(path.join(dir, '.oc/coordinator/state.json'), 'utf8')
+      );
+      return child;
+    },
   });
   runtime.save(state);
-  await runtime.fanout({ ...item, cwd }, [{ lane: 1, files: ['tools/test.js'], findings: [] }], [{ model: 'gpt-test', family: 'gpt', harness: 'codex', score: 90 }], state);
+  await runtime.fanout(
+    { ...item, cwd },
+    [{ lane: 1, files: ['tools/test.js'], findings: [] }],
+    [{ model: 'gpt-test', family: 'gpt', harness: 'codex', score: 90 }],
+    state
+  );
   child.finish();
   assert.equal(beforeSpawn.launches.length, 1);
 });
@@ -145,15 +193,27 @@ test('AC-166-09: metrics and coordinator loop respect held locks, mask audit cre
   const dir = temporary(t);
   const prevCwd = process.cwd();
   const prevConfig = process.env.OPENCODE_CONFIG;
-  t.after(() => { process.chdir(prevCwd); if (prevConfig === undefined) delete process.env.OPENCODE_CONFIG; else process.env.OPENCODE_CONFIG = prevConfig; });
+  t.after(() => {
+    process.chdir(prevCwd);
+    if (prevConfig === undefined) delete process.env.OPENCODE_CONFIG;
+    else process.env.OPENCODE_CONFIG = prevConfig;
+  });
   fs.writeFileSync(path.join(dir, 'opencode.json'), '{}');
   process.env.OPENCODE_CONFIG = path.join(dir, 'opencode.json');
   const localDir = path.join(dir, '.oc/coordinator');
   fs.mkdirSync(localDir, { recursive: true });
-  fs.writeFileSync(path.join(localDir, 'loop.lock'), JSON.stringify({ pid: 12345, at: '2026-01-01T00:00:00Z' }));
+  fs.writeFileSync(
+    path.join(localDir, 'loop.lock'),
+    JSON.stringify({ pid: 12345, at: '2026-01-01T00:00:00Z' })
+  );
   fs.writeFileSync(path.join(dir, 'items.json'), JSON.stringify([{ ...item, cwd: dir }]));
   process.chdir(dir);
-  await assert.rejects(require('../coordinator-cli').main(['run', inputFile(dir)]), /LOOP_LOCK_HELD/);
+  await assert.rejects(
+    require('../coordinator-cli').main(['run', inputFile(dir)]),
+    /LOOP_LOCK_HELD/
+  );
 });
 
-function inputFile(dir) { return path.join(dir, 'items.json'); }
+function inputFile(dir) {
+  return path.join(dir, 'items.json');
+}
