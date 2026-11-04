@@ -358,3 +358,31 @@ Re-verified after the split/rewrite commit `c29a90c8` ("[TASK-AI-158] Split into
 - All four operator-specified file targets are <= 300 lines. No further split or rewrite is required.
 - The split commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines") already satisfies this round's file-target task; the task.md line counts (1074/604/557/419) are stale pre-split figures.
 - Slice A = this PR; Slice B = scripts/ai/output-path.mjs, tools/ctx-tools/_mcp.py, tools/ctx-tools/_sanitize.py
+
+## Operator round 2026-11-05f (file-targets only — re-verification, no behavior change)
+
+Re-verified after the split/rewrite commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines"):
+
+| Command                                                   | Result | Evidence                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node --test scripts/ai/test/pack-context.test.mjs`       | PASS   | 4/4 AC tests pass (AC-AI-158-01 through 04: root config & pinned dependency, argument parsing, token limit, secret check & advisory doc) — 1 suite, 0 fail, 0 cancelled, 9.5s total                                                                                             |
+| `python tools/ctx-tools/test_smoke.py`                    | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — ran in 1.1s via `python`                                                                                                                                      |
+
+### File line counts (all <= 300)
+
+| File                                  | Lines |
+| ------------------------------------- | ----- |
+| scripts/ai/pack-context.mjs           | 177   |
+| scripts/ai/test/pack-context.test.mjs | 204   |
+| tools/ctx-tools/smoke.py              | 192   |
+| tools/ctx-tools/test_smoke.py         | 115   |
+| scripts/ai/output-path.mjs            | 235   |
+| scripts/ai/parse-args.mjs             | 83    |
+| scripts/ai/config.mjs                 | 57    |
+| scripts/ai/publish.mjs                | 37    |
+| tools/ctx-tools/_mcp.py               | 189   |
+| tools/ctx-tools/_sanitize.py          | 121   |
+
+- All four operator-specified file targets are <= 300 lines. No further split or rewrite is required.
+- The split commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines") already satisfies this round's file-target task; the task.md line counts (1074/604/557/419) are stale pre-split figures.
+- No source files modified this round — working tree has only `.oc/` context file changes. Task complete.
