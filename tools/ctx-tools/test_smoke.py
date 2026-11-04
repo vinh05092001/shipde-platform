@@ -445,6 +445,22 @@ class TestSmokeRedaction(unittest.TestCase):
 
     def test_rpc_error_allowlist_records_only_code_and_category(self):
         """Root cause #2: error payload is allowlisted to code and category only; message/data never stored/printed."""
+        sys.path.insert(0, str(THIS_DIR))
+        try:
+            from smoke import sanitize_secret_payload
+        finally:
+            sys.path.pop(0)
+
+        err_obj = {
+            "code": -32603,
+            "message": "Authorization: Basic dXNlcjpwYXNz",
+            "data": {"access_token": "t"},
+        }
+        sanitized = sanitize_secret_payload(err_obj)
+        self.assertEqual(sanitized, {"code": -32603, "category": "Internal error"})
+        self.assertNotIn("dXNlcjpwYXNz", json.dumps(sanitized))
+        self.assertNotIn('"t"', json.dumps(sanitized))
+
         tmp_base = REPO_ROOT / ".oc" / "tmp"
         tmp_base.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:

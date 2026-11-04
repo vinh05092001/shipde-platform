@@ -768,6 +768,10 @@ describe('failure cleanup and destination safety', () => {
     try {
       // 1. --out .GIT refused
       assert.throws(
+        () => validateOutputPath(fixture, '.context-packs/.GIT'),
+        /inside \.git/i,
+      );
+      assert.throws(
         () => validateOutputPath(fixture, '.GIT'),
         /inside \.git|inside \.context-packs/i,
       );
