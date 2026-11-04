@@ -62,7 +62,7 @@ Latest review: .oc/review.txt at 517ee1725e96f13642283f2bafa3fdd1b67e6929.
 | `pnpm typecheck`                                          | PASS    | TypeScript compilation across all packages and apps passes with 0 errors                                                                                                                       |
 | `pnpm lint`                                               | PASS    | ESLint across all packages and scripts passes with 0 errors                                                                                                                                    |
 | `node scripts/ai/check-no-hardcode.mjs`                   | PASS    | 0 new raw hardcodes                                                                                                                                                                            |
-| `git -c safe.directory=* diff --check origin/main...HEAD` | PASS    | No whitespace errors against origin/main                                                                                                                                                       |
+| `git -c safe.directory=* diff --check origin/main...HEAD` | PARTIAL | `git diff --check` exits 0 (no errors) but reports 845 trailing-whitespace lines across 5 `.oc/` files (`.oc/context-pack.md` 826, `.oc/history-before-root-0010.md` 6, `.oc/history-pre-size-1505.md` 6, `.oc/review.txt` 6, `.oc/size-analysis.txt` 1). All five files are new in this branch — `origin/main` contains no `.oc/` at all — so every match is pre-existing coordinator input, not a TASK-AI-158 source file. No whitespace error is introduced by this Work Item. |
 | `git -c safe.directory=* diff --check`                    | PASS    | Working tree diff clean (0 whitespace errors)                                                                                                                                                  |
 
 ## Codex review
@@ -101,7 +101,7 @@ Re-verified after the split/rewrite commit `c29a90c`:
 | `node --test scripts/ai/test/pack-context.test.mjs`       | PASS   | 4/4 AC tests pass (AC-AI-158-01 through 04) — 4 suites, 0 fail, 0 cancelled                                                                                                                    |
 | `python3 tools/ctx-tools/test_smoke.py`                   | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python` alias is disabled |
 | `node scripts/ai/check-no-hardcode.mjs`                   | PASS   | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                             |
-| `git -c safe.directory=* diff --check origin/main...HEAD` | PASS   | No whitespace errors against origin/main                                                                                                                                                       |
+| `git -c safe.directory=* diff --check origin/main...HEAD` | PARTIAL | `git diff --check` exits 0 (no errors), but reports 845 trailing-whitespace lines across 5 `.oc/` files (`.oc/context-pack.md` 826, `.oc/history-before-root-0010.md` 6, `.oc/history-pre-size-1505.md` 6, `.oc/review.txt` 6, `.oc/size-analysis.txt` 1). All five files are new in this branch — `origin/main` contains no `.oc/` at all — so every match is pre-existing coordinator input, not a TASK-AI-158 source file. No whitespace error is introduced by this Work Item. |
 | `git -c safe.directory=* diff --check`                    | PASS   | Working tree diff clean (0 whitespace errors)                                                                                                                                                  |
 | `node tools/ctx-tools/prompt-block.js`                    | PASS   | Prompt block generation succeeds with all registered tools                                                                                                                                     |
 
@@ -131,7 +131,7 @@ Re-verified after the split/rewrite commit `c29a90c` ("[TASK-AI-158] Split into 
 | `node --test scripts/ai/test/pack-context.test.mjs`       | PASS   | 4/4 AC tests pass (AC-AI-158-01 through 04: root config & pinned dependency, argument parsing, token limit, secret check & advisory doc) — 1 suite, 0 fail, 0 cancelled                       |
 | `python312 tools/ctx-tools/test_smoke.py`                 | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python` alias is disabled |
 | `node scripts/ai/check-no-hardcode.mjs`                   | PASS   | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                              |
-| `git -c safe.directory=* diff --check origin/main...HEAD` | PASS   | No whitespace errors against origin/main                                                                                                                                                       |
+| `git -c safe.directory=* diff --check origin/main...HEAD` | PARTIAL | `git diff --check` exits 0 (no errors), but reports 845 trailing-whitespace lines across 5 `.oc/` files (`.oc/context-pack.md` 826, `.oc/history-before-root-0010.md` 6, `.oc/history-pre-size-1505.md` 6, `.oc/review.txt` 6, `.oc/size-analysis.txt` 1). All five files are new in this branch — `origin/main` contains no `.oc/` at all — so every match is pre-existing coordinator input, not a TASK-AI-158 source file. No whitespace error is introduced by this Work Item. |
 | `git -c safe.directory=* diff --check`                    | PASS   | Working tree diff clean (0 whitespace errors)                                                                                                                                                  |
 | `node tools/ctx-tools/prompt-block.js`                    | PASS   | Prompt block generation succeeds with all registered tools                                                                                                                                     |
 
@@ -163,7 +163,7 @@ Re-verified after the split/rewrite commit `c29a90c8` ("[TASK-AI-158] Split into
 | `node --test scripts/ai/test/pack-context.test.mjs`       | PASS   | 4/4 AC tests pass (AC-AI-158-01 through 04: root config & pinned dependency, argument parsing, token limit, secret check & advisory doc) — 1 suite, 0 fail, 0 cancelled                       |
 | `python312 tools/ctx-tools/test_smoke.py`                 | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python` alias is disabled |
 | `node scripts/ai/check-no-hardcode.mjs`                   | PASS   | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                              |
-| `git -c safe.directory=* diff --check origin/main...HEAD` | PASS   | No whitespace errors against origin/main                                                                                                                                                       |
+| `git -c safe.directory=* diff --check origin/main...HEAD` | PARTIAL | `git diff --check` exits 0 (no errors), but reports 845 trailing-whitespace lines across 5 `.oc/` files (`.oc/context-pack.md` 826, `.oc/history-before-root-0010.md` 6, `.oc/history-pre-size-1505.md` 6, `.oc/review.txt` 6, `.oc/size-analysis.txt` 1). All five files are new in this branch — `origin/main` contains no `.oc/` at all — so every match is pre-existing coordinator input, not a TASK-AI-158 source file. No whitespace error is introduced by this Work Item. |
 | `git -c safe.directory=* diff --check`                    | PASS   | Working tree diff clean (0 whitespace errors)                                                                                                                                                  |
 | `node tools/ctx-tools/prompt-block.js`                    | PASS   | Prompt block generation succeeds with all registered tools                                                                                                                                     |
 
@@ -185,3 +185,37 @@ Re-verified after the split/rewrite commit `c29a90c8` ("[TASK-AI-158] Split into
 - All four operator-specified file targets are <= 300 lines. No further split or rewrite is required.
 - The split commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines") already satisfies this round's file-target task; the task.md line counts (1074/604/557/419) are stale pre-split figures.
 - `python3` is not on PATH on this host; `python312` (full path) is used instead — test result is identical.
+- **Correction to earlier rounds:** the prior `git diff --check origin/main...HEAD` rows in this file recorded "PASS / No whitespace errors" — that was inaccurate. The correct result is PARTIAL, as documented in each round's row above. The whitespace findings are all in new `.oc/` coordinator inputs (origin/main contains no `.oc/` at all), not in any TASK-AI-158 source file.
+
+## Operator round 2026-11-04d (file-targets only — re-verification, no behavior change)
+
+Re-verified after the split/rewrite commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines"):
+
+| Command                                                   | Result   | Evidence                                                                                                                                                                                       |
+| --------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node --test scripts/ai/test/pack-context.test.mjs`       | PASS     | 4/4 AC tests pass (AC-AI-158-01 through 04: root config & pinned dependency, argument parsing, token limit, secret check & advisory doc) — 1 suite, 0 fail, 0 cancelled                       |
+| `python312 -m unittest tools/ctx-tools/test_smoke.py -v`  | PASS     | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python`/`python3` alias is disabled |
+| `node scripts/ai/check-no-hardcode.mjs`                   | PASS     | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                              |
+| `node tools/ctx-tools/prompt-block.js`                    | PASS     | Prompt block generation succeeds with all registered tools                                                                                                                                     |
+| `git -c safe.directory=* diff --check origin/main...HEAD`  | PARTIAL  | `git diff --check` exits 0 (no errors), but reports 845 trailing-whitespace lines across 5 `.oc/` files (`.oc/context-pack.md` 826, `.oc/history-before-root-0010.md` 6, `.oc/history-pre-size-1505.md` 6, `.oc/review.txt` 6, `.oc/size-analysis.txt` 1). All five files are new in this branch — `origin/main` contains no `.oc/` at all — so every match is pre-existing coordinator input, not a TASK-AI-158 source file. No whitespace error is introduced by this Work Item. |
+| `git -c safe.directory=* diff --check`                     | PASS     | Working tree diff clean (0 whitespace errors) — manifest `createdAt` timestamp noise reverted, working tree now matches HEAD exactly |
+
+### File line counts (all <= 300)
+
+| File                                  | Lines |
+| ------------------------------------- | ----- |
+| scripts/ai/pack-context.mjs           | 177   |
+| scripts/ai/test/pack-context.test.mjs | 204   |
+| scripts/ai/output-path.mjs            | 235   |
+| scripts/ai/parse-args.mjs             | 83    |
+| scripts/ai/config.mjs                 | 57    |
+| scripts/ai/publish.mjs                | 37    |
+| tools/ctx-tools/smoke.py              | 192   |
+| tools/ctx-tools/test_smoke.py         | 115   |
+| tools/ctx-tools/_mcp.py               | 189   |
+| tools/ctx-tools/_sanitize.py          | 121   |
+
+- All four operator-specified file targets are <= 300 lines. No further split or rewrite is required.
+- The split commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines") already satisfies this round's file-target task; the task.md line counts (1074/604/557/419) are stale pre-split figures.
+- `python3` is not on PATH on this host; `python312` (full path) is used instead — test result is identical.
+- **Correction to earlier rounds:** the prior `git diff --check origin/main...HEAD` rows in this file recorded "PASS / No whitespace errors" — that was inaccurate. The correct result is PARTIAL, as documented above. The whitespace findings are all in new `.oc/` coordinator inputs, not in any TASK-AI-158 source file.
