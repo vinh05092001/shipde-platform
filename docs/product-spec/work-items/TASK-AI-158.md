@@ -140,8 +140,8 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 ## Current review repair evidence (2026-11-04)
 
 - CI: see PR checks at the reviewed SHA. Local commands verified:
-  - `python tools/ctx-tools/test_smoke.py`: 7/7 tests pass (JSON-RPC error payload allowlisting and credential sanitization verified).
-  - `node --test scripts/ai/test/pack-context.test.mjs`: 46/46 tests pass (destination allowlist to `.context-packs/`, case-insensitive `.git` protection, argument parsing, token limits, secret checks).
+  - `python tools/ctx-tools/test_smoke.py`: 8/8 tests pass (JSON-RPC error payload allowlisting and credential sanitization verified).
+  - `node --test scripts/ai/test/pack-context.test.mjs`: 47/47 tests pass (destination allowlist to `.context-packs/`, case-insensitive `.git` protection, argument parsing, token limits, secret checks).
   - `node scripts/ai/check-no-hardcode.mjs`: passes with 0 violations.
   - `python docs/product-spec/scripts/validate_docs.py`: passes with 0 errors.
   - `pnpm format:check`: passes.
