@@ -897,7 +897,8 @@ async function main(): Promise<void> {
       // Unauthenticated request to test-rls endpoint must be denied with 401
       await request(app.getHttpServer()).get('/api/v1/test-rls/orders').expect(401);
 
-      // Negative HTTP test: token with empty scope must deny tenant context establishment
+      // Negative HTTP test: token with empty scope must be rejected before handler executes
+      // Finding 1, 2, 3: Must deny with 403 FORBIDDEN and return zero protected orders
       const sIdEmpty = randomUUID();
       const { token: tokenEmptyScope } = signAccessToken(
         {
@@ -925,11 +926,16 @@ async function main(): Promise<void> {
       const httpResEmptyScope = await request(app.getHttpServer())
         .get('/api/v1/test-rls/orders')
         .set('Authorization', `Bearer ${tokenEmptyScope}`)
-        .expect(200);
+        .expect(403);
       assert.strictEqual(
-        httpResEmptyScope.body.observedTenantId,
+        httpResEmptyScope.body?.error?.code,
+        'FORBIDDEN',
+        'token with empty scope must be denied with 403 FORBIDDEN'
+      );
+      assert.strictEqual(
+        httpResEmptyScope.body?.orders,
         undefined,
-        'token with empty scope must deny tenant context establishment'
+        'empty scope request must NOT return protected orders'
       );
 
       // Merchant A search request: must only see Tenant A's orders, never Tenant B's orders

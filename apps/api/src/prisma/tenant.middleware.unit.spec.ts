@@ -63,16 +63,36 @@ function signToken(
  * async boundary (timer tick) inside the next() continuation — the same
  * mechanism by which guards and controller handlers inherit the context.
  */
-function runMiddleware(authHeader?: string): Promise<string | undefined> {
+function runMiddleware(
+  authHeader?: string,
+  requestPath = '/api/v1/orders'
+): Promise<string | undefined> {
   const middleware = new TenantMiddleware();
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const req = {
+      path: requestPath,
       headers: authHeader === undefined ? {} : { authorization: authHeader },
     };
     const next: NextFunction = () => {
       setTimeout(() => resolve(getTenantId()), 0);
     };
-    middleware.use(req as unknown as Request, {} as Response, next);
+    const res = {
+      status(code: number) {
+        return {
+          json(payload: any) {
+            reject({
+              status: code,
+              ...payload,
+            });
+          },
+        };
+      },
+    };
+    try {
+      middleware.use(req as unknown as Request, res as unknown as Response, next);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -121,13 +141,28 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
     assert.equal(tenant, MERCHANT_B);
   });
 
-  it('does not establish tenant context for setup tokens (scope: setup)', async () => {
+  it('does not establish tenant context for setup tokens on setup routes', async () => {
     const setupToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, 'setup');
-    const tenant = await runMiddleware(`Bearer ${setupToken}`);
+    const tenant = await runMiddleware(`Bearer ${setupToken}`, '/auth/mfa/setup');
     assert.equal(
       tenant,
       undefined,
-      'setup scoped tokens must not establish merchant tenant context'
+      'setup scoped tokens on setup routes must not establish merchant tenant context'
+    );
+  });
+
+  it('rejects setup tokens on protected resource routes with 403 Forbidden', async () => {
+    const setupToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, 'setup');
+    await assert.rejects(
+      runMiddleware(`Bearer ${setupToken}`, '/api/v1/orders'),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      'setup scoped tokens must reject on protected resource routes'
     );
   });
 
@@ -137,19 +172,33 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
     assert.equal(tenant, undefined, 'empty mid must not establish tenant context');
   });
 
-  it('does not establish tenant context for empty scope claims', async () => {
+  it('rejects empty scope claims with 403 Forbidden', async () => {
     const emptyScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, '');
-    const tenant = await runMiddleware(`Bearer ${emptyScopeToken}`);
-    assert.equal(tenant, undefined, 'empty scope must not establish merchant tenant context');
+    await assert.rejects(
+      runMiddleware(`Bearer ${emptyScopeToken}`),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      'empty scope must reject with 403 FORBIDDEN'
+    );
   });
 
-  it('does not establish tenant context for whitespace-only scope claims', async () => {
+  it('rejects whitespace-only scope claims with 403 Forbidden', async () => {
     const whitespaceScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, '   ');
-    const tenant = await runMiddleware(`Bearer ${whitespaceScopeToken}`);
-    assert.equal(
-      tenant,
-      undefined,
-      'whitespace-only scope must not establish merchant tenant context'
+    await assert.rejects(
+      runMiddleware(`Bearer ${whitespaceScopeToken}`),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      'whitespace-only scope must reject with 403 FORBIDDEN'
     );
   });
 
@@ -162,7 +211,7 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
     assert.deepEqual(placeholders, [], `placeholders: ${placeholders.join(', ')}`);
   });
 
-  it('does not establish tenant context for empty array scope claims', async () => {
+  it('rejects empty array scope claims with 403 Forbidden', async () => {
     const emptyArrayScopeToken = signToken(
       MERCHANT_A,
       'OWNER',
@@ -170,8 +219,17 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
       SECRET,
       [] as unknown as string
     );
-    const tenant = await runMiddleware(`Bearer ${emptyArrayScopeToken}`);
-    assert.equal(tenant, undefined, 'empty array scope must not establish merchant tenant context');
+    await assert.rejects(
+      runMiddleware(`Bearer ${emptyArrayScopeToken}`),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      'empty array scope must reject with 403 FORBIDDEN'
+    );
   });
 
   it('does not establish tenant context for PLATFORM_ADMIN tokens even if mid is present', async () => {
@@ -184,23 +242,41 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
     );
   });
 
-  it('does not establish tenant context for setup prefixed scope array claims', async () => {
+  it('rejects setup prefixed scope array claims with 403 Forbidden', async () => {
     const setupArrayScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, [
       'setup-invite',
     ] as unknown as string);
-    const tenant = await runMiddleware(`Bearer ${setupArrayScopeToken}`);
-    assert.equal(tenant, undefined, 'setup-x scope must not establish merchant tenant context');
+    await assert.rejects(
+      runMiddleware(`Bearer ${setupArrayScopeToken}`),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      'setup-x scope must reject with 403 FORBIDDEN'
+    );
   });
 
-  it('does not establish tenant context for null/invalid scope array claims', async () => {
+  it('rejects null/invalid scope array claims with 403 Forbidden', async () => {
     const nullArrayScopeToken = signToken(MERCHANT_A, 'OWNER', 3600, SECRET, [
       null,
     ] as unknown as string);
-    const tenant = await runMiddleware(`Bearer ${nullArrayScopeToken}`);
-    assert.equal(tenant, undefined, '[null] scope must not establish merchant tenant context');
+    await assert.rejects(
+      runMiddleware(`Bearer ${nullArrayScopeToken}`),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      '[null] scope must reject with 403 FORBIDDEN'
+    );
   });
 
-  it('does not establish tenant context for non-string scope claims', async () => {
+  it('rejects non-string scope claims with 403 Forbidden', async () => {
     const numberScopeToken = signToken(
       MERCHANT_A,
       'OWNER',
@@ -208,7 +284,16 @@ describe('TASK-AI-154: TenantMiddleware tenant context establishment', () => {
       SECRET,
       12345 as unknown as string
     );
-    const tenant = await runMiddleware(`Bearer ${numberScopeToken}`);
-    assert.equal(tenant, undefined, 'non-string scope must not establish merchant tenant context');
+    await assert.rejects(
+      runMiddleware(`Bearer ${numberScopeToken}`),
+      (err: any) => {
+        const status = err.status ?? err.getStatus?.();
+        const code = err.response?.error?.code ?? err.error?.code;
+        assert.equal(status, 403);
+        assert.equal(code, 'FORBIDDEN');
+        return true;
+      },
+      'non-string scope must reject with 403 FORBIDDEN'
+    );
   });
 });
