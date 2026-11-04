@@ -110,3 +110,4 @@ None. Internal AI workflow scripts and markdown templates.
 
 - Codex review: PASS at commit `eafc4f8`.
 - Follow-up in `dbce7e3`: treat explicitly empty modelId and accountId as invalid.
+- Address review of `52acbbe`: add unit test verifying pr-body template and PR body contain zero unchecked mandatory checklist items (- [ ]), resolving CI contract gate failure.
