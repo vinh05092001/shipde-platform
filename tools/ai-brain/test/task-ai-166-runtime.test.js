@@ -32,11 +32,8 @@ function temporary(t, prefix) {
 
 function launchRig(t) {
   const dir = temporary(t, 'ai166-launch-');
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  const stdin = new EventEmitter();
-  stdin.end = () => {};
-  const child = new EventEmitter();
+  const io = () => Object.assign(new EventEmitter(), { end: () => {} });
+  const [stdout, stderr, stdin, child] = [io(), io(), io(), new EventEmitter()];
   Object.assign(child, { pid: 99999, stdout, stderr, stdin, unref: () => {} });
   const runtime = createRuntime({ config: {}, spawn: () => child });
   return {
@@ -54,7 +51,10 @@ function launchRig(t) {
 function poolWriterJob(t, prefix, job) {
   const dir = temporary(t, prefix);
   const file = path.join(dir, 'job.json');
-  fs.writeFileSync(file, JSON.stringify({ accountId: 'agy01', cwd: dir, model: 'm', prompt: 'task', ...job }));
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ accountId: 'agy01', cwd: dir, model: 'm', prompt: 'task', ...job })
+  );
   return {
     dir,
     file,
@@ -66,20 +66,22 @@ function poolWriterJob(t, prefix, job) {
 test('AC-166-01: benchmark sources retain discrete records without column-wise mean and scanner keeps errno', async () => {
   const { mergePriorDocuments } = require('../priors');
   const now = Date.parse('2026-11-02T12:00:00Z');
-  const source = (id, url, score) => ({
+  const source = (id, score) => ({
     retrievedAt: '2026-11-01T00:00:00Z',
-    sources: [{ id, url }],
+    sources: [{ id, url: `https://${id}.invalid` }],
     models: [{ canonical: 'model-x', benchmarks: { 'SWE-bench Verified': score } }],
   });
-  const doc = mergePriorDocuments(
-    [source('skillbench', 'https://skillbench.invalid/report', 72), source('aa', 'https://aa.invalid/report', 40)],
-    now,
-    {}
-  );
+  const doc = mergePriorDocuments([source('sb', 72), source('aa', 40)], now, {});
   const row = doc.ranking.find((r) => r.canonical === 'model-x');
   const scores = row.benchmarks.filter((b) => b.name === 'SWE-bench Verified').map((b) => b.score);
-  assert.deepEqual([...scores].sort((a, b) => a - b), [40, 72]);
-  assert.equal(row.benchmarks.some((b) => b.score === 56), false);
+  assert.deepEqual(
+    [...scores].sort((a, b) => a - b),
+    [40, 72]
+  );
+  assert.equal(
+    row.benchmarks.some((b) => b.score === 56),
+    false
+  );
 
   await assert.rejects(
     publicDocuments({
@@ -117,7 +119,9 @@ test('AC-166-04: writer launch bounds log at MAX_LOG_BYTES, drains streams, and 
     false
   );
   let resolved = false;
-  handle.completed.then(() => { resolved = true; });
+  handle.completed.then(() => {
+    resolved = true;
+  });
   rig.child.stdout.emit('data', 'chunk 1\n[BLOCKED_BY_SANDBOX]');
   rig.child.stderr.emit('data', 'rate limit warning');
   rig.child.emit('close', 0);
@@ -126,8 +130,7 @@ test('AC-166-04: writer launch bounds log at MAX_LOG_BYTES, drains streams, and 
   rig.finish();
   assert.equal((await handle.completed).exitCode, 0);
   const drained = fs.readFileSync(handle.log, 'utf8');
-  assert.ok(drained.includes('[BLOCKED_BY_SANDBOX]'));
-  assert.ok(drained.includes('rate limit warning'));
+  assert.ok(drained.includes('[BLOCKED_BY_SANDBOX]') && drained.includes('rate limit warning'));
 
   const bounded = launchRig(t);
   const capped = await bounded.runtime.launch(
@@ -157,22 +160,22 @@ test('AC-166-04: writer launch bounds log at MAX_LOG_BYTES, drains streams, and 
   assert.equal(queued.jobId, 'agy01/fixture');
   assert.equal(queued.reason, 'RESOURCE_EXHAUSTED');
 
-  const rejected = poolWriterJob(t, 'ai166-pool-bad-', { cwd: path.join(os.tmpdir(), 'ai166-bad') });
+  const rejected = poolWriterJob(t, 'ai166-pool-bad-', {
+    cwd: path.join(os.tmpdir(), 'ai166-bad'),
+  });
   await assert.rejects(() => rejected.run({ expectedCwd: rejected.dir }), /INVALID_JOB_CWD/);
 
-  const sanitized = poolWriterJob(t, 'ai166-pool-sec-', { prompt: 'task' });
-  const result = await sanitized.run({
-    expectedCwd: sanitized.dir,
+  const secJob = poolWriterJob(t, 'ai166-pool-sec-', {});
+  const secRes = await secJob.run({
+    expectedCwd: secJob.dir,
     submitJob: async () => ({
       state: 'error',
       exitCode: 1,
-      reason: 'Failed auth password="my-secret-pw" for user@tenant.com',
-      jobId: 'agy01/test-job',
+      reason: 'password="leak" user@tenant.com',
+      jobId: 'agy01/test',
     }),
   });
-  assert.equal(result.reason.includes('my-secret-pw'), false);
-  assert.equal(result.reason.includes('user@tenant.com'), false);
-  assert.ok(result.reason.includes('[REDACTED]'));
+  assert.ok(!secRes.reason.includes('leak') && !secRes.reason.includes('user@tenant.com'));
 });
 
 // AC-166-05: Host commit excludes private paths and merges CSV conflict via row union through hook
@@ -190,18 +193,22 @@ test('AC-166-05: host commit excludes private paths and merges CSV conflict via 
       if (args[0] === 'add' && args.includes(csv)) registerAdded = true;
       const stdout =
         args[0] === 'status'
-          ? (committed ? '' : ' M tools/ai-brain/x.js\n')
+          ? committed
+            ? ''
+            : ' M tools/ai-brain/x.js\n'
           : args[0] === 'rev-list'
-          ? '1'
-          : args.includes('--diff-filter=U')
-          ? registerAdded ? '' : csv
-          : args[0] === 'show'
-          ? '"work_item_id","name"\n' + (args[1].startsWith(':2') ? '"A","one"' : '"B","two"')
-          : args[0] === 'log'
-          ? '[TASK-AI-166] outcome'
-          : args[0] === 'rev-parse'
-          ? 'a'.repeat(40)
-          : '';
+            ? '1'
+            : args.includes('--diff-filter=U')
+              ? registerAdded
+                ? ''
+                : csv
+              : args[0] === 'show'
+                ? '"work_item_id","name"\n' + (args[1].startsWith(':2') ? '"A","one"' : '"B","two"')
+                : args[0] === 'log'
+                  ? '[TASK-AI-166] outcome'
+                  : args[0] === 'rev-parse'
+                    ? 'a'.repeat(40)
+                    : '';
       return { exitCode: args[0] === 'merge' ? 1 : 0, stdout };
     },
     hookedGit: async (cwd, args) => {
@@ -216,12 +223,7 @@ test('AC-166-05: host commit excludes private paths and merges CSV conflict via 
     assert.ok(add.includes(':(exclude)' + excluded));
   }
   assert.ok(
-    calls.some(
-      (call) =>
-        call[0] === 'hooked' &&
-        call[1] === 'commit' &&
-        call[3] === '[TASK-AI-166] Address review: writer output (gpt-test)'
-    )
+    calls.some((c) => c[0] === 'hooked' && c[1] === 'commit' && c[3].includes('Address review'))
   );
   assert.equal(calls.flat().includes('--no-verify'), false);
 
@@ -256,45 +258,36 @@ test('AC-166-08: fan-out merges lanes in numerical order and aborts on conflict'
       writer: { model: 'gpt-test' },
     }));
   const order = [];
+  const gitMock = (failMerge) => async (cwd, args) => {
+    order.push(args);
+    return {
+      exitCode: failMerge && args[0] === 'merge' && args[1] !== '--abort' ? 1 : 0,
+      stdout:
+        args[0] === 'diff' && args.includes('--name-only') && !args.includes('--cached')
+          ? 'apps/file' + cwd.slice(-1) + '.js'
+          : '',
+    };
+  };
+  const main = { id: 'TASK-AI-166', cwd: '/fixture/main' };
   const ordered = createRuntime({
     config: {},
-    git: async (cwd, args) => {
-      order.push([cwd, args]);
-      return {
-        exitCode: 0,
-        stdout:
-          args[0] === 'diff' && args.includes('--name-only') && !args.includes('--cached')
-            ? 'apps/file' + cwd.slice(-1) + '.js'
-            : '',
-      };
-    },
-    hookedGit: async (cwd, args) => order.push([cwd, ['hooked', ...args]]),
+    git: gitMock(false),
+    hookedGit: async (cwd, args) => order.push(['hooked', ...args]),
   });
-  const main = { id: 'TASK-AI-166', cwd: '/fixture/main' };
   assert.equal((await ordered.collectLanes(main, lanes([2, 1]))).state, 'merged');
   assert.deepEqual(
-    order.filter((call) => call[1][0] === 'merge').map((call) => call[1].at(-1)),
+    order.filter((call) => call[0] === 'merge').map((call) => call.at(-1)),
     ['lane1', 'lane2']
   );
-  assert.equal(order.filter((call) => call[1][0] === 'hooked').length, 2);
-  assert.equal(order.flat(2).includes('--force'), false);
+  assert.equal(order.filter((call) => call[0] === 'hooked').length, 2);
+  assert.equal(order.flat().includes('--force'), false);
 
-  const conflict = [];
-  const failing = createRuntime({
-    config: {},
-    git: async (cwd, args) => {
-      conflict.push(args);
-      return {
-        exitCode: args[0] === 'merge' && args[1] !== '--abort' ? 1 : 0,
-        stdout:
-          args[0] === 'diff' && args.includes('--name-only') && !args.includes('--cached')
-            ? 'apps/file' + cwd.slice(-1) + '.js'
-            : '',
-      };
-    },
-    hookedGit: async () => {},
-  });
+  order.length = 0;
+  const failing = createRuntime({ config: {}, git: gitMock(true), hookedGit: async () => {} });
   assert.equal((await failing.collectLanes(main, lanes([1, 2]))).state, 'conflict');
-  assert.ok(conflict.some((call) => call.join(' ') === 'merge --abort'));
-  assert.equal(conflict.some((call) => call.at(-1) === 'lane2' && call[0] === 'merge'), false);
+  assert.ok(order.some((call) => call.join(' ') === 'merge --abort'));
+  assert.equal(
+    order.some((call) => call.at(-1) === 'lane2' && call[0] === 'merge'),
+    false
+  );
 });

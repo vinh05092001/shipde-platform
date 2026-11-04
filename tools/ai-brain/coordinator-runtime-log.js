@@ -69,9 +69,11 @@ function parseReview(text, tokens = null) {
         !/\b(?:NOT\s+FIXED|OPEN|UNRESOLVED)\b/i.test(block),
       files: [
         ...new Set(
-          [...block.matchAll(/(?:`|\s)((?:apps|packages|docs|scripts|tools|prisma)\/[\w./\-\[\]]+)(?::\d+)?/g)].map(
-            (match) => match[1]
-          )
+          [
+            ...block.matchAll(
+              /(?:`|\s)((?:apps|packages|docs|scripts|tools|prisma)\/[\w./\-\[\]]+)(?::\d+)?/g
+            ),
+          ].map((match) => match[1])
         ),
       ],
       text: safeText(block),
@@ -86,7 +88,8 @@ function reviewUsage(log) {
   for (const line of log.split(/\r?\n/)) {
     try {
       const event = JSON.parse(line);
-      if (event.type === 'text' && typeof event.part?.text === 'string') text += event.part.text + '\n';
+      if (event.type === 'text' && typeof event.part?.text === 'string')
+        text += event.part.text + '\n';
       if (typeof event.result === 'string') text += event.result + '\n';
       const usage = event.part?.tokens || event.usage;
       if (usage) {

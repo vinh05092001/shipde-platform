@@ -48,7 +48,12 @@ test('AC-166-01: refresh stages run in order, reject incomplete evidence, and re
 
   const now = new Date();
   const f = fixture(t, 'ai166-ac01-');
-  f.writeFresh({ lastAttemptAt: now.toISOString(), lastSuccessfulAt: null, complete: true, failedSources: [] });
+  f.writeFresh({
+    lastAttemptAt: now.toISOString(),
+    lastSuccessfulAt: null,
+    complete: true,
+    failedSources: [],
+  });
   fs.writeFileSync(f.files.priorsFile, JSON.stringify({ ranking: [{ canonical: 'm-a' }] }));
   f.writeQuota({
     s1: {
@@ -71,7 +76,11 @@ test('AC-166-01: refresh stages run in order, reject incomplete evidence, and re
 
   // Incomplete evidence rejects exit 0
   const bad = fixture(t, 'ai166-ac01-bad-');
-  bad.writeFresh({ lastAttemptAt: now.toISOString(), complete: false, failedSources: [{ id: 'src', reason: 'fail' }] });
+  bad.writeFresh({
+    lastAttemptAt: now.toISOString(),
+    complete: false,
+    failedSources: [{ id: 'src', reason: 'fail' }],
+  });
   fs.writeFileSync(bad.files.priorsFile, JSON.stringify({ ranking: [{ canonical: 'm-a' }] }));
   bad.writeQuota({ s1: { code: 'OK', at: now.toISOString() } });
   const badResult = await bad.refresh();
@@ -112,7 +121,9 @@ test('AC-166-02: live discovery enumerates sources, handles unknown providers, a
 
   // Failed provider is marked unknown, does not fall back to obsolete
   const failed = await enumerateLiveSources({
-    config: { provider: { p: { options: { baseURL: 'https://p.invalid' }, models: { obsolete: {} } } } },
+    config: {
+      provider: { p: { options: { baseURL: 'https://p.invalid' }, models: { obsolete: {} } } },
+    },
     lanes: [],
     runCommand: async () => ({ exitCode: 1 }),
     fetch: async () => {
@@ -128,11 +139,13 @@ test('AC-166-02: live discovery enumerates sources, handles unknown providers, a
   const base = { registry: { sources: [{ id: 'provider' }] }, current: new Map([['old', prior]]) };
   assert.equal(reconcileRun({ ...base, results: {} }).transitions.length, 0);
   assert.equal(
-    reconcileRun({ ...base, results: { provider: { status: 'unknown', catalogs: [] } } }).transitions.length,
+    reconcileRun({ ...base, results: { provider: { status: 'unknown', catalogs: [] } } })
+      .transitions.length,
     0
   );
   assert.equal(
-    reconcileRun({ ...base, results: { provider: { status: 'enumerated', catalogs: [] } } }).transitions[0].state,
+    reconcileRun({ ...base, results: { provider: { status: 'enumerated', catalogs: [] } } })
+      .transitions[0].state,
     'REMOVED'
   );
 });
@@ -143,7 +156,10 @@ test('AC-166-03: catalogue freshness gate refuses absent, future or >48h observa
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T12:00:00Z');
   const write = (lastSuccessfulAt, complete = true, extra = {}) =>
-    fs.writeFileSync(path.join(dir, 'freshness.json'), JSON.stringify({ lastSuccessfulAt, complete, ...extra }));
+    fs.writeFileSync(
+      path.join(dir, 'freshness.json'),
+      JSON.stringify({ lastSuccessfulAt, complete, ...extra })
+    );
 
   // Missing freshness refuses STALE_CATALOGUE
   assert.equal(catalogueFreshness({ dataDir: dir, now }).code, 'STALE_CATALOGUE');
