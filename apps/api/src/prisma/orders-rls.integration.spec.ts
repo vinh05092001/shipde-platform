@@ -244,7 +244,7 @@ async function main(): Promise<void> {
     await probe.$disconnect().catch(() => {});
   }
 
-  console.log('All orders RLS AC integration tests passed');
+  console.log('All orders RLS AC integration tests passed (AC-AI-154-01..08)');
 }
 
 main().catch((error: unknown) => {
