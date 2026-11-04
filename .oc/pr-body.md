@@ -133,7 +133,7 @@ This round reduces the changed surfaces to small files (operator instruction: fi
 - `npx prettier --check <changed tools/ai-brain/*.js>` — PASS, "All matched files use Prettier code style!".
 - Split entry modules re-export the moved code without behavior change: `coordinator.js` 155 lines, `coordinator-runtime.js` 107 lines, plus `coordinator-{metrics,policy,pool-writer,quota-state,text,tick-core,tick-review}.js` and `coordinator-runtime-{core,git,launch,log,ops}.js`, all <=300 lines.
 - Split tests: `task-ai-166-refresh.test.js` 155, `task-ai-166-review.test.js` 219, `task-ai-166-runtime.test.js` 261 lines, all <=300.
-- `git diff --check origin/main...HEAD` — **FAIL (pre-existing, deferred)**: 10 trailing-whitespace lines in `.oc/history-pre-size-1505.md`, an orchestration artifact committed by an earlier split commit. Not fixed this round because the operator restricted this round to the five file targets and no review fixes.
+- `git diff --check origin/main...HEAD` — **FAIL (pre-existing, deferred)**: 15 trailing-whitespace lines in the committed orchestration artifacts `.oc/history-pre-size-1505.md` (10) and `.oc/history.md` (5). Not fixed this round because the operator restricted this round to the five file targets and no review fixes; the artifacts should be excluded from the publication delta and the whitespace remedied in the review-fix round.
 
 ## Documentation and traceability
 
