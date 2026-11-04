@@ -58,8 +58,31 @@ function routeModelKey(value, routeId) {
     .trim()
     .toLowerCase();
   const route = String(routeId || '').toLowerCase();
-  // A prefix that names the route itself is redundant (ag/x on route ag).
-  return route && id.startsWith(route + '/') ? id.slice(route.length + 1) : id;
+  // A prefix that names the route itself, or one of its registry aliases, is
+  // redundant (ag/x on route ag; ninerouter/x on route 9router, as OpenCode
+  // names it).
+  for (const name of [route, ...routeAliases(route)]) {
+    if (name && id.startsWith(name + '/')) return id.slice(name.length + 1);
+  }
+  return id;
+}
+
+let aliasCache = null;
+function routeAliases(route) {
+  if (!route) return [];
+  if (!aliasCache) {
+    aliasCache = new Map();
+    try {
+      for (const s of sourcesApi.loadSources().sources || []) {
+        if (s && s.id && Array.isArray(s.aliases)) {
+          aliasCache.set(String(s.id).toLowerCase(), s.aliases.map((a) => String(a).toLowerCase()));
+        }
+      }
+    } catch {
+      // No registry: only the route id itself is stripped.
+    }
+  }
+  return aliasCache.get(route) || [];
 }
 
 function normalizeModelId(value) {
