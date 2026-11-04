@@ -1,9 +1,14 @@
 import 'reflect-metadata';
+import {
+  createApiTestModule,
+  describeDatabaseTarget,
+  isLocalTestDb,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
@@ -227,6 +232,7 @@ async function runCarrierCatalogSupertestSuite() {
     path.resolve(__dirname, '../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -254,7 +260,7 @@ async function runCarrierCatalogSupertestSuite() {
     process.env.DATABASE_URL ||
     'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   }).compile();
 
@@ -266,8 +272,11 @@ async function runCarrierCatalogSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    const isCi = Boolean(process.env.CI);
-    const failureMsg = buildDatabaseReadinessFailureMessage(databaseUrl, isCi);
+    const isCi = Boolean(process.env.CI) || isLocalTestDb();
+    // BR-LOCAL-06: TEST_DB=local names only the masked host:port/db target, never the username.
+    const failureMsg = isLocalTestDb()
+      ? `Database must be reachable for TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      : buildDatabaseReadinessFailureMessage(databaseUrl, isCi);
     if (isCi) {
       throw new Error(failureMsg);
     }

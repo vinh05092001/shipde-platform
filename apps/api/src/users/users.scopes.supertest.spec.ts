@@ -1,8 +1,9 @@
 import 'reflect-metadata';
+import { describeDatabaseTarget, createApiTestModule } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
@@ -48,7 +49,7 @@ async function main() {
     TRUST_PROXY_HOPS: 1,
   });
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+  const moduleFixture: TestingModule = await createApiTestModule({ imports: [AppModule] })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
@@ -63,7 +64,7 @@ async function main() {
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
     throw new Error(
-      `Database must be reachable at ${databaseUrl} for RBAC-02 Supertest suite; failing closed.`
+      `Database must be reachable at ${describeDatabaseTarget(databaseUrl)} for RBAC-02 Supertest suite; failing closed.`
     );
   }
 
@@ -76,7 +77,7 @@ async function main() {
   } catch {
     // Ignore if table/row not present yet
   }
-  await seedDatabase();
+  await seedDatabase(prisma);
   await app.get(RbacService).ensurePlatformSeed();
 
   // Create additional tenant for cross-tenant testing (AC-RBAC-02-18)

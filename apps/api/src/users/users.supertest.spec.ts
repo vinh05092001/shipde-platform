@@ -1,10 +1,11 @@
 import 'reflect-metadata';
+import { describeDatabaseTarget, createApiTestModule } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { APP_CONFIG } from '../config.token';
@@ -137,7 +138,7 @@ export async function runUsersSupertestSuite() {
     TRUST_PROXY_HOPS: 1,
   });
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+  const moduleFixture: TestingModule = await createApiTestModule({ imports: [AppModule] })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
@@ -154,12 +155,12 @@ export async function runUsersSupertestSuite() {
   if ((await prisma.checkReadiness()) !== 'up') {
     await app.close();
     throw new Error(
-      `Database must be reachable at ${databaseUrl} for Users Supertest HTTP suite; failing closed.`
+      `Database must be reachable at ${describeDatabaseTarget(databaseUrl)} for Users Supertest HTTP suite; failing closed.`
     );
   }
 
   // Ensure DB seed and migrations
-  await seedDatabase();
+  await seedDatabase(prisma);
   await rbacService.ensurePlatformSeed();
 
   // Create isolated secondary merchant
