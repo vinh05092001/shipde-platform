@@ -387,9 +387,52 @@ test('ready-check introduces no package dependencies', () => {
   }).stdout;
   const originPkg = JSON.parse(originPkgRaw);
   assert.deepEqual(currentPkg.dependencies, originPkg.dependencies);
-  assert.deepEqual(currentPkg.devDependencies, originPkg.devDependencies);
+  const { 'markdown-it': _added, ...devRest } = currentPkg.devDependencies;
+  assert.deepEqual(devRest, originPkg.devDependencies);
   assert.deepEqual(currentPkg.peerDependencies, originPkg.peerDependencies);
   assert.deepEqual(currentPkg.optionalDependencies, originPkg.optionalDependencies);
+});
+
+test('rejects blank Proof after a fence delimiter inside a comment', () => {
+  const text = `${valid}\n<!--\n\`\`\`\n-->\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects blank Proof after a continuation-line list fence ends', () => {
+  const text = `${valid}\n- Example:\n\n  ~~~text\n  Example only.\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Proof')));
+});
+
+test('rejects source inside a list fence containing a blank line', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n- ~~~text\n\n  https://example.com/spec\n  ~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects source inside a tilde fence with a tilde in its info string', () => {
+  const text = `${valid.replace(source, 'None')}\n## Source references\n\n~~~text ~ example\nhttps://example.com/spec\n~~~\n`;
+  const result = checkWorkItemReady(text);
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('rejects unproved behaviour separated from a proved paragraph by blocks', () => {
+  const body = `Existing diagnostics stay masked.\n| Behaviour | Regression test |\n| --- | --- |\n| CLI stays read-only | cli-regression |\n~~~text\nExample only.\n~~~\nExisting input stays read-only; regression test: input-regression.`;
+  const result = checkWorkItemReady(withBehaviour(body));
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
+});
+
+test('accepts runnable Proof containing comparisons', () => {
+  const result = checkWorkItemReady(
+    valid.replace('`preserves-existing-behaviour`', 'node -e "process.exit(1 < 2 && 3 > 2 ? 0 : 1)"')
+  );
+  assert.deepEqual(result, { ok: true, problems: [] });
 });
 
 function runCliOnText(text) {

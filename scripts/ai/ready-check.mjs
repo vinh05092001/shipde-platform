@@ -2,7 +2,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import MarkdownIt from 'markdown-it';
 
+const md = new MarkdownIt({ html: true });
 const CLARIFICATION = /\[NEEDS\s+CLARIFICATION(?:\s*:[^\]]*)?\s*\]/gi;
 
 function tableCells(line) {
@@ -23,13 +25,12 @@ function tableCells(line) {
   return cells.map((cell) => cell.trim());
 }
 
-function isTableSeparator(cells) {
-  return cells.every((cell) => /^:?-+:?$/.test(cell));
-}
-
 function concrete(value) {
-  if (/<[^>]*>/.test(value)) return false;
-  const text = value.replace(/[`*_~]/g, '').trim();
+  if (/<[a-zA-Z][\w\s-]*>/.test(value)) return false;
+  const text = value
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/[`*_~]/g, '')
+    .trim();
   const stripped = text
     .replace(/^[-—:;~#/*[({<"'`\s]+/, '')
     .replace(/[-—:;~#/*\])}>'"`;?!,\s]+$/, '');
@@ -171,189 +172,6 @@ function extractTables(tokens) {
   return tables;
 }
 
-function getIndent(str) {
-  let count = 0;
-  for (const ch of str) {
-    if (ch === ' ') count += 1;
-    else if (ch === '\t') count += 4;
-    else break;
-  }
-  return count;
-}
-
-function parseContainers(line) {
-  let rem = line;
-  const containers = [];
-  while (true) {
-    const q = rem.match(/^[ \t]*>/);
-    if (q) {
-      containers.push({ type: 'quote' });
-      rem = rem.slice(q[0].length);
-      continue;
-    }
-    const l = rem.match(/^([ \t]*)(?:[-*+]|\d+[.)])([ \t]+)/);
-    if (l) {
-      const indent = getIndent(l[1]) + l[0].length - l[1].length;
-      containers.push({ type: 'list', indent });
-      rem = rem.slice(l[0].length);
-      continue;
-    }
-    break;
-  }
-  return { containers, rem };
-}
-
-function consumeContainers(line, activeContainers) {
-  let rem = line;
-  for (const c of activeContainers) {
-    if (c.type === 'quote') {
-      const q = rem.match(/^[ \t]*>/);
-      if (!q) return null;
-      rem = rem.slice(q[0].length);
-    } else if (c.type === 'list') {
-      const sp = rem.match(/^[ \t]*/)[0];
-      const ind = getIndent(sp);
-      if (ind < c.indent) return null;
-      let consumed = 0;
-      let idx = 0;
-      while (idx < sp.length && consumed < c.indent) {
-        consumed += sp[idx] === '\t' ? 4 : 1;
-        idx++;
-      }
-      rem = rem.slice(idx);
-    }
-  }
-  return rem;
-}
-
-function parseMarkdownFallback(text) {
-  const lines = text.split('\n');
-  const tokens = [];
-  let inFence = false;
-  let fenceChar = '';
-  let fenceLen = 0;
-  let fenceContainers = [];
-  let inComment = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const rawLine = lines[i];
-    const trimmed = rawLine.trim();
-
-    if (inFence) {
-      const rem = consumeContainers(rawLine, fenceContainers);
-      if (rem === null) {
-        inFence = false;
-        fenceContainers = [];
-      } else {
-        tokens.push({ type: 'fence', content: rawLine, map: [i, i + 1] });
-        const closerMatch = rem.trim().match(/^(`{3,}|~{3,})$/);
-        if (closerMatch && closerMatch[1][0] === fenceChar && closerMatch[1].length >= fenceLen) {
-          inFence = false;
-          fenceContainers = [];
-        }
-        continue;
-      }
-    }
-
-    const { containers, rem: afterContainers } = parseContainers(rawLine);
-    const fenceOpen = afterContainers.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
-    if (fenceOpen && !fenceOpen[2].includes(fenceOpen[1][0])) {
-      inFence = true;
-      fenceChar = fenceOpen[1][0];
-      fenceLen = fenceOpen[1].length;
-      fenceContainers = containers;
-      tokens.push({ type: 'fence', content: rawLine, map: [i, i + 1] });
-      continue;
-    }
-
-    if (inComment) {
-      tokens.push({ type: 'html_block', content: rawLine, map: [i, i + 1] });
-      if (rawLine.includes('-->')) inComment = false;
-      continue;
-    }
-
-    const lineWithoutCode = rawLine.replace(/(`+)([\s\S]*?)\1/g, '');
-    if (lineWithoutCode.includes('<!--') && !lineWithoutCode.includes('-->')) {
-      inComment = true;
-      tokens.push({ type: 'html_block', content: rawLine, map: [i, i + 1] });
-      continue;
-    }
-
-    const headingMatch = rawLine.match(/^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      tokens.push({ type: 'heading_open', tag: `h${level}`, map: [i, i + 1] });
-      tokens.push({ type: 'inline', content: headingMatch[2].trim() });
-      tokens.push({ type: 'heading_close', tag: `h${level}` });
-      continue;
-    }
-
-    const cells = tableCells(rawLine);
-    if (cells && i + 1 < lines.length) {
-      const nextCells = tableCells(lines[i + 1]);
-      if (nextCells && isTableSeparator(nextCells) && nextCells.length === cells.length) {
-        const headerLine = i;
-        const headerCells = cells;
-        i += 1;
-        const rows = [];
-        let j = i + 1;
-        for (; j < lines.length; j++) {
-          const rowCells = tableCells(lines[j]);
-          if (!rowCells) break;
-          rows.push({ line: j, cells: rowCells });
-        }
-        i = j - 1;
-
-        tokens.push({ type: 'table_open', map: [headerLine, j] });
-        tokens.push({ type: 'thead_open' });
-        tokens.push({ type: 'tr_open', map: [headerLine, headerLine + 1] });
-        for (const cell of headerCells) {
-          tokens.push({ type: 'th_open' });
-          tokens.push({ type: 'inline', content: cell });
-          tokens.push({ type: 'th_close' });
-        }
-        tokens.push({ type: 'tr_close' });
-        tokens.push({ type: 'thead_close' });
-
-        for (const row of rows) {
-          tokens.push({ type: 'tr_open', map: [row.line, row.line + 1] });
-          for (const cell of row.cells) {
-            tokens.push({ type: 'td_open' });
-            tokens.push({ type: 'inline', content: cell });
-            tokens.push({ type: 'td_close' });
-          }
-          tokens.push({ type: 'tr_close' });
-        }
-        tokens.push({ type: 'table_close' });
-        continue;
-      }
-    }
-
-    if (lineWithoutCode.includes('<!--') && lineWithoutCode.includes('-->')) {
-      tokens.push({ type: 'html_block', content: rawLine, map: [i, i + 1] });
-      const withoutComment = lineWithoutCode.replace(/<!--[\s\S]*?-->/g, '').trim();
-      if (withoutComment) {
-        tokens.push({
-          type: 'inline',
-          content: withoutComment,
-          children: [{ type: 'text', content: withoutComment }],
-        });
-      }
-      continue;
-    }
-
-    if (trimmed) {
-      tokens.push({
-        type: 'inline',
-        content: rawLine,
-        children: [{ type: 'text', content: rawLine }],
-      });
-    }
-  }
-
-  return tokens;
-}
-
 const IGNORED_SOURCE_BLOCKS = new Set(['fence', 'code_block', 'html_block']);
 const IGNORED_SOURCE_INLINES = new Set(['html_inline']);
 
@@ -371,7 +189,7 @@ export function checkWorkItemReady(content) {
     );
   }
 
-  const tokens = parseMarkdownFallback(text);
+  const tokens = md.parse(text, {});
 
   const allSections = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -476,7 +294,10 @@ export function checkWorkItemReady(content) {
     }
 
     for (let l = section.index + 1; l < section.end; l++) {
-      if (ignoredBlockLines.has(l)) continue;
+      if (ignoredBlockLines.has(l)) {
+        listLines.push('');
+        continue;
+      }
       const isSubheading = allSections.some((s) => s.index === l);
       if (isSubheading) {
         listLines.push('');
