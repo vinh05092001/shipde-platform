@@ -91,3 +91,33 @@ Latest review: .oc/review.txt at 517ee1725e96f13642283f2bafa3fdd1b67e6929.
   - Finding 2: pack-context.mjs destination allowlist — validateOutputPath confines output to .context-packs/ and refuses .git segments.
   - Finding 3: Work Item CI claims — replaced with "CI: see PR checks at the reviewed SHA".
 - No new Work Items; all work is under TASK-AI-158.
+
+## Operator round 2026-11-04 (file-targets only, no behavior change)
+
+Re-verified after the split/rewrite commit `c29a90c`:
+
+| Command                                                   | Result | Evidence                                                                                                                                                                                       |
+| --------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `node --test scripts/ai/test/pack-context.test.mjs`       | PASS   | 4/4 AC tests pass (AC-AI-158-01 through 04) — 4 suites, 0 fail, 0 cancelled                                                                                                                    |
+| `python3 tools/ctx-tools/test_smoke.py`                    | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python` alias is disabled |
+| `node scripts/ai/check-no-hardcode.mjs`                   | PASS   | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                              |
+| `git -c safe.directory=* diff --check origin/main...HEAD` | PASS   | No whitespace errors against origin/main                                                                                                                                                       |
+| `git -c safe.directory=* diff --check`                    | PASS   | Working tree diff clean (0 whitespace errors)                                                                                                                                                  |
+| `node tools/ctx-tools/prompt-block.js`                    | PASS   | Prompt block generation succeeds with all registered tools                                                                                                                                     |
+
+### File line counts (all <= 300)
+
+| File                                                    | Lines |
+| ------------------------------------------------------- | ----- |
+| scripts/ai/pack-context.mjs                             | 177   |
+| scripts/ai/output-path.mjs                              | 235   |
+| scripts/ai/parse-args.mjs                               | 83    |
+| scripts/ai/config.mjs                                   | 57    |
+| scripts/ai/publish.mjs                                  | 37    |
+| scripts/ai/test/pack-context.test.mjs                   | 204   |
+| tools/ctx-tools/smoke.py                                | 192   |
+| tools/ctx-tools/_mcp.py                                 | 189   |
+| tools/ctx-tools/_sanitize.py                            | 121   |
+| tools/ctx-tools/test_smoke.py                           | 115   |
+
+- Slice A = this PR; Slice B = scripts/ai/output-path.mjs, tools/ctx-tools/_mcp.py, tools/ctx-tools/_sanitize.py
