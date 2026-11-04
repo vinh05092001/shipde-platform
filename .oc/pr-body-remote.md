@@ -123,4 +123,3 @@ Identity/family data now lives in `config/route-identity.json` (versioned JSON, 
 - [x] The implementation author has stopped after opening/updating this PR and has not started another Work Item.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
