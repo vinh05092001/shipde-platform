@@ -122,3 +122,4 @@ Identity/family data now lives in `config/route-identity.json` (versioned JSON, 
 - Verdict: PENDING — every target module is ≤300 lines, the offline suite is one test per acceptance criterion, and all 10 tests pass (0 fail).
 
 - [x] The implementation author has stopped after opening/updating this PR and has not started another Work Item.
+Slice A = this PR; Slice B = tools/ai-brain/routing.js downstream integration (same Work Item).
