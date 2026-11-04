@@ -1,16 +1,16 @@
 VERDICT: CHANGES_REQUIRED
-Reviewed SHA: a2bea13048ae3c3e8677fb35671745aee92c88a7
+Reviewed SHA: d654b40d450c5288360a0ee7e16cdfae72ae61f8
 
 1. **P1 — CI failing:** application-gate, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
 
-### current-application (job 126752143192) — failing log lines
+### current-application (job 126910789575) — failing log lines
 ```
-Đã phát hiện và quét 21 tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:
- - .oc/pr-body.md
- - config/route-identity.json
-❌ PHÁT HIỆN 1 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
- - .oc/pr-body.md
-Chạy "npx prettier --write <file>" để sửa định dạng các tệp trên.
+================================================================
+✨ SHIP DỄ — BỘ KIỂM TOÁN ĐỊNH DẠNG TĂNG TRƯỞNG (INCREMENTAL PRETTIER CHECK)
+================================================================
+❌ PHÁT HIỆN 12 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+Đã phát hiện và quét 33 tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:
+ - .oc/context-pack.md
 --
  - tools/ai-brain/unified-selector-admission.js
  - tools/ai-brain/unified-selector-jev.js
@@ -19,7 +19,7 @@ Chạy "npx prettier --write <file>" để sửa định dạng các tệp trên
 ##[error]Process completed with exit code 1.
 ```
 
-### application-gate (job 126753246519) — failing log lines
+### application-gate (job 126911736876) — failing log lines
 ```
 env:
   DETECT_RESULT: success

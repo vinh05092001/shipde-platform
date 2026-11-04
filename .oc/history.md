@@ -294,3 +294,67 @@ env:
 Required application checks did not pass: failure
 ##[error]Process completed with exit code 1.
 ```
+
+## Round 12 review (pl-task-ai-171-12, writer was opencode:ninerouter/kgw/dots-studio/dots-3-note-preview:free)
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: 4d25a5ab990fae564bcc785c7848d2df5074e569
+
+1. **P1 — CI failing:** application-gate, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### current-application (job 126899925983) — failing log lines
+```
+ - tools/ai-brain/unified-selector-admission.js
+ - tools/ai-brain/unified-selector-jev.js
+ - tools/ai-brain/unified-selector.js
+❌ PHÁT HIỆN 11 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+ - .oc/context-pack.md
+ - .oc/decisions.md
+--
+ - .oc/task-fix.md
+ - .oc/task.md
+Chạy "npx prettier --write <file>" để sửa định dạng các tệp trên.
+[ELIFECYCLE] Command failed with exit code 1.
+##[error]Process completed with exit code 1.
+```
+
+### application-gate (job 126900951701) — failing log lines
+```
+env:
+  DETECT_RESULT: success
+  APPLICATION: true
+  APPLICATION_RESULT: failure
+Required application checks did not pass: failure
+##[error]Process completed with exit code 1.
+```
+
+## Round 13 review (pl-task-ai-171-13, writer was opencode:ninerouter/kgw/dots-studio/dots-3-note-preview:free)
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: d654b40d450c5288360a0ee7e16cdfae72ae61f8
+
+1. **P1 — CI failing:** application-gate, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### current-application (job 126910789575) — failing log lines
+```
+================================================================
+✨ SHIP DỄ — BỘ KIỂM TOÁN ĐỊNH DẠNG TĂNG TRƯỞNG (INCREMENTAL PRETTIER CHECK)
+================================================================
+❌ PHÁT HIỆN 12 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+Đã phát hiện và quét 33 tệp tin được Prettier hỗ trợ trong phạm vi thay đổi:
+ - .oc/context-pack.md
+--
+ - tools/ai-brain/unified-selector-admission.js
+ - tools/ai-brain/unified-selector-jev.js
+ - tools/ai-brain/unified-selector.js
+[ELIFECYCLE] Command failed with exit code 1.
+##[error]Process completed with exit code 1.
+```
+
+### application-gate (job 126911736876) — failing log lines
+```
+env:
+  DETECT_RESULT: success
+  APPLICATION: true
+  APPLICATION_RESULT: failure
+Required application checks did not pass: failure
+##[error]Process completed with exit code 1.
+```
