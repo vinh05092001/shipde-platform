@@ -41,9 +41,6 @@ export * from './dashboard-drawer-focus';
 export * from './dashboard-nav-permissions';
 export * from './dashboard-nav-sections';
 
-
-
-
 export function DashboardLayout({
   children,
   navSections = DEFAULT_NAV_SECTIONS,

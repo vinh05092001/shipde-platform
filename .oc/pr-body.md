@@ -17,6 +17,7 @@
 ## Scope integrity
 
 - [x] This PR contains exactly one Work Item (TASK-AI-155).
+- [x] Slice A = this PR; Slice B = apps/web/src/components/ShipmentListTab.tsx, apps/web/src/components/ReconciliationTab.tsx, apps/web/src/components/ExceptionWorkboxTab.tsx (same Work Item)
 - [x] No unrelated refactor, cleanup or second feature is included; existing feature screens remain untouched.
 - [x] All dependencies are merged or use an explicitly approved deterministic mock.
 - [x] Changes stay inside the Work Item author boundary and allowed paths.

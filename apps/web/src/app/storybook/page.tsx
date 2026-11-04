@@ -22,11 +22,7 @@ import {
   useDataTable,
 } from '../../components/data-table';
 import { useShowcaseColumns } from './showcase-columns';
-import {
-  createShowcaseActions,
-  useShowcaseRows,
-  useShowcaseSelection,
-} from './use-showcase-data';
+import { createShowcaseActions, useShowcaseRows, useShowcaseSelection } from './use-showcase-data';
 import { ShowcaseBanners, ShowcaseHeaderActions, StateSimulator } from './showcase-sections';
 import { DashboardLayout, PageHeader } from '../../components/dashboard';
 import {
@@ -76,8 +72,23 @@ function StorybookContent() {
     searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
   });
 
-  const { selectedStatus, selectedCarriers, filteredData, pageCount, safePageIndex, paginatedData } =
-    useShowcaseRows({ filters, simulatedEmpty, fixtureShipmentsList, searchValue, sort, pageSize, pageIndex, setPagination });
+  const {
+    selectedStatus,
+    selectedCarriers,
+    filteredData,
+    pageCount,
+    safePageIndex,
+    paginatedData,
+  } = useShowcaseRows({
+    filters,
+    simulatedEmpty,
+    fixtureShipmentsList,
+    searchValue,
+    sort,
+    pageSize,
+    pageIndex,
+    setPagination,
+  });
 
   const columns = useShowcaseColumns({ sort, setSort, setHiddenColumns });
 
@@ -98,7 +109,10 @@ function StorybookContent() {
       searchHref="/search"
       profileHref="/settings/profile"
     >
-      <ShowcaseBanners actionFeedback={actionFeedback} onDismissFeedback={() => setActionFeedback(null)} />
+      <ShowcaseBanners
+        actionFeedback={actionFeedback}
+        onDismissFeedback={() => setActionFeedback(null)}
+      />
 
       {/* Page Header */}
       <PageHeader

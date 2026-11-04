@@ -1,5 +1,0 @@
-serena references: find_referencing_symbols on useDataTable, DataTableToolbar, and DataTableFacetedFilter to identify all callers prior to refactor
-playwright-cli: BLOCKED_BY_SANDBOX (C:\ShipDeWorker\npm\playwright-cli.ps1 failed with Cannot find module 'C:\ShipDeWorker\npm\node_modules\@playwright\cli\playwright-cli.js')
-msw: evaluated installed 2.15.0; in-memory React test harness used for pure URL verification without network dependencies
-tablecn: cloned https://github.com/sadmann7/shadcn-table to C:/Users/agy05/ref/tablecn; adapted useChainedUpdate pattern in useDataTable for chaining pending uncommitted query intent across successive facet edits, and debounced URL-state search draft acknowledgment preservation in DataTableToolbar
-no-lib: nuqs cannot be added via pnpm in worktree due to ERR_PNPM_UNEXPECTED_VIRTUAL_STORE cross-worktree symlink constraints; hand-written pure URL source-of-truth adapted from sadmann7/shadcn-table MIT patterns

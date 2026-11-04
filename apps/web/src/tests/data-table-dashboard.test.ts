@@ -43,7 +43,8 @@ const columns: ColumnDef<FixtureShipment>[] = [
   {
     id: 'trackingCode',
     header: 'Mã vận đơn',
-    cell: ({ row }) => React.createElement<any>('span', { className: 'font-mono' }, row.trackingCode),
+    cell: ({ row }) =>
+      React.createElement<any>('span', { className: 'font-mono' }, row.trackingCode),
     enableSorting: true,
   },
   {
@@ -156,7 +157,9 @@ test('AC-AI-155-05 DataTableColumnHeader sorting', () => {
   assert.ok(sortHtml({ id: 'trackingCode', desc: true }).includes('data-sort="descending"'));
   assert.ok(sortHtml(null).includes('data-sort="none"'));
   assert.ok(
-    sortHtml({ id: 'trackingCode', desc: false }).includes('Sắp xếp theo Mã vận đơn: hiện tại tăng dần')
+    sortHtml({ id: 'trackingCode', desc: false }).includes(
+      'Sắp xếp theo Mã vận đơn: hiện tại tăng dần'
+    )
   );
   assert.ok(!sortHtml(null, columns[1]).includes('<button'));
 });
@@ -274,7 +277,9 @@ test('AC-AI-155-11 Storybook page exports and fixture isolation', () => {
   const storybookDir = path.resolve(__dirname, '../app/storybook');
   const pageContent = fs.readFileSync(path.join(storybookDir, 'page.tsx'), 'utf8');
   const namedExports =
-    pageContent.match(/export\s+(const|let|var|function|class|interface|type)\s+([A-Za-z0-9_]+)/g) || [];
+    pageContent.match(
+      /export\s+(const|let|var|function|class|interface|type)\s+([A-Za-z0-9_]+)/g
+    ) || [];
   assert.strictEqual(namedExports.length, 0, `page.tsx must only export default (${namedExports})`);
   assert.ok(pageContent.includes('export default function StorybookPage'));
   const sections = fs.readFileSync(path.join(storybookDir, 'showcase-sections.tsx'), 'utf8');

@@ -58,7 +58,6 @@ export interface DashboardHeaderProps {
   defaultUserMenuOpen?: boolean;
 }
 
-
 export function DashboardHeader({
   currentUser,
   shopName = 'Ship Dễ — Shop Demo',
@@ -132,6 +131,10 @@ export function DashboardHeader({
     } else if (e.key === 'Tab') {
       setIsUserMenuOpen(false);
     }
+  };
+
+  const handleSetMenuItemRef = (index: number, el: HTMLElement | null) => {
+    menuItemRefs.current[index] = el;
   };
 
   const handleSearchActivation = useCallback(() => {
@@ -253,7 +256,7 @@ export function DashboardHeader({
           setIsUserMenuOpen={setIsUserMenuOpen}
           userMenuRef={userMenuRef}
           userMenuTriggerRef={userMenuTriggerRef}
-          menuItemRefs={menuItemRefs}
+          onSetMenuItemRef={handleSetMenuItemRef}
           userMenuLabel={userMenuLabel}
           initials={initials}
           handleTriggerKeyDown={handleTriggerKeyDown}

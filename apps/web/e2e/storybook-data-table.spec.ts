@@ -3,7 +3,9 @@ import { expect, test, type Page } from '@playwright/test';
 const SEARCH_LABEL = 'Tìm theo mã vận đơn, mã đơn, khách hàng...';
 const PAGE_SIZE_LABEL = 'Chọn số dòng hiển thị mỗi trang';
 
-test('AC-AI-155: mounted /storybook table restores state on real browser back/forward', async ({ page }) => {
+test('AC-AI-155: mounted /storybook table restores state on real browser back/forward', async ({
+  page,
+}) => {
   await page.goto('/storybook?per_page=5');
   const search = page.getByRole('textbox', { name: SEARCH_LABEL });
   await expect(search).toBeVisible();
@@ -33,7 +35,9 @@ test('AC-AI-155: mounted /storybook table restores state on real browser back/fo
   await expect(search).toHaveValue('GHTK');
 });
 
-test('AC-AI-155: mounted pagination dropdown synchronizes per_page without state loss', async ({ page }) => {
+test('AC-AI-155: mounted pagination dropdown synchronizes per_page without state loss', async ({
+  page,
+}) => {
   await page.goto('/storybook');
   const pageSizeSelect = page.getByRole('combobox', { name: PAGE_SIZE_LABEL });
   await expect(pageSizeSelect).toBeVisible();
@@ -71,7 +75,9 @@ test('AC-AI-155: mounted column sorting updates URL and preserves filters', asyn
   await expect(search).toHaveValue('An');
 });
 
-test('AC-AI-155: mounted reset filters clears search and facet filters but retains default view', async ({ page }) => {
+test('AC-AI-155: mounted reset filters clears search and facet filters but retains default view', async ({
+  page,
+}) => {
   await page.goto('/storybook?search=An&status=DELIVERED');
   const search = page.getByRole('textbox', { name: SEARCH_LABEL });
   await expect(search).toHaveValue('An');
@@ -87,7 +93,9 @@ test('AC-AI-155: mounted reset filters clears search and facet filters but retai
   await expect(resetButton).not.toBeVisible();
 });
 
-test('AC-AI-155: mounted pagination remains synchronized after Back then Next', async ({ page }) => {
+test('AC-AI-155: mounted pagination remains synchronized after Back then Next', async ({
+  page,
+}) => {
   await page.goto('/storybook?per_page=5');
   const search = page.getByRole('textbox', { name: SEARCH_LABEL });
   await expect(search).toBeVisible();

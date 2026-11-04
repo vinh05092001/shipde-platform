@@ -36,11 +36,7 @@ import type { UseDataTableProps, UseDataTableReturn } from './use-shipde-data-ta
 import { useShipdeDataTable } from './use-shipde-data-table';
 import { useTablecnDataTable } from './use-tablecn-data-table';
 
-export {
-  formatSortParam,
-  normalizeParamsString,
-  parseSortParam,
-} from './data-table-url-params';
+export { formatSortParam, normalizeParamsString, parseSortParam } from './data-table-url-params';
 export type { UseDataTableProps, UseDataTableReturn } from './use-shipde-data-table';
 export type { TablecnUseDataTableProps } from './use-tablecn-helpers';
 

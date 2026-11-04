@@ -154,6 +154,10 @@ export function DataTableColumnHeader<TData = any>({
   const hasHide = column.enableHiding !== false && Boolean(onHide);
   const totalMenuItems = hasHide ? 3 : 2;
 
+  const handleSetMenuItemRef = (index: number, el: HTMLButtonElement | null) => {
+    menuItemRefs.current[index] = el;
+  };
+
   const menuElement = isOpen ? (
     <DataTableColumnHeaderMenu<TData>
       column={column}
@@ -165,6 +169,7 @@ export function DataTableColumnHeader<TData = any>({
       setIsOpen={setIsOpen}
       menuRef={menuRef}
       menuItemRefs={menuItemRefs}
+      onSetMenuItemRef={handleSetMenuItemRef}
       isMounted={isMounted}
       menuPosition={menuPosition}
     />
