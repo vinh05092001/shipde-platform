@@ -1,6 +1,6 @@
 # TASK-AI-160 — Pull Request body
 
-## Slice A = this PR; Slice B = none
+## Slice A = this PR; Slice B = docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md, docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md (non-core guidance)
 
 All files are under 300 lines (max is `scripts/ai/research.mjs` at 254). No further splitting needed.
 
