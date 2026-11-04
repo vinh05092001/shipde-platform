@@ -8,6 +8,14 @@ import { isIP, isIPv4, isIPv6 } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ipaddr from 'ipaddr.js';
+import { useAgent } from 'request-filtering-agent';
+
+// Network boundary references & attribution:
+// - Pinned-IP socket connection and per-hop manual redirect validation adapted from
+//   github.com/jonathanong/ssrf-guard (MIT license, Copyright (c) 2024 Jonathan Ong).
+// - Request filtering agent and connect-time IP validation adapted from
+//   github.com/azu/request-filtering-agent (MIT license, Copyright (c) 2020 azu).
 
 const VERSION = '1.6.1';
 const INSTALL_HINT = `uv tool install https://github.com/Panniantong/Agent-Reach/releases/download/v${VERSION}/agent-reach.zip\nSee https://github.com/Panniantong/Agent-Reach/blob/v${VERSION}/docs/install.md. Never install agent-reach from PyPI.\n`;
@@ -48,20 +56,16 @@ const refused = (message, maxChars = 20000) => ({
   stderr: truncate(`${message}\n`, maxChars),
 });
 
-function isPrivateIPv4(ip) {
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) return false;
-  const [a, b, c, d] = parts;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)) || (b === 88 && c === 99)))
-    return true;
-  if (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) return true;
-  if (a === 203 && b === 0 && c === 113) return true;
-  if (a >= 224) return true;
-  return false;
+function isPrivateIp(ip) {
+  try {
+    let addr = ipaddr.parse(ip);
+    if (addr.kind() === 'ipv6' && addr.isIPv4MappedAddress()) {
+      addr = addr.toIPv4Address();
+    }
+    return addr.range() !== 'unicast';
+  } catch {
+    return false;
+  }
 }
 
 function isPrivateHost(host) {
@@ -74,16 +78,9 @@ function isPrivateHost(host) {
     /\.(localhost|local|internal|lan|home|corp|arpa|priv|private|test|invalid|example)$/i.test(h)
   )
     return true;
-  if (isIPv4(h)) return isPrivateIPv4(h);
-  if (isIPv6(h)) {
-    if (h === '::1' || h === '::') return true;
-    if (/^f[cd]/i.test(h) || /^fe[89ab]/i.test(h) || /^ff/i.test(h) || /^::ffff:/i.test(h))
-      return true;
-    if (/^(100::|2001:db8:|2001:10:)/i.test(h)) return true;
-    return false;
-  }
+  if (isIP(h)) return isPrivateIp(h);
   const match = h.match(/\b(?:\d{1,3}[.-]){3}\d{1,3}\b/);
-  if (match && isPrivateIPv4(match[0].replace(/-/g, '.'))) return true;
+  if (match && isPrivateIp(match[0].replace(/-/g, '.'))) return true;
   return false;
 }
 
@@ -370,7 +367,7 @@ async function resolvePublicAddresses(url, resolveHost) {
     throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
   }
   for (const ip of ips) {
-    if (isPrivateHost(ip) || isPrivateIPv4(ip)) throw new Error(PRIVATE_DESTINATION);
+    if (isPrivateHost(ip)) throw new Error(PRIVATE_DESTINATION);
   }
   return { parsed, addresses: ips };
 }
@@ -379,7 +376,7 @@ async function resolvePublicAddresses(url, resolveHost) {
 // it returns the pinned address chosen above, so a rebinding answer between the
 // check and the connect can never redirect the connection. Redirects are never
 // followed automatically; the caller inspects and validates each hop first.
-function requestOnce(url, { method, address, timeoutMs = RETRIEVAL_TIMEOUT_MS }) {
+function requestOnce(url, { method, address, connectTo, timeoutMs = RETRIEVAL_TIMEOUT_MS }) {
   return new Promise((resolvePromise, rejectPromise) => {
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
@@ -394,8 +391,17 @@ function requestOnce(url, { method, address, timeoutMs = RETRIEVAL_TIMEOUT_MS })
       if (settled) return;
       settled = true;
       clearTimeout(timeoutId);
-      if (err) rejectPromise(isRefusedMessage(err.message) ? err : new Error(REDIRECT_VERIFY_FAILED));
-      else resolvePromise(result);
+      if (err) {
+        if (isRefusedMessage(err.message)) {
+          rejectPromise(err);
+        } else if (/private IP address|meta IP address|denyIPAddressList/i.test(err.message)) {
+          rejectPromise(new Error(PRIVATE_DESTINATION));
+        } else {
+          rejectPromise(new Error(REDIRECT_VERIFY_FAILED));
+        }
+      } else {
+        resolvePromise(result);
+      }
     };
 
     let req;
@@ -406,12 +412,14 @@ function requestOnce(url, { method, address, timeoutMs = RETRIEVAL_TIMEOUT_MS })
     }, timeoutMs);
 
     try {
-      // A dedicated agent per request: the global (possibly proxy-aware) agent
-      // is never consulted, so inherited proxy settings cannot be used.
-      const agent =
-        parsed.protocol === 'https:'
-          ? new https.Agent({ keepAlive: false })
-          : new http.Agent({ keepAlive: false });
+      // Pass an explicit fresh agent for every request via request-filtering-agent;
+      // the global (possibly proxy-aware) agent is never consulted, so inherited
+      // proxy settings cannot be used, and connect-time IP filtering rejects private destinations.
+      const agentOptions = { keepAlive: false };
+      if (connectTo) {
+        agentOptions.allowIPAddressList = [connectTo];
+      }
+      const agent = useAgent(url, agentOptions);
       const requestOptions = {
         method,
         agent,
@@ -474,7 +482,7 @@ export async function defaultRetrieve(
     const pinned = connectTo ?? addresses[0];
     const response = request
       ? await request(current, { method, address: pinned })
-      : await requestOnce(current, { method, address: pinned });
+      : await requestOnce(current, { method, address: pinned, connectTo });
     const location = response.location;
     if (response.status >= 300 && response.status < 400 && location) {
       if (hops + 1 > maxHops) throw new Error(TOO_MANY_REDIRECTS);
@@ -560,7 +568,7 @@ async function validateDestinationSafety(
       throw new Error(`Research refused: cannot resolve host "${parsed.hostname}".`);
     }
     for (const ip of ips) {
-      if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
+      if (isPrivateHost(ip)) {
         throw new Error('Research refused: destination resolves to a private or restricted address.');
       }
     }
@@ -580,7 +588,7 @@ async function validateDestinationSafety(
     const postIps = isIP(host) ? [host] : await resolver(host);
     if (postIps && Array.isArray(postIps)) {
       for (const ip of postIps) {
-        if (isPrivateHost(ip) || isPrivateIPv4(ip)) {
+        if (isPrivateHost(ip)) {
           throw new Error('Research refused: destination resolves to a private or restricted address.');
         }
       }

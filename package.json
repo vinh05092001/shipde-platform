@@ -50,6 +50,9 @@
     "guard:install": "node tools/ai-guard/cli.js install",
     "guard:status": "node tools/ai-guard/cli.js status"
   },
+  "dependencies": {
+    "request-filtering-agent": "3.2.1"
+  },
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
     "@prisma/client": "^6.19.2",
