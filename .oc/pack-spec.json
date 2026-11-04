@@ -1,0 +1,10 @@
+{
+  "allowedPaths": [
+    "tools/ai-brain/coordinator-metrics.js",
+    "tools/ai-brain/coordinator-quota-state.js",
+    "tools/ai-brain/test/task-ai-166-refresh.test.js",
+    "tools/ai-brain/test/task-ai-166-review.test.js",
+    "tools/ai-brain/test/task-ai-166-runtime.test.js",
+    "AGENTS.md"
+  ]
+}

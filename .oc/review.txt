@@ -1,0 +1,68 @@
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: b04c5e2c9b1be8d34bae56ee878d59ea05794a77
+
+1. **P1 — CI failing:** ai-brain-tests. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### ai-brain-tests (job 126606002178) — failing log lines
+```
+  ✔ capabilities the operator declares are carried through (0.561136ms)
+  ✔ an entry written without a credential reports it cannot authenticate yet (AI-29-R10) (0.506014ms)
+✔ the add path writes only the entry the registry accepts (9.445757ms)
+▶ the validator is the gate and names every failing field
+  ✔ a missing provider, model and context window are all reported at once (AI-29-R03) (0.843293ms)
+  ✔ a malformed id is refused rather than written (AI-29-R03) (1.041903ms)
+  ✔ a tier outside the ladder is refused (AI-29-R03) (0.524838ms)
+  ✔ a credential field inside the entry is refused, and cannot be smuggled in (AI-29-R04) (0.395748ms)
+✔ the validator is the gate and names every failing field (3.303782ms)
+▶ a ceiling carries its provenance and never a bare number
+  ✔ a bare number ceiling is refused, not assumed (AI-29-R05) (0.339403ms)
+--
+  ✔ the secret never appears in the registry file (1.804406ms)
+  ✔ the secret is not stored in plaintext anywhere (1.610845ms)
+  ✔ listAccounts reports presence but never the value (1.295276ms)
+  ✔ a wrong key fails loudly instead of returning garbage (0.917691ms)
+  ✔ a secret for an unknown account is refused (1.047173ms)
+  ✔ removing an account destroys its secret (1.517149ms)
+--
+✔ The operator console reads the rotation and the refusal (#116 N2) (4.384869ms)
+▶ Benchmark source verification and key uniqueness (TASK-AI-46)
+  ✔ a record marked verified: false grades nothing and is reported (0.405476ms)
+  ✔ a record that omits the verified flag is refused and is an audit error (#116 B3) (0.507126ms)
+  ✔ a non-boolean verified flag is refused and is an audit error (#116 B3) (0.4288ms)
+  ✔ a record cannot grade itself through a self-declared grade (#116 B4) (0.746652ms)
+  ✔ a score that cannot be mapped grades nothing and is an audit error (#116 B4) (0.366263ms)
+  ✔ the strongest single record sets the grade, and it is never blended (#116 B4) (0.183102ms)
+  ✔ a repeated (model, version, benchmark, benchmark version) key is an audit error (0.258151ms)
+  ✔ every shipped benchmark record is marked unverified until a real source is recorded (0.19874ms)
+✔ Benchmark source verification and key uniqueness (TASK-AI-46) (3.63537ms)
+▶ Benchmark staleness and completeness audit (TASK-AI-46)
+  ✔ audit flags records older than 90 days as warning (0.276746ms)
+  ✔ audit flags missing source URL or checked_on as error (0.292255ms)
+  ✔ audit flags model version mismatch with offerings as warning (0.235239ms)
+  ✔ production benchmarks.json passes audit with zero errors (0.185426ms)
+✔ Benchmark staleness and completeness audit (TASK-AI-46) (1.510988ms)
+▶ Evidence reaches real offerings and fails closed (#106 review 05:09Z)
+  ✔ a seed offering resolves through externalEvidence by its model, not its offering id (2.20925ms)
+  ✔ a seed offering graded by evidence carries the sourced record as its proof (1.572052ms)
+--
+  ✔ resolveGrade does not read damaged evidence as no evidence (0.228847ms)
+  ✔ summary.pass counts records with no findings (0.390569ms)
+  ✔ the audit prints the operator-console state lines (0.27859ms)
+✔ Evidence reaches real offerings and fails closed (#106 review 05:09Z) (7.253238ms)
+▶ evidence store
+  ✔ loads empty evidence when file does not exist (2.376002ms)
+--
+  ✔ shared-quota defaults to unknown (0.806724ms)
+  ✔ candidateKey produces seven-part identity everywhere matching candidates.candidateKey (0.200664ms)
+  ✔ cross-account: 401 on one account does not block unrelated accounts on same upstream (12.826323ms)
+  ✔ cross-account: failure recorded for one account does not infect other accounts (2.547912ms)
+  ✔ cross-account: success on one account is not inherited as verified by another (1.999019ms)
+  ✔ migration: legacy 4-field evidence is migrated fail-closed as unverified history (1.505368ms)
+  ✔ headroomScore: unpacks object readings from quota.accountHeadroom (0.37538ms)
+✔ evidence store (33.415294ms)
+--
+  ▶ agy-pool quota and adapter (TASK-AI-68)
+    ✔ a quota result with 0% excludes that account until reset (44.844441ms)
+    ✔ login-required excluded (42.955458ms)
+    ✔ the adapter writes the expected job.json and maps each result state (5.295537ms)
+```

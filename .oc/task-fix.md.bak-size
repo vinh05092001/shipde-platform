@@ -1,0 +1,46 @@
+ROLE: You are the AUTHOR for this Work Item under AGENTS.md. You do not review or declare PASS; Codex reviews independently. Never merge.
+SCOPE (strict):
+- Fix ONLY the P0/P1 findings listed in .oc/review.txt, at the file:line each one names. Do not refactor, rename, reformat or "improve" anything else.
+- Touch only the files the findings name, plus the test file that proves each fix. Do not read the whole repo: read those files and their direct imports.
+- Each fix: first a test that fails without it, then the minimal fix, then run ONLY that test file (plus pnpm lint/typecheck if app code changed).
+- If a finding needs a product decision the specs do not make: write NEEDS_DECISION under Known limitations; do not invent.
+- If .oc/context-pack.md exists, use it as your context instead of exploring.
+- Before every commit run `pnpm security:secrets`; test fixtures must use obviously fake values (e.g. `test-not-a-key`), never key-shaped strings. Register row: delivery_order is assigned by the coordinator (see your row); never change it, and when merging main keep both rows.
+- TOKEN SAVING (keep meaning): if MCP tools jcodemunch/serena are available, look up functions/symbols/references with them instead of reading whole files (measured ~4-20x fewer tokens). Pipe long passing command output through `rtk` (e.g. `rtk pnpm lint`); for a FAILING test or evidence log use raw output, never compressed.
+---
+Also read .oc/history.md if present: every earlier review round on this PR. Do not regress anything fixed in an earlier round. Read first: docs/product-spec/work-items/TASK-AI-166.md (scope, acceptance matrix, source documents it links) and the previous review in .oc/review.txt. The PR must satisfy EVERY acceptance row and the linked specs, not only the listed findings; if a finding needs a product decision the specs do not make, do not invent one: write it under Known limitations as NEEDS_DECISION and fix the rest. Start with: git fetch origin && git merge --no-edit origin/main (resolve conflicts keeping both sides; one register row per Work Item).
+Fix every P0/P1 in .oc/review.txt for PR this PR (TASK-AI-166). Branch is current; do NOT rebase/reset/force.
+Each fix needs a negative test proving it (HTTP-level where the finding says so). Empty scopes must deny; audit metadata always masked.
+Do not touch gate configs, allowlists, baselines, semgrep rules or .github/. Before commit run pnpm lint, pnpm typecheck, pnpm test (api) and git diff --check origin/main...HEAD; all must pass.
+Commit "[TASK-AI-166] Address review: <summary>". Do not push.
+
+Local DB services are stopped by default. Before running tests that need Postgres/Redis/MinIO: if `docker info` fails, start Docker Desktop ("C:/Program Files/Docker/Docker/Docker Desktop.exe") and wait until `docker info` succeeds; then run: docker start shipde-postgres shipde-redis shipde-minio ; when your tests finish run: docker stop shipde-postgres shipde-redis shipde-minio
+
+Before committing, for EVERY finding in .oc/review.txt: first add or update a test that fails without your fix (cross-tenant/forbidden/validation cases as HTTP-level tests where relevant), then fix, then run it green. In .oc/pr-body.md list each finding -> test name -> command run -> result. Also self-check the same categories the reviewer uses: tenant scope, RBAC/empty-scope deny, negative tests, Work Item acceptance rows, integer VND, idempotency, audit/PII masking, UI states. Fix everything in one pass; do not leave items for a later round.
+
+Done when: every finding in .oc/review.txt has a test or command proving it fixed (listed in .oc/pr-body.md); every acceptance row of the Work Item still passes; pnpm lint, pnpm typecheck, pnpm test and git diff --check origin/main...HEAD are green locally. Stop after that; do not start unrelated refactors.
+
+Temp files: Use .oc/tmp inside this worktree (mkdir -p .oc/tmp). Never read or write paths outside this worktree (no %TEMP%, /tmp, ~): the tool denies them and your run dies.
+
+Git: work only in this worktree's existing repository. Never run git init, git clone, or edit the .git file/directory; never point this worktree at another repository.
+
+Reuse attached repos before writing new code: read docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md and use the pinned tool that fits the Work Item (e.g. NestJS+Prisma+supertest+openapi-typescript for API, Storybook+MSW+axe-core+Playwright for UI states, BullMQ for background jobs, vietnamese-provinces-database for addresses, OpenTelemetry for tracing). Look up library APIs with tools/ai-brain/context7.js instead of guessing; follow the Work Item spec-kit checklist. Do not add a dependency that is not in the manifest/package.json; if one is needed, write it under Known limitations as NEEDS_DECISION. In .oc/pr-body.md list which attached repos you used and why.
+
+## Required tools for this task (log each use in .oc/tools-used.txt, one line: tool + what for)
+- serena find_referencing_symbols on every symbol touched by the main-merge conflict before resolving it; keep both sides.
+- rtk for long passing output; raw output for failures.
+
+- REUSE FIRST (operator 04/11): before writing any parser, sanitizer/redactor, URL/state sync, network guard, retry/queue, date/money/format helper or UI widget, search for a maintained library or an attached repo (manifest, context7.js, npm/GitHub) and USE it. Hand-write only if none fits, and say why in .oc/tools-used.txt ("no-lib: <reason>"). New dependencies are allowed when they are well-maintained (recent release, real user base, OSI licence), pinned to an exact version with the lockfile committed; never for auth/tenant/money logic without the Work Item naming it.
+
+## root-cause (reference implementation, 04/11) — adapt, do not invent
+Reference: LiteLLM model_prices_and_context_window.json (github.com/BerriAI/litellm, fetched at startup with bundled fallback) + OpenRouter public GET /api/v1/models; merge pattern from lean-ctx live_pricing.rs (OpenRouter first, LiteLLM fills gaps, tolerate either source failing, periodic refresh). No hand-maintained model list.
+Clone read-only to C:/Users/gumac/AI/ref/<name> (git clone --depth 1), read the named parts, adapt to our files; respect licence and credit the source in a header comment; log reference + what was adapted in .oc/tools-used.txt.
+
+## root-cause (USE PUBLIC DATA SOURCES, 04/11 12:10) — no hand-maintained model list
+Catalogue = merge of (1) OpenRouter public GET https://openrouter.ai/api/v1/models (keyless; ids, context, pricing) and (2) LiteLLM https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json (fills gaps), plus our own live /models per configured provider. Tolerate either source failing (keep last good snapshot), refresh on a schedule. Pattern reference: lean-ctx live_pricing.rs (OpenRouter first, LiteLLM fills gaps). No model ids or scores hard-coded in code (scripts/ai/check-no-hardcode.mjs must pass).
+
+## root-cause (SCORING, 04/11 12:40) — fold into TASK-AI-166, no new Work Item
+WHERE: tools/ai-brain/priors.js normalisation (normalizedScore per benchmark; FALLBACK_BENCHMARKS = ['aggregate','benchlm']).
+WRONG: a model scored only by the fallback aggregate gets its BenchLM percentile as its score, so it outranks multi-source models: deepseek-v4-1-flash raw 65.2 -> 97.1 (above claude-opus-5-5 95.3, raw 86.9); dots-3-note-preview 96.7; glm-5 91. Writers are then chosen on inflated numbers.
+GOAL: scores comparable across models. Either (a) map fallback-only models onto the primary (Artificial Analysis coding/agentic) scale using the models present in BOTH sources (fitted from data each refresh, nothing typed by hand), or (b) keep their rawScore and mark them provisional so routing ranks them below any multi-source model with a higher raw score. Free/preview variants (":free", "-free", "-preview") must not inherit the full model's score without their own evidence; use measured outcomes (commit rate / first-review PASS from the pipeline metrics) when available.
+VERIFY: test: a fallback-only model with raw 65 never outranks a multi-source model with raw 86; deepseek-v4-1-flash < claude-opus-5-5 after refresh; node scripts/ai/check-no-hardcode.mjs passes.

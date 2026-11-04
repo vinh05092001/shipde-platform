@@ -1,0 +1,54 @@
+[
+  {
+    "file": "tools/ai-brain/cli.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/discovery.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/discovery/reconcile.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/discovery/spawn.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/priors-public.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/catalogue-refresh.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/coordinator.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/coordinator-runtime.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/coordinator-cli.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/discovery/live.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/test/task-ai-166-refresh.test.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/test/task-ai-166-coordinator.test.js",
+    "exitCode": 0
+  },
+  {
+    "file": "tools/ai-brain/test/task-ai-166-runtime.test.js",
+    "exitCode": 0
+  }
+]

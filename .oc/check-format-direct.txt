@@ -1,0 +1,21 @@
+package.json 23ms (unchanged)
+tools/ai-brain/cli.js 370ms (unchanged)
+tools/ai-brain/discovery.js 30ms (unchanged)
+tools/ai-brain/discovery/reconcile.js 11ms (unchanged)
+tools/ai-brain/discovery/spawn.js 10ms (unchanged)
+tools/ai-brain/priors-public.js 37ms (unchanged)
+tools/ai-brain/priors-sources/public.json 3ms (unchanged)
+tools/ai-brain/catalogue-refresh.js 9ms
+tools/ai-brain/coordinator.js 31ms
+tools/ai-brain/coordinator-runtime.js 32ms
+tools/ai-brain/coordinator-cli.js 7ms (unchanged)
+tools/ai-brain/discovery/live.js 9ms (unchanged)
+tools/ai-brain/test/task-ai-166-refresh.test.js 8ms (unchanged)
+tools/ai-brain/test/task-ai-166-coordinator.test.js 18ms (unchanged)
+tools/ai-brain/test/task-ai-166-runtime.test.js 20ms (unchanged)
+tools/ai-brain/data/quota-scan-summary.json 1ms (unchanged)
+tools/ai-brain/data/discovery/freshness.json 2ms (unchanged)
+tools/ai-brain/data/discovery/refresh-report.json 1ms (unchanged)
+tools/ai-brain/data/discovery/snapshots/snapshot-20261102T101647-6v6bv4.json 200ms
+tools/ai-brain/data/discovery/snapshots/snapshot-20261102T102341-1rsjly.json 180ms
+tools/ai-brain/data/discovery/snapshots/snapshot-20261102T103407-lsweal.json 162ms
