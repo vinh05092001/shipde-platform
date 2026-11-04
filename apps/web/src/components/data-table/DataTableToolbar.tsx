@@ -1,3 +1,4 @@
+// Adapted from tablecn (MIT) https://github.com/sadmann7/shadcn-table
 /**
  * Ported from sadmann7/shadcn-table (MIT License)
  * Source: https://github.com/sadmann7/shadcn-table
@@ -22,8 +23,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Toolbar with search input, faceted filter controls, reset button, and view options.
  */
 
 'use client';
@@ -42,7 +41,7 @@ export interface DataTableToolbarProps {
   onResetFilters?: () => void;
   className?: string;
   debounceMs?: number;
-  resetEpoch?: number;
+  table?: any;
 }
 
 export function createDebouncedSearch(
@@ -82,7 +81,6 @@ export function DataTableToolbar({
   onResetFilters,
   className = '',
   debounceMs = 300,
-  resetEpoch = 0,
 }: DataTableToolbarProps) {
   // Only local state allowed: the search box's in-progress text (BR-UI-01)
   const [draftSearch, setDraftSearch] = React.useState(searchValue || '');
@@ -93,66 +91,90 @@ export function DataTableToolbar({
     searchCallbackRef.current = onSearchChange;
   }, [onSearchChange]);
 
-  const debouncedSearchRef = React.useRef<ReturnType<typeof createDebouncedSearch> | null>(null);
-  const expectedSearchKeyRef = React.useRef(searchValue);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastDispatchedRef = React.useRef<string | null>(null);
+  const isPopstateRef = React.useRef(false);
 
-  const getDebouncedSearch = () => {
-    if (debouncedSearchRef.current === null) {
-      debouncedSearchRef.current = createDebouncedSearch((val) => {
-        expectedSearchKeyRef.current = val;
-        searchCallbackRef.current?.(val);
-      }, debounceMs);
+  React.useEffect(() => {
+    const handlePopstate = () => {
+      isPopstateRef.current = true;
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('popstate', handlePopstate);
+      return () => window.removeEventListener('popstate', handlePopstate);
     }
-    return debouncedSearchRef.current;
-  };
-
-  const prevEpochRef = React.useRef(resetEpoch);
-  const prevSearchRef = React.useRef(searchValue);
+  }, []);
 
   // Reset to URL value whenever the committed URL value changes (BR-UI-01)
   React.useEffect(() => {
-    if (resetEpoch !== prevEpochRef.current) {
-      prevEpochRef.current = resetEpoch;
-      prevSearchRef.current = searchValue;
-      expectedSearchKeyRef.current = searchValue;
-      setDraftSearch('');
-      debouncedSearchRef.current?.cancel();
+    if (isPopstateRef.current) {
+      isPopstateRef.current = false;
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      setDraftSearch(searchValue || '');
       return;
     }
-    if (searchValue !== prevSearchRef.current) {
-      if (searchValue === expectedSearchKeyRef.current) {
-        prevSearchRef.current = searchValue;
-        return;
-      }
-      prevSearchRef.current = searchValue;
-      expectedSearchKeyRef.current = searchValue;
-      setDraftSearch(searchValue || '');
-      debouncedSearchRef.current?.cancel();
+
+    // If searchValue matches our own in-flight dispatch and user is actively drafting newer text, preserve newer draft
+    if (
+      lastDispatchedRef.current !== null &&
+      searchValue === lastDispatchedRef.current &&
+      timerRef.current !== null
+    ) {
+      return;
     }
-  }, [searchValue, resetEpoch]);
+
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setDraftSearch(searchValue || '');
+  }, [searchValue]);
 
   // Drop scheduled debounce when the toolbar unmounts
   React.useEffect(() => {
     return () => {
-      debouncedSearchRef.current?.cancel();
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
     };
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setDraftSearch(e.target.value);
-    getDebouncedSearch().type(e.target.value);
+    const val = e.target.value;
+    setDraftSearch(val);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (debounceMs <= 0) {
+      lastDispatchedRef.current = val;
+      searchCallbackRef.current?.(val);
+    } else {
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        lastDispatchedRef.current = val;
+        searchCallbackRef.current?.(val);
+      }, debounceMs);
+    }
   };
 
   const handleClear = () => {
-    expectedSearchKeyRef.current = '';
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    lastDispatchedRef.current = '';
     setDraftSearch('');
-    getDebouncedSearch().clear();
+    searchCallbackRef.current?.('');
   };
 
   const handleReset = () => {
-    expectedSearchKeyRef.current = '';
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    lastDispatchedRef.current = '';
     setDraftSearch('');
-    getDebouncedSearch().cancel();
     onResetFilters?.();
   };
 

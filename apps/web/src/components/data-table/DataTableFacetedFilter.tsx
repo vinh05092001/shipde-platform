@@ -1,3 +1,4 @@
+// Adapted from tablecn (MIT) https://github.com/sadmann7/shadcn-table
 /**
  * Ported from sadmann7/shadcn-table (MIT License)
  * Source: https://github.com/sadmann7/shadcn-table
@@ -22,9 +23,6 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * Faceted filter dropdown with multi-select checkboxes, count badges,
- * and accessible listbox keyboard navigation.
  */
 
 'use client';
@@ -33,17 +31,17 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Check, PlusCircle, X } from 'lucide-react';
 import { DataTableFilterOption } from './types';
 
-interface DataTableFacetedFilterProps {
-  title: string;
+export interface DataTableFacetedFilterProps {
+  title?: string;
   options: DataTableFilterOption[];
   selectedValues?: Set<string>;
-  onSelect: (values: string[]) => void;
+  onSelect?: (values: string[]) => void;
   className?: string;
-  resetEpoch?: number;
+  column?: any;
 }
 
 export function DataTableFacetedFilter({
-  title,
+  title = 'Bộ lọc',
   options,
   selectedValues = new Set(),
   onSelect,
@@ -105,12 +103,12 @@ export function DataTableFacetedFilter({
     } else {
       next.add(value);
     }
-    onSelect(Array.from(next));
+    onSelect?.(Array.from(next));
   };
 
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onSelect([]);
+    onSelect?.([]);
   };
 
   const handleOptionKeyDown = (e: React.KeyboardEvent, index: number, value: string) => {

@@ -1,3 +1,4 @@
+// Adapted from tablecn (MIT) https://github.com/sadmann7/shadcn-table
 /**
  * Ported from sadmann7/shadcn-table (MIT License)
  * Source: https://github.com/sadmann7/shadcn-table

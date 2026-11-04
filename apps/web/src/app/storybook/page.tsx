@@ -14,6 +14,7 @@
 import React, { useState, useMemo, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { Download, Plus, RefreshCw, Sparkles } from 'lucide-react';
+import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import {
   DataTable,
   DataTableColumnHeader,
@@ -65,7 +66,6 @@ function StorybookContent() {
     setPagination,
     setSort,
     isFiltered,
-    resetEpoch,
   } = useDataTable({
     defaultPageSize: 10,
     defaultSort: { id: 'createdAt', desc: true },
@@ -579,7 +579,6 @@ function StorybookContent() {
             searchPlaceholder="Tìm theo mã vận đơn, mã đơn, khách hàng..."
             isFiltered={isFiltered}
             onResetFilters={resetFilters}
-            resetEpoch={resetEpoch}
             filtersSlot={
               <>
                 <DataTableFacetedFilter
@@ -587,14 +586,12 @@ function StorybookContent() {
                   options={STATUS_OPTIONS}
                   selectedValues={new Set(selectedStatus)}
                   onSelect={(vals) => setFilter('status', vals)}
-                  resetEpoch={resetEpoch}
                 />
                 <DataTableFacetedFilter
                   title="Hãng vận chuyển"
                   options={CARRIER_OPTIONS}
                   selectedValues={new Set(selectedCarriers)}
                   onSelect={(vals) => setFilter('carrier', vals)}
-                  resetEpoch={resetEpoch}
                 />
               </>
             }
@@ -637,14 +634,16 @@ function StorybookContent() {
 
 export default function StorybookPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center p-8 text-xs text-[var(--text-muted)]">
-          Đang khởi tạo linh kiện...
-        </div>
-      }
-    >
-      <StorybookContent />
-    </Suspense>
+    <NuqsAdapter>
+      <Suspense
+        fallback={
+          <div className="min-h-screen flex items-center justify-center p-8 text-xs text-[var(--text-muted)]">
+            Đang khởi tạo linh kiện...
+          </div>
+        }
+      >
+        <StorybookContent />
+      </Suspense>
+    </NuqsAdapter>
   );
 }
