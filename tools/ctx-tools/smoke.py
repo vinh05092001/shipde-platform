@@ -1,4 +1,7 @@
-"""Smoke test shared MCP servers (jcodemunch, serena) and report token savings."""
+"""Smoke test shared MCP servers (jcodemunch, serena) and report token savings.
+
+Reference: MCP Python SDK client stdio session (modelcontextprotocol/python-sdk, MIT License)
+"""
 import argparse
 import hashlib
 import json

@@ -4,6 +4,8 @@
 /**
  * Ship Dễ — Pack focused repo context with repomix (TASK-AI-158)
  *
+ * Reference: github.com/yamadashy/repomix (MIT License) - options, security check and output path handling
+ *
  * Produces a token-budgeted, secret-checked XML context file for writer and
  * reviewer prompts. Only the paths given via --paths are packed.
  *
