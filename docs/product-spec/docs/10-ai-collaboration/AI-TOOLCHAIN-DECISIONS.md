@@ -1,5 +1,21 @@
 # Ship Dễ AI Toolchain Decisions
 
+## Shared author pre-push check (TASK-AI-162)
+
+Operator approved on 2026-11-02. Every writer lane (Gemini, Claude, 9Router and directly assigned Codex authors) runs `pnpm ai:check` before committing/pushing and pastes its summary in the PR. This local helper calls the existing CI gate scripts; **CI remains the authority**, and a local PASS is not independent review or permission to merge.
+
+The checker runs `pnpm format:check`, `pnpm lint`, `pnpm typecheck`, `pnpm security:secrets`, `git diff --check origin/main...HEAD`, then tests, sequentially and failing fast. It pins the existing incremental scripts' base to `origin/main`, including their existing working-tree checks. It does not fetch; keep that ref current before starting work. Missing dependencies, Git history or native Gitleaks fail the relevant gate.
+
+For tests, pnpm's since filter selects workspaces changed from the merge-base of `origin/main` and `HEAD`, plus their dependents. Before narrowing tests, the checker verifies that these workspace directories cover every committed, staged and unstaged changed path, including deletions and both sides of renames. Root/shared changes, untracked files, an empty selection, incomplete metadata or unavailable filtering conservatively fall back to full `pnpm test`.
+
+When Turbo's affected dry-run contains runnable tests for every selected workspace, the checker uses `turbo run test --affected` to preserve its build graph. Empty, non-runnable or incomplete task sets require full tests, as does a successful probe with missing or malformed output. Only valid JSON with an optional Turbo version banner is accepted; a failed Turbo process may use the already verified pnpm filter. A failing test command is a failure, never a fallback trigger. Lint, typecheck and secrets retain their existing scope. The whitespace command checks committed changes; authors should also check their staged diff before committing.
+
+The summary has one PASS/FAIL line per executed gate followed by `PASS ai:check` or `FAIL ai:check`; failure exits nonzero. Child output and exception text are suppressed because any gate can print sensitive source or environment data. The failed gate's name identifies the command to diagnose locally; never paste raw secrets or environment values into PR evidence.
+
+Local hook installation remains optional and explicit: after `pnpm install --frozen-lockfile`, run `pnpm lefthook install`. Installed pre-push hooks invoke the shared command by default. The supported exception is the explicit, hook-only variable `SHIPDE_SKIP_AI_CHECK=1`; record why the local hook was skipped in PR evidence and still run the author checklist. Direct `pnpm ai:check` ignores the skip variable. Existing pre-commit and no-hardcode hooks are unchanged. No CI workflow, gate configuration, allowlist, baseline or Semgrep rule is relaxed.
+
+On PowerShell systems that block `.ps1` shims, use `pnpm.cmd` for the same commands. Offline regression tests: `node --test tools/ai-brain/test/task-ai-162-prepush-check.test.js` (also discovered by the existing `pnpm test:brain` command).
+
 ## Objective
 
 Use the lowest-cost capable author without reducing business completeness, UI quality, security or evidence. GitHub artifacts are the shared memory; no agent framework may replace the approved product specification, Work Item or independent review.
@@ -559,3 +575,73 @@ The action connects to an OpenAI-compatible endpoint using credentials provided 
 - `PR_AGENT_MODEL`: The model name to execute reviews and suggestions (e.g., `gpt-4o`, `gpt-4o-mini`, or provider model ID).
 
 If any of these secrets are absent, or if the Pull Request originates from a fork, `.github/workflows/pr-agent.yml` skips execution cleanly, posts an informational notice, and completes successfully without failing.
+
+## Offline DB-backed API tests (TASK-AI-163)
+
+Operator authorization: 2026-11-02. Select option (a), `@electric-sql/pglite@0.3.16` with `pglite-prisma-adapter@0.6.1`, as an opt-in test dependency in `@shipde/testkit`. On 2026-11-03, the frozen install and all six helper integration tests passed on Windows inside the sandbox, including the complete migration history, Prisma CRUD/types, constraints, triggers, rollback and reset. The repository declares Prisma `^6.19.2` and locks Prisma/client 6.19.3. Full API acceptance results are recorded in `.oc/pr-body.md`.
+
+### Evaluation order and compatibility
+
+1. **PGlite + Prisma 6 adapter: first viable option, verified with our migrations.** The installed 0.6.1 manifest declares Prisma client `>= 6.10.0`, PGlite `>=0.2.0`, and adapter utilities 6.10.1. The installed PGlite 0.3.16 manifest identifies Electric DB Limited and Apache-2.0; it packages the WASM database without a server or native installer. Pin the established 0.3 release line for this Prisma 6 evaluation. Published sources: [adapter manifest](https://github.com/lucasthevenet/pglite-utils/blob/pglite-prisma-adapter%400.6.1/packages/prisma-adapter/package.json), [PGlite manifest](https://github.com/electric-sql/pglite/blob/%40electric-sql/pglite%400.3.16/packages/pglite/package.json).
+2. **Latest adapter 0.7.2: rejected for Prisma 6.** Its [manifest](https://github.com/lucasthevenet/pglite-utils/blob/main/packages/prisma-adapter/package.json) requires Prisma client `>= 7.1.0` and adapter utilities 7.2.0. Do not resolve the adapter through an unbounded latest version.
+3. **Embedded PostgreSQL binary: not selected because option (a) works.** [embedded-postgres](https://www.npmjs.com/package/embedded-postgres?activeTab=versions) has a PostgreSQL 16 release line and [Windows x64 binaries](https://www.npmjs.com/package/%40embedded-postgres/windows-x64). It starts `initdb`/`postgres` child processes and needs a cluster directory and socket. In the requested evaluation order, no binary installation or runtime claim is needed after PGlite passes the migration acceptance tests. Independent-connection and locking coverage remains on CI PostgreSQL, as authorized; it is not simulated locally.
+
+[Prisma's v6 client reference](https://www.prisma.io/docs/orm/v6/reference/prisma-client-reference#adapter) states that driver adapters became GA in 6.16. The adapter README's historical `driverAdapters` preview flag is unnecessary with 6.19. The production schema/generator and CI connection behavior therefore remain unchanged.
+
+### npm provenance and activity evidence
+
+The following activity figures were already recorded in this worktree from indexed npm page snapshots on 2026-11-02. They have not been refreshed and must not be treated as current registry counters or exact release dates. On 2026-11-03, the installed package manifests independently confirmed the selected versions, licenses, author identities and adapter peer requirements. Author/repository identity is not a verified live npm maintainer list.
+
+| Package                                                                                         | Maintainer/source                         | License                                                         | npm weekly downloads observed                                    | Last release shown                                                            |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [@electric-sql/pglite](https://www.npmjs.com/package/%40electric-sql/pglite)                    | Electric DB Limited / `electric-sql`      | Apache-2.0 in manifest; upstream also offers PostgreSQL License | 27,037,821 (package sidebar)                                     | 0.5.14, “a day ago”; implementation pin is 0.3.16                             |
+| [pglite-prisma-adapter](https://www.npmjs.com/package/pglite-prisma-adapter?activeTab=versions) | Lucas Thevenet / `lucasthevenet`          | MIT                                                             | 157,659 (package sidebar); 78,345 for 0.6.1 in the version table | 0.7.2, “9 months ago”; 0.6.1, “a year ago”                                    |
+| [embedded-postgres](https://www.npmjs.com/package/embedded-postgres?activeTab=versions)         | `leinelissen` (upstream repository owner) | MIT wrapper; binary package describes Apache-2.0 licensing      | 597,325 (package sidebar)                                        | Snapshot shows 18.4.0-beta.17, “5 months ago”; 16.14.0-beta.17 is also listed |
+
+Live registry/weekly-download verification on 2026-11-03 is `BLOCKED_BY_SANDBOX`: each of the three package requests returned `{"error":"fetch failed","code":"EACCES"}`. The web tool also returned `(403) Forbidden` for npm package pages and could not access registry/download endpoints. The coordinator must refresh npm maintainer lists, exact latest/pinned release dates and weekly downloads; `.oc/tmp/npm-evidence.json` retains the package-level blocked results. Runtime acceptance is independently executable with the installed packages and is not blocked by this metadata request.
+
+Lockfile entries retain SHA-512 integrity checks. The initial implementation reconstructed five new package records from published dependency manifests and existing npm/yarn lock records: [adapter, driver utilities, debug and postgres-array](https://github.com/oldschoolgg/oldschoolbot/blob/bf50c1a2f05d427b86863627ac23ba424ffecb8a/pnpm-lock.yaml) and [PGlite 0.3.16](https://github.com/lissy93/web-check/blob/master/yarn.lock) (recorded blob `85be6eda5fd97714c92ad3cda616f7bad9ee9f51`). No existing dependency versions or build-script policies change. `pnpm install --frozen-lockfile` now passes against the populated worktree (`Already up to date`); this proves lockfile consistency, not a fresh network download or clean-checkout install. CI/coordinator owns that remaining installation evidence.
+
+### Execution and evidence boundary
+
+`pnpm test:local-db` runs the existing API Supertest scripts serially with `TEST_DB=local`, a fresh in-memory database per DB-backed script, all 18 current migration files, and synthetic configuration. The helper executes whole SQL files separately (including PL/pgSQL triggers and enum alterations), offers reset by dropping only its private schema and replaying migrations, and closes both Prisma and PGlite. Future migrations are discovered automatically; missing or unsupported SQL fails the run.
+
+The adapter does not implement `prisma migrate deploy`; direct execution of the repository migration SQL is the local test path, and CI keeps its existing CLI migration path. No `db push`, SQL replacement or migration omission is used. Helper regression tests cover representative types, unique/FK constraints, trigger behavior, rollback and reset; the full API suite remains the required acceptance proof.
+
+Single-connection PGlite cannot validate overlapping transactions, independent connection access, locking, deadlocks or production PostgreSQL performance/version parity. Nine existing race scenarios are explicitly skipped with names and reasons; onboarding still prepares required fixtures sequentially. Four branch authorization scenarios also require a root-client read while an interactive transaction holds the only connection; they are named skips rather than increasing timeouts or rewriting transaction semantics. Branch owner CRUD, scoped reads, guard denials and cross-tenant assertions still run locally. In addition, an in-process git history secrets scan in RBAC tests is skipped offline where git history is not available. Redis/Lua, MinIO, worker/outbox delivery and dependency recovery require CI. Local API tests use the real rate-limit service's no-Redis memory backend; Redis/storage readiness reports down and unexpected direct service access throws. The foundation integration runner explicitly skips under local mode.
+
+The runner reports suite process pass/skip/fail separately from skipped scenarios, and fails on child errors, timeouts or legacy offline-skipped suites. Actual check results, blocked errors and counts belong to `.oc/pr-body.md`; no blocked suite is reported as passing. Usage and lifecycle examples: packages/testkit/README.md.
+
+## Affected-only PR CI caching and merge queue (TASK-AI-165)
+
+Operator explicitly approved modifying `.github/` for this item on 2026-11-02.
+
+### What Changed
+1. **Affected-only PR CI with Turborepo**:
+   - In `.github/workflows/current-application.yml`, configured `actions/checkout` with `fetch-depth: 0`, cached pnpm store (`pnpm/action-setup` before `actions/setup-node` with `cache: pnpm`), and restored Turborepo filesystem cache via `actions/cache@v4` on `.turbo`.
+   - On `pull_request` events, runs `turbo run lint typecheck test build --affected` with `TURBO_SCM_BASE = ${{ github.event.pull_request.base.sha }}`, followed by root scripts linting (`pnpm exec eslint scripts`).
+   - On `push` to `main` and on `merge_group` events, executes full non-affected runs (`pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`) to guarantee complete mainline integrity.
+   - Preserves all required status check job names (`application-gate`, `contract`) and required verification steps (Prisma client generation, migrations, database services, integration tests, contract verification, secrets scanning, ast-grep, formatting negative proofs).
+2. **Merge queue triggers**:
+   - Added `merge_group` trigger to both workflows that provide required status checks:
+     - `.github/workflows/current-application.yml` (provides required status check `application-gate`)
+     - `.github/workflows/feature-contract-gate.yml` (provides required status check `contract`)
+   - Added `push: branches: [main]` trigger to `.github/workflows/current-application.yml` to ensure Turborepo cache is populated on main and master runs are validated.
+
+### Expected Effect
+- **Substantially faster PR verification**: Rather than running full lint, typecheck, test, and build across all monorepo packages, PR CI runs only against packages directly affected by the PR diff relative to the PR base commit (`TURBO_SCM_BASE`), reducing CI duration and worker waiting times.
+- **Cache reuse**: Monorepo package outputs and hashes are cached in `.turbo`, allowing unchanged dependencies to be restored instantly.
+- **Concurrent agent PR throughput**: GitHub Merge Queue allows concurrent agent PRs to be queued and validated in parallel against speculative merged results without serial human rebase bottlenecks.
+- **Zero weakening of required gates**: Required status checks (`application-gate` and `contract`) remain strictly enforced with identical names.
+
+### Operator Step to Enable Merge Queue in Branch Protection
+To enable the merge queue in GitHub repository settings (not executed by this PR):
+1. Navigate to repository settings on GitHub: **Settings > Branches**.
+2. Under **Branch protection rules**, edit the rule for branch `main`.
+3. Check the box **Require merge queue**.
+4. Configure merge queue parameters:
+   - **Merge method**: Squash and merge.
+   - **Build concurrency**: 2 to 5 (adjust based on GitHub Actions concurrency limit).
+   - **Minimum / Maximum pull requests to merge**: 1 to 5.
+   - **Status checks**: Ensure required checks `contract` and `application-gate` are selected.
+5. Save changes.

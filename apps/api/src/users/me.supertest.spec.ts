@@ -1,9 +1,10 @@
 import 'reflect-metadata';
+import { createApiTestModule } from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from '../app.module';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,10 +14,10 @@ import { RoleEnum } from '@prisma/client';
 import { VERIFICATION_ADAPTER } from '../auth/auth.tokens';
 import { MockVerificationDeliveryAdapter } from '@shipde/testkit';
 import { signAccessToken, resolveAccessTokenSecret } from '../auth/token.util';
-import { seedDatabase, SEED_MERCHANT_ID } from '../../../../infra/docker/seed';
+import { seedDatabase, SEED_MERCHANT_ID, SEED_USERS } from '../../../../infra/docker/seed';
 
-const TEST_USER_ID = 'b0000000-0000-0000-0000-0000000000a2'; // OPS_CSKH in seed
-const OTHER_USER_ID = 'b0000000-0000-0000-0000-0000000000a1'; // OWNER in seed
+const TEST_USER_ID = SEED_USERS[1].id; // OPS_CSKH in the canonical seed
+const OTHER_USER_ID = SEED_USERS[0].id; // OWNER in the canonical seed
 
 async function runMeSupertestSuite() {
   console.log('================================================================');
@@ -51,7 +52,7 @@ async function runMeSupertestSuite() {
     TRUST_PROXY_HOPS: 1,
   };
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+  const moduleFixture: TestingModule = await createApiTestModule({ imports: [AppModule] })
     .overrideProvider(APP_CONFIG)
     .useValue(testConfig)
     .overrideProvider(VERIFICATION_ADAPTER)
@@ -64,7 +65,7 @@ async function runMeSupertestSuite() {
   const prisma = app.get(PrismaService);
 
   // Ensure DB has seed
-  await seedDatabase();
+  await seedDatabase(prisma);
 
   // Create helper to mint valid bearer token with active session
   const createSessionToken = async (

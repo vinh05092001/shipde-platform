@@ -10,6 +10,7 @@
   },
   "scripts": {
     "dev": "turbo dev --cache-dir=.turbo/cache",
+    "ai:check": "node scripts/ai/prepush-check.mjs",
     "build": "pnpm db:generate && turbo build --cache-dir=.turbo/cache",
     "lint": "turbo lint --cache-dir=.turbo/cache && eslint scripts",
     "format:check": "tsx scripts/verify-formatting.ts",
@@ -18,6 +19,7 @@
     "test": "turbo test --cache-dir=.turbo/cache && turbo test:audit --cache-dir=.turbo/cache && pnpm contract:check && pnpm test:a11y && pnpm test:visual && pnpm test:perf",
     "test:audit": "turbo test:audit --cache-dir=.turbo/cache",
     "test:integration": "pnpm --filter @shipde/api --filter @shipde/worker build && tsx packages/testkit/src/integration.ts",
+    "test:local-db": "pnpm db:generate && pnpm --filter @shipde/testkit... build && node scripts/test-local-db.mjs",
     "test:e2e": "turbo test:e2e --cache-dir=.turbo/cache",
     "test:a11y": "tsx scripts/verify-a11y.ts",
     "test:visual": "tsx scripts/verify-visual.ts",

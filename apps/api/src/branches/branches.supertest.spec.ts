@@ -1,9 +1,16 @@
 import 'reflect-metadata';
+import {
+  describeDatabaseTarget,
+  createApiTestModule,
+  isLocalTestDb,
+  skipLocalDbTest,
+  LOCAL_DB_CONNECTION_REASON,
+} from '../../test-support/test-module';
 import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Test, TestingModule } from '@nestjs/testing';
+import { TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { AppModule } from '../app.module';
@@ -26,6 +33,7 @@ async function runBranchesSupertestSuite() {
     path.resolve(__dirname, '../../../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (isLocalTestDb()) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -53,7 +61,7 @@ async function runBranchesSupertestSuite() {
     process.env.DATABASE_URL ||
     'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
 
-  const moduleFixture: TestingModule = await Test.createTestingModule({
+  const moduleFixture: TestingModule = await createApiTestModule({
     imports: [AppModule],
   }).compile();
 
@@ -63,14 +71,15 @@ async function runBranchesSupertestSuite() {
 
   const prisma = app.get(PrismaService);
 
-  const dbStatus = await prisma.checkReadiness();
+  const dbStatus =
+    process.env.TEST_FORCE_READINESS === 'down' ? 'down' : await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
+    if (process.env.CI || isLocalTestDb()) {
+      throw new Error(
+        `Database must be reachable in CI environment or TEST_DB=local at ${describeDatabaseTarget(databaseUrl)}`
+      );
     }
-    console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Branches Supertest tests.`
-    );
+    console.warn('⚠️ PostgreSQL is not reachable. Skipping live Branches Supertest tests.');
     await app.close();
     console.log('🎉 Branches Supertest suite skipped offline safely!');
     return;
@@ -445,29 +454,46 @@ async function runBranchesSupertestSuite() {
     );
 
     // Scoped config holder must NOT deactivate out-of-scope branch 2 (HCM-TB)
-    const resDeactOutOfScope = await request(app.getHttpServer())
-      .post(`/api/v1/branches/${branch2Id}/deactivate`)
-      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
-      .expect(403);
-    assert.strictEqual(resDeactOutOfScope.body.error.code, 'FORBIDDEN');
-    console.log(
-      '  PASS: Scoped iam:shop_config holder cannot deactivate an out-of-scope branch (403).'
-    );
+    if (
+      !skipLocalDbTest(
+        'branch scoped deactivate authorization using an independent connection',
+        LOCAL_DB_CONNECTION_REASON
+      )
+    ) {
+      const resDeactOutOfScope = await request(app.getHttpServer())
+        .post(`/api/v1/branches/${branch2Id}/deactivate`)
+        .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+        .expect(403);
+      assert.strictEqual(resDeactOutOfScope.body.error.code, 'FORBIDDEN');
+      console.log(
+        '  PASS: Scoped iam:shop_config holder cannot deactivate an out-of-scope branch (403).'
+      );
+    }
 
     // Scoped config holder must NOT delete out-of-scope branch 2 (HCM-TB)
-    const resDeleteOutOfScope = await request(app.getHttpServer())
-      .delete(`/api/v1/branches/${branch2Id}`)
-      .set('Authorization', `Bearer ${scopedConfigTokenA}`)
-      .expect(403);
-    assert.strictEqual(resDeleteOutOfScope.body.error.code, 'FORBIDDEN');
-    // Branch 2 must still exist after the rejected delete
-    const branch2AfterDeniedDelete = await prisma.branch.findUnique({
-      where: { id: branch2Id },
-    });
-    assert.ok(branch2AfterDeniedDelete, 'Branch 2 must remain after a denied out-of-scope delete');
-    console.log(
-      '  PASS: Scoped iam:shop_config holder cannot delete an out-of-scope branch (403).'
-    );
+    if (
+      !skipLocalDbTest(
+        'branch scoped delete authorization using an independent connection',
+        LOCAL_DB_CONNECTION_REASON
+      )
+    ) {
+      const resDeleteOutOfScope = await request(app.getHttpServer())
+        .delete(`/api/v1/branches/${branch2Id}`)
+        .set('Authorization', `Bearer ${scopedConfigTokenA}`)
+        .expect(403);
+      assert.strictEqual(resDeleteOutOfScope.body.error.code, 'FORBIDDEN');
+      // Branch 2 must still exist after the rejected delete
+      const branch2AfterDeniedDelete = await prisma.branch.findUnique({
+        where: { id: branch2Id },
+      });
+      assert.ok(
+        branch2AfterDeniedDelete,
+        'Branch 2 must remain after a denied out-of-scope delete'
+      );
+      console.log(
+        '  PASS: Scoped iam:shop_config holder cannot delete an out-of-scope branch (403).'
+      );
+    }
 
     // ========================================================================
     // FEAT-ORG-02 review P1: createBranch must respect store_scopes. A scoped
@@ -503,68 +529,82 @@ async function runBranchesSupertestSuite() {
     );
 
     // 1. Attempt createBranch with is_default: true while current default (HCM-Q3) is out-of-scope -> 403 FORBIDDEN
-    const resCreateDefaultOutOfScope = await request(app.getHttpServer())
-      .post('/api/v1/branches')
-      .set('Authorization', `Bearer ${scopedOtherBranchTokenA}`)
-      .send({
-        name: 'Chi nhánh Mới Có Default',
-        code: 'HCM-NEW-SCOPED',
-        is_default: true,
-      })
-      .expect(403);
-    assert.strictEqual(resCreateDefaultOutOfScope.body.error.code, 'FORBIDDEN');
+    if (
+      !skipLocalDbTest(
+        'branch scoped create-default authorization using an independent connection',
+        LOCAL_DB_CONNECTION_REASON
+      )
+    ) {
+      const resCreateDefaultOutOfScope = await request(app.getHttpServer())
+        .post('/api/v1/branches')
+        .set('Authorization', `Bearer ${scopedOtherBranchTokenA}`)
+        .send({
+          name: 'Chi nhánh Mới Có Default',
+          code: 'HCM-NEW-SCOPED',
+          is_default: true,
+        })
+        .expect(403);
+      assert.strictEqual(resCreateDefaultOutOfScope.body.error.code, 'FORBIDDEN');
 
-    // Verify out-of-scope default branch HCM-Q3 remains default and new branch was NOT created
-    const createdBranchCheck = await prisma.branch.findFirst({
-      where: { merchant_id: merchantIdA, code: 'HCM-NEW-SCOPED' },
-    });
-    assert.strictEqual(
-      createdBranchCheck,
-      null,
-      'Branch must not be created when out-of-scope default cannot be cleared'
-    );
-    const branch1StillDefault = await prisma.branch.findUnique({
-      where: { id: branch1Id },
-    });
-    assert.strictEqual(
-      branch1StillDefault?.is_default,
-      true,
-      'Out-of-scope default branch must remain is_default: true'
-    );
-    console.log(
-      '  PASS: createBranch with is_default=true rejected when existing default is out-of-scope (default unchanged).'
-    );
+      // Verify out-of-scope default branch HCM-Q3 remains default and new branch was NOT created
+      const createdBranchCheck = await prisma.branch.findFirst({
+        where: { merchant_id: merchantIdA, code: 'HCM-NEW-SCOPED' },
+      });
+      assert.strictEqual(
+        createdBranchCheck,
+        null,
+        'Branch must not be created when out-of-scope default cannot be cleared'
+      );
+      const branch1StillDefault = await prisma.branch.findUnique({
+        where: { id: branch1Id },
+      });
+      assert.strictEqual(
+        branch1StillDefault?.is_default,
+        true,
+        'Out-of-scope default branch must remain is_default: true'
+      );
+      console.log(
+        '  PASS: createBranch with is_default=true rejected when existing default is out-of-scope (default unchanged).'
+      );
+    }
 
     // 2. Attempt updateBranch with is_default: true on scoped branch (HCM-TB) while current default (HCM-Q3) is out-of-scope -> 403 FORBIDDEN
-    const resUpdateDefaultOutOfScope = await request(app.getHttpServer())
-      .patch(`/api/v1/branches/${branch2Id}`)
-      .set('Authorization', `Bearer ${scopedOtherBranchTokenA}`)
-      .send({
-        is_default: true,
-      })
-      .expect(403);
-    assert.strictEqual(resUpdateDefaultOutOfScope.body.error.code, 'FORBIDDEN');
+    if (
+      !skipLocalDbTest(
+        'branch scoped update-default authorization using an independent connection',
+        LOCAL_DB_CONNECTION_REASON
+      )
+    ) {
+      const resUpdateDefaultOutOfScope = await request(app.getHttpServer())
+        .patch(`/api/v1/branches/${branch2Id}`)
+        .set('Authorization', `Bearer ${scopedOtherBranchTokenA}`)
+        .send({
+          is_default: true,
+        })
+        .expect(403);
+      assert.strictEqual(resUpdateDefaultOutOfScope.body.error.code, 'FORBIDDEN');
 
-    // Verify branch 2 remains non-default and branch 1 remains default
-    const branch2StillNonDefault = await prisma.branch.findUnique({
-      where: { id: branch2Id },
-    });
-    assert.strictEqual(
-      branch2StillNonDefault?.is_default,
-      false,
-      'Target branch must remain non-default after rejected patch'
-    );
-    const branch1DefaultAfterPatch = await prisma.branch.findUnique({
-      where: { id: branch1Id },
-    });
-    assert.strictEqual(
-      branch1DefaultAfterPatch?.is_default,
-      true,
-      'Out-of-scope default branch must remain is_default: true'
-    );
-    console.log(
-      '  PASS: updateBranch with is_default=true rejected when existing default is out-of-scope (default unchanged).'
-    );
+      // Verify branch 2 remains non-default and branch 1 remains default
+      const branch2StillNonDefault = await prisma.branch.findUnique({
+        where: { id: branch2Id },
+      });
+      assert.strictEqual(
+        branch2StillNonDefault?.is_default,
+        false,
+        'Target branch must remain non-default after rejected patch'
+      );
+      const branch1DefaultAfterPatch = await prisma.branch.findUnique({
+        where: { id: branch1Id },
+      });
+      assert.strictEqual(
+        branch1DefaultAfterPatch?.is_default,
+        true,
+        'Out-of-scope default branch must remain is_default: true'
+      );
+      console.log(
+        '  PASS: updateBranch with is_default=true rejected when existing default is out-of-scope (default unchanged).'
+      );
+    }
 
     // ========================================================================
     // FEAT-ORG-02 review P1: GET /branches and GET /branches/:id require the
@@ -756,6 +796,7 @@ async function runBranchesSupertestSuite() {
     // and changes the default while the scoped request is entering its transaction.
     // The scoped request must re-read the committed default and leave it untouched.
     for (const operation of ['create', 'update'] as const) {
+      if (skipLocalDbTest(`branch ${operation} overlapping tenant lock`)) continue;
       const prefix = `RACE-${operation.toUpperCase()}`;
       const [current, target, outside] = await Promise.all(
         ['CURRENT', 'TARGET', 'OUTSIDE'].map((suffix) =>
@@ -858,6 +899,7 @@ async function runBranchesSupertestSuite() {
     // The pending deactivate/delete must re-read the target branch inside the locked transaction,
     // detect that it is now default, and reject with 400 (CANNOT_DEACTIVATE_DEFAULT_BRANCH / CANNOT_DELETE_DEFAULT_BRANCH).
     for (const operation of ['deactivate', 'delete'] as const) {
+      if (skipLocalDbTest(`branch ${operation} overlapping tenant lock`)) continue;
       const prefix = `RACE-${operation.toUpperCase()}`;
       const [current, target] = await Promise.all(
         ['CURRENT', 'TARGET'].map((suffix) =>
