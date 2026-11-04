@@ -24,7 +24,7 @@
  * SOFTWARE.
  *
  * Faceted filter dropdown with multi-select checkboxes, count badges,
- * optimistic selection accumulation, and accessible listbox keyboard navigation.
+ * and accessible listbox keyboard navigation.
  */
 
 'use client';
@@ -32,7 +32,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Check, PlusCircle, X } from 'lucide-react';
 import { DataTableFilterOption } from './types';
-import { normalizeParamsString } from './useDataTable';
 
 interface DataTableFacetedFilterProps {
   title: string;
@@ -44,226 +43,19 @@ interface DataTableFacetedFilterProps {
   resetEpoch?: number;
 }
 
-/**
- * Computes the synchronized optimistic selection for faceted filter when
- * committed selectedValues prop, historyEpoch, or resetEpoch changes (Finding 4 P1).
- * Preserves optimistic selections when multiple selections happen in the same
- * dropdown before committed search params update, and drops pending selections
- * on browser history navigation (popstate) or explicit external filter resets.
- *
- * Round 41 finding 3: `externalUrlEvent` marks that the URL itself advanced
- * without a popstate (an external Link navigation) while this facet's
- * committed value stayed the same. The committed URL is authoritative: the
- * display shows exactly its selected filters and cancelled optimistic
- * selections are discarded.
- */
-export function computeOptimisticFacetSelection(
-  currentOptimistic: Set<string>,
-  incomingCommitted: Set<string>,
-  prevCommitted: Set<string>,
-  pendingSelections: string[],
-  historyEvent = false,
-  resetEvent = false,
-  externalUrlEvent = false
-): {
-  nextOptimistic: Set<string>;
-  nextPending: string[];
-  wasIgnoredDueToPending: boolean;
-} {
-  const incomingStr = Array.from(incomingCommitted).sort().join('.');
-  const prevStr = Array.from(prevCommitted).sort().join('.');
-
-  if (resetEvent) {
-    // If newer facet selections are already queued after an empty reset target,
-    // preserve them (Round 12 P2).
-    const resetIdx = pendingSelections.indexOf('');
-    if (resetIdx !== -1 && resetIdx < pendingSelections.length - 1) {
-      return {
-        nextOptimistic: currentOptimistic,
-        nextPending: pendingSelections.slice(resetIdx + 1),
-        wasIgnoredDueToPending: true,
-      };
-    }
-    // Otherwise, toolbar reset initiates clearing the filter. If current committed
-    // state is non-empty, the empty commit ('') is pending acknowledgment so
-    // subsequent selections made while reset is in-flight survive the empty commit (Round 14 / Finding 8 P2).
-    const isOldPendingClear = incomingStr !== '';
-    return {
-      nextOptimistic: new Set<string>(),
-      nextPending: isOldPendingClear ? [''] : [],
-      wasIgnoredDueToPending: false,
-    };
-  }
-
-  // Explicit browser history or external navigation must always take precedence
-  // and discard cancelled intent, before any intermediate acknowledgment matching (Round 14 / Finding 8 P1).
-  if (historyEvent) {
-    return {
-      nextOptimistic: new Set(incomingCommitted),
-      nextPending: [],
-      wasIgnoredDueToPending: false,
-    };
-  }
-
-  // Round 41 finding 3: an external Link navigation committed other URL params
-  // while this facet's committed value stayed the same (no popstate, incoming
-  // equals previous). The unchanged-value fast path must not let a cancelled
-  // optimistic selection survive an authoritative external navigation: display
-  // exactly the committed filters and discard queued intent.
-  if (externalUrlEvent && incomingStr === prevStr) {
-    const currentStr = Array.from(currentOptimistic).sort().join('.');
-    if (currentStr === incomingStr && pendingSelections.length === 0) {
-      // Already exactly the committed selection: keep the same Set identity.
-      return {
-        nextOptimistic: currentOptimistic,
-        nextPending: pendingSelections,
-        wasIgnoredDueToPending: false,
-      };
-    }
-    return {
-      nextOptimistic: new Set(incomingCommitted),
-      nextPending: [],
-      wasIgnoredDueToPending: false,
-    };
-  }
-
-  if (incomingStr === prevStr) {
-    return {
-      nextOptimistic: currentOptimistic,
-      nextPending: pendingSelections,
-      wasIgnoredDueToPending: false,
-    };
-  }
-
-  const pendingIdx = pendingSelections.indexOf(incomingStr);
-  if (pendingIdx !== -1) {
-    const nextPending = pendingSelections.slice(pendingIdx + 1);
-    if (nextPending.length === 0) {
-      // All pending selections acknowledged
-      return {
-        nextOptimistic: new Set(incomingCommitted),
-        nextPending,
-        wasIgnoredDueToPending: false,
-      };
-    } else {
-      // User made newer selections; preserve current optimistic values
-      return {
-        nextOptimistic: currentOptimistic,
-        nextPending,
-        wasIgnoredDueToPending: true,
-      };
-    }
-  }
-
-  // External change (e.g. unqueued reset commit or external URL navigation)
-  return {
-    nextOptimistic: new Set(incomingCommitted),
-    nextPending: [],
-    wasIgnoredDueToPending: false,
-  };
-}
-
 export function DataTableFacetedFilter({
   title,
   options,
   selectedValues = new Set(),
   onSelect,
   className = '',
-  historyEpoch,
-  resetEpoch,
 }: DataTableFacetedFilterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
-
-  // Optimistic facet selections queue (Finding 4 P1)
-  const [optimisticValues, setOptimisticValues] = useState<Set<string>>(
-    () => new Set(selectedValues)
-  );
-  const pendingSelectionsRef = useRef<string[]>([]);
-  const prevCommittedRef = useRef<Set<string>>(selectedValues);
-  const prevHistoryEpochRef = useRef<number | undefined>(historyEpoch);
-  const prevResetEpochRef = useRef<number | undefined>(resetEpoch);
   const prevIsOpenRef = useRef(false);
-
-  const [popstateEpoch, setPopstateEpoch] = useState(0);
-  const prevPopstateEpochRef = useRef(0);
-
-  // Last URL search string observed by this facet. The committed URL is the
-  // single source of truth (BR-UI-01): when it advances without a popstate
-  // (an external Link navigation), this facet treats it as authoritative even
-  // if its own committed value is unchanged (Round 41 finding 3).
-  const lastSeenLocationSearchRef = useRef<string | null>(null);
-
-  // Authoritative browser history navigation (Back/Forward) cancels queued intent (BR-UI-01, Finding 3 P1)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handlePopState = () => {
-      pendingSelectionsRef.current = [];
-      setPopstateEpoch((epoch) => epoch + 1);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, []);
-
-  // Synchronize optimistic state with prop changes
-  useEffect(() => {
-    const popstateEvent = popstateEpoch !== prevPopstateEpochRef.current;
-    prevPopstateEpochRef.current = popstateEpoch;
-
-    const historyEvent =
-      popstateEvent ||
-      (historyEpoch !== undefined &&
-        prevHistoryEpochRef.current !== undefined &&
-        historyEpoch !== prevHistoryEpochRef.current);
-    prevHistoryEpochRef.current = historyEpoch;
-
-    const resetEvent =
-      resetEpoch !== undefined &&
-      prevResetEpochRef.current !== undefined &&
-      resetEpoch !== prevResetEpochRef.current;
-    prevResetEpochRef.current = resetEpoch;
-
-    // An external Link navigation advances window.location.search WITHOUT a
-    // popstate and without changing this facet's committed value. Recognize
-    // that the URL itself moved so the committed URL can override cancelled
-    // optimistic selections (Round 41 finding 3, BR-UI-01).
-    let externalUrlEvent = false;
-    if (typeof window !== 'undefined' && window.location) {
-      const currentSearch = window.location.search || '';
-      if (lastSeenLocationSearchRef.current === null) {
-        lastSeenLocationSearchRef.current = currentSearch;
-      } else if (lastSeenLocationSearchRef.current !== currentSearch) {
-        lastSeenLocationSearchRef.current = currentSearch;
-        const normalized = normalizeParamsString(currentSearch);
-        const tableQueries = (window as any).__shipde_table_queries as Set<string> | undefined;
-        // If the URL change was dispatched by this table, it is an acknowledgment
-        // of a table control, not an external navigation (Finding 3 P1).
-        if (!tableQueries || !tableQueries.has(normalized)) {
-          externalUrlEvent = true;
-        }
-      }
-    }
-
-    const res = computeOptimisticFacetSelection(
-      optimisticValues,
-      selectedValues,
-      prevCommittedRef.current,
-      pendingSelectionsRef.current,
-      historyEvent,
-      resetEvent,
-      externalUrlEvent
-    );
-    prevCommittedRef.current = selectedValues;
-    pendingSelectionsRef.current = res.nextPending;
-    if (res.nextOptimistic !== optimisticValues) {
-      setOptimisticValues(res.nextOptimistic);
-    }
-  }, [selectedValues, historyEpoch, resetEpoch, optimisticValues, popstateEpoch]);
 
   // Restore trigger focus on dropdown close (Finding 14 P2)
   useEffect(() => {
@@ -308,23 +100,17 @@ export function DataTableFacetedFilter({
   }, [filteredOptions]);
 
   const handleToggle = (value: string) => {
-    const next = new Set(optimisticValues);
+    const next = new Set(selectedValues);
     if (next.has(value)) {
       next.delete(value);
     } else {
       next.add(value);
     }
-    setOptimisticValues(next);
-    const serialized = Array.from(next).sort().join('.');
-    pendingSelectionsRef.current.push(serialized);
     onSelect(Array.from(next));
   };
 
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const next = new Set<string>();
-    setOptimisticValues(next);
-    pendingSelectionsRef.current.push('');
     onSelect([]);
   };
 
@@ -352,7 +138,8 @@ export function DataTableFacetedFilter({
     }
   };
 
-  const selectedCount = optimisticValues.size;
+  // Checked state and count are pure functions of URL-derived selectedValues (BR-UI-01)
+  const selectedCount = selectedValues.size;
 
   return (
     <div className={`relative inline-block ${className}`} ref={containerRef}>
@@ -419,7 +206,7 @@ export function DataTableFacetedFilter({
               </div>
             ) : (
               filteredOptions.map((option, optIdx) => {
-                const isSelected = optimisticValues.has(option.value);
+                const isSelected = selectedValues.has(option.value);
                 const Icon = option.icon;
 
                 return (

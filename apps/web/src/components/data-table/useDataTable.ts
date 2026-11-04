@@ -28,7 +28,7 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
@@ -61,7 +61,7 @@ export interface UseDataTableReturn {
   resetFilters: () => void;
   createQueryString: (params: Record<string, string | number | null | undefined>) => string;
   isPending: boolean;
-  // Increments on explicit filter resets (Finding 4 P1).
+  // Increments on explicit filter resets.
   resetEpoch: number;
 }
 
@@ -81,56 +81,6 @@ export function normalizeParamsString(params: URLSearchParams | string | null | 
     sorted.append(k, v);
   }
   return sorted.toString();
-}
-
-export function isCompatibleSubset(
-  committedStr: string,
-  targetStr: string,
-  baselineStr?: string
-): boolean {
-  if (!committedStr) return true;
-  if (!targetStr && !baselineStr) return false;
-  const committed = new URLSearchParams(committedStr);
-  const target = new URLSearchParams(targetStr);
-  const baseline = baselineStr ? new URLSearchParams(baselineStr) : null;
-  for (const [key, value] of committed.entries()) {
-    const targetValue = target.get(key);
-    if (targetValue === value) {
-      continue;
-    }
-    // If targetValue is null, check if this is an intermediate facet removal from baseline (Finding 6 P1).
-    if (targetValue === null) {
-      if (baseline) {
-        const baselineValue = baseline.get(key);
-        if (baselineValue) {
-          const committedSegments = value.split('.').filter(Boolean);
-          const baselineSegments = baselineValue.split('.').filter(Boolean);
-          if (
-            committedSegments.length > 0 &&
-            committedSegments.every((segment) => baselineSegments.includes(segment))
-          ) {
-            continue;
-          }
-        }
-      }
-      return false;
-    }
-    // A facet value is a dot-joined multi-selection (e.g. status=FAILED or
-    // status=FAILED.DELIVERED). A commit of an earlier same-facet selection is
-    // a compatible intermediate acknowledgment when every segment it carries
-    // is still present in the newer pending target, so the newer selection is
-    // preserved instead of treated as a conflict (Round 41 finding 5).
-    const committedSegments = value.split('.').filter(Boolean);
-    const targetSegments = targetValue.split('.').filter(Boolean);
-    if (
-      committedSegments.length > 0 &&
-      committedSegments.every((segment) => targetSegments.includes(segment))
-    ) {
-      continue;
-    }
-    return false;
-  }
-  return true;
 }
 
 export function parseSortParam(sortParam: string | null): ColumnSort | null {
@@ -165,76 +115,20 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const [isPending, startTransition] = useTransition();
 
-  // Filter reset signal (Finding 4 P1): increments when resetFilters is called.
+  // Filter reset signal: increments when resetFilters is called.
   const [resetEpoch, setResetEpoch] = useState(0);
 
   const routerSearchParams =
     props.searchParams !== undefined ? props.searchParams : nextSearchParams;
 
-  // Pending navigation intent: the query string this hook pushed, with
-  // the committed baseline it was composed from. Intermediate acknowledgments
-  // advance the baseline while preserving newer pending intent (BR-UI-01, Finding 4 P1).
-  const pendingNavigationRef = useRef<{ baseline: string; target: string } | null>(null);
-
-  const committedParams = normalizeParamsString(routerSearchParams);
-
-  // If the committed params reached the pending target, the navigation has settled.
-  // Invalidate pending intent once committed so subsequent external navigation
-  // cannot match a stale baseline and resurrect settled filters (Finding 5 P1).
-  useEffect(() => {
-    if (pendingNavigationRef.current && committedParams === pendingNavigationRef.current.target) {
-      pendingNavigationRef.current = null;
-    }
-  }, [committedParams]);
-
   // Table state is a pure function of the committed router search params (BR-UI-01)
   const activeSearchParams = routerSearchParams;
+  const committedParams = normalizeParamsString(routerSearchParams);
 
-  // Next query string for a table action: composes onto the pending intent of
-  // a navigation still unacknowledged, else onto the committed URL.
+  // Next query string base builds from the current committed params only (BR-UI-01)
   const getNextQueryBase = useCallback(() => {
-    const pending = pendingNavigationRef.current;
-    if (!pending) {
-      return { baseline: committedParams, base: committedParams };
-    }
-    if (committedParams === pending.target) {
-      pendingNavigationRef.current = null;
-      return { baseline: committedParams, base: committedParams };
-    }
-    if (committedParams === pending.baseline) {
-      return { baseline: committedParams, base: pending.target };
-    }
-    // Intermediate acknowledgment: if committedParams is a compatible subset of
-    // the pending target (e.g. status=FAILED committed while carrier=GHN is still pending, Finding 4 P1;
-    // or status=FAILED committed while status removal is pending, Finding 6 P1),
-    // advance baseline and preserve the pending target.
-    if (isCompatibleSubset(committedParams, pending.target, pending.baseline)) {
-      pending.baseline = committedParams;
-      return { baseline: committedParams, base: pending.target };
-    }
-    // Conflicting or external navigation: committed URL wins
-    pendingNavigationRef.current = null;
     return { baseline: committedParams, base: committedParams };
   }, [committedParams]);
-
-  // Authoritative browser history navigation (Back/Forward) discards any
-  // uncommitted pending intent so a subsequent edit composes from the history
-  // entry the user actually landed on, never resurrecting cancelled queued
-  // filters — even when that entry's params are a subset of the pending target
-  // (Round 41 finding 4, BR-UI-01).
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const handlePopState = () => {
-      pendingNavigationRef.current = null;
-      if (typeof window !== 'undefined' && (window as any).__shipde_table_queries) {
-        (window as any).__shipde_table_queries.clear();
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, []);
 
   // Search params state with validation & fallback
   const page = useMemo(() => {
@@ -309,8 +203,7 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // Column visibility local state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
 
-  // URL query builder: composes against committed router search parameters,
-  // or against the pending intent of a navigation that has not committed yet
+  // URL query builder: composes against committed router search parameters (BR-UI-01)
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
       const newSearchParams = new URLSearchParams(getNextQueryBase().base);
@@ -331,25 +224,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   const navigate = useCallback(
     (queryString: string) => {
       const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
-      const normalizedTarget = normalizeParamsString(queryString);
-      const prev = pendingNavigationRef.current;
-      const currentBaseline =
-        prev &&
-        (prev.baseline === committedParams ||
-          isCompatibleSubset(committedParams, prev.target, prev.baseline))
-          ? prev.baseline
-          : committedParams;
-      pendingNavigationRef.current = {
-        baseline: currentBaseline,
-        target: normalizedTarget,
-      };
-      if (typeof window !== 'undefined') {
-        const globalAny = window as any;
-        if (!globalAny.__shipde_table_queries) {
-          globalAny.__shipde_table_queries = new Set<string>();
-        }
-        globalAny.__shipde_table_queries.add(normalizedTarget);
-      }
       if (onNavigate) {
         onNavigate(targetUrl);
         return;
@@ -364,7 +238,7 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
         }
       }
     },
-    [committedParams, onNavigate, pathname, router]
+    [onNavigate, pathname, router]
   );
 
   const setPagination = useCallback(
@@ -438,9 +312,6 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
 
   const resetFilters = useCallback(() => {
     setResetEpoch((epoch) => epoch + 1);
-    if (typeof window !== 'undefined' && (window as any).__shipde_table_queries) {
-      (window as any).__shipde_table_queries.clear();
-    }
     const keysToRemove: Record<string, null> = {
       page: null,
       sort: null,

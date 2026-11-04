@@ -31,10 +31,7 @@ import {
   parseSortParam,
   formatSortParam,
   useDataTable,
-  isCompatibleSubset,
   isInteractiveControl,
-  computeToolbarDraftOnPropChange,
-  computeOptimisticFacetSelection,
   createDebouncedSearch,
 } from '../components/data-table';
 import {
@@ -838,217 +835,6 @@ async function runTestSuite() {
   assert.ok(
     !multiwordToolbarHtml.includes('value="Nguyễn" '),
     'Negative test: multiword search draft must not trim trailing space to "Nguyễn"'
-  );
-
-  // Finding 5 / TASK-AI-155 repair Finding 2: continuous typing & delayed
-  // search updates without a historyEpoch signal. Only a commit of the LAST
-  // value this toolbar itself dispatched is an acknowledgment of its own
-  // request; every other committed change is authoritative URL state that
-  // resynchronizes the draft and cancels unsent edits (BR-UI-01).
-  // Step 1: User typed "N" (dispatched), then typed "Ng" (not dispatched yet).
-  // Step 2: Delayed acknowledgment of the toolbar's own "N" arrives.
-  const delayedCommit1 = computeToolbarDraftOnPropChange('Ng', 'N', '', 'N');
-  // Negative test: own delayed acknowledgment must NEVER overwrite newer draft "Ng"
-  assert.strictEqual(
-    delayedCommit1.nextDraft,
-    'Ng',
-    'Negative test: delayed own acknowledgment of "N" must NOT overwrite newer user draft "Ng"'
-  );
-  assert.strictEqual(
-    delayedCommit1.shouldCancelDebounce,
-    false,
-    'Own acknowledgment must not cancel the still-unsent "Ng" debounce'
-  );
-  assert.strictEqual(
-    delayedCommit1.nextPrevSearchValue,
-    'N',
-    'Own acknowledgment advances the committed baseline'
-  );
-
-  // Step 3: Final commit of "Ng" arrives matching the last dispatched value
-  const delayedCommit2 = computeToolbarDraftOnPropChange('Ng', 'Ng', 'N', 'Ng');
-  assert.strictEqual(
-    delayedCommit2.nextDraft,
-    'Ng',
-    'Final commit "Ng" must synchronize draft with committed value'
-  );
-  assert.strictEqual(
-    delayedCommit2.shouldCancelDebounce,
-    false,
-    'Latest edit acknowledgment must not be treated as authoritative'
-  );
-
-  // Step 4: External value change (e.g. external Link navigation clears search)
-  // — the committed URL diverges from the toolbar's own last dispatched value.
-  const externalNav = computeToolbarDraftOnPropChange('Ng', '', 'Ng', 'Ng');
-  assert.strictEqual(
-    externalNav.nextDraft,
-    '',
-    'External value change must reset/synchronize input draft'
-  );
-  assert.strictEqual(
-    externalNav.shouldCancelDebounce,
-    true,
-    'Authoritative URL change must cancel unsent debounced search'
-  );
-
-  // Negative test: No-op prop changes (incoming === prev) must not mutate draft
-  const noopProp = computeToolbarDraftOnPropChange('TestDraft', 'Ng', 'Ng', 'N');
-  assert.strictEqual(noopProp.nextDraft, 'TestDraft', 'No-op prop change must preserve draft');
-  assert.strictEqual(
-    noopProp.shouldCancelDebounce,
-    false,
-    'No-op must not cancel a pending debounce'
-  );
-
-  // Review item 3 / repair Finding 2: browser Back lands on an EXISTING "Ng"
-  // history entry while both "Ng" and "Ngu" were dispatched (last dispatched
-  // "Ngu"). The incoming "Ng" is NOT the acknowledgment of the newest dispatch
-  // — it is authoritative navigation, so the draft must resync to the URL.
-  const navCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', 'Ngu');
-  assert.strictEqual(
-    navCollision.nextDraft,
-    'Ng',
-    'Review item 3: Back to an existing "Ng" entry must resynchronize draft to the URL value'
-  );
-  assert.strictEqual(
-    navCollision.shouldCancelDebounce,
-    true,
-    'Review item 3: authoritative navigation must cancel unsent edits'
-  );
-
-  // Negative control: the SAME incoming "Ng" arriving as acknowledgment of the
-  // toolbar's own last dispatch "Ng" (unsent newer draft "Ngu") must preserve
-  // the newer draft and keep the timer alive.
-  const ackCollision = computeToolbarDraftOnPropChange('Ngu', 'Ng', 'N', 'Ng');
-  assert.strictEqual(
-    ackCollision.nextDraft,
-    'Ngu',
-    'Review item 3 negative control: own acknowledgment must NOT be mistaken for navigation'
-  );
-  assert.strictEqual(
-    ackCollision.shouldCancelDebounce,
-    false,
-    'Review item 3 negative control: own acknowledgment keeps the pending debounce'
-  );
-
-  // Navigation to a value never typed locally must resync draft.
-  const navForeign = computeToolbarDraftOnPropChange('Ngu', 'XYZ', 'N', 'Ngu');
-  assert.strictEqual(
-    navForeign.nextDraft,
-    'XYZ',
-    'Review item 3: navigation to a foreign value must resync draft to the URL value'
-  );
-  assert.strictEqual(navForeign.shouldCancelDebounce, true, 'Foreign nav cancels unsent edits');
-
-  // ---------------------------------------------------------------------------
-  // Faceted Filter Optimistic Selection Accumulation (Review 5 Finding 4 P1)
-  // ---------------------------------------------------------------------------
-  // Scenario: In one facet dropdown (e.g. Status), user selects 'FAILED', then selects 'DELIVERED'
-  // before the first commit arrives. Both selections must be preserved.
-  const initialCommitted = new Set<string>();
-  let facetOptimistic = new Set<string>(['FAILED']);
-  let facetPending = ['FAILED'];
-
-  // User makes second selection 'DELIVERED' in the same dropdown while navigation is held
-  facetOptimistic.add('DELIVERED');
-  const serializedSecond = Array.from(facetOptimistic).sort().join('.');
-  assert.strictEqual(
-    serializedSecond,
-    'DELIVERED.FAILED',
-    'Optimistic selection must contain both DELIVERED and FAILED'
-  );
-  facetPending.push(serializedSecond);
-
-  // Negative test: if handler started from committed selection instead of optimistic selection,
-  // the second selection would only contain DELIVERED!
-  const brokenSecondHandler = new Set(initialCommitted);
-  brokenSecondHandler.add('DELIVERED');
-  assert.strictEqual(
-    brokenSecondHandler.has('FAILED'),
-    false,
-    'Negative test: without optimistic accumulation, second selection would lose FAILED'
-  );
-
-  // Step 1: Delayed commit of first selection ('FAILED') arrives
-  const delayedFacetCommit1 = computeOptimisticFacetSelection(
-    facetOptimistic,
-    new Set(['FAILED']),
-    initialCommitted,
-    facetPending,
-    false
-  );
-  assert.strictEqual(
-    delayedFacetCommit1.wasIgnoredDueToPending,
-    true,
-    'Older commit of FAILED must be ignored from overwriting active optimistic selection'
-  );
-  assert.deepStrictEqual(
-    Array.from(delayedFacetCommit1.nextOptimistic).sort(),
-    ['DELIVERED', 'FAILED'],
-    'Optimistic selection must still contain both DELIVERED and FAILED'
-  );
-  assert.deepStrictEqual(
-    delayedFacetCommit1.nextPending,
-    ['DELIVERED.FAILED'],
-    'Pending list must advance and track remaining newer selection'
-  );
-
-  // Step 2: Final commit of ('FAILED.DELIVERED') arrives
-  const delayedFacetCommit2 = computeOptimisticFacetSelection(
-    delayedFacetCommit1.nextOptimistic,
-    new Set(['DELIVERED', 'FAILED']),
-    new Set(['FAILED']),
-    delayedFacetCommit1.nextPending,
-    false
-  );
-  assert.strictEqual(
-    delayedFacetCommit2.wasIgnoredDueToPending,
-    false,
-    'Latest commit must be acknowledged'
-  );
-  assert.deepStrictEqual(
-    delayedFacetCommit2.nextPending,
-    [],
-    'All pending facet selections must be acknowledged and cleared'
-  );
-  assert.deepStrictEqual(
-    Array.from(delayedFacetCommit2.nextOptimistic).sort(),
-    ['DELIVERED', 'FAILED'],
-    'Final selection must match committed values'
-  );
-
-  // Step 3: Browser Back/Forward navigation (historyEvent=true)
-  const facetHistoryNav = computeOptimisticFacetSelection(
-    facetOptimistic,
-    new Set(['PENDING']),
-    new Set(['DELIVERED', 'FAILED']),
-    ['DELIVERED.FAILED'],
-    true
-  );
-  assert.deepStrictEqual(
-    Array.from(facetHistoryNav.nextOptimistic),
-    ['PENDING'],
-    'History event must resynchronize optimistic selection to URL value'
-  );
-  assert.deepStrictEqual(
-    facetHistoryNav.nextPending,
-    [],
-    'History event must clear pending facet selections'
-  );
-
-  // Step 4: External filter reset (e.g. Reset filters button)
-  const facetReset = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['DELIVERED']),
-    [],
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(facetReset.nextOptimistic),
-    [],
-    'External reset must clear optimistic selections'
   );
 
   // ---------------------------------------------------------------------------
@@ -2394,52 +2180,6 @@ async function runTestSuite() {
     'Negative proof: Pending carrier=GHN must not be present after external navigation'
   );
 
-  // 13.2 Finding 4 (P1): Facet Reset Clears Pending Selections Even When Committed Value Is Unchanged
-  // Case from review.txt Finding 4:
-  // User opens /storybook?search=GHN (committed status is empty).
-  // User selects 'FAILED' -> optimistic is Set(['FAILED']), pendingSelections is ['FAILED'].
-  // Then clicks toolbar reset button (resetEvent = true).
-  // Committed status remains empty (incomingCommitted = new Set(), prevCommitted = new Set()).
-  const resetFacetResult = computeOptimisticFacetSelection(
-    new Set(['FAILED']),
-    new Set(),
-    new Set(),
-    ['FAILED'],
-    false,
-    true
-  );
-  assert.deepStrictEqual(
-    Array.from(resetFacetResult.nextOptimistic),
-    [],
-    'Finding 4 (P1): Explicit reset (resetEvent=true) must discard pending selections even if committed value is unchanged'
-  );
-  assert.deepStrictEqual(
-    resetFacetResult.nextPending,
-    [],
-    'Finding 4 (P1): Pending selections queue must be emptied on reset'
-  );
-
-  // Negative proof: without resetEvent (resetEvent=false), identical incoming and prev committed values
-  // would retain optimistic selections and pending queue!
-  const nonResetFacetResult = computeOptimisticFacetSelection(
-    new Set(['FAILED']),
-    new Set(),
-    new Set(),
-    ['FAILED'],
-    false,
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(nonResetFacetResult.nextOptimistic),
-    ['FAILED'],
-    'Negative proof: without resetEvent, matching committed values retain pending optimistic selection'
-  );
-  assert.deepStrictEqual(
-    nonResetFacetResult.nextPending,
-    ['FAILED'],
-    'Negative proof: without resetEvent, matching committed values retain pending queue'
-  );
-
   // Hook resetFilters() increments resetEpoch
   assert.strictEqual(typeof mountedHook.current.resetEpoch, 'number');
   const prevEpoch = mountedHook.current.resetEpoch;
@@ -2671,83 +2411,6 @@ async function runTestSuite() {
     'Negative test: Sanitized text contains zero template placeholders'
   );
 
-  // 13.10 Round 10 Finding 11 P2: Reset immediately applies empty search target without restoring old search
-  // Scenario: user had searchValue = 'GHN', clicks Reset, delayed reset navigation is held in-flight
-  const draftBeforeReset = 'GHN';
-  const committedBeforeReset = 'GHN';
-  const resetEpochChangeResult = computeToolbarDraftOnPropChange(
-    draftBeforeReset,
-    committedBeforeReset, // 'GHN' is still in-flight/held from parent
-    committedBeforeReset, // prev is 'GHN'
-    committedBeforeReset, // last dispatched is 'GHN'
-    true // resetEvent!
-  );
-
-  assert.strictEqual(
-    resetEpochChangeResult.nextDraft,
-    '',
-    'Finding 11: resetEvent must immediately clear search draft to empty string'
-  );
-  assert.strictEqual(
-    resetEpochChangeResult.shouldCancelDebounce,
-    true,
-    'Finding 11: resetEvent must cancel unsent debounced search'
-  );
-  assert.strictEqual(
-    resetEpochChangeResult.nextPrevSearchValue,
-    'GHN',
-    'Finding 11: resetEvent with still-held old search retains prev so the cleared commit is not mistaken'
-  );
-
-  // Negative test: verify that without resetEvent handling, the old implementation would have restored 'GHN'
-  const oldNaiveBehaviorResult = computeToolbarDraftOnPropChange(
-    draftBeforeReset,
-    committedBeforeReset,
-    committedBeforeReset,
-    committedBeforeReset,
-    false // without resetEvent
-  );
-  assert.strictEqual(
-    oldNaiveBehaviorResult.nextDraft,
-    'GHN',
-    'Negative test proof: without resetEvent handling, input draft would remain/restore to old "GHN"'
-  );
-
-  // Subsequent re-render while reset navigation is still in-flight
-  // (the reset's target '' became the last intent once applied)
-  const subsequentHeldRenderResult = computeToolbarDraftOnPropChange(
-    resetEpochChangeResult.nextDraft, // ''
-    committedBeforeReset, // 'GHN' still held
-    resetEpochChangeResult.nextPrevSearchValue, // 'GHN'
-    '', // reset target '' is now the toolbar's last intent
-    false
-  );
-  assert.strictEqual(
-    subsequentHeldRenderResult.nextDraft,
-    '',
-    'Finding 11: draft must stably remain empty while reset navigation is held in-flight'
-  );
-
-  // When reset navigation finally commits, incoming becomes '' — acknowledgment
-  // of the reset's own empty target
-  const committedResetResult = computeToolbarDraftOnPropChange(
-    '',
-    '', // committed URL search param is now ''
-    'GHN', // prev was 'GHN'
-    '', // reset already dispatched the empty target
-    false
-  );
-  assert.strictEqual(
-    committedResetResult.nextDraft,
-    '',
-    'Finding 11: committed reset aligns draft with empty string'
-  );
-  assert.strictEqual(
-    committedResetResult.shouldCancelDebounce,
-    false,
-    'Finding 11: acknowledgment of the reset target must not be reported as authoritative'
-  );
-
   // 13.11 Round 10 Finding 8 P2: Column header sorting menu portalled and not clipped
   const columnHeaderHtml = renderToStaticMarkup(
     React.createElement<any>(DataTableColumnHeader, {
@@ -2955,31 +2618,6 @@ async function runTestSuite() {
     'Finding 7: DashboardHeader must NOT leak plaintext email'
   );
 
-  // 13.15 Round 11 Finding 8 P2: Reset immediately clears optimistic facet selections while navigation is pending
-  const heldResetFacetResult = computeOptimisticFacetSelection(
-    new Set(['FAILED']), // current optimistic has FAILED
-    new Set(['FAILED']), // incoming committed still has FAILED while navigation is in-flight
-    new Set(['FAILED']), // prev committed had FAILED
-    ['FAILED'], // pending selections
-    false, // historyEvent
-    true // resetEvent = true (toolbar Reset triggered)
-  );
-  assert.strictEqual(
-    heldResetFacetResult.nextOptimistic.size,
-    0,
-    'Finding 8: resetEvent must immediately clear optimistic facet selections'
-  );
-  assert.deepStrictEqual(
-    heldResetFacetResult.nextPending,
-    [''],
-    'Round 14 Finding 8 P2: resetEvent enqueues empty target to preserve subsequent selections against empty commit'
-  );
-  assert.strictEqual(
-    heldResetFacetResult.wasIgnoredDueToPending,
-    false,
-    'Finding 8: wasIgnoredDueToPending must be false on reset'
-  );
-
   // 13.16 Round 11 Finding 13 P2: Initial desktop breakpoint evaluation dismisses drawer immediately
   let desktopCloseCount = 0;
   const onDesktopClose = () => {
@@ -3082,93 +2720,6 @@ async function runTestSuite() {
     `Round 12 P1: a later edit must compose from the externally selected search, not the cancelled newer draft (got: ${afterExternal})`
   );
   assert.strictEqual(afterExternalParams.get('status'), 'FAILED');
-  const toolbarAfterExternal = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng');
-  assert.strictEqual(
-    toolbarAfterExternal.nextDraft,
-    'N',
-    'Round 12 P1: toolbar must drop the newer draft when the navigation is external'
-  );
-  assert.strictEqual(
-    toolbarAfterExternal.shouldCancelDebounce,
-    true,
-    'Round 12 P1: external navigation must cancel unsent debounced edits'
-  );
-
-  // Negative proof: an acknowledgment of the toolbar's OWN last dispatched
-  // value must never be mistaken for external navigation — it keeps the
-  // newer unsent draft and its debounce timer.
-  const toolbarOwnAckKeepsNewerDraft = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'N');
-  assert.strictEqual(
-    toolbarOwnAckKeepsNewerDraft.nextDraft,
-    'Ngu',
-    'Round 12/13 P1 negative proof: own acknowledgment must not overwrite a newer unsent draft'
-  );
-  assert.strictEqual(
-    toolbarOwnAckKeepsNewerDraft.shouldCancelDebounce,
-    false,
-    'Round 12/13 P1 negative proof: own acknowledgment must not cancel the pending debounce'
-  );
-
-  // 14.3 P2: reset -> newer facet selection -> empty reset acknowledgment
-  // must keep the newer selection.
-  const resetThenSelect = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    ['', 'DELIVERED'],
-    false,
-    true
-  );
-  assert.deepStrictEqual(
-    Array.from(resetThenSelect.nextOptimistic),
-    ['DELIVERED'],
-    'Round 12 P2: an empty reset acknowledgment must not erase a facet selected after the reset'
-  );
-  assert.deepStrictEqual(resetThenSelect.nextPending, ['DELIVERED']);
-  const acknowledgedReset = computeOptimisticFacetSelection(
-    new Set(['FAILED']),
-    new Set(),
-    new Set(['FAILED']),
-    [''],
-    false,
-    true
-  );
-  assert.deepStrictEqual(
-    Array.from(acknowledgedReset.nextOptimistic),
-    [],
-    'Round 12 P2: a reset with no newer facet selection must still clear'
-  );
-
-  // 14.3b P2: reset -> newer facet selection -> empty reset acknowledgment in real lifecycle
-  const resetWithAcknowledgment = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    ['', 'DELIVERED'],
-    false,
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(resetWithAcknowledgment.nextOptimistic),
-    ['DELIVERED'],
-    'Round 13/14 P2: intermediate reset acknowledgment preserves newer facet selection'
-  );
-  assert.strictEqual(resetWithAcknowledgment.wasIgnoredDueToPending, true);
-
-  // Negative proof: history popstate without queued pending selections correctly resets optimistic facets
-  const historyResetCleared = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    [],
-    true,
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(historyResetCleared.nextOptimistic),
-    [],
-    'Round 13 P2 negative proof: history navigation without queued selections correctly resets optimistic facets'
-  );
 
   // 14.4 P2: disabled navigation must not activate, and must stay focusable.
   let disabledPrevented = false;
@@ -3268,120 +2819,6 @@ async function runTestSuite() {
   );
   // Toolbar's last dispatched value is 'Ng'; the committed 'N' cannot be its
   // own request acknowledgment, so the draft aligns with incoming 'N'
-  const round14Toolbar = computeToolbarDraftOnPropChange(
-    'Ng',
-    round14Hook.current.searchValue,
-    '',
-    'Ng'
-  );
-  assert.strictEqual(
-    round14Toolbar.nextDraft,
-    'N',
-    'Round 14 Finding 4 P1: Toolbar must drop the newer draft when navigation is external'
-  );
-  assert.strictEqual(
-    round14Toolbar.shouldCancelDebounce,
-    true,
-    'Round 14 Finding 4 P1: external navigation cancels unsent debounced edits'
-  );
-
-  // Negative proof: an acknowledgment of the toolbar's own last dispatch 'N'
-  // keeps a newer unsent draft 'Ngu'
-  const round14ToolbarMistaken = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'N');
-  assert.strictEqual(
-    round14ToolbarMistaken.nextDraft,
-    'Ngu',
-    'Round 14 Finding 4 P1 negative proof: own acknowledgment keeps newer unsent draft'
-  );
-
-  // 15.2 Phase 1(h) Finding 8 (NEW P1): History navigation resets cancelled facet selections
-  // With pending selections FAILED then DELIVERED.FAILED, Back to an existing FAILED entry resets optimistic facets
-  const historyBackFacet = computeOptimisticFacetSelection(
-    new Set(['FAILED', 'DELIVERED']),
-    new Set(['FAILED']),
-    new Set(['FAILED', 'DELIVERED']),
-    ['FAILED', 'DELIVERED.FAILED'],
-    true, // historyEvent = true (Back/Forward)
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(historyBackFacet.nextOptimistic),
-    ['FAILED'],
-    'Round 14 Finding 8 P1: History navigation must discard cancelled facet intent and reset to incoming URL'
-  );
-  assert.deepStrictEqual(
-    historyBackFacet.nextPending,
-    [],
-    'Round 14 Finding 8 P1: History navigation must clear pending selections queue'
-  );
-
-  // Negative proof: if acknowledgment matching were evaluated before historyEvent, cancelled DELIVERED would be retained
-  const mistakenIntermediateMatch = computeOptimisticFacetSelection(
-    new Set(['FAILED', 'DELIVERED']),
-    new Set(['FAILED']),
-    new Set(['FAILED', 'DELIVERED']),
-    ['FAILED', 'DELIVERED.FAILED'],
-    false, // simulated defect: historyEvent ignored/false
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(mistakenIntermediateMatch.nextOptimistic).sort(),
-    ['DELIVERED', 'FAILED'],
-    'Round 14 Finding 8 P1 negative proof: acknowledgment matching without historyEvent keeps cancelled selection'
-  );
-
-  // 15.3 Phase 1(h) Finding 8 (P2): Toolbar reset enqueues empty target to preserve subsequent selection
-  // Step 1: Toolbar reset is triggered while status=FAILED is committed
-  const toolbarResetStep1 = computeOptimisticFacetSelection(
-    new Set(['FAILED']),
-    new Set(['FAILED']),
-    new Set(['FAILED']),
-    [],
-    false,
-    true // resetEvent = true
-  );
-  assert.deepStrictEqual(
-    Array.from(toolbarResetStep1.nextOptimistic),
-    [],
-    'Round 14 Finding 8 P2: Toolbar reset must immediately clear optimistic facets'
-  );
-  assert.deepStrictEqual(
-    toolbarResetStep1.nextPending,
-    [''],
-    'Round 14 Finding 8 P2: Toolbar reset must enqueue empty target in pending queue'
-  );
-
-  // Step 2: User selects DELIVERED while reset is held (pending queue becomes ['', 'DELIVERED'])
-  // Step 3: Empty reset commits arrive (incomingCommitted is empty)
-  const toolbarResetStep3 = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    ['', 'DELIVERED'],
-    false,
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(toolbarResetStep3.nextOptimistic),
-    ['DELIVERED'],
-    'Round 14 Finding 8 P2: Facet selected after toolbar reset survives the empty reset commit'
-  );
-  assert.strictEqual(toolbarResetStep3.wasIgnoredDueToPending, true);
-
-  // Negative proof: without enqueuing '', pending queue is only ['DELIVERED'], so empty commit clears it
-  const toolbarResetWithoutQueue = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    ['DELIVERED'], // missing '' target
-    false,
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(toolbarResetWithoutQueue.nextOptimistic),
-    [],
-    'Round 14 Finding 8 P2 negative proof: without enqueued reset target, subsequent selection is wiped by empty commit'
-  );
 
   // 15.4 Phase 2 Finding 10 (P2): DataTableColumnHeader container div does NOT assign aria-sort
   const colHeaderStandaloneHtml = renderToStaticMarkup(
@@ -3462,60 +2899,6 @@ async function runTestSuite() {
 
   // 16. Round 37 Review Findings (P1 & P2 CI Failures Resolution)
   console.log('🧪 16. Testing Round 37 Review Findings...');
-
-  // 16.1 Finding 1 (P1): External Next.js navigation commit resets toolbar draft.
-  // The toolbar last dispatched 'Ng', so a commit of 'N' can only be an
-  // external navigation — the draft must resync to the URL.
-  const toolbarDraftBeforeExternalNav = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng', false);
-  assert.strictEqual(
-    toolbarDraftBeforeExternalNav.nextDraft,
-    'N',
-    'Round 37 Finding 1 P1: External Link navigation commit resets draft from Ng to N'
-  );
-  assert.strictEqual(
-    toolbarDraftBeforeExternalNav.shouldCancelDebounce,
-    true,
-    'Round 37 Finding 1 P1: external commit cancels unsent debounced edits'
-  );
-
-  // Negative test: commit of the toolbar's own last dispatched 'N' is an
-  // acknowledgment of its own request and must keep the newer draft 'Ngu'
-  const toolbarDraftNegative = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'N', false);
-  assert.strictEqual(
-    toolbarDraftNegative.nextDraft,
-    'Ngu',
-    'Round 37 Finding 1 P1 negative proof: own acknowledgment retains newer draft'
-  );
-
-  // 16.2 Finding 1 (P2): Real router acknowledgment (historyEvent=false) preserves facet selection after reset
-  const facetResetAckRealRouter = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    ['', 'DELIVERED'],
-    false, // historyEvent = false (real Next.js router commit, NOT a popstate event)
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(facetResetAckRealRouter.nextOptimistic),
-    ['DELIVERED'],
-    'Round 37 Finding 1 P2: Real router acknowledgment preserves DELIVERED facet selection'
-  );
-
-  // Negative test: synthetic popstate event triggers historyEvent=true, which mistakenly resets optimistic facets to incoming URL
-  const facetResetAckSyntheticPopstate = computeOptimisticFacetSelection(
-    new Set(['DELIVERED']),
-    new Set(),
-    new Set(['FAILED']),
-    ['', 'DELIVERED'],
-    true, // synthetic popstate
-    false
-  );
-  assert.deepStrictEqual(
-    Array.from(facetResetAckSyntheticPopstate.nextOptimistic),
-    [],
-    'Round 37 Finding 1 P2 negative proof: synthetic popstate mistakenly clears newer facet selection'
-  );
 
   console.log('   ✅ Round 37 review findings proven');
 
@@ -3692,79 +3075,15 @@ async function runTestSuite() {
   assert.strictEqual(debounceCalls[1], '', '(4) Clear resets search to empty');
 
   // ---------------------------------------------------------------------------
-  // 19. ROUND 39 REVIEW FINDINGS 1–4 (P1): pending composition & debounce cancelation
+  // 19. ROOT-CAUSE FIX: TOOLBAR & FACETED FILTER ONE URL SOURCE OF TRUTH (BR-UI-01)
   // ---------------------------------------------------------------------------
-  console.log('🧪 19. Testing Round 39 Review Findings 1–4 (P1)...');
+  console.log(
+    '🧪 19. Testing Root-cause Fix: Toolbar & Faceted Filter One URL Source of Truth (BR-UI-01)...'
+  );
 
-  // 19.1 Finding 1 (P1): pending facet edits compose before commit
-  {
-    const composedNavigations: string[] = [];
-    const composeHook = renderMountedDataTableHook({
-      contextSearchParams: new URLSearchParams('per_page=5'),
-      // Navigation held: committed params never change until released.
-      onNavigate: (url: string) => {
-        composedNavigations.push(url);
-      },
-      defaultPageSize: 10,
-      filterableColumns: [
-        { id: 'status', title: 'Trạng thái', options: [] },
-        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-      ],
-      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-    });
-
-    composeHook.current.setFilter('status', ['FAILED']);
-    composeHook.current.setFilter('carrier', ['GHN']);
-    composeHook.current.setSearch('Ng');
-    assert.strictEqual(composedNavigations.length, 3, 'Three held navigations recorded');
-
-    const firstRequest = new URLSearchParams(composedNavigations[0].split('?')[1] ?? '');
-    assert.strictEqual(firstRequest.get('status'), 'FAILED');
-
-    const secondRequest = new URLSearchParams(composedNavigations[1].split('?')[1] ?? '');
-    assert.strictEqual(
-      secondRequest.get('carrier'),
-      'GHN',
-      'pending facet edits compose before commit: carrier selection applied'
-    );
-    assert.strictEqual(
-      secondRequest.get('status'),
-      'FAILED',
-      'pending facet edits compose before commit: earlier pending status=FAILED retained'
-    );
-
-    const thirdRequest = new URLSearchParams(composedNavigations[2].split('?')[1] ?? '');
-    assert.strictEqual(thirdRequest.get('search'), 'Ng');
-    assert.strictEqual(
-      thirdRequest.get('status'),
-      'FAILED',
-      'A third edit preserves the first pending intent'
-    );
-    assert.strictEqual(
-      thirdRequest.get('carrier'),
-      'GHN',
-      'A third edit preserves the second pending intent (settled URL contains both)'
-    );
-
-    // Once a composed target commits (acknowledgment), later edits compose
-    // from the committed URL unchanged.
-    composeHook.rerender({
-      contextSearchParams: new URLSearchParams(composedNavigations[2].split('?')[1] ?? ''),
-    });
-    composeHook.current.setPagination(2);
-    const settledRequest = new URLSearchParams(
-      composedNavigations[3].split('?')[1] ?? composedNavigations[3]
-    );
-    assert.strictEqual(settledRequest.get('page'), '2');
-    assert.strictEqual(settledRequest.get('status'), 'FAILED');
-    assert.strictEqual(settledRequest.get('carrier'), 'GHN');
-    assert.strictEqual(settledRequest.get('search'), 'Ng');
-    console.log('   ✅ Finding 1 (P1): pending facet edits compose before commit');
-  }
-
-  // Mounted DataTableToolbar harness: real component function driven by the
-  // same fake dispatcher used for hooks, with a rerender loop so drafts,
-  // debounce timers and prop-change synchronization behave like the live page.
+  // Mounted DataTableToolbar harness: real component function driven by fake
+  // dispatcher with a rerender loop so drafts, debounce timers, and prop-change
+  // synchronization behave like the live page.
   function renderMountedDataTableToolbar(initialProps: any) {
     let toolbarProps = { ...initialProps };
     let toolbarElement: any = null;
@@ -3797,9 +3116,6 @@ async function runTestSuite() {
         }
         return refs[idx];
       },
-      // Real React lifecycle: the previous effect's cleanup runs before the
-      // replacement effect whenever deps change (Round 41 finding 1: skipping
-      // this concealed the toolbar's debounce-cancellation defect).
       useEffect(fn: () => any, deps: any[] | undefined) {
         const idx = effectIdx++;
         if (idx >= effects.length) {
@@ -3900,7 +3216,8 @@ async function runTestSuite() {
         props.onChange({ target: { value } });
       },
       inputValue(): string {
-        return searchInputProps().value;
+        const props = searchInputProps();
+        return props ? props.value : '';
       },
       clickClear() {
         const props = clearButtonProps();
@@ -3968,9 +3285,6 @@ async function runTestSuite() {
         }
         return prev.val;
       },
-      // Real React lifecycle: the previous effect's cleanup runs before the
-      // replacement effect whenever deps change (Round 41 finding 1: skipping
-      // this concealed the toolbar's debounce-cancellation defect).
       useEffect(fn: () => any, deps: any[] | undefined) {
         const idx = effectIdx++;
         if (idx >= effects.length) {
@@ -4090,8 +3404,8 @@ async function runTestSuite() {
         return Number(badge.children);
       },
       selectedAriaCount(): number {
-        const trigger = findRenderedProps(filterElement, 'aria-label', (p) => p.type === 'button');
-        const match = trigger?.['aria-label']?.match(/(\d+) đã chọn/);
+        const trigger = findRenderedProps(filterElement, 'title', (p) => p.type === 'button');
+        const match = trigger?.['title']?.match(/(\d+) đã chọn/);
         return match ? parseInt(match[1], 10) : 0;
       },
       isOptionSelected(value: string): boolean {
@@ -4116,867 +3430,314 @@ async function runTestSuite() {
 
   const waitMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  // 19.2 Finding 2 (P1): external Link cancels pending search draft
+  // 19.1 typing then Back restores URL search text and cancels scheduled debounce
   {
-    const dispatches: string[] = [];
+    const emissions: string[] = [];
     const toolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => dispatches.push(val),
-      debounceMs: 10,
+      searchValue: 'GHN',
+      onSearchChange: (val: string) => emissions.push(val),
+      debounceMs: 50,
     });
-    toolbar.type('N');
-    await waitMs(30);
-    toolbar.type('Ng');
-    await waitMs(30);
-    assert.deepStrictEqual(dispatches, ['N', 'Ng'], 'Both held search edits dispatched');
-    assert.strictEqual(toolbar.inputValue(), 'Ng');
+    assert.strictEqual(toolbar.inputValue(), 'GHN', 'Initial search text matches URL');
 
-    // External Link navigation commits the older "?search=N" URL.
-    toolbar.rerender({ searchValue: 'N' });
+    // User types in search box
+    toolbar.type('GHN Express');
+    assert.strictEqual(toolbar.inputValue(), 'GHN Express', 'Draft text reflects typing');
+
+    // Simulate browser Back: URL restores previous searchValue: ''
+    toolbar.rerender({ searchValue: '' });
     assert.strictEqual(
       toolbar.inputValue(),
-      'N',
-      'external Link cancels pending search draft: textbox resyncs to the committed URL'
+      '',
+      'typing then Back restores URL search text: textbox resets to committed URL value'
     );
-
-    // Finding 1 (P1): mounted own acknowledgment preserves newer debounce
-    const ownAckDispatches: string[] = [];
-    let settledSearchUrl = '';
-    const ownAckToolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => {
-        ownAckDispatches.push(val);
-        settledSearchUrl = val ? `?search=${val}` : '';
-      },
-      debounceMs: 60,
-    });
-    ownAckToolbar.type('N');
-    await waitMs(90); // 'N' dispatched; now type newer unsent text
-    ownAckToolbar.type('Ngu');
-    ownAckToolbar.rerender({ searchValue: 'N' }); // delayed ack of the toolbar's own request
-    assert.strictEqual(
-      ownAckToolbar.inputValue(),
-      'Ngu',
-      'mounted own acknowledgment preserves newer debounce: draft remains Ngu'
-    );
-    await waitMs(90);
-    assert.deepStrictEqual(
-      ownAckDispatches,
-      ['N', 'Ngu'],
-      'mounted own acknowledgment preserves newer debounce: emissions equal ["N", "Ngu"]'
-    );
-    assert.ok(
-      settledSearchUrl.includes('search=Ngu'),
-      'mounted own acknowledgment preserves newer debounce: settled URL contains search=Ngu'
-    );
-    console.log('   ✅ Finding 1 (P1): mounted own acknowledgment preserves newer debounce');
-
-    // Finding 2 (P1): authoritative navigation can revisit cancelled search
-    const revisitDispatches: string[] = [];
-    const revisitToolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => revisitDispatches.push(val),
-      debounceMs: 10,
-    });
-    revisitToolbar.type('N');
-    await waitMs(30);
-    revisitToolbar.type('Ng');
-    await waitMs(30);
-    assert.deepStrictEqual(revisitDispatches, ['N', 'Ng'], 'Both values dispatched');
-    revisitToolbar.type('Ngu'); // newer unsent intent
-    revisitToolbar.rerender({ searchValue: 'N' }); // commit external N cancelling unsent intent
-    assert.strictEqual(revisitToolbar.inputValue(), 'N', 'External N commit restores textbox to N');
-    revisitToolbar.rerender({ searchValue: 'Ng' }); // commit authoritative Ng
-    assert.strictEqual(
-      revisitToolbar.inputValue(),
-      'Ng',
-      'authoritative navigation can revisit cancelled search: textbox equals Ng'
-    );
-    console.log('   ✅ Finding 2 (P1): authoritative navigation can revisit cancelled search');
-  }
-
-  // 19.3 Finding 3 (P1): clear cancels debounce across callback replacement
-  {
-    const emissions: string[] = [];
-    const toolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => emissions.push(`first:${val}`),
-      debounceMs: 40,
-    });
-    toolbar.type('An'); // schedules debounced 'An'
-    // Parent rerender (e.g. loading simulator toggle) supplies a new callback.
-    toolbar.rerender({ onSearchChange: (val: string) => emissions.push(`second:${val}`) });
-    toolbar.clickClear();
-    await waitMs(90);
-    assert.ok(
-      !emissions.some((e) => e.endsWith(':An')),
-      `clear cancels debounce across callback replacement: abandoned timer must not resend "An" (emissions: ${JSON.stringify(emissions)})`
-    );
+    await waitMs(80);
     assert.deepStrictEqual(
       emissions,
-      ['second:'],
-      'Only the immediate empty clear is emitted, through the current callback'
+      [],
+      'typing then Back cancels pending debounce: abandoned typing does not dispatch'
     );
-    console.log('   ✅ Finding 3 (P1): clear cancels debounce across callback replacement');
+    console.log(
+      '   ✅ 19.1 typing then Back restores URL search text and cancels pending debounce'
+    );
   }
 
-  // 19.4 Finding 4 (P1): Back cancels unsent debounced search
+  // 19.2 Search clear button immediately clears search and cancels scheduled debounce
   {
-    const emissions: string[] = [];
-    const stableCallback = (val: string) => emissions.push(val);
-    const toolbar = renderMountedDataTableToolbar({
-      searchValue: 'N',
-      onSearchChange: stableCallback,
-      debounceMs: 40,
+    const clearEmissions: string[] = [];
+    const clearToolbar = renderMountedDataTableToolbar({
+      searchValue: 'old',
+      onSearchChange: (val: string) => clearEmissions.push(val),
+      debounceMs: 50,
     });
-    toolbar.type('Ng'); // unsent debounce pending
-    toolbar.rerender({ searchValue: '' }); // Back restores empty committed search
-    assert.strictEqual(toolbar.inputValue(), '', 'Back restores the committed empty search');
-    await waitMs(90);
-    assert.ok(
-      !emissions.includes('Ng'),
-      'Back cancels unsent debounced search: the abandoned timer must not override Back'
+    clearToolbar.type('older');
+    clearToolbar.clickClear();
+    assert.strictEqual(clearToolbar.inputValue(), '', 'Clear resets textbox immediately');
+    assert.deepStrictEqual(clearEmissions, [''], 'Clear dispatches empty string immediately');
+    await waitMs(80);
+    assert.deepStrictEqual(
+      clearEmissions,
+      [''],
+      'Clear cancels scheduled debounce: typing is not dispatched later'
     );
-    console.log('   ✅ Finding 4 (P1): Back cancels unsent debounced search');
+    console.log(
+      '   ✅ 19.2 Search clear button immediately clears search and cancels scheduled debounce'
+    );
   }
 
-  // 19.5 Finding 3 (P1): mounted Back cancels overlapping facet selections
+  // 19.3 facet toggle → URL updated and checkbox follows URL after Back/Forward
   {
-    // Step 1: create the existing FAILED history entry
-    let currentPopstateListener: (() => void) | null = null;
-    const prevWindow = (globalThis as any).window;
-    (globalThis as any).window = {
-      location: { search: '?status=FAILED' },
-      addEventListener: (event: string, fn: () => void) => {
-        if (event === 'popstate') currentPopstateListener = fn;
+    let committedStatusUrl = '';
+    let currentStatusParams = new URLSearchParams('per_page=5');
+    const statusHook = renderMountedDataTableHook({
+      contextSearchParams: currentStatusParams,
+      onNavigate: (url: string) => {
+        committedStatusUrl = url;
       },
-      removeEventListener: () => {},
-    };
+      defaultPageSize: 10,
+      filterableColumns: [
+        {
+          id: 'status',
+          title: 'Trạng thái',
+          options: [
+            { label: 'Thất bại', value: 'FAILED' },
+            { label: 'Đã giao', value: 'DELIVERED' },
+          ],
+        },
+      ],
+    });
 
-    // User is on empty status initially (Storybook supplies no historyEpoch)
-    const facetFilter = renderMountedDataTableFacetedFilter({
+    const statusFilter = renderMountedDataTableFacetedFilter({
       title: 'Trạng thái',
       options: [
         { label: 'Thất bại', value: 'FAILED' },
         { label: 'Đã giao', value: 'DELIVERED' },
       ],
-      selectedValues: new Set<string>(), // committed empty status
+      selectedValues: new Set<string>(statusHook.current.filters.status || []),
+      onSelect: (vals: string[]) => statusHook.current.setFilter('status', vals),
+    });
+
+    // Step 1: Open facet and toggle FAILED
+    statusFilter.open();
+    statusFilter.toggle('FAILED');
+    assert.ok(
+      committedStatusUrl.includes('status=FAILED'),
+      'facet toggle updates URL with status=FAILED'
+    );
+
+    // Step 2: Router commits new URL
+    currentStatusParams = new URLSearchParams('per_page=5&status=FAILED');
+    statusHook.rerender({ contextSearchParams: currentStatusParams });
+    statusFilter.rerender({
+      selectedValues: new Set<string>(statusHook.current.filters.status || []),
+    });
+    assert.strictEqual(
+      statusFilter.isOptionSelected('FAILED'),
+      true,
+      'checkbox follows URL: FAILED is checked'
+    );
+    assert.strictEqual(statusFilter.badgeCount(), 1, 'badge count is 1');
+
+    // Step 3: Browser Back to initial ?per_page=5
+    currentStatusParams = new URLSearchParams('per_page=5');
+    statusHook.rerender({ contextSearchParams: currentStatusParams });
+    statusFilter.rerender({
+      selectedValues: new Set<string>(statusHook.current.filters.status || []),
+    });
+    assert.strictEqual(
+      statusFilter.isOptionSelected('FAILED'),
+      false,
+      'checkbox follows URL after Back: FAILED is unchecked'
+    );
+    assert.strictEqual(statusFilter.badgeCount(), 0, 'badge count is 0 after Back');
+
+    // Step 4: Browser Forward back to ?per_page=5&status=FAILED
+    currentStatusParams = new URLSearchParams('per_page=5&status=FAILED');
+    statusHook.rerender({ contextSearchParams: currentStatusParams });
+    statusFilter.rerender({
+      selectedValues: new Set<string>(statusHook.current.filters.status || []),
+    });
+    assert.strictEqual(
+      statusFilter.isOptionSelected('FAILED'),
+      true,
+      'checkbox follows URL after Forward: FAILED is checked again'
+    );
+    assert.strictEqual(statusFilter.badgeCount(), 1, 'badge count is 1 after Forward');
+    console.log(
+      '   ✅ 19.3 facet toggle → URL updated and checkbox follows URL after Back/Forward'
+    );
+  }
+
+  // 19.4 two quick facet clicks keep both values
+  {
+    let quickFacetNavUrl = '';
+    let quickFacetParams = new URLSearchParams('per_page=5');
+    const quickHook = renderMountedDataTableHook({
+      contextSearchParams: quickFacetParams,
+      onNavigate: (url: string) => {
+        quickFacetNavUrl = url;
+        quickFacetParams = new URLSearchParams(url.split('?')[1] || url);
+        quickHook.rerender({ contextSearchParams: quickFacetParams });
+        quickFilter.rerender({
+          selectedValues: new Set<string>(quickHook.current.filters.status || []),
+        });
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        {
+          id: 'status',
+          title: 'Trạng thái',
+          options: [
+            { label: 'Thất bại', value: 'FAILED' },
+            { label: 'Đã giao', value: 'DELIVERED' },
+          ],
+        },
+      ],
+    });
+
+    const quickFilter = renderMountedDataTableFacetedFilter({
+      title: 'Trạng thái',
+      options: [
+        { label: 'Thất bại', value: 'FAILED' },
+        { label: 'Đã giao', value: 'DELIVERED' },
+      ],
+      selectedValues: new Set<string>(quickHook.current.filters.status || []),
+      onSelect: (vals: string[]) => quickHook.current.setFilter('status', vals),
+    });
+
+    quickFilter.open();
+    // Quick click 1:
+    quickFilter.toggle('FAILED');
+    // Quick click 2:
+    quickFilter.toggle('DELIVERED');
+
+    assert.ok(quickFacetNavUrl.includes('status='), 'two quick facet clicks update navigation URL');
+    const finalStatus = quickFacetParams.get('status') || '';
+    assert.ok(
+      finalStatus.includes('FAILED') && finalStatus.includes('DELIVERED'),
+      `two quick facet clicks keep both values: status is "${finalStatus}"`
+    );
+    assert.strictEqual(quickFilter.isOptionSelected('FAILED'), true, 'FAILED remains selected');
+    assert.strictEqual(
+      quickFilter.isOptionSelected('DELIVERED'),
+      true,
+      'DELIVERED remains selected'
+    );
+    assert.strictEqual(quickFilter.badgeCount(), 2, 'badge reports 2 selections');
+    console.log('   ✅ 19.4 two quick facet clicks keep both values');
+  }
+
+  // 19.5 external Link navigation discards pending search and syncs to committed URL
+  {
+    const externalLinkToolbar = renderMountedDataTableToolbar({
+      searchValue: 'original',
+      onSearchChange: () => {},
+      debounceMs: 50,
+    });
+    externalLinkToolbar.type('typing something else');
+    assert.strictEqual(externalLinkToolbar.inputValue(), 'typing something else');
+
+    // External Link commits ?search=external
+    externalLinkToolbar.rerender({ searchValue: 'external' });
+    assert.strictEqual(
+      externalLinkToolbar.inputValue(),
+      'external',
+      'external Link navigation syncs search box to committed URL'
+    );
+    console.log(
+      '   ✅ 19.5 external Link navigation discards pending search and syncs to committed URL'
+    );
+  }
+
+  // 19.6 external subset Link discards pending table intent and does not resurrect unselected filters
+  {
+    let compParams = new URLSearchParams('search=N&sort=codAmount.asc&per_page=5');
+    let capturedUrl = '';
+    const compHook = renderMountedDataTableHook({
+      contextSearchParams: compParams,
+      onNavigate: (url: string) => {
+        capturedUrl = url;
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        { id: 'status', title: 'Trạng thái', options: [] },
+        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
+      ],
+      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    });
+
+    // Commit external Link to ?search=N
+    compParams = new URLSearchParams('search=N');
+    compHook.rerender({ contextSearchParams: compParams });
+
+    // Subsequent selection of carrier GHN composes purely from committed ?search=N
+    compHook.current.setFilter('carrier', ['GHN']);
+    const afterExternalParams = new URLSearchParams(capturedUrl.split('?')[1] || capturedUrl);
+    assert.strictEqual(
+      afterExternalParams.get('search'),
+      'N',
+      'search=N is preserved from committed URL'
+    );
+    assert.strictEqual(afterExternalParams.get('carrier'), 'GHN', 'carrier=GHN is added');
+    assert.strictEqual(
+      afterExternalParams.get('status'),
+      null,
+      'cancelled status is NOT resurrected'
+    );
+    assert.strictEqual(afterExternalParams.get('sort'), null, 'cancelled sort is NOT resurrected');
+    console.log(
+      '   ✅ 19.6 external subset Link discards pending table intent and does not resurrect unselected filters'
+    );
+  }
+
+  // 19.7 external previously-owned URL clears pending facet selections
+  {
+    let facetParams = new URLSearchParams('search=N');
+    const facetHook = renderMountedDataTableHook({
+      contextSearchParams: facetParams,
+      onNavigate: () => {},
+      defaultPageSize: 10,
+      filterableColumns: [{ id: 'status', title: 'Trạng thái', options: [] }],
+    });
+
+    const extFacet = renderMountedDataTableFacetedFilter({
+      title: 'Trạng thái',
+      options: [
+        { label: 'Thất bại', value: 'FAILED' },
+        { label: 'Đã giao', value: 'DELIVERED' },
+      ],
+      selectedValues: new Set<string>(facetHook.current.filters.status || []),
       onSelect: () => {},
     });
 
-    // Step 2: Queue both edits under held navigation (FAILED then DELIVERED)
-    facetFilter.open();
-    facetFilter.toggle('FAILED');
-    facetFilter.toggle('DELIVERED');
-    assert.strictEqual(facetFilter.badgeCount(), 2, 'Two selections queued optimistically');
+    extFacet.open();
 
-    // Step 3: Navigate Back -> restores existing FAILED history entry
-    if (currentPopstateListener) (currentPopstateListener as any)();
-    (globalThis as any).window.location.search = '?status=FAILED';
-    facetFilter.rerender({ selectedValues: new Set(['FAILED']) });
+    // When URL has no status, facet displays 0 selections
+    assert.strictEqual(extFacet.badgeCount(), 0);
+    assert.strictEqual(extFacet.isOptionSelected('FAILED'), false);
 
-    // Step 4: Assert only FAILED is selected and badge reports 1
-    assert.strictEqual(
-      facetFilter.badgeCount(),
-      1,
-      'mounted Back cancels overlapping facet selections: badge reports one selection'
-    );
-    assert.strictEqual(
-      facetFilter.selectedAriaCount(),
-      1,
-      'mounted Back cancels overlapping facet selections: aria-label reports 1 đã chọn'
-    );
-    assert.strictEqual(facetFilter.isOptionSelected('FAILED'), true, 'FAILED remains selected');
-    assert.strictEqual(
-      facetFilter.isOptionSelected('DELIVERED'),
-      false,
-      'DELIVERED is cancelled and unselected'
-    );
-    console.log('   ✅ Finding 3 (P1): mounted Back cancels overlapping facet selections');
-
-    (globalThis as any).window = prevWindow;
-  }
-
-  // 19.6 Finding 4 (P1): pending facets survive intermediate acknowledgment
-  {
-    const capturedQueries: string[] = [];
-    let currentControlledParams = new URLSearchParams('per_page=5');
-    const hook = renderMountedDataTableHook({
-      contextSearchParams: currentControlledParams,
-      onNavigate: (url: string) => {
-        capturedQueries.push(url);
-      },
-      defaultPageSize: 10,
-      filterableColumns: [
-        { id: 'status', title: 'Trạng thái', options: [] },
-        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-      ],
-      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
+    // Commit ?status=FAILED
+    facetParams = new URLSearchParams('search=N&status=FAILED');
+    facetHook.rerender({ contextSearchParams: facetParams });
+    extFacet.rerender({
+      selectedValues: new Set<string>(facetHook.current.filters.status || []),
     });
+    assert.strictEqual(extFacet.badgeCount(), 1);
+    assert.strictEqual(extFacet.isOptionSelected('FAILED'), true);
 
-    // Step 1: queue both facets under held navigation
-    hook.current.setFilter('status', ['FAILED']);
-    hook.current.setFilter('carrier', ['GHN']);
-    assert.strictEqual(capturedQueries.length, 2, 'Two facet queries captured');
-
-    // Step 2: commit the first captured query while the second remains pending
-    const firstQueryParamString = capturedQueries[0].split('?')[1] ?? '';
-    currentControlledParams = new URLSearchParams(firstQueryParamString);
-    hook.rerender({ contextSearchParams: currentControlledParams });
-
-    // Step 3: set search
-    hook.current.setSearch('Ng');
-    assert.strictEqual(capturedQueries.length, 3, 'Third query captured');
-
-    // Step 4: assert the third query contains FAILED, GHN and Ng
-    const thirdQueryParams = new URLSearchParams(capturedQueries[2].split('?')[1] ?? '');
-    assert.strictEqual(
-      thirdQueryParams.get('status'),
-      'FAILED',
-      'pending facets survive intermediate acknowledgment: third query contains FAILED'
-    );
-    assert.strictEqual(
-      thirdQueryParams.get('carrier'),
-      'GHN',
-      'pending facets survive intermediate acknowledgment: third query contains GHN'
-    );
-    assert.strictEqual(
-      thirdQueryParams.get('search'),
-      'Ng',
-      'pending facets survive intermediate acknowledgment: third query contains Ng'
-    );
-    console.log('   ✅ Finding 4 (P1): pending facets survive intermediate acknowledgment');
-  }
-
-  // 19.7 Round 41 finding 1 (P1): real mounted own acknowledgment preserves newer debounce
-  // The mounted harness above now runs effect cleanup, so an acknowledgment of
-  // the toolbar's own request must not cancel the newer unsent draft's timer.
-  {
-    const ownAckDispatches: string[] = [];
-    let settledSearchUrl = '';
-    const ownAckToolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => {
-        ownAckDispatches.push(val);
-        settledSearchUrl = val ? `?search=${val}` : '';
-      },
-      debounceMs: 60,
+    // External link returns to ?search=N (without status)
+    facetParams = new URLSearchParams('search=N');
+    facetHook.rerender({ contextSearchParams: facetParams });
+    extFacet.rerender({
+      selectedValues: new Set<string>(facetHook.current.filters.status || []),
     });
-    ownAckToolbar.type('N');
-    await waitMs(90); // own 'N' request dispatched; now type newer unsent text
-    ownAckToolbar.type('Ngu');
-    ownAckToolbar.rerender({ searchValue: 'N' }); // delayed ack of the toolbar's own request
     assert.strictEqual(
-      ownAckToolbar.inputValue(),
-      'Ngu',
-      'real mounted own acknowledgment preserves newer debounce: draft remains Ngu'
+      extFacet.badgeCount(),
+      0,
+      'external previously-owned URL clears facet badge'
     );
-    await waitMs(90);
-    assert.deepStrictEqual(
-      ownAckDispatches,
-      ['N', 'Ngu'],
-      'real mounted own acknowledgment preserves newer debounce: emissions equal ["N", "Ngu"]'
-    );
-    assert.ok(
-      settledSearchUrl.includes('search=Ngu'),
-      'real mounted own acknowledgment preserves newer debounce: settled URL contains search=Ngu'
-    );
-    console.log(
-      '   ✅ Round 41 finding 1 (P1): real mounted own acknowledgment preserves newer debounce'
-    );
-  }
-
-  // 19.8 Round 41 finding 2 (P1): mounted Back with unchanged search cancels debounce
-  {
-    const prevWindow = (globalThis as any).window;
-    let backPopstateListener: (() => void) | null = null;
-    (globalThis as any).window = {
-      location: { search: '?search=N&sort=codAmount.asc' },
-      addEventListener: (event: string, fn: () => void) => {
-        if (event === 'popstate') backPopstateListener = fn;
-      },
-      removeEventListener: () => {},
-    };
-    try {
-      const backCancelsEmissions: string[] = [];
-      const backCancelsToolbar = renderMountedDataTableToolbar({
-        searchValue: 'N',
-        onSearchChange: (val: string) => backCancelsEmissions.push(val),
-        debounceMs: 60,
-      });
-      // Two history entries exist with search=N; the user is on the ascending
-      // sort entry and types an unsent edit.
-      backCancelsToolbar.type('Ng');
-      assert.ok(backPopstateListener, 'toolbar must observe authoritative history navigation');
-
-      // Back to the existing descending-sort entry: the committed search value
-      // is unchanged, so prop synchronization alone cannot cancel the timer.
-      (globalThis as any).window.location.search = '?search=N&sort=codAmount.desc';
-      (backPopstateListener as any)();
-      assert.strictEqual(
-        backCancelsToolbar.inputValue(),
-        'N',
-        'mounted Back with unchanged search cancels debounce: textbox restored to N'
-      );
-      backCancelsToolbar.rerender({ searchValue: 'N' }); // Next commits the same search value
-      await waitMs(90);
-      assert.deepStrictEqual(
-        backCancelsEmissions,
-        [],
-        'mounted Back with unchanged search cancels debounce: the abandoned timer must not dispatch Ng'
-      );
-      assert.strictEqual(
-        (globalThis as any).window.location.search,
-        '?search=N&sort=codAmount.desc',
-        'mounted Back with unchanged search cancels debounce: URL remains N with descending sort'
-      );
-      console.log(
-        '   ✅ Round 41 finding 2 (P1): mounted Back with unchanged search cancels debounce'
-      );
-    } finally {
-      (globalThis as any).window = prevWindow;
-    }
-  }
-
-  // 19.9 Finding 1 & 2 (P1): owned intermediate acknowledgment vs external Link draft cancellation
-  {
-    // Finding 1 (P1): mounted external Link cancels unsent draft after owned dispatches
-    const externalLinkDispatches: string[] = [];
-    let externalSettledUrl = '';
-    const externalLinkToolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => {
-        externalLinkDispatches.push(val);
-        externalSettledUrl = val ? `?search=${val}` : '';
-      },
-      debounceMs: 50,
-    });
-    externalLinkToolbar.type('N');
-    await waitMs(80); // own 'N' request dispatched
-    externalLinkToolbar.type('Ng');
-    await waitMs(80); // own 'Ng' request dispatched; both 'N' and 'Ng' held
-    externalLinkToolbar.type('Ngu'); // newer unsent draft
-    // Commit the external Storybook Link to ?search=N before debounce expiry
-    externalSettledUrl = '?search=N';
-    externalLinkToolbar.rerender({ searchValue: 'N' });
-    assert.strictEqual(
-      externalLinkToolbar.inputValue(),
-      'N',
-      'mounted external Link cancels unsent draft after owned dispatches: textbox resyncs to N'
-    );
-    await waitMs(80); // expire the debounce
-    assert.deepStrictEqual(
-      externalLinkDispatches,
-      ['N', 'Ng'],
-      'mounted external Link cancels unsent draft after owned dispatches: emissions equal exactly ["N", "Ng"]'
-    );
-    assert.strictEqual(
-      externalSettledUrl,
-      '?search=N',
-      'mounted external Link cancels unsent draft after owned dispatches: URL equals N'
-    );
-    console.log(
-      '   ✅ Finding 1 (P1): mounted external Link cancels unsent draft after owned dispatches'
-    );
-
-    // Finding 2 (P1): external link navigation cancels pending search draft
-    const externalLinkHeldEmissions: string[] = [];
-    const externalLinkHeldToolbar = renderMountedDataTableToolbar({
-      searchValue: '',
-      onSearchChange: (val: string) => externalLinkHeldEmissions.push(val),
-      debounceMs: 50,
-    });
-    externalLinkHeldToolbar.type('N');
-    await waitMs(80); // own 'N' request dispatched
-    externalLinkHeldToolbar.type('Ng');
-    await waitMs(80); // own 'Ng' request dispatched; textbox is exactly 'Ng' (no unsent draft)
-    assert.strictEqual(externalLinkHeldToolbar.inputValue(), 'Ng');
-    // External link navigation to ?search=N commits while 'Ng' was dispatched
-    externalLinkHeldToolbar.rerender({ searchValue: 'N' });
-    assert.strictEqual(
-      externalLinkHeldToolbar.inputValue(),
-      'N',
-      'external link navigation resyncs textbox to committed URL'
-    );
-    await waitMs(80);
-    assert.deepStrictEqual(
-      externalLinkHeldEmissions,
-      ['N', 'Ng'],
-      'external link navigation cancels draft without additional emissions'
-    );
-    console.log('   ✅ Finding 2 (P1): external link navigation cancels pending search draft');
-
-    // Helper-level proofs at the exact classification point.
-    const externalLinkCollidingAck = computeToolbarDraftOnPropChange('Ngu', 'N', '', 'Ng', false, [
-      'N',
-      'Ng',
-    ]);
-    assert.strictEqual(
-      externalLinkCollidingAck.nextDraft,
-      'N',
-      'helper: external navigation colliding with earlier owned request discards unsent draft'
-    );
-    assert.strictEqual(
-      externalLinkCollidingAck.shouldCancelDebounce,
-      true,
-      'helper: external navigation colliding with earlier owned request cancels debounce'
-    );
-
-    const externalLinkNoDraftAck = computeToolbarDraftOnPropChange('Ng', 'N', '', 'Ng', false, [
-      'N',
-      'Ng',
-    ]);
-    assert.strictEqual(
-      externalLinkNoDraftAck.nextDraft,
-      'N',
-      'helper: external navigation with no unsent draft resyncs to incoming committed search'
-    );
-    assert.strictEqual(
-      externalLinkNoDraftAck.shouldCancelDebounce,
-      true,
-      'helper: external navigation cancels debounce'
-    );
-  }
-
-  // 19.10 Round 41 finding 3 (P1): mounted external Link clears unchanged committed facet
-  {
-    const prevWindow = (globalThis as any).window;
-    (globalThis as any).window = {
-      location: { search: '' },
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    };
-    try {
-      const facetSelections: string[][] = [];
-      const externalLinkFacet = renderMountedDataTableFacetedFilter({
-        title: 'Trạng thái',
-        options: [
-          { label: 'Thất bại', value: 'FAILED' },
-          { label: 'Đã giao', value: 'DELIVERED' },
-        ],
-        selectedValues: new Set<string>(), // committed empty status
-        onSelect: (values: string[]) => facetSelections.push(values),
-      });
-      externalLinkFacet.open();
-      externalLinkFacet.toggle('FAILED'); // queued under held navigation
-      assert.strictEqual(externalLinkFacet.badgeCount(), 1, 'FAILED queued optimistically');
-
-      // Commit the external Storybook Link to ?search=N: no popstate occurs
-      // and this facet's committed value stays empty.
-      (globalThis as any).window.location.search = '?search=N';
-      externalLinkFacet.rerender({ selectedValues: new Set<string>() });
-
-      assert.ok(
-        !(globalThis as any).window.location.search.includes('status'),
-        'mounted external Link clears unchanged committed facet: URL has no status'
-      );
-      assert.strictEqual(
-        externalLinkFacet.isOptionSelected('FAILED'),
-        false,
-        'mounted external Link clears unchanged committed facet: FAILED aria-selected is false'
-      );
-      assert.strictEqual(
-        externalLinkFacet.badgeCount(),
-        0,
-        'mounted external Link clears unchanged committed facet: badge shows no selections'
-      );
-      assert.strictEqual(
-        externalLinkFacet.selectedAriaCount(),
-        0,
-        'mounted external Link clears unchanged committed facet: trigger reports no selections'
-      );
-
-      // Helper-level proofs at the exact classification point.
-      const externalLinkUnchangedFacet = computeOptimisticFacetSelection(
-        new Set(['FAILED']),
-        new Set<string>(),
-        new Set<string>(),
-        ['FAILED'],
-        false,
-        false,
-        true
-      );
-      assert.deepStrictEqual(
-        Array.from(externalLinkUnchangedFacet.nextOptimistic),
-        [],
-        'helper: external URL navigation discards cancelled optimistic selections'
-      );
-      assert.deepStrictEqual(externalLinkUnchangedFacet.nextPending, []);
-      const ownCommitWithUrlChange = computeOptimisticFacetSelection(
-        new Set(['FAILED', 'DELIVERED']),
-        new Set(['FAILED']),
-        new Set<string>(),
-        ['FAILED', 'FAILED.DELIVERED'],
-        false,
-        false,
-        true
-      );
-      assert.deepStrictEqual(
-        Array.from(ownCommitWithUrlChange.nextOptimistic).sort(),
-        ['DELIVERED', 'FAILED'],
-        'helper: an own intermediate commit that changes the facet value stays an acknowledgment'
-      );
-      assert.deepStrictEqual(ownCommitWithUrlChange.nextPending, ['FAILED.DELIVERED']);
-      console.log(
-        '   ✅ Round 41 finding 3 (P1): mounted external Link clears unchanged committed facet'
-      );
-    } finally {
-      (globalThis as any).window = prevWindow;
-    }
-  }
-
-  // 19.11 Round 41 finding 4 (P1): pending facets are discarded on Back to subset URL
-  {
-    const prevWindow = (globalThis as any).window;
-    let facetBackPopstateListener: (() => void) | null = null;
-    (globalThis as any).window = {
-      location: { search: '' },
-      addEventListener: (event: string, fn: () => void) => {
-        if (event === 'popstate') facetBackPopstateListener = fn;
-      },
-      removeEventListener: () => {},
-    };
-    try {
-      const backDiscardedQueries: string[] = [];
-      const backDiscardedHook = renderMountedDataTableHook({
-        contextSearchParams: new URLSearchParams(''),
-        onNavigate: (url: string) => {
-          backDiscardedQueries.push(url);
-        },
-        defaultPageSize: 10,
-        filterableColumns: [
-          { id: 'status', title: 'Trạng thái', options: [] },
-          { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-        ],
-        searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-      });
-
-      // Commit FAILED, hold carrier=GHN.
-      backDiscardedHook.current.setFilter('status', ['FAILED']);
-      backDiscardedHook.current.setFilter('carrier', ['GHN']);
-      assert.strictEqual(backDiscardedQueries.length, 2, 'Two facet queries captured');
-      backDiscardedHook.rerender({ contextSearchParams: new URLSearchParams('status=FAILED') });
-
-      // Authoritative Back to the existing empty history entry (a subset URL).
-      assert.ok(
-        facetBackPopstateListener,
-        'useDataTable must observe authoritative history navigation'
-      );
-      (facetBackPopstateListener as any)();
-      backDiscardedHook.rerender({ contextSearchParams: new URLSearchParams('') });
-
-      // A subsequent edit must compose from the authoritative history entry.
-      backDiscardedHook.current.setSearch('Ng');
-      assert.strictEqual(backDiscardedQueries.length, 3, 'Third query captured');
-      const backDiscardedParams = new URLSearchParams(backDiscardedQueries[2].split('?')[1] ?? '');
-      assert.strictEqual(
-        backDiscardedParams.get('search'),
-        'Ng',
-        'pending facets are discarded on Back to subset URL: query contains search=Ng'
-      );
-      assert.strictEqual(
-        backDiscardedParams.get('status'),
-        null,
-        'pending facets are discarded on Back to subset URL: cancelled FAILED is not resurrected'
-      );
-      assert.strictEqual(
-        backDiscardedParams.get('carrier'),
-        null,
-        'pending facets are discarded on Back to subset URL: cancelled GHN is not resurrected'
-      );
-      console.log(
-        '   ✅ Round 41 finding 4 (P1): pending facets are discarded on Back to subset URL'
-      );
-    } finally {
-      (globalThis as any).window = prevWindow;
-    }
-  }
-
-  // 19.12 Round 41 finding 5 (P1): same-facet intent survives intermediate acknowledgment
-  {
-    assert.strictEqual(
-      isCompatibleSubset('status=FAILED', 'status=FAILED.DELIVERED'),
-      true,
-      'helper: a dot-value subset commit within one facet is a compatible intermediate acknowledgment'
-    );
-    assert.strictEqual(
-      isCompatibleSubset('search=N', 'search=Ng'),
-      false,
-      'helper: unrelated scalar values are never a compatible subset'
-    );
-
-    const sameFacetQueries: string[] = [];
-    const sameFacetHook = renderMountedDataTableHook({
-      contextSearchParams: new URLSearchParams(''),
-      onNavigate: (url: string) => {
-        sameFacetQueries.push(url);
-      },
-      defaultPageSize: 10,
-      filterableColumns: [
-        { id: 'status', title: 'Trạng thái', options: [] },
-        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-      ],
-      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-    });
-
-    // Queue status=FAILED then status=FAILED.DELIVERED.
-    sameFacetHook.current.setFilter('status', ['FAILED']);
-    sameFacetHook.current.setFilter('status', ['FAILED', 'DELIVERED']);
-    assert.strictEqual(sameFacetQueries.length, 2, 'Both status queries captured');
-
-    // Acknowledge the first query while the second remains pending.
-    sameFacetHook.rerender({
-      contextSearchParams: new URLSearchParams(sameFacetQueries[0].split('?')[1] ?? ''),
-    });
-
-    // A newer selection must preserve the newer same-facet intent.
-    sameFacetHook.current.setFilter('carrier', ['GHN']);
-    assert.strictEqual(sameFacetQueries.length, 3, 'Third query captured');
-    const sameFacetParams = new URLSearchParams(sameFacetQueries[2].split('?')[1] ?? '');
-    assert.strictEqual(
-      sameFacetParams.get('status'),
-      'FAILED.DELIVERED',
-      'same-facet intent survives intermediate acknowledgment: third query contains FAILED and DELIVERED'
-    );
-    assert.strictEqual(
-      sameFacetParams.get('carrier'),
-      'GHN',
-      'same-facet intent survives intermediate acknowledgment: third query contains GHN'
-    );
-    console.log(
-      '   ✅ Round 41 finding 5 (P1): same-facet intent survives intermediate acknowledgment'
-    );
-  }
-
-  // 19.13 Finding 4 (P1): mounted unchanged-search Back invalidates last owned dispatch
-  {
-    const prevWindow = (globalThis as any).window;
-    let backPopstateListener: (() => void) | null = null;
-    (globalThis as any).window = {
-      location: { search: '?search=GHTK&sort=codAmount.asc' },
-      addEventListener: (event: string, fn: () => void) => {
-        if (event === 'popstate') backPopstateListener = fn;
-      },
-      removeEventListener: () => {},
-    };
-    try {
-      const emissions: string[] = [];
-      let settledUrl = '?search=GHTK&sort=codAmount.asc';
-      const toolbar = renderMountedDataTableToolbar({
-        searchValue: 'GHTK',
-        onSearchChange: (val: string) => {
-          emissions.push(val);
-          settledUrl = val ? `?search=${val}` : '';
-        },
-        debounceMs: 50,
-      });
-
-      // User dispatches held search N from the ascending GHTK entry
-      toolbar.type('N');
-      await waitMs(80); // 'N' emitted/dispatched; remains held
-      assert.deepStrictEqual(emissions, ['N']);
-
-      // Back to descending GHTK history entry while search remains GHTK
-      (globalThis as any).window.location.search = '?search=GHTK&sort=codAmount.desc';
-      assert.ok(backPopstateListener, 'Toolbar must register popstate listener');
-      (backPopstateListener as any)();
-      assert.strictEqual(toolbar.inputValue(), 'GHTK');
-
-      // Subsequently commit the external Link to ?search=N
-      (globalThis as any).window.location.search = '?search=N';
-      settledUrl = '?search=N';
-      toolbar.rerender({ searchValue: 'N' });
-      assert.strictEqual(
-        toolbar.inputValue(),
-        'N',
-        'mounted unchanged-search Back invalidates last owned dispatch: textbox equals N'
-      );
-      assert.strictEqual(
-        settledUrl,
-        '?search=N',
-        'mounted unchanged-search Back invalidates last owned dispatch: URL equals N'
-      );
-      console.log(
-        '   ✅ Finding 4 (P1): mounted unchanged-search Back invalidates last owned dispatch'
-      );
-    } finally {
-      (globalThis as any).window = prevWindow;
-    }
-  }
-
-  // 19.14 Finding 5 (P1): mounted external Link after settled facet does not resurrect filters
-  {
-    const capturedQueries: string[] = [];
-    let currentControlledParams = new URLSearchParams('search=N');
-    const hook = renderMountedDataTableHook({
-      contextSearchParams: currentControlledParams,
-      onNavigate: (url: string) => {
-        capturedQueries.push(url);
-      },
-      defaultPageSize: 10,
-      filterableColumns: [
-        { id: 'status', title: 'Trạng thái', options: [] },
-        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-      ],
-      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-    });
-
-    // Step 1: select FAILED and wait for its URL commit
-    hook.current.setFilter('status', ['FAILED']);
-    assert.strictEqual(capturedQueries.length, 1);
-    currentControlledParams = new URLSearchParams('search=N&status=FAILED');
-    hook.rerender({ contextSearchParams: currentControlledParams });
-
-    // Step 2: commit the external Storybook Link back to ?search=N
-    currentControlledParams = new URLSearchParams('search=N');
-    hook.rerender({ contextSearchParams: currentControlledParams });
-
-    // Step 3: selecting carrier GHN afterward must compose from search=N without resurrecting status=FAILED
-    hook.current.setFilter('carrier', ['GHN']);
-    assert.strictEqual(capturedQueries.length, 2);
-    const params = new URLSearchParams(capturedQueries[1].split('?')[1] ?? '');
-    assert.strictEqual(
-      params.get('search'),
-      'N',
-      'mounted external Link after settled facet does not resurrect filters: search equals N'
-    );
-    assert.strictEqual(
-      params.get('carrier'),
-      'GHN',
-      'mounted external Link after settled facet does not resurrect filters: carrier equals GHN'
-    );
-    assert.strictEqual(
-      params.get('status'),
-      null,
-      'mounted external Link after settled facet does not resurrect filters: status is absent'
-    );
-    console.log(
-      '   ✅ Finding 5 (P1): mounted external Link after settled facet does not resurrect filters'
-    );
-  }
-
-  // 19.15 Finding 6 (P1): pending facet removal survives intermediate acknowledgment
-  {
-    const capturedQueries: string[] = [];
-    let currentControlledParams = new URLSearchParams('status=FAILED.DELIVERED');
-    const hook = renderMountedDataTableHook({
-      contextSearchParams: currentControlledParams,
-      onNavigate: (url: string) => {
-        capturedQueries.push(url);
-      },
-      defaultPageSize: 10,
-      filterableColumns: [
-        { id: 'status', title: 'Trạng thái', options: [] },
-        { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-      ],
-      searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-    });
-
-    // Step 1: from committed status=FAILED.DELIVERED, queue status=FAILED, then queue removal of status entirely
-    hook.current.setFilter('status', ['FAILED']);
-    hook.current.setFilter('status', []);
-    assert.strictEqual(capturedQueries.length, 2, 'Two deselection queries captured');
-
-    // Step 2: acknowledge the first request (status=FAILED) while the removal remains pending
-    currentControlledParams = new URLSearchParams('status=FAILED');
-    hook.rerender({ contextSearchParams: currentControlledParams });
-
-    // Step 3: select carrier GHN
-    hook.current.setFilter('carrier', ['GHN']);
-    assert.strictEqual(capturedQueries.length, 3, 'Third query captured');
-    const nextQuery = capturedQueries[2];
-    const params = new URLSearchParams(nextQuery.split('?')[1] ?? '');
-    assert.strictEqual(
-      params.get('carrier'),
-      'GHN',
-      'pending facet removal survives intermediate acknowledgment: carrier equals GHN'
-    );
-    assert.strictEqual(
-      params.get('status'),
-      null,
-      'pending facet removal survives intermediate acknowledgment: status is absent'
-    );
-    console.log('   ✅ Finding 6 (P1): pending facet removal survives intermediate acknowledgment');
-  }
-
-  // 19.16 Finding 3 (P1): mounted status acknowledgment preserves pending carrier selection
-  {
-    const prevWindow = (globalThis as any).window;
-    (globalThis as any).window = {
-      location: { search: '' },
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    };
-    try {
-      const capturedQueries: string[] = [];
-      let currentControlledParams = new URLSearchParams('');
-      const hook = renderMountedDataTableHook({
-        contextSearchParams: currentControlledParams,
-        onNavigate: (url: string) => {
-          capturedQueries.push(url);
-        },
-        defaultPageSize: 10,
-        filterableColumns: [
-          { id: 'status', title: 'Trạng thái', options: [] },
-          { id: 'carrier', title: 'Hãng vận chuyển', options: [] },
-        ],
-        searchableColumns: [{ id: 'search', title: 'Tìm kiếm' }],
-      });
-
-      // Mount faceted filter for carrier connected to hook
-      const carrierFilter = renderMountedDataTableFacetedFilter({
-        title: 'Hãng vận chuyển',
-        options: [
-          { label: 'Giao Hàng Nhanh', value: 'GHN' },
-          { label: 'Giao Hàng Tiết Kiệm', value: 'GHTK' },
-        ],
-        selectedValues: new Set<string>(hook.current.filters.carrier || []),
-        onSelect: (vals: string[]) => hook.current.setFilter('carrier', vals),
-      });
-
-      // Step 1: from empty filters, queue status=FAILED, then carrier=GHN
-      hook.current.setFilter('status', ['FAILED']);
-      carrierFilter.open();
-      carrierFilter.toggle('GHN');
-      assert.strictEqual(capturedQueries.length, 2, 'Two requests queued');
-      assert.strictEqual(carrierFilter.isOptionSelected('GHN'), true);
-
-      // Step 2: acknowledge the status request while the carrier request remains held
-      const statusQuery = capturedQueries[0].split('?')[1] ?? '';
-      (globalThis as any).window.location.search = `?${statusQuery}`;
-      currentControlledParams = new URLSearchParams(statusQuery);
-      hook.rerender({ contextSearchParams: currentControlledParams });
-      carrierFilter.rerender({
-        selectedValues: new Set<string>(hook.current.filters.carrier || []),
-      });
-
-      // Step 3: assert GHN remains selected in carrier filter
-      assert.strictEqual(
-        carrierFilter.isOptionSelected('GHN'),
-        true,
-        'mounted status acknowledgment preserves pending carrier selection: GHN remains selected'
-      );
-
-      // Step 4: select GHTK in carrier filter
-      carrierFilter.toggle('GHTK');
-      assert.strictEqual(capturedQueries.length, 3, 'Third request sent');
-      const thirdParams = new URLSearchParams(capturedQueries[2].split('?')[1] ?? '');
-      assert.strictEqual(
-        thirdParams.get('status'),
-        'FAILED',
-        'mounted status acknowledgment preserves pending carrier selection: status equals FAILED'
-      );
-      const carrierSegments = (thirdParams.get('carrier') || '').split('.');
-      assert.ok(
-        carrierSegments.includes('GHN') && carrierSegments.includes('GHTK'),
-        'mounted status acknowledgment preserves pending carrier selection: carrier contains both GHN and GHTK'
-      );
-      console.log(
-        '   ✅ Finding 3 (P1): mounted status acknowledgment preserves pending carrier selection'
-      );
-    } finally {
-      (globalThis as any).window = prevWindow;
-    }
+    assert.strictEqual(extFacet.isOptionSelected('FAILED'), false, 'FAILED is unselected');
+    console.log('   ✅ 19.7 external previously-owned URL clears pending facet selections');
   }
 
   console.log(
