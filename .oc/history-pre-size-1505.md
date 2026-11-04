@@ -85,16 +85,16 @@ Reviewed SHA: df63795e5ea10091ade7f94254f6ca006df25513
 
 3. **Phase 1 (c) — Negative tests: product 403/404 cases are N/A.** Controller negatives now exist: protected paths, bad subjects, merge conflicts, stale evidence and invalid review results are covered in `tools/ai-brain/test/task-ai-166-coordinator.test.js`, `task-ai-166-refresh.test.js` and `task-ai-166-runtime.test.js`. Their presence fixes the previous “no test files” assertion. Execution evidence remains incomplete; see finding 7.
 
-4. **Phase 1 (d) — NEW P1: scheduled-lane discovery never awaits the production submission.**  
+4. **Phase 1 (d) — NEW P1: scheduled-lane discovery never awaits the production submission.**
    `tools/ai-brain/discovery/live.js:152-161` awaits the injected `submitModels` branch but omits `await` before `pool.submitJob(...)`. For its asynchronous result, `exitCode` and `stdout` are read from the Promise, so the lane is recorded as `MODELS_COMMAND_FAILED` while its job continues. Configured lanes consequently prevent a complete refresh and fresh dispatch. The injected test bypasses this production branch. Await the real submission and consume its completed receipt.
 
-5. **Phase 1 (d) — NEW P1: partial registry listings can advance global freshness.**  
+5. **Phase 1 (d) — NEW P1: partial registry listings can advance global freshness.**
    `tools/ai-brain/discovery.js:126-140` excludes listings with nonempty `notes` from `successful`, but does not include them in `failed`. One other successful source therefore makes `complete` true despite a partial source. This contradicts BR-166-01 and AC-166-02. Treat incomplete listings as refresh failures while preserving the previous successful timestamp.
 
-6. **Phase 1 (d) — NEW P1: lossy model filtering can manufacture disappearance evidence.**  
+6. **Phase 1 (d) — NEW P1: lossy model filtering can manufacture disappearance evidence.**
    `tools/ai-brain/discovery/live.js:108-118` silently drops unsupported or malformed rows and labels the remaining list `enumerated`. The regex rejects `@`, although the supplied catalogue contains IDs such as `cf/@cf/cloudflare/clef-flash` and `cl/@preset/...`. Once such a source has previous observations, a subsequent filtered listing can cause removals through `discovery/reconcile.js:83-97`. Validate the complete payload and supported identifier syntax; rejected rows must make the listing incomplete rather than authoritative.
 
-7. **Phase 1 (d) — P1, prior acceptance-evidence finding NOT FIXED in full.**  
+7. **Phase 1 (d) — P1, prior acceptance-evidence finding NOT FIXED in full.**
    `docs/product-spec/work-items/TASK-AI-166.md:75` still leaves verification unchecked; `:89-98` requires unit evidence and live logs. Test files and failed scanner-attempt artifacts are now supplied, but successful verification results and the required PR-body evidence are absent. The CI excerpt associates check names with this SHA but supplies **no conclusions**, so it does not establish green CI.
 
    Against the supplied acceptance matrix:
@@ -109,10 +109,10 @@ Reviewed SHA: df63795e5ea10091ade7f94254f6ca006df25513
 
 8. **Phase 1 (e) — Integer VND: N/A.** No monetary computation or persistence changes.
 
-9. **Phase 1 (f) — NEW P1: quota cooldown renews indefinitely from the same old log.**  
+9. **Phase 1 (f) — NEW P1: quota cooldown renews indefinitely from the same old log.**
    `tools/ai-brain/coordinator.js:302-303` adds an exclusion ending at `now + quotaCooldownMs` every tick that rereads the quota log. If no alternative writer exists, `route()` retains that writer and log (`:255-257`), so every subsequent tick extends the exclusion again. The model never becomes eligible after two hours. Persist classification once per launch, using a stable observation time, and reconcile newer quota evidence.
 
-10. **Phase 1 (g) — P1, prior unbounded-output finding NOT FIXED.**  
+10. **Phase 1 (g) — P1, prior unbounded-output finding NOT FIXED.**
     `tools/ai-brain/coordinator-runtime.js:233-245` has neither a partial-line buffer limit nor a file-size limit. A child emitting one long line exhausts memory; newline-delimited output can exhaust disk. `:354` and the review reader around `:376` then load the entire file. Sanitization does not bound resource consumption. Bound buffers, retention and reads, preserving an explicit truncation indicator.
 
     The previous quota-summary privacy finding **is FIXED**: `tools/ai-brain/catalogue-refresh.js:94-99` persists aggregate counts instead of source/scope/upstream/model identifiers.
@@ -144,16 +144,16 @@ Reviewed SHA: df63795e5ea10091ade7f94254f6ca006df25513
 
     Earlier claims about future timestamps passing, subprocess memory hiding persisted files, unsupported `TASK-FOUND`/`FEAT-AUTH` IDs, out-of-scope paths, and necessarily committing unresolved Git entries are **NOT FIXED because those claims are withdrawn**: the supplied delta does not establish those defects. The benchmark cross-source assertion was a suggested additional test, not evidence of averaging introduced by this delta.
 
-13. **Phase 2 — NEW P1: fan-out authors can review their own combined output.**  
+13. **Phase 2 — NEW P1: fan-out authors can review their own combined output.**
     `tools/ai-brain/coordinator-runtime.js:401-423` selects and records lane writers, but `coordinator.js:298-299` clears the lanes without retaining their author families. Reviewer selection then excludes only `current.writer`’s original family (`:364-375`). A lane writer from another family can consequently become the combined-SHA reviewer. Preserve the families of every contributing author and exclude all of them; stop for an operator if no independent reviewer remains.
 
-14. **Phase 2 — NEW P1: a mixed finding block can hide an open P1 from the PASS guard.**  
+14. **Phase 2 — NEW P1: a mixed finding block can hide an open P1 from the PASS guard.**
     `tools/ai-brain/coordinator-runtime.js:43-47` marks an entire block closed whenever it contains `FIXED` and lacks the exact text `NOT FIXED`. For example, `1. P1 Open authorization defect; previous issue FIXED` becomes a closed P1. `coordinator.js:399-400` then accepts a matching-SHA PASS despite the open defect. Parse finding status explicitly and separately from prior-finding commentary; mixed or ambiguous blocks must fail closed.
 
-15. **Phase 2 — NEW P1: publication preflight permits already-committed private coordinator files.**  
+15. **Phase 2 — NEW P1: publication preflight permits already-committed private coordinator files.**
     `tools/ai-brain/coordinator-runtime.js:150-153` checks committed paths through `coordinator.js:192-197`, which does not reject `.oc/`, `.serena/` or `.oc-codex-task.md`. Staging exclusions and the cached-file check protect only the host handoff operation. An already-authored or native-writer commit containing `.oc/writer.log` or coordinator state can pass preflight and be pushed. Reject private paths in the complete publication delta before push.
 
-16. **Phase 2 — NEW P2: valid Controller goal items are rejected.**  
+16. **Phase 2 — NEW P2: valid Controller goal items are rejected.**
     `tools/ai-brain/coordinator-cli.js:34` excludes `GOAL-<GOAL>-<n>` identifiers, although the supplied agent contract explicitly permits them as delivery units. Support that identifier form or explicitly restrict this coordinator’s supported item types in its contract.
 
 ## Round 6 review (pl-task-ai-166-6, writer was codex-ar:gpt-6-astra)

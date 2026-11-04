@@ -6,22 +6,22 @@ Reviewed SHA: a905cd69ed392dee45a4bee169fce7bae6111ab2
 Goal: TASK-AI-166 refreshes live model, benchmark and quota evidence and restores bounded unattended coordination with publication gates and independent exact-SHA review.
 Touched acceptance rows: AC-166-01–03 refresh/discovery/freshness; AC-166-04–08 writer/publication/review/quota/fan-out; AC-166-09–10 metrics/daily scheduling/handoff.
 
-1. PRIOR FINDINGS — P1 FIXED: failing CI gates  
-   WHERE: tools/ai-brain/test/discovery.test.js:1008 (append-only ledger regression)  
-   WRONG: Previous head had failing ai-brain-tests and contract gates; the supplied exact-head results now show both SUCCESS. PR-body repair lines were not supplied.  
-   GOAL: AC-166-10 and AGENTS.md require valid handoff evidence and green CI.  
+1. PRIOR FINDINGS — P1 FIXED: failing CI gates
+   WHERE: tools/ai-brain/test/discovery.test.js:1008 (append-only ledger regression)
+   WRONG: Previous head had failing ai-brain-tests and contract gates; the supplied exact-head results now show both SUCCESS. PR-body repair lines were not supplied.
+   GOAL: AC-166-10 and AGENTS.md require valid handoff evidence and green CI.
    VERIFY: Supplied statusCheckRollup reports ai-brain-tests=SUCCESS and contract=SUCCESS at the reviewed SHA; no additional committed test is requested.
 
-2. BLOCKING NEW FINDING — P1: AC/spec match  
-   WHERE: tools/ai-brain/cli.js:2100 (dispatchCommand)  
-   WRONG: An operator host sets AGY_POOL_RUNS_DIR to its real scheduled-lane directory. With catalogue evidence older than 48 hours and an otherwise eligible live candidate, dispatch --dry-run skips the freshness gate because that environment variable exists, permitting selection from stale live evidence.  
-   GOAL: AC-166-03 / BR-166-03 require live dispatch dry-runs to refuse STALE_CATALOGUE. A runtime-directory setting must not establish that candidates are fixture-injected.  
+2. BLOCKING NEW FINDING — P1: AC/spec match
+   WHERE: tools/ai-brain/cli.js:2100 (dispatchCommand)
+   WRONG: An operator host sets AGY_POOL_RUNS_DIR to its real scheduled-lane directory. With catalogue evidence older than 48 hours and an otherwise eligible live candidate, dispatch --dry-run skips the freshness gate because that environment variable exists, permitting selection from stale live evidence.
+   GOAL: AC-166-03 / BR-166-03 require live dispatch dry-runs to refuse STALE_CATALOGUE. A runtime-directory setting must not establish that candidates are fixture-injected.
    VERIFY: Run an uncommitted check named “live pool directory cannot bypass stale catalogue”, asserting exitCode === 1 and warning.code === "STALE_CATALOGUE" with AGY_POOL_RUNS_DIR configured; record command and result in the PR body.
 
-3. BLOCKING NEW FINDING — P1: AC/spec match  
-   WHERE: tools/ai-brain/catalogue-refresh.js:112 (refreshCatalogue)  
-   WRONG: The coordinator’s daily refresh and an operator’s pnpm ai:refresh-catalogue overlap, both capturing the same expired lastSuccessfulAt. The coordinator succeeds and publishes fresh evidence; the operator’s attempt subsequently fails and restores its captured expired timestamp. Dispatch then reports STALE_CATALOGUE despite the completed successful refresh. No shared refresh lock prevents this ordinary overlap.  
-   GOAL: AC-166-09 / BR-166-10 require single-flight daily refresh; BR-166-01 requires failed attempts to preserve the latest good evidence. Coordinate both entry points through the same exclusive refresh boundary.  
+3. BLOCKING NEW FINDING — P1: AC/spec match
+   WHERE: tools/ai-brain/catalogue-refresh.js:112 (refreshCatalogue)
+   WRONG: The coordinator’s daily refresh and an operator’s pnpm ai:refresh-catalogue overlap, both capturing the same expired lastSuccessfulAt. The coordinator succeeds and publishes fresh evidence; the operator’s attempt subsequently fails and restores its captured expired timestamp. Dispatch then reports STALE_CATALOGUE despite the completed successful refresh. No shared refresh lock prevents this ordinary overlap.
+   GOAL: AC-166-09 / BR-166-10 require single-flight daily refresh; BR-166-01 requires failed attempts to preserve the latest good evidence. Coordinate both entry points through the same exclusive refresh boundary.
    VERIFY: Run an uncommitted check named “overlapping refresh cannot erase latest success”, controlling completion order and asserting either refusal of the second attempt or preservation of the successful timestamp; record command and result in the PR body.
 
 SIZE: 5140 lines, cut duplicate/finding-check blocks in tools/ai-brain/test/task-ai-166-review.test.js and tools/ai-brain/test/task-ai-166-runtime.test.js; retain required AC coverage and use Slice B/C for deferred scope.

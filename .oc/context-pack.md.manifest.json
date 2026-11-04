@@ -1,11 +1,7 @@
 {
   "files": [
-    "AGENTS.md",
-    "tools/ai-brain/coordinator-metrics.js",
-    "tools/ai-brain/coordinator-quota-state.js",
-    "tools/ai-brain/test/task-ai-166-refresh.test.js",
-    "tools/ai-brain/test/task-ai-166-review.test.js",
-    "tools/ai-brain/test/task-ai-166-runtime.test.js"
+    ".oc/history-pre-size-1505.md",
+    "AGENTS.md"
   ],
-  "createdAt": "2026-11-04T12:56:54.367Z"
+  "createdAt": "2026-11-04T20:16:46.736Z"
 }
