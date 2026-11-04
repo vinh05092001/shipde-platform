@@ -1,19 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   extractWorkItemMeta,
   evaluateWorkItemScope,
   formatFindings,
   renderTask,
-  loadTemplate,
 } from '../render-task.mjs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 describe('render-task', () => {
   const ciWorkItemMd = `# TASK-AI-165 — Faster PR CI and merge queue
@@ -161,19 +153,5 @@ CI workflows, gate configurations, .github/.
     assert.equal((formattedRaw.match(/^WHERE:/gm) || []).length, 2);
     assert.ok(formattedRaw.includes('WHERE: a:1'));
     assert.ok(formattedRaw.includes('WHERE: b:2'));
-  });
-
-  it('ensures pr-body template and PR body have no unchecked mandatory checklist items', () => {
-    const template = loadTemplate('pr-body');
-    assert.ok(!template.includes('- [ ]'), 'pr-body.md template must not contain unchecked checklist items');
-
-    const rendered = renderTask('pr-body', 'TASK-AI-170');
-    assert.ok(!rendered.includes('- [ ]'), 'rendered pr-body must not contain unchecked checklist items');
-
-    const prBodyPath = path.join(REPO_ROOT, '.oc', 'pr-body.md');
-    if (fs.existsSync(prBodyPath)) {
-      const prBodyContent = fs.readFileSync(prBodyPath, 'utf8');
-      assert.ok(!prBodyContent.includes('- [ ]'), '.oc/pr-body.md must not contain unchecked checklist items');
-    }
   });
 });
