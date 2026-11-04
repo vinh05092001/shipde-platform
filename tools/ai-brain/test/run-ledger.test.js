@@ -317,7 +317,7 @@ test('distinct_attempts_cannot_reuse_in_flight_credit', () => {
     const res = ledger.record('writer', {
       itemId: 'TASK-FLIGHT',
       attemptId,
-      fp: 'F-SHARED',
+      fp: 'F-' + attemptId,
       verdict: 'IN_FLIGHT',
       ms: 100,
     });
@@ -1541,4 +1541,255 @@ test('prototype_named_fingerprint_is_refused_without_writes', () => {
 
   const globalSummaryAfter = ledger.getSummary();
   assert.deepEqual(globalSummaryAfter, globalSummaryBefore);
+});
+
+// --- Round 64 reviewer findings & scenarios ---
+
+test('distinct_recorded_in_flight_attempt_cannot_overwrite_owner', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 2 } },
+  });
+  const r1 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'IN_FLIGHT',
+    ms: 50,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a2',
+    fp: 'F',
+    verdict: 'IN_FLIGHT',
+    ms: 50,
+  });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.cause, Cause.NO_PROGRESS);
+
+  const state1 = ledger.load();
+  const rec1 = state1.items['T'].stages['writer'].fps['F'];
+  assert.equal(rec1.outcome, 'IN_FLIGHT');
+  assert.equal(rec1.attemptId, 'a1');
+  assert.equal(ledger.getSummary('T').attempts, 1);
+
+  const rComplete = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'DONE',
+    ms: 50,
+  });
+  assert.equal(rComplete.ok, true);
+  assert.equal(ledger.getSummary('T').attempts, 1);
+});
+
+test('reserved_attempt_with_changed_fingerprint_completes_at_cap', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 1 }, goal: { attempts: 1 } },
+  });
+  const adm = ledger.admit('T', 'writer', 'F1', {
+    reserve: true,
+    pid: process.pid,
+    attemptId: 'a1',
+  });
+  assert.equal(adm.ok, true);
+
+  const rec = ledger.record('fallback', {
+    itemId: 'T',
+    attemptId: 'a1',
+    fp: 'F2',
+    verdict: 'DONE',
+    ms: 100,
+  });
+  assert.equal(rec.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['T'].spent.attempts, 1);
+  assert.equal(state.goal.attempts, 1);
+  const reloaded = ledger.progressLedger.load();
+  assert.equal(reloaded.items['T'].spent.attempts, 1);
+});
+
+test('completed_target_fingerprint_does_not_hide_cross_stage_reservation', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { item: { attempts: 2 }, goal: { attempts: 2 } },
+  });
+  const r0 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a0',
+    fp: 'F',
+    verdict: 'DONE',
+    ms: 50,
+  });
+  assert.equal(r0.ok, true);
+
+  const adm = ledger.admit('T', 'fallback', 'F', {
+    reserve: true,
+    pid: process.pid,
+    attemptId: 'a1',
+  });
+  assert.equal(adm.ok, true);
+
+  const r1 = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    fp: 'F',
+    verdict: 'DONE',
+    ms: 50,
+  });
+  assert.equal(r1.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.items['T'].spent.attempts, 2);
+  assert.equal(state.goal.attempts, 2);
+  assert.equal(ledger.getRuns('T').length, 2);
+});
+
+test('reservation_without_item_cannot_return_unreserved_success', () => {
+  const ledger = new RunLedger({
+    file: path.join(tmpDir(), 'ledger.json'),
+    limits: { goal: { attempts: 1 } },
+  });
+  const adm1 = ledger.admit({
+    stage: 'writer',
+    attemptId: 'a1',
+    reserve: true,
+    pid: process.pid,
+  });
+  assert.equal(adm1.ok, true);
+
+  const state1 = ledger.load();
+  assert.equal(state1.goal.attempts, 1);
+
+  const adm2 = ledger.admit({
+    stage: 'writer',
+    attemptId: 'a2',
+    reserve: true,
+    pid: process.pid,
+  });
+  assert.equal(adm2.ok, false);
+  assert.equal(adm2.cause, Cause.GOAL_EXHAUSTED);
+});
+
+test('concurrent_completion_then_fallback_without_goal_preserves_rollup', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledgerA = new RunLedger({ file });
+  const ledgerB = new RunLedger({ file });
+
+  const origAdmit = ledgerA.progressLedger.admit.bind(ledgerA.progressLedger);
+  ledgerA.progressLedger.admit = (itemId, stage, fp, opts) => {
+    const res = origAdmit(itemId, stage, fp, opts);
+    const r1 = ledgerB.record('writer', {
+      itemId: 'T',
+      attemptId: 'a1',
+      fp: 'F',
+      ms: 100,
+      tokens: 10,
+      verdict: 'DONE',
+    });
+    assert.equal(r1.ok, true);
+
+    const r2 = ledgerB.record('fallback', {
+      itemId: 'T',
+      attemptId: 'a1',
+      fp: 'F',
+      ms: 50,
+      tokens: 5,
+      verdict: 'DONE',
+    });
+    assert.equal(r2.ok, true);
+    return res;
+  };
+
+  const adm = ledgerA.admit('T', 'writer', 'F', {
+    reserve: true,
+    pid: process.pid,
+    goalId: 'G',
+  });
+  assert.equal(adm.ok, true);
+
+  const state = ledgerA.load();
+  assert.equal(state.goals['G'].attempts, 1);
+  assert.equal(state.goals['G'].ms, 150);
+  assert.equal(state.goals['G'].tokens, 15);
+
+  const runs = ledgerA.getRuns('T');
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].goalId, 'G');
+  assert.equal(runs[1].goalId, 'G');
+});
+
+test('coerced_prototype_fingerprint_is_refused_without_writes', () => {
+  const file = path.join(tmpDir(), 'ledger.json');
+  const ledger = new RunLedger({ file });
+
+  const seed = ledger.record('writer', {
+    itemId: 'T',
+    attemptId: 'a1',
+    ms: 100,
+    tokens: 10,
+    verdict: 'DONE',
+  });
+  assert.equal(seed.ok, true);
+
+  const bytesBefore = fs.readFileSync(file);
+  const summaryBefore = ledger.getSummary('T');
+
+  assert.throws(
+    () =>
+      ledger.record('writer', {
+        itemId: 'T',
+        attemptId: 'a2',
+        fp: ['__proto__'],
+        verdict: 'IN_FLIGHT',
+        ms: 50,
+      }),
+    /RUN_LEDGER_REFUSED: invalid fingerprint/
+  );
+
+  const bytesAfter = fs.readFileSync(file);
+  assert.deepEqual(bytesAfter, bytesBefore);
+  assert.deepEqual(ledger.getSummary('T'), summaryBefore);
+});
+
+test('late goal rollup counted once', () => {
+  const ledger = new RunLedger({ file: path.join(tmpDir(), 'ledger.json') });
+  const r1 = ledger.record('writer', {
+    itemId: 'T-LATE',
+    attemptId: 'a1',
+    retryLayer: 'gateway',
+    ms: 100,
+  });
+  assert.equal(r1.ok, true);
+
+  const r2 = ledger.record('writer', {
+    itemId: 'T-LATE',
+    attemptId: 'a1',
+    retryLayer: 'pipeline',
+    goalId: 'GOAL-LATE',
+    ms: 200,
+  });
+  assert.equal(r2.ok, true);
+
+  const state = ledger.load();
+  assert.equal(state.goals['GOAL-LATE'].attempts, 1);
+  assert.equal(state.goals['GOAL-LATE'].ms, 300);
+
+  const r3 = ledger.record('writer', {
+    itemId: 'T-LATE',
+    attemptId: 'a1',
+    retryLayer: 'cli',
+    goalId: 'GOAL-LATE',
+    ms: 50,
+  });
+  assert.equal(r3.ok, true);
+
+  const state2 = ledger.load();
+  assert.equal(state2.goals['GOAL-LATE'].attempts, 1);
+  assert.equal(state2.goals['GOAL-LATE'].ms, 350);
 });

@@ -6,10 +6,23 @@ const { ProgressLedger, Cause, fingerprint } = require('./work-guard');
 
 const VALID_STAGES = new Set(['writer', 'reviewer', 'repair', 'fallback', 'review']);
 const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
+const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function isForbiddenId(id) {
-  if (!id || typeof id !== 'string') return false;
-  return id in Object.prototype || id === 'prototype';
+  if (id === null || id === undefined) return false;
+  let s;
+  try {
+    s = String(id);
+  } catch (_) {
+    return true;
+  }
+  return FORBIDDEN_IDS.has(s) || s in Object.prototype;
+}
+
+function assertValidId(id, name) {
+  if (isForbiddenId(id)) {
+    throw new Error(`RUN_LEDGER_REFUSED: invalid ${name} ${id}`);
+  }
 }
 
 function maskCredentials(v) {
@@ -80,6 +93,76 @@ function limitCause(k) {
       : Cause.ATTEMPTS_EXHAUSTED;
 }
 
+function computeGoalRollups(s) {
+  const goals = Object.create(null);
+  if (s.goals) {
+    for (const [k, v] of Object.entries(s.goals)) {
+      if (!isForbiddenId(k) && typeof v === 'object' && v !== null) {
+        goals[k] = {
+          attempts: 0,
+          ms: 0,
+          tokens: 0,
+          tokensUnknown: 0,
+          unknownTokens: 0,
+          _attempts: new Set(),
+        };
+      }
+    }
+  }
+  const runs = s.runs || [];
+  for (const r of runs) {
+    if (!r.goalId) continue;
+    const g = r.goalId;
+    if (!goals[g]) {
+      goals[g] = {
+        attempts: 0,
+        ms: 0,
+        tokens: 0,
+        tokensUnknown: 0,
+        unknownTokens: 0,
+        _attempts: new Set(),
+      };
+    }
+    const acc = goals[g];
+    if (r.attemptId && !acc._attempts.has(r.attemptId)) {
+      acc._attempts.add(r.attemptId);
+      acc.attempts = acc._attempts.size;
+    }
+    if (Number.isFinite(r.ms)) acc.ms += r.ms;
+    if (Number.isFinite(r.tokens)) acc.tokens += r.tokens;
+    else if (r.tokens === 'UNKNOWN') acc.tokensUnknown += 1;
+  }
+  for (const item of Object.values(s.items || {})) {
+    for (const stage of Object.values(item.stages || {})) {
+      for (const rec of Object.values(stage.fps || {})) {
+        if (rec && rec.outcome === 'IN_FLIGHT' && rec.goalId) {
+          const g = rec.goalId;
+          if (!goals[g]) {
+            goals[g] = {
+              attempts: 0,
+              ms: 0,
+              tokens: 0,
+              tokensUnknown: 0,
+              unknownTokens: 0,
+              _attempts: new Set(),
+            };
+          }
+          const acc = goals[g];
+          const attKey = rec.attemptId || rec;
+          if (!acc._attempts.has(attKey)) {
+            acc._attempts.add(attKey);
+            acc.attempts = acc._attempts.size;
+          }
+        }
+      }
+    }
+  }
+  for (const g of Object.keys(goals)) {
+    delete goals[g]._attempts;
+  }
+  s.goals = goals;
+}
+
 class RunLedger {
   constructor(o = {}) {
     if (typeof o === 'string') o = { file: o };
@@ -121,102 +204,76 @@ class RunLedger {
       stage = arg1;
       opts = {};
     }
-    if (itemId && isForbiddenId(itemId)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + itemId);
+
+    assertValidId(itemId, 'itemId');
+    assertValidId(opts && opts.goalId, 'goalId');
+    assertValidId(fp, 'fingerprint');
+
+    const attemptKey = opts && (opts.attemptId || opts.jobId);
+    const targetItemId = itemId || (attemptKey ? String(attemptKey) : null);
+    assertValidId(targetItemId, 'itemId');
+
+    if (opts && opts.reserve && !targetItemId) {
+      return { ok: false, cause: Cause.NO_PROGRESS };
     }
-    if (opts && opts.goalId && isForbiddenId(opts.goalId)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid goalId ' + opts.goalId);
-    }
-    const rawAdmitFp = fp || (opts && (opts.fp || opts.fingerprint));
-    if (rawAdmitFp && isForbiddenId(rawAdmitFp)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid fingerprint ' + rawAdmitFp);
-    }
-    this.progressLedger.limits = this.limits;
-    const attemptKey = opts.attemptId || opts.jobId;
+
     const actualFp =
       fp ||
-      (opts.headSha
+      (opts && opts.headSha
         ? fingerprint({ headSha: opts.headSha, baseSha: opts.baseSha, inputs: opts.inputs })
-        : 'att-' + (attemptKey || ''));
+        : 'att-' + (attemptKey || 'default'));
+    assertValidId(actualFp, 'fingerprint');
 
-    if (itemId && stage) {
-      const res = this.progressLedger.admit(itemId, stage, actualFp, opts);
-      if (res && res.ok && opts.reserve) {
-        this.progressLedger.locked(() => {
-          const s = this.progressLedger.load();
-          const it = s.items && s.items[itemId];
-          const stObj = it && it.stages && it.stages[stage];
-          const cur = stObj && stObj.fps && stObj.fps[actualFp];
-          if (cur && attemptKey) cur.attemptId = attemptKey;
-          if (opts.goalId) {
-            if (cur && cur.goalId === opts.goalId) return;
-            const itemGoalAttemptsInRuns = new Set(
-              (s.runs || [])
-                .filter((r) => r.goalId === opts.goalId && r.itemId === itemId && r.attemptId)
-                .map((r) => r.attemptId)
-            ).size;
-            const itemSpentAttempts = (it && it.spent && it.spent.attempts) || 0;
-            if (itemGoalAttemptsInRuns >= itemSpentAttempts) return;
-            if (cur) cur.goalId = opts.goalId;
-            s.goals = s.goals || Object.create(null);
-            const gAcc = (Object.hasOwn(s.goals, opts.goalId) && s.goals[opts.goalId]) || {
-              attempts: 0,
-              ms: 0,
-              tokens: 0,
-              tokensUnknown: 0,
-              unknownTokens: 0,
-            };
-            gAcc.attempts = (gAcc.attempts || 0) + 1;
-            const completionRuns =
-              cur && cur.outcome !== 'IN_FLIGHT'
-                ? (s.runs || []).filter(
-                    (r) =>
-                      r.itemId === itemId &&
-                      r.stage === stage &&
-                      (!r.goalId || r.goalId === null) &&
-                      (cur.attemptId
-                        ? r.attemptId === cur.attemptId
-                        : attemptKey
-                          ? r.attemptId === attemptKey
-                          : false)
-                  )
-                : [];
-            for (const completionRun of completionRuns) {
-              completionRun.goalId = opts.goalId;
-              if (Number.isFinite(completionRun.ms)) {
-                gAcc.ms = (gAcc.ms || 0) + completionRun.ms;
-              }
-              if (Number.isFinite(completionRun.tokens)) {
-                gAcc.tokens = (gAcc.tokens || 0) + completionRun.tokens;
-              } else if (completionRun.tokens === 'UNKNOWN') {
-                gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
-              }
-              if (s.chains && s.chains[itemId]) {
-                for (const r of s.chains[itemId]) {
-                  if (r.attemptId === completionRun.attemptId && (!r.goalId || r.goalId === null)) {
-                    r.goalId = opts.goalId;
-                  }
-                }
-              }
-              if (it && it.runs) {
-                for (const r of it.runs) {
-                  if (r.attemptId === completionRun.attemptId && (!r.goalId || r.goalId === null)) {
-                    r.goalId = opts.goalId;
-                  }
-                }
+    this.progressLedger.limits = this.limits;
+    if (!targetItemId) {
+      const s = this.progressLedger.load();
+      if (
+        this.limits.goal &&
+        Number.isFinite(this.limits.goal.attempts) &&
+        s.goal.attempts >= this.limits.goal.attempts
+      ) {
+        return { ok: false, cause: Cause.GOAL_EXHAUSTED };
+      }
+      return { ok: true };
+    }
+
+    const res = this.progressLedger.admit(targetItemId, stage, actualFp, opts);
+    if (res && res.ok && opts && opts.reserve) {
+      this.progressLedger.locked(() => {
+        const s = this.progressLedger.load();
+        const it = s.items && s.items[targetItemId];
+        const stObj = it && it.stages && it.stages[stage];
+        const cur = stObj && stObj.fps && stObj.fps[actualFp];
+        if (cur) {
+          if (attemptKey) cur.attemptId = String(attemptKey);
+          if (opts.goalId) cur.goalId = String(opts.goalId);
+        }
+        if (opts.goalId && (!cur || cur.outcome !== 'IN_FLIGHT')) {
+          for (const r of s.runs || []) {
+            if (
+              r.itemId === targetItemId &&
+              (!r.goalId || r.goalId === null) &&
+              (cur && cur.attemptId ? r.attemptId === cur.attemptId : true)
+            ) {
+              r.goalId = opts.goalId;
+            }
+          }
+          if (s.chains && s.chains[targetItemId]) {
+            for (const r of s.chains[targetItemId]) {
+              if (
+                (!r.goalId || r.goalId === null) &&
+                (cur && cur.attemptId ? r.attemptId === cur.attemptId : true)
+              ) {
+                r.goalId = opts.goalId;
               }
             }
-            s.goals[opts.goalId] = gAcc;
           }
-          writeJson(this.file, s);
-        });
-      }
-      return res;
+        }
+        computeGoalRollups(s);
+        writeJson(this.file, s);
+      });
     }
-    const s = this.progressLedger.load();
-    const over = exceeded(s.goal, this.limits.goal);
-    if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
-    return { ok: true };
+    return res;
   }
 
   record(arg1, arg2, arg3) {
@@ -258,31 +315,23 @@ class RunLedger {
     }
 
     const attemptKey = String(opts.attemptId || opts.jobId);
-    let itemId = opts.itemId;
-    if (itemId && isForbiddenId(itemId)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + itemId);
-    }
-    if (opts.goalId && isForbiddenId(opts.goalId)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid goalId ' + opts.goalId);
-    }
+    assertValidId(opts.itemId, 'itemId');
+    assertValidId(opts.goalId, 'goalId');
     const rawFp = opts.fp || opts.fingerprint;
-    if (rawFp && isForbiddenId(rawFp)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid fingerprint ' + rawFp);
-    }
+    assertValidId(rawFp, 'fingerprint');
 
     return this.progressLedger.locked(() => {
       this.progressLedger.limits = this.limits;
       const s = this.progressLedger.load();
 
+      let itemId = opts.itemId;
       if (!itemId && attemptKey && s.runs) {
         const priorRun = s.runs.find((r) => r.attemptId === attemptKey && r.itemId);
         if (priorRun) itemId = priorRun.itemId;
       }
 
       const targetItemId = itemId || attemptKey;
-      if (isForbiddenId(targetItemId)) {
-        throw new Error('RUN_LEDGER_REFUSED: invalid itemId ' + targetItemId);
-      }
+      assertValidId(targetItemId, 'itemId');
 
       if (itemId && s.runs) {
         const otherOwner = s.runs.find(
@@ -300,80 +349,69 @@ class RunLedger {
         (runReviewSha
           ? fingerprint({ headSha: runReviewSha, baseSha: opts.baseSha, inputs: opts.inputs })
           : 'att-' + attemptKey);
-      if (isForbiddenId(fp)) {
-        throw new Error('RUN_LEDGER_REFUSED: invalid fingerprint ' + fp);
-      }
+      assertValidId(fp, 'fingerprint');
 
       const it = (Object.hasOwn(s.items, targetItemId) && s.items[targetItemId]) || null;
-      let prev = it && it.stages && it.stages[st] && it.stages[st].fps && it.stages[st].fps[fp];
-      let prevStage = prev ? st : null;
-      let prevFp = prev ? fp : null;
-      if (!prev && it && it.stages) {
-        if (opts.fp || opts.fingerprint) {
-          for (const [sName, stageObj] of Object.entries(it.stages)) {
-            if (stageObj && stageObj.fps && Object.hasOwn(stageObj.fps, fp)) {
-              const rec = stageObj.fps[fp];
+      const currentRec =
+        it && it.stages && it.stages[st] && it.stages[st].fps && it.stages[st].fps[fp];
+
+      if (
+        currentRec &&
+        currentRec.outcome === 'IN_FLIGHT' &&
+        currentRec.attemptId &&
+        currentRec.attemptId !== attemptKey
+      ) {
+        return {
+          ok: false,
+          cause: Cause.NO_PROGRESS,
+          reason: 'in-flight-owned-by-other-attempt',
+        };
+      }
+
+      // Discover matching reservation across stages and fingerprints
+      let resRec = null;
+      let resStage = null;
+      let resFp = null;
+
+      if (
+        currentRec &&
+        currentRec.outcome === 'IN_FLIGHT' &&
+        (!currentRec.attemptId || currentRec.attemptId === attemptKey)
+      ) {
+        resRec = currentRec;
+        resStage = st;
+        resFp = fp;
+      } else if (it && it.stages) {
+        for (const [sName, stageObj] of Object.entries(it.stages)) {
+          if (stageObj && stageObj.fps) {
+            for (const [existingFp, rec] of Object.entries(stageObj.fps)) {
               if (
                 rec &&
                 rec.outcome === 'IN_FLIGHT' &&
-                (!rec.attemptId || rec.attemptId === attemptKey)
+                (rec.attemptId === attemptKey || (!rec.attemptId && existingFp === fp))
               ) {
-                prev = rec;
-                prevStage = sName;
-                prevFp = fp;
+                resRec = rec;
+                resStage = sName;
+                resFp = existingFp;
                 break;
               }
             }
-          }
-        } else {
-          if (it.stages[st] && it.stages[st].fps) {
-            for (const [existingFp, rec] of Object.entries(it.stages[st].fps)) {
-              if (
-                rec &&
-                rec.outcome === 'IN_FLIGHT' &&
-                (rec.attemptId === attemptKey || existingFp === '__probe__' + attemptKey)
-              ) {
-                prev = rec;
-                prevStage = st;
-                prevFp = existingFp;
-                fp = existingFp;
-                break;
-              }
-            }
-          }
-          if (!prev) {
-            for (const [sName, stageObj] of Object.entries(it.stages)) {
-              if (sName !== st && stageObj && stageObj.fps) {
-                for (const [existingFp, rec] of Object.entries(stageObj.fps)) {
-                  if (
-                    rec &&
-                    rec.outcome === 'IN_FLIGHT' &&
-                    (rec.attemptId === attemptKey || existingFp === '__probe__' + attemptKey)
-                  ) {
-                    prev = rec;
-                    prevStage = sName;
-                    prevFp = existingFp;
-                    fp = existingFp;
-                    break;
-                  }
-                }
-                if (prev) break;
-              }
-            }
+            if (resRec) break;
           }
         }
       }
-      const reserved = Boolean(
-        prev &&
-        prev.outcome === 'IN_FLIGHT' &&
-        Number.isInteger(prev.pid) &&
-        (!prev.attemptId || prev.attemptId === attemptKey)
-      );
 
+      if (resRec && (resStage !== st || resFp !== fp)) {
+        delete it.stages[resStage].fps[resFp];
+        it.stages[st] = it.stages[st] || { fps: {} };
+        it.stages[st].fps[fp] = resRec;
+        writeJson(this.file, s);
+      }
+
+      const reserved = Boolean(resRec && resRec.outcome === 'IN_FLIGHT');
       const isExistingAttempt = (s.runs || []).some(
         (r) => r.attemptId === attemptKey && (!itemId || r.itemId === itemId)
       );
-
       const consumesAttempt = !isExistingAttempt && !reserved;
 
       if (it && it.blocked) return { ok: false, cause: Cause.ITEM_BLOCKED, reason: it.blocked };
@@ -390,43 +428,12 @@ class RunLedger {
       const tokenEnforcement = hasTokens ? opts.tokenEnforcement || 'ENFORCED' : 'UNENFORCED';
       const runVerdict = String(opts.verdict || opts.outcome || 'DONE');
 
-      const isReservedFlight =
-        prev &&
-        prev.outcome === 'IN_FLIGHT' &&
-        prev.attemptId &&
-        !(s.runs || []).some((r) => r.attemptId === prev.attemptId);
-
-      if (prev && prev.outcome === 'IN_FLIGHT' && !reserved) {
-        if (runVerdict !== 'IN_FLIGHT' || isReservedFlight) {
-          return {
-            ok: false,
-            cause: Cause.NO_PROGRESS,
-            reason: 'in-flight-owned-by-other-attempt',
-          };
-        }
-      }
-
       const effectiveGoalId =
         opts.goalId ||
-        (prev && prev.goalId) ||
+        (resRec && resRec.goalId) ||
         ((s.runs || []).find((r) => r.attemptId === attemptKey && r.goalId) || {}).goalId ||
         null;
-      if (effectiveGoalId && isForbiddenId(effectiveGoalId)) {
-        throw new Error('RUN_LEDGER_REFUSED: invalid goalId ' + effectiveGoalId);
-      }
-
-      if (prevStage && prevStage !== st) {
-        const curState = this.progressLedger.load();
-        const curIt = curState.items && curState.items[targetItemId];
-        if (curIt && curIt.stages && curIt.stages[prevStage] && curIt.stages[prevStage].fps) {
-          const reservation = curIt.stages[prevStage].fps[prevFp];
-          delete curIt.stages[prevStage].fps[prevFp];
-          curIt.stages[st] = curIt.stages[st] || { fps: {} };
-          curIt.stages[st].fps = curIt.stages[st].fps || {};
-          curIt.stages[st].fps[fp] = reservation;
-          writeJson(this.file, curState);
-        }
-      }
+      assertValidId(effectiveGoalId, 'goalId');
 
       if (!isExistingAttempt) {
         if (runVerdict === 'IN_FLIGHT') {
@@ -521,14 +528,14 @@ class RunLedger {
           const curPid =
             Number.isInteger(opts.pid) && opts.pid > 0
               ? opts.pid
-              : Number.isInteger(prev && prev.pid) && prev.pid > 0
-                ? prev.pid
+              : Number.isInteger(resRec && resRec.pid) && resRec.pid > 0
+                ? resRec.pid
                 : process.pid;
           curSt.fps[fp] = {
             outcome: runVerdict,
             attemptId: attemptKey,
             at: this.now(),
-            imputedTokens: hasTokens ? 0 : 0,
+            imputedTokens: 0,
             ...(runVerdict === 'IN_FLIGHT' ? { pid: curPid } : {}),
           };
           if (effectiveGoalId) curSt.fps[fp].goalId = effectiveGoalId;
@@ -540,27 +547,18 @@ class RunLedger {
       const updatedState = this.progressLedger.load();
 
       if (effectiveGoalId) {
-        updatedState.goals = updatedState.goals
-          ? Object.assign(Object.create(null), updatedState.goals)
-          : Object.create(null);
-        const gAcc = (Object.hasOwn(updatedState.goals, effectiveGoalId) &&
-          updatedState.goals[effectiveGoalId]) || {
-          attempts: 0,
-          ms: 0,
-          tokens: 0,
-          tokensUnknown: 0,
-          unknownTokens: 0,
-        };
-        const goalAlreadyCharged =
-          Boolean(reserved && prev && prev.goalId === effectiveGoalId) ||
-          (updatedState.runs || []).some(
-            (r) => r.attemptId === attemptKey && r.goalId === effectiveGoalId
-          );
-        if (!goalAlreadyCharged) gAcc.attempts = (gAcc.attempts || 0) + 1;
-        gAcc.ms = (gAcc.ms || 0) + ms;
-        if (hasTokens) gAcc.tokens = (gAcc.tokens || 0) + tokens;
-        else gAcc.tokensUnknown = (gAcc.tokensUnknown || 0) + 1;
-        updatedState.goals[effectiveGoalId] = gAcc;
+        for (const r of updatedState.runs || []) {
+          if (r.attemptId === attemptKey && (!r.goalId || r.goalId === null)) {
+            r.goalId = effectiveGoalId;
+          }
+        }
+        if (updatedState.chains && updatedState.chains[targetItemId]) {
+          for (const r of updatedState.chains[targetItemId]) {
+            if (r.attemptId === attemptKey && (!r.goalId || r.goalId === null)) {
+              r.goalId = effectiveGoalId;
+            }
+          }
+        }
       }
 
       const run = {
@@ -593,6 +591,7 @@ class RunLedger {
         updatedState.items[targetItemId].runs = updatedState.chains[targetItemId];
       }
 
+      computeGoalRollups(updatedState);
       writeJson(this.file, updatedState);
       return { ok: true, run };
     });
