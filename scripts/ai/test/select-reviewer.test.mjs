@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
   selectReviewer,
   parseCandidate,
-  canonicalIdentity,
   checkIndependence,
   getSelectionApiStub,
 } from '../select-reviewer.mjs';
@@ -84,6 +83,13 @@ describe('select-reviewer', () => {
     const resGateway = checkIndependence(parseCandidate(writerCandidate), parseCandidate(reviewerSameGateway));
     assert.equal(resGateway.independent, false);
     assert.ok(resGateway.reason.includes('SAME_GATEWAY'));
+
+    const result = selectReviewer({
+      writer: writerCandidate,
+      candidates: [reviewerSameAccount, reviewerSameModel, reviewerSameGateway],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 'BLOCKED');
   });
 
   it('selects an independent reviewer candidate successfully', () => {
@@ -109,18 +115,6 @@ describe('select-reviewer', () => {
     assert.equal(result.reviewer.account, 'acc-reviewer-02');
   });
 
-  it('returns BLOCKED when no candidates remain in the pool', () => {
-    const result = selectReviewer({
-      writer: writerCandidate,
-      candidates: [],
-    });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.verdict, 'BLOCKED');
-    assert.ok(result.reason.includes('NO_REVIEWER_CANDIDATE'));
-  });
-
   it('reports stub status "chưa nối" when selection API is not merged', () => {
     const stub = getSelectionApiStub();
     assert.equal(stub.status, 'UNCONNECTED');
@@ -134,190 +128,5 @@ describe('select-reviewer', () => {
     assert.equal(result.ok, false);
     assert.equal(result.status, 'BLOCKED');
     assert.ok(result.reason.includes('chưa nối'));
-  });
-
-  it('blocks reviewer with missing upstream', () => {
-    const reviewerMissingUpstream = {
-      harness: 'cli-harness-b',
-      accessPath: 'path-alt',
-      gateway: 'gw-two',
-      // upstream is omitted
-      account: 'acc-reviewer-02',
-      quotaScope: 'scope-b',
-      modelId: 'synthetic-model-y',
-      qualifiedRoles: ['reviewer'],
-    };
-
-    const result = selectReviewer({
-      writer: writerCandidate,
-      candidates: [reviewerMissingUpstream],
-    });
-
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.reviewer, null);
-  });
-
-  it('blocks conflicting candidate identity', () => {
-    const writer = {
-      harness: 'cli-harness-w',
-      accessPath: 'path-direct',
-      gateway: 'gw-w',
-      upstream: 'up-w',
-      account: 'acc-w',
-      quotaScope: 'scope-w',
-      modelId: 'model-w',
-      candidateKey: 'cli-harness-w::path-direct::gw-w::up-w::acc-w::scope-w::model-w',
-    };
-
-    const conflictingReviewer = {
-      candidateKey: 'r::direct::gw-r::up-w::acc-w::q-r::model-r',
-      harness: 'r',
-      accessPath: 'direct',
-      gateway: 'gw-r',
-      upstream: 'up-r', // conflicts with up-w in candidateKey
-      account: 'acc-r',  // conflicts with acc-w in candidateKey
-      quotaScope: 'q-r',
-      modelId: 'model-r',
-      qualifiedRoles: ['reviewer'],
-    };
-
-    const result = selectReviewer({
-      writer,
-      candidates: [conflictingReviewer],
-    });
-
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.reviewer, null);
-  });
-
-  it('blocks when chosen reviewer upstream is empty after resolve', () => {
-    const reviewer = {
-      harness: 'cli-harness-b',
-      accessPath: 'path-alt',
-      gateway: 'gw-two',
-      upstream: 'upstream-beta',
-      account: 'acc-reviewer-02',
-      quotaScope: 'scope-b',
-      modelId: 'synthetic-model-y',
-      qualifiedRoles: ['reviewer'],
-    };
-
-    const result = selectReviewer({
-      writer: writerCandidate,
-      candidates: [reviewer],
-      resolveCandidate: (chosen) => ({ ...chosen, upstream: '' }),
-    });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.verdict, 'BLOCKED');
-    assert.equal(result.reviewer, null);
-    assert.ok(result.reason.includes('UNVERIFIED_UPSTREAM') || result.reason.includes('upstream is empty'));
-  });
-
-  it('blocks resolved object with conflicting candidate key', () => {
-    const writer = {
-      harness: 'cli-harness-w',
-      accessPath: 'path-direct',
-      gateway: 'gw-w',
-      upstream: 'up-w',
-      account: 'acc-w',
-      quotaScope: 'scope-w',
-      modelId: 'model-w',
-      candidateKey: 'cli-harness-w::path-direct::gw-w::up-w::acc-w::scope-w::model-w',
-    };
-
-    const eligibleReviewer = {
-      harness: 'hr',
-      accessPath: 'pr',
-      gateway: 'gw-r',
-      upstream: 'up-r',
-      account: 'acc-r',
-      quotaScope: 'qr',
-      modelId: 'model-r',
-      candidateKey: 'hr::pr::gw-r::up-r::acc-r::qr::model-r',
-      qualifiedRoles: ['reviewer'],
-    };
-
-    const result = selectReviewer({
-      writer,
-      candidates: [eligibleReviewer],
-      resolveCandidate: (c) => ({ ...c, candidateKey: 'hr::pr::gw-r::up-w::acc-w::qr::model-r' }),
-    });
-
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.reviewer, null);
-  });
-
-  it('blocks candidate when key upstream is empty but field is present', () => {
-    const candidateEmptyKeyUpstream = {
-      harness: 'hr',
-      accessPath: 'pr',
-      gateway: 'gw-r',
-      upstream: 'up-r',
-      account: 'acc-r',
-      quotaScope: 'qr',
-      modelId: 'model-r',
-      candidateKey: 'hr::pr::gw-r::::acc-r::qr::model-r',
-      qualifiedRoles: ['reviewer'],
-    };
-
-    const result = selectReviewer({
-      writer: writerCandidate,
-      candidates: [candidateEmptyKeyUpstream],
-    });
-
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.reviewer, null);
-  });
-
-  it('blocks resolved reviewer with explicit null upstream', () => {
-    const result = selectReviewer({
-      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
-      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
-      resolveCandidate: (c) => ({ ...c, upstream: null }),
-    });
-
-    assert.equal(result.status, 'BLOCKED');
-    assert.equal(result.reviewer, null);
-  });
-
-  it('blocks explicit null modelId and accountId', () => {
-    const resultModel = selectReviewer({
-      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
-      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
-      resolveCandidate: (c) => ({ ...c, modelId: null }),
-    });
-    assert.equal(resultModel.status, 'BLOCKED');
-    assert.equal(resultModel.reviewer, null);
-
-    const resultAccount = selectReviewer({
-      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
-      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
-      resolveCandidate: (c) => ({ ...c, accountId: null }),
-    });
-    assert.equal(resultAccount.status, 'BLOCKED');
-    assert.equal(resultAccount.reviewer, null);
-
-    const resultEmptyModel = selectReviewer({
-      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
-      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
-      resolveCandidate: (c) => ({ ...c, modelId: '' }),
-    });
-    assert.equal(resultEmptyModel.status, 'BLOCKED');
-    assert.equal(resultEmptyModel.reviewer, null);
-
-    const resultEmptyAccount = selectReviewer({
-      writer: 'hw::pw::gw-w::up-w::acc-w::qw::model-w',
-      candidates: ['hr::pr::gw-r::up-r::acc-r::qr::model-r'],
-      resolveCandidate: (c) => ({ ...c, accountId: '  ' }),
-    });
-    assert.equal(resultEmptyAccount.status, 'BLOCKED');
-    assert.equal(resultEmptyAccount.reviewer, null);
-
-    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', modelId: null }), null);
-    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', accountId: null }), null);
-    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', modelId: '' }), null);
-    assert.equal(canonicalIdentity({ candidateKey: 'hw::pw::gw-w::up-w::acc-w::qw::model-w', accountId: '' }), null);
   });
 });

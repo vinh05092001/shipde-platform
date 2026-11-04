@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-162`, `TASK-AI-165` |
 | Assigned author | GEMINI |
 | Risk | LOW |
-| Allowed paths | `scripts/ai/templates/author-header.md`, `scripts/ai/templates/review-contract.md`, `scripts/ai/templates/task-fix.md`, `scripts/ai/templates/task-prbody.md`, `scripts/ai/templates/pr-body.md`, `scripts/ai/render-task.mjs`, `scripts/ai/select-reviewer.mjs`, `scripts/ai/test/render-task.test.mjs`, `scripts/ai/test/select-reviewer.test.mjs`, `docs/product-spec/work-items/TASK-AI-170.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `scripts/ai/templates/author-header.md`, `scripts/ai/templates/review-contract.md`, `scripts/ai/templates/task-fix.md`, `scripts/ai/templates/task-prbody.md`, `scripts/ai/templates/pr-body.md`, `scripts/ai/render-task.mjs`, `scripts/ai/render-task-scope.mjs`, `scripts/ai/select-reviewer.mjs`, `scripts/ai/select-reviewer-identity.mjs`, `scripts/ai/test/render-task.test.mjs`, `scripts/ai/test/select-reviewer.test.mjs`, `docs/product-spec/work-items/TASK-AI-170.md`, `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | Codex PASS eafc4f8 |
 | Branch | `feat/task-ai-170-dispatch-prompts` |
 | Pull Request | `UNKNOWN` |
