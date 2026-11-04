@@ -142,6 +142,7 @@ async function main(): Promise<void> {
     const orderA = await admin.order.create({ data: orderInput(merchantA, `RLS-A-${suffix}`) });
     const orderB = await admin.order.create({ data: orderInput(merchantB, `RLS-B-${suffix}`) });
 
+    // AC-AI-154-01: Only own-tenant orders returned when merchant_id filter omitted
     await runWithTenant(merchantA, async () => {
       const visible = await extended.order.findMany({
         where: { id: { in: [orderA.id, orderB.id] } },
@@ -153,12 +154,14 @@ async function main(): Promise<void> {
     });
     console.log('PASS: AC-AI-154-01');
 
+    // AC-AI-154-02: Cross-tenant findUnique returns null
     await runWithTenant(merchantA, async () => {
       const row = await extended.order.findUnique({ where: { id: orderB.id } });
       assert.equal(row, null);
     });
     console.log('PASS: AC-AI-154-02');
 
+    // AC-AI-154-03: Cross-tenant create rejected by RLS WITH CHECK
     await assert.rejects(
       runWithTenant(merchantA, async () => {
         await extended.order.create({ data: orderInput(merchantB, `RLS-CROSS-${suffix}`) });
@@ -170,6 +173,7 @@ async function main(): Promise<void> {
     );
     console.log('PASS: AC-AI-154-03');
 
+    // AC-AI-154-04: Cross-tenant update rejected by RLS and row untouched
     await assert.rejects(
       runWithTenant(merchantA, async () => {
         await extended.order.update({
@@ -182,18 +186,21 @@ async function main(): Promise<void> {
     assert.equal(untouched?.recipient_province, 'HN');
     console.log('PASS: AC-AI-154-04');
 
+    // AC-AI-154-05: Own-tenant create succeeds
     const ownOrder = await runWithTenant(merchantA, async () =>
       extended.order.create({ data: orderInput(merchantA, `RLS-OWN-${suffix}`) })
     );
     assert.equal(ownOrder.merchant_id, merchantA);
     console.log('PASS: AC-AI-154-05');
 
+    // AC-AI-154-06: Unscoped session succeeds under pilot fail-open
     const unscoped = await extended.order.findMany({
       where: { id: { in: [orderA.id, orderB.id] } },
     });
     assert.deepEqual(unscoped.map((r) => r.id).sort(), [orderA.id, orderB.id].sort());
     console.log('PASS: AC-AI-154-06');
 
+    // AC-AI-154-07: Interactive transaction applies tenant context
     const inTx = (await runWithTenant(merchantA, async () =>
       extended.$transaction(async (tx) =>
         tx.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } })
@@ -205,6 +212,7 @@ async function main(): Promise<void> {
     );
     console.log('PASS: AC-AI-154-07');
 
+    // AC-AI-154-08: Malformed tenant value fails closed
     await assert.rejects(
       runWithTenant('not-a-uuid', async () => {
         await extended.order.findMany({ where: { merchant_id: merchantA } });
