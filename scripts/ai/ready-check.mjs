@@ -2,13 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-let md = null;
-try {
-  const { default: MarkdownIt } = await import('markdown-it');
-  md = new MarkdownIt({ html: true });
-} catch {
-  md = null;
-}
+
 const CLARIFICATION = /\[NEEDS\s+CLARIFICATION(?:\s*:[^\]]*)?\s*\]/gi;
 
 function tableCells(line) {
@@ -35,9 +29,7 @@ function isTableSeparator(cells) {
 
 function concrete(value) {
   if (/<[^>]*>/.test(value)) return false;
-  const text = value
-    .replace(/[`*_~]/g, '')
-    .trim();
+  const text = value.replace(/[`*_~]/g, '').trim();
   const stripped = text
     .replace(/^[-—:;~#/*[({<"'`\s]+/, '')
     .replace(/[-—:;~#/*\])}>'"`;?!,\s]+$/, '');
@@ -179,12 +171,68 @@ function extractTables(tokens) {
   return tables;
 }
 
+function getIndent(str) {
+  let count = 0;
+  for (const ch of str) {
+    if (ch === ' ') count += 1;
+    else if (ch === '\t') count += 4;
+    else break;
+  }
+  return count;
+}
+
+function parseContainers(line) {
+  let rem = line;
+  const containers = [];
+  while (true) {
+    const q = rem.match(/^[ \t]*>/);
+    if (q) {
+      containers.push({ type: 'quote' });
+      rem = rem.slice(q[0].length);
+      continue;
+    }
+    const l = rem.match(/^([ \t]*)(?:[-*+]|\d+[.)])([ \t]+)/);
+    if (l) {
+      const indent = getIndent(l[1]) + l[0].length - l[1].length;
+      containers.push({ type: 'list', indent });
+      rem = rem.slice(l[0].length);
+      continue;
+    }
+    break;
+  }
+  return { containers, rem };
+}
+
+function consumeContainers(line, activeContainers) {
+  let rem = line;
+  for (const c of activeContainers) {
+    if (c.type === 'quote') {
+      const q = rem.match(/^[ \t]*>/);
+      if (!q) return null;
+      rem = rem.slice(q[0].length);
+    } else if (c.type === 'list') {
+      const sp = rem.match(/^[ \t]*/)[0];
+      const ind = getIndent(sp);
+      if (ind < c.indent) return null;
+      let consumed = 0;
+      let idx = 0;
+      while (idx < sp.length && consumed < c.indent) {
+        consumed += sp[idx] === '\t' ? 4 : 1;
+        idx++;
+      }
+      rem = rem.slice(idx);
+    }
+  }
+  return rem;
+}
+
 function parseMarkdownFallback(text) {
   const lines = text.split('\n');
   const tokens = [];
   let inFence = false;
   let fenceChar = '';
   let fenceLen = 0;
+  let fenceContainers = [];
   let inComment = false;
 
   for (let i = 0; i < lines.length; i++) {
@@ -192,31 +240,42 @@ function parseMarkdownFallback(text) {
     const trimmed = rawLine.trim();
 
     if (inFence) {
-      tokens.push({ type: 'fence', content: rawLine });
-      const closerMatch = trimmed.match(/^(`{3,}|~{3,})$/);
-      if (closerMatch && closerMatch[1][0] === fenceChar && closerMatch[1].length >= fenceLen) {
+      const rem = consumeContainers(rawLine, fenceContainers);
+      if (rem === null) {
         inFence = false;
+        fenceContainers = [];
+      } else {
+        tokens.push({ type: 'fence', content: rawLine, map: [i, i + 1] });
+        const closerMatch = rem.trim().match(/^(`{3,}|~{3,})$/);
+        if (closerMatch && closerMatch[1][0] === fenceChar && closerMatch[1].length >= fenceLen) {
+          inFence = false;
+          fenceContainers = [];
+        }
+        continue;
       }
-      continue;
     }
 
-    const fenceOpen = rawLine.match(/^(?:[ \t]*(?:>|[-*+]|\d+[.)]))*[ \t]*(`{3,}|~{3,})/);
-    if (fenceOpen) {
+    const { containers, rem: afterContainers } = parseContainers(rawLine);
+    const fenceOpen = afterContainers.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
+    if (fenceOpen && !fenceOpen[2].includes(fenceOpen[1][0])) {
       inFence = true;
       fenceChar = fenceOpen[1][0];
       fenceLen = fenceOpen[1].length;
-      tokens.push({ type: 'fence', content: rawLine });
+      fenceContainers = containers;
+      tokens.push({ type: 'fence', content: rawLine, map: [i, i + 1] });
       continue;
     }
 
     if (inComment) {
-      tokens.push({ type: 'html_block', content: rawLine });
+      tokens.push({ type: 'html_block', content: rawLine, map: [i, i + 1] });
       if (rawLine.includes('-->')) inComment = false;
       continue;
     }
-    if (rawLine.includes('<!--') && !rawLine.includes('-->')) {
+
+    const lineWithoutCode = rawLine.replace(/(`+)([\s\S]*?)\1/g, '');
+    if (lineWithoutCode.includes('<!--') && !lineWithoutCode.includes('-->')) {
       inComment = true;
-      tokens.push({ type: 'html_block', content: rawLine });
+      tokens.push({ type: 'html_block', content: rawLine, map: [i, i + 1] });
       continue;
     }
 
@@ -270,9 +329,9 @@ function parseMarkdownFallback(text) {
       }
     }
 
-    if (rawLine.includes('<!--') && rawLine.includes('-->')) {
-      tokens.push({ type: 'html_block', content: rawLine });
-      const withoutComment = rawLine.replace(/<!--[\s\S]*?-->/g, '').trim();
+    if (lineWithoutCode.includes('<!--') && lineWithoutCode.includes('-->')) {
+      tokens.push({ type: 'html_block', content: rawLine, map: [i, i + 1] });
+      const withoutComment = lineWithoutCode.replace(/<!--[\s\S]*?-->/g, '').trim();
       if (withoutComment) {
         tokens.push({
           type: 'inline',
@@ -312,7 +371,7 @@ export function checkWorkItemReady(content) {
     );
   }
 
-  const tokens = md ? md.parse(text, {}) : parseMarkdownFallback(text);
+  const tokens = parseMarkdownFallback(text);
 
   const allSections = [];
   for (let i = 0; i < tokens.length; i++) {

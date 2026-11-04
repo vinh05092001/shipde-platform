@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { checkWorkItemReady } from '../ready-check.mjs';
 
 const valid = readFileSync(new URL('fixtures/ready-check/valid.md', import.meta.url), 'utf8');
@@ -376,4 +378,52 @@ test('rejects source inside a tab-separated list fence', () => {
   const result = checkWorkItemReady(text);
   assert.equal(result.ok, false);
   assert.ok(result.problems.some((problem) => problem.includes('source-document')));
+});
+
+test('ready-check introduces no package dependencies', () => {
+  const currentPkg = JSON.parse(readFileSync('package.json', 'utf8'));
+  const originPkgRaw = spawnSync('git', ['show', 'origin/main:package.json'], {
+    encoding: 'utf8',
+  }).stdout;
+  const originPkg = JSON.parse(originPkgRaw);
+  assert.deepEqual(currentPkg.dependencies, originPkg.dependencies);
+  assert.deepEqual(currentPkg.devDependencies, originPkg.devDependencies);
+  assert.deepEqual(currentPkg.peerDependencies, originPkg.peerDependencies);
+  assert.deepEqual(currentPkg.optionalDependencies, originPkg.optionalDependencies);
+});
+
+function runCliOnText(text) {
+  const tmpPath = join(tmpdir(), `ready-check-boundary-${Date.now()}-${Math.random().toString(36).slice(2)}.md`);
+  writeFileSync(tmpPath, text, 'utf8');
+  try {
+    const scriptPath = fileURLToPath(new URL('../ready-check.mjs', import.meta.url));
+    return spawnSync(process.execPath, [scriptPath, tmpPath], {
+      encoding: 'utf8',
+    });
+  } finally {
+    try {
+      unlinkSync(tmpPath);
+    } catch {}
+  }
+}
+
+test('production CLI rejects blank Proof after a blockquote fence ends', () => {
+  const text = `${valid}\n> ~~~text\n> Example only.\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = runCliOnText(text);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Proof/);
+});
+
+test('production CLI rejects blank Proof after an inline-code comment token', () => {
+  const text = `${valid}\n\`<!--\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = runCliOnText(text);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Proof/);
+});
+
+test('production CLI rejects blank Proof after a complete backtick code span', () => {
+  const text = `${valid}\n\`\`\`example\`\`\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  const result = runCliOnText(text);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Proof/);
 });
