@@ -34,3 +34,9 @@ Revamp the Controller's route scanning mechanism across `tools/ai-brain/quota-sc
 - No test-only branching in production paths; use dependency injection (`fetch`, `now`, `env`, `quotaStateFile`).
 - Unit tests run fully isolated with local fixtures and zero external network calls.
 - Full `ai-brain` test suite and `check-no-hardcode.mjs` must pass clean.
+
+## Follow-up 2026-11-04: alias-prefixed router ids
+
+- Defect: OpenCode names 9Router models `ninerouter/<upstream>/<model>`; probes and discovery record health as `<upstream>/<model>` on route `9router`. Dispatch looked up the alias-prefixed id, found no record, and refused every live 9Router writer (outcome 6 unmet).
+- Fix: `stripRouteAlias` in `tools/ai-brain/cli.js` removes a registry alias of the candidate's route (from `sources.json` `aliases`, already loaded by dispatch) before the route-health lookup.
+- Evidence: `tools/ai-brain/test/task-ai-147-route-alias-health.test.js`; same discovery dir and health store, `dispatch --dry-run --item TASK-AI-154`: origin/main 0 OpenCode writers, this change 93.
