@@ -1,0 +1,83 @@
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: e3dff46b6880a4fe146121dea5b00607167c54c4
+
+Goal: TASK-AI-155 provides reusable server-driven tables and a responsive dashboard shell.
+Touched acceptance requirements: URL pagination/sort/search/facet synchronization with transitions, accessible pagination/mobile navigation, and verification.
+Scope: supplied part 1/4 only; no acceptance row identifiers or completed exact-head CI conclusions were supplied.
+
+1. **PRIOR FINDINGS — P1 CI: NOT FIXED (resolution unverified)**
+
+   WHERE: apps/web/e2e/storybook-data-table.spec.ts:234 (mounted popstate Back test; previous-review location), :692 (reset/facet test; previous-review location)
+   WRONG: The supplied previous run returned `"Ngu"` instead of `"N"` on Back and lost the selected facet after reset. No passing exact-head rerun is provided; the current rollup omits current-application/application-gate and contains blank conclusions.
+   GOAL: TASK-AI-155 verification requires working URL navigation and interactive filtering; the previous failing application gates must pass. Current failure is not established, but neither is resolution.
+   VERIFY: Run `pnpm --filter @shipde/web test:a11y`; assert both named scenarios pass. Record command/results and exact-head current-application/application-gate SUCCESS evidence in the PR body.
+
+2. **BLOCKING NEW FINDING — P1, AC/spec match**
+
+   WHERE: apps/web/src/components/data-table/useDataTable.ts:194 (useTablecnDataTable)
+   WRONG: A Next.js page supplies server-fetched page-one rows to `useDataTable({ columns, data, pageCount })`. Clicking page two updates URL/table pagination using default `shallow: true`, without refreshing the server-rendered data; the table retains page-one rows because pagination is manual.
+   GOAL: TASK-AI-155’s server-driven table must refresh supplied server data when pagination, sorting, or filters change. Use maintained **nuqs** server navigation support with `shallow: false` and transition integration for the server default.
+   VERIFY: Run scenario `server pagination refreshes supplied rows`: click page two on a server-fetched table and assert both the server request and displayed row IDs correspond to page two. Record command/result in the PR body.
+
+3. **BLOCKING NEW FINDING — P1, AC/spec match**
+
+   WHERE: apps/web/src/components/data-table/useDataTable.ts:572 (useShipdeDataTable/createQueryString)
+   WRONG: Starting with no facets, select `status=pending`, then `carrier=ghtk` before the first router navigation commits. Both updates build from the same committed URL; the second navigation contains only `carrier=ghtk`, dropping the status selection.
+   GOAL: TASK-AI-155 requires synchronized multi-select faceted URL state. Use maintained **nuqs `useQueryStates`** batching for the Ship Dễ hook; the unused pending reference at line 494 does not preserve successive edits.
+   VERIFY: Run scenario `successive facet edits survive pending navigation`: delay the first navigation, select both facets, then assert the final URL and selected controls retain both values. Record command/result in the PR body; no committed test is requested.
+
+SIZE: 2423 inserted lines in supplied part 1; cut apps/web/src/tests/data-table-tablecn.test.ts as a separate suite and consolidate required acceptance coverage into the Work Item’s designated data-table-dashboard.test.ts.
+
+Follow-up (non-blocking): give pagination selectors per-instance IDs when composing multiple tables.VERDICT: CHANGES_REQUIRED
+Reviewed SHA: e3dff46b6880a4fe146121dea5b00607167c54c4
+
+Goal: TASK-AI-155 provides reusable server-driven tables and a responsive dashboard shell while preserving existing feature screens.
+Acceptance touched: URL synchronization, accessible table states and selection, sidebar navigation, isolated fixtures, and browser verification.
+Scope: supplied part 2/4 only; the acceptance matrix itself was not supplied.
+
+1. WHERE: `apps/web/e2e/storybook-data-table.spec.ts:234,692` (Back-navigation and reset/facet tests) — **PRIOR FINDINGS: P1 NOT FIXED — unverified**.
+   WRONG: The previous run observed `Ngu` instead of `N` and never observed the expected `status=DELIVERED` request. The supplied exact-head CI entries contain no conclusions and omit `current-application` and `application-gate`; they do not establish either failure was repaired.
+   GOAL: AGENTS.md verification gate requires successful application checks. Demonstrate both previously failing scenarios and both required jobs passing at the reviewed SHA.
+   VERIFY: Run `pnpm --filter @shipde/web test:a11y` and `gh pr checks 493`; provide commands and results in the PR body, with successful exact-head application checks.
+
+2. WHERE: `apps/web/src/components/data-table/DataTableToolbar.tsx:98` (`DataTableToolbar.handlePopstate`; synchronization effect at line 108) — **BLOCKING NEW FINDINGS: P1, AC/spec match**.
+   WRONG: With mounted history entries `?search=An&page=1` and `?search=An&page=2`, type `Ng`, then press Back before the debounce expires. The handler only sets a ref. Because `searchValue` remains `An`, the synchronization effect does not run: the textbox retains `Ng`, and its pending timer dispatches the abandoned search after Back.
+   GOAL: The Work Item’s URL synchronization requirement and BR-UI-01 require Back to restore the selected URL state and cancel abandoned drafts even when the search parameter is unchanged. Reuse the maintained `sadmann7/shadcn-table` URL-state synchronization pattern instead of extending this independent history tracker.
+   VERIFY: Temporary browser check `back_same_search_cancels_pending_draft`: perform that sequence, wait beyond the debounce, and assert input/search remain `An`, page remains `1`, and no `Ng` dispatch occurs. Record the command and result in the PR body; no committed test is requested.
+
+SIZE: 2387 lines, cut `apps/web/src/components/data-table/lib/data-table-filters.ts` — supplied-part insertion count; its advanced client-side filtering engine is not required by the supplied server-driven table acceptance requirements.
+
+Follow-up (non-blocking): `storybook-data-table.spec.ts:670` accepts `Ng`/`Ngu` through loose final matchers despite requiring exactly `N`; tighten the verification evidence.VERDICT: CHANGES_REQUIRED
+Reviewed SHA: e3dff46b6880a4fe146121dea5b00607167c54c4
+
+TASK-AI-155 delivers reusable server-driven tables and a responsive dashboard shell with accessible Vietnamese states and isolated fixtures.
+This part touches AC-AI-155-01–11 through showcase composition, particularly -05 (sorting), -08 (page header), -10 (URL helpers), and -11 (fixtures).
+
+1. **PRIOR FINDINGS — P1: NOT FIXED (closure unverified).**
+   WHERE: apps/web/e2e/support/review-gates.mjs:191 (`review 37` test).
+   WRONG: The previous mounted Back scenario expected `N` but received `Ngu`. These source-string assertions do not exercise that behavior or the previously failing reset/facet scenario. The supplied exact-HEAD CI list contains no conclusions proving either application gate passed.
+   GOAL: BR-UI-01 requires navigation and filter state synchronization; the previous CI finding requires successful `current-application` and `application-gate` results. Neither closure is demonstrated by this part.
+   VERIFY: Run `pnpm --filter @shipde/web test:a11y`; the existing “mounted popstate Back arriving at a previously drafted value is not dropped as an acknowledgment” and “review 12 P2: a facet selected after reset survives the empty reset acknowledgment” cases must pass. Record command/results in the PR body and provide both application gates’ SUCCESS conclusions at this SHA.
+
+Blocking new findings: None established in supplied part 3/4.
+
+Follow-up (non-blocking): Align showcase page-size choices `[5, 10, 20]` with AC-AI-155-06’s `[10, 20, 50, 100]`.
+
+SIZE: 2151 lines in supplied part 3/4, cut apps/web/e2e/support/review-gates.mjs (historical review scaffolding; no acceptance row requires it).VERDICT: CHANGES_REQUIRED
+Reviewed SHA: e3dff46b6880a4fe146121dea5b00607167c54c4
+
+TASK-AI-155 should provide reusable server-driven tables and a responsive dashboard shell while preserving existing feature screens.
+This part touches dashboard header actions, faceted selection, unit-test integration, licensing, and the runtime-dependency constraint.
+Numbered acceptance rows were not supplied; review is limited to part 4/4 and the stated requirements.
+
+1. **PRIOR FINDINGS — P1: NOT FIXED (closure unverified).**
+   WHERE: apps/web/e2e/storybook-data-table.spec.ts:234 and :692 (Back-restoration and post-reset facet tests; locations from the supplied previous logs).
+   WRONG: Previously, Back restored `Ngu` instead of `N`, and selecting a facet after Reset lost the selection. This part supplies neither the relevant implementation repair nor passing browser results. The supplied head CI entries have blank conclusions and omit `current-application` and `application-gate`; they do not establish resolution.
+   GOAL: TASK-AI-155 URL synchronization must restore browser-history state and preserve subsequent facet selections; both required application checks must pass.
+   VERIFY: Run `pnpm --filter @shipde/web test:a11y`; existing tests “mounted popstate Back arriving at a previously drafted value is not dropped as an acknowledgment” and “review 12 P2: a facet selected after reset survives the empty reset acknowledgment” must pass their respective assertions. Record command/results and both application checks’ exact-SHA `SUCCESS` evidence in the PR body; no additional committed test requested.
+
+BLOCKING NEW FINDINGS: None established from the supplied part.
+
+SIZE: 4869 lines, cut apps/web/src/tests/data-table-dashboard.test.ts (non-AC PR-body/template checks, simulated review-history proofs, and duplicated test machinery; retain AC coverage). Count covers supplied part only, excluding lockfile.
+
+Follow-up (non-blocking): Reconcile the added `@tanstack/react-table` and `nuqs` runtime dependencies with the Work Item’s explicit no-new-runtime-dependencies constraint.

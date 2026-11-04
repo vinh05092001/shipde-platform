@@ -1,0 +1,13 @@
+{
+  "files": [
+    "AGENTS.md",
+    "apps/web/e2e/storybook-data-table.spec.ts",
+    "apps/web/e2e/support/review-gates.mjs",
+    "apps/web/src/components/data-table/DataTableToolbar.tsx",
+    "apps/web/src/components/data-table/lib/data-table-filters.ts",
+    "apps/web/src/components/data-table/useDataTable.ts",
+    "apps/web/src/tests/data-table-dashboard.test.ts",
+    "apps/web/src/tests/data-table-tablecn.test.ts"
+  ],
+  "createdAt": "2026-11-04T12:25:22.548Z"
+}

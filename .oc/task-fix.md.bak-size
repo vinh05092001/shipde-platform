@@ -1,0 +1,77 @@
+ROLE: You are the AUTHOR for this Work Item under AGENTS.md. You do not review or declare PASS; Codex reviews independently. Never merge.
+SCOPE (strict):
+
+- If this file contains a section headed "root-cause" (or "root cause"), THAT SECTION OVERRIDES everything else: implement the redesign it describes, even if it restructures, shrinks or rewrites the named files; the findings in .oc/review.txt are symptoms the redesign must make disappear, do NOT patch them one by one. Otherwise: fix ONLY the P0/P1 findings listed in .oc/review.txt at the file:line each names; no unrelated refactor.
+- Touch only the files the findings name, plus the test file that proves each fix. Do not read the whole repo: read those files and their direct imports.
+- Each fix: first a test that fails without it, then the minimal fix, then run ONLY that test file (plus pnpm lint/typecheck if app code changed).
+- If a finding needs a product decision the specs do not make: write NEEDS_DECISION under Known limitations; do not invent.
+- If .oc/context-pack.md exists, use it as your context instead of exploring.
+- Before every commit run `pnpm security:secrets`; test fixtures must use obviously fake values (e.g. `test-not-a-key`), never key-shaped strings. Register row: delivery_order is assigned by the coordinator (see your row); never change it, and when merging main keep both rows.
+- TOKEN SAVING (keep meaning): if MCP tools jcodemunch/serena are available, look up functions/symbols/references with them instead of reading whole files (measured ~4-20x fewer tokens). Pipe long passing command output through `rtk` (e.g. `rtk pnpm lint`); for a FAILING test or evidence log use raw output, never compressed.
+
+---
+
+# TASK-AI-155 — root-cause fix: one URL source of truth (39 rounds of the same class)
+
+WHERE: apps/web/src/components/data-table/useDataTable.ts:116-200 (useSearchParams + popstate listener :125-130 + `historyEpoch` + `window.location.search` snapshot :137-138 + pending-navigation queue :150-175).
+WRONG: two competing sources for table state (Next committed router params vs a pre-commit window.location snapshot and a hand-written queue). Reproduce: `/storybook?per_page=5` → Next → Back → Next: URL says page=2, table stays on page 1. Every round found a new variant of this desync (8 findings in this file).
+GOAL (BR-UI-01): table state is a PURE function of the committed router params from `useSearchParams()` (or props.searchParams when server-provided). Delete the popstate listener, `historyEpoch`, the window.location snapshot and the pending queue. Table actions only call `router.replace/push` with the next params and never set local page/sort/filter state; the render follows the URL. Debounce only the filter text input (local draft text), not committed state. Keep the public hook API; if `historyEpoch` is in the returned type, remove it and update its callers.
+VERIFY: tests in the existing useDataTable test file: (1) Next→Back→Next shows page 2 matching URL; (2) Back restores page 1 and rows; (3) rapid Next,Next yields page 3; (4) filter typing debounced then URL updated once. Run those tests, pnpm --filter web typecheck, pnpm lint, pnpm format:check, pnpm security:secrets. Size cap: net change should SHRINK the file.
+
+## root-cause (extension, 07:45) — toolbar and faceted filter keep a second state machine
+
+WHERE: apps/web/src/components/data-table/DataTableToolbar.tsx:103-118 (computeToolbarDraftOnPropChange), :271; DataTableFacetedFilter.tsx:246; useDataTable.ts:210-215 (getNextQueryBase) and the 2 remaining historyEpoch/window.location uses.
+WRONG: "draft / acknowledgment / dispatch invalidation" machinery in the toolbar and facets re-creates the desync the hook fix removed; 6 new findings are all in it.
+GOAL (BR-UI-01): the ONLY local state allowed is the search box's in-progress text, reset to the URL value whenever the committed URL value changes (one `useEffect` on that value). Facets have NO local state: checked = derived from URL params; a click calls the hook's setter which router.replace()s. getNextQueryBase builds from the current committed params only. Delete computeToolbarDraftOnPropChange, acknowledgment/invalidation logic and remaining historyEpoch/window.location code. Net line count of the three files must drop.
+VERIFY: tests: typing then Back restores URL search text; facet toggle → URL updated and checkbox follows URL after Back/Forward; two quick facet clicks keep both values.
+
+## Required tools for this task (log each use in .oc/tools-used.txt, one line: tool + what for)
+
+- serena find_referencing_symbols on useDataTable / DataTableToolbar / DataTableFacetedFilter before deleting state, so every caller is updated.
+- Playwright CLI (manifest) against /storybook: reproduce Next→Back→Next and facet toggle + Back before and after the fix; save the commands in tools-used.
+- msw (installed 2.15.0) only if a test needs a data response; no new deps.
+
+## Library to use (operator-approved 04/11; replaces hand-written code — pin an exact version, commit lockfile)
+
+- nuqs (latest 2.x, Next.js App Router adapter `NuqsAdapter`): `pnpm --filter web add nuqs`. Replace all URL<->state code in useDataTable / DataTableToolbar / DataTableFacetedFilter with useQueryStates (page, per_page, sort, filters; parseAsInteger/parseAsArrayOf). Use its built-in throttle for the search box instead of a custom debounce/draft. Delete the custom history/draft/ack machinery.
+
+- REUSE FIRST (operator 04/11): before writing any parser, sanitizer/redactor, URL/state sync, network guard, retry/queue, date/money/format helper or UI widget, search for a maintained library or an attached repo (manifest, context7.js, npm/GitHub) and USE it. Hand-write only if none fits, and say why in .oc/tools-used.txt ("no-lib: <reason>"). New dependencies are allowed when they are well-maintained (recent release, real user base, OSI licence), pinned to an exact version with the lockfile committed; never for auth/tenant/money logic without the Work Item naming it.
+
+## root-cause (reference implementation, 04/11) — adapt tablecn instead of inventing
+
+Reference: github.com/sadmann7/shadcn-table (tablecn, MIT) — `useDataTable` hook (TanStack Table + nuqs `useQueryStates`, server-side pagination/sort/filter, `NuqsAdapter` from `nuqs/adapters/next/app`), toolbar + faceted filter components.
+Do: `git clone --depth 1 https://github.com/sadmann7/shadcn-table C:/Users/gumac/AI/ref/tablecn` (read-only reference, outside this repo), read its hooks/use-data-table and data-table toolbar/faceted-filter, and ADAPT them to our files (apps/web/src/components/data-table/*), keeping our public props, Vietnamese labels, design tokens and BR-UI-01 states. Add @tanstack/react-table and nuqs pinned. Credit the MIT source in a file header comment. Our hand-written history/draft/ack code is deleted, not merged.
+Log the reference and what you adapted in .oc/tools-used.txt.
+
+## root-cause (MANDATORY, 04/11 11:30) — adopt tablecn now; the pending-edit patches are rejected
+
+The reference is ALREADY CLONED read-only at C:/Users/gumac/AI/ref/tablecn (MIT, 2d74ac5). Do not clone.
+Read and adapt, in this order:
+
+1. C:/Users/gumac/AI/ref/tablecn/src/registry/bases/base/hooks/use-data-table.ts → replace apps/web/src/components/data-table/useDataTable.ts (nuqs useQueryStates for page/perPage/sort/filters, shallow:false + throttle for text filter).
+2. .../components/data-table/data-table-faceted-filter.tsx → DataTableFacetedFilter.tsx (facet state = URL array param; no local pending/ack state).
+3. .../components/data-table/data-table-toolbar.tsx and data-table-pagination.tsx → our toolbar/pagination.
+4. Tests to mirror: .../src/hooks/test/use-data-table.test.tsx and faceted.test.tsx.
+   Install pinned: `pnpm --filter web add nuqs@2.10.1 @tanstack/react-table@9.2.4`; wrap the app (or storybook decorator) with NuqsAdapter from 'nuqs/adapters/next/app'.
+   Keep our props, Vietnamese labels, design tokens and BR-UI-01 states; add an MIT credit header to adapted files.
+   ACCEPTANCE GATE: apps/web/package.json must contain nuqs; useDataTable.ts must import from 'nuqs'; the custom pending-edit / acknowledgment / getNextQueryBase code must be gone. Without these the review is CHANGES_REQUIRED regardless of tests.
+   Write .oc/tools-used.txt: `ref: tablecn <files adapted>`.
+
+## root-cause (COPY-THEN-ADAPT, 04/11 12:00) — supersedes the "read and adapt" sections above
+
+Verbatim tablecn (MIT) sources are staged at .oc/ref-src/ (hooks/, components/, lib/, test/, LICENSE). Do NOT rewrite them from scratch.
+
+1. `pnpm --filter web add nuqs@2.10.1 @tanstack/react-table@9.2.4`
+2. Copy, keeping code as-is:
+   .oc/ref-src/hooks/use-data-table.ts -> apps/web/src/components/data-table/useDataTable.ts
+   .oc/ref-src/components/data-table-toolbar.tsx -> DataTableToolbar.tsx
+   .oc/ref-src/components/data-table-faceted-filter.tsx -> DataTableFacetedFilter.tsx
+   .oc/ref-src/components/data-table-pagination.tsx -> DataTablePagination.tsx
+   .oc/ref-src/components/data-table-column-header.tsx -> DataTableColumnHeader.tsx
+   .oc/ref-src/components/data-table-view-options.tsx -> DataTableViewOptions.tsx
+   .oc/ref-src/components/data-table.tsx -> DataTable.tsx
+   .oc/ref-src/lib/data-table-*.ts -> apps/web/src/components/data-table/lib/
+3. Minimal edits only: fix import paths (@/lib/... -> ./lib/..., @/registry/bases/base/ui/* -> our existing ui components; if one is missing, keep tablecn's file in ./lib/ui/), Vietnamese labels, our design tokens, keep our exported names/props in index.ts and types.ts. Add header `// Adapted from tablecn (MIT) https://github.com/sadmann7/shadcn-table`.
+4. Wrap with NuqsAdapter (nuqs/adapters/next/app) where the table renders (page + storybook decorator).
+5. Port the two tests from .oc/ref-src/test/ to our test runner.
+   Delete every remaining hand-written pending-edit/ack/getNextQueryBase line. Expected: diff mostly copied lines.

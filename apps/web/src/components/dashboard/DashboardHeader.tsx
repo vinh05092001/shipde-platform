@@ -30,9 +30,17 @@
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import Link from 'next/link';
-import { LogOut, Menu, Search, Store, User } from 'lucide-react';
-import { DashboardUser } from './types';
+import { Menu, Search, Store } from 'lucide-react';
+import type { DashboardUser } from './types';
+import { DashboardUserMenu } from './DashboardUserMenu';
+import { createGlobalShortcutHandler } from './dashboard-header-utils';
+
+export {
+  createGlobalShortcutHandler,
+  maskEmail,
+  type GlobalShortcutOptions,
+  type ShortcutKeyEvent,
+} from './dashboard-header-utils';
 
 export interface DashboardHeaderProps {
   currentUser?: DashboardUser | null;
@@ -50,66 +58,6 @@ export interface DashboardHeaderProps {
   defaultUserMenuOpen?: boolean;
 }
 
-/**
- * Masks an email address for privacy and PII protection in accordance with BR-UI-03 & Work Item.
- * E.g. 'nguyenvana@shipde.vn' -> 'n****a@shipde.vn'
- */
-export function maskEmail(email?: string | null): string {
-  if (!email) return '';
-  if (!email.includes('@')) return '***';
-  const [name, domain] = email.split('@');
-  if (!name || !domain) return '***';
-  if (name.length <= 2) {
-    return `${name[0]}*@${domain}`;
-  }
-  return `${name[0]}${'*'.repeat(Math.min(name.length - 2, 4))}${name[name.length - 1]}@${domain}`;
-}
-
-export interface GlobalShortcutOptions {
-  showSearch?: boolean;
-  onTrigger: () => void;
-}
-
-export interface ShortcutKeyEvent {
-  ctrlKey?: boolean;
-  metaKey?: boolean;
-  key: string;
-  preventDefault: () => void;
-  target?:
-    | EventTarget
-    | {
-        tagName?: string;
-        isContentEditable?: boolean;
-        getAttribute?: (name: string) => string | null;
-      }
-    | null;
-}
-
-/**
- * Creates the global keyboard listener for Ctrl+K search shortcut (Finding 6).
- * Safe against uppercase 'K', modifier combinations, and inputs.
- */
-export function createGlobalShortcutHandler({
-  showSearch = true,
-  onTrigger,
-}: GlobalShortcutOptions) {
-  return function handleGlobalKeyDown(event: KeyboardEvent | ShortcutKeyEvent) {
-    if (showSearch === false) return;
-    if ((event.ctrlKey || event.metaKey) && (event.key === 'k' || event.key === 'K')) {
-      const target = (event as any).target;
-      const isEditable =
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable ||
-          target.getAttribute?.('contenteditable') === 'true');
-      if (!isEditable) {
-        event.preventDefault();
-        onTrigger();
-      }
-    }
-  };
-}
 
 export function DashboardHeader({
   currentUser,
@@ -296,120 +244,21 @@ export function DashboardHeader({
       <div className="flex items-center gap-3">
         {actions}
 
-        {/* User profile dropdown */}
-        <div className="relative" ref={userMenuRef}>
-          <button
-            ref={userMenuTriggerRef}
-            type="button"
-            onClick={() => setIsUserMenuOpen((prev) => !prev)}
-            onKeyDown={handleTriggerKeyDown}
-            aria-label="Menu tài khoản cá nhân"
-            title={userMenuLabel}
-            aria-expanded={isUserMenuOpen}
-            aria-haspopup="menu"
-            className="flex items-center gap-2 p-1.5 rounded-[8px] hover:bg-[var(--bg-subtle)] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
-          >
-            <div className="w-8 h-8 rounded-full bg-[var(--primary-subtle)] text-[var(--primary)] font-bold text-xs flex items-center justify-center border border-[var(--primary-border)]">
-              {initials}
-            </div>
-            <div className="hidden sm:block text-left text-xs leading-tight">
-              <div className="font-semibold text-[var(--text-primary)] max-w-[120px] truncate">
-                {currentUser?.name || 'Chưa đăng nhập'}
-              </div>
-              <div className="text-[11px] text-[var(--text-muted)] max-w-[120px] truncate">
-                {currentUser?.role || 'Khách'}
-              </div>
-            </div>
-          </button>
-
-          {isUserMenuOpen && (
-            <div
-              role="menu"
-              aria-label="Menu tài khoản"
-              className="absolute right-0 top-full mt-2 w-56 rounded-[10px] bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-xl py-1 z-40 animate-in fade-in zoom-in-95 duration-100"
-            >
-              {currentUser ? (
-                <div className="px-3 py-2 border-b border-[var(--border-subtle)]">
-                  <div className="font-semibold text-xs text-[var(--text-primary)] truncate">
-                    {currentUser.name}
-                  </div>
-                  {currentUser.email && (
-                    <div
-                      className="text-[11px] text-[var(--text-muted)] truncate"
-                      data-testid="user-email"
-                    >
-                      {maskEmail(currentUser.email)}
-                    </div>
-                  )}
-                  {currentUser.role && (
-                    <div className="mt-1">
-                      <span className="badge-ok !text-[10px] !py-0.5 !px-1.5">
-                        {currentUser.role}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="px-3 py-2.5 border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)] text-center">
-                  <div className="font-semibold text-xs text-[var(--text-secondary)]">
-                    Chưa đăng nhập
-                  </div>
-                  <div className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                    Thông tin tài khoản không khả dụng
-                  </div>
-                </div>
-              )}
-
-              {currentUser && (
-                <div className="py-1">
-                  <Link
-                    ref={(el) => {
-                      menuItemRefs.current[0] = el;
-                    }}
-                    href={profileHref}
-                    role="menuitem"
-                    tabIndex={0}
-                    onClick={() => {
-                      setIsUserMenuOpen(false);
-                      onProfileClick?.();
-                    }}
-                    onKeyDown={(e) => handleMenuItemKeyDown(e, 0)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
-                  >
-                    <User className="w-3.5 h-3.5 text-[var(--text-muted)]" aria-hidden="true" />
-                    <span>Hồ sơ tài khoản</span>
-                  </Link>
-                </div>
-              )}
-
-              {onSignOut && (
-                <>
-                  <div className="h-px bg-[var(--border-subtle)] my-1" />
-                  <div className="py-1">
-                    <button
-                      ref={(el) => {
-                        const signOutIdx = currentUser ? 1 : 0;
-                        menuItemRefs.current[signOutIdx] = el;
-                      }}
-                      type="button"
-                      role="menuitem"
-                      tabIndex={0}
-                      onClick={() => {
-                        setIsUserMenuOpen(false);
-                        onSignOut();
-                      }}
-                      onKeyDown={(e) => handleMenuItemKeyDown(e, currentUser ? 1 : 0)}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-[var(--status-risk-text)] hover:bg-[var(--status-risk-bg)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--status-risk-border)]"
-                    >
-                      <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Đăng xuất</span>
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
+        <DashboardUserMenu
+          currentUser={currentUser}
+          profileHref={profileHref}
+          onProfileClick={onProfileClick}
+          onSignOut={onSignOut}
+          isUserMenuOpen={isUserMenuOpen}
+          setIsUserMenuOpen={setIsUserMenuOpen}
+          userMenuRef={userMenuRef}
+          userMenuTriggerRef={userMenuTriggerRef}
+          menuItemRefs={menuItemRefs}
+          userMenuLabel={userMenuLabel}
+          initials={initials}
+          handleTriggerKeyDown={handleTriggerKeyDown}
+          handleMenuItemKeyDown={handleMenuItemKeyDown}
+        />
       </div>
     </header>
   );

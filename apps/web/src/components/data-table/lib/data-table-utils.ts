@@ -1,123 +1,20 @@
 // Adapted from tablecn (MIT) https://github.com/sadmann7/shadcn-table
+
 import type { Column, ColumnFilter, RowData, SortingState, Table } from '@tanstack/react-table';
 
 import type { DataTableFeatures } from './data-table-features';
-import type {
-  ColumnFilterItem,
-  ColumnSelectOption,
-  ColumnVariantMeta,
-  FilterOperator,
-  FilterOperatorOption,
-  FilterVariant,
-} from './data-table-types';
+import type { ColumnFilterItem, FilterOperator, FilterVariant } from './data-table-types';
 
-import { formatDate } from './utils';
+import { formatFilterDate, getIsDateVariant, parseFilterDate } from './data-table-utils-dates';
+import {
+  getIsMultiValueVariant,
+  getIsValuelessOperator,
+  getPlainFilterId,
+  getPlainFilterOperator,
+} from './data-table-utils-operators';
 
-export const FILTER_VARIANTS = [
-  'text',
-  'number',
-  'range',
-  'date',
-  'date-range',
-  'boolean',
-  'select',
-  'multi-select',
-] as const;
-
-export const FILTER_OPERATORS = {
-  iLike: 'ilike',
-  notILike: 'not.ilike',
-  eq: 'eq',
-  ne: 'neq',
-  inArray: 'in',
-  notInArray: 'not.in',
-  isEmpty: 'is.empty',
-  isNotEmpty: 'not.is.empty',
-  lt: 'lt',
-  lte: 'lte',
-  gt: 'gt',
-  gte: 'gte',
-  isBetween: 'between',
-  isRelativeToToday: 'rel',
-} as const;
-
-export const JOIN_OPERATORS = ['and', 'or'] as const;
-
-export const SORT_ORDERS = [
-  { label: 'Asc', value: 'asc' },
-  { label: 'Desc', value: 'desc' },
-] as const;
-
-const TEXT_OPERATORS = [
-  { label: 'Contains', value: 'iLike' },
-  { label: 'Does not contain', value: 'notILike' },
-  { label: 'Is', value: 'eq' },
-  { label: 'Is not', value: 'ne' },
-  { label: 'Is empty', value: 'isEmpty' },
-  { label: 'Is not empty', value: 'isNotEmpty' },
-] satisfies FilterOperatorOption[];
-
-const NUMERIC_OPERATORS = [
-  { label: 'Is', value: 'eq' },
-  { label: 'Is not', value: 'ne' },
-  { label: 'Is less than', value: 'lt' },
-  { label: 'Is less than or equal to', value: 'lte' },
-  { label: 'Is greater than', value: 'gt' },
-  { label: 'Is greater than or equal to', value: 'gte' },
-  { label: 'Is between', value: 'isBetween' },
-  { label: 'Is empty', value: 'isEmpty' },
-  { label: 'Is not empty', value: 'isNotEmpty' },
-] satisfies FilterOperatorOption[];
-
-const DATE_OPERATORS = [
-  { label: 'Is', value: 'eq' },
-  { label: 'Is not', value: 'ne' },
-  { label: 'Is before', value: 'lt' },
-  { label: 'Is after', value: 'gt' },
-  { label: 'Is on or before', value: 'lte' },
-  { label: 'Is on or after', value: 'gte' },
-  { label: 'Is between', value: 'isBetween' },
-  { label: 'Is relative to today', value: 'isRelativeToToday' },
-  { label: 'Is empty', value: 'isEmpty' },
-  { label: 'Is not empty', value: 'isNotEmpty' },
-] satisfies FilterOperatorOption[];
-
-const SELECT_OPERATORS = [
-  { label: 'Is', value: 'eq' },
-  { label: 'Is not', value: 'ne' },
-  { label: 'Is empty', value: 'isEmpty' },
-  { label: 'Is not empty', value: 'isNotEmpty' },
-] satisfies FilterOperatorOption[];
-
-const MULTI_SELECT_OPERATORS = [
-  { label: 'Has any of', value: 'inArray' },
-  { label: 'Has none of', value: 'notInArray' },
-  { label: 'Is empty', value: 'isEmpty' },
-  { label: 'Is not empty', value: 'isNotEmpty' },
-] satisfies FilterOperatorOption[];
-
-const BOOLEAN_OPERATORS = [
-  { label: 'Is', value: 'eq' },
-  { label: 'Is not', value: 'ne' },
-] satisfies FilterOperatorOption[];
-
-const MULTI_VALUE_FILTER_VARIANTS: FilterVariant[] = [
-  'select',
-  'multi-select',
-  'range',
-  'date-range',
-];
-
-const FILTER_OPERATORS_BY_VARIANT: Record<FilterVariant, FilterOperatorOption[]> = {
-  text: TEXT_OPERATORS,
-  number: NUMERIC_OPERATORS,
-  range: NUMERIC_OPERATORS,
-  date: DATE_OPERATORS,
-  'date-range': DATE_OPERATORS,
-  boolean: BOOLEAN_OPERATORS,
-  select: SELECT_OPERATORS,
-  'multi-select': MULTI_SELECT_OPERATORS,
-};
+export * from './data-table-utils-dates';
+export * from './data-table-utils-operators';
 
 export function getAriaSort(
   sorting: SortingState,
@@ -170,16 +67,6 @@ export function getColumnSizingStyle<TData extends RowData>(
   return style;
 }
 
-export function getFilterOperators(filterVariant: FilterVariant) {
-  return FILTER_OPERATORS_BY_VARIANT[filterVariant] ?? [];
-}
-
-export function getDefaultFilterOperator(filterVariant: FilterVariant) {
-  const operators = getFilterOperators(filterVariant);
-
-  return operators[0]?.value ?? (filterVariant === 'text' ? 'iLike' : 'eq');
-}
-
 export function getIsEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
 
@@ -191,132 +78,12 @@ export function getIsEditableTarget(target: EventTarget | null) {
   );
 }
 
-export function getIsValuelessOperator(operator: FilterOperator) {
-  return operator === 'isEmpty' || operator === 'isNotEmpty';
-}
-
-export function coerceFilterValue(operator: FilterOperator, value: string | string[]) {
-  if (getIsValuelessOperator(operator)) return '';
-
-  if (operator === 'inArray' || operator === 'notInArray') {
-    if (Array.isArray(value)) return value;
-    return value ? [value] : [];
-  }
-
-  if (operator === 'isBetween') {
-    return Array.isArray(value) ? value : [value, ''];
-  }
-
-  if (Array.isArray(value)) return value.find((item) => item !== '') ?? '';
-
-  return value;
-}
-
-export function getFilterVariant(meta: ColumnVariantMeta | undefined): FilterVariant {
-  switch (meta?.variant) {
-    case 'number':
-      return meta.filter === 'range' ? 'range' : 'number';
-    case 'date':
-      return meta.filter === 'range' ? 'date-range' : 'date';
-    case 'boolean':
-    case 'select':
-    case 'multi-select':
-      return meta.variant;
-    default:
-      return 'text';
-  }
-}
-
-export function getColumnSelectOptions(meta: ColumnVariantMeta | undefined): ColumnSelectOption[] {
-  return meta?.variant === 'select' || meta?.variant === 'multi-select' ? (meta.options ?? []) : [];
-}
-
-export function getDefaultFilter<TData extends RowData>(column: Column<DataTableFeatures, TData>) {
-  const variant = getFilterVariant(column.columnDef.meta);
-
-  return {
-    id: column.id,
-    variant,
-    operator: getDefaultFilterOperator(variant),
-    value: '',
-  };
-}
-
-export function getSelectFilterValue(filter: ColumnFilterItem) {
-  if (filter.variant === 'multi-select') {
-    return Array.isArray(filter.value) ? filter.value : [];
-  }
-
-  return typeof filter.value === 'string' ? filter.value : undefined;
-}
-
 function getColumnVar(columnId: string, property: 'size' | 'offset') {
   const name = columnId.replace(
     /[^a-zA-Z0-9-]/g,
     (char) => `_${char.codePointAt(0)?.toString(16)}_`
   );
   return `--column-${name}-${property}`;
-}
-
-const CALENDAR_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-export function parseFilterDate(value: unknown): Date | undefined {
-  if (value instanceof Date) return getValidDate(value);
-  if (typeof value === 'number') return getValidDate(new Date(value));
-  if (typeof value !== 'string' || value.trim() === '') return undefined;
-
-  const text = value.trim();
-  const match = CALENDAR_DATE_PATTERN.exec(text);
-  if (match) {
-    const [, year, month, day] = match.map(Number);
-    if (year === undefined || month === undefined || day === undefined) {
-      return undefined;
-    }
-    const date = new Date(year, month - 1, day);
-    return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day
-      ? date
-      : undefined;
-  }
-
-  const numeric = Number(text);
-  return getValidDate(new Date(Number.isNaN(numeric) ? text : numeric));
-}
-
-export function formatFilterDate(date: Date) {
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-export function getIsDateVariant(variant: FilterVariant) {
-  return variant === 'date' || variant === 'date-range';
-}
-
-export function getFilterDates(value: ColumnFilterItem['value']) {
-  return (Array.isArray(value) ? value : [value]).flatMap((item) => {
-    const date = parseFilterDate(item);
-    return date ? [date] : [];
-  });
-}
-
-export function getFilterDateValue(date: Date | undefined) {
-  return date ? formatFilterDate(date) : '';
-}
-
-export function getDateFilterLabel(filter: ColumnFilterItem) {
-  const [startDate, endDate] = getFilterDates(filter.value);
-  if (!startDate) return undefined;
-
-  const start = formatDate(startDate, { month: 'short' });
-  if (
-    filter.operator !== 'isBetween' ||
-    !endDate ||
-    startDate.toDateString() === endDate.toDateString()
-  ) {
-    return start;
-  }
-
-  return `${start} - ${formatDate(endDate, { month: 'short' })}`;
 }
 
 export function stringifyFilterValue(value: unknown): string {
@@ -356,27 +123,6 @@ export function getValidRangeFilterBounds(
   if (start !== undefined && end !== undefined && start > end) return null;
 
   return [start, end];
-}
-
-export function getIsMultiValueVariant(variant: FilterVariant) {
-  return MULTI_VALUE_FILTER_VARIANTS.includes(variant);
-}
-
-export function getPlainFilterOperator(variant: FilterVariant): FilterOperator {
-  if (variant === 'select' || variant === 'multi-select') return 'inArray';
-  if (variant === 'range' || variant === 'date-range') return 'isBetween';
-  return getDefaultFilterOperator(variant);
-}
-
-export function getIsPlainFilter(filter: ColumnFilterItem) {
-  return (
-    filter.operator === getPlainFilterOperator(filter.variant) &&
-    Array.isArray(filter.value) === getIsMultiValueVariant(filter.variant)
-  );
-}
-
-export function getPlainFilterId(columnId: string) {
-  return `${columnId}-filter`;
 }
 
 export function createPlainFilter<TColumnId extends string>(
@@ -471,10 +217,6 @@ export function getActiveFilters<TFilterItem extends ColumnFilterItem>(
   filters: TFilterItem[]
 ): TFilterItem[] {
   return filters.filter(getIsActiveFilter);
-}
-
-function getValidDate(date: Date) {
-  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 function normalizeFilterValues(variant: FilterVariant, operator: FilterOperator, values: string[]) {

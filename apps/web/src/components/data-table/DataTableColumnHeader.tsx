@@ -34,6 +34,7 @@ import React, { useState, useRef, useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, ArrowUpDown, EyeOff } from 'lucide-react';
 import { ColumnDef, ColumnSort } from './types';
+import { DataTableColumnHeaderMenu } from './DataTableColumnHeaderMenu';
 
 interface DataTableColumnHeaderProps<TData = any> {
   column: ColumnDef<TData>;
@@ -153,114 +154,20 @@ export function DataTableColumnHeader<TData = any>({
   const hasHide = column.enableHiding !== false && Boolean(onHide);
   const totalMenuItems = hasHide ? 3 : 2;
 
-  const handleMenuItemKeyDown = (e: React.KeyboardEvent, index: number) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const nextIdx = (index + 1) % totalMenuItems;
-      menuItemRefs.current[nextIdx]?.focus();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const prevIdx = (index - 1 + totalMenuItems) % totalMenuItems;
-      menuItemRefs.current[prevIdx]?.focus();
-    } else if (e.key === 'Home') {
-      e.preventDefault();
-      menuItemRefs.current[0]?.focus();
-    } else if (e.key === 'End') {
-      e.preventDefault();
-      menuItemRefs.current[totalMenuItems - 1]?.focus();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setIsOpen(false);
-    }
-  };
-
   const menuElement = isOpen ? (
-    <div
-      ref={menuRef}
-      role="menu"
-      aria-label={`Tùy chọn cho cột ${title}`}
-      className={`${
-        isMounted && typeof document !== 'undefined'
-          ? 'fixed z-50'
-          : 'absolute left-0 top-full mt-1.5 z-30'
-      } w-44 rounded-[8px] bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-lg py-1 animate-in fade-in zoom-in-95 duration-100`}
-      style={
-        isMounted && typeof document !== 'undefined'
-          ? {
-              top: menuPosition ? `${menuPosition.top}px` : undefined,
-              left: menuPosition ? `${menuPosition.left}px` : undefined,
-              visibility: menuPosition ? 'visible' : 'hidden',
-            }
-          : undefined
-      }
-    >
-      <button
-        ref={(el) => {
-          menuItemRefs.current[0] = el;
-        }}
-        type="button"
-        role="menuitem"
-        tabIndex={0}
-        onClick={() => {
-          onSort(column.id, false);
-          setIsOpen(false);
-        }}
-        onKeyDown={(e) => handleMenuItemKeyDown(e, 0)}
-        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
-          isSorted === 'asc'
-            ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
-            : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
-        }`}
-      >
-        <ArrowUp className="w-3.5 h-3.5 text-[var(--text-muted)]" />
-        <span>Tăng dần</span>
-      </button>
-
-      <button
-        ref={(el) => {
-          menuItemRefs.current[1] = el;
-        }}
-        type="button"
-        role="menuitem"
-        tabIndex={-1}
-        onClick={() => {
-          onSort(column.id, true);
-          setIsOpen(false);
-        }}
-        onKeyDown={(e) => handleMenuItemKeyDown(e, 1)}
-        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)] ${
-          isSorted === 'desc'
-            ? 'font-semibold text-[var(--primary)] bg-[var(--primary-subtle)]'
-            : 'text-[var(--text-primary)] hover:bg-[var(--bg-subtle)]'
-        }`}
-      >
-        <ArrowDown className="w-3.5 h-3.5 text-[var(--text-muted)]" />
-        <span>Giảm dần</span>
-      </button>
-
-      {hasHide && (
-        <>
-          <div className="h-px bg-[var(--border-subtle)] my-1" />
-          <button
-            ref={(el) => {
-              menuItemRefs.current[2] = el;
-            }}
-            type="button"
-            role="menuitem"
-            tabIndex={-1}
-            onClick={() => {
-              onHide!(column.id);
-              setIsOpen(false);
-            }}
-            onKeyDown={(e) => handleMenuItemKeyDown(e, 2)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-focus)]"
-          >
-            <EyeOff className="w-3.5 h-3.5 text-[var(--text-dim)]" aria-hidden="true" />
-            <span>Ẩn cột này</span>
-          </button>
-        </>
-      )}
-    </div>
+    <DataTableColumnHeaderMenu<TData>
+      column={column}
+      title={title}
+      isSorted={isSorted}
+      hasHide={hasHide}
+      onSort={onSort}
+      onHide={onHide}
+      setIsOpen={setIsOpen}
+      menuRef={menuRef}
+      menuItemRefs={menuItemRefs}
+      isMounted={isMounted}
+      menuPosition={menuPosition}
+    />
   ) : null;
 
   return (
