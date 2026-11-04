@@ -1,12 +1,7 @@
 {
   "files": [
-    ".oc/check-syntax.json",
-    ".oc/context-pack.md",
-    ".oc/context-pack.md.manifest.json",
-    "AGENTS.md",
-    "tools/ai-brain/test/task-ai-166-refresh.test.js",
-    "tools/ai-brain/test/task-ai-166-review.test.js",
-    "tools/ai-brain/test/task-ai-166-runtime.test.js"
+    ".oc/pr-body-remote.md",
+    "AGENTS.md"
   ],
-  "createdAt": "2026-11-04T21:46:05.108Z"
+  "createdAt": "2026-11-04T23:01:24.715Z"
 }
