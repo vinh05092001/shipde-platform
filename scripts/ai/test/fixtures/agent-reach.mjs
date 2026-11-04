@@ -48,20 +48,46 @@ if (argv[0] === 'version') {
   console.log(
     JSON.stringify({
       ok: false,
-      error: { code: 'TIMEOUT', token: 'fixture-upstream-secret' },
+      error: { code: 'TIMEOUT', token: 'test-not-a-key' },
     })
   );
 } else if (mode === 'plain') {
   console.log('Not the pinned JSON CLI');
 } else if (mode === 'retrieve-target') {
-  // Agent-Reach post-processes the public URL the wrapper already retrieved in
-  // process. It never fetches anything itself, so it cannot be redirected.
-  console.log(
-    JSON.stringify({
-      ok: true,
-      items: [{ title: 'document', url: argv[argv.length - 1], text: 'public content' }],
-    })
-  );
+  // Genuinely retrieving fixture: connects to target, refuses private redirects.
+  const target = argv[argv.length - 1];
+  try {
+    const parsed = new URL(target);
+    const fetchTarget =
+      parsed.hostname === 'docs.example.com' && parsed.port
+        ? `http://127.0.0.1:${parsed.port}${parsed.pathname}${parsed.search}`
+        : target;
+    const res = await fetch(fetchTarget, {
+      headers: { host: parsed.host },
+      redirect: 'manual',
+    });
+    const location = res.headers.get('location');
+    if (res.status >= 300 && res.status < 400 && location) {
+      const dest = new URL(location, target);
+      if (['127.0.0.1', 'localhost', '::1'].includes(dest.hostname)) {
+        console.log(
+          JSON.stringify({
+            ok: false,
+            error: { code: 'UPSTREAM_ERROR', message: 'redirect refused' },
+          })
+        );
+      } else {
+        const nextRes = await fetch(dest.href);
+        const text = await nextRes.text();
+        console.log(JSON.stringify({ ok: true, items: [{ title: 'document', url: target, text }] }));
+      }
+    } else {
+      const text = await res.text();
+      console.log(JSON.stringify({ ok: true, items: [{ title: 'document', url: target, text }] }));
+    }
+  } catch {
+    console.log(JSON.stringify({ ok: false, error: { code: 'UPSTREAM_ERROR' } }));
+  }
 } else if (mode === 'failure' || mode === 'login' || mode === 'secret-code') {
   console.error('Cookie: session=fixture-cookie; Authorization: Bearer fixture-token');
   console.log(

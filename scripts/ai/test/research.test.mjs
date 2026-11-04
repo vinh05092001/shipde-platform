@@ -1043,6 +1043,106 @@ test('cli_redirect_after_both_preflights_never_contacts_private_destination', as
   }
 });
 
+test('cli_late_redirect_after_all_wrapper_fetches_never_contacts_private_destination', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-cli-late-redirect-'));
+  const marker = join(root, 'cli-calls');
+  const privateProbe = await startPrivateProbe(root);
+  // All wrapper fetches (preflights + in-process retrieval) succeed (after: 2).
+  // The subsequent child retrieval receives a 302 redirect to loopback.
+  // The genuinely retrieving child fixture refuses the private redirect,
+  // the private listener receives zero requests, and the wrapper fails safely.
+  const publicServer = await startPublicServer({
+    after: 2,
+    location: `http://127.0.0.1:${privateProbe.port}/secret`,
+  });
+  try {
+    const preflight = async () => ({ status: 200, headers: {}, body: 'public' });
+    const result = await runResearch(
+      ['web', 'read', `http://docs.example.com:${publicServer.port}/doc`],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'retrieve-target', marker],
+        resolveHost: defaultTestResolver,
+        fetchUrl: preflight,
+        connectTo: '127.0.0.1',
+      }
+    );
+
+    assert.notEqual(result.code, 0, 'Must be refused');
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.doesNotMatch(result.stdout + result.stderr, /private content/);
+  } finally {
+    publicServer.server.close();
+    privateProbe.proc.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('url_transcript_preserves_subtitle_result', async () => {
+  const result = await runResearch(
+    ['youtube', 'transcript', 'https://www.youtube.com/watch?v=jNQXAC9IVRw'],
+    {
+      binary: process.execPath,
+      prefixArgs: [fixture, 'transcript', '-'],
+      resolveHost: defaultTestResolver,
+      fetchUrl: async () => ({
+        status: 200,
+        headers: {},
+        body: '<html><body>fixture-watch-page-html</body></html>',
+      }),
+    }
+  );
+  assert.equal(result.code, 0);
+  const data = JSON.parse(result.stdout);
+  assert.equal(data.ok, true);
+  assert.match(data.items[0].text, /fixture-caption-line-one/);
+  assert.doesNotMatch(data.items[0].text, /fixture-watch-page-html/);
+});
+
+test('read_preserves_failed_payload_with_zero_exit', async () => {
+  const result = await runResearch(
+    ['web', 'read', 'https://docs.example.com/reference'],
+    {
+      binary: process.execPath,
+      prefixArgs: [fixture, 'failure-zero', '-'],
+      resolveHost: defaultTestResolver,
+      fetchUrl: async () => ({ status: 200, headers: {}, body: 'public' }),
+    }
+  );
+  assert.notEqual(result.code, 0, 'Must exit nonzero on upstream failure');
+  assert.equal(result.stdout, '', 'stdout must be empty on failure');
+  assert.match(result.stderr, /Research refused: public access failed \(TIMEOUT\)/);
+  assert.doesNotMatch(result.stderr, /test-not-a-key/);
+});
+
+test('read_fixture_execution_requires_no_network', async () => {
+  let socketCreated = false;
+  const { Socket } = await import('node:net');
+  const origConnect = Socket.prototype.connect;
+  Socket.prototype.connect = function (...args) {
+    socketCreated = true;
+    return origConnect.apply(this, args);
+  };
+  try {
+    const result = await runResearch(
+      ['web', 'read', 'https://docs.example.com/reference'],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'read-html', '-'],
+        resolveHost: defaultTestResolver,
+        fetchUrl: async () => ({ status: 200, headers: {}, body: 'offline fixture text' }),
+      }
+    );
+    assert.equal(result.code, 0);
+    assert.equal(socketCreated, false, 'zero external socket connections attempted');
+    const data = JSON.parse(result.stdout);
+    assert.equal(data.ok, true);
+    assert.equal(data.items[0].text, 'offline fixture text');
+  } finally {
+    Socket.prototype.connect = origConnect;
+  }
+});
+
 test('preflight_ignores_authenticated_environment_proxy', async () => {
   const { createServer } = await import('node:http');
   let proxyRequests = 0;

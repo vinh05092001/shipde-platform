@@ -923,8 +923,17 @@ export async function runResearch(
     // redirects, per-hop re-validation). The CLI never re-fetches that URL.
     let fetched;
     if (request.action !== 'search' && request.urls && request.urls.length > 0) {
+      const injectedRequest =
+        fetchText ||
+        (!connectTo &&
+          ((typeof retrieve === 'function' ? retrieve : retrieve?.retrieve) ||
+            (fetchUrl && fetchUrl !== defaultFetchUrl ? fetchUrl : undefined)));
       try {
-        fetched = await defaultRetrieve(request.urls[0], { resolveHost, connectTo, request: fetchText });
+        fetched = await defaultRetrieve(request.urls[0], {
+          resolveHost,
+          connectTo,
+          request: injectedRequest,
+        });
       } catch (err) {
         return fail(redact(err.message || 'Research refused: unable to retrieve.', envValues));
       }
@@ -971,7 +980,12 @@ export async function runResearch(
           {
             title: typeof processed.title === 'string' ? processed.title : '',
             url: request.urls[0],
-            text: fetched.body ?? '',
+            text:
+              typeof fetched.body === 'string' && fetched.body.length > 0
+                ? fetched.body
+                : typeof processed.text === 'string'
+                  ? processed.text
+                  : '',
           },
         ],
       };
