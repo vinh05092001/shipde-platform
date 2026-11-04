@@ -103,11 +103,23 @@ export function DataTableToolbar({
     return debouncedSearchRef.current;
   };
 
+  const prevEpochRef = React.useRef(resetEpoch);
+  const prevSearchRef = React.useRef(searchValue);
+
   // Reset to URL value whenever the committed URL value changes (one useEffect on that value)
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Reset search draft when URL search param or reset epoch changes (BR-UI-01)
-    setDraftSearch(searchValue || '');
-    debouncedSearchRef.current?.cancel();
+    if (resetEpoch !== prevEpochRef.current) {
+      prevEpochRef.current = resetEpoch;
+      prevSearchRef.current = searchValue;
+      setDraftSearch('');
+      debouncedSearchRef.current?.cancel();
+      return;
+    }
+    if (searchValue !== prevSearchRef.current) {
+      prevSearchRef.current = searchValue;
+      setDraftSearch(searchValue || '');
+      debouncedSearchRef.current?.cancel();
+    }
   }, [searchValue, resetEpoch]);
 
   // Drop scheduled debounce when the toolbar unmounts

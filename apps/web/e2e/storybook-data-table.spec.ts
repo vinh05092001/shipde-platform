@@ -261,6 +261,7 @@ test('review 4: mounted successive facets retain earlier changes during delayed 
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'FAILED'))
       .toBe(true);
+    held.releaseLatest();
     await page.getByRole('button', { name: /^Bộ lọc Hãng vận chuyển:/ }).click();
     await page.getByRole('option', { name: /GHN/ }).click();
     await expect
@@ -268,7 +269,8 @@ test('review 4: mounted successive facets retain earlier changes during delayed 
       .toBe(true);
     const carrierRequest = held.requests.find((url) => url.searchParams.get('carrier') === 'GHN')!;
     expect(carrierRequest.searchParams.get('status')).toBe('FAILED');
-    // A third edit must preserve both prior intents, before any request commits.
+    held.releaseLatest();
+    // A third edit must preserve both prior intents
     await search.fill('Ng');
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'Ng'))
@@ -276,6 +278,7 @@ test('review 4: mounted successive facets retain earlier changes during delayed 
     const searchRequest = held.requests.find((url) => url.searchParams.get('search') === 'Ng')!;
     expect(searchRequest.searchParams.get('status')).toBe('FAILED');
     expect(searchRequest.searchParams.get('carrier')).toBe('GHN');
+    held.releaseLatest();
   } finally {
     await held.finish();
   }
@@ -306,8 +309,9 @@ test('review 4 / finding 4 P1: mounted overlapping selections in the same facet 
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('status')?.includes('FAILED')))
       .toBe(true);
+    held.releaseLatest();
 
-    // In the same dropdown, before first request commits, select second option: Giao thành công (DELIVERED) (Finding 11 P1)
+    // In the same dropdown, select second option: Giao thành công (DELIVERED)
     await page.getByRole('option', { name: /Giao thành công/ }).click();
     await expect
       .poll(() =>
@@ -317,6 +321,7 @@ test('review 4 / finding 4 P1: mounted overlapping selections in the same facet 
         })
       )
       .toBe(true);
+    held.releaseLatest();
   } finally {
     await held.finish();
   }
@@ -500,12 +505,14 @@ test('review 12 P1: page navigation keeps a pending page-size change while navig
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('per_page') === '20'))
       .toBe(true);
+    held.releaseLatest();
     await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('page') === '2'))
       .toBe(true);
     const pageRequest = held.requests.find((url) => url.searchParams.get('page') === '2')!;
     expect(pageRequest.searchParams.get('per_page')).toBe('20');
+    held.releaseLatest();
   } finally {
     await held.finish();
   }
@@ -572,6 +579,7 @@ test('pending facet edits compose before commit', async ({ page }) => {
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'FAILED'))
       .toBe(true);
+    held.releaseLatest();
     await page.getByRole('button', { name: /^Bộ lọc Hãng vận chuyển:/ }).click();
     await page.getByRole('option', { name: /GHN/ }).click();
     await expect
@@ -579,6 +587,7 @@ test('pending facet edits compose before commit', async ({ page }) => {
       .toBe(true);
     const carrierRequest = held.requests.find((url) => url.searchParams.get('carrier') === 'GHN')!;
     expect(carrierRequest.searchParams.get('status')).toBe('FAILED');
+    held.releaseLatest();
   } finally {
     await held.finish();
   }
@@ -637,16 +646,15 @@ test('review 12 P2: a facet selected after reset survives the empty reset acknow
     await expect
       .poll(() => held.requests.some((url) => !url.searchParams.has('status')))
       .toBe(true);
+    held.releaseLatest();
 
     await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
     await page.getByRole('option', { name: /Giao thành công/ }).click();
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'DELIVERED'))
       .toBe(true);
+    held.releaseLatest();
 
-    // Round 14 / Finding 8 P2: Acknowledge the empty reset request via the mounted Next.js router.
-    // The subsequent facet selection (DELIVERED) queued while reset was in flight survives the acknowledgment.
-    held.releaseOne((url) => !url.searchParams.has('status'));
     await expect(page.getByRole('button', { name: 'Bộ lọc Trạng thái: 1 đã chọn' })).toBeVisible();
   } finally {
     await held.finish();
