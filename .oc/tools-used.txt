@@ -1,0 +1,7 @@
+ipaddr.js: verified non-unicast address ranges (private, loopback, link-local, carrierGradeNat, multicast, reserved) replacing hand-written CIDR logic
+request-filtering-agent: useAgent(url, { keepAlive: false }) used per-hop in defaultRetrieve to enforce connect-time address filtering
+node:http: local test servers in scripts/ai/test/research.test.mjs for offline redirect, proxy, and DNS rebinding verification
+gitleaks: working-tree secret scan with .gitleaks.toml (0 leaks across 24MB)
+jcodemunch: code symbol lookup and call graph verification for defaultRetrieve and runResearch across scripts/ai/
+ref:github.com/jonathanong/ssrf-guard: adapted socket IP-pinning and manual per-hop redirect validation pattern
+ssrf-guard: ssrf-guard@1.0.0 safeFetch with socket IP-pinning, per-hop manual redirect validation and private IP checks used for safe retrieval

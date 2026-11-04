@@ -1,0 +1,49 @@
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: 4126ff1c6020a328fa5b4edd61aa8d98fb388934
+
+TASK-AI-160 should provide pinned, anonymous, public read-only research through seven allowed Agent-Reach actions.
+AC-AI-160-01–05 cover correct retrieval, safe refusals, version verification, redacted bounded output and isolated execution; AC-AI-160-06–07 cover documented guidance and truthful handoff evidence.
+
+Phase 1 checklist:
+
+- **(a) Tenant scope:** N/A — no product data reads or writes.
+- **(b) Authorization/RBAC, empty scope denies:** Product endpoints N/A. Public-only access remains violated by P1 finding 1 at `scripts/ai/research.mjs:927`.
+- **(c) Negative tests:** Cross-tenant and product-forbidden tests N/A. CLI refusal tests exist. The child-redirect fixture at `scripts/ai/test/fixtures/agent-reach.mjs:19` performs no retrieval, leaving finding 1 untested. Offline execution is broken by P1 finding 4 at `scripts/ai/research.mjs:917`.
+- **(d) Work Item/specification behavior:** P1 findings 1–4 violate AC-AI-160-01/02/05 and the required offline evidence.
+- **(e) Integer VND:** N/A — no money calculations.
+- **(f) External-effect idempotency/timeouts/reconciliation:** Mutations and reconciliation N/A. Child execution has a timeout; actual child destination enforcement remains incomplete in finding 1.
+- **(g) Audit and PII/secret masking:** Audit N/A. Previous serialized-session masking finding is FIXED at `scripts/ai/research.mjs:788`.
+- **(h) UI states:** N/A — no UI changes.
+- **(i) Prior-review findings:**
+  - **Open finding 1 — NOT FIXED:** `scripts/ai/research.mjs:927` still invokes the original retrieval command after wrapper fetching.
+  - **Open finding 2 — FIXED:** `scripts/ai/research.mjs:788` now matches serialized `session_id` assignments; the supplied regression exercises returned text without an inherited session value.
+  - **Earlier proxy finding — FIXED:** dedicated request agents at `scripts/ai/research.mjs:411`.
+  - **Earlier apiKey finding — FIXED:** credential matcher at `scripts/ai/research.mjs:26`.
+  - **Earlier inherited-session finding — FIXED:** sensitive environment matcher at `scripts/ai/research.mjs:30`, collected at `:835`.
+  - **Earlier bare OpenAI finding — FIXED:** masking at `scripts/ai/research.mjs:793`.
+  - **Earlier serialized client_secret finding — FIXED:** assignment masking at `scripts/ai/research.mjs:788`.
+  - **Previously closed code findings remain FIXED:** pinned connection lookup (`:421`), bare PAT masking (`:791`), IPv6 URL matching (`:721`), tolerant decoding (`:701`), diagnostic masking (`:853`) and literal-address DNS bypass (`:364`).
+
+Phase 2 open sweep: **NEW P0: none. NEW P1: findings 2–4.**
+
+1. **WHERE:** scripts/ai/research.mjs:927 (runResearch); P1; previous finding 1 NOT FIXED  
+   **WRONG:** Both preflights and the additional in-process fetch return public HTTP 200; the subsequently invoked read CLI follows a late redirect to loopback and contacts the private destination. Replacing its returned text happens after that access.  
+   **GOAL:** R02 and AC-AI-160-02/05 require public destination enforcement before every actual retrieval connection, including child redirects. Discarding retrieved content does not prevent private access.  
+   **VERIFY:** `cli_late_redirect_after_all_wrapper_fetches_never_contacts_private_destination` — use a genuinely retrieving executable fixture and separate-process listeners; return 200 for every wrapper fetch, then redirect the child retrieval to loopback; assert zero private requests and no private content emitted.
+
+2. **WHERE:** scripts/ai/research.mjs:950 (runResearch); P1 NEW  
+   **WRONG:** `youtube transcript https://www.youtube.com/watch?v=jNQXAC9IVRw` retrieves HTTP 200 webpage HTML, and the CLI returns public subtitle text; the wrapper replaces those subtitles with the webpage HTML and reports success.  
+   **GOAL:** R01 and AC-AI-160-01 require transcript to map to subtitle retrieval and return caption evidence, preserving the selected action’s result.  
+   **VERIFY:** `url_transcript_preserves_subtitle_result` — serve a public watch-page HTML response and have the executable fixture return distinctive captions; assert emitted research contains the captions and excludes the webpage HTML.
+
+3. **WHERE:** scripts/ai/research.mjs:945 (runResearch); P1 NEW  
+   **WRONG:** A read fetch returns HTTP 200, while the CLI exits zero with `{"ok":false,"error":{"code":"TIMEOUT"}}`; assigning `ok: true` converts that failure into successful research output.  
+   **GOAL:** R05 and AC-AI-160-05 require upstream failures and timeouts to remain failures, independently of the child’s exit status.  
+   **VERIFY:** `read_preserves_failed_payload_with_zero_exit` — return HTTP 200 from retrieval and an executable-fixture payload with `ok:false`, `TIMEOUT` and exit zero; assert nonzero wrapper exit, empty stdout and a sanitized failure.
+
+4. **WHERE:** scripts/ai/research.mjs:917 (runResearch); P1 NEW  
+   **WRONG:** The allowed-web-read test injects an executable fixture, a public resolver and an HTTP-200 fixture transport, but this call bypasses that transport and connects to `93.184.216.34`. With networking disabled, the test returns a refusal instead of its required successful fixture result.  
+   **GOAL:** T02 and AC-AI-160-01–05 require executable-fixture verification without network access; injected retrieval evidence must cover the actual retrieval path.  
+   **VERIFY:** `read_fixture_execution_requires_no_network` — disable external socket connections and execute an allowed read using the fixture transport; assert zero external connection attempts, successful completion and the expected fixture content.
+
+Follow-up (non-blocking): Reconcile the Work Item’s conflicting 37/66-test claims; the supplied CI section contains no check results to verify current remote gates.

@@ -1,0 +1,43 @@
+ROLE: You are the AUTHOR for this Work Item under AGENTS.md. You do not review or declare PASS; Codex reviews independently. Never merge.
+SCOPE (strict):
+- If this file contains a section headed "root-cause" (or "root cause"), THAT SECTION OVERRIDES everything else: implement the redesign it describes, even if it restructures, shrinks or rewrites the named files; the findings in .oc/review.txt are symptoms the redesign must make disappear, do NOT patch them one by one. Otherwise: fix ONLY the P0/P1 findings listed in .oc/review.txt at the file:line each names; no unrelated refactor.
+- Touch only the files the findings name, plus the test file that proves each fix. Do not read the whole repo: read those files and their direct imports.
+- Each fix: first a test that fails without it, then the minimal fix, then run ONLY that test file (plus pnpm lint/typecheck if app code changed).
+- If a finding needs a product decision the specs do not make: write NEEDS_DECISION under Known limitations; do not invent.
+- If .oc/context-pack.md exists, use it as your context instead of exploring.
+- Before every commit run `pnpm security:secrets`; test fixtures must use obviously fake values (e.g. `test-not-a-key`), never key-shaped strings. Register row: delivery_order is assigned by the coordinator (see your row); never change it, and when merging main keep both rows.
+- TOKEN SAVING (keep meaning): if MCP tools jcodemunch/serena are available, look up functions/symbols/references with them instead of reading whole files (measured ~4-20x fewer tokens). Pipe long passing command output through `rtk` (e.g. `rtk pnpm lint`); for a FAILING test or evidence log use raw output, never compressed.
+---
+
+# TASK-AI-160 — root-cause fix for the network boundary (PR #508; branch feat/task-ai-160-agent-reach-v2)
+
+History-scan blocker is solved by the squash (#508); remove the "retained commit b4631c7" limitation line in docs/product-spec/work-items/TASK-AI-160.md:146 and record `pnpm security:secrets` result instead.
+
+1. WHERE: scripts/ai/research.mjs:851 runResearch (wrapper preflights the URL, then an external CLI re-fetches it).
+   WRONG: target returns 200 to the preflight, then redirects to a private address during the CLI's own retrieval; the CLI follows it and private text comes back under the public URL.
+   GOAL (R02, AC-AI-160-02/05): the boundary is enforced ON the retrieval itself. Do the retrieval in-process (defaultRetrieve): resolve DNS once, reject private/loopback/link-local/metadata IPs, connect to that pinned IP (custom `lookup`), `redirect: manual`, and re-validate every hop (max 5) before connecting. Use the CLI only to post-process text you already fetched, or drop it. A preflight-then-refetch design is not acceptable.
+   VERIFY: test `redirect to private address during retrieval is refused` (local http server: 302 → 127.0.0.1) and `DNS rebinding between check and connect is refused`.
+2. WHERE: scripts/ai/research.mjs:364 defaultRetrieve (`https.request` with default agent).
+   WRONG: on Node 24 with NODE_USE_ENV_PROXY=1 + HTTPS_PROXY set, the global agent sends traffic and operator proxy credentials through the proxy.
+   GOAL (AC-AI-160-05): pass an explicit fresh `new https.Agent({ keepAlive:false })` / `http.Agent` for every request and never use globalAgent; spawned children get an env with HTTP(S)_PROXY, NO_PROXY, NODE_USE_ENV_PROXY and credentials removed.
+   VERIFY: test `inherited proxy env is never used` (set env HTTPS_PROXY to a local listener, assert it receives zero connections).
+Run: node --test scripts/ai/test/research.test.mjs, pnpm format:check, pnpm lint, pnpm run security:secrets.
+
+## Required tools for this task (log each use in .oc/tools-used.txt, one line: tool + what for)
+- ipaddr.js (installed) for private/loopback/link-local/metadata range checks — do not hand-write CIDR logic.
+- node:http local test servers for redirect/rebinding tests (no network).
+- Gitleaks via pnpm run security:secrets before commit.
+- jcodemunch search for every call of defaultRetrieve/runResearch.
+
+## Library to use (operator-approved 04/11; replaces hand-written code — pin an exact version, commit lockfile)
+- request-filtering-agent (latest, by azu): `pnpm add -w request-filtering-agent`. Use `useAgent(url)` as the http(s) agent for EVERY hop of defaultRetrieve (it rejects private/loopback/link-local/metadata IPs at connect time, which also covers DNS rebinding). Follow redirects manually and pass a fresh agent per hop. This replaces the hand-written IP checks (ipaddr.js only if the library needs it).
+
+- REUSE FIRST (operator 04/11): before writing any parser, sanitizer/redactor, URL/state sync, network guard, retry/queue, date/money/format helper or UI widget, search for a maintained library or an attached repo (manifest, context7.js, npm/GitHub) and USE it. Hand-write only if none fits, and say why in .oc/tools-used.txt ("no-lib: <reason>"). New dependencies are allowed when they are well-maintained (recent release, real user base, OSI licence), pinned to an exact version with the lockfile committed; never for auth/tenant/money logic without the Work Item naming it.
+
+## root-cause (reference implementation, 04/11) — adapt, do not invent
+Reference: github.com/jonathanong/ssrf-guard — validateUrl returns the resolved IPs so the socket is pinned to the validated IP (closes DNS-rebinding TOCTOU), redirects re-validated per hop. Use it directly if its Node requirement (>=24) matches our CI node; otherwise use request-filtering-agent and copy ssrf-guard's IP-pinning + per-hop redirect pattern.
+Reference ALREADY CLONED read-only at C:/Users/gumac/AI/ref/ssrf-guard (do not clone), read the named parts, adapt to our files; respect licence and credit the source in a header comment; log reference + what was adapted in .oc/tools-used.txt.
+
+## root-cause (USE THE PACKAGE, 04/11 12:00) — supersedes the reference sections above
+`ssrf-guard@1.0.0` (MIT, by jonathanong, Node>=24 = our CI) is on npm. `pnpm add -w ssrf-guard@1.0.0`.
+Replace defaultRetrieve's own DNS/IP/redirect/agent code in scripts/ai/research.mjs with ssrf-guard's safe fetch (it validates the URL, pins the socket to the validated IP, re-validates every redirect hop). Read its API in C:/Users/gumac/AI/ref/ssrf-guard/src/node/safe-fetch.mts and README.md. Keep request-filtering-agent only if ssrf-guard does not cover a case; otherwise remove it. Proxy env must still be stripped for children. Existing tests stay; add one test that a 302 to 127.0.0.1 is refused through ssrf-guard.

@@ -1,0 +1,14 @@
+import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { runResearch } from '../scripts/ai/research.mjs';
+const fixture = fileURLToPath(new URL('../scripts/ai/test/fixtures/agent-reach.mjs', import.meta.url));
+let hits = 0;
+const srv = createServer((req, res) => { hits++; console.log('SERVER HIT', req.url); res.writeHead(302, {location:'http://127.0.0.1:9/secret'}); res.end(); });
+await new Promise(r => srv.listen(0, '127.0.0.1', r));
+const port = srv.address().port;
+const resolver = async () => ['93.184.216.34'];
+const out = await runResearch(['web','read',`http://docs.example.com:${port}/doc`], { binary: process.execPath, prefixArgs:[fixture,'retrieve-target','-'], resolveHost: resolver });
+console.log('code', out.code, 'hits', hits);
+console.log('stderr:', out.stderr);
+srv.close();
+process.exit(0);

@@ -1,0 +1,89 @@
+test('DNS rebinding between check and connect is refused', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-rebinding-'));
+  const marker = join(root, 'cli-calls');
+  const privateProbe = await startPrivateProbe(root);
+  // The host resolves public for the preflight, then private while the actual
+  // retrieval is being connected.
+  let lookups = 0;
+  const rebindingResolver = async () => (++lookups === 1 ? ['93.184.216.34'] : ['127.0.0.1']);
+  try {
+    const result = await runResearch(
+      ['web', 'read', `http://rebind.example.com:${privateProbe.port}/secret`],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'retrieve-target', marker],
+        resolveHost: rebindingResolver,
+      }
+    );
+
+    assert.notEqual(result.code, 0, 'Must be refused');
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.equal(existsSync(marker), false, 'CLI must not be launched for retrieval');
+    assert.doesNotMatch(result.stdout + result.stderr, /private content/);
+  } finally {
+    privateProbe.proc.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('redirect to private address during retrieval is refused', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-redirect-refusal-'));
+  const marker = join(root, 'cli-calls');
+  const privateProbe = await startPrivateProbe(root);
+  // The public server answers 200 to both wrapper preflights and only the
+  // actual retrieval connection meets the 302 to loopback.
+  const publicServer = await startPublicServer({
+    after: 3,
+    location: `http://127.0.0.1:${privateProbe.port}/secret`,
+  });
+  try {
+    const result = await runResearch(
+      ['web', 'read', `http://docs.example.com:${publicServer.port}/doc`],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'retrieve-target', marker],
+        resolveHost: async () => ['127.0.0.1'],
+      }
+    );
+
+    assert.notEqual(result.code, 0, 'Must be refused');
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.equal(existsSync(marker), false, 'CLI must not be launched for retrieval');
+    assert.doesNotMatch(result.stdout + result.stderr, /private content/);
+    assert.ok(publicServer.hits.length > 0, 'public destination was actually retrieved');
+  } finally {
+    publicServer.server.close();
+    privateProbe.proc.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cli_redirect_after_both_preflights_never_contacts_private_destination', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'shipde-research-cli-redirect-'));
+  const marker = join(root, 'cli-calls');
+  const privateProbe = await startPrivateProbe(root);
+  const publicServer = await startPublicServer({
+    after: 3,
+    location: `http://127.0.0.1:${privateProbe.port}/secret`,
+  });
+  try {
+    const result = await runResearch(
+      ['web', 'read', `http://docs.example.com:${publicServer.port}/doc`],
+      {
+        binary: process.execPath,
+        prefixArgs: [fixture, 'retrieve-target', marker],
+        resolveHost: async () => ['127.0.0.1'],
+      }
+    );
+
+    assert.notEqual(result.code, 0, 'Must be refused');
+    assert.equal(existsSync(privateProbe.hits), false, 'Private listener must receive zero requests');
+    assert.equal(existsSync(marker), false, 'CLI must not perform retrieval');
+    assert.doesNotMatch(result.stdout + result.stderr, /private content/);
+  } finally {
+    publicServer.server.close();
+    privateProbe.proc.kill();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

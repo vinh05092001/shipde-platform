@@ -1,0 +1,171 @@
+✖ allows web read with an anonymous backend (10084.6251ms)
+✔ allows web search with an anonymous backend (128.5496ms)
+✔ allows github search with an anonymous backend (120.4622ms)
+✔ allows github read with an anonymous backend (122.2623ms)
+✖ allows reddit read with an anonymous backend (10068.4148ms)
+✔ allows reddit search with an anonymous backend (118.8784ms)
+✔ allows youtube transcript with an anonymous backend (116.8288ms)
+✔ forwards only action-specific safe options and joins search words (241.6413ms)
+✔ refuses management, mutation, login channels, unsafe options and malformed inputs before launch (39.8025ms)
+✔ missing executable returns only a pinned GitHub install hint (3.538ms)
+✔ wrong CLI version is refused with the pinned install hint (59.8249ms)
+✔ upstream failure is a failure without stderr or login fallback (123.5746ms)
+✔ upstream login is a failure without stderr or login fallback (127.199ms)
+✔ upstream plain is a failure without stderr or login fallback (117.6055ms)
+✔ default output budget includes the truncation marker (120.4103ms)
+✔ custom budget 1 bounds output, including Unicode (120.3916ms)
+✔ custom budget 12 bounds output, including Unicode (127.0225ms)
+✔ custom budget 13 bounds output, including Unicode (114.5752ms)
+✔ custom budget 100 bounds output, including Unicode (134.3726ms)
+✔ custom budget 2000 bounds output, including Unicode (118.8534ms)
+✔ failure diagnostics also fit the selected output budget (425.3801ms)
+✔ redacts credentials and arbitrary environment values before truncation (346.679ms)
+✔ child cannot inherit operator accounts, config, proxies or runtime injection variables (122.536ms)
+✔ real CLI entry point refuses an unsafe action without echoing arguments (82.5797ms)
+✔ unverifiable CLI version returns the pinned install hint without raw output (61.4266ms)
+✔ quoted credentials, Basic auth, URL userinfo, access_key, passwd and environment-valued keys are redacted (130.1976ms)
+✔ untrusted error codes cannot echo environment values (117.0507ms)
+✔ validation refusals honor a valid small budget before launching the CLI (2.4181ms)
+✔ search queries can contain a documentation URL and other words (119.2275ms)
+✔ schemeless credential URLs are refused before launch (2.6761ms)
+✔ short environment values are redacted when emitted as values (115.1906ms)
+✔ boolean and common non-secret environment values do not corrupt payload booleans (116.6622ms)
+✔ private address and unsafe redirect targets are refused before launch (26.753ms)
+✔ destination safety enforces DNS resolution to public IP and refuses private address destinations before launch (10.2569ms)
+✔ destination safety follows redirect chains and refuses private or credential-bearing redirect destinations before launch (9.1226ms)
+✔ punctuation-embedded credential URLs in search queries are recognized and refused before launch (12.9796ms)
+✔ standard credential parameters (key, sig, signature) in read and search URLs are refused before launch (14.9212ms)
+✔ standard credential parameters (key, sig, signature) in returned URLs, headers and JSON are masked (241.2063ms)
+✔ schemeless credential URLs and sensitive keys (passwd, access_key) in search and read are refused before launch (19.5815ms)
+✔ duplicate budget validation honors the selected small budget (3.3558ms)
+✔ retrieval transport refuses a destination that rebinds to a private address after preflight (3.091ms)
+✔ retrieval transport cannot answer public for one method and redirect privately for the next (1.3425ms)
+✔ retrieval transport refuses redirect loops and credentialed redirect destinations (2.6264ms)
+✔ credential-bearing IPv6 search URLs keep their delimiters and are refused before launch (125.5762ms)
+✔ credential-bearing bare userinfo is refused in read and search, including single-label hosts (6.1025ms)
+✔ encoded credential parameter names in returned URLs are masked before truncation (476.2844ms)
+✔ masking preserves ordinary public content (117.3782ms)
+✖ pr_history_secret_scan: working tree contains zero leaks and test fixtures use test-not-a-key (1559.4654ms)
+✔ search queries distinguish library identifiers from URL candidates (734.1531ms)
+✔ normal question search queries with question marks are not rejected as unsafe URLs (120.6171ms)
+✔ PR contract validation: .oc/pr-body.md contains no placeholders and satisfies contract gate (0.742ms)
+✔ DNS rebinding between check and connect is refused (80.9292ms)
+✔ redirect to private address during retrieval is refused (80.5466ms)
+✔ cli_redirect_after_both_preflights_never_contacts_private_destination (144.6026ms)
+✔ preflight_ignores_authenticated_environment_proxy (10061.2774ms)
+✔ bare_credential_patterns_are_redacted (124.5013ms)
+✔ returned_ipv6_encoded_credentials_are_masked (258.2414ms)
+✔ malformed_parameter_does_not_disable_redaction (127.3034ms)
+✔ dns_refusal_masks_inherited_values (1.9794ms)
+✖ public_ipv6_literal_skips_dns (65.3538ms)
+✔ camel_case_api_key_target_is_refused_before_launch (2.0747ms)
+✖ inherited_session_value_is_redacted (10061.0886ms)
+✔ bare_openai_credential_is_redacted_before_truncation (254.3089ms)
+✔ serialized_client_secret_is_redacted (118.7099ms)
+✔ serialized_session_id_is_redacted (355.4462ms)
+✔ default_transport_ignores_startup_authenticated_proxy (10174.2766ms)
+✔ inherited proxy env is never used (10164.3933ms)
+ℹ tests 67
+ℹ suites 0
+ℹ pass 62
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 69531.0182
+
+✖ failing tests:
+
+test at scripts\ai\test\research.test.mjs:96:3
+✖ allows web read with an anonymous backend (10084.6251ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///C:/Users/gumac/AI/shipde-platform/.worktrees/p-task-ai-160/scripts/ai/test/research.test.mjs:107:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at scripts\ai\test\research.test.mjs:96:3
+✖ allows reddit read with an anonymous backend (10068.4148ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///C:/Users/gumac/AI/shipde-platform/.worktrees/p-task-ai-160/scripts/ai/test/research.test.mjs:107:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at scripts\ai\test\research.test.mjs:822:1
+✖ pr_history_secret_scan: working tree contains zero leaks and test fixtures use test-not-a-key (1559.4654ms)
+  AssertionError [ERR_ASSERTION]: gitleaks dir on working tree must find zero leaks
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///C:/Users/gumac/AI/shipde-platform/.worktrees/p-task-ai-160/scripts/ai/test/research.test.mjs:840:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1201:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:831:18)
+      at Test.postRun (node:internal/test_runner/test:1330:19)
+      at Test.run (node:internal/test_runner/test:1258:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at scripts\ai\test\research.test.mjs:1137:1
+✖ public_ipv6_literal_skips_dns (65.3538ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///C:/Users/gumac/AI/shipde-platform/.worktrees/p-task-ai-160/scripts/ai/test/research.test.mjs:1151:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at scripts\ai\test\research.test.mjs:1180:1
+✖ inherited_session_value_is_redacted (10061.0886ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  1 !== 0
+  
+      at TestContext.<anonymous> (file:///C:/Users/gumac/AI/shipde-platform/.worktrees/p-task-ai-160/scripts/ai/test/research.test.mjs:1188:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1208:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:831:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
