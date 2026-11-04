@@ -3337,8 +3337,8 @@ packages:
     resolution: {integrity: sha512-HJp37y62j3j8qzAOODWuUJl4ysLwsDvCTBV6odr3jIRHR/a5e+tI14VQGIBcpK9ysqC3pGWyW5Rp9Jv1YDubyw==}
     hasBin: true
 
-  legacy-javascript@0.0.4:
-    resolution: {integrity: sha512-UTmeKBVxnfJcpmpOvzzNnLsQT99BXHpPlc/ZKddIRmWmrR0fw6335I3lq4+sJoP60UTbBNaYsGYVPc65YB1x3A==}
+  legacy-javascript@0.0.3:
+    resolution: {integrity: sha512-1r6MT4dVaJyXt4G07Cm2cQ0AUaLJdefiEp4SmIAylA++gnEQ82YvmzE58RkM5EP0fk5hROLCslUPGnwIYdZQVA==}
 
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
@@ -5645,7 +5645,7 @@ snapshots:
 
   '@paulirish/trace_engine@0.0.53':
     dependencies:
-      legacy-javascript: 0.0.4
+      legacy-javascript: 0.0.3
       third-party-web: 0.30.0
 
   '@playwright/test@1.64.1':
@@ -7958,7 +7958,7 @@ snapshots:
       lefthook-windows-arm64: 1.11.3
       lefthook-windows-x64: 1.11.3
 
-  legacy-javascript@0.0.4: {}
+  legacy-javascript@0.0.3: {}
 
   levn@0.4.1:
     dependencies:

@@ -19,6 +19,7 @@ const {
   limitCause,
   computeGoals,
   normalizeAdmit,
+  normalizeRecord,
 } = require('./run-ledger-helpers');
 
 class RunLedger {
@@ -95,44 +96,7 @@ class RunLedger {
   }
 
   record(arg1, arg2, arg3) {
-    let stage, opts;
-    if (typeof arg1 === 'object' && arg1 !== null) {
-      opts = arg1;
-      stage = opts.stage;
-    } else if (typeof arg2 === 'object' && arg2 !== null && !arg3) {
-      stage = arg1;
-      opts = arg2;
-    } else if (typeof arg1 === 'string' && typeof arg2 === 'string') {
-      stage = arg2;
-      opts = Object.assign({ itemId: arg1 }, typeof arg3 === 'object' ? arg3 : {});
-    } else {
-      stage = arg1;
-      opts = arg2 || {};
-    }
-    const st = String(stage || '').toLowerCase();
-    if (!VALID_STAGES.has(st)) throw new Error('RUN_LEDGER_REFUSED: invalid stage ' + stage);
-    if (opts.retryLayer && !VALID_RETRY_LAYERS.has(opts.retryLayer)) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid retryLayer ' + opts.retryLayer);
-    }
-    if (!opts.attemptId && !opts.jobId) {
-      throw new Error('RUN_LEDGER_REFUSED: missing jobId or attemptId');
-    }
-    if (
-      opts.ms !== undefined &&
-      (typeof opts.ms !== 'number' || !Number.isFinite(opts.ms) || opts.ms < 0)
-    ) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid ms');
-    }
-    if (
-      opts.tokens !== undefined &&
-      (typeof opts.tokens !== 'number' || !Number.isFinite(opts.tokens) || opts.tokens < 0)
-    ) {
-      throw new Error('RUN_LEDGER_REFUSED: invalid tokens');
-    }
-    const attemptKey = String(opts.attemptId || opts.jobId);
-    assertValidId(opts.itemId, 'itemId');
-    assertValidId(opts.goalId, 'goalId');
-    assertValidId(opts.fp || opts.fingerprint, 'fingerprint');
+    const { stage: st, opts, attemptKey } = normalizeRecord(arg1, arg2, arg3);
 
     return this.progressLedger.locked(() => {
       this.progressLedger.limits = this.limits;

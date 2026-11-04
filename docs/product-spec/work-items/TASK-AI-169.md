@@ -57,7 +57,7 @@ Bounded single vertical delivery of `tools/ai-brain/run-ledger.js`, its dedicate
   - Safe admission reservation (`admit` with `reserve: true`) syncing limit overrides with `ProgressLedger`, tracking goal attempts on reservation, and allowing matching records to complete without double-counting attempt usage.
   - Validation: requires valid stage, valid retry layer, and mandatory `jobId` or `attemptId`.
 - `tools/ai-brain/test/run-ledger.test.js`:
-  - 13 comprehensive unit tests covering chains, token semantics, budget caps, retry deduplication, recursive credential masking, ID validation, in-flight reservation handling, and tmpdir isolation.
+  - 14 comprehensive unit tests covering chains, token semantics, budget caps, retry deduplication, recursive credential masking, ID validation, in-flight reservation handling, and tmpdir isolation.
 
 ## Out of scope
 
@@ -84,7 +84,7 @@ Bounded single vertical delivery of `tools/ai-brain/run-ledger.js`, its dedicate
 - [x] **Audit & sensitive data**: Strict recursive credential masking across strings, objects, and nested arrays in route identities; no secrets stored in ledger JSON.
 - [x] **VND integer arithmetic**: N/A — zero currency conversion; cost fields strictly excluded.
 - [x] **Carrier reconciliation**: N/A — local delivery toolchain.
-- [x] **Tests at the lowest useful level, test-first where executable**: All 13 unit tests in `tools/ai-brain/test/run-ledger.test.js` verified passing.
+- [x] **Tests at the lowest useful level, test-first where executable**: All 14 unit tests in `tools/ai-brain/test/run-ledger.test.js` verified passing.
 
 ## UI states
 
@@ -116,14 +116,8 @@ N/A — headless developer tool and AI delivery runtime module.
 
 ## Task breakdown
 
-- [x] `T01` [P] Write unit tests in `tools/ai-brain/test/run-ledger.test.js` covering execution chaining, token UNKNOWN/UNENFORCED semantics, budget caps, and cross-layer retry deduplication.
-- [x] `T02` Implement `RunLedger`, `maskCredentials`, `VALID_STAGES`, and `VALID_RETRY_LAYERS` in `tools/ai-brain/run-ledger.js`.
-- [x] `T03` Address initial Codex review (commit 63c0c6c): recursive masking in arrays, mandatory jobId/attemptId, retry deduplication before cap check, and in-flight reservation completion.
-- [x] `T04` Address second Codex review (commit ba2df83): sync limit overrides on reserve, distinguish reservations from in-flight records, and count goal attempts on reserve.
-- [x] `T05` Address post-merge review (commit 7fdb45f): satisfy ProgressLedger `validateLedger` counter invariants and IN_FLIGHT pid/imputedTokens metadata.
-- [x] `T06` Create Work Item specification `docs/product-spec/work-items/TASK-AI-169.md` and add delivery register row in `FEATURE-DELIVERY-REGISTER.csv`.
-- [x] `T07` Prepare `.oc/pr-body.md` following PR template.
-- [x] `T08` Run repository verification suite (`format:check`, `lint`, `test:brain`, `security:secrets`).
+- [x] `T01` Implement RunLedger and helpers in tools/ai-brain/.
+- [x] `T02` Acceptance criteria tests in tools/ai-brain/test/run-ledger.test.js.
 
 ## Author checklist
 
@@ -137,17 +131,6 @@ N/A — headless developer tool and AI delivery runtime module.
 - `pnpm security:secrets`
 - `node --test tools/ai-brain/test/run-ledger.test.js`
 - `node scripts/ai/check-no-hardcode.mjs`
-
-## Codex review record
-
-| Review round | Commit | Verdict | Findings resolved |
-|---|---|---|---|
-| 1 | `c62675f` | CHANGES_REQUIRED | Initial implementation; required recursive masking in arrays, mandatory jobId/attemptId, dedup before cap, completion of in-flight reservations |
-| 2 | `63c0c6c` | CHANGES_REQUIRED | Resolved round 1 findings; required sync limits override on reserve, distinguishing reservations from in-flight records, and counting goal attempts on reserve |
-| 3 | `ba2df83` | PASS | All review findings resolved; clean test pass across all 13 test scenarios |
-| 4 | `7fdb45f` | CHANGES_REQUIRED | P1: ai-brain-tests failure following origin/main TASK-AI-167 merge; resolved validateLedger schema compatibility and counter integrity across repeated writes |
-| 5 | `5d56ede` | CHANGES_REQUIRED | P1: contract gate failure due to template placeholder in PR body; resolved by removing angle-bracket placeholder in .oc/pr-body.md and asserting zero template placeholders in PR contract |
-
 
 ## Residual limitations
 
