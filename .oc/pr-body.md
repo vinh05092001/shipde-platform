@@ -39,31 +39,31 @@
 
 ## Acceptance evidence
 
-| AC/Test ID   | Result | Automated evidence                                                   | Visual/manual evidence |
-| ------------ | ------ | -------------------------------------------------------------------- | ---------------------- |
-| AC-AI-171-01 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:26 (Criterion 1)  | N/A                    |
-| AC-AI-171-02 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:59 (Criterion 2)  | N/A                    |
-| AC-AI-171-03 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:93 (Criterion 3)  | N/A                    |
-| AC-AI-171-04 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:104 (Criterion 4) | N/A                    |
-| AC-AI-171-05 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:134 (Criterion 5) | N/A                    |
-| AC-AI-171-06 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:160 (Criterion 6) | N/A                    |
-| AC-AI-171-07 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:174 (Criterion 7) | N/A                    |
-| AC-AI-171-08 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:202 (Criterion 8) | N/A                    |
-| AC-AI-171-09 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:253 (Criterion 9) | N/A                    |
-| AC-AI-171-10 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:286 (Criterion 10)| N/A                    |
+| AC/Test ID   | Result | Automated evidence                                                     | Visual/manual evidence |
+| ------------ | ------ | ---------------------------------------------------------------------- | ---------------------- |
+| AC-AI-171-01 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:26 (Criterion 1)   | N/A                    |
+| AC-AI-171-02 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:59 (Criterion 2)   | N/A                    |
+| AC-AI-171-03 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:93 (Criterion 3)   | N/A                    |
+| AC-AI-171-04 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:104 (Criterion 4)  | N/A                    |
+| AC-AI-171-05 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:134 (Criterion 5)  | N/A                    |
+| AC-AI-171-06 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:160 (Criterion 6)  | N/A                    |
+| AC-AI-171-07 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:174 (Criterion 7)  | N/A                    |
+| AC-AI-171-08 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:202 (Criterion 8)  | N/A                    |
+| AC-AI-171-09 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:253 (Criterion 9)  | N/A                    |
+| AC-AI-171-10 | PASS   | tools/ai-brain/test/unified-routing-offline.test.js:286 (Criterion 10) | N/A                    |
 
 ## Verification
 
-| Command | Result | Evidence/notes |
-| --- | --- | --- |
-| node scripts/ai/check-no-hardcode.mjs | PASS | 0 raw instances, 0 new violations |
-| node --test tools/ai-brain/test/unified-routing-offline.test.js | PASS | 10 tests, 0 fail, duration_ms 124 (1 test per acceptance criterion) |
-| node --test tools/ai-brain/test/task-ai-142-account-quota-scope.test.js | PASS | 10 tests pass with new family fields |
-| pnpm exec prettier --check tools/ai-brain/test/unified-routing-offline.test.js tools/ai-brain/route-identity*.js tools/ai-brain/scoped-health*.js tools/ai-brain/candidate-adapters*.js tools/ai-brain/unified-selector*.js | PASS | All 14 split modules formatted and strictly <= 300 lines each |
-| pnpm format:check | BLOCKED_BY_SANDBOX | Fails only on untracked coordinator `.oc/*.md` files; all changed files pass Prettier |
-| pnpm lint | PASS | 12 turbo tasks successful, 0 errors |
-| pnpm typecheck | PASS | 12 turbo tasks successful |
-| git commit | PASS | `[TASK-AI-171] Split into small files: 3303 lines` (route-identity construction moved to `route-identity-create.js`; AC suite is 10 tests) |
+| Command                                                                                                                                                                                                                     | Result             | Evidence/notes                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| node scripts/ai/check-no-hardcode.mjs                                                                                                                                                                                       | PASS               | 0 raw instances, 0 new violations                                                                                                                                                                                                                           |
+| node --test tools/ai-brain/test/unified-routing-offline.test.js                                                                                                                                                             | PASS               | 10 tests, 0 fail, duration_ms 124 (1 test per acceptance criterion)                                                                                                                                                                                         |
+| node --test tools/ai-brain/test/task-ai-142-account-quota-scope.test.js                                                                                                                                                     | PASS               | 10 tests pass with new family fields                                                                                                                                                                                                                        |
+| pnpm exec prettier --check tools/ai-brain/test/unified-routing-offline.test.js tools/ai-brain/route-identity*.js tools/ai-brain/scoped-health*.js tools/ai-brain/candidate-adapters*.js tools/ai-brain/unified-selector*.js | PASS               | All 14 split modules formatted and strictly <= 300 lines each                                                                                                                                                                                               |
+| pnpm format:check                                                                                                                                                                                                           | BLOCKED_BY_SANDBOX | Fails only on untracked coordinator `.oc/*.md` files; all changed files pass Prettier                                                                                                                                                                       |
+| pnpm lint                                                                                                                                                                                                                   | PASS               | 12 turbo tasks successful, 0 errors                                                                                                                                                                                                                         |
+| pnpm typecheck                                                                                                                                                                                                              | PASS               | 12 turbo tasks successful                                                                                                                                                                                                                                   |
+| git commit                                                                                                                                                                                                                  | BLOCKED_BY_SANDBOX | `fatal: not a git repository: C:/Users/gumac/AI/shipde-platform/.git/worktrees/p-routing-core` (Windows sandbox permission denied to parent .git; changes ready in working tree for coordinator commit: `[TASK-AI-171] Split into small files: 2680 lines`) |
 
 - [x] Clean install completed.
 - [x] Lint/typecheck completed.
@@ -74,13 +74,13 @@
 
 ## Review round fixes — no-hardcode guard (TASK-AI-171)
 
-| Finding | Test | Command | Result |
-| --- | --- | --- | --- |
-| `candidate-adapters.js:106/513/532` literal `claude-gpt` | `TASK-AI-171: quota group to family mapping is loaded from the same data file` | `node --test tools/ai-brain/test/unified-routing-offline.test.js` | PASS |
-| `route-identity.js:28-36` alias literals (`grok-cli`, `ollama`, `mistral`, …) | `TASK-AI-171: prefix-to-provider aliases are loaded from the versioned data file` | `node --test tools/ai-brain/test/unified-routing-offline.test.js` | PASS |
-| `unified-selector.js:30-32` numeric quality weights | `TASK-AI-171: weight profiles are loaded from the same data file` | `node --test tools/ai-brain/test/unified-routing-offline.test.js` | PASS |
-| No-hardcode guard must report 0 new violations | guard itself | `node scripts/ai/check-no-hardcode.mjs --staged` | PASS |
-| CI `pnpm test:brain` regression in `task-ai-69` / `task-ai-142` caused by the branch's Argon/group fields | `R7: real agy quota output format…`; `TASK-AI-142 Finding 7…` | `node --test tools/ai-brain/test/task-ai-69.test.js tools/ai-brain/test/task-ai-142-account-quota-scope.test.js` | PASS |
+| Finding                                                                                                   | Test                                                                              | Command                                                                                                          | Result |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------ |
+| `candidate-adapters.js:106/513/532` literal `claude-gpt`                                                  | `TASK-AI-171: quota group to family mapping is loaded from the same data file`    | `node --test tools/ai-brain/test/unified-routing-offline.test.js`                                                | PASS   |
+| `route-identity.js:28-36` alias literals (`grok-cli`, `ollama`, `mistral`, …)                             | `TASK-AI-171: prefix-to-provider aliases are loaded from the versioned data file` | `node --test tools/ai-brain/test/unified-routing-offline.test.js`                                                | PASS   |
+| `unified-selector.js:30-32` numeric quality weights                                                       | `TASK-AI-171: weight profiles are loaded from the same data file`                 | `node --test tools/ai-brain/test/unified-routing-offline.test.js`                                                | PASS   |
+| No-hardcode guard must report 0 new violations                                                            | guard itself                                                                      | `node scripts/ai/check-no-hardcode.mjs --staged`                                                                 | PASS   |
+| CI `pnpm test:brain` regression in `task-ai-69` / `task-ai-142` caused by the branch's Argon/group fields | `R7: real agy quota output format…`; `TASK-AI-142 Finding 7…`                     | `node --test tools/ai-brain/test/task-ai-69.test.js tools/ai-brain/test/task-ai-142-account-quota-scope.test.js` | PASS   |
 
 Identity/family data now lives in `config/route-identity.json` (versioned JSON, same data-driven model-group idea as LiteLLM Router, credited in the file header). `route-identity.js` loads prefixes and quota families from it; `candidate-adapters.js` reads the `external → claude-gpt` family from the same data; `unified-selector.js` builds weight profiles from the same file. Behaviour is unchanged and covered by the three new regression tests.
 
@@ -104,12 +104,12 @@ Identity/family data now lives in `config/route-identity.json` (versioned JSON, 
 
 - **Size**: Slice A = this PR; Slice B = tools/ai-brain/routing.js downstream integration (same Work Item).
   Per operator instruction (04/11), every target file is a module of ≤300 lines (move only, no behavior change):
-  - `tools/ai-brain/test/unified-routing-offline.test.js` (291 lines): exactly 1 test per acceptance criterion (Criteria 1–10).
-  - `tools/ai-brain/scoped-health.js` (300): `scoped-health-classifier.js` (258), `scoped-health-eval.js` (158).
+  - `tools/ai-brain/test/unified-routing-offline.test.js` (281 lines): exactly 1 test per acceptance criterion (Criteria 1–10).
+  - `tools/ai-brain/scoped-health.js` (257): `scoped-health-classifier.js` (258), `scoped-health-eval.js` (203).
   - `tools/ai-brain/unified-selector.js` (273): `unified-selector-admission.js` (234), `unified-selector-jev.js` (156).
   - `tools/ai-brain/candidate-adapters.js` (226): `candidate-adapters-agy.js` (259), `candidate-adapters-direct.js` (105), `candidate-adapters-common.js` (61).
   - `tools/ai-brain/route-identity.js` (213): `route-identity-utils.js` (195), `route-identity-combo.js` (53), `route-identity-create.js` (127).
-  Public exports of the original entry files are unchanged. Total insertions vs origin/main remain above 400 because the ten acceptance criteria plus the existing review-fix data file (`config/route-identity.json`) and Work Item docs require it.
+    Public exports of the original entry files are unchanged. Total insertions vs origin/main remain above 400 because the ten acceptance criteria plus the existing review-fix data file (`config/route-identity.json`) and Work Item docs require it.
 - Pre-existing, not introduced here: 6 `pnpm test:brain` failures on this Windows host are CRLF vendored-hash checks and 15-30s controller-timeout tests; they pass on a clean LF checkout.
 - Pre-existing: `pnpm security:secrets` flags the literal `key_behavior` text in unchanged `DASHBOARD.html` as a generic API key. Fixing it requires a `.gitleaks.toml` allowlist change, which this Work Item is forbidden to touch.
 - `config/route-identity.json` is a new versioned data file outside the original allowed-path list, added because the no-hardcode guard scans `tools/ai-brain/**` and would re-flag the same literals inside any registry kept there.
