@@ -24,6 +24,22 @@ test('dispatch dry-run fails before selection when freshness is absent', () => {
   assert.equal(result.warning.code, 'STALE_CATALOGUE');
   assert.match(errors[0], /STALE_CATALOGUE/);
 });
+test('BR-166-03: fixture candidate tests with custom evidence or pool runs bypass live freshness gate', () => {
+  const errors = [];
+  const fixtureEvidenceDir = path.resolve('.oc/tmp/fixture-evidence');
+  fs.mkdirSync(fixtureEvidenceDir, { recursive: true });
+  const result = dispatchCommand(
+    { 'dry-run': true, 'evidence-dir': fixtureEvidenceDir },
+    {
+      error: (text) => errors.push(text),
+      log: () => {},
+      exit: () => {},
+      discoveryDataDir: path.resolve('.oc/tmp/missing-fixture'),
+    }
+  );
+  assert.notEqual(result?.warning?.code, 'STALE_CATALOGUE');
+  assert.equal(errors.filter((e) => /STALE_CATALOGUE/.test(e)).length, 0);
+});
 test('Finding 15 (BR-166-02): two-source benchmark rows stay discrete with no column-wise mean', () => {
   const { mergePriorDocuments } = require('../priors');
   const now = Date.parse('2026-11-02T12:00:00Z');

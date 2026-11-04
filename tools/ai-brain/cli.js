@@ -2083,13 +2083,22 @@ function dispatchCommand(args, deps = {}) {
 
   // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
   // caller injects fixture candidates (deps.candidates /
-  // deps.discoveryCatalogue). Fixture-injected tests do not assert live
-  // freshness; every production path (item, profile, execute) resolves
-  // candidates from the live catalogue and therefore goes through this gate.
+  // deps.discoveryCatalogue / custom evidence-dir / fixture pool-runs-dir).
+  // Fixture-injected tests do not assert live freshness; every production path
+  // (item, profile, execute) resolves candidates from the live catalogue and
+  // therefore goes through this gate.
   if (
     dryRunFlag &&
     !deps.candidates &&
     !deps.discoveryCatalogue &&
+    !args['evidence-dir'] &&
+    !args.evidenceDir &&
+    !(deps && deps.evidenceDir) &&
+    !args['pool-runtime-dir'] &&
+    !args['agy-runs-dir'] &&
+    !(deps && deps.fakeRunsDir) &&
+    !process.env.AGY_POOL_RUNS_DIR &&
+    !process.env.AGY_RUNS_DIR &&
     !args.close &&
     !args.complete &&
     !args.fail
