@@ -20,7 +20,6 @@ import { BranchesModule } from './branches/branches.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { SearchModule } from './search/search.module';
-import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
 
 @Module({
   imports: [
@@ -34,7 +33,6 @@ import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
     WarehousesModule,
     OnboardingModule,
     SearchModule,
-    CarrierCatalogModule,
   ],
   controllers: [HealthController],
   providers: [
@@ -52,10 +50,6 @@ import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
-    consumer.apply(CorrelationMiddleware).forRoutes('*');
-    consumer
-      .apply(TenantMiddleware)
-      .exclude('health', 'health/(.*)', 'api/v1/health', 'api/v1/health/(.*)')
-      .forRoutes('*');
+    consumer.apply(CorrelationMiddleware, TenantMiddleware).forRoutes('*');
   }
 }

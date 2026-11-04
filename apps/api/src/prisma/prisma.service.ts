@@ -19,14 +19,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   readonly extended: ExtendedPrismaClient;
 
   constructor(options?: ConstructorParameters<typeof PrismaClient>[0]) {
-    super({
-      ...options,
-      transactionOptions: {
-        maxWait: 5000,
-        timeout: 10000,
-        ...options?.transactionOptions,
-      },
-    });
+    super(options);
     this.extended = createExtendedClient(this);
   }
 
