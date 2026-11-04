@@ -1,0 +1,10 @@
+{
+  "files": [
+    ".oc/pr-body.md",
+    "AGENTS.md",
+    "docs/product-spec/work-items/TASK-AI-169.md",
+    "tools/ai-brain/run-ledger-helpers.js",
+    "tools/ai-brain/run-ledger.js"
+  ],
+  "createdAt": "2026-11-04T17:59:18.378Z"
+}
