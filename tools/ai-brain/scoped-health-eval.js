@@ -35,6 +35,75 @@ function accountModelHealthKey(id) {
   return JSON.stringify([accountHealthKey(id), id.outboundModelId]);
 }
 
+function checkModelLock(registry, id, now = Date.now()) {
+  const lockKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, id.connectionId);
+  const wildcardKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, '*');
+
+  let connLockUntil = registry.modelLocks.get(lockKey);
+  if (connLockUntil && now > connLockUntil) {
+    registry.modelLocks.delete(lockKey);
+    connLockUntil = null;
+  }
+  let wildcardLockUntil = registry.modelLocks.get(wildcardKey);
+  if (wildcardLockUntil && now > wildcardLockUntil) {
+    registry.modelLocks.delete(wildcardKey);
+    wildcardLockUntil = null;
+  }
+
+  const activeLockUntil =
+    (connLockUntil && now <= connLockUntil ? connLockUntil : null) ||
+    (wildcardLockUntil && now <= wildcardLockUntil ? wildcardLockUntil : null);
+
+  if (activeLockUntil) {
+    return {
+      healthy: false,
+      blockedBy: 'model_lock',
+      category: ErrorCategory.RATE_LIMIT,
+      reason: 'MODEL_LOCK_ACTIVE',
+      resetsAt: activeLockUntil,
+    };
+  }
+  return null;
+}
+
+function checkAccountHealth(registry, id, now = Date.now()) {
+  const acc = accountHealthKey(id);
+  if (acc && acc !== 'UNKNOWN') {
+    const aRec = registry.accounts.get(acc);
+    if (aRec) {
+      if (aRec.isPermanent || (aRec.resetsAt && now < aRec.resetsAt)) {
+        return {
+          healthy: false,
+          blockedBy: HealthScope.ACCOUNT,
+          category: aRec.category,
+          reason: aRec.reason,
+          resetsAt: aRec.resetsAt,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function checkQuotaScopeHealth(registry, id, now = Date.now()) {
+  if (id.quotaScopeId && id.quotaScopeId !== 'UNKNOWN') {
+    const qRec = registry.quotaScopes.get(quotaHealthKey(id));
+    if (qRec && qRec.exhausted) {
+      if (qRec.resetsAt && now > qRec.resetsAt) {
+        return { quotaProbeNeeded: true, quotaResetAt: qRec.resetsAt };
+      }
+      return {
+        healthy: false,
+        blockedBy: HealthScope.QUOTA_SCOPE,
+        category: ErrorCategory.QUOTA_CREDIT,
+        reason: qRec.reason,
+        resetsAt: qRec.resetsAt,
+      };
+    }
+  }
+  return null;
+}
+
 function evaluateCandidateAccounts(registry, id, now = Date.now()) {
   const candidateAccounts = Array.isArray(id.metadata?.candidateAccounts)
     ? id.metadata.candidateAccounts
@@ -74,42 +143,15 @@ function evaluateCandidateAccounts(registry, id, now = Date.now()) {
       (candModelRec.isPermanent || (candModelRec.resetsAt && now < candModelRec.resetsAt))
     );
 
-    const candLockKey = modelLockHealthKey(
-      dummyId.upstreamProviderId,
-      dummyId.outboundModelId,
-      dummyId.connectionId
-    );
-    const candWildcardKey = modelLockHealthKey(
-      dummyId.upstreamProviderId,
-      dummyId.outboundModelId,
-      '*'
-    );
-    let candConnLock = registry.modelLocks.get(candLockKey);
-    if (candConnLock && now > candConnLock) {
-      registry.modelLocks.delete(candLockKey);
-      candConnLock = null;
-    }
-    let candWildcardLock = registry.modelLocks.get(candWildcardKey);
-    if (candWildcardLock && now > candWildcardLock) {
-      registry.modelLocks.delete(candWildcardKey);
-      candWildcardLock = null;
-    }
-    const candLockUntil =
-      (candConnLock && now <= candConnLock ? candConnLock : null) ||
-      (candWildcardLock && now <= candWildcardLock ? candWildcardLock : null);
-    const candLockBlocked = Boolean(candLockUntil);
+    const candLock = checkModelLock(registry, dummyId, now);
+    const candLockBlocked = Boolean(candLock);
 
     if (!candBlocked && !candQuotaBlocked && !candModelBlocked && !candLockBlocked) {
       anyHealthy = true;
       break;
     }
     if (candLockBlocked) {
-      lastFailure = {
-        category: ErrorCategory.RATE_LIMIT,
-        scope: 'model_lock',
-        reason: 'MODEL_LOCK_ACTIVE',
-        resetsAt: candLockUntil,
-      };
+      lastFailure = candLock;
     } else if (candModelBlocked) {
       lastFailure = candModelRec;
     } else if (
@@ -154,5 +196,8 @@ module.exports = {
   quotaHealthKey,
   modelLockHealthKey,
   accountModelHealthKey,
+  checkModelLock,
+  checkAccountHealth,
+  checkQuotaScopeHealth,
   evaluateCandidateAccounts,
 };

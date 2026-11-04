@@ -24,6 +24,9 @@ const {
   quotaHealthKey,
   modelLockHealthKey,
   accountModelHealthKey,
+  checkModelLock,
+  checkAccountHealth,
+  checkQuotaScopeHealth,
   evaluateCandidateAccounts,
 } = require('./scoped-health-eval');
 
@@ -126,8 +129,6 @@ class ScopedHealthRegistry {
 
   evaluateHealth(routeIdentity, now = Date.now()) {
     const id = routeIdentity || {};
-    let quotaProbeNeeded = false;
-    let quotaResetAt = null;
 
     // 1. Check Gateway
     if (id.gatewayId && id.gatewayId !== 'direct' && id.gatewayId !== 'none') {
@@ -144,21 +145,8 @@ class ScopedHealthRegistry {
     }
 
     // 2. Check Account
-    const acc = accountHealthKey(id);
-    if (acc && acc !== 'UNKNOWN') {
-      const aRec = this.accounts.get(acc);
-      if (aRec) {
-        if (aRec.isPermanent || (aRec.resetsAt && now < aRec.resetsAt)) {
-          return {
-            healthy: false,
-            blockedBy: HealthScope.ACCOUNT,
-            category: aRec.category,
-            reason: aRec.reason,
-            resetsAt: aRec.resetsAt,
-          };
-        }
-      }
-    }
+    const accountBlock = checkAccountHealth(this, id, now);
+    if (accountBlock) return accountBlock;
 
     // Check Multi-account Combo Candidate Accounts
     const candidateAccountsResult = evaluateCandidateAccounts(this, id, now);
@@ -167,21 +155,15 @@ class ScopedHealthRegistry {
     }
 
     // 3. Check Quota Scope
-    if (id.quotaScopeId && id.quotaScopeId !== 'UNKNOWN') {
-      const qRec = this.quotaScopes.get(quotaHealthKey(id));
-      if (qRec && qRec.exhausted) {
-        if (qRec.resetsAt && now > qRec.resetsAt) {
-          quotaProbeNeeded = true;
-          quotaResetAt = qRec.resetsAt;
-        } else {
-          return {
-            healthy: false,
-            blockedBy: HealthScope.QUOTA_SCOPE,
-            category: ErrorCategory.QUOTA_CREDIT,
-            reason: qRec.reason,
-            resetsAt: qRec.resetsAt,
-          };
-        }
+    let quotaProbeNeeded = false;
+    let quotaResetAt = null;
+    const quotaBlock = checkQuotaScopeHealth(this, id, now);
+    if (quotaBlock) {
+      if (quotaBlock.quotaProbeNeeded) {
+        quotaProbeNeeded = true;
+        quotaResetAt = quotaBlock.quotaResetAt;
+      } else {
+        return quotaBlock;
       }
     }
 
@@ -228,33 +210,8 @@ class ScopedHealthRegistry {
     }
 
     // 7. Check Model Lock
-    const lockKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, id.connectionId);
-    const wildcardKey = modelLockHealthKey(id.upstreamProviderId, id.outboundModelId, '*');
-
-    let connLockUntil = this.modelLocks.get(lockKey);
-    if (connLockUntil && now > connLockUntil) {
-      this.modelLocks.delete(lockKey);
-      connLockUntil = null;
-    }
-    let wildcardLockUntil = this.modelLocks.get(wildcardKey);
-    if (wildcardLockUntil && now > wildcardLockUntil) {
-      this.modelLocks.delete(wildcardKey);
-      wildcardLockUntil = null;
-    }
-
-    const activeLockUntil =
-      (connLockUntil && now <= connLockUntil ? connLockUntil : null) ||
-      (wildcardLockUntil && now <= wildcardLockUntil ? wildcardLockUntil : null);
-
-    if (activeLockUntil) {
-      return {
-        healthy: false,
-        blockedBy: 'model_lock',
-        category: ErrorCategory.RATE_LIMIT,
-        reason: 'MODEL_LOCK_ACTIVE',
-        resetsAt: activeLockUntil,
-      };
-    }
+    const lockBlock = checkModelLock(this, id, now);
+    if (lockBlock) return lockBlock;
 
     // 8. If quota reset elapsed, candidate requires probe before dispatch
     if (quotaProbeNeeded) {

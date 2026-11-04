@@ -27,27 +27,19 @@ const identity = (overrides) => createRouteIdentity({ harness: 'direct-http', ..
 
 test('Criterion 1: Account A auth failure stays scoped to A while Account B stays healthy', () => {
   const health = new ScopedHealthRegistry();
-  const sharedFields = {
+  const shared = {
     sourceId: 'deepseek-pool',
     gatewayId: 'direct',
     upstreamProviderId: 'deepseek',
     configuredModelId: 'deepseek-v4.1-flash',
     harness: 'opencode',
   };
-  const candidateA = identity({
-    ...sharedFields,
-    accountRef: 'user_alpha@corp.com',
-    quotaScopeId: 'quota::deepseek::alpha',
-  });
-  const candidateB = identity({
-    ...sharedFields,
-    accountRef: 'user_beta@corp.com',
-    quotaScopeId: 'quota::deepseek::beta',
-  });
+  const candA = identity({ ...shared, accountRef: 'a@corp.com', quotaScopeId: 'quota::ds::a' });
+  const candB = identity({ ...shared, accountRef: 'b@corp.com', quotaScopeId: 'quota::ds::b' });
 
-  health.recordFailure(candidateA, { httpStatus: 401, message: 'Unauthorized' });
-  const healthA = health.evaluateHealth(candidateA);
-  const healthB = health.evaluateHealth(candidateB);
+  health.recordFailure(candA, { httpStatus: 401, message: 'Unauthorized' });
+  const healthA = health.evaluateHealth(candA);
+  const healthB = health.evaluateHealth(candB);
 
   assert.equal(healthA.healthy, false);
   assert.equal(healthA.blockedBy, HealthScope.ACCOUNT);
@@ -98,13 +90,13 @@ test('Criterion 3: DNS failure classifies as NETWORK_DNS with transient cooldown
 
 test('Criterion 4: Gateway outage blocks the 9router gateway and leaves the direct route healthy', () => {
   const health = new ScopedHealthRegistry();
-  const candidateVia9R = identity({
+  const cand9R = identity({
     sourceId: '9router',
     gatewayId: '9router',
     upstreamProviderId: 'github',
     configuredModelId: 'gh/gpt-5.4-nano',
   });
-  const candidateDirect = identity({
+  const candDirect = identity({
     harness: 'codex',
     sourceId: 'codex-direct',
     gatewayId: 'direct',
@@ -112,20 +104,20 @@ test('Criterion 4: Gateway outage blocks the 9router gateway and leaves the dire
     configuredModelId: 'gpt-5.3-codex',
   });
 
-  health.recordFailure(candidateVia9R, {
+  health.recordFailure(cand9R, {
     code: 'ECONNREFUSED',
     message: 'connect ECONNREFUSED 127.0.0.1:20128',
     gatewayId: '9router',
   });
 
-  assert.equal(health.evaluateHealth(candidateVia9R).healthy, false);
-  assert.equal(health.evaluateHealth(candidateVia9R).blockedBy, HealthScope.GATEWAY);
-  assert.equal(health.evaluateHealth(candidateDirect).healthy, true);
+  assert.equal(health.evaluateHealth(cand9R).healthy, false);
+  assert.equal(health.evaluateHealth(cand9R).blockedBy, HealthScope.GATEWAY);
+  assert.equal(health.evaluateHealth(candDirect).healthy, true);
 });
 
 test('Criterion 5: Expired resetAt requires a fresh probe and an expired model lock is cleared', () => {
   const health = new ScopedHealthRegistry();
-  const candidate = identity({
+  const cand = identity({
     sourceId: 'deepseek-direct',
     quotaScopeId: 'quota::deepseek::user1',
     upstreamProviderId: 'antigravity',
@@ -134,16 +126,16 @@ test('Criterion 5: Expired resetAt requires a fresh probe and an expired model l
   });
 
   const now = 1730000000000;
-  health.recordFailure(candidate, { httpStatus: 402, message: 'resets in 10s' }, now);
+  health.recordFailure(cand, { httpStatus: 402, message: 'resets in 10s' }, now);
 
-  const evalPastReset = health.evaluateHealth(candidate, now + 15000);
+  const evalPastReset = health.evaluateHealth(cand, now + 15000);
   assert.equal(evalPastReset.healthy, false);
   assert.equal(evalPastReset.requiresProbe, true);
   assert.equal(evalPastReset.quotaStatus, 'RESET_ELAPSED_PROBE_NEEDED');
 
   health.setModelLock('antigravity', 'claude-opus-4-6-thinking', 'conn_ag_01', now + 10000);
-  assert.equal(health.evaluateHealth(candidate, now + 2000).healthy, false);
-  assert.equal(health.evaluateHealth(candidate, now + 12000).requiresProbe, true);
+  assert.equal(health.evaluateHealth(cand, now + 2000).healthy, false);
+  assert.equal(health.evaluateHealth(cand, now + 12000).requiresProbe, true);
 });
 
 test('Criterion 6: Model IDs with several slashes and mixed casing are preserved verbatim', () => {
@@ -167,9 +159,7 @@ test('Criterion 7: Combo keeps its branches and is rejected when an excluded mod
   const expanded = expandComboIdentity(
     combo,
     ['ag/gemini-3.8-flash', 'ag/claude-opus-4-6-thinking'],
-    {
-      antigravity: [{ connectionId: 'ag1', accountRef: 'vi***07@gmail.com', priority: 1 }],
-    }
+    { antigravity: [{ connectionId: 'ag1', accountRef: 'vi***07@gmail.com', priority: 1 }] }
   );
 
   assert.equal(expanded.isCombo, true);
