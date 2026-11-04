@@ -130,10 +130,10 @@ Pre-implementation quality and safety invariants verified by author before codin
 | `AC-AI-155-05` | DataTableColumnHeader sorting | Sets `aria-sort` to ascending, descending, or none; toggle sort on click | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 5) |
 | `AC-AI-155-06` | DataTablePagination controls | Renders record range, page size options (10, 20, 50, 100), selection count, and navigation buttons | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 6) |
 | `AC-AI-155-07` | DataTableToolbar & Faceted Filter | Renders search input, faceted filter buttons with active count badges, and reset button | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 7) |
-| `AC-AI-155-08` | PageHeader & Heading pattern | Renders breadcrumbs with `aria-label`, bold h1 title, description, and action button slots | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 8) |
-| `AC-AI-155-09` | DashboardSidebar & DashboardHeader | Renders Ship Dễ brand, sections, active nav items, shop badge, search trigger, and user profile menu | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 9) |
+| `AC-AI-155-08` | PageHeader & Heading pattern | Renders breadcrumbs with `aria-label`, bold h1 title, description, and action button slots | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 8) | **Slice B (follow-up PR)**
+| `AC-AI-155-09` | DashboardSidebar & DashboardHeader | Renders Ship Dễ brand, sections, active nav items, shop badge, search trigger, and user profile menu | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 9) | **Slice B (follow-up PR)**
 | `AC-AI-155-10` | URL search params helpers | `parseSortParam` and `formatSortParam` parse and format sort parameters correctly | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 10) |
-| `AC-AI-155-11` | Fixture isolation & Storybook | Storybook page uses 8 isolated fixtures tagged with `fix-` and clearly marked notice banner | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 11) |
+| `AC-AI-155-11` | Fixture isolation & Storybook | Storybook page uses 8 isolated fixtures tagged with `fix-` and clearly marked notice banner | `apps/web/src/tests/data-table-dashboard.test.ts` (Test 11) | **Slice B (follow-up PR)**
 
 ## Verification commands
 
@@ -189,3 +189,8 @@ git diff --check origin/main...HEAD
   - `node scripts/ai/check-no-hardcode.mjs`: PASS (0 hardcoded credentials/secrets found).
   - `git diff --check origin/main...HEAD`: PASS (zero whitespace/conflict errors).
   - `pnpm --filter @shipde/web test:a11y` (Playwright E2E `apps/web/e2e/storybook-data-table.spec.ts`): BLOCKED_BY_SANDBOX in Windows worktree environment due to Next.js Turbopack junction symlink resolution (`Error [TurbopackInternalError]: Symlink node_modules could not be resolved: the symlink target leaves the filesystem root or its parent directory could not be resolved`), executed via clean standalone checkout in CI application gate.
+
+## Slice plan (2026-11-04)
+
+- Slice A (this PR): server-driven DataTable kit, AC-AI-155-01 to 07 and 10.
+- Slice B (next PR, same Work Item): PageHeader, DashboardSidebar/DashboardHeader shell and the Storybook showcase, AC-AI-155-08, 09 and 11. Removed from this branch to keep the PR reviewable.

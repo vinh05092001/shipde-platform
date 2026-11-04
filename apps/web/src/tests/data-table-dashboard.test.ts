@@ -1,5 +1,5 @@
 /**
- * TASK-AI-155 acceptance tests for the reusable server-driven data table and dashboard shell.
+ * TASK-AI-155 acceptance tests for the reusable server-driven data table (Slice A).
  *
  * One test per acceptance criterion (AC-AI-155-01 .. AC-AI-155-11) from
  * docs/product-spec/work-items/TASK-AI-155.md. Per-finding and duplicate regression
@@ -31,13 +31,7 @@ import {
   formatSortParam,
   parseSortParam,
 } from '../components/data-table';
-import {
-  DashboardHeader,
-  DashboardSidebar,
-  PageHeader,
-  DEFAULT_NAV_SECTIONS,
-} from '../components/dashboard';
-import { FIXTURE_SHIPMENTS, FixtureShipment } from '../app/storybook/fixtures';
+import { FIXTURE_SHIPMENTS, FixtureShipment } from './fixtures/data-table-shipments';
 
 const columns: ColumnDef<FixtureShipment>[] = [
   {
@@ -218,51 +212,6 @@ test('AC-AI-155-07 DataTableToolbar and faceted filter', () => {
   assert.ok(toolbar.includes('Cột hiển thị'));
 });
 
-// AC-AI-155-08: PageHeader and breadcrumb pattern
-test('AC-AI-155-08 PageHeader and breadcrumb pattern', () => {
-  const pageHeader = renderToStaticMarkup(
-    React.createElement<any>(PageHeader, {
-      title: 'Quản lý vận đơn đối soát',
-      description: 'Theo dõi hành trình, cước phí và trạng thái bồi thường đơn hàng.',
-      breadcrumbs: [
-        { label: 'Tổng quan', href: '/' },
-        { label: 'Vận đơn', active: true },
-      ],
-      actions: React.createElement<any>('button', { type: 'button' }, 'Tạo đơn mới'),
-    })
-  );
-  assert.ok(pageHeader.includes('Quản lý vận đơn đối soát'));
-  assert.ok(pageHeader.includes('Theo dõi hành trình, cước phí'));
-  assert.ok(pageHeader.includes('aria-label="Đường dẫn trang"'));
-  assert.ok(pageHeader.includes('Tạo đơn mới'));
-});
-
-// AC-AI-155-09: DashboardSidebar and DashboardHeader shell
-test('AC-AI-155-09 DashboardSidebar and DashboardHeader shell', () => {
-  const sidebar = renderToStaticMarkup(
-    React.createElement<any>(DashboardSidebar, { navSections: DEFAULT_NAV_SECTIONS })
-  );
-  assert.ok(sidebar.includes('Ship Dễ'));
-  assert.ok(sidebar.includes(DEFAULT_NAV_SECTIONS[0].title!));
-  assert.ok(sidebar.includes(DEFAULT_NAV_SECTIONS[1].items[0].title!));
-  const header = renderToStaticMarkup(
-    React.createElement<any>(DashboardHeader, {
-      currentUser: { name: 'Nguyễn Văn Chủ Shop', email: 'owner@shipde.net', role: 'Chủ Shop' },
-      shopName: 'Shop Dễ Dàng — Chi Nhánh 1',
-      onSearchClick: () => {},
-      onProfileClick: () => {},
-      searchHref: '/search',
-      profileHref: '/settings/profile',
-    })
-  );
-  assert.ok(header.includes('Shop Dễ Dàng — Chi Nhánh 1'));
-  assert.ok(header.includes('Nguyễn Văn Chủ Shop'));
-  assert.ok(header.includes('aria-label="Chủ Shop"') || header.includes('Chủ Shop'));
-  assert.ok(header.includes('aria-label="Tìm kiếm nhanh toàn hệ thống (Ctrl + K)"'));
-  assert.ok(header.includes('Ctrl K'));
-  assert.ok(header.includes('aria-label="Menu tài khoản cá nhân"'));
-});
-
 // AC-AI-155-10: URL search params sort helpers
 test('AC-AI-155-10 URL search params sort helpers', () => {
   assert.deepStrictEqual(parseSortParam('codAmount.asc'), { id: 'codAmount', desc: false });
@@ -270,23 +219,4 @@ test('AC-AI-155-10 URL search params sort helpers', () => {
   assert.strictEqual(parseSortParam(null), null);
   assert.strictEqual(formatSortParam({ id: 'feeAmount', desc: false }), 'feeAmount.asc');
   assert.strictEqual(formatSortParam({ id: 'feeAmount', desc: true }), 'feeAmount.desc');
-});
-
-// AC-AI-155-11: Storybook page exports and fixture isolation
-test('AC-AI-155-11 Storybook page exports and fixture isolation', () => {
-  const storybookDir = path.resolve(__dirname, '../app/storybook');
-  const pageContent = fs.readFileSync(path.join(storybookDir, 'page.tsx'), 'utf8');
-  const namedExports =
-    pageContent.match(
-      /export\s+(const|let|var|function|class|interface|type)\s+([A-Za-z0-9_]+)/g
-    ) || [];
-  assert.strictEqual(namedExports.length, 0, `page.tsx must only export default (${namedExports})`);
-  assert.ok(pageContent.includes('export default function StorybookPage'));
-  const sections = fs.readFileSync(path.join(storybookDir, 'showcase-sections.tsx'), 'utf8');
-  assert.ok(sections.includes('[DỮ LIỆU THỬ NGHIỆM / FIXTURE DATA]'));
-  assert.strictEqual(FIXTURE_SHIPMENTS.length, 8);
-  for (const item of FIXTURE_SHIPMENTS) {
-    assert.ok(item.id.startsWith('fix-'));
-    assert.ok(item.codAmount > 0);
-  }
 });
