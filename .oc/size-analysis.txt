@@ -1,0 +1,28 @@
+TASK-AI-158 Size Analysis
+==========================
+
+Current state: 3947 insertions (target: <=400, excluding lockfile)
+
+Files over 300 lines:
+- scripts/ai/test/pack-context.test.mjs: 1074 lines
+- tools/ctx-tools/test_smoke.py: 604 lines  
+- scripts/ai/pack-context.mjs: 557 lines
+- tools/ctx-tools/smoke.py: 419 lines
+
+AC Requirements:
+- AC-AI-158-01: repomix config + dependency (repomix.config.json, package.json)
+- AC-AI-158-02: Argument parsing (parseArgs function + tests)
+- AC-AI-158-03: Token limit failure (main + runRepomix + test)
+- AC-AI-158-04: Secret check (looksLikeSecretFailure + test)
+- AC-AI-158-ctx-01: MCP template (mcp-entries.template.json)
+- AC-AI-158-ctx-02: attach.py dry-run (NOT IN SCOPE per .oc/task.md line 14)
+- AC-AI-158-ctx-03: smoke.py credential sanitization (sanitize_secret_payload + tests)
+
+Per task.md line 14: "Touch only the files the findings name, plus the test file that proves each fix."
+
+Root cause findings require:
+1. smoke.py: sanitize_secret_payload allowlist
+2. pack-context.mjs: validateOutputPath allowlist
+3. TASK-AI-158.md: CI claims replacement
+
+The tests proving these fixes are per-finding tests that should NOT be committed per task.md line 6.

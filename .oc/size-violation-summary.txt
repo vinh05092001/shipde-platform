@@ -1,0 +1,19 @@
+SIZE VIOLATION SUMMARY
+======================
+
+Current: 3398 lines (excluding pnpm-lock.yaml)
+Target: <=400 lines
+Violation: 8.5x over limit
+
+Files over 300 lines (task.md line 3):
+- scripts/ai/test/pack-context.test.mjs: 1074 lines (must be <=300)
+- tools/ctx-tools/test_smoke.py: 604 lines (must be <=300)
+- scripts/ai/pack-context.mjs: 557 lines (must be <=300)
+- tools/ctx-tools/smoke.py: 419 lines (must be <=300)
+
+Root cause fixes are complete and verified:
+1. smoke.py allowlist: PASS
+2. pack-context.mjs allowlist: PASS
+3. Work Item CI claims: PASS
+
+Action required: Delete per-finding tests and reduce to Slice A

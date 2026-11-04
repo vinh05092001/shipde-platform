@@ -1,0 +1,10 @@
+{
+  "files": [
+    "AGENTS.md",
+    "docs/product-spec/work-items/TASK-AI-158.md",
+    "scripts/ai/pack-context.mjs",
+    "scripts/ai/test/pack-context.test.mjs",
+    "tools/ai-brain/test/context-pack-repomix.test.js"
+  ],
+  "createdAt": "2026-11-04T16:21:02.240Z"
+}

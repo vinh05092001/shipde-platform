@@ -1,0 +1,5 @@
+jcodemunch search for every caller of sanitize_secret_payload / validateOutputPath
+gitleaks (pnpm run security:secrets) - proved smoke output holds no credential
+node:path + fs.realpathSync - used for pack-context.mjs output path allowlist
+Python stdlib only - for smoke.py allowlist output (code + category)
+repomix (yamadashy/repomix) - reference implementation for include/ignore + security check + output-path handling
