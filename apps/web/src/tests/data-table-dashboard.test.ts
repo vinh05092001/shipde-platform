@@ -18,6 +18,13 @@
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+
+if (typeof (globalThis as any).location === 'undefined') {
+  (globalThis as any).location = new URL('http://localhost/storybook');
+}
+if (typeof (globalThis as any).window === 'undefined') {
+  (globalThis as any).window = globalThis;
+}
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
@@ -1456,6 +1463,8 @@ async function runTestSuite() {
     PathnameContext,
   } = require('next/dist/shared/lib/hooks-client-context.shared-runtime.js');
 
+  const { NuqsTestingAdapter } = require('nuqs/adapters/testing');
+
   function renderHookHarness(tableProps: any): any {
     let hookResult: any = null;
     function TestHookComponent() {
@@ -1480,15 +1489,25 @@ async function runTestSuite() {
     const mockSearchParams = tableProps.searchParams || new URLSearchParams('');
     renderToStaticMarkup(
       React.createElement(
-        AppRouterContext.Provider,
-        { value: mockRouter },
+        NuqsTestingAdapter,
+        {
+          searchParams: mockSearchParams.toString(),
+          onUrlUpdate: (e: any) => {
+            const path = e.url?.pathname ? `${e.url.pathname}${e.url.search}` : e.queryString;
+            mockRouter.push(path);
+          },
+        },
         React.createElement(
-          PathnameContext.Provider,
-          { value: '/storybook' },
+          AppRouterContext.Provider,
+          { value: mockRouter },
           React.createElement(
-            SearchParamsContext.Provider,
-            { value: mockSearchParams },
-            React.createElement(TestHookComponent)
+            PathnameContext.Provider,
+            { value: '/storybook' },
+            React.createElement(
+              SearchParamsContext.Provider,
+              { value: mockSearchParams },
+              React.createElement(TestHookComponent)
+            )
           )
         )
       )
@@ -1606,6 +1625,29 @@ async function runTestSuite() {
           return hookProps.contextSearchParams !== undefined
             ? hookProps.contextSearchParams
             : hookProps.searchParams || new URLSearchParams('');
+        if (context?.displayName === 'NuqsAdapterContext') {
+          return {
+            useAdapter: () => ({
+              searchParams:
+                hookProps.contextSearchParams !== undefined
+                  ? hookProps.contextSearchParams
+                  : hookProps.searchParams || new URLSearchParams(''),
+              updateUrl: (search: any) => {
+                const qs = search.toString();
+                const targetUrl = qs ? `/storybook?${qs}` : '/storybook';
+                if (hookProps.onNavigate) {
+                  hookProps.onNavigate(targetUrl);
+                }
+              },
+              getSearchParamsSnapshot: () =>
+                hookProps.contextSearchParams !== undefined
+                  ? hookProps.contextSearchParams
+                  : hookProps.searchParams || new URLSearchParams(''),
+              rateLimitFactor: 0,
+              autoResetQueueOnUpdate: true,
+            }),
+          };
+        }
         return context?._currentValue ?? null;
       },
       use(usable: any) {
@@ -1623,6 +1665,9 @@ async function runTestSuite() {
       },
       useId() {
         return 'test-id';
+      },
+      useSyncExternalStore(subscribe: any, getSnapshot: () => any) {
+        return getSnapshot();
       },
       useDebugValue() {},
     };

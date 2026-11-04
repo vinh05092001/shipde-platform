@@ -109,7 +109,7 @@ export function DataTableToolbar({
   const prevEpochRef = React.useRef(resetEpoch);
   const prevSearchRef = React.useRef(searchValue);
 
-  // Reset to URL value whenever the committed URL value changes (one useEffect on that value)
+  // Reset to URL value whenever the committed URL value changes (BR-UI-01)
   React.useEffect(() => {
     if (resetEpoch !== prevEpochRef.current) {
       prevEpochRef.current = resetEpoch;
@@ -120,7 +120,6 @@ export function DataTableToolbar({
       return;
     }
     if (searchValue !== prevSearchRef.current) {
-      // If the incoming search matches our dispatched value, acknowledge without overwriting newer draft typing
       if (searchValue === expectedSearchKeyRef.current) {
         prevSearchRef.current = searchValue;
         return;

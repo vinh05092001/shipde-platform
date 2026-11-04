@@ -505,14 +505,12 @@ test('review 12 P1: page navigation keeps a pending page-size change while navig
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('per_page') === '20'))
       .toBe(true);
-    held.releaseLatest();
     await page.getByRole('button', { name: 'Đến trang kế tiếp' }).click();
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('page') === '2'))
       .toBe(true);
     const pageRequest = held.requests.find((url) => url.searchParams.get('page') === '2')!;
     expect(pageRequest.searchParams.get('per_page')).toBe('20');
-    held.releaseLatest();
   } finally {
     await held.finish();
   }

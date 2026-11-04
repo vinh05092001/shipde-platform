@@ -39,7 +39,6 @@ interface DataTableFacetedFilterProps {
   selectedValues?: Set<string>;
   onSelect: (values: string[]) => void;
   className?: string;
-  historyEpoch?: number;
   resetEpoch?: number;
 }
 
