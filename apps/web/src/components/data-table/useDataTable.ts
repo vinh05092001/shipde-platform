@@ -566,12 +566,10 @@ function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableReturn {
   // Column visibility local state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
 
-  // URL query builder: builds from committed parameters and chains uncommitted rapid edits
+  // URL query builder: builds from current committed parameters (BR-UI-01: single source of truth)
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
-      const pending = pendingRef.current;
-      const baseStr = pending && pending.base === committedParams ? pending.next : committedParams;
-      const newSearchParams = new URLSearchParams(baseStr);
+      const newSearchParams = new URLSearchParams(committedParams);
 
       for (const [key, value] of Object.entries(params)) {
         if (value === null || value === undefined || value === '') {
@@ -581,9 +579,7 @@ function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableReturn {
         }
       }
 
-      const nextStr = newSearchParams.toString();
-      pendingRef.current = { base: committedParams, next: nextStr };
-      return nextStr;
+      return newSearchParams.toString();
     },
     [committedParams]
   );
