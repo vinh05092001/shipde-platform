@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import {
   assertPublicTarget,
   collectSecrets,
-  isPrivateDestination,
   redact,
   retrieve as defaultRetrieve,
   scanQueryForUnsafeUrls,
@@ -24,16 +23,6 @@ const ACTIONS = new Map([
   ['reddit read', ['read', 'public-web']],
   ['reddit search', ['search', 'public-web']],
   ['youtube transcript', ['subtitle', 'yt-dlp']],
-]);
-const PUBLIC_ERROR_CODES = new Set([
-  'BAD_INPUT',
-  'TIMEOUT',
-  'RATE_LIMITED',
-  'NOT_FOUND',
-  'UPSTREAM_BROKEN',
-  'PLATFORM_BLOCKED',
-  'UNSUPPORTED',
-  'BUSY',
 ]);
 const DEFAULT_BUDGET = 20000;
 const positiveInteger = (value) =>
@@ -236,23 +225,10 @@ export async function runResearch(
       );
     }
     if (!payload.ok || result.status !== 0) {
-      const code = PUBLIC_ERROR_CODES.has(payload.error?.code)
-        ? payload.error.code
-        : 'UPSTREAM_ERROR';
+      const code = payload.error?.code || 'UPSTREAM_ERROR';
       return fail(
         `Research refused: public access failed (${code}). Use another public source; no login or automatic retry.`
       );
-    }
-    for (const item of Array.isArray(payload.items) ? payload.items : []) {
-      if (typeof item?.url === 'string') {
-        try {
-          if (isPrivateDestination(new URL(item.url).hostname)) {
-            return fail('Research refused: response points to a private destination.');
-          }
-        } catch {
-          /* Untrusted URL text is redacted below, not fetched. */
-        }
-      }
     }
     return ok(payload, request.maxChars, [...parentSecrets, ...collectSecrets(childEnv)]);
   } catch {
