@@ -1,0 +1,12 @@
+node scripts/ai/check-no-hardcode.mjs --all (before): reproduced 26 new violations; the 9 in this Work Item were candidate-adapters.js (3x claude-gpt), route-identity.js (grok-cli/ollama/mistral) and unified-selector.js (3x NUMERIC_CAP quality weights).
+jcodemunch route/search_text (repo shipde-platform): attempted literal lookup for claude-gpt/grok-cli/ollama/mistral; index returned 0 usable results (uncommitted edits), so Grep was used to enumerate every literal and locate the existing JSON registries (tools/ai-brain/sources.json, tools/ai-brain/priors-sources/public.json).
+Reference LiteLLM Router (github.com/BerriAI/litellm, router.py model groups): adapted the data-driven model-group idea only; no code copied. Credit recorded in config/route-identity.json header note. Clone skipped: the task forbids writes outside this worktree and no LiteLLM checkout was present.
+node scripts/ai/check-no-hardcode.mjs --staged (after): PASS, 3 files scanned, 0 new violations, baseline 345.
+node --test tools/ai-brain/test/unified-routing-offline.test.js tools/ai-brain/test/task-ai-69.test.js tools/ai-brain/test/task-ai-142-account-quota-scope.test.js: 90 pass, 0 fail (with generated runtime state moved aside; R3 is state-dependent, passes on a clean checkout).
+no-lib: versioned JSON data file is plain configuration consumed by the existing route-identity/selector modules; no parser/sanitizer/network/retry logic was written, so no library applies.
+7. node scripts/ai/check-no-hardcode.mjs (verification run): PASS - 0 new violations, baseline 345
+8. pnpm security:secrets (verification): PRE-EXISTING_FAIL - false positive in DASHBOARD.html (key_behavior text), not introduced by this diff
+9. pnpm format:check (verification): BLOCKED_BY_SANDBOX - fails on untracked .oc/*.md coordinator files; all changed production files pass Prettier
+10. pnpm lint (verification): PASS - 12 tasks, 1 pre-existing warning in AppShell.tsx
+11. pnpm typecheck (verification): PASS - 12 tasks successful
+12. git diff --shortstat origin/main...HEAD: 5401 insertions, 14 deletions
