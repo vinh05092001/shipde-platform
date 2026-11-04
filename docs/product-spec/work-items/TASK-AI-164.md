@@ -52,7 +52,7 @@ One Work Item, branch and eventual PR. Keep the implementation focused on parsin
 ## In scope
 
 - Template sections for empty Open questions, unchanged behaviour with regression tests, and Proof on every acceptance row.
-- Dependency-free, read-only `pnpm ai:ready <work-item>` with exit 0 for ready and exit 1 with one line per problem otherwise.
+- uses pinned markdownlint@0.42.0 (operator decision 04/11), read-only `pnpm ai:ready <work-item>` with exit 0 for ready and exit 1 with one line per problem otherwise.
 - Fixture-based Node tests, planning/author handoff documentation, this Work Item, one register row and PR evidence.
 
 ## Out of scope
