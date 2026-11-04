@@ -165,7 +165,10 @@ export function resolveTenantContext(req: Request): TenantResolution {
         }
         const trimmed = s.trim();
         if (trimmed.length === 0) {
-          return { status: 'DENIED', reason: 'Scopes array elements cannot be empty or whitespace-only' };
+          return {
+            status: 'DENIED',
+            reason: 'Scopes array elements cannot be empty or whitespace-only',
+          };
         }
         if (trimmed === 'setup' || trimmed.startsWith('setup-')) {
           if (isSetupPath(req)) {
