@@ -568,7 +568,7 @@ test('review 12 P1: external same-page navigation to an older pending search can
 });
 
 test('pending facet edits compose before commit', async ({ page }) => {
-  // Round 39 Finding 1 P1: select status=FAILED, then carrier=GHN while the
+  // Round 39 & Round 47 Finding 1 P1: select status=FAILED, then carrier=GHN while the
   // first navigation is still held. The carrier request — and the settled
   // URL — must contain BOTH parameters (BR-UI-01, AC-AI-155-07).
   await page.goto('/storybook');
@@ -579,7 +579,7 @@ test('pending facet edits compose before commit', async ({ page }) => {
     await expect
       .poll(() => held.requests.some((url) => url.searchParams.get('status') === 'FAILED'))
       .toBe(true);
-    held.releaseLatest();
+    // Keep status request held throughout carrier selection (do not release before carrier click)
     await page.getByRole('button', { name: /^Bộ lọc Hãng vận chuyển:/ }).click();
     await page.getByRole('option', { name: /GHN/ }).click();
     await expect
@@ -587,6 +587,7 @@ test('pending facet edits compose before commit', async ({ page }) => {
       .toBe(true);
     const carrierRequest = held.requests.find((url) => url.searchParams.get('carrier') === 'GHN')!;
     expect(carrierRequest.searchParams.get('status')).toBe('FAILED');
+    expect(carrierRequest.searchParams.get('carrier')).toBe('GHN');
     held.releaseLatest();
   } finally {
     await held.finish();
@@ -599,6 +600,44 @@ test('pending facet edits compose before commit', async ({ page }) => {
   await expect(
     page.getByRole('button', { name: 'Bộ lọc Hãng vận chuyển: 1 đã chọn' })
   ).toBeVisible();
+});
+
+test('own search acknowledgment preserves newer draft', async ({ page }) => {
+  // Round 47 Finding 2 P1: Starting with empty search, type "N" and hold its
+  // dispatched navigation. Type "Ng", then release the "N" response before
+  // the newer 300 ms debounce expires. The acknowledgment changes searchValue
+  // to "N"; the textbox retains "Ng" and subsequently dispatches search=Ng.
+  await page.goto('/storybook');
+  const search = page.getByRole('textbox', { name: SEARCH_LABEL });
+  await expect(search).toBeVisible();
+
+  const held = await holdTableNavigation(page);
+  try {
+    await search.fill('N');
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'N'))
+      .toBe(true);
+
+    // User types "Ng" while "N" is held
+    await search.fill('Ng');
+    await expect(search).toHaveValue('Ng');
+
+    // Release "N" acknowledgment before the newer 300 ms debounce expires
+    held.releaseOne((url) => url.searchParams.get('search') === 'N');
+
+    // Assert textbox retains "Ng" and was not overwritten by "N" acknowledgment
+    await expect(search).toHaveValue('Ng');
+
+    // Wait for "Ng" debounce to fire and dispatch search=Ng
+    await expect
+      .poll(() => held.requests.some((url) => url.searchParams.get('search') === 'Ng'))
+      .toBe(true);
+  } finally {
+    await held.finish();
+  }
+
+  await page.waitForURL((url) => url.searchParams.get('search') === 'Ng');
+  await expect(search).toHaveValue('Ng');
 });
 
 test('external Link cancels pending search draft', async ({ page }) => {
@@ -646,7 +685,7 @@ test('review 12 P2: a facet selected after reset survives the empty reset acknow
     await expect
       .poll(() => held.requests.some((url) => !url.searchParams.has('status')))
       .toBe(true);
-    held.releaseLatest();
+    held.releaseOne((url) => !url.searchParams.has('status'));
 
     await page.getByRole('button', { name: /^Bộ lọc Trạng thái:/ }).click();
     await page.getByRole('option', { name: /Giao thành công/ }).click();

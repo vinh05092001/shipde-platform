@@ -3740,6 +3740,84 @@ async function runTestSuite() {
     console.log('   ✅ 19.7 external previously-owned URL clears pending facet selections');
   }
 
+  // 19.8 pending facet edits compose before commit (Round 47 Finding 1 P1)
+  {
+    let composedNavUrls: string[] = [];
+    let composedParams = new URLSearchParams('per_page=5');
+    // Simulate delayed navigation commit: onNavigate records target URL but does NOT rerender hook yet
+    const composeHook = renderMountedDataTableHook({
+      contextSearchParams: composedParams,
+      onNavigate: (url: string) => {
+        composedNavUrls.push(url);
+      },
+      defaultPageSize: 10,
+      filterableColumns: [
+        {
+          id: 'status',
+          title: 'Trạng thái',
+          options: [{ label: 'Thất bại', value: 'FAILED' }],
+        },
+        {
+          id: 'carrier',
+          title: 'Hãng vận chuyển',
+          options: [{ label: 'GHN', value: 'GHN' }],
+        },
+      ],
+    });
+
+    // Action 1: Select status=FAILED (held navigation)
+    composeHook.current.setFilter('status', ['FAILED']);
+    assert.strictEqual(composedNavUrls.length, 1);
+    assert.ok(composedNavUrls[0].includes('status=FAILED'));
+
+    // Action 2: Before Action 1 commits, select carrier=GHN
+    composeHook.current.setFilter('carrier', ['GHN']);
+    assert.strictEqual(composedNavUrls.length, 2);
+    // Both carrier request and settled URL must contain status=FAILED and carrier=GHN
+    const carrierRequestUrl = composedNavUrls[1];
+    assert.ok(
+      carrierRequestUrl.includes('status=FAILED') && carrierRequestUrl.includes('carrier=GHN'),
+      `carrier request must contain both status=FAILED and carrier=GHN, got: ${carrierRequestUrl}`
+    );
+    console.log('   ✅ 19.8 pending facet edits compose before commit');
+  }
+
+  // 19.9 own search acknowledgment preserves newer draft (Round 47 Finding 2 P1)
+  {
+    let dispatchedSearches: string[] = [];
+    const tb = renderMountedDataTableToolbar({
+      searchValue: '',
+      onSearchChange: (val: string) => {
+        dispatchedSearches.push(val);
+      },
+      debounceMs: 50,
+    });
+
+    // 1. Type "N"
+    tb.type('N');
+    // Wait for 50ms debounce to fire and dispatch "N"
+    await new Promise((r) => setTimeout(r, 70));
+    assert.strictEqual(dispatchedSearches.length, 1);
+    assert.strictEqual(dispatchedSearches[0], 'N');
+
+    // 2. Type "Ng" while "N" is held (before commit)
+    tb.type('Ng');
+    assert.strictEqual(tb.inputValue(), 'Ng');
+
+    // 3. Release "N" acknowledgment before newer 50ms debounce expires
+    // searchValue changes to 'N'
+    tb.rerender({ searchValue: 'N' });
+
+    // Assert the textbox retains "Ng" and was NOT overwritten by "N"
+    assert.strictEqual(tb.inputValue(), 'Ng', 'textbox must retain "Ng" after "N" acknowledgment');
+
+    // 4. Wait for newer debounce to expire and dispatch "Ng"
+    await new Promise((r) => setTimeout(r, 70));
+    assert.strictEqual(dispatchedSearches.length, 2);
+    assert.strictEqual(dispatchedSearches[1], 'Ng', 'toolbar must dispatch search=Ng');
+    console.log('   ✅ 19.9 own search acknowledgment preserves newer draft');
+  }
+
   console.log(
     '   ✅ Round 6, 8, 9, 10, 11, 12, 14, 37, 38, 39, 40 & 41 review findings proven and verified with unit test suites'
   );

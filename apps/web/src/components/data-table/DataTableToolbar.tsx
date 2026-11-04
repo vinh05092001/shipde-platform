@@ -94,9 +94,12 @@ export function DataTableToolbar({
   }, [onSearchChange]);
 
   const debouncedSearchRef = React.useRef<ReturnType<typeof createDebouncedSearch> | null>(null);
+  const expectedSearchKeyRef = React.useRef(searchValue);
+
   const getDebouncedSearch = () => {
     if (debouncedSearchRef.current === null) {
       debouncedSearchRef.current = createDebouncedSearch((val) => {
+        expectedSearchKeyRef.current = val;
         searchCallbackRef.current?.(val);
       }, debounceMs);
     }
@@ -111,12 +114,19 @@ export function DataTableToolbar({
     if (resetEpoch !== prevEpochRef.current) {
       prevEpochRef.current = resetEpoch;
       prevSearchRef.current = searchValue;
+      expectedSearchKeyRef.current = searchValue;
       setDraftSearch('');
       debouncedSearchRef.current?.cancel();
       return;
     }
     if (searchValue !== prevSearchRef.current) {
+      // If the incoming search matches our dispatched value, acknowledge without overwriting newer draft typing
+      if (searchValue === expectedSearchKeyRef.current) {
+        prevSearchRef.current = searchValue;
+        return;
+      }
       prevSearchRef.current = searchValue;
+      expectedSearchKeyRef.current = searchValue;
       setDraftSearch(searchValue || '');
       debouncedSearchRef.current?.cancel();
     }
@@ -135,11 +145,13 @@ export function DataTableToolbar({
   };
 
   const handleClear = () => {
+    expectedSearchKeyRef.current = '';
     setDraftSearch('');
     getDebouncedSearch().clear();
   };
 
   const handleReset = () => {
+    expectedSearchKeyRef.current = '';
     setDraftSearch('');
     getDebouncedSearch().cancel();
     onResetFilters?.();

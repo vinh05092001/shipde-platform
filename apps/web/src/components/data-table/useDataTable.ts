@@ -28,7 +28,7 @@
 
 'use client';
 
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
@@ -125,8 +125,16 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   const activeSearchParams = routerSearchParams;
   const committedParams = normalizeParamsString(routerSearchParams);
 
-  // Next query string base builds from the current committed params only (BR-UI-01)
+  // Chained query builder: preserves uncommitted pending intent across rapid successive edits
+  // Adapted from sadmann7/shadcn-table useChainedUpdate (MIT)
+  const pendingQueryRef = useRef<{ base: string; next: string } | null>(null);
+
+  // Next query string base builds from pending uncommitted intent or current committed params
   const getNextQueryBase = useCallback(() => {
+    const pending = pendingQueryRef.current;
+    if (pending && pending.base === committedParams && committedParams !== pending.next) {
+      return { baseline: committedParams, base: pending.next };
+    }
     return { baseline: committedParams, base: committedParams };
   }, [committedParams]);
 
@@ -206,7 +214,8 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   // URL query builder: composes against committed router search parameters (BR-UI-01)
   const createQueryString = useCallback(
     (params: Record<string, string | number | null | undefined>) => {
-      const newSearchParams = new URLSearchParams(getNextQueryBase().base);
+      const base = getNextQueryBase().base;
+      const newSearchParams = new URLSearchParams(base);
 
       for (const [key, value] of Object.entries(params)) {
         if (value === null || value === undefined || value === '') {
@@ -216,9 +225,14 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
         }
       }
 
-      return newSearchParams.toString();
+      const nextQuery = newSearchParams.toString();
+      pendingQueryRef.current = {
+        base: committedParams,
+        next: normalizeParamsString(nextQuery),
+      };
+      return nextQuery;
     },
-    [getNextQueryBase]
+    [committedParams, getNextQueryBase]
   );
 
   const navigate = useCallback(
@@ -311,6 +325,7 @@ export function useDataTable(props: UseDataTableProps = {}): UseDataTableReturn 
   );
 
   const resetFilters = useCallback(() => {
+    pendingQueryRef.current = null;
     setResetEpoch((epoch) => epoch + 1);
     const keysToRemove: Record<string, null> = {
       page: null,
