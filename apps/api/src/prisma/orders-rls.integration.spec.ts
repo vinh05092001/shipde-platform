@@ -15,9 +15,7 @@ function getDbUrl(): string {
     if (!fs.existsSync(f)) continue;
     for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
       const m = l.trim().match(/^([^#=]+)=(.*)$/);
-      if (m && !process.env[m[1].trim()]) {
-        process.env[m[1].trim()] = m[2].trim().replace(/^['"]|['"]$/g, '');
-      }
+      if (m && !process.env[m[1].trim()]) process.env[m[1].trim()] = m[2].trim().replace(/^['"]|['"]$/g, '');
     }
     break;
   }
@@ -58,27 +56,19 @@ async function main(): Promise<void> {
       await admin.$disconnect().catch(() => {});
       throw new Error(`PostgreSQL must be reachable for orders RLS in CI (${ep})`);
     }
-    console.warn(`PostgreSQL is not reachable at ${ep}. Skipping orders RLS integration tests.`);
+    console.warn(`PostgreSQL not reachable at ${ep}. Skipping orders RLS integration tests.`);
     await admin.$disconnect().catch(() => {});
     return;
   }
 
   const [rlsFlags, policyRows] = await Promise.all([
     admin.$queryRaw<Array<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>>`
-      SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'orders' AND c.relkind = 'r'
+      SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname='public' AND c.relname='orders' AND c.relkind='r'
     `,
-    admin.$queryRaw<Array<{ policyname: string }>>`
-      SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND tablename = 'orders' AND policyname = ${POLICY_NAME}
-    `,
+    admin.$queryRaw<Array<{ policyname: string }>>`SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='orders' AND policyname=${POLICY_NAME}`,
   ]);
-  const rlsOk = rlsFlags[0]?.relrowsecurity && rlsFlags[0]?.relforcerowsecurity;
-  if (!rlsOk || policyRows.length === 0) {
-    if (process.env.CI) {
-      await admin.$disconnect().catch(() => {});
-      throw new Error(
-        `orders RLS DDL missing in CI (rls=${rlsOk}, policy=${policyRows.length > 0}); run pnpm db:migrate`
-      );
-    }
+  if (!rlsFlags[0]?.relrowsecurity || !rlsFlags[0]?.relforcerowsecurity || policyRows.length === 0) {
+    if (process.env.CI) throw new Error('orders RLS DDL missing in CI; run pnpm db:migrate');
     console.warn('orders RLS DDL not applied locally. Skipping.');
     await admin.$disconnect().catch(() => {});
     return;
@@ -87,10 +77,7 @@ async function main(): Promise<void> {
   const roleSuffix = randomUUID().replace(/-/g, '').slice(0, 10).toLowerCase();
   const PROBE_ROLE = `shipde_rls_probe_${roleSuffix}`;
   const probePassword = randomUUID().replace(/-/g, '');
-  const dbRows = await admin.$queryRaw<
-    Array<{ current_database: string }>
-  >`SELECT current_database()`;
-  const currentDb = dbRows[0]?.current_database || 'shipde_dev';
+  const [{ current_database: currentDb }] = await admin.$queryRaw<Array<{ current_database: string }>>`SELECT current_database()`;
 
   const cleanupRole = async () => {
     for (const sql of [
@@ -99,9 +86,7 @@ async function main(): Promise<void> {
       `REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`,
       `REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`,
       `DROP ROLE IF EXISTS ${PROBE_ROLE}`,
-    ]) {
-      await admin.$executeRaw(Prisma.raw(sql)).catch(() => {});
-    }
+    ]) await admin.$executeRaw(Prisma.raw(sql)).catch(() => {});
   };
 
   await cleanupRole();
@@ -111,9 +96,7 @@ async function main(): Promise<void> {
     `GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`,
     `GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`,
-  ]) {
-    await admin.$executeRaw(Prisma.raw(sql));
-  }
+  ]) await admin.$executeRaw(Prisma.raw(sql));
 
   const probeUrl = new URL(dbUrl);
   probeUrl.username = PROBE_ROLE;
@@ -126,106 +109,56 @@ async function main(): Promise<void> {
   const merchantB = randomUUID();
 
   try {
-    await admin.merchant.create({
-      data: { id: merchantA, name: `RLS A ${suffix}`, code: `rls-a-${suffix}` },
-    });
-    await admin.merchant.create({
-      data: { id: merchantB, name: `RLS B ${suffix}`, code: `rls-b-${suffix}` },
-    });
+    await admin.merchant.create({ data: { id: merchantA, name: `RLS A ${suffix}`, code: `rls-a-${suffix}` } });
+    await admin.merchant.create({ data: { id: merchantB, name: `RLS B ${suffix}`, code: `rls-b-${suffix}` } });
     const orderA = await admin.order.create({ data: orderData(merchantA, `RLS-A-${suffix}`) });
     const orderB = await admin.order.create({ data: orderData(merchantB, `RLS-B-${suffix}`) });
 
-    // AC-AI-154-01: Only own-tenant orders returned when merchant_id filter omitted
     await runWithTenant(merchantA, async () => {
-      const rows = await extended.order.findMany({
-        where: { id: { in: [orderA.id, orderB.id] } },
-      });
-      assert.deepEqual(
-        rows.map((r) => r.id),
-        [orderA.id]
-      );
+      const rows = await extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } });
+      assert.deepEqual(rows.map((r: any) => r.id), [orderA.id]);
     });
     console.log('PASS: AC-AI-154-01');
 
-    // AC-AI-154-02: Cross-tenant findUnique returns null
     await runWithTenant(merchantA, async () => {
-      const row = await extended.order.findUnique({ where: { id: orderB.id } });
-      assert.equal(row, null);
+      assert.equal(await extended.order.findUnique({ where: { id: orderB.id } }), null);
     });
     console.log('PASS: AC-AI-154-02');
 
-    // AC-AI-154-03: Cross-tenant create rejected by RLS WITH CHECK
     await assert.rejects(
-      runWithTenant(merchantA, async () => {
-        await extended.order.create({ data: orderData(merchantB, `RLS-CROSS-${suffix}`) });
-      }),
-      (err: unknown) =>
-        /row-level security|new row violates/i.test(
-          err instanceof Error ? err.message : String(err)
-        )
+      runWithTenant(merchantA, async () => extended.order.create({ data: orderData(merchantB, `RLS-CROSS-${suffix}`) })),
+      (err: unknown) => /row-level security|new row violates/i.test(err instanceof Error ? err.message : String(err))
     );
     console.log('PASS: AC-AI-154-03');
 
-    // AC-AI-154-04: Cross-tenant update rejected by RLS and row untouched
-    await assert.rejects(
-      runWithTenant(merchantA, async () => {
-        await extended.order.update({
-          where: { id: orderB.id },
-          data: { recipient_province: 'SG' },
-        });
-      })
-    );
-    const untouched = await admin.order.findUnique({ where: { id: orderB.id } });
-    assert.equal(untouched?.recipient_province, 'HN');
+    await assert.rejects(runWithTenant(merchantA, async () => extended.order.update({ where: { id: orderB.id }, data: { recipient_province: 'SG' } })));
+    assert.equal((await admin.order.findUnique({ where: { id: orderB.id } }))?.recipient_province, 'HN');
     console.log('PASS: AC-AI-154-04');
 
-    // AC-AI-154-05: Own-tenant create succeeds
-    const own = await runWithTenant(merchantA, async () =>
-      extended.order.create({ data: orderData(merchantA, `RLS-OWN-${suffix}`) })
-    );
+    const own = await runWithTenant(merchantA, async () => extended.order.create({ data: orderData(merchantA, `RLS-OWN-${suffix}`) }));
     assert.equal(own.merchant_id, merchantA);
     console.log('PASS: AC-AI-154-05');
 
-    // AC-AI-154-06: Unscoped session succeeds under pilot fail-open
-    const unscoped = await extended.order.findMany({
-      where: { id: { in: [orderA.id, orderB.id] } },
-    });
-    assert.deepEqual(unscoped.map((r) => r.id).sort(), [orderA.id, orderB.id].sort());
+    const unscoped = await extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } });
+    assert.deepEqual(unscoped.map((r: any) => r.id).sort(), [orderA.id, orderB.id].sort());
     console.log('PASS: AC-AI-154-06');
 
-    // AC-AI-154-07: Interactive transaction applies tenant context
-    const inTx = (await runWithTenant(merchantA, async () =>
-      extended.$transaction(async (tx) =>
-        tx.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } })
-      )
-    )) as Array<{ id: string }>;
-    assert.deepEqual(
-      inTx.map((r) => r.id),
-      [orderA.id]
-    );
+    const inTx = (await runWithTenant(merchantA, async () => extended.$transaction(async (tx: any) => tx.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } })))) as Array<{ id: string }>;
+    assert.deepEqual(inTx.map((r) => r.id), [orderA.id]);
     console.log('PASS: AC-AI-154-07');
 
-    // AC-AI-154-08: Malformed tenant value fails closed
     await assert.rejects(
-      runWithTenant('not-a-uuid', async () => {
-        await extended.order.findMany({ where: { merchant_id: merchantA } });
-      }),
-      (err: unknown) =>
-        /invalid input syntax for type uuid/i.test(err instanceof Error ? err.message : String(err))
+      runWithTenant('not-a-uuid', async () => extended.order.findMany({ where: { merchant_id: merchantA } })),
+      (err: unknown) => /invalid input syntax for type uuid/i.test(err instanceof Error ? err.message : String(err))
     );
     console.log('PASS: AC-AI-154-08');
   } finally {
-    await admin.order
-      .deleteMany({ where: { merchant_id: { in: [merchantA, merchantB] } } })
-      .catch(() => {});
-    await admin.merchant
-      .deleteMany({ where: { id: { in: [merchantA, merchantB] } } })
-      .catch(() => {});
+    await admin.order.deleteMany({ where: { merchant_id: { in: [merchantA, merchantB] } } }).catch(() => {});
+    await admin.merchant.deleteMany({ where: { id: { in: [merchantA, merchantB] } } }).catch(() => {});
     await cleanupRole();
     await admin.$disconnect().catch(() => {});
     await probe.$disconnect().catch(() => {});
   }
-
   console.log('All orders RLS AC integration tests passed (AC-AI-154-01..08)');
 }
 
