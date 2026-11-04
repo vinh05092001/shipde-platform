@@ -315,6 +315,8 @@ test('TASK-AI-142 H3: original harnesses converging on one Hermes key are ranked
 test('TASK-AI-142 H3: production assembly probes an untested stronger model before a healthy weaker model', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-ranked-probe-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Fixed clock: the priors fixture is dated 2026-10-13 and goes stale after 30 days.
+  const NOW = Date.parse('2026-10-14T12:00:00.000Z');
   const models = ['cbai/deepseek-v4.1-flash', 'cl/openai/gpt-6-astra'];
   const registry = {
     sources: [
@@ -334,7 +336,7 @@ test('TASK-AI-142 H3: production assembly probes an untested stronger model befo
     models[0],
     { id: 'fixture', accountId: 'account' },
     { ok: true },
-    Date.now()
+    NOW
   );
   const probed = [];
   const spawned = [];
@@ -364,6 +366,7 @@ test('TASK-AI-142 H3: production assembly probes an untested stronger model befo
     rootDir: root,
     homeDir: root, // hermetic: no host Codex login joins the pool
     skipDecisionLog: true,
+    now: NOW,
     env: { FIXTURE_KEY: 'test-fixture-value' },
   };
   const selected = hermesSessionApi.selectReasoningCandidate(options, deps);
