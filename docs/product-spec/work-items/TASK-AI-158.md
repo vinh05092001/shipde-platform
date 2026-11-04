@@ -134,7 +134,8 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | 7 | `f5160c6b7f1647335c1ab023da497b584e98d570` | `CHANGES_REQUIRED` | Duplicate delivery order changed to 294 in register row, but Work Item remained at 293. |
 | 8 | `2c733eabfc58e57f743451c8eda2bd0efcb7fed9` | `CHANGES_REQUIRED` | Round 88 findings: client installer paths `tools/ctx-tools/attach.py`, acceptance matrix scope expansion beyond approved AC-AI-158-01..04, and smoke.py secret leak on stderr. |
 | 9 | `d55d4573927712cecff7a88a3d6472579504a8f5` | `CHANGES_REQUIRED` | Round 89 finding: P1 — CI failing (`ai-brain-tests`, `application-gate`, `current-application`). |
-| 10 | current local repair tree | `READY_FOR_CODEX` | Synchronized toolchain devDependency snapshots, verified no-hardcode guard, delivery order 294, and added CI pipeline integrity test (44/44 pass). Residual sandbox limitations recorded in `.oc/pr-body.md`. |
+| 10 | `517ee1725e96f13642283f2bafa3fdd1b67e6929` | `CHANGES_REQUIRED` | Round 90 findings: P1 — sanitize_secret_payload leaks sensitive data, validateOutputPath directory alias glob collision, unverified remote CI claims. |
+| 11 | current local repair tree | `READY_FOR_CODEX` | Root cause #2: switched blocklists to allowlists in smoke.py and pack-context.mjs destination allowlist; replaced remote CI claims with local verification commands. |
 
 ## Current review repair evidence (2026-11-04)
 

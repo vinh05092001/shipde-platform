@@ -514,6 +514,74 @@ class TestSmokeRedaction(unittest.TestCase):
                 server_err = data["servers"]["fake_server"]["error"]
                 self.assertEqual(server_err, {"code": -32603, "category": "Internal error"})
 
+    def test_rpc_error_redacts_entire_quoted_password(self):
+        """Review 3 finding 1 symptom check: quoted password with spaces must never reach stderr or smoke-results.json."""
+        tmp_base = REPO_ROOT / ".oc" / "tmp"
+        tmp_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+
+            fake_server_script = tmp_path / "fake_mcp_server.py"
+            fake_server_script.write_text(
+                'import sys, json\n'
+                'for line in sys.stdin:\n'
+                '    try:\n'
+                '        req = json.loads(line)\n'
+                '        req_id = req.get("id")\n'
+                '        if req_id is not None:\n'
+                '            err_resp = {\n'
+                '                "jsonrpc": "2.0",\n'
+                '                "id": req_id,\n'
+                '                "error": {"code": -32603, "message": \'password="alpha beta gamma"\'}\n'
+                '            }\n'
+                '            sys.stdout.write(json.dumps(err_resp) + "\\n")\n'
+                '            sys.stdout.flush()\n'
+                '    except Exception:\n'
+                '        pass\n',
+                encoding="utf-8",
+            )
+
+            entries_file = tmp_path / "entries.json"
+            entries_file.write_text(
+                json.dumps({
+                    "fake_server": {
+                        "command": PYTHON_EXE,
+                        "args": [str(fake_server_script)],
+                    }
+                }),
+                encoding="utf-8",
+            )
+
+            out_dir = tmp_path / "out"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            proc = subprocess.run(
+                [
+                    PYTHON_EXE,
+                    str(SMOKE_SCRIPT),
+                    "--entries", str(entries_file),
+                    "--out-dir", str(out_dir),
+                    "--project", str(REPO_ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+            results_json = ""
+            results_file = out_dir / "smoke-results.json"
+            if results_file.exists():
+                results_json = results_file.read_text(encoding="utf-8")
+
+            self.assertNotEqual(proc.returncode, 0, "smoke.py must exit non-zero when server fails")
+            self.assertNotIn("alpha", proc.stderr, "alpha leaked in stderr")
+            self.assertNotIn("beta", proc.stderr, "beta leaked in stderr")
+            self.assertNotIn("gamma", proc.stderr, "gamma leaked in stderr")
+            self.assertNotIn("alpha", results_json, "alpha leaked in smoke-results.json")
+            self.assertNotIn("beta", results_json, "beta leaked in smoke-results.json")
+            self.assertNotIn("gamma", results_json, "gamma leaked in smoke-results.json")
+            self.assertIn("Internal error", proc.stderr, "category must be in stderr")
+
 
 
 if __name__ == "__main__":
