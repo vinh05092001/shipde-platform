@@ -7,27 +7,41 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const routeHealth = require('../route-health');
+const { stripRouteAlias } = require('../cli');
+
+const registry = {
+  sources: [
+    { id: '9router', aliases: ['ninerouter'] },
+    { id: 'rqsty', aliases: ['requesty'] },
+  ],
+};
 
 function storeWith(modelId) {
   const store = { paths: {}, events: [] };
-  routeHealth.recordResult(store, modelId, '9router', { ok: true }, Date.parse('2026-11-04T12:00:00Z'));
+  routeHealth.recordResult(
+    store,
+    modelId,
+    '9router',
+    { ok: true },
+    Date.parse('2026-11-04T12:00:00Z')
+  );
   return store;
 }
 
 test('alias-prefixed OpenCode id finds the record a probe wrote', () => {
   const store = storeWith('rc/zai-org/GLM-5.3');
-  const rec = routeHealth.getPathRecord(store, 'ninerouter/rc/zai-org/GLM-5.3', '9router');
-  assert.strictEqual(rec && rec.status, 'AVAILABLE');
-});
-
-test('route-id prefix is still stripped', () => {
-  const store = storeWith('rc/zai-org/GLM-5.3');
-  const rec = routeHealth.getPathRecord(store, '9router/rc/zai-org/GLM-5.3', '9router');
-  assert.strictEqual(rec && rec.status, 'AVAILABLE');
+  const id = stripRouteAlias('ninerouter/rc/zai-org/GLM-5.3', '9router', registry);
+  assert.strictEqual(id, 'rc/zai-org/GLM-5.3');
+  assert.strictEqual(routeHealth.getPathRecord(store, id, '9router').status, 'AVAILABLE');
 });
 
 test('an alias of a different route is not stripped', () => {
-  const store = storeWith('rc/zai-org/GLM-5.3');
-  const rec = routeHealth.getPathRecord(store, 'requesty/rc/zai-org/GLM-5.3', '9router');
-  assert.strictEqual(rec, undefined);
+  assert.strictEqual(
+    stripRouteAlias('requesty/rc/zai-org/GLM-5.3', '9router', registry),
+    'requesty/rc/zai-org/GLM-5.3'
+  );
+});
+
+test('no registry leaves the id unchanged', () => {
+  assert.strictEqual(stripRouteAlias('ninerouter/x', '9router', undefined), 'ninerouter/x');
 });
