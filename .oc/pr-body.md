@@ -75,16 +75,16 @@ Latest review: .oc/review.txt at 517ee1725e96f13642283f2bafa3fdd1b67e6929.
 ## Size and scope notes
 
 - All files in this Work Item are <= 300 lines each:
-  - scripts/ai/pack-context.mjs: 177 lines
-  - scripts/ai/output-path.mjs: 235 lines
-  - scripts/ai/parse-args.mjs: 83 lines
-  - scripts/ai/config.mjs: 57 lines
-  - scripts/ai/publish.mjs: 37 lines
-  - scripts/ai/test/pack-context.test.mjs: 204 lines
-  - tools/ctx-tools/smoke.py: 192 lines
-  - tools/ctx-tools/_mcp.py: 189 lines
-  - tools/ctx-tools/_sanitize.py: 121 lines
-  - tools/ctx-tools/test_smoke.py: 115 lines
+  - scripts/ai/pack-context.mjs: 159 lines
+  - scripts/ai/output-path.mjs: 204 lines
+  - scripts/ai/parse-args.mjs: 77 lines
+  - scripts/ai/config.mjs: 49 lines
+  - scripts/ai/publish.mjs: 34 lines
+  - scripts/ai/test/pack-context.test.mjs: 181 lines
+  - tools/ctx-tools/smoke.py: 176 lines
+  - tools/ctx-tools/_mcp.py: 173 lines
+  - tools/ctx-tools/_sanitize.py: 101 lines
+  - tools/ctx-tools/test_smoke.py: 104 lines
 - Slice A = this PR; Slice B = scripts/ai/output-path.mjs, tools/ctx-tools/_mcp.py, tools/ctx-tools/_sanitize.py
 - Root cause #2 fixes are complete and verified:
   - Finding 1: smoke.py allowlist — test_ac_ai_158_ctx_03_smoke_never_prints_credential_values verifies allowlisting to code and category only.
@@ -99,25 +99,25 @@ Re-verified after the split/rewrite commit `c29a90c`:
 | Command                                                   | Result | Evidence                                                                                                                                                                                       |
 | --------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `node --test scripts/ai/test/pack-context.test.mjs`       | PASS   | 4/4 AC tests pass (AC-AI-158-01 through 04) — 4 suites, 0 fail, 0 cancelled                                                                                                                    |
-| `python3 tools/ctx-tools/test_smoke.py`                    | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python` alias is disabled |
-| `node scripts/ai/check-no-hardcode.mjs`                   | PASS   | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                              |
+| `python3 tools/ctx-tools/test_smoke.py`                   | PASS   | 3/3 AC tests pass (AC-AI-158-ctx-01 versioned template, ctx-02 attach.py absent, ctx-03 credential sanitization) — invoked via full Python312 path on Windows where `python` alias is disabled |
+| `node scripts/ai/check-no-hardcode.mjs`                   | PASS   | 0 new raw hardcodes (1 file scanned, baseline 345)                                                                                                                                             |
 | `git -c safe.directory=* diff --check origin/main...HEAD` | PASS   | No whitespace errors against origin/main                                                                                                                                                       |
 | `git -c safe.directory=* diff --check`                    | PASS   | Working tree diff clean (0 whitespace errors)                                                                                                                                                  |
 | `node tools/ctx-tools/prompt-block.js`                    | PASS   | Prompt block generation succeeds with all registered tools                                                                                                                                     |
 
 ### File line counts (all <= 300)
 
-| File                                                    | Lines |
-| ------------------------------------------------------- | ----- |
-| scripts/ai/pack-context.mjs                             | 177   |
-| scripts/ai/output-path.mjs                              | 235   |
-| scripts/ai/parse-args.mjs                               | 83    |
-| scripts/ai/config.mjs                                   | 57    |
-| scripts/ai/publish.mjs                                  | 37    |
-| scripts/ai/test/pack-context.test.mjs                   | 204   |
-| tools/ctx-tools/smoke.py                                | 192   |
-| tools/ctx-tools/_mcp.py                                 | 189   |
-| tools/ctx-tools/_sanitize.py                            | 121   |
-| tools/ctx-tools/test_smoke.py                           | 115   |
+| File                                  | Lines |
+| ------------------------------------- | ----- |
+| scripts/ai/pack-context.mjs           | 159   |
+| scripts/ai/output-path.mjs            | 204   |
+| scripts/ai/parse-args.mjs             | 77    |
+| scripts/ai/config.mjs                 | 49    |
+| scripts/ai/publish.mjs                | 34    |
+| scripts/ai/test/pack-context.test.mjs | 181   |
+| tools/ctx-tools/smoke.py              | 176   |
+| tools/ctx-tools/_mcp.py               | 173   |
+| tools/ctx-tools/_sanitize.py          | 101   |
+| tools/ctx-tools/test_smoke.py         | 104   |
 
 - Slice A = this PR; Slice B = scripts/ai/output-path.mjs, tools/ctx-tools/_mcp.py, tools/ctx-tools/_sanitize.py
