@@ -60,6 +60,7 @@
     "eslint": "^9.39.5",
     "lefthook": "1.11.3",
     "markdown-it": "^14.1.0",
+    "markdownlint": "0.42.0",
     "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.6",
     "prisma": "^6.19.2",

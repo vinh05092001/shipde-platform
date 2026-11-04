@@ -257,3 +257,34 @@ for (const [name, rule] of [
     assert.equal(repeated.stdout, result.stdout);
   });
 }
+
+const sourceLink =
+  '- [Baseline](docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md#baseline-statement)';
+
+test('rejects blank Proof after an inline-code comment token', () => {
+  const text = `${valid}\n\`<!--\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  assert.equal(check(text).ok, false);
+});
+
+test('rejects blank Proof after a complete backtick code span', () => {
+  const text = `${valid}\n\`\`\`example\`\`\`\n\n## Acceptance recovery\n\n| AC | Proof |\n| --- | --- |\n| AC-02 | |\n`;
+  assert.equal(check(text).ok, false);
+});
+
+test('rejects source inside a blockquote fence nested under a list', () => {
+  const text = `${valid.replace(sourceLink, 'None')}\n## Source references\n\n- > ~~~text\n  > https://example.com/spec\n  > ~~~\n`;
+  assert.equal(check(text).ok, false);
+});
+
+test('rejects source inside list-nested fenced examples', () => {
+  const text = valid.replace(
+    sourceLink,
+    '- Example:\n\n    ~~~text\n    https://example.com/spec\n    ~~~'
+  );
+  assert.equal(check(text).ok, false);
+});
+
+test('rejects source inside tab-indented fenced examples', () => {
+  const text = valid.replace(sourceLink, '\t```text\n\thttps://example.com/spec\n\t```');
+  assert.equal(check(text).ok, false);
+});

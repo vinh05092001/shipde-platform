@@ -394,7 +394,8 @@ test('ready-check introduces no package dependencies', () => {
   }).stdout;
   const originPkg = JSON.parse(originPkgRaw);
   assert.deepEqual(currentPkg.dependencies, originPkg.dependencies);
-  const { 'markdown-it': _added, ...devRest } = currentPkg.devDependencies;
+  const { 'markdown-it': _added1, markdownlint: _added2, ...devRest } =
+    currentPkg.devDependencies;
   assert.deepEqual(devRest, originPkg.devDependencies);
   assert.deepEqual(currentPkg.peerDependencies, originPkg.peerDependencies);
   assert.deepEqual(currentPkg.optionalDependencies, originPkg.optionalDependencies);
