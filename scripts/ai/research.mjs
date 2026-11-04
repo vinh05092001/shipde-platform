@@ -16,7 +16,6 @@ import {
 
 const VERSION = '1.6.1';
 const INSTALL_HINT = `uv tool install https://github.com/Panniantong/Agent-Reach/releases/download/v${VERSION}/agent-reach.zip\nSee https://github.com/Panniantong/Agent-Reach/blob/v${VERSION}/docs/install.md. Never install agent-reach from PyPI.\n`;
-// Public allowlist: the operator-approved, anonymous backend for each pair.
 const ACTIONS = new Map([
   ['web read', ['read', 'jina']],
   ['web search', ['search', 'exa']],
@@ -125,7 +124,6 @@ function isolatedEnv(parent, home) {
   for (const [key, value] of Object.entries(parent)) {
     if (/^(PATH|PATHEXT|SYSTEMROOT|WINDIR|TMP|TEMP)$/i.test(key)) env[key] = value;
   }
-  // No process-global configuration changes: only this CLI sees the temp home.
   return {
     ...env,
     HOME: home,
@@ -195,9 +193,6 @@ export async function runResearch(
     ) {
       return fail(`Research refused: Agent-Reach v${VERSION} is required.\n${INSTALL_HINT}`);
     }
-    // A caller-supplied URL is retrieved here, under the network boundary. The
-    // CLI never re-fetches it: read results are produced in-process so a late
-    // redirect cannot make the child contact a private destination.
     let fetched;
     if (request.urls.length > 0) {
       try {

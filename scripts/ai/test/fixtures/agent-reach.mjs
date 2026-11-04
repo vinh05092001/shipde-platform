@@ -6,7 +6,7 @@ import { join } from 'node:path';
 // Offline stand-in for the pinned Agent-Reach CLI. All credential-shaped values
 // are obviously fake so the fixture never resembles a live secret.
 const [mode, marker, ...argv] = process.argv.slice(2);
-if (marker !== '-') appendFileSync(marker, `${JSON.stringify(argv)}\n`);
+if (marker !== '-' && argv[0] !== 'version') appendFileSync(marker, `${JSON.stringify(argv)}\n`);
 
 if (argv[0] === 'version') {
   if (mode === 'invalid-version') console.log('Unverified CLI; Cookie: fixture-cookie');
@@ -41,6 +41,7 @@ if (mode === 'plain') {
       },
     ],
   };
+  console.log(JSON.stringify(payload));
 } else {
   let text = JSON.stringify({ argv });
   if (mode === 'unicode') text = '📚'.repeat(5000);

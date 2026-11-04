@@ -1,12 +1,6 @@
 import { isPrivateIp } from 'ssrf-guard';
 import { safeFetch } from 'ssrf-guard/node';
 
-// Network boundary: retrieval uses ssrf-guard@1.0.0 (MIT, Copyright (c) 2024
-// Jonathan Ong). Its safeFetch validates the URL, pins the socket to the
-// validated address and re-validates every redirect hop, so a late redirect to
-// a private address or a DNS answer that changes between check and connect is
-// refused before the private destination is contacted.
-
 export const SENSITIVE =
   /(?:cookie|token|secret|password|passwd|authorization|auth|credential|session|environment|^env$|api[_-]?key|access[_-]?key|(?:^|[_-])(?:key|sig(?:nature)?)(?:[_-]|$))/i;
 const NON_SECRET = /^(?:true|false|0|1|utf-?8)$/i;
@@ -25,14 +19,9 @@ export function isPrivateDestination(hostname) {
     return true;
   }
   if (isPrivateIp(host)) return true;
-  // A single-label hostname is not a public destination; public IP literals
-  // contain dots or colons and are handled by isPrivateIp above.
   return !host.includes('.') && !host.includes(':');
 }
 
-// Every caller-supplied target must be a public HTTP(S) URL without credentials
-// in the userinfo, query or fragment. This is a cheap local check; the actual
-// address validation happens on retrieval in safeFetch.
 export function assertPublicTarget(raw) {
   const candidate = String(raw).includes('://') ? String(raw) : `https://${raw}`;
   let url;
@@ -121,8 +110,6 @@ export function redact(value, secrets = []) {
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\b/g, '[REDACTED]')
     .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, '[REDACTED]');
   for (const secret of secrets) {
-    // Short values match whole words so an inherited value such as "us" cannot
-    // corrupt ordinary words like "refused".
     const escaped = secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     text =
       secret.length < 4
