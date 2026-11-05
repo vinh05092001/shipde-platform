@@ -1079,6 +1079,19 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
   return [...Array.from(map.values()), ...noId];
 }
 
+// OpenCode names a router model with the router's registry alias
+// (ninerouter/<upstream>/<model> on route 9router); probes and discovery
+// record it as <upstream>/<model>. Strip the alias so both reach one record.
+function stripRouteAlias(modelId, gateway, registry) {
+  const source = ((registry && registry.sources) || []).find((s) => s && s.id === gateway);
+  const id = String(modelId);
+  for (const alias of (source && source.aliases) || []) {
+    const prefix = String(alias).toLowerCase() + '/';
+    if (id.toLowerCase().startsWith(prefix)) return id.slice(prefix.length);
+  }
+  return modelId;
+}
+
 function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
   if (
     candidate &&
@@ -1097,7 +1110,11 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+  const rec = routeHealthApi.getPathRecord(
+    routeHealth,
+    stripRouteAlias(modelId, gateway, options && options.registry),
+    routePath
+  );
   if (rec) return rec.status === 'AVAILABLE';
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
@@ -1484,7 +1501,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         isCandidateRouteEligible(
           routeHealth,
           candidate,
-          Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+          Object.assign({}, opts, {
+            requireRouteHealth: enforceMissingHealth,
+            registry: resolvedRegistry,
+          }),
           routeHealthApi
         )
       ) {
@@ -5125,6 +5145,7 @@ module.exports = {
   // would rank.
   assembleCandidates,
   assembleForDispatch,
+  stripRouteAlias,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
