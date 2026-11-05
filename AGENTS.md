@@ -76,7 +76,4 @@ A feature is vertical, not UI-only. Where applicable it includes:
 - [Full contract and section map](docs/product-spec/docs/10-ai-collaboration/AGENT-CONTRACT-DETAILS.md)
 - [Workflow](docs/product-spec/docs/10-ai-collaboration/SEMI-MANUAL-AI-WORKFLOW.md), [register](docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv), [Work Item template](docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md)
 - [Planning, author and review prompts; toolchain, CLI manifest and Windows setup](docs/product-spec/docs/10-ai-collaboration/AGENT-CONTRACT-DETAILS.md#required-handoff-documents)
-- [Shared code-context MCP setup](tools/ctx-tools/README.md)
-- [Agent toolkit registry](tools/ctx-tools/toolkit.json)
-- [Agent prompt tools generator](tools/ctx-tools/prompt-block.js)
 - [Safe control scripts](scripts/ai/README.md)

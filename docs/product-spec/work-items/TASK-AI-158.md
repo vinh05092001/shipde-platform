@@ -98,9 +98,9 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 | AC-AI-158-02 | Argument parsing | `--paths`, `--out` and `--max-tokens` parse; missing or invalid arguments throw | unit: `scripts/ai/test/pack-context.test.mjs` |
 | AC-AI-158-03 | Token limit | A fixture pack over `--max-tokens` exits non-zero and removes the output; stdout has no file contents | unit: `scripts/ai/test/pack-context.test.mjs` |
 | AC-AI-158-04 | Secret check and advisory note | Security check failure is non-zero; toolchain doc states purpose, usage, no secrets/`.env`, advisory only | unit + docs-inspection |
-| AC-AI-158-ctx-01 | Versioned MCP entries template | Versioned template with jcodemunch and serena definitions and safe roots | unit: `tools/ctx-tools/test_smoke.py` |
-| AC-AI-158-ctx-02 | attach.py dry-run by default | Attachment script defaults to dry-run preview without mutating configs | unit: `tools/ctx-tools/test_smoke.py` |
-| AC-AI-158-ctx-03 | smoke.py never prints credential values | Sensitive keys and error payloads are sanitized recursively so credentials and tokens never appear in stdout, stderr, or results JSON | unit: `tools/ctx-tools/test_smoke.py` |
+| AC-AI-158-ctx-01 | Versioned MCP entries template | Versioned template with jcodemunch and serena definitions and safe roots | unit: `tools/ctx-tools/test_smoke.py` | **Slice B (follow-up PR)**
+| AC-AI-158-ctx-02 | attach.py dry-run by default | Attachment script defaults to dry-run preview without mutating configs | unit: `tools/ctx-tools/test_smoke.py` | **Slice B (follow-up PR)**
+| AC-AI-158-ctx-03 | smoke.py never prints credential values | Sensitive keys and error payloads are sanitized recursively so credentials and tokens never appear in stdout, stderr, or results JSON | unit: `tools/ctx-tools/test_smoke.py` | **Slice B (follow-up PR)**
 
 ## Task breakdown
 
@@ -174,3 +174,8 @@ N/A — no API, event or database change. One root devDependency and its lockfil
 ## Residual limitations
 
 - The register defect and all packer acceptance rows pass locally. Fetch/merge/staging are `BLOCKED_BY_SANDBOX` because `.git/FETCH_HEAD`, `.git/ORIG_HEAD.lock` and `.git/index.lock` writes are denied; current `origin/main` could not be refreshed and no commit was created. The sandbox also denies the Docker named pipe and host quota-state/launch-result paths. API/root tests fail at an unchanged RBAC LF/CRLF assertion; formatting reports four unchanged coordinator inputs; native Gitleaks 8.30.1 flags unchanged `DASHBOARD.html:115`. These files are outside this Work Item. See `.oc/pr-body.md` for exact command outcomes and preserved repair evidence. Current remote CI and independent review remain unverified.
+
+## Slice plan (2026-11-05)
+
+- Slice A (this PR): pinned repomix context packing, AC-AI-158-01 to 04.
+- Slice B (next PR, same Work Item): the folded ctx-tools MCP infrastructure (`tools/ctx-tools/**`), AC-AI-158-ctx-*, per HUMAN-DECISION 2026-11-03. Removed from this branch to keep the PR reviewable; recover from commit before this cut.
