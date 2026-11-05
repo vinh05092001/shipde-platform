@@ -4,8 +4,7 @@
  * RunLedger is a thin execution-chain adapter over ProgressLedger (work-guard).
  * Budget ownership and reservation stay in ProgressLedger: admission, caps,
  * attempt counting and goal totals are delegated there. RunLedger only persists
- * writer -> review -> repair links and retry-layer metadata under keys
- * ProgressLedger's validator ignores. Masking uses fast-redact.
+ * writer -> review -> repair links, retry-layer metadata, and goal rollups.
  */
 
 const { ProgressLedger, Cause, fingerprint } = require('./work-guard');
@@ -15,7 +14,6 @@ const {
   assertValidId,
   maskCredentials,
   writeJson,
-  checkGoalBudget,
   findReservation,
   computeGoals,
   normalizeAdmit,
@@ -61,27 +59,12 @@ class RunLedger {
 
     return this.progressLedger.locked(() => {
       this.progressLedger.limits = this.limits;
-      const s = this.progressLedger.load();
-      if (!targetItemId) {
-        const cause = checkGoalBudget(s.goal, this.limits);
-        if (cause) {
-          const limit =
-            cause === Cause.TIME_EXHAUSTED
-              ? 'ms'
-              : cause === Cause.ATTEMPTS_EXHAUSTED
-                ? 'attempts'
-                : 'tokens';
-          return { ok: false, cause, limit };
-        }
-        return { ok: true };
-      }
-
-      const res = this.progressLedger.admitUnlocked(targetItemId, stage, fp, {
+      const res = this.progressLedger.admitUnlocked(targetItemId || '__goal__', stage, fp, {
         reserve: opts.reserve,
         pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
       });
       if (!res.ok) return res;
-      if (opts.reserve) {
+      if (opts.reserve && targetItemId) {
         const fresh = this.progressLedger.load();
         const entry = fresh.items?.[targetItemId]?.stages?.[stage]?.fps?.[fp];
         if (entry) {
@@ -137,8 +120,6 @@ class RunLedger {
 
       const targetEntry = stages[st]?.fps?.[fp];
       if (targetEntry && targetEntry.outcome === 'IN_FLIGHT') {
-        // The destination is already reserved. If it belongs to another attempt,
-        // refuse — a continuation may not replace another attempt's reservation.
         if (targetEntry.attemptId && targetEntry.attemptId !== attemptKey) {
           return {
             ok: false,
@@ -146,7 +127,6 @@ class RunLedger {
             reason: 'in-flight-owned-by-other-attempt',
           };
         }
-        // This attempt already owns the destination: use it as the reservation.
         if (!reservedEntry || reservedStage !== st || reservedFp !== fp) {
           reservedStage = st;
           reservedFp = fp;
@@ -194,6 +174,8 @@ class RunLedger {
         writeJson(this.file, s);
       } else {
         if (alreadyRecorded) {
+          const priorVerdict = stages[st]?.fps?.[fp]?.outcome || 'DONE';
+          const finalVerdict = opts.verdict || opts.outcome || priorVerdict;
           stages[st] = stages[st] || { fps: {} };
           stages[st].fps[fp] = Object.assign({}, stages[st].fps[fp], {
             outcome: 'IN_FLIGHT',
@@ -203,18 +185,26 @@ class RunLedger {
             attemptId: attemptKey,
           });
           writeJson(this.file, s);
+          this.progressLedger.recordUnlocked(targetItemId, st, fp, finalVerdict, {
+            ms,
+            tokens: known ? opts.tokens : undefined,
+          });
         } else if (!reservedEntry) {
           const admitRes = this.progressLedger.admitUnlocked(targetItemId, st, fp, {
             reserve: true,
             pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
           });
           if (!admitRes.ok) return admitRes;
+          this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
+            ms,
+            tokens: known ? opts.tokens : undefined,
+          });
+        } else {
+          this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
+            ms,
+            tokens: known ? opts.tokens : undefined,
+          });
         }
-
-        this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
-          ms,
-          tokens: known ? opts.tokens : undefined,
-        });
       }
 
       s = this.progressLedger.load();

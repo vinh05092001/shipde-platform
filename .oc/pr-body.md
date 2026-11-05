@@ -55,17 +55,24 @@
 | P1: Cross-stage execution continuation to fallback at attempt cap (run-ledger.js:133)                 | `reserved_attempt_can_continue_in_fallback_at_cap`               | `node reserved_attempt_can_continue_in_fallback_at_cap.js`                              | PASS                                                                                       |
 | P1: Reservation without attemptId captures prior runs into goal rollup (run-ledger.js:167)            | `reservation_without_attempt_id_does_not_capture_prior_runs`     | `node reservation_without_attempt_id_does_not_capture_prior_runs.js`                    | PASS                                                                                       |
 | P1: Prototype-named fingerprint identifier refused without writes (run-ledger-helpers.js:255)         | `prototype_named_fingerprint_is_refused_without_writes`          | `node prototype_named_fingerprint_is_refused_without_writes.js`                         | PASS                                                                                       |
-| P1: CI statusCheckRollup reports SUCCESS                                                              | `statusCheckRollup`                                              | `gh pr view 505 --json headRefOid,statusCheckRollup`                                    | PASS (headRefOid=eaec81b5… matches reviewed SHA; 10/10 required checks conclusion=SUCCESS) |
+| P1: CI statusCheckRollup reports SUCCESS                                                              | `statusCheckRollup`                                              | `gh pr view 505 --json headRefOid,statusCheckRollup`                                    | PASS (headRefOid=4783ce7e… matches reviewed SHA; 10/10 required checks conclusion=SUCCESS) |
 | P1: Goal time cap applies without item id (run-ledger.js:214)                                         | `goal_time_cap_applies_without_item_id`                          | `node goal_time_cap_applies_without_item_id.js`                                         | PASS                                                                                       |
 | P1: Route key is redacted with fast-redact (run-ledger-helpers.js:117)                                | `route_key_is_redacted`                                          | `node route_key_is_redacted.js`                                                         | PASS                                                                                       |
 | P1: `Authorization` header credential persisted unredacted (run-ledger-helpers.js:27)                 | `route_authorization_header_is_redacted`                         | `node route_authorization_header_is_redacted.js`                                        | PASS                                                                                       |
 | P1: Continuation overwrote another attempt's reserved destination (run-ledger.js:142)                 | `reserved_attempt_cannot_overwrite_another_reserved_destination` | `node reserved_attempt_cannot_overwrite_another_reserved_destination.js`                | PASS                                                                                       |
 | P1: Standard Anthropic `x-api-key` header credential persisted unredacted (run-ledger-helpers.js:117) | `route_x_api_key_header_is_redacted`                             | `node route_x_api_key_header_is_redacted.js`                                            | PASS                                                                                       |
+| P1: Recursive sk-... key pattern masking in strings and objects (run-ledger-helpers.js:110)           | `mask_credentials_sk_pattern`                                    | `node verify-finding-1.js`                                                              | PASS                                                                                       |
+| P1: Cross-layer retry deduplication accumulates elapsed ms and preserves verdict (run-ledger.js:196)  | `retry_layer_ms_accumulation`                                    | `node verify-finding-2.js`                                                              | PASS                                                                                       |
+| P1: Goal reservation attempts tracked without explicit attemptId (run-ledger-helpers.js:194)          | `goal_reservations_attempts_tracked`                             | `node verify-finding-3.js`                                                              | PASS                                                                                       |
 | Follow-up: AC-AI-169-01 assertions for ms=4100/tokens=1700                                            | `AC-AI-169-01`                                                   | `node --test --test-name-pattern="AC-AI-169-01" tools/ai-brain/test/run-ledger.test.js` | PASS                                                                                       |
 
-### Round-93 root-cause verification (2026-11-05)
+### Root-cause round review verifications (Round 93)
 
-All 11 findings from `.oc/review.txt` re-run as temporary scripts and deleted after; each row above is the surviving evidence. Finding 5 (CI statusCheckRollup) was the only outstanding item and is now fixed: `gh pr view 505 --json headRefOid,statusCheckRollup` at the reviewed SHA `eaec81b5ee6015e5c40dc1c3bb30a1f2727e72bf` returns 10/10 required checks with `conclusion == SUCCESS`. Round-10 fixes (x-api-key masking paths, AC-AI-169-01 ms/tokens assertions) remain in place.
+- finding 1: `node verify-finding-1.js` -> pass
+- finding 2: `node verify-finding-2.js` -> pass
+- finding 3: `node verify-finding-3.js` -> pass
+
+All findings from `.oc/review.txt` re-run as temporary scripts and deleted after; each row above is the surviving evidence. Finding 5 (CI statusCheckRollup) was updated: `gh pr view 505 --json headRefOid,statusCheckRollup` at the reviewed SHA `4783ce7eb5694949a31c0e3309974d1ce5245be9` returns 10/10 required checks with `conclusion == SUCCESS`.
 
 ## Verification
 
@@ -77,7 +84,7 @@ All 11 findings from `.oc/review.txt` re-run as temporary scripts and deleted af
 | git diff --check origin/main...HEAD                                                                                           | PASS               | Zero whitespace or merge conflict markers (exit 0)                                                                                                                                                                 |
 | pnpm security:secrets                                                                                                         | BLOCKED_BY_SANDBOX | pnpm refuses to run in this sandbox (exit 1: pnpm install failed); the underlying scan was run directly instead via `npx tsx scripts/verify-secrets.ts`                                                            |
 | npx tsx scripts/verify-secrets.ts (equivalent)                                                                                | BLOCKED_BY_SANDBOX | gitleaks scan of working tree reports 2 findings in DASHBOARD.html:115 (generic-api-key) — pre-existing file on origin/main, untouched by this Work Item; gitleaks native binary available, scan ran to completion |
-| gh pr view 505 --json headRefOid,statusCheckRollup                                                                            | PASS               | headRefOid == eaec81b5ee6015e5c40dc1c3bb30a1f2727e72bf; 10/10 required checks conclusion == SUCCESS                                                                                                                |
+| gh pr view 505 --json headRefOid,statusCheckRollup                                                                            | PASS               | headRefOid == 4783ce7eb5694949a31c0e3309974d1ce5245be9; 10/10 required checks conclusion == SUCCESS                                                                                                                |
 
 - [x] Clean install completed.
 - [x] Lint/typecheck completed.
@@ -116,7 +123,7 @@ None
 ## Codex review
 
 - Review status: READY_FOR_CODEX
-- Reviewed commit: eaec81b5ee6015e5c40dc1c3bb30a1f2727e72bf (Round 93: CHANGES_REQUIRED — Finding 1 (CI statusCheckRollup) fixed; all 10 required checks now report SUCCESS at the exact reviewed SHA)
+- Reviewed commit: 4783ce7eb5694949a31c0e3309974d1ce5245be9 (Round 93: ROOT-CAUSE ROUND — findings 1, 2, 3 addressed; RunLedger delegates admission and accounting to ProgressLedger)
 - Verdict: READY_FOR_REVIEW
 
 - [x] The implementation author has stopped after opening/updating this PR and has not started another Work Item.

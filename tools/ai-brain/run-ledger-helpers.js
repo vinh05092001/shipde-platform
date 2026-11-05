@@ -15,8 +15,6 @@ const SENSITIVE_KEYS = [
   'token',
   'authorization',
   'Authorization',
-  'Apikey',
-  'ApiKey',
   'secret',
   'password',
   'credential',
@@ -42,6 +40,8 @@ const redactor = fastRedact({
   censor: '[REDACTED]',
   serialize: false,
 });
+
+const SK_RE = /(\bsk-[a-zA-Z0-9_-]+|^\s*(bearer|basic)\s+\S+)/i;
 
 function isForbiddenId(id) {
   if (id === null || id === undefined) return false;
@@ -77,40 +77,19 @@ function maskUrl(v) {
   }
 }
 
-function walkUrls(obj) {
-  if (!obj || typeof obj !== 'object') return obj;
-  for (const k of Object.keys(obj)) {
-    const val = obj[k];
-    if (typeof val === 'string' && val.includes('://')) {
-      obj[k] = maskUrl(val);
-    } else if (typeof val === 'object' && val !== null) {
-      walkUrls(val);
-    }
-  }
-  return obj;
-}
-
-// Key names that carry credentials, matched case-insensitively with "-" or "_" separators, at any depth.
-const SENSITIVE_KEY_RE =
-  /^(x[-_]?)?(api[-_]?key|apikey|key|auth|authorization|bearer|cookie|set[-_]?cookie|password|passwd|secret|client[-_]?secret|credentials?|private[-_]?key|(access|refresh|id|session)[-_]?token|token)$/i;
-const BEARER_RE = /^\s*(bearer|basic|token)\s+\S+/i;
-const API_KEY_RE = /^(sk-|o[-_]?)?[a-z0-9_-]{20,}$/i;
-
-function maskKeys(obj, seen = new Set()) {
+function walkStrings(obj, seen = new Set()) {
   if (!obj || typeof obj !== 'object' || seen.has(obj)) return obj;
   seen.add(obj);
   for (const k of Object.keys(obj)) {
     const val = obj[k];
-    if (SENSITIVE_KEY_RE.test(k)) {
-      obj[k] = '[REDACTED]';
-    } else if (typeof val === 'string') {
-      if (BEARER_RE.test(val) || API_KEY_RE.test(val)) {
+    if (typeof val === 'string') {
+      if (SK_RE.test(val)) {
         obj[k] = '[REDACTED]';
-      } else if (val && typeof val === 'object') {
-        maskKeys(val, seen);
+      } else if (val.includes('://')) {
+        obj[k] = maskUrl(val);
       }
     } else if (val && typeof val === 'object') {
-      maskKeys(val, seen);
+      walkStrings(val, seen);
     }
   }
   return obj;
@@ -118,13 +97,12 @@ function maskKeys(obj, seen = new Set()) {
 
 function maskCredentials(v) {
   if (typeof v === 'string') {
-    if (BEARER_RE.test(v) || API_KEY_RE.test(v)) return '[REDACTED]';
+    if (SK_RE.test(v)) return '[REDACTED]';
     return maskUrl(v);
   }
   if (!v || typeof v !== 'object') return v;
   const copy = JSON.parse(JSON.stringify(v));
-  walkUrls(copy);
-  maskKeys(copy);
+  walkStrings(copy);
   redactor(copy);
   return copy;
 }
@@ -135,19 +113,6 @@ function writeJson(file, value) {
   const tmp = file + '.' + process.pid + '.' + Date.now() + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
   fs.renameSync(tmp, file);
-}
-
-function checkGoalBudget(goal, limits) {
-  if (!limits || !limits.goal) return null;
-  const g = limits.goal;
-  if (Number.isFinite(g.ms) && (goal.ms || 0) >= g.ms) return Cause.TIME_EXHAUSTED;
-  if (Number.isFinite(g.attempts) && (goal.attempts || 0) >= g.attempts) {
-    return Cause.ATTEMPTS_EXHAUSTED;
-  }
-  if (Number.isFinite(g.tokens) && (goal.tokens || 0) + (goal.unknownTokens || 0) >= g.tokens) {
-    return Cause.TOKENS_EXHAUSTED;
-  }
-  return null;
 }
 
 function findReservation(stages, attemptKey) {
@@ -184,14 +149,14 @@ function computeGoals(runs, items) {
     if (Number.isFinite(r.tokens)) g.tokens += r.tokens;
     else if (r.tokens === 'UNKNOWN') g.tokensUnknown += 1;
   }
-  for (const it of Object.values(items || {})) {
+  for (const [itKey, it] of Object.entries(items || {})) {
     if (!it || !it.stages) continue;
-    for (const st of Object.values(it.stages)) {
+    for (const [stKey, st] of Object.entries(it.stages)) {
       if (!st || !st.fps) continue;
-      for (const entry of Object.values(st.fps)) {
+      for (const [fpKey, entry] of Object.entries(st.fps)) {
         if (
           entry &&
-          entry.outcome === 'IN_FLIGHT' &&
+          (entry.outcome === 'IN_FLIGHT' || entry.outcome === 'TIMEOUT') &&
           entry.goalId &&
           !isForbiddenId(entry.goalId)
         ) {
@@ -203,7 +168,7 @@ function computeGoals(runs, items) {
             unknownTokens: 0,
           });
           const ids = seen.get(entry.goalId) || new Set();
-          const attemptKey = entry.attemptId || 'res-' + entry.goalId;
+          const attemptKey = entry.attemptId || `${itKey}:${stKey}:${fpKey}`;
           if (!ids.has(attemptKey)) {
             ids.add(attemptKey);
             g.attempts += 1;
@@ -277,7 +242,6 @@ module.exports = {
   maskUrl,
   maskCredentials,
   writeJson,
-  checkGoalBudget,
   findReservation,
   computeGoals,
   normalizeAdmit,
