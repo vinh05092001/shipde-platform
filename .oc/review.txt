@@ -1,5 +1,0 @@
-VERDICT: CHANGES_REQUIRED
-
-1. **P1 — push gate refused this branch (SKIP p-routing-core bad=0 g=0).** Fix before anything else:
-.oc/pr-body-remote.md:128: new blank line at EOF.
-Commit subjects must contain AI-171; leftover conflict markers must be resolved.
