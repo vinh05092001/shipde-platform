@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-05",
+  "note": "Versioned route identity data. Router prefixes and gateway endpoint hints are configuration, not code literals. Adapted from the data-driven model-group idea in LiteLLM Router (https://github.com/BerriAI/litellm, router.py). Quota families and weight profiles belong to Slices B/C and are intentionally absent from this Slice A file.",
+  "gatewayPortHints": {
+    "9router": [20128]
+  },
+  "prefixToProvider": {
+    "ag": "antigravity",
+    "gh": "github",
+    "cc": "claude",
+    "kr": "kiro",
+    "gcli": "grok-cli",
+    "cl": "cline",
+    "cf": "cloudflare-ai",
+    "kgw": "kilo-gateway",
+    "nous": "nous",
+    "ollama": "ollama",
+    "mistral": "mistral",
+    "kimchi": "kimchi",
+    "qd": "qoder",
+    "bzl": "bazaarlink",
+    "groq": "groq",
+    "el": "elevenlabs",
+    "jina": "jina-ai",
+    "polly": "aws-polly",
+    "xmtp": "xiaomi-tokenplan",
+    "openai": "openai",
+    "cerebras": "cerebras",
+    "tokenrouter": "tokenrouter"
+  }
+}
