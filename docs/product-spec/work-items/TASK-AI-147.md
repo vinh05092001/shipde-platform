@@ -34,3 +34,15 @@ Revamp the Controller's route scanning mechanism across `tools/ai-brain/quota-sc
 - No test-only branching in production paths; use dependency injection (`fetch`, `now`, `env`, `quotaStateFile`).
 - Unit tests run fully isolated with local fixtures and zero external network calls.
 - Full `ai-brain` test suite and `check-no-hardcode.mjs` must pass clean.
+
+## Follow-up 2026-11-04: alias-prefixed router ids
+
+- Defect: OpenCode names 9Router models `ninerouter/<upstream>/<model>`; probes and discovery record health as `<upstream>/<model>` on route `9router`. Dispatch looked up the alias-prefixed id, found no record, and refused every live 9Router writer (outcome 6 unmet).
+- Fix: `stripRouteAlias` in `tools/ai-brain/cli.js` removes a registry alias of the candidate's route (from `sources.json` `aliases`, already loaded by dispatch) before the route-health lookup.
+- Evidence: `tools/ai-brain/test/task-ai-147-route-alias-health.test.js`; same discovery dir and health store, `dispatch --dry-run --item TASK-AI-154`: origin/main 0 OpenCode writers, this change 93.
+
+## Follow-up 2026-11-05: operator writer combo
+
+- Operator decision 2026-11-05: the Controller's 9Router writer combo is `vinh` (operator-maintained in the 9Router dashboard), replacing `shipde-writer`. `tools/ai-brain/sources.json` `dispatch.nineRouterWriterCombo` points at it; the combo's members and order stay operator data in 9Router, not in code.
+- Evidence: three real `/v1/chat/completions` calls to `vinh` answered (served `gpt-4.1-2025-04-14`); combo and registry tests (7 files, 71 tests) pass.
+- Review independence: the combo can serve an openai-family model, so the reviewer is chosen per PR from a different family.

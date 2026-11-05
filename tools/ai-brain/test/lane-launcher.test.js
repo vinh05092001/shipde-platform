@@ -1,0 +1,634 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { once } = require('node:events');
+const { Worker } = require('node:worker_threads');
+const {
+  launch,
+  acquireLaneLock,
+  releaseLaneLock,
+  readResult,
+  saveResult,
+  cleanup,
+} = require('../lane-launcher');
+
+function makeTempLane() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'lane-launcher-test-'));
+}
+
+test('2 job tranh 1 lane -> 1 bị từ chối, bỏ skipLock', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const res1 = launch(dir, { name: 'job-1' });
+  assert.strictEqual(res1.ok, true);
+  assert.ok(res1.job.jobId);
+  assert.ok(res1.job.attemptId);
+
+  const res2 = launch(dir, { name: 'job-2' });
+  assert.strictEqual(res2.ok, false);
+
+  // skipLock đã bị loại bỏ -> vẫn bị từ chối
+  const res3 = launch(dir, { name: 'job-3' }, { skipLock: true });
+  assert.strictEqual(res3.ok, false);
+
+  // kiểm tra pid > 0 được bảo đảm không bị bypass kể cả khi truyền skipLock: true
+  const dirPid = makeTempLane();
+  t.after(() => fs.rmSync(dirPid, { recursive: true, force: true }));
+  assert.throws(
+    () => launch(dirPid, { name: 'job-4' }, { pid: 0, skipLock: true }),
+    /positive pid required/
+  );
+  assert.throws(
+    () => launch(dirPid, { name: 'job-5' }, { pid: -1, skipLock: true }),
+    /positive pid required/
+  );
+});
+
+test('result job cũ bị bỏ', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const oldJob = { jobId: 'job-old-123' };
+  saveResult(dir, oldJob, { exitCode: 0, stderr: '' });
+
+  const newJob = { jobId: 'job-new-456' };
+  const readMismatch = readResult(dir, newJob);
+  assert.strictEqual(readMismatch, null);
+
+  const readOld = readResult(dir, oldJob);
+  assert.ok(readOld);
+  assert.strictEqual(readOld.jobId, 'job-old-123');
+});
+
+test('owner chết -> chiếm qua thế hệ mới, chỉ owner release, không chiếm theo tuổi', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const alivePids = new Set([1001]);
+  const lock1 = acquireLaneLock(
+    dir,
+    { jobId: 'job-1', pid: 1001 },
+    { pidAlive: (p) => alivePids.has(p) }
+  );
+  assert.strictEqual(lock1.ok, true);
+  assert.strictEqual(lock1.owner.gen, 1);
+
+  // Live holder prevents stealing, regardless of age
+  const blocked = acquireLaneLock(
+    dir,
+    { jobId: 'job-2', pid: 1002 },
+    { pidAlive: (p) => alivePids.has(p) }
+  );
+  assert.strictEqual(blocked.ok, false);
+
+  // Non-owner release refused
+  const badRel = releaseLaneLock(dir, { jobId: 'wrong-owner' });
+  assert.strictEqual(badRel.ok, false);
+
+  // Owner 1 dies -> Contender acquires generation 2
+  alivePids.delete(1001);
+  alivePids.add(1002);
+  const lock2 = acquireLaneLock(
+    dir,
+    { jobId: 'job-2', pid: 1002 },
+    { pidAlive: (p) => alivePids.has(p) }
+  );
+  assert.strictEqual(lock2.ok, true);
+  assert.strictEqual(lock2.owner.gen, 2);
+
+  // Owner 2 can release
+  const goodRel = releaseLaneLock(dir, lock2.owner);
+  assert.strictEqual(goodRel.ok, true);
+});
+
+test('cleanup không đụng pid job khác, chỉ kill khi jobId lưu trong lane khớp', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const killed = [];
+  const mockKill = (pid) => killed.push(pid);
+
+  // lane đang lưu jobA
+  const jobA = { jobId: 'job-A', pidTree: [100, 101, 102] };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(jobA, null, 2));
+
+  // cleanup với jobB khác jobId -> không kill gì
+  const jobB = { jobId: 'job-B', pidTree: [200, 201] };
+  const resB = cleanup(dir, jobB, { kill: mockKill });
+  assert.strictEqual(resB.ok, false);
+  assert.deepStrictEqual(resB.killed, []);
+  assert.deepStrictEqual(killed, []);
+
+  // cleanup với jobA khớp jobId -> dùng pidTree đã lưu trong lane
+  const resA = cleanup(dir, jobA, { kill: mockKill });
+  assert.strictEqual(resA.ok, true);
+  assert.deepStrictEqual(resA.killed, [100, 101, 102]);
+  assert.deepStrictEqual(killed, [100, 101, 102]);
+  assert.strictEqual(killed.includes(200), false);
+  assert.strictEqual(killed.includes(201), false);
+});
+
+test('stderr không còn chuỗi key (regex key/token/Bearer), lưu exitCode, durationMs, logPath', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Test che JSON {"api_key":"secret","token":"secret"}
+  const jsonDirty = '{"api_key":"secret","token":"secret"}';
+  const savedJson = saveResult(
+    dir,
+    { jobId: 'job-json' },
+    {
+      stderr: jsonDirty,
+    }
+  );
+  assert.strictEqual(savedJson.stderr.includes('secret'), false);
+  assert.strictEqual(savedJson.stderr, '[REDACTED LINE: credential]');
+
+  const dirty =
+    'Error: Bearer secret-tok-999; api_key="secret-key-888"; token=tok-777; --key=key-666';
+  const saved = saveResult(
+    dir,
+    { jobId: 'job-secure' },
+    {
+      exitCode: 7,
+      stderr: dirty,
+      durationMs: 350,
+      logPath: '/tmp/job.log',
+    }
+  );
+
+  assert.strictEqual(saved.exitCode, 7);
+  assert.strictEqual(saved.durationMs, 350);
+  assert.strictEqual(saved.logPath, '/tmp/job.log');
+  assert.strictEqual(saved.stderr.includes('secret-tok-999'), false);
+  assert.strictEqual(saved.stderr.includes('secret-key-888'), false);
+  assert.strictEqual(saved.stderr.includes('tok-777'), false);
+  assert.strictEqual(saved.stderr.includes('key-666'), false);
+
+  const read = readResult(dir, { jobId: 'job-secure' });
+  assert.strictEqual(read.stderr, saved.stderr);
+});
+
+test('relaunch cùng object job cũ -> ID khác, result cũ bị bỏ', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const l1 = launch(dir, { name: 'relaunch-task' });
+  assert.strictEqual(l1.ok, true);
+  saveResult(dir, l1.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, l1.job);
+
+  // relaunch cùng object job cũ
+  const l2 = launch(dir, l1.job);
+  assert.strictEqual(l2.ok, true);
+  assert.notStrictEqual(l2.job.jobId, l1.job.jobId);
+  assert.notStrictEqual(l2.job.attemptId, l1.job.attemptId);
+
+  // result cũ bị bỏ vì jobId không khớp
+  const oldResult = readResult(dir, l2.job);
+  assert.strictEqual(oldResult, null);
+});
+
+test('launch cho phép job mới khi job cũ đã có result và lock giải phóng', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const l1 = launch(dir, { name: 'first' });
+  assert.strictEqual(l1.ok, true);
+
+  saveResult(dir, l1.job, { exitCode: 0 });
+  releaseLaneLock(dir, l1.job);
+
+  const l2 = launch(dir, { name: 'second' });
+  assert.strictEqual(l2.ok, true);
+  assert.notStrictEqual(l2.job.jobId, l1.job.jobId);
+});
+
+test('redacts-comma-containing-unquoted-api-key', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-unquoted-comma-key' };
+  const rawStderr = 'api_key=FAKE_PREFIX,FAKE_SUFFIX';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_PREFIX'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_SUFFIX'), false);
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr.includes('FAKE_PREFIX'), false);
+  assert.strictEqual(persisted.stderr.includes('FAKE_SUFFIX'), false);
+});
+
+test('cleanup-rejects-supplied-job-without-jobId', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const killed = [];
+  let killCalled = false;
+  const mockKill = (pid) => {
+    killCalled = true;
+    killed.push(pid);
+  };
+
+  const jobA = { jobId: 'job-A', pidTree: [100, 101] };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(jobA, null, 2));
+
+  const jobB = { name: 'job-B', pidTree: [200] };
+  const res = cleanup(dir, jobB, { kill: mockKill });
+
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(res.killed, []);
+  assert.strictEqual(killCalled, false);
+});
+
+test('redacts-following-quoted-token-after-unquoted-key', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-A' };
+  const rawStderr = 'api_key=FAKE_FIRST,token="FAKE_SECOND"';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_FIRST'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_SECOND'), false);
+  assert.strictEqual(saved.stderr, '[REDACTED LINE: credential]');
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr.includes('FAKE_FIRST'), false);
+  assert.strictEqual(persisted.stderr.includes('FAKE_SECOND'), false);
+  assert.strictEqual(persisted.stderr, '[REDACTED LINE: credential]');
+});
+
+test('cleanup-rejects-empty-job-identifier', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const killed = [];
+  let killCalled = false;
+  const mockKill = (pid) => {
+    killCalled = true;
+    killed.push(pid);
+  };
+
+  const jobA = { jobId: 'job-A', pidTree: [100, 101] };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(jobA, null, 2));
+
+  const resEmptyStr = cleanup(dir, '', { kill: mockKill });
+  assert.strictEqual(resEmptyStr.ok, false);
+  assert.strictEqual(resEmptyStr.cause, 'JOB_MISMATCH');
+  assert.deepStrictEqual(resEmptyStr.killed, []);
+  assert.strictEqual(killCalled, false);
+
+  const resEmptyObj = cleanup(dir, { jobId: '' }, { kill: mockKill });
+  assert.strictEqual(resEmptyObj.ok, false);
+  assert.strictEqual(resEmptyObj.cause, 'JOB_MISMATCH');
+  assert.deepStrictEqual(resEmptyObj.killed, []);
+  assert.strictEqual(killCalled, false);
+  assert.deepStrictEqual(killed, []);
+});
+
+test('redactStderr replaces only lines containing credentials, preserves safe lines', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-multiline' };
+  const rawStderr = [
+    'INFO: process started successfully',
+    'DEBUG: api_key=super_secret_123 in config',
+    'WARN: high memory usage detected',
+    'ERROR: token="another_secret_456" expired',
+    'INFO: process terminating normally',
+  ].join('\n');
+
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+  assert.strictEqual(saved.stderr.includes('super_secret_123'), false);
+  assert.strictEqual(saved.stderr.includes('another_secret_456'), false);
+  assert.strictEqual(saved.stderr.includes('INFO: process started successfully'), true);
+  assert.strictEqual(saved.stderr.includes('WARN: high memory usage detected'), true);
+  assert.strictEqual(saved.stderr.includes('INFO: process terminating normally'), true);
+
+  const expected = [
+    'INFO: process started successfully',
+    '[REDACTED LINE: credential]',
+    'WARN: high memory usage detected',
+    '[REDACTED LINE: credential]',
+    'INFO: process terminating normally',
+  ].join('\n');
+  assert.strictEqual(saved.stderr, expected);
+});
+
+test('redacts-standalone-key-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-A' };
+  const rawStderr = '--key=FAKE_ONLY';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr, '[REDACTED LINE: credential]');
+  assert.strictEqual(saved.stderr.includes('FAKE_ONLY'), false);
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr, '[REDACTED LINE: credential]');
+  assert.strictEqual(persisted.stderr.includes('FAKE_ONLY'), false);
+});
+
+test('launch-rejects-zero-job-pid', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  assert.throws(() => launch(dir, { pid: 0 }), /positive pid required/);
+
+  const lockPath = path.join(dir, 'lock');
+  const jobFile = path.join(dir, 'job.json');
+  assert.strictEqual(fs.existsSync(lockPath), false);
+  assert.strictEqual(fs.existsSync(jobFile), false);
+});
+
+test('late-result-preserves-active-completion', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Complete and release A
+  const resA = launch(dir, { name: 'job-A' });
+  assert.strictEqual(resA.ok, true);
+  saveResult(dir, resA.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resA.job);
+
+  // Launch and complete/release B
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  saveResult(dir, resB.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resB.job);
+
+  // Then deliver A's delayed result
+  saveResult(dir, resA.job, { exitCode: 1, stderr: 'late result' });
+
+  // Assert B's result remains readable
+  const readB = readResult(dir, resB.job);
+  assert.ok(readB);
+  assert.strictEqual(readB.jobId, resB.job.jobId);
+  assert.strictEqual(readB.exitCode, 0);
+
+  // Assert launching C succeeds
+  const resC = launch(dir, { name: 'job-C' });
+  assert.strictEqual(resC.ok, true);
+  assert.ok(resC.job.jobId);
+});
+
+test('redacts-json-credential-value-on-next-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-json-next-line' };
+  const rawStderr = '{\n"api_key":\n"FAKE_CREDENTIAL"\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_CREDENTIAL'), false);
+
+  const persisted = readResult(dir, job);
+  assert.ok(persisted);
+  assert.strictEqual(persisted.stderr.includes('FAKE_CREDENTIAL'), false);
+
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
+});
+
+test('launch-rejects-negative-and-null-job-pid', (t) => {
+  for (const bad of [-1, null, 1.5, '42']) {
+    const dir = makeTempLane();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    assert.throws(() => launch(dir, { pid: bad }), /positive pid required/);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'lock')), false);
+    assert.strictEqual(fs.existsSync(path.join(dir, 'job.json')), false);
+  }
+});
+
+test('late-result-without-jobid-cannot-overwrite-active-completion', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  saveResult(dir, resB.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resB.job);
+
+  // An unbound late result (no jobId on job nor outcome) must be discarded.
+  assert.strictEqual(saveResult(dir, {}, { exitCode: 1, stderr: 'late' }), null);
+  assert.strictEqual(saveResult(dir, undefined, { exitCode: 1 }), null);
+
+  const readB = readResult(dir, resB.job);
+  assert.ok(readB);
+  assert.strictEqual(readB.jobId, resB.job.jobId);
+  assert.strictEqual(launch(dir, { name: 'job-C' }).ok, true);
+});
+
+test('redacts-json-credential-value-after-separator-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-json-separator-line' };
+  const rawStderr =
+    '{\n"api_key"\n:\n"FAKE_CREDENTIAL"\n}\r\n{\r\n"token"\r\n\r\n=\r\n"FAKE_CREDENTIAL"\r\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+  assert.strictEqual(saved.stderr.includes('FAKE_CREDENTIAL'), false);
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
+  // Structural lines that carry no credential are preserved.
+  assert.ok(saved.stderr.startsWith('{\n'));
+  assert.ok(saved.stderr.endsWith('}'));
+});
+
+// A paused lane operation must be reproducible across processes to prove the
+// fix: a worker runs the delayed operation and pauses at the seam while the
+// main thread replaces the lane, then the paused operation resumes.
+const PAUSE_WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads');
+const control = new Int32Array(workerData.sab);
+const launcher = require(workerData.launcher);
+const seam = () => {
+  // 1 = paused, 2 = released. Wait for the release token, never for 0.
+  Atomics.store(control, 0, 1);
+  Atomics.notify(control, 0);
+  Atomics.wait(control, 0, 1, 15000);
+};
+const options = {};
+if (workerData.pauseAt === 'beforePublish') options.beforePublish = seam;
+if (workerData.pauseAt === 'beforeLockAcquire') options.beforeLockAcquire = seam;
+const res =
+  workerData.op === 'saveResult'
+    ? launcher.saveResult(workerData.dir, workerData.job, workerData.outcome, options)
+    : launcher.launch(workerData.dir, workerData.job, options);
+parentPort.postMessage(res === null ? { discarded: true } : { discarded: false, res });
+`;
+
+function startPauseWorker(t, { pauseAt, op, dir, job, outcome }) {
+  const sab = new SharedArrayBuffer(4);
+  const control = new Int32Array(sab);
+  const worker = new Worker(PAUSE_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      sab,
+      pauseAt,
+      op,
+      dir,
+      job: job || null,
+      outcome: outcome || null,
+      launcher: path.join(__dirname, '..', 'lane-launcher.js'),
+    },
+  });
+  t.after(() => worker.terminate());
+  // 'ok' = woken by the pause store; 'not-equal' = the worker paused first.
+  const paused = Atomics.wait(control, 0, 0, 15000);
+  assert.ok(
+    paused === 'ok' || paused === 'not-equal',
+    `the delayed ${op} must pause at ${pauseAt} (seam reached before its critical section)`
+  );
+  const resume = () => {
+    Atomics.store(control, 0, 2);
+    Atomics.notify(control, 0);
+  };
+  const done = once(worker, 'message');
+  return { resume, done };
+}
+
+test('late-result-race-preserves-active-completion', async (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Complete and release A.
+  const resA = launch(dir, { name: 'job-A' });
+  assert.strictEqual(resA.ok, true);
+  saveResult(dir, resA.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resA.job);
+
+  // A's delayed save validates A's identity, pauses before publication, and only
+  // resumes after another process has launched, completed and released B.
+  const { resume, done } = startPauseWorker(t, {
+    pauseAt: 'beforePublish',
+    op: 'saveResult',
+    dir,
+    job: resA.job,
+    outcome: { exitCode: 1, stderr: 'late A' },
+  });
+
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  saveResult(dir, resB.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resB.job);
+
+  resume();
+  const [{ discarded }] = await done;
+
+  // A's late publication must be discarded, never overwrite B's completion.
+  assert.strictEqual(discarded, true);
+  const readB = readResult(dir, resB.job);
+  assert.ok(readB);
+  assert.strictEqual(readB.jobId, resB.job.jobId);
+  assert.strictEqual(readB.exitCode, 0);
+
+  // Launching C succeeds.
+  const resC = launch(dir, { name: 'job-C' });
+  assert.strictEqual(resC.ok, true);
+  assert.ok(resC.job.jobId);
+});
+
+test('launch-rechecks-active-job-after-lock-acquisition', async (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  // Completed and released A recorded on the lane.
+  const resA = launch(dir, { name: 'job-A' });
+  assert.strictEqual(resA.ok, true);
+  saveResult(dir, resA.job, { exitCode: 0, stderr: '' });
+  releaseLaneLock(dir, resA.job);
+
+  // Contender C passes the initial busy check, then pauses before acquiring the
+  // lock. B launches, stays active without a result, and its owner releases the lock.
+  const { resume, done } = startPauseWorker(t, {
+    pauseAt: 'beforeLockAcquire',
+    op: 'launch',
+    dir,
+    job: { name: 'job-C' },
+  });
+
+  const resB = launch(dir, { name: 'job-B' });
+  assert.strictEqual(resB.ok, true);
+  releaseLaneLock(dir, resB.job);
+
+  resume();
+  const [{ res: resC }] = await done;
+
+  // C must be rejected; it cannot overwrite B's active job.json.
+  assert.strictEqual(resC.ok, false);
+  assert.strictEqual(resC.cause, 'LANE_BUSY');
+  const stored = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+  assert.strictEqual(stored.jobId, resB.job.jobId);
+});
+
+test('redacts-credential-container-with-keyword-on-opening-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-container-keyword-line' };
+  const rawStderr = '{\n"secret": { "token": "FAKE_A",\n"value": "FAKE_CREDENTIAL"\n}\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_A'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_CREDENTIAL'), false);
+
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_A'), false);
+  assert.strictEqual(rawResult.includes('FAKE_CREDENTIAL'), false);
+});
+
+test('redacts-json-credential-nested-object-and-array-values', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-json-nested' };
+  const rawStderr = [
+    '{',
+    '"secret": {',
+    '"value": "FAKE_CREDENTIAL_A",',
+    '"inner": { "v": "FAKE_CREDENTIAL_B" }',
+    '},',
+    '"api_key":',
+    '[',
+    '"FAKE_CREDENTIAL_C"',
+    '],',
+    '"status": "safe-visible"',
+    '}',
+  ].join('\n');
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+  assert.strictEqual(/FAKE_CREDENTIAL/.test(saved.stderr), false);
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(/FAKE_CREDENTIAL/.test(rawResult), false);
+  // Masking stops after the credential value closes.
+  assert.ok(saved.stderr.includes('"status": "safe-visible"'));
+});
+
+test('redacts-pending-key-on-credential-container-closing-line', (t) => {
+  const dir = makeTempLane();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const job = { jobId: 'job-closing-line-pending-key' };
+  const rawStderr = '{\n"secret": {\n"value": "FAKE_A"\n}, "api_key":\n"FAKE_B"\n}';
+  const saved = saveResult(dir, job, { stderr: rawStderr });
+
+  assert.strictEqual(saved.stderr.includes('FAKE_A'), false);
+  assert.strictEqual(saved.stderr.includes('FAKE_B'), false);
+
+  const rawResult = fs.readFileSync(path.join(dir, 'result.json'), 'utf8');
+  assert.strictEqual(rawResult.includes('FAKE_A'), false);
+  assert.strictEqual(rawResult.includes('FAKE_B'), false);
+});

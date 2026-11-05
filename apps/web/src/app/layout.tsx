@@ -1,5 +1,9 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { Suspense } from 'react';
+import { cookies } from 'next/headers';
+import { NuqsAdapter } from 'nuqs/adapters/next/app';
+import { AppShell, ShellSkeleton } from '@/components/shell/AppShell';
 
 export const metadata: Metadata = {
   title: 'Ship Dễ — Nền Tảng Điều Hành & Kiểm Soát Vận Chuyển',
@@ -8,15 +12,22 @@ export const metadata: Metadata = {
 
 import { AuthProvider } from '@/context/AuthContext';
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const defaultOpen = (await cookies()).get('sidebar_state')?.value !== 'false';
   return (
     <html lang="vi">
       <body className="antialiased">
-        <AuthProvider>{children}</AuthProvider>
+        <NuqsAdapter>
+          <AuthProvider>
+            <Suspense fallback={<ShellSkeleton />}>
+              <AppShell defaultOpen={defaultOpen}>{children}</AppShell>
+            </Suspense>
+          </AuthProvider>
+        </NuqsAdapter>
       </body>
     </html>
   );

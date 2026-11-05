@@ -1079,6 +1079,19 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
   return [...Array.from(map.values()), ...noId];
 }
 
+// OpenCode names a router model with the router's registry alias
+// (ninerouter/<upstream>/<model> on route 9router); probes and discovery
+// record it as <upstream>/<model>. Strip the alias so both reach one record.
+function stripRouteAlias(modelId, gateway, registry) {
+  const source = ((registry && registry.sources) || []).find((s) => s && s.id === gateway);
+  const id = String(modelId);
+  for (const alias of (source && source.aliases) || []) {
+    const prefix = String(alias).toLowerCase() + '/';
+    if (id.toLowerCase().startsWith(prefix)) return id.slice(prefix.length);
+  }
+  return modelId;
+}
+
 function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
   if (
     candidate &&
@@ -1097,7 +1110,11 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+  const rec = routeHealthApi.getPathRecord(
+    routeHealth,
+    stripRouteAlias(modelId, gateway, options && options.registry),
+    routePath
+  );
   if (rec) return rec.status === 'AVAILABLE';
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
@@ -1484,7 +1501,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         isCandidateRouteEligible(
           routeHealth,
           candidate,
-          Object.assign({}, opts, { requireRouteHealth: enforceMissingHealth }),
+          Object.assign({}, opts, {
+            requireRouteHealth: enforceMissingHealth,
+            registry: resolvedRegistry,
+          }),
           routeHealthApi
         )
       ) {
@@ -2080,6 +2100,40 @@ function dispatchCommand(args, deps = {}) {
   const log = deps.log || console.log;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
+
+  // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
+  // caller injects fixture candidates (deps.candidates /
+  // deps.discoveryCatalogue / custom evidence-dir / fixture pool-runs-dir).
+  // Fixture-injected tests do not assert live freshness; every production path
+  // (item, profile, execute) resolves candidates from the live catalogue and
+  // therefore goes through this gate.
+  if (
+    dryRunFlag &&
+    !deps.candidates &&
+    !deps.discoveryCatalogue &&
+    !args['evidence-dir'] &&
+    !args.evidenceDir &&
+    !(deps && deps.evidenceDir) &&
+    !args['pool-runtime-dir'] &&
+    !args['agy-runs-dir'] &&
+    !(deps && deps.fakeRunsDir) &&
+    !process.env.AGY_POOL_RUNS_DIR &&
+    !process.env.AGY_RUNS_DIR &&
+    !args.close &&
+    !args.complete &&
+    !args.fail
+  ) {
+    const freshness = require('./catalogue-refresh').catalogueFreshness({
+      dataDir: args['discovery-dir'] || deps.discoveryDataDir,
+      now: deps.now,
+    });
+    if (freshness.stale) {
+      error(
+        'STALE_CATALOGUE: last successful live enumeration is missing or older than 48h; run pnpm ai:refresh-catalogue'
+      );
+      return { exitCode: 1, dryRun: true, warning: freshness };
+    }
+  }
 
   // Releasing a claim is its own operation:
   const close = args.close || args.complete || args.fail;
@@ -3432,6 +3486,24 @@ function discoveryCommand(args, deps) {
   const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
   const rootDir = args.root || d.rootDir || process.cwd();
 
+  if (sub === 'run') {
+    return require('./discovery')
+      .cmdRun({ 'data-dir': dataDir, 'freshness-file': args['freshness-file'] }, d)
+      .then((result) => {
+        log(JSON.stringify(result, null, 2));
+        if (result.exitCode)
+          error(
+            'DISCOVERY_INCOMPLETE: ' +
+              result.sources
+                .filter((source) => source.incomplete)
+                .map((source) => source.id + '=' + source.reason)
+                .join('; ')
+          );
+        process.exitCode = result.exitCode;
+        return result;
+      });
+  }
+
   if (sub === 'import') {
     const { importCatalogue, formatSummary } = require('./discovery/catalogue-import');
     if (typeof args.catalogue !== 'string' || !args.catalogue) {
@@ -4652,13 +4724,16 @@ function main(argv = process.argv.slice(2), deps = {}) {
     // here and turned into a non-zero exit instead.
     if (result && typeof result.then === 'function') {
       result.then(
-        () => {},
+        (value) => {
+          if (value?.exitCode) process.exitCode = value.exitCode;
+        },
         (err) => {
           console.error('Dispatch lỗi: ' + (err && err.message ? err.message : err));
           process.exitCode = 1;
         }
       );
     }
+    if (result?.exitCode) process.exitCode = result.exitCode;
     return;
   }
   if (command === 'shadow') return shadowCommand(args);
@@ -5125,6 +5200,7 @@ module.exports = {
   // would rank.
   assembleCandidates,
   assembleForDispatch,
+  stripRouteAlias,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,

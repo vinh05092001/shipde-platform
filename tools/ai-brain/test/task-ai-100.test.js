@@ -158,17 +158,17 @@ describe('TASK-AI-100 external benchmark priors', () => {
       ],
     };
 
-    assert.deepEqual(priorFor(model, 'writer', priors), {
+    assert.deepEqual(priorFor(model, 'writer', priors, NOW), {
       canonical: 'gpt-6-luna',
       tier: 'T4',
       bonus: 0,
     });
-    assert.deepEqual(priorFor(model, 'reviewer', priors), {
+    assert.deepEqual(priorFor(model, 'reviewer', priors, NOW), {
       canonical: 'gpt-6-luna',
       tier: 'T1',
       bonus: 6,
     });
-    assert.deepEqual(priorFor(model, 'security-review', priors), {
+    assert.deepEqual(priorFor(model, 'security-review', priors, NOW), {
       canonical: 'gpt-6-luna',
       tier: 'T1',
       bonus: 6,

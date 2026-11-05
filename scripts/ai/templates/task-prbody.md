@@ -1,0 +1,11 @@
+ROLE: You are the AUTHOR for this Work Item under AGENTS.md. You do not review or declare PASS; Codex reviews independently. Never merge.
+SCOPE (strict):
+- Fix ONLY the P0/P1 findings listed in .oc/review.txt, at the file:line each one names. Do not refactor, rename, reformat or "improve" anything else.
+- Touch only the files the findings name, plus the test file that proves each fix ({{FILES}}). Do not read the whole repo: read those files and their direct imports.
+- Each fix: first a test that fails without it, then the minimal fix, then run ONLY that test file (plus pnpm lint/typecheck if app code changed).
+- If a finding needs a product decision the specs do not make: write NEEDS_DECISION under Known limitations; do not invent.
+- If .oc/context-pack.md exists, use it as your context instead of exploring.
+---
+The implementation for {{WORK_ITEM}} is committed on this branch (see git log origin/main..HEAD and docs/product-spec/work-items/{{WORK_ITEM}}.md). Do NOT change product code. Only: 1) run the checks this change needs (pnpm lint, pnpm typecheck, {{TEST_CMD}}) and git diff --check origin/main...HEAD; fix only genuine failures and whitespace; 2) write .oc/pr-body.md with the 10 ## sections of .oc/pr-body-template.md, "- Review status: READY_FOR_CODEX", the commands run with exact results, evidence for every acceptance row, screenshots/state evidence for changed UI states (or why not captured), and Known limitations (checks the sandbox blocked as BLOCKED_BY_SANDBOX). Use .oc/tmp for temp files; never touch paths outside this worktree. Stop after that.
+
+Reuse attached repos before writing new code: read docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md and use the pinned tool that fits the Work Item (e.g. NestJS+Prisma+supertest+openapi-typescript for API, Storybook+MSW+axe-core+Playwright for UI states, BullMQ for background jobs, vietnamese-provinces-database for addresses, OpenTelemetry for tracing). Look up library APIs with tools/ai-brain/context7.js instead of guessing; follow the Work Item spec-kit checklist. Do not add a dependency that is not in the manifest/package.json; if one is needed, write it under Known limitations as NEEDS_DECISION. In .oc/pr-body.md list which attached repos you used and why.
