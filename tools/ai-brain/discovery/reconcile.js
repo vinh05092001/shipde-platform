@@ -80,6 +80,18 @@ function reconcileRun(opts) {
     if (seenKeys.has(key)) continue;
     const priorState = (prior.state || '').toUpperCase();
     if (priorState === 'REMOVED') continue; // already gone
+    // An outage, omitted source or partial listing is not disappearance evidence.
+    // Every advertiser must have returned a complete successful listing.
+    if (
+      !(prior.sourceIds || []).length ||
+      !(prior.sourceIds || []).every(
+        (id) =>
+          results[id] &&
+          ['enumerated', 'enumerated-via-route'].includes(results[id].status) &&
+          !(results[id].notes || []).length
+      )
+    )
+      continue;
     const line = catalogueLine({
       runId,
       now,
