@@ -10,6 +10,7 @@
 const {
   UNKNOWN,
   GATEWAY_PREFIX_SEPARATOR,
+  detectGatewayFromEndpoint,
   escapePart,
   resolveModelPrefix,
   registerPrivateEmail,
@@ -29,11 +30,8 @@ function createRouteIdentity(input) {
 
   let gatewayId = input.gatewayId || input.gateway;
   if (!gatewayId) {
-    if (sourceId === '9router' || (input.endpoint && String(input.endpoint).includes('20128'))) {
-      gatewayId = '9router';
-    } else {
-      gatewayId = 'direct';
-    }
+    gatewayId =
+      sourceId === '9router' ? '9router' : detectGatewayFromEndpoint(input.endpoint) || 'direct';
   }
 
   const configuredModelId = input.configuredModelId || input.modelId || input.model || UNKNOWN;

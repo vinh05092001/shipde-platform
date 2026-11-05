@@ -1,7 +1,10 @@
 {
   "version": 1,
   "updatedAt": "2026-11-05",
-  "note": "Versioned route identity data. Router prefixes are configuration, not code literals. Adapted from the data-driven model-group idea in LiteLLM Router (https://github.com/BerriAI/litellm, router.py). Quota families and weight profiles belong to Slices B/C and are intentionally absent from this Slice A file.",
+  "note": "Versioned route identity data. Router prefixes and gateway endpoint hints are configuration, not code literals. Adapted from the data-driven model-group idea in LiteLLM Router (https://github.com/BerriAI/litellm, router.py). Quota families and weight profiles belong to Slices B/C and are intentionally absent from this Slice A file.",
+  "gatewayPortHints": {
+    "9router": [20128]
+  },
   "prefixToProvider": {
     "ag": "antigravity",
     "gh": "github",

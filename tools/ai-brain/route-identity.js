@@ -60,7 +60,7 @@ function parseRouteIdentity(key, defaults = {}) {
       accountRef: p[4],
       quotaScopeId: p[5],
       configuredModelId: p[6],
-      outboundModelId: p[6],
+      outboundModelId: resolveModelPrefix(p[6]).outboundModelId,
       ...defaults,
     });
   }
@@ -75,7 +75,7 @@ function parseRouteIdentity(key, defaults = {}) {
       accountRef: p[4],
       quotaScopeId: UNKNOWN,
       configuredModelId: p[5],
-      outboundModelId: p[5],
+      outboundModelId: resolveModelPrefix(p[5]).outboundModelId,
       ...defaults,
     });
   }

@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-167` |
 | Assigned author | `AGY` |
 | Risk | `LOW` |
-| Allowed paths | `tools/ai-brain/route-identity.js`; `tools/ai-brain/route-identity-utils.js`; `tools/ai-brain/route-identity-combo.js`; `tools/ai-brain/scoped-health.js`; `tools/ai-brain/scoped-health-classifier.js`; `tools/ai-brain/scoped-health-eval.js`; `tools/ai-brain/unified-selector.js`; `tools/ai-brain/unified-selector-admission.js`; `tools/ai-brain/unified-selector-jev.js`; `tools/ai-brain/candidate-adapters.js`; `tools/ai-brain/candidate-adapters-common.js`; `tools/ai-brain/candidate-adapters-direct.js`; `tools/ai-brain/candidate-adapters-agy.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/test/unified-routing-offline.test.js`; `docs/product-spec/work-items/TASK-AI-171.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
+| Allowed paths | `tools/ai-brain/route-identity.js`; `tools/ai-brain/route-identity-utils.js`; `tools/ai-brain/route-identity-create.js`; `tools/ai-brain/route-identity-combo.js`; `config/route-identity.json`; `tools/ai-brain/test/task-ai-171-route-identity.test.js`; `tools/ai-brain/scoped-health.js`; `tools/ai-brain/scoped-health-classifier.js`; `tools/ai-brain/scoped-health-eval.js`; `tools/ai-brain/unified-selector.js`; `tools/ai-brain/unified-selector-admission.js`; `tools/ai-brain/unified-selector-jev.js`; `tools/ai-brain/candidate-adapters.js`; `tools/ai-brain/candidate-adapters-common.js`; `tools/ai-brain/candidate-adapters-direct.js`; `tools/ai-brain/candidate-adapters-agy.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/test/unified-routing-offline.test.js`; `docs/product-spec/work-items/TASK-AI-171.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/routing-core-selection` |
 | Pull Request | `N/A — authoring stage` |
@@ -33,17 +33,21 @@ Establish a single, governed, unified route selection engine across all three ex
 - `docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md`
 - `tools/ai-brain/work-guard.js`
 - `tools/ai-brain/route-identity.js`
+- `tools/ai-brain/route-identity-utils.js`
+- `tools/ai-brain/route-identity-create.js`
+- `tools/ai-brain/route-identity-combo.js`
+- `config/route-identity.json`
 - `tools/ai-brain/scoped-health.js`
 - `tools/ai-brain/unified-selector.js`
 - `tools/ai-brain/candidate-adapters.js`
 - `tools/ai-brain/routing.js`
-- `tools/ai-brain/test/unified-routing-offline.test.js`
+- `tools/ai-brain/test/task-ai-171-route-identity.test.js`
 
 ## Preconditions and dependencies
 
 - Monorepo baseline with Node >= 20.
 - All candidate sources (9router SQLite database, direct provider environments, AGY pool lane configurations) accessible via offline deterministic adapters.
-- Complete offline test suite in `tools/ai-brain/test/unified-routing-offline.test.js` verifying 0 live inference calls.
+- Slice A offline test suite in `tools/ai-brain/test/task-ai-171-route-identity.test.js`; Slices B and C add their own offline suites. All suites verify 0 live inference calls.
 
 ## Ambiguity and clarification markers
 
@@ -100,7 +104,7 @@ of the same Work Item; see the Slice plan section.
 - [x] **Audit & sensitive data**: Private email addresses are hashed and masked (`registerPrivateEmail`, `hashEmail`); raw credentials and tokens never appear in candidate keys, scopes, or decision logs.
 - [x] **VND integer arithmetic**: N/A — Routing modules calculate model token budgets and USD costs with strict null/unknown rejection.
 - [x] **Carrier reconciliation**: N/A — AI model routing, not carrier logistics.
-- [x] **Tests at the lowest useful level, test-first where executable**: All 10 criteria and all Codex review findings verified by 63 unit tests in `tools/ai-brain/test/unified-routing-offline.test.js` running 100% offline.
+- [x] **Tests at the lowest useful level, test-first where executable**: Slice A acceptance is verified by 2 offline unit tests in `tools/ai-brain/test/task-ai-171-route-identity.test.js`, covering AC-AI-171-06 and the branch-preservation half of AC-AI-171-07. The remaining criteria move with Slices B/C.
 
 ## UI states
 
@@ -136,14 +140,14 @@ N/A — Backend routing and AI brain toolchain; no user interface is modified.
 - [ ] `T05` Export production bridge `selectOptimalRoute` from `tools/ai-brain/routing.js` — Slice C, not in this PR.
 - [x] `T06` [P] Write offline route identity unit tests for Slice A (`tools/ai-brain/test/task-ai-171-route-identity.test.js`).
 - [x] `T07` Create Work Item `docs/product-spec/work-items/TASK-AI-171.md` and add delivery register row in `FEATURE-DELIVERY-REGISTER.csv`.
-- [x] `T08` Run repository verification suite and record evidence.
+- [x] `T08` Run the Slice A verification suite and record evidence (unit test, format check, exact-head CI).
 
 ## Author checklist
 
 - [x] `node --test tools/ai-brain/test/task-ai-171-route-identity.test.js` — 2 tests, 0 fail.
 - [x] `pnpm format:check` — exit 0 (6 changed files).
 - [x] Offline check `explicit-provider-preserves-model-namespace` — pass.
-- [x] CI `current-application` and `application-gate` — pass at reviewed SHA `bba97729`.
+- [x] CI `current-application` and `application-gate` — pass at reviewed SHA `e72f3e19` (`gh pr checks 509`).
 
 ## Verification commands
 

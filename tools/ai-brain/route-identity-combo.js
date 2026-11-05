@@ -25,11 +25,11 @@ function expandComboIdentity(comboIdentity, constituentModels, candidateAccountM
       quotaScopeId: eligibleAccounts.length === 1 ? eligibleAccounts[0].quotaScopeId : UNKNOWN,
       isCombo: false,
       metadata: {
+        ...(typeof m === 'object' ? m : {}),
+        ...(typeof m === 'object' ? m.metadata : {}),
         parentCombo: parent.configuredModelId,
         branchIndex: index + 1,
         totalCandidatesForProvider: eligibleAccounts.length,
-        ...(typeof m === 'object' ? m : {}),
-        ...(typeof m === 'object' ? m.metadata : {}),
         capabilities: m.capabilities ?? m.metadata?.capabilities ?? [],
         candidateAccounts: eligibleAccounts.map((a) => ({
           connectionId: a.connectionId || UNKNOWN,

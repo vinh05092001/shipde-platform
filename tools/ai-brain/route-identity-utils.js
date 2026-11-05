@@ -13,6 +13,20 @@ const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
 
 const PREFIX_PROVIDER_MAP = DEFAULT_PREFIX_TO_PROVIDER;
 
+const GATEWAY_PORT_HINTS = Object.freeze({
+  ...(ROUTE_IDENTITY_DATA.gatewayPortHints || {}),
+});
+
+function detectGatewayFromEndpoint(endpoint) {
+  const value = String(endpoint || '');
+  if (!value) return null;
+  for (const [gatewayId, hints] of Object.entries(GATEWAY_PORT_HINTS)) {
+    const list = Array.isArray(hints) ? hints : [hints];
+    if (list.some((hint) => value.includes(String(hint)))) return gatewayId;
+  }
+  return null;
+}
+
 function escapePart(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -27,7 +41,8 @@ function unescapePart(str) {
 }
 
 const PRIVATE_ACCOUNT_EMAIL_MAP = new Map();
-const PRIVATE_SALT = 'shipde-route-identity-salt-v1';
+const PRIVATE_SALT = process.env.SHIPDE_ROUTE_IDENTITY_SALT || 'shipde-route-identity-salt-v1';
+const EMAIL_HASH_LENGTH = 16;
 
 function hashEmail(email) {
   const normalized = String(email || '')
@@ -37,7 +52,7 @@ function hashEmail(email) {
     .createHash('sha256')
     .update(PRIVATE_SALT + '::' + normalized)
     .digest('hex')
-    .slice(0, 10);
+    .slice(0, EMAIL_HASH_LENGTH);
 }
 
 function registerPrivateEmail(key, email) {
@@ -172,6 +187,8 @@ module.exports = {
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
   PREFIX_PROVIDER_MAP,
+  GATEWAY_PORT_HINTS,
+  detectGatewayFromEndpoint,
   escapePart,
   unescapePart,
   distinguishPathway,
