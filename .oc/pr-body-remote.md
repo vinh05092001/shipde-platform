@@ -164,6 +164,20 @@ Known limitations:
 - Coordinator handoff: complete the outstanding checks, exclude `.oc/`, `.serena/` and `.oc-codex-task.md`, and commit `[TASK-AI-166] Address review: preserve discovery and independent publication` through installed hooks. Obtain a fresh different-family review of the resulting exact SHA.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-Slice A = this PR; Slice B = none
+  Slice A = this PR; Slice B = none
+
+## Verification — file-target split round 2 (2026-11-05)
+
+Operator instruction (`.oc/task.md`): file targets only, no new features, no review fixes. Re-verified the five named files rather than re-splitting.
+
+- **File line counts (all <=300):** `task-ai-166-review.test.js` 219, `coordinator-runtime.js` 107, `task-ai-166-runtime.test.js` 261, `coordinator.js` 155, `task-ai-166-refresh.test.js` 155. Total 897 lines across the five targets.
+- **Split modules (all <=300):** `coordinator.js` 155, `coordinator-runtime.js` 107, plus `coordinator-{metrics,policy,pool-writer,quota-state,text,tick-core,tick-review}.js` and `coordinator-runtime-{core,git,launch,log,ops}.js`. Entry modules re-export moved code with no behavior change; working tree diff for all five targets is empty.
+- **AC tests:** `node --test tools/ai-brain/test/task-ai-166-review.test.js tools/ai-brain/test/task-ai-166-runtime.test.js tools/ai-brain/test/task-ai-166-refresh.test.js tools/ai-brain/test/task-ai-166-coordinator.test.js` — **27 passed, 0 failed, 0 skipped**, exit 0. One test per acceptance criterion AC-166-01..09; per-finding and duplicate cases already deleted.
+- **Format:** `npx prettier --check` on the five target files — PASS, "All matched files use Prettier code style!".
+- **`git diff --check origin/main...HEAD`** — PASS, exit 0.
+- **`git diff --check HEAD`** — PASS, exit 0 for the five Work Item targets (working-tree diff is empty for them).
+
+BLOCKED_BY_SANDBOX — full `pnpm test:brain`: the complete suite exceeds the 120s shell timeout and contains pre-existing `task-ai-142-*` suites unrelated to this Work Item. I made zero code changes, so these are not regressions; `task-ai-142-known-good.test.js` passes 7/7 when run alone. The five TASK-AI-166 files are the only acceptance surface for this item and they are green.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+

@@ -1,13 +1,14 @@
 {
   "files": [
     ".oc/context-pack.md",
-    ".oc/context-pack.md.manifest.json",
-    ".oc/pr-body.md",
+    ".oc/decisions.md",
     ".oc/task.md",
+    ".oc/tmp/fixture-evidence/evidence.json",
     "AGENTS.md",
+    "package.json",
     "tools/ai-brain/test/task-ai-166-refresh.test.js",
     "tools/ai-brain/test/task-ai-166-review.test.js",
     "tools/ai-brain/test/task-ai-166-runtime.test.js"
   ],
-  "createdAt": "2026-11-05T00:46:12.227Z"
+  "createdAt": "2026-11-05T01:20:23.565Z"
 }

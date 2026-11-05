@@ -1,9 +1,9 @@
 VERDICT: CHANGES_REQUIRED
-Reviewed SHA: e6d5db2cfbb943240d98134fd08e784d78383a45
+Reviewed SHA: e8c217c5ff70997358f7cfc64b58ae8340535122
 
 1. **P1 — CI failing:** application-gate, contract, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
 
-### contract (job 126952446340) — failing log lines
+### contract (job 126979564624) — failing log lines
 ```
   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.16/x64
   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.16/x64
@@ -13,23 +13,23 @@ Pull Request contract validation failed:
 ##[error]Process completed with exit code 1.
 ```
 
-### current-application (job 126952514234) — failing log lines
+### current-application (job 126979639667) — failing log lines
 ```
+ - .oc/task.md
+ - .oc/tmp/fixture-evidence/evidence.json
+ - package.json
+❌ PHÁT HIỆN 7 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+ - .oc/context-pack.md
+ - .oc/decisions.md
+--
  - tools/ai-brain/test/task-ai-166-refresh.test.js
  - tools/ai-brain/test/task-ai-166-review.test.js
  - tools/ai-brain/test/task-ai-166-runtime.test.js
-❌ PHÁT HIỆN 5 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
- - .oc/context-pack.md
- - .oc/context-pack.md.manifest.json
---
- - .oc/pr-body.md
- - .oc/task.md
-Chạy "npx prettier --write <file>" để sửa định dạng các tệp trên.
 [ELIFECYCLE] Command failed with exit code 1.
 ##[error]Process completed with exit code 1.
 ```
 
-### application-gate (job 126953434495) — failing log lines
+### application-gate (job 126980487155) — failing log lines
 ```
 env:
   DETECT_RESULT: success
