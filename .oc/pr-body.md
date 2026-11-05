@@ -10,7 +10,7 @@
 
 Slice A = this PR; Slice B = apps/api/src/search/search.service.ts, apps/api/src/search/search.unit.spec.ts
 
-- Slice A (this PR, 632 insertions versus `origin/main`, excluding `pnpm-lock.yaml`): production RLS wiring, migration, Work Item documentation, `tenant.middleware.unit.spec.ts` unit acceptance suite, and compact `orders-rls.integration.spec.ts` (<=300 lines) database RLS acceptance suite.
+- Slice A (this PR, 613 insertions versus `origin/main`, excluding `pnpm-lock.yaml`): production RLS wiring, migration, Work Item documentation, `tenant.middleware.unit.spec.ts` unit acceptance suite, and compact `orders-rls.integration.spec.ts` (<=300 lines) database RLS acceptance suite.
 - Slice B: `apps/api/src/search/search.service.ts`, `apps/api/src/search/search.unit.spec.ts` — search pipeline RLS integration and subsequent multi-table RLS policies under TASK-AI-154.
 
 ## Source requirements
