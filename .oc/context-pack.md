@@ -2589,6 +2589,36 @@ This section contains the contents of the repository's files.
 21: }
 </file>
 
+<file path="apps/web/e2e/a11y.spec.ts">
+ 1: import AxeBuilder from '@axe-core/playwright';
+ 2: import { expect, test } from '@playwright/test';
+ 3: 
+ 4: // Public routes that render without a signed-in session.
+ 5: const ROUTES = ['/', '/register', '/forgot-password', '/reset-password'];
+ 6: 
+ 7: for (const route of ROUTES) {
+ 8:   test(`${route} has no WCAG 2.1 A/AA violations`, async ({ page }, testInfo) => {
+ 9:     const response = await page.goto(route);
+10:     expect(response?.ok(), `GET ${route} returned ${response?.status()}`).toBeTruthy();
+11:     const results = await new AxeBuilder({ page })
+12:       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
+13:       .analyze();
+14:     await testInfo.attach('axe-results', {
+15:       body: JSON.stringify(
+16:         { violations: results.violations, incomplete: results.incomplete },
+17:         null,
+18:         2
+19:       ),
+20:       contentType: 'application/json',
+21:     });
+22:     const summary = results.violations.map(
+23:       (v) => `${v.id} (${v.impact}): ${v.nodes.length} node(s) — ${v.help}`
+24:     );
+25:     expect(summary, summary.join('\n')).toEqual([]);
+26:   });
+27: }
+</file>
+
 <file path="apps/web/src/adapters/base.carrier.ts">
  1: // ============================================================================
  2: // Ship Dễ — Base Carrier Adapter Contract (Tập 1 Mục 5, Tập 2 CN-04..06)
@@ -4534,6 +4564,1294 @@ This section contains the contents of the repository's files.
 43: }
 </file>
 
+<file path="apps/web/src/components/auth/ForgotPasswordView.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState, useEffect } from 'react';
+  4: import { useAuth } from '@/context/AuthContext';
+  5: import { useRouter } from 'next/navigation';
+  6: import {
+  7:   ShieldCheck,
+  8:   Mail,
+  9:   Phone,
+ 10:   Lock,
+ 11:   ArrowRight,
+ 12:   AlertCircle,
+ 13:   CheckCircle2,
+ 14:   Loader2,
+ 15:   ChevronLeft,
+ 16: } from 'lucide-react';
+ 17: 
+ 18: interface Props {
+ 19:   onBackToLogin: () => void;
+ 20: }
+ 21: 
+ 22: type ForgotPasswordState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'RATE_LIMITED' | 'FORBIDDEN';
+ 23: 
+ 24: export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
+ 25:   const { forgotPassword } = useAuth();
+ 26:   const [identifier, setIdentifier] = useState('');
+ 27:   const [state, setState] = useState<ForgotPasswordState>('IDLE');
+ 28:   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+ 29:   const [rateLimitRetryAfter, setRateLimitRetryAfter] = useState<number | null>(null);
+ 30:   const [submittedIdentifier, setSubmittedIdentifier] = useState<string | null>(null);
+ 31:   const [submittedChannel, setSubmittedChannel] = useState<'email' | 'phone' | null>(null);
+ 32: 
+ 33:   // Countdown timer for rate limit
+ 34:   useEffect(() => {
+ 35:     if (!rateLimitRetryAfter || rateLimitRetryAfter <= 0) return;
+ 36:     const timer = setInterval(() => {
+ 37:       setRateLimitRetryAfter((prev) => (prev && prev > 0 ? prev - 1 : 0));
+ 38:     }, 1000);
+ 39:     return () => clearInterval(timer);
+ 40:   }, [rateLimitRetryAfter]);
+ 41: 
+ 42:   const isEmail = identifier.includes('@');
+ 43:   const channel = isEmail ? 'email' : 'phone';
+ 44:   const isValidFormat = isEmail
+ 45:     ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier.trim())
+ 46:     : /^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(identifier.trim().replace(/\s+/g, ''));
+ 47: 
+ 48:   const isEmpty = !identifier.trim();
+ 49:   const isDisabled = state === 'LOADING' || state === 'SUCCESS' || isEmpty || !isValidFormat;
+ 50: 
+ 51:   const handleSubmit = async (e: React.FormEvent) => {
+ 52:     e.preventDefault();
+ 53:     if (isDisabled) return;
+ 54: 
+ 55:     setState('LOADING');
+ 56:     setErrorMessage(null);
+ 57: 
+ 58:     try {
+ 59:       const res = await forgotPassword(identifier.trim());
+ 60:       if (!res.success) {
+ 61:         if (res.code === 'RATE_LIMITED') {
+ 62:           setState('RATE_LIMITED');
+ 63:           setRateLimitRetryAfter(res.cooldownSeconds || 60);
+ 64:           setErrorMessage(res.error || 'Quá nhiều yêu cầu. Vui lòng thử lại sau.');
+ 65:         } else if (res.code === 'FORBIDDEN') {
+ 66:           setState('FORBIDDEN');
+ 67:           setErrorMessage(res.error || 'Tài khoản bị khóa, không thể yêu cầu đặt lại mật khẩu.');
+ 68:         } else {
+ 69:           setState('IDLE');
+ 70:           setErrorMessage(res.error || 'Có lỗi xảy ra. Vui lòng thử lại.');
+ 71:         }
+ 72:         return;
+ 73:       }
+ 74: 
+ 75:       // Success - token sent
+ 76:       setState('SUCCESS');
+ 77:       setSubmittedIdentifier(identifier.trim());
+ 78:       setSubmittedChannel((res.data?.channel || channel) as 'email' | 'phone' | null);
+ 79:     } catch {
+ 80:       setState('IDLE');
+ 81:       setErrorMessage('Lỗi kết nối máy chủ. Vui lòng thử lại sau.');
+ 82:     }
+ 83:   };
+ 84: 
+ 85:   const handleTryAgain = () => {
+ 86:     setState('IDLE');
+ 87:     setErrorMessage(null);
+ 88:     setRateLimitRetryAfter(null);
+ 89:     setSubmittedIdentifier(null);
+ 90:     setSubmittedChannel(null);
+ 91:   };
+ 92: 
+ 93:   const handleBackToLogin = () => {
+ 94:     onBackToLogin();
+ 95:   };
+ 96: 
+ 97:   return (
+ 98:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
+ 99:       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+100:         <div className="text-center space-y-2 mb-8">
+101:           <div className="w-14 h-14 rounded-2xl bg-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#c23807]/20">
+102:             S
+103:           </div>
+104:           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+105:             Khôi Phục Mật Khẩu
+106:           </h1>
+107:           <p className="text-sm text-slate-500">
+108:             Nhập email hoặc số điện thoại để đặt lại mật khẩu
+109:           </p>
+110:         </div>
+111:         <div className="modern-card p-8 space-y-6 shadow-xl">
+112:           {state === 'LOADING' && (
+113:             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
+114:               <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
+115:               <span className="text-sm text-slate-600 font-medium">Đang gửi liên kết...</span>
+116:             </div>
+117:           )}
+118:           {state === 'IDLE' && isEmpty && (
+119:             <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+120:               <AlertCircle className="w-4 h-4 shrink-0" />
+121:               <span>Vui lòng nhập email hoặc số điện thoại</span>
+122:             </div>
+123:           )}
+124:           {state === 'IDLE' && errorMessage && !isEmpty && (
+125:             <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+126:               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
+127:               <span>{errorMessage}</span>
+128:             </div>
+129:           )}
+130:           {state === 'IDLE' && !isEmpty && !isValidFormat && !errorMessage && (
+131:             <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+132:               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
+133:               <span>Email hoặc số điện thoại không hợp lệ</span>
+134:             </div>
+135:           )}
+136:           {state === 'RATE_LIMITED' && (
+137:             <div className="space-y-4 animate-in fade-in">
+138:               <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+139:                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+140:                 <div>
+141:                   <p className="font-bold">Quá nhiều yêu cầu</p>
+142:                   <p className="text-amber-700 mt-1">Thử lại sau {rateLimitRetryAfter} giây</p>
+143:                 </div>
+144:               </div>
+145:               {rateLimitRetryAfter === 0 ? (
+146:                 <button
+147:                   type="button"
+148:                   onClick={handleTryAgain}
+149:                   className="btn-primary w-full justify-center text-sm py-3"
+150:                 >
+151:                   Thử lại
+152:                 </button>
+153:               ) : (
+154:                 <button
+155:                   type="button"
+156:                   disabled
+157:                   className="btn-primary w-full justify-center text-sm py-3 opacity-50 cursor-not-allowed"
+158:                 >
+159:                   Đang chờ...
+160:                 </button>
+161:               )}
+162:             </div>
+163:           )}
+164:           {state === 'FORBIDDEN' && (
+165:             <div className="space-y-4 animate-in fade-in">
+166:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+167:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+168:                 <div>
+169:                   <p className="font-bold">Tài khoản bị khóa</p>
+170:                   <p className="text-rose-700 mt-1">
+171:                     {errorMessage || 'Tài khoản này không thể đặt lại mật khẩu.'}
+172:                   </p>
+173:                 </div>
+174:               </div>
+175:               <button
+176:                 type="button"
+177:                 onClick={handleBackToLogin}
+178:                 className="btn-secondary w-full justify-center text-sm py-3"
+179:               >
+180:                 Quay lại đăng nhập
+181:               </button>
+182:             </div>
+183:           )}
+184:           {state === 'SUCCESS' && (
+185:             <div className="space-y-4 animate-in fade-in">
+186:               <div className="flex flex-col items-center py-4 space-y-3">
+187:                 <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
+188:                   <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+189:                 </div>
+190:                 <div className="text-center space-y-1">
+191:                   <p className="text-sm font-bold text-slate-900">Liên kết đã được gửi</p>
+192:                   <p className="text-xs text-slate-500">
+193:                     Kiểm tra {submittedChannel === 'email' ? 'email' : 'SMS'}
+194:                   </p>
+195:                 </div>
+196:               </div>
+197:               <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-medium">
+198:                 Nếu tài khoản tồn tại và đã xác thực, liên kết đặt lại mật khẩu đã được gửi.
+199:               </div>
+200:               <button
+201:                 type="button"
+202:                 onClick={handleBackToLogin}
+203:                 className="btn-primary w-full justify-center text-sm py-3"
+204:               >
+205:                 Quay lại đăng nhập
+206:               </button>
+207:             </div>
+208:           )}
+209:           {state === 'IDLE' && (
+210:             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+211:               <div>
+212:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+213:                   Email hoặc Số Điện Thoại
+214:                 </label>
+215:                 <div className="relative">
+216:                   {isEmail ? (
+217:                     <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+218:                   ) : (
+219:                     <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+220:                   )}
+221:                   <input
+222:                     type="text"
+223:                     value={identifier}
+224:                     onChange={(e) => {
+225:                       setIdentifier(e.target.value);
+226:                       if (errorMessage) setErrorMessage(null);
+227:                     }}
+228:                     placeholder="owner@ananboutique.vn hoặc 0901234567"
+229:                     className="modern-input pl-10 h-11 text-sm font-medium"
+230:                     autoFocus
+231:                   />
+232:                 </div>
+233:               </div>
+234:               <button
+235:                 type="submit"
+236:                 disabled={isDisabled}
+237:                 className="btn-primary w-full justify-center text-sm py-3 font-bold"
+238:               >
+239:                 Gửi liên kết đặt lại mật khẩu
+240:               </button>
+241:             </form>
+242:           )}
+243:         </div>
+244:         <div className="text-center mt-6 text-xs text-slate-500">
+245:           Nhớ mật khẩu?{' '}
+246:           <button
+247:             type="button"
+248:             onClick={handleBackToLogin}
+249:             className="text-[#c23807] font-bold hover:underline"
+250:           >
+251:             Quay lại đăng nhập
+252:           </button>
+253:         </div>
+254:       </div>
+255:     </div>
+256:   );
+257: };
+</file>
+
+<file path="apps/web/src/components/auth/RegisterView.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState, useEffect } from 'react';
+  4: import { useAuth } from '@/context/AuthContext';
+  5: import {
+  6:   ShieldCheck,
+  7:   Store,
+  8:   Phone,
+  9:   Mail,
+ 10:   Lock,
+ 11:   ArrowRight,
+ 12:   User,
+ 13:   CheckCircle2,
+ 14:   AlertTriangle,
+ 15:   Clock,
+ 16:   RefreshCw,
+ 17:   KeyRound,
+ 18: } from 'lucide-react';
+ 19: 
+ 20: interface Props {
+ 21:   onSwitchToLogin: () => void;
+ 22: }
+ 23: 
+ 24: type RegistrationStep = 'FORM' | 'PENDING_VERIFICATION' | 'VERIFIED_SUCCESS';
+ 25: 
+ 26: export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
+ 27:   const { register, verifyEmail, verifyPhone, resendVerification } = useAuth();
+ 28: 
+ 29:   // Form State
+ 30:   const [merchantName, setMerchantName] = useState('');
+ 31:   const [fullName, setFullName] = useState('');
+ 32:   const [email, setEmail] = useState('');
+ 33:   const [phone, setPhone] = useState('');
+ 34:   const [password, setPassword] = useState('');
+ 35:   const [termsAccepted, setTermsAccepted] = useState(false);
+ 36: 
+ 37:   // Status & Error States
+ 38:   const [step, setStep] = useState<RegistrationStep>('FORM');
+ 39:   const [loading, setLoading] = useState(false);
+ 40:   const [generalError, setGeneralError] = useState<string | null>(null);
+ 41:   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
+ 42:   const [duplicateIdentifier, setDuplicateIdentifier] = useState<string | null>(null);
+ 43:   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+ 44: 
+ 45:   // Verification Step States
+ 46:   const [registeredEmail, setRegisteredEmail] = useState('');
+ 47:   const [registeredPhone, setRegisteredPhone] = useState('');
+ 48:   const [verificationCode, setVerificationCode] = useState('');
+ 49:   const [verifyLoading, setVerifyLoading] = useState(false);
+ 50:   const [verifyError, setVerifyError] = useState<string | null>(null);
+ 51:   const [resendCooldown, setResendCooldown] = useState(0);
+ 52:   const [resendMessage, setResendMessage] = useState<string | null>(null);
+ 53: 
+ 54:   // Countdown timer for resend cooldown
+ 55:   useEffect(() => {
+ 56:     if (resendCooldown <= 0) return;
+ 57:     const timer = setInterval(() => {
+ 58:       setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+ 59:     }, 1000);
+ 60:     return () => clearInterval(timer);
+ 61:   }, [resendCooldown]);
+ 62: 
+ 63:   // Dirty form warning
+ 64:   const isDirty =
+ 65:     Boolean(merchantName || fullName || email || phone || password) && step === 'FORM';
+ 66: 
+ 67:   useEffect(() => {
+ 68:     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+ 69:       if (isDirty) {
+ 70:         e.preventDefault();
+ 71:         e.returnValue = '';
+ 72:       }
+ 73:     };
+ 74:     window.addEventListener('beforeunload', handleBeforeUnload);
+ 75:     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+ 76:   }, [isDirty]);
+ 77: 
+ 78:   const handleRegister = async (e: React.FormEvent) => {
+ 79:     e.preventDefault();
+ 80:     setGeneralError(null);
+ 81:     setRateLimitMessage(null);
+ 82:     setDuplicateIdentifier(null);
+ 83:     setFieldErrors({});
+ 84: 
+ 85:     if (!termsAccepted) {
+ 86:       setFieldErrors({
+ 87:         terms_accepted: 'Vui lòng đồng ý với Điều khoản dịch vụ và Chính sách bảo mật.',
+ 88:       });
+ 89:       return;
+ 90:     }
+ 91: 
+ 92:     setLoading(true);
+ 93: 
+ 94:     const res = await register({
+ 95:       merchantName: merchantName.trim(),
+ 96:       fullName: fullName.trim(),
+ 97:       email: email.trim() || undefined,
+ 98:       phone: phone.trim() || undefined,
+ 99:       password,
+100:       termsAccepted: true,
+101:       termsVersion: '2026.1',
+102:     });
+103: 
+104:     setLoading(false);
+105: 
+106:     if (!res.success) {
+107:       if (res.code === 'RATE_LIMITED') {
+108:         setRateLimitMessage(
+109:           res.nextAction ||
+110:             res.error ||
+111:             'Quá nhiều yêu cầu đăng ký từ địa chỉ của bạn. Vui lòng thử lại sau.'
+112:         );
+113:       } else if (
+114:         res.fields?.some((f) => f.code === 'DUPLICATE') ||
+115:         res.error?.includes('đã được đăng ký')
+116:       ) {
+117:         const dupField = res.fields?.find((f) => f.code === 'DUPLICATE')?.field || 'thông tin';
+118:         setDuplicateIdentifier(
+119:           dupField === 'email'
+120:             ? 'Email này đã được đăng ký tài khoản.'
+121:             : 'Số điện thoại này đã được đăng ký tài khoản.'
+122:         );
+123:       } else if (res.fields && res.fields.length > 0) {
+124:         const errMap: Record<string, string> = {};
+125:         res.fields.forEach((f) => {
+126:           errMap[f.field] = f.message;
+127:         });
+128:         setFieldErrors(errMap);
+129:       } else {
+130:         setGeneralError(res.error || 'Đăng ký thất bại. Vui lòng kiểm tra lại thông tin.');
+131:       }
+132:       return;
+133:     }
+134: 
+135:     // Success -> Transition to verification pending screen
+136:     setRegisteredEmail(res.data?.email || email);
+137:     setRegisteredPhone(res.data?.phone || phone);
+138:     setResendCooldown(60);
+139:     setStep('PENDING_VERIFICATION');
+140:   };
+141: 
+142:   const handleVerify = async (e: React.FormEvent) => {
+143:     e.preventDefault();
+144:     if (!verificationCode.trim()) {
+145:       setVerifyError('Vui lòng nhập mã xác thực');
+146:       return;
+147:     }
+148: 
+149:     setVerifyLoading(true);
+150:     setVerifyError(null);
+151: 
+152:     let res: { success: boolean; error?: string; code?: string; nextAction?: string };
+153: 
+154:     if (registeredPhone && /^\d{6}$/.test(verificationCode.trim())) {
+155:       res = await verifyPhone(registeredPhone, verificationCode.trim());
+156:     } else {
+157:       res = await verifyEmail(verificationCode.trim());
+158:     }
+159: 
+160:     setVerifyLoading(false);
+161: 
+162:     if (res.success) {
+163:       setStep('VERIFIED_SUCCESS');
+164:     } else {
+165:       setVerifyError(
+166:         res.error ||
+167:           res.nextAction ||
+168:           'Mã xác thực không đúng hoặc đã hết hạn. Vui lòng kiểm tra lại.'
+169:       );
+170:     }
+171:   };
+172: 
+173:   const handleResend = async () => {
+174:     if (resendCooldown > 0) return;
+175:     const identifier = registeredEmail || registeredPhone;
+176:     const channel = registeredEmail ? 'email' : 'phone';
+177: 
+178:     const res = await resendVerification(identifier, channel);
+179:     if (res.success) {
+180:       setResendCooldown(res.cooldownSeconds || 60);
+181:       setResendMessage(
+182:         `Đã gửi lại mã xác thực tới ${channel === 'email' ? 'email' : 'số điện thoại'}.`
+183:       );
+184:       setVerifyError(null);
+185:     } else {
+186:       setVerifyError(res.error || 'Gửi lại mã thất bại. Vui lòng thử lại.');
+187:     }
+188:   };
+189: 
+190:   const maskIdentifier = (val: string): string => {
+191:     if (!val) return '';
+192:     if (val.includes('@')) {
+193:       const [name, domain] = val.split('@');
+194:       return `${name.slice(0, 2)}***@${domain}`;
+195:     }
+196:     return `${val.slice(0, 4)}****${val.slice(-3)}`;
+197:   };
+198: 
+199:   return (
+200:     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-orange-600 selection:text-white relative overflow-hidden">
+201:       <div className="absolute inset-0 bg-[radial-gradient(#CBD5E1_1px,transparent_1px)] [background-size:24px_24px] opacity-40 pointer-events-none" />
+202: 
+203:       <div className="sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
+204:         {/* Brand Header */}
+205:         <div className="text-center space-y-2 mb-6">
+206:           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#c23807] to-[#a8300a] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-orange-500/20">
+207:             S
+208:           </div>
+209:           <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+210:             {step === 'FORM' && 'Đăng Ký Cửa Hàng Mới'}
+211:             {step === 'PENDING_VERIFICATION' && 'Xác Thực Tài Khoản'}
+212:             {step === 'VERIFIED_SUCCESS' && 'Kích Hoạt Thành Công!'}
+213:           </h2>
+214:           <p className="text-sm text-slate-500">
+215:             {step === 'FORM' &&
+216:               'Nền tảng điều hành và kiểm soát vận chuyển dành riêng cho Shop Online'}
+217:             {step === 'PENDING_VERIFICATION' &&
+218:               'Vui lòng hoàn tất xác thực để bảo vệ an toàn cho cửa hàng của bạn'}
+219:             {step === 'VERIFIED_SUCCESS' && 'Cửa hàng của bạn đã sẵn sàng hoạt động trên Ship Dễ'}
+220:           </p>
+221:         </div>
+222: 
+223:         {/* STEP 1: Registration Form */}
+224:         {step === 'FORM' && (
+225:           <div className="bg-white py-8 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 space-y-5">
+226:             {/* Duplicate Identifier Banner */}
+227:             {duplicateIdentifier && (
+228:               <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl text-xs space-y-2">
+229:                 <div className="flex items-center gap-2 font-bold text-amber-800">
+230:                   <AlertTriangle className="w-4 h-4 shrink-0" />
+231:                   <span>{duplicateIdentifier}</span>
+232:                 </div>
+233:                 <p className="text-amber-700">
+234:                   Bạn đã có tài khoản trên Ship Dễ? Vui lòng chuyển sang đăng nhập.
+235:                 </p>
+236:                 <button
+237:                   type="button"
+238:                   onClick={onSwitchToLogin}
+239:                   className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs inline-flex items-center gap-1.5 shadow-sm"
+240:                 >
+241:                   <span>Chuyển sang Đăng Nhập</span>
+242:                   <ArrowRight className="w-3.5 h-3.5" />
+243:                 </button>
+244:               </div>
+245:             )}
+246: 
+247:             {/* Rate Limited Alert */}
+248:             {rateLimitMessage && (
+249:               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs space-y-1">
+250:                 <div className="flex items-center gap-2 font-bold text-rose-900">
+251:                   <Clock className="w-4 h-4 shrink-0" />
+252:                   <span>Giới hạn tần suất thao tác (Rate Limit)</span>
+253:                 </div>
+254:                 <p>{rateLimitMessage}</p>
+255:               </div>
+256:             )}
+257: 
+258:             {/* General Server Error */}
+259:             {generalError && (
+260:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+261:                 <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
+262:                 <span>{generalError}</span>
+263:               </div>
+264:             )}
+265: 
+266:             <form onSubmit={handleRegister} className="space-y-4 text-xs">
+267:               {/* Merchant Name */}
+268:               <div>
+269:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+270:                   Tên Cửa Hàng / Thương Hiệu <span className="text-rose-500">*</span>
+271:                 </label>
+272:                 <div className="relative">
+273:                   <Store className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+274:                   <input
+275:                     type="text"
+276:                     value={merchantName}
+277:                     onChange={(e) => {
+278:                       setMerchantName(e.target.value);
+279:                       if (fieldErrors.merchant_name)
+280:                         setFieldErrors({ ...fieldErrors, merchant_name: '' });
+281:                     }}
+282:                     placeholder="Ví dụ: Tiệm Bánh Nhà Mây, Thời Trang An An"
+283:                     className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
+284:                       fieldErrors.merchant_name ? 'border-rose-400 bg-rose-50/20' : ''
+285:                     }`}
+286:                     disabled={loading}
+287:                     required
+288:                   />
+289:                 </div>
+290:                 {fieldErrors.merchant_name && (
+291:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
+292:                     {fieldErrors.merchant_name}
+293:                   </p>
+294:                 )}
+295:               </div>
+296: 
+297:               {/* Full Name & Phone */}
+298:               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+299:                 <div>
+300:                   <label className="text-xs font-bold text-slate-700 block mb-1.5">
+301:                     Họ và Tên Chủ Shop <span className="text-rose-500">*</span>
+302:                   </label>
+303:                   <div className="relative">
+304:                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+305:                     <input
+306:                       type="text"
+307:                       value={fullName}
+308:                       onChange={(e) => {
+309:                         setFullName(e.target.value);
+310:                         if (fieldErrors.full_name)
+311:                           setFieldErrors({ ...fieldErrors, full_name: '' });
+312:                       }}
+313:                       placeholder="Nguyễn Văn A"
+314:                       className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
+315:                         fieldErrors.full_name ? 'border-rose-400 bg-rose-50/20' : ''
+316:                       }`}
+317:                       disabled={loading}
+318:                       required
+319:                     />
+320:                   </div>
+321:                   {fieldErrors.full_name && (
+322:                     <p className="mt-1 text-rose-600 font-semibold text-[11px]">
+323:                       {fieldErrors.full_name}
+324:                     </p>
+325:                   )}
+326:                 </div>
+327: 
+328:                 <div>
+329:                   <label className="text-xs font-bold text-slate-700 block mb-1.5">
+330:                     Số Điện Thoại
+331:                   </label>
+332:                   <div className="relative">
+333:                     <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+334:                     <input
+335:                       type="tel"
+336:                       value={phone}
+337:                       onChange={(e) => {
+338:                         setPhone(e.target.value);
+339:                         if (fieldErrors.phone) setFieldErrors({ ...fieldErrors, phone: '' });
+340:                       }}
+341:                       placeholder="0901234567"
+342:                       className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
+343:                         fieldErrors.phone ? 'border-rose-400 bg-rose-50/20' : ''
+344:                       }`}
+345:                       disabled={loading}
+346:                     />
+347:                   </div>
+348:                   {fieldErrors.phone && (
+349:                     <p className="mt-1 text-rose-600 font-semibold text-[11px]">
+350:                       {fieldErrors.phone}
+351:                     </p>
+352:                   )}
+353:                 </div>
+354:               </div>
+355: 
+356:               {/* Email */}
+357:               <div>
+358:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+359:                   Email Đăng Nhập & Nhận Thông Báo
+360:                 </label>
+361:                 <div className="relative">
+362:                   <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+363:                   <input
+364:                     type="email"
+365:                     value={email}
+366:                     onChange={(e) => {
+367:                       setEmail(e.target.value);
+368:                       if (fieldErrors.email) setFieldErrors({ ...fieldErrors, email: '' });
+369:                     }}
+370:                     placeholder="chushop@gmail.com"
+371:                     className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
+372:                       fieldErrors.email ? 'border-rose-400 bg-rose-50/20' : ''
+373:                     }`}
+374:                     disabled={loading}
+375:                   />
+376:                 </div>
+377:                 {fieldErrors.email && (
+378:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
+379:                     {fieldErrors.email}
+380:                   </p>
+381:                 )}
+382:               </div>
+383: 
+384:               {/* Password */}
+385:               <div>
+386:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+387:                   Mật Khẩu Thiết Lập <span className="text-rose-500">*</span>
+388:                 </label>
+389:                 <div className="relative">
+390:                   <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+391:                   <input
+392:                     type="password"
+393:                     value={password}
+394:                     onChange={(e) => {
+395:                       setPassword(e.target.value);
+396:                       if (fieldErrors.password) setFieldErrors({ ...fieldErrors, password: '' });
+397:                     }}
+398:                     placeholder="Tối thiểu 8 ký tự"
+399:                     className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
+400:                       fieldErrors.password ? 'border-rose-400 bg-rose-50/20' : ''
+401:                     }`}
+402:                     disabled={loading}
+403:                     required
+404:                   />
+405:                 </div>
+406:                 {fieldErrors.password && (
+407:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
+408:                     {fieldErrors.password}
+409:                   </p>
+410:                 )}
+411:               </div>
+412: 
+413:               {/* Terms Acceptance (BR-AUTH-04) */}
+414:               <div className="pt-1">
+415:                 <label className="flex items-start gap-2.5 cursor-pointer select-none">
+416:                   <input
+417:                     type="checkbox"
+418:                     checked={termsAccepted}
+419:                     onChange={(e) => {
+420:                       setTermsAccepted(e.target.checked);
+421:                       if (fieldErrors.terms_accepted) {
+422:                         setFieldErrors({ ...fieldErrors, terms_accepted: '' });
+423:                       }
+424:                     }}
+425:                     disabled={loading}
+426:                     className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#c23807] focus:ring-[#c23807]"
+427:                   />
+428:                   <span className="text-[11px] leading-relaxed text-slate-600 font-normal">
+429:                     Tôi đã đọc và đồng ý với{' '}
+430:                     <span className="text-[#c23807] font-semibold hover:underline">
+431:                       Điều khoản dịch vụ
+432:                     </span>{' '}
+433:                     và{' '}
+434:                     <span className="text-[#c23807] font-semibold hover:underline">
+435:                       Chính sách bảo mật
+436:                     </span>{' '}
+437:                     của Ship Dễ (Phiên bản 2026.1).
+438:                   </span>
+439:                 </label>
+440:                 {fieldErrors.terms_accepted && (
+441:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
+442:                     {fieldErrors.terms_accepted}
+443:                   </p>
+444:                 )}
+445:               </div>
+446: 
+447:               {/* Submit Button */}
+448:               <button
+449:                 type="submit"
+450:                 disabled={loading}
+451:                 className="w-full h-12 bg-[#c23807] hover:bg-[#a8300a] disabled:bg-slate-300 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 transition-all mt-2 cursor-pointer disabled:cursor-not-allowed"
+452:               >
+453:                 {loading ? (
+454:                   <span className="flex items-center gap-2">
+455:                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+456:                     <span>Đang khởi tạo tài khoản cửa hàng...</span>
+457:                   </span>
+458:                 ) : (
+459:                   <span className="flex items-center gap-1.5">
+460:                     <span>Đăng Ký & Kích Hoạt Cửa Hàng</span>
+461:                     <ArrowRight className="w-4 h-4" />
+462:                   </span>
+463:                 )}
+464:               </button>
+465:             </form>
+466: 
+467:             <div className="pt-3 text-center border-t border-slate-100">
+468:               <button
+469:                 type="button"
+470:                 onClick={onSwitchToLogin}
+471:                 className="text-xs text-[#c23807] hover:text-[#a8300a] font-bold hover:underline"
+472:               >
+473:                 ← Đã có tài khoản? Quay lại đăng nhập
+474:               </button>
+475:             </div>
+476:           </div>
+477:         )}
+478: 
+479:         {/* STEP 2: Pending Verification Screen */}
+480:         {step === 'PENDING_VERIFICATION' && (
+481:           <div className="bg-white py-8 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 space-y-6">
+482:             <div className="text-center space-y-2">
+483:               <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
+484:                 <Mail className="w-6 h-6" />
+485:               </div>
+486:               <h3 className="text-lg font-bold text-slate-900">Kiểm tra hòm thư / tin nhắn</h3>
+487:               <p className="text-xs text-slate-600 leading-relaxed">
+488:                 Mã xác thực tài khoản đã được gửi tới:{' '}
+489:                 <span className="font-bold text-slate-800">
+490:                   {registeredEmail
+491:                     ? maskIdentifier(registeredEmail)
+492:                     : maskIdentifier(registeredPhone)}
+493:                 </span>
+494:               </p>
+495:             </div>
+496: 
+497:             {resendMessage && (
+498:               <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+499:                 <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+500:                 <span>{resendMessage}</span>
+501:               </div>
+502:             )}
+503: 
+504:             {verifyError && (
+505:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+506:                 <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+507:                 <span>{verifyError}</span>
+508:               </div>
+509:             )}
+510: 
+511:             <form onSubmit={handleVerify} className="space-y-4 text-xs">
+512:               <div>
+513:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+514:                   Nhập mã xác thực hoặc mã OTP
+515:                 </label>
+516:                 <div className="relative">
+517:                   <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+518:                   <input
+519:                     type="text"
+520:                     value={verificationCode}
+521:                     onChange={(e) => {
+522:                       setVerificationCode(e.target.value);
+523:                       if (verifyError) setVerifyError(null);
+524:                     }}
+525:                     placeholder={
+526:                       registeredPhone ? 'Ví dụ: 123456' : 'Dán mã token từ liên kết email'
+527:                     }
+528:                     className="modern-input w-full pl-10 h-11 text-xs font-mono font-medium"
+529:                     disabled={verifyLoading}
+530:                     required
+531:                   />
+532:                 </div>
+533:               </div>
+534: 
+535:               <button
+536:                 type="submit"
+537:                 disabled={verifyLoading}
+538:                 className="w-full h-11 bg-[#c23807] hover:bg-[#a8300a] disabled:bg-slate-300 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/20"
+539:               >
+540:                 {verifyLoading ? (
+541:                   <span className="flex items-center gap-2">
+542:                     <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+543:                     <span>Đang kiểm tra...</span>
+544:                   </span>
+545:                 ) : (
+546:                   <span>Xác Thực Ngay</span>
+547:                 )}
+548:               </button>
+549:             </form>
+550: 
+551:             <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+552:               <button
+553:                 type="button"
+554:                 onClick={() => setStep('FORM')}
+555:                 className="text-slate-500 hover:text-slate-700 font-medium"
+556:               >
+557:                 ← Sửa thông tin đăng ký
+558:               </button>
+559: 
+560:               <button
+561:                 type="button"
+562:                 onClick={handleResend}
+563:                 disabled={resendCooldown > 0}
+564:                 className="text-[#c23807] hover:text-[#a8300a] disabled:text-slate-400 font-bold inline-flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+565:               >
+566:                 <RefreshCw className="w-3 h-3" />
+567:                 <span>
+568:                   {resendCooldown > 0 ? `Gửi lại sau (${resendCooldown}s)` : 'Gửi lại mã'}
+569:                 </span>
+570:               </button>
+571:             </div>
+572:           </div>
+573:         )}
+574: 
+575:         {/* STEP 3: Verification Success Screen */}
+576:         {step === 'VERIFIED_SUCCESS' && (
+577:           <div className="bg-white py-10 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 text-center space-y-6">
+578:             <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+579:               <CheckCircle2 className="w-10 h-10" />
+580:             </div>
+581: 
+582:             <div className="space-y-2">
+583:               <h3 className="text-xl font-extrabold text-slate-900">Xác Thực Thành Công!</h3>
+584:               <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
+585:                 Tài khoản cửa hàng của bạn đã được kích hoạt thành công. Bạn có thể đăng nhập ngay
+586:                 để kết nối hãng vận chuyển và bắt đầu đối soát COD.
+587:               </p>
+588:             </div>
+589: 
+590:             <button
+591:               type="button"
+592:               onClick={onSwitchToLogin}
+593:               className="w-full h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-600/25"
+594:             >
+595:               <span>Tiến Hành Đăng Nhập</span>
+596:               <ArrowRight className="w-4 h-4" />
+597:             </button>
+598:           </div>
+599:         )}
+600: 
+601:         {/* Security / Tenant Isolation Note */}
+602:         <div className="text-center mt-6 text-xs text-slate-500 space-y-1">
+603:           <div className="flex items-center justify-center gap-1.5 text-emerald-700 font-semibold">
+604:             <ShieldCheck className="w-4 h-4 text-emerald-600" />
+605:             <span>Mỗi cửa hàng là một cơ sở dữ liệu phân vùng độc lập (Tenant Isolation)</span>
+606:           </div>
+607:         </div>
+608:       </div>
+609:     </div>
+610:   );
+611: };
+</file>
+
+<file path="apps/web/src/components/auth/ResetPasswordView.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState, useEffect, useRef } from 'react';
+  4: import { useAuth } from '@/context/AuthContext';
+  5: import { useRouter, useSearchParams } from 'next/navigation';
+  6: import { Lock, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, ChevronLeft } from 'lucide-react';
+  7: 
+  8: interface Props {
+  9:   onBackToLogin: () => void;
+ 10: }
+ 11: type ResetPasswordState =
+ 12:   | 'VERIFYING'
+ 13:   | 'VALID_TOKEN'
+ 14:   | 'LOADING'
+ 15:   | 'INVALID_TOKEN'
+ 16:   | 'TOKEN_EXPIRED'
+ 17:   | 'TOKEN_USED'
+ 18:   | 'SUCCESS'
+ 19:   | 'FORBIDDEN'
+ 20:   | 'ERROR';
+ 21: 
+ 22: export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
+ 23:   const { verifyResetToken, resetPassword } = useAuth();
+ 24:   const router = useRouter();
+ 25:   const searchParams = useSearchParams();
+ 26:   const tokenFromUrl = searchParams.get('token') || '';
+ 27: 
+ 28:   const [state, setState] = useState<ResetPasswordState>('VERIFYING');
+ 29:   const [password, setPassword] = useState('');
+ 30:   const [passwordConfirm, setPasswordConfirm] = useState('');
+ 31:   const [showPassword, setShowPassword] = useState(false);
+ 32:   const [showConfirm, setShowConfirm] = useState(false);
+ 33:   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+ 34:   const [fieldErrors, setFieldErrors] = useState<Array<{ field: string; message: string }>>([]);
+ 35:   const [identifier, setIdentifier] = useState<string | null>(null);
+ 36:   const [channel, setChannel] = useState<string | null>(null);
+ 37:   const [passwordStrength, setPasswordStrength] = useState(0);
+ 38:   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+ 39: 
+ 40:   // Verify token on mount
+ 41:   useEffect(() => {
+ 42:     if (!tokenFromUrl) {
+ 43:       // A link with no token can be answered without asking the server, so this
+ 44:       // one state is set straight away. Same exemption and reason as
+ 45:       // ShipmentListTab, ThreeLedgersTab and AuthContext.
+ 46:       // eslint-disable-next-line react-hooks/set-state-in-effect -- no token to verify
+ 47:       setState('INVALID_TOKEN');
+ 48:       return;
+ 49:     }
+ 50:     const verify = async () => {
+ 51:       setState('VERIFYING');
+ 52:       setErrorMessage(null);
+ 53:       setFieldErrors([]);
+ 54:       try {
+ 55:         const res = await verifyResetToken(tokenFromUrl);
+ 56:         if (!res.success) {
+ 57:           if (res.code === 'TOKEN_EXPIRED') {
+ 58:             setState('TOKEN_EXPIRED');
+ 59:           } else if (res.code === 'TOKEN_ALREADY_USED') {
+ 60:             setState('TOKEN_USED');
+ 61:           } else if (res.code === 'FORBIDDEN') {
+ 62:             setState('FORBIDDEN');
+ 63:           } else {
+ 64:             setState('INVALID_TOKEN');
+ 65:           }
+ 66:           setErrorMessage(res.error || 'Liên kết không hợp lệ.');
+ 67:           return;
+ 68:         }
+ 69:         setState('VALID_TOKEN');
+ 70:         setIdentifier(res.data?.identifier || null);
+ 71:         setChannel(res.data?.channel || null);
+ 72:       } catch {
+ 73:         setState('ERROR');
+ 74:         setErrorMessage('Lỗi kết nối máy chủ. Vui lòng thử lại.');
+ 75:       }
+ 76:     };
+ 77:     verify();
+ 78:     // eslint-disable-next-line react-hooks/exhaustive-deps -- verifyResetToken is stable from context
+ 79:   }, [tokenFromUrl]);
+ 80: 
+ 81:   const handlePasswordChange = (val: string) => {
+ 82:     setPassword(val);
+ 83:     let strength = 0;
+ 84:     if (val.length >= 6) strength++;
+ 85:     if (val.length >= 10) strength++;
+ 86:     if (/[A-Z]/.test(val)) strength++;
+ 87:     if (/[0-9]/.test(val)) strength++;
+ 88:     if (/[^A-Za-z0-9]/.test(val)) strength++;
+ 89:     setPasswordStrength(strength);
+ 90:     setFieldErrors((prev) => prev.filter((f) => f.field !== 'newPassword'));
+ 91:   };
+ 92: 
+ 93:   const handleSubmit = async (e: React.FormEvent) => {
+ 94:     e.preventDefault();
+ 95:     setErrorMessage(null);
+ 96:     setFieldErrors([]);
+ 97: 
+ 98:     if (password !== passwordConfirm) {
+ 99:       setFieldErrors([{ field: 'newPassword', message: 'Mật khẩu không khớp.' }]);
+100:       return;
+101:     }
+102: 
+103:     setState('LOADING');
+104:     try {
+105:       const res = await resetPassword({
+106:         token: tokenFromUrl,
+107:         password,
+108:         password_confirm: passwordConfirm,
+109:       });
+110:       if (!res.success) {
+111:         if (res.code === 'TOKEN_EXPIRED') {
+112:           setState('TOKEN_EXPIRED');
+113:           setErrorMessage(res.error || null);
+114:         } else if (res.code === 'TOKEN_ALREADY_USED') {
+115:           setState('TOKEN_USED');
+116:           setErrorMessage(res.error || null);
+117:         } else if (res.code === 'FORBIDDEN') {
+118:           setState('FORBIDDEN');
+119:           setErrorMessage(res.error || null);
+120:         } else if (res.code === 'INVALID_TOKEN') {
+121:           setState('INVALID_TOKEN');
+122:           setErrorMessage(res.error || null);
+123:           setFieldErrors(res.fields || []);
+124:         } else if (res.code === 'VALIDATION_ERROR') {
+125:           const mismatchField = res.fields?.find((f) => f.code === 'MISMATCH');
+126:           if (mismatchField) {
+127:             setState('VALID_TOKEN');
+128:             setFieldErrors(res.fields || []);
+129:           } else {
+130:             setState('VALID_TOKEN');
+131:             setFieldErrors(res.fields || []);
+132:             setErrorMessage(res.error || 'Dữ liệu không hợp lệ');
+133:           }
+134:         } else {
+135:           setState('ERROR');
+136:           setErrorMessage(res.error || 'Có lỗi xảy ra.');
+137:         }
+138:         return;
+139:       }
+140:       setState('SUCCESS');
+141:       timerRef.current = setTimeout(() => {
+142:         onBackToLogin();
+143:       }, 5000);
+144:     } catch {
+145:       setState('ERROR');
+146:       setErrorMessage('Lỗi kết nối máy chủ. Vui lòng thử lại.');
+147:     }
+148:   };
+149: 
+150:   const handleBackToLogin = () => {
+151:     if (timerRef.current) clearTimeout(timerRef.current);
+152:     router.push('/');
+153:   };
+154: 
+155:   const strengthLabels = ['Rất yếu', 'Yếu', 'Trung bình', 'Mạnh', 'Rất mạnh'];
+156: 
+157:   return (
+158:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
+159:       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+160:         <div className="text-center space-y-2 mb-8">
+161:           <button
+162:             type="button"
+163:             onClick={handleBackToLogin}
+164:             aria-label="Quay lại đăng nhập"
+165:             title="Quay lại đăng nhập"
+166:             className="text-slate-400 hover:text-slate-600 transition-colors"
+167:           >
+168:             <ChevronLeft className="w-6 h-6 mx-auto" />
+169:           </button>
+170:           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+171:             Đặt Lại Mật Khẩu
+172:           </h1>
+173:           <p className="text-sm text-slate-500">Nhập mật khẩu mới an toàn</p>
+174:         </div>
+175:         <div className="modern-card p-8 space-y-6 shadow-xl">
+176:           {state === 'VERIFYING' && (
+177:             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
+178:               <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
+179:               <span className="text-sm text-slate-600 font-medium">Đang xác minh liên kết...</span>
+180:             </div>
+181:           )}
+182:           {state === 'ERROR' && (
+183:             <div className="space-y-4 animate-in fade-in">
+184:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+185:                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+186:                 <div>
+187:                   <p className="font-bold">Lỗi</p>
+188:                   <p className="text-rose-700 mt-1">{errorMessage}</p>
+189:                 </div>
+190:               </div>
+191:               <button
+192:                 type="button"
+193:                 onClick={handleBackToLogin}
+194:                 className="btn-secondary w-full justify-center text-sm py-3"
+195:               >
+196:                 Quay lại đăng nhập
+197:               </button>
+198:             </div>
+199:           )}
+200:           {state === 'INVALID_TOKEN' && (
+201:             <div className="space-y-4 animate-in fade-in">
+202:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+203:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+204:                 <div>
+205:                   <p className="font-bold">Liên kết không hợp lệ</p>
+206:                   <p className="text-rose-700 mt-1">
+207:                     {errorMessage || 'Liên kết đã được sử dụng hoặc không đúng định dạng.'}
+208:                   </p>
+209:                 </div>
+210:               </div>
+211:               {fieldErrors.length > 0 && (
+212:                 <div className="text-xs text-rose-600 space-y-1">
+213:                   {fieldErrors.map((fe, i) => (
+214:                     <p key={i}>{fe.message}</p>
+215:                   ))}
+216:                 </div>
+217:               )}
+218:               <button
+219:                 type="button"
+220:                 onClick={handleBackToLogin}
+221:                 className="btn-secondary w-full justify-center text-sm py-3"
+222:               >
+223:                 Quay lại đăng nhập
+224:               </button>
+225:             </div>
+226:           )}
+227: 
+228:           {state === 'TOKEN_EXPIRED' && (
+229:             <div className="space-y-4 animate-in fade-in">
+230:               <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+231:                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+232:                 <div>
+233:                   <p className="font-bold">Liên kết đã hết hạn</p>
+234:                   <p className="text-amber-700 mt-1">
+235:                     {errorMessage || 'Vui lòng yêu cầu liên kết mới.'}
+236:                   </p>
+237:                 </div>
+238:               </div>
+239:               <button
+240:                 type="button"
+241:                 onClick={handleBackToLogin}
+242:                 className="btn-primary w-full justify-center text-sm py-3"
+243:               >
+244:                 Quay lại đăng nhập
+245:               </button>
+246:             </div>
+247:           )}
+248:           {state === 'TOKEN_USED' && (
+249:             <div className="space-y-4 animate-in fade-in">
+250:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+251:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+252:                 <div>
+253:                   <p className="font-bold">Liên kết đã được sử dụng</p>
+254:                   <p className="text-rose-700 mt-1">
+255:                     {errorMessage || 'Mật khẩu đã được thay đổi. Vui lòng đăng nhập.'}
+256:                   </p>
+257:                 </div>
+258:               </div>
+259:               <button
+260:                 type="button"
+261:                 onClick={handleBackToLogin}
+262:                 className="btn-primary w-full justify-center text-sm py-3"
+263:               >
+264:                 Đăng nhập
+265:               </button>
+266:             </div>
+267:           )}
+268:           {state === 'FORBIDDEN' && (
+269:             <div className="space-y-4 animate-in fade-in">
+270:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
+271:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+272:                 <div>
+273:                   <p className="font-bold">Tài khoản bị khóa</p>
+274:                   <p className="text-rose-700 mt-1">
+275:                     {errorMessage || 'Tài khoản này không thể đặt lại mật khẩu.'}
+276:                   </p>
+277:                 </div>
+278:               </div>
+279:               <button
+280:                 type="button"
+281:                 onClick={handleBackToLogin}
+282:                 className="btn-secondary w-full justify-center text-sm py-3"
+283:               >
+284:                 Quay lại đăng nhập
+285:               </button>
+286:             </div>
+287:           )}
+288: 
+289:           {state === 'VALID_TOKEN' && (
+290:             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+291:               <div>
+292:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+293:                   Mật khẩu mới
+294:                 </label>
+295:                 <div className="relative">
+296:                   <input
+297:                     type={showPassword ? 'text' : 'password'}
+298:                     value={password}
+299:                     onChange={(e) => handlePasswordChange(e.target.value)}
+300:                     placeholder="Nhập mật khẩu mới"
+301:                     className="modern-input pr-10 h-11 text-sm font-medium"
+302:                   />
+303:                   <button
+304:                     type="button"
+305:                     onClick={() => setShowPassword(!showPassword)}
+306:                     aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+307:                     title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+308:                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+309:                   >
+310:                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+311:                   </button>
+312:                 </div>
+313:               </div>
+314:               {passwordStrength > 0 && (
+315:                 <div className="space-y-1.5">
+316:                   <div className="flex gap-1">
+317:                     {[1, 2, 3, 4, 5].map((bar) => (
+318:                       <div
+319:                         key={bar}
+320:                         className={`h-1.5 flex-1 rounded-full ${bar <= passwordStrength ? (passwordStrength <= 2 ? 'bg-red-500' : passwordStrength <= 3 ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-slate-200'}`}
+321:                       />
+322:                     ))}
+323:                   </div>
+324:                   <p className="text-[10px] text-slate-500 font-medium">
+325:                     Độ mạnh: {strengthLabels[passwordStrength - 1]}
+326:                   </p>
+327:                 </div>
+328:               )}
+329:               <div>
+330:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
+331:                   Xác nhận mật khẩu
+332:                 </label>
+333:                 <div className="relative">
+334:                   <input
+335:                     type={showConfirm ? 'text' : 'password'}
+336:                     value={passwordConfirm}
+337:                     onChange={(e) => {
+338:                       setPasswordConfirm(e.target.value);
+339:                       setFieldErrors((prev) => prev.filter((f) => f.field !== 'newPassword'));
+340:                     }}
+341:                     placeholder="Nhập lại mật khẩu"
+342:                     className="modern-input pr-10 h-11 text-sm font-medium"
+343:                   />
+344:                   <button
+345:                     type="button"
+346:                     onClick={() => setShowConfirm(!showConfirm)}
+347:                     aria-label={showConfirm ? 'Ẩn xác nhận mật khẩu' : 'Hiện xác nhận mật khẩu'}
+348:                     title={showConfirm ? 'Ẩn xác nhận mật khẩu' : 'Hiện xác nhận mật khẩu'}
+349:                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
+350:                   >
+351:                     {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+352:                   </button>
+353:                 </div>
+354:               </div>
+355:               {fieldErrors.map((fe, i) => (
+356:                 <div
+357:                   key={i}
+358:                   className="text-xs text-rose-600 font-semibold bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 animate-in fade-in"
+359:                 >
+360:                   {fe.message}
+361:                 </div>
+362:               ))}
+363:               <button
+364:                 type="submit"
+365:                 disabled={!password || password.length < 8 || password !== passwordConfirm}
+366:                 className="btn-primary w-full justify-center text-sm py-3 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+367:               >
+368:                 Đặt lại mật khẩu
+369:               </button>
+370:             </form>
+371:           )}
+372: 
+373:           {state === 'LOADING' && (
+374:             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
+375:               <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
+376:               <span className="text-sm text-slate-600 font-medium">Đang đặt lại mật khẩu...</span>
+377:             </div>
+378:           )}
+379:           {state === 'SUCCESS' && (
+380:             <div className="flex flex-col items-center justify-center py-4 space-y-4 animate-in fade-in">
+381:               <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
+382:                 <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+383:               </div>
+384:               <div className="text-center space-y-1">
+385:                 <p className="text-sm font-bold text-slate-900">Đặt lại mật khẩu thành công</p>
+386:                 <p className="text-xs text-slate-500">Vui lòng đăng nhập lại với mật khẩu mới.</p>
+387:               </div>
+388:               <button
+389:                 type="button"
+390:                 onClick={handleBackToLogin}
+391:                 className="btn-primary w-full justify-center text-sm py-3"
+392:               >
+393:                 Quay lại đăng nhập
+394:               </button>
+395:             </div>
+396:           )}
+397:         </div>
+398:         <div className="text-center mt-6 text-xs text-slate-500">
+399:           Nhớ mật khẩu?{' '}
+400:           <button
+401:             type="button"
+402:             onClick={handleBackToLogin}
+403:             className="text-[#c23807] font-bold hover:underline"
+404:           >
+405:             Quay lại đăng nhập
+406:           </button>
+407:         </div>
+408:       </div>
+409:     </div>
+410:   );
+411: };
+</file>
+
 <file path="apps/web/src/components/forms/ConnectCarrierModal.tsx">
   1: 'use client';
   2: 
@@ -5533,6 +6851,390 @@ This section contains the contents of the repository's files.
 212:     </div>
 213:   );
 214: }
+</file>
+
+<file path="apps/web/src/components/ui/OperationalComponents.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState } from 'react';
+  4: import { Copy, Check, Info, ShieldAlert, AlertTriangle, ExternalLink } from 'lucide-react';
+  5: import { ShipmentStatus, CarrierCapabilityTier } from '@/types/domain';
+  6: 
+  7: // ============================================================================
+  8: // 1. Money Component (Tabular Figures, Precise Formatting)
+  9: // ============================================================================
+ 10: interface MoneyProps {
+ 11:   amount: number | bigint;
+ 12:   state?: 'confirmed' | 'pending' | 'estimated';
+ 13:   showSign?: boolean;
+ 14:   className?: string;
+ 15: }
+ 16: 
+ 17: export const Money: React.FC<MoneyProps> = ({
+ 18:   amount,
+ 19:   state = 'confirmed',
+ 20:   showSign = false,
+ 21:   className = '',
+ 22: }) => {
+ 23:   const num = Number(amount) || 0;
+ 24:   const isNegative = num < 0;
+ 25:   const absNum = Math.abs(num);
+ 26:   const formatted = absNum.toLocaleString('vi-VN') + ' đ';
+ 27: 
+ 28:   const signStr = isNegative ? '- ' : showSign && num > 0 ? '+ ' : '';
+ 29: 
+ 30:   let stateStyle = 'font-mono tabular-nums text-right ';
+ 31:   if (state === 'confirmed') {
+ 32:     stateStyle += isNegative ? 'text-rose-600 font-bold' : 'text-slate-900 font-semibold';
+ 33:   } else if (state === 'pending') {
+ 34:     stateStyle += 'text-slate-500 italic';
+ 35:   } else if (state === 'estimated') {
+ 36:     stateStyle += 'text-slate-500 italic';
+ 37:   }
+ 38: 
+ 39:   return (
+ 40:     <span
+ 41:       className={`${stateStyle} ${className}`}
+ 42:       title={state !== 'confirmed' ? `Trạng thái: ${state}` : undefined}
+ 43:     >
+ 44:       {signStr}
+ 45:       {formatted}
+ 46:     </span>
+ 47:   );
+ 48: };
+ 49: 
+ 50: // ============================================================================
+ 51: // 2. TrackingCode Component (1-Touch Copy with Immediate Visual Feedback)
+ 52: // ============================================================================
+ 53: interface TrackingCodeProps {
+ 54:   code: string;
+ 55:   onClick?: () => void;
+ 56:   className?: string;
+ 57: }
+ 58: 
+ 59: export const TrackingCode: React.FC<TrackingCodeProps> = ({ code, onClick, className = '' }) => {
+ 60:   const [copied, setCopied] = useState(false);
+ 61: 
+ 62:   const handleCopy = (e: React.MouseEvent) => {
+ 63:     e.stopPropagation();
+ 64:     navigator.clipboard.writeText(code);
+ 65:     setCopied(true);
+ 66:     setTimeout(() => setCopied(false), 2000);
+ 67:   };
+ 68: 
+ 69:   return (
+ 70:     <span
+ 71:       onClick={onClick}
+ 72:       className={`inline-flex items-center gap-1.5 font-mono text-[13px] font-bold text-slate-900 hover:text-[#c23807] cursor-pointer group select-all transition-colors ${className}`}
+ 73:       title="Bấm để sao chép hoặc mở chi tiết hành trình"
+ 74:     >
+ 75:       <span>{code}</span>
+ 76:       <button
+ 77:         type="button"
+ 78:         onClick={handleCopy}
+ 79:         className="text-slate-400 hover:text-[#c23807] p-1 rounded-md transition"
+ 80:         title={copied ? 'Đã sao chép mã' : 'Sao chép mã'}
+ 81:       >
+ 82:         {copied ? (
+ 83:           <Check className="w-3.5 h-3.5 text-emerald-600" />
+ 84:         ) : (
+ 85:           <Copy className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+ 86:         )}
+ 87:       </button>
+ 88:     </span>
+ 89:   );
+ 90: };
+ 91: 
+ 92: // ============================================================================
+ 93: // 3. StatusBadge Component (Vietnamese Business Language)
+ 94: // ============================================================================
+ 95: interface StatusBadgeProps {
+ 96:   status: ShipmentStatus | string;
+ 97:   className?: string;
+ 98: }
+ 99: 
+100: export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = '' }) => {
+101:   const s = String(status).toUpperCase();
+102: 
+103:   let badgeClass = 'badge-info';
+104:   let label = status;
+105:   let dotColor = 'bg-slate-400';
+106: 
+107:   if (
+108:     s === 'DELIVERED' ||
+109:     s === 'RESOLVED' ||
+110:     s === 'MATCHED' ||
+111:     s === 'ACCEPTED' ||
+112:     s === 'ACTIVE'
+113:   ) {
+114:     badgeClass = 'badge-ok';
+115:     dotColor = 'bg-emerald-600';
+116:     if (s === 'DELIVERED') label = 'Giao Thành Công';
+117:     else if (s === 'RESOLVED') label = 'Đã Đối Soát';
+118:     else if (s === 'MATCHED') label = 'Đã Khớp Mã';
+119:     else if (s === 'ACCEPTED') label = 'Hãng Đã Chấp Thuận';
+120:   } else if (s === 'OUT_FOR_DELIVERY') {
+121:     badgeClass = 'badge-warn';
+122:     dotColor = 'bg-amber-600';
+123:     label = 'Đang Giao Hàng';
+124:   } else if (s === 'IN_TRANSIT') {
+125:     badgeClass = 'badge-info';
+126:     dotColor = 'bg-slate-500';
+127:     label = 'Đang Trung Chuyển';
+128:   } else if (s === 'PICKING' || s === 'PICKED' || s === 'READY_TO_PICK' || s === 'CREATED') {
+129:     badgeClass = 'badge-info';
+130:     dotColor = 'bg-slate-500';
+131:     label = s === 'PICKED' ? 'Đã Lấy Hàng' : 'Chờ Lấy Hàng';
+132:   } else if (s === 'RETURNING') {
+133:     badgeClass = 'badge-warn';
+134:     dotColor = 'bg-amber-600';
+135:     label = 'Đang Chuyển Hoàn';
+136:   } else if (s === 'RETURNED') {
+137:     badgeClass = 'badge-info';
+138:     dotColor = 'bg-slate-600';
+139:     label = 'Đã Nhập Hoàn Kho';
+140:   } else if (s === 'DRAFT') {
+141:     badgeClass = 'badge-info';
+142:     dotColor = 'bg-slate-400';
+143:     label = 'Bản Nháp';
+144:   } else if (s === 'CANCELLED') {
+145:     badgeClass = 'badge-info';
+146:     dotColor = 'bg-slate-400';
+147:     label = 'Đã Hủy';
+148:   } else if (
+149:     s.includes('FAIL') ||
+150:     s.includes('DISPUTE') ||
+151:     s.includes('REJECTED') ||
+152:     s.includes('DAMAGED') ||
+153:     s.includes('LOST') ||
+154:     s.startsWith('D')
+155:   ) {
+156:     badgeClass = 'badge-risk';
+157:     dotColor = 'bg-rose-600';
+158:     if (s === 'DELIVERY_FAIL') label = 'Giao Thất Bại';
+159:     else if (s === 'DISPUTED') label = 'Đang Khiếu Nại';
+160:     else if (s === 'DAMAGED') label = 'Hàng Hư Hỏng';
+161:     else if (s === 'LOST') label = 'Thất Lạc Hàng';
+162:     else if (s === 'D1_WEIGHT') label = 'Lệch Cân Tính Phí';
+163:     else if (s === 'D2_FREIGHT') label = 'Lệch Cước Hợp Đồng';
+164:     else if (s === 'D4_DUPLICATE' || s.includes('D4')) label = 'Trừ Cước Trùng';
+165:     else if (s === 'D5_COD_MISMATCH' || s.includes('D5')) label = 'Lệch Tiền COD';
+166:     else if (s === 'D6_OVERDUE_COD' || s.includes('D6')) label = 'COD Quá Hạn';
+167:     else if (s === 'D7_MISSING' || s.includes('D7')) label = 'Thiếu Dòng Sao Kê';
+168:   } else if (
+169:     s.includes('DELAY') ||
+170:     s.includes('PENDING') ||
+171:     s.includes('OPEN') ||
+172:     s.includes('ASSIGNED') ||
+173:     s.includes('SUBMITTED')
+174:   ) {
+175:     badgeClass = 'badge-warn';
+176:     dotColor = 'bg-amber-600';
+177:     if (s === 'PICKUP_DELAY') label = 'Chậm Lấy Hàng';
+178:     else if (s === 'OPEN') label = 'Chờ Xử Lý';
+179:     else if (s === 'ASSIGNED') label = 'Đã Phân Công';
+180:     else if (s === 'SUBMITTED') label = 'Đã Gửi Hãng';
+181:     else if (s === 'PENDING') label = 'Chờ Duyệt';
+182:   } else if (s.includes('REATTEMPT')) {
+183:     badgeClass = 'badge-info';
+184:     dotColor = 'bg-emerald-600';
+185:     label = 'Đã Gửi Lệnh Giao Lại';
+186:   }
+187: 
+188:   return (
+189:     <span className={`${badgeClass} ${className}`}>
+190:       <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+191:       <span>{label}</span>
+192:     </span>
+193:   );
+194: };
+195: 
+196: // ============================================================================
+197: // 4. AutomationBadge Component (Clear Operational Description)
+198: // ============================================================================
+199: interface AutomationBadgeProps {
+200:   tier: CarrierCapabilityTier | 'L2' | 'L1' | 'L0';
+201:   carrierCode?: string;
+202:   className?: string;
+203: }
+204: 
+205: export const AutomationBadge: React.FC<AutomationBadgeProps> = ({
+206:   tier,
+207:   carrierCode = '',
+208:   className = '',
+209: }) => {
+210:   const t = String(tier).toUpperCase();
+211: 
+212:   if (t === 'L2' || t.includes('EXECUTE')) {
+213:     return (
+214:       <span
+215:         className={`badge-ok font-semibold text-xs ${className}`}
+216:         title="Tự động gọi API hãng trực tiếp"
+217:       >
+218:         <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+219:         <span>{carrierCode ? `${carrierCode} · ` : ''}Tự Động Qua API</span>
+220:       </span>
+221:     );
+222:   }
+223: 
+224:   if (t === 'L1' || t.includes('ASSIST')) {
+225:     return (
+226:       <span
+227:         className={`badge-warn font-semibold text-xs ${className}`}
+228:         title="Tạo hồ sơ chuẩn mẫu để nhân viên dán lên cổng hãng"
+229:       >
+230:         <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
+231:         <span>{carrierCode ? `${carrierCode} · ` : ''}Hỗ Trợ Cổng Hãng</span>
+232:       </span>
+233:     );
+234:   }
+235: 
+236:   return (
+237:     <span
+238:       className={`badge-info font-medium text-xs ${className}`}
+239:       title="Thao tác hoàn toàn thủ công"
+240:     >
+241:       <span>{carrierCode ? `${carrierCode} · ` : ''}Thủ Công</span>
+242:     </span>
+243:   );
+244: };
+245: 
+246: // ============================================================================
+247: // 5. EmptyState Component (Clean & Helpful)
+248: // ============================================================================
+249: interface EmptyStateProps {
+250:   title: string;
+251:   description?: string;
+252:   reason?: string;
+253:   actionLabel?: string;
+254:   onAction?: () => void;
+255:   icon?: React.ReactNode;
+256: }
+257: 
+258: export const EmptyState: React.FC<EmptyStateProps> = ({
+259:   title,
+260:   description,
+261:   reason,
+262:   actionLabel,
+263:   onAction,
+264:   icon,
+265: }) => {
+266:   return (
+267:     <div className="modern-card p-12 text-center flex flex-col items-center justify-center space-y-3">
+268:       <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center text-xl">
+269:         {icon || <Info className="w-6 h-6 text-slate-400" />}
+270:       </div>
+271:       <div className="space-y-1 max-w-md">
+272:         <h4 className="font-bold text-slate-900 text-sm">{title}</h4>
+273:         {(description || reason) && (
+274:           <p className="text-xs text-slate-500">{description || reason}</p>
+275:         )}
+276:       </div>
+277:       {actionLabel && onAction && (
+278:         <button type="button" onClick={onAction} className="btn-primary mt-2">
+279:           {actionLabel}
+280:         </button>
+281:       )}
+282:     </div>
+283:   );
+284: };
+285: 
+286: // ============================================================================
+287: // 6. ConfirmDialog Modal (Focus Trapped, Accessible)
+288: // ============================================================================
+289: interface ConfirmDialogProps {
+290:   isOpen: boolean;
+291:   title: string;
+292:   message?: string;
+293:   description?: string;
+294:   confirmLabel?: string;
+295:   cancelLabel?: string;
+296:   isDanger?: boolean;
+297:   requireReason?: boolean;
+298:   onConfirm: (reason: string) => void;
+299:   onCancel?: () => void;
+300:   onClose?: () => void;
+301: }
+302: 
+303: export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
+304:   isOpen,
+305:   title,
+306:   message,
+307:   description,
+308:   confirmLabel = 'Xác Nhận',
+309:   cancelLabel = 'Hủy Bỏ',
+310:   isDanger = false,
+311:   requireReason = false,
+312:   onConfirm,
+313:   onCancel,
+314:   onClose,
+315: }) => {
+316:   const handleClose = () => {
+317:     if (onCancel) onCancel();
+318:     if (onClose) onClose();
+319:   };
+320:   const [reason, setReason] = useState('');
+321:   const [error, setError] = useState<string | null>(null);
+322: 
+323:   if (!isOpen) return null;
+324: 
+325:   const handleConfirm = () => {
+326:     if (requireReason && !reason.trim()) {
+327:       setError('Vui lòng nhập lý do giải trình bắt buộc.');
+328:       return;
+329:     }
+330:     setError(null);
+331:     onConfirm(reason);
+332:     setReason('');
+333:   };
+334: 
+335:   return (
+336:     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+337:       <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+338:         <div className="flex items-center gap-3">
+339:           <div
+340:             className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isDanger ? 'bg-rose-50 text-rose-600' : 'bg-[#FFF5F0] text-[#c23807]'}`}
+341:           >
+342:             {isDanger ? <ShieldAlert className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+343:           </div>
+344:           <div>
+345:             <h3 className="font-bold text-slate-900 text-base">{title}</h3>
+346:             <p className="text-xs text-slate-500 mt-0.5">{message}</p>
+347:           </div>
+348:         </div>
+349: 
+350:         {requireReason && (
+351:           <div className="space-y-1.5 pt-2">
+352:             <label className="text-xs font-bold text-slate-700 block">
+353:               Lý do giải trình (Bắt buộc theo quy tắc tài chính):
+354:             </label>
+355:             <textarea
+356:               value={reason}
+357:               onChange={(e) => setReason(e.target.value)}
+358:               placeholder="Nhập chi tiết căn cứ giải trình..."
+359:               className="modern-input text-xs h-20 resize-none"
+360:               autoFocus
+361:             />
+362:             {error && <p className="text-xs text-rose-600 font-semibold">{error}</p>}
+363:           </div>
+364:         )}
+365: 
+366:         <div className="flex justify-end items-center gap-2 pt-3 border-t border-slate-100">
+367:           <button type="button" onClick={onCancel} className="btn-secondary text-xs">
+368:             {cancelLabel}
+369:           </button>
+370:           <button
+371:             type="button"
+372:             onClick={handleConfirm}
+373:             className={isDanger ? 'btn-danger text-xs' : 'btn-primary text-xs'}
+374:           >
+375:             {confirmLabel}
+376:           </button>
+377:         </div>
+378:       </div>
+379:     </div>
+380:   );
+381: };
 </file>
 
 <file path="apps/web/src/components/AdminSystemTab.tsx">
@@ -6901,6 +8603,890 @@ This section contains the contents of the repository's files.
 1132: };
 </file>
 
+<file path="apps/web/src/components/ControlTowerTab.tsx">
+  1: 'use client';
+  2: 
+  3: import React from 'react';
+  4: import { TrackingCode, Money, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
+  5: import {
+  6:   MASTER_SHIPMENTS,
+  7:   MASTER_EXCEPTIONS,
+  8:   MASTER_DISCREPANCIES,
+  9:   MASTER_CLAIMS,
+ 10:   getUnifiedMetrics,
+ 11: } from '@/services/unifiedDataStore';
+ 12: import {
+ 13:   Package,
+ 14:   AlertTriangle,
+ 15:   Clock,
+ 16:   DollarSign,
+ 17:   TrendingUp,
+ 18:   ArrowRight,
+ 19:   ShieldCheck,
+ 20:   CheckCircle2,
+ 21:   Sliders,
+ 22:   RotateCcw,
+ 23:   Truck,
+ 24: } from 'lucide-react';
+ 25: 
+ 26: interface Props {
+ 27:   role: string;
+ 28:   onNavigate: (tab: string) => void;
+ 29:   onCreateOrder?: () => void;
+ 30: }
+ 31: 
+ 32: export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrder }) => {
+ 33:   const metrics = getUnifiedMetrics();
+ 34: 
+ 35:   const urgentExceptions = MASTER_EXCEPTIONS.filter((e) => e.status === 'OPEN').slice(0, 3);
+ 36:   const urgentDiscrepancies = MASTER_DISCREPANCIES.filter((d) => d.status === 'OPEN').slice(0, 3);
+ 37: 
+ 38:   return (
+ 39:     <div className="w-full space-y-6">
+ 40:       {/* Operational Header Bar */}
+ 41:       <div className="modern-card p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gradient-to-r from-white via-white to-[#FFF5F0] border-l-4 border-l-[#c23807]">
+ 42:         <div>
+ 43:           <h1 className="text-base font-bold text-slate-900 flex items-center gap-2">
+ 44:             <span>Bàn Điều Khiển Vận Hành & Đối Soát Ba Sổ</span>
+ 45:           </h1>
+ 46:           <p className="text-xs text-slate-500 mt-0.5">
+ 47:             Giám sát bưu kiện thời gian thực, xử lý sự cố cứu đơn và đối soát chênh lệch tài chính
+ 48:             tự động.
+ 49:           </p>
+ 50:         </div>
+ 51: 
+ 52:         {onCreateOrder && (
+ 53:           <button type="button" onClick={onCreateOrder} className="btn-primary text-xs shrink-0">
+ 54:             <span>+ Tạo Vận Đơn Mới</span>
+ 55:           </button>
+ 56:         )}
+ 57:       </div>
+ 58: 
+ 59:       {/* 4 Unified Operational KPI Cards */}
+ 60:       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+ 61:         {/* Metric 1: Active Shipments */}
+ 62:         <div
+ 63:           onClick={() => onNavigate('shipments')}
+ 64:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-[#c23807] transition-colors"
+ 65:         >
+ 66:           <div className="flex items-center justify-between">
+ 67:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+ 68:               Tổng Bưu Kiện Đang Chạy
+ 69:             </span>
+ 70:             <div className="w-9 h-9 rounded-xl bg-[#FFF5F0] text-[#c23807] flex items-center justify-center">
+ 71:               <Package className="w-4.5 h-4.5" />
+ 72:             </div>
+ 73:           </div>
+ 74:           <div className="my-2">
+ 75:             <div className="text-3xl font-black font-mono text-slate-900">
+ 76:               {metrics.activeShipments}
+ 77:             </div>
+ 78:             <div className="text-xs text-slate-500 mt-0.5">
+ 79:               Trên tổng số {metrics.totalShipments} bưu kiện trong hệ thống
+ 80:             </div>
+ 81:           </div>
+ 82:           <div className="flex items-center gap-1 text-xs font-semibold text-[#c23807] group-hover:underline pt-2 border-t border-slate-100">
+ 83:             <span>Mở danh sách vận đơn</span>
+ 84:             <ArrowRight className="w-3.5 h-3.5" />
+ 85:           </div>
+ 86:         </div>
+ 87: 
+ 88:         {/* Metric 2: Open Exceptions Needing Rescue */}
+ 89:         <div
+ 90:           onClick={() => onNavigate('exceptions')}
+ 91:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-amber-400 transition-colors"
+ 92:         >
+ 93:           <div className="flex items-center justify-between">
+ 94:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+ 95:               Sự Cố Cần Cứu Đơn Gấp
+ 96:             </span>
+ 97:             <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
+ 98:               <AlertTriangle className="w-4.5 h-4.5" />
+ 99:             </div>
+100:           </div>
+101:           <div className="my-2">
+102:             <div className="text-3xl font-black font-mono text-amber-700">
+103:               {metrics.openExceptionsCount}
+104:             </div>
+105:             <div className="text-xs text-slate-500 mt-0.5">
+106:               Giao thất bại, trễ lấy hàng, đọng trung chuyển
+107:             </div>
+108:           </div>
+109:           <div className="flex items-center gap-1 text-xs font-semibold text-amber-700 group-hover:underline pt-2 border-t border-slate-100">
+110:             <span>Vào hộp việc CSKH</span>
+111:             <ArrowRight className="w-3.5 h-3.5" />
+112:           </div>
+113:         </div>
+114: 
+115:         {/* Metric 3: Financial Discrepancies */}
+116:         <div
+117:           onClick={() => onNavigate('reconciliation')}
+118:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-rose-400 transition-colors"
+119:         >
+120:           <div className="flex items-center justify-between">
+121:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+122:               Khoản Lệch Cước & COD
+123:             </span>
+124:             <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center">
+125:               <DollarSign className="w-4.5 h-4.5" />
+126:             </div>
+127:           </div>
+128:           <div className="my-2">
+129:             <div className="text-3xl font-black font-mono text-rose-700">
+130:               <Money amount={metrics.totalDiscrepancyAmount} state="confirmed" />
+131:             </div>
+132:             <div className="text-xs text-slate-500 mt-0.5">
+133:               {metrics.openDiscrepanciesCount} khoản lệch đang chờ duyệt
+134:             </div>
+135:           </div>
+136:           <div className="flex items-center gap-1 text-xs font-semibold text-rose-700 group-hover:underline pt-2 border-t border-slate-100">
+137:             <span>Duyệt đối soát chênh lệch</span>
+138:             <ArrowRight className="w-3.5 h-3.5" />
+139:           </div>
+140:         </div>
+141: 
+142:         {/* Metric 4: Rescued & Recovered Value */}
+143:         <div
+144:           onClick={() => onNavigate('three_ledgers')}
+145:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-emerald-400 transition-colors"
+146:         >
+147:           <div className="flex items-center justify-between">
+148:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+149:               Bồi Thường Đã Thu Hồi
+150:             </span>
+151:             <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+152:               <TrendingUp className="w-4.5 h-4.5" />
+153:             </div>
+154:           </div>
+155:           <div className="my-2">
+156:             <div className="text-3xl font-black font-mono text-emerald-700">
+157:               <Money amount={1500000} state="confirmed" />
+158:             </div>
+159:             <div className="text-xs text-slate-500 mt-0.5">
+160:               Tiền bồi thường thực nhận đã về tài khoản
+161:             </div>
+162:           </div>
+163:           <div className="flex items-center gap-1 text-xs font-semibold text-emerald-700 group-hover:underline pt-2 border-t border-slate-100">
+164:             <span>Xem Báo Cáo Ba Sổ</span>
+165:             <ArrowRight className="w-3.5 h-3.5" />
+166:           </div>
+167:         </div>
+168:       </div>
+169: 
+170:       {/* Priority Work Queue (Trả Lời 3 Câu Hỏi Vận Hành) */}
+171:       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+172:         {/* Panel 1: Urgent Exceptions Requiring Action */}
+173:         <div className="modern-card p-6 space-y-4">
+174:           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+175:             <div>
+176:               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+177:                 <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
+178:                 <span>Hàng Đợi Cứu Đơn Cần Can Thiệp Hôm Nay</span>
+179:               </h2>
+180:               <p className="text-xs text-slate-500 mt-0.5">
+181:                 Các đơn giao không thành công sắp chạm hạn chót hãng chuyển hoàn.
+182:               </p>
+183:             </div>
+184:             <button
+185:               type="button"
+186:               onClick={() => onNavigate('exceptions')}
+187:               className="btn-secondary text-xs"
+188:             >
+189:               Xem Tất Cả ({metrics.openExceptionsCount})
+190:             </button>
+191:           </div>
+192: 
+193:           <div className="divide-y divide-slate-100">
+194:             {urgentExceptions.map((exc) => (
+195:               <div key={exc.id} className="py-3 flex items-center justify-between gap-3">
+196:                 <div className="space-y-1">
+197:                   <div className="flex items-center gap-2">
+198:                     <TrackingCode
+199:                       code={exc.tracking_code}
+200:                       onClick={() => onNavigate('exceptions')}
+201:                     />
+202:                     <span className="font-bold text-xs text-slate-700">{exc.carrier_code}</span>
+203:                     <span className="badge-warn text-xs">Còn {exc.hours_remaining}h</span>
+204:                   </div>
+205:                   <div className="text-xs text-slate-600 font-medium">
+206:                     {exc.carrier_reason || 'Khách không nghe máy (Lần 1)'}
+207:                   </div>
+208:                   <div className="text-xs text-slate-400">
+209:                     Người nhận: <strong>{exc.recipient_name}</strong> · COD:{' '}
+210:                     <Money amount={exc.cod_amount} state="pending" className="inline text-xs" />
+211:                   </div>
+212:                 </div>
+213: 
+214:                 <button
+215:                   type="button"
+216:                   onClick={() => onNavigate('exceptions')}
+217:                   className="btn-primary text-xs shrink-0 py-1.5 px-3"
+218:                 >
+219:                   Xử Lý Ngay
+220:                 </button>
+221:               </div>
+222:             ))}
+223:           </div>
+224:         </div>
+225: 
+226:         {/* Panel 2: Urgent Discrepancies Requiring Maker-Checker Approval */}
+227:         <div className="modern-card p-6 space-y-4">
+228:           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
+229:             <div>
+230:               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+231:                 <DollarSign className="w-4.5 h-4.5 text-rose-600" />
+232:                 <span>Khoản Lệch Tài Chính Chờ Kế Toán Duyệt</span>
+233:               </h2>
+234:               <p className="text-xs text-slate-500 mt-0.5">
+235:                 Phát hiện qua 6 phép dò đối soát tự động so với biểu giá hợp đồng.
+236:               </p>
+237:             </div>
+238:             <button
+239:               type="button"
+240:               onClick={() => onNavigate('reconciliation')}
+241:               className="btn-secondary text-xs"
+242:             >
+243:               Đối Soát Kỳ Này
+244:             </button>
+245:           </div>
+246: 
+247:           <div className="divide-y divide-slate-100">
+248:             {urgentDiscrepancies.map((disc) => (
+249:               <div key={disc.id} className="py-3 flex items-center justify-between gap-3">
+250:                 <div className="space-y-1">
+251:                   <div className="flex items-center gap-2">
+252:                     <TrackingCode
+253:                       code={disc.tracking_code}
+254:                       onClick={() => onNavigate('reconciliation')}
+255:                     />
+256:                     <StatusBadge status={disc.type} />
+257:                   </div>
+258:                   <div className="text-xs text-slate-600">{disc.reason}</div>
+259:                   <div className="text-xs text-rose-700 font-bold font-mono">
+260:                     Chênh lệch:{' '}
+261:                     <Money amount={disc.discrepancy_amount} state="confirmed" className="inline" />
+262:                   </div>
+263:                 </div>
+264: 
+265:                 <button
+266:                   type="button"
+267:                   onClick={() => onNavigate('reconciliation')}
+268:                   className="btn-secondary text-xs shrink-0 py-1.5 px-3 font-semibold"
+269:                 >
+270:                   Kiểm Tra
+271:                 </button>
+272:               </div>
+273:             ))}
+274:           </div>
+275:         </div>
+276:       </div>
+277:     </div>
+278:   );
+279: };
+</file>
+
+<file path="apps/web/src/components/CreateOrderModal.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState } from 'react';
+  4: import {
+  5:   PackagePlus,
+  6:   X,
+  7:   Check,
+  8:   Truck,
+  9:   DollarSign,
+ 10:   Clock,
+ 11:   ShieldCheck,
+ 12:   MapPin,
+ 13:   Scale,
+ 14:   Sparkles,
+ 15:   ArrowRight,
+ 16:   Info,
+ 17:   Store,
+ 18: } from 'lucide-react';
+ 19: import { Money, AutomationBadge } from './ui/OperationalComponents';
+ 20: import { MASTER_SHIPMENTS, UnifiedShipment } from '@/services/unifiedDataStore';
+ 21: 
+ 22: interface Props {
+ 23:   isOpen: boolean;
+ 24:   onClose: () => void;
+ 25:   onOrderCreated: (newShipment: UnifiedShipment) => void;
+ 26: }
+ 27: 
+ 28: export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCreated }) => {
+ 29:   // Order information
+ 30:   // eslint-disable-next-line react-hooks/purity -- Legacy prototype random order code generator
+ 31:   const [orderCode, setOrderCode] = useState(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
+ 32:   const [pickupWarehouse, setPickupWarehouse] = useState('store_01');
+ 33:   const [recipientName, setRecipientName] = useState('Nguyễn Văn Khách');
+ 34:   const [recipientPhone, setRecipientPhone] = useState('0901234567');
+ 35:   const [recipientProvince, setRecipientProvince] = useState<'HCM' | 'HN' | 'OTHER'>('HCM');
+ 36:   const [recipientDistrict, setRecipientDistrict] = useState('Quận 3');
+ 37:   const [recipientAddress, setRecipientAddress] = useState('128 Nguyễn Trãi, Phường 3');
+ 38:   const [itemName, setItemName] = useState('Váy lụa thiết kế cao cấp (Size M)');
+ 39: 
+ 40:   // Package specifications
+ 41:   const [weightGram, setWeightGram] = useState<number>(350);
+ 42:   const [lengthCm, setLengthCm] = useState<number>(20);
+ 43:   const [widthCm, setWidthCm] = useState<number>(15);
+ 44:   const [heightCm, setHeightCm] = useState<number>(5);
+ 45:   const [codAmount, setCodAmount] = useState<number>(450000);
+ 46:   const [insuranceValue, setInsuranceValue] = useState<number>(450000);
+ 47:   const [payer, setPayer] = useState<'SENDER' | 'RECEIVER'>('RECEIVER');
+ 48:   const [inspectionNote, setInspectionNote] = useState<
+ 49:     'CHO_XEM_HANG' | 'CHO_THU_HANG' | 'KHONG_CHO_XEM'
+ 50:   >('CHO_XEM_HANG');
+ 51: 
+ 52:   // Selected Carrier
+ 53:   const [selectedCarrier, setSelectedCarrier] = useState<'GHN' | 'GHTK'>('GHN');
+ 54:   const [loading, setLoading] = useState(false);
+ 55:   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+ 56: 
+ 57:   if (!isOpen) return null;
+ 58: 
+ 59:   // Volumetric weight formula: (L x W x H) / 5000 * 1000 (in grams)
+ 60:   const volumetricWeightGram = Math.round(((lengthCm * widthCm * heightCm) / 5000) * 1000);
+ 61:   const chargeableWeightGram = Math.max(weightGram, volumetricWeightGram);
+ 62: 
+ 63:   // Dynamic Rate Comparison Engine across Connected Carriers
+ 64:   const isIntraProvince = recipientProvince === 'HCM';
+ 65: 
+ 66:   const carriersComparison = [
+ 67:     {
+ 68:       id: 'GHN' as const,
+ 69:       name: 'Giao Hàng Nhanh (GHN Express)',
+ 70:       baseFee: isIntraProvince ? 22000 : 32000,
+ 71:       addWeightFee:
+ 72:         chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 5000 : 0,
+ 73:       insuranceFee: insuranceValue > 1000000 ? Math.round(insuranceValue * 0.005) : 0,
+ 74:       codFee: 0,
+ 75:       deliveryTime: isIntraProvince ? 'Hỏa tốc trong 24h (Sáng mai)' : '1 - 2 ngày làm việc',
+ 76:       tier: 'L2' as const,
+ 77:       tierLabel: 'Tự động gọi API (L2)',
+ 78:       badge: '⚡ Giao Nhanh Nhất',
+ 79:       badgeColor: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+ 80:       logoBg: 'bg-[#FFF5F0] text-[#c23807]',
+ 81:     },
+ 82:     {
+ 83:       id: 'GHTK' as const,
+ 84:       name: 'Giao Hàng Tiết Kiệm (GHTK)',
+ 85:       baseFee: isIntraProvince ? 24000 : 34000,
+ 86:       addWeightFee:
+ 87:         chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 6000 : 0,
+ 88:       insuranceFee: insuranceValue > 1000000 ? Math.round(insuranceValue * 0.005) : 0,
+ 89:       codFee: 0,
+ 90:       deliveryTime: isIntraProvince ? '1 - 2 ngày làm việc' : '2 - 3 ngày làm việc',
+ 91:       tier: 'L1' as const,
+ 92:       tierLabel: 'Hỗ trợ cổng hãng (L1)',
+ 93:       badge: 'Phổ Biến Tuyến Huyện',
+ 94:       badgeColor: 'bg-slate-100 text-slate-700 border-slate-200',
+ 95:       logoBg: 'bg-emerald-50 text-emerald-700',
+ 96:     },
+ 97:   ].map((c) => ({
+ 98:     ...c,
+ 99:     totalFee: c.baseFee + c.addWeightFee + c.insuranceFee + c.codFee,
+100:   }));
+101: 
+102:   const activeCarrierInfo =
+103:     carriersComparison.find((c) => c.id === selectedCarrier) || carriersComparison[0];
+104: 
+105:   const handleSubmit = async (e: React.FormEvent) => {
+106:     e.preventDefault();
+107:     if (!recipientName.trim() || !recipientPhone.trim()) {
+108:       setErrorMsg('Vui lòng điền họ tên và số điện thoại người nhận.');
+109:       return;
+110:     }
+111: 
+112:     setLoading(true);
+113:     setErrorMsg(null);
+114: 
+115:     const generatedTracking = `${selectedCarrier}8829${Math.floor(Math.random() * 89999) + 10000}`;
+116:     const provinceName =
+117:       recipientProvince === 'HCM'
+118:         ? 'TP. Hồ Chí Minh'
+119:         : recipientProvince === 'HN'
+120:           ? 'Hà Nội'
+121:           : 'Đà Nẵng';
+122: 
+123:     const newShipment: UnifiedShipment = {
+124:       id: `shp_${Date.now()}`,
+125:       tracking_code: generatedTracking,
+126:       order_code: orderCode,
+127:       carrier_code: selectedCarrier,
+128:       carrier_account: selectedCarrier === 'GHN' ? 'acc_ghn_01' : 'acc_ghtk_01',
+129:       recipient_name: recipientName,
+130:       recipient_phone: recipientPhone,
+131:       recipient_address: `${recipientAddress}, ${recipientDistrict}`,
+132:       destination_province: provinceName,
+133:       cod_amount: Number(codAmount),
+134:       quoted_fee: activeCarrierInfo.totalFee,
+135:       declared_weight_g: Number(chargeableWeightGram),
+136:       status: 'picking',
+137:       match_status: 'matched_exact',
+138:       warehouse_id: pickupWarehouse,
+139:       created_at:
+140:         new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
+141:       updated_at:
+142:         new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
+143:       has_open_exception: false,
+144:       has_open_discrepancy: false,
+145:       has_open_claim: false,
+146:       timeline: [
+147:         {
+148:           title: 'Đã tạo vận đơn mới',
+149:           description: `Đơn hàng ${orderCode} đã tạo thành công và đẩy thông tin sang hãng ${selectedCarrier}`,
+150:           occurred_at: new Date().toLocaleTimeString('vi-VN'),
+151:           source_label: 'Hệ thống Ship Dễ',
+152:         },
+153:       ],
+154:     };
+155: 
+156:     // Prepend to Master Shipments
+157:     MASTER_SHIPMENTS.unshift(newShipment);
+158: 
+159:     setTimeout(() => {
+160:       setLoading(false);
+161:       onOrderCreated(newShipment);
+162:       onClose();
+163:     }, 600);
+164:   };
+165: 
+166:   return (
+167:     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+168:       <div className="bg-white rounded-2xl border border-slate-200 max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden shadow-2xl text-xs animate-in zoom-in-95 duration-150">
+169:         {/* Modal Header */}
+170:         <div className="p-4 sm:p-5 border-b border-slate-100 bg-[#FDFCFB] flex justify-between items-center shrink-0">
+171:           <div className="flex items-center gap-3">
+172:             <div className="w-10 h-10 rounded-xl bg-[#c23807] text-white flex items-center justify-center shadow-xs">
+173:               <PackagePlus className="w-5 h-5" />
+174:             </div>
+175:             <div>
+176:               <div className="flex items-center gap-2">
+177:                 <h2 className="font-bold text-sm text-slate-900">
+178:                   Tạo Vận Đơn Mới & So Sánh Cước Phí
+179:                 </h2>
+180:                 <span className="badge-ok text-xs">So Cước Tự Động</span>
+181:               </div>
+182:               <p className="text-xs text-slate-500 mt-0.5">
+183:                 Nhập thông tin giao hàng để hệ thống tính cước theo biểu giá hợp đồng và đẩy đơn
+184:                 sang hãng vận chuyển.
+185:               </p>
+186:             </div>
+187:           </div>
+188:           <button
+189:             type="button"
+190:             onClick={onClose}
+191:             className="w-8 h-8 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs cursor-pointer transition"
+192:           >
+193:             ✕
+194:           </button>
+195:         </div>
+196: 
+197:         {/* Modal Body: 2-Column Split */}
+198:         <div className="overflow-y-auto flex-1 p-4 sm:p-6 custom-scrollbar">
+199:           {errorMsg && (
+200:             <div className="p-3 mb-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+201:               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
+202:               <span>{errorMsg}</span>
+203:             </div>
+204:           )}
+205: 
+206:           <form
+207:             id="create-order-form"
+208:             onSubmit={handleSubmit}
+209:             className="grid grid-cols-1 lg:grid-cols-12 gap-6"
+210:           >
+211:             {/* LEFT COLUMN (7 Cols): Order & Package Info */}
+212:             <div className="lg:col-span-7 space-y-4">
+213:               {/* Section 1: Receiver & Address */}
+214:               <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/80">
+215:                 <div className="flex justify-between items-center">
+216:                   <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+217:                     <MapPin className="w-3.5 h-3.5 text-[#c23807]" />
+218:                     <span>1. Thông Tin Người Nhận & Nơi Giao</span>
+219:                   </span>
+220:                   <span className="text-xs font-mono text-slate-500 font-semibold">
+221:                     Mã đơn: {orderCode}
+222:                   </span>
+223:                 </div>
+224: 
+225:                 <div className="grid grid-cols-2 gap-3">
+226:                   <div>
+227:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+228:                       Tên Người Nhận:
+229:                     </label>
+230:                     <input
+231:                       type="text"
+232:                       value={recipientName}
+233:                       onChange={(e) => setRecipientName(e.target.value)}
+234:                       placeholder="Nguyễn Văn Khách"
+235:                       className="modern-input w-full text-xs font-medium"
+236:                       required
+237:                     />
+238:                   </div>
+239:                   <div>
+240:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+241:                       Số Điện Thoại:
+242:                     </label>
+243:                     <input
+244:                       type="tel"
+245:                       value={recipientPhone}
+246:                       onChange={(e) => setRecipientPhone(e.target.value)}
+247:                       placeholder="0901234567"
+248:                       className="modern-input w-full font-mono text-xs font-medium"
+249:                       required
+250:                     />
+251:                   </div>
+252:                 </div>
+253: 
+254:                 <div className="grid grid-cols-2 gap-3">
+255:                   <div>
+256:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+257:                       Tỉnh / Thành Phố:
+258:                     </label>
+259:                     <select
+260:                       value={recipientProvince}
+261:                       onChange={(e: any) => setRecipientProvince(e.target.value)}
+262:                       className="modern-input w-full font-semibold text-xs text-slate-800"
+263:                     >
+264:                       <option value="HCM">TP. Hồ Chí Minh (Nội Tỉnh)</option>
+265:                       <option value="HN">Hà Nội (Liên Tỉnh)</option>
+266:                       <option value="OTHER">Đà Nẵng / Tỉnh khác (Liên Tỉnh)</option>
+267:                     </select>
+268:                   </div>
+269:                   <div>
+270:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+271:                       Quận / Huyện:
+272:                     </label>
+273:                     <input
+274:                       type="text"
+275:                       value={recipientDistrict}
+276:                       onChange={(e) => setRecipientDistrict(e.target.value)}
+277:                       placeholder="Quận 3"
+278:                       className="modern-input w-full text-xs font-medium"
+279:                     />
+280:                   </div>
+281:                 </div>
+282: 
+283:                 <div>
+284:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
+285:                     Địa Chỉ Chi Tiết (Số nhà, Tên đường, Phường):
+286:                   </label>
+287:                   <input
+288:                     type="text"
+289:                     value={recipientAddress}
+290:                     onChange={(e) => setRecipientAddress(e.target.value)}
+291:                     placeholder="128 Nguyễn Trãi, Phường 3"
+292:                     className="modern-input w-full text-xs font-medium"
+293:                     required
+294:                   />
+295:                 </div>
+296: 
+297:                 <div>
+298:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
+299:                     Kho / Chi Nhánh Xuất Hàng:
+300:                   </label>
+301:                   <select
+302:                     value={pickupWarehouse}
+303:                     onChange={(e) => setPickupWarehouse(e.target.value)}
+304:                     className="modern-input w-full font-semibold text-xs text-slate-800"
+305:                   >
+306:                     <option value="store_01">Chi Nhánh Quận 3 (128 Nguyễn Trãi, HCM)</option>
+307:                     <option value="store_02">Kho Vận Tân Bình (55 CMT8, HCM)</option>
+308:                     <option value="store_03">Chi Nhánh Hà Nội (320 Cầu Giấy)</option>
+309:                     <option value="store_04">Chi Nhánh Đà Nẵng (102 Hoàng Văn Thụ)</option>
+310:                   </select>
+311:                 </div>
+312:               </div>
+313: 
+314:               {/* Section 2: Package Weight, Dimensions & COD */}
+315:               <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/80">
+316:                 <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+317:                   <Scale className="w-3.5 h-3.5 text-[#c23807]" />
+318:                   <span>2. Thông Số Kiện Hàng & Thu Tiền (COD)</span>
+319:                 </span>
+320: 
+321:                 <div>
+322:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
+323:                     Tên Sản Phẩm / Hàng Hóa:
+324:                   </label>
+325:                   <input
+326:                     type="text"
+327:                     value={itemName}
+328:                     onChange={(e) => setItemName(e.target.value)}
+329:                     placeholder="Quần áo, phụ kiện thời trang..."
+330:                     className="modern-input w-full text-xs font-medium"
+331:                   />
+332:                 </div>
+333: 
+334:                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+335:                   <div>
+336:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+337:                       Cân Nặng (g):
+338:                     </label>
+339:                     <input
+340:                       type="number"
+341:                       value={weightGram}
+342:                       onChange={(e) => setWeightGram(Number(e.target.value) || 0)}
+343:                       className="modern-input w-full font-mono font-bold text-xs"
+344:                       min={10}
+345:                       step={50}
+346:                     />
+347:                   </div>
+348:                   <div>
+349:                     <label className="font-bold text-slate-700 block mb-1 text-xs">Dài (cm):</label>
+350:                     <input
+351:                       type="number"
+352:                       value={lengthCm}
+353:                       onChange={(e) => setLengthCm(Number(e.target.value) || 0)}
+354:                       className="modern-input w-full font-mono text-xs"
+355:                       min={1}
+356:                     />
+357:                   </div>
+358:                   <div>
+359:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+360:                       Rộng (cm):
+361:                     </label>
+362:                     <input
+363:                       type="number"
+364:                       value={widthCm}
+365:                       onChange={(e) => setWidthCm(Number(e.target.value) || 0)}
+366:                       className="modern-input w-full font-mono text-xs"
+367:                       min={1}
+368:                     />
+369:                   </div>
+370:                   <div>
+371:                     <label className="font-bold text-slate-700 block mb-1 text-xs">Cao (cm):</label>
+372:                     <input
+373:                       type="number"
+374:                       value={heightCm}
+375:                       onChange={(e) => setHeightCm(Number(e.target.value) || 0)}
+376:                       className="modern-input w-full font-mono text-xs"
+377:                       min={1}
+378:                     />
+379:                   </div>
+380:                 </div>
+381: 
+382:                 {/* Chargeable Weight Indicator */}
+383:                 <div className="flex justify-between items-center p-2.5 bg-[#FFF5F0] rounded-lg border border-[#FDDDD0] text-xs text-slate-800">
+384:                   <span>
+385:                     Cân thực: <strong>{weightGram}g</strong> · Thể tích quy đổi (D×R×C/5000):{' '}
+386:                     <strong>{volumetricWeightGram}g</strong>
+387:                   </span>
+388:                   <span className="font-bold text-[#c23807]">
+389:                     Tính cước: {chargeableWeightGram}g
+390:                   </span>
+391:                 </div>
+392: 
+393:                 <div className="grid grid-cols-2 gap-3">
+394:                   <div>
+395:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+396:                       Tiền Thu Hộ COD (VND):
+397:                     </label>
+398:                     <input
+399:                       type="number"
+400:                       value={codAmount}
+401:                       onChange={(e) => setCodAmount(Number(e.target.value) || 0)}
+402:                       className="modern-input w-full font-mono font-bold text-xs text-slate-900"
+403:                       min={0}
+404:                       step={10000}
+405:                     />
+406:                   </div>
+407:                   <div>
+408:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
+409:                       Khai Giá Hàng Hóa:
+410:                     </label>
+411:                     <input
+412:                       type="number"
+413:                       value={insuranceValue}
+414:                       onChange={(e) => setInsuranceValue(Number(e.target.value) || 0)}
+415:                       className="modern-input w-full font-mono text-xs"
+416:                       min={0}
+417:                       step={50000}
+418:                     />
+419:                   </div>
+420:                 </div>
+421:               </div>
+422: 
+423:               {/* Section 3: Delivery Options */}
+424:               <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50/70 rounded-xl border border-slate-200/80">
+425:                 <div>
+426:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
+427:                     Lưu Ý Xem Hàng:
+428:                   </label>
+429:                   <select
+430:                     value={inspectionNote}
+431:                     onChange={(e: any) => setInspectionNote(e.target.value)}
+432:                     className="modern-input w-full text-xs font-semibold"
+433:                   >
+434:                     <option value="CHO_XEM_HANG">Cho xem hàng không cho thử</option>
+435:                     <option value="CHO_THU_HANG">Cho thử hàng</option>
+436:                     <option value="KHONG_CHO_XEM">Không cho xem hàng</option>
+437:                   </select>
+438:                 </div>
+439: 
+440:                 <div>
+441:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
+442:                     Người Trả Cước Phí:
+443:                   </label>
+444:                   <select
+445:                     value={payer}
+446:                     onChange={(e: any) => setPayer(e.target.value)}
+447:                     className="modern-input w-full text-xs font-semibold"
+448:                   >
+449:                     <option value="RECEIVER">Người nhận trả cước</option>
+450:                     <option value="SENDER">Người gửi trả cước (Shop)</option>
+451:                   </select>
+452:                 </div>
+453:               </div>
+454:             </div>
+455: 
+456:             {/* RIGHT COLUMN (5 Cols): REALTIME MULTI-CARRIER RATE COMPARISON */}
+457:             <div className="lg:col-span-5 space-y-4 flex flex-col justify-between">
+458:               <div className="space-y-3">
+459:                 <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+460:                   <div className="flex items-center gap-1.5 font-bold text-slate-900 text-xs">
+461:                     <Truck className="w-4 h-4 text-[#c23807]" />
+462:                     <span>So Sánh Cước Phí Theo Biểu Giá Hợp Đồng:</span>
+463:                   </div>
+464:                 </div>
+465: 
+466:                 <div className="space-y-2.5">
+467:                   {carriersComparison.map((carrier) => {
+468:                     const isSelected = selectedCarrier === carrier.id;
+469: 
+470:                     return (
+471:                       <div
+472:                         key={carrier.id}
+473:                         onClick={() => setSelectedCarrier(carrier.id)}
+474:                         className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col justify-between space-y-2.5 ${
+475:                           isSelected
+476:                             ? 'bg-[#FFF5F0] border-[#c23807] ring-2 ring-[#c23807]/20 shadow-xs'
+477:                             : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+478:                         }`}
+479:                       >
+480:                         <div className="flex justify-between items-start">
+481:                           <div className="flex items-center gap-2.5">
+482:                             <div
+483:                               className={`w-8 h-8 rounded-lg ${carrier.logoBg} flex items-center justify-center font-black text-xs shrink-0 border border-slate-200`}
+484:                             >
+485:                               {carrier.id}
+486:                             </div>
+487:                             <div>
+488:                               <div className="font-bold text-slate-900 text-xs leading-tight">
+489:                                 {carrier.name}
+490:                               </div>
+491:                               <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+492:                                 <span className="flex items-center gap-1">
+493:                                   <Clock className="w-3 h-3 text-slate-400" />
+494:                                   {carrier.deliveryTime}
+495:                                 </span>
+496:                               </div>
+497:                             </div>
+498:                           </div>
+499: 
+500:                           <div className="text-right">
+501:                             <div className="font-mono text-base font-black text-slate-900">
+502:                               <Money amount={carrier.totalFee} state="confirmed" />
+503:                             </div>
+504:                             <span
+505:                               className={`text-[11px] font-bold px-2 py-0.5 rounded border ${carrier.badgeColor}`}
+506:                             >
+507:                               {carrier.badge}
+508:                             </span>
+509:                           </div>
+510:                         </div>
+511: 
+512:                         {/* Fee breakdown on selected */}
+513:                         {isSelected && (
+514:                           <div className="pt-2 border-t border-[#FDDDD0] flex justify-between items-center text-xs text-slate-700 font-medium">
+515:                             <span>
+516:                               Cước gốc:{' '}
+517:                               <Money
+518:                                 amount={carrier.baseFee}
+519:                                 state="confirmed"
+520:                                 className="inline text-xs"
+521:                               />
+522:                             </span>
+523:                             <span>
+524:                               Phụ phí:{' '}
+525:                               <Money
+526:                                 amount={carrier.addWeightFee}
+527:                                 state="confirmed"
+528:                                 className="inline text-xs"
+529:                               />
+530:                             </span>
+531:                             <AutomationBadge tier={carrier.tier} />
+532:                           </div>
+533:                         )}
+534:                       </div>
+535:                     );
+536:                   })}
+537:                 </div>
+538:               </div>
+539: 
+540:               {/* Selected Summary Card */}
+541:               <div className="p-5 bg-slate-900 text-white rounded-2xl space-y-4 shadow-lg">
+542:                 <div className="flex justify-between items-center border-b border-slate-800 pb-2 text-xs">
+543:                   <span className="text-slate-400">Hãng vận chuyển:</span>
+544:                   <span className="font-bold text-white flex items-center gap-1.5">
+545:                     <Check className="w-3.5 h-3.5 text-emerald-400" />
+546:                     {activeCarrierInfo.name}
+547:                   </span>
+548:                 </div>
+549: 
+550:                 <div className="flex justify-between items-center">
+551:                   <div>
+552:                     <span className="text-xs text-slate-400 uppercase tracking-wider block">
+553:                       Cước Tạm Tính:
+554:                     </span>
+555:                     <div className="font-mono text-2xl font-black text-emerald-400">
+556:                       <Money
+557:                         amount={activeCarrierInfo.totalFee}
+558:                         state="confirmed"
+559:                         className="text-emerald-400 text-2xl"
+560:                       />
+561:                     </div>
+562:                   </div>
+563: 
+564:                   <div className="text-right">
+565:                     <span className="text-xs text-slate-400 uppercase tracking-wider block">
+566:                       Tiền Thu Hộ COD:
+567:                     </span>
+568:                     <div className="font-mono text-lg font-bold text-white">
+569:                       <Money amount={codAmount} state="confirmed" className="text-white text-lg" />
+570:                     </div>
+571:                   </div>
+572:                 </div>
+573: 
+574:                 <button
+575:                   type="submit"
+576:                   form="create-order-form"
+577:                   disabled={loading}
+578:                   className="btn-primary w-full h-11 justify-center text-xs font-bold shadow-md"
+579:                 >
+580:                   {loading ? (
+581:                     <span className="flex items-center gap-2">
+582:                       <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+583:                       <span>Đang tạo vận đơn & đẩy sang hãng...</span>
+584:                     </span>
+585:                   ) : (
+586:                     <span className="flex items-center gap-1.5">
+587:                       <span>Xác Nhận Tạo Đơn & Đẩy Sang {selectedCarrier}</span>
+588:                       <ArrowRight className="w-4 h-4" />
+589:                     </span>
+590:                   )}
+591:                 </button>
+592:               </div>
+593:             </div>
+594:           </form>
+595:         </div>
+596:       </div>
+597:     </div>
+598:   );
+599: };
+</file>
+
 <file path="apps/web/src/components/MobileSimulatorTab.tsx">
   1: 'use client';
   2: 
@@ -8118,6 +10704,309 @@ This section contains the contents of the repository's files.
 152:     </div>
 153:   );
 154: };
+</file>
+
+<file path="apps/web/src/components/ReturnScanTab.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState, useRef } from 'react';
+  4: import { TrackingCode, StatusBadge } from './ui/OperationalComponents';
+  5: import {
+  6:   RotateCcw,
+  7:   QrCode,
+  8:   Wifi,
+  9:   WifiOff,
+ 10:   Camera,
+ 11:   CheckCircle2,
+ 12:   AlertTriangle,
+ 13:   Upload,
+ 14:   RefreshCw,
+ 15:   Package,
+ 16: } from 'lucide-react';
+ 17: 
+ 18: export const ReturnScanTab: React.FC = () => {
+ 19:   const [isOfflineMode, setIsOfflineMode] = useState(false);
+ 20:   const [barcodeInput, setBarcodeInput] = useState('');
+ 21:   const [conditionInput, setConditionInput] = useState<'intact' | 'damaged' | 'missing_item'>(
+ 22:     'intact'
+ 23:   );
+ 24:   const [hasPhoto, setHasPhoto] = useState(false);
+ 25:   const [toastMessage, setToastMessage] = useState<{
+ 26:     type: 'ok' | 'risk' | 'warn';
+ 27:     msg: string;
+ 28:   } | null>(null);
+ 29: 
+ 30:   const [offlineQueue, setOfflineQueue] = useState<any[]>([]);
+ 31:   const [history, setHistory] = useState([
+ 32:     {
+ 33:       id: 'rec_1',
+ 34:       tracking_code: 'GHN88290111',
+ 35:       warehouse: 'Kho Tân Bình, HCM',
+ 36:       condition: 'intact',
+ 37:       scanned_at: '17/08/2026 08:15',
+ 38:       staff: 'Phạm Văn Kho',
+ 39:     },
+ 40:     {
+ 41:       id: 'rec_2',
+ 42:       tracking_code: 'GHTK77129002',
+ 43:       warehouse: 'Kho Tân Bình, HCM',
+ 44:       condition: 'damaged',
+ 45:       scanned_at: '17/08/2026 08:30',
+ 46:       staff: 'Phạm Văn Kho',
+ 47:       evidence_url: 'https://storage.shipde.net/evidence/img_02.jpg',
+ 48:     },
+ 49:   ]);
+ 50: 
+ 51:   const inputRef = useRef<HTMLInputElement>(null);
+ 52: 
+ 53:   const handleScanSubmit = (e: React.FormEvent) => {
+ 54:     e.preventDefault();
+ 55:     const code = barcodeInput
+ 56:       .trim()
+ 57:       .toUpperCase()
+ 58:       .replace(/[^A-Z0-9]/g, '');
+ 59:     if (!code) return;
+ 60: 
+ 61:     // Kiện hàng hư hỏng bắt buộc chụp ảnh làm chứng cứ
+ 62:     if (conditionInput !== 'intact' && !hasPhoto) {
+ 63:       setToastMessage({
+ 64:         type: 'risk',
+ 65:         msg: 'Kiện hàng hư hỏng hoặc thiếu hàng bắt buộc phải chụp ảnh làm bằng chứng khiếu nại.',
+ 66:       });
+ 67:       return;
+ 68:     }
+ 69: 
+ 70:     const newItem = {
+ 71:       id: `scan_${Date.now()}`,
+ 72:       tracking_code: code,
+ 73:       warehouse: 'Kho Tân Bình, HCM',
+ 74:       condition: conditionInput,
+ 75:       scanned_at:
+ 76:         new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
+ 77:       staff: 'Phạm Văn Kho (Thủ kho)',
+ 78:       evidence_url: hasPhoto ? 'https://storage.shipde.net/evidence/photo_proof.jpg' : undefined,
+ 79:     };
+ 80: 
+ 81:     if (isOfflineMode) {
+ 82:       setOfflineQueue((prev) => [newItem, ...prev]);
+ 83:       setToastMessage({
+ 84:         type: 'warn',
+ 85:         msg: `[Chế độ Ngoại tuyến] Đã lưu mã ${code} vào hàng đợi cục bộ (${offlineQueue.length + 1} kiện chờ đồng bộ).`,
+ 86:       });
+ 87:     } else {
+ 88:       setHistory((prev) => [newItem, ...prev]);
+ 89:       setToastMessage({
+ 90:         type: 'ok',
+ 91:         msg: `Đã xác nhận nhận kiện hoàn ${code} vào kho Tân Bình thành công.`,
+ 92:       });
+ 93:     }
+ 94: 
+ 95:     setBarcodeInput('');
+ 96:     setHasPhoto(false);
+ 97:     setConditionInput('intact');
+ 98:     if (inputRef.current) inputRef.current.focus();
+ 99:   };
+100: 
+101:   const handleSyncOffline = () => {
+102:     if (offlineQueue.length === 0) return;
+103:     setHistory((prev) => [...offlineQueue, ...prev]);
+104:     setToastMessage({
+105:       type: 'ok',
+106:       msg: `Đã đồng bộ ${offlineQueue.length} kiện hoàn từ máy quét lên máy chủ thành công.`,
+107:     });
+108:     setOfflineQueue([]);
+109:   };
+110: 
+111:   return (
+112:     <div className="w-full max-w-4xl mx-auto space-y-6">
+113:       {/* Toast */}
+114:       {toastMessage && (
+115:         <div
+116:           className={`p-4 rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg animate-in fade-in ${
+117:             toastMessage.type === 'ok'
+118:               ? 'bg-slate-900 text-white'
+119:               : toastMessage.type === 'risk'
+120:                 ? 'bg-rose-900 text-white'
+121:                 : 'bg-amber-900 text-white'
+122:           }`}
+123:         >
+124:           <div className="flex items-center gap-2">
+125:             {toastMessage.type === 'ok' ? (
+126:               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+127:             ) : (
+128:               <AlertTriangle className="w-4 h-4 text-amber-400" />
+129:             )}
+130:             <span>{toastMessage.msg}</span>
+131:           </div>
+132:           <button
+133:             type="button"
+134:             onClick={() => setToastMessage(null)}
+135:             className="font-bold text-slate-400 hover:text-white"
+136:           >
+137:             ✕
+138:           </button>
+139:         </div>
+140:       )}
+141: 
+142:       {/* Main Scanner Box */}
+143:       <div className="modern-card p-6 md:p-8 space-y-6">
+144:         <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+145:           <div>
+146:             <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+147:               <RotateCcw className="w-5 h-5 text-[#c23807]" />
+148:               <span>Tiếp Nhận & Quét Mã Kiện Hàng Hoàn</span>
+149:             </h1>
+150:             <p className="text-xs text-slate-500 mt-0.5">
+151:               Dành cho Thủ kho sử dụng máy quét mã vạch chuyên dụng hoặc camera điện thoại.
+152:             </p>
+153:           </div>
+154: 
+155:           {/* Offline Toggle */}
+156:           <button
+157:             type="button"
+158:             onClick={() => setIsOfflineMode(!isOfflineMode)}
+159:             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+160:               isOfflineMode
+161:                 ? 'bg-amber-50 text-amber-800 border border-amber-300'
+162:                 : 'bg-emerald-50 text-emerald-800 border border-emerald-300'
+163:             }`}
+164:           >
+165:             {isOfflineMode ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
+166:             <span>{isOfflineMode ? 'Ngoại Tuyến (Offline)' : 'Trực Tuyến'}</span>
+167:           </button>
+168:         </div>
+169: 
+170:         {/* Scan Input Form */}
+171:         <form onSubmit={handleScanSubmit} className="space-y-4">
+172:           <div>
+173:             <label className="text-xs font-bold text-slate-700 block mb-1">
+174:               Quét Hoặc Nhập Mã Vận Đơn:
+175:             </label>
+176:             <div className="relative">
+177:               <input
+178:                 ref={inputRef}
+179:                 type="text"
+180:                 value={barcodeInput}
+181:                 onChange={(e) => setBarcodeInput(e.target.value.toUpperCase())}
+182:                 placeholder="Quét mã vạch (GHN8829..., GHTK7712...)"
+183:                 className="modern-input pl-10 text-base font-mono font-bold tracking-wider"
+184:                 autoFocus
+185:               />
+186:               <QrCode className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+187:             </div>
+188:           </div>
+189: 
+190:           {/* Package Condition Selector */}
+191:           <div>
+192:             <label className="text-xs font-bold text-slate-700 block mb-1">
+193:               Tình Trạng Kiện Hàng Khi Nhận:
+194:             </label>
+195:             <div className="grid grid-cols-3 gap-3">
+196:               {[
+197:                 { id: 'intact', label: 'Nguyên Vẹn', desc: 'Hộp nguyên seal, không móp rách' },
+198:                 { id: 'damaged', label: 'Hư Hỏng / Rách', desc: 'Bể vỡ, ướt hoặc rách hộp' },
+199:                 { id: 'missing_item', label: 'Thiếu Hàng', desc: 'Bị rạch bưu phẩm mất đồ' },
+200:               ].map((cond) => (
+201:                 <button
+202:                   key={cond.id}
+203:                   type="button"
+204:                   onClick={() => setConditionInput(cond.id as any)}
+205:                   className={`p-3 rounded-xl text-left border transition cursor-pointer ${
+206:                     conditionInput === cond.id
+207:                       ? 'bg-[#FFF5F0] border-[#c23807] text-[#c23807]'
+208:                       : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+209:                   }`}
+210:                 >
+211:                   <div className="font-bold text-xs">{cond.label}</div>
+212:                   <div className="text-[11px] text-slate-500 mt-0.5">{cond.desc}</div>
+213:                 </button>
+214:               ))}
+215:             </div>
+216:           </div>
+217: 
+218:           {/* Photo Evidence (Mandatory if Damaged) */}
+219:           {conditionInput !== 'intact' && (
+220:             <div className="p-4 rounded-xl border border-amber-200 bg-amber-50/50 space-y-2">
+221:               <div className="flex items-center justify-between">
+222:                 <span className="font-bold text-xs text-amber-900 flex items-center gap-1.5">
+223:                   <Camera className="w-4 h-4 text-amber-700" />
+224:                   <span>Ảnh Chụp Hiện Trạng Kiện Hỏng (Bắt Buộc):</span>
+225:                 </span>
+226:                 {hasPhoto && <span className="badge-ok text-xs">✓ Đã Chụp Ảnh</span>}
+227:               </div>
+228: 
+229:               <div className="flex gap-2">
+230:                 <button
+231:                   type="button"
+232:                   onClick={() => setHasPhoto(true)}
+233:                   className="btn-secondary text-xs"
+234:                 >
+235:                   <Camera className="w-4 h-4" />
+236:                   <span>Mở Máy Ảnh Chụp</span>
+237:                 </button>
+238:                 <button
+239:                   type="button"
+240:                   onClick={() => setHasPhoto(true)}
+241:                   className="btn-secondary text-xs"
+242:                 >
+243:                   <Upload className="w-4 h-4" />
+244:                   <span>Tải Ảnh Lên</span>
+245:                 </button>
+246:               </div>
+247:             </div>
+248:           )}
+249: 
+250:           <button
+251:             type="submit"
+252:             className="btn-primary w-full justify-center text-sm py-2.5 font-bold"
+253:           >
+254:             Xác Nhận Nhập Kiện Vào Kho
+255:           </button>
+256:         </form>
+257: 
+258:         {/* Offline Queue Sync Bar */}
+259:         {offlineQueue.length > 0 && (
+260:           <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex justify-between items-center">
+261:             <span className="text-xs font-bold text-amber-900">
+262:               Có {offlineQueue.length} kiện hàng đang chờ đồng bộ lên máy chủ
+263:             </span>
+264:             <button type="button" onClick={handleSyncOffline} className="btn-primary text-xs">
+265:               <RefreshCw className="w-3.5 h-3.5" />
+266:               <span>Đồng Bộ Ngay</span>
+267:             </button>
+268:           </div>
+269:         )}
+270:       </div>
+271: 
+272:       {/* History Log */}
+273:       <div className="modern-card p-6 space-y-4">
+274:         <h2 className="font-bold text-slate-900 text-sm">Lịch Sử Nhận Hàng Hoàn Gần Đây</h2>
+275:         <div className="divide-y divide-slate-100">
+276:           {history.map((item) => (
+277:             <div key={item.id} className="py-3 flex justify-between items-center text-xs">
+278:               <div className="space-y-0.5">
+279:                 <div className="flex items-center gap-2">
+280:                   <TrackingCode code={item.tracking_code} />
+281:                   <span
+282:                     className={
+283:                       item.condition === 'intact' ? 'badge-ok text-xs' : 'badge-risk text-xs'
+284:                     }
+285:                   >
+286:                     {item.condition === 'intact' ? 'Nguyên Vẹn' : 'Hư Hỏng'}
+287:                   </span>
+288:                 </div>
+289:                 <div className="text-slate-500">
+290:                   {item.warehouse} · {item.staff}
+291:                 </div>
+292:               </div>
+293:               <div className="text-slate-400 font-mono">{item.scanned_at}</div>
+294:             </div>
+295:           ))}
+296:         </div>
+297:       </div>
+298:     </div>
+299:   );
+300: };
 </file>
 
 <file path="apps/web/src/components/ShopSettingsModal.tsx">
@@ -12061,6 +14950,59 @@ This section contains the contents of the repository's files.
 17: ];
 18: 
 19: export default eslintConfig;
+</file>
+
+<file path="apps/web/lighthouserc.cjs">
+ 1: // GOAL-AUTOCLAW-REPOS-6: Lighthouse CI budgets for the public web routes.
+ 2: // Chrome comes from the Playwright install the a11y gate already provisions.
+ 3: const { chromium } = require('@playwright/test');
+ 4: 
+ 5: const port = Number(process.env.SHIPDE_LHCI_PORT || 3200);
+ 6: const base = `http://127.0.0.1:${port}`;
+ 7: 
+ 8: module.exports = {
+ 9:   ci: {
+10:     collect: {
+11:       startServerCommand: `pnpm exec next start -p ${port}`,
+12:       startServerReadyPattern: 'Ready',
+13:       url: ['/', '/register', '/forgot-password', '/reset-password'].map((p) => base + p),
+14:       numberOfRuns: 3,
+15:       chromePath: process.env.CHROME_PATH || chromium.executablePath(),
+16:       settings: { preset: 'desktop', chromeFlags: '--headless=new --no-sandbox' },
+17:     },
+18:     assert: {
+19:       assertions: {
+20:         // Blocking: TECH-STACK-REPOSITORY "targeted Lighthouse CI budgets";
+21:         // DESIGN-SYSTEM-UX-RULES requires WCAG AA.
+22:         'categories:accessibility': ['error', { minScore: 0.95, aggregationMethod: 'median-run' }],
+23:         'categories:best-practices': ['error', { minScore: 0.9, aggregationMethod: 'median-run' }],
+24:         'categories:performance': ['warn', { minScore: 0.8, aggregationMethod: 'median-run' }],
+25:         'categories:seo': ['warn', { minScore: 0.8, aggregationMethod: 'median-run' }],
+26:       },
+27:     },
+28:     upload: { target: 'filesystem', outputDir: './lhci-report' },
+29:   },
+30: };
+</file>
+
+<file path="apps/web/playwright.config.ts">
+ 1: import { defineConfig, devices } from '@playwright/test';
+ 2: 
+ 3: // TASK GOAL-AUTOCLAW-REPOS-6: browser accessibility gate (axe-core) against the built app.
+ 4: const port = Number(process.env.SHIPDE_A11Y_PORT || 3100);
+ 5: 
+ 6: export default defineConfig({
+ 7:   testDir: './e2e',
+ 8:   reporter: [['list'], ['json', { outputFile: 'test-results/a11y-report.json' }]],
+ 9:   use: { baseURL: `http://127.0.0.1:${port}`, trace: 'retain-on-failure' },
+10:   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+11:   webServer: {
+12:     command: `pnpm exec next start -p ${port}`,
+13:     url: `http://127.0.0.1:${port}`,
+14:     reuseExistingServer: !process.env.CI,
+15:     timeout: 120_000,
+16:   },
+17: });
 </file>
 
 <file path="apps/web/postcss.config.mjs">
@@ -54827,36 +57769,6 @@ This section contains the contents of the repository's files.
 29: - Do not edit generated client output or hand-apply SQL outside `prisma/migrations`.
 </file>
 
-<file path="apps/web/e2e/a11y.spec.ts">
- 1: import AxeBuilder from '@axe-core/playwright';
- 2: import { expect, test } from '@playwright/test';
- 3: 
- 4: // Public routes that render without a signed-in session.
- 5: const ROUTES = ['/', '/register', '/forgot-password', '/reset-password'];
- 6: 
- 7: for (const route of ROUTES) {
- 8:   test(`${route} has no WCAG 2.1 A/AA violations`, async ({ page }, testInfo) => {
- 9:     const response = await page.goto(route);
-10:     expect(response?.ok(), `GET ${route} returned ${response?.status()}`).toBeTruthy();
-11:     const results = await new AxeBuilder({ page })
-12:       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
-13:       .analyze();
-14:     await testInfo.attach('axe-results', {
-15:       body: JSON.stringify(
-16:         { violations: results.violations, incomplete: results.incomplete },
-17:         null,
-18:         2
-19:       ),
-20:       contentType: 'application/json',
-21:     });
-22:     const summary = results.violations.map(
-23:       (v) => `${v.id} (${v.impact}): ${v.nodes.length} node(s) — ${v.help}`
-24:     );
-25:     expect(summary, summary.join('\n')).toEqual([]);
-26:   });
-27: }
-</file>
-
 <file path="apps/web/e2e/app-shell.spec.ts">
   1: import { expect, test, type Page, type TestInfo } from '@playwright/test';
   2: import AxeBuilder from '@axe-core/playwright';
@@ -60734,6 +63646,515 @@ This section contains the contents of the repository's files.
 276: }
 </file>
 
+<file path="apps/web/src/app/globals.css">
+  1: @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+  2: @import 'tailwindcss';
+  3: 
+  4: :root {
+  5:   /* ============================================================================
+  6:      Ship Dễ Brand Design Tokens (https://shipde.net/)
+  7:      Thương hiệu vận hành cao cấp: Cam năng lượng + Nền ấm + Ink Navy
+  8:      ============================================================================ */
+  9:   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+ 10:   --font-mono: 'JetBrains Mono', monospace;
+ 11: 
+ 12:   /* Brand Primary Orange */
+ 13:   --primary: #c23807;
+ 14:   --primary-hover: #a8300a;
+ 15:   --primary-subtle: #fff5f0;
+ 16:   --primary-border: #fdddd0;
+ 17: 
+ 18:   /* Ink / Navy Typography Palette */
+ 19:   --text-primary: #0c1421;
+ 20:   --text-secondary: #3b4352;
+ 21:   --text-muted: #697386;
+ 22:   --text-dim: #9da6b8;
+ 23: 
+ 24:   /* Warm Canvas Surfaces */
+ 25:   --bg-app: #fdfcfb;
+ 26:   --bg-card: #ffffff;
+ 27:   --bg-subtle: #f6f5f3;
+ 28:   --bg-hover: #f2f0ec;
+ 29: 
+ 30:   /* Warm Neutral Hairline Borders */
+ 31:   --border-subtle: #eae7e4;
+ 32:   --border-strong: #d5d1cb;
+ 33:   --border-focus: #c23807;
+ 34: 
+ 35:   /* Semantic Status Tokens (Green, Amber, Red Only) */
+ 36:   --status-ok-bg: #f0fdf4;
+ 37:   --status-ok-text: #15803d;
+ 38:   --status-ok-border: #bbf7d0;
+ 39: 
+ 40:   --status-warn-bg: #fffbeb;
+ 41:   --status-warn-text: #b45309;
+ 42:   --status-warn-border: #fde68a;
+ 43: 
+ 44:   --status-risk-bg: #fef2f2;
+ 45:   --status-risk-text: #b91c1c;
+ 46:   --status-risk-border: #fecaca;
+ 47: 
+ 48:   --status-info-bg: #f8f7f6;
+ 49:   --status-info-text: #0c1421;
+ 50:   --status-info-border: #eae7e4;
+ 51: }
+ 52: 
+ 53: body {
+ 54:   font-family: var(--font-sans);
+ 55:   background-color: var(--bg-app);
+ 56:   color: var(--text-primary);
+ 57:   font-size: 14px;
+ 58:   line-height: 1.5;
+ 59:   margin: 0;
+ 60:   padding: 0;
+ 61:   -webkit-font-smoothing: antialiased;
+ 62:   -moz-osx-font-smoothing: grayscale;
+ 63: }
+ 64: 
+ 65: /* Tabular numbers for financial precision */
+ 66: .tabular-nums,
+ 67: .font-mono,
+ 68: td,
+ 69: th {
+ 70:   font-variant-numeric: tabular-nums;
+ 71: }
+ 72: 
+ 73: /* Custom Sleek Scrollbar */
+ 74: ::-webkit-scrollbar {
+ 75:   width: 6px;
+ 76:   height: 6px;
+ 77: }
+ 78: ::-webkit-scrollbar-track {
+ 79:   background: transparent;
+ 80: }
+ 81: ::-webkit-scrollbar-thumb {
+ 82:   background: #d5d1cb;
+ 83:   border-radius: 999px;
+ 84: }
+ 85: ::-webkit-scrollbar-thumb:hover {
+ 86:   background: #9da6b8;
+ 87: }
+ 88: 
+ 89: /* Card Primitive */
+ 90: .modern-card {
+ 91:   background: #ffffff;
+ 92:   border: 1px solid var(--border-subtle);
+ 93:   border-radius: 12px;
+ 94:   box-shadow:
+ 95:     0 1px 3px 0 rgba(12, 20, 33, 0.03),
+ 96:     0 1px 2px -1px rgba(12, 20, 33, 0.03);
+ 97:   transition: all 0.15s ease-in-out;
+ 98: }
+ 99: .modern-card:hover {
+100:   box-shadow:
+101:     0 4px 6px -1px rgba(12, 20, 33, 0.05),
+102:     0 2px 4px -2px rgba(12, 20, 33, 0.03);
+103: }
+104: 
+105: /* Button Primitives (Min 40px touch targets, 14px text) */
+106: .btn-primary {
+107:   background-color: var(--primary);
+108:   color: #ffffff;
+109:   font-weight: 600;
+110:   font-size: 14px;
+111:   min-height: 40px;
+112:   padding: 8px 16px;
+113:   border-radius: 10px;
+114:   border: 1px solid transparent;
+115:   display: inline-flex;
+116:   align-items: center;
+117:   gap: 8px;
+118:   transition: all 0.15s ease-in-out;
+119:   cursor: pointer;
+120:   box-shadow: 0 1px 2px rgba(194, 56, 7, 0.15);
+121: }
+122: .btn-primary:hover:not(:disabled) {
+123:   background-color: var(--primary-hover);
+124:   box-shadow: 0 2px 4px rgba(194, 56, 7, 0.25);
+125: }
+126: .btn-primary:disabled {
+127:   opacity: 0.5;
+128:   cursor: not-allowed;
+129: }
+130: 
+131: .btn-secondary {
+132:   background-color: #ffffff;
+133:   color: var(--text-primary);
+134:   font-weight: 600;
+135:   font-size: 14px;
+136:   min-height: 40px;
+137:   padding: 8px 16px;
+138:   border-radius: 10px;
+139:   border: 1px solid var(--border-subtle);
+140:   display: inline-flex;
+141:   align-items: center;
+142:   gap: 8px;
+143:   transition: all 0.15s ease-in-out;
+144:   cursor: pointer;
+145: }
+146: .btn-secondary:hover:not(:disabled) {
+147:   background-color: var(--bg-subtle);
+148:   border-color: var(--border-strong);
+149: }
+150: .btn-secondary:disabled {
+151:   opacity: 0.5;
+152:   cursor: not-allowed;
+153: }
+154: 
+155: .btn-danger {
+156:   background-color: #ffffff;
+157:   color: var(--status-risk-text);
+158:   font-weight: 600;
+159:   font-size: 14px;
+160:   min-height: 40px;
+161:   padding: 8px 16px;
+162:   border-radius: 10px;
+163:   border: 1px solid var(--status-risk-border);
+164:   display: inline-flex;
+165:   align-items: center;
+166:   gap: 8px;
+167:   transition: all 0.15s ease-in-out;
+168:   cursor: pointer;
+169: }
+170: .btn-danger:hover:not(:disabled) {
+171:   background-color: var(--status-risk-bg);
+172: }
+173: 
+174: /* Modern Accessible Input Control */
+175: .modern-input {
+176:   background-color: #ffffff;
+177:   border: 1px solid var(--border-subtle);
+178:   border-radius: 10px;
+179:   padding: 9px 14px;
+180:   font-size: 14px;
+181:   color: var(--text-primary);
+182:   transition: all 0.15s ease;
+183:   width: 100%;
+184: }
+185: .modern-input:focus {
+186:   outline: none;
+187:   border-color: var(--border-focus);
+188:   box-shadow: 0 0 0 3px rgba(194, 56, 7, 0.12);
+189: }
+190: 
+191: /* Semantic Badges */
+192: .badge-ok {
+193:   display: inline-flex;
+194:   align-items: center;
+195:   gap: 6px;
+196:   padding: 3px 9px;
+197:   border-radius: 6px;
+198:   font-size: 12px;
+199:   font-weight: 600;
+200:   background-color: var(--status-ok-bg);
+201:   color: var(--status-ok-text);
+202:   border: 1px solid var(--status-ok-border);
+203: }
+204: 
+205: .badge-warn {
+206:   display: inline-flex;
+207:   align-items: center;
+208:   gap: 6px;
+209:   padding: 3px 9px;
+210:   border-radius: 6px;
+211:   font-size: 12px;
+212:   font-weight: 600;
+213:   background-color: var(--status-warn-bg);
+214:   color: var(--status-warn-text);
+215:   border: 1px solid var(--status-warn-border);
+216: }
+217: 
+218: .badge-risk {
+219:   display: inline-flex;
+220:   align-items: center;
+221:   gap: 6px;
+222:   padding: 3px 9px;
+223:   border-radius: 6px;
+224:   font-size: 12px;
+225:   font-weight: 600;
+226:   background-color: var(--status-risk-bg);
+227:   color: var(--status-risk-text);
+228:   border: 1px solid var(--status-risk-border);
+229: }
+230: 
+231: .badge-info {
+232:   display: inline-flex;
+233:   align-items: center;
+234:   gap: 6px;
+235:   padding: 3px 9px;
+236:   border-radius: 6px;
+237:   font-size: 12px;
+238:   font-weight: 600;
+239:   background-color: var(--status-info-bg);
+240:   color: var(--status-info-text);
+241:   border: 1px solid var(--status-info-border);
+242: }
+243: 
+244: /* Modern Data Table */
+245: .modern-table {
+246:   width: 100%;
+247:   border-collapse: collapse;
+248:   font-size: 14px;
+249:   text-align: left;
+250: }
+251: .modern-table th {
+252:   background-color: #faf9f7;
+253:   color: var(--text-secondary);
+254:   font-weight: 600;
+255:   font-size: 12px;
+256:   text-transform: uppercase;
+257:   letter-spacing: 0.04em;
+258:   padding: 12px 16px;
+259:   border-bottom: 1px solid var(--border-subtle);
+260: }
+261: .modern-table td {
+262:   padding: 14px 16px;
+263:   border-bottom: 1px solid var(--border-subtle);
+264:   color: var(--text-primary);
+265:   vertical-align: middle;
+266: }
+267: .modern-table tbody tr {
+268:   transition: background-color 0.1s ease;
+269: }
+270: .modern-table tbody tr:hover {
+271:   background-color: #faf9f7;
+272: }
+273: 
+274: /* Operational Badges & Code Blocks */
+275: .tracking-badge {
+276:   font-family: var(--font-mono);
+277:   font-weight: 600;
+278:   color: var(--text-primary);
+279:   background-color: #f6f5f3;
+280:   padding: 3px 8px;
+281:   border-radius: 6px;
+282:   border: 1px solid var(--border-subtle);
+283:   display: inline-flex;
+284:   align-items: center;
+285:   gap: 6px;
+286:   user-select: all;
+287: }
+288: 
+289: /* TASK-AI-159 app shell; reuse the approved warm surface/brand tokens. */
+290: .shell-frame {
+291:   display: flex;
+292:   min-height: 100dvh;
+293: }
+294: .shell-sidebar {
+295:   width: 16rem;
+296:   flex-shrink: 0;
+297:   position: sticky;
+298:   top: 0;
+299:   height: 100dvh;
+300:   overflow-y: auto;
+301:   border-right: 1px solid var(--border-subtle);
+302:   background: var(--bg-card);
+303: }
+304: .shell-frame[data-state='collapsed'] .shell-sidebar {
+305:   width: 4rem;
+306: }
+307: .shell-frame[data-state='collapsed'] .shell-sidebar .shell-nav-label,
+308: .shell-frame[data-state='collapsed'] .shell-sidebar .shell-group-label {
+309:   position: absolute;
+310:   width: 1px;
+311:   height: 1px;
+312:   overflow: hidden;
+313:   clip-path: inset(50%);
+314:   white-space: nowrap;
+315: }
+316: .shell-inset {
+317:   flex: 1;
+318:   min-width: 0;
+319: }
+320: .shell-header {
+321:   position: sticky;
+322:   top: 0;
+323:   z-index: 40;
+324:   display: flex;
+325:   align-items: center;
+326:   gap: 8px;
+327:   min-height: 64px;
+328:   padding: 8px 16px;
+329:   border-bottom: 1px solid var(--border-subtle);
+330:   background: var(--bg-card);
+331: }
+332: .shell-brand {
+333:   display: flex;
+334:   align-items: center;
+335:   gap: 12px;
+336:   padding: 16px;
+337:   font-weight: 800;
+338: }
+339: .shell-brand-icon {
+340:   display: grid;
+341:   place-items: center;
+342:   width: 32px;
+343:   height: 32px;
+344:   flex-shrink: 0;
+345:   border-radius: 8px;
+346:   color: white;
+347:   background: var(--primary);
+348: }
+349: .shell-sidebar-content {
+350:   padding: 8px;
+351:   display: flex;
+352:   flex-direction: column;
+353:   gap: 16px;
+354: }
+355: .shell-group-label {
+356:   padding: 8px;
+357:   font-size: 12px;
+358:   font-weight: 600;
+359:   color: var(--text-secondary);
+360: }
+361: .shell-nav-link {
+362:   display: flex;
+363:   align-items: center;
+364:   gap: 12px;
+365:   min-height: 40px;
+366:   padding: 8px;
+367:   border-radius: 8px;
+368:   font-size: 14px;
+369:   text-align: left;
+370: }
+371: .shell-nav-link svg {
+372:   flex-shrink: 0;
+373: }
+374: .shell-nav-link:hover,
+375: .shell-icon-button:hover {
+376:   background: var(--bg-hover);
+377: }
+378: .shell-nav-link[aria-current='page'] {
+379:   color: var(--primary);
+380:   background: var(--primary-subtle);
+381:   font-weight: 600;
+382: }
+383: .shell-nav-label {
+384:   overflow: hidden;
+385:   text-overflow: ellipsis;
+386:   white-space: nowrap;
+387: }
+388: .shell-icon-button {
+389:   display: inline-flex;
+390:   align-items: center;
+391:   justify-content: center;
+392:   gap: 8px;
+393:   min-height: 40px;
+394:   min-width: 40px;
+395:   padding: 8px;
+396:   border-radius: 8px;
+397:   cursor: pointer;
+398: }
+399: .shell-frame :is(a, button, summary, select):focus-visible,
+400: .shell-modal :is(button, input):focus-visible {
+401:   outline: 2px solid var(--border-focus);
+402:   outline-offset: 2px;
+403: }
+404: .shell-skip-link {
+405:   position: fixed;
+406:   top: 8px;
+407:   left: 8px;
+408:   z-index: 60;
+409:   transform: translateY(-150%);
+410:   background: var(--bg-card);
+411:   padding: 12px;
+412:   border: 2px solid var(--border-focus);
+413: }
+414: .shell-skip-link:focus {
+415:   transform: translateY(0);
+416: }
+417: .shell-avatar {
+418:   width: 24px;
+419:   height: 24px;
+420:   display: grid;
+421:   place-items: center;
+422:   border-radius: 6px;
+423:   background: var(--text-primary);
+424:   color: white;
+425: }
+426: .shell-user-menu {
+427:   position: relative;
+428: }
+429: .shell-user-menu summary {
+430:   list-style: none;
+431: }
+432: .shell-user-menu summary::-webkit-details-marker {
+433:   display: none;
+434: }
+435: .shell-user-content {
+436:   position: absolute;
+437:   right: 0;
+438:   top: calc(100% + 8px);
+439:   width: 240px;
+440:   max-width: calc(100vw - 32px);
+441:   border: 1px solid var(--border-subtle);
+442:   border-radius: 12px;
+443:   padding: 8px;
+444:   background: var(--bg-card);
+445:   box-shadow: 0 8px 24px #0c14211a;
+446: }
+447: .shell-modal {
+448:   padding: 0;
+449:   border: 1px solid var(--border-subtle);
+450:   background: var(--bg-card);
+451:   color: var(--text-primary);
+452:   max-height: 100dvh;
+453: }
+454: .shell-modal::backdrop {
+455:   background: #0c142180;
+456: }
+457: .shell-modal-sheet {
+458:   margin: 0;
+459:   width: min(288px, calc(100vw - 40px));
+460:   height: 100dvh;
+461:   max-width: none;
+462:   max-height: none;
+463: }
+464: .shell-modal-command {
+465:   margin: 10dvh auto auto;
+466:   width: min(560px, calc(100vw - 32px));
+467:   border-radius: 12px;
+468: }
+469: .shell-command-results {
+470:   max-height: 60dvh;
+471:   overflow-y: auto;
+472:   padding: 8px;
+473: }
+474: .shell-command-target {
+475:   display: flex;
+476:   align-items: center;
+477:   gap: 12px;
+478:   width: 100%;
+479:   min-height: 48px;
+480:   padding: 8px;
+481:   border-radius: 8px;
+482:   text-align: left;
+483: }
+484: .shell-command-target:hover,
+485: .shell-command-target:focus {
+486:   background: var(--primary-subtle);
+487: }
+488: .shell-skeleton {
+489:   display: grid;
+490:   grid-template-columns: 16rem minmax(0, 1fr);
+491:   min-height: 100dvh;
+492: }
+493: @media (max-width: 767px) {
+494:   .shell-sidebar {
+495:     display: none;
+496:   }
+497:   .shell-header {
+498:     padding: 8px;
+499:   }
+500:   .shell-skeleton {
+501:     grid-template-columns: minmax(0, 1fr);
+502:   }
+503:   #shell-content {
+504:     overflow-x: auto;
+505:   }
+506: }
+</file>
+
 <file path="apps/web/src/app/layout.tsx">
  1: import type { Metadata } from 'next';
  2: import './globals.css';
@@ -60768,1292 +64189,918 @@ This section contains the contents of the repository's files.
 31: }
 </file>
 
-<file path="apps/web/src/components/auth/ForgotPasswordView.tsx">
+<file path="apps/web/src/components/auth/LoginView.tsx">
   1: 'use client';
   2: 
-  3: import React, { useState, useEffect } from 'react';
-  4: import { useAuth } from '@/context/AuthContext';
-  5: import { useRouter } from 'next/navigation';
+  3: import React, { useEffect, useState } from 'react';
+  4: import Link from 'next/link';
+  5: import { useAuth, AuthStatusBlock } from '@/context/AuthContext';
   6: import {
-  7:   ShieldCheck,
-  8:   Mail,
-  9:   Phone,
- 10:   Lock,
- 11:   ArrowRight,
- 12:   AlertCircle,
- 13:   CheckCircle2,
- 14:   Loader2,
- 15:   ChevronLeft,
- 16: } from 'lucide-react';
- 17: 
- 18: interface Props {
- 19:   onBackToLogin: () => void;
- 20: }
- 21: 
- 22: type ForgotPasswordState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'RATE_LIMITED' | 'FORBIDDEN';
- 23: 
- 24: export const ForgotPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
- 25:   const { forgotPassword } = useAuth();
- 26:   const [identifier, setIdentifier] = useState('');
- 27:   const [state, setState] = useState<ForgotPasswordState>('IDLE');
- 28:   const [errorMessage, setErrorMessage] = useState<string | null>(null);
- 29:   const [rateLimitRetryAfter, setRateLimitRetryAfter] = useState<number | null>(null);
- 30:   const [submittedIdentifier, setSubmittedIdentifier] = useState<string | null>(null);
- 31:   const [submittedChannel, setSubmittedChannel] = useState<'email' | 'phone' | null>(null);
- 32: 
- 33:   // Countdown timer for rate limit
- 34:   useEffect(() => {
- 35:     if (!rateLimitRetryAfter || rateLimitRetryAfter <= 0) return;
- 36:     const timer = setInterval(() => {
- 37:       setRateLimitRetryAfter((prev) => (prev && prev > 0 ? prev - 1 : 0));
- 38:     }, 1000);
- 39:     return () => clearInterval(timer);
- 40:   }, [rateLimitRetryAfter]);
- 41: 
- 42:   const isEmail = identifier.includes('@');
- 43:   const channel = isEmail ? 'email' : 'phone';
- 44:   const isValidFormat = isEmail
- 45:     ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier.trim())
- 46:     : /^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(identifier.trim().replace(/\s+/g, ''));
- 47: 
- 48:   const isEmpty = !identifier.trim();
- 49:   const isDisabled = state === 'LOADING' || state === 'SUCCESS' || isEmpty || !isValidFormat;
- 50: 
- 51:   const handleSubmit = async (e: React.FormEvent) => {
- 52:     e.preventDefault();
- 53:     if (isDisabled) return;
- 54: 
- 55:     setState('LOADING');
- 56:     setErrorMessage(null);
- 57: 
- 58:     try {
- 59:       const res = await forgotPassword(identifier.trim());
- 60:       if (!res.success) {
- 61:         if (res.code === 'RATE_LIMITED') {
- 62:           setState('RATE_LIMITED');
- 63:           setRateLimitRetryAfter(res.cooldownSeconds || 60);
- 64:           setErrorMessage(res.error || 'Quá nhiều yêu cầu. Vui lòng thử lại sau.');
- 65:         } else if (res.code === 'FORBIDDEN') {
- 66:           setState('FORBIDDEN');
- 67:           setErrorMessage(res.error || 'Tài khoản bị khóa, không thể yêu cầu đặt lại mật khẩu.');
- 68:         } else {
- 69:           setState('IDLE');
- 70:           setErrorMessage(res.error || 'Có lỗi xảy ra. Vui lòng thử lại.');
- 71:         }
- 72:         return;
- 73:       }
- 74: 
- 75:       // Success - token sent
- 76:       setState('SUCCESS');
- 77:       setSubmittedIdentifier(identifier.trim());
- 78:       setSubmittedChannel((res.data?.channel || channel) as 'email' | 'phone' | null);
- 79:     } catch {
- 80:       setState('IDLE');
- 81:       setErrorMessage('Lỗi kết nối máy chủ. Vui lòng thử lại sau.');
- 82:     }
- 83:   };
- 84: 
- 85:   const handleTryAgain = () => {
- 86:     setState('IDLE');
- 87:     setErrorMessage(null);
- 88:     setRateLimitRetryAfter(null);
- 89:     setSubmittedIdentifier(null);
- 90:     setSubmittedChannel(null);
- 91:   };
- 92: 
- 93:   const handleBackToLogin = () => {
- 94:     onBackToLogin();
- 95:   };
- 96: 
- 97:   return (
- 98:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
- 99:       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-100:         <div className="text-center space-y-2 mb-8">
-101:           <div className="w-14 h-14 rounded-2xl bg-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#c23807]/20">
-102:             S
-103:           </div>
-104:           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-105:             Khôi Phục Mật Khẩu
-106:           </h1>
-107:           <p className="text-sm text-slate-500">
-108:             Nhập email hoặc số điện thoại để đặt lại mật khẩu
-109:           </p>
-110:         </div>
-111:         <div className="modern-card p-8 space-y-6 shadow-xl">
-112:           {state === 'LOADING' && (
-113:             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
-114:               <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
-115:               <span className="text-sm text-slate-600 font-medium">Đang gửi liên kết...</span>
-116:             </div>
-117:           )}
-118:           {state === 'IDLE' && isEmpty && (
-119:             <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
-120:               <AlertCircle className="w-4 h-4 shrink-0" />
-121:               <span>Vui lòng nhập email hoặc số điện thoại</span>
-122:             </div>
-123:           )}
-124:           {state === 'IDLE' && errorMessage && !isEmpty && (
-125:             <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
-126:               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
-127:               <span>{errorMessage}</span>
-128:             </div>
-129:           )}
-130:           {state === 'IDLE' && !isEmpty && !isValidFormat && !errorMessage && (
-131:             <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
-132:               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
-133:               <span>Email hoặc số điện thoại không hợp lệ</span>
-134:             </div>
-135:           )}
-136:           {state === 'RATE_LIMITED' && (
-137:             <div className="space-y-4 animate-in fade-in">
-138:               <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-139:                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-140:                 <div>
-141:                   <p className="font-bold">Quá nhiều yêu cầu</p>
-142:                   <p className="text-amber-700 mt-1">Thử lại sau {rateLimitRetryAfter} giây</p>
-143:                 </div>
-144:               </div>
-145:               {rateLimitRetryAfter === 0 ? (
-146:                 <button
-147:                   type="button"
-148:                   onClick={handleTryAgain}
-149:                   className="btn-primary w-full justify-center text-sm py-3"
-150:                 >
-151:                   Thử lại
-152:                 </button>
-153:               ) : (
-154:                 <button
-155:                   type="button"
-156:                   disabled
-157:                   className="btn-primary w-full justify-center text-sm py-3 opacity-50 cursor-not-allowed"
-158:                 >
-159:                   Đang chờ...
-160:                 </button>
-161:               )}
-162:             </div>
-163:           )}
-164:           {state === 'FORBIDDEN' && (
-165:             <div className="space-y-4 animate-in fade-in">
-166:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-167:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-168:                 <div>
-169:                   <p className="font-bold">Tài khoản bị khóa</p>
-170:                   <p className="text-rose-700 mt-1">
-171:                     {errorMessage || 'Tài khoản này không thể đặt lại mật khẩu.'}
-172:                   </p>
-173:                 </div>
-174:               </div>
-175:               <button
-176:                 type="button"
-177:                 onClick={handleBackToLogin}
-178:                 className="btn-secondary w-full justify-center text-sm py-3"
-179:               >
-180:                 Quay lại đăng nhập
-181:               </button>
-182:             </div>
-183:           )}
-184:           {state === 'SUCCESS' && (
-185:             <div className="space-y-4 animate-in fade-in">
-186:               <div className="flex flex-col items-center py-4 space-y-3">
-187:                 <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
-188:                   <CheckCircle2 className="w-8 h-8 text-emerald-600" />
-189:                 </div>
-190:                 <div className="text-center space-y-1">
-191:                   <p className="text-sm font-bold text-slate-900">Liên kết đã được gửi</p>
-192:                   <p className="text-xs text-slate-500">
-193:                     Kiểm tra {submittedChannel === 'email' ? 'email' : 'SMS'}
-194:                   </p>
-195:                 </div>
-196:               </div>
-197:               <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-medium">
-198:                 Nếu tài khoản tồn tại và đã xác thực, liên kết đặt lại mật khẩu đã được gửi.
-199:               </div>
-200:               <button
-201:                 type="button"
-202:                 onClick={handleBackToLogin}
-203:                 className="btn-primary w-full justify-center text-sm py-3"
-204:               >
-205:                 Quay lại đăng nhập
-206:               </button>
-207:             </div>
-208:           )}
-209:           {state === 'IDLE' && (
-210:             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-211:               <div>
-212:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-213:                   Email hoặc Số Điện Thoại
-214:                 </label>
-215:                 <div className="relative">
-216:                   {isEmail ? (
-217:                     <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-218:                   ) : (
-219:                     <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-220:                   )}
-221:                   <input
-222:                     type="text"
-223:                     value={identifier}
-224:                     onChange={(e) => {
-225:                       setIdentifier(e.target.value);
-226:                       if (errorMessage) setErrorMessage(null);
-227:                     }}
-228:                     placeholder="owner@ananboutique.vn hoặc 0901234567"
-229:                     className="modern-input pl-10 h-11 text-sm font-medium"
-230:                     autoFocus
-231:                   />
-232:                 </div>
-233:               </div>
-234:               <button
-235:                 type="submit"
-236:                 disabled={isDisabled}
-237:                 className="btn-primary w-full justify-center text-sm py-3 font-bold"
-238:               >
-239:                 Gửi liên kết đặt lại mật khẩu
-240:               </button>
-241:             </form>
-242:           )}
-243:         </div>
-244:         <div className="text-center mt-6 text-xs text-slate-500">
-245:           Nhớ mật khẩu?{' '}
-246:           <button
-247:             type="button"
-248:             onClick={handleBackToLogin}
-249:             className="text-[#c23807] font-bold hover:underline"
-250:           >
-251:             Quay lại đăng nhập
-252:           </button>
-253:         </div>
-254:       </div>
-255:     </div>
-256:   );
-257: };
-</file>
-
-<file path="apps/web/src/components/auth/RegisterView.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState, useEffect } from 'react';
-  4: import { useAuth } from '@/context/AuthContext';
-  5: import {
-  6:   ShieldCheck,
-  7:   Store,
-  8:   Phone,
-  9:   Mail,
- 10:   Lock,
- 11:   ArrowRight,
- 12:   User,
+  7:   Mail,
+  8:   Lock,
+  9:   ArrowRight,
+ 10:   ArrowLeft,
+ 11:   Eye,
+ 12:   EyeOff,
  13:   CheckCircle2,
  14:   AlertTriangle,
- 15:   Clock,
- 16:   RefreshCw,
- 17:   KeyRound,
- 18: } from 'lucide-react';
- 19: 
- 20: interface Props {
- 21:   onSwitchToLogin: () => void;
- 22: }
- 23: 
- 24: type RegistrationStep = 'FORM' | 'PENDING_VERIFICATION' | 'VERIFIED_SUCCESS';
- 25: 
- 26: export const RegisterView: React.FC<Props> = ({ onSwitchToLogin }) => {
- 27:   const { register, verifyEmail, verifyPhone, resendVerification } = useAuth();
+ 15:   Loader2,
+ 16:   Smartphone,
+ 17:   ShieldCheck,
+ 18:   KeyRound,
+ 19: } from 'lucide-react';
+ 20: 
+ 21: type LoginMode =
+ 22:   | 'CREDENTIALS'
+ 23:   | 'OTP_IDENTIFIER'
+ 24:   | 'OTP_CODE'
+ 25:   | 'MFA_CHALLENGE'
+ 26:   | 'MFA_RECOVERY'
+ 27:   | 'MFA_ENROLLMENT_NOTICE';
  28: 
- 29:   // Form State
- 30:   const [merchantName, setMerchantName] = useState('');
- 31:   const [fullName, setFullName] = useState('');
- 32:   const [email, setEmail] = useState('');
- 33:   const [phone, setPhone] = useState('');
- 34:   const [password, setPassword] = useState('');
- 35:   const [termsAccepted, setTermsAccepted] = useState(false);
- 36: 
- 37:   // Status & Error States
- 38:   const [step, setStep] = useState<RegistrationStep>('FORM');
- 39:   const [loading, setLoading] = useState(false);
- 40:   const [generalError, setGeneralError] = useState<string | null>(null);
- 41:   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null);
- 42:   const [duplicateIdentifier, setDuplicateIdentifier] = useState<string | null>(null);
- 43:   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
- 44: 
- 45:   // Verification Step States
- 46:   const [registeredEmail, setRegisteredEmail] = useState('');
- 47:   const [registeredPhone, setRegisteredPhone] = useState('');
- 48:   const [verificationCode, setVerificationCode] = useState('');
- 49:   const [verifyLoading, setVerifyLoading] = useState(false);
- 50:   const [verifyError, setVerifyError] = useState<string | null>(null);
- 51:   const [resendCooldown, setResendCooldown] = useState(0);
- 52:   const [resendMessage, setResendMessage] = useState<string | null>(null);
- 53: 
- 54:   // Countdown timer for resend cooldown
- 55:   useEffect(() => {
- 56:     if (resendCooldown <= 0) return;
- 57:     const timer = setInterval(() => {
- 58:       setResendCooldown((prev) => (prev > 0 ? prev - 1 : 0));
- 59:     }, 1000);
- 60:     return () => clearInterval(timer);
- 61:   }, [resendCooldown]);
- 62: 
- 63:   // Dirty form warning
- 64:   const isDirty =
- 65:     Boolean(merchantName || fullName || email || phone || password) && step === 'FORM';
- 66: 
- 67:   useEffect(() => {
- 68:     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
- 69:       if (isDirty) {
- 70:         e.preventDefault();
- 71:         e.returnValue = '';
- 72:       }
- 73:     };
- 74:     window.addEventListener('beforeunload', handleBeforeUnload);
- 75:     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
- 76:   }, [isDirty]);
- 77: 
- 78:   const handleRegister = async (e: React.FormEvent) => {
- 79:     e.preventDefault();
- 80:     setGeneralError(null);
- 81:     setRateLimitMessage(null);
- 82:     setDuplicateIdentifier(null);
- 83:     setFieldErrors({});
- 84: 
- 85:     if (!termsAccepted) {
- 86:       setFieldErrors({
- 87:         terms_accepted: 'Vui lòng đồng ý với Điều khoản dịch vụ và Chính sách bảo mật.',
- 88:       });
- 89:       return;
- 90:     }
- 91: 
- 92:     setLoading(true);
- 93: 
- 94:     const res = await register({
- 95:       merchantName: merchantName.trim(),
- 96:       fullName: fullName.trim(),
- 97:       email: email.trim() || undefined,
- 98:       phone: phone.trim() || undefined,
- 99:       password,
-100:       termsAccepted: true,
-101:       termsVersion: '2026.1',
-102:     });
-103: 
-104:     setLoading(false);
-105: 
-106:     if (!res.success) {
-107:       if (res.code === 'RATE_LIMITED') {
-108:         setRateLimitMessage(
-109:           res.nextAction ||
-110:             res.error ||
-111:             'Quá nhiều yêu cầu đăng ký từ địa chỉ của bạn. Vui lòng thử lại sau.'
-112:         );
-113:       } else if (
-114:         res.fields?.some((f) => f.code === 'DUPLICATE') ||
-115:         res.error?.includes('đã được đăng ký')
-116:       ) {
-117:         const dupField = res.fields?.find((f) => f.code === 'DUPLICATE')?.field || 'thông tin';
-118:         setDuplicateIdentifier(
-119:           dupField === 'email'
-120:             ? 'Email này đã được đăng ký tài khoản.'
-121:             : 'Số điện thoại này đã được đăng ký tài khoản.'
-122:         );
-123:       } else if (res.fields && res.fields.length > 0) {
-124:         const errMap: Record<string, string> = {};
-125:         res.fields.forEach((f) => {
-126:           errMap[f.field] = f.message;
-127:         });
-128:         setFieldErrors(errMap);
-129:       } else {
-130:         setGeneralError(res.error || 'Đăng ký thất bại. Vui lòng kiểm tra lại thông tin.');
-131:       }
-132:       return;
-133:     }
-134: 
-135:     // Success -> Transition to verification pending screen
-136:     setRegisteredEmail(res.data?.email || email);
-137:     setRegisteredPhone(res.data?.phone || phone);
-138:     setResendCooldown(60);
-139:     setStep('PENDING_VERIFICATION');
+ 29: const RESEND_COOLDOWN_SECONDS = 60;
+ 30: 
+ 31: const STATUS_TITLE: Record<string, string> = {
+ 32:   AUTH_PENDING_VERIFICATION: 'Tài khoản chưa xác thực',
+ 33:   AUTH_ACCOUNT_SUSPENDED: 'Tài khoản đã bị tạm ngưng',
+ 34:   AUTH_ACCOUNT_DISABLED: 'Tài khoản đã bị vô hiệu hóa',
+ 35:   AUTH_INVITATION_PENDING: 'Lời mời tham gia cửa hàng chưa được chấp nhận',
+ 36: };
+ 37: 
+ 38: const formatRetry = (seconds: number): string => {
+ 39:   if (seconds >= 60) return `${Math.ceil(seconds / 60)} phút`;
+ 40:   return `${seconds} giây`;
+ 41: };
+ 42: 
+ 43: interface Props {
+ 44:   onSwitchToRegister: () => void;
+ 45: }
+ 46: 
+ 47: export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
+ 48:   const {
+ 49:     login,
+ 50:     requestLoginOtp,
+ 51:     verifyLoginOtp,
+ 52:     resendVerification,
+ 53:     verifyMfaChallenge,
+ 54:     verifyMfaRecovery,
+ 55:   } = useAuth();
+ 56: 
+ 57:   const [mode, setMode] = useState<LoginMode>('CREDENTIALS');
+ 58:   const [account, setAccount] = useState('');
+ 59:   const [password, setPassword] = useState('');
+ 60:   const [showPassword, setShowPassword] = useState(false);
+ 61:   const [rememberMe, setRememberMe] = useState(true);
+ 62:   const [loading, setLoading] = useState(false);
+ 63:   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+ 64:   const [infoMsg, setInfoMsg] = useState<string | null>(null);
+ 65:   const [fieldError, setFieldError] = useState<{
+ 66:     account?: string;
+ 67:     password?: string;
+ 68:     otp?: string;
+ 69:   } | null>(null);
+ 70:   const [statusBlock, setStatusBlock] = useState<AuthStatusBlock | null>(null);
+ 71:   const [otpChallenge, setOtpChallenge] = useState<{
+ 72:     maskedIdentifier?: string;
+ 73:     channel?: string;
+ 74:     expiresIn?: number;
+ 75:   } | null>(null);
+ 76:   const [otpCode, setOtpCode] = useState('');
+ 77:   const [resendCooldown, setResendCooldown] = useState(0);
+ 78:   const [resendBusy, setResendBusy] = useState(false);
+ 79: 
+ 80:   // MFA state
+ 81:   const [mfaChallengeId, setMfaChallengeId] = useState<string | null>(null);
+ 82:   const [mfaExpiresIn, setMfaExpiresIn] = useState<number | null>(null);
+ 83:   const [mfaTotpCode, setMfaTotpCode] = useState('');
+ 84:   const [mfaRecoveryCode, setMfaRecoveryCode] = useState('');
+ 85:   const [mfaSetupToken, setMfaSetupToken] = useState<string | null>(null);
+ 86: 
+ 87:   useEffect(() => {
+ 88:     if (resendCooldown <= 0) return undefined;
+ 89:     const timer = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+ 90:     return () => clearTimeout(timer);
+ 91:   }, [resendCooldown]);
+ 92: 
+ 93:   const resetMessages = () => {
+ 94:     setErrorMsg(null);
+ 95:     setInfoMsg(null);
+ 96:   };
+ 97: 
+ 98:   const handlePasswordLogin = async (e: React.FormEvent) => {
+ 99:     e.preventDefault();
+100:     resetMessages();
+101: 
+102:     const nextField: { account?: string; password?: string } = {};
+103:     if (!account.trim()) nextField.account = 'Vui lòng nhập email hoặc số điện thoại.';
+104:     if (!password) nextField.password = 'Vui lòng nhập mật khẩu.';
+105:     setFieldError(Object.keys(nextField).length ? nextField : null);
+106:     if (Object.keys(nextField).length) return;
+107: 
+108:     setLoading(true);
+109:     const res = await login(account.trim(), password, rememberMe);
+110:     setLoading(false);
+111: 
+112:     if (res.success) return; // Session applied by AuthContext; the app shell re-renders.
+113: 
+114:     if (res.mfaRequired && res.challengeId) {
+115:       setMfaChallengeId(res.challengeId);
+116:       setMfaExpiresIn(res.expiresIn || 300);
+117:       setMfaTotpCode('');
+118:       setMode('MFA_CHALLENGE');
+119:       return;
+120:     }
+121: 
+122:     if (res.mfaEnrollmentRequired) {
+123:       setMfaSetupToken(res.setupToken || null);
+124:       setMode('MFA_ENROLLMENT_NOTICE');
+125:       return;
+126:     }
+127: 
+128:     if (res.statusBlock) {
+129:       setStatusBlock(res.statusBlock);
+130:       return;
+131:     }
+132:     if (res.code === 'RATE_LIMITED') {
+133:       const retry = res.retryAfterSeconds
+134:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
+135:         : '';
+136:       setErrorMsg(`${res.error || 'Bạn đã thử đăng nhập quá nhiều lần.'}${retry}`);
+137:       return;
+138:     }
+139:     setErrorMsg(res.error || 'Đăng nhập không thành công. Vui lòng kiểm tra lại tài khoản.');
 140:   };
 141: 
-142:   const handleVerify = async (e: React.FormEvent) => {
-143:     e.preventDefault();
-144:     if (!verificationCode.trim()) {
-145:       setVerifyError('Vui lòng nhập mã xác thực');
-146:       return;
-147:     }
-148: 
-149:     setVerifyLoading(true);
-150:     setVerifyError(null);
-151: 
-152:     let res: { success: boolean; error?: string; code?: string; nextAction?: string };
-153: 
-154:     if (registeredPhone && /^\d{6}$/.test(verificationCode.trim())) {
-155:       res = await verifyPhone(registeredPhone, verificationCode.trim());
-156:     } else {
-157:       res = await verifyEmail(verificationCode.trim());
-158:     }
-159: 
-160:     setVerifyLoading(false);
-161: 
-162:     if (res.success) {
-163:       setStep('VERIFIED_SUCCESS');
-164:     } else {
-165:       setVerifyError(
-166:         res.error ||
-167:           res.nextAction ||
-168:           'Mã xác thực không đúng hoặc đã hết hạn. Vui lòng kiểm tra lại.'
-169:       );
-170:     }
-171:   };
-172: 
-173:   const handleResend = async () => {
-174:     if (resendCooldown > 0) return;
-175:     const identifier = registeredEmail || registeredPhone;
-176:     const channel = registeredEmail ? 'email' : 'phone';
-177: 
-178:     const res = await resendVerification(identifier, channel);
-179:     if (res.success) {
-180:       setResendCooldown(res.cooldownSeconds || 60);
-181:       setResendMessage(
-182:         `Đã gửi lại mã xác thực tới ${channel === 'email' ? 'email' : 'số điện thoại'}.`
-183:       );
-184:       setVerifyError(null);
-185:     } else {
-186:       setVerifyError(res.error || 'Gửi lại mã thất bại. Vui lòng thử lại.');
-187:     }
-188:   };
-189: 
-190:   const maskIdentifier = (val: string): string => {
-191:     if (!val) return '';
-192:     if (val.includes('@')) {
-193:       const [name, domain] = val.split('@');
-194:       return `${name.slice(0, 2)}***@${domain}`;
-195:     }
-196:     return `${val.slice(0, 4)}****${val.slice(-3)}`;
-197:   };
-198: 
-199:   return (
-200:     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-orange-600 selection:text-white relative overflow-hidden">
-201:       <div className="absolute inset-0 bg-[radial-gradient(#CBD5E1_1px,transparent_1px)] [background-size:24px_24px] opacity-40 pointer-events-none" />
-202: 
-203:       <div className="sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
-204:         {/* Brand Header */}
-205:         <div className="text-center space-y-2 mb-6">
-206:           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#c23807] to-[#a8300a] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-orange-500/20">
-207:             S
-208:           </div>
-209:           <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-210:             {step === 'FORM' && 'Đăng Ký Cửa Hàng Mới'}
-211:             {step === 'PENDING_VERIFICATION' && 'Xác Thực Tài Khoản'}
-212:             {step === 'VERIFIED_SUCCESS' && 'Kích Hoạt Thành Công!'}
-213:           </h2>
-214:           <p className="text-sm text-slate-500">
-215:             {step === 'FORM' &&
-216:               'Nền tảng điều hành và kiểm soát vận chuyển dành riêng cho Shop Online'}
-217:             {step === 'PENDING_VERIFICATION' &&
-218:               'Vui lòng hoàn tất xác thực để bảo vệ an toàn cho cửa hàng của bạn'}
-219:             {step === 'VERIFIED_SUCCESS' && 'Cửa hàng của bạn đã sẵn sàng hoạt động trên Ship Dễ'}
-220:           </p>
-221:         </div>
-222: 
-223:         {/* STEP 1: Registration Form */}
-224:         {step === 'FORM' && (
-225:           <div className="bg-white py-8 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 space-y-5">
-226:             {/* Duplicate Identifier Banner */}
-227:             {duplicateIdentifier && (
-228:               <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl text-xs space-y-2">
-229:                 <div className="flex items-center gap-2 font-bold text-amber-800">
-230:                   <AlertTriangle className="w-4 h-4 shrink-0" />
-231:                   <span>{duplicateIdentifier}</span>
-232:                 </div>
-233:                 <p className="text-amber-700">
-234:                   Bạn đã có tài khoản trên Ship Dễ? Vui lòng chuyển sang đăng nhập.
-235:                 </p>
-236:                 <button
-237:                   type="button"
-238:                   onClick={onSwitchToLogin}
-239:                   className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs inline-flex items-center gap-1.5 shadow-sm"
-240:                 >
-241:                   <span>Chuyển sang Đăng Nhập</span>
-242:                   <ArrowRight className="w-3.5 h-3.5" />
-243:                 </button>
-244:               </div>
-245:             )}
-246: 
-247:             {/* Rate Limited Alert */}
-248:             {rateLimitMessage && (
-249:               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs space-y-1">
-250:                 <div className="flex items-center gap-2 font-bold text-rose-900">
-251:                   <Clock className="w-4 h-4 shrink-0" />
-252:                   <span>Giới hạn tần suất thao tác (Rate Limit)</span>
-253:                 </div>
-254:                 <p>{rateLimitMessage}</p>
-255:               </div>
-256:             )}
-257: 
-258:             {/* General Server Error */}
-259:             {generalError && (
-260:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
-261:                 <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
-262:                 <span>{generalError}</span>
-263:               </div>
-264:             )}
-265: 
-266:             <form onSubmit={handleRegister} className="space-y-4 text-xs">
-267:               {/* Merchant Name */}
-268:               <div>
-269:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-270:                   Tên Cửa Hàng / Thương Hiệu <span className="text-rose-500">*</span>
-271:                 </label>
-272:                 <div className="relative">
-273:                   <Store className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-274:                   <input
-275:                     type="text"
-276:                     value={merchantName}
-277:                     onChange={(e) => {
-278:                       setMerchantName(e.target.value);
-279:                       if (fieldErrors.merchant_name)
-280:                         setFieldErrors({ ...fieldErrors, merchant_name: '' });
-281:                     }}
-282:                     placeholder="Ví dụ: Tiệm Bánh Nhà Mây, Thời Trang An An"
-283:                     className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
-284:                       fieldErrors.merchant_name ? 'border-rose-400 bg-rose-50/20' : ''
-285:                     }`}
-286:                     disabled={loading}
-287:                     required
-288:                   />
-289:                 </div>
-290:                 {fieldErrors.merchant_name && (
-291:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
-292:                     {fieldErrors.merchant_name}
-293:                   </p>
-294:                 )}
-295:               </div>
-296: 
-297:               {/* Full Name & Phone */}
-298:               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-299:                 <div>
-300:                   <label className="text-xs font-bold text-slate-700 block mb-1.5">
-301:                     Họ và Tên Chủ Shop <span className="text-rose-500">*</span>
-302:                   </label>
-303:                   <div className="relative">
-304:                     <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-305:                     <input
-306:                       type="text"
-307:                       value={fullName}
-308:                       onChange={(e) => {
-309:                         setFullName(e.target.value);
-310:                         if (fieldErrors.full_name)
-311:                           setFieldErrors({ ...fieldErrors, full_name: '' });
-312:                       }}
-313:                       placeholder="Nguyễn Văn A"
-314:                       className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
-315:                         fieldErrors.full_name ? 'border-rose-400 bg-rose-50/20' : ''
-316:                       }`}
-317:                       disabled={loading}
-318:                       required
-319:                     />
-320:                   </div>
-321:                   {fieldErrors.full_name && (
-322:                     <p className="mt-1 text-rose-600 font-semibold text-[11px]">
-323:                       {fieldErrors.full_name}
-324:                     </p>
-325:                   )}
-326:                 </div>
-327: 
-328:                 <div>
-329:                   <label className="text-xs font-bold text-slate-700 block mb-1.5">
-330:                     Số Điện Thoại
-331:                   </label>
-332:                   <div className="relative">
-333:                     <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-334:                     <input
-335:                       type="tel"
-336:                       value={phone}
-337:                       onChange={(e) => {
-338:                         setPhone(e.target.value);
-339:                         if (fieldErrors.phone) setFieldErrors({ ...fieldErrors, phone: '' });
-340:                       }}
-341:                       placeholder="0901234567"
-342:                       className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
-343:                         fieldErrors.phone ? 'border-rose-400 bg-rose-50/20' : ''
-344:                       }`}
-345:                       disabled={loading}
-346:                     />
-347:                   </div>
-348:                   {fieldErrors.phone && (
-349:                     <p className="mt-1 text-rose-600 font-semibold text-[11px]">
-350:                       {fieldErrors.phone}
-351:                     </p>
-352:                   )}
-353:                 </div>
-354:               </div>
-355: 
-356:               {/* Email */}
-357:               <div>
-358:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-359:                   Email Đăng Nhập & Nhận Thông Báo
-360:                 </label>
-361:                 <div className="relative">
-362:                   <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-363:                   <input
-364:                     type="email"
-365:                     value={email}
-366:                     onChange={(e) => {
-367:                       setEmail(e.target.value);
-368:                       if (fieldErrors.email) setFieldErrors({ ...fieldErrors, email: '' });
-369:                     }}
-370:                     placeholder="chushop@gmail.com"
-371:                     className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
-372:                       fieldErrors.email ? 'border-rose-400 bg-rose-50/20' : ''
-373:                     }`}
-374:                     disabled={loading}
-375:                   />
-376:                 </div>
-377:                 {fieldErrors.email && (
-378:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
-379:                     {fieldErrors.email}
-380:                   </p>
-381:                 )}
-382:               </div>
-383: 
-384:               {/* Password */}
-385:               <div>
-386:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-387:                   Mật Khẩu Thiết Lập <span className="text-rose-500">*</span>
-388:                 </label>
-389:                 <div className="relative">
-390:                   <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-391:                   <input
-392:                     type="password"
-393:                     value={password}
-394:                     onChange={(e) => {
-395:                       setPassword(e.target.value);
-396:                       if (fieldErrors.password) setFieldErrors({ ...fieldErrors, password: '' });
-397:                     }}
-398:                     placeholder="Tối thiểu 8 ký tự"
-399:                     className={`modern-input w-full pl-10 h-11 text-xs font-medium ${
-400:                       fieldErrors.password ? 'border-rose-400 bg-rose-50/20' : ''
-401:                     }`}
-402:                     disabled={loading}
-403:                     required
-404:                   />
-405:                 </div>
-406:                 {fieldErrors.password && (
-407:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
-408:                     {fieldErrors.password}
-409:                   </p>
-410:                 )}
-411:               </div>
-412: 
-413:               {/* Terms Acceptance (BR-AUTH-04) */}
-414:               <div className="pt-1">
-415:                 <label className="flex items-start gap-2.5 cursor-pointer select-none">
-416:                   <input
-417:                     type="checkbox"
-418:                     checked={termsAccepted}
-419:                     onChange={(e) => {
-420:                       setTermsAccepted(e.target.checked);
-421:                       if (fieldErrors.terms_accepted) {
-422:                         setFieldErrors({ ...fieldErrors, terms_accepted: '' });
-423:                       }
-424:                     }}
-425:                     disabled={loading}
-426:                     className="w-4 h-4 mt-0.5 rounded border-slate-300 text-[#c23807] focus:ring-[#c23807]"
-427:                   />
-428:                   <span className="text-[11px] leading-relaxed text-slate-600 font-normal">
-429:                     Tôi đã đọc và đồng ý với{' '}
-430:                     <span className="text-[#c23807] font-semibold hover:underline">
-431:                       Điều khoản dịch vụ
-432:                     </span>{' '}
-433:                     và{' '}
-434:                     <span className="text-[#c23807] font-semibold hover:underline">
-435:                       Chính sách bảo mật
-436:                     </span>{' '}
-437:                     của Ship Dễ (Phiên bản 2026.1).
-438:                   </span>
-439:                 </label>
-440:                 {fieldErrors.terms_accepted && (
-441:                   <p className="mt-1 text-rose-600 font-semibold text-[11px]">
-442:                     {fieldErrors.terms_accepted}
-443:                   </p>
-444:                 )}
-445:               </div>
-446: 
-447:               {/* Submit Button */}
-448:               <button
-449:                 type="submit"
-450:                 disabled={loading}
-451:                 className="w-full h-12 bg-[#c23807] hover:bg-[#a8300a] disabled:bg-slate-300 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/25 transition-all mt-2 cursor-pointer disabled:cursor-not-allowed"
-452:               >
-453:                 {loading ? (
-454:                   <span className="flex items-center gap-2">
-455:                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-456:                     <span>Đang khởi tạo tài khoản cửa hàng...</span>
-457:                   </span>
-458:                 ) : (
-459:                   <span className="flex items-center gap-1.5">
-460:                     <span>Đăng Ký & Kích Hoạt Cửa Hàng</span>
-461:                     <ArrowRight className="w-4 h-4" />
-462:                   </span>
-463:                 )}
-464:               </button>
-465:             </form>
-466: 
-467:             <div className="pt-3 text-center border-t border-slate-100">
-468:               <button
-469:                 type="button"
-470:                 onClick={onSwitchToLogin}
-471:                 className="text-xs text-[#c23807] hover:text-[#a8300a] font-bold hover:underline"
-472:               >
-473:                 ← Đã có tài khoản? Quay lại đăng nhập
-474:               </button>
-475:             </div>
-476:           </div>
-477:         )}
-478: 
-479:         {/* STEP 2: Pending Verification Screen */}
-480:         {step === 'PENDING_VERIFICATION' && (
-481:           <div className="bg-white py-8 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 space-y-6">
-482:             <div className="text-center space-y-2">
-483:               <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mx-auto">
-484:                 <Mail className="w-6 h-6" />
-485:               </div>
-486:               <h3 className="text-lg font-bold text-slate-900">Kiểm tra hòm thư / tin nhắn</h3>
-487:               <p className="text-xs text-slate-600 leading-relaxed">
-488:                 Mã xác thực tài khoản đã được gửi tới:{' '}
-489:                 <span className="font-bold text-slate-800">
-490:                   {registeredEmail
-491:                     ? maskIdentifier(registeredEmail)
-492:                     : maskIdentifier(registeredPhone)}
-493:                 </span>
-494:               </p>
-495:             </div>
-496: 
-497:             {resendMessage && (
-498:               <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2">
-499:                 <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-500:                 <span>{resendMessage}</span>
-501:               </div>
-502:             )}
-503: 
-504:             {verifyError && (
-505:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
-506:                 <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-507:                 <span>{verifyError}</span>
-508:               </div>
-509:             )}
-510: 
-511:             <form onSubmit={handleVerify} className="space-y-4 text-xs">
-512:               <div>
-513:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-514:                   Nhập mã xác thực hoặc mã OTP
-515:                 </label>
-516:                 <div className="relative">
-517:                   <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-518:                   <input
-519:                     type="text"
-520:                     value={verificationCode}
-521:                     onChange={(e) => {
-522:                       setVerificationCode(e.target.value);
-523:                       if (verifyError) setVerifyError(null);
-524:                     }}
-525:                     placeholder={
-526:                       registeredPhone ? 'Ví dụ: 123456' : 'Dán mã token từ liên kết email'
-527:                     }
-528:                     className="modern-input w-full pl-10 h-11 text-xs font-mono font-medium"
-529:                     disabled={verifyLoading}
-530:                     required
-531:                   />
-532:                 </div>
-533:               </div>
-534: 
-535:               <button
-536:                 type="submit"
-537:                 disabled={verifyLoading}
-538:                 className="w-full h-11 bg-[#c23807] hover:bg-[#a8300a] disabled:bg-slate-300 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-orange-500/20"
-539:               >
-540:                 {verifyLoading ? (
-541:                   <span className="flex items-center gap-2">
-542:                     <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-543:                     <span>Đang kiểm tra...</span>
-544:                   </span>
-545:                 ) : (
-546:                   <span>Xác Thực Ngay</span>
-547:                 )}
-548:               </button>
-549:             </form>
-550: 
-551:             <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-552:               <button
-553:                 type="button"
-554:                 onClick={() => setStep('FORM')}
-555:                 className="text-slate-500 hover:text-slate-700 font-medium"
-556:               >
-557:                 ← Sửa thông tin đăng ký
-558:               </button>
-559: 
-560:               <button
-561:                 type="button"
-562:                 onClick={handleResend}
-563:                 disabled={resendCooldown > 0}
-564:                 className="text-[#c23807] hover:text-[#a8300a] disabled:text-slate-400 font-bold inline-flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
-565:               >
-566:                 <RefreshCw className="w-3 h-3" />
-567:                 <span>
-568:                   {resendCooldown > 0 ? `Gửi lại sau (${resendCooldown}s)` : 'Gửi lại mã'}
-569:                 </span>
-570:               </button>
-571:             </div>
-572:           </div>
-573:         )}
-574: 
-575:         {/* STEP 3: Verification Success Screen */}
-576:         {step === 'VERIFIED_SUCCESS' && (
-577:           <div className="bg-white py-10 px-6 sm:px-10 shadow-xl shadow-slate-200/50 rounded-3xl border border-slate-200/80 text-center space-y-6">
-578:             <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
-579:               <CheckCircle2 className="w-10 h-10" />
-580:             </div>
-581: 
-582:             <div className="space-y-2">
-583:               <h3 className="text-xl font-extrabold text-slate-900">Xác Thực Thành Công!</h3>
-584:               <p className="text-xs text-slate-600 max-w-sm mx-auto leading-relaxed">
-585:                 Tài khoản cửa hàng của bạn đã được kích hoạt thành công. Bạn có thể đăng nhập ngay
-586:                 để kết nối hãng vận chuyển và bắt đầu đối soát COD.
-587:               </p>
-588:             </div>
-589: 
-590:             <button
-591:               type="button"
-592:               onClick={onSwitchToLogin}
-593:               className="w-full h-12 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-emerald-600/25"
-594:             >
-595:               <span>Tiến Hành Đăng Nhập</span>
-596:               <ArrowRight className="w-4 h-4" />
-597:             </button>
-598:           </div>
-599:         )}
-600: 
-601:         {/* Security / Tenant Isolation Note */}
-602:         <div className="text-center mt-6 text-xs text-slate-500 space-y-1">
-603:           <div className="flex items-center justify-center gap-1.5 text-emerald-700 font-semibold">
-604:             <ShieldCheck className="w-4 h-4 text-emerald-600" />
-605:             <span>Mỗi cửa hàng là một cơ sở dữ liệu phân vùng độc lập (Tenant Isolation)</span>
-606:           </div>
-607:         </div>
-608:       </div>
-609:     </div>
-610:   );
-611: };
-</file>
-
-<file path="apps/web/src/components/auth/ResetPasswordView.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState, useEffect, useRef } from 'react';
-  4: import { useAuth } from '@/context/AuthContext';
-  5: import { useRouter, useSearchParams } from 'next/navigation';
-  6: import { Lock, AlertCircle, CheckCircle2, Loader2, Eye, EyeOff, ChevronLeft } from 'lucide-react';
-  7: 
-  8: interface Props {
-  9:   onBackToLogin: () => void;
- 10: }
- 11: type ResetPasswordState =
- 12:   | 'VERIFYING'
- 13:   | 'VALID_TOKEN'
- 14:   | 'LOADING'
- 15:   | 'INVALID_TOKEN'
- 16:   | 'TOKEN_EXPIRED'
- 17:   | 'TOKEN_USED'
- 18:   | 'SUCCESS'
- 19:   | 'FORBIDDEN'
- 20:   | 'ERROR';
- 21: 
- 22: export const ResetPasswordView: React.FC<Props> = ({ onBackToLogin }) => {
- 23:   const { verifyResetToken, resetPassword } = useAuth();
- 24:   const router = useRouter();
- 25:   const searchParams = useSearchParams();
- 26:   const tokenFromUrl = searchParams.get('token') || '';
- 27: 
- 28:   const [state, setState] = useState<ResetPasswordState>('VERIFYING');
- 29:   const [password, setPassword] = useState('');
- 30:   const [passwordConfirm, setPasswordConfirm] = useState('');
- 31:   const [showPassword, setShowPassword] = useState(false);
- 32:   const [showConfirm, setShowConfirm] = useState(false);
- 33:   const [errorMessage, setErrorMessage] = useState<string | null>(null);
- 34:   const [fieldErrors, setFieldErrors] = useState<Array<{ field: string; message: string }>>([]);
- 35:   const [identifier, setIdentifier] = useState<string | null>(null);
- 36:   const [channel, setChannel] = useState<string | null>(null);
- 37:   const [passwordStrength, setPasswordStrength] = useState(0);
- 38:   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
- 39: 
- 40:   // Verify token on mount
- 41:   useEffect(() => {
- 42:     if (!tokenFromUrl) {
- 43:       // A link with no token can be answered without asking the server, so this
- 44:       // one state is set straight away. Same exemption and reason as
- 45:       // ShipmentListTab, ThreeLedgersTab and AuthContext.
- 46:       // eslint-disable-next-line react-hooks/set-state-in-effect -- no token to verify
- 47:       setState('INVALID_TOKEN');
- 48:       return;
- 49:     }
- 50:     const verify = async () => {
- 51:       setState('VERIFYING');
- 52:       setErrorMessage(null);
- 53:       setFieldErrors([]);
- 54:       try {
- 55:         const res = await verifyResetToken(tokenFromUrl);
- 56:         if (!res.success) {
- 57:           if (res.code === 'TOKEN_EXPIRED') {
- 58:             setState('TOKEN_EXPIRED');
- 59:           } else if (res.code === 'TOKEN_ALREADY_USED') {
- 60:             setState('TOKEN_USED');
- 61:           } else if (res.code === 'FORBIDDEN') {
- 62:             setState('FORBIDDEN');
- 63:           } else {
- 64:             setState('INVALID_TOKEN');
- 65:           }
- 66:           setErrorMessage(res.error || 'Liên kết không hợp lệ.');
- 67:           return;
- 68:         }
- 69:         setState('VALID_TOKEN');
- 70:         setIdentifier(res.data?.identifier || null);
- 71:         setChannel(res.data?.channel || null);
- 72:       } catch {
- 73:         setState('ERROR');
- 74:         setErrorMessage('Lỗi kết nối máy chủ. Vui lòng thử lại.');
- 75:       }
- 76:     };
- 77:     verify();
- 78:     // eslint-disable-next-line react-hooks/exhaustive-deps -- verifyResetToken is stable from context
- 79:   }, [tokenFromUrl]);
- 80: 
- 81:   const handlePasswordChange = (val: string) => {
- 82:     setPassword(val);
- 83:     let strength = 0;
- 84:     if (val.length >= 6) strength++;
- 85:     if (val.length >= 10) strength++;
- 86:     if (/[A-Z]/.test(val)) strength++;
- 87:     if (/[0-9]/.test(val)) strength++;
- 88:     if (/[^A-Za-z0-9]/.test(val)) strength++;
- 89:     setPasswordStrength(strength);
- 90:     setFieldErrors((prev) => prev.filter((f) => f.field !== 'newPassword'));
- 91:   };
- 92: 
- 93:   const handleSubmit = async (e: React.FormEvent) => {
- 94:     e.preventDefault();
- 95:     setErrorMessage(null);
- 96:     setFieldErrors([]);
- 97: 
- 98:     if (password !== passwordConfirm) {
- 99:       setFieldErrors([{ field: 'newPassword', message: 'Mật khẩu không khớp.' }]);
-100:       return;
-101:     }
-102: 
-103:     setState('LOADING');
-104:     try {
-105:       const res = await resetPassword({
-106:         token: tokenFromUrl,
-107:         password,
-108:         password_confirm: passwordConfirm,
-109:       });
-110:       if (!res.success) {
-111:         if (res.code === 'TOKEN_EXPIRED') {
-112:           setState('TOKEN_EXPIRED');
-113:           setErrorMessage(res.error || null);
-114:         } else if (res.code === 'TOKEN_ALREADY_USED') {
-115:           setState('TOKEN_USED');
-116:           setErrorMessage(res.error || null);
-117:         } else if (res.code === 'FORBIDDEN') {
-118:           setState('FORBIDDEN');
-119:           setErrorMessage(res.error || null);
-120:         } else if (res.code === 'INVALID_TOKEN') {
-121:           setState('INVALID_TOKEN');
-122:           setErrorMessage(res.error || null);
-123:           setFieldErrors(res.fields || []);
-124:         } else if (res.code === 'VALIDATION_ERROR') {
-125:           const mismatchField = res.fields?.find((f) => f.code === 'MISMATCH');
-126:           if (mismatchField) {
-127:             setState('VALID_TOKEN');
-128:             setFieldErrors(res.fields || []);
-129:           } else {
-130:             setState('VALID_TOKEN');
-131:             setFieldErrors(res.fields || []);
-132:             setErrorMessage(res.error || 'Dữ liệu không hợp lệ');
-133:           }
-134:         } else {
-135:           setState('ERROR');
-136:           setErrorMessage(res.error || 'Có lỗi xảy ra.');
-137:         }
-138:         return;
-139:       }
-140:       setState('SUCCESS');
-141:       timerRef.current = setTimeout(() => {
-142:         onBackToLogin();
-143:       }, 5000);
-144:     } catch {
-145:       setState('ERROR');
-146:       setErrorMessage('Lỗi kết nối máy chủ. Vui lòng thử lại.');
-147:     }
+142:   const handleStartOtp = () => {
+143:     resetMessages();
+144:     setStatusBlock(null);
+145:     setFieldError(null);
+146:     setOtpCode('');
+147:     setMode('OTP_IDENTIFIER');
 148:   };
 149: 
-150:   const handleBackToLogin = () => {
-151:     if (timerRef.current) clearTimeout(timerRef.current);
-152:     router.push('/');
-153:   };
-154: 
-155:   const strengthLabels = ['Rất yếu', 'Yếu', 'Trung bình', 'Mạnh', 'Rất mạnh'];
-156: 
-157:   return (
-158:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
-159:       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-160:         <div className="text-center space-y-2 mb-8">
-161:           <button
-162:             type="button"
-163:             onClick={handleBackToLogin}
-164:             aria-label="Quay lại đăng nhập"
-165:             title="Quay lại đăng nhập"
-166:             className="text-slate-400 hover:text-slate-600 transition-colors"
-167:           >
-168:             <ChevronLeft className="w-6 h-6 mx-auto" />
-169:           </button>
-170:           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-171:             Đặt Lại Mật Khẩu
-172:           </h1>
-173:           <p className="text-sm text-slate-500">Nhập mật khẩu mới an toàn</p>
-174:         </div>
-175:         <div className="modern-card p-8 space-y-6 shadow-xl">
-176:           {state === 'VERIFYING' && (
-177:             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
-178:               <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
-179:               <span className="text-sm text-slate-600 font-medium">Đang xác minh liên kết...</span>
-180:             </div>
-181:           )}
-182:           {state === 'ERROR' && (
-183:             <div className="space-y-4 animate-in fade-in">
-184:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-185:                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-186:                 <div>
-187:                   <p className="font-bold">Lỗi</p>
-188:                   <p className="text-rose-700 mt-1">{errorMessage}</p>
-189:                 </div>
-190:               </div>
-191:               <button
-192:                 type="button"
-193:                 onClick={handleBackToLogin}
-194:                 className="btn-secondary w-full justify-center text-sm py-3"
-195:               >
-196:                 Quay lại đăng nhập
-197:               </button>
-198:             </div>
-199:           )}
-200:           {state === 'INVALID_TOKEN' && (
-201:             <div className="space-y-4 animate-in fade-in">
-202:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-203:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-204:                 <div>
-205:                   <p className="font-bold">Liên kết không hợp lệ</p>
-206:                   <p className="text-rose-700 mt-1">
-207:                     {errorMessage || 'Liên kết đã được sử dụng hoặc không đúng định dạng.'}
-208:                   </p>
-209:                 </div>
-210:               </div>
-211:               {fieldErrors.length > 0 && (
-212:                 <div className="text-xs text-rose-600 space-y-1">
-213:                   {fieldErrors.map((fe, i) => (
-214:                     <p key={i}>{fe.message}</p>
-215:                   ))}
-216:                 </div>
-217:               )}
-218:               <button
-219:                 type="button"
-220:                 onClick={handleBackToLogin}
-221:                 className="btn-secondary w-full justify-center text-sm py-3"
-222:               >
-223:                 Quay lại đăng nhập
-224:               </button>
-225:             </div>
-226:           )}
-227: 
-228:           {state === 'TOKEN_EXPIRED' && (
-229:             <div className="space-y-4 animate-in fade-in">
-230:               <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-231:                 <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-232:                 <div>
-233:                   <p className="font-bold">Liên kết đã hết hạn</p>
-234:                   <p className="text-amber-700 mt-1">
-235:                     {errorMessage || 'Vui lòng yêu cầu liên kết mới.'}
-236:                   </p>
-237:                 </div>
-238:               </div>
-239:               <button
-240:                 type="button"
-241:                 onClick={handleBackToLogin}
-242:                 className="btn-primary w-full justify-center text-sm py-3"
-243:               >
-244:                 Quay lại đăng nhập
-245:               </button>
-246:             </div>
-247:           )}
-248:           {state === 'TOKEN_USED' && (
-249:             <div className="space-y-4 animate-in fade-in">
-250:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-251:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-252:                 <div>
-253:                   <p className="font-bold">Liên kết đã được sử dụng</p>
-254:                   <p className="text-rose-700 mt-1">
-255:                     {errorMessage || 'Mật khẩu đã được thay đổi. Vui lòng đăng nhập.'}
-256:                   </p>
-257:                 </div>
-258:               </div>
-259:               <button
-260:                 type="button"
-261:                 onClick={handleBackToLogin}
-262:                 className="btn-primary w-full justify-center text-sm py-3"
-263:               >
-264:                 Đăng nhập
-265:               </button>
-266:             </div>
-267:           )}
-268:           {state === 'FORBIDDEN' && (
-269:             <div className="space-y-4 animate-in fade-in">
-270:               <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2">
-271:                 <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-272:                 <div>
-273:                   <p className="font-bold">Tài khoản bị khóa</p>
-274:                   <p className="text-rose-700 mt-1">
-275:                     {errorMessage || 'Tài khoản này không thể đặt lại mật khẩu.'}
-276:                   </p>
-277:                 </div>
-278:               </div>
-279:               <button
-280:                 type="button"
-281:                 onClick={handleBackToLogin}
-282:                 className="btn-secondary w-full justify-center text-sm py-3"
-283:               >
-284:                 Quay lại đăng nhập
-285:               </button>
-286:             </div>
-287:           )}
-288: 
-289:           {state === 'VALID_TOKEN' && (
-290:             <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-291:               <div>
-292:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-293:                   Mật khẩu mới
-294:                 </label>
-295:                 <div className="relative">
-296:                   <input
-297:                     type={showPassword ? 'text' : 'password'}
-298:                     value={password}
-299:                     onChange={(e) => handlePasswordChange(e.target.value)}
-300:                     placeholder="Nhập mật khẩu mới"
-301:                     className="modern-input pr-10 h-11 text-sm font-medium"
-302:                   />
-303:                   <button
-304:                     type="button"
-305:                     onClick={() => setShowPassword(!showPassword)}
-306:                     aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-307:                     title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-308:                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
-309:                   >
-310:                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-311:                   </button>
-312:                 </div>
-313:               </div>
-314:               {passwordStrength > 0 && (
-315:                 <div className="space-y-1.5">
-316:                   <div className="flex gap-1">
-317:                     {[1, 2, 3, 4, 5].map((bar) => (
-318:                       <div
-319:                         key={bar}
-320:                         className={`h-1.5 flex-1 rounded-full ${bar <= passwordStrength ? (passwordStrength <= 2 ? 'bg-red-500' : passwordStrength <= 3 ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-slate-200'}`}
-321:                       />
-322:                     ))}
-323:                   </div>
-324:                   <p className="text-[10px] text-slate-500 font-medium">
-325:                     Độ mạnh: {strengthLabels[passwordStrength - 1]}
-326:                   </p>
-327:                 </div>
-328:               )}
-329:               <div>
-330:                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
-331:                   Xác nhận mật khẩu
-332:                 </label>
-333:                 <div className="relative">
-334:                   <input
-335:                     type={showConfirm ? 'text' : 'password'}
-336:                     value={passwordConfirm}
-337:                     onChange={(e) => {
-338:                       setPasswordConfirm(e.target.value);
-339:                       setFieldErrors((prev) => prev.filter((f) => f.field !== 'newPassword'));
-340:                     }}
-341:                     placeholder="Nhập lại mật khẩu"
-342:                     className="modern-input pr-10 h-11 text-sm font-medium"
-343:                   />
-344:                   <button
-345:                     type="button"
-346:                     onClick={() => setShowConfirm(!showConfirm)}
-347:                     aria-label={showConfirm ? 'Ẩn xác nhận mật khẩu' : 'Hiện xác nhận mật khẩu'}
-348:                     title={showConfirm ? 'Ẩn xác nhận mật khẩu' : 'Hiện xác nhận mật khẩu'}
-349:                     className="absolute right-3 top-3 text-slate-400 hover:text-slate-600"
-350:                   >
-351:                     {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-352:                   </button>
-353:                 </div>
-354:               </div>
-355:               {fieldErrors.map((fe, i) => (
-356:                 <div
-357:                   key={i}
-358:                   className="text-xs text-rose-600 font-semibold bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 animate-in fade-in"
-359:                 >
-360:                   {fe.message}
-361:                 </div>
-362:               ))}
-363:               <button
-364:                 type="submit"
-365:                 disabled={!password || password.length < 8 || password !== passwordConfirm}
-366:                 className="btn-primary w-full justify-center text-sm py-3 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
-367:               >
-368:                 Đặt lại mật khẩu
-369:               </button>
-370:             </form>
-371:           )}
-372: 
-373:           {state === 'LOADING' && (
-374:             <div className="flex flex-col items-center justify-center py-8 space-y-4 animate-in fade-in">
-375:               <Loader2 className="w-10 h-10 border-4 border-[#c23807] border-t-transparent rounded-full animate-spin" />
-376:               <span className="text-sm text-slate-600 font-medium">Đang đặt lại mật khẩu...</span>
-377:             </div>
-378:           )}
-379:           {state === 'SUCCESS' && (
-380:             <div className="flex flex-col items-center justify-center py-4 space-y-4 animate-in fade-in">
-381:               <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
-382:                 <CheckCircle2 className="w-8 h-8 text-emerald-600" />
-383:               </div>
-384:               <div className="text-center space-y-1">
-385:                 <p className="text-sm font-bold text-slate-900">Đặt lại mật khẩu thành công</p>
-386:                 <p className="text-xs text-slate-500">Vui lòng đăng nhập lại với mật khẩu mới.</p>
-387:               </div>
-388:               <button
-389:                 type="button"
-390:                 onClick={handleBackToLogin}
-391:                 className="btn-primary w-full justify-center text-sm py-3"
-392:               >
-393:                 Quay lại đăng nhập
-394:               </button>
-395:             </div>
-396:           )}
-397:         </div>
-398:         <div className="text-center mt-6 text-xs text-slate-500">
-399:           Nhớ mật khẩu?{' '}
-400:           <button
-401:             type="button"
-402:             onClick={handleBackToLogin}
-403:             className="text-[#c23807] font-bold hover:underline"
-404:           >
-405:             Quay lại đăng nhập
-406:           </button>
-407:         </div>
-408:       </div>
-409:     </div>
-410:   );
-411: };
+150:   const handleRequestOtp = async (e: React.FormEvent) => {
+151:     e.preventDefault();
+152:     resetMessages();
+153: 
+154:     if (!account.trim()) {
+155:       setFieldError({ account: 'Vui lòng nhập email hoặc số điện thoại.' });
+156:       return;
+157:     }
+158:     setFieldError(null);
+159:     setLoading(true);
+160:     const res = await requestLoginOtp(account.trim());
+161:     setLoading(false);
+162: 
+163:     if (res.success) {
+164:       setOtpChallenge({
+165:         maskedIdentifier: res.maskedIdentifier,
+166:         channel: res.channel,
+167:         expiresIn: res.expiresIn,
+168:       });
+169:       setOtpCode('');
+170:       setResendCooldown(RESEND_COOLDOWN_SECONDS);
+171:       setInfoMsg(
+172:         `Mã OTP đã được gửi đến ${res.maskedIdentifier || 'kênh đã xác thực của bạn'}. Mã có hiệu lực ${formatRetry(res.expiresIn || 300)}.`
+173:       );
+174:       setMode('OTP_CODE');
+175:       return;
+176:     }
+177:     if (res.code === 'AUTH_OTP_LOGIN_DISABLED') {
+178:       setErrorMsg(res.error || 'Đăng nhập bằng mã OTP hiện không được kích hoạt.');
+179:       return;
+180:     }
+181:     if (res.code === 'RATE_LIMITED') {
+182:       const retry = res.retryAfterSeconds
+183:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
+184:         : '';
+185:       setErrorMsg(`${res.error || 'Bạn đã yêu cầu mã OTP quá nhiều lần.'}${retry}`);
+186:       return;
+187:     }
+188:     setErrorMsg(res.error || 'Không gửi được mã OTP. Vui lòng thử lại.');
+189:   };
+190: 
+191:   const handleVerifyOtp = async (e: React.FormEvent) => {
+192:     e.preventDefault();
+193:     resetMessages();
+194: 
+195:     if (!/^\d{6}$/.test(otpCode.trim())) {
+196:       setFieldError({ otp: 'Mã OTP gồm 6 chữ số.' });
+197:       return;
+198:     }
+199:     setFieldError(null);
+200:     setLoading(true);
+201:     const res = await verifyLoginOtp(account.trim(), otpCode.trim());
+202:     setLoading(false);
+203: 
+204:     if (res.success) return; // Session applied by AuthContext; the app shell re-renders.
+205: 
+206:     if (res.mfaRequired && res.challengeId) {
+207:       setMfaChallengeId(res.challengeId);
+208:       setMfaExpiresIn(res.expiresIn || 300);
+209:       setMfaTotpCode('');
+210:       setMode('MFA_CHALLENGE');
+211:       return;
+212:     }
+213: 
+214:     if (res.mfaEnrollmentRequired) {
+215:       setMfaSetupToken(res.setupToken || null);
+216:       setMode('MFA_ENROLLMENT_NOTICE');
+217:       return;
+218:     }
+219: 
+220:     if (res.statusBlock) {
+221:       setStatusBlock(res.statusBlock);
+222:       return;
+223:     }
+224:     if (
+225:       res.code === 'OTP_ALREADY_CONSUMED' ||
+226:       res.code === 'OTP_EXPIRED' ||
+227:       res.code === 'OTP_MAX_ATTEMPTS_EXCEEDED'
+228:     ) {
+229:       setErrorMsg(res.error || 'Mã OTP không còn hiệu lực. Vui lòng yêu cầu mã mới.');
+230:       return;
+231:     }
+232:     setFieldError({ otp: res.error || 'Mã OTP không đúng. Vui lòng thử lại.' });
+233:   };
+234: 
+235:   const handleVerifyMfaChallenge = async (e: React.FormEvent) => {
+236:     e.preventDefault();
+237:     resetMessages();
+238: 
+239:     if (!/^\d{6}$/.test(mfaTotpCode.trim())) {
+240:       setFieldError({ otp: 'Mã xác thực gồm 6 chữ số.' });
+241:       return;
+242:     }
+243:     if (!mfaChallengeId) {
+244:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+245:       setMode('CREDENTIALS');
+246:       return;
+247:     }
+248: 
+249:     setFieldError(null);
+250:     setLoading(true);
+251:     const res = await verifyMfaChallenge(mfaChallengeId, mfaTotpCode.trim());
+252:     setLoading(false);
+253: 
+254:     if (res.success) return;
+255: 
+256:     if (res.code === 'RATE_LIMITED') {
+257:       const retry = res.retryAfterSeconds
+258:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
+259:         : '';
+260:       setErrorMsg(`${res.error || 'Bạn đã thử xác thực quá nhiều lần.'}${retry}`);
+261:       return;
+262:     }
+263:     if (
+264:       res.code === 'CHALLENGE_EXPIRED' ||
+265:       res.code === 'CHALLENGE_CONSUMED' ||
+266:       res.code === 'CHALLENGE_INVALIDATED'
+267:     ) {
+268:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+269:       setMode('CREDENTIALS');
+270:       return;
+271:     }
+272: 
+273:     setFieldError({ otp: res.error || 'Mã xác thực không chính xác. Vui lòng thử lại.' });
+274:   };
+275: 
+276:   const handleVerifyMfaRecovery = async (e: React.FormEvent) => {
+277:     e.preventDefault();
+278:     resetMessages();
+279: 
+280:     const cleanCode = mfaRecoveryCode.trim().toUpperCase();
+281:     if (!cleanCode) {
+282:       setFieldError({ otp: 'Vui lòng nhập mã dự phòng.' });
+283:       return;
+284:     }
+285:     if (!mfaChallengeId) {
+286:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+287:       setMode('CREDENTIALS');
+288:       return;
+289:     }
+290: 
+291:     setFieldError(null);
+292:     setLoading(true);
+293:     const res = await verifyMfaRecovery(mfaChallengeId, cleanCode);
+294:     setLoading(false);
+295: 
+296:     if (res.success) return;
+297: 
+298:     if (res.code === 'RATE_LIMITED') {
+299:       const retry = res.retryAfterSeconds
+300:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
+301:         : '';
+302:       setErrorMsg(`${res.error || 'Bạn đã thử xác thực quá nhiều lần.'}${retry}`);
+303:       return;
+304:     }
+305:     if (
+306:       res.code === 'CHALLENGE_EXPIRED' ||
+307:       res.code === 'CHALLENGE_CONSUMED' ||
+308:       res.code === 'CHALLENGE_INVALIDATED'
+309:     ) {
+310:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
+311:       setMode('CREDENTIALS');
+312:       return;
+313:     }
+314: 
+315:     setFieldError({ otp: res.error || 'Mã dự phòng không chính xác hoặc đã được sử dụng.' });
+316:   };
+317: 
+318:   const handleResendOtp = async () => {
+319:     resetMessages();
+320:     setResendBusy(true);
+321:     const res = await requestLoginOtp(account.trim());
+322:     setResendBusy(false);
+323: 
+324:     if (res.success) {
+325:       setResendCooldown(RESEND_COOLDOWN_SECONDS);
+326:       setInfoMsg(
+327:         `Mã OTP mới đã được gửi đến ${res.maskedIdentifier || otpChallenge?.maskedIdentifier || 'kênh đã xác thực của bạn'}.`
+328:       );
+329:       return;
+330:     }
+331:     if (res.code === 'RATE_LIMITED') {
+332:       setResendCooldown(res.retryAfterSeconds || RESEND_COOLDOWN_SECONDS);
+333:       setErrorMsg(res.error || 'Vui lòng đợi trước khi yêu cầu mã mới.');
+334:       return;
+335:     }
+336:     setErrorMsg(res.error || 'Không gửi được mã OTP mới.');
+337:   };
+338: 
+339:   const handleResendVerification = async () => {
+340:     resetMessages();
+341:     setResendBusy(true);
+342:     const res = await resendVerification(account.trim(), 'email');
+343:     setResendBusy(false);
+344: 
+345:     if (res.success) {
+346:       setInfoMsg(`Đã gửi lại liên kết xác thực đến ${account.trim()}.`);
+347:       return;
+348:     }
+349:     setErrorMsg(res.error || 'Không gửi lại được email xác thực.');
+350:   };
+351: 
+352:   const handleBackToCredentials = () => {
+353:     resetMessages();
+354:     setStatusBlock(null);
+355:     setFieldError(null);
+356:     setMfaTotpCode('');
+357:     setMfaRecoveryCode('');
+358:     setMode('CREDENTIALS');
+359:   };
+360: 
+361:   return (
+362:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
+363:       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+364:         {/* Brand Logo & Title */}
+365:         <div className="text-center space-y-2 mb-8">
+366:           <div className="w-14 h-14 rounded-2xl bg-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#c23807]/20">
+367:             S
+368:           </div>
+369:           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
+370:             Đăng Nhập Ship Dễ
+371:           </h1>
+372:           <p className="text-sm text-slate-500">
+373:             Hệ thống kiểm soát vận hành &amp; đối soát COD tự động cho Online Shop
+374:           </p>
+375:         </div>
+376: 
+377:         {/* Main Login Card */}
+378:         <div className="modern-card p-8 space-y-6 shadow-xl">
+379:           {statusBlock ? (
+380:             <div className="space-y-4 text-center" data-testid="login-status-block">
+381:               <div
+382:                 className={`w-12 h-12 rounded-2xl mx-auto flex items-center justify-center ${
+383:                   statusBlock.code === 'AUTH_ACCOUNT_SUSPENDED' ||
+384:                   statusBlock.code === 'AUTH_ACCOUNT_DISABLED'
+385:                     ? 'bg-rose-50 text-rose-600'
+386:                     : 'bg-amber-50 text-amber-600'
+387:                 }`}
+388:               >
+389:                 <AlertTriangle className="w-6 h-6" />
+390:               </div>
+391:               <div className="space-y-1.5">
+392:                 <h2 className="text-base font-bold text-slate-900">
+393:                   {STATUS_TITLE[statusBlock.code] || 'Không thể đăng nhập'}
+394:                 </h2>
+395:                 <p className="text-xs text-slate-600 leading-relaxed">
+396:                   {statusBlock.message || 'Tài khoản của bạn hiện không thể đăng nhập.'}
+397:                 </p>
+398:                 {statusBlock.nextAction && (
+399:                   <p className="text-xs text-slate-500 leading-relaxed">{statusBlock.nextAction}</p>
+400:                 )}
+401:               </div>
+402:               {statusBlock.code === 'AUTH_PENDING_VERIFICATION' && (
+403:                 <button
+404:                   type="button"
+405:                   onClick={handleResendVerification}
+406:                   disabled={resendBusy}
+407:                   className="btn-primary w-full justify-center text-sm py-3 font-bold"
+408:                 >
+409:                   {resendBusy ? (
+410:                     <Loader2 className="w-4 h-4 animate-spin" />
+411:                   ) : (
+412:                     'Gửi lại email xác thực'
+413:                   )}
+414:                 </button>
+415:               )}
+416:               <button
+417:                 type="button"
+418:                 onClick={handleBackToCredentials}
+419:                 className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+420:               >
+421:                 ← Quay lại đăng nhập
+422:               </button>
+423:             </div>
+424:           ) : (
+425:             <>
+426:               {errorMsg && (
+427:                 <div
+428:                   className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2"
+429:                   data-testid="login-error"
+430:                 >
+431:                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+432:                   <span>{errorMsg}</span>
+433:                 </div>
+434:               )}
+435: 
+436:               {infoMsg && (
+437:                 <div
+438:                   className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-start gap-2"
+439:                   data-testid="login-info"
+440:                 >
+441:                   <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+442:                   <span>{infoMsg}</span>
+443:                 </div>
+444:               )}
+445: 
+446:               {mode === 'CREDENTIALS' && (
+447:                 <>
+448:                   <form onSubmit={handlePasswordLogin} className="space-y-4 text-xs">
+449:                     <div>
+450:                       <label className="text-xs font-bold text-slate-700 block mb-1.5">
+451:                         Email hoặc Số Điện Thoại
+452:                       </label>
+453:                       <div className="relative">
+454:                         <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+455:                         <input
+456:                           type="text"
+457:                           value={account}
+458:                           onChange={(e) => setAccount(e.target.value)}
+459:                           placeholder="email@cuahang.vn hoặc 09xx.xxx.xxx"
+460:                           autoComplete="username"
+461:                           className="modern-input pl-10 h-11 text-sm font-medium"
+462:                         />
+463:                       </div>
+464:                       {fieldError?.account && (
+465:                         <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+466:                           {fieldError.account}
+467:                         </p>
+468:                       )}
+469:                     </div>
+470: 
+471:                     <div>
+472:                       <div className="flex justify-between items-center mb-1.5">
+473:                         <label className="text-xs font-bold text-slate-700">Mật Khẩu</label>
+474:                         <Link
+475:                           href="/forgot-password"
+476:                           className="text-xs text-[#c23807] font-semibold hover:underline"
+477:                         >
+478:                           Quên mật khẩu?
+479:                         </Link>
+480:                       </div>
+481:                       <div className="relative">
+482:                         <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+483:                         <input
+484:                           type={showPassword ? 'text' : 'password'}
+485:                           value={password}
+486:                           onChange={(e) => setPassword(e.target.value)}
+487:                           placeholder="••••••••"
+488:                           autoComplete="current-password"
+489:                           className="modern-input pl-10 pr-10 h-11 text-sm font-medium"
+490:                         />
+491:                         <button
+492:                           type="button"
+493:                           onClick={() => setShowPassword(!showPassword)}
+494:                           aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+495:                           className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600"
+496:                         >
+497:                           {showPassword ? (
+498:                             <EyeOff className="w-4 h-4" />
+499:                           ) : (
+500:                             <Eye className="w-4 h-4" />
+501:                           )}
+502:                         </button>
+503:                       </div>
+504:                       {fieldError?.password && (
+505:                         <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+506:                           {fieldError.password}
+507:                         </p>
+508:                       )}
+509:                     </div>
+510: 
+511:                     <div className="flex items-center justify-between pt-1">
+512:                       <label className="flex items-center gap-2 cursor-pointer">
+513:                         <input
+514:                           type="checkbox"
+515:                           checked={rememberMe}
+516:                           onChange={(e) => setRememberMe(e.target.checked)}
+517:                           className="rounded border-slate-300 text-[#c23807] focus:ring-[#c23807] w-4 h-4"
+518:                         />
+519:                         <span className="text-xs text-slate-600 font-medium">
+520:                           Ghi nhớ đăng nhập
+521:                         </span>
+522:                       </label>
+523:                     </div>
+524: 
+525:                     <button
+526:                       type="submit"
+527:                       disabled={loading}
+528:                       className="btn-primary w-full justify-center text-sm py-3 font-bold"
+529:                     >
+530:                       {loading ? (
+531:                         <span className="flex items-center gap-2">
+532:                           <Loader2 className="w-4 h-4 animate-spin" />
+533:                           Đang Đăng Nhập...
+534:                         </span>
+535:                       ) : (
+536:                         <>
+537:                           <span>Đăng Nhập</span>
+538:                           <ArrowRight className="w-4 h-4" />
+539:                         </>
+540:                       )}
+541:                     </button>
+542:                   </form>
+543: 
+544:                   <div className="relative my-4">
+545:                     <div className="absolute inset-0 flex items-center">
+546:                       <div className="w-full border-t border-slate-200" />
+547:                     </div>
+548:                     <div className="relative flex justify-center text-xs">
+549:                       <span className="bg-white px-3 text-slate-600 font-semibold">hoặc</span>
+550:                     </div>
+551:                   </div>
+552: 
+553:                   <button
+554:                     type="button"
+555:                     onClick={handleStartOtp}
+556:                     className="w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors"
+557:                   >
+558:                     <Smartphone className="w-4 h-4 text-slate-500" />
+559:                     Đăng nhập bằng mã OTP (không cần mật khẩu)
+560:                   </button>
+561:                 </>
+562:               )}
+563: 
+564:               {mode === 'OTP_IDENTIFIER' && (
+565:                 <form onSubmit={handleRequestOtp} className="space-y-4 text-xs">
+566:                   <div>
+567:                     <label className="text-xs font-bold text-slate-700 block mb-1.5">
+568:                       Email hoặc Số Điện Thoại nhận mã
+569:                     </label>
+570:                     <div className="relative">
+571:                       <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+572:                       <input
+573:                         type="text"
+574:                         value={account}
+575:                         onChange={(e) => setAccount(e.target.value)}
+576:                         placeholder="email@cuahang.vn hoặc 09xx.xxx.xxx"
+577:                         autoComplete="username"
+578:                         className="modern-input pl-10 h-11 text-sm font-medium"
+579:                       />
+580:                     </div>
+581:                     {fieldError?.account && (
+582:                       <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
+583:                         {fieldError.account}
+584:                       </p>
+585:                     )}
+586:                   </div>
+587:                   <button
+588:                     type="submit"
+589:                     disabled={loading}
+590:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
+591:                   >
+592:                     {loading ? (
+593:                       <span className="flex items-center gap-2">
+594:                         <Loader2 className="w-4 h-4 animate-spin" />
+595:                         Đang Gửi Mã...
+596:                       </span>
+597:                     ) : (
+598:                       'Gửi Mã OTP'
+599:                     )}
+600:                   </button>
+601:                   <button
+602:                     type="button"
+603:                     onClick={handleBackToCredentials}
+604:                     className="w-full flex items-center justify-center gap-1.5 text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+605:                   >
+606:                     <ArrowLeft className="w-3.5 h-3.5" />
+607:                     Đăng nhập bằng mật khẩu
+608:                   </button>
+609:                 </form>
+610:               )}
+611: 
+612:               {mode === 'OTP_CODE' && (
+613:                 <form onSubmit={handleVerifyOtp} className="space-y-4 text-xs">
+614:                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
+615:                     Nhập mã OTP gồm 6 chữ số đã được gửi đến{' '}
+616:                     <span className="font-bold text-slate-800">
+617:                       {otpChallenge?.maskedIdentifier || 'kênh đã xác thực của bạn'}
+618:                     </span>
+619:                     {otpChallenge?.expiresIn
+620:                       ? ` (hiệu lực ${formatRetry(otpChallenge.expiresIn)})`
+621:                       : ''}
+622:                     . Mã chỉ dùng được một lần.
+623:                   </div>
+624:                   <div>
+625:                     <label className="text-xs font-bold text-slate-700 block mb-1.5">Mã OTP</label>
+626:                     <div className="relative">
+627:                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+628:                       <input
+629:                         type="text"
+630:                         inputMode="numeric"
+631:                         autoComplete="one-time-code"
+632:                         maxLength={6}
+633:                         value={otpCode}
+634:                         onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+635:                         placeholder="••••••"
+636:                         className="modern-input pl-10 h-11 text-sm font-medium tracking-[0.4em]"
+637:                       />
+638:                     </div>
+639:                     {fieldError?.otp && (
+640:                       <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
+641:                         {fieldError.otp}
+642:                       </p>
+643:                     )}
+644:                   </div>
+645:                   <button
+646:                     type="submit"
+647:                     disabled={loading}
+648:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
+649:                   >
+650:                     {loading ? (
+651:                       <span className="flex items-center gap-2">
+652:                         <Loader2 className="w-4 h-4 animate-spin" />
+653:                         Đang Xác Thực...
+654:                       </span>
+655:                     ) : (
+656:                       <>
+657:                         <span>Xác Nhận &amp; Đăng Nhập</span>
+658:                         <ArrowRight className="w-4 h-4" />
+659:                       </>
+660:                     )}
+661:                   </button>
+662:                   <div className="flex items-center justify-between">
+663:                     <button
+664:                       type="button"
+665:                       onClick={handleResendOtp}
+666:                       disabled={resendBusy || resendCooldown > 0}
+667:                       className="text-xs text-[#c23807] font-semibold hover:underline disabled:text-slate-400 disabled:cursor-not-allowed disabled:no-underline"
+668:                     >
+669:                       {resendBusy
+670:                         ? 'Đang gửi lại...'
+671:                         : resendCooldown > 0
+672:                           ? `Gửi lại mã sau ${resendCooldown}s`
+673:                           : 'Gửi lại mã OTP'}
+674:                     </button>
+675:                     <button
+676:                       type="button"
+677:                       onClick={handleStartOtp}
+678:                       className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+679:                     >
+680:                       ← Dùng tài khoản khác
+681:                     </button>
+682:                   </div>
+683:                 </form>
+684:               )}
+685: 
+686:               {mode === 'MFA_CHALLENGE' && (
+687:                 <form
+688:                   onSubmit={handleVerifyMfaChallenge}
+689:                   className="space-y-4 text-xs"
+690:                   data-testid="mfa-challenge-form"
+691:                 >
+692:                   <div className="p-3.5 rounded-xl bg-orange-50 border border-orange-200 text-[11px] text-orange-950 leading-relaxed flex items-start gap-2.5">
+693:                     <ShieldCheck className="w-5 h-5 text-[#c23807] shrink-0 mt-0.5" />
+694:                     <div>
+695:                       <p className="font-bold text-slate-900 mb-0.5">Xác thực hai yếu tố (2FA)</p>
+696:                       <p className="text-slate-600">
+697:                         Nhập mã 6 chữ số từ ứng dụng xác thực (Google Authenticator, Microsoft
+698:                         Authenticator) trên điện thoại của bạn.
+699:                       </p>
+700:                     </div>
+701:                   </div>
+702: 
+703:                   <div>
+704:                     <label
+705:                       htmlFor="mfa-totp-code"
+706:                       className="text-xs font-bold text-slate-700 block mb-1.5"
+707:                     >
+708:                       Mã Xác Thực (TOTP)
+709:                     </label>
+710:                     <div className="relative">
+711:                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+712:                       <input
+713:                         id="mfa-totp-code"
+714:                         type="text"
+715:                         inputMode="numeric"
+716:                         autoComplete="one-time-code"
+717:                         maxLength={6}
+718:                         value={mfaTotpCode}
+719:                         onChange={(e) =>
+720:                           setMfaTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))
+721:                         }
+722:                         placeholder="••••••"
+723:                         autoFocus
+724:                         className="modern-input pl-10 h-11 text-sm font-medium tracking-[0.4em]"
+725:                       />
+726:                     </div>
+727:                     {fieldError?.otp && (
+728:                       <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
+729:                         {fieldError.otp}
+730:                       </p>
+731:                     )}
+732:                   </div>
+733: 
+734:                   <button
+735:                     type="submit"
+736:                     disabled={loading}
+737:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
+738:                   >
+739:                     {loading ? (
+740:                       <span className="flex items-center gap-2">
+741:                         <Loader2 className="w-4 h-4 animate-spin" />
+742:                         Đang Xác Thực...
+743:                       </span>
+744:                     ) : (
+745:                       <>
+746:                         <span>Xác Nhận Đăng Nhập</span>
+747:                         <ArrowRight className="w-4 h-4" />
+748:                       </>
+749:                     )}
+750:                   </button>
+751: 
+752:                   <div className="flex flex-col gap-2 pt-2 text-center">
+753:                     <button
+754:                       type="button"
+755:                       onClick={() => {
+756:                         resetMessages();
+757:                         setFieldError(null);
+758:                         setMode('MFA_RECOVERY');
+759:                       }}
+760:                       className="text-xs text-[#c23807] font-semibold hover:underline"
+761:                     >
+762:                       Không mang theo điện thoại? Sử dụng mã dự phòng
+763:                     </button>
+764:                     <button
+765:                       type="button"
+766:                       onClick={handleBackToCredentials}
+767:                       className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+768:                     >
+769:                       ← Quay lại đăng nhập bằng tài khoản khác
+770:                     </button>
+771:                   </div>
+772:                 </form>
+773:               )}
+774: 
+775:               {mode === 'MFA_RECOVERY' && (
+776:                 <form
+777:                   onSubmit={handleVerifyMfaRecovery}
+778:                   className="space-y-4 text-xs"
+779:                   data-testid="mfa-recovery-form"
+780:                 >
+781:                   <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 leading-relaxed flex items-start gap-2.5">
+782:                     <KeyRound className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" />
+783:                     <div>
+784:                       <p className="font-bold text-slate-900 mb-0.5">Sử dụng mã dự phòng</p>
+785:                       <p className="text-slate-600">
+786:                         Nhập một trong các mã khôi phục bạn đã lưu khi kích hoạt 2FA. Mỗi mã chỉ
+787:                         dùng được một lần.
+788:                       </p>
+789:                     </div>
+790:                   </div>
+791: 
+792:                   <div>
+793:                     <label
+794:                       htmlFor="mfa-recovery-code"
+795:                       className="text-xs font-bold text-slate-700 block mb-1.5"
+796:                     >
+797:                       Mã Dự Phòng (Recovery Code)
+798:                     </label>
+799:                     <div className="relative">
+800:                       <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+801:                       <input
+802:                         id="mfa-recovery-code"
+803:                         type="text"
+804:                         autoCapitalize="characters"
+805:                         autoComplete="off"
+806:                         value={mfaRecoveryCode}
+807:                         onChange={(e) => setMfaRecoveryCode(e.target.value.toUpperCase())}
+808:                         placeholder="XXXX-XXXX-XXXX-XXXX"
+809:                         autoFocus
+810:                         className="modern-input pl-10 h-11 text-sm font-mono tracking-wider uppercase"
+811:                       />
+812:                     </div>
+813:                     {fieldError?.otp && (
+814:                       <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
+815:                         {fieldError.otp}
+816:                       </p>
+817:                     )}
+818:                   </div>
+819: 
+820:                   <button
+821:                     type="submit"
+822:                     disabled={loading}
+823:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
+824:                   >
+825:                     {loading ? (
+826:                       <span className="flex items-center gap-2">
+827:                         <Loader2 className="w-4 h-4 animate-spin" />
+828:                         Đang Xác Thực...
+829:                       </span>
+830:                     ) : (
+831:                       <>
+832:                         <span>Xác Nhận Bằng Mã Dự Phòng</span>
+833:                         <ArrowRight className="w-4 h-4" />
+834:                       </>
+835:                     )}
+836:                   </button>
+837: 
+838:                   <div className="flex flex-col gap-2 pt-2 text-center">
+839:                     <button
+840:                       type="button"
+841:                       onClick={() => {
+842:                         resetMessages();
+843:                         setFieldError(null);
+844:                         setMode('MFA_CHALLENGE');
+845:                       }}
+846:                       className="text-xs text-[#c23807] font-semibold hover:underline"
+847:                     >
+848:                       ← Sử dụng mã xác thực từ ứng dụng (TOTP)
+849:                     </button>
+850:                     <button
+851:                       type="button"
+852:                       onClick={handleBackToCredentials}
+853:                       className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
+854:                     >
+855:                       Quay lại đăng nhập
+856:                     </button>
+857:                   </div>
+858:                 </form>
+859:               )}
+860: 
+861:               {mode === 'MFA_ENROLLMENT_NOTICE' && (
+862:                 <div className="space-y-4 text-center" data-testid="mfa-enrollment-notice">
+863:                   <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center bg-amber-50 text-amber-600">
+864:                     <ShieldCheck className="w-6 h-6" />
+865:                   </div>
+866:                   <div className="space-y-1.5">
+867:                     <h2 className="text-base font-bold text-slate-900">
+868:                       Bắt buộc thiết lập Xác thực Hai Yếu tố (MFA)
+869:                     </h2>
+870:                     <p className="text-xs text-slate-600 leading-relaxed">
+871:                       Tài khoản Chủ cửa hàng (Owner) hoặc Quản lý tài chính bắt buộc phải kích hoạt
+872:                       bảo mật hai lớp trước khi truy cập hệ thống Ship Dễ.
+873:                     </p>
+874:                   </div>
+875: 
+876:                   <Link
+877:                     href="/settings/security"
+878:                     className="btn-primary w-full justify-center text-sm py-3 font-bold inline-flex items-center gap-2"
+879:                   >
+880:                     <span>Kích Hoạt Bảo Mật 2FA Ngay</span>
+881:                     <ArrowRight className="w-4 h-4" />
+882:                   </Link>
+883: 
+884:                   <button
+885:                     type="button"
+886:                     onClick={handleBackToCredentials}
+887:                     className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline block mx-auto"
+888:                   >
+889:                     ← Quay lại đăng nhập
+890:                   </button>
+891:                 </div>
+892:               )}
+893:             </>
+894:           )}
+895:         </div>
+896: 
+897:         {/* Footer */}
+898:         <div className="text-center mt-6 text-xs text-slate-500">
+899:           Chưa có tài khoản?{' '}
+900:           <button
+901:             type="button"
+902:             onClick={onSwitchToRegister}
+903:             className="text-[#c23807] font-bold hover:underline"
+904:           >
+905:             Đăng ký tài khoản mới
+906:           </button>
+907:         </div>
+908:       </div>
+909:     </div>
+910:   );
+911: };
 </file>
 
 <file path="apps/web/src/components/forms/InviteUserModal.tsx">
@@ -65432,390 +68479,6 @@ This section contains the contents of the repository's files.
 27: SOFTWARE.
 </file>
 
-<file path="apps/web/src/components/ui/OperationalComponents.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState } from 'react';
-  4: import { Copy, Check, Info, ShieldAlert, AlertTriangle, ExternalLink } from 'lucide-react';
-  5: import { ShipmentStatus, CarrierCapabilityTier } from '@/types/domain';
-  6: 
-  7: // ============================================================================
-  8: // 1. Money Component (Tabular Figures, Precise Formatting)
-  9: // ============================================================================
- 10: interface MoneyProps {
- 11:   amount: number | bigint;
- 12:   state?: 'confirmed' | 'pending' | 'estimated';
- 13:   showSign?: boolean;
- 14:   className?: string;
- 15: }
- 16: 
- 17: export const Money: React.FC<MoneyProps> = ({
- 18:   amount,
- 19:   state = 'confirmed',
- 20:   showSign = false,
- 21:   className = '',
- 22: }) => {
- 23:   const num = Number(amount) || 0;
- 24:   const isNegative = num < 0;
- 25:   const absNum = Math.abs(num);
- 26:   const formatted = absNum.toLocaleString('vi-VN') + ' đ';
- 27: 
- 28:   const signStr = isNegative ? '- ' : showSign && num > 0 ? '+ ' : '';
- 29: 
- 30:   let stateStyle = 'font-mono tabular-nums text-right ';
- 31:   if (state === 'confirmed') {
- 32:     stateStyle += isNegative ? 'text-rose-600 font-bold' : 'text-slate-900 font-semibold';
- 33:   } else if (state === 'pending') {
- 34:     stateStyle += 'text-slate-500 italic';
- 35:   } else if (state === 'estimated') {
- 36:     stateStyle += 'text-slate-500 italic';
- 37:   }
- 38: 
- 39:   return (
- 40:     <span
- 41:       className={`${stateStyle} ${className}`}
- 42:       title={state !== 'confirmed' ? `Trạng thái: ${state}` : undefined}
- 43:     >
- 44:       {signStr}
- 45:       {formatted}
- 46:     </span>
- 47:   );
- 48: };
- 49: 
- 50: // ============================================================================
- 51: // 2. TrackingCode Component (1-Touch Copy with Immediate Visual Feedback)
- 52: // ============================================================================
- 53: interface TrackingCodeProps {
- 54:   code: string;
- 55:   onClick?: () => void;
- 56:   className?: string;
- 57: }
- 58: 
- 59: export const TrackingCode: React.FC<TrackingCodeProps> = ({ code, onClick, className = '' }) => {
- 60:   const [copied, setCopied] = useState(false);
- 61: 
- 62:   const handleCopy = (e: React.MouseEvent) => {
- 63:     e.stopPropagation();
- 64:     navigator.clipboard.writeText(code);
- 65:     setCopied(true);
- 66:     setTimeout(() => setCopied(false), 2000);
- 67:   };
- 68: 
- 69:   return (
- 70:     <span
- 71:       onClick={onClick}
- 72:       className={`inline-flex items-center gap-1.5 font-mono text-[13px] font-bold text-slate-900 hover:text-[#c23807] cursor-pointer group select-all transition-colors ${className}`}
- 73:       title="Bấm để sao chép hoặc mở chi tiết hành trình"
- 74:     >
- 75:       <span>{code}</span>
- 76:       <button
- 77:         type="button"
- 78:         onClick={handleCopy}
- 79:         className="text-slate-400 hover:text-[#c23807] p-1 rounded-md transition"
- 80:         title={copied ? 'Đã sao chép mã' : 'Sao chép mã'}
- 81:       >
- 82:         {copied ? (
- 83:           <Check className="w-3.5 h-3.5 text-emerald-600" />
- 84:         ) : (
- 85:           <Copy className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
- 86:         )}
- 87:       </button>
- 88:     </span>
- 89:   );
- 90: };
- 91: 
- 92: // ============================================================================
- 93: // 3. StatusBadge Component (Vietnamese Business Language)
- 94: // ============================================================================
- 95: interface StatusBadgeProps {
- 96:   status: ShipmentStatus | string;
- 97:   className?: string;
- 98: }
- 99: 
-100: export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, className = '' }) => {
-101:   const s = String(status).toUpperCase();
-102: 
-103:   let badgeClass = 'badge-info';
-104:   let label = status;
-105:   let dotColor = 'bg-slate-400';
-106: 
-107:   if (
-108:     s === 'DELIVERED' ||
-109:     s === 'RESOLVED' ||
-110:     s === 'MATCHED' ||
-111:     s === 'ACCEPTED' ||
-112:     s === 'ACTIVE'
-113:   ) {
-114:     badgeClass = 'badge-ok';
-115:     dotColor = 'bg-emerald-600';
-116:     if (s === 'DELIVERED') label = 'Giao Thành Công';
-117:     else if (s === 'RESOLVED') label = 'Đã Đối Soát';
-118:     else if (s === 'MATCHED') label = 'Đã Khớp Mã';
-119:     else if (s === 'ACCEPTED') label = 'Hãng Đã Chấp Thuận';
-120:   } else if (s === 'OUT_FOR_DELIVERY') {
-121:     badgeClass = 'badge-warn';
-122:     dotColor = 'bg-amber-600';
-123:     label = 'Đang Giao Hàng';
-124:   } else if (s === 'IN_TRANSIT') {
-125:     badgeClass = 'badge-info';
-126:     dotColor = 'bg-slate-500';
-127:     label = 'Đang Trung Chuyển';
-128:   } else if (s === 'PICKING' || s === 'PICKED' || s === 'READY_TO_PICK' || s === 'CREATED') {
-129:     badgeClass = 'badge-info';
-130:     dotColor = 'bg-slate-500';
-131:     label = s === 'PICKED' ? 'Đã Lấy Hàng' : 'Chờ Lấy Hàng';
-132:   } else if (s === 'RETURNING') {
-133:     badgeClass = 'badge-warn';
-134:     dotColor = 'bg-amber-600';
-135:     label = 'Đang Chuyển Hoàn';
-136:   } else if (s === 'RETURNED') {
-137:     badgeClass = 'badge-info';
-138:     dotColor = 'bg-slate-600';
-139:     label = 'Đã Nhập Hoàn Kho';
-140:   } else if (s === 'DRAFT') {
-141:     badgeClass = 'badge-info';
-142:     dotColor = 'bg-slate-400';
-143:     label = 'Bản Nháp';
-144:   } else if (s === 'CANCELLED') {
-145:     badgeClass = 'badge-info';
-146:     dotColor = 'bg-slate-400';
-147:     label = 'Đã Hủy';
-148:   } else if (
-149:     s.includes('FAIL') ||
-150:     s.includes('DISPUTE') ||
-151:     s.includes('REJECTED') ||
-152:     s.includes('DAMAGED') ||
-153:     s.includes('LOST') ||
-154:     s.startsWith('D')
-155:   ) {
-156:     badgeClass = 'badge-risk';
-157:     dotColor = 'bg-rose-600';
-158:     if (s === 'DELIVERY_FAIL') label = 'Giao Thất Bại';
-159:     else if (s === 'DISPUTED') label = 'Đang Khiếu Nại';
-160:     else if (s === 'DAMAGED') label = 'Hàng Hư Hỏng';
-161:     else if (s === 'LOST') label = 'Thất Lạc Hàng';
-162:     else if (s === 'D1_WEIGHT') label = 'Lệch Cân Tính Phí';
-163:     else if (s === 'D2_FREIGHT') label = 'Lệch Cước Hợp Đồng';
-164:     else if (s === 'D4_DUPLICATE' || s.includes('D4')) label = 'Trừ Cước Trùng';
-165:     else if (s === 'D5_COD_MISMATCH' || s.includes('D5')) label = 'Lệch Tiền COD';
-166:     else if (s === 'D6_OVERDUE_COD' || s.includes('D6')) label = 'COD Quá Hạn';
-167:     else if (s === 'D7_MISSING' || s.includes('D7')) label = 'Thiếu Dòng Sao Kê';
-168:   } else if (
-169:     s.includes('DELAY') ||
-170:     s.includes('PENDING') ||
-171:     s.includes('OPEN') ||
-172:     s.includes('ASSIGNED') ||
-173:     s.includes('SUBMITTED')
-174:   ) {
-175:     badgeClass = 'badge-warn';
-176:     dotColor = 'bg-amber-600';
-177:     if (s === 'PICKUP_DELAY') label = 'Chậm Lấy Hàng';
-178:     else if (s === 'OPEN') label = 'Chờ Xử Lý';
-179:     else if (s === 'ASSIGNED') label = 'Đã Phân Công';
-180:     else if (s === 'SUBMITTED') label = 'Đã Gửi Hãng';
-181:     else if (s === 'PENDING') label = 'Chờ Duyệt';
-182:   } else if (s.includes('REATTEMPT')) {
-183:     badgeClass = 'badge-info';
-184:     dotColor = 'bg-emerald-600';
-185:     label = 'Đã Gửi Lệnh Giao Lại';
-186:   }
-187: 
-188:   return (
-189:     <span className={`${badgeClass} ${className}`}>
-190:       <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-191:       <span>{label}</span>
-192:     </span>
-193:   );
-194: };
-195: 
-196: // ============================================================================
-197: // 4. AutomationBadge Component (Clear Operational Description)
-198: // ============================================================================
-199: interface AutomationBadgeProps {
-200:   tier: CarrierCapabilityTier | 'L2' | 'L1' | 'L0';
-201:   carrierCode?: string;
-202:   className?: string;
-203: }
-204: 
-205: export const AutomationBadge: React.FC<AutomationBadgeProps> = ({
-206:   tier,
-207:   carrierCode = '',
-208:   className = '',
-209: }) => {
-210:   const t = String(tier).toUpperCase();
-211: 
-212:   if (t === 'L2' || t.includes('EXECUTE')) {
-213:     return (
-214:       <span
-215:         className={`badge-ok font-semibold text-xs ${className}`}
-216:         title="Tự động gọi API hãng trực tiếp"
-217:       >
-218:         <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-219:         <span>{carrierCode ? `${carrierCode} · ` : ''}Tự Động Qua API</span>
-220:       </span>
-221:     );
-222:   }
-223: 
-224:   if (t === 'L1' || t.includes('ASSIST')) {
-225:     return (
-226:       <span
-227:         className={`badge-warn font-semibold text-xs ${className}`}
-228:         title="Tạo hồ sơ chuẩn mẫu để nhân viên dán lên cổng hãng"
-229:       >
-230:         <span className="w-1.5 h-1.5 rounded-full bg-amber-600" />
-231:         <span>{carrierCode ? `${carrierCode} · ` : ''}Hỗ Trợ Cổng Hãng</span>
-232:       </span>
-233:     );
-234:   }
-235: 
-236:   return (
-237:     <span
-238:       className={`badge-info font-medium text-xs ${className}`}
-239:       title="Thao tác hoàn toàn thủ công"
-240:     >
-241:       <span>{carrierCode ? `${carrierCode} · ` : ''}Thủ Công</span>
-242:     </span>
-243:   );
-244: };
-245: 
-246: // ============================================================================
-247: // 5. EmptyState Component (Clean & Helpful)
-248: // ============================================================================
-249: interface EmptyStateProps {
-250:   title: string;
-251:   description?: string;
-252:   reason?: string;
-253:   actionLabel?: string;
-254:   onAction?: () => void;
-255:   icon?: React.ReactNode;
-256: }
-257: 
-258: export const EmptyState: React.FC<EmptyStateProps> = ({
-259:   title,
-260:   description,
-261:   reason,
-262:   actionLabel,
-263:   onAction,
-264:   icon,
-265: }) => {
-266:   return (
-267:     <div className="modern-card p-12 text-center flex flex-col items-center justify-center space-y-3">
-268:       <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center text-xl">
-269:         {icon || <Info className="w-6 h-6 text-slate-400" />}
-270:       </div>
-271:       <div className="space-y-1 max-w-md">
-272:         <h4 className="font-bold text-slate-900 text-sm">{title}</h4>
-273:         {(description || reason) && (
-274:           <p className="text-xs text-slate-500">{description || reason}</p>
-275:         )}
-276:       </div>
-277:       {actionLabel && onAction && (
-278:         <button type="button" onClick={onAction} className="btn-primary mt-2">
-279:           {actionLabel}
-280:         </button>
-281:       )}
-282:     </div>
-283:   );
-284: };
-285: 
-286: // ============================================================================
-287: // 6. ConfirmDialog Modal (Focus Trapped, Accessible)
-288: // ============================================================================
-289: interface ConfirmDialogProps {
-290:   isOpen: boolean;
-291:   title: string;
-292:   message?: string;
-293:   description?: string;
-294:   confirmLabel?: string;
-295:   cancelLabel?: string;
-296:   isDanger?: boolean;
-297:   requireReason?: boolean;
-298:   onConfirm: (reason: string) => void;
-299:   onCancel?: () => void;
-300:   onClose?: () => void;
-301: }
-302: 
-303: export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
-304:   isOpen,
-305:   title,
-306:   message,
-307:   description,
-308:   confirmLabel = 'Xác Nhận',
-309:   cancelLabel = 'Hủy Bỏ',
-310:   isDanger = false,
-311:   requireReason = false,
-312:   onConfirm,
-313:   onCancel,
-314:   onClose,
-315: }) => {
-316:   const handleClose = () => {
-317:     if (onCancel) onCancel();
-318:     if (onClose) onClose();
-319:   };
-320:   const [reason, setReason] = useState('');
-321:   const [error, setError] = useState<string | null>(null);
-322: 
-323:   if (!isOpen) return null;
-324: 
-325:   const handleConfirm = () => {
-326:     if (requireReason && !reason.trim()) {
-327:       setError('Vui lòng nhập lý do giải trình bắt buộc.');
-328:       return;
-329:     }
-330:     setError(null);
-331:     onConfirm(reason);
-332:     setReason('');
-333:   };
-334: 
-335:   return (
-336:     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-337:       <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
-338:         <div className="flex items-center gap-3">
-339:           <div
-340:             className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${isDanger ? 'bg-rose-50 text-rose-600' : 'bg-[#FFF5F0] text-[#c23807]'}`}
-341:           >
-342:             {isDanger ? <ShieldAlert className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
-343:           </div>
-344:           <div>
-345:             <h3 className="font-bold text-slate-900 text-base">{title}</h3>
-346:             <p className="text-xs text-slate-500 mt-0.5">{message}</p>
-347:           </div>
-348:         </div>
-349: 
-350:         {requireReason && (
-351:           <div className="space-y-1.5 pt-2">
-352:             <label className="text-xs font-bold text-slate-700 block">
-353:               Lý do giải trình (Bắt buộc theo quy tắc tài chính):
-354:             </label>
-355:             <textarea
-356:               value={reason}
-357:               onChange={(e) => setReason(e.target.value)}
-358:               placeholder="Nhập chi tiết căn cứ giải trình..."
-359:               className="modern-input text-xs h-20 resize-none"
-360:               autoFocus
-361:             />
-362:             {error && <p className="text-xs text-rose-600 font-semibold">{error}</p>}
-363:           </div>
-364:         )}
-365: 
-366:         <div className="flex justify-end items-center gap-2 pt-3 border-t border-slate-100">
-367:           <button type="button" onClick={onCancel} className="btn-secondary text-xs">
-368:             {cancelLabel}
-369:           </button>
-370:           <button
-371:             type="button"
-372:             onClick={handleConfirm}
-373:             className={isDanger ? 'btn-danger text-xs' : 'btn-primary text-xs'}
-374:           >
-375:             {confirmLabel}
-376:           </button>
-377:         </div>
-378:       </div>
-379:     </div>
-380:   );
-381: };
-</file>
-
 <file path="apps/web/src/components/ui/sheet.tsx">
  1: 'use client';
  2: 
@@ -67240,888 +69903,475 @@ This section contains the contents of the repository's files.
 271: };
 </file>
 
-<file path="apps/web/src/components/ControlTowerTab.tsx">
-  1: 'use client';
-  2: 
-  3: import React from 'react';
-  4: import { TrackingCode, Money, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
-  5: import {
-  6:   MASTER_SHIPMENTS,
-  7:   MASTER_EXCEPTIONS,
-  8:   MASTER_DISCREPANCIES,
-  9:   MASTER_CLAIMS,
- 10:   getUnifiedMetrics,
- 11: } from '@/services/unifiedDataStore';
- 12: import {
- 13:   Package,
- 14:   AlertTriangle,
- 15:   Clock,
- 16:   DollarSign,
- 17:   TrendingUp,
- 18:   ArrowRight,
- 19:   ShieldCheck,
- 20:   CheckCircle2,
- 21:   Sliders,
- 22:   RotateCcw,
- 23:   Truck,
- 24: } from 'lucide-react';
- 25: 
- 26: interface Props {
- 27:   role: string;
- 28:   onNavigate: (tab: string) => void;
- 29:   onCreateOrder?: () => void;
- 30: }
- 31: 
- 32: export const ControlTowerTab: React.FC<Props> = ({ role, onNavigate, onCreateOrder }) => {
- 33:   const metrics = getUnifiedMetrics();
- 34: 
- 35:   const urgentExceptions = MASTER_EXCEPTIONS.filter((e) => e.status === 'OPEN').slice(0, 3);
- 36:   const urgentDiscrepancies = MASTER_DISCREPANCIES.filter((d) => d.status === 'OPEN').slice(0, 3);
- 37: 
- 38:   return (
- 39:     <div className="w-full space-y-6">
- 40:       {/* Operational Header Bar */}
- 41:       <div className="modern-card p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-gradient-to-r from-white via-white to-[#FFF5F0] border-l-4 border-l-[#c23807]">
- 42:         <div>
- 43:           <h1 className="text-base font-bold text-slate-900 flex items-center gap-2">
- 44:             <span>Bàn Điều Khiển Vận Hành & Đối Soát Ba Sổ</span>
- 45:           </h1>
- 46:           <p className="text-xs text-slate-500 mt-0.5">
- 47:             Giám sát bưu kiện thời gian thực, xử lý sự cố cứu đơn và đối soát chênh lệch tài chính
- 48:             tự động.
- 49:           </p>
- 50:         </div>
- 51: 
- 52:         {onCreateOrder && (
- 53:           <button type="button" onClick={onCreateOrder} className="btn-primary text-xs shrink-0">
- 54:             <span>+ Tạo Vận Đơn Mới</span>
- 55:           </button>
- 56:         )}
- 57:       </div>
- 58: 
- 59:       {/* 4 Unified Operational KPI Cards */}
- 60:       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
- 61:         {/* Metric 1: Active Shipments */}
- 62:         <div
- 63:           onClick={() => onNavigate('shipments')}
- 64:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-[#c23807] transition-colors"
- 65:         >
- 66:           <div className="flex items-center justify-between">
- 67:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
- 68:               Tổng Bưu Kiện Đang Chạy
- 69:             </span>
- 70:             <div className="w-9 h-9 rounded-xl bg-[#FFF5F0] text-[#c23807] flex items-center justify-center">
- 71:               <Package className="w-4.5 h-4.5" />
- 72:             </div>
- 73:           </div>
- 74:           <div className="my-2">
- 75:             <div className="text-3xl font-black font-mono text-slate-900">
- 76:               {metrics.activeShipments}
- 77:             </div>
- 78:             <div className="text-xs text-slate-500 mt-0.5">
- 79:               Trên tổng số {metrics.totalShipments} bưu kiện trong hệ thống
- 80:             </div>
- 81:           </div>
- 82:           <div className="flex items-center gap-1 text-xs font-semibold text-[#c23807] group-hover:underline pt-2 border-t border-slate-100">
- 83:             <span>Mở danh sách vận đơn</span>
- 84:             <ArrowRight className="w-3.5 h-3.5" />
- 85:           </div>
- 86:         </div>
- 87: 
- 88:         {/* Metric 2: Open Exceptions Needing Rescue */}
- 89:         <div
- 90:           onClick={() => onNavigate('exceptions')}
- 91:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-amber-400 transition-colors"
- 92:         >
- 93:           <div className="flex items-center justify-between">
- 94:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
- 95:               Sự Cố Cần Cứu Đơn Gấp
- 96:             </span>
- 97:             <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
- 98:               <AlertTriangle className="w-4.5 h-4.5" />
- 99:             </div>
-100:           </div>
-101:           <div className="my-2">
-102:             <div className="text-3xl font-black font-mono text-amber-700">
-103:               {metrics.openExceptionsCount}
-104:             </div>
-105:             <div className="text-xs text-slate-500 mt-0.5">
-106:               Giao thất bại, trễ lấy hàng, đọng trung chuyển
-107:             </div>
-108:           </div>
-109:           <div className="flex items-center gap-1 text-xs font-semibold text-amber-700 group-hover:underline pt-2 border-t border-slate-100">
-110:             <span>Vào hộp việc CSKH</span>
-111:             <ArrowRight className="w-3.5 h-3.5" />
-112:           </div>
-113:         </div>
-114: 
-115:         {/* Metric 3: Financial Discrepancies */}
-116:         <div
-117:           onClick={() => onNavigate('reconciliation')}
-118:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-rose-400 transition-colors"
-119:         >
-120:           <div className="flex items-center justify-between">
-121:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-122:               Khoản Lệch Cước & COD
-123:             </span>
-124:             <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center">
-125:               <DollarSign className="w-4.5 h-4.5" />
-126:             </div>
-127:           </div>
-128:           <div className="my-2">
-129:             <div className="text-3xl font-black font-mono text-rose-700">
-130:               <Money amount={metrics.totalDiscrepancyAmount} state="confirmed" />
-131:             </div>
-132:             <div className="text-xs text-slate-500 mt-0.5">
-133:               {metrics.openDiscrepanciesCount} khoản lệch đang chờ duyệt
-134:             </div>
-135:           </div>
-136:           <div className="flex items-center gap-1 text-xs font-semibold text-rose-700 group-hover:underline pt-2 border-t border-slate-100">
-137:             <span>Duyệt đối soát chênh lệch</span>
-138:             <ArrowRight className="w-3.5 h-3.5" />
-139:           </div>
-140:         </div>
-141: 
-142:         {/* Metric 4: Rescued & Recovered Value */}
-143:         <div
-144:           onClick={() => onNavigate('three_ledgers')}
-145:           className="modern-card p-5 cursor-pointer flex flex-col justify-between group hover:border-emerald-400 transition-colors"
-146:         >
-147:           <div className="flex items-center justify-between">
-148:             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-149:               Bồi Thường Đã Thu Hồi
-150:             </span>
-151:             <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
-152:               <TrendingUp className="w-4.5 h-4.5" />
-153:             </div>
-154:           </div>
-155:           <div className="my-2">
-156:             <div className="text-3xl font-black font-mono text-emerald-700">
-157:               <Money amount={1500000} state="confirmed" />
-158:             </div>
-159:             <div className="text-xs text-slate-500 mt-0.5">
-160:               Tiền bồi thường thực nhận đã về tài khoản
-161:             </div>
-162:           </div>
-163:           <div className="flex items-center gap-1 text-xs font-semibold text-emerald-700 group-hover:underline pt-2 border-t border-slate-100">
-164:             <span>Xem Báo Cáo Ba Sổ</span>
-165:             <ArrowRight className="w-3.5 h-3.5" />
-166:           </div>
-167:         </div>
-168:       </div>
-169: 
-170:       {/* Priority Work Queue (Trả Lời 3 Câu Hỏi Vận Hành) */}
-171:       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-172:         {/* Panel 1: Urgent Exceptions Requiring Action */}
-173:         <div className="modern-card p-6 space-y-4">
-174:           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-175:             <div>
-176:               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-177:                 <AlertTriangle className="w-4.5 h-4.5 text-amber-600" />
-178:                 <span>Hàng Đợi Cứu Đơn Cần Can Thiệp Hôm Nay</span>
-179:               </h2>
-180:               <p className="text-xs text-slate-500 mt-0.5">
-181:                 Các đơn giao không thành công sắp chạm hạn chót hãng chuyển hoàn.
-182:               </p>
-183:             </div>
-184:             <button
-185:               type="button"
-186:               onClick={() => onNavigate('exceptions')}
-187:               className="btn-secondary text-xs"
-188:             >
-189:               Xem Tất Cả ({metrics.openExceptionsCount})
-190:             </button>
-191:           </div>
-192: 
-193:           <div className="divide-y divide-slate-100">
-194:             {urgentExceptions.map((exc) => (
-195:               <div key={exc.id} className="py-3 flex items-center justify-between gap-3">
-196:                 <div className="space-y-1">
-197:                   <div className="flex items-center gap-2">
-198:                     <TrackingCode
-199:                       code={exc.tracking_code}
-200:                       onClick={() => onNavigate('exceptions')}
-201:                     />
-202:                     <span className="font-bold text-xs text-slate-700">{exc.carrier_code}</span>
-203:                     <span className="badge-warn text-xs">Còn {exc.hours_remaining}h</span>
-204:                   </div>
-205:                   <div className="text-xs text-slate-600 font-medium">
-206:                     {exc.carrier_reason || 'Khách không nghe máy (Lần 1)'}
-207:                   </div>
-208:                   <div className="text-xs text-slate-400">
-209:                     Người nhận: <strong>{exc.recipient_name}</strong> · COD:{' '}
-210:                     <Money amount={exc.cod_amount} state="pending" className="inline text-xs" />
-211:                   </div>
-212:                 </div>
-213: 
-214:                 <button
-215:                   type="button"
-216:                   onClick={() => onNavigate('exceptions')}
-217:                   className="btn-primary text-xs shrink-0 py-1.5 px-3"
-218:                 >
-219:                   Xử Lý Ngay
-220:                 </button>
-221:               </div>
-222:             ))}
-223:           </div>
-224:         </div>
-225: 
-226:         {/* Panel 2: Urgent Discrepancies Requiring Maker-Checker Approval */}
-227:         <div className="modern-card p-6 space-y-4">
-228:           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-229:             <div>
-230:               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-231:                 <DollarSign className="w-4.5 h-4.5 text-rose-600" />
-232:                 <span>Khoản Lệch Tài Chính Chờ Kế Toán Duyệt</span>
-233:               </h2>
-234:               <p className="text-xs text-slate-500 mt-0.5">
-235:                 Phát hiện qua 6 phép dò đối soát tự động so với biểu giá hợp đồng.
-236:               </p>
-237:             </div>
-238:             <button
-239:               type="button"
-240:               onClick={() => onNavigate('reconciliation')}
-241:               className="btn-secondary text-xs"
-242:             >
-243:               Đối Soát Kỳ Này
-244:             </button>
-245:           </div>
-246: 
-247:           <div className="divide-y divide-slate-100">
-248:             {urgentDiscrepancies.map((disc) => (
-249:               <div key={disc.id} className="py-3 flex items-center justify-between gap-3">
-250:                 <div className="space-y-1">
-251:                   <div className="flex items-center gap-2">
-252:                     <TrackingCode
-253:                       code={disc.tracking_code}
-254:                       onClick={() => onNavigate('reconciliation')}
-255:                     />
-256:                     <StatusBadge status={disc.type} />
-257:                   </div>
-258:                   <div className="text-xs text-slate-600">{disc.reason}</div>
-259:                   <div className="text-xs text-rose-700 font-bold font-mono">
-260:                     Chênh lệch:{' '}
-261:                     <Money amount={disc.discrepancy_amount} state="confirmed" className="inline" />
-262:                   </div>
-263:                 </div>
-264: 
-265:                 <button
-266:                   type="button"
-267:                   onClick={() => onNavigate('reconciliation')}
-268:                   className="btn-secondary text-xs shrink-0 py-1.5 px-3 font-semibold"
-269:                 >
-270:                   Kiểm Tra
-271:                 </button>
-272:               </div>
-273:             ))}
-274:           </div>
-275:         </div>
-276:       </div>
-277:     </div>
-278:   );
-279: };
-</file>
-
-<file path="apps/web/src/components/CreateOrderModal.tsx">
+<file path="apps/web/src/components/ExceptionWorkboxTab.tsx">
   1: 'use client';
   2: 
   3: import React, { useState } from 'react';
-  4: import {
-  5:   PackagePlus,
-  6:   X,
-  7:   Check,
-  8:   Truck,
-  9:   DollarSign,
- 10:   Clock,
- 11:   ShieldCheck,
- 12:   MapPin,
- 13:   Scale,
- 14:   Sparkles,
- 15:   ArrowRight,
- 16:   Info,
- 17:   Store,
- 18: } from 'lucide-react';
- 19: import { Money, AutomationBadge } from './ui/OperationalComponents';
- 20: import { MASTER_SHIPMENTS, UnifiedShipment } from '@/services/unifiedDataStore';
- 21: 
- 22: interface Props {
- 23:   isOpen: boolean;
- 24:   onClose: () => void;
- 25:   onOrderCreated: (newShipment: UnifiedShipment) => void;
- 26: }
+  4: import { UIExceptionItem } from './types';
+  5: import { MASTER_EXCEPTIONS } from '@/services/unifiedDataStore';
+  6: import {
+  7:   TrackingCode,
+  8:   Money,
+  9:   StatusBadge,
+ 10:   AutomationBadge,
+ 11:   ConfirmDialog,
+ 12: } from './ui/OperationalComponents';
+ 13: import {
+ 14:   Phone,
+ 15:   Calendar,
+ 16:   AlertTriangle,
+ 17:   CheckCircle2,
+ 18:   Clock,
+ 19:   Send,
+ 20:   User,
+ 21:   MapPin,
+ 22:   ShieldCheck,
+ 23:   ChevronDown,
+ 24:   ChevronUp,
+ 25:   FileSpreadsheet,
+ 26: } from 'lucide-react';
  27: 
- 28: export const CreateOrderModal: React.FC<Props> = ({ isOpen, onClose, onOrderCreated }) => {
- 29:   // Order information
- 30:   // eslint-disable-next-line react-hooks/purity -- Legacy prototype random order code generator
- 31:   const [orderCode, setOrderCode] = useState(`ORD_${Math.floor(Math.random() * 89999) + 10000}`);
- 32:   const [pickupWarehouse, setPickupWarehouse] = useState('store_01');
- 33:   const [recipientName, setRecipientName] = useState('Nguyễn Văn Khách');
- 34:   const [recipientPhone, setRecipientPhone] = useState('0901234567');
- 35:   const [recipientProvince, setRecipientProvince] = useState<'HCM' | 'HN' | 'OTHER'>('HCM');
- 36:   const [recipientDistrict, setRecipientDistrict] = useState('Quận 3');
- 37:   const [recipientAddress, setRecipientAddress] = useState('128 Nguyễn Trãi, Phường 3');
- 38:   const [itemName, setItemName] = useState('Váy lụa thiết kế cao cấp (Size M)');
- 39: 
- 40:   // Package specifications
- 41:   const [weightGram, setWeightGram] = useState<number>(350);
- 42:   const [lengthCm, setLengthCm] = useState<number>(20);
- 43:   const [widthCm, setWidthCm] = useState<number>(15);
- 44:   const [heightCm, setHeightCm] = useState<number>(5);
- 45:   const [codAmount, setCodAmount] = useState<number>(450000);
- 46:   const [insuranceValue, setInsuranceValue] = useState<number>(450000);
- 47:   const [payer, setPayer] = useState<'SENDER' | 'RECEIVER'>('RECEIVER');
- 48:   const [inspectionNote, setInspectionNote] = useState<
- 49:     'CHO_XEM_HANG' | 'CHO_THU_HANG' | 'KHONG_CHO_XEM'
- 50:   >('CHO_XEM_HANG');
- 51: 
- 52:   // Selected Carrier
- 53:   const [selectedCarrier, setSelectedCarrier] = useState<'GHN' | 'GHTK'>('GHN');
- 54:   const [loading, setLoading] = useState(false);
- 55:   const [errorMsg, setErrorMsg] = useState<string | null>(null);
- 56: 
- 57:   if (!isOpen) return null;
- 58: 
- 59:   // Volumetric weight formula: (L x W x H) / 5000 * 1000 (in grams)
- 60:   const volumetricWeightGram = Math.round(((lengthCm * widthCm * heightCm) / 5000) * 1000);
- 61:   const chargeableWeightGram = Math.max(weightGram, volumetricWeightGram);
- 62: 
- 63:   // Dynamic Rate Comparison Engine across Connected Carriers
- 64:   const isIntraProvince = recipientProvince === 'HCM';
- 65: 
- 66:   const carriersComparison = [
- 67:     {
- 68:       id: 'GHN' as const,
- 69:       name: 'Giao Hàng Nhanh (GHN Express)',
- 70:       baseFee: isIntraProvince ? 22000 : 32000,
- 71:       addWeightFee:
- 72:         chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 5000 : 0,
- 73:       insuranceFee: insuranceValue > 1000000 ? Math.round(insuranceValue * 0.005) : 0,
- 74:       codFee: 0,
- 75:       deliveryTime: isIntraProvince ? 'Hỏa tốc trong 24h (Sáng mai)' : '1 - 2 ngày làm việc',
- 76:       tier: 'L2' as const,
- 77:       tierLabel: 'Tự động gọi API (L2)',
- 78:       badge: '⚡ Giao Nhanh Nhất',
- 79:       badgeColor: 'bg-emerald-50 text-emerald-800 border-emerald-200',
- 80:       logoBg: 'bg-[#FFF5F0] text-[#c23807]',
- 81:     },
- 82:     {
- 83:       id: 'GHTK' as const,
- 84:       name: 'Giao Hàng Tiết Kiệm (GHTK)',
- 85:       baseFee: isIntraProvince ? 24000 : 34000,
- 86:       addWeightFee:
- 87:         chargeableWeightGram > 1000 ? Math.ceil((chargeableWeightGram - 1000) / 500) * 6000 : 0,
- 88:       insuranceFee: insuranceValue > 1000000 ? Math.round(insuranceValue * 0.005) : 0,
- 89:       codFee: 0,
- 90:       deliveryTime: isIntraProvince ? '1 - 2 ngày làm việc' : '2 - 3 ngày làm việc',
- 91:       tier: 'L1' as const,
- 92:       tierLabel: 'Hỗ trợ cổng hãng (L1)',
- 93:       badge: 'Phổ Biến Tuyến Huyện',
- 94:       badgeColor: 'bg-slate-100 text-slate-700 border-slate-200',
- 95:       logoBg: 'bg-emerald-50 text-emerald-700',
- 96:     },
- 97:   ].map((c) => ({
- 98:     ...c,
- 99:     totalFee: c.baseFee + c.addWeightFee + c.insuranceFee + c.codFee,
-100:   }));
-101: 
-102:   const activeCarrierInfo =
-103:     carriersComparison.find((c) => c.id === selectedCarrier) || carriersComparison[0];
-104: 
-105:   const handleSubmit = async (e: React.FormEvent) => {
-106:     e.preventDefault();
-107:     if (!recipientName.trim() || !recipientPhone.trim()) {
-108:       setErrorMsg('Vui lòng điền họ tên và số điện thoại người nhận.');
-109:       return;
-110:     }
+ 28: interface Props {
+ 29:   exceptions?: UIExceptionItem[];
+ 30:   onUpdateException?: (updated: UIExceptionItem) => void;
+ 31:   carrierGhnTier?: 'L2' | 'L1';
+ 32:   selectedCaseId?: string | null;
+ 33:   onClearSelection?: () => void;
+ 34: }
+ 35: 
+ 36: export const ExceptionWorkboxTab: React.FC<Props> = ({
+ 37:   exceptions = MASTER_EXCEPTIONS,
+ 38:   onUpdateException,
+ 39:   carrierGhnTier = 'L2',
+ 40:   selectedCaseId: propSelectedCaseId,
+ 41:   onClearSelection,
+ 42: }) => {
+ 43:   const [prevExceptions, setPrevExceptions] = useState(exceptions);
+ 44:   const [caseList, setCaseList] = useState<UIExceptionItem[]>(exceptions);
+ 45:   if (prevExceptions !== exceptions) {
+ 46:     setPrevExceptions(exceptions);
+ 47:     setCaseList(exceptions);
+ 48:   }
+ 49: 
+ 50:   const [dismissedCaseId, setDismissedCaseId] = useState<string | null>(null);
+ 51:   const [prevPropSelectedCaseId, setPrevPropSelectedCaseId] = useState(propSelectedCaseId);
+ 52: 
+ 53:   if (prevPropSelectedCaseId !== propSelectedCaseId) {
+ 54:     setPrevPropSelectedCaseId(propSelectedCaseId);
+ 55:     setDismissedCaseId(null);
+ 56:   }
+ 57: 
+ 58:   const effectivePropCaseId =
+ 59:     propSelectedCaseId && propSelectedCaseId !== dismissedCaseId ? propSelectedCaseId : null;
+ 60: 
+ 61:   const [selectedCaseId, setSelectedCaseId] = useState<string>(
+ 62:     effectivePropCaseId || caseList[0]?.id || ''
+ 63:   );
+ 64:   const [filterType, setFilterType] = useState<'ALL' | 'MINE' | 'UNASSIGNED' | 'EXPIRING'>('ALL');
+ 65:   const [callNote, setCallNote] = useState('');
+ 66:   const [newPhone, setNewPhone] = useState('');
+ 67:   const [scheduledDate, setScheduledDate] = useState('2026-08-18');
+ 68:   const [reattemptNote, setReattemptNote] = useState('Khách hẹn giao lại ca chiều');
+ 69:   const [toastFeedback, setToastFeedback] = useState<string | null>(null);
+ 70:   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+ 71: 
+ 72:   const isCaseActivated = Boolean(effectivePropCaseId);
+ 73:   const matchedCase = isCaseActivated ? caseList.find((e) => e.id === effectivePropCaseId) : null;
+ 74:   const isCaseNotFound = isCaseActivated && !matchedCase;
+ 75: 
+ 76:   const activeCaseId = effectivePropCaseId || selectedCaseId || caseList[0]?.id || '';
+ 77:   const selectedCase = isCaseNotFound
+ 78:     ? null
+ 79:     : matchedCase || caseList.find((e) => e.id === activeCaseId) || caseList[0] || null;
+ 80: 
+ 81:   const handleRecoverException = () => {
+ 82:     if (propSelectedCaseId) {
+ 83:       setDismissedCaseId(propSelectedCaseId);
+ 84:     }
+ 85:     const firstId = caseList[0]?.id || '';
+ 86:     setSelectedCaseId(firstId);
+ 87:     onClearSelection?.();
+ 88:   };
+ 89: 
+ 90:   const handleSelectCase = (id: string) => {
+ 91:     if (propSelectedCaseId) {
+ 92:       setDismissedCaseId(propSelectedCaseId);
+ 93:     }
+ 94:     setSelectedCaseId(id);
+ 95:     onClearSelection?.();
+ 96:   };
+ 97: 
+ 98:   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
+ 99:   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
+100:   const expiringCount = caseList.filter(
+101:     (e) => (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0
+102:   ).length;
+103: 
+104:   const filteredCases = caseList.filter((e) => {
+105:     if (filterType === 'MINE') return e.assigned_to?.includes('Hoa');
+106:     if (filterType === 'UNASSIGNED') return !e.assigned_to;
+107:     if (filterType === 'EXPIRING')
+108:       return (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0;
+109:     return true;
+110:   });
 111: 
-112:     setLoading(true);
-113:     setErrorMsg(null);
-114: 
-115:     const generatedTracking = `${selectedCarrier}8829${Math.floor(Math.random() * 89999) + 10000}`;
-116:     const provinceName =
-117:       recipientProvince === 'HCM'
-118:         ? 'TP. Hồ Chí Minh'
-119:         : recipientProvince === 'HN'
-120:           ? 'Hà Nội'
-121:           : 'Đà Nẵng';
+112:   const handleLogContact = (e: React.FormEvent) => {
+113:     e.preventDefault();
+114:     if (!callNote.trim()) {
+115:       alert('Vui lòng nhập ghi chú cuộc gọi.');
+116:       return;
+117:     }
+118:     setToastFeedback('✓ Đã ghi nhận nhật ký liên hệ khách hàng thành công.');
+119:     setCallNote('');
+120:     setTimeout(() => setToastFeedback(null), 3000);
+121:   };
 122: 
-123:     const newShipment: UnifiedShipment = {
-124:       id: `shp_${Date.now()}`,
-125:       tracking_code: generatedTracking,
-126:       order_code: orderCode,
-127:       carrier_code: selectedCarrier,
-128:       carrier_account: selectedCarrier === 'GHN' ? 'acc_ghn_01' : 'acc_ghtk_01',
-129:       recipient_name: recipientName,
-130:       recipient_phone: recipientPhone,
-131:       recipient_address: `${recipientAddress}, ${recipientDistrict}`,
-132:       destination_province: provinceName,
-133:       cod_amount: Number(codAmount),
-134:       quoted_fee: activeCarrierInfo.totalFee,
-135:       declared_weight_g: Number(chargeableWeightGram),
-136:       status: 'picking',
-137:       match_status: 'matched_exact',
-138:       warehouse_id: pickupWarehouse,
-139:       created_at:
-140:         new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
-141:       updated_at:
-142:         new Date().toLocaleDateString('vi-VN') + ' ' + new Date().toLocaleTimeString('vi-VN'),
-143:       has_open_exception: false,
-144:       has_open_discrepancy: false,
-145:       has_open_claim: false,
-146:       timeline: [
-147:         {
-148:           title: 'Đã tạo vận đơn mới',
-149:           description: `Đơn hàng ${orderCode} đã tạo thành công và đẩy thông tin sang hãng ${selectedCarrier}`,
-150:           occurred_at: new Date().toLocaleTimeString('vi-VN'),
-151:           source_label: 'Hệ thống Ship Dễ',
-152:         },
-153:       ],
-154:     };
-155: 
-156:     // Prepend to Master Shipments
-157:     MASTER_SHIPMENTS.unshift(newShipment);
-158: 
-159:     setTimeout(() => {
-160:       setLoading(false);
-161:       onOrderCreated(newShipment);
-162:       onClose();
-163:     }, 600);
-164:   };
-165: 
-166:   return (
-167:     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
-168:       <div className="bg-white rounded-2xl border border-slate-200 max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden shadow-2xl text-xs animate-in zoom-in-95 duration-150">
-169:         {/* Modal Header */}
-170:         <div className="p-4 sm:p-5 border-b border-slate-100 bg-[#FDFCFB] flex justify-between items-center shrink-0">
-171:           <div className="flex items-center gap-3">
-172:             <div className="w-10 h-10 rounded-xl bg-[#c23807] text-white flex items-center justify-center shadow-xs">
-173:               <PackagePlus className="w-5 h-5" />
-174:             </div>
-175:             <div>
-176:               <div className="flex items-center gap-2">
-177:                 <h2 className="font-bold text-sm text-slate-900">
-178:                   Tạo Vận Đơn Mới & So Sánh Cước Phí
-179:                 </h2>
-180:                 <span className="badge-ok text-xs">So Cước Tự Động</span>
-181:               </div>
-182:               <p className="text-xs text-slate-500 mt-0.5">
-183:                 Nhập thông tin giao hàng để hệ thống tính cước theo biểu giá hợp đồng và đẩy đơn
-184:                 sang hãng vận chuyển.
-185:               </p>
-186:             </div>
-187:           </div>
-188:           <button
-189:             type="button"
-190:             onClick={onClose}
-191:             className="w-8 h-8 rounded-lg bg-white hover:bg-slate-100 border border-slate-200 text-slate-500 flex items-center justify-center font-bold text-xs cursor-pointer transition"
-192:           >
-193:             ✕
-194:           </button>
-195:         </div>
-196: 
-197:         {/* Modal Body: 2-Column Split */}
-198:         <div className="overflow-y-auto flex-1 p-4 sm:p-6 custom-scrollbar">
-199:           {errorMsg && (
-200:             <div className="p-3 mb-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-center gap-2">
-201:               <span className="w-1.5 h-1.5 rounded-full bg-rose-600 shrink-0" />
-202:               <span>{errorMsg}</span>
-203:             </div>
-204:           )}
-205: 
-206:           <form
-207:             id="create-order-form"
-208:             onSubmit={handleSubmit}
-209:             className="grid grid-cols-1 lg:grid-cols-12 gap-6"
-210:           >
-211:             {/* LEFT COLUMN (7 Cols): Order & Package Info */}
-212:             <div className="lg:col-span-7 space-y-4">
-213:               {/* Section 1: Receiver & Address */}
-214:               <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/80">
-215:                 <div className="flex justify-between items-center">
-216:                   <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-217:                     <MapPin className="w-3.5 h-3.5 text-[#c23807]" />
-218:                     <span>1. Thông Tin Người Nhận & Nơi Giao</span>
-219:                   </span>
-220:                   <span className="text-xs font-mono text-slate-500 font-semibold">
-221:                     Mã đơn: {orderCode}
-222:                   </span>
-223:                 </div>
-224: 
-225:                 <div className="grid grid-cols-2 gap-3">
-226:                   <div>
-227:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-228:                       Tên Người Nhận:
-229:                     </label>
-230:                     <input
-231:                       type="text"
-232:                       value={recipientName}
-233:                       onChange={(e) => setRecipientName(e.target.value)}
-234:                       placeholder="Nguyễn Văn Khách"
-235:                       className="modern-input w-full text-xs font-medium"
-236:                       required
-237:                     />
-238:                   </div>
-239:                   <div>
-240:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-241:                       Số Điện Thoại:
-242:                     </label>
-243:                     <input
-244:                       type="tel"
-245:                       value={recipientPhone}
-246:                       onChange={(e) => setRecipientPhone(e.target.value)}
-247:                       placeholder="0901234567"
-248:                       className="modern-input w-full font-mono text-xs font-medium"
-249:                       required
-250:                     />
-251:                   </div>
-252:                 </div>
-253: 
-254:                 <div className="grid grid-cols-2 gap-3">
-255:                   <div>
-256:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-257:                       Tỉnh / Thành Phố:
-258:                     </label>
-259:                     <select
-260:                       value={recipientProvince}
-261:                       onChange={(e: any) => setRecipientProvince(e.target.value)}
-262:                       className="modern-input w-full font-semibold text-xs text-slate-800"
-263:                     >
-264:                       <option value="HCM">TP. Hồ Chí Minh (Nội Tỉnh)</option>
-265:                       <option value="HN">Hà Nội (Liên Tỉnh)</option>
-266:                       <option value="OTHER">Đà Nẵng / Tỉnh khác (Liên Tỉnh)</option>
-267:                     </select>
-268:                   </div>
-269:                   <div>
-270:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-271:                       Quận / Huyện:
-272:                     </label>
-273:                     <input
-274:                       type="text"
-275:                       value={recipientDistrict}
-276:                       onChange={(e) => setRecipientDistrict(e.target.value)}
-277:                       placeholder="Quận 3"
-278:                       className="modern-input w-full text-xs font-medium"
-279:                     />
-280:                   </div>
-281:                 </div>
-282: 
-283:                 <div>
-284:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
-285:                     Địa Chỉ Chi Tiết (Số nhà, Tên đường, Phường):
-286:                   </label>
-287:                   <input
-288:                     type="text"
-289:                     value={recipientAddress}
-290:                     onChange={(e) => setRecipientAddress(e.target.value)}
-291:                     placeholder="128 Nguyễn Trãi, Phường 3"
-292:                     className="modern-input w-full text-xs font-medium"
-293:                     required
-294:                   />
-295:                 </div>
-296: 
-297:                 <div>
-298:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
-299:                     Kho / Chi Nhánh Xuất Hàng:
-300:                   </label>
-301:                   <select
-302:                     value={pickupWarehouse}
-303:                     onChange={(e) => setPickupWarehouse(e.target.value)}
-304:                     className="modern-input w-full font-semibold text-xs text-slate-800"
-305:                   >
-306:                     <option value="store_01">Chi Nhánh Quận 3 (128 Nguyễn Trãi, HCM)</option>
-307:                     <option value="store_02">Kho Vận Tân Bình (55 CMT8, HCM)</option>
-308:                     <option value="store_03">Chi Nhánh Hà Nội (320 Cầu Giấy)</option>
-309:                     <option value="store_04">Chi Nhánh Đà Nẵng (102 Hoàng Văn Thụ)</option>
-310:                   </select>
-311:                 </div>
-312:               </div>
-313: 
-314:               {/* Section 2: Package Weight, Dimensions & COD */}
-315:               <div className="space-y-3 p-4 bg-slate-50/70 rounded-xl border border-slate-200/80">
-316:                 <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-317:                   <Scale className="w-3.5 h-3.5 text-[#c23807]" />
-318:                   <span>2. Thông Số Kiện Hàng & Thu Tiền (COD)</span>
-319:                 </span>
-320: 
-321:                 <div>
-322:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
-323:                     Tên Sản Phẩm / Hàng Hóa:
-324:                   </label>
-325:                   <input
-326:                     type="text"
-327:                     value={itemName}
-328:                     onChange={(e) => setItemName(e.target.value)}
-329:                     placeholder="Quần áo, phụ kiện thời trang..."
-330:                     className="modern-input w-full text-xs font-medium"
-331:                   />
-332:                 </div>
+123:   const handleDispatchReattempt = async () => {
+124:     if (!selectedCase) return;
+125: 
+126:     const updated = {
+127:       ...selectedCase,
+128:       status: 'REATTEMPT_REQUESTED' as any,
+129:       version: (selectedCase.version || 1) + 1,
+130:       attempts: (selectedCase.attempts || 1) + 1,
+131:     };
+132: 
+133:     setCaseList((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+134:     if (onUpdateException) onUpdateException(updated);
+135: 
+136:     setToastFeedback(
+137:       selectedCase.carrier_code === 'GHN' && carrierGhnTier === 'L2'
+138:         ? `✓ Đã tự động gửi yêu cầu giao lại qua API GHN cho mã ${selectedCase.tracking_code}.`
+139:         : `✓ Đã tạo hồ sơ hỗ trợ cho đơn ${selectedCase.tracking_code}. Vui lòng dán lên cổng hỗ trợ của ${selectedCase.carrier_code}.`
+140:     );
+141:     setTimeout(() => setToastFeedback(null), 4000);
+142:   };
+143: 
+144:   const currentTier = selectedCase?.carrier_code === 'GHN' ? carrierGhnTier : 'L1';
+145: 
+146:   return (
+147:     <div className="w-full space-y-4">
+148:       {toastFeedback && (
+149:         <div className="p-3.5 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
+150:           <div className="flex items-center gap-2">
+151:             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+152:             <span>{toastFeedback}</span>
+153:           </div>
+154:           <button
+155:             type="button"
+156:             onClick={() => setToastFeedback(null)}
+157:             className="font-bold text-slate-400 hover:text-white"
+158:           >
+159:             ✕
+160:           </button>
+161:         </div>
+162:       )}
+163: 
+164:       {/* Activated Case Not Found Alert (Real Not-Found State with Recovery) */}
+165:       {isCaseNotFound && (
+166:         <div
+167:           data-testid="activated-case-not-found"
+168:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+169:         >
+170:           <div className="flex items-center gap-2.5">
+171:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+172:             <div>
+173:               <div className="font-bold text-xs sm:text-sm">
+174:                 Không tìm thấy sự cố vận hành{' '}
+175:                 <span className="font-mono underline">{propSelectedCaseId}</span>
+176:               </div>
+177:               <div className="text-xs text-amber-700">
+178:                 Sự cố không tồn tại trong danh sách ca chờ xử lý hoặc đã được xử lý xong.
+179:               </div>
+180:             </div>
+181:           </div>
+182:           <div className="flex items-center gap-2">
+183:             <button
+184:               type="button"
+185:               onClick={handleRecoverException}
+186:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+187:             >
+188:               Quay lại danh sách sự cố
+189:             </button>
+190:           </div>
+191:         </div>
+192:       )}
+193: 
+194:       {/* 3-Column Layout */}
+195:       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+196:         {/* Left Column (3 cols): Filter Navigation */}
+197:         <div className="lg:col-span-3 space-y-3">
+198:           <div className="modern-card p-3 space-y-1">
+199:             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider px-3 py-1.5 block">
+200:               Phân Loại Sự Cố
+201:             </span>
+202: 
+203:             {[
+204:               { id: 'ALL', label: 'Tất cả sự cố', count: caseList.length, color: 'text-slate-900' },
+205:               { id: 'MINE', label: 'Việc của tôi', count: myCasesCount, color: 'text-[#c23807]' },
+206:               {
+207:                 id: 'UNASSIGNED',
+208:                 label: 'Chưa phân công',
+209:                 count: unassignedCount,
+210:                 color: 'text-slate-600',
+211:               },
+212:               {
+213:                 id: 'EXPIRING',
+214:                 label: 'Sắp hết hạn xử lý (<4h)',
+215:                 count: expiringCount,
+216:                 color: 'text-amber-700',
+217:               },
+218:             ].map((f) => (
+219:               <button
+220:                 key={f.id}
+221:                 type="button"
+222:                 onClick={() => setFilterType(f.id as any)}
+223:                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+224:                   filterType === f.id
+225:                     ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
+226:                     : 'text-slate-600 hover:bg-slate-50'
+227:                 }`}
+228:               >
+229:                 <span>{f.label}</span>
+230:                 <span className={`font-mono text-xs font-bold ${f.color}`}>{f.count}</span>
+231:               </button>
+232:             ))}
+233:           </div>
+234: 
+235:           <div className="modern-card p-4 space-y-2 text-xs">
+236:             <span className="font-bold text-slate-900 flex items-center gap-1.5">
+237:               <ShieldCheck className="w-4 h-4 text-emerald-600" />
+238:               Khóa Chống Can Thiệp Trùng
+239:             </span>
+240:             <p className="text-slate-500 leading-relaxed text-xs">
+241:               Khi bạn mở hồ sơ, hệ thống khóa bảo vệ để ngăn nhân viên khác cùng thao tác đồng thời.
+242:             </p>
+243:           </div>
+244:         </div>
+245: 
+246:         {/* Middle Column (4 cols): Urgency Exception List */}
+247:         <div className="lg:col-span-4 modern-card flex flex-col overflow-hidden">
+248:           <div className="p-4 border-b border-slate-100 bg-slate-50/70 flex justify-between items-center">
+249:             <span className="font-bold text-xs text-slate-900">
+250:               Danh Sách Sự Cố ({filteredCases.length})
+251:             </span>
+252:             <span className="text-xs text-slate-500">Xếp theo hạn xử lý</span>
+253:           </div>
+254: 
+255:           <div className="overflow-y-auto flex-1 divide-y divide-slate-100 max-h-[calc(100vh-250px)] custom-scrollbar">
+256:             {filteredCases.map((c) => {
+257:               const isSelected = !isCaseNotFound && c.id === selectedCase?.id;
+258:               const hrs = c.hours_remaining ?? 6;
+259:               const isExpiring = hrs <= 4;
+260: 
+261:               return (
+262:                 <div
+263:                   key={c.id}
+264:                   onClick={() => handleSelectCase(c.id)}
+265:                   className={`p-4 cursor-pointer transition ${
+266:                     isSelected ? 'bg-[#FFF5F0] border-l-4 border-l-[#c23807]' : 'hover:bg-slate-50'
+267:                   }`}
+268:                 >
+269:                   <div className="flex justify-between items-start">
+270:                     <div className="space-y-1">
+271:                       <div className="flex items-center gap-2">
+272:                         <TrackingCode code={c.tracking_code} />
+273:                         <span className="text-xs font-bold text-slate-500">{c.carrier_code}</span>
+274:                       </div>
+275:                       <div className="font-bold text-slate-900 text-xs">
+276:                         {c.carrier_reason || 'Khách không nghe máy lần 1'}
+277:                       </div>
+278:                       <div className="flex items-center gap-2 text-xs text-slate-500">
+279:                         <span>
+280:                           COD:{' '}
+281:                           <Money
+282:                             amount={c.cod_amount}
+283:                             state="pending"
+284:                             className="inline text-xs font-bold"
+285:                           />
+286:                         </span>
+287:                         <span>·</span>
+288:                         <span>{c.recipient_name}</span>
+289:                       </div>
+290:                     </div>
+291: 
+292:                     <div className="text-right space-y-1.5 shrink-0">
+293:                       <span className={isExpiring ? 'badge-risk text-xs' : 'badge-warn text-xs'}>
+294:                         Còn {hrs}h
+295:                       </span>
+296:                       <div className="text-xs text-slate-500 font-medium">
+297:                         {c.assigned_to ? c.assigned_to.split(' ')[0] : 'Chưa nhận'}
+298:                       </div>
+299:                     </div>
+300:                   </div>
+301:                 </div>
+302:               );
+303:             })}
+304:           </div>
+305:         </div>
+306: 
+307:         {/* Right Column (5 cols): Operational Action Drawer */}
+308:         {selectedCase && !isCaseNotFound && (
+309:           <div
+310:             data-testid="selected-exception-drawer"
+311:             data-selected-case-id={selectedCase.id}
+312:             className="lg:col-span-5 modern-card p-5 space-y-5 overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar text-xs"
+313:           >
+314:             {/* Header */}
+315:             <div className="border-b border-slate-100 pb-3 flex justify-between items-start">
+316:               <div>
+317:                 <div className="flex items-center gap-2">
+318:                   <span className="font-mono font-bold text-base text-slate-900">
+319:                     {selectedCase.tracking_code}
+320:                   </span>
+321:                   <AutomationBadge
+322:                     tier={currentTier as any}
+323:                     carrierCode={selectedCase.carrier_code}
+324:                   />
+325:                 </div>
+326:                 <div className="text-slate-500 mt-1">
+327:                   Đơn hàng: <strong>{selectedCase.order_code}</strong> · COD:{' '}
+328:                   <Money amount={selectedCase.cod_amount} state="pending" className="inline" />
+329:                 </div>
+330:               </div>
+331:               <StatusBadge status={selectedCase.status} />
+332:             </div>
 333: 
-334:                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-335:                   <div>
-336:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-337:                       Cân Nặng (g):
-338:                     </label>
-339:                     <input
-340:                       type="number"
-341:                       value={weightGram}
-342:                       onChange={(e) => setWeightGram(Number(e.target.value) || 0)}
-343:                       className="modern-input w-full font-mono font-bold text-xs"
-344:                       min={10}
-345:                       step={50}
-346:                     />
-347:                   </div>
-348:                   <div>
-349:                     <label className="font-bold text-slate-700 block mb-1 text-xs">Dài (cm):</label>
-350:                     <input
-351:                       type="number"
-352:                       value={lengthCm}
-353:                       onChange={(e) => setLengthCm(Number(e.target.value) || 0)}
-354:                       className="modern-input w-full font-mono text-xs"
-355:                       min={1}
-356:                     />
-357:                   </div>
-358:                   <div>
-359:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-360:                       Rộng (cm):
-361:                     </label>
-362:                     <input
-363:                       type="number"
-364:                       value={widthCm}
-365:                       onChange={(e) => setWidthCm(Number(e.target.value) || 0)}
-366:                       className="modern-input w-full font-mono text-xs"
-367:                       min={1}
-368:                     />
-369:                   </div>
-370:                   <div>
-371:                     <label className="font-bold text-slate-700 block mb-1 text-xs">Cao (cm):</label>
-372:                     <input
-373:                       type="number"
-374:                       value={heightCm}
-375:                       onChange={(e) => setHeightCm(Number(e.target.value) || 0)}
-376:                       className="modern-input w-full font-mono text-xs"
-377:                       min={1}
-378:                     />
-379:                   </div>
-380:                 </div>
-381: 
-382:                 {/* Chargeable Weight Indicator */}
-383:                 <div className="flex justify-between items-center p-2.5 bg-[#FFF5F0] rounded-lg border border-[#FDDDD0] text-xs text-slate-800">
-384:                   <span>
-385:                     Cân thực: <strong>{weightGram}g</strong> · Thể tích quy đổi (D×R×C/5000):{' '}
-386:                     <strong>{volumetricWeightGram}g</strong>
-387:                   </span>
-388:                   <span className="font-bold text-[#c23807]">
-389:                     Tính cước: {chargeableWeightGram}g
-390:                   </span>
-391:                 </div>
-392: 
-393:                 <div className="grid grid-cols-2 gap-3">
-394:                   <div>
-395:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-396:                       Tiền Thu Hộ COD (VND):
-397:                     </label>
-398:                     <input
-399:                       type="number"
-400:                       value={codAmount}
-401:                       onChange={(e) => setCodAmount(Number(e.target.value) || 0)}
-402:                       className="modern-input w-full font-mono font-bold text-xs text-slate-900"
-403:                       min={0}
-404:                       step={10000}
-405:                     />
-406:                   </div>
-407:                   <div>
-408:                     <label className="font-bold text-slate-700 block mb-1 text-xs">
-409:                       Khai Giá Hàng Hóa:
-410:                     </label>
-411:                     <input
-412:                       type="number"
-413:                       value={insuranceValue}
-414:                       onChange={(e) => setInsuranceValue(Number(e.target.value) || 0)}
-415:                       className="modern-input w-full font-mono text-xs"
-416:                       min={0}
-417:                       step={50000}
-418:                     />
-419:                   </div>
-420:                 </div>
-421:               </div>
-422: 
-423:               {/* Section 3: Delivery Options */}
-424:               <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50/70 rounded-xl border border-slate-200/80">
-425:                 <div>
-426:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
-427:                     Lưu Ý Xem Hàng:
-428:                   </label>
-429:                   <select
-430:                     value={inspectionNote}
-431:                     onChange={(e: any) => setInspectionNote(e.target.value)}
-432:                     className="modern-input w-full text-xs font-semibold"
-433:                   >
-434:                     <option value="CHO_XEM_HANG">Cho xem hàng không cho thử</option>
-435:                     <option value="CHO_THU_HANG">Cho thử hàng</option>
-436:                     <option value="KHONG_CHO_XEM">Không cho xem hàng</option>
-437:                   </select>
-438:                 </div>
-439: 
-440:                 <div>
-441:                   <label className="font-bold text-slate-700 block mb-1 text-xs">
-442:                     Người Trả Cước Phí:
-443:                   </label>
-444:                   <select
-445:                     value={payer}
-446:                     onChange={(e: any) => setPayer(e.target.value)}
-447:                     className="modern-input w-full text-xs font-semibold"
-448:                   >
-449:                     <option value="RECEIVER">Người nhận trả cước</option>
-450:                     <option value="SENDER">Người gửi trả cước (Shop)</option>
-451:                   </select>
-452:                 </div>
-453:               </div>
-454:             </div>
-455: 
-456:             {/* RIGHT COLUMN (5 Cols): REALTIME MULTI-CARRIER RATE COMPARISON */}
-457:             <div className="lg:col-span-5 space-y-4 flex flex-col justify-between">
-458:               <div className="space-y-3">
-459:                 <div className="flex justify-between items-center border-b border-slate-100 pb-2">
-460:                   <div className="flex items-center gap-1.5 font-bold text-slate-900 text-xs">
-461:                     <Truck className="w-4 h-4 text-[#c23807]" />
-462:                     <span>So Sánh Cước Phí Theo Biểu Giá Hợp Đồng:</span>
-463:                   </div>
-464:                 </div>
-465: 
-466:                 <div className="space-y-2.5">
-467:                   {carriersComparison.map((carrier) => {
-468:                     const isSelected = selectedCarrier === carrier.id;
-469: 
-470:                     return (
-471:                       <div
-472:                         key={carrier.id}
-473:                         onClick={() => setSelectedCarrier(carrier.id)}
-474:                         className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col justify-between space-y-2.5 ${
-475:                           isSelected
-476:                             ? 'bg-[#FFF5F0] border-[#c23807] ring-2 ring-[#c23807]/20 shadow-xs'
-477:                             : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-478:                         }`}
-479:                       >
-480:                         <div className="flex justify-between items-start">
-481:                           <div className="flex items-center gap-2.5">
-482:                             <div
-483:                               className={`w-8 h-8 rounded-lg ${carrier.logoBg} flex items-center justify-center font-black text-xs shrink-0 border border-slate-200`}
-484:                             >
-485:                               {carrier.id}
-486:                             </div>
-487:                             <div>
-488:                               <div className="font-bold text-slate-900 text-xs leading-tight">
-489:                                 {carrier.name}
-490:                               </div>
-491:                               <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
-492:                                 <span className="flex items-center gap-1">
-493:                                   <Clock className="w-3 h-3 text-slate-400" />
-494:                                   {carrier.deliveryTime}
-495:                                 </span>
-496:                               </div>
-497:                             </div>
-498:                           </div>
-499: 
-500:                           <div className="text-right">
-501:                             <div className="font-mono text-base font-black text-slate-900">
-502:                               <Money amount={carrier.totalFee} state="confirmed" />
-503:                             </div>
-504:                             <span
-505:                               className={`text-[11px] font-bold px-2 py-0.5 rounded border ${carrier.badgeColor}`}
-506:                             >
-507:                               {carrier.badge}
-508:                             </span>
-509:                           </div>
-510:                         </div>
-511: 
-512:                         {/* Fee breakdown on selected */}
-513:                         {isSelected && (
-514:                           <div className="pt-2 border-t border-[#FDDDD0] flex justify-between items-center text-xs text-slate-700 font-medium">
-515:                             <span>
-516:                               Cước gốc:{' '}
-517:                               <Money
-518:                                 amount={carrier.baseFee}
-519:                                 state="confirmed"
-520:                                 className="inline text-xs"
-521:                               />
-522:                             </span>
-523:                             <span>
-524:                               Phụ phí:{' '}
-525:                               <Money
-526:                                 amount={carrier.addWeightFee}
-527:                                 state="confirmed"
-528:                                 className="inline text-xs"
-529:                               />
-530:                             </span>
-531:                             <AutomationBadge tier={carrier.tier} />
-532:                           </div>
-533:                         )}
-534:                       </div>
-535:                     );
-536:                   })}
-537:                 </div>
-538:               </div>
-539: 
-540:               {/* Selected Summary Card */}
-541:               <div className="p-5 bg-slate-900 text-white rounded-2xl space-y-4 shadow-lg">
-542:                 <div className="flex justify-between items-center border-b border-slate-800 pb-2 text-xs">
-543:                   <span className="text-slate-400">Hãng vận chuyển:</span>
-544:                   <span className="font-bold text-white flex items-center gap-1.5">
-545:                     <Check className="w-3.5 h-3.5 text-emerald-400" />
-546:                     {activeCarrierInfo.name}
-547:                   </span>
-548:                 </div>
-549: 
-550:                 <div className="flex justify-between items-center">
-551:                   <div>
-552:                     <span className="text-xs text-slate-400 uppercase tracking-wider block">
-553:                       Cước Tạm Tính:
-554:                     </span>
-555:                     <div className="font-mono text-2xl font-black text-emerald-400">
-556:                       <Money
-557:                         amount={activeCarrierInfo.totalFee}
-558:                         state="confirmed"
-559:                         className="text-emerald-400 text-2xl"
-560:                       />
-561:                     </div>
-562:                   </div>
-563: 
-564:                   <div className="text-right">
-565:                     <span className="text-xs text-slate-400 uppercase tracking-wider block">
-566:                       Tiền Thu Hộ COD:
-567:                     </span>
-568:                     <div className="font-mono text-lg font-bold text-white">
-569:                       <Money amount={codAmount} state="confirmed" className="text-white text-lg" />
-570:                     </div>
-571:                   </div>
-572:                 </div>
-573: 
-574:                 <button
-575:                   type="submit"
-576:                   form="create-order-form"
-577:                   disabled={loading}
-578:                   className="btn-primary w-full h-11 justify-center text-xs font-bold shadow-md"
-579:                 >
-580:                   {loading ? (
-581:                     <span className="flex items-center gap-2">
-582:                       <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-583:                       <span>Đang tạo vận đơn & đẩy sang hãng...</span>
-584:                     </span>
-585:                   ) : (
-586:                     <span className="flex items-center gap-1.5">
-587:                       <span>Xác Nhận Tạo Đơn & Đẩy Sang {selectedCarrier}</span>
-588:                       <ArrowRight className="w-4 h-4" />
-589:                     </span>
-590:                   )}
-591:                 </button>
-592:               </div>
-593:             </div>
-594:           </form>
-595:         </div>
-596:       </div>
-597:     </div>
-598:   );
-599: };
+334:             {/* Customer Details */}
+335:             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+336:               <div className="font-bold text-slate-900 text-xs">
+337:                 Khách hàng: {selectedCase.recipient_name}
+338:               </div>
+339:               <div className="flex gap-2">
+340:                 <input
+341:                   type="tel"
+342:                   value={newPhone}
+343:                   onChange={(e) => setNewPhone(e.target.value)}
+344:                   className="modern-input flex-1 font-mono text-xs"
+345:                   placeholder="Nhập SĐT mới nếu khách đổi..."
+346:                 />
+347:                 <button
+348:                   type="button"
+349:                   onClick={() => alert(`✓ Đã lưu số điện thoại mới: ${newPhone}`)}
+350:                   className="btn-secondary text-xs"
+351:                 >
+352:                   Lưu SĐT
+353:                 </button>
+354:               </div>
+355:             </div>
+356: 
+357:             {/* Reattempt Action Form */}
+358:             <div className="space-y-3 p-4 rounded-xl border border-[#FDDDD0] bg-[#FFF5F0]/50">
+359:               <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+360:                 <Send className="w-4 h-4 text-[#c23807]" />
+361:                 Gửi Yêu Cầu Giao Lại (
+362:                 {currentTier === 'L2' ? 'Tự động gọi qua API' : 'Tạo hồ sơ dán cổng'}):
+363:               </span>
+364: 
+365:               <div className="grid grid-cols-2 gap-2">
+366:                 <div>
+367:                   <label className="text-xs font-semibold text-slate-600 block mb-1">
+368:                     Ngày hẹn giao:
+369:                   </label>
+370:                   <input
+371:                     type="date"
+372:                     value={scheduledDate}
+373:                     onChange={(e) => setScheduledDate(e.target.value)}
+374:                     className="modern-input text-xs"
+375:                   />
+376:                 </div>
+377:                 <div>
+378:                   <label className="text-xs font-semibold text-slate-600 block mb-1">
+379:                     Ghi chú bưu tá:
+380:                   </label>
+381:                   <input
+382:                     type="text"
+383:                     value={reattemptNote}
+384:                     onChange={(e) => setReattemptNote(e.target.value)}
+385:                     className="modern-input text-xs"
+386:                   />
+387:                 </div>
+388:               </div>
+389: 
+390:               <button
+391:                 type="button"
+392:                 onClick={handleDispatchReattempt}
+393:                 className="btn-primary w-full justify-center text-xs py-2 mt-1"
+394:               >
+395:                 {selectedCase.carrier_code === 'GHN' && carrierGhnTier === 'L2'
+396:                   ? 'Gửi Yêu Cầu Giao Lại Qua API (GHN)'
+397:                   : 'Tạo Hồ Sơ Hỗ Trợ Gửi Cổng Hãng (GHTK)'}
+398:               </button>
+399:             </div>
+400: 
+401:             {/* Contact Call Log Form */}
+402:             <form onSubmit={handleLogContact} className="space-y-2">
+403:               <label className="font-bold text-slate-900 block text-xs">
+404:                 Ghi Nhật Ký Cuộc Gọi CSKH:
+405:               </label>
+406:               <textarea
+407:                 value={callNote}
+408:                 onChange={(e) => setCallNote(e.target.value)}
+409:                 placeholder="Khách báo shipper chưa gọi, hẹn lại giao buổi chiều..."
+410:                 className="modern-input text-xs h-18 resize-none"
+411:               />
+412:               <button type="submit" className="btn-secondary text-xs w-full justify-center">
+413:                 Lưu Nhật Ký Cuộc Gọi
+414:               </button>
+415:             </form>
+416: 
+417:             {/* Expandable Technical Details (For Admins) */}
+418:             <div className="pt-2 border-t border-slate-100">
+419:               <button
+420:                 type="button"
+421:                 onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
+422:                 className="flex items-center justify-between w-full text-xs font-bold text-slate-500 hover:text-slate-800 py-1"
+423:               >
+424:                 <span>Chi Tiết Kỹ Thuật (Dành cho Quản Trị)</span>
+425:                 {showTechnicalDetails ? (
+426:                   <ChevronUp className="w-4 h-4" />
+427:                 ) : (
+428:                   <ChevronDown className="w-4 h-4" />
+429:                 )}
+430:               </button>
+431: 
+432:               {showTechnicalDetails && (
+433:                 <div className="p-3 bg-slate-100 rounded-lg font-mono text-[11px] text-slate-700 space-y-1 mt-2">
+434:                   <div>case_id: {selectedCase.id}</div>
+435:                   <div>carrier_code: {selectedCase.carrier_code}</div>
+436:                   <div>version: {selectedCase.version || 1}</div>
+437:                   <div>priority_score: {selectedCase.priority_score}</div>
+438:                   <div>occurred_at: {selectedCase.occurred_at}</div>
+439:                 </div>
+440:               )}
+441:             </div>
+442:           </div>
+443:         )}
+444: 
+445:         {isCaseNotFound && (
+446:           <div
+447:             data-testid="selected-exception-drawer-not-found"
+448:             className="lg:col-span-5 modern-card p-6 flex flex-col items-center justify-center text-center space-y-3 text-slate-500 min-h-[300px]"
+449:           >
+450:             <AlertTriangle className="w-10 h-10 text-amber-500" />
+451:             <div className="font-bold text-slate-800">Không tìm thấy ca sự cố</div>
+452:             <p className="text-xs max-w-xs text-slate-600">
+453:               Mã sự cố <span className="font-mono font-semibold">{propSelectedCaseId}</span> không
+454:               có trong hệ thống hoặc đã được xử lý xong.
+455:             </p>
+456:             <button
+457:               type="button"
+458:               onClick={handleRecoverException}
+459:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+460:             >
+461:               Xem sự cố ưu tiên
+462:             </button>
+463:           </div>
+464:         )}
+465:       </div>
+466:     </div>
+467:   );
+468: };
 </file>
 
 <file path="apps/web/src/components/GlobalSearchModal.tsx">
@@ -70673,307 +72923,1224 @@ This section contains the contents of the repository's files.
 783: };
 </file>
 
-<file path="apps/web/src/components/ReturnScanTab.tsx">
+<file path="apps/web/src/components/ReconciliationTab.tsx">
   1: 'use client';
   2: 
-  3: import React, { useState, useRef } from 'react';
-  4: import { TrackingCode, StatusBadge } from './ui/OperationalComponents';
-  5: import {
-  6:   RotateCcw,
-  7:   QrCode,
-  8:   Wifi,
-  9:   WifiOff,
- 10:   Camera,
- 11:   CheckCircle2,
- 12:   AlertTriangle,
- 13:   Upload,
- 14:   RefreshCw,
- 15:   Package,
- 16: } from 'lucide-react';
- 17: 
- 18: export const ReturnScanTab: React.FC = () => {
- 19:   const [isOfflineMode, setIsOfflineMode] = useState(false);
- 20:   const [barcodeInput, setBarcodeInput] = useState('');
- 21:   const [conditionInput, setConditionInput] = useState<'intact' | 'damaged' | 'missing_item'>(
- 22:     'intact'
- 23:   );
- 24:   const [hasPhoto, setHasPhoto] = useState(false);
- 25:   const [toastMessage, setToastMessage] = useState<{
- 26:     type: 'ok' | 'risk' | 'warn';
- 27:     msg: string;
- 28:   } | null>(null);
- 29: 
- 30:   const [offlineQueue, setOfflineQueue] = useState<any[]>([]);
- 31:   const [history, setHistory] = useState([
- 32:     {
- 33:       id: 'rec_1',
- 34:       tracking_code: 'GHN88290111',
- 35:       warehouse: 'Kho Tân Bình, HCM',
- 36:       condition: 'intact',
- 37:       scanned_at: '17/08/2026 08:15',
- 38:       staff: 'Phạm Văn Kho',
- 39:     },
- 40:     {
- 41:       id: 'rec_2',
- 42:       tracking_code: 'GHTK77129002',
- 43:       warehouse: 'Kho Tân Bình, HCM',
- 44:       condition: 'damaged',
- 45:       scanned_at: '17/08/2026 08:30',
- 46:       staff: 'Phạm Văn Kho',
- 47:       evidence_url: 'https://storage.shipde.net/evidence/img_02.jpg',
- 48:     },
- 49:   ]);
- 50: 
- 51:   const inputRef = useRef<HTMLInputElement>(null);
+  3: import React, { useState } from 'react';
+  4: import { UIDiscrepancyItem, UIStatementBatch } from './types';
+  5: import { MASTER_DISCREPANCIES, MASTER_STATEMENTS } from '@/services/unifiedDataStore';
+  6: import {
+  7:   TrackingCode,
+  8:   Money,
+  9:   StatusBadge,
+ 10:   AutomationBadge,
+ 11:   ConfirmDialog,
+ 12: } from './ui/OperationalComponents';
+ 13: import { DiscrepancyType, DiscrepancyResolution } from '@/types/domain';
+ 14: import {
+ 15:   DollarSign,
+ 16:   Upload,
+ 17:   CheckCircle2,
+ 18:   AlertTriangle,
+ 19:   FileSpreadsheet,
+ 20:   Lock,
+ 21:   ChevronDown,
+ 22:   ChevronUp,
+ 23:   ShieldAlert,
+ 24:   ArrowRight,
+ 25:   Filter,
+ 26:   Check,
+ 27: } from 'lucide-react';
+ 28: 
+ 29: interface Props {
+ 30:   discrepancies?: UIDiscrepancyItem[];
+ 31:   onUpdateDiscrepancy?: (updated: UIDiscrepancyItem) => void;
+ 32:   role?: string;
+ 33:   selectedBatchId?: string | null;
+ 34:   selectedDiscrepancyId?: string | null;
+ 35:   statements?: UIStatementBatch[];
+ 36:   onClearBatchSelection?: () => void;
+ 37:   onClearDiscrepancySelection?: () => void;
+ 38: }
+ 39: 
+ 40: export const ReconciliationTab: React.FC<Props> = ({
+ 41:   discrepancies = MASTER_DISCREPANCIES,
+ 42:   onUpdateDiscrepancy,
+ 43:   role = 'OWNER',
+ 44:   selectedBatchId,
+ 45:   selectedDiscrepancyId,
+ 46:   statements,
+ 47:   onClearBatchSelection,
+ 48:   onClearDiscrepancySelection,
+ 49: }) => {
+ 50:   const [prevDiscrepancies, setPrevDiscrepancies] = useState(discrepancies);
+ 51:   const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
  52: 
- 53:   const handleScanSubmit = (e: React.FormEvent) => {
- 54:     e.preventDefault();
- 55:     const code = barcodeInput
- 56:       .trim()
- 57:       .toUpperCase()
- 58:       .replace(/[^A-Z0-9]/g, '');
- 59:     if (!code) return;
- 60: 
- 61:     // Kiện hàng hư hỏng bắt buộc chụp ảnh làm chứng cứ
- 62:     if (conditionInput !== 'intact' && !hasPhoto) {
- 63:       setToastMessage({
- 64:         type: 'risk',
- 65:         msg: 'Kiện hàng hư hỏng hoặc thiếu hàng bắt buộc phải chụp ảnh làm bằng chứng khiếu nại.',
- 66:       });
- 67:       return;
- 68:     }
- 69: 
- 70:     const newItem = {
- 71:       id: `scan_${Date.now()}`,
- 72:       tracking_code: code,
- 73:       warehouse: 'Kho Tân Bình, HCM',
- 74:       condition: conditionInput,
- 75:       scanned_at:
- 76:         new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
- 77:       staff: 'Phạm Văn Kho (Thủ kho)',
- 78:       evidence_url: hasPhoto ? 'https://storage.shipde.net/evidence/photo_proof.jpg' : undefined,
- 79:     };
- 80: 
- 81:     if (isOfflineMode) {
- 82:       setOfflineQueue((prev) => [newItem, ...prev]);
- 83:       setToastMessage({
- 84:         type: 'warn',
- 85:         msg: `[Chế độ Ngoại tuyến] Đã lưu mã ${code} vào hàng đợi cục bộ (${offlineQueue.length + 1} kiện chờ đồng bộ).`,
- 86:       });
- 87:     } else {
- 88:       setHistory((prev) => [newItem, ...prev]);
- 89:       setToastMessage({
- 90:         type: 'ok',
- 91:         msg: `Đã xác nhận nhận kiện hoàn ${code} vào kho Tân Bình thành công.`,
- 92:       });
- 93:     }
+ 53:   if (prevDiscrepancies !== discrepancies) {
+ 54:     setPrevDiscrepancies(discrepancies);
+ 55:     setItems(discrepancies);
+ 56:   }
+ 57: 
+ 58:   const [selectedDiscrepancyType, setSelectedDiscrepancyType] = useState<string>('ALL');
+ 59:   const [manualResolvingItem, setManualResolvingItem] = useState<UIDiscrepancyItem | null>(null);
+ 60:   const [dismissedDiscrepancyId, setDismissedDiscrepancyId] = useState<string | null>(null);
+ 61:   const [prevSelectedDiscrepancyId, setPrevSelectedDiscrepancyId] = useState(selectedDiscrepancyId);
+ 62: 
+ 63:   if (prevSelectedDiscrepancyId !== selectedDiscrepancyId) {
+ 64:     setPrevSelectedDiscrepancyId(selectedDiscrepancyId);
+ 65:     setDismissedDiscrepancyId(null);
+ 66:     setManualResolvingItem(null);
+ 67:   }
+ 68: 
+ 69:   const [dismissedBatchId, setDismissedBatchId] = useState<string | null>(null);
+ 70:   const [prevSelectedBatchId, setPrevSelectedBatchId] = useState(selectedBatchId);
+ 71: 
+ 72:   if (prevSelectedBatchId !== selectedBatchId) {
+ 73:     setPrevSelectedBatchId(selectedBatchId);
+ 74:     setDismissedBatchId(null);
+ 75:   }
+ 76: 
+ 77:   const effectiveBatchId =
+ 78:     selectedBatchId && selectedBatchId !== dismissedBatchId ? selectedBatchId : null;
+ 79:   const effectiveDiscrepancyId =
+ 80:     selectedDiscrepancyId && selectedDiscrepancyId !== dismissedDiscrepancyId
+ 81:       ? selectedDiscrepancyId
+ 82:       : null;
+ 83: 
+ 84:   const resolvingItem =
+ 85:     manualResolvingItem ??
+ 86:     (effectiveDiscrepancyId ? items.find((d) => d.id === effectiveDiscrepancyId) || null : null);
+ 87: 
+ 88:   const setResolvingItem = (item: UIDiscrepancyItem | null) => {
+ 89:     setManualResolvingItem(item);
+ 90:     if (!item && effectiveDiscrepancyId) {
+ 91:       setDismissedDiscrepancyId(effectiveDiscrepancyId);
+ 92:     }
+ 93:   };
  94: 
- 95:     setBarcodeInput('');
- 96:     setHasPhoto(false);
- 97:     setConditionInput('intact');
- 98:     if (inputRef.current) inputRef.current.focus();
- 99:   };
+ 95:   const [resolvingAction, setResolvingAction] = useState<DiscrepancyResolution>(
+ 96:     DiscrepancyResolution.DISPUTE
+ 97:   );
+ 98:   const [isPeriodClosed, setIsPeriodClosed] = useState<boolean>(false);
+ 99:   const [toastMessage, setToastMessage] = useState<string | null>(null);
 100: 
-101:   const handleSyncOffline = () => {
-102:     if (offlineQueue.length === 0) return;
-103:     setHistory((prev) => [...offlineQueue, ...prev]);
-104:     setToastMessage({
-105:       type: 'ok',
-106:       msg: `Đã đồng bộ ${offlineQueue.length} kiện hoàn từ máy quét lên máy chủ thành công.`,
-107:     });
-108:     setOfflineQueue([]);
-109:   };
+101:   const availableStatements = statements && statements.length > 0 ? statements : MASTER_STATEMENTS;
+102: 
+103:   const isBatchActivated = Boolean(effectiveBatchId);
+104:   const matchedBatch = isBatchActivated
+105:     ? availableStatements.find((s) => s.id === effectiveBatchId)
+106:     : null;
+107:   const isBatchNotFound = isBatchActivated && !matchedBatch;
+108:   const activeStatement = matchedBatch || availableStatements[0];
+109:   const statementSummary = activeStatement;
 110: 
-111:   return (
-112:     <div className="w-full max-w-4xl mx-auto space-y-6">
-113:       {/* Toast */}
-114:       {toastMessage && (
-115:         <div
-116:           className={`p-4 rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg animate-in fade-in ${
-117:             toastMessage.type === 'ok'
-118:               ? 'bg-slate-900 text-white'
-119:               : toastMessage.type === 'risk'
-120:                 ? 'bg-rose-900 text-white'
-121:                 : 'bg-amber-900 text-white'
-122:           }`}
-123:         >
-124:           <div className="flex items-center gap-2">
-125:             {toastMessage.type === 'ok' ? (
-126:               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-127:             ) : (
-128:               <AlertTriangle className="w-4 h-4 text-amber-400" />
-129:             )}
-130:             <span>{toastMessage.msg}</span>
-131:           </div>
-132:           <button
-133:             type="button"
-134:             onClick={() => setToastMessage(null)}
-135:             className="font-bold text-slate-400 hover:text-white"
-136:           >
-137:             ✕
-138:           </button>
-139:         </div>
-140:       )}
-141: 
-142:       {/* Main Scanner Box */}
-143:       <div className="modern-card p-6 md:p-8 space-y-6">
-144:         <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-145:           <div>
-146:             <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-147:               <RotateCcw className="w-5 h-5 text-[#c23807]" />
-148:               <span>Tiếp Nhận & Quét Mã Kiện Hàng Hoàn</span>
-149:             </h1>
-150:             <p className="text-xs text-slate-500 mt-0.5">
-151:               Dành cho Thủ kho sử dụng máy quét mã vạch chuyên dụng hoặc camera điện thoại.
-152:             </p>
-153:           </div>
-154: 
-155:           {/* Offline Toggle */}
-156:           <button
-157:             type="button"
-158:             onClick={() => setIsOfflineMode(!isOfflineMode)}
-159:             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-160:               isOfflineMode
-161:                 ? 'bg-amber-50 text-amber-800 border border-amber-300'
-162:                 : 'bg-emerald-50 text-emerald-800 border border-emerald-300'
-163:             }`}
-164:           >
-165:             {isOfflineMode ? <WifiOff className="w-3.5 h-3.5" /> : <Wifi className="w-3.5 h-3.5" />}
-166:             <span>{isOfflineMode ? 'Ngoại Tuyến (Offline)' : 'Trực Tuyến'}</span>
-167:           </button>
-168:         </div>
-169: 
-170:         {/* Scan Input Form */}
-171:         <form onSubmit={handleScanSubmit} className="space-y-4">
-172:           <div>
-173:             <label className="text-xs font-bold text-slate-700 block mb-1">
-174:               Quét Hoặc Nhập Mã Vận Đơn:
-175:             </label>
-176:             <div className="relative">
-177:               <input
-178:                 ref={inputRef}
-179:                 type="text"
-180:                 value={barcodeInput}
-181:                 onChange={(e) => setBarcodeInput(e.target.value.toUpperCase())}
-182:                 placeholder="Quét mã vạch (GHN8829..., GHTK7712...)"
-183:                 className="modern-input pl-10 text-base font-mono font-bold tracking-wider"
-184:                 autoFocus
-185:               />
-186:               <QrCode className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-187:             </div>
-188:           </div>
-189: 
-190:           {/* Package Condition Selector */}
-191:           <div>
-192:             <label className="text-xs font-bold text-slate-700 block mb-1">
-193:               Tình Trạng Kiện Hàng Khi Nhận:
-194:             </label>
-195:             <div className="grid grid-cols-3 gap-3">
-196:               {[
-197:                 { id: 'intact', label: 'Nguyên Vẹn', desc: 'Hộp nguyên seal, không móp rách' },
-198:                 { id: 'damaged', label: 'Hư Hỏng / Rách', desc: 'Bể vỡ, ướt hoặc rách hộp' },
-199:                 { id: 'missing_item', label: 'Thiếu Hàng', desc: 'Bị rạch bưu phẩm mất đồ' },
-200:               ].map((cond) => (
-201:                 <button
-202:                   key={cond.id}
-203:                   type="button"
-204:                   onClick={() => setConditionInput(cond.id as any)}
-205:                   className={`p-3 rounded-xl text-left border transition cursor-pointer ${
-206:                     conditionInput === cond.id
-207:                       ? 'bg-[#FFF5F0] border-[#c23807] text-[#c23807]'
-208:                       : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-209:                   }`}
-210:                 >
-211:                   <div className="font-bold text-xs">{cond.label}</div>
-212:                   <div className="text-[11px] text-slate-500 mt-0.5">{cond.desc}</div>
-213:                 </button>
-214:               ))}
+111:   const isDiscrepancyActivated = Boolean(effectiveDiscrepancyId);
+112:   const matchedDiscrepancy = isDiscrepancyActivated
+113:     ? items.find((d) => d.id === effectiveDiscrepancyId)
+114:     : null;
+115:   const isDiscrepancyNotFound = isDiscrepancyActivated && !matchedDiscrepancy;
+116: 
+117:   const handleRecoverBatch = () => {
+118:     if (selectedBatchId) setDismissedBatchId(selectedBatchId);
+119:     onClearBatchSelection?.();
+120:   };
+121: 
+122:   const handleRecoverDiscrepancy = () => {
+123:     if (selectedDiscrepancyId) setDismissedDiscrepancyId(selectedDiscrepancyId);
+124:     setSelectedDiscrepancyType('ALL');
+125:     onClearDiscrepancySelection?.();
+126:   };
+127: 
+128:   const openDiscrepancies = items.filter((d) => String(d.status).toUpperCase() === 'OPEN');
+129:   const openCount = openDiscrepancies.length;
+130:   const totalOpenAmount = openDiscrepancies.reduce((sum, d) => sum + d.discrepancy_amount, 0);
+131: 
+132:   const filteredDiscrepancies = items.filter((d) => {
+133:     if (selectedDiscrepancyType === 'ALL') return true;
+134:     return String(d.type).startsWith(selectedDiscrepancyType);
+135:   });
+136: 
+137:   const handleResolveAction = (item: UIDiscrepancyItem, action: DiscrepancyResolution) => {
+138:     // Maker-Checker Check
+139:     if (item.created_by_user === 'usr_02' && role === 'OPS_CSKH') {
+140:       alert(
+141:         '[Quy tắc Tách quyền tài chính]: Bạn là nhân viên CSKH đã tạo yêu cầu xử lý đơn này, nên không được quyền tự duyệt chênh lệch. Vui lòng chuyển cho Kế toán viên độc lập duyệt.'
+142:       );
+143:       return;
+144:     }
+145: 
+146:     setResolvingItem(item);
+147:     setResolvingAction(action);
+148:   };
+149: 
+150:   const handleConfirmResolution = async (reason: string) => {
+151:     if (!resolvingItem) return;
+152: 
+153:     const updated: UIDiscrepancyItem = {
+154:       ...resolvingItem,
+155:       status: resolvingAction === DiscrepancyResolution.CONFIRMED ? 'CONFIRMED' : 'RESOLVED',
+156:       reason: reason,
+157:       version: (resolvingItem.version || 1) + 1,
+158:     };
+159: 
+160:     setItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+161:     if (onUpdateDiscrepancy) onUpdateDiscrepancy(updated);
+162: 
+163:     setToastMessage(`✓ Đã xử lý chênh lệch cho mã ${resolvingItem.tracking_code} thành công.`);
+164:     setResolvingItem(null);
+165:     setTimeout(() => setToastMessage(null), 4000);
+166:   };
+167: 
+168:   return (
+169:     <div className="w-full space-y-6">
+170:       {toastMessage && (
+171:         <div className="p-3.5 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
+172:           <div className="flex items-center gap-2">
+173:             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+174:             <span>{toastMessage}</span>
+175:           </div>
+176:           <button
+177:             type="button"
+178:             onClick={() => setToastMessage(null)}
+179:             className="font-bold text-slate-400 hover:text-white"
+180:           >
+181:             ✕
+182:           </button>
+183:         </div>
+184:       )}
+185: 
+186:       {/* Activated Batch Not Found Alert */}
+187:       {isBatchNotFound && (
+188:         <div
+189:           data-testid="activated-batch-not-found"
+190:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+191:         >
+192:           <div className="flex items-center gap-2.5">
+193:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+194:             <div>
+195:               <div className="font-bold text-xs sm:text-sm">
+196:                 Không tìm thấy bảng kê đối soát{' '}
+197:                 <span className="font-mono underline">{selectedBatchId}</span>
+198:               </div>
+199:               <div className="text-xs text-amber-700">
+200:                 Bảng kê không tồn tại trong danh sách kỳ đối soát hoặc đã bị xóa.
+201:               </div>
+202:             </div>
+203:           </div>
+204:           <div className="flex items-center gap-2">
+205:             <button
+206:               type="button"
+207:               onClick={handleRecoverBatch}
+208:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+209:             >
+210:               Quay lại kỳ gần nhất
+211:             </button>
+212:           </div>
+213:         </div>
+214:       )}
+215: 
+216:       {/* Statement Summary Card */}
+217:       {!isBatchNotFound && (
+218:         <div
+219:           data-selected-batch={effectiveBatchId && matchedBatch ? 'true' : undefined}
+220:           data-testid={
+221:             effectiveBatchId && matchedBatch
+222:               ? `selected-batch-${effectiveBatchId}`
+223:               : `batch-${statementSummary.id}`
+224:           }
+225:           className={`modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-white border-slate-800 ${
+226:             effectiveBatchId && matchedBatch ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
+227:           }`}
+228:         >
+229:           <div className="space-y-1">
+230:             <div className="flex items-center gap-2">
+231:               <h1 className="text-lg font-bold text-white flex items-center gap-2">
+232:                 <DollarSign className="w-5 h-5 text-[#c23807]" />
+233:                 <span>Đối Soát COD, Cước Vận Chuyển & Phụ Phí</span>
+234:               </h1>
+235:               <span className="badge-ok text-xs">
+236:                 {statementSummary.status === 'OPEN' ? 'Kỳ Mở' : 'Kỳ Đã Khóa'}
+237:               </span>
+238:               {effectiveBatchId && matchedBatch && (
+239:                 <span className="text-xs bg-[#c23807] px-2 py-0.5 rounded font-mono font-bold">
+240:                   {matchedBatch.id}
+241:                 </span>
+242:               )}
+243:             </div>
+244:             <p className="text-xs text-slate-300">
+245:               {statementSummary.period} · {statementSummary.carrier} · Tổng{' '}
+246:               {statementSummary.total_rows} dòng sao kê
+247:             </p>
+248:           </div>
+249: 
+250:           <div className="flex items-center gap-3">
+251:             <div className="text-right">
+252:               <div className="text-xs text-slate-400">Tổng COD Đối Soát</div>
+253:               <div className="text-xl font-bold font-mono text-emerald-400">
+254:                 <Money
+255:                   amount={statementSummary.total_cod}
+256:                   state="confirmed"
+257:                   className="text-emerald-400 text-xl"
+258:                 />
+259:               </div>
+260:             </div>
+261: 
+262:             <button
+263:               type="button"
+264:               onClick={() => {
+265:                 if (openCount > 0) {
+266:                   alert(
+267:                     `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
+268:                   );
+269:                   return;
+270:                 }
+271:                 setIsPeriodClosed(true);
+272:                 setToastMessage(
+273:                   '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
+274:                 );
+275:               }}
+276:               disabled={isPeriodClosed}
+277:               className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
+278:             >
+279:               <Lock className="w-4 h-4" />
+280:               <span>{isPeriodClosed ? 'Kỳ Đã Khóa' : 'Chốt Kỳ Đối Soát'}</span>
+281:             </button>
+282:           </div>
+283:         </div>
+284:       )}
+285: 
+286:       {/* Discrepancy Classification Filter Bar */}
+287:       <div className="modern-card p-4 space-y-3">
+288:         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+289:           <div>
+290:             <span className="font-bold text-slate-900 text-sm">
+291:               Danh Sách Khoản Lệch Cần Xử Lý ({openCount} khoản mở)
+292:             </span>
+293:             <span className="text-xs text-slate-500 ml-2">
+294:               Tổng giá trị chênh lệch:{' '}
+295:               <strong className="text-rose-700 font-mono">
+296:                 <Money amount={totalOpenAmount} state="confirmed" className="inline" />
+297:               </strong>
+298:             </span>
+299:           </div>
+300: 
+301:           <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar">
+302:             {[
+303:               { id: 'ALL', label: 'Tất Cả' },
+304:               { id: 'D1', label: 'Lệch Cân' },
+305:               { id: 'D2', label: 'Lệch Cước' },
+306:               { id: 'D4', label: 'Trừ Trùng' },
+307:               { id: 'D5', label: 'Lệch COD' },
+308:               { id: 'D6', label: 'COD Quá Hạn' },
+309:               { id: 'D7', label: 'Thiếu Dòng' },
+310:             ].map((f) => (
+311:               <button
+312:                 key={f.id}
+313:                 type="button"
+314:                 onClick={() => setSelectedDiscrepancyType(f.id)}
+315:                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+316:                   selectedDiscrepancyType === f.id
+317:                     ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
+318:                     : 'text-slate-600 hover:bg-slate-100'
+319:                 }`}
+320:               >
+321:                 {f.label}
+322:               </button>
+323:             ))}
+324:           </div>
+325:         </div>
+326:       </div>
+327: 
+328:       {/* Activated Discrepancy Not Found Alert */}
+329:       {isDiscrepancyNotFound && (
+330:         <div
+331:           data-testid="activated-discrepancy-not-found"
+332:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+333:         >
+334:           <div className="flex items-center gap-2.5">
+335:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+336:             <div>
+337:               <div className="font-bold text-xs sm:text-sm">
+338:                 Không tìm thấy khoản sai lệch{' '}
+339:                 <span className="font-mono underline">{selectedDiscrepancyId}</span>
+340:               </div>
+341:               <div className="text-xs text-amber-700">
+342:                 Khoản sai lệch không tồn tại trong danh sách đối soát hoặc đã được xử lý xong.
+343:               </div>
+344:             </div>
+345:           </div>
+346:           <div className="flex items-center gap-2">
+347:             <button
+348:               type="button"
+349:               onClick={handleRecoverDiscrepancy}
+350:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+351:             >
+352:               Quay lại danh sách sai lệch
+353:             </button>
+354:           </div>
+355:         </div>
+356:       )}
+357: 
+358:       {/* Discrepancies Table */}
+359:       <div className="modern-card overflow-hidden">
+360:         <div className="overflow-x-auto">
+361:           <table className="modern-table">
+362:             <thead>
+363:               <tr>
+364:                 <th>Mã Vận Đơn / Mã Đơn</th>
+365:                 <th>Hãng</th>
+366:                 <th>Phân Loại Sai Lệch</th>
+367:                 <th>Số Liệu Khai Báo vs Sao Kê</th>
+368:                 <th className="text-right">Số Tiền Lệch</th>
+369:                 <th>Lý Do Chi Tiết</th>
+370:                 <th className="text-right">Thao Tác Duyệt</th>
+371:               </tr>
+372:             </thead>
+373:             <tbody>
+374:               {filteredDiscrepancies.map((disc) => {
+375:                 const isResolved = disc.status !== 'OPEN';
+376:                 const isSelected = Boolean(
+377:                   matchedDiscrepancy && disc.id === effectiveDiscrepancyId
+378:                 );
+379: 
+380:                 return (
+381:                   <tr
+382:                     key={disc.id}
+383:                     data-selected={isSelected ? 'true' : undefined}
+384:                     data-testid={
+385:                       isSelected ? `selected-discrepancy-${effectiveDiscrepancyId}` : undefined
+386:                     }
+387:                     className={
+388:                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+389:                     }
+390:                   >
+391:                     <td>
+392:                       <TrackingCode code={disc.tracking_code} />
+393:                       <div className="text-xs text-slate-500 font-mono mt-0.5">
+394:                         {disc.order_code}
+395:                       </div>
+396:                     </td>
+397: 
+398:                     <td className="font-bold text-xs text-slate-800">{disc.carrier_code}</td>
+399: 
+400:                     <td>
+401:                       <StatusBadge status={disc.type} />
+402:                     </td>
+403: 
+404:                     <td className="text-xs space-y-0.5">
+405:                       <div className="text-slate-500">{disc.declared_value}</div>
+406:                       <div className="font-semibold text-slate-900">{disc.charged_value}</div>
+407:                     </td>
+408: 
+409:                     <td className="text-right font-mono font-bold text-rose-700 text-sm">
+410:                       <Money amount={disc.discrepancy_amount} state="confirmed" />
+411:                     </td>
+412: 
+413:                     <td className="text-xs text-slate-600 max-w-xs">{disc.reason}</td>
+414: 
+415:                     <td className="text-right space-x-1.5">
+416:                       {isResolved ? (
+417:                         <span className="badge-ok text-xs">Đã Xử Lý</span>
+418:                       ) : (
+419:                         <>
+420:                           <button
+421:                             type="button"
+422:                             onClick={() =>
+423:                               handleResolveAction(disc, DiscrepancyResolution.CONFIRMED)
+424:                             }
+425:                             className="btn-secondary text-xs py-1 px-2.5 font-semibold text-emerald-700"
+426:                           >
+427:                             Chấp Thuận
+428:                           </button>
+429:                           <button
+430:                             type="button"
+431:                             onClick={() => handleResolveAction(disc, DiscrepancyResolution.DISPUTE)}
+432:                             className="btn-primary text-xs py-1 px-2.5"
+433:                           >
+434:                             Khiếu Nại
+435:                           </button>
+436:                         </>
+437:                       )}
+438:                     </td>
+439:                   </tr>
+440:                 );
+441:               })}
+442:             </tbody>
+443:           </table>
+444:         </div>
+445:       </div>
+446: 
+447:       {/* Discrepancy Resolution Modal with Mandatory Reason */}
+448:       <ConfirmDialog
+449:         isOpen={!!resolvingItem}
+450:         title={
+451:           resolvingAction === DiscrepancyResolution.CONFIRMED
+452:             ? 'Xác Nhận Chấp Thuận Chênh Lệch'
+453:             : 'Mở Hồ Sơ Khiếu Nại Khoản Lệch'
+454:         }
+455:         message={`Xử lý khoản lệch ${resolvingItem?.discrepancy_amount.toLocaleString('vi-VN')} đ cho mã vận đơn ${resolvingItem?.tracking_code}.`}
+456:         confirmLabel="Xác Nhận Xử Lý"
+457:         cancelLabel="Hủy Bỏ"
+458:         requireReason={true}
+459:         onConfirm={handleConfirmResolution}
+460:         onCancel={() => setResolvingItem(null)}
+461:       />
+462:     </div>
+463:   );
+464: };
+</file>
+
+<file path="apps/web/src/components/ShipmentListTab.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState, useEffect } from 'react';
+  4: import { Money, TrackingCode, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
+  5: import { MASTER_SHIPMENTS, UnifiedShipment } from '@/services/unifiedDataStore';
+  6: import {
+  7:   Search,
+  8:   Filter,
+  9:   AlertTriangle,
+ 10:   Eye,
+ 11:   EyeOff,
+ 12:   X,
+ 13:   Package,
+ 14:   Truck,
+ 15:   DollarSign,
+ 16:   CheckCircle2,
+ 17:   ChevronLeft,
+ 18:   ChevronRight,
+ 19:   FileSpreadsheet,
+ 20:   Calendar,
+ 21:   MapPin,
+ 22:   Clock,
+ 23:   ShieldCheck,
+ 24:   RefreshCw,
+ 25:   SlidersHorizontal,
+ 26:   ExternalLink,
+ 27: } from 'lucide-react';
+ 28: 
+ 29: interface Props {
+ 30:   onOpenTrackingModal: (trackingCode: string) => void;
+ 31:   onNavigateToTab?: (tabId: string) => void;
+ 32:   onCreateOrder?: () => void;
+ 33:   userRole?: string;
+ 34:   selectedOrderId?: string | null;
+ 35:   selectedOrderCode?: string | null;
+ 36:   onClearSelection?: () => void;
+ 37: }
+ 38: 
+ 39: export const ShipmentListTab: React.FC<Props> = ({
+ 40:   onOpenTrackingModal,
+ 41:   onNavigateToTab,
+ 42:   onCreateOrder,
+ 43:   userRole = 'OWNER',
+ 44:   selectedOrderId,
+ 45:   selectedOrderCode,
+ 46:   onClearSelection,
+ 47: }) => {
+ 48:   const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
+ 49:   const [loading, setLoading] = useState(false);
+ 50: 
+ 51:   // Cursor Pagination State
+ 52:   const [cursorIndex, setCursorIndex] = useState(0);
+ 53:   const [pageSize, setPageSize] = useState(20);
+ 54: 
+ 55:   // Synchronize search term and reset cursor when selectedOrderCode/selectedOrderId changes
+ 56:   const [dismissedOrderId, setDismissedOrderId] = useState<string | null>(null);
+ 57:   const [dismissedOrderCode, setDismissedOrderCode] = useState<string | null>(null);
+ 58:   const [prevSelectedOrderCode, setPrevSelectedOrderCode] = useState(selectedOrderCode);
+ 59:   const [prevSelectedOrderId, setPrevSelectedOrderId] = useState(selectedOrderId);
+ 60:   const [userSearchTerm, setUserSearchTerm] = useState<string | null>(null);
+ 61: 
+ 62:   if (prevSelectedOrderCode !== selectedOrderCode || prevSelectedOrderId !== selectedOrderId) {
+ 63:     setPrevSelectedOrderCode(selectedOrderCode);
+ 64:     setPrevSelectedOrderId(selectedOrderId);
+ 65:     setDismissedOrderId(null);
+ 66:     setDismissedOrderCode(null);
+ 67:     setUserSearchTerm(null);
+ 68:     setCursorIndex(0);
+ 69:   }
+ 70: 
+ 71:   const effectiveOrderId =
+ 72:     selectedOrderId && selectedOrderId !== dismissedOrderId ? selectedOrderId : null;
+ 73:   const effectiveOrderCode =
+ 74:     selectedOrderCode && selectedOrderCode !== dismissedOrderCode ? selectedOrderCode : null;
+ 75: 
+ 76:   const isOrderActivated = Boolean(effectiveOrderId || effectiveOrderCode);
+ 77:   const matchedShipment = isOrderActivated
+ 78:     ? shipments.find(
+ 79:         (s) =>
+ 80:           (effectiveOrderCode && s.order_code === effectiveOrderCode) ||
+ 81:           (effectiveOrderId &&
+ 82:             (s.id === effectiveOrderId || (s as any).order_id === effectiveOrderId))
+ 83:       )
+ 84:     : null;
+ 85:   const isOrderNotFound = isOrderActivated && !matchedShipment;
+ 86: 
+ 87:   const searchTerm = userSearchTerm ?? (effectiveOrderCode || '');
+ 88:   const setSearchTerm = (term: string) => setUserSearchTerm(term);
+ 89: 
+ 90:   // Filter Controls
+ 91:   const [carrierFilter, setCarrierFilter] = useState('ALL');
+ 92:   const [statusFilter, setStatusFilter] = useState('ALL');
+ 93:   const [warehouseFilter, setWarehouseFilter] = useState('ALL');
+ 94:   const [matchStatusFilter, setMatchStatusFilter] = useState('ALL');
+ 95:   const [dateRangeFilter, setDateRangeFilter] = useState('30d');
+ 96:   const [hasOpenCaseFilter, setHasOpenCaseFilter] = useState(false);
+ 97:   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+ 98: 
+ 99:   // PII Masking State
+100:   const [unmaskedRows, setUnmaskedRows] = useState<Record<string, boolean>>({});
+101:   const [toast, setToast] = useState<string | null>(null);
+102: 
+103:   const fetchShipments = async () => {
+104:     setLoading(true);
+105:     try {
+106:       const res = await fetch('/api/shipments');
+107:       const data = await res.json();
+108:       if (res.ok && data.data && data.data.length > 0) {
+109:         // If API returns data, sync, otherwise keep master shipments
+110:       }
+111:     } catch (e) {
+112:       console.error('Failed to load shipments:', e);
+113:     } finally {
+114:       setLoading(false);
+115:     }
+116:   };
+117: 
+118:   useEffect(() => {
+119:     // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype initial fetch pattern
+120:     fetchShipments();
+121:   }, []);
+122: 
+123:   const toggleUnmask = (id: string, trackingCode: string) => {
+124:     const isCurrentlyUnmasked = unmaskedRows[id];
+125:     setUnmaskedRows((prev) => ({ ...prev, [id]: !isCurrentlyUnmasked }));
+126:     if (!isCurrentlyUnmasked) {
+127:       setToast(
+128:         `[Audit Log] Đã mở xem thông tin số điện thoại khách hàng cho mã ${trackingCode}. Đã ghi nhật ký kiểm toán.`
+129:       );
+130:       setTimeout(() => setToast(null), 4000);
+131:     }
+132:   };
+133: 
+134:   // Filter Pipeline
+135:   const filtered = shipments.filter((s) => {
+136:     if (searchTerm) {
+137:       const term = searchTerm.toLowerCase();
+138:       const matchTracking = s.tracking_code.toLowerCase().includes(term);
+139:       const matchOrder = s.order_code.toLowerCase().includes(term);
+140:       const matchCustomer = s.recipient_name.toLowerCase().includes(term);
+141:       const matchPhone = s.recipient_phone.toLowerCase().includes(term);
+142:       if (!matchTracking && !matchOrder && !matchCustomer && !matchPhone) return false;
+143:     }
+144: 
+145:     if (carrierFilter !== 'ALL' && s.carrier_code !== carrierFilter) return false;
+146:     if (statusFilter !== 'ALL' && s.status !== statusFilter) return false;
+147:     if (warehouseFilter !== 'ALL' && s.warehouse_id !== warehouseFilter) return false;
+148: 
+149:     if (matchStatusFilter !== 'ALL') {
+150:       if (s.match_status !== matchStatusFilter) return false;
+151:     }
+152: 
+153:     if (hasOpenCaseFilter) {
+154:       if (!s.has_open_exception && !s.has_open_discrepancy && !s.has_open_claim) return false;
+155:     }
+156: 
+157:     return true;
+158:   });
+159: 
+160:   const paginatedShipments = filtered.slice(cursorIndex, cursorIndex + pageSize);
+161:   const totalCount = filtered.length;
+162:   const hasNextPage = cursorIndex + pageSize < totalCount;
+163:   const hasPrevPage = cursorIndex > 0;
+164: 
+165:   const handleNextPage = () => {
+166:     if (hasNextPage) setCursorIndex((prev) => prev + pageSize);
+167:   };
+168: 
+169:   const handlePrevPage = () => {
+170:     if (hasPrevPage) setCursorIndex((prev) => Math.max(0, prev - pageSize));
+171:   };
+172: 
+173:   const handleResetFilters = () => {
+174:     if (selectedOrderId) setDismissedOrderId(selectedOrderId);
+175:     if (selectedOrderCode) setDismissedOrderCode(selectedOrderCode);
+176:     setUserSearchTerm('');
+177:     setCarrierFilter('ALL');
+178:     setStatusFilter('ALL');
+179:     setWarehouseFilter('ALL');
+180:     setMatchStatusFilter('ALL');
+181:     setDateRangeFilter('30d');
+182:     setHasOpenCaseFilter(false);
+183:     setCursorIndex(0);
+184:     onClearSelection?.();
+185:   };
+186: 
+187:   const hasActiveFilters =
+188:     searchTerm !== '' ||
+189:     carrierFilter !== 'ALL' ||
+190:     statusFilter !== 'ALL' ||
+191:     warehouseFilter !== 'ALL' ||
+192:     matchStatusFilter !== 'ALL' ||
+193:     dateRangeFilter !== '30d' ||
+194:     hasOpenCaseFilter;
+195: 
+196:   return (
+197:     <div className="w-full space-y-4">
+198:       {/* Activated Order Not Found Alert (Real Not-Found State with Recovery) */}
+199:       {isOrderNotFound && (
+200:         <div
+201:           data-testid="activated-order-not-found"
+202:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
+203:         >
+204:           <div className="flex items-center gap-2.5">
+205:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+206:             <div>
+207:               <div className="font-bold text-xs sm:text-sm">
+208:                 Không tìm thấy đơn hàng{' '}
+209:                 <span className="font-mono underline">{selectedOrderCode || selectedOrderId}</span>
+210:               </div>
+211:               <div className="text-xs text-amber-700">
+212:                 Bản ghi không tồn tại trong danh sách vận đơn hiện tại hoặc nằm ngoài phạm vi truy
+213:                 cập của bạn.
+214:               </div>
 215:             </div>
 216:           </div>
-217: 
-218:           {/* Photo Evidence (Mandatory if Damaged) */}
-219:           {conditionInput !== 'intact' && (
-220:             <div className="p-4 rounded-xl border border-amber-200 bg-amber-50/50 space-y-2">
-221:               <div className="flex items-center justify-between">
-222:                 <span className="font-bold text-xs text-amber-900 flex items-center gap-1.5">
-223:                   <Camera className="w-4 h-4 text-amber-700" />
-224:                   <span>Ảnh Chụp Hiện Trạng Kiện Hỏng (Bắt Buộc):</span>
-225:                 </span>
-226:                 {hasPhoto && <span className="badge-ok text-xs">✓ Đã Chụp Ảnh</span>}
-227:               </div>
-228: 
-229:               <div className="flex gap-2">
-230:                 <button
-231:                   type="button"
-232:                   onClick={() => setHasPhoto(true)}
-233:                   className="btn-secondary text-xs"
-234:                 >
-235:                   <Camera className="w-4 h-4" />
-236:                   <span>Mở Máy Ảnh Chụp</span>
-237:                 </button>
-238:                 <button
-239:                   type="button"
-240:                   onClick={() => setHasPhoto(true)}
-241:                   className="btn-secondary text-xs"
-242:                 >
-243:                   <Upload className="w-4 h-4" />
-244:                   <span>Tải Ảnh Lên</span>
-245:                 </button>
-246:               </div>
-247:             </div>
-248:           )}
-249: 
-250:           <button
-251:             type="submit"
-252:             className="btn-primary w-full justify-center text-sm py-2.5 font-bold"
-253:           >
-254:             Xác Nhận Nhập Kiện Vào Kho
-255:           </button>
-256:         </form>
-257: 
-258:         {/* Offline Queue Sync Bar */}
-259:         {offlineQueue.length > 0 && (
-260:           <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 flex justify-between items-center">
-261:             <span className="text-xs font-bold text-amber-900">
-262:               Có {offlineQueue.length} kiện hàng đang chờ đồng bộ lên máy chủ
-263:             </span>
-264:             <button type="button" onClick={handleSyncOffline} className="btn-primary text-xs">
-265:               <RefreshCw className="w-3.5 h-3.5" />
-266:               <span>Đồng Bộ Ngay</span>
-267:             </button>
-268:           </div>
-269:         )}
-270:       </div>
+217:           <div className="flex items-center gap-2">
+218:             <button
+219:               type="button"
+220:               onClick={handleResetFilters}
+221:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
+222:             >
+223:               Quay lại danh sách
+224:             </button>
+225:             <button
+226:               type="button"
+227:               onClick={fetchShipments}
+228:               className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700 transition"
+229:             >
+230:               Thử lại
+231:             </button>
+232:           </div>
+233:         </div>
+234:       )}
+235: 
+236:       {/* Toast Notification */}
+237:       {toast && (
+238:         <div className="p-3 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
+239:           <div className="flex items-center gap-2">
+240:             <ShieldCheck className="w-4 h-4 text-emerald-400" />
+241:             <span>{toast}</span>
+242:           </div>
+243:           <button
+244:             type="button"
+245:             onClick={() => setToast(null)}
+246:             className="font-bold text-slate-400 hover:text-white"
+247:           >
+248:             ✕
+249:           </button>
+250:         </div>
+251:       )}
+252: 
+253:       {/* Header Bar */}
+254:       <div className="modern-card p-5 space-y-4">
+255:         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+256:           <div>
+257:             <div className="flex items-center gap-2.5">
+258:               <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+259:                 <Package className="w-5 h-5 text-[#c23807]" />
+260:                 <span>Danh Sách & Tra Cứu Vận Đơn</span>
+261:               </h1>
+262:               <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-[#FFF5F0] text-[#c23807] border border-[#FDDDD0]">
+263:                 {totalCount} bưu kiện
+264:               </span>
+265:             </div>
+266:             <p className="text-xs text-slate-500 mt-1">
+267:               Tra cứu bưu kiện toàn trình, kiểm tra trạng thái khớp mã nguồn và mở Timeline sự kiện
+268:               hợp nhất 3 nguồn.
+269:             </p>
+270:           </div>
 271: 
-272:       {/* History Log */}
-273:       <div className="modern-card p-6 space-y-4">
-274:         <h2 className="font-bold text-slate-900 text-sm">Lịch Sử Nhận Hàng Hoàn Gần Đây</h2>
-275:         <div className="divide-y divide-slate-100">
-276:           {history.map((item) => (
-277:             <div key={item.id} className="py-3 flex justify-between items-center text-xs">
-278:               <div className="space-y-0.5">
-279:                 <div className="flex items-center gap-2">
-280:                   <TrackingCode code={item.tracking_code} />
-281:                   <span
-282:                     className={
-283:                       item.condition === 'intact' ? 'badge-ok text-xs' : 'badge-risk text-xs'
-284:                     }
-285:                   >
-286:                     {item.condition === 'intact' ? 'Nguyên Vẹn' : 'Hư Hỏng'}
-287:                   </span>
-288:                 </div>
-289:                 <div className="text-slate-500">
-290:                   {item.warehouse} · {item.staff}
-291:                 </div>
-292:               </div>
-293:               <div className="text-slate-400 font-mono">{item.scanned_at}</div>
-294:             </div>
-295:           ))}
-296:         </div>
-297:       </div>
-298:     </div>
-299:   );
-300: };
+272:           <div className="flex items-center gap-2 self-stretch md:self-auto">
+273:             {onCreateOrder && (
+274:               <button type="button" onClick={onCreateOrder} className="btn-primary text-xs">
+275:                 <span>+ Tạo Vận Đơn</span>
+276:               </button>
+277:             )}
+278: 
+279:             <button
+280:               type="button"
+281:               onClick={() => {
+282:                 setToast(
+283:                   `✓ Đã xuất file Excel ${totalCount} vận đơn theo đúng tiêu chí lọc hiện hành.`
+284:                 );
+285:                 setTimeout(() => setToast(null), 4000);
+286:               }}
+287:               className="btn-secondary text-xs"
+288:             >
+289:               <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+290:               <span>Xuất Excel</span>
+291:             </button>
+292: 
+293:             <button
+294:               type="button"
+295:               onClick={fetchShipments}
+296:               disabled={loading}
+297:               className="btn-secondary text-xs"
+298:               title="Tải lại dữ liệu mới nhất"
+299:             >
+300:               <RefreshCw
+301:                 className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#c23807]' : 'text-slate-500'}`}
+302:               />
+303:               <span className="hidden sm:inline">Làm mới</span>
+304:             </button>
+305:           </div>
+306:         </div>
+307: 
+308:         {/* Primary Filter Toolbar */}
+309:         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-2 border-t border-slate-100">
+310:           {/* Search Box */}
+311:           <div className="lg:col-span-2 relative">
+312:             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+313:             <input
+314:               type="text"
+315:               value={searchTerm}
+316:               onChange={(e) => {
+317:                 setSearchTerm(e.target.value);
+318:                 setCursorIndex(0);
+319:               }}
+320:               placeholder="Tìm mã vận đơn, mã đơn POS, tên, SĐT..."
+321:               className="modern-input pl-9 pr-8 text-xs font-medium"
+322:             />
+323:             {searchTerm && (
+324:               <button
+325:                 type="button"
+326:                 onClick={() => setSearchTerm('')}
+327:                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+328:               >
+329:                 <X className="w-4 h-4" />
+330:               </button>
+331:             )}
+332:           </div>
+333: 
+334:           {/* Carrier Selector */}
+335:           <div>
+336:             <select
+337:               value={carrierFilter}
+338:               onChange={(e) => {
+339:                 setCarrierFilter(e.target.value);
+340:                 setCursorIndex(0);
+341:               }}
+342:               className="modern-input text-xs font-semibold text-slate-800"
+343:             >
+344:               <option value="ALL">Hãng: Tất cả (GHN, GHTK)</option>
+345:               <option value="GHN">GHN Express (Tự động API)</option>
+346:               <option value="GHTK">GHTK (Hỗ trợ cổng)</option>
+347:             </select>
+348:           </div>
+349: 
+350:           {/* Status Selector */}
+351:           <div>
+352:             <select
+353:               value={statusFilter}
+354:               onChange={(e) => {
+355:                 setStatusFilter(e.target.value);
+356:                 setCursorIndex(0);
+357:               }}
+358:               className="modern-input text-xs font-semibold text-slate-800"
+359:             >
+360:               <option value="ALL">Trạng thái: Tất cả</option>
+361:               <option value="picking">Chờ lấy hàng</option>
+362:               <option value="in_transit">Đang trung chuyển</option>
+363:               <option value="out_for_delivery">Đang giao hàng</option>
+364:               <option value="delivered">Giao thành công</option>
+365:               <option value="delivery_fail">Giao thất bại (Cần cứu)</option>
+366:               <option value="returning">Đang chuyển hoàn</option>
+367:               <option value="returned">Đã nhập hoàn kho</option>
+368:             </select>
+369:           </div>
+370: 
+371:           {/* Time Range Selector */}
+372:           <div>
+373:             <select
+374:               value={dateRangeFilter}
+375:               onChange={(e) => {
+376:                 setDateRangeFilter(e.target.value);
+377:                 setCursorIndex(0);
+378:               }}
+379:               className="modern-input text-xs font-semibold text-slate-800"
+380:             >
+381:               <option value="today">Hôm nay</option>
+382:               <option value="7d">7 ngày qua</option>
+383:               <option value="30d">30 ngày qua</option>
+384:               <option value="90d">90 ngày qua (Tối đa)</option>
+385:             </select>
+386:           </div>
+387: 
+388:           {/* Advanced Filter Toggle & Reset */}
+389:           <div className="flex items-center gap-2">
+390:             <button
+391:               type="button"
+392:               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+393:               className={`flex-1 btn-secondary text-xs justify-center ${
+394:                 showAdvancedFilters ||
+395:                 hasOpenCaseFilter ||
+396:                 matchStatusFilter !== 'ALL' ||
+397:                 warehouseFilter !== 'ALL'
+398:                   ? 'bg-[#FFF5F0] text-[#c23807] border-[#FDDDD0] font-bold'
+399:                   : ''
+400:               }`}
+401:             >
+402:               <SlidersHorizontal className="w-3.5 h-3.5" />
+403:               <span>Bộ Lọc</span>
+404:             </button>
+405: 
+406:             {hasActiveFilters && (
+407:               <button
+408:                 type="button"
+409:                 onClick={handleResetFilters}
+410:                 className="btn-secondary text-xs px-2.5 text-rose-600 hover:bg-rose-50"
+411:                 title="Xóa toàn bộ bộ lọc"
+412:               >
+413:                 Xóa
+414:               </button>
+415:             )}
+416:           </div>
+417:         </div>
+418: 
+419:         {/* Collapsible Advanced Filters */}
+420:         {showAdvancedFilters && (
+421:           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+422:             <div>
+423:               <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
+424:                 Trạng thái ghép mã nguồn:
+425:               </label>
+426:               <select
+427:                 value={matchStatusFilter}
+428:                 onChange={(e) => {
+429:                   setMatchStatusFilter(e.target.value);
+430:                   setCursorIndex(0);
+431:                 }}
+432:                 className="modern-input text-xs"
+433:               >
+434:                 <option value="ALL">Tất cả trạng thái khớp</option>
+435:                 <option value="matched_exact">Khớp chính xác (Mã vận đơn / Mã đơn)</option>
+436:                 <option value="matched_fuzzy">Khớp mờ (Theo số tiền COD & ngày)</option>
+437:                 <option value="unmatched">Chưa khớp mã</option>
+438:               </select>
+439:             </div>
+440: 
+441:             <div>
+442:               <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
+443:                 Chi nhánh xuất kho:
+444:               </label>
+445:               <select
+446:                 value={warehouseFilter}
+447:                 onChange={(e) => {
+448:                   setWarehouseFilter(e.target.value);
+449:                   setCursorIndex(0);
+450:                 }}
+451:                 className="modern-input text-xs"
+452:               >
+453:                 <option value="ALL">Tất cả chi nhánh</option>
+454:                 <option value="store_01">Chi Nhánh Quận 3 (HCM-Q3)</option>
+455:                 <option value="store_02">Kho Vận Tân Bình (HCM-TB)</option>
+456:                 <option value="store_03">Chi Nhánh Hà Nội (HN-CG)</option>
+457:                 <option value="store_04">Chi Nhánh Đà Nẵng (DN-HC)</option>
+458:               </select>
+459:             </div>
+460: 
+461:             <div className="flex items-center pt-5">
+462:               <label className="flex items-center gap-2 cursor-pointer select-none">
+463:                 <input
+464:                   type="checkbox"
+465:                   checked={hasOpenCaseFilter}
+466:                   onChange={(e) => {
+467:                     setHasOpenCaseFilter(e.target.checked);
+468:                     setCursorIndex(0);
+469:                   }}
+470:                   className="w-4 h-4 rounded text-[#c23807] focus:ring-[#c23807] border-slate-300"
+471:                 />
+472:                 <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+473:                   <AlertTriangle className="w-4 h-4 text-amber-600" />
+474:                   <span>Chỉ đơn có hồ sơ mở (Sự cố / Khoản lệch / Khiếu nại)</span>
+475:                 </span>
+476:               </label>
+477:             </div>
+478:           </div>
+479:         )}
+480:       </div>
+481: 
+482:       {/* Main Table Viewport (14px Text, High Contrast, Clean Hairline Borders) */}
+483:       <div className="modern-card overflow-hidden">
+484:         <div className="overflow-x-auto">
+485:           <table className="modern-table">
+486:             <thead>
+487:               <tr>
+488:                 <th>Mã Vận Đơn / Mã Đơn POS</th>
+489:                 <th>Hãng & Phương Thức</th>
+490:                 <th>Người Nhận & Địa Chỉ</th>
+491:                 <th>Trạng Thái</th>
+492:                 <th>Ghép Mã</th>
+493:                 <th className="text-right">Tiền Thu Hộ (COD)</th>
+494:                 <th>Hồ Sơ Vận Hành</th>
+495:                 <th className="text-right">Thao Tác</th>
+496:               </tr>
+497:             </thead>
+498:             <tbody>
+499:               {paginatedShipments.map((shipment) => {
+500:                 const isUnmasked = unmaskedRows[shipment.id];
+501:                 const rawPhone = shipment.recipient_phone;
+502:                 const maskedPhone = isUnmasked
+503:                   ? rawPhone
+504:                   : rawPhone.slice(0, 3) + '***' + rawPhone.slice(-4);
+505: 
+506:                 const isSelected = Boolean(
+507:                   matchedShipment &&
+508:                   ((effectiveOrderCode && shipment.order_code === effectiveOrderCode) ||
+509:                     (effectiveOrderId &&
+510:                       (shipment.id === effectiveOrderId ||
+511:                         (shipment as any).order_id === effectiveOrderId)))
+512:                 );
+513:                 const selectedKey = effectiveOrderCode || effectiveOrderId;
+514: 
+515:                 return (
+516:                   <tr
+517:                     key={shipment.id}
+518:                     data-selected={isSelected ? 'true' : undefined}
+519:                     data-testid={isSelected ? `selected-order-${selectedKey}` : undefined}
+520:                     className={
+521:                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
+522:                     }
+523:                   >
+524:                     {/* Column 1: Tracking & Order Code */}
+525:                     <td>
+526:                       <TrackingCode
+527:                         code={shipment.tracking_code}
+528:                         onClick={() => onOpenTrackingModal(shipment.tracking_code)}
+529:                       />
+530:                       <div className="text-xs text-slate-500 font-mono mt-0.5">
+531:                         Đơn:{' '}
+532:                         <span className="font-semibold text-slate-700">{shipment.order_code}</span>
+533:                       </div>
+534:                     </td>
+535: 
+536:                     {/* Column 2: Carrier & Automation */}
+537:                     <td>
+538:                       <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+539:                         <Truck className="w-3.5 h-3.5 text-slate-500" />
+540:                         <span>{shipment.carrier_code}</span>
+541:                       </div>
+542:                       <div className="mt-1">
+543:                         <AutomationBadge tier={shipment.carrier_code === 'GHN' ? 'L2' : 'L1'} />
+544:                       </div>
+545:                     </td>
+546: 
+547:                     {/* Column 3: Customer with PII Masking */}
+548:                     <td>
+549:                       <div className="font-semibold text-slate-900 text-xs">
+550:                         {shipment.recipient_name}
+551:                       </div>
+552:                       <div className="text-xs text-slate-600 flex items-center gap-1.5 mt-0.5">
+553:                         <span className="font-mono">{maskedPhone}</span>
+554:                         <button
+555:                           type="button"
+556:                           onClick={() => toggleUnmask(shipment.id, shipment.tracking_code)}
+557:                           className="text-slate-400 hover:text-[#c23807] transition"
+558:                           title={
+559:                             isUnmasked
+560:                               ? 'Ẩn số điện thoại'
+561:                               : 'Mở xem số điện thoại (Có ghi log kiểm toán)'
+562:                           }
+563:                         >
+564:                           {isUnmasked ? (
+565:                             <EyeOff className="w-3.5 h-3.5 text-[#c23807]" />
+566:                           ) : (
+567:                             <Eye className="w-3.5 h-3.5" />
+568:                           )}
+569:                         </button>
+570:                       </div>
+571:                       <div className="text-xs text-slate-400 truncate max-w-[200px]">
+572:                         {shipment.destination_province}
+573:                       </div>
+574:                     </td>
+575: 
+576:                     {/* Column 4: Status */}
+577:                     <td>
+578:                       <StatusBadge status={shipment.status} />
+579:                     </td>
+580: 
+581:                     {/* Column 5: Match Status */}
+582:                     <td>
+583:                       {shipment.match_status === 'matched_exact' && (
+584:                         <span className="badge-ok text-xs">
+585:                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+586:                           <span>Khớp Chính Xác</span>
+587:                         </span>
+588:                       )}
+589:                       {shipment.match_status === 'matched_fuzzy' && (
+590:                         <span className="badge-warn text-xs">
+591:                           <Clock className="w-3.5 h-3.5 text-amber-600" />
+592:                           <span>Khớp Mờ COD</span>
+593:                         </span>
+594:                       )}
+595:                       {shipment.match_status === 'unmatched' && (
+596:                         <span className="badge-info text-xs">Chưa Khớp</span>
+597:                       )}
+598:                     </td>
+599: 
+600:                     {/* Column 6: COD Amount */}
+601:                     <td className="text-right font-mono font-bold text-slate-900 text-sm">
+602:                       {shipment.cod_amount > 0 ? (
+603:                         <Money amount={shipment.cod_amount} state="pending" />
+604:                       ) : (
+605:                         <span className="text-slate-400 text-xs font-normal">Không COD</span>
+606:                       )}
+607:                     </td>
+608: 
+609:                     {/* Column 7: Actionable Open Case Links */}
+610:                     <td>
+611:                       {shipment.has_open_exception && (
+612:                         <button
+613:                           type="button"
+614:                           onClick={() => onNavigateToTab && onNavigateToTab('exceptions')}
+615:                           className="badge-risk text-xs cursor-pointer hover:bg-rose-100 transition inline-flex items-center gap-1"
+616:                           title="Bấm để chuyển sang Hộp việc cứu đơn xử lý ngay"
+617:                         >
+618:                           <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+619:                           <span>Cần cứu đơn</span>
+620:                           <ExternalLink className="w-3 h-3" />
+621:                         </button>
+622:                       )}
+623: 
+624:                       {shipment.has_open_discrepancy && !shipment.has_open_exception && (
+625:                         <button
+626:                           type="button"
+627:                           onClick={() => onNavigateToTab && onNavigateToTab('reconciliation')}
+628:                           className="badge-warn text-xs cursor-pointer hover:bg-amber-100 transition inline-flex items-center gap-1"
+629:                         >
+630:                           <DollarSign className="w-3.5 h-3.5 text-amber-600" />
+631:                           <span>Lệch cước/COD</span>
+632:                         </button>
+633:                       )}
+634: 
+635:                       {shipment.has_open_claim &&
+636:                         !shipment.has_open_exception &&
+637:                         !shipment.has_open_discrepancy && (
+638:                           <button
+639:                             type="button"
+640:                             onClick={() => onNavigateToTab && onNavigateToTab('claims')}
+641:                             className="badge-info text-xs cursor-pointer hover:bg-slate-200 transition inline-flex items-center gap-1"
+642:                           >
+643:                             <FileSpreadsheet className="w-3.5 h-3.5" />
+644:                             <span>Hồ sơ bồi thường</span>
+645:                           </button>
+646:                         )}
+647: 
+648:                       {!shipment.has_open_exception &&
+649:                         !shipment.has_open_discrepancy &&
+650:                         !shipment.has_open_claim && (
+651:                           <span className="text-slate-400 text-xs flex items-center gap-1 font-medium">
+652:                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+653:                             <span>Bình thường</span>
+654:                           </span>
+655:                         )}
+656:                     </td>
+657: 
+658:                     {/* Column 8: Details CTA */}
+659:                     <td className="text-right">
+660:                       <button
+661:                         type="button"
+662:                         onClick={() => onOpenTrackingModal(shipment.tracking_code)}
+663:                         className="btn-secondary text-xs py-1.5 px-3"
+664:                       >
+665:                         Chi Tiết
+666:                       </button>
+667:                     </td>
+668:                   </tr>
+669:                 );
+670:               })}
+671: 
+672:               {paginatedShipments.length === 0 && (
+673:                 <tr>
+674:                   <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
+675:                     <Package className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+676:                     <p className="font-semibold text-slate-600">
+677:                       Không tìm thấy bưu kiện nào phù hợp với bộ lọc hiện tại.
+678:                     </p>
+679:                     {hasActiveFilters && (
+680:                       <button
+681:                         type="button"
+682:                         onClick={handleResetFilters}
+683:                         className="mt-3 btn-secondary text-xs"
+684:                       >
+685:                         Xóa toàn bộ bộ lọc
+686:                       </button>
+687:                     )}
+688:                   </td>
+689:                 </tr>
+690:               )}
+691:             </tbody>
+692:           </table>
+693:         </div>
+694: 
+695:         {/* Cursor Pagination Bar */}
+696:         <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-slate-600">
+697:           <div className="flex items-center gap-3">
+698:             <span>
+699:               Hiển thị{' '}
+700:               <strong className="text-slate-900">{totalCount > 0 ? cursorIndex + 1 : 0}</strong> –{' '}
+701:               <strong className="text-slate-900">
+702:                 {Math.min(cursorIndex + pageSize, totalCount)}
+703:               </strong>{' '}
+704:               trên tổng <strong className="text-slate-900">{totalCount}</strong> bưu kiện
+705:             </span>
+706: 
+707:             <div className="flex items-center gap-1.5">
+708:               <span className="text-slate-400">|</span>
+709:               <span>Dòng/trang:</span>
+710:               <select
+711:                 value={pageSize}
+712:                 onChange={(e) => {
+713:                   setPageSize(Number(e.target.value));
+714:                   setCursorIndex(0);
+715:                 }}
+716:                 className="px-2 py-1 rounded-md border border-slate-200 bg-white font-semibold text-xs"
+717:               >
+718:                 <option value={20}>20</option>
+719:                 <option value={50}>50</option>
+720:                 <option value={100}>100</option>
+721:               </select>
+722:             </div>
+723:           </div>
+724: 
+725:           <div className="flex items-center gap-2">
+726:             <button
+727:               type="button"
+728:               onClick={handlePrevPage}
+729:               disabled={!hasPrevPage}
+730:               className="btn-secondary text-xs py-1.5 px-3"
+731:             >
+732:               <ChevronLeft className="w-3.5 h-3.5" />
+733:               <span>Trang Trước</span>
+734:             </button>
+735: 
+736:             <button
+737:               type="button"
+738:               onClick={handleNextPage}
+739:               disabled={!hasNextPage}
+740:               className="btn-secondary text-xs py-1.5 px-3"
+741:             >
+742:               <span>Trang Sau</span>
+743:               <ChevronRight className="w-3.5 h-3.5" />
+744:             </button>
+745:           </div>
+746:         </div>
+747:       </div>
+748:     </div>
+749:   );
+750: };
 </file>
 
 <file path="apps/web/src/components/ShopProfileForm.tsx">
@@ -82823,39 +85990,6 @@ This section contains the contents of the repository's files.
 19: }
 </file>
 
-<file path="apps/web/lighthouserc.cjs">
- 1: // GOAL-AUTOCLAW-REPOS-6: Lighthouse CI budgets for the public web routes.
- 2: // Chrome comes from the Playwright install the a11y gate already provisions.
- 3: const { chromium } = require('@playwright/test');
- 4: 
- 5: const port = Number(process.env.SHIPDE_LHCI_PORT || 3200);
- 6: const base = `http://127.0.0.1:${port}`;
- 7: 
- 8: module.exports = {
- 9:   ci: {
-10:     collect: {
-11:       startServerCommand: `pnpm exec next start -p ${port}`,
-12:       startServerReadyPattern: 'Ready',
-13:       url: ['/', '/register', '/forgot-password', '/reset-password'].map((p) => base + p),
-14:       numberOfRuns: 3,
-15:       chromePath: process.env.CHROME_PATH || chromium.executablePath(),
-16:       settings: { preset: 'desktop', chromeFlags: '--headless=new --no-sandbox' },
-17:     },
-18:     assert: {
-19:       assertions: {
-20:         // Blocking: TECH-STACK-REPOSITORY "targeted Lighthouse CI budgets";
-21:         // DESIGN-SYSTEM-UX-RULES requires WCAG AA.
-22:         'categories:accessibility': ['error', { minScore: 0.95, aggregationMethod: 'median-run' }],
-23:         'categories:best-practices': ['error', { minScore: 0.9, aggregationMethod: 'median-run' }],
-24:         'categories:performance': ['warn', { minScore: 0.8, aggregationMethod: 'median-run' }],
-25:         'categories:seo': ['warn', { minScore: 0.8, aggregationMethod: 'median-run' }],
-26:       },
-27:     },
-28:     upload: { target: 'filesystem', outputDir: './lhci-report' },
-29:   },
-30: };
-</file>
-
 <file path="apps/web/next.config.mjs">
  1: /** @type {import('next').NextConfig} */
  2: const nextConfig = {
@@ -82874,26 +86008,6 @@ This section contains the contents of the repository's files.
 15: };
 16: 
 17: export default nextConfig;
-</file>
-
-<file path="apps/web/playwright.config.ts">
- 1: import { defineConfig, devices } from '@playwright/test';
- 2: 
- 3: // TASK GOAL-AUTOCLAW-REPOS-6: browser accessibility gate (axe-core) against the built app.
- 4: const port = Number(process.env.SHIPDE_A11Y_PORT || 3100);
- 5: 
- 6: export default defineConfig({
- 7:   testDir: './e2e',
- 8:   reporter: [['list'], ['json', { outputFile: 'test-results/a11y-report.json' }]],
- 9:   use: { baseURL: `http://127.0.0.1:${port}`, trace: 'retain-on-failure' },
-10:   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-11:   webServer: {
-12:     command: `pnpm exec next start -p ${port}`,
-13:     url: `http://127.0.0.1:${port}`,
-14:     reuseExistingServer: !process.env.CI,
-15:     timeout: 120_000,
-16:   },
-17: });
 </file>
 
 <file path="docs/product-spec/docs/02-business/BUSINESS-RULES-DECISION-TABLES.md">
@@ -100499,3120 +103613,6 @@ This section contains the contents of the repository's files.
 262: void runUsersPageStatesTest();
 </file>
 
-<file path="apps/web/src/app/globals.css">
-  1: @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-  2: @import 'tailwindcss';
-  3: 
-  4: :root {
-  5:   /* ============================================================================
-  6:      Ship Dễ Brand Design Tokens (https://shipde.net/)
-  7:      Thương hiệu vận hành cao cấp: Cam năng lượng + Nền ấm + Ink Navy
-  8:      ============================================================================ */
-  9:   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
- 10:   --font-mono: 'JetBrains Mono', monospace;
- 11: 
- 12:   /* Brand Primary Orange */
- 13:   --primary: #c23807;
- 14:   --primary-hover: #a8300a;
- 15:   --primary-subtle: #fff5f0;
- 16:   --primary-border: #fdddd0;
- 17: 
- 18:   /* Ink / Navy Typography Palette */
- 19:   --text-primary: #0c1421;
- 20:   --text-secondary: #3b4352;
- 21:   --text-muted: #697386;
- 22:   --text-dim: #9da6b8;
- 23: 
- 24:   /* Warm Canvas Surfaces */
- 25:   --bg-app: #fdfcfb;
- 26:   --bg-card: #ffffff;
- 27:   --bg-subtle: #f6f5f3;
- 28:   --bg-hover: #f2f0ec;
- 29: 
- 30:   /* Warm Neutral Hairline Borders */
- 31:   --border-subtle: #eae7e4;
- 32:   --border-strong: #d5d1cb;
- 33:   --border-focus: #c23807;
- 34: 
- 35:   /* Semantic Status Tokens (Green, Amber, Red Only) */
- 36:   --status-ok-bg: #f0fdf4;
- 37:   --status-ok-text: #15803d;
- 38:   --status-ok-border: #bbf7d0;
- 39: 
- 40:   --status-warn-bg: #fffbeb;
- 41:   --status-warn-text: #b45309;
- 42:   --status-warn-border: #fde68a;
- 43: 
- 44:   --status-risk-bg: #fef2f2;
- 45:   --status-risk-text: #b91c1c;
- 46:   --status-risk-border: #fecaca;
- 47: 
- 48:   --status-info-bg: #f8f7f6;
- 49:   --status-info-text: #0c1421;
- 50:   --status-info-border: #eae7e4;
- 51: }
- 52: 
- 53: body {
- 54:   font-family: var(--font-sans);
- 55:   background-color: var(--bg-app);
- 56:   color: var(--text-primary);
- 57:   font-size: 14px;
- 58:   line-height: 1.5;
- 59:   margin: 0;
- 60:   padding: 0;
- 61:   -webkit-font-smoothing: antialiased;
- 62:   -moz-osx-font-smoothing: grayscale;
- 63: }
- 64: 
- 65: /* Tabular numbers for financial precision */
- 66: .tabular-nums,
- 67: .font-mono,
- 68: td,
- 69: th {
- 70:   font-variant-numeric: tabular-nums;
- 71: }
- 72: 
- 73: /* Custom Sleek Scrollbar */
- 74: ::-webkit-scrollbar {
- 75:   width: 6px;
- 76:   height: 6px;
- 77: }
- 78: ::-webkit-scrollbar-track {
- 79:   background: transparent;
- 80: }
- 81: ::-webkit-scrollbar-thumb {
- 82:   background: #d5d1cb;
- 83:   border-radius: 999px;
- 84: }
- 85: ::-webkit-scrollbar-thumb:hover {
- 86:   background: #9da6b8;
- 87: }
- 88: 
- 89: /* Card Primitive */
- 90: .modern-card {
- 91:   background: #ffffff;
- 92:   border: 1px solid var(--border-subtle);
- 93:   border-radius: 12px;
- 94:   box-shadow:
- 95:     0 1px 3px 0 rgba(12, 20, 33, 0.03),
- 96:     0 1px 2px -1px rgba(12, 20, 33, 0.03);
- 97:   transition: all 0.15s ease-in-out;
- 98: }
- 99: .modern-card:hover {
-100:   box-shadow:
-101:     0 4px 6px -1px rgba(12, 20, 33, 0.05),
-102:     0 2px 4px -2px rgba(12, 20, 33, 0.03);
-103: }
-104: 
-105: /* Button Primitives (Min 40px touch targets, 14px text) */
-106: .btn-primary {
-107:   background-color: var(--primary);
-108:   color: #ffffff;
-109:   font-weight: 600;
-110:   font-size: 14px;
-111:   min-height: 40px;
-112:   padding: 8px 16px;
-113:   border-radius: 10px;
-114:   border: 1px solid transparent;
-115:   display: inline-flex;
-116:   align-items: center;
-117:   gap: 8px;
-118:   transition: all 0.15s ease-in-out;
-119:   cursor: pointer;
-120:   box-shadow: 0 1px 2px rgba(194, 56, 7, 0.15);
-121: }
-122: .btn-primary:hover:not(:disabled) {
-123:   background-color: var(--primary-hover);
-124:   box-shadow: 0 2px 4px rgba(194, 56, 7, 0.25);
-125: }
-126: .btn-primary:disabled {
-127:   opacity: 0.5;
-128:   cursor: not-allowed;
-129: }
-130: 
-131: .btn-secondary {
-132:   background-color: #ffffff;
-133:   color: var(--text-primary);
-134:   font-weight: 600;
-135:   font-size: 14px;
-136:   min-height: 40px;
-137:   padding: 8px 16px;
-138:   border-radius: 10px;
-139:   border: 1px solid var(--border-subtle);
-140:   display: inline-flex;
-141:   align-items: center;
-142:   gap: 8px;
-143:   transition: all 0.15s ease-in-out;
-144:   cursor: pointer;
-145: }
-146: .btn-secondary:hover:not(:disabled) {
-147:   background-color: var(--bg-subtle);
-148:   border-color: var(--border-strong);
-149: }
-150: .btn-secondary:disabled {
-151:   opacity: 0.5;
-152:   cursor: not-allowed;
-153: }
-154: 
-155: .btn-danger {
-156:   background-color: #ffffff;
-157:   color: var(--status-risk-text);
-158:   font-weight: 600;
-159:   font-size: 14px;
-160:   min-height: 40px;
-161:   padding: 8px 16px;
-162:   border-radius: 10px;
-163:   border: 1px solid var(--status-risk-border);
-164:   display: inline-flex;
-165:   align-items: center;
-166:   gap: 8px;
-167:   transition: all 0.15s ease-in-out;
-168:   cursor: pointer;
-169: }
-170: .btn-danger:hover:not(:disabled) {
-171:   background-color: var(--status-risk-bg);
-172: }
-173: 
-174: /* Modern Accessible Input Control */
-175: .modern-input {
-176:   background-color: #ffffff;
-177:   border: 1px solid var(--border-subtle);
-178:   border-radius: 10px;
-179:   padding: 9px 14px;
-180:   font-size: 14px;
-181:   color: var(--text-primary);
-182:   transition: all 0.15s ease;
-183:   width: 100%;
-184: }
-185: .modern-input:focus {
-186:   outline: none;
-187:   border-color: var(--border-focus);
-188:   box-shadow: 0 0 0 3px rgba(194, 56, 7, 0.12);
-189: }
-190: 
-191: /* Semantic Badges */
-192: .badge-ok {
-193:   display: inline-flex;
-194:   align-items: center;
-195:   gap: 6px;
-196:   padding: 3px 9px;
-197:   border-radius: 6px;
-198:   font-size: 12px;
-199:   font-weight: 600;
-200:   background-color: var(--status-ok-bg);
-201:   color: var(--status-ok-text);
-202:   border: 1px solid var(--status-ok-border);
-203: }
-204: 
-205: .badge-warn {
-206:   display: inline-flex;
-207:   align-items: center;
-208:   gap: 6px;
-209:   padding: 3px 9px;
-210:   border-radius: 6px;
-211:   font-size: 12px;
-212:   font-weight: 600;
-213:   background-color: var(--status-warn-bg);
-214:   color: var(--status-warn-text);
-215:   border: 1px solid var(--status-warn-border);
-216: }
-217: 
-218: .badge-risk {
-219:   display: inline-flex;
-220:   align-items: center;
-221:   gap: 6px;
-222:   padding: 3px 9px;
-223:   border-radius: 6px;
-224:   font-size: 12px;
-225:   font-weight: 600;
-226:   background-color: var(--status-risk-bg);
-227:   color: var(--status-risk-text);
-228:   border: 1px solid var(--status-risk-border);
-229: }
-230: 
-231: .badge-info {
-232:   display: inline-flex;
-233:   align-items: center;
-234:   gap: 6px;
-235:   padding: 3px 9px;
-236:   border-radius: 6px;
-237:   font-size: 12px;
-238:   font-weight: 600;
-239:   background-color: var(--status-info-bg);
-240:   color: var(--status-info-text);
-241:   border: 1px solid var(--status-info-border);
-242: }
-243: 
-244: /* Modern Data Table */
-245: .modern-table {
-246:   width: 100%;
-247:   border-collapse: collapse;
-248:   font-size: 14px;
-249:   text-align: left;
-250: }
-251: .modern-table th {
-252:   background-color: #faf9f7;
-253:   color: var(--text-secondary);
-254:   font-weight: 600;
-255:   font-size: 12px;
-256:   text-transform: uppercase;
-257:   letter-spacing: 0.04em;
-258:   padding: 12px 16px;
-259:   border-bottom: 1px solid var(--border-subtle);
-260: }
-261: .modern-table td {
-262:   padding: 14px 16px;
-263:   border-bottom: 1px solid var(--border-subtle);
-264:   color: var(--text-primary);
-265:   vertical-align: middle;
-266: }
-267: .modern-table tbody tr {
-268:   transition: background-color 0.1s ease;
-269: }
-270: .modern-table tbody tr:hover {
-271:   background-color: #faf9f7;
-272: }
-273: 
-274: /* Operational Badges & Code Blocks */
-275: .tracking-badge {
-276:   font-family: var(--font-mono);
-277:   font-weight: 600;
-278:   color: var(--text-primary);
-279:   background-color: #f6f5f3;
-280:   padding: 3px 8px;
-281:   border-radius: 6px;
-282:   border: 1px solid var(--border-subtle);
-283:   display: inline-flex;
-284:   align-items: center;
-285:   gap: 6px;
-286:   user-select: all;
-287: }
-288: 
-289: /* TASK-AI-159 app shell; reuse the approved warm surface/brand tokens. */
-290: .shell-frame {
-291:   display: flex;
-292:   min-height: 100dvh;
-293: }
-294: .shell-sidebar {
-295:   width: 16rem;
-296:   flex-shrink: 0;
-297:   position: sticky;
-298:   top: 0;
-299:   height: 100dvh;
-300:   overflow-y: auto;
-301:   border-right: 1px solid var(--border-subtle);
-302:   background: var(--bg-card);
-303: }
-304: .shell-frame[data-state='collapsed'] .shell-sidebar {
-305:   width: 4rem;
-306: }
-307: .shell-frame[data-state='collapsed'] .shell-sidebar .shell-nav-label,
-308: .shell-frame[data-state='collapsed'] .shell-sidebar .shell-group-label {
-309:   position: absolute;
-310:   width: 1px;
-311:   height: 1px;
-312:   overflow: hidden;
-313:   clip-path: inset(50%);
-314:   white-space: nowrap;
-315: }
-316: .shell-inset {
-317:   flex: 1;
-318:   min-width: 0;
-319: }
-320: .shell-header {
-321:   position: sticky;
-322:   top: 0;
-323:   z-index: 40;
-324:   display: flex;
-325:   align-items: center;
-326:   gap: 8px;
-327:   min-height: 64px;
-328:   padding: 8px 16px;
-329:   border-bottom: 1px solid var(--border-subtle);
-330:   background: var(--bg-card);
-331: }
-332: .shell-brand {
-333:   display: flex;
-334:   align-items: center;
-335:   gap: 12px;
-336:   padding: 16px;
-337:   font-weight: 800;
-338: }
-339: .shell-brand-icon {
-340:   display: grid;
-341:   place-items: center;
-342:   width: 32px;
-343:   height: 32px;
-344:   flex-shrink: 0;
-345:   border-radius: 8px;
-346:   color: white;
-347:   background: var(--primary);
-348: }
-349: .shell-sidebar-content {
-350:   padding: 8px;
-351:   display: flex;
-352:   flex-direction: column;
-353:   gap: 16px;
-354: }
-355: .shell-group-label {
-356:   padding: 8px;
-357:   font-size: 12px;
-358:   font-weight: 600;
-359:   color: var(--text-secondary);
-360: }
-361: .shell-nav-link {
-362:   display: flex;
-363:   align-items: center;
-364:   gap: 12px;
-365:   min-height: 40px;
-366:   padding: 8px;
-367:   border-radius: 8px;
-368:   font-size: 14px;
-369:   text-align: left;
-370: }
-371: .shell-nav-link svg {
-372:   flex-shrink: 0;
-373: }
-374: .shell-nav-link:hover,
-375: .shell-icon-button:hover {
-376:   background: var(--bg-hover);
-377: }
-378: .shell-nav-link[aria-current='page'] {
-379:   color: var(--primary);
-380:   background: var(--primary-subtle);
-381:   font-weight: 600;
-382: }
-383: .shell-nav-label {
-384:   overflow: hidden;
-385:   text-overflow: ellipsis;
-386:   white-space: nowrap;
-387: }
-388: .shell-icon-button {
-389:   display: inline-flex;
-390:   align-items: center;
-391:   justify-content: center;
-392:   gap: 8px;
-393:   min-height: 40px;
-394:   min-width: 40px;
-395:   padding: 8px;
-396:   border-radius: 8px;
-397:   cursor: pointer;
-398: }
-399: .shell-frame :is(a, button, summary, select):focus-visible,
-400: .shell-modal :is(button, input):focus-visible {
-401:   outline: 2px solid var(--border-focus);
-402:   outline-offset: 2px;
-403: }
-404: .shell-skip-link {
-405:   position: fixed;
-406:   top: 8px;
-407:   left: 8px;
-408:   z-index: 60;
-409:   transform: translateY(-150%);
-410:   background: var(--bg-card);
-411:   padding: 12px;
-412:   border: 2px solid var(--border-focus);
-413: }
-414: .shell-skip-link:focus {
-415:   transform: translateY(0);
-416: }
-417: .shell-avatar {
-418:   width: 24px;
-419:   height: 24px;
-420:   display: grid;
-421:   place-items: center;
-422:   border-radius: 6px;
-423:   background: var(--text-primary);
-424:   color: white;
-425: }
-426: .shell-user-menu {
-427:   position: relative;
-428: }
-429: .shell-user-menu summary {
-430:   list-style: none;
-431: }
-432: .shell-user-menu summary::-webkit-details-marker {
-433:   display: none;
-434: }
-435: .shell-user-content {
-436:   position: absolute;
-437:   right: 0;
-438:   top: calc(100% + 8px);
-439:   width: 240px;
-440:   max-width: calc(100vw - 32px);
-441:   border: 1px solid var(--border-subtle);
-442:   border-radius: 12px;
-443:   padding: 8px;
-444:   background: var(--bg-card);
-445:   box-shadow: 0 8px 24px #0c14211a;
-446: }
-447: .shell-modal {
-448:   padding: 0;
-449:   border: 1px solid var(--border-subtle);
-450:   background: var(--bg-card);
-451:   color: var(--text-primary);
-452:   max-height: 100dvh;
-453: }
-454: .shell-modal::backdrop {
-455:   background: #0c142180;
-456: }
-457: .shell-modal-sheet {
-458:   margin: 0;
-459:   width: min(288px, calc(100vw - 40px));
-460:   height: 100dvh;
-461:   max-width: none;
-462:   max-height: none;
-463: }
-464: .shell-modal-command {
-465:   margin: 10dvh auto auto;
-466:   width: min(560px, calc(100vw - 32px));
-467:   border-radius: 12px;
-468: }
-469: .shell-command-results {
-470:   max-height: 60dvh;
-471:   overflow-y: auto;
-472:   padding: 8px;
-473: }
-474: .shell-command-target {
-475:   display: flex;
-476:   align-items: center;
-477:   gap: 12px;
-478:   width: 100%;
-479:   min-height: 48px;
-480:   padding: 8px;
-481:   border-radius: 8px;
-482:   text-align: left;
-483: }
-484: .shell-command-target:hover,
-485: .shell-command-target:focus {
-486:   background: var(--primary-subtle);
-487: }
-488: .shell-skeleton {
-489:   display: grid;
-490:   grid-template-columns: 16rem minmax(0, 1fr);
-491:   min-height: 100dvh;
-492: }
-493: @media (max-width: 767px) {
-494:   .shell-sidebar {
-495:     display: none;
-496:   }
-497:   .shell-header {
-498:     padding: 8px;
-499:   }
-500:   .shell-skeleton {
-501:     grid-template-columns: minmax(0, 1fr);
-502:   }
-503:   #shell-content {
-504:     overflow-x: auto;
-505:   }
-506: }
-</file>
-
-<file path="apps/web/src/components/auth/LoginView.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useEffect, useState } from 'react';
-  4: import Link from 'next/link';
-  5: import { useAuth, AuthStatusBlock } from '@/context/AuthContext';
-  6: import {
-  7:   Mail,
-  8:   Lock,
-  9:   ArrowRight,
- 10:   ArrowLeft,
- 11:   Eye,
- 12:   EyeOff,
- 13:   CheckCircle2,
- 14:   AlertTriangle,
- 15:   Loader2,
- 16:   Smartphone,
- 17:   ShieldCheck,
- 18:   KeyRound,
- 19: } from 'lucide-react';
- 20: 
- 21: type LoginMode =
- 22:   | 'CREDENTIALS'
- 23:   | 'OTP_IDENTIFIER'
- 24:   | 'OTP_CODE'
- 25:   | 'MFA_CHALLENGE'
- 26:   | 'MFA_RECOVERY'
- 27:   | 'MFA_ENROLLMENT_NOTICE';
- 28: 
- 29: const RESEND_COOLDOWN_SECONDS = 60;
- 30: 
- 31: const STATUS_TITLE: Record<string, string> = {
- 32:   AUTH_PENDING_VERIFICATION: 'Tài khoản chưa xác thực',
- 33:   AUTH_ACCOUNT_SUSPENDED: 'Tài khoản đã bị tạm ngưng',
- 34:   AUTH_ACCOUNT_DISABLED: 'Tài khoản đã bị vô hiệu hóa',
- 35:   AUTH_INVITATION_PENDING: 'Lời mời tham gia cửa hàng chưa được chấp nhận',
- 36: };
- 37: 
- 38: const formatRetry = (seconds: number): string => {
- 39:   if (seconds >= 60) return `${Math.ceil(seconds / 60)} phút`;
- 40:   return `${seconds} giây`;
- 41: };
- 42: 
- 43: interface Props {
- 44:   onSwitchToRegister: () => void;
- 45: }
- 46: 
- 47: export const LoginView: React.FC<Props> = ({ onSwitchToRegister }) => {
- 48:   const {
- 49:     login,
- 50:     requestLoginOtp,
- 51:     verifyLoginOtp,
- 52:     resendVerification,
- 53:     verifyMfaChallenge,
- 54:     verifyMfaRecovery,
- 55:   } = useAuth();
- 56: 
- 57:   const [mode, setMode] = useState<LoginMode>('CREDENTIALS');
- 58:   const [account, setAccount] = useState('');
- 59:   const [password, setPassword] = useState('');
- 60:   const [showPassword, setShowPassword] = useState(false);
- 61:   const [rememberMe, setRememberMe] = useState(true);
- 62:   const [loading, setLoading] = useState(false);
- 63:   const [errorMsg, setErrorMsg] = useState<string | null>(null);
- 64:   const [infoMsg, setInfoMsg] = useState<string | null>(null);
- 65:   const [fieldError, setFieldError] = useState<{
- 66:     account?: string;
- 67:     password?: string;
- 68:     otp?: string;
- 69:   } | null>(null);
- 70:   const [statusBlock, setStatusBlock] = useState<AuthStatusBlock | null>(null);
- 71:   const [otpChallenge, setOtpChallenge] = useState<{
- 72:     maskedIdentifier?: string;
- 73:     channel?: string;
- 74:     expiresIn?: number;
- 75:   } | null>(null);
- 76:   const [otpCode, setOtpCode] = useState('');
- 77:   const [resendCooldown, setResendCooldown] = useState(0);
- 78:   const [resendBusy, setResendBusy] = useState(false);
- 79: 
- 80:   // MFA state
- 81:   const [mfaChallengeId, setMfaChallengeId] = useState<string | null>(null);
- 82:   const [mfaExpiresIn, setMfaExpiresIn] = useState<number | null>(null);
- 83:   const [mfaTotpCode, setMfaTotpCode] = useState('');
- 84:   const [mfaRecoveryCode, setMfaRecoveryCode] = useState('');
- 85:   const [mfaSetupToken, setMfaSetupToken] = useState<string | null>(null);
- 86: 
- 87:   useEffect(() => {
- 88:     if (resendCooldown <= 0) return undefined;
- 89:     const timer = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
- 90:     return () => clearTimeout(timer);
- 91:   }, [resendCooldown]);
- 92: 
- 93:   const resetMessages = () => {
- 94:     setErrorMsg(null);
- 95:     setInfoMsg(null);
- 96:   };
- 97: 
- 98:   const handlePasswordLogin = async (e: React.FormEvent) => {
- 99:     e.preventDefault();
-100:     resetMessages();
-101: 
-102:     const nextField: { account?: string; password?: string } = {};
-103:     if (!account.trim()) nextField.account = 'Vui lòng nhập email hoặc số điện thoại.';
-104:     if (!password) nextField.password = 'Vui lòng nhập mật khẩu.';
-105:     setFieldError(Object.keys(nextField).length ? nextField : null);
-106:     if (Object.keys(nextField).length) return;
-107: 
-108:     setLoading(true);
-109:     const res = await login(account.trim(), password, rememberMe);
-110:     setLoading(false);
-111: 
-112:     if (res.success) return; // Session applied by AuthContext; the app shell re-renders.
-113: 
-114:     if (res.mfaRequired && res.challengeId) {
-115:       setMfaChallengeId(res.challengeId);
-116:       setMfaExpiresIn(res.expiresIn || 300);
-117:       setMfaTotpCode('');
-118:       setMode('MFA_CHALLENGE');
-119:       return;
-120:     }
-121: 
-122:     if (res.mfaEnrollmentRequired) {
-123:       setMfaSetupToken(res.setupToken || null);
-124:       setMode('MFA_ENROLLMENT_NOTICE');
-125:       return;
-126:     }
-127: 
-128:     if (res.statusBlock) {
-129:       setStatusBlock(res.statusBlock);
-130:       return;
-131:     }
-132:     if (res.code === 'RATE_LIMITED') {
-133:       const retry = res.retryAfterSeconds
-134:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
-135:         : '';
-136:       setErrorMsg(`${res.error || 'Bạn đã thử đăng nhập quá nhiều lần.'}${retry}`);
-137:       return;
-138:     }
-139:     setErrorMsg(res.error || 'Đăng nhập không thành công. Vui lòng kiểm tra lại tài khoản.');
-140:   };
-141: 
-142:   const handleStartOtp = () => {
-143:     resetMessages();
-144:     setStatusBlock(null);
-145:     setFieldError(null);
-146:     setOtpCode('');
-147:     setMode('OTP_IDENTIFIER');
-148:   };
-149: 
-150:   const handleRequestOtp = async (e: React.FormEvent) => {
-151:     e.preventDefault();
-152:     resetMessages();
-153: 
-154:     if (!account.trim()) {
-155:       setFieldError({ account: 'Vui lòng nhập email hoặc số điện thoại.' });
-156:       return;
-157:     }
-158:     setFieldError(null);
-159:     setLoading(true);
-160:     const res = await requestLoginOtp(account.trim());
-161:     setLoading(false);
-162: 
-163:     if (res.success) {
-164:       setOtpChallenge({
-165:         maskedIdentifier: res.maskedIdentifier,
-166:         channel: res.channel,
-167:         expiresIn: res.expiresIn,
-168:       });
-169:       setOtpCode('');
-170:       setResendCooldown(RESEND_COOLDOWN_SECONDS);
-171:       setInfoMsg(
-172:         `Mã OTP đã được gửi đến ${res.maskedIdentifier || 'kênh đã xác thực của bạn'}. Mã có hiệu lực ${formatRetry(res.expiresIn || 300)}.`
-173:       );
-174:       setMode('OTP_CODE');
-175:       return;
-176:     }
-177:     if (res.code === 'AUTH_OTP_LOGIN_DISABLED') {
-178:       setErrorMsg(res.error || 'Đăng nhập bằng mã OTP hiện không được kích hoạt.');
-179:       return;
-180:     }
-181:     if (res.code === 'RATE_LIMITED') {
-182:       const retry = res.retryAfterSeconds
-183:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
-184:         : '';
-185:       setErrorMsg(`${res.error || 'Bạn đã yêu cầu mã OTP quá nhiều lần.'}${retry}`);
-186:       return;
-187:     }
-188:     setErrorMsg(res.error || 'Không gửi được mã OTP. Vui lòng thử lại.');
-189:   };
-190: 
-191:   const handleVerifyOtp = async (e: React.FormEvent) => {
-192:     e.preventDefault();
-193:     resetMessages();
-194: 
-195:     if (!/^\d{6}$/.test(otpCode.trim())) {
-196:       setFieldError({ otp: 'Mã OTP gồm 6 chữ số.' });
-197:       return;
-198:     }
-199:     setFieldError(null);
-200:     setLoading(true);
-201:     const res = await verifyLoginOtp(account.trim(), otpCode.trim());
-202:     setLoading(false);
-203: 
-204:     if (res.success) return; // Session applied by AuthContext; the app shell re-renders.
-205: 
-206:     if (res.mfaRequired && res.challengeId) {
-207:       setMfaChallengeId(res.challengeId);
-208:       setMfaExpiresIn(res.expiresIn || 300);
-209:       setMfaTotpCode('');
-210:       setMode('MFA_CHALLENGE');
-211:       return;
-212:     }
-213: 
-214:     if (res.mfaEnrollmentRequired) {
-215:       setMfaSetupToken(res.setupToken || null);
-216:       setMode('MFA_ENROLLMENT_NOTICE');
-217:       return;
-218:     }
-219: 
-220:     if (res.statusBlock) {
-221:       setStatusBlock(res.statusBlock);
-222:       return;
-223:     }
-224:     if (
-225:       res.code === 'OTP_ALREADY_CONSUMED' ||
-226:       res.code === 'OTP_EXPIRED' ||
-227:       res.code === 'OTP_MAX_ATTEMPTS_EXCEEDED'
-228:     ) {
-229:       setErrorMsg(res.error || 'Mã OTP không còn hiệu lực. Vui lòng yêu cầu mã mới.');
-230:       return;
-231:     }
-232:     setFieldError({ otp: res.error || 'Mã OTP không đúng. Vui lòng thử lại.' });
-233:   };
-234: 
-235:   const handleVerifyMfaChallenge = async (e: React.FormEvent) => {
-236:     e.preventDefault();
-237:     resetMessages();
-238: 
-239:     if (!/^\d{6}$/.test(mfaTotpCode.trim())) {
-240:       setFieldError({ otp: 'Mã xác thực gồm 6 chữ số.' });
-241:       return;
-242:     }
-243:     if (!mfaChallengeId) {
-244:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
-245:       setMode('CREDENTIALS');
-246:       return;
-247:     }
-248: 
-249:     setFieldError(null);
-250:     setLoading(true);
-251:     const res = await verifyMfaChallenge(mfaChallengeId, mfaTotpCode.trim());
-252:     setLoading(false);
-253: 
-254:     if (res.success) return;
-255: 
-256:     if (res.code === 'RATE_LIMITED') {
-257:       const retry = res.retryAfterSeconds
-258:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
-259:         : '';
-260:       setErrorMsg(`${res.error || 'Bạn đã thử xác thực quá nhiều lần.'}${retry}`);
-261:       return;
-262:     }
-263:     if (
-264:       res.code === 'CHALLENGE_EXPIRED' ||
-265:       res.code === 'CHALLENGE_CONSUMED' ||
-266:       res.code === 'CHALLENGE_INVALIDATED'
-267:     ) {
-268:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
-269:       setMode('CREDENTIALS');
-270:       return;
-271:     }
-272: 
-273:     setFieldError({ otp: res.error || 'Mã xác thực không chính xác. Vui lòng thử lại.' });
-274:   };
-275: 
-276:   const handleVerifyMfaRecovery = async (e: React.FormEvent) => {
-277:     e.preventDefault();
-278:     resetMessages();
-279: 
-280:     const cleanCode = mfaRecoveryCode.trim().toUpperCase();
-281:     if (!cleanCode) {
-282:       setFieldError({ otp: 'Vui lòng nhập mã dự phòng.' });
-283:       return;
-284:     }
-285:     if (!mfaChallengeId) {
-286:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
-287:       setMode('CREDENTIALS');
-288:       return;
-289:     }
-290: 
-291:     setFieldError(null);
-292:     setLoading(true);
-293:     const res = await verifyMfaRecovery(mfaChallengeId, cleanCode);
-294:     setLoading(false);
-295: 
-296:     if (res.success) return;
-297: 
-298:     if (res.code === 'RATE_LIMITED') {
-299:       const retry = res.retryAfterSeconds
-300:         ? ` (thử lại sau ${formatRetry(res.retryAfterSeconds)})`
-301:         : '';
-302:       setErrorMsg(`${res.error || 'Bạn đã thử xác thực quá nhiều lần.'}${retry}`);
-303:       return;
-304:     }
-305:     if (
-306:       res.code === 'CHALLENGE_EXPIRED' ||
-307:       res.code === 'CHALLENGE_CONSUMED' ||
-308:       res.code === 'CHALLENGE_INVALIDATED'
-309:     ) {
-310:       setErrorMsg('Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại.');
-311:       setMode('CREDENTIALS');
-312:       return;
-313:     }
-314: 
-315:     setFieldError({ otp: res.error || 'Mã dự phòng không chính xác hoặc đã được sử dụng.' });
-316:   };
-317: 
-318:   const handleResendOtp = async () => {
-319:     resetMessages();
-320:     setResendBusy(true);
-321:     const res = await requestLoginOtp(account.trim());
-322:     setResendBusy(false);
-323: 
-324:     if (res.success) {
-325:       setResendCooldown(RESEND_COOLDOWN_SECONDS);
-326:       setInfoMsg(
-327:         `Mã OTP mới đã được gửi đến ${res.maskedIdentifier || otpChallenge?.maskedIdentifier || 'kênh đã xác thực của bạn'}.`
-328:       );
-329:       return;
-330:     }
-331:     if (res.code === 'RATE_LIMITED') {
-332:       setResendCooldown(res.retryAfterSeconds || RESEND_COOLDOWN_SECONDS);
-333:       setErrorMsg(res.error || 'Vui lòng đợi trước khi yêu cầu mã mới.');
-334:       return;
-335:     }
-336:     setErrorMsg(res.error || 'Không gửi được mã OTP mới.');
-337:   };
-338: 
-339:   const handleResendVerification = async () => {
-340:     resetMessages();
-341:     setResendBusy(true);
-342:     const res = await resendVerification(account.trim(), 'email');
-343:     setResendBusy(false);
-344: 
-345:     if (res.success) {
-346:       setInfoMsg(`Đã gửi lại liên kết xác thực đến ${account.trim()}.`);
-347:       return;
-348:     }
-349:     setErrorMsg(res.error || 'Không gửi lại được email xác thực.');
-350:   };
-351: 
-352:   const handleBackToCredentials = () => {
-353:     resetMessages();
-354:     setStatusBlock(null);
-355:     setFieldError(null);
-356:     setMfaTotpCode('');
-357:     setMfaRecoveryCode('');
-358:     setMode('CREDENTIALS');
-359:   };
-360: 
-361:   return (
-362:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-[#c23807] selection:text-white relative">
-363:       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
-364:         {/* Brand Logo & Title */}
-365:         <div className="text-center space-y-2 mb-8">
-366:           <div className="w-14 h-14 rounded-2xl bg-[#c23807] text-white flex items-center justify-center font-black text-2xl mx-auto shadow-md shadow-[#c23807]/20">
-367:             S
-368:           </div>
-369:           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900">
-370:             Đăng Nhập Ship Dễ
-371:           </h1>
-372:           <p className="text-sm text-slate-500">
-373:             Hệ thống kiểm soát vận hành &amp; đối soát COD tự động cho Online Shop
-374:           </p>
-375:         </div>
-376: 
-377:         {/* Main Login Card */}
-378:         <div className="modern-card p-8 space-y-6 shadow-xl">
-379:           {statusBlock ? (
-380:             <div className="space-y-4 text-center" data-testid="login-status-block">
-381:               <div
-382:                 className={`w-12 h-12 rounded-2xl mx-auto flex items-center justify-center ${
-383:                   statusBlock.code === 'AUTH_ACCOUNT_SUSPENDED' ||
-384:                   statusBlock.code === 'AUTH_ACCOUNT_DISABLED'
-385:                     ? 'bg-rose-50 text-rose-600'
-386:                     : 'bg-amber-50 text-amber-600'
-387:                 }`}
-388:               >
-389:                 <AlertTriangle className="w-6 h-6" />
-390:               </div>
-391:               <div className="space-y-1.5">
-392:                 <h2 className="text-base font-bold text-slate-900">
-393:                   {STATUS_TITLE[statusBlock.code] || 'Không thể đăng nhập'}
-394:                 </h2>
-395:                 <p className="text-xs text-slate-600 leading-relaxed">
-396:                   {statusBlock.message || 'Tài khoản của bạn hiện không thể đăng nhập.'}
-397:                 </p>
-398:                 {statusBlock.nextAction && (
-399:                   <p className="text-xs text-slate-500 leading-relaxed">{statusBlock.nextAction}</p>
-400:                 )}
-401:               </div>
-402:               {statusBlock.code === 'AUTH_PENDING_VERIFICATION' && (
-403:                 <button
-404:                   type="button"
-405:                   onClick={handleResendVerification}
-406:                   disabled={resendBusy}
-407:                   className="btn-primary w-full justify-center text-sm py-3 font-bold"
-408:                 >
-409:                   {resendBusy ? (
-410:                     <Loader2 className="w-4 h-4 animate-spin" />
-411:                   ) : (
-412:                     'Gửi lại email xác thực'
-413:                   )}
-414:                 </button>
-415:               )}
-416:               <button
-417:                 type="button"
-418:                 onClick={handleBackToCredentials}
-419:                 className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
-420:               >
-421:                 ← Quay lại đăng nhập
-422:               </button>
-423:             </div>
-424:           ) : (
-425:             <>
-426:               {errorMsg && (
-427:                 <div
-428:                   className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold flex items-start gap-2"
-429:                   data-testid="login-error"
-430:                 >
-431:                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-432:                   <span>{errorMsg}</span>
-433:                 </div>
-434:               )}
-435: 
-436:               {infoMsg && (
-437:                 <div
-438:                   className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-start gap-2"
-439:                   data-testid="login-info"
-440:                 >
-441:                   <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-442:                   <span>{infoMsg}</span>
-443:                 </div>
-444:               )}
-445: 
-446:               {mode === 'CREDENTIALS' && (
-447:                 <>
-448:                   <form onSubmit={handlePasswordLogin} className="space-y-4 text-xs">
-449:                     <div>
-450:                       <label className="text-xs font-bold text-slate-700 block mb-1.5">
-451:                         Email hoặc Số Điện Thoại
-452:                       </label>
-453:                       <div className="relative">
-454:                         <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-455:                         <input
-456:                           type="text"
-457:                           value={account}
-458:                           onChange={(e) => setAccount(e.target.value)}
-459:                           placeholder="email@cuahang.vn hoặc 09xx.xxx.xxx"
-460:                           autoComplete="username"
-461:                           className="modern-input pl-10 h-11 text-sm font-medium"
-462:                         />
-463:                       </div>
-464:                       {fieldError?.account && (
-465:                         <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
-466:                           {fieldError.account}
-467:                         </p>
-468:                       )}
-469:                     </div>
-470: 
-471:                     <div>
-472:                       <div className="flex justify-between items-center mb-1.5">
-473:                         <label className="text-xs font-bold text-slate-700">Mật Khẩu</label>
-474:                         <Link
-475:                           href="/forgot-password"
-476:                           className="text-xs text-[#c23807] font-semibold hover:underline"
-477:                         >
-478:                           Quên mật khẩu?
-479:                         </Link>
-480:                       </div>
-481:                       <div className="relative">
-482:                         <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-483:                         <input
-484:                           type={showPassword ? 'text' : 'password'}
-485:                           value={password}
-486:                           onChange={(e) => setPassword(e.target.value)}
-487:                           placeholder="••••••••"
-488:                           autoComplete="current-password"
-489:                           className="modern-input pl-10 pr-10 h-11 text-sm font-medium"
-490:                         />
-491:                         <button
-492:                           type="button"
-493:                           onClick={() => setShowPassword(!showPassword)}
-494:                           aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-495:                           className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-600"
-496:                         >
-497:                           {showPassword ? (
-498:                             <EyeOff className="w-4 h-4" />
-499:                           ) : (
-500:                             <Eye className="w-4 h-4" />
-501:                           )}
-502:                         </button>
-503:                       </div>
-504:                       {fieldError?.password && (
-505:                         <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
-506:                           {fieldError.password}
-507:                         </p>
-508:                       )}
-509:                     </div>
-510: 
-511:                     <div className="flex items-center justify-between pt-1">
-512:                       <label className="flex items-center gap-2 cursor-pointer">
-513:                         <input
-514:                           type="checkbox"
-515:                           checked={rememberMe}
-516:                           onChange={(e) => setRememberMe(e.target.checked)}
-517:                           className="rounded border-slate-300 text-[#c23807] focus:ring-[#c23807] w-4 h-4"
-518:                         />
-519:                         <span className="text-xs text-slate-600 font-medium">
-520:                           Ghi nhớ đăng nhập
-521:                         </span>
-522:                       </label>
-523:                     </div>
-524: 
-525:                     <button
-526:                       type="submit"
-527:                       disabled={loading}
-528:                       className="btn-primary w-full justify-center text-sm py-3 font-bold"
-529:                     >
-530:                       {loading ? (
-531:                         <span className="flex items-center gap-2">
-532:                           <Loader2 className="w-4 h-4 animate-spin" />
-533:                           Đang Đăng Nhập...
-534:                         </span>
-535:                       ) : (
-536:                         <>
-537:                           <span>Đăng Nhập</span>
-538:                           <ArrowRight className="w-4 h-4" />
-539:                         </>
-540:                       )}
-541:                     </button>
-542:                   </form>
-543: 
-544:                   <div className="relative my-4">
-545:                     <div className="absolute inset-0 flex items-center">
-546:                       <div className="w-full border-t border-slate-200" />
-547:                     </div>
-548:                     <div className="relative flex justify-center text-xs">
-549:                       <span className="bg-white px-3 text-slate-600 font-semibold">hoặc</span>
-550:                     </div>
-551:                   </div>
-552: 
-553:                   <button
-554:                     type="button"
-555:                     onClick={handleStartOtp}
-556:                     className="w-full flex items-center justify-center gap-2 h-11 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors"
-557:                   >
-558:                     <Smartphone className="w-4 h-4 text-slate-500" />
-559:                     Đăng nhập bằng mã OTP (không cần mật khẩu)
-560:                   </button>
-561:                 </>
-562:               )}
-563: 
-564:               {mode === 'OTP_IDENTIFIER' && (
-565:                 <form onSubmit={handleRequestOtp} className="space-y-4 text-xs">
-566:                   <div>
-567:                     <label className="text-xs font-bold text-slate-700 block mb-1.5">
-568:                       Email hoặc Số Điện Thoại nhận mã
-569:                     </label>
-570:                     <div className="relative">
-571:                       <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-572:                       <input
-573:                         type="text"
-574:                         value={account}
-575:                         onChange={(e) => setAccount(e.target.value)}
-576:                         placeholder="email@cuahang.vn hoặc 09xx.xxx.xxx"
-577:                         autoComplete="username"
-578:                         className="modern-input pl-10 h-11 text-sm font-medium"
-579:                       />
-580:                     </div>
-581:                     {fieldError?.account && (
-582:                       <p className="text-[11px] text-rose-600 font-semibold mt-1.5">
-583:                         {fieldError.account}
-584:                       </p>
-585:                     )}
-586:                   </div>
-587:                   <button
-588:                     type="submit"
-589:                     disabled={loading}
-590:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
-591:                   >
-592:                     {loading ? (
-593:                       <span className="flex items-center gap-2">
-594:                         <Loader2 className="w-4 h-4 animate-spin" />
-595:                         Đang Gửi Mã...
-596:                       </span>
-597:                     ) : (
-598:                       'Gửi Mã OTP'
-599:                     )}
-600:                   </button>
-601:                   <button
-602:                     type="button"
-603:                     onClick={handleBackToCredentials}
-604:                     className="w-full flex items-center justify-center gap-1.5 text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
-605:                   >
-606:                     <ArrowLeft className="w-3.5 h-3.5" />
-607:                     Đăng nhập bằng mật khẩu
-608:                   </button>
-609:                 </form>
-610:               )}
-611: 
-612:               {mode === 'OTP_CODE' && (
-613:                 <form onSubmit={handleVerifyOtp} className="space-y-4 text-xs">
-614:                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600 leading-relaxed">
-615:                     Nhập mã OTP gồm 6 chữ số đã được gửi đến{' '}
-616:                     <span className="font-bold text-slate-800">
-617:                       {otpChallenge?.maskedIdentifier || 'kênh đã xác thực của bạn'}
-618:                     </span>
-619:                     {otpChallenge?.expiresIn
-620:                       ? ` (hiệu lực ${formatRetry(otpChallenge.expiresIn)})`
-621:                       : ''}
-622:                     . Mã chỉ dùng được một lần.
-623:                   </div>
-624:                   <div>
-625:                     <label className="text-xs font-bold text-slate-700 block mb-1.5">Mã OTP</label>
-626:                     <div className="relative">
-627:                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-628:                       <input
-629:                         type="text"
-630:                         inputMode="numeric"
-631:                         autoComplete="one-time-code"
-632:                         maxLength={6}
-633:                         value={otpCode}
-634:                         onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-635:                         placeholder="••••••"
-636:                         className="modern-input pl-10 h-11 text-sm font-medium tracking-[0.4em]"
-637:                       />
-638:                     </div>
-639:                     {fieldError?.otp && (
-640:                       <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
-641:                         {fieldError.otp}
-642:                       </p>
-643:                     )}
-644:                   </div>
-645:                   <button
-646:                     type="submit"
-647:                     disabled={loading}
-648:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
-649:                   >
-650:                     {loading ? (
-651:                       <span className="flex items-center gap-2">
-652:                         <Loader2 className="w-4 h-4 animate-spin" />
-653:                         Đang Xác Thực...
-654:                       </span>
-655:                     ) : (
-656:                       <>
-657:                         <span>Xác Nhận &amp; Đăng Nhập</span>
-658:                         <ArrowRight className="w-4 h-4" />
-659:                       </>
-660:                     )}
-661:                   </button>
-662:                   <div className="flex items-center justify-between">
-663:                     <button
-664:                       type="button"
-665:                       onClick={handleResendOtp}
-666:                       disabled={resendBusy || resendCooldown > 0}
-667:                       className="text-xs text-[#c23807] font-semibold hover:underline disabled:text-slate-400 disabled:cursor-not-allowed disabled:no-underline"
-668:                     >
-669:                       {resendBusy
-670:                         ? 'Đang gửi lại...'
-671:                         : resendCooldown > 0
-672:                           ? `Gửi lại mã sau ${resendCooldown}s`
-673:                           : 'Gửi lại mã OTP'}
-674:                     </button>
-675:                     <button
-676:                       type="button"
-677:                       onClick={handleStartOtp}
-678:                       className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
-679:                     >
-680:                       ← Dùng tài khoản khác
-681:                     </button>
-682:                   </div>
-683:                 </form>
-684:               )}
-685: 
-686:               {mode === 'MFA_CHALLENGE' && (
-687:                 <form
-688:                   onSubmit={handleVerifyMfaChallenge}
-689:                   className="space-y-4 text-xs"
-690:                   data-testid="mfa-challenge-form"
-691:                 >
-692:                   <div className="p-3.5 rounded-xl bg-orange-50 border border-orange-200 text-[11px] text-orange-950 leading-relaxed flex items-start gap-2.5">
-693:                     <ShieldCheck className="w-5 h-5 text-[#c23807] shrink-0 mt-0.5" />
-694:                     <div>
-695:                       <p className="font-bold text-slate-900 mb-0.5">Xác thực hai yếu tố (2FA)</p>
-696:                       <p className="text-slate-600">
-697:                         Nhập mã 6 chữ số từ ứng dụng xác thực (Google Authenticator, Microsoft
-698:                         Authenticator) trên điện thoại của bạn.
-699:                       </p>
-700:                     </div>
-701:                   </div>
-702: 
-703:                   <div>
-704:                     <label
-705:                       htmlFor="mfa-totp-code"
-706:                       className="text-xs font-bold text-slate-700 block mb-1.5"
-707:                     >
-708:                       Mã Xác Thực (TOTP)
-709:                     </label>
-710:                     <div className="relative">
-711:                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-712:                       <input
-713:                         id="mfa-totp-code"
-714:                         type="text"
-715:                         inputMode="numeric"
-716:                         autoComplete="one-time-code"
-717:                         maxLength={6}
-718:                         value={mfaTotpCode}
-719:                         onChange={(e) =>
-720:                           setMfaTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))
-721:                         }
-722:                         placeholder="••••••"
-723:                         autoFocus
-724:                         className="modern-input pl-10 h-11 text-sm font-medium tracking-[0.4em]"
-725:                       />
-726:                     </div>
-727:                     {fieldError?.otp && (
-728:                       <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
-729:                         {fieldError.otp}
-730:                       </p>
-731:                     )}
-732:                   </div>
-733: 
-734:                   <button
-735:                     type="submit"
-736:                     disabled={loading}
-737:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
-738:                   >
-739:                     {loading ? (
-740:                       <span className="flex items-center gap-2">
-741:                         <Loader2 className="w-4 h-4 animate-spin" />
-742:                         Đang Xác Thực...
-743:                       </span>
-744:                     ) : (
-745:                       <>
-746:                         <span>Xác Nhận Đăng Nhập</span>
-747:                         <ArrowRight className="w-4 h-4" />
-748:                       </>
-749:                     )}
-750:                   </button>
-751: 
-752:                   <div className="flex flex-col gap-2 pt-2 text-center">
-753:                     <button
-754:                       type="button"
-755:                       onClick={() => {
-756:                         resetMessages();
-757:                         setFieldError(null);
-758:                         setMode('MFA_RECOVERY');
-759:                       }}
-760:                       className="text-xs text-[#c23807] font-semibold hover:underline"
-761:                     >
-762:                       Không mang theo điện thoại? Sử dụng mã dự phòng
-763:                     </button>
-764:                     <button
-765:                       type="button"
-766:                       onClick={handleBackToCredentials}
-767:                       className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
-768:                     >
-769:                       ← Quay lại đăng nhập bằng tài khoản khác
-770:                     </button>
-771:                   </div>
-772:                 </form>
-773:               )}
-774: 
-775:               {mode === 'MFA_RECOVERY' && (
-776:                 <form
-777:                   onSubmit={handleVerifyMfaRecovery}
-778:                   className="space-y-4 text-xs"
-779:                   data-testid="mfa-recovery-form"
-780:                 >
-781:                   <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 leading-relaxed flex items-start gap-2.5">
-782:                     <KeyRound className="w-5 h-5 text-slate-700 shrink-0 mt-0.5" />
-783:                     <div>
-784:                       <p className="font-bold text-slate-900 mb-0.5">Sử dụng mã dự phòng</p>
-785:                       <p className="text-slate-600">
-786:                         Nhập một trong các mã khôi phục bạn đã lưu khi kích hoạt 2FA. Mỗi mã chỉ
-787:                         dùng được một lần.
-788:                       </p>
-789:                     </div>
-790:                   </div>
-791: 
-792:                   <div>
-793:                     <label
-794:                       htmlFor="mfa-recovery-code"
-795:                       className="text-xs font-bold text-slate-700 block mb-1.5"
-796:                     >
-797:                       Mã Dự Phòng (Recovery Code)
-798:                     </label>
-799:                     <div className="relative">
-800:                       <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-801:                       <input
-802:                         id="mfa-recovery-code"
-803:                         type="text"
-804:                         autoCapitalize="characters"
-805:                         autoComplete="off"
-806:                         value={mfaRecoveryCode}
-807:                         onChange={(e) => setMfaRecoveryCode(e.target.value.toUpperCase())}
-808:                         placeholder="XXXX-XXXX-XXXX-XXXX"
-809:                         autoFocus
-810:                         className="modern-input pl-10 h-11 text-sm font-mono tracking-wider uppercase"
-811:                       />
-812:                     </div>
-813:                     {fieldError?.otp && (
-814:                       <p role="alert" className="text-[11px] text-rose-600 font-semibold mt-1.5">
-815:                         {fieldError.otp}
-816:                       </p>
-817:                     )}
-818:                   </div>
-819: 
-820:                   <button
-821:                     type="submit"
-822:                     disabled={loading}
-823:                     className="btn-primary w-full justify-center text-sm py-3 font-bold"
-824:                   >
-825:                     {loading ? (
-826:                       <span className="flex items-center gap-2">
-827:                         <Loader2 className="w-4 h-4 animate-spin" />
-828:                         Đang Xác Thực...
-829:                       </span>
-830:                     ) : (
-831:                       <>
-832:                         <span>Xác Nhận Bằng Mã Dự Phòng</span>
-833:                         <ArrowRight className="w-4 h-4" />
-834:                       </>
-835:                     )}
-836:                   </button>
-837: 
-838:                   <div className="flex flex-col gap-2 pt-2 text-center">
-839:                     <button
-840:                       type="button"
-841:                       onClick={() => {
-842:                         resetMessages();
-843:                         setFieldError(null);
-844:                         setMode('MFA_CHALLENGE');
-845:                       }}
-846:                       className="text-xs text-[#c23807] font-semibold hover:underline"
-847:                     >
-848:                       ← Sử dụng mã xác thực từ ứng dụng (TOTP)
-849:                     </button>
-850:                     <button
-851:                       type="button"
-852:                       onClick={handleBackToCredentials}
-853:                       className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline"
-854:                     >
-855:                       Quay lại đăng nhập
-856:                     </button>
-857:                   </div>
-858:                 </form>
-859:               )}
-860: 
-861:               {mode === 'MFA_ENROLLMENT_NOTICE' && (
-862:                 <div className="space-y-4 text-center" data-testid="mfa-enrollment-notice">
-863:                   <div className="w-12 h-12 rounded-2xl mx-auto flex items-center justify-center bg-amber-50 text-amber-600">
-864:                     <ShieldCheck className="w-6 h-6" />
-865:                   </div>
-866:                   <div className="space-y-1.5">
-867:                     <h2 className="text-base font-bold text-slate-900">
-868:                       Bắt buộc thiết lập Xác thực Hai Yếu tố (MFA)
-869:                     </h2>
-870:                     <p className="text-xs text-slate-600 leading-relaxed">
-871:                       Tài khoản Chủ cửa hàng (Owner) hoặc Quản lý tài chính bắt buộc phải kích hoạt
-872:                       bảo mật hai lớp trước khi truy cập hệ thống Ship Dễ.
-873:                     </p>
-874:                   </div>
-875: 
-876:                   <Link
-877:                     href="/settings/security"
-878:                     className="btn-primary w-full justify-center text-sm py-3 font-bold inline-flex items-center gap-2"
-879:                   >
-880:                     <span>Kích Hoạt Bảo Mật 2FA Ngay</span>
-881:                     <ArrowRight className="w-4 h-4" />
-882:                   </Link>
-883: 
-884:                   <button
-885:                     type="button"
-886:                     onClick={handleBackToCredentials}
-887:                     className="text-xs text-slate-500 font-semibold hover:text-slate-700 hover:underline block mx-auto"
-888:                   >
-889:                     ← Quay lại đăng nhập
-890:                   </button>
-891:                 </div>
-892:               )}
-893:             </>
-894:           )}
-895:         </div>
-896: 
-897:         {/* Footer */}
-898:         <div className="text-center mt-6 text-xs text-slate-500">
-899:           Chưa có tài khoản?{' '}
-900:           <button
-901:             type="button"
-902:             onClick={onSwitchToRegister}
-903:             className="text-[#c23807] font-bold hover:underline"
-904:           >
-905:             Đăng ký tài khoản mới
-906:           </button>
-907:         </div>
-908:       </div>
-909:     </div>
-910:   );
-911: };
-</file>
-
-<file path="apps/web/src/components/ExceptionWorkboxTab.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState } from 'react';
-  4: import { UIExceptionItem } from './types';
-  5: import { MASTER_EXCEPTIONS } from '@/services/unifiedDataStore';
-  6: import {
-  7:   TrackingCode,
-  8:   Money,
-  9:   StatusBadge,
- 10:   AutomationBadge,
- 11:   ConfirmDialog,
- 12: } from './ui/OperationalComponents';
- 13: import {
- 14:   Phone,
- 15:   Calendar,
- 16:   AlertTriangle,
- 17:   CheckCircle2,
- 18:   Clock,
- 19:   Send,
- 20:   User,
- 21:   MapPin,
- 22:   ShieldCheck,
- 23:   ChevronDown,
- 24:   ChevronUp,
- 25:   FileSpreadsheet,
- 26: } from 'lucide-react';
- 27: 
- 28: interface Props {
- 29:   exceptions?: UIExceptionItem[];
- 30:   onUpdateException?: (updated: UIExceptionItem) => void;
- 31:   carrierGhnTier?: 'L2' | 'L1';
- 32:   selectedCaseId?: string | null;
- 33:   onClearSelection?: () => void;
- 34: }
- 35: 
- 36: export const ExceptionWorkboxTab: React.FC<Props> = ({
- 37:   exceptions = MASTER_EXCEPTIONS,
- 38:   onUpdateException,
- 39:   carrierGhnTier = 'L2',
- 40:   selectedCaseId: propSelectedCaseId,
- 41:   onClearSelection,
- 42: }) => {
- 43:   const [prevExceptions, setPrevExceptions] = useState(exceptions);
- 44:   const [caseList, setCaseList] = useState<UIExceptionItem[]>(exceptions);
- 45:   if (prevExceptions !== exceptions) {
- 46:     setPrevExceptions(exceptions);
- 47:     setCaseList(exceptions);
- 48:   }
- 49: 
- 50:   const [dismissedCaseId, setDismissedCaseId] = useState<string | null>(null);
- 51:   const [prevPropSelectedCaseId, setPrevPropSelectedCaseId] = useState(propSelectedCaseId);
- 52: 
- 53:   if (prevPropSelectedCaseId !== propSelectedCaseId) {
- 54:     setPrevPropSelectedCaseId(propSelectedCaseId);
- 55:     setDismissedCaseId(null);
- 56:   }
- 57: 
- 58:   const effectivePropCaseId =
- 59:     propSelectedCaseId && propSelectedCaseId !== dismissedCaseId ? propSelectedCaseId : null;
- 60: 
- 61:   const [selectedCaseId, setSelectedCaseId] = useState<string>(
- 62:     effectivePropCaseId || caseList[0]?.id || ''
- 63:   );
- 64:   const [filterType, setFilterType] = useState<'ALL' | 'MINE' | 'UNASSIGNED' | 'EXPIRING'>('ALL');
- 65:   const [callNote, setCallNote] = useState('');
- 66:   const [newPhone, setNewPhone] = useState('');
- 67:   const [scheduledDate, setScheduledDate] = useState('2026-08-18');
- 68:   const [reattemptNote, setReattemptNote] = useState('Khách hẹn giao lại ca chiều');
- 69:   const [toastFeedback, setToastFeedback] = useState<string | null>(null);
- 70:   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
- 71: 
- 72:   const isCaseActivated = Boolean(effectivePropCaseId);
- 73:   const matchedCase = isCaseActivated ? caseList.find((e) => e.id === effectivePropCaseId) : null;
- 74:   const isCaseNotFound = isCaseActivated && !matchedCase;
- 75: 
- 76:   const activeCaseId = effectivePropCaseId || selectedCaseId || caseList[0]?.id || '';
- 77:   const selectedCase = isCaseNotFound
- 78:     ? null
- 79:     : matchedCase || caseList.find((e) => e.id === activeCaseId) || caseList[0] || null;
- 80: 
- 81:   const handleRecoverException = () => {
- 82:     if (propSelectedCaseId) {
- 83:       setDismissedCaseId(propSelectedCaseId);
- 84:     }
- 85:     const firstId = caseList[0]?.id || '';
- 86:     setSelectedCaseId(firstId);
- 87:     onClearSelection?.();
- 88:   };
- 89: 
- 90:   const handleSelectCase = (id: string) => {
- 91:     if (propSelectedCaseId) {
- 92:       setDismissedCaseId(propSelectedCaseId);
- 93:     }
- 94:     setSelectedCaseId(id);
- 95:     onClearSelection?.();
- 96:   };
- 97: 
- 98:   const myCasesCount = caseList.filter((e) => e.assigned_to?.includes('Hoa')).length;
- 99:   const unassignedCount = caseList.filter((e) => !e.assigned_to).length;
-100:   const expiringCount = caseList.filter(
-101:     (e) => (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0
-102:   ).length;
-103: 
-104:   const filteredCases = caseList.filter((e) => {
-105:     if (filterType === 'MINE') return e.assigned_to?.includes('Hoa');
-106:     if (filterType === 'UNASSIGNED') return !e.assigned_to;
-107:     if (filterType === 'EXPIRING')
-108:       return (e.hours_remaining ?? 6) <= 4 && (e.hours_remaining ?? 6) > 0;
-109:     return true;
-110:   });
-111: 
-112:   const handleLogContact = (e: React.FormEvent) => {
-113:     e.preventDefault();
-114:     if (!callNote.trim()) {
-115:       alert('Vui lòng nhập ghi chú cuộc gọi.');
-116:       return;
-117:     }
-118:     setToastFeedback('✓ Đã ghi nhận nhật ký liên hệ khách hàng thành công.');
-119:     setCallNote('');
-120:     setTimeout(() => setToastFeedback(null), 3000);
-121:   };
-122: 
-123:   const handleDispatchReattempt = async () => {
-124:     if (!selectedCase) return;
-125: 
-126:     const updated = {
-127:       ...selectedCase,
-128:       status: 'REATTEMPT_REQUESTED' as any,
-129:       version: (selectedCase.version || 1) + 1,
-130:       attempts: (selectedCase.attempts || 1) + 1,
-131:     };
-132: 
-133:     setCaseList((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-134:     if (onUpdateException) onUpdateException(updated);
-135: 
-136:     setToastFeedback(
-137:       selectedCase.carrier_code === 'GHN' && carrierGhnTier === 'L2'
-138:         ? `✓ Đã tự động gửi yêu cầu giao lại qua API GHN cho mã ${selectedCase.tracking_code}.`
-139:         : `✓ Đã tạo hồ sơ hỗ trợ cho đơn ${selectedCase.tracking_code}. Vui lòng dán lên cổng hỗ trợ của ${selectedCase.carrier_code}.`
-140:     );
-141:     setTimeout(() => setToastFeedback(null), 4000);
-142:   };
-143: 
-144:   const currentTier = selectedCase?.carrier_code === 'GHN' ? carrierGhnTier : 'L1';
-145: 
-146:   return (
-147:     <div className="w-full space-y-4">
-148:       {toastFeedback && (
-149:         <div className="p-3.5 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
-150:           <div className="flex items-center gap-2">
-151:             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-152:             <span>{toastFeedback}</span>
-153:           </div>
-154:           <button
-155:             type="button"
-156:             onClick={() => setToastFeedback(null)}
-157:             className="font-bold text-slate-400 hover:text-white"
-158:           >
-159:             ✕
-160:           </button>
-161:         </div>
-162:       )}
-163: 
-164:       {/* Activated Case Not Found Alert (Real Not-Found State with Recovery) */}
-165:       {isCaseNotFound && (
-166:         <div
-167:           data-testid="activated-case-not-found"
-168:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
-169:         >
-170:           <div className="flex items-center gap-2.5">
-171:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-172:             <div>
-173:               <div className="font-bold text-xs sm:text-sm">
-174:                 Không tìm thấy sự cố vận hành{' '}
-175:                 <span className="font-mono underline">{propSelectedCaseId}</span>
-176:               </div>
-177:               <div className="text-xs text-amber-700">
-178:                 Sự cố không tồn tại trong danh sách ca chờ xử lý hoặc đã được xử lý xong.
-179:               </div>
-180:             </div>
-181:           </div>
-182:           <div className="flex items-center gap-2">
-183:             <button
-184:               type="button"
-185:               onClick={handleRecoverException}
-186:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
-187:             >
-188:               Quay lại danh sách sự cố
-189:             </button>
-190:           </div>
-191:         </div>
-192:       )}
-193: 
-194:       {/* 3-Column Layout */}
-195:       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-196:         {/* Left Column (3 cols): Filter Navigation */}
-197:         <div className="lg:col-span-3 space-y-3">
-198:           <div className="modern-card p-3 space-y-1">
-199:             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider px-3 py-1.5 block">
-200:               Phân Loại Sự Cố
-201:             </span>
-202: 
-203:             {[
-204:               { id: 'ALL', label: 'Tất cả sự cố', count: caseList.length, color: 'text-slate-900' },
-205:               { id: 'MINE', label: 'Việc của tôi', count: myCasesCount, color: 'text-[#c23807]' },
-206:               {
-207:                 id: 'UNASSIGNED',
-208:                 label: 'Chưa phân công',
-209:                 count: unassignedCount,
-210:                 color: 'text-slate-600',
-211:               },
-212:               {
-213:                 id: 'EXPIRING',
-214:                 label: 'Sắp hết hạn xử lý (<4h)',
-215:                 count: expiringCount,
-216:                 color: 'text-amber-700',
-217:               },
-218:             ].map((f) => (
-219:               <button
-220:                 key={f.id}
-221:                 type="button"
-222:                 onClick={() => setFilterType(f.id as any)}
-223:                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-224:                   filterType === f.id
-225:                     ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
-226:                     : 'text-slate-600 hover:bg-slate-50'
-227:                 }`}
-228:               >
-229:                 <span>{f.label}</span>
-230:                 <span className={`font-mono text-xs font-bold ${f.color}`}>{f.count}</span>
-231:               </button>
-232:             ))}
-233:           </div>
-234: 
-235:           <div className="modern-card p-4 space-y-2 text-xs">
-236:             <span className="font-bold text-slate-900 flex items-center gap-1.5">
-237:               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-238:               Khóa Chống Can Thiệp Trùng
-239:             </span>
-240:             <p className="text-slate-500 leading-relaxed text-xs">
-241:               Khi bạn mở hồ sơ, hệ thống khóa bảo vệ để ngăn nhân viên khác cùng thao tác đồng thời.
-242:             </p>
-243:           </div>
-244:         </div>
-245: 
-246:         {/* Middle Column (4 cols): Urgency Exception List */}
-247:         <div className="lg:col-span-4 modern-card flex flex-col overflow-hidden">
-248:           <div className="p-4 border-b border-slate-100 bg-slate-50/70 flex justify-between items-center">
-249:             <span className="font-bold text-xs text-slate-900">
-250:               Danh Sách Sự Cố ({filteredCases.length})
-251:             </span>
-252:             <span className="text-xs text-slate-500">Xếp theo hạn xử lý</span>
-253:           </div>
-254: 
-255:           <div className="overflow-y-auto flex-1 divide-y divide-slate-100 max-h-[calc(100vh-250px)] custom-scrollbar">
-256:             {filteredCases.map((c) => {
-257:               const isSelected = !isCaseNotFound && c.id === selectedCase?.id;
-258:               const hrs = c.hours_remaining ?? 6;
-259:               const isExpiring = hrs <= 4;
-260: 
-261:               return (
-262:                 <div
-263:                   key={c.id}
-264:                   onClick={() => handleSelectCase(c.id)}
-265:                   className={`p-4 cursor-pointer transition ${
-266:                     isSelected ? 'bg-[#FFF5F0] border-l-4 border-l-[#c23807]' : 'hover:bg-slate-50'
-267:                   }`}
-268:                 >
-269:                   <div className="flex justify-between items-start">
-270:                     <div className="space-y-1">
-271:                       <div className="flex items-center gap-2">
-272:                         <TrackingCode code={c.tracking_code} />
-273:                         <span className="text-xs font-bold text-slate-500">{c.carrier_code}</span>
-274:                       </div>
-275:                       <div className="font-bold text-slate-900 text-xs">
-276:                         {c.carrier_reason || 'Khách không nghe máy lần 1'}
-277:                       </div>
-278:                       <div className="flex items-center gap-2 text-xs text-slate-500">
-279:                         <span>
-280:                           COD:{' '}
-281:                           <Money
-282:                             amount={c.cod_amount}
-283:                             state="pending"
-284:                             className="inline text-xs font-bold"
-285:                           />
-286:                         </span>
-287:                         <span>·</span>
-288:                         <span>{c.recipient_name}</span>
-289:                       </div>
-290:                     </div>
-291: 
-292:                     <div className="text-right space-y-1.5 shrink-0">
-293:                       <span className={isExpiring ? 'badge-risk text-xs' : 'badge-warn text-xs'}>
-294:                         Còn {hrs}h
-295:                       </span>
-296:                       <div className="text-xs text-slate-500 font-medium">
-297:                         {c.assigned_to ? c.assigned_to.split(' ')[0] : 'Chưa nhận'}
-298:                       </div>
-299:                     </div>
-300:                   </div>
-301:                 </div>
-302:               );
-303:             })}
-304:           </div>
-305:         </div>
-306: 
-307:         {/* Right Column (5 cols): Operational Action Drawer */}
-308:         {selectedCase && !isCaseNotFound && (
-309:           <div
-310:             data-testid="selected-exception-drawer"
-311:             data-selected-case-id={selectedCase.id}
-312:             className="lg:col-span-5 modern-card p-5 space-y-5 overflow-y-auto max-h-[calc(100vh-250px)] custom-scrollbar text-xs"
-313:           >
-314:             {/* Header */}
-315:             <div className="border-b border-slate-100 pb-3 flex justify-between items-start">
-316:               <div>
-317:                 <div className="flex items-center gap-2">
-318:                   <span className="font-mono font-bold text-base text-slate-900">
-319:                     {selectedCase.tracking_code}
-320:                   </span>
-321:                   <AutomationBadge
-322:                     tier={currentTier as any}
-323:                     carrierCode={selectedCase.carrier_code}
-324:                   />
-325:                 </div>
-326:                 <div className="text-slate-500 mt-1">
-327:                   Đơn hàng: <strong>{selectedCase.order_code}</strong> · COD:{' '}
-328:                   <Money amount={selectedCase.cod_amount} state="pending" className="inline" />
-329:                 </div>
-330:               </div>
-331:               <StatusBadge status={selectedCase.status} />
-332:             </div>
-333: 
-334:             {/* Customer Details */}
-335:             <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-336:               <div className="font-bold text-slate-900 text-xs">
-337:                 Khách hàng: {selectedCase.recipient_name}
-338:               </div>
-339:               <div className="flex gap-2">
-340:                 <input
-341:                   type="tel"
-342:                   value={newPhone}
-343:                   onChange={(e) => setNewPhone(e.target.value)}
-344:                   className="modern-input flex-1 font-mono text-xs"
-345:                   placeholder="Nhập SĐT mới nếu khách đổi..."
-346:                 />
-347:                 <button
-348:                   type="button"
-349:                   onClick={() => alert(`✓ Đã lưu số điện thoại mới: ${newPhone}`)}
-350:                   className="btn-secondary text-xs"
-351:                 >
-352:                   Lưu SĐT
-353:                 </button>
-354:               </div>
-355:             </div>
-356: 
-357:             {/* Reattempt Action Form */}
-358:             <div className="space-y-3 p-4 rounded-xl border border-[#FDDDD0] bg-[#FFF5F0]/50">
-359:               <span className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-360:                 <Send className="w-4 h-4 text-[#c23807]" />
-361:                 Gửi Yêu Cầu Giao Lại (
-362:                 {currentTier === 'L2' ? 'Tự động gọi qua API' : 'Tạo hồ sơ dán cổng'}):
-363:               </span>
-364: 
-365:               <div className="grid grid-cols-2 gap-2">
-366:                 <div>
-367:                   <label className="text-xs font-semibold text-slate-600 block mb-1">
-368:                     Ngày hẹn giao:
-369:                   </label>
-370:                   <input
-371:                     type="date"
-372:                     value={scheduledDate}
-373:                     onChange={(e) => setScheduledDate(e.target.value)}
-374:                     className="modern-input text-xs"
-375:                   />
-376:                 </div>
-377:                 <div>
-378:                   <label className="text-xs font-semibold text-slate-600 block mb-1">
-379:                     Ghi chú bưu tá:
-380:                   </label>
-381:                   <input
-382:                     type="text"
-383:                     value={reattemptNote}
-384:                     onChange={(e) => setReattemptNote(e.target.value)}
-385:                     className="modern-input text-xs"
-386:                   />
-387:                 </div>
-388:               </div>
-389: 
-390:               <button
-391:                 type="button"
-392:                 onClick={handleDispatchReattempt}
-393:                 className="btn-primary w-full justify-center text-xs py-2 mt-1"
-394:               >
-395:                 {selectedCase.carrier_code === 'GHN' && carrierGhnTier === 'L2'
-396:                   ? 'Gửi Yêu Cầu Giao Lại Qua API (GHN)'
-397:                   : 'Tạo Hồ Sơ Hỗ Trợ Gửi Cổng Hãng (GHTK)'}
-398:               </button>
-399:             </div>
-400: 
-401:             {/* Contact Call Log Form */}
-402:             <form onSubmit={handleLogContact} className="space-y-2">
-403:               <label className="font-bold text-slate-900 block text-xs">
-404:                 Ghi Nhật Ký Cuộc Gọi CSKH:
-405:               </label>
-406:               <textarea
-407:                 value={callNote}
-408:                 onChange={(e) => setCallNote(e.target.value)}
-409:                 placeholder="Khách báo shipper chưa gọi, hẹn lại giao buổi chiều..."
-410:                 className="modern-input text-xs h-18 resize-none"
-411:               />
-412:               <button type="submit" className="btn-secondary text-xs w-full justify-center">
-413:                 Lưu Nhật Ký Cuộc Gọi
-414:               </button>
-415:             </form>
-416: 
-417:             {/* Expandable Technical Details (For Admins) */}
-418:             <div className="pt-2 border-t border-slate-100">
-419:               <button
-420:                 type="button"
-421:                 onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
-422:                 className="flex items-center justify-between w-full text-xs font-bold text-slate-500 hover:text-slate-800 py-1"
-423:               >
-424:                 <span>Chi Tiết Kỹ Thuật (Dành cho Quản Trị)</span>
-425:                 {showTechnicalDetails ? (
-426:                   <ChevronUp className="w-4 h-4" />
-427:                 ) : (
-428:                   <ChevronDown className="w-4 h-4" />
-429:                 )}
-430:               </button>
-431: 
-432:               {showTechnicalDetails && (
-433:                 <div className="p-3 bg-slate-100 rounded-lg font-mono text-[11px] text-slate-700 space-y-1 mt-2">
-434:                   <div>case_id: {selectedCase.id}</div>
-435:                   <div>carrier_code: {selectedCase.carrier_code}</div>
-436:                   <div>version: {selectedCase.version || 1}</div>
-437:                   <div>priority_score: {selectedCase.priority_score}</div>
-438:                   <div>occurred_at: {selectedCase.occurred_at}</div>
-439:                 </div>
-440:               )}
-441:             </div>
-442:           </div>
-443:         )}
-444: 
-445:         {isCaseNotFound && (
-446:           <div
-447:             data-testid="selected-exception-drawer-not-found"
-448:             className="lg:col-span-5 modern-card p-6 flex flex-col items-center justify-center text-center space-y-3 text-slate-500 min-h-[300px]"
-449:           >
-450:             <AlertTriangle className="w-10 h-10 text-amber-500" />
-451:             <div className="font-bold text-slate-800">Không tìm thấy ca sự cố</div>
-452:             <p className="text-xs max-w-xs text-slate-600">
-453:               Mã sự cố <span className="font-mono font-semibold">{propSelectedCaseId}</span> không
-454:               có trong hệ thống hoặc đã được xử lý xong.
-455:             </p>
-456:             <button
-457:               type="button"
-458:               onClick={handleRecoverException}
-459:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
-460:             >
-461:               Xem sự cố ưu tiên
-462:             </button>
-463:           </div>
-464:         )}
-465:       </div>
-466:     </div>
-467:   );
-468: };
-</file>
-
-<file path="apps/web/src/components/ReconciliationTab.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState } from 'react';
-  4: import { UIDiscrepancyItem, UIStatementBatch } from './types';
-  5: import { MASTER_DISCREPANCIES, MASTER_STATEMENTS } from '@/services/unifiedDataStore';
-  6: import {
-  7:   TrackingCode,
-  8:   Money,
-  9:   StatusBadge,
- 10:   AutomationBadge,
- 11:   ConfirmDialog,
- 12: } from './ui/OperationalComponents';
- 13: import { DiscrepancyType, DiscrepancyResolution } from '@/types/domain';
- 14: import {
- 15:   DollarSign,
- 16:   Upload,
- 17:   CheckCircle2,
- 18:   AlertTriangle,
- 19:   FileSpreadsheet,
- 20:   Lock,
- 21:   ChevronDown,
- 22:   ChevronUp,
- 23:   ShieldAlert,
- 24:   ArrowRight,
- 25:   Filter,
- 26:   Check,
- 27: } from 'lucide-react';
- 28: 
- 29: interface Props {
- 30:   discrepancies?: UIDiscrepancyItem[];
- 31:   onUpdateDiscrepancy?: (updated: UIDiscrepancyItem) => void;
- 32:   role?: string;
- 33:   selectedBatchId?: string | null;
- 34:   selectedDiscrepancyId?: string | null;
- 35:   statements?: UIStatementBatch[];
- 36:   onClearBatchSelection?: () => void;
- 37:   onClearDiscrepancySelection?: () => void;
- 38: }
- 39: 
- 40: export const ReconciliationTab: React.FC<Props> = ({
- 41:   discrepancies = MASTER_DISCREPANCIES,
- 42:   onUpdateDiscrepancy,
- 43:   role = 'OWNER',
- 44:   selectedBatchId,
- 45:   selectedDiscrepancyId,
- 46:   statements,
- 47:   onClearBatchSelection,
- 48:   onClearDiscrepancySelection,
- 49: }) => {
- 50:   const [prevDiscrepancies, setPrevDiscrepancies] = useState(discrepancies);
- 51:   const [items, setItems] = useState<UIDiscrepancyItem[]>(discrepancies);
- 52: 
- 53:   if (prevDiscrepancies !== discrepancies) {
- 54:     setPrevDiscrepancies(discrepancies);
- 55:     setItems(discrepancies);
- 56:   }
- 57: 
- 58:   const [selectedDiscrepancyType, setSelectedDiscrepancyType] = useState<string>('ALL');
- 59:   const [manualResolvingItem, setManualResolvingItem] = useState<UIDiscrepancyItem | null>(null);
- 60:   const [dismissedDiscrepancyId, setDismissedDiscrepancyId] = useState<string | null>(null);
- 61:   const [prevSelectedDiscrepancyId, setPrevSelectedDiscrepancyId] = useState(selectedDiscrepancyId);
- 62: 
- 63:   if (prevSelectedDiscrepancyId !== selectedDiscrepancyId) {
- 64:     setPrevSelectedDiscrepancyId(selectedDiscrepancyId);
- 65:     setDismissedDiscrepancyId(null);
- 66:     setManualResolvingItem(null);
- 67:   }
- 68: 
- 69:   const [dismissedBatchId, setDismissedBatchId] = useState<string | null>(null);
- 70:   const [prevSelectedBatchId, setPrevSelectedBatchId] = useState(selectedBatchId);
- 71: 
- 72:   if (prevSelectedBatchId !== selectedBatchId) {
- 73:     setPrevSelectedBatchId(selectedBatchId);
- 74:     setDismissedBatchId(null);
- 75:   }
- 76: 
- 77:   const effectiveBatchId =
- 78:     selectedBatchId && selectedBatchId !== dismissedBatchId ? selectedBatchId : null;
- 79:   const effectiveDiscrepancyId =
- 80:     selectedDiscrepancyId && selectedDiscrepancyId !== dismissedDiscrepancyId
- 81:       ? selectedDiscrepancyId
- 82:       : null;
- 83: 
- 84:   const resolvingItem =
- 85:     manualResolvingItem ??
- 86:     (effectiveDiscrepancyId ? items.find((d) => d.id === effectiveDiscrepancyId) || null : null);
- 87: 
- 88:   const setResolvingItem = (item: UIDiscrepancyItem | null) => {
- 89:     setManualResolvingItem(item);
- 90:     if (!item && effectiveDiscrepancyId) {
- 91:       setDismissedDiscrepancyId(effectiveDiscrepancyId);
- 92:     }
- 93:   };
- 94: 
- 95:   const [resolvingAction, setResolvingAction] = useState<DiscrepancyResolution>(
- 96:     DiscrepancyResolution.DISPUTE
- 97:   );
- 98:   const [isPeriodClosed, setIsPeriodClosed] = useState<boolean>(false);
- 99:   const [toastMessage, setToastMessage] = useState<string | null>(null);
-100: 
-101:   const availableStatements = statements && statements.length > 0 ? statements : MASTER_STATEMENTS;
-102: 
-103:   const isBatchActivated = Boolean(effectiveBatchId);
-104:   const matchedBatch = isBatchActivated
-105:     ? availableStatements.find((s) => s.id === effectiveBatchId)
-106:     : null;
-107:   const isBatchNotFound = isBatchActivated && !matchedBatch;
-108:   const activeStatement = matchedBatch || availableStatements[0];
-109:   const statementSummary = activeStatement;
-110: 
-111:   const isDiscrepancyActivated = Boolean(effectiveDiscrepancyId);
-112:   const matchedDiscrepancy = isDiscrepancyActivated
-113:     ? items.find((d) => d.id === effectiveDiscrepancyId)
-114:     : null;
-115:   const isDiscrepancyNotFound = isDiscrepancyActivated && !matchedDiscrepancy;
-116: 
-117:   const handleRecoverBatch = () => {
-118:     if (selectedBatchId) setDismissedBatchId(selectedBatchId);
-119:     onClearBatchSelection?.();
-120:   };
-121: 
-122:   const handleRecoverDiscrepancy = () => {
-123:     if (selectedDiscrepancyId) setDismissedDiscrepancyId(selectedDiscrepancyId);
-124:     setSelectedDiscrepancyType('ALL');
-125:     onClearDiscrepancySelection?.();
-126:   };
-127: 
-128:   const openDiscrepancies = items.filter((d) => String(d.status).toUpperCase() === 'OPEN');
-129:   const openCount = openDiscrepancies.length;
-130:   const totalOpenAmount = openDiscrepancies.reduce((sum, d) => sum + d.discrepancy_amount, 0);
-131: 
-132:   const filteredDiscrepancies = items.filter((d) => {
-133:     if (selectedDiscrepancyType === 'ALL') return true;
-134:     return String(d.type).startsWith(selectedDiscrepancyType);
-135:   });
-136: 
-137:   const handleResolveAction = (item: UIDiscrepancyItem, action: DiscrepancyResolution) => {
-138:     // Maker-Checker Check
-139:     if (item.created_by_user === 'usr_02' && role === 'OPS_CSKH') {
-140:       alert(
-141:         '[Quy tắc Tách quyền tài chính]: Bạn là nhân viên CSKH đã tạo yêu cầu xử lý đơn này, nên không được quyền tự duyệt chênh lệch. Vui lòng chuyển cho Kế toán viên độc lập duyệt.'
-142:       );
-143:       return;
-144:     }
-145: 
-146:     setResolvingItem(item);
-147:     setResolvingAction(action);
-148:   };
-149: 
-150:   const handleConfirmResolution = async (reason: string) => {
-151:     if (!resolvingItem) return;
-152: 
-153:     const updated: UIDiscrepancyItem = {
-154:       ...resolvingItem,
-155:       status: resolvingAction === DiscrepancyResolution.CONFIRMED ? 'CONFIRMED' : 'RESOLVED',
-156:       reason: reason,
-157:       version: (resolvingItem.version || 1) + 1,
-158:     };
-159: 
-160:     setItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-161:     if (onUpdateDiscrepancy) onUpdateDiscrepancy(updated);
-162: 
-163:     setToastMessage(`✓ Đã xử lý chênh lệch cho mã ${resolvingItem.tracking_code} thành công.`);
-164:     setResolvingItem(null);
-165:     setTimeout(() => setToastMessage(null), 4000);
-166:   };
-167: 
-168:   return (
-169:     <div className="w-full space-y-6">
-170:       {toastMessage && (
-171:         <div className="p-3.5 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
-172:           <div className="flex items-center gap-2">
-173:             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-174:             <span>{toastMessage}</span>
-175:           </div>
-176:           <button
-177:             type="button"
-178:             onClick={() => setToastMessage(null)}
-179:             className="font-bold text-slate-400 hover:text-white"
-180:           >
-181:             ✕
-182:           </button>
-183:         </div>
-184:       )}
-185: 
-186:       {/* Activated Batch Not Found Alert */}
-187:       {isBatchNotFound && (
-188:         <div
-189:           data-testid="activated-batch-not-found"
-190:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
-191:         >
-192:           <div className="flex items-center gap-2.5">
-193:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-194:             <div>
-195:               <div className="font-bold text-xs sm:text-sm">
-196:                 Không tìm thấy bảng kê đối soát{' '}
-197:                 <span className="font-mono underline">{selectedBatchId}</span>
-198:               </div>
-199:               <div className="text-xs text-amber-700">
-200:                 Bảng kê không tồn tại trong danh sách kỳ đối soát hoặc đã bị xóa.
-201:               </div>
-202:             </div>
-203:           </div>
-204:           <div className="flex items-center gap-2">
-205:             <button
-206:               type="button"
-207:               onClick={handleRecoverBatch}
-208:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
-209:             >
-210:               Quay lại kỳ gần nhất
-211:             </button>
-212:           </div>
-213:         </div>
-214:       )}
-215: 
-216:       {/* Statement Summary Card */}
-217:       {!isBatchNotFound && (
-218:         <div
-219:           data-selected-batch={effectiveBatchId && matchedBatch ? 'true' : undefined}
-220:           data-testid={
-221:             effectiveBatchId && matchedBatch
-222:               ? `selected-batch-${effectiveBatchId}`
-223:               : `batch-${statementSummary.id}`
-224:           }
-225:           className={`modern-card p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-white border-slate-800 ${
-226:             effectiveBatchId && matchedBatch ? 'bg-slate-800 ring-2 ring-[#c23807]' : 'bg-slate-900'
-227:           }`}
-228:         >
-229:           <div className="space-y-1">
-230:             <div className="flex items-center gap-2">
-231:               <h1 className="text-lg font-bold text-white flex items-center gap-2">
-232:                 <DollarSign className="w-5 h-5 text-[#c23807]" />
-233:                 <span>Đối Soát COD, Cước Vận Chuyển & Phụ Phí</span>
-234:               </h1>
-235:               <span className="badge-ok text-xs">
-236:                 {statementSummary.status === 'OPEN' ? 'Kỳ Mở' : 'Kỳ Đã Khóa'}
-237:               </span>
-238:               {effectiveBatchId && matchedBatch && (
-239:                 <span className="text-xs bg-[#c23807] px-2 py-0.5 rounded font-mono font-bold">
-240:                   {matchedBatch.id}
-241:                 </span>
-242:               )}
-243:             </div>
-244:             <p className="text-xs text-slate-300">
-245:               {statementSummary.period} · {statementSummary.carrier} · Tổng{' '}
-246:               {statementSummary.total_rows} dòng sao kê
-247:             </p>
-248:           </div>
-249: 
-250:           <div className="flex items-center gap-3">
-251:             <div className="text-right">
-252:               <div className="text-xs text-slate-400">Tổng COD Đối Soát</div>
-253:               <div className="text-xl font-bold font-mono text-emerald-400">
-254:                 <Money
-255:                   amount={statementSummary.total_cod}
-256:                   state="confirmed"
-257:                   className="text-emerald-400 text-xl"
-258:                 />
-259:               </div>
-260:             </div>
-261: 
-262:             <button
-263:               type="button"
-264:               onClick={() => {
-265:                 if (openCount > 0) {
-266:                   alert(
-267:                     `Không thể chốt kỳ khi còn ${openCount} khoản chênh lệch chưa xử lý. Vui lòng duyệt hoặc chuyển kỳ.`
-268:                   );
-269:                   return;
-270:                 }
-271:                 setIsPeriodClosed(true);
-272:                 setToastMessage(
-273:                   '✓ Đã chốt sổ kỳ đối soát thành công. Dữ liệu đã được khóa bất biến.'
-274:                 );
-275:               }}
-276:               disabled={isPeriodClosed}
-277:               className={`btn-primary text-xs ${isPeriodClosed ? 'opacity-50 cursor-not-allowed' : ''}`}
-278:             >
-279:               <Lock className="w-4 h-4" />
-280:               <span>{isPeriodClosed ? 'Kỳ Đã Khóa' : 'Chốt Kỳ Đối Soát'}</span>
-281:             </button>
-282:           </div>
-283:         </div>
-284:       )}
-285: 
-286:       {/* Discrepancy Classification Filter Bar */}
-287:       <div className="modern-card p-4 space-y-3">
-288:         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-289:           <div>
-290:             <span className="font-bold text-slate-900 text-sm">
-291:               Danh Sách Khoản Lệch Cần Xử Lý ({openCount} khoản mở)
-292:             </span>
-293:             <span className="text-xs text-slate-500 ml-2">
-294:               Tổng giá trị chênh lệch:{' '}
-295:               <strong className="text-rose-700 font-mono">
-296:                 <Money amount={totalOpenAmount} state="confirmed" className="inline" />
-297:               </strong>
-298:             </span>
-299:           </div>
-300: 
-301:           <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar">
-302:             {[
-303:               { id: 'ALL', label: 'Tất Cả' },
-304:               { id: 'D1', label: 'Lệch Cân' },
-305:               { id: 'D2', label: 'Lệch Cước' },
-306:               { id: 'D4', label: 'Trừ Trùng' },
-307:               { id: 'D5', label: 'Lệch COD' },
-308:               { id: 'D6', label: 'COD Quá Hạn' },
-309:               { id: 'D7', label: 'Thiếu Dòng' },
-310:             ].map((f) => (
-311:               <button
-312:                 key={f.id}
-313:                 type="button"
-314:                 onClick={() => setSelectedDiscrepancyType(f.id)}
-315:                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
-316:                   selectedDiscrepancyType === f.id
-317:                     ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
-318:                     : 'text-slate-600 hover:bg-slate-100'
-319:                 }`}
-320:               >
-321:                 {f.label}
-322:               </button>
-323:             ))}
-324:           </div>
-325:         </div>
-326:       </div>
-327: 
-328:       {/* Activated Discrepancy Not Found Alert */}
-329:       {isDiscrepancyNotFound && (
-330:         <div
-331:           data-testid="activated-discrepancy-not-found"
-332:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
-333:         >
-334:           <div className="flex items-center gap-2.5">
-335:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-336:             <div>
-337:               <div className="font-bold text-xs sm:text-sm">
-338:                 Không tìm thấy khoản sai lệch{' '}
-339:                 <span className="font-mono underline">{selectedDiscrepancyId}</span>
-340:               </div>
-341:               <div className="text-xs text-amber-700">
-342:                 Khoản sai lệch không tồn tại trong danh sách đối soát hoặc đã được xử lý xong.
-343:               </div>
-344:             </div>
-345:           </div>
-346:           <div className="flex items-center gap-2">
-347:             <button
-348:               type="button"
-349:               onClick={handleRecoverDiscrepancy}
-350:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
-351:             >
-352:               Quay lại danh sách sai lệch
-353:             </button>
-354:           </div>
-355:         </div>
-356:       )}
-357: 
-358:       {/* Discrepancies Table */}
-359:       <div className="modern-card overflow-hidden">
-360:         <div className="overflow-x-auto">
-361:           <table className="modern-table">
-362:             <thead>
-363:               <tr>
-364:                 <th>Mã Vận Đơn / Mã Đơn</th>
-365:                 <th>Hãng</th>
-366:                 <th>Phân Loại Sai Lệch</th>
-367:                 <th>Số Liệu Khai Báo vs Sao Kê</th>
-368:                 <th className="text-right">Số Tiền Lệch</th>
-369:                 <th>Lý Do Chi Tiết</th>
-370:                 <th className="text-right">Thao Tác Duyệt</th>
-371:               </tr>
-372:             </thead>
-373:             <tbody>
-374:               {filteredDiscrepancies.map((disc) => {
-375:                 const isResolved = disc.status !== 'OPEN';
-376:                 const isSelected = Boolean(
-377:                   matchedDiscrepancy && disc.id === effectiveDiscrepancyId
-378:                 );
-379: 
-380:                 return (
-381:                   <tr
-382:                     key={disc.id}
-383:                     data-selected={isSelected ? 'true' : undefined}
-384:                     data-testid={
-385:                       isSelected ? `selected-discrepancy-${effectiveDiscrepancyId}` : undefined
-386:                     }
-387:                     className={
-388:                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
-389:                     }
-390:                   >
-391:                     <td>
-392:                       <TrackingCode code={disc.tracking_code} />
-393:                       <div className="text-xs text-slate-500 font-mono mt-0.5">
-394:                         {disc.order_code}
-395:                       </div>
-396:                     </td>
-397: 
-398:                     <td className="font-bold text-xs text-slate-800">{disc.carrier_code}</td>
-399: 
-400:                     <td>
-401:                       <StatusBadge status={disc.type} />
-402:                     </td>
-403: 
-404:                     <td className="text-xs space-y-0.5">
-405:                       <div className="text-slate-500">{disc.declared_value}</div>
-406:                       <div className="font-semibold text-slate-900">{disc.charged_value}</div>
-407:                     </td>
-408: 
-409:                     <td className="text-right font-mono font-bold text-rose-700 text-sm">
-410:                       <Money amount={disc.discrepancy_amount} state="confirmed" />
-411:                     </td>
-412: 
-413:                     <td className="text-xs text-slate-600 max-w-xs">{disc.reason}</td>
-414: 
-415:                     <td className="text-right space-x-1.5">
-416:                       {isResolved ? (
-417:                         <span className="badge-ok text-xs">Đã Xử Lý</span>
-418:                       ) : (
-419:                         <>
-420:                           <button
-421:                             type="button"
-422:                             onClick={() =>
-423:                               handleResolveAction(disc, DiscrepancyResolution.CONFIRMED)
-424:                             }
-425:                             className="btn-secondary text-xs py-1 px-2.5 font-semibold text-emerald-700"
-426:                           >
-427:                             Chấp Thuận
-428:                           </button>
-429:                           <button
-430:                             type="button"
-431:                             onClick={() => handleResolveAction(disc, DiscrepancyResolution.DISPUTE)}
-432:                             className="btn-primary text-xs py-1 px-2.5"
-433:                           >
-434:                             Khiếu Nại
-435:                           </button>
-436:                         </>
-437:                       )}
-438:                     </td>
-439:                   </tr>
-440:                 );
-441:               })}
-442:             </tbody>
-443:           </table>
-444:         </div>
-445:       </div>
-446: 
-447:       {/* Discrepancy Resolution Modal with Mandatory Reason */}
-448:       <ConfirmDialog
-449:         isOpen={!!resolvingItem}
-450:         title={
-451:           resolvingAction === DiscrepancyResolution.CONFIRMED
-452:             ? 'Xác Nhận Chấp Thuận Chênh Lệch'
-453:             : 'Mở Hồ Sơ Khiếu Nại Khoản Lệch'
-454:         }
-455:         message={`Xử lý khoản lệch ${resolvingItem?.discrepancy_amount.toLocaleString('vi-VN')} đ cho mã vận đơn ${resolvingItem?.tracking_code}.`}
-456:         confirmLabel="Xác Nhận Xử Lý"
-457:         cancelLabel="Hủy Bỏ"
-458:         requireReason={true}
-459:         onConfirm={handleConfirmResolution}
-460:         onCancel={() => setResolvingItem(null)}
-461:       />
-462:     </div>
-463:   );
-464: };
-</file>
-
-<file path="apps/web/src/components/ShipmentListTab.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState, useEffect } from 'react';
-  4: import { Money, TrackingCode, StatusBadge, AutomationBadge } from './ui/OperationalComponents';
-  5: import { MASTER_SHIPMENTS, UnifiedShipment } from '@/services/unifiedDataStore';
-  6: import {
-  7:   Search,
-  8:   Filter,
-  9:   AlertTriangle,
- 10:   Eye,
- 11:   EyeOff,
- 12:   X,
- 13:   Package,
- 14:   Truck,
- 15:   DollarSign,
- 16:   CheckCircle2,
- 17:   ChevronLeft,
- 18:   ChevronRight,
- 19:   FileSpreadsheet,
- 20:   Calendar,
- 21:   MapPin,
- 22:   Clock,
- 23:   ShieldCheck,
- 24:   RefreshCw,
- 25:   SlidersHorizontal,
- 26:   ExternalLink,
- 27: } from 'lucide-react';
- 28: 
- 29: interface Props {
- 30:   onOpenTrackingModal: (trackingCode: string) => void;
- 31:   onNavigateToTab?: (tabId: string) => void;
- 32:   onCreateOrder?: () => void;
- 33:   userRole?: string;
- 34:   selectedOrderId?: string | null;
- 35:   selectedOrderCode?: string | null;
- 36:   onClearSelection?: () => void;
- 37: }
- 38: 
- 39: export const ShipmentListTab: React.FC<Props> = ({
- 40:   onOpenTrackingModal,
- 41:   onNavigateToTab,
- 42:   onCreateOrder,
- 43:   userRole = 'OWNER',
- 44:   selectedOrderId,
- 45:   selectedOrderCode,
- 46:   onClearSelection,
- 47: }) => {
- 48:   const [shipments, setShipments] = useState<UnifiedShipment[]>(MASTER_SHIPMENTS);
- 49:   const [loading, setLoading] = useState(false);
- 50: 
- 51:   // Cursor Pagination State
- 52:   const [cursorIndex, setCursorIndex] = useState(0);
- 53:   const [pageSize, setPageSize] = useState(20);
- 54: 
- 55:   // Synchronize search term and reset cursor when selectedOrderCode/selectedOrderId changes
- 56:   const [dismissedOrderId, setDismissedOrderId] = useState<string | null>(null);
- 57:   const [dismissedOrderCode, setDismissedOrderCode] = useState<string | null>(null);
- 58:   const [prevSelectedOrderCode, setPrevSelectedOrderCode] = useState(selectedOrderCode);
- 59:   const [prevSelectedOrderId, setPrevSelectedOrderId] = useState(selectedOrderId);
- 60:   const [userSearchTerm, setUserSearchTerm] = useState<string | null>(null);
- 61: 
- 62:   if (prevSelectedOrderCode !== selectedOrderCode || prevSelectedOrderId !== selectedOrderId) {
- 63:     setPrevSelectedOrderCode(selectedOrderCode);
- 64:     setPrevSelectedOrderId(selectedOrderId);
- 65:     setDismissedOrderId(null);
- 66:     setDismissedOrderCode(null);
- 67:     setUserSearchTerm(null);
- 68:     setCursorIndex(0);
- 69:   }
- 70: 
- 71:   const effectiveOrderId =
- 72:     selectedOrderId && selectedOrderId !== dismissedOrderId ? selectedOrderId : null;
- 73:   const effectiveOrderCode =
- 74:     selectedOrderCode && selectedOrderCode !== dismissedOrderCode ? selectedOrderCode : null;
- 75: 
- 76:   const isOrderActivated = Boolean(effectiveOrderId || effectiveOrderCode);
- 77:   const matchedShipment = isOrderActivated
- 78:     ? shipments.find(
- 79:         (s) =>
- 80:           (effectiveOrderCode && s.order_code === effectiveOrderCode) ||
- 81:           (effectiveOrderId &&
- 82:             (s.id === effectiveOrderId || (s as any).order_id === effectiveOrderId))
- 83:       )
- 84:     : null;
- 85:   const isOrderNotFound = isOrderActivated && !matchedShipment;
- 86: 
- 87:   const searchTerm = userSearchTerm ?? (effectiveOrderCode || '');
- 88:   const setSearchTerm = (term: string) => setUserSearchTerm(term);
- 89: 
- 90:   // Filter Controls
- 91:   const [carrierFilter, setCarrierFilter] = useState('ALL');
- 92:   const [statusFilter, setStatusFilter] = useState('ALL');
- 93:   const [warehouseFilter, setWarehouseFilter] = useState('ALL');
- 94:   const [matchStatusFilter, setMatchStatusFilter] = useState('ALL');
- 95:   const [dateRangeFilter, setDateRangeFilter] = useState('30d');
- 96:   const [hasOpenCaseFilter, setHasOpenCaseFilter] = useState(false);
- 97:   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
- 98: 
- 99:   // PII Masking State
-100:   const [unmaskedRows, setUnmaskedRows] = useState<Record<string, boolean>>({});
-101:   const [toast, setToast] = useState<string | null>(null);
-102: 
-103:   const fetchShipments = async () => {
-104:     setLoading(true);
-105:     try {
-106:       const res = await fetch('/api/shipments');
-107:       const data = await res.json();
-108:       if (res.ok && data.data && data.data.length > 0) {
-109:         // If API returns data, sync, otherwise keep master shipments
-110:       }
-111:     } catch (e) {
-112:       console.error('Failed to load shipments:', e);
-113:     } finally {
-114:       setLoading(false);
-115:     }
-116:   };
-117: 
-118:   useEffect(() => {
-119:     // eslint-disable-next-line react-hooks/set-state-in-effect -- Legacy prototype initial fetch pattern
-120:     fetchShipments();
-121:   }, []);
-122: 
-123:   const toggleUnmask = (id: string, trackingCode: string) => {
-124:     const isCurrentlyUnmasked = unmaskedRows[id];
-125:     setUnmaskedRows((prev) => ({ ...prev, [id]: !isCurrentlyUnmasked }));
-126:     if (!isCurrentlyUnmasked) {
-127:       setToast(
-128:         `[Audit Log] Đã mở xem thông tin số điện thoại khách hàng cho mã ${trackingCode}. Đã ghi nhật ký kiểm toán.`
-129:       );
-130:       setTimeout(() => setToast(null), 4000);
-131:     }
-132:   };
-133: 
-134:   // Filter Pipeline
-135:   const filtered = shipments.filter((s) => {
-136:     if (searchTerm) {
-137:       const term = searchTerm.toLowerCase();
-138:       const matchTracking = s.tracking_code.toLowerCase().includes(term);
-139:       const matchOrder = s.order_code.toLowerCase().includes(term);
-140:       const matchCustomer = s.recipient_name.toLowerCase().includes(term);
-141:       const matchPhone = s.recipient_phone.toLowerCase().includes(term);
-142:       if (!matchTracking && !matchOrder && !matchCustomer && !matchPhone) return false;
-143:     }
-144: 
-145:     if (carrierFilter !== 'ALL' && s.carrier_code !== carrierFilter) return false;
-146:     if (statusFilter !== 'ALL' && s.status !== statusFilter) return false;
-147:     if (warehouseFilter !== 'ALL' && s.warehouse_id !== warehouseFilter) return false;
-148: 
-149:     if (matchStatusFilter !== 'ALL') {
-150:       if (s.match_status !== matchStatusFilter) return false;
-151:     }
-152: 
-153:     if (hasOpenCaseFilter) {
-154:       if (!s.has_open_exception && !s.has_open_discrepancy && !s.has_open_claim) return false;
-155:     }
-156: 
-157:     return true;
-158:   });
-159: 
-160:   const paginatedShipments = filtered.slice(cursorIndex, cursorIndex + pageSize);
-161:   const totalCount = filtered.length;
-162:   const hasNextPage = cursorIndex + pageSize < totalCount;
-163:   const hasPrevPage = cursorIndex > 0;
-164: 
-165:   const handleNextPage = () => {
-166:     if (hasNextPage) setCursorIndex((prev) => prev + pageSize);
-167:   };
-168: 
-169:   const handlePrevPage = () => {
-170:     if (hasPrevPage) setCursorIndex((prev) => Math.max(0, prev - pageSize));
-171:   };
-172: 
-173:   const handleResetFilters = () => {
-174:     if (selectedOrderId) setDismissedOrderId(selectedOrderId);
-175:     if (selectedOrderCode) setDismissedOrderCode(selectedOrderCode);
-176:     setUserSearchTerm('');
-177:     setCarrierFilter('ALL');
-178:     setStatusFilter('ALL');
-179:     setWarehouseFilter('ALL');
-180:     setMatchStatusFilter('ALL');
-181:     setDateRangeFilter('30d');
-182:     setHasOpenCaseFilter(false);
-183:     setCursorIndex(0);
-184:     onClearSelection?.();
-185:   };
-186: 
-187:   const hasActiveFilters =
-188:     searchTerm !== '' ||
-189:     carrierFilter !== 'ALL' ||
-190:     statusFilter !== 'ALL' ||
-191:     warehouseFilter !== 'ALL' ||
-192:     matchStatusFilter !== 'ALL' ||
-193:     dateRangeFilter !== '30d' ||
-194:     hasOpenCaseFilter;
-195: 
-196:   return (
-197:     <div className="w-full space-y-4">
-198:       {/* Activated Order Not Found Alert (Real Not-Found State with Recovery) */}
-199:       {isOrderNotFound && (
-200:         <div
-201:           data-testid="activated-order-not-found"
-202:           className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900"
-203:         >
-204:           <div className="flex items-center gap-2.5">
-205:             <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-206:             <div>
-207:               <div className="font-bold text-xs sm:text-sm">
-208:                 Không tìm thấy đơn hàng{' '}
-209:                 <span className="font-mono underline">{selectedOrderCode || selectedOrderId}</span>
-210:               </div>
-211:               <div className="text-xs text-amber-700">
-212:                 Bản ghi không tồn tại trong danh sách vận đơn hiện tại hoặc nằm ngoài phạm vi truy
-213:                 cập của bạn.
-214:               </div>
-215:             </div>
-216:           </div>
-217:           <div className="flex items-center gap-2">
-218:             <button
-219:               type="button"
-220:               onClick={handleResetFilters}
-221:               className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-lg text-xs font-semibold hover:bg-amber-100 transition"
-222:             >
-223:               Quay lại danh sách
-224:             </button>
-225:             <button
-226:               type="button"
-227:               onClick={fetchShipments}
-228:               className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700 transition"
-229:             >
-230:               Thử lại
-231:             </button>
-232:           </div>
-233:         </div>
-234:       )}
-235: 
-236:       {/* Toast Notification */}
-237:       {toast && (
-238:         <div className="p-3 bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center justify-between shadow-lg border border-slate-700 animate-in fade-in">
-239:           <div className="flex items-center gap-2">
-240:             <ShieldCheck className="w-4 h-4 text-emerald-400" />
-241:             <span>{toast}</span>
-242:           </div>
-243:           <button
-244:             type="button"
-245:             onClick={() => setToast(null)}
-246:             className="font-bold text-slate-400 hover:text-white"
-247:           >
-248:             ✕
-249:           </button>
-250:         </div>
-251:       )}
-252: 
-253:       {/* Header Bar */}
-254:       <div className="modern-card p-5 space-y-4">
-255:         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
-256:           <div>
-257:             <div className="flex items-center gap-2.5">
-258:               <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-259:                 <Package className="w-5 h-5 text-[#c23807]" />
-260:                 <span>Danh Sách & Tra Cứu Vận Đơn</span>
-261:               </h1>
-262:               <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-[#FFF5F0] text-[#c23807] border border-[#FDDDD0]">
-263:                 {totalCount} bưu kiện
-264:               </span>
-265:             </div>
-266:             <p className="text-xs text-slate-500 mt-1">
-267:               Tra cứu bưu kiện toàn trình, kiểm tra trạng thái khớp mã nguồn và mở Timeline sự kiện
-268:               hợp nhất 3 nguồn.
-269:             </p>
-270:           </div>
-271: 
-272:           <div className="flex items-center gap-2 self-stretch md:self-auto">
-273:             {onCreateOrder && (
-274:               <button type="button" onClick={onCreateOrder} className="btn-primary text-xs">
-275:                 <span>+ Tạo Vận Đơn</span>
-276:               </button>
-277:             )}
-278: 
-279:             <button
-280:               type="button"
-281:               onClick={() => {
-282:                 setToast(
-283:                   `✓ Đã xuất file Excel ${totalCount} vận đơn theo đúng tiêu chí lọc hiện hành.`
-284:                 );
-285:                 setTimeout(() => setToast(null), 4000);
-286:               }}
-287:               className="btn-secondary text-xs"
-288:             >
-289:               <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-290:               <span>Xuất Excel</span>
-291:             </button>
-292: 
-293:             <button
-294:               type="button"
-295:               onClick={fetchShipments}
-296:               disabled={loading}
-297:               className="btn-secondary text-xs"
-298:               title="Tải lại dữ liệu mới nhất"
-299:             >
-300:               <RefreshCw
-301:                 className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#c23807]' : 'text-slate-500'}`}
-302:               />
-303:               <span className="hidden sm:inline">Làm mới</span>
-304:             </button>
-305:           </div>
-306:         </div>
-307: 
-308:         {/* Primary Filter Toolbar */}
-309:         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-2 border-t border-slate-100">
-310:           {/* Search Box */}
-311:           <div className="lg:col-span-2 relative">
-312:             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-313:             <input
-314:               type="text"
-315:               value={searchTerm}
-316:               onChange={(e) => {
-317:                 setSearchTerm(e.target.value);
-318:                 setCursorIndex(0);
-319:               }}
-320:               placeholder="Tìm mã vận đơn, mã đơn POS, tên, SĐT..."
-321:               className="modern-input pl-9 pr-8 text-xs font-medium"
-322:             />
-323:             {searchTerm && (
-324:               <button
-325:                 type="button"
-326:                 onClick={() => setSearchTerm('')}
-327:                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-328:               >
-329:                 <X className="w-4 h-4" />
-330:               </button>
-331:             )}
-332:           </div>
-333: 
-334:           {/* Carrier Selector */}
-335:           <div>
-336:             <select
-337:               value={carrierFilter}
-338:               onChange={(e) => {
-339:                 setCarrierFilter(e.target.value);
-340:                 setCursorIndex(0);
-341:               }}
-342:               className="modern-input text-xs font-semibold text-slate-800"
-343:             >
-344:               <option value="ALL">Hãng: Tất cả (GHN, GHTK)</option>
-345:               <option value="GHN">GHN Express (Tự động API)</option>
-346:               <option value="GHTK">GHTK (Hỗ trợ cổng)</option>
-347:             </select>
-348:           </div>
-349: 
-350:           {/* Status Selector */}
-351:           <div>
-352:             <select
-353:               value={statusFilter}
-354:               onChange={(e) => {
-355:                 setStatusFilter(e.target.value);
-356:                 setCursorIndex(0);
-357:               }}
-358:               className="modern-input text-xs font-semibold text-slate-800"
-359:             >
-360:               <option value="ALL">Trạng thái: Tất cả</option>
-361:               <option value="picking">Chờ lấy hàng</option>
-362:               <option value="in_transit">Đang trung chuyển</option>
-363:               <option value="out_for_delivery">Đang giao hàng</option>
-364:               <option value="delivered">Giao thành công</option>
-365:               <option value="delivery_fail">Giao thất bại (Cần cứu)</option>
-366:               <option value="returning">Đang chuyển hoàn</option>
-367:               <option value="returned">Đã nhập hoàn kho</option>
-368:             </select>
-369:           </div>
-370: 
-371:           {/* Time Range Selector */}
-372:           <div>
-373:             <select
-374:               value={dateRangeFilter}
-375:               onChange={(e) => {
-376:                 setDateRangeFilter(e.target.value);
-377:                 setCursorIndex(0);
-378:               }}
-379:               className="modern-input text-xs font-semibold text-slate-800"
-380:             >
-381:               <option value="today">Hôm nay</option>
-382:               <option value="7d">7 ngày qua</option>
-383:               <option value="30d">30 ngày qua</option>
-384:               <option value="90d">90 ngày qua (Tối đa)</option>
-385:             </select>
-386:           </div>
-387: 
-388:           {/* Advanced Filter Toggle & Reset */}
-389:           <div className="flex items-center gap-2">
-390:             <button
-391:               type="button"
-392:               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-393:               className={`flex-1 btn-secondary text-xs justify-center ${
-394:                 showAdvancedFilters ||
-395:                 hasOpenCaseFilter ||
-396:                 matchStatusFilter !== 'ALL' ||
-397:                 warehouseFilter !== 'ALL'
-398:                   ? 'bg-[#FFF5F0] text-[#c23807] border-[#FDDDD0] font-bold'
-399:                   : ''
-400:               }`}
-401:             >
-402:               <SlidersHorizontal className="w-3.5 h-3.5" />
-403:               <span>Bộ Lọc</span>
-404:             </button>
-405: 
-406:             {hasActiveFilters && (
-407:               <button
-408:                 type="button"
-409:                 onClick={handleResetFilters}
-410:                 className="btn-secondary text-xs px-2.5 text-rose-600 hover:bg-rose-50"
-411:                 title="Xóa toàn bộ bộ lọc"
-412:               >
-413:                 Xóa
-414:               </button>
-415:             )}
-416:           </div>
-417:         </div>
-418: 
-419:         {/* Collapsible Advanced Filters */}
-420:         {showAdvancedFilters && (
-421:           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-422:             <div>
-423:               <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-424:                 Trạng thái ghép mã nguồn:
-425:               </label>
-426:               <select
-427:                 value={matchStatusFilter}
-428:                 onChange={(e) => {
-429:                   setMatchStatusFilter(e.target.value);
-430:                   setCursorIndex(0);
-431:                 }}
-432:                 className="modern-input text-xs"
-433:               >
-434:                 <option value="ALL">Tất cả trạng thái khớp</option>
-435:                 <option value="matched_exact">Khớp chính xác (Mã vận đơn / Mã đơn)</option>
-436:                 <option value="matched_fuzzy">Khớp mờ (Theo số tiền COD & ngày)</option>
-437:                 <option value="unmatched">Chưa khớp mã</option>
-438:               </select>
-439:             </div>
-440: 
-441:             <div>
-442:               <label className="block text-xs font-bold text-slate-600 uppercase mb-1">
-443:                 Chi nhánh xuất kho:
-444:               </label>
-445:               <select
-446:                 value={warehouseFilter}
-447:                 onChange={(e) => {
-448:                   setWarehouseFilter(e.target.value);
-449:                   setCursorIndex(0);
-450:                 }}
-451:                 className="modern-input text-xs"
-452:               >
-453:                 <option value="ALL">Tất cả chi nhánh</option>
-454:                 <option value="store_01">Chi Nhánh Quận 3 (HCM-Q3)</option>
-455:                 <option value="store_02">Kho Vận Tân Bình (HCM-TB)</option>
-456:                 <option value="store_03">Chi Nhánh Hà Nội (HN-CG)</option>
-457:                 <option value="store_04">Chi Nhánh Đà Nẵng (DN-HC)</option>
-458:               </select>
-459:             </div>
-460: 
-461:             <div className="flex items-center pt-5">
-462:               <label className="flex items-center gap-2 cursor-pointer select-none">
-463:                 <input
-464:                   type="checkbox"
-465:                   checked={hasOpenCaseFilter}
-466:                   onChange={(e) => {
-467:                     setHasOpenCaseFilter(e.target.checked);
-468:                     setCursorIndex(0);
-469:                   }}
-470:                   className="w-4 h-4 rounded text-[#c23807] focus:ring-[#c23807] border-slate-300"
-471:                 />
-472:                 <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
-473:                   <AlertTriangle className="w-4 h-4 text-amber-600" />
-474:                   <span>Chỉ đơn có hồ sơ mở (Sự cố / Khoản lệch / Khiếu nại)</span>
-475:                 </span>
-476:               </label>
-477:             </div>
-478:           </div>
-479:         )}
-480:       </div>
-481: 
-482:       {/* Main Table Viewport (14px Text, High Contrast, Clean Hairline Borders) */}
-483:       <div className="modern-card overflow-hidden">
-484:         <div className="overflow-x-auto">
-485:           <table className="modern-table">
-486:             <thead>
-487:               <tr>
-488:                 <th>Mã Vận Đơn / Mã Đơn POS</th>
-489:                 <th>Hãng & Phương Thức</th>
-490:                 <th>Người Nhận & Địa Chỉ</th>
-491:                 <th>Trạng Thái</th>
-492:                 <th>Ghép Mã</th>
-493:                 <th className="text-right">Tiền Thu Hộ (COD)</th>
-494:                 <th>Hồ Sơ Vận Hành</th>
-495:                 <th className="text-right">Thao Tác</th>
-496:               </tr>
-497:             </thead>
-498:             <tbody>
-499:               {paginatedShipments.map((shipment) => {
-500:                 const isUnmasked = unmaskedRows[shipment.id];
-501:                 const rawPhone = shipment.recipient_phone;
-502:                 const maskedPhone = isUnmasked
-503:                   ? rawPhone
-504:                   : rawPhone.slice(0, 3) + '***' + rawPhone.slice(-4);
-505: 
-506:                 const isSelected = Boolean(
-507:                   matchedShipment &&
-508:                   ((effectiveOrderCode && shipment.order_code === effectiveOrderCode) ||
-509:                     (effectiveOrderId &&
-510:                       (shipment.id === effectiveOrderId ||
-511:                         (shipment as any).order_id === effectiveOrderId)))
-512:                 );
-513:                 const selectedKey = effectiveOrderCode || effectiveOrderId;
-514: 
-515:                 return (
-516:                   <tr
-517:                     key={shipment.id}
-518:                     data-selected={isSelected ? 'true' : undefined}
-519:                     data-testid={isSelected ? `selected-order-${selectedKey}` : undefined}
-520:                     className={
-521:                       isSelected ? 'bg-orange-50/70 border-l-4 border-l-[#c23807]' : undefined
-522:                     }
-523:                   >
-524:                     {/* Column 1: Tracking & Order Code */}
-525:                     <td>
-526:                       <TrackingCode
-527:                         code={shipment.tracking_code}
-528:                         onClick={() => onOpenTrackingModal(shipment.tracking_code)}
-529:                       />
-530:                       <div className="text-xs text-slate-500 font-mono mt-0.5">
-531:                         Đơn:{' '}
-532:                         <span className="font-semibold text-slate-700">{shipment.order_code}</span>
-533:                       </div>
-534:                     </td>
-535: 
-536:                     {/* Column 2: Carrier & Automation */}
-537:                     <td>
-538:                       <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
-539:                         <Truck className="w-3.5 h-3.5 text-slate-500" />
-540:                         <span>{shipment.carrier_code}</span>
-541:                       </div>
-542:                       <div className="mt-1">
-543:                         <AutomationBadge tier={shipment.carrier_code === 'GHN' ? 'L2' : 'L1'} />
-544:                       </div>
-545:                     </td>
-546: 
-547:                     {/* Column 3: Customer with PII Masking */}
-548:                     <td>
-549:                       <div className="font-semibold text-slate-900 text-xs">
-550:                         {shipment.recipient_name}
-551:                       </div>
-552:                       <div className="text-xs text-slate-600 flex items-center gap-1.5 mt-0.5">
-553:                         <span className="font-mono">{maskedPhone}</span>
-554:                         <button
-555:                           type="button"
-556:                           onClick={() => toggleUnmask(shipment.id, shipment.tracking_code)}
-557:                           className="text-slate-400 hover:text-[#c23807] transition"
-558:                           title={
-559:                             isUnmasked
-560:                               ? 'Ẩn số điện thoại'
-561:                               : 'Mở xem số điện thoại (Có ghi log kiểm toán)'
-562:                           }
-563:                         >
-564:                           {isUnmasked ? (
-565:                             <EyeOff className="w-3.5 h-3.5 text-[#c23807]" />
-566:                           ) : (
-567:                             <Eye className="w-3.5 h-3.5" />
-568:                           )}
-569:                         </button>
-570:                       </div>
-571:                       <div className="text-xs text-slate-400 truncate max-w-[200px]">
-572:                         {shipment.destination_province}
-573:                       </div>
-574:                     </td>
-575: 
-576:                     {/* Column 4: Status */}
-577:                     <td>
-578:                       <StatusBadge status={shipment.status} />
-579:                     </td>
-580: 
-581:                     {/* Column 5: Match Status */}
-582:                     <td>
-583:                       {shipment.match_status === 'matched_exact' && (
-584:                         <span className="badge-ok text-xs">
-585:                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-586:                           <span>Khớp Chính Xác</span>
-587:                         </span>
-588:                       )}
-589:                       {shipment.match_status === 'matched_fuzzy' && (
-590:                         <span className="badge-warn text-xs">
-591:                           <Clock className="w-3.5 h-3.5 text-amber-600" />
-592:                           <span>Khớp Mờ COD</span>
-593:                         </span>
-594:                       )}
-595:                       {shipment.match_status === 'unmatched' && (
-596:                         <span className="badge-info text-xs">Chưa Khớp</span>
-597:                       )}
-598:                     </td>
-599: 
-600:                     {/* Column 6: COD Amount */}
-601:                     <td className="text-right font-mono font-bold text-slate-900 text-sm">
-602:                       {shipment.cod_amount > 0 ? (
-603:                         <Money amount={shipment.cod_amount} state="pending" />
-604:                       ) : (
-605:                         <span className="text-slate-400 text-xs font-normal">Không COD</span>
-606:                       )}
-607:                     </td>
-608: 
-609:                     {/* Column 7: Actionable Open Case Links */}
-610:                     <td>
-611:                       {shipment.has_open_exception && (
-612:                         <button
-613:                           type="button"
-614:                           onClick={() => onNavigateToTab && onNavigateToTab('exceptions')}
-615:                           className="badge-risk text-xs cursor-pointer hover:bg-rose-100 transition inline-flex items-center gap-1"
-616:                           title="Bấm để chuyển sang Hộp việc cứu đơn xử lý ngay"
-617:                         >
-618:                           <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-619:                           <span>Cần cứu đơn</span>
-620:                           <ExternalLink className="w-3 h-3" />
-621:                         </button>
-622:                       )}
-623: 
-624:                       {shipment.has_open_discrepancy && !shipment.has_open_exception && (
-625:                         <button
-626:                           type="button"
-627:                           onClick={() => onNavigateToTab && onNavigateToTab('reconciliation')}
-628:                           className="badge-warn text-xs cursor-pointer hover:bg-amber-100 transition inline-flex items-center gap-1"
-629:                         >
-630:                           <DollarSign className="w-3.5 h-3.5 text-amber-600" />
-631:                           <span>Lệch cước/COD</span>
-632:                         </button>
-633:                       )}
-634: 
-635:                       {shipment.has_open_claim &&
-636:                         !shipment.has_open_exception &&
-637:                         !shipment.has_open_discrepancy && (
-638:                           <button
-639:                             type="button"
-640:                             onClick={() => onNavigateToTab && onNavigateToTab('claims')}
-641:                             className="badge-info text-xs cursor-pointer hover:bg-slate-200 transition inline-flex items-center gap-1"
-642:                           >
-643:                             <FileSpreadsheet className="w-3.5 h-3.5" />
-644:                             <span>Hồ sơ bồi thường</span>
-645:                           </button>
-646:                         )}
-647: 
-648:                       {!shipment.has_open_exception &&
-649:                         !shipment.has_open_discrepancy &&
-650:                         !shipment.has_open_claim && (
-651:                           <span className="text-slate-400 text-xs flex items-center gap-1 font-medium">
-652:                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-653:                             <span>Bình thường</span>
-654:                           </span>
-655:                         )}
-656:                     </td>
-657: 
-658:                     {/* Column 8: Details CTA */}
-659:                     <td className="text-right">
-660:                       <button
-661:                         type="button"
-662:                         onClick={() => onOpenTrackingModal(shipment.tracking_code)}
-663:                         className="btn-secondary text-xs py-1.5 px-3"
-664:                       >
-665:                         Chi Tiết
-666:                       </button>
-667:                     </td>
-668:                   </tr>
-669:                 );
-670:               })}
-671: 
-672:               {paginatedShipments.length === 0 && (
-673:                 <tr>
-674:                   <td colSpan={8} className="py-12 text-center text-slate-400 text-xs">
-675:                     <Package className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-676:                     <p className="font-semibold text-slate-600">
-677:                       Không tìm thấy bưu kiện nào phù hợp với bộ lọc hiện tại.
-678:                     </p>
-679:                     {hasActiveFilters && (
-680:                       <button
-681:                         type="button"
-682:                         onClick={handleResetFilters}
-683:                         className="mt-3 btn-secondary text-xs"
-684:                       >
-685:                         Xóa toàn bộ bộ lọc
-686:                       </button>
-687:                     )}
-688:                   </td>
-689:                 </tr>
-690:               )}
-691:             </tbody>
-692:           </table>
-693:         </div>
-694: 
-695:         {/* Cursor Pagination Bar */}
-696:         <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-slate-600">
-697:           <div className="flex items-center gap-3">
-698:             <span>
-699:               Hiển thị{' '}
-700:               <strong className="text-slate-900">{totalCount > 0 ? cursorIndex + 1 : 0}</strong> –{' '}
-701:               <strong className="text-slate-900">
-702:                 {Math.min(cursorIndex + pageSize, totalCount)}
-703:               </strong>{' '}
-704:               trên tổng <strong className="text-slate-900">{totalCount}</strong> bưu kiện
-705:             </span>
-706: 
-707:             <div className="flex items-center gap-1.5">
-708:               <span className="text-slate-400">|</span>
-709:               <span>Dòng/trang:</span>
-710:               <select
-711:                 value={pageSize}
-712:                 onChange={(e) => {
-713:                   setPageSize(Number(e.target.value));
-714:                   setCursorIndex(0);
-715:                 }}
-716:                 className="px-2 py-1 rounded-md border border-slate-200 bg-white font-semibold text-xs"
-717:               >
-718:                 <option value={20}>20</option>
-719:                 <option value={50}>50</option>
-720:                 <option value={100}>100</option>
-721:               </select>
-722:             </div>
-723:           </div>
-724: 
-725:           <div className="flex items-center gap-2">
-726:             <button
-727:               type="button"
-728:               onClick={handlePrevPage}
-729:               disabled={!hasPrevPage}
-730:               className="btn-secondary text-xs py-1.5 px-3"
-731:             >
-732:               <ChevronLeft className="w-3.5 h-3.5" />
-733:               <span>Trang Trước</span>
-734:             </button>
-735: 
-736:             <button
-737:               type="button"
-738:               onClick={handleNextPage}
-739:               disabled={!hasNextPage}
-740:               className="btn-secondary text-xs py-1.5 px-3"
-741:             >
-742:               <span>Trang Sau</span>
-743:               <ChevronRight className="w-3.5 h-3.5" />
-744:             </button>
-745:           </div>
-746:         </div>
-747:       </div>
-748:     </div>
-749:   );
-750: };
-</file>
-
 <file path="apps/web/src/context/AuthContext.tsx">
    1: 'use client';
    2: 
@@ -112763,6 +112763,777 @@ This section contains the contents of the repository's files.
 16: export class UsersModule {}
 </file>
 
+<file path="apps/web/src/components/SettingsWorkspace.tsx">
+  1: 'use client';
+  2: 
+  3: import React, { useState } from 'react';
+  4: import Link from 'next/link';
+  5: import {
+  6:   Store,
+  7:   Users,
+  8:   Key,
+  9:   Bell,
+ 10:   Shield,
+ 11:   Globe,
+ 12:   Sliders,
+ 13:   CheckCircle2,
+ 14:   AlertTriangle,
+ 15:   RefreshCw,
+ 16:   Copy,
+ 17:   Check,
+ 18:   Plus,
+ 19:   Trash2,
+ 20:   Lock,
+ 21:   ArrowRight,
+ 22:   ExternalLink,
+ 23:   Smartphone,
+ 24:   Radio,
+ 25:   FileSpreadsheet,
+ 26:   User as UserIcon,
+ 27:   PackageCheck,
+ 28: } from 'lucide-react';
+ 29: import { AutomationBadge, Money } from './ui/OperationalComponents';
+ 30: import { PublicTrackingTab } from './PublicTrackingTab';
+ 31: import { NotificationMatrixTab } from './NotificationMatrixTab';
+ 32: import { UserManagementTab } from './UserManagementTab';
+ 33: import { ProfileSettingsTab } from './ProfileSettingsTab';
+ 34: 
+ 35: interface Props {
+ 36:   initialSection?: 'integrations';
+ 37:   onBackToDashboard: () => void;
+ 38:   onToast: (msg: string) => void;
+ 39:   carrierGhnTier?: 'L2' | 'L1';
+ 40:   onToggleGhnTier?: (tier: 'L2' | 'L1') => void;
+ 41: }
+ 42: 
+ 43: export const SettingsWorkspace: React.FC<Props> = ({
+ 44:   initialSection,
+ 45:   onBackToDashboard,
+ 46:   onToast,
+ 47:   carrierGhnTier = 'L2',
+ 48:   onToggleGhnTier,
+ 49: }) => {
+ 50:   const [activeSection, setActiveSection] = useState<
+ 51:     | 'stores'
+ 52:     | 'team'
+ 53:     | 'profile'
+ 54:     | 'integrations'
+ 55:     | 'notifications'
+ 56:     | 'security'
+ 57:     | 'tracking_portal'
+ 58:   >(initialSection || 'stores');
+ 59: 
+ 60:   // Integrations State
+ 61:   const [ghnTokenInput, setGhnTokenInput] = useState('');
+ 62:   const [ghnShopId, setGhnShopId] = useState('189201');
+ 63:   const [ghnClientId, setGhnClientId] = useState('554109');
+ 64:   const [isEditingGhnToken, setIsEditingGhnToken] = useState(false);
+ 65: 
+ 66:   const [ghtkTokenInput, setGhtkTokenInput] = useState('');
+ 67:   const [ghtkPartnerId, setGhtkPartnerId] = useState('PARTNER_ANAN_VN');
+ 68:   const [isEditingGhtkToken, setIsEditingGhtkToken] = useState(false);
+ 69: 
+ 70:   const [pancakeApiKeyInput, setPancakeApiKeyInput] = useState('');
+ 71:   const [pancakeShopId, setPancakeShopId] = useState('shop_anan_9901');
+ 72:   const [isEditingPancakeKey, setIsEditingPancakeKey] = useState(false);
+ 73: 
+ 74:   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+ 75: 
+ 76:   // Stores State
+ 77:   const [stores, setStores] = useState([
+ 78:     {
+ 79:       id: 'store_01',
+ 80:       name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
+ 81:       address: '128 Nguyễn Trãi, P. 3, Q. 5, TP. HCM',
+ 82:       code: 'HCM-Q3',
+ 83:       is_default: true,
+ 84:     },
+ 85:     {
+ 86:       id: 'store_02',
+ 87:       name: 'Kho Vận Tân Bình',
+ 88:       address: '55 CMT8, P. 5, Tân Bình, TP. HCM',
+ 89:       code: 'HCM-TB',
+ 90:       is_default: false,
+ 91:     },
+ 92:     {
+ 93:       id: 'store_03',
+ 94:       name: 'Chi Nhánh Hà Nội',
+ 95:       address: '320 Cầu Giấy, Quan Hoa, Cầu Giấy, Hà Nội',
+ 96:       code: 'HN-CG',
+ 97:       is_default: false,
+ 98:     },
+ 99:     {
+100:       id: 'store_04',
+101:       name: 'Chi Nhánh Đà Nẵng',
+102:       address: '102 Hoàng Văn Thụ, Hải Châu, Đà Nẵng',
+103:       code: 'DN-HC',
+104:       is_default: false,
+105:     },
+106:   ]);
+107: 
+108:   // Device Sessions State
+109:   const [sessions, setSessions] = useState([
+110:     {
+111:       id: 'sess_1',
+112:       user: 'Nguyễn Văn An (Chủ Shop)',
+113:       device: 'MacBook Pro · Chrome 127',
+114:       ip: '14.161.22.88',
+115:       location: 'TP. Hồ Chí Minh',
+116:       last_active: 'Đang hoạt động',
+117:       current: true,
+118:     },
+119:     {
+120:       id: 'sess_2',
+121:       user: 'Trần Thị Hoa (CSKH)',
+122:       device: 'iPhone 15 Pro · iOS 17.5',
+123:       ip: '113.190.44.12',
+124:       location: 'TP. Hồ Chí Minh',
+125:       last_active: '5 phút trước',
+126:       current: false,
+127:     },
+128:     {
+129:       id: 'sess_3',
+130:       user: 'Phạm Văn Kho (Thủ kho)',
+131:       device: 'Samsung Galaxy A54 · Android 14',
+132:       ip: '115.79.33.90',
+133:       location: 'TP. Hồ Chí Minh',
+134:       last_active: '15 phút trước',
+135:       current: false,
+136:     },
+137:   ]);
+138: 
+139:   const copyToClipboard = (text: string, id: string) => {
+140:     navigator.clipboard.writeText(text);
+141:     setCopiedUrl(id);
+142:     setTimeout(() => setCopiedUrl(null), 2000);
+143:   };
+144: 
+145:   const handleRevokeSession = (sessionId: string, userName: string) => {
+146:     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+147:     onToast(
+148:       `✓ Đã thu hồi quyền truy cập thiết bị của ${userName}. Phiên làm việc đã bị vô hiệu hóa từ xa.`
+149:     );
+150:   };
+151: 
+152:   return (
+153:     <div className="w-full space-y-6">
+154:       {/* Settings Header */}
+155:       <div className="modern-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-l-4 border-l-[#c23807]">
+156:         <div>
+157:           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2.5">
+158:             <Sliders className="w-6 h-6 text-[#c23807]" />
+159:             <span>Cài Đặt & Cấu Hình Cửa Hàng</span>
+160:           </h1>
+161:           <p className="text-sm text-slate-500 mt-1">
+162:             Quản lý chi nhánh, nhân sự phân quyền, kết nối hãng vận chuyển và chính sách bảo mật hệ
+163:             thống.
+164:           </p>
+165:         </div>
+166: 
+167:         <button type="button" onClick={onBackToDashboard} className="btn-secondary text-sm">
+168:           <span>← Quay lại Bàn Điều Khiển</span>
+169:         </button>
+170:       </div>
+171: 
+172:       {/* Two-Column Layout: Secondary Sidebar + Content Panel */}
+173:       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+174:         {/* Secondary Navigation Sidebar (4 cols) */}
+175:         <div className="lg:col-span-3 space-y-2">
+176:           <nav className="modern-card p-2 space-y-1">
+177:             {[
+178:               {
+179:                 id: 'stores',
+180:                 label: 'Cửa Hàng & Chi Nhánh',
+181:                 icon: Store,
+182:                 desc: 'Phạm vi kho và chi nhánh',
+183:               },
+184:               {
+185:                 id: 'team',
+186:                 label: 'Nhân Sự & Phân Quyền',
+187:                 icon: Users,
+188:                 desc: 'Quản lý thành viên & RBAC',
+189:               },
+190:               {
+191:                 id: 'profile',
+192:                 label: 'Hồ Sơ Cá Nhân',
+193:                 icon: UserIcon,
+194:                 desc: 'Liên hệ, múi giờ & thông báo',
+195:               },
+196:               {
+197:                 id: 'integrations',
+198:                 label: 'Tích Hợp Kênh & Hãng',
+199:                 icon: Key,
+200:                 desc: 'API GHN, GHTK, Pancake POS',
+201:               },
+202:               {
+203:                 id: 'notifications',
+204:                 label: 'Cấu Hình Cảnh Báo',
+205:                 icon: Bell,
+206:                 desc: 'Ma trận thông báo & PII',
+207:               },
+208:               {
+209:                 id: 'security',
+210:                 label: 'Bảo Mật & Phiên Thiết Bị',
+211:                 icon: Shield,
+212:                 desc: 'Giám sát IP & thu hồi từ xa',
+213:               },
+214:               {
+215:                 id: 'tracking_portal',
+216:                 label: 'Cổng Tra Cứu Khách Hàng',
+217:                 icon: Globe,
+218:                 desc: 'Trang công khai cho người mua',
+219:               },
+220:             ].map((item) => {
+221:               const Icon = item.icon;
+222:               const isActive = activeSection === item.id;
+223:               return (
+224:                 <button
+225:                   key={item.id}
+226:                   type="button"
+227:                   onClick={() => setActiveSection(item.id as any)}
+228:                   className={`w-full text-left px-3.5 py-3 rounded-xl transition flex items-center gap-3 cursor-pointer ${
+229:                     isActive
+230:                       ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
+231:                       : 'text-slate-700 hover:bg-slate-50 font-medium'
+232:                   }`}
+233:                 >
+234:                   <Icon
+235:                     className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#c23807]' : 'text-slate-400'}`}
+236:                   />
+237:                   <div>
+238:                     <div className="text-sm leading-tight">{item.label}</div>
+239:                     <div className="text-xs text-slate-400 font-normal mt-0.5">{item.desc}</div>
+240:                   </div>
+241:                 </button>
+242:               );
+243:             })}
+244: 
+245:             <div className="pt-2 border-t border-slate-100">
+246:               <Link
+247:                 href="/onboarding"
+248:                 className="w-full text-left px-3.5 py-3 rounded-xl transition flex items-center gap-3 text-slate-700 hover:bg-slate-50 font-medium"
+249:               >
+250:                 <PackageCheck className="w-5 h-5 shrink-0 text-[#c23807]" />
+251:                 <div className="flex-1">
+252:                   <div className="text-sm leading-tight font-bold text-slate-900">
+253:                     Thiết Lập Ban Đầu
+254:                   </div>
+255:                   <div className="text-xs text-slate-400 font-normal mt-0.5">
+256:                     Quy trình onboarding 6 bước (SCR-ONB-01)
+257:                   </div>
+258:                 </div>
+259:                 <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+260:               </Link>
+261:             </div>
+262:           </nav>
+263:         </div>
+264: 
+265:         {/* Main Content Viewport (9 cols) */}
+266:         <div className="lg:col-span-9">
+267:           {/* SECTION 1: STORES & BRANCHES */}
+268:           {activeSection === 'stores' && (
+269:             <div className="modern-card p-6 space-y-6">
+270:               <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+271:                 <div>
+272:                   <h2 className="text-base font-bold text-slate-900">
+273:                     Danh Sách Chi Nhánh & Kho Vận
+274:                   </h2>
+275:                   <p className="text-xs text-slate-500 mt-0.5">
+276:                     Phân quyền vận đơn và kiểm soát bưu kiện theo từng địa điểm xuất hàng.
+277:                   </p>
+278:                 </div>
+279:                 <button
+280:                   type="button"
+281:                   onClick={() => onToast('✓ Tính năng thêm chi nhánh mới')}
+282:                   className="btn-primary text-xs"
+283:                 >
+284:                   <Plus className="w-4 h-4" />
+285:                   <span>Thêm Chi Nhánh</span>
+286:                 </button>
+287:               </div>
+288: 
+289:               <div className="divide-y divide-slate-100">
+290:                 {stores.map((store) => (
+291:                   <div key={store.id} className="py-4 flex items-center justify-between gap-4">
+292:                     <div className="space-y-1">
+293:                       <div className="flex items-center gap-2">
+294:                         <span className="font-bold text-sm text-slate-900">{store.name}</span>
+295:                         <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold border border-slate-200">
+296:                           {store.code}
+297:                         </span>
+298:                         {store.is_default && <span className="badge-ok text-xs">Mặc Định</span>}
+299:                       </div>
+300:                       <p className="text-xs text-slate-500">{store.address}</p>
+301:                     </div>
+302: 
+303:                     <div className="flex items-center gap-2">
+304:                       <button
+305:                         type="button"
+306:                         onClick={() => onToast(`✓ Đang chỉnh sửa thông tin ${store.name}`)}
+307:                         className="btn-secondary text-xs"
+308:                       >
+309:                         Chỉnh Sửa
+310:                       </button>
+311:                     </div>
+312:                   </div>
+313:                 ))}
+314:               </div>
+315:             </div>
+316:           )}
+317: 
+318:           {/* SECTION 2: TEAM & PERMISSIONS */}
+319:           {activeSection === 'team' && (
+320:             <div className="space-y-4">
+321:               <UserManagementTab />
+322:             </div>
+323:           )}
+324: 
+325:           {/* SECTION: PERSONAL PROFILE (FEAT-PRO-01) */}
+326:           {activeSection === 'profile' && (
+327:             <div className="space-y-4">
+328:               <ProfileSettingsTab />
+329:             </div>
+330:           )}
+331: 
+332:           {/* SECTION 3: INTEGRATIONS (CARRIERS & POS) */}
+333:           {activeSection === 'integrations' && (
+334:             <div className="space-y-6">
+335:               {/* R1 Active Integrations */}
+336:               <div className="modern-card p-6 space-y-6">
+337:                 <div className="pb-4 border-b border-slate-100">
+338:                   <h2 className="text-base font-bold text-slate-900">
+339:                     1. Kênh Bán Hàng & Cổng Hãng Đang Kết Nối (R1 Core)
+340:                   </h2>
+341:                   <p className="text-xs text-slate-500 mt-0.5">
+342:                     Khai báo thông tin API và Webhook tiếp nhận sự kiện từ các đối tác chính thức.
+343:                   </p>
+344:                 </div>
+345: 
+346:                 {/* GHN Card */}
+347:                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+348:                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+349:                     <div className="flex items-center gap-3">
+350:                       <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-[#c23807] shadow-2xs">
+351:                         GHN
+352:                       </div>
+353:                       <div>
+354:                         <div className="flex items-center gap-2">
+355:                           <h3 className="font-bold text-sm text-slate-900">
+356:                             Giao Hàng Nhanh (GHN Express)
+357:                           </h3>
+358:                           <span className="badge-ok text-xs">Đang Hoạt Động</span>
+359:                         </div>
+360:                         <p className="text-xs text-slate-500">
+361:                           Đồng bộ trạng thái toàn trình qua Webhook & gọi lệnh giao lại tự động.
+362:                         </p>
+363:                       </div>
+364:                     </div>
+365: 
+366:                     <AutomationBadge tier={carrierGhnTier} carrierCode="GHN" />
+367:                   </div>
+368: 
+369:                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+370:                     {/* API Token (Write-Only Secret) */}
+371:                     <div>
+372:                       <label className="text-xs font-bold text-slate-700 block mb-1">
+373:                         API Token (Khóa Bí Mật):
+374:                       </label>
+375:                       {isEditingGhnToken ? (
+376:                         <div className="flex gap-2">
+377:                           <input
+378:                             type="password"
+379:                             value={ghnTokenInput}
+380:                             onChange={(e) => setGhnTokenInput(e.target.value)}
+381:                             placeholder="Dán mã token mới từ cổng GHN..."
+382:                             className="modern-input text-xs"
+383:                             autoFocus
+384:                           />
+385:                           <button
+386:                             type="button"
+387:                             onClick={() => {
+388:                               setIsEditingGhnToken(false);
+389:                               onToast('✓ Đã cập nhật API Token GHN thành công.');
+390:                             }}
+391:                             className="btn-primary text-xs"
+392:                           >
+393:                             Lưu
+394:                           </button>
+395:                         </div>
+396:                       ) : (
+397:                         <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
+398:                           <span className="font-mono text-slate-600 font-semibold">
+399:                             ghn_live_••••••••••••9842
+400:                           </span>
+401:                           <button
+402:                             type="button"
+403:                             onClick={() => setIsEditingGhnToken(true)}
+404:                             className="text-xs font-bold text-[#c23807] hover:underline"
+405:                           >
+406:                             Đổi Token
+407:                           </button>
+408:                         </div>
+409:                       )}
+410:                     </div>
+411: 
+412:                     {/* Shop ID */}
+413:                     <div>
+414:                       <label className="text-xs font-bold text-slate-700 block mb-1">
+415:                         GHN Shop ID & Client ID:
+416:                       </label>
+417:                       <div className="grid grid-cols-2 gap-2">
+418:                         <input
+419:                           type="text"
+420:                           value={ghnShopId}
+421:                           onChange={(e) => setGhnShopId(e.target.value)}
+422:                           className="modern-input text-xs font-mono"
+423:                           placeholder="Shop ID"
+424:                         />
+425:                         <input
+426:                           type="text"
+427:                           value={ghnClientId}
+428:                           onChange={(e) => setGhnClientId(e.target.value)}
+429:                           className="modern-input text-xs font-mono"
+430:                           placeholder="Client ID"
+431:                         />
+432:                       </div>
+433:                     </div>
+434:                   </div>
+435: 
+436:                   {/* Webhook Endpoint */}
+437:                   <div className="space-y-1">
+438:                     <label className="text-xs font-bold text-slate-700 block">
+439:                       Webhook Endpoint Nhận Sự Kiện GHN:
+440:                     </label>
+441:                     <div className="flex gap-2">
+442:                       <input
+443:                         type="text"
+444:                         readOnly
+445:                         value="https://api.shipde.net/v1/webhooks/ghn/wh_anan_9901"
+446:                         className="modern-input text-xs font-mono bg-white text-slate-600 select-all"
+447:                       />
+448:                       <button
+449:                         type="button"
+450:                         onClick={() =>
+451:                           copyToClipboard(
+452:                             'https://api.shipde.net/v1/webhooks/ghn/wh_anan_9901',
+453:                             'ghn'
+454:                           )
+455:                         }
+456:                         className="btn-secondary text-xs"
+457:                         title="Sao chép URL"
+458:                       >
+459:                         {copiedUrl === 'ghn' ? (
+460:                           <Check className="w-4 h-4 text-emerald-600" />
+461:                         ) : (
+462:                           <Copy className="w-4 h-4" />
+463:                         )}
+464:                         <span>{copiedUrl === 'ghn' ? 'Đã chép' : 'Sao chép'}</span>
+465:                       </button>
+466:                     </div>
+467:                   </div>
+468: 
+469:                   {/* Action Buttons: Test Connection separated from Save */}
+470:                   <div className="flex justify-between items-center pt-3 border-t border-slate-200">
+471:                     <button
+472:                       type="button"
+473:                       onClick={() =>
+474:                         onToggleGhnTier && onToggleGhnTier(carrierGhnTier === 'L2' ? 'L1' : 'L2')
+475:                       }
+476:                       className="text-xs font-bold text-slate-600 hover:text-slate-900 underline"
+477:                     >
+478:                       Chuyển sang{' '}
+479:                       {carrierGhnTier === 'L2' ? 'Chế độ Hỗ trợ (L1)' : 'Tự động gọi API (L2)'}
+480:                     </button>
+481: 
+482:                     <div className="flex items-center gap-2">
+483:                       <button
+484:                         type="button"
+485:                         onClick={() =>
+486:                           onToast('✓ [GHN Express] Kiểm tra kết nối API thành công (Độ trễ: 38ms).')
+487:                         }
+488:                         className="btn-secondary text-xs"
+489:                       >
+490:                         <RefreshCw className="w-3.5 h-3.5" />
+491:                         <span>Kiểm Tra Kết Nối</span>
+492:                       </button>
+493:                       <button
+494:                         type="button"
+495:                         onClick={() => onToast('✓ Đã lưu cấu hình GHN thành công.')}
+496:                         className="btn-primary text-xs"
+497:                       >
+498:                         Lưu Cấu Hình
+499:                       </button>
+500:                     </div>
+501:                   </div>
+502:                 </div>
+503: 
+504:                 {/* GHTK Card */}
+505:                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+506:                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+507:                     <div className="flex items-center gap-3">
+508:                       <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-emerald-700 shadow-2xs">
+509:                         GHTK
+510:                       </div>
+511:                       <div>
+512:                         <div className="flex items-center gap-2">
+513:                           <h3 className="font-bold text-sm text-slate-900">
+514:                             Giao Hàng Tiết Kiệm (GHTK)
+515:                           </h3>
+516:                           <span className="badge-ok text-xs">Đang Hoạt Động</span>
+517:                         </div>
+518:                         <p className="text-xs text-slate-500">
+519:                           Tự động tổng hợp hồ sơ chuẩn mẫu dán cổng khi cần can thiệp giao lại.
+520:                         </p>
+521:                       </div>
+522:                     </div>
+523: 
+524:                     <AutomationBadge tier="L1" carrierCode="GHTK" />
+525:                   </div>
+526: 
+527:                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+528:                     <div>
+529:                       <label className="text-xs font-bold text-slate-700 block mb-1">
+530:                         Partner Token:
+531:                       </label>
+532:                       {isEditingGhtkToken ? (
+533:                         <div className="flex gap-2">
+534:                           <input
+535:                             type="password"
+536:                             value={ghtkTokenInput}
+537:                             onChange={(e) => setGhtkTokenInput(e.target.value)}
+538:                             placeholder="Dán token GHTK..."
+539:                             className="modern-input text-xs"
+540:                             autoFocus
+541:                           />
+542:                           <button
+543:                             type="button"
+544:                             onClick={() => {
+545:                               setIsEditingGhtkToken(false);
+546:                               onToast('✓ Đã cập nhật Token GHTK.');
+547:                             }}
+548:                             className="btn-primary text-xs"
+549:                           >
+550:                             Lưu
+551:                           </button>
+552:                         </div>
+553:                       ) : (
+554:                         <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
+555:                           <span className="font-mono text-slate-600 font-semibold">
+556:                             ghtk_partner_••••••••2394
+557:                           </span>
+558:                           <button
+559:                             type="button"
+560:                             onClick={() => setIsEditingGhtkToken(true)}
+561:                             className="text-xs font-bold text-[#c23807] hover:underline"
+562:                           >
+563:                             Đổi Token
+564:                           </button>
+565:                         </div>
+566:                       )}
+567:                     </div>
+568: 
+569:                     <div>
+570:                       <label className="text-xs font-bold text-slate-700 block mb-1">
+571:                         Partner ID:
+572:                       </label>
+573:                       <input
+574:                         type="text"
+575:                         value={ghtkPartnerId}
+576:                         onChange={(e) => setGhtkPartnerId(e.target.value)}
+577:                         className="modern-input text-xs font-mono"
+578:                       />
+579:                     </div>
+580:                   </div>
+581: 
+582:                   <div className="flex justify-end items-center gap-2 pt-3 border-t border-slate-200">
+583:                     <button
+584:                       type="button"
+585:                       onClick={() =>
+586:                         onToast('✓ [GHTK] Kiểm tra cổng đối tác thành công (Ping: 45ms).')
+587:                       }
+588:                       className="btn-secondary text-xs"
+589:                     >
+590:                       Kiểm Tra Kết Nối
+591:                     </button>
+592:                     <button
+593:                       type="button"
+594:                       onClick={() => onToast('✓ Đã lưu cấu hình GHTK.')}
+595:                       className="btn-primary text-xs"
+596:                     >
+597:                       Lưu Cấu Hình
+598:                     </button>
+599:                   </div>
+600:                 </div>
+601: 
+602:                 {/* Pancake POS Card */}
+603:                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+604:                   <div className="flex items-center justify-between">
+605:                     <div className="flex items-center gap-3">
+606:                       <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-blue-600 shadow-2xs">
+607:                         POS
+608:                       </div>
+609:                       <div>
+610:                         <div className="flex items-center gap-2">
+611:                           <h3 className="font-bold text-sm text-slate-900">Pancake POS Open API</h3>
+612:                           <span className="badge-ok text-xs">Tự Động Đồng Bộ</span>
+613:                         </div>
+614:                         <p className="text-xs text-slate-500">
+615:                           Tự động nạp đơn hàng mới, thông tin khách và mã vận đơn vào Ship Dễ.
+616:                         </p>
+617:                       </div>
+618:                     </div>
+619:                   </div>
+620: 
+621:                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+622:                     <div>
+623:                       <label className="text-xs font-bold text-slate-700 block mb-1">
+624:                         Pancake API Key:
+625:                       </label>
+626:                       <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
+627:                         <span className="font-mono text-slate-600 font-semibold">
+628:                           pk_live_••••••••1039
+629:                         </span>
+630:                         <button
+631:                           type="button"
+632:                           onClick={() => onToast('✓ Vui lòng nhập mã API Key mới')}
+633:                           className="text-xs font-bold text-[#c23807] hover:underline"
+634:                         >
+635:                           Cập Nhật
+636:                         </button>
+637:                       </div>
+638:                     </div>
+639: 
+640:                     <div>
+641:                       <label className="text-xs font-bold text-slate-700 block mb-1">
+642:                         Shop ID:
+643:                       </label>
+644:                       <input
+645:                         type="text"
+646:                         value={pancakeShopId}
+647:                         onChange={(e) => setPancakeShopId(e.target.value)}
+648:                         className="modern-input text-xs font-mono"
+649:                       />
+650:                     </div>
+651:                   </div>
+652:                 </div>
+653:               </div>
+654: 
+655:               {/* Roadmap Deferred Integrations (R2/R3) */}
+656:               <div className="modern-card p-6 space-y-4">
+657:                 <div className="pb-3 border-b border-slate-100">
+658:                   <h2 className="text-base font-bold text-slate-900">
+659:                     2. Cổng Tích Hợp Đang Phát Triển (Lộ Trình R2 / R3)
+660:                   </h2>
+661:                   <p className="text-xs text-slate-500 mt-0.5">
+662:                     Các cổng sau được lên kế hoạch phát hành ở phiên bản tiếp theo.
+663:                   </p>
+664:                 </div>
+665: 
+666:                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+667:                   {[
+668:                     { name: 'Viettel Post', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
+669:                     { name: 'J&T Express', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
+670:                     { name: 'VNPost', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
+671:                     { name: 'KiotViet POS', type: 'Kênh bán lẻ', badge: 'Lộ trình R2' },
+672:                     { name: 'TikTok Shop', type: 'Sàn TMĐT', badge: 'Lộ trình R2' },
+673:                     {
+674:                       name: 'Public Developer API',
+675:                       type: 'Cổng lập trình viên',
+676:                       badge: 'Lộ trình R3',
+677:                     },
+678:                   ].map((ch, idx) => (
+679:                     <div
+680:                       key={idx}
+681:                       className="p-4 rounded-xl border border-slate-200 bg-white space-y-2 opacity-75"
+682:                     >
+683:                       <div className="flex justify-between items-start">
+684:                         <span className="font-bold text-sm text-slate-900">{ch.name}</span>
+685:                         <span className="badge-warn text-[11px]">{ch.badge}</span>
+686:                       </div>
+687:                       <p className="text-xs text-slate-500">{ch.type} · Sắp ra mắt</p>
+688:                     </div>
+689:                   ))}
+690:                 </div>
+691:               </div>
+692:             </div>
+693:           )}
+694: 
+695:           {/* SECTION 4: NOTIFICATIONS & ALERTS */}
+696:           {activeSection === 'notifications' && (
+697:             <div className="space-y-4">
+698:               <NotificationMatrixTab />
+699:             </div>
+700:           )}
+701: 
+702:           {/* SECTION 5: SECURITY & DEVICE SESSIONS */}
+703:           {activeSection === 'security' && (
+704:             <div className="modern-card p-6 space-y-6">
+705:               <div className="pb-4 border-b border-slate-100">
+706:                 <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+707:                   <Shield className="w-5 h-5 text-emerald-600" />
+708:                   <span>Giám Sát Bảo Mật & Phiên Làm Việc Thiết Bị</span>
+709:                 </h2>
+710:                 <p className="text-xs text-slate-500 mt-0.5">
+711:                   Kiểm soát các thiết bị di động, máy tính của nhân viên đang đăng nhập vào hệ thống
+712:                   và thu hồi quyền từ xa khi cần.
+713:                 </p>
+714:               </div>
+715: 
+716:               <div className="divide-y divide-slate-100">
+717:                 {sessions.map((sess) => (
+718:                   <div
+719:                     key={sess.id}
+720:                     className="py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3"
+721:                   >
+722:                     <div className="space-y-1">
+723:                       <div className="flex items-center gap-2">
+724:                         <span className="font-bold text-sm text-slate-900">{sess.user}</span>
+725:                         {sess.current ? (
+726:                           <span className="badge-ok text-xs">Phiên Này</span>
+727:                         ) : (
+728:                           <span className="text-xs text-slate-500 font-medium">
+729:                             · {sess.last_active}
+730:                           </span>
+731:                         )}
+732:                       </div>
+733:                       <div className="text-xs text-slate-500 flex items-center gap-3">
+734:                         <span className="flex items-center gap-1">
+735:                           <Smartphone className="w-3.5 h-3.5 text-slate-400" />
+736:                           <span>{sess.device}</span>
+737:                         </span>
+738:                         <span className="font-mono text-slate-400">IP: {sess.ip}</span>
+739:                         <span>{sess.location}</span>
+740:                       </div>
+741:                     </div>
+742: 
+743:                     {!sess.current && (
+744:                       <button
+745:                         type="button"
+746:                         onClick={() => handleRevokeSession(sess.id, sess.user)}
+747:                         className="btn-danger text-xs py-1.5 px-3"
+748:                       >
+749:                         Thu Hồi Quyền
+750:                       </button>
+751:                     )}
+752:                   </div>
+753:                 ))}
+754:               </div>
+755:             </div>
+756:           )}
+757: 
+758:           {/* SECTION 6: PUBLIC TRACKING PORTAL PREVIEW */}
+759:           {activeSection === 'tracking_portal' && (
+760:             <div className="space-y-4">
+761:               <PublicTrackingTab />
+762:             </div>
+763:           )}
+764:         </div>
+765:       </div>
+766:     </div>
+767:   );
+768: };
+</file>
+
 <file path="docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md">
  1: # Baseline and Decisions
  2: 
@@ -116305,775 +117076,657 @@ This section contains the contents of the repository's files.
 1830: }
 </file>
 
-<file path="apps/web/src/components/SettingsWorkspace.tsx">
+<file path="apps/web/src/app/page.tsx">
   1: 'use client';
   2: 
-  3: import React, { useState } from 'react';
-  4: import Link from 'next/link';
-  5: import {
-  6:   Store,
-  7:   Users,
-  8:   Key,
-  9:   Bell,
- 10:   Shield,
- 11:   Globe,
- 12:   Sliders,
- 13:   CheckCircle2,
- 14:   AlertTriangle,
- 15:   RefreshCw,
- 16:   Copy,
- 17:   Check,
- 18:   Plus,
- 19:   Trash2,
- 20:   Lock,
- 21:   ArrowRight,
- 22:   ExternalLink,
- 23:   Smartphone,
- 24:   Radio,
- 25:   FileSpreadsheet,
- 26:   User as UserIcon,
- 27:   PackageCheck,
- 28: } from 'lucide-react';
- 29: import { AutomationBadge, Money } from './ui/OperationalComponents';
- 30: import { PublicTrackingTab } from './PublicTrackingTab';
- 31: import { NotificationMatrixTab } from './NotificationMatrixTab';
- 32: import { UserManagementTab } from './UserManagementTab';
- 33: import { ProfileSettingsTab } from './ProfileSettingsTab';
- 34: 
- 35: interface Props {
- 36:   initialSection?: 'integrations';
- 37:   onBackToDashboard: () => void;
- 38:   onToast: (msg: string) => void;
- 39:   carrierGhnTier?: 'L2' | 'L1';
- 40:   onToggleGhnTier?: (tier: 'L2' | 'L1') => void;
- 41: }
- 42: 
- 43: export const SettingsWorkspace: React.FC<Props> = ({
- 44:   initialSection,
- 45:   onBackToDashboard,
- 46:   onToast,
- 47:   carrierGhnTier = 'L2',
- 48:   onToggleGhnTier,
- 49: }) => {
- 50:   const [activeSection, setActiveSection] = useState<
- 51:     | 'stores'
- 52:     | 'team'
- 53:     | 'profile'
- 54:     | 'integrations'
- 55:     | 'notifications'
- 56:     | 'security'
- 57:     | 'tracking_portal'
- 58:   >(initialSection || 'stores');
- 59: 
- 60:   // Integrations State
- 61:   const [ghnTokenInput, setGhnTokenInput] = useState('');
- 62:   const [ghnShopId, setGhnShopId] = useState('189201');
- 63:   const [ghnClientId, setGhnClientId] = useState('554109');
- 64:   const [isEditingGhnToken, setIsEditingGhnToken] = useState(false);
- 65: 
- 66:   const [ghtkTokenInput, setGhtkTokenInput] = useState('');
- 67:   const [ghtkPartnerId, setGhtkPartnerId] = useState('PARTNER_ANAN_VN');
- 68:   const [isEditingGhtkToken, setIsEditingGhtkToken] = useState(false);
- 69: 
- 70:   const [pancakeApiKeyInput, setPancakeApiKeyInput] = useState('');
- 71:   const [pancakeShopId, setPancakeShopId] = useState('shop_anan_9901');
- 72:   const [isEditingPancakeKey, setIsEditingPancakeKey] = useState(false);
- 73: 
- 74:   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
- 75: 
- 76:   // Stores State
- 77:   const [stores, setStores] = useState([
- 78:     {
- 79:       id: 'store_01',
- 80:       name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)',
- 81:       address: '128 Nguyễn Trãi, P. 3, Q. 5, TP. HCM',
- 82:       code: 'HCM-Q3',
- 83:       is_default: true,
- 84:     },
- 85:     {
- 86:       id: 'store_02',
- 87:       name: 'Kho Vận Tân Bình',
- 88:       address: '55 CMT8, P. 5, Tân Bình, TP. HCM',
- 89:       code: 'HCM-TB',
- 90:       is_default: false,
- 91:     },
- 92:     {
- 93:       id: 'store_03',
- 94:       name: 'Chi Nhánh Hà Nội',
- 95:       address: '320 Cầu Giấy, Quan Hoa, Cầu Giấy, Hà Nội',
- 96:       code: 'HN-CG',
- 97:       is_default: false,
- 98:     },
- 99:     {
-100:       id: 'store_04',
-101:       name: 'Chi Nhánh Đà Nẵng',
-102:       address: '102 Hoàng Văn Thụ, Hải Châu, Đà Nẵng',
-103:       code: 'DN-HC',
-104:       is_default: false,
-105:     },
-106:   ]);
-107: 
-108:   // Device Sessions State
-109:   const [sessions, setSessions] = useState([
-110:     {
-111:       id: 'sess_1',
-112:       user: 'Nguyễn Văn An (Chủ Shop)',
-113:       device: 'MacBook Pro · Chrome 127',
-114:       ip: '14.161.22.88',
-115:       location: 'TP. Hồ Chí Minh',
-116:       last_active: 'Đang hoạt động',
-117:       current: true,
-118:     },
-119:     {
-120:       id: 'sess_2',
-121:       user: 'Trần Thị Hoa (CSKH)',
-122:       device: 'iPhone 15 Pro · iOS 17.5',
-123:       ip: '113.190.44.12',
-124:       location: 'TP. Hồ Chí Minh',
-125:       last_active: '5 phút trước',
-126:       current: false,
-127:     },
-128:     {
-129:       id: 'sess_3',
-130:       user: 'Phạm Văn Kho (Thủ kho)',
-131:       device: 'Samsung Galaxy A54 · Android 14',
-132:       ip: '115.79.33.90',
-133:       location: 'TP. Hồ Chí Minh',
-134:       last_active: '15 phút trước',
-135:       current: false,
-136:     },
-137:   ]);
-138: 
-139:   const copyToClipboard = (text: string, id: string) => {
-140:     navigator.clipboard.writeText(text);
-141:     setCopiedUrl(id);
-142:     setTimeout(() => setCopiedUrl(null), 2000);
-143:   };
-144: 
-145:   const handleRevokeSession = (sessionId: string, userName: string) => {
-146:     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-147:     onToast(
-148:       `✓ Đã thu hồi quyền truy cập thiết bị của ${userName}. Phiên làm việc đã bị vô hiệu hóa từ xa.`
-149:     );
-150:   };
-151: 
-152:   return (
-153:     <div className="w-full space-y-6">
-154:       {/* Settings Header */}
-155:       <div className="modern-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-l-4 border-l-[#c23807]">
-156:         <div>
-157:           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2.5">
-158:             <Sliders className="w-6 h-6 text-[#c23807]" />
-159:             <span>Cài Đặt & Cấu Hình Cửa Hàng</span>
-160:           </h1>
-161:           <p className="text-sm text-slate-500 mt-1">
-162:             Quản lý chi nhánh, nhân sự phân quyền, kết nối hãng vận chuyển và chính sách bảo mật hệ
-163:             thống.
-164:           </p>
-165:         </div>
-166: 
-167:         <button type="button" onClick={onBackToDashboard} className="btn-secondary text-sm">
-168:           <span>← Quay lại Bàn Điều Khiển</span>
-169:         </button>
-170:       </div>
-171: 
-172:       {/* Two-Column Layout: Secondary Sidebar + Content Panel */}
-173:       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-174:         {/* Secondary Navigation Sidebar (4 cols) */}
-175:         <div className="lg:col-span-3 space-y-2">
-176:           <nav className="modern-card p-2 space-y-1">
-177:             {[
-178:               {
-179:                 id: 'stores',
-180:                 label: 'Cửa Hàng & Chi Nhánh',
-181:                 icon: Store,
-182:                 desc: 'Phạm vi kho và chi nhánh',
-183:               },
-184:               {
-185:                 id: 'team',
-186:                 label: 'Nhân Sự & Phân Quyền',
-187:                 icon: Users,
-188:                 desc: 'Quản lý thành viên & RBAC',
-189:               },
-190:               {
-191:                 id: 'profile',
-192:                 label: 'Hồ Sơ Cá Nhân',
-193:                 icon: UserIcon,
-194:                 desc: 'Liên hệ, múi giờ & thông báo',
-195:               },
-196:               {
-197:                 id: 'integrations',
-198:                 label: 'Tích Hợp Kênh & Hãng',
-199:                 icon: Key,
-200:                 desc: 'API GHN, GHTK, Pancake POS',
-201:               },
-202:               {
-203:                 id: 'notifications',
-204:                 label: 'Cấu Hình Cảnh Báo',
-205:                 icon: Bell,
-206:                 desc: 'Ma trận thông báo & PII',
-207:               },
-208:               {
-209:                 id: 'security',
-210:                 label: 'Bảo Mật & Phiên Thiết Bị',
-211:                 icon: Shield,
-212:                 desc: 'Giám sát IP & thu hồi từ xa',
-213:               },
-214:               {
-215:                 id: 'tracking_portal',
-216:                 label: 'Cổng Tra Cứu Khách Hàng',
-217:                 icon: Globe,
-218:                 desc: 'Trang công khai cho người mua',
-219:               },
-220:             ].map((item) => {
-221:               const Icon = item.icon;
-222:               const isActive = activeSection === item.id;
-223:               return (
-224:                 <button
-225:                   key={item.id}
-226:                   type="button"
-227:                   onClick={() => setActiveSection(item.id as any)}
-228:                   className={`w-full text-left px-3.5 py-3 rounded-xl transition flex items-center gap-3 cursor-pointer ${
-229:                     isActive
-230:                       ? 'bg-[#FFF5F0] text-[#c23807] font-bold border border-[#FDDDD0]'
-231:                       : 'text-slate-700 hover:bg-slate-50 font-medium'
-232:                   }`}
-233:                 >
-234:                   <Icon
-235:                     className={`w-5 h-5 shrink-0 ${isActive ? 'text-[#c23807]' : 'text-slate-400'}`}
-236:                   />
-237:                   <div>
-238:                     <div className="text-sm leading-tight">{item.label}</div>
-239:                     <div className="text-xs text-slate-400 font-normal mt-0.5">{item.desc}</div>
-240:                   </div>
-241:                 </button>
-242:               );
-243:             })}
-244: 
-245:             <div className="pt-2 border-t border-slate-100">
-246:               <Link
-247:                 href="/onboarding"
-248:                 className="w-full text-left px-3.5 py-3 rounded-xl transition flex items-center gap-3 text-slate-700 hover:bg-slate-50 font-medium"
-249:               >
-250:                 <PackageCheck className="w-5 h-5 shrink-0 text-[#c23807]" />
-251:                 <div className="flex-1">
-252:                   <div className="text-sm leading-tight font-bold text-slate-900">
-253:                     Thiết Lập Ban Đầu
-254:                   </div>
-255:                   <div className="text-xs text-slate-400 font-normal mt-0.5">
-256:                     Quy trình onboarding 6 bước (SCR-ONB-01)
-257:                   </div>
-258:                 </div>
-259:                 <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-260:               </Link>
-261:             </div>
-262:           </nav>
-263:         </div>
-264: 
-265:         {/* Main Content Viewport (9 cols) */}
-266:         <div className="lg:col-span-9">
-267:           {/* SECTION 1: STORES & BRANCHES */}
-268:           {activeSection === 'stores' && (
-269:             <div className="modern-card p-6 space-y-6">
-270:               <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-271:                 <div>
-272:                   <h2 className="text-base font-bold text-slate-900">
-273:                     Danh Sách Chi Nhánh & Kho Vận
-274:                   </h2>
-275:                   <p className="text-xs text-slate-500 mt-0.5">
-276:                     Phân quyền vận đơn và kiểm soát bưu kiện theo từng địa điểm xuất hàng.
-277:                   </p>
-278:                 </div>
-279:                 <button
-280:                   type="button"
-281:                   onClick={() => onToast('✓ Tính năng thêm chi nhánh mới')}
-282:                   className="btn-primary text-xs"
-283:                 >
-284:                   <Plus className="w-4 h-4" />
-285:                   <span>Thêm Chi Nhánh</span>
-286:                 </button>
-287:               </div>
-288: 
-289:               <div className="divide-y divide-slate-100">
-290:                 {stores.map((store) => (
-291:                   <div key={store.id} className="py-4 flex items-center justify-between gap-4">
-292:                     <div className="space-y-1">
-293:                       <div className="flex items-center gap-2">
-294:                         <span className="font-bold text-sm text-slate-900">{store.name}</span>
-295:                         <span className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold border border-slate-200">
-296:                           {store.code}
-297:                         </span>
-298:                         {store.is_default && <span className="badge-ok text-xs">Mặc Định</span>}
-299:                       </div>
-300:                       <p className="text-xs text-slate-500">{store.address}</p>
-301:                     </div>
-302: 
-303:                     <div className="flex items-center gap-2">
-304:                       <button
-305:                         type="button"
-306:                         onClick={() => onToast(`✓ Đang chỉnh sửa thông tin ${store.name}`)}
-307:                         className="btn-secondary text-xs"
-308:                       >
-309:                         Chỉnh Sửa
-310:                       </button>
-311:                     </div>
-312:                   </div>
-313:                 ))}
-314:               </div>
-315:             </div>
-316:           )}
+  3: import React, { useState, useEffect } from 'react';
+  4: import { usePathname, useSearchParams } from 'next/navigation';
+  5: import { useAuth } from '@/context/AuthContext';
+  6: import { LoginView } from '@/components/auth/LoginView';
+  7: import { RegisterView } from '@/components/auth/RegisterView';
+  8: import { ActiveRole, UIExceptionItem, UIDiscrepancyItem, UIClaimItem } from '@/components/types';
+  9: import {
+ 10:   MASTER_SHIPMENTS,
+ 11:   MASTER_EXCEPTIONS,
+ 12:   MASTER_DISCREPANCIES,
+ 13:   MASTER_CLAIMS,
+ 14:   getUnifiedMetrics,
+ 15: } from '@/services/unifiedDataStore';
+ 16: 
+ 17: import { ShipmentListTab } from '@/components/ShipmentListTab';
+ 18: import { ControlTowerTab } from '@/components/ControlTowerTab';
+ 19: import { ThreeLedgersTab } from '@/components/ThreeLedgersTab';
+ 20: import { ExceptionWorkboxTab } from '@/components/ExceptionWorkboxTab';
+ 21: import { ReconciliationTab } from '@/components/ReconciliationTab';
+ 22: import { ReturnScanTab } from '@/components/ReturnScanTab';
+ 23: import { ClaimCasesTab } from '@/components/ClaimCasesTab';
+ 24: import { AdminSystemTab } from '@/components/AdminSystemTab';
+ 25: import { SettingsWorkspace } from '@/components/SettingsWorkspace';
+ 26: import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
+ 27: import { UploadStatementModal } from '@/components/UploadStatementModal';
+ 28: import { CreateOrderModal } from '@/components/CreateOrderModal';
+ 29: import { GlobalSearchModal } from '@/components/GlobalSearchModal';
+ 30: 
+ 31: import {
+ 32:   Package,
+ 33:   LayoutDashboard,
+ 34:   TrendingUp,
+ 35:   AlertTriangle,
+ 36:   DollarSign,
+ 37:   RotateCcw,
+ 38:   FileText,
+ 39:   Database,
+ 40:   Search,
+ 41:   Settings,
+ 42:   RefreshCw,
+ 43:   ChevronDown,
+ 44:   ShieldCheck,
+ 45:   Store,
+ 46:   Key,
+ 47: } from 'lucide-react';
+ 48: 
+ 49: export interface SearchActivationActions {
+ 50:   setActiveTab: (tab: string) => void;
+ 51:   setSelectedGlobalTracking: (code: string | null) => void;
+ 52:   setSelectedOrderId: (id: string | null) => void;
+ 53:   setSelectedOrderCode: (code: string | null) => void;
+ 54:   setSelectedBatchId: (id: string | null) => void;
+ 55:   setSelectedCaseId: (id: string | null) => void;
+ 56:   setSelectedClaimId: (id: string | null) => void;
+ 57:   setSelectedClaimCode: (code: string | null) => void;
+ 58:   setSelectedDiscrepancyId: (id: string | null) => void;
+ 59:   pushUrl?: (url: string) => void;
+ 60:   showToast?: (message: string) => void;
+ 61: }
+ 62: 
+ 63: export function handleSearchResultActivation(
+ 64:   item: {
+ 65:     id: string;
+ 66:     type: string;
+ 67:     code: string;
+ 68:     url?: string;
+ 69:     title?: string;
+ 70:     metadata?: Record<string, unknown>;
+ 71:   },
+ 72:   actions: SearchActivationActions
+ 73: ) {
+ 74:   // Follow result URL in browser history
+ 75:   if (actions.pushUrl && item.url) {
+ 76:     actions.pushUrl(item.url);
+ 77:   } else if (typeof window !== 'undefined' && item.url) {
+ 78:     window.history.pushState(null, '', item.url);
+ 79:   }
+ 80: 
+ 81:   // Clear previous selections across all entity types so consecutive activations do not leave stale selections
+ 82:   actions.setSelectedGlobalTracking(null);
+ 83:   actions.setSelectedOrderId(null);
+ 84:   actions.setSelectedOrderCode(null);
+ 85:   actions.setSelectedBatchId(null);
+ 86:   actions.setSelectedCaseId(null);
+ 87:   actions.setSelectedClaimId(null);
+ 88:   actions.setSelectedClaimCode(null);
+ 89:   actions.setSelectedDiscrepancyId(null);
+ 90: 
+ 91:   if (item.type === 'WAYBILL') {
+ 92:     actions.setSelectedGlobalTracking(item.code);
+ 93:   } else if (item.type === 'ORDER') {
+ 94:     actions.setActiveTab('shipments');
+ 95:     actions.setSelectedOrderId(item.id);
+ 96:     actions.setSelectedOrderCode(item.code);
+ 97:   } else if (item.type === 'BATCH') {
+ 98:     actions.setActiveTab('reconciliation');
+ 99:     actions.setSelectedBatchId(item.id);
+100:   } else if (item.type === 'CASE') {
+101:     const isClaim =
+102:       item.url?.startsWith('/claims/') ||
+103:       Boolean(item.metadata && 'claim_type' in item.metadata) ||
+104:       item.title?.toLowerCase().includes('bồi thường');
+105:     if (isClaim) {
+106:       actions.setActiveTab('claims');
+107:       actions.setSelectedClaimId(item.id);
+108:       actions.setSelectedClaimCode(item.code);
+109:     } else {
+110:       actions.setActiveTab('exceptions');
+111:       actions.setSelectedCaseId(item.id);
+112:     }
+113:   } else if (item.type === 'TRANSACTION') {
+114:     actions.setActiveTab('reconciliation');
+115:     actions.setSelectedDiscrepancyId(item.id);
+116:   }
+117: }
+118: 
+119: export default function ShipDeConsoleApp() {
+120:   const { user, merchant, isAuthenticated, isHydrating, switchRole } = useAuth();
+121:   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+122: 
+123:   const searchParams = useSearchParams();
+124:   const pathname = usePathname();
+125:   const routeTab = searchParams.get('view') || 'dashboard';
+126:   const [activeTab, setActiveTabState] = useState<string>(routeTab);
+127:   useEffect(() => {
+128:     // Existing tab content follows links, command selection and browser history.
+129:     if (pathname === '/') Promise.resolve().then(() => setActiveTabState(routeTab));
+130:   }, [pathname, routeTab]);
+131:   const setActiveTab = (tab: string) => {
+132:     setActiveTabState(tab);
+133:     window.history.pushState(null, '', '/?view=' + encodeURIComponent(tab));
+134:   };
+135:   const [carrierGhnTier, setCarrierGhnTier] = useState<'L2' | 'L1'>('L2');
+136: 
+137:   const [exceptions, setExceptions] = useState<UIExceptionItem[]>(MASTER_EXCEPTIONS);
+138:   const [discrepancies, setDiscrepancies] = useState<UIDiscrepancyItem[]>(MASTER_DISCREPANCIES);
+139:   const [claims, setClaims] = useState<UIClaimItem[]>(MASTER_CLAIMS);
+140: 
+141:   // Deep search result selections (FEAT-COM-01)
+142:   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+143:   const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
+144:   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+145:   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+146:   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+147:   const [selectedClaimCode, setSelectedClaimCode] = useState<string | null>(null);
+148:   const [selectedDiscrepancyId, setSelectedDiscrepancyId] = useState<string | null>(null);
+149: 
+150:   // Modals
+151:   const [createOrderOpen, setCreateOrderOpen] = useState(false);
+152:   const [uploadStatementOpen, setUploadStatementOpen] = useState(false);
+153:   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+154:   const [selectedGlobalTracking, setSelectedGlobalTracking] = useState<string | null>(null);
+155:   const [toastMessage, setToastMessage] = useState<string | null>(null);
+156:   const [syncingPancake, setSyncingPancake] = useState(false);
+157:   const [selectedStore, setSelectedStore] = useState<string>('ALL');
+158:   const [storeMenuOpen, setStoreMenuOpen] = useState(false);
+159: 
+160:   const STORES_LIST = [
+161:     { id: 'ALL', name: 'Toàn Hệ Thống (Tất cả 4 chi nhánh)', code: 'ALL' },
+162:     { id: 'store_01', name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)', code: 'HCM-Q3' },
+163:     { id: 'store_02', name: 'Kho Vận Tân Bình', code: 'HCM-TB' },
+164:     { id: 'store_03', name: 'Chi Nhánh Hà Nội (Cầu Giấy)', code: 'HN-CG' },
+165:     { id: 'store_04', name: 'Chi Nhánh Đà Nẵng (Hải Châu)', code: 'DN-HC' },
+166:   ];
+167: 
+168:   const currentStoreObj = STORES_LIST.find((s) => s.id === selectedStore) || STORES_LIST[0];
+169: 
+170:   const showToast = (msg: string) => {
+171:     setToastMessage(msg);
+172:     setTimeout(() => setToastMessage(null), 4000);
+173:   };
+174: 
+175:   const handleUpdateException = (updated: UIExceptionItem) => {
+176:     setExceptions((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+177:   };
+178: 
+179:   const handleUpdateDiscrepancy = (updated: UIDiscrepancyItem) => {
+180:     setDiscrepancies((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+181:   };
+182: 
+183:   const handleUpdateClaim = (updated: UIClaimItem) => {
+184:     setClaims((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+185:   };
+186: 
+187:   const handleSyncPancake = async () => {
+188:     setSyncingPancake(true);
+189:     try {
+190:       const res = await fetch('/api/shipments', {
+191:         method: 'POST',
+192:         headers: { 'Content-Type': 'application/json' },
+193:         body: JSON.stringify({ action: 'SYNC_PANCAKE' }),
+194:       });
+195:       const data = await res.json();
+196:       if (res.ok) {
+197:         showToast('✓ Đã đồng bộ đơn hàng mới từ Pancake POS thành công.');
+198:       } else {
+199:         showToast(`Lỗi: ${data.error?.message || 'Không thể đồng bộ'}`);
+200:       }
+201:     } catch (e: any) {
+202:       showToast(`Lỗi kết nối: ${e.message}`);
+203:     } finally {
+204:       setSyncingPancake(false);
+205:     }
+206:   };
+207: 
+208:   // Ctrl/Cmd+K belongs to page navigation; preserve entity search on Shift+K.
+209:   useEffect(() => {
+210:     const handleKey = (event: KeyboardEvent) => {
+211:       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'k') {
+212:         if (document.querySelector('dialog[open], [role="dialog"]')) return;
+213:         event.preventDefault();
+214:         setGlobalSearchOpen(true);
+215:       }
+216:     };
+217:     window.addEventListener('keydown', handleKey);
+218:     return () => window.removeEventListener('keydown', handleKey);
+219:   }, []);
+220: 
+221:   const currentRole = user?.role || 'OWNER';
+222:   const metrics = getUnifiedMetrics();
+223: 
+224:   // Role-based Navigation Tabs (Max 4-5 items per role)
+225:   const getTabsForRole = (role: string) => {
+226:     switch (role) {
+227:       case 'OPS_CSKH':
+228:         return [
+229:           { id: 'dashboard', label: 'Tổng Quan CSKH', icon: LayoutDashboard },
+230:           {
+231:             id: 'exceptions',
+232:             label: 'Hộp Việc Cứu Đơn',
+233:             icon: AlertTriangle,
+234:             count: metrics.openExceptionsCount,
+235:             countType: 'risk',
+236:           },
+237:           { id: 'shipments', label: 'Tra Cứu Vận Đơn', icon: Package },
+238:           {
+239:             id: 'claims',
+240:             label: 'Khiếu Nại Giao Hàng',
+241:             icon: FileText,
+242:             count: metrics.urgentClaimsCount,
+243:             countType: 'warn',
+244:           },
+245:         ];
+246:       case 'ACCOUNTANT':
+247:         return [
+248:           { id: 'dashboard', label: 'Tổng Quan Đối Soát', icon: LayoutDashboard },
+249:           {
+250:             id: 'reconciliation',
+251:             label: 'Đối Soát COD & Cước',
+252:             icon: DollarSign,
+253:             count: metrics.openDiscrepanciesCount,
+254:             countType: 'risk',
+255:           },
+256:           { id: 'shipments', label: 'Tra Cứu Vận Đơn', icon: Package },
+257:           { id: 'three_ledgers', label: 'Báo Cáo Ba Sổ', icon: TrendingUp },
+258:           {
+259:             id: 'claims',
+260:             label: 'Hồ Sơ Bồi Thường',
+261:             icon: FileText,
+262:             count: metrics.urgentClaimsCount,
+263:             countType: 'warn',
+264:           },
+265:         ];
+266:       case 'WAREHOUSE':
+267:         return [
+268:           { id: 'returns', label: 'Tiếp Nhận Hàng Hoàn', icon: RotateCcw },
+269:           { id: 'shipments', label: 'Tra Cứu Vận Đơn Kho', icon: Package },
+270:           { id: 'claims', label: 'Báo Cáo Hàng Hư Hỏng', icon: FileText },
+271:         ];
+272:       case 'BACKOFFICE':
+273:         return [
+274:           { id: 'settings', label: 'Tích Hợp & Cổng Hãng', icon: Key },
+275:           { id: 'admin_matrix', label: 'Ma Trận Năng Lực Hãng', icon: Settings },
+276:           { id: 'admin_unmapped', label: 'Hàng Chờ Trạng Thái Lạ', icon: Database },
+277:         ];
+278:       case 'OWNER':
+279:       default:
+280:         return [
+281:           { id: 'dashboard', label: 'Bàn Điều Khiển & 3 Sổ', icon: LayoutDashboard },
+282:           { id: 'shipments', label: 'Quản Lý Vận Đơn', icon: Package },
+283:           {
+284:             id: 'exceptions',
+285:             label: 'Hộp Việc Cứu Đơn',
+286:             icon: AlertTriangle,
+287:             count: metrics.openExceptionsCount,
+288:             countType: 'risk',
+289:           },
+290:           {
+291:             id: 'reconciliation',
+292:             label: 'Đối Soát COD & Cước',
+293:             icon: DollarSign,
+294:             count: metrics.openDiscrepanciesCount,
+295:             countType: 'risk',
+296:           },
+297:           { id: 'returns', label: 'Quản Lý Nhập Hoàn', icon: RotateCcw },
+298:         ];
+299:     }
+300:   };
+301: 
+302:   const handleRoleChange = (newRole: any) => {
+303:     switchRole(newRole);
+304:     const newTabs = getTabsForRole(newRole);
+305:     if (!newTabs.some((t) => t.id === activeTab)) {
+306:       setActiveTab(newTabs[0]?.id || 'dashboard');
+307:     }
+308:     showToast(`Đã chuyển vai trò: ${newRole}`);
+309:   };
+310: 
+311:   // During the single-tick localStorage restore, render nothing rather than a
+312:   // login skeleton that could sit on screen while the user is not signed in.
+313:   // BRAIN.md rule 4: a screen must never stay in a loading frame when the
+314:   // user is not signed in. Once hydration ends, LoginView / RegisterView own
+315:   // empty, validation, error, forbidden and success.
+316:   if (isHydrating) return null;
 317: 
-318:           {/* SECTION 2: TEAM & PERMISSIONS */}
-319:           {activeSection === 'team' && (
-320:             <div className="space-y-4">
-321:               <UserManagementTab />
-322:             </div>
-323:           )}
+318:   if (!isAuthenticated) {
+319:     if (authMode === 'REGISTER') {
+320:       return <RegisterView onSwitchToLogin={() => setAuthMode('LOGIN')} />;
+321:     }
+322:     return <LoginView onSwitchToRegister={() => setAuthMode('REGISTER')} />;
+323:   }
 324: 
-325:           {/* SECTION: PERSONAL PROFILE (FEAT-PRO-01) */}
-326:           {activeSection === 'profile' && (
-327:             <div className="space-y-4">
-328:               <ProfileSettingsTab />
-329:             </div>
-330:           )}
-331: 
-332:           {/* SECTION 3: INTEGRATIONS (CARRIERS & POS) */}
-333:           {activeSection === 'integrations' && (
-334:             <div className="space-y-6">
-335:               {/* R1 Active Integrations */}
-336:               <div className="modern-card p-6 space-y-6">
-337:                 <div className="pb-4 border-b border-slate-100">
-338:                   <h2 className="text-base font-bold text-slate-900">
-339:                     1. Kênh Bán Hàng & Cổng Hãng Đang Kết Nối (R1 Core)
-340:                   </h2>
-341:                   <p className="text-xs text-slate-500 mt-0.5">
-342:                     Khai báo thông tin API và Webhook tiếp nhận sự kiện từ các đối tác chính thức.
-343:                   </p>
-344:                 </div>
-345: 
-346:                 {/* GHN Card */}
-347:                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
-348:                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-349:                     <div className="flex items-center gap-3">
-350:                       <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-[#c23807] shadow-2xs">
-351:                         GHN
-352:                       </div>
-353:                       <div>
-354:                         <div className="flex items-center gap-2">
-355:                           <h3 className="font-bold text-sm text-slate-900">
-356:                             Giao Hàng Nhanh (GHN Express)
-357:                           </h3>
-358:                           <span className="badge-ok text-xs">Đang Hoạt Động</span>
-359:                         </div>
-360:                         <p className="text-xs text-slate-500">
-361:                           Đồng bộ trạng thái toàn trình qua Webhook & gọi lệnh giao lại tự động.
-362:                         </p>
-363:                       </div>
-364:                     </div>
-365: 
-366:                     <AutomationBadge tier={carrierGhnTier} carrierCode="GHN" />
-367:                   </div>
-368: 
-369:                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-370:                     {/* API Token (Write-Only Secret) */}
-371:                     <div>
-372:                       <label className="text-xs font-bold text-slate-700 block mb-1">
-373:                         API Token (Khóa Bí Mật):
-374:                       </label>
-375:                       {isEditingGhnToken ? (
-376:                         <div className="flex gap-2">
-377:                           <input
-378:                             type="password"
-379:                             value={ghnTokenInput}
-380:                             onChange={(e) => setGhnTokenInput(e.target.value)}
-381:                             placeholder="Dán mã token mới từ cổng GHN..."
-382:                             className="modern-input text-xs"
-383:                             autoFocus
-384:                           />
-385:                           <button
-386:                             type="button"
-387:                             onClick={() => {
-388:                               setIsEditingGhnToken(false);
-389:                               onToast('✓ Đã cập nhật API Token GHN thành công.');
-390:                             }}
-391:                             className="btn-primary text-xs"
-392:                           >
-393:                             Lưu
-394:                           </button>
-395:                         </div>
-396:                       ) : (
-397:                         <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
-398:                           <span className="font-mono text-slate-600 font-semibold">
-399:                             ghn_live_••••••••••••9842
-400:                           </span>
-401:                           <button
-402:                             type="button"
-403:                             onClick={() => setIsEditingGhnToken(true)}
-404:                             className="text-xs font-bold text-[#c23807] hover:underline"
-405:                           >
-406:                             Đổi Token
-407:                           </button>
-408:                         </div>
-409:                       )}
-410:                     </div>
-411: 
-412:                     {/* Shop ID */}
-413:                     <div>
-414:                       <label className="text-xs font-bold text-slate-700 block mb-1">
-415:                         GHN Shop ID & Client ID:
-416:                       </label>
-417:                       <div className="grid grid-cols-2 gap-2">
-418:                         <input
-419:                           type="text"
-420:                           value={ghnShopId}
-421:                           onChange={(e) => setGhnShopId(e.target.value)}
-422:                           className="modern-input text-xs font-mono"
-423:                           placeholder="Shop ID"
-424:                         />
-425:                         <input
-426:                           type="text"
-427:                           value={ghnClientId}
-428:                           onChange={(e) => setGhnClientId(e.target.value)}
-429:                           className="modern-input text-xs font-mono"
-430:                           placeholder="Client ID"
-431:                         />
-432:                       </div>
-433:                     </div>
-434:                   </div>
-435: 
-436:                   {/* Webhook Endpoint */}
-437:                   <div className="space-y-1">
-438:                     <label className="text-xs font-bold text-slate-700 block">
-439:                       Webhook Endpoint Nhận Sự Kiện GHN:
-440:                     </label>
-441:                     <div className="flex gap-2">
-442:                       <input
-443:                         type="text"
-444:                         readOnly
-445:                         value="https://api.shipde.net/v1/webhooks/ghn/wh_anan_9901"
-446:                         className="modern-input text-xs font-mono bg-white text-slate-600 select-all"
-447:                       />
-448:                       <button
-449:                         type="button"
-450:                         onClick={() =>
-451:                           copyToClipboard(
-452:                             'https://api.shipde.net/v1/webhooks/ghn/wh_anan_9901',
-453:                             'ghn'
-454:                           )
-455:                         }
-456:                         className="btn-secondary text-xs"
-457:                         title="Sao chép URL"
-458:                       >
-459:                         {copiedUrl === 'ghn' ? (
-460:                           <Check className="w-4 h-4 text-emerald-600" />
-461:                         ) : (
-462:                           <Copy className="w-4 h-4" />
-463:                         )}
-464:                         <span>{copiedUrl === 'ghn' ? 'Đã chép' : 'Sao chép'}</span>
-465:                       </button>
-466:                     </div>
-467:                   </div>
-468: 
-469:                   {/* Action Buttons: Test Connection separated from Save */}
-470:                   <div className="flex justify-between items-center pt-3 border-t border-slate-200">
-471:                     <button
-472:                       type="button"
-473:                       onClick={() =>
-474:                         onToggleGhnTier && onToggleGhnTier(carrierGhnTier === 'L2' ? 'L1' : 'L2')
-475:                       }
-476:                       className="text-xs font-bold text-slate-600 hover:text-slate-900 underline"
-477:                     >
-478:                       Chuyển sang{' '}
-479:                       {carrierGhnTier === 'L2' ? 'Chế độ Hỗ trợ (L1)' : 'Tự động gọi API (L2)'}
-480:                     </button>
-481: 
-482:                     <div className="flex items-center gap-2">
-483:                       <button
-484:                         type="button"
-485:                         onClick={() =>
-486:                           onToast('✓ [GHN Express] Kiểm tra kết nối API thành công (Độ trễ: 38ms).')
-487:                         }
-488:                         className="btn-secondary text-xs"
-489:                       >
-490:                         <RefreshCw className="w-3.5 h-3.5" />
-491:                         <span>Kiểm Tra Kết Nối</span>
-492:                       </button>
-493:                       <button
-494:                         type="button"
-495:                         onClick={() => onToast('✓ Đã lưu cấu hình GHN thành công.')}
-496:                         className="btn-primary text-xs"
-497:                       >
-498:                         Lưu Cấu Hình
-499:                       </button>
-500:                     </div>
-501:                   </div>
-502:                 </div>
-503: 
-504:                 {/* GHTK Card */}
-505:                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
-506:                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-507:                     <div className="flex items-center gap-3">
-508:                       <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-emerald-700 shadow-2xs">
-509:                         GHTK
-510:                       </div>
-511:                       <div>
-512:                         <div className="flex items-center gap-2">
-513:                           <h3 className="font-bold text-sm text-slate-900">
-514:                             Giao Hàng Tiết Kiệm (GHTK)
-515:                           </h3>
-516:                           <span className="badge-ok text-xs">Đang Hoạt Động</span>
-517:                         </div>
-518:                         <p className="text-xs text-slate-500">
-519:                           Tự động tổng hợp hồ sơ chuẩn mẫu dán cổng khi cần can thiệp giao lại.
-520:                         </p>
-521:                       </div>
-522:                     </div>
-523: 
-524:                     <AutomationBadge tier="L1" carrierCode="GHTK" />
-525:                   </div>
-526: 
-527:                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-528:                     <div>
-529:                       <label className="text-xs font-bold text-slate-700 block mb-1">
-530:                         Partner Token:
-531:                       </label>
-532:                       {isEditingGhtkToken ? (
-533:                         <div className="flex gap-2">
-534:                           <input
-535:                             type="password"
-536:                             value={ghtkTokenInput}
-537:                             onChange={(e) => setGhtkTokenInput(e.target.value)}
-538:                             placeholder="Dán token GHTK..."
-539:                             className="modern-input text-xs"
-540:                             autoFocus
-541:                           />
-542:                           <button
-543:                             type="button"
-544:                             onClick={() => {
-545:                               setIsEditingGhtkToken(false);
-546:                               onToast('✓ Đã cập nhật Token GHTK.');
-547:                             }}
-548:                             className="btn-primary text-xs"
-549:                           >
-550:                             Lưu
-551:                           </button>
-552:                         </div>
-553:                       ) : (
-554:                         <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
-555:                           <span className="font-mono text-slate-600 font-semibold">
-556:                             ghtk_partner_••••••••2394
-557:                           </span>
-558:                           <button
-559:                             type="button"
-560:                             onClick={() => setIsEditingGhtkToken(true)}
-561:                             className="text-xs font-bold text-[#c23807] hover:underline"
-562:                           >
-563:                             Đổi Token
-564:                           </button>
-565:                         </div>
-566:                       )}
-567:                     </div>
-568: 
-569:                     <div>
-570:                       <label className="text-xs font-bold text-slate-700 block mb-1">
-571:                         Partner ID:
-572:                       </label>
-573:                       <input
-574:                         type="text"
-575:                         value={ghtkPartnerId}
-576:                         onChange={(e) => setGhtkPartnerId(e.target.value)}
-577:                         className="modern-input text-xs font-mono"
-578:                       />
-579:                     </div>
-580:                   </div>
-581: 
-582:                   <div className="flex justify-end items-center gap-2 pt-3 border-t border-slate-200">
-583:                     <button
-584:                       type="button"
-585:                       onClick={() =>
-586:                         onToast('✓ [GHTK] Kiểm tra cổng đối tác thành công (Ping: 45ms).')
-587:                       }
-588:                       className="btn-secondary text-xs"
-589:                     >
-590:                       Kiểm Tra Kết Nối
-591:                     </button>
-592:                     <button
-593:                       type="button"
-594:                       onClick={() => onToast('✓ Đã lưu cấu hình GHTK.')}
-595:                       className="btn-primary text-xs"
-596:                     >
-597:                       Lưu Cấu Hình
-598:                     </button>
-599:                   </div>
-600:                 </div>
-601: 
-602:                 {/* Pancake POS Card */}
-603:                 <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
-604:                   <div className="flex items-center justify-between">
-605:                     <div className="flex items-center gap-3">
-606:                       <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-black text-xs text-blue-600 shadow-2xs">
-607:                         POS
-608:                       </div>
-609:                       <div>
-610:                         <div className="flex items-center gap-2">
-611:                           <h3 className="font-bold text-sm text-slate-900">Pancake POS Open API</h3>
-612:                           <span className="badge-ok text-xs">Tự Động Đồng Bộ</span>
-613:                         </div>
-614:                         <p className="text-xs text-slate-500">
-615:                           Tự động nạp đơn hàng mới, thông tin khách và mã vận đơn vào Ship Dễ.
-616:                         </p>
-617:                       </div>
-618:                     </div>
-619:                   </div>
-620: 
-621:                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
-622:                     <div>
-623:                       <label className="text-xs font-bold text-slate-700 block mb-1">
-624:                         Pancake API Key:
-625:                       </label>
-626:                       <div className="flex items-center justify-between p-2 rounded-lg bg-white border border-slate-200 text-xs">
-627:                         <span className="font-mono text-slate-600 font-semibold">
-628:                           pk_live_••••••••1039
-629:                         </span>
-630:                         <button
-631:                           type="button"
-632:                           onClick={() => onToast('✓ Vui lòng nhập mã API Key mới')}
-633:                           className="text-xs font-bold text-[#c23807] hover:underline"
-634:                         >
-635:                           Cập Nhật
-636:                         </button>
-637:                       </div>
-638:                     </div>
-639: 
-640:                     <div>
-641:                       <label className="text-xs font-bold text-slate-700 block mb-1">
-642:                         Shop ID:
-643:                       </label>
-644:                       <input
-645:                         type="text"
-646:                         value={pancakeShopId}
-647:                         onChange={(e) => setPancakeShopId(e.target.value)}
-648:                         className="modern-input text-xs font-mono"
-649:                       />
-650:                     </div>
-651:                   </div>
-652:                 </div>
-653:               </div>
-654: 
-655:               {/* Roadmap Deferred Integrations (R2/R3) */}
-656:               <div className="modern-card p-6 space-y-4">
-657:                 <div className="pb-3 border-b border-slate-100">
-658:                   <h2 className="text-base font-bold text-slate-900">
-659:                     2. Cổng Tích Hợp Đang Phát Triển (Lộ Trình R2 / R3)
-660:                   </h2>
-661:                   <p className="text-xs text-slate-500 mt-0.5">
-662:                     Các cổng sau được lên kế hoạch phát hành ở phiên bản tiếp theo.
-663:                   </p>
-664:                 </div>
-665: 
-666:                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-667:                   {[
-668:                     { name: 'Viettel Post', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
-669:                     { name: 'J&T Express', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
-670:                     { name: 'VNPost', type: 'Hãng vận chuyển', badge: 'Lộ trình R2' },
-671:                     { name: 'KiotViet POS', type: 'Kênh bán lẻ', badge: 'Lộ trình R2' },
-672:                     { name: 'TikTok Shop', type: 'Sàn TMĐT', badge: 'Lộ trình R2' },
-673:                     {
-674:                       name: 'Public Developer API',
-675:                       type: 'Cổng lập trình viên',
-676:                       badge: 'Lộ trình R3',
-677:                     },
-678:                   ].map((ch, idx) => (
-679:                     <div
-680:                       key={idx}
-681:                       className="p-4 rounded-xl border border-slate-200 bg-white space-y-2 opacity-75"
-682:                     >
-683:                       <div className="flex justify-between items-start">
-684:                         <span className="font-bold text-sm text-slate-900">{ch.name}</span>
-685:                         <span className="badge-warn text-[11px]">{ch.badge}</span>
-686:                       </div>
-687:                       <p className="text-xs text-slate-500">{ch.type} · Sắp ra mắt</p>
-688:                     </div>
-689:                   ))}
-690:                 </div>
-691:               </div>
-692:             </div>
-693:           )}
-694: 
-695:           {/* SECTION 4: NOTIFICATIONS & ALERTS */}
-696:           {activeSection === 'notifications' && (
-697:             <div className="space-y-4">
-698:               <NotificationMatrixTab />
-699:             </div>
-700:           )}
-701: 
-702:           {/* SECTION 5: SECURITY & DEVICE SESSIONS */}
-703:           {activeSection === 'security' && (
-704:             <div className="modern-card p-6 space-y-6">
-705:               <div className="pb-4 border-b border-slate-100">
-706:                 <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-707:                   <Shield className="w-5 h-5 text-emerald-600" />
-708:                   <span>Giám Sát Bảo Mật & Phiên Làm Việc Thiết Bị</span>
-709:                 </h2>
-710:                 <p className="text-xs text-slate-500 mt-0.5">
-711:                   Kiểm soát các thiết bị di động, máy tính của nhân viên đang đăng nhập vào hệ thống
-712:                   và thu hồi quyền từ xa khi cần.
-713:                 </p>
-714:               </div>
-715: 
-716:               <div className="divide-y divide-slate-100">
-717:                 {sessions.map((sess) => (
-718:                   <div
-719:                     key={sess.id}
-720:                     className="py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3"
-721:                   >
-722:                     <div className="space-y-1">
-723:                       <div className="flex items-center gap-2">
-724:                         <span className="font-bold text-sm text-slate-900">{sess.user}</span>
-725:                         {sess.current ? (
-726:                           <span className="badge-ok text-xs">Phiên Này</span>
-727:                         ) : (
-728:                           <span className="text-xs text-slate-500 font-medium">
-729:                             · {sess.last_active}
-730:                           </span>
-731:                         )}
-732:                       </div>
-733:                       <div className="text-xs text-slate-500 flex items-center gap-3">
-734:                         <span className="flex items-center gap-1">
-735:                           <Smartphone className="w-3.5 h-3.5 text-slate-400" />
-736:                           <span>{sess.device}</span>
-737:                         </span>
-738:                         <span className="font-mono text-slate-400">IP: {sess.ip}</span>
-739:                         <span>{sess.location}</span>
-740:                       </div>
-741:                     </div>
-742: 
-743:                     {!sess.current && (
-744:                       <button
-745:                         type="button"
-746:                         onClick={() => handleRevokeSession(sess.id, sess.user)}
-747:                         className="btn-danger text-xs py-1.5 px-3"
-748:                       >
-749:                         Thu Hồi Quyền
-750:                       </button>
-751:                     )}
-752:                   </div>
-753:                 ))}
-754:               </div>
-755:             </div>
-756:           )}
-757: 
-758:           {/* SECTION 6: PUBLIC TRACKING PORTAL PREVIEW */}
-759:           {activeSection === 'tracking_portal' && (
-760:             <div className="space-y-4">
-761:               <PublicTrackingTab />
-762:             </div>
-763:           )}
-764:         </div>
-765:       </div>
-766:     </div>
-767:   );
-768: };
+325:   return (
+326:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-between font-sans selection:bg-[#c23807] selection:text-white">
+327:       <div>
+328:         {/* Global Toast Notification */}
+329:         {toastMessage && (
+330:           <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs font-semibold flex items-center gap-2.5 animate-in slide-in-from-bottom-2 duration-150">
+331:             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+332:             <span>{toastMessage}</span>
+333:             <button
+334:               onClick={() => setToastMessage(null)}
+335:               className="text-slate-400 hover:text-white font-bold ml-2"
+336:             >
+337:               ✕
+338:             </button>
+339:           </div>
+340:         )}
+341: 
+342:         {/* Top Header */}
+343:         <header
+344:           aria-label="Thao tác vận hành"
+345:           className="border-b border-(--border-subtle) bg-(--bg-card)"
+346:         >
+347:           <div className="max-w-[1600px] mx-auto p-4 flex flex-wrap items-center justify-between gap-3">
+348:             {/* Logo & Store Selector */}
+349:             <div className="flex items-center gap-3.5">
+350:               <div
+351:                 onClick={() => setActiveTab('dashboard')}
+352:                 className="w-8.5 h-8.5 rounded-xl bg-[#c23807] text-white flex items-center justify-center font-black text-base shadow-xs cursor-pointer"
+353:               >
+354:                 S
+355:               </div>
+356:               <div className="flex items-center gap-2">
+357:                 <span
+358:                   onClick={() => setActiveTab('dashboard')}
+359:                   className="font-black text-slate-900 text-base tracking-tight cursor-pointer"
+360:                 >
+361:                   Ship Dễ
+362:                 </span>
+363: 
+364:                 {/* Branch Selector */}
+365:                 <div className="relative ml-2">
+366:                   <button
+367:                     type="button"
+368:                     onClick={() => setStoreMenuOpen(!storeMenuOpen)}
+369:                     className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-[#F6F5F3] hover:bg-[#EAE7E4] px-3 py-1.5 rounded-lg border border-[#EAE7E4] transition cursor-pointer"
+370:                   >
+371:                     <Store className="w-3.5 h-3.5 text-[#c23807]" />
+372:                     <span className="truncate max-w-[150px]">{currentStoreObj.name}</span>
+373:                     <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+374:                   </button>
+375: 
+376:                   {storeMenuOpen && (
+377:                     <div className="absolute left-0 mt-1.5 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs">
+378:                       <div className="px-2.5 py-1.5 border-b border-slate-100 font-bold text-[11px] text-slate-400 uppercase tracking-wider">
+379:                         Phạm Vi Chi Nhánh / Kho Xuất Hàng:
+380:                       </div>
+381:                       {STORES_LIST.map((store) => (
+382:                         <button
+383:                           key={store.id}
+384:                           type="button"
+385:                           onClick={() => {
+386:                             setSelectedStore(store.id);
+387:                             setStoreMenuOpen(false);
+388:                             showToast(`Đã chuyển phạm vi: ${store.name}`);
+389:                           }}
+390:                           className={`w-full text-left px-3 py-2 rounded-lg transition flex items-center justify-between ${
+391:                             selectedStore === store.id
+392:                               ? 'bg-[#FFF5F0] text-[#c23807] font-bold'
+393:                               : 'hover:bg-slate-50 text-slate-700'
+394:                           }`}
+395:                         >
+396:                           <span className="truncate">{store.name}</span>
+397:                           <span className="font-mono text-xs text-slate-400">{store.code}</span>
+398:                         </button>
+399:                       ))}
+400:                     </div>
+401:                   )}
+402:                 </div>
+403:               </div>
+404:             </div>
+405: 
+406:             {/* Top Operational Status & Actions */}
+407:             <div className="flex flex-wrap items-center gap-2.5">
+408:               {/* POS Status Badge */}
+409:               <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold">
+410:                 <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+411:                 <span>Pancake POS: Đã Kết Nối</span>
+412:               </div>
+413: 
+414:               {/* Existing entity search: Ctrl/Cmd+Shift+K */}
+415:               <button
+416:                 type="button"
+417:                 aria-label="Tìm mã đơn hàng"
+418:                 aria-keyshortcuts="Control+Shift+K Meta+Shift+K"
+419:                 title="Tìm mã đơn hàng (Ctrl hoặc Command Shift K)"
+420:                 onClick={() => setGlobalSearchOpen(true)}
+421:                 className="flex items-center gap-2 text-xs font-medium text-slate-600 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] px-3 py-1.5 rounded-lg transition"
+422:               >
+423:                 <Search className="w-3.5 h-3.5 text-slate-400" />
+424:                 <span>Tìm mã</span>
+425:               </button>
+426: 
+427:               {/* Manual POS Sync Trigger */}
+428:               <button
+429:                 type="button"
+430:                 onClick={handleSyncPancake}
+431:                 disabled={syncingPancake}
+432:                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] rounded-lg transition cursor-pointer"
+433:                 title="Kích hoạt đồng bộ đơn hàng mới từ Pancake POS"
+434:               >
+435:                 <RefreshCw
+436:                   className={`w-3.5 h-3.5 ${syncingPancake ? 'animate-spin text-[#c23807]' : 'text-slate-600'}`}
+437:                 />
+438:                 <span>Đồng bộ POS</span>
+439:               </button>
+440: 
+441:               {/* Create Shipment / Order CTA */}
+442:               {(currentRole === 'OWNER' || currentRole === 'OPS_CSKH') && (
+443:                 <button
+444:                   type="button"
+445:                   onClick={() => setCreateOrderOpen(true)}
+446:                   className="btn-primary text-xs shrink-0 py-1.5 px-3"
+447:                   title="Tạo đơn hàng thủ công và so sánh cước đa hãng"
+448:                 >
+449:                   <span>+ Tạo Đơn Hàng</span>
+450:                 </button>
+451:               )}
+452: 
+453:               {/* Settings (Full-Page View) */}
+454:               {currentRole === 'OWNER' && (
+455:                 <button
+456:                   type="button"
+457:                   onClick={() => setActiveTab('settings')}
+458:                   className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition cursor-pointer ${
+459:                     activeTab === 'settings'
+460:                       ? 'bg-[#c23807] text-white border-[#c23807]'
+461:                       : 'bg-[#F6F5F3] text-slate-700 hover:bg-[#EAE7E4] border-[#EAE7E4]'
+462:                   }`}
+463:                   title="Cài đặt cửa hàng, nhân sự, kết nối hãng và bảo mật"
+464:                 >
+465:                   <Settings className="w-3.5 h-3.5" />
+466:                   <span>Cài Đặt Cửa Hàng</span>
+467:                 </button>
+468:               )}
+469: 
+470:               {/* Existing role preview changes display only; shell permissions come from the server. */}
+471:               <label className="flex items-center gap-2 text-xs">
+472:                 <span className="sr-only">Chuyển Vai Trò Vận Hành</span>
+473:                 <select
+474:                   aria-label="Chuyển Vai Trò Vận Hành"
+475:                   value={currentRole}
+476:                   onChange={(event) => handleRoleChange(event.target.value)}
+477:                   className="modern-input max-w-40"
+478:                 >
+479:                   <option value="OWNER">Chủ Shop (Owner)</option>
+480:                   <option value="OPS_CSKH">CSKH / Vận Hành (Ops)</option>
+481:                   <option value="ACCOUNTANT">Kế Toán Đối Soát</option>
+482:                   <option value="WAREHOUSE">Thủ Kho Quét Hoàn</option>
+483:                   <option value="BACKOFFICE">Quản Trị Hệ Thống</option>
+484:                 </select>
+485:               </label>
+486:             </div>
+487:           </div>
+488:         </header>
+489: 
+490:         {/* Main Viewport */}
+491:         <main className="min-w-0 max-w-[1600px] mx-auto px-4 sm:px-6 py-6">
+492:           {activeTab === 'dashboard' && (
+493:             <ControlTowerTab
+494:               role={user?.role || 'OWNER'}
+495:               onNavigate={(tab) => setActiveTab(tab)}
+496:               onCreateOrder={() => setCreateOrderOpen(true)}
+497:             />
+498:           )}
+499: 
+500:           {activeTab === 'shipments' && (
+501:             <ShipmentListTab
+502:               onOpenTrackingModal={(code) => setSelectedGlobalTracking(code)}
+503:               onNavigateToTab={(tab) => setActiveTab(tab)}
+504:               onCreateOrder={() => setCreateOrderOpen(true)}
+505:               userRole={user?.role || 'OWNER'}
+506:               selectedOrderId={selectedOrderId}
+507:               selectedOrderCode={selectedOrderCode}
+508:               onClearSelection={() => {
+509:                 setSelectedOrderId(null);
+510:                 setSelectedOrderCode(null);
+511:               }}
+512:             />
+513:           )}
+514: 
+515:           {activeTab === 'exceptions' && (
+516:             <ExceptionWorkboxTab
+517:               exceptions={exceptions}
+518:               onUpdateException={handleUpdateException}
+519:               carrierGhnTier={carrierGhnTier}
+520:               selectedCaseId={selectedCaseId}
+521:               onClearSelection={() => setSelectedCaseId(null)}
+522:             />
+523:           )}
+524: 
+525:           {activeTab === 'reconciliation' && (
+526:             <ReconciliationTab
+527:               discrepancies={discrepancies}
+528:               onUpdateDiscrepancy={handleUpdateDiscrepancy}
+529:               role={user?.role || 'OWNER'}
+530:               selectedBatchId={selectedBatchId}
+531:               selectedDiscrepancyId={selectedDiscrepancyId}
+532:               onClearBatchSelection={() => setSelectedBatchId(null)}
+533:               onClearDiscrepancySelection={() => setSelectedDiscrepancyId(null)}
+534:             />
+535:           )}
+536: 
+537:           {activeTab === 'three_ledgers' && <ThreeLedgersTab />}
+538: 
+539:           {activeTab === 'returns' && <ReturnScanTab />}
+540: 
+541:           {activeTab === 'claims' && (
+542:             <ClaimCasesTab
+543:               claims={claims}
+544:               onUpdateClaim={handleUpdateClaim}
+545:               selectedClaimId={selectedClaimId}
+546:               selectedClaimCode={selectedClaimCode}
+547:               onClearSelection={() => {
+548:                 setSelectedClaimId(null);
+549:                 setSelectedClaimCode(null);
+550:               }}
+551:             />
+552:           )}
+553: 
+554:           {activeTab === 'settings' && (
+555:             <SettingsWorkspace
+556:               key={searchParams.get('section') || 'stores'}
+557:               initialSection={
+558:                 searchParams.get('section') === 'integrations' ? 'integrations' : undefined
+559:               }
+560:               onBackToDashboard={() => setActiveTab('dashboard')}
+561:               onToast={showToast}
+562:               carrierGhnTier={carrierGhnTier}
+563:               onToggleGhnTier={(t) => setCarrierGhnTier(t)}
+564:             />
+565:           )}
+566: 
+567:           {/* Backoffice System Management */}
+568:           {activeTab === 'admin_matrix' && <AdminSystemTab activeSection="carrier_matrix" />}
+569: 
+570:           {activeTab === 'admin_unmapped' && <AdminSystemTab activeSection="unmapped_queue" />}
+571:         </main>
+572:       </div>
+573: 
+574:       {/* Modern Footer */}
+575:       <footer className="border-t border-[#EAE7E4] bg-white text-slate-500 text-xs py-4 px-4 sm:px-6 mt-12">
+576:         <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row justify-between items-center gap-2">
+577:           <div className="flex flex-wrap justify-center items-center gap-2">
+578:             <span className="font-bold text-slate-900">Ship Dễ Platform</span>
+579:             <span>· Hệ thống điều hành & kiểm soát vận tải sau bán</span>
+580:             <span className="text-slate-300">|</span>
+581:             <span className="text-emerald-700 font-semibold flex items-center gap-1">
+582:               <ShieldCheck className="w-4 h-4 text-emerald-600" />
+583:               Tiền COD chuyển thẳng về tài khoản ngân hàng của Shop
+584:             </span>
+585:           </div>
+586: 
+587:           <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
+588:             <span>Bảo vệ PII</span>
+589:             <span>Tách quyền tài chính Maker-Checker</span>
+590:             <span>Quét hoàn lũy đẳng</span>
+591:           </div>
+592:         </div>
+593:       </footer>
+594: 
+595:       {/* Global Search Modal ⌘K (FEAT-COM-01) */}
+596:       <GlobalSearchModal
+597:         isOpen={globalSearchOpen}
+598:         onClose={() => setGlobalSearchOpen(false)}
+599:         onSelectResult={(item) => {
+600:           setGlobalSearchOpen(false);
+601:           handleSearchResultActivation(item, {
+602:             // Entity results already supply their own URL; preserve that deep link.
+603:             setActiveTab: setActiveTabState,
+604:             setSelectedGlobalTracking,
+605:             setSelectedOrderId,
+606:             setSelectedOrderCode,
+607:             setSelectedBatchId,
+608:             setSelectedCaseId,
+609:             setSelectedClaimId,
+610:             setSelectedClaimCode,
+611:             setSelectedDiscrepancyId,
+612:             showToast,
+613:           });
+614:         }}
+615:       />
+616: 
+617:       {/* Statement Upload Modal */}
+618:       <UploadStatementModal
+619:         isOpen={uploadStatementOpen}
+620:         onClose={() => setUploadStatementOpen(false)}
+621:         onUploadComplete={(r) => {
+622:           showToast(`✓ Đã nạp sao kê: ${r.discrepancies_found} dòng lệch`);
+623:           setActiveTab('reconciliation');
+624:         }}
+625:       />
+626: 
+627:       {/* Unified Tracking Modal */}
+628:       {selectedGlobalTracking && (
+629:         <UnifiedTrackingModal
+630:           trackingCode={selectedGlobalTracking}
+631:           onClose={() => setSelectedGlobalTracking(null)}
+632:           onActionReattempt={() => setActiveTab('exceptions')}
+633:           onActionClaim={() => setActiveTab('claims')}
+634:         />
+635:       )}
+636: 
+637:       {/* Manual Order Creation & Rate Comparison Modal */}
+638:       <CreateOrderModal
+639:         isOpen={createOrderOpen}
+640:         onClose={() => setCreateOrderOpen(false)}
+641:         onOrderCreated={(newOrder) => {
+642:           showToast(
+643:             `✓ Đã tạo vận đơn mới ${newOrder.tracking_code} (${newOrder.carrier_code}) và đẩy sang hãng thành công.`
+644:           );
+645:           setActiveTab('shipments');
+646:         }}
+647:       />
+648:     </div>
+649:   );
+650: }
 </file>
 
 <file path="apps/web/src/components/UserManagementTab.tsx">
@@ -119656,659 +120309,6 @@ This section contains the contents of the repository's files.
 2577: }
 </file>
 
-<file path="apps/web/src/app/page.tsx">
-  1: 'use client';
-  2: 
-  3: import React, { useState, useEffect } from 'react';
-  4: import { usePathname, useSearchParams } from 'next/navigation';
-  5: import { useAuth } from '@/context/AuthContext';
-  6: import { LoginView } from '@/components/auth/LoginView';
-  7: import { RegisterView } from '@/components/auth/RegisterView';
-  8: import { ActiveRole, UIExceptionItem, UIDiscrepancyItem, UIClaimItem } from '@/components/types';
-  9: import {
- 10:   MASTER_SHIPMENTS,
- 11:   MASTER_EXCEPTIONS,
- 12:   MASTER_DISCREPANCIES,
- 13:   MASTER_CLAIMS,
- 14:   getUnifiedMetrics,
- 15: } from '@/services/unifiedDataStore';
- 16: 
- 17: import { ShipmentListTab } from '@/components/ShipmentListTab';
- 18: import { ControlTowerTab } from '@/components/ControlTowerTab';
- 19: import { ThreeLedgersTab } from '@/components/ThreeLedgersTab';
- 20: import { ExceptionWorkboxTab } from '@/components/ExceptionWorkboxTab';
- 21: import { ReconciliationTab } from '@/components/ReconciliationTab';
- 22: import { ReturnScanTab } from '@/components/ReturnScanTab';
- 23: import { ClaimCasesTab } from '@/components/ClaimCasesTab';
- 24: import { AdminSystemTab } from '@/components/AdminSystemTab';
- 25: import { SettingsWorkspace } from '@/components/SettingsWorkspace';
- 26: import { UnifiedTrackingModal } from '@/components/UnifiedTrackingModal';
- 27: import { UploadStatementModal } from '@/components/UploadStatementModal';
- 28: import { CreateOrderModal } from '@/components/CreateOrderModal';
- 29: import { GlobalSearchModal } from '@/components/GlobalSearchModal';
- 30: 
- 31: import {
- 32:   Package,
- 33:   LayoutDashboard,
- 34:   TrendingUp,
- 35:   AlertTriangle,
- 36:   DollarSign,
- 37:   RotateCcw,
- 38:   FileText,
- 39:   Database,
- 40:   Search,
- 41:   Settings,
- 42:   RefreshCw,
- 43:   ChevronDown,
- 44:   ShieldCheck,
- 45:   Store,
- 46:   Key,
- 47: } from 'lucide-react';
- 48: 
- 49: export interface SearchActivationActions {
- 50:   setActiveTab: (tab: string) => void;
- 51:   setSelectedGlobalTracking: (code: string | null) => void;
- 52:   setSelectedOrderId: (id: string | null) => void;
- 53:   setSelectedOrderCode: (code: string | null) => void;
- 54:   setSelectedBatchId: (id: string | null) => void;
- 55:   setSelectedCaseId: (id: string | null) => void;
- 56:   setSelectedClaimId: (id: string | null) => void;
- 57:   setSelectedClaimCode: (code: string | null) => void;
- 58:   setSelectedDiscrepancyId: (id: string | null) => void;
- 59:   pushUrl?: (url: string) => void;
- 60:   showToast?: (message: string) => void;
- 61: }
- 62: 
- 63: export function handleSearchResultActivation(
- 64:   item: {
- 65:     id: string;
- 66:     type: string;
- 67:     code: string;
- 68:     url?: string;
- 69:     title?: string;
- 70:     metadata?: Record<string, unknown>;
- 71:   },
- 72:   actions: SearchActivationActions
- 73: ) {
- 74:   // Follow result URL in browser history
- 75:   if (actions.pushUrl && item.url) {
- 76:     actions.pushUrl(item.url);
- 77:   } else if (typeof window !== 'undefined' && item.url) {
- 78:     window.history.pushState(null, '', item.url);
- 79:   }
- 80: 
- 81:   // Clear previous selections across all entity types so consecutive activations do not leave stale selections
- 82:   actions.setSelectedGlobalTracking(null);
- 83:   actions.setSelectedOrderId(null);
- 84:   actions.setSelectedOrderCode(null);
- 85:   actions.setSelectedBatchId(null);
- 86:   actions.setSelectedCaseId(null);
- 87:   actions.setSelectedClaimId(null);
- 88:   actions.setSelectedClaimCode(null);
- 89:   actions.setSelectedDiscrepancyId(null);
- 90: 
- 91:   if (item.type === 'WAYBILL') {
- 92:     actions.setSelectedGlobalTracking(item.code);
- 93:   } else if (item.type === 'ORDER') {
- 94:     actions.setActiveTab('shipments');
- 95:     actions.setSelectedOrderId(item.id);
- 96:     actions.setSelectedOrderCode(item.code);
- 97:   } else if (item.type === 'BATCH') {
- 98:     actions.setActiveTab('reconciliation');
- 99:     actions.setSelectedBatchId(item.id);
-100:   } else if (item.type === 'CASE') {
-101:     const isClaim =
-102:       item.url?.startsWith('/claims/') ||
-103:       Boolean(item.metadata && 'claim_type' in item.metadata) ||
-104:       item.title?.toLowerCase().includes('bồi thường');
-105:     if (isClaim) {
-106:       actions.setActiveTab('claims');
-107:       actions.setSelectedClaimId(item.id);
-108:       actions.setSelectedClaimCode(item.code);
-109:     } else {
-110:       actions.setActiveTab('exceptions');
-111:       actions.setSelectedCaseId(item.id);
-112:     }
-113:   } else if (item.type === 'TRANSACTION') {
-114:     actions.setActiveTab('reconciliation');
-115:     actions.setSelectedDiscrepancyId(item.id);
-116:   }
-117: }
-118: 
-119: export default function ShipDeConsoleApp() {
-120:   const { user, merchant, isAuthenticated, isHydrating, switchRole } = useAuth();
-121:   const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
-122: 
-123:   const searchParams = useSearchParams();
-124:   const pathname = usePathname();
-125:   const routeTab = searchParams.get('view') || 'dashboard';
-126:   const [activeTab, setActiveTabState] = useState<string>(routeTab);
-127:   useEffect(() => {
-128:     // Existing tab content follows links, command selection and browser history.
-129:     if (pathname === '/') Promise.resolve().then(() => setActiveTabState(routeTab));
-130:   }, [pathname, routeTab]);
-131:   const setActiveTab = (tab: string) => {
-132:     setActiveTabState(tab);
-133:     window.history.pushState(null, '', '/?view=' + encodeURIComponent(tab));
-134:   };
-135:   const [carrierGhnTier, setCarrierGhnTier] = useState<'L2' | 'L1'>('L2');
-136: 
-137:   const [exceptions, setExceptions] = useState<UIExceptionItem[]>(MASTER_EXCEPTIONS);
-138:   const [discrepancies, setDiscrepancies] = useState<UIDiscrepancyItem[]>(MASTER_DISCREPANCIES);
-139:   const [claims, setClaims] = useState<UIClaimItem[]>(MASTER_CLAIMS);
-140: 
-141:   // Deep search result selections (FEAT-COM-01)
-142:   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
-143:   const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
-144:   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
-145:   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
-146:   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
-147:   const [selectedClaimCode, setSelectedClaimCode] = useState<string | null>(null);
-148:   const [selectedDiscrepancyId, setSelectedDiscrepancyId] = useState<string | null>(null);
-149: 
-150:   // Modals
-151:   const [createOrderOpen, setCreateOrderOpen] = useState(false);
-152:   const [uploadStatementOpen, setUploadStatementOpen] = useState(false);
-153:   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
-154:   const [selectedGlobalTracking, setSelectedGlobalTracking] = useState<string | null>(null);
-155:   const [toastMessage, setToastMessage] = useState<string | null>(null);
-156:   const [syncingPancake, setSyncingPancake] = useState(false);
-157:   const [selectedStore, setSelectedStore] = useState<string>('ALL');
-158:   const [storeMenuOpen, setStoreMenuOpen] = useState(false);
-159: 
-160:   const STORES_LIST = [
-161:     { id: 'ALL', name: 'Toàn Hệ Thống (Tất cả 4 chi nhánh)', code: 'ALL' },
-162:     { id: 'store_01', name: 'Chi Nhánh Quận 3 (Trụ Sở Chính)', code: 'HCM-Q3' },
-163:     { id: 'store_02', name: 'Kho Vận Tân Bình', code: 'HCM-TB' },
-164:     { id: 'store_03', name: 'Chi Nhánh Hà Nội (Cầu Giấy)', code: 'HN-CG' },
-165:     { id: 'store_04', name: 'Chi Nhánh Đà Nẵng (Hải Châu)', code: 'DN-HC' },
-166:   ];
-167: 
-168:   const currentStoreObj = STORES_LIST.find((s) => s.id === selectedStore) || STORES_LIST[0];
-169: 
-170:   const showToast = (msg: string) => {
-171:     setToastMessage(msg);
-172:     setTimeout(() => setToastMessage(null), 4000);
-173:   };
-174: 
-175:   const handleUpdateException = (updated: UIExceptionItem) => {
-176:     setExceptions((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-177:   };
-178: 
-179:   const handleUpdateDiscrepancy = (updated: UIDiscrepancyItem) => {
-180:     setDiscrepancies((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-181:   };
-182: 
-183:   const handleUpdateClaim = (updated: UIClaimItem) => {
-184:     setClaims((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-185:   };
-186: 
-187:   const handleSyncPancake = async () => {
-188:     setSyncingPancake(true);
-189:     try {
-190:       const res = await fetch('/api/shipments', {
-191:         method: 'POST',
-192:         headers: { 'Content-Type': 'application/json' },
-193:         body: JSON.stringify({ action: 'SYNC_PANCAKE' }),
-194:       });
-195:       const data = await res.json();
-196:       if (res.ok) {
-197:         showToast('✓ Đã đồng bộ đơn hàng mới từ Pancake POS thành công.');
-198:       } else {
-199:         showToast(`Lỗi: ${data.error?.message || 'Không thể đồng bộ'}`);
-200:       }
-201:     } catch (e: any) {
-202:       showToast(`Lỗi kết nối: ${e.message}`);
-203:     } finally {
-204:       setSyncingPancake(false);
-205:     }
-206:   };
-207: 
-208:   // Ctrl/Cmd+K belongs to page navigation; preserve entity search on Shift+K.
-209:   useEffect(() => {
-210:     const handleKey = (event: KeyboardEvent) => {
-211:       if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'k') {
-212:         if (document.querySelector('dialog[open], [role="dialog"]')) return;
-213:         event.preventDefault();
-214:         setGlobalSearchOpen(true);
-215:       }
-216:     };
-217:     window.addEventListener('keydown', handleKey);
-218:     return () => window.removeEventListener('keydown', handleKey);
-219:   }, []);
-220: 
-221:   const currentRole = user?.role || 'OWNER';
-222:   const metrics = getUnifiedMetrics();
-223: 
-224:   // Role-based Navigation Tabs (Max 4-5 items per role)
-225:   const getTabsForRole = (role: string) => {
-226:     switch (role) {
-227:       case 'OPS_CSKH':
-228:         return [
-229:           { id: 'dashboard', label: 'Tổng Quan CSKH', icon: LayoutDashboard },
-230:           {
-231:             id: 'exceptions',
-232:             label: 'Hộp Việc Cứu Đơn',
-233:             icon: AlertTriangle,
-234:             count: metrics.openExceptionsCount,
-235:             countType: 'risk',
-236:           },
-237:           { id: 'shipments', label: 'Tra Cứu Vận Đơn', icon: Package },
-238:           {
-239:             id: 'claims',
-240:             label: 'Khiếu Nại Giao Hàng',
-241:             icon: FileText,
-242:             count: metrics.urgentClaimsCount,
-243:             countType: 'warn',
-244:           },
-245:         ];
-246:       case 'ACCOUNTANT':
-247:         return [
-248:           { id: 'dashboard', label: 'Tổng Quan Đối Soát', icon: LayoutDashboard },
-249:           {
-250:             id: 'reconciliation',
-251:             label: 'Đối Soát COD & Cước',
-252:             icon: DollarSign,
-253:             count: metrics.openDiscrepanciesCount,
-254:             countType: 'risk',
-255:           },
-256:           { id: 'shipments', label: 'Tra Cứu Vận Đơn', icon: Package },
-257:           { id: 'three_ledgers', label: 'Báo Cáo Ba Sổ', icon: TrendingUp },
-258:           {
-259:             id: 'claims',
-260:             label: 'Hồ Sơ Bồi Thường',
-261:             icon: FileText,
-262:             count: metrics.urgentClaimsCount,
-263:             countType: 'warn',
-264:           },
-265:         ];
-266:       case 'WAREHOUSE':
-267:         return [
-268:           { id: 'returns', label: 'Tiếp Nhận Hàng Hoàn', icon: RotateCcw },
-269:           { id: 'shipments', label: 'Tra Cứu Vận Đơn Kho', icon: Package },
-270:           { id: 'claims', label: 'Báo Cáo Hàng Hư Hỏng', icon: FileText },
-271:         ];
-272:       case 'BACKOFFICE':
-273:         return [
-274:           { id: 'settings', label: 'Tích Hợp & Cổng Hãng', icon: Key },
-275:           { id: 'admin_matrix', label: 'Ma Trận Năng Lực Hãng', icon: Settings },
-276:           { id: 'admin_unmapped', label: 'Hàng Chờ Trạng Thái Lạ', icon: Database },
-277:         ];
-278:       case 'OWNER':
-279:       default:
-280:         return [
-281:           { id: 'dashboard', label: 'Bàn Điều Khiển & 3 Sổ', icon: LayoutDashboard },
-282:           { id: 'shipments', label: 'Quản Lý Vận Đơn', icon: Package },
-283:           {
-284:             id: 'exceptions',
-285:             label: 'Hộp Việc Cứu Đơn',
-286:             icon: AlertTriangle,
-287:             count: metrics.openExceptionsCount,
-288:             countType: 'risk',
-289:           },
-290:           {
-291:             id: 'reconciliation',
-292:             label: 'Đối Soát COD & Cước',
-293:             icon: DollarSign,
-294:             count: metrics.openDiscrepanciesCount,
-295:             countType: 'risk',
-296:           },
-297:           { id: 'returns', label: 'Quản Lý Nhập Hoàn', icon: RotateCcw },
-298:         ];
-299:     }
-300:   };
-301: 
-302:   const handleRoleChange = (newRole: any) => {
-303:     switchRole(newRole);
-304:     const newTabs = getTabsForRole(newRole);
-305:     if (!newTabs.some((t) => t.id === activeTab)) {
-306:       setActiveTab(newTabs[0]?.id || 'dashboard');
-307:     }
-308:     showToast(`Đã chuyển vai trò: ${newRole}`);
-309:   };
-310: 
-311:   // During the single-tick localStorage restore, render nothing rather than a
-312:   // login skeleton that could sit on screen while the user is not signed in.
-313:   // BRAIN.md rule 4: a screen must never stay in a loading frame when the
-314:   // user is not signed in. Once hydration ends, LoginView / RegisterView own
-315:   // empty, validation, error, forbidden and success.
-316:   if (isHydrating) return null;
-317: 
-318:   if (!isAuthenticated) {
-319:     if (authMode === 'REGISTER') {
-320:       return <RegisterView onSwitchToLogin={() => setAuthMode('LOGIN')} />;
-321:     }
-322:     return <LoginView onSwitchToRegister={() => setAuthMode('REGISTER')} />;
-323:   }
-324: 
-325:   return (
-326:     <div className="min-h-screen bg-[#FDFCFB] text-slate-900 flex flex-col justify-between font-sans selection:bg-[#c23807] selection:text-white">
-327:       <div>
-328:         {/* Global Toast Notification */}
-329:         {toastMessage && (
-330:           <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs font-semibold flex items-center gap-2.5 animate-in slide-in-from-bottom-2 duration-150">
-331:             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-332:             <span>{toastMessage}</span>
-333:             <button
-334:               onClick={() => setToastMessage(null)}
-335:               className="text-slate-400 hover:text-white font-bold ml-2"
-336:             >
-337:               ✕
-338:             </button>
-339:           </div>
-340:         )}
-341: 
-342:         {/* Top Header */}
-343:         <header
-344:           aria-label="Thao tác vận hành"
-345:           className="border-b border-(--border-subtle) bg-(--bg-card)"
-346:         >
-347:           <div className="max-w-[1600px] mx-auto p-4 flex flex-wrap items-center justify-between gap-3">
-348:             {/* Logo & Store Selector */}
-349:             <div className="flex items-center gap-3.5">
-350:               <div
-351:                 onClick={() => setActiveTab('dashboard')}
-352:                 className="w-8.5 h-8.5 rounded-xl bg-[#c23807] text-white flex items-center justify-center font-black text-base shadow-xs cursor-pointer"
-353:               >
-354:                 S
-355:               </div>
-356:               <div className="flex items-center gap-2">
-357:                 <span
-358:                   onClick={() => setActiveTab('dashboard')}
-359:                   className="font-black text-slate-900 text-base tracking-tight cursor-pointer"
-360:                 >
-361:                   Ship Dễ
-362:                 </span>
-363: 
-364:                 {/* Branch Selector */}
-365:                 <div className="relative ml-2">
-366:                   <button
-367:                     type="button"
-368:                     onClick={() => setStoreMenuOpen(!storeMenuOpen)}
-369:                     className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-[#F6F5F3] hover:bg-[#EAE7E4] px-3 py-1.5 rounded-lg border border-[#EAE7E4] transition cursor-pointer"
-370:                   >
-371:                     <Store className="w-3.5 h-3.5 text-[#c23807]" />
-372:                     <span className="truncate max-w-[150px]">{currentStoreObj.name}</span>
-373:                     <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-374:                   </button>
-375: 
-376:                   {storeMenuOpen && (
-377:                     <div className="absolute left-0 mt-1.5 w-80 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100 text-xs">
-378:                       <div className="px-2.5 py-1.5 border-b border-slate-100 font-bold text-[11px] text-slate-400 uppercase tracking-wider">
-379:                         Phạm Vi Chi Nhánh / Kho Xuất Hàng:
-380:                       </div>
-381:                       {STORES_LIST.map((store) => (
-382:                         <button
-383:                           key={store.id}
-384:                           type="button"
-385:                           onClick={() => {
-386:                             setSelectedStore(store.id);
-387:                             setStoreMenuOpen(false);
-388:                             showToast(`Đã chuyển phạm vi: ${store.name}`);
-389:                           }}
-390:                           className={`w-full text-left px-3 py-2 rounded-lg transition flex items-center justify-between ${
-391:                             selectedStore === store.id
-392:                               ? 'bg-[#FFF5F0] text-[#c23807] font-bold'
-393:                               : 'hover:bg-slate-50 text-slate-700'
-394:                           }`}
-395:                         >
-396:                           <span className="truncate">{store.name}</span>
-397:                           <span className="font-mono text-xs text-slate-400">{store.code}</span>
-398:                         </button>
-399:                       ))}
-400:                     </div>
-401:                   )}
-402:                 </div>
-403:               </div>
-404:             </div>
-405: 
-406:             {/* Top Operational Status & Actions */}
-407:             <div className="flex flex-wrap items-center gap-2.5">
-408:               {/* POS Status Badge */}
-409:               <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold">
-410:                 <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-411:                 <span>Pancake POS: Đã Kết Nối</span>
-412:               </div>
-413: 
-414:               {/* Existing entity search: Ctrl/Cmd+Shift+K */}
-415:               <button
-416:                 type="button"
-417:                 aria-label="Tìm mã đơn hàng"
-418:                 aria-keyshortcuts="Control+Shift+K Meta+Shift+K"
-419:                 title="Tìm mã đơn hàng (Ctrl hoặc Command Shift K)"
-420:                 onClick={() => setGlobalSearchOpen(true)}
-421:                 className="flex items-center gap-2 text-xs font-medium text-slate-600 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] px-3 py-1.5 rounded-lg transition"
-422:               >
-423:                 <Search className="w-3.5 h-3.5 text-slate-400" />
-424:                 <span>Tìm mã</span>
-425:               </button>
-426: 
-427:               {/* Manual POS Sync Trigger */}
-428:               <button
-429:                 type="button"
-430:                 onClick={handleSyncPancake}
-431:                 disabled={syncingPancake}
-432:                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-[#F6F5F3] hover:bg-[#EAE7E4] border border-[#EAE7E4] rounded-lg transition cursor-pointer"
-433:                 title="Kích hoạt đồng bộ đơn hàng mới từ Pancake POS"
-434:               >
-435:                 <RefreshCw
-436:                   className={`w-3.5 h-3.5 ${syncingPancake ? 'animate-spin text-[#c23807]' : 'text-slate-600'}`}
-437:                 />
-438:                 <span>Đồng bộ POS</span>
-439:               </button>
-440: 
-441:               {/* Create Shipment / Order CTA */}
-442:               {(currentRole === 'OWNER' || currentRole === 'OPS_CSKH') && (
-443:                 <button
-444:                   type="button"
-445:                   onClick={() => setCreateOrderOpen(true)}
-446:                   className="btn-primary text-xs shrink-0 py-1.5 px-3"
-447:                   title="Tạo đơn hàng thủ công và so sánh cước đa hãng"
-448:                 >
-449:                   <span>+ Tạo Đơn Hàng</span>
-450:                 </button>
-451:               )}
-452: 
-453:               {/* Settings (Full-Page View) */}
-454:               {currentRole === 'OWNER' && (
-455:                 <button
-456:                   type="button"
-457:                   onClick={() => setActiveTab('settings')}
-458:                   className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg border transition cursor-pointer ${
-459:                     activeTab === 'settings'
-460:                       ? 'bg-[#c23807] text-white border-[#c23807]'
-461:                       : 'bg-[#F6F5F3] text-slate-700 hover:bg-[#EAE7E4] border-[#EAE7E4]'
-462:                   }`}
-463:                   title="Cài đặt cửa hàng, nhân sự, kết nối hãng và bảo mật"
-464:                 >
-465:                   <Settings className="w-3.5 h-3.5" />
-466:                   <span>Cài Đặt Cửa Hàng</span>
-467:                 </button>
-468:               )}
-469: 
-470:               {/* Existing role preview changes display only; shell permissions come from the server. */}
-471:               <label className="flex items-center gap-2 text-xs">
-472:                 <span className="sr-only">Chuyển Vai Trò Vận Hành</span>
-473:                 <select
-474:                   aria-label="Chuyển Vai Trò Vận Hành"
-475:                   value={currentRole}
-476:                   onChange={(event) => handleRoleChange(event.target.value)}
-477:                   className="modern-input max-w-40"
-478:                 >
-479:                   <option value="OWNER">Chủ Shop (Owner)</option>
-480:                   <option value="OPS_CSKH">CSKH / Vận Hành (Ops)</option>
-481:                   <option value="ACCOUNTANT">Kế Toán Đối Soát</option>
-482:                   <option value="WAREHOUSE">Thủ Kho Quét Hoàn</option>
-483:                   <option value="BACKOFFICE">Quản Trị Hệ Thống</option>
-484:                 </select>
-485:               </label>
-486:             </div>
-487:           </div>
-488:         </header>
-489: 
-490:         {/* Main Viewport */}
-491:         <main className="min-w-0 max-w-[1600px] mx-auto px-4 sm:px-6 py-6">
-492:           {activeTab === 'dashboard' && (
-493:             <ControlTowerTab
-494:               role={user?.role || 'OWNER'}
-495:               onNavigate={(tab) => setActiveTab(tab)}
-496:               onCreateOrder={() => setCreateOrderOpen(true)}
-497:             />
-498:           )}
-499: 
-500:           {activeTab === 'shipments' && (
-501:             <ShipmentListTab
-502:               onOpenTrackingModal={(code) => setSelectedGlobalTracking(code)}
-503:               onNavigateToTab={(tab) => setActiveTab(tab)}
-504:               onCreateOrder={() => setCreateOrderOpen(true)}
-505:               userRole={user?.role || 'OWNER'}
-506:               selectedOrderId={selectedOrderId}
-507:               selectedOrderCode={selectedOrderCode}
-508:               onClearSelection={() => {
-509:                 setSelectedOrderId(null);
-510:                 setSelectedOrderCode(null);
-511:               }}
-512:             />
-513:           )}
-514: 
-515:           {activeTab === 'exceptions' && (
-516:             <ExceptionWorkboxTab
-517:               exceptions={exceptions}
-518:               onUpdateException={handleUpdateException}
-519:               carrierGhnTier={carrierGhnTier}
-520:               selectedCaseId={selectedCaseId}
-521:               onClearSelection={() => setSelectedCaseId(null)}
-522:             />
-523:           )}
-524: 
-525:           {activeTab === 'reconciliation' && (
-526:             <ReconciliationTab
-527:               discrepancies={discrepancies}
-528:               onUpdateDiscrepancy={handleUpdateDiscrepancy}
-529:               role={user?.role || 'OWNER'}
-530:               selectedBatchId={selectedBatchId}
-531:               selectedDiscrepancyId={selectedDiscrepancyId}
-532:               onClearBatchSelection={() => setSelectedBatchId(null)}
-533:               onClearDiscrepancySelection={() => setSelectedDiscrepancyId(null)}
-534:             />
-535:           )}
-536: 
-537:           {activeTab === 'three_ledgers' && <ThreeLedgersTab />}
-538: 
-539:           {activeTab === 'returns' && <ReturnScanTab />}
-540: 
-541:           {activeTab === 'claims' && (
-542:             <ClaimCasesTab
-543:               claims={claims}
-544:               onUpdateClaim={handleUpdateClaim}
-545:               selectedClaimId={selectedClaimId}
-546:               selectedClaimCode={selectedClaimCode}
-547:               onClearSelection={() => {
-548:                 setSelectedClaimId(null);
-549:                 setSelectedClaimCode(null);
-550:               }}
-551:             />
-552:           )}
-553: 
-554:           {activeTab === 'settings' && (
-555:             <SettingsWorkspace
-556:               key={searchParams.get('section') || 'stores'}
-557:               initialSection={
-558:                 searchParams.get('section') === 'integrations' ? 'integrations' : undefined
-559:               }
-560:               onBackToDashboard={() => setActiveTab('dashboard')}
-561:               onToast={showToast}
-562:               carrierGhnTier={carrierGhnTier}
-563:               onToggleGhnTier={(t) => setCarrierGhnTier(t)}
-564:             />
-565:           )}
-566: 
-567:           {/* Backoffice System Management */}
-568:           {activeTab === 'admin_matrix' && <AdminSystemTab activeSection="carrier_matrix" />}
-569: 
-570:           {activeTab === 'admin_unmapped' && <AdminSystemTab activeSection="unmapped_queue" />}
-571:         </main>
-572:       </div>
-573: 
-574:       {/* Modern Footer */}
-575:       <footer className="border-t border-[#EAE7E4] bg-white text-slate-500 text-xs py-4 px-4 sm:px-6 mt-12">
-576:         <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row justify-between items-center gap-2">
-577:           <div className="flex flex-wrap justify-center items-center gap-2">
-578:             <span className="font-bold text-slate-900">Ship Dễ Platform</span>
-579:             <span>· Hệ thống điều hành & kiểm soát vận tải sau bán</span>
-580:             <span className="text-slate-300">|</span>
-581:             <span className="text-emerald-700 font-semibold flex items-center gap-1">
-582:               <ShieldCheck className="w-4 h-4 text-emerald-600" />
-583:               Tiền COD chuyển thẳng về tài khoản ngân hàng của Shop
-584:             </span>
-585:           </div>
-586: 
-587:           <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
-588:             <span>Bảo vệ PII</span>
-589:             <span>Tách quyền tài chính Maker-Checker</span>
-590:             <span>Quét hoàn lũy đẳng</span>
-591:           </div>
-592:         </div>
-593:       </footer>
-594: 
-595:       {/* Global Search Modal ⌘K (FEAT-COM-01) */}
-596:       <GlobalSearchModal
-597:         isOpen={globalSearchOpen}
-598:         onClose={() => setGlobalSearchOpen(false)}
-599:         onSelectResult={(item) => {
-600:           setGlobalSearchOpen(false);
-601:           handleSearchResultActivation(item, {
-602:             // Entity results already supply their own URL; preserve that deep link.
-603:             setActiveTab: setActiveTabState,
-604:             setSelectedGlobalTracking,
-605:             setSelectedOrderId,
-606:             setSelectedOrderCode,
-607:             setSelectedBatchId,
-608:             setSelectedCaseId,
-609:             setSelectedClaimId,
-610:             setSelectedClaimCode,
-611:             setSelectedDiscrepancyId,
-612:             showToast,
-613:           });
-614:         }}
-615:       />
-616: 
-617:       {/* Statement Upload Modal */}
-618:       <UploadStatementModal
-619:         isOpen={uploadStatementOpen}
-620:         onClose={() => setUploadStatementOpen(false)}
-621:         onUploadComplete={(r) => {
-622:           showToast(`✓ Đã nạp sao kê: ${r.discrepancies_found} dòng lệch`);
-623:           setActiveTab('reconciliation');
-624:         }}
-625:       />
-626: 
-627:       {/* Unified Tracking Modal */}
-628:       {selectedGlobalTracking && (
-629:         <UnifiedTrackingModal
-630:           trackingCode={selectedGlobalTracking}
-631:           onClose={() => setSelectedGlobalTracking(null)}
-632:           onActionReattempt={() => setActiveTab('exceptions')}
-633:           onActionClaim={() => setActiveTab('claims')}
-634:         />
-635:       )}
-636: 
-637:       {/* Manual Order Creation & Rate Comparison Modal */}
-638:       <CreateOrderModal
-639:         isOpen={createOrderOpen}
-640:         onClose={() => setCreateOrderOpen(false)}
-641:         onOrderCreated={(newOrder) => {
-642:           showToast(
-643:             `✓ Đã tạo vận đơn mới ${newOrder.tracking_code} (${newOrder.carrier_code}) và đẩy sang hãng thành công.`
-644:           );
-645:           setActiveTab('shipments');
-646:         }}
-647:       />
-648:     </div>
-649:   );
-650: }
-</file>
-
 <file path="docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md">
   1: # Ship Dễ AI Toolchain Decisions
   2: 
@@ -121183,6 +121183,62 @@ This section contains the contents of the repository's files.
 54:     consumer.apply(CorrelationMiddleware).forRoutes('*');
 55:   }
 56: }
+</file>
+
+<file path="apps/web/package.json">
+ 1: {
+ 2:   "name": "@shipde/web",
+ 3:   "version": "3.3.0",
+ 4:   "description": "Ship Dễ (shipde.net) - Next.js Web Console Application",
+ 5:   "private": true,
+ 6:   "prisma": {
+ 7:     "schema": "../../prisma/schema.prisma"
+ 8:   },
+ 9:   "scripts": {
+10:     "dev": "next dev",
+11:     "build": "next build",
+12:     "start": "next start",
+13:     "lint": "eslint .",
+14:     "typecheck": "tsc --noEmit",
+15:     "test": "tsx src/tests/comprehensive-rules.test.ts && tsx src/tests/admin-shops.test.ts && tsx src/tests/rbac-matrix-live.test.ts && tsx src/tests/roles-page-states.test.ts && tsx src/tests/profile-page-states.test.ts && tsx src/tests/user-scopes-states.test.ts && tsx src/app/settings/users/users-page-states.test.ts && tsx src/tests/shop-profile.test.ts && tsx src/tests/branches-page-states.test.ts && tsx src/tests/warehouses-page-states.test.ts && tsx src/tests/onboarding-page-states.test.ts && tsx src/tests/global-search-states.test.ts && tsx src/tests/app-shell.test.tsx",
+16:     "test:audit": "tsx src/tests/regression-audit.test.ts",
+17:     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
+18:     "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
+19:     "db:generate": "prisma generate",
+20:     "version:next": "next --version",
+21:     "test:a11y": "playwright test",
+22:     "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
+23:   },
+24:   "dependencies": {
+25:     "@prisma/client": "^6.19.2",
+26:     "@shipde/config": "workspace:*",
+27:     "@shipde/contracts": "workspace:*",
+28:     "@shipde/ui": "workspace:*",
+29:     "framer-motion": "^12.35.0",
+30:     "lucide-react": "^0.577.0",
+31:     "next": "16.4.1",
+32:     "react": "19.2.3",
+33:     "react-dom": "19.2.3",
+34:     "recharts": "^3.8.0"
+35:   },
+36:   "devDependencies": {
+37:     "@axe-core/playwright": "^4.14.0",
+38:     "@lhci/cli": "^0.15.1",
+39:     "@playwright/test": "^1.64.1",
+40:     "@shipde/testkit": "workspace:*",
+41:     "@tailwindcss/postcss": "^4",
+42:     "@types/node": "^20",
+43:     "@types/react": "^19",
+44:     "@types/react-dom": "^19",
+45:     "axe-core": "4.14.0",
+46:     "eslint": "^9.39.5",
+47:     "eslint-config-next": "16.3.8",
+48:     "prisma": "^6.19.2",
+49:     "tailwindcss": "^4.2.1",
+50:     "tsx": "^4.21.0",
+51:     "typescript": "^5"
+52:   }
+53: }
 </file>
 
 <file path="apps/api/package.json">
@@ -128274,62 +128330,6 @@ This section contains the contents of the repository's files.
 5017:     };
 5018:   };
 5019: }
-</file>
-
-<file path="apps/web/package.json">
- 1: {
- 2:   "name": "@shipde/web",
- 3:   "version": "3.3.0",
- 4:   "description": "Ship Dễ (shipde.net) - Next.js Web Console Application",
- 5:   "private": true,
- 6:   "prisma": {
- 7:     "schema": "../../prisma/schema.prisma"
- 8:   },
- 9:   "scripts": {
-10:     "dev": "next dev",
-11:     "build": "next build",
-12:     "start": "next start",
-13:     "lint": "eslint .",
-14:     "typecheck": "tsc --noEmit",
-15:     "test": "tsx src/tests/comprehensive-rules.test.ts && tsx src/tests/admin-shops.test.ts && tsx src/tests/rbac-matrix-live.test.ts && tsx src/tests/roles-page-states.test.ts && tsx src/tests/profile-page-states.test.ts && tsx src/tests/user-scopes-states.test.ts && tsx src/app/settings/users/users-page-states.test.ts && tsx src/tests/shop-profile.test.ts && tsx src/tests/branches-page-states.test.ts && tsx src/tests/warehouses-page-states.test.ts && tsx src/tests/onboarding-page-states.test.ts && tsx src/tests/global-search-states.test.ts && tsx src/tests/app-shell.test.tsx",
-16:     "test:audit": "tsx src/tests/regression-audit.test.ts",
-17:     "test:e2e": "tsx src/tests/e2e-scenarios.test.ts",
-18:     "test:baseline": "tsx src/tests/preservation-smoke.test.ts",
-19:     "db:generate": "prisma generate",
-20:     "version:next": "next --version",
-21:     "test:a11y": "playwright test",
-22:     "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
-23:   },
-24:   "dependencies": {
-25:     "@prisma/client": "^6.19.2",
-26:     "@shipde/config": "workspace:*",
-27:     "@shipde/contracts": "workspace:*",
-28:     "@shipde/ui": "workspace:*",
-29:     "framer-motion": "^12.35.0",
-30:     "lucide-react": "^0.577.0",
-31:     "next": "16.4.1",
-32:     "react": "19.2.3",
-33:     "react-dom": "19.2.3",
-34:     "recharts": "^3.8.0"
-35:   },
-36:   "devDependencies": {
-37:     "@axe-core/playwright": "^4.14.0",
-38:     "@lhci/cli": "^0.15.1",
-39:     "@playwright/test": "^1.64.1",
-40:     "@shipde/testkit": "workspace:*",
-41:     "@tailwindcss/postcss": "^4",
-42:     "@types/node": "^20",
-43:     "@types/react": "^19",
-44:     "@types/react-dom": "^19",
-45:     "axe-core": "4.14.0",
-46:     "eslint": "^9.39.5",
-47:     "eslint-config-next": "16.3.8",
-48:     "prisma": "^6.19.2",
-49:     "tailwindcss": "^4.2.1",
-50:     "tsx": "^4.21.0",
-51:     "typescript": "^5"
-52:   }
-53: }
 </file>
 
 <file path="docs/product-spec/work-items/TASK-AI-158.md">
