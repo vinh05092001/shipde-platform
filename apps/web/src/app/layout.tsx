@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { Suspense } from 'react';
 import { cookies } from 'next/headers';
+import { NuqsAdapter } from 'nuqs/adapters/next/app';
 import { AppShell, ShellSkeleton } from '@/components/shell/AppShell';
 
 export const metadata: Metadata = {
@@ -20,11 +21,13 @@ export default async function RootLayout({
   return (
     <html lang="vi">
       <body className="antialiased">
-        <AuthProvider>
-          <Suspense fallback={<ShellSkeleton />}>
-            <AppShell defaultOpen={defaultOpen}>{children}</AppShell>
-          </Suspense>
-        </AuthProvider>
+        <NuqsAdapter>
+          <AuthProvider>
+            <Suspense fallback={<ShellSkeleton />}>
+              <AppShell defaultOpen={defaultOpen}>{children}</AppShell>
+            </Suspense>
+          </AuthProvider>
+        </NuqsAdapter>
       </body>
     </html>
   );
