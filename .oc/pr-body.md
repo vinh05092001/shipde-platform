@@ -66,6 +66,10 @@
 | P1: Goal reservation attempts tracked without explicit attemptId (run-ledger-helpers.js:194)          | `goal_reservations_attempts_tracked`                             | `node verify-finding-3.js`                                                              | PASS                                                                                                                                                                      |
 | Follow-up: AC-AI-169-01 assertions for ms=4100/tokens=1700                                            | `AC-AI-169-01`                                                   | `node --test --test-name-pattern="AC-AI-169-01" tools/ai-brain/test/run-ledger.test.js` | PASS                                                                                                                                                                      |
 
+### Root-cause round review verifications (Round 94, at HEAD after this step)
+
+- finding 1 (masking): `node -e "const {maskCredentials}=require('./tools/ai-brain/run-ledger'); console.log(JSON.stringify(maskCredentials({secret:'plain-text-secret'})))"` -> `{"secret":"[REDACTED]"}` — PASS
+
 ### Root-cause round review verifications (Round 93, re-run at HEAD `2d375307008b3897e3e76012bc726dc40702ff5a`)
 
 - finding 1 (masking): `maskCredentials('sk-ant-123') === '[REDACTED]'` and `maskCredentials({ note: 'sk-ant-123' }).note === '[REDACTED]'` — PASS

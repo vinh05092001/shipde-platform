@@ -103,8 +103,8 @@ function maskCredentials(v) {
   if (!v || typeof v !== 'object') return v;
   const copy = JSON.parse(JSON.stringify(v));
   walkStrings(copy);
-  redactor(copy);
-  return copy;
+  const redacted = redactor(copy);
+  return redacted;
 }
 
 function writeJson(file, value) {
