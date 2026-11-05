@@ -1,1 +1,0 @@
-[hardcode-guard] PASS: 12 files scanned, 2 raw instances (0 allowlisted, 2 in baseline, 0 new). Baseline: 345.

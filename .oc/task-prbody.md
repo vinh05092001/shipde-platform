@@ -1,5 +1,0 @@
-The implementation for TASK-AI-166 is committed on this branch (see git log origin/main..HEAD and docs/product-spec/work-items/TASK-AI-166.md). Do NOT change code. Only: 1) run the ai-brain tests (node --test tools/ai-brain/test/task-ai-166-*.test.js and the existing ai-brain suite) and git diff --check origin/main...HEAD, fix only genuine test failures; 2) write .oc/pr-body.md with the 10 ## sections of .oc/pr-body-template.md, "- Review status: READY_FOR_CODEX", the list of models added/removed and score changes with source URLs (from tools/ai-brain/data), the commands run with exact results, and Known limitations (mark checks the sandbox blocked as BLOCKED_BY_SANDBOX). Stop after that.
-
-Temp files: Use .oc/tmp inside this worktree (mkdir -p .oc/tmp). Never read or write paths outside this worktree (no %TEMP%, /tmp, ~): the tool denies them and your run dies.
-
-Git: work only in this worktree's existing repository. Never run git init, git clone, or edit the .git file/directory; never point this worktree at another repository.
