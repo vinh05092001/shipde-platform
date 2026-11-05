@@ -185,25 +185,28 @@ class RunLedger {
             attemptId: attemptKey,
           });
           writeJson(this.file, s);
-          this.progressLedger.recordUnlocked(targetItemId, st, fp, finalVerdict, {
+          const recRes0 = this.progressLedger.recordUnlocked(targetItemId, st, fp, finalVerdict, {
             ms,
             tokens: known ? opts.tokens : undefined,
           });
+          if (!recRes0.ok) return recRes0;
         } else if (!reservedEntry) {
           const admitRes = this.progressLedger.admitUnlocked(targetItemId, st, fp, {
             reserve: true,
             pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
           });
           if (!admitRes.ok) return admitRes;
-          this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
+          const recRes1 = this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
             ms,
             tokens: known ? opts.tokens : undefined,
           });
+          if (!recRes1.ok) return recRes1;
         } else {
-          this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
+          const recRes2 = this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
             ms,
             tokens: known ? opts.tokens : undefined,
           });
+          if (!recRes2.ok) return recRes2;
         }
       }
 

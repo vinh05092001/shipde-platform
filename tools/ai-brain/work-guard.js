@@ -360,11 +360,11 @@ class ProgressLedger {
     };
     it.stages = it.stages || {};
     const u = usage || {};
-    // Usage only ever adds: negative or non-finite values would refund a spent budget.
     if (u.ms !== undefined && (typeof u.ms !== 'number' || !isCount(u.ms)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.ms');
     if (u.tokens !== undefined && (typeof u.tokens !== 'number' || !isCount(u.tokens)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
+
     const prev = ((it.stages[stage] || {}).fps || {})[fp];
     const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
     const knownTokens = typeof u.tokens === 'number' && Number.isFinite(u.tokens);
@@ -390,6 +390,17 @@ class ProgressLedger {
         ? Math.max(0, this.now() - prev.at)
         : 0;
     const consumedMs = u.ms !== undefined ? Math.max(suppliedMs, elapsedMs) : elapsedMs;
+
+    const overMs =
+      u.ms !== undefined
+        ? exceeded({ ms: (it.spent.ms || 0) + consumedMs }, this.limits.item)
+        : null;
+    if (overMs) return { ok: false, cause: Cause.TIME_EXHAUSTED, limit: overMs };
+
+    const overTokens =
+      u.tokens !== undefined ? exceeded(tokenSpend(it.spent), this.limits.item) : null;
+    if (overTokens) return { ok: false, cause: Cause.TOKENS_EXHAUSTED, limit: overTokens };
+
     for (const acc of [it.spent, s.goal]) {
       if (!reserved) acc.attempts += 1;
       acc.ms += consumedMs;
@@ -404,7 +415,6 @@ class ProgressLedger {
           acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
           acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
         }
-        // If reserved, the attempt was already charged in admit(); preserve its charge.
       }
     }
     const st = it.stages[stage] || { fps: {} };
@@ -417,6 +427,7 @@ class ProgressLedger {
     it.stages[stage] = st;
     s.items[itemId] = it;
     writeJson(this.file, s);
+    return { ok: true };
   }
 
   block(itemId, reason) {
