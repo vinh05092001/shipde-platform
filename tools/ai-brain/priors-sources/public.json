@@ -98,7 +98,9 @@
         "coding": 0.35,
         "review": 0.4
       },
-      "trustLevel": "primary"
+      "trustLevel": "primary",
+      "score_scale": "percent",
+      "verified": true
     },
     {
       "id": "swe-bench",
@@ -109,7 +111,9 @@
         "coding": 0.25,
         "review": 0.2
       },
-      "trustLevel": "verified"
+      "trustLevel": "verified",
+      "score_scale": "percent",
+      "verified": true
     },
     {
       "id": "terminal-bench",
@@ -120,7 +124,9 @@
         "coding": 0.15,
         "review": 0.15
       },
-      "trustLevel": "verified"
+      "trustLevel": "verified",
+      "score_scale": "percent",
+      "verified": true
     },
     {
       "id": "aider-polyglot",
@@ -131,7 +137,9 @@
         "coding": 0.1,
         "review": 0.1
       },
-      "trustLevel": "verified"
+      "trustLevel": "verified",
+      "score_scale": "percent",
+      "verified": true
     },
     {
       "id": "livebench",
@@ -142,7 +150,9 @@
         "coding": 0.1,
         "review": 0.1
       },
-      "trustLevel": "verified"
+      "trustLevel": "verified",
+      "score_scale": "percent",
+      "verified": true
     },
     {
       "id": "benchlm",
@@ -153,7 +163,9 @@
         "coding": 0.05,
         "review": 0.05
       },
-      "trustLevel": "supplementary"
+      "trustLevel": "supplementary",
+      "score_scale": "percent",
+      "verified": true
     }
   ]
 }

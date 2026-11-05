@@ -312,7 +312,16 @@ function submitLocked(accountId, job, opts, dir) {
   fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, state: 'submitted' }), 'utf8');
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(submitted, null, 2), 'utf8');
   const finish = (result) => {
-    const bound = { ...result, jobId, accountId };
+    // Capture listing output before releasing this job's account lock. A
+    // caller must never reread the shared mailbox after another job owns it.
+    const bound = {
+      ...result,
+      jobId,
+      accountId,
+      ...(job.command === 'models' && result?.exitCode === 0
+        ? { stdout: result.stdout ?? exp.readOutText(accountId, opts) }
+        : {}),
+    };
     fs.writeFileSync(
       receiptFile,
       JSON.stringify({

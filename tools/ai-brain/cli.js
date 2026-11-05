@@ -2101,6 +2101,40 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
 
+  // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
+  // caller injects fixture candidates (deps.candidates /
+  // deps.discoveryCatalogue / custom evidence-dir / fixture pool-runs-dir).
+  // Fixture-injected tests do not assert live freshness; every production path
+  // (item, profile, execute) resolves candidates from the live catalogue and
+  // therefore goes through this gate.
+  if (
+    dryRunFlag &&
+    !deps.candidates &&
+    !deps.discoveryCatalogue &&
+    !args['evidence-dir'] &&
+    !args.evidenceDir &&
+    !(deps && deps.evidenceDir) &&
+    !args['pool-runtime-dir'] &&
+    !args['agy-runs-dir'] &&
+    !(deps && deps.fakeRunsDir) &&
+    !process.env.AGY_POOL_RUNS_DIR &&
+    !process.env.AGY_RUNS_DIR &&
+    !args.close &&
+    !args.complete &&
+    !args.fail
+  ) {
+    const freshness = require('./catalogue-refresh').catalogueFreshness({
+      dataDir: args['discovery-dir'] || deps.discoveryDataDir,
+      now: deps.now,
+    });
+    if (freshness.stale) {
+      error(
+        'STALE_CATALOGUE: last successful live enumeration is missing or older than 48h; run pnpm ai:refresh-catalogue'
+      );
+      return { exitCode: 1, dryRun: true, warning: freshness };
+    }
+  }
+
   // Releasing a claim is its own operation:
   const close = args.close || args.complete || args.fail;
   if (typeof close === 'string') {
@@ -3452,6 +3486,24 @@ function discoveryCommand(args, deps) {
   const evidenceDir = args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
   const rootDir = args.root || d.rootDir || process.cwd();
 
+  if (sub === 'run') {
+    return require('./discovery')
+      .cmdRun({ 'data-dir': dataDir, 'freshness-file': args['freshness-file'] }, d)
+      .then((result) => {
+        log(JSON.stringify(result, null, 2));
+        if (result.exitCode)
+          error(
+            'DISCOVERY_INCOMPLETE: ' +
+              result.sources
+                .filter((source) => source.incomplete)
+                .map((source) => source.id + '=' + source.reason)
+                .join('; ')
+          );
+        process.exitCode = result.exitCode;
+        return result;
+      });
+  }
+
   if (sub === 'import') {
     const { importCatalogue, formatSummary } = require('./discovery/catalogue-import');
     if (typeof args.catalogue !== 'string' || !args.catalogue) {
@@ -4672,13 +4724,16 @@ function main(argv = process.argv.slice(2), deps = {}) {
     // here and turned into a non-zero exit instead.
     if (result && typeof result.then === 'function') {
       result.then(
-        () => {},
+        (value) => {
+          if (value?.exitCode) process.exitCode = value.exitCode;
+        },
         (err) => {
           console.error('Dispatch lỗi: ' + (err && err.message ? err.message : err));
           process.exitCode = 1;
         }
       );
     }
+    if (result?.exitCode) process.exitCode = result.exitCode;
     return;
   }
   if (command === 'shadow') return shadowCommand(args);

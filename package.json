@@ -49,6 +49,7 @@
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",
     "guard:status": "node tools/ai-guard/cli.js status",
+    "ai:refresh-catalogue": "node tools/ai-brain/catalogue-refresh.js",
     "ai:pack": "node scripts/ai/pack-context.mjs"
   },
   "devDependencies": {
@@ -62,7 +63,6 @@
     "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.6",
     "prisma": "^6.19.2",
-    "repomix": "1.18.1",
     "tsx": "^4.21.0",
     "turbo": "^2.4.4",
     "typescript": "^5"

@@ -1005,34 +1005,10 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
     );
   }
 
-  // Retrieve the working/HEAD blob as raw bytes with no text conversion
-  let currentBytes = null;
-  try {
-    const workingBlobSha = execFileSync(
-      'git',
-      ['hash-object', '-w', `--path=${relCatPath}`, catFile],
-      {
-        stdio: ['pipe', 'pipe', 'ignore'],
-        maxBuffer: 10 * 1024 * 1024,
-      }
-    )
-      .toString()
-      .trim();
-    currentBytes = execFileSync('git', ['cat-file', 'blob', workingBlobSha], {
-      stdio: ['pipe', 'pipe', 'ignore'],
-      maxBuffer: 10 * 1024 * 1024,
-    });
-  } catch (_) {
-    try {
-      currentBytes = execFileSync('git', ['cat-file', 'blob', `HEAD:${relCatPath}`], {
-        stdio: ['pipe', 'pipe', 'ignore'],
-        maxBuffer: 10 * 1024 * 1024,
-      });
-    } catch (_) {
-      const raw = fs.readFileSync(catFile);
-      currentBytes = Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
-    }
-  }
+  // Inspect uncommitted working bytes too, using the ledger's canonical LF
+  // representation. A read-only regression test must not write Git objects or
+  // fall back to HEAD and accidentally hide a rewritten working prefix.
+  const currentBytes = Buffer.from(fs.readFileSync(catFile, 'utf8').replace(/\r\n/g, '\n'));
 
   assert.ok(
     currentBytes.length >= PARENT_77D1BE3_BYTE_LEN,
@@ -1114,9 +1090,26 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
   assert.strictEqual(migrationRow.fromVersion, 1, 'Migration record must specify fromVersion 1');
   assert.strictEqual(migrationRow.format, '7-part-identity');
 
-  // Verify state reconstruction from the persisted file
+  // Freeze the original migration result while allowing later observations
+  // to append new candidates, as the live discovery contract requires.
+  const originalState = currentState(parsedLines.slice(0, 1862));
+  assert.strictEqual(originalState.size, 1861, 'original prefix must resolve all 1861 candidates');
+  const expectedKeys = new Set(
+    parsedLines
+      .filter((row) => row.type === 'transition')
+      .map((row) => normalizeCandidateKey(row.key))
+  );
   const state = currentState(parsedLines);
-  assert.strictEqual(state.size, 1861, 'currentState must resolve all 1861 candidates');
+  assert.strictEqual(
+    state.size,
+    expectedKeys.size,
+    'currentState must resolve every recorded identity'
+  );
+  for (const key of expectedKeys)
+    assert.ok(
+      state.has(key),
+      'an original or appended candidate is missing from reconstructed state'
+    );
   assert.ok(Array.isArray(state.migrations), 'state must track migrations');
   assert.strictEqual(state.migrations.length, 1, 'state must record the migration line');
   assert.strictEqual(state.migrations[0].version, 2);
@@ -1135,7 +1128,12 @@ test('regression 1: the persisted ledger stays append-only after migration - no 
 
   // Verify reader interface normalises legacy rows fail-closed
   const cat = readDiscoveryCatalogue({ lines: parsedLines });
-  assert.strictEqual(cat.candidates.length, 1861);
+  assert.strictEqual(cat.candidates.length, expectedKeys.size);
+  for (const key of expectedKeys)
+    assert.ok(
+      cat.get(key),
+      'an original or appended candidate is missing from the catalogue reader'
+    );
   const candFromCat = cat.get(firstRawKey);
   assert.ok(candFromCat, 'candidate must be retrievable by legacy key');
   assert.strictEqual(candFromCat.modelId, 'vinh');
