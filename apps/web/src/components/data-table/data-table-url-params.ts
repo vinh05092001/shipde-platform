@@ -1,3 +1,5 @@
+import { createParser } from 'nuqs';
+
 import type { ColumnSort } from './types';
 
 export function normalizeParamsString(params: URLSearchParams | string | null | undefined): string {
@@ -33,3 +35,21 @@ export function formatSortParam(sort: ColumnSort | null): string | null {
   if (!sort || !sort.id) return null;
   return `${sort.id}.${sort.desc ? 'desc' : 'asc'}`;
 }
+
+export function parseFilterValues(value: string | null | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split('.')
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+export const filterValuesParser = createParser<string[]>({
+  parse: (value) => parseFilterValues(value),
+  serialize: (values) => values.join('.'),
+});
+
+export const sortParamParser = createParser<ColumnSort | null>({
+  parse: (value) => parseSortParam(value),
+  serialize: (sort) => formatSortParam(sort) ?? '',
+});

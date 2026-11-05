@@ -61,7 +61,7 @@ export function useTablecnDataTable<TData extends RowData>({
   throttleMs = THROTTLE_MS,
   clearOnDefault = false,
   scroll = false,
-  shallow: shallowProp = true,
+  shallow: shallowProp = false,
   startTransition,
   ...props
 }: TablecnUseDataTableProps<TData>) {

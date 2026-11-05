@@ -2,11 +2,10 @@
 
 'use client';
 
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { parseAsInteger, parseAsString, useQueryStates, type UseQueryStatesKeysMap } from 'nuqs';
 import * as React from 'react';
-import { useCallback, useMemo, useState, useTransition } from 'react';
 
-import { normalizeParamsString, parseSortParam } from './data-table-url-params';
+import { filterValuesParser, parseFilterValues, sortParamParser } from './data-table-url-params';
 import { ColumnSort, DataTableFilterableColumn, DataTableSearchableColumn } from './types';
 
 export interface UseDataTableProps {
@@ -15,10 +14,6 @@ export interface UseDataTableProps {
   filterableColumns?: DataTableFilterableColumn[];
   searchableColumns?: DataTableSearchableColumn[];
   defaultSort?: ColumnSort;
-  // Optional explicit searchParams or navigation override for testing and decoupled usage
-  searchParams?: URLSearchParams | null;
-  onNavigate?: (url: string) => void;
-  browserHistory?: string[];
 }
 
 export interface UseDataTableReturn {
@@ -37,11 +32,15 @@ export interface UseDataTableReturn {
   setSort: (columnId: string, desc?: boolean) => void;
   setFilter: (key: string, values: string[] | string | null) => void;
   resetFilters: () => void;
-  createQueryString: (params: Record<string, string | number | null | undefined>) => string;
   isPending: boolean;
   resetEpoch: number;
   table?: any;
 }
+
+const PAGE_KEY = 'page';
+const PER_PAGE_KEY = 'per_page';
+const SORT_KEY = 'sort';
+const SEARCH_KEY = 'search';
 
 export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableReturn {
   const {
@@ -50,222 +49,143 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
     filterableColumns = [],
     searchableColumns = [],
     defaultSort,
-    onNavigate,
   } = props;
 
-  const nextSearchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname() || '';
-
-  const [isPending, startTransition] = useTransition();
-  const [resetEpoch, setResetEpoch] = useState(0);
-
-  const routerSearchParams =
-    props.searchParams !== undefined ? props.searchParams : nextSearchParams;
-
-  // Table state is a pure function of the committed router search params (BR-UI-01)
-  const activeSearchParams = routerSearchParams;
-  const committedParams = normalizeParamsString(routerSearchParams);
-
-  // useChainedUpdate pattern adapted from tablecn: preserves successive edits before router commit
-  const pendingRef = React.useRef<{ base: string; next: string } | null>(null);
-
-  // Search params state with validation & fallback
-  const page = useMemo(() => {
-    const p = activeSearchParams?.get('page');
-    if (!p) return 1;
-    const parsed = parseInt(p, 10);
-    return isNaN(parsed) || parsed < 1 ? 1 : parsed;
-  }, [activeSearchParams]);
-
-  const perPage = useMemo(() => {
-    const pp = activeSearchParams?.get('per_page');
-    if (!pp) return defaultPageSize;
-    const parsed = parseInt(pp, 10);
-    return isNaN(parsed) || parsed < 1 ? defaultPageSize : parsed;
-  }, [activeSearchParams, defaultPageSize]);
-
-  const sort = useMemo<ColumnSort | null>(() => {
-    const s = activeSearchParams?.get('sort');
-    if (s) {
-      const parsed = parseSortParam(s);
-      if (parsed) return parsed;
-    }
-    return defaultSort ?? null;
-  }, [activeSearchParams, defaultSort]);
-
-  const searchValue = useMemo(() => {
-    return activeSearchParams?.get('search') ?? '';
-  }, [activeSearchParams]);
-
-  const filters = useMemo(() => {
-    const result: Record<string, string[]> = {};
-    if (!activeSearchParams) return result;
-    for (const col of filterableColumns) {
-      const val = activeSearchParams.get(col.id);
-      if (val) {
-        result[col.id] = val
-          .split('.')
-          .map((v: string) => v.trim())
-          .filter(Boolean);
-      } else {
-        result[col.id] = [];
-      }
-    }
-    return result;
-  }, [activeSearchParams, filterableColumns]);
-
-  const getFilter = useCallback(
-    (key: string): string[] => {
-      const val = activeSearchParams?.get(key);
-      if (!val) return [];
-      return val
-        .split('.')
-        .map((v: string) => v.trim())
-        .filter(Boolean);
-    },
-    [activeSearchParams]
-  );
-
-  const isFiltered = useMemo(() => {
-    if (searchValue.trim().length > 0) return true;
-    for (const col of filterableColumns) {
-      const val = activeSearchParams?.get(col.id);
-      if (val && val.trim().length > 0) return true;
-    }
-    for (const col of searchableColumns) {
-      const val = activeSearchParams?.get(col.id);
-      if (val && val.trim().length > 0) return true;
-    }
-    return false;
-  }, [activeSearchParams, filterableColumns, searchableColumns, searchValue]);
+  const [isPending, startTransition] = React.useTransition();
+  const [resetEpoch, setResetEpoch] = React.useState(0);
 
   // Column visibility local state
-  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() => new Set());
+  const [visibleColumns, setVisibleColumns] = React.useState<Set<string>>(() => new Set());
 
-  // URL query builder: builds from current committed parameters (BR-UI-01: single source of truth)
-  const createQueryString = useCallback(
-    (params: Record<string, string | number | null | undefined>) => {
-      const newSearchParams = new URLSearchParams(committedParams);
-
-      for (const [key, value] of Object.entries(params)) {
-        if (value === null || value === undefined || value === '') {
-          newSearchParams.delete(key);
-        } else {
-          newSearchParams.set(key, String(value));
-        }
-      }
-
-      return newSearchParams.toString();
-    },
-    [committedParams]
+  // Single source of truth for every table URL parameter (BR-UI-01): one nuqs
+  // useQueryStates holding page, per_page, sort, search and every facet column.
+  const parsers = React.useMemo(
+    () =>
+      ({
+        [PAGE_KEY]: parseAsInteger.withDefault(1),
+        [PER_PAGE_KEY]: parseAsInteger.withDefault(defaultPageSize),
+        [SORT_KEY]: sortParamParser,
+        [SEARCH_KEY]: parseAsString.withDefault(''),
+        ...Object.fromEntries(
+          filterableColumns.map((col) => [
+            col.id,
+            filterValuesParser.withOptions({ history: 'replace' }).withDefault([]),
+          ])
+        ),
+        ...Object.fromEntries(
+          searchableColumns.map((col) => [col.id, filterValuesParser.withDefault([])])
+        ),
+      }) as UseQueryStatesKeysMap,
+    [defaultPageSize, filterableColumns, searchableColumns]
   );
 
-  const navigate = useCallback(
-    (queryString: string) => {
-      const targetUrl = queryString ? `${pathname || ''}?${queryString}` : pathname || '';
-      if (onNavigate) {
-        onNavigate(targetUrl);
-        return;
-      }
-      if (router) {
-        try {
-          startTransition(() => {
-            router.push(targetUrl);
-          });
-        } catch {
-          router.push(targetUrl);
-        }
-      }
-    },
-    [onNavigate, pathname, router]
+  // Server-driven table: shallow: false so every URL change reruns the server page.
+  const [state, setTableState] = useQueryStates(parsers, {
+    shallow: false,
+    history: 'push',
+    startTransition,
+  });
+
+  const page: number = state[PAGE_KEY] ?? 1;
+  const perPage: number = state[PER_PAGE_KEY] ?? defaultPageSize;
+
+  const sort = React.useMemo<ColumnSort | null>(
+    () => state[SORT_KEY] ?? defaultSort ?? null,
+    [state, defaultSort]
   );
 
-  const setPagination = useCallback(
+  const searchValue: string = state[SEARCH_KEY] ?? '';
+
+  const filters = React.useMemo(() => {
+    const result: Record<string, string[]> = {};
+    for (const col of filterableColumns) {
+      result[col.id] = Array.isArray(state[col.id]) ? state[col.id] : [];
+    }
+    return result;
+  }, [filterableColumns, state]);
+
+  const getFilter = React.useCallback(
+    (key: string): string[] => {
+      const value = state[key];
+      if (Array.isArray(value)) return value;
+      if (typeof value === 'string') return parseFilterValues(value);
+      return [];
+    },
+    [state]
+  );
+
+  const isFiltered = React.useMemo(() => {
+    if (searchValue.trim().length > 0) return true;
+    for (const col of [...filterableColumns, ...searchableColumns]) {
+      if (getFilter(col.id).length > 0) return true;
+    }
+    return false;
+  }, [filterableColumns, getFilter, searchableColumns, searchValue]);
+
+  // Every write is a functional partial patch of the single nuqs state: only the
+  // keys touched by the action are queued, so successive updates in one tick
+  // compose instead of clobbering each other (no committed-snapshot builder).
+  const setPagination = React.useCallback(
     (newPage: number, newPageSize?: number) => {
-      const updates: Record<string, string | number | null> = {
-        page: newPage <= 1 ? null : newPage,
-      };
-      if (newPageSize !== undefined) {
-        updates.per_page = newPageSize === defaultPageSize ? null : newPageSize;
-      }
-      const qs = createQueryString(updates);
-      navigate(qs);
+      setTableState(() => ({
+        [PAGE_KEY]: newPage <= 1 ? null : newPage,
+        ...(newPageSize !== undefined ? { [PER_PAGE_KEY]: newPageSize } : {}),
+      }));
     },
-    [createQueryString, defaultPageSize, navigate]
+    [setTableState]
   );
 
-  const setSort = useCallback(
+  const setSort = React.useCallback(
     (columnId: string, desc?: boolean) => {
-      let sortStr: string | null = null;
-      if (desc !== undefined) {
-        sortStr = `${columnId}.${desc ? 'desc' : 'asc'}`;
-      } else if (sort?.id === columnId) {
-        if (!sort.desc) {
-          sortStr = `${columnId}.desc`;
+      setTableState((prev) => {
+        const current = prev[SORT_KEY] ?? defaultSort ?? null;
+        let nextSort: ColumnSort | null;
+        if (desc !== undefined) {
+          nextSort = { id: columnId, desc };
+        } else if (current?.id === columnId) {
+          nextSort = current.desc ? null : { id: columnId, desc: true };
         } else {
-          sortStr = null;
+          nextSort = { id: columnId, desc: false };
         }
-      } else {
-        sortStr = `${columnId}.asc`;
-      }
-
-      const qs = createQueryString({
-        sort: sortStr,
-        page: null,
+        return { [SORT_KEY]: nextSort, [PAGE_KEY]: null };
       });
-      navigate(qs);
     },
-    [createQueryString, navigate, sort]
+    [defaultSort, setTableState]
   );
 
-  const setSearch = useCallback(
+  const setSearch = React.useCallback(
     (val: string | null) => {
       const queryVal = val !== null && val !== undefined && val.length > 0 ? val : null;
-      const qs = createQueryString({
-        search: queryVal,
-        page: null,
-      });
-      navigate(qs);
+      setTableState(() => ({ [SEARCH_KEY]: queryVal, [PAGE_KEY]: null }));
     },
-    [createQueryString, navigate]
+    [setTableState]
   );
 
-  const setFilter = useCallback(
+  const setFilter = React.useCallback(
     (key: string, values: string[] | string | null) => {
-      let valueStr: string | null = null;
-      if (Array.isArray(values)) {
-        const nonEmpties = values.filter(Boolean);
-        valueStr = nonEmpties.length > 0 ? nonEmpties.join('.') : null;
-      } else if (values) {
-        valueStr = values.trim().length > 0 ? values.trim() : null;
-      }
-
-      const qs = createQueryString({
-        [key]: valueStr,
-        page: null,
-      });
-      navigate(qs);
+      const nextValues = Array.isArray(values) ? values.filter(Boolean) : parseFilterValues(values);
+      setTableState(() => ({
+        [key]: nextValues.length > 0 ? nextValues : null,
+        [PAGE_KEY]: null,
+      }));
     },
-    [createQueryString, navigate]
+    [setTableState]
   );
 
-  const resetFilters = useCallback(() => {
+  const resetFilters = React.useCallback(() => {
     setResetEpoch((epoch) => epoch + 1);
-    const keysToRemove: Record<string, null> = {
-      page: null,
-      sort: null,
-      search: null,
-    };
-    filterableColumns.forEach((col) => {
-      keysToRemove[col.id] = null;
+    setTableState(() => {
+      const cleared: Record<string, null> = {
+        [PAGE_KEY]: null,
+        [SORT_KEY]: null,
+        [SEARCH_KEY]: null,
+      };
+      for (const col of [...filterableColumns, ...searchableColumns]) {
+        cleared[col.id] = null;
+      }
+      return cleared;
     });
-    searchableColumns.forEach((col) => {
-      keysToRemove[col.id] = null;
-    });
-    const qs = createQueryString(keysToRemove);
-    navigate(qs);
-  }, [createQueryString, filterableColumns, navigate, searchableColumns]);
+  }, [filterableColumns, searchableColumns, setTableState]);
 
   return {
     pageIndex: page,
@@ -283,7 +203,6 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
     setSort,
     setFilter,
     resetFilters,
-    createQueryString,
     isPending,
     resetEpoch,
   };
