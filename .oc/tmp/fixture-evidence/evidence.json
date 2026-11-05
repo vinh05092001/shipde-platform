@@ -18,8 +18,8 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:08:14.370Z",
-          "elapsedMs": 2070
+          "observedAt": "2026-11-05T00:50:43.038Z",
+          "elapsedMs": 3062
         }
       ],
       "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::internlm::xkiro::internlm::intern-latest"
@@ -41,8 +41,8 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:08:14.370Z",
-          "elapsedMs": 2070
+          "observedAt": "2026-11-05T00:50:43.038Z",
+          "elapsedMs": 3062
         }
       ],
       "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::internlm::xkiro::internlm::intern-latest"
@@ -64,7 +64,7 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:08:14.370Z",
+          "observedAt": "2026-11-05T00:50:43.038Z",
           "elapsedMs": 659
         }
       ],
@@ -87,7 +87,7 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:08:14.370Z",
+          "observedAt": "2026-11-05T00:50:43.038Z",
           "elapsedMs": 659
         }
       ],
@@ -110,8 +110,8 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:08:14.370Z",
-          "elapsedMs": 1008
+          "observedAt": "2026-11-05T00:50:43.038Z",
+          "elapsedMs": 2443
         }
       ],
       "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::amd-radeon::xkiro::amd-radeon::Qwen3.8-Flash-Next"
@@ -133,8 +133,8 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:08:14.370Z",
-          "elapsedMs": 1008
+          "observedAt": "2026-11-05T00:50:43.038Z",
+          "elapsedMs": 2443
         }
       ],
       "candidateKey": "paseo::http://127.0.0.1:20128/v1::9router::amd-radeon::xkiro::amd-radeon::Qwen3.8-Flash-Next"
@@ -156,8 +156,8 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:09:17.529Z",
-          "elapsedMs": 1662
+          "observedAt": "2026-11-05T00:51:56.894Z",
+          "elapsedMs": 2209
         }
       ],
       "candidateKey": "direct-http::https://chat.intern-ai.org.cn/api/v1::internlm::internlm::*::internlm::intern-latest"
@@ -179,8 +179,8 @@
           "status": "passed",
           "level": 1,
           "proofLevel": "API_PASS",
-          "observedAt": "2026-11-04T23:09:56.989Z",
-          "elapsedMs": 1453
+          "observedAt": "2026-11-05T00:53:45.199Z",
+          "elapsedMs": 1463
         }
       ],
       "candidateKey": "direct-http::https://developer.amd.com.cn/radeon/api/v1::amd-radeon::amd-radeon::*::amd-radeon::Qwen3.8-Flash-Next"

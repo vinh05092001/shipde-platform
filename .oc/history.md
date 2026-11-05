@@ -180,3 +180,86 @@ env:
 Required application checks did not pass: failure
 ##[error]Process completed with exit code 1.
 ```
+
+## Round 121 review (pl-task-ai-166-121, writer was opencode:ninerouter/kgw/stealth/glyph-cluster)
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: 5cc02ba6dd873e8c26faff880cc9ed75263cdd4f
+
+1. **P1 — CI failing:** application-gate, contract, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### contract (job 126934018747) — failing log lines
+```
+  Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+##[error]Process completed with exit code 1.
+```
+
+### current-application (job 126934100056) — failing log lines
+```
+ - tools/ai-brain/test/task-ai-166-refresh.test.js
+ - tools/ai-brain/test/task-ai-166-review.test.js
+ - tools/ai-brain/test/task-ai-166-runtime.test.js
+❌ PHÁT HIỆN 4 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+ - .oc/context-pack.md
+ - .oc/context-pack.md.manifest.json
+ - .oc/pack-spec.json
+ - .oc/task.md
+Chạy "npx prettier --write <file>" để sửa định dạng các tệp trên.
+[ELIFECYCLE] Command failed with exit code 1.
+##[error]Process completed with exit code 1.
+```
+
+### application-gate (job 126935116064) — failing log lines
+```
+env:
+  DETECT_RESULT: success
+  APPLICATION: true
+  APPLICATION_RESULT: failure
+Required application checks did not pass: failure
+##[error]Process completed with exit code 1.
+```
+
+## Round 122 review (pl-task-ai-166-122, writer was opencode:ninerouter/kgw/dots-studio/dots-3-note-preview:free)
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: e6d5db2cfbb943240d98134fd08e784d78383a45
+
+1. **P1 — CI failing:** application-gate, contract, current-application. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### contract (job 126952446340) — failing log lines
+```
+  Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.16/x64
+  Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.16/x64
+  LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.16/x64/lib
+Pull Request contract validation failed:
+- PR body still contains required template placeholders
+##[error]Process completed with exit code 1.
+```
+
+### current-application (job 126952514234) — failing log lines
+```
+ - tools/ai-brain/test/task-ai-166-refresh.test.js
+ - tools/ai-brain/test/task-ai-166-review.test.js
+ - tools/ai-brain/test/task-ai-166-runtime.test.js
+❌ PHÁT HIỆN 5 TỆP TIN CHƯA ĐẠT CHUẨN ĐỊNH DẠNG PRETTIER:
+ - .oc/context-pack.md
+ - .oc/context-pack.md.manifest.json
+--
+ - .oc/pr-body.md
+ - .oc/task.md
+Chạy "npx prettier --write <file>" để sửa định dạng các tệp trên.
+[ELIFECYCLE] Command failed with exit code 1.
+##[error]Process completed with exit code 1.
+```
+
+### application-gate (job 126953434495) — failing log lines
+```
+env:
+  DETECT_RESULT: success
+  APPLICATION: true
+  APPLICATION_RESULT: failure
+Required application checks did not pass: failure
+##[error]Process completed with exit code 1.
+```

@@ -1,7 +1,13 @@
 {
   "files": [
-    ".oc/pr-body-remote.md",
-    "AGENTS.md"
+    ".oc/context-pack.md",
+    ".oc/context-pack.md.manifest.json",
+    ".oc/pr-body.md",
+    ".oc/task.md",
+    "AGENTS.md",
+    "tools/ai-brain/test/task-ai-166-refresh.test.js",
+    "tools/ai-brain/test/task-ai-166-review.test.js",
+    "tools/ai-brain/test/task-ai-166-runtime.test.js"
   ],
-  "createdAt": "2026-11-04T23:01:24.715Z"
+  "createdAt": "2026-11-05T00:46:12.227Z"
 }

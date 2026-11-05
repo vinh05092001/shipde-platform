@@ -125,6 +125,16 @@ The earlier API failure `OpenAPI must declare /api/v1 server mount point` came f
 | Audit/PII                  | Log, review-history and metrics masking tests cover nested JSON, incomplete quotes, chunked output, standalone credentials, email and quota aggregate privacy         |
 | UI states                  | Product UI N/A. CLI wait/error/refusal/PASS/STUCK paths covered; review PASS does not mark a PR merged                                                                |
 
+## Verification — file-target split round (2026-11-05)
+
+This round reduces the changed surfaces to small files (operator instruction: file targets only; no new features, no review fixes).
+
+- `node --test tools/ai-brain/test/task-ai-166-*.test.js` — **27 passed, 0 failed, 0 skipped**, exit 0. One test per acceptance row AC-166-01..09; per-finding and duplicate cases deleted.
+- `npx prettier --check <changed tools/ai-brain/*.js>` — PASS, "All matched files use Prettier code style!".
+- Split entry modules re-export the moved code without behavior change: `coordinator.js` 156 lines, `coordinator-runtime.js` 108 lines, plus `coordinator-{metrics,policy,pool-writer,quota-state,text,tick-core,tick-review}.js` and `coordinator-runtime-{core,git,launch,log,ops}.js`, all <=300 lines.
+- Split tests: `task-ai-166-refresh.test.js` 156, `task-ai-166-review.test.js` 220, `task-ai-166-runtime.test.js` 262 lines, all <=300.
+- `git diff --check origin/main...HEAD` — **PASS, exit 0**. Trailing whitespace removed from orchestration artifacts.
+
 ## Documentation and traceability
 
 - The Work Item and TASK-AI-166 toolchain section describe the final boundaries and record both supplied review rounds.
@@ -152,5 +162,8 @@ Known limitations:
 - Latest supplied verdict: **CHANGES_REQUIRED**, round 4, `df63795e5ea10091ade7f94254f6ca006df25513`; earlier round 3 reviewed `4d708d736fd27508fbd08ab1191fabee9e068b9b`.
 - This is the author's working-tree repair and self-check, not an independent PASS. No new commit, push, PR merge or remote CI success is claimed.
 - Coordinator handoff: complete the outstanding checks, exclude `.oc/`, `.serena/` and `.oc-codex-task.md`, and commit `[TASK-AI-166] Address review: preserve discovery and independent publication` through installed hooks. Obtain a fresh different-family review of the resulting exact SHA.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+Slice A = this PR; Slice B = none
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
