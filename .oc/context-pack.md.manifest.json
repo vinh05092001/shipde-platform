@@ -1,8 +1,0 @@
-{
-  "files": [
-    "AGENTS.md",
-    "scripts/ai/research.mjs",
-    "scripts/ai/test/fixtures/agent-reach.mjs"
-  ],
-  "createdAt": "2026-11-04T23:11:09.222Z"
-}
