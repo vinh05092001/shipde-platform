@@ -326,13 +326,13 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
     const candidatesApi = require('../candidates');
     fs.writeFileSync(
       path.join(accDir, 'models-out.txt'),
-      'gemini-2.5-pro\nunknown-mystery-model\nmystery-omega-model\nag/gemini-unmapped-custom\n'
+      'gemini-2.5-pro\nunknown-mystery-model\nargon-mystery-model\nag/gemini-unmapped-custom\n'
     );
     const catalog = [
       'gemini-2.5-pro',
       'gemini-2.5-flash',
       'unknown-mystery-model',
-      'mystery-omega-model',
+      'argon-mystery-model',
       'ag/gemini-unmapped-custom',
     ];
     const rejections = [];
@@ -353,7 +353,7 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
               'gemini-2.5-pro',
               'gemini-2.5-flash',
               'unknown-mystery-model',
-              'mystery-omega-model',
+              'argon-mystery-model',
             ],
           },
         ],
@@ -377,9 +377,9 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
       'must not emit unknown family model even when listed in models-out.txt inventory'
     );
     assert.equal(
-      emittedModels.includes('mystery-omega-model'),
+      emittedModels.includes('argon-mystery-model'),
       false,
-      'must not emit unknown family model with an unknown substring even when listed in models-out.txt'
+      'must not emit unknown family model bearing argon substring even when listed in models-out.txt'
     );
     assert.equal(
       emittedModels.includes('ag/gemini-unmapped-custom'),
@@ -399,15 +399,15 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
       'unknown-mystery-model must be rejected for UNKNOWN_MODEL_FAMILY from family classification'
     );
 
-    const argonRejection = rejections.find((r) => r.modelId === 'mystery-omega-model');
+    const argonRejection = rejections.find((r) => r.modelId === 'argon-mystery-model');
     assert.ok(
       argonRejection,
-      'must record candidate generation rejection specifically for the unknown-family substring model'
+      'must record candidate generation rejection specifically for substring-bearing argon-mystery-model'
     );
     assert.equal(
       argonRejection.reasonCode,
       'UNKNOWN_MODEL_FAMILY',
-      'mystery-omega-model must pass ID mapping and be rejected for UNKNOWN_MODEL_FAMILY'
+      'argon-mystery-model must pass ID mapping and be rejected for UNKNOWN_MODEL_FAMILY'
     );
 
     const unmappedRejection = rejections.find((r) => r.modelId === 'gemini-unmapped-custom');
@@ -435,7 +435,7 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
     const rejectionsDirect = [];
     candidatesApi.poolAccountCandidates({
       runsDir: tempDir,
-      models: ['gemini-2.5-pro', 'unknown-mystery-model', 'mystery-omega-model'],
+      models: ['gemini-2.5-pro', 'unknown-mystery-model', 'argon-mystery-model'],
       discoverPool: false,
       candidateGenerationRejections: rejectionsDirect,
       registry: {
@@ -460,7 +460,7 @@ test('TASK-AI-142 Finding 7: readQuotaText does not treat model name Argon as qu
       'candidate reaching family classification directly must be rejected with UNKNOWN_MODEL_FAMILY'
     );
 
-    const directArgonRej = rejectionsDirect.find((r) => r.modelId === 'mystery-omega-model');
+    const directArgonRej = rejectionsDirect.find((r) => r.modelId === 'argon-mystery-model');
     assert.ok(
       directArgonRej,
       'rejection record must be created specifically for substring-bearing model under direct classification'

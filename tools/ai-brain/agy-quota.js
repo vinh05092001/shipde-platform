@@ -34,12 +34,10 @@ const { readIdentity } = require('./agy-identity');
 const Family = {
   GEMINI: 'gemini',
   CLAUDE_GPT: 'claude-gpt',
-  ARGON: 'argon',
 };
 
 function familyOf(model) {
   const m = String(model || '').toLowerCase();
-  if (m.includes('argon')) return 'argon';
   if (m.includes('gemini')) return Family.GEMINI;
   if (m.includes('claude') || m.includes('gpt')) return Family.CLAUDE_GPT;
   return null;
@@ -56,10 +54,8 @@ function mapFamily(name) {
   const s = String(name || '')
     .trim()
     .toLowerCase();
-  if (s.includes('argon')) return 'argon';
   if (s.includes('gemini')) return Family.GEMINI;
-  if (s.includes('claude') || s.includes('gpt') || s.includes('3p') || s.includes('external'))
-    return Family.CLAUDE_GPT;
+  if (s.includes('claude') || s.includes('gpt') || s.includes('3p')) return Family.CLAUDE_GPT;
   return null;
 }
 
@@ -101,13 +97,7 @@ function parseTsvRows(text) {
     }
 
     if (cols && cols.length >= 3) {
-      const colName = cols[0];
-      const s = colName.toLowerCase();
-      const isArgon = /argon/i.test(s);
-      const isExternal =
-        s.includes('claude') || s.includes('gpt') || s.includes('3p') || s.includes('external');
-      const group = isArgon ? 'argon' : isExternal ? 'external' : 'gemini';
-      const family = isArgon ? 'argon' : mapFamily(colName);
+      const family = mapFamily(cols[0]);
       const window = mapWindow(cols[1]);
       if (!family || !window) continue;
 
@@ -122,7 +112,6 @@ function parseTsvRows(text) {
       const resetsAt = resetMatch ? resetMatch[0] : null;
 
       rows.push({
-        group,
         family,
         window,
         remainingPercent,
@@ -156,28 +145,9 @@ function parseFixtureGroups(doc) {
   const rows = [];
   const groups = Array.isArray(doc.groups) ? doc.groups : Array.isArray(doc) ? doc : [];
   for (const group of groups) {
-    const gid = String(group.id || '').toLowerCase();
-    const gname = String(group.name || '');
-    const isArgon = gid === 'argon' || /argon/i.test(gname);
-    const isExternal =
-      gid === 'external' || /claude|gpt|3p/i.test(gname) || /claude|gpt|3p/i.test(gid);
-    const isGemini = gid === 'gemini' || /gemini/i.test(gname);
-    const groupName = isArgon
-      ? 'argon'
-      : isExternal
-        ? 'external'
-        : isGemini
-          ? 'gemini'
-          : group.id || gname;
-    const family = isArgon
-      ? 'argon'
-      : mapFamily(group.id || group.family || group.name) || group.family || group.id || groupName;
+    const family =
+      mapFamily(group.id || group.family || group.name) || group.id || group.family || group.name;
     if (!family) continue;
-    const groupModels = Array.isArray(group.models)
-      ? group.models.map((m) =>
-          typeof m === 'string' ? m.trim() : String(m?.id || m?.modelId || m || '').trim()
-        )
-      : undefined;
     for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
       const windowValue = group[key];
       if (!windowValue || typeof windowValue !== 'object') continue;
@@ -200,9 +170,7 @@ function parseFixtureGroups(doc) {
       const known = isFinite || Boolean(windowValue.disabled);
 
       rows.push({
-        group: group.id || groupName,
         family,
-        ...(groupModels ? { models: groupModels } : {}),
         window: mapWindow(key) || key,
         remainingPercent,
         known,

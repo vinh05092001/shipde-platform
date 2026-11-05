@@ -2601,6 +2601,4 @@ module.exports = {
   stallAssessment,
   reportDispatchOutcome,
   runProfileDispatch,
-  selectOptimalRoute: require('./unified-selector').selectOptimalRoute,
-  UnifiedRouteSelector: require('./unified-selector').UnifiedRouteSelector,
 };
