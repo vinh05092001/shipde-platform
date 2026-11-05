@@ -17,6 +17,7 @@ import { UsersModule } from './users/users.module';
 import { ShopsModule } from './shops/shops.module';
 import { BranchesModule } from './branches/branches.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
+import { ExportsModule } from './exports/exports.module';
 import { OnboardingModule } from './onboarding/onboarding.module';
 import { SearchModule } from './search/search.module';
 import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
@@ -31,6 +32,7 @@ import { CarrierCatalogModule } from './carrier-catalog/carrier-catalog.module';
     ShopsModule,
     BranchesModule,
     WarehousesModule,
+    ExportsModule,
     OnboardingModule,
     SearchModule,
     CarrierCatalogModule,
