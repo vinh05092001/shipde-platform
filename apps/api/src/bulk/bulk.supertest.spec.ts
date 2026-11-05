@@ -3,6 +3,7 @@ import * as assert from 'node:assert';
 import { randomUUID, createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { test } from 'node:test';
 import { Test, TestingModule } from '@nestjs/testing';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
@@ -50,10 +51,6 @@ async function runBulkSupertestSuite() {
     }
   }
 
-  const databaseUrl =
-    process.env.DATABASE_URL ||
-    'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
-
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
@@ -66,15 +63,8 @@ async function runBulkSupertestSuite() {
 
   const dbStatus = await prisma.checkReadiness();
   if (dbStatus !== 'up') {
-    if (process.env.CI) {
-      throw new Error(`Database must be reachable in CI environment at ${databaseUrl}`);
-    }
-    console.warn(
-      `⚠️ PostgreSQL is not reachable at ${databaseUrl}. Skipping live Bulk Actions Supertest tests (run 'pnpm infra:up' to enable).`
-    );
     await app.close();
-    console.log('🎉 Bulk Actions Supertest suite skipped offline safely!');
-    return;
+    throw new Error('PostgreSQL is required for the bulk HTTP integration suite; no offline skip.');
   }
 
   await app.get(RbacService).ensurePlatformSeed();
@@ -632,7 +622,7 @@ async function runBulkSupertestSuite() {
     const scopeExportPayload = {
       entity_type: 'users',
       action: 'export_csv',
-      ids: [targetUser1Id, targetUser2Id],
+      ids: [targetUser1Id.toUpperCase(), targetUser2Id.toUpperCase()],
     };
     const scopeExport = await request(app.getHttpServer())
       .post('/api/v1/bulk-actions')
@@ -642,6 +632,7 @@ async function runBulkSupertestSuite() {
       .expect(200);
     assert.strictEqual(scopeExport.body.data.success_count, 2);
     assert.ok(scopeExport.body.data.export_payload.includes(privateCsvFragment));
+    assert.deepStrictEqual(scopeExport.body.data.succeeded_ids, [targetUser1Id, targetUser2Id]);
 
     for (const targetScopes of [
       { store_scopes: [], warehouse_scopes: ['wh-south'] },
@@ -1091,7 +1082,7 @@ async function runBulkSupertestSuite() {
   }
 }
 
-runBulkSupertestSuite().catch((err) => {
-  console.error('❌ Bulk actions supertest suite failed:', err);
-  process.exit(1);
-});
+test(
+  'FEAT-COM-03 HTTP acceptance, scope replay and savepoints with real PostgreSQL',
+  runBulkSupertestSuite
+);

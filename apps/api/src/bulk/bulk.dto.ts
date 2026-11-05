@@ -1,5 +1,5 @@
 import { HttpStatus } from '@nestjs/common';
-import { BulkEntityType, BulkActionType, BulkActionRequest } from '@shipde/contracts';
+import { BulkEntityType, BulkActionType } from '@shipde/contracts';
 import { CanonicalApiException } from '../auth/auth.service';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -17,6 +17,34 @@ export interface ValidatedBulkActionDto {
   };
   confirm?: boolean;
   idempotency_key?: string;
+}
+
+/** Keys are opaque, control-free strings bounded by bulk_action_batches VARCHAR(255). */
+export function validateBulkIdempotencyKey(
+  value: unknown,
+  field = 'idempotency_key'
+): string | undefined {
+  if (value === undefined) return undefined;
+  const key = typeof value === 'string' ? value.trim() : '';
+  const code =
+    typeof value !== 'string'
+      ? 'INVALID_TYPE'
+      : [...key].length > 255
+        ? 'MAX_LENGTH_EXCEEDED'
+        : /[\u0000-\u001f\u007f-\u009f]/u.test(value)
+          ? 'INVALID_CHARACTERS'
+          : undefined;
+  if (code) {
+    throw new CanonicalApiException(
+      HttpStatus.BAD_REQUEST,
+      'VALIDATION_ERROR',
+      'Khóa idempotency không hợp lệ',
+      false,
+      'Sử dụng chuỗi tối đa 255 ký tự, không chứa ký tự điều khiển',
+      [{ field, code, message: 'Khóa phải là chuỗi tối đa 255 ký tự, không chứa ký tự điều khiển' }]
+    );
+  }
+  return key || undefined;
 }
 
 /**
@@ -156,20 +184,30 @@ export function validateBulkActionDto(input: unknown, maxItems: number): Validat
         });
       }
 
-      if (hasStoreScopes) {
-        validatedParams.store_scopes = (paramsObj.store_scopes as unknown[]).map((s) =>
-          String(s).trim()
-        );
-      }
-      if (hasWarehouseScopes) {
-        validatedParams.warehouse_scopes = (paramsObj.warehouse_scopes as unknown[]).map((w) =>
-          String(w).trim()
-        );
-      }
-      if (hasCarrierScopes) {
-        validatedParams.carrier_account_scopes = (
-          paramsObj.carrier_account_scopes as unknown[]
-        ).map((c) => String(c).trim());
+      for (const field of ['store_scopes', 'warehouse_scopes', 'carrier_account_scopes'] as const) {
+        const scopes = paramsObj[field];
+        if (scopes === undefined) continue;
+        if (!Array.isArray(scopes)) {
+          errors.push({
+            field: `params.${field}`,
+            code: 'INVALID_ARRAY',
+            message: 'Phạm vi phải là một mảng chuỗi',
+          });
+          continue;
+        }
+        const normalized: string[] = [];
+        for (const [index, scope] of scopes.entries()) {
+          if (typeof scope !== 'string' || !scope.trim()) {
+            errors.push({
+              field: `params.${field}[${index}]`,
+              code: 'INVALID_SCOPE',
+              message: 'Mỗi phạm vi phải là chuỗi không rỗng',
+            });
+          } else {
+            normalized.push(scope.trim());
+          }
+        }
+        validatedParams[field] = normalized;
       }
     }
 
@@ -200,18 +238,7 @@ export function validateBulkActionDto(input: unknown, maxItems: number): Validat
   }
 
   // 6. Idempotency key validation
-  let validatedIdempotencyKey: string | undefined = undefined;
-  if (raw.idempotency_key !== undefined) {
-    if (typeof raw.idempotency_key !== 'string') {
-      errors.push({
-        field: 'idempotency_key',
-        code: 'INVALID_TYPE',
-        message: 'idempotency_key phải là chuỗi ký tự',
-      });
-    } else {
-      validatedIdempotencyKey = raw.idempotency_key.trim();
-    }
-  }
+  const validatedIdempotencyKey = validateBulkIdempotencyKey(raw.idempotency_key);
 
   if (errors.length > 0) {
     throw new CanonicalApiException(
@@ -227,6 +254,8 @@ export function validateBulkActionDto(input: unknown, maxItems: number): Validat
   return {
     entity_type: (raw.entity_type as string).trim().toLowerCase() as BulkEntityType,
     action: normalizedAction as BulkActionType,
+    // Retain submitted spelling for verification of legacy persisted hashes.
+    // The service canonicalizes UUIDs before new hashing and execution deduplication.
     ids: (raw.ids as string[]).map((id) => id.trim()),
     params: validatedParams,
     confirm: raw.confirm === true,

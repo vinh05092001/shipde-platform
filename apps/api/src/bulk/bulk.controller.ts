@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { BulkService } from './bulk.service';
-import { validateBulkActionDto } from './bulk.dto';
+import { validateBulkActionDto, validateBulkIdempotencyKey } from './bulk.dto';
 import { SessionGuard } from '../session/session.guard';
 import { RbacSeedGuard } from '../rbac/rbac.guard';
 import { CanonicalExceptionFilter } from '../auth/canonical-exception.filter';
@@ -73,7 +73,10 @@ export class BulkController {
     const maxItems = resolveBulkActionMaxItems();
     const validatedDto = validateBulkActionDto(body, maxItems);
 
-    const effectiveIdempotencyKey = idempotencyKeyHeader || xIdempotencyKeyHeader;
+    // Validate every supplied source, even when another source takes precedence.
+    const headerKey = validateBulkIdempotencyKey(idempotencyKeyHeader, 'Idempotency-Key');
+    const aliasKey = validateBulkIdempotencyKey(xIdempotencyKeyHeader, 'x-idempotency-key');
+    const effectiveIdempotencyKey = headerKey || aliasKey;
 
     const result = await this.bulkService.executeBulkAction(
       actor.merchantId,

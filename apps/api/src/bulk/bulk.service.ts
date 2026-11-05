@@ -15,14 +15,17 @@ import {
 import { redactSensitiveData, resolveBulkActionMaxItems } from '@shipde/config';
 import { CanonicalApiException } from '../auth/auth.service';
 import { maskIdentifier } from '../invitations/invitations.service';
-import { ValidatedBulkActionDto } from './bulk.dto';
+import { ValidatedBulkActionDto, validateBulkIdempotencyKey } from './bulk.dto';
 
 /**
  * Escapes a cell value for RFC 4180 CSV compliance.
  */
 function escapeCsvCell(val: unknown): string {
   if (val === null || val === undefined) return '';
-  const str = String(val);
+  const raw = String(val);
+  // Quote spreadsheet formulas as text before RFC 4180 escaping. Also cover
+  // whitespace-prefixed formulas and cells beginning with tab/line breaks.
+  const str = /^(?:[\t\r\n]|\s*[=+\-@])/.test(raw) ? "'" + raw : raw;
   if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -60,8 +63,24 @@ function maskAuditMetadata(value: unknown): unknown {
   if (redacted && typeof redacted === 'object') {
     return Object.fromEntries(
       Object.entries(redacted).map(([key, entry]) => {
-        // Free-form reasons may contain opaque secrets that patterns cannot identify.
-        if (key === 'reason') return [key, '[REDACTED]'];
+        // Free-form identity/address/code fields can contain opaque PII or bank
+        // details of any type; pattern matching cannot make them safe for audit.
+        if (/reason|name|code|address|bank|account_number/i.test(key)) {
+          return [key, '[REDACTED]'];
+        }
+        if (key.endsWith('_scopes')) {
+          // Legacy scope codes are free-form and may themselves contain PII.
+          // Preserve only structural identifiers; never log the raw code text.
+          const scopes = Array.isArray(entry)
+            ? entry.map((scope) =>
+                typeof scope === 'string' &&
+                (scope === '*' || /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(scope))
+                  ? scope
+                  : '[REDACTED]'
+              )
+            : '[REDACTED]';
+          return [key, scopes];
+        }
         const original = (value as Record<string, unknown>)[key];
         // Keep the shared identifier mask for dedicated PII fields.
         const masked =
@@ -139,8 +158,10 @@ export class BulkService {
   /**
    * Computes a deterministic SHA-256 hash of the request content for idempotency validation.
    */
-  private computeRequestHash(dto: ValidatedBulkActionDto): string {
-    const sortedIds = [...dto.ids].sort();
+  private computeRequestHash(dto: ValidatedBulkActionDto, legacy = false): string {
+    const sortedIds = legacy
+      ? [...dto.ids].sort()
+      : [...new Set(dto.ids.map((id) => id.trim().toLowerCase()))].sort();
     const payload = JSON.stringify({
       entity_type: dto.entity_type,
       action: dto.action,
@@ -212,7 +233,6 @@ export class BulkService {
     const hasWildcardWarehouse = actorWarehouseScopes.includes('*');
 
     const authorizedResults: BulkActionItemResult[] = [];
-    const forbiddenIds = new Set<string>();
 
     for (const item of cachedData.results) {
       let isAllowed = false;
@@ -298,7 +318,6 @@ export class BulkService {
       if (isAllowed) {
         authorizedResults.push(item);
       } else {
-        forbiddenIds.add(item.id);
         authorizedResults.push({
           id: item.id,
           status: BulkItemStatus.FAILED,
@@ -308,10 +327,6 @@ export class BulkService {
           },
         });
       }
-    }
-
-    if (forbiddenIds.size === 0) {
-      return cachedData;
     }
 
     const succeededIds = authorizedResults
@@ -329,17 +344,21 @@ export class BulkService {
       // Filter at complete CSV record level (not physical lines) so a forbidden
       // row with a quoted multiline field cannot leak continuation fragments.
       const records = parseCsvRecords(sanitizedExportPayload);
+      const allowedIds = new Set(succeededIds.map((id) => id.trim().toLowerCase()));
       if (records.length > 0) {
         const filteredRecords = [records[0]];
         for (let i = 1; i < records.length; i++) {
           const record = records[i];
           if (record.cells.length === 1 && record.cells[0].trim() === '') continue;
-          const firstCol = (record.cells[0] || '').trim();
-          if (firstCol && !forbiddenIds.has(firstCol)) {
+          const firstCol = (record.cells[0] || '').trim().toLowerCase();
+          if (firstCol && allowedIds.has(firstCol)) {
             filteredRecords.push(record);
           }
         }
-        sanitizedExportPayload = filteredRecords.map((record) => record.raw).join('\r\n');
+        // Older cached exports also need formula-safe cells on disclosure.
+        sanitizedExportPayload = filteredRecords
+          .map((record) => record.cells.map(escapeCsvCell).join(','))
+          .join('\r\n');
       }
     }
 
@@ -370,10 +389,12 @@ export class BulkService {
     await this.assertActorEntityPermission(actor, dto.entity_type);
 
     // 2. Transaction with tenant serialization lock (PostgreSQL FOR NO KEY UPDATE)
-    const effectiveIdempotencyKey = (dto.idempotency_key || idempotencyKeyHeader || '').trim();
+    const bodyKey = validateBulkIdempotencyKey(dto.idempotency_key);
+    const headerKey = validateBulkIdempotencyKey(idempotencyKeyHeader, 'Idempotency-Key');
+    const effectiveIdempotencyKey = bodyKey || headerKey;
     const requestHash = this.computeRequestHash(dto);
     const batchId = randomUUID();
-    const uniqueIds = Array.from(new Set(dto.ids));
+    const uniqueIds = Array.from(new Set(dto.ids.map((id) => id.trim().toLowerCase())));
 
     return await this.prisma
       .$transaction(async (tx: any) => {
@@ -393,7 +414,13 @@ export class BulkService {
           });
 
           if (existingBatch) {
-            if (existingBatch.request_hash !== requestHash) {
+            // Previously stored hashes included UUID case and duplicate count.
+            // Accept an exact legacy payload match, then apply the same current
+            // scope checks; never infer equivalence from cached result contents.
+            if (
+              existingBatch.request_hash !== requestHash &&
+              existingBatch.request_hash !== this.computeRequestHash(dto, true)
+            ) {
               throw new CanonicalApiException(
                 HttpStatus.CONFLICT,
                 'IDEMPOTENCY_CONFLICT',

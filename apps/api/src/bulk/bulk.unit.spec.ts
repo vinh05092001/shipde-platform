@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
+import { createHash } from 'node:crypto';
 import { Test } from '@nestjs/testing';
 import type { ExecutionContext } from '@nestjs/common';
 import request from 'supertest';
@@ -157,7 +158,7 @@ function createMockPrismaService() {
     findFirst: async ({ where }: any) => {
       return (
         users.find((u) => {
-          if (where.id && u.id !== where.id) return false;
+          if (where.id && u.id.toLowerCase() !== where.id.toLowerCase()) return false;
           if (where.merchant_id && u.merchant_id !== where.merchant_id) return false;
           return true;
         }) || null
@@ -184,7 +185,7 @@ function createMockPrismaService() {
     findFirst: async ({ where }: any) => {
       return (
         branches.find((b) => {
-          if (where.id && b.id !== where.id) return false;
+          if (where.id && b.id.toLowerCase() !== where.id.toLowerCase()) return false;
           if (where.merchant_id && b.merchant_id !== where.merchant_id) return false;
           return true;
         }) || null
@@ -202,7 +203,7 @@ function createMockPrismaService() {
     findFirst: async ({ where }: any) => {
       return (
         warehouses.find((w) => {
-          if (where.id && w.id !== where.id) return false;
+          if (where.id && w.id.toLowerCase() !== where.id.toLowerCase()) return false;
           if (where.merchant_id && w.merchant_id !== where.merchant_id) return false;
           return true;
         }) || null
@@ -546,6 +547,408 @@ describe('FEAT-COM-03: Bulk Actions Unit Tests', () => {
   });
 
   describe('BulkService Operations', () => {
+    it('Review 2: HTTP uppercase UUID replay removes forbidden CSV records for every entity', async (t) => {
+      for (const entity of Object.values(BulkEntityType)) {
+        await t.test(entity, async () => {
+          const prisma = createMockPrismaService();
+          const rows = entity === 'users' ? prisma.users.slice(1, 3) : prisma[entity];
+          rows[0].id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+          rows[1].id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+          rows[1].name = rows[1].full_name = 'Private,\n"UPPERCASE-PRIVATE-FRAGMENT"';
+          const app = await createBulkTestApp(prisma, callerOwner);
+          try {
+            await app.init();
+            const body = {
+              entity_type: entity,
+              action: 'export_csv',
+              ids: rows.map((row) => row.id.toUpperCase()),
+              idempotency_key: 'uppercase-replay',
+            };
+            const first = await request(app.getHttpServer())
+              .post('/api/v1/bulk-actions')
+              .send(body)
+              .expect(200);
+            assert.strictEqual(first.body.data.success_count, 2);
+            assert.ok(first.body.data.export_payload.includes('UPPERCASE-PRIVATE-FRAGMENT'));
+            // Exercise older cached item IDs independently of request normalization.
+            prisma.batches[0].results.results[1].id = rows[1].id.toUpperCase();
+            prisma.users[0].store_scopes = entity === 'users' ? ['branch-north'] : [rows[0].id];
+            prisma.users[0].warehouse_scopes = entity === 'users' ? ['wh-north'] : [rows[0].id];
+            const replay = await request(app.getHttpServer())
+              .post('/api/v1/bulk-actions')
+              .send(body)
+              .expect(200);
+            assert.strictEqual(replay.body.data.success_count, 1);
+            assert.strictEqual(replay.body.data.failure_count, 1);
+            assert.strictEqual(replay.body.data.results[1].error.code, 'SCOPE_FORBIDDEN');
+            assert.strictEqual(replay.body.data.results[1].data, undefined);
+            assert.ok(!replay.body.data.export_payload.includes(rows[1].id));
+            assert.ok(!JSON.stringify(replay.body).includes('UPPERCASE-PRIVATE-FRAGMENT'));
+            assert.strictEqual(parseCsvRecords(replay.body.data.export_payload).length, 2);
+            assert.strictEqual(prisma.batches.length, 1);
+            assert.strictEqual(prisma.auditLogs.length, 0);
+          } finally {
+            await app.close();
+          }
+        });
+      }
+    });
+
+    it('Review 2: HTTP UUID case and duplicate IDs cannot duplicate mutations or change the request hash', async () => {
+      const prisma = createMockPrismaService();
+      const id = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
+      prisma.users[2].id = id;
+      const app = await createBulkTestApp(prisma, callerOwner);
+      try {
+        await app.init();
+        const body = {
+          entity_type: 'users',
+          action: 'activate',
+          ids: [id.toUpperCase(), id],
+          idempotency_key: 'uuid-dedupe',
+        };
+        const first = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send(body)
+          .expect(200);
+        assert.deepStrictEqual(first.body.data.succeeded_ids, [id]);
+        assert.strictEqual(first.body.data.total_count, 1);
+        const replay = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send({ ...body, ids: [id] })
+          .expect(200);
+        assert.deepStrictEqual(replay.body.data, first.body.data);
+        assert.strictEqual(prisma.auditLogs.length, 1);
+        assert.strictEqual(prisma.batches.length, 1);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('Review 2: HTTP identical legacy uppercase requests replay safely after canonical hashing', async () => {
+      const prisma = createMockPrismaService();
+      const id = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
+      prisma.users[2].id = id;
+      const app = await createBulkTestApp(prisma, callerOwner);
+      try {
+        await app.init();
+        const body = {
+          entity_type: 'users',
+          action: 'export_csv',
+          ids: [id.toUpperCase()],
+          idempotency_key: 'legacy-uppercase',
+        };
+        await request(app.getHttpServer()).post('/api/v1/bulk-actions').send(body).expect(200);
+        // The previous release hashed the original case and duplicate count.
+        prisma.batches[0].request_hash = createHash('sha256')
+          .update(
+            JSON.stringify({
+              entity_type: body.entity_type,
+              action: body.action,
+              ids: body.ids,
+              params: {},
+              confirm: false,
+            })
+          )
+          .digest('hex');
+        prisma.batches[0].results.results[0].id = id.toUpperCase();
+        prisma.users[0].store_scopes = [];
+        const replay = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send(body)
+          .expect(200);
+        assert.strictEqual(replay.body.data.results[0].error.code, 'SCOPE_FORBIDDEN');
+        assert.strictEqual(parseCsvRecords(replay.body.data.export_payload).length, 1);
+        const conflict = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send({ ...body, action: 'activate' })
+          .expect(409);
+        assert.strictEqual(conflict.body.error.code, 'IDEMPOTENCY_CONFLICT');
+        assert.strictEqual(prisma.batches.length, 1);
+        assert.strictEqual(prisma.auditLogs.length, 0);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('Review 11: HTTP malformed scope arrays reject before any transaction', async (t) => {
+      for (const field of ['store_scopes', 'warehouse_scopes', 'carrier_account_scopes']) {
+        for (const invalid of [
+          [null],
+          [{}],
+          [[]],
+          [42],
+          [true],
+          [''],
+          ['  '],
+          'branch-north',
+          null,
+        ]) {
+          await t.test(`${field}:${JSON.stringify(invalid)}`, async () => {
+            const prisma = createMockPrismaService();
+            let transactions = 0;
+            const transaction = prisma.$transaction;
+            prisma.$transaction = async (cb) => {
+              transactions++;
+              return transaction(cb);
+            };
+            const app = await createBulkTestApp(prisma, callerOwner);
+            try {
+              await app.init();
+              const before = JSON.stringify(prisma.users);
+              const response = await request(app.getHttpServer())
+                .post('/api/v1/bulk-actions')
+                .send({
+                  entity_type: 'users',
+                  action: 'assign_scopes',
+                  ids: [prisma.users[2].id],
+                  params: {
+                    store_scopes: ['branch-south'],
+                    warehouse_scopes: ['wh-south'],
+                    [field]: invalid,
+                  },
+                  idempotency_key: 'invalid-scope',
+                })
+                .expect(400);
+              assert.strictEqual(response.body.error.code, 'VALIDATION_ERROR');
+              assert.ok(
+                response.body.error.fields.some((error: { field: string }) =>
+                  error.field.startsWith(`params.${field}`)
+                )
+              );
+              assert.strictEqual(transactions, 0);
+              assert.strictEqual(JSON.stringify(prisma.users), before);
+              assert.strictEqual(prisma.batches.length, 0);
+              assert.strictEqual(prisma.auditLogs.length, 0);
+            } finally {
+              await app.close();
+            }
+          });
+        }
+      }
+    });
+
+    it('Review 12: HTTP invalid body and header idempotency keys reject before any transaction', async (t) => {
+      for (const source of ['body', 'Idempotency-Key', 'x-idempotency-key']) {
+        for (const key of [
+          'x'.repeat(256),
+          'bad\tkey',
+          ...(source === 'body' ? ['bad\u0000key', 123] : []),
+        ]) {
+          await t.test(
+            `${source}:${typeof key === 'string' ? key.length : 'non-string'}`,
+            async () => {
+              const prisma = createMockPrismaService();
+              let transactions = 0;
+              const transaction = prisma.$transaction;
+              prisma.$transaction = async (cb) => {
+                transactions++;
+                return transaction(cb);
+              };
+              const app = await createBulkTestApp(prisma, callerOwner);
+              try {
+                await app.init();
+                const body = {
+                  entity_type: 'users',
+                  action: 'activate',
+                  ids: [prisma.users[2].id],
+                  idempotency_key: source === 'body' ? key : 'valid-body-key',
+                };
+                const req = request(app.getHttpServer()).post('/api/v1/bulk-actions');
+                if (source !== 'body') req.set(source, key as string);
+                const response = await req.send(body).expect(400);
+                assert.strictEqual(response.body.error.code, 'VALIDATION_ERROR');
+                assert.strictEqual(transactions, 0);
+                assert.strictEqual(prisma.users[2].status, 'suspended');
+                assert.strictEqual(prisma.batches.length, 0);
+                assert.strictEqual(prisma.auditLogs.length, 0);
+              } finally {
+                await app.close();
+              }
+            }
+          );
+        }
+      }
+    });
+
+    it('Review 10: HTTP CSV neutralizes formulas in fresh exports and older cached payloads', async (t) => {
+      for (const entity of Object.values(BulkEntityType)) {
+        for (const value of [
+          '=HYPERLINK("https://example.invalid","x")',
+          '+1+1',
+          '-1+1',
+          '@SUM(1,2)',
+          '\t=1',
+          '\r=1',
+          '\n=1',
+          '  =1',
+        ]) {
+          await t.test(`${entity}:${JSON.stringify(value)}`, async () => {
+            const prisma = createMockPrismaService();
+            const target = entity === 'users' ? prisma.users[2] : prisma[entity][1];
+            for (const field of [
+              'full_name',
+              'name',
+              'code',
+              'address',
+              'address_line',
+              'contact_name',
+              'city',
+            ])
+              target[field] = value;
+            const app = await createBulkTestApp(prisma, callerOwner);
+            try {
+              await app.init();
+              const body = {
+                entity_type: entity,
+                action: 'export_csv',
+                ids: [target.id],
+                idempotency_key: 'safe-csv',
+              };
+              const first = await request(app.getHttpServer())
+                .post('/api/v1/bulk-actions')
+                .send(body)
+                .expect(200);
+              const records = parseCsvRecords(first.body.data.export_payload);
+              const index = records[0].cells.indexOf(entity === 'users' ? 'full_name' : 'name');
+              assert.strictEqual(records[1].cells[index], "'" + value);
+              assert.ok(!records[1].cells.includes(value));
+              // Cached exports written by the older implementation must also be safe.
+              prisma.batches[0].results.export_payload = `id,name\r\n${target.id},"${value.replace(/"/g, '""')}"`;
+              const replay = await request(app.getHttpServer())
+                .post('/api/v1/bulk-actions')
+                .send(body)
+                .expect(200);
+              assert.strictEqual(
+                parseCsvRecords(replay.body.data.export_payload)[1].cells[1],
+                "'" + value
+              );
+            } finally {
+              await app.close();
+            }
+          });
+        }
+      }
+    });
+
+    it('Review 7: HTTP audit masks opaque personal and financial values in metadata of any type', async (t) => {
+      for (const entity of ['branches', 'warehouses'] as const) {
+        for (const sensitive of [
+          'Opaque Person Address',
+          12345678901234,
+          { address: 'Private Address', bank_account: 12345678901234, token: 'test-only-secret' },
+          ['Private Name'],
+        ]) {
+          await t.test(`${entity}:${typeof sensitive}`, async () => {
+            const prisma = createMockPrismaService();
+            const target = prisma[entity][1];
+            target.name = sensitive;
+            target.code = sensitive;
+            const app = await createBulkTestApp(prisma, callerOwner);
+            try {
+              await app.init();
+              const response = await request(app.getHttpServer())
+                .post('/api/v1/bulk-actions')
+                .send({
+                  entity_type: entity,
+                  action: 'deactivate',
+                  ids: [target.id],
+                  confirm: true,
+                })
+                .expect(200);
+              assert.strictEqual(response.body.data.success_count, 1);
+              assert.strictEqual(prisma.auditLogs.length, 1);
+              const audit = prisma.auditLogs[0];
+              assert.strictEqual(audit.new_value.name, '[REDACTED]');
+              assert.strictEqual(audit.new_value.code, '[REDACTED]');
+              assert.strictEqual(
+                audit.new_value.status,
+                entity === 'branches' ? 'INACTIVE' : 'inactive'
+              );
+              assert.strictEqual(audit.merchant_id, callerOwner.merchantId);
+              assert.strictEqual(audit.user_id, callerOwner.userId);
+            } finally {
+              await app.close();
+            }
+          });
+        }
+      }
+    });
+
+    it('Review 7: HTTP scope audit retains identifiers but masks opaque names and account numbers', async (t) => {
+      for (const field of ['store_scopes', 'warehouse_scopes', 'carrier_account_scopes']) {
+        await t.test(field, async () => {
+          const prisma = createMockPrismaService();
+          const target = prisma.users[2];
+          target[field] = ['Private Legacy Scope'];
+          const uuid = 'abcdefab-cdef-4abc-8def-abcdefabcdef';
+          const scopes = ['*', uuid, 'Opaque Private Location', '12345678901234'];
+          const app = await createBulkTestApp(prisma, callerOwner);
+          try {
+            await app.init();
+            const response = await request(app.getHttpServer())
+              .post('/api/v1/bulk-actions')
+              .send({
+                entity_type: 'users',
+                action: 'assign_scopes',
+                ids: [target.id],
+                params: { [field]: scopes },
+              })
+              .expect(200);
+            assert.strictEqual(response.body.data.success_count, 1);
+            assert.deepStrictEqual(prisma.users[2][field], scopes);
+            assert.strictEqual(prisma.auditLogs.length, 1);
+            const audit = prisma.auditLogs[0];
+            assert.deepStrictEqual(audit.old_value[field], ['[REDACTED]']);
+            assert.deepStrictEqual(audit.new_value[field], ['*', uuid, '[REDACTED]', '[REDACTED]']);
+          } finally {
+            await app.close();
+          }
+        });
+      }
+    });
+
+    it('Review 4: HTTP omitted keys are independent; bounded opaque keys replay without repeated audits', async () => {
+      const prisma = createMockPrismaService();
+      const app = await createBulkTestApp(prisma, callerOwner);
+      try {
+        await app.init();
+        const body = {
+          entity_type: 'users',
+          action: 'deactivate',
+          ids: [prisma.users[2].id],
+          confirm: true,
+        };
+        const first = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send(body)
+          .expect(200);
+        const second = await request(app.getHttpServer())
+          .post('/api/v1/bulk-actions')
+          .send(body)
+          .expect(200);
+        assert.notStrictEqual(first.body.data.batch_id, second.body.data.batch_id);
+        assert.strictEqual(prisma.batches.length, 0);
+        for (const source of ['body', 'Idempotency-Key', 'x-idempotency-key']) {
+          const key = source + '-'.repeat(255 - source.length);
+          const send = () => {
+            const req = request(app.getHttpServer()).post('/api/v1/bulk-actions');
+            if (source !== 'body') req.set(source, key);
+            return req
+              .send({ ...body, ...(source === 'body' ? { idempotency_key: key } : {}) })
+              .expect(200);
+          };
+          const before = prisma.auditLogs.length;
+          const keyed = await send();
+          const replay = await send();
+          assert.deepStrictEqual(replay.body.data, keyed.body.data);
+          assert.strictEqual(prisma.auditLogs.length, before + 1);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
     it('AC-COM-03-01: activates valid suspended user and records truthful outcome & audit log', async () => {
       const mockPrisma = createMockPrismaService();
       const mockRbac = createMockRbacService();
