@@ -65,6 +65,7 @@
     "prisma": "^6.19.2",
     "tsx": "^4.21.0",
     "turbo": "^2.4.4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "repomix": "1.18.1"
   }
 }
