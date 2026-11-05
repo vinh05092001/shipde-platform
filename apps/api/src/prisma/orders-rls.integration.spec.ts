@@ -12,22 +12,20 @@ const DEFAULT_URL = 'postgresql://postgres:postgres@localhost:5433/shipde_dev?sc
 
 function getDbUrl(): string {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-  for (const f of ['.env', '../../.env'].map((p) => path.resolve(p))) {
-    if (!fs.existsSync(f)) continue;
-    for (const l of fs.readFileSync(f, 'utf8').split('\n')) {
-      const m = l.trim().match(/^([^#=]+)=(.*)$/);
-      if (m && !process.env[m[1].trim()])
-        process.env[m[1].trim()] = m[2].trim().replace(/^['"]|['"]$/g, '');
+  for (const p of ['.env', '../../.env']) {
+    const f = path.resolve(p);
+    if (fs.existsSync(f)) {
+      const match = fs.readFileSync(f, 'utf8').match(/^DATABASE_URL=(.*)$/m);
+      if (match) return match[1].trim().replace(/^['"]|['"]$/g, '');
     }
-    break;
   }
-  return process.env.DATABASE_URL || DEFAULT_URL;
+  return DEFAULT_URL;
 }
 
 function endpoint(raw: string): string {
   try {
     const u = new URL(raw);
-    return `${u.protocol}//${u.username ? u.username + '@' : ''}${u.host || 'localhost'}/${u.pathname.replace(/^\//, '') || 'shipde_dev'}`;
+    return `${u.protocol}//${u.host || 'localhost'}/${u.pathname.replace(/^\//, '') || 'shipde_dev'}`;
   } catch {
     return '[sanitized-db-endpoint]';
   }
@@ -89,26 +87,33 @@ async function main(): Promise<void> {
     Array<{ current_database: string }>
   >`SELECT current_database()`;
 
-  const cleanupRole = async () => {
-    for (const sql of [
-      `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`,
-      `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`,
-      `REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`,
-      `REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`,
-      `DROP ROLE IF EXISTS ${PROBE_ROLE}`,
-    ])
-      await admin.$executeRaw(Prisma.raw(sql)).catch(() => {});
+  const runSql = async (sqls: string[], ignoreErrors = false) => {
+    for (const sql of sqls) {
+      if (ignoreErrors) await admin.$executeRaw(Prisma.raw(sql)).catch(() => {});
+      else await admin.$executeRaw(Prisma.raw(sql));
+    }
   };
 
+  const cleanupRole = () =>
+    runSql(
+      [
+        `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${PROBE_ROLE}`,
+        `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM ${PROBE_ROLE}`,
+        `REVOKE ALL PRIVILEGES ON SCHEMA public FROM ${PROBE_ROLE}`,
+        `REVOKE ALL PRIVILEGES ON DATABASE "${currentDb}" FROM ${PROBE_ROLE}`,
+        `DROP ROLE IF EXISTS ${PROBE_ROLE}`,
+      ],
+      true
+    );
+
   await cleanupRole();
-  for (const sql of [
+  await runSql([
     `CREATE ROLE ${PROBE_ROLE} LOGIN PASSWORD '${probePassword}' NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`,
     `GRANT CONNECT ON DATABASE "${currentDb}" TO ${PROBE_ROLE}`,
     `GRANT USAGE ON SCHEMA public TO ${PROBE_ROLE}`,
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${PROBE_ROLE}`,
     `GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ${PROBE_ROLE}`,
-  ])
-    await admin.$executeRaw(Prisma.raw(sql));
+  ]);
 
   const probeUrl = new URL(dbUrl);
   probeUrl.username = PROBE_ROLE;
@@ -130,6 +135,7 @@ async function main(): Promise<void> {
     const orderA = await admin.order.create({ data: orderData(merchantA, `RLS-A-${suffix}`) });
     const orderB = await admin.order.create({ data: orderData(merchantB, `RLS-B-${suffix}`) });
 
+    // AC-AI-154-01: Tenant A queries findMany without merchant_id filter -> only Tenant A orders
     await runWithTenant(merchantA, async () => {
       const rows = await extended.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } });
       assert.deepEqual(
@@ -139,11 +145,13 @@ async function main(): Promise<void> {
     });
     console.log('PASS: AC-AI-154-01');
 
+    // AC-AI-154-02: Tenant A queries findUnique for Tenant B order -> returns null
     await runWithTenant(merchantA, async () => {
       assert.equal(await extended.order.findUnique({ where: { id: orderB.id } }), null);
     });
     console.log('PASS: AC-AI-154-02');
 
+    // AC-AI-154-03: Tenant A creates order with Tenant B merchant_id -> rejected by RLS WITH CHECK
     await assert.rejects(
       runWithTenant(merchantA, async () =>
         extended.order.create({ data: orderData(merchantB, `RLS-CROSS-${suffix}`) })
@@ -155,6 +163,7 @@ async function main(): Promise<void> {
     );
     console.log('PASS: AC-AI-154-03');
 
+    // AC-AI-154-04: Tenant A updates Tenant B order -> rejected and unchanged
     await assert.rejects(
       runWithTenant(merchantA, async () =>
         extended.order.update({ where: { id: orderB.id }, data: { recipient_province: 'SG' } })
@@ -166,18 +175,21 @@ async function main(): Promise<void> {
     );
     console.log('PASS: AC-AI-154-04');
 
+    // AC-AI-154-05: Tenant A creates order for own merchant_id -> succeeds
     const own = await runWithTenant(merchantA, async () =>
       extended.order.create({ data: orderData(merchantA, `RLS-OWN-${suffix}`) })
     );
     assert.equal(own.merchant_id, merchantA);
     console.log('PASS: AC-AI-154-05');
 
+    // AC-AI-154-06: Unscoped query succeeds under pilot fail-open
     const unscoped = await extended.order.findMany({
       where: { id: { in: [orderA.id, orderB.id] } },
     });
     assert.deepEqual(unscoped.map((r: any) => r.id).sort(), [orderA.id, orderB.id].sort());
     console.log('PASS: AC-AI-154-06');
 
+    // AC-AI-154-07: Interactive transaction applies tenant setting
     const inTx = (await runWithTenant(merchantA, async () =>
       extended.$transaction(async (tx: any) =>
         tx.order.findMany({ where: { id: { in: [orderA.id, orderB.id] } } })
@@ -189,6 +201,7 @@ async function main(): Promise<void> {
     );
     console.log('PASS: AC-AI-154-07');
 
+    // AC-AI-154-08: Malformed tenant context fails closed on uuid cast
     await assert.rejects(
       runWithTenant('not-a-uuid', async () =>
         extended.order.findMany({ where: { merchant_id: merchantA } })

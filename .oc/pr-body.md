@@ -10,7 +10,7 @@
 
 Slice A = this PR; Slice B = apps/api/src/search/search.service.ts, apps/api/src/search/search.unit.spec.ts
 
-- Slice A (this PR, 614 insertions versus `origin/main`, excluding `pnpm-lock.yaml`): production RLS wiring, migration, Work Item documentation, `tenant.middleware.unit.spec.ts` unit acceptance suite, and compact `orders-rls.integration.spec.ts` (<=300 lines) database RLS acceptance suite.
+- Slice A (this PR, 627 insertions versus `origin/main`, excluding `pnpm-lock.yaml`): production RLS wiring, migration, Work Item documentation, `tenant.middleware.unit.spec.ts` unit acceptance suite, and compact `orders-rls.integration.spec.ts` (<=300 lines) database RLS acceptance suite.
 - Slice B: `apps/api/src/search/search.service.ts`, `apps/api/src/search/search.unit.spec.ts` — search pipeline RLS integration and subsequent multi-table RLS policies under TASK-AI-154.
 
 ## Source requirements
@@ -52,11 +52,11 @@ Slice A = this PR; Slice B = apps/api/src/search/search.service.ts, apps/api/src
 | `pnpm --filter @shipde/api typecheck`                                                                       | PASS   | `tsc --noEmit`, exit 0                                                                                                                                                |
 | `pnpm --filter @shipde/api lint`                                                                            | PASS   | `eslint .`, exit 0                                                                                                                                                    |
 | `pnpm exec tsx --tsconfig apps/api/tsconfig.json --test apps/api/src/prisma/tenant.middleware.unit.spec.ts` | PASS   | 8/8 tests passed (verified 2026-11-05)                                                                                                                                |
-| `pnpm exec tsx --tsconfig apps/api/tsconfig.json apps/api/src/prisma/orders-rls.integration.spec.ts`        | PASS   | All 8 AC tests (AC-AI-154-01..08) passed (verified 2026-11-05). Spec file is 217 lines (<=300). One test per acceptance criterion; no per-finding or duplicate cases. |
+| `pnpm exec tsx --tsconfig apps/api/tsconfig.json apps/api/src/prisma/orders-rls.integration.spec.ts`        | PASS   | All 8 AC tests (AC-AI-154-01..08) passed (verified 2026-11-05). Spec file is 230 lines (<=300). One test per acceptance criterion; no per-finding or duplicate cases. |
 | `pnpm format:check`                                                                                         | PASS   | All changed files conform to Prettier (verified 2026-11-05)                                                                                                           |
 | `git diff --check origin/main`                                                                              | PASS   | 0 whitespace or conflict marker errors                                                                                                                                |
 | `node scripts/ai/check-no-hardcode.mjs`                                                                     | PASS   | 0 raw instances, baseline preserved (verified 2026-11-05)                                                                                                             |
-| `git diff --shortstat origin/main -- . ':!pnpm-lock.yaml' ':!.oc/'`                                         | PASS   | 614 insertions; all individual files <=300 lines (verified 2026-11-05)                                                                                                |
+| `git diff --shortstat origin/main -- . ':!pnpm-lock.yaml' ':!.oc/'`                                         | PASS   | 627 insertions; all individual files <=300 lines (verified 2026-11-05)                                                                                                |
 
 - [x] Lint and typecheck completed.
 - [x] All acceptance tests for AC-AI-154-01 through AC-AI-154-09 verified.
