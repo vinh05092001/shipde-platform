@@ -6,6 +6,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { runWithTenant } from './tenant-context';
 import { tenantRlsExtension } from './tenant-rls.extension';
 
+// TASK-AI-154: Orders RLS acceptance tests (AC-AI-154-01..08, one test per AC)
 const POLICY_NAME = 'orders_tenant_isolation';
 const DEFAULT_URL = 'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
 
