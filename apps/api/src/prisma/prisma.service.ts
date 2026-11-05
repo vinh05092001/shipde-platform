@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { tenantRlsExtension } from './tenant-rls.extension';
 
@@ -18,7 +18,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
    */
   readonly extended: ExtendedPrismaClient;
 
-  constructor(options?: ConstructorParameters<typeof PrismaClient>[0]) {
+  /**
+   * No constructor parameters: Nest must be able to instantiate this
+   * provider without any injection token, otherwise bootstrap fails with
+   * "Nest can't resolve dependencies of the PrismaService" and the HTTP
+   * server (including /health/live) never starts. Tests that need custom
+   * datasource options use `PrismaService.withOptions(...)`.
+   */
+  constructor(@Optional() options?: ConstructorParameters<typeof PrismaClient>[0]) {
     super(options);
     this.extended = createExtendedClient(this);
   }
