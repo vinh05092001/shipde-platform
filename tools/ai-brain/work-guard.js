@@ -391,14 +391,14 @@ class ProgressLedger {
         : 0;
     const consumedMs = u.ms !== undefined ? Math.max(suppliedMs, elapsedMs) : elapsedMs;
 
-    const overMs =
-      u.ms !== undefined
-        ? exceeded({ ms: (it.spent.ms || 0) + consumedMs }, this.limits.item)
-        : null;
-    if (overMs) return { ok: false, cause: Cause.TIME_EXHAUSTED, limit: overMs };
-
-    const overTokens =
-      u.tokens !== undefined ? exceeded(tokenSpend(it.spent), this.limits.item) : null;
+    let overTokens = null;
+    if (u.tokens !== undefined) {
+      const currentCounted = countedTokens(it.spent);
+      const projectedCounted = reserved
+        ? currentCounted - prevImputed + Number(u.tokens)
+        : currentCounted + Number(u.tokens);
+      overTokens = exceeded({ tokens: projectedCounted }, this.limits.item);
+    }
     if (overTokens) return { ok: false, cause: Cause.TOKENS_EXHAUSTED, limit: overTokens };
 
     for (const acc of [it.spent, s.goal]) {
