@@ -1,0 +1,21 @@
+{
+  "startedAt": "2026-11-02T10:34:06.632Z",
+  "finishedAt": "2026-11-02T10:36:02.639Z",
+  "ok": false,
+  "stages": [
+    {
+      "command": "priors refresh",
+      "exitCode": 1,
+      "error": "PRIORS_PUBLIC_FETCH_FAILED: artificial-analysis: EACCES"
+    },
+    {
+      "command": "discovery run",
+      "exitCode": 1,
+      "error": "DISCOVERY_INCOMPLETE: agy-gateway=catalogue unavailable at this moment; rqsty=catalogue unavailable at this moment; thb=catalogue unavailable at this moment; bai=catalogue request failed with http 0; aihubmix=catalogue request failed with http 0; thegrid=catalogue request failed with http 0; poolside=catalogue request failed with http 0; internlm=catalogue request failed with http 0; iteracompute=catalogue request failed with http 0; autoclaw=CLI harness resolves its models at call time; the registry declares no catalogue endpoint; agy-pool=CLI harness resolves its models at call time; the registry declares no catalogue endpoint; tencent=catalogue request failed with http 0; qwen=CLI harness resolves its models at call time; the registry declares no catalogue endpoint; cohere=catalogue request failed with http 0; baseten=catalogue request failed with http 0; inception=catalogue request failed with http 0; regolo=catalogue request failed with http 0; amd-radeon=catalogue request failed "
+    },
+    {
+      "command": "quota-scan",
+      "exitCode": 0
+    }
+  ]
+}

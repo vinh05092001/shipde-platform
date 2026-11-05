@@ -151,11 +151,15 @@ function runCommand(command, args, opts) {
       child = o.spawn
         ? o.spawn(resolved.file, resolved.args.concat(args || []), {
             encoding: 'utf8',
+            cwd: o.cwd,
+            env: o.env,
             windowsHide: true,
             shell: false,
           })
         : spawn(resolved.file, resolved.args.concat(args || []), {
             encoding: 'utf8',
+            cwd: o.cwd,
+            env: o.env,
             windowsHide: true,
             shell: false,
           });
