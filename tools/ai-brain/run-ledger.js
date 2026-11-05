@@ -136,7 +136,9 @@ class RunLedger {
       let reservedEntry = found ? found.entry : null;
 
       const targetEntry = stages[st]?.fps?.[fp];
-      if (!reservedEntry && targetEntry && targetEntry.outcome === 'IN_FLIGHT') {
+      if (targetEntry && targetEntry.outcome === 'IN_FLIGHT') {
+        // The destination is already reserved. If it belongs to another attempt,
+        // refuse — a continuation may not replace another attempt's reservation.
         if (targetEntry.attemptId && targetEntry.attemptId !== attemptKey) {
           return {
             ok: false,
@@ -144,9 +146,12 @@ class RunLedger {
             reason: 'in-flight-owned-by-other-attempt',
           };
         }
-        reservedStage = st;
-        reservedFp = fp;
-        reservedEntry = targetEntry;
+        // This attempt already owns the destination: use it as the reservation.
+        if (!reservedEntry || reservedStage !== st || reservedFp !== fp) {
+          reservedStage = st;
+          reservedFp = fp;
+          reservedEntry = targetEntry;
+        }
       }
 
       if (reservedEntry && (reservedStage !== st || reservedFp !== fp)) {
