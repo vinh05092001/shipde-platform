@@ -4717,13 +4717,6 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'prove') return proveCommand(args);
   if (command === 'quota') return quotaCommand(args);
   if (command === 'quota-scan') return quotaScanCommand(args, deps);
-  if (command === 'coordinator')
-    return require('./coordinator-cli')
-      .main(args._.slice(1).concat(args.loop ? ['--loop'] : []))
-      .catch((err) => {
-        console.error(require('./coordinator-text').errorText(err));
-        process.exitCode = 1;
-      });
   if (command === 'dispatch') {
     const result = dispatchCommand(args);
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a

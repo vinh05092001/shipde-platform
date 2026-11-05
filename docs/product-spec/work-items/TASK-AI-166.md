@@ -116,3 +116,10 @@ Round 3 reviewed `4d708d736fd27508fbd08ab1191fabee9e068b9b`; round 4 reviewed `d
 ## Residual limitations
 
 Git publication, Docker control and full live discovery require the coordinator. The LF-only OpenAPI assertion passes after byte-equivalent local LF normalization; product source and contract content remain unchanged from `origin/main`. The API command stalls in its DB-backed RBAC HTTP suite, and the root test command exits at the API task without a conclusive failing-step diagnostic. These are incomplete verification results, not PASS claims. Owner: host coordinator; next action: complete live and full-suite verification, commit `[TASK-AI-166] Address review: preserve discovery and independent publication` through installed hooks, run CI, and obtain independent review of that exact SHA. Finding-to-test mappings and command outcomes are in `.oc/pr-body.md`.
+
+## Slice plan (2026-11-05)
+
+The PR reached 4.3k lines and 125 review rounds (STUCK), so it ships in slices of the same Work Item:
+
+- Slice A (this PR): live catalogue refresh, discovery and the 48h stale-catalogue guard — AC-166-01, 02, 03 and the AC-166-10 handoff. Files: `catalogue-refresh.js`, `discovery/live.js`, `discovery.js`, `priors-public.js`, the stale guard in `cli.js`, `coordinator-text.js` (shared `safeText`), tests `task-ai-166-refresh.test.js` and `discovery.test.js`.
+- Slice B (next PR): the unattended coordinator — AC-166-04 to 09 (`coordinator*.js`, `ai:metrics`, coordinator/review/runtime tests). Open review findings on coordinator files move with it.
