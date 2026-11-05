@@ -52,6 +52,16 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
   } = props;
 
   const [isPending, startTransition] = React.useTransition();
+  const safeStartTransition = React.useCallback(
+    (callback: () => void) => {
+      try {
+        startTransition(callback);
+      } catch {
+        callback();
+      }
+    },
+    [startTransition]
+  );
   const [resetEpoch, setResetEpoch] = React.useState(0);
 
   // Column visibility local state
@@ -83,7 +93,7 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
   const [state, setTableState] = useQueryStates(parsers, {
     shallow: false,
     history: 'push',
-    startTransition,
+    startTransition: safeStartTransition,
   });
 
   const page: number = state[PAGE_KEY] ?? 1;
@@ -127,9 +137,11 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
   // compose instead of clobbering each other (no committed-snapshot builder).
   const setPagination = React.useCallback(
     (newPage: number, newPageSize?: number) => {
-      setTableState(() => ({
+      setTableState((prev) => ({
         [PAGE_KEY]: newPage <= 1 ? null : newPage,
-        ...(newPageSize !== undefined ? { [PER_PAGE_KEY]: newPageSize } : {}),
+        ...(newPageSize !== undefined && newPageSize !== prev[PER_PAGE_KEY]
+          ? { [PER_PAGE_KEY]: newPageSize }
+          : {}),
       }));
     },
     [setTableState]
@@ -156,7 +168,7 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
   const setSearch = React.useCallback(
     (val: string | null) => {
       const queryVal = val !== null && val !== undefined && val.length > 0 ? val : null;
-      setTableState(() => ({ [SEARCH_KEY]: queryVal, [PAGE_KEY]: null }));
+      setTableState((prev) => ({ [SEARCH_KEY]: queryVal, [PAGE_KEY]: null }));
     },
     [setTableState]
   );
@@ -164,17 +176,20 @@ export function useShipdeDataTable(props: UseDataTableProps = {}): UseDataTableR
   const setFilter = React.useCallback(
     (key: string, values: string[] | string | null) => {
       const nextValues = Array.isArray(values) ? values.filter(Boolean) : parseFilterValues(values);
-      setTableState(() => ({
-        [key]: nextValues.length > 0 ? nextValues : null,
-        [PAGE_KEY]: null,
-      }));
+      setTableState(
+        (prev) => ({
+          [key]: nextValues.length > 0 ? nextValues : null,
+          [PAGE_KEY]: null,
+        }),
+        { history: 'replace' }
+      );
     },
     [setTableState]
   );
 
   const resetFilters = React.useCallback(() => {
     setResetEpoch((epoch) => epoch + 1);
-    setTableState(() => {
+    setTableState((prev) => {
       const cleared: Record<string, null> = {
         [PAGE_KEY]: null,
         [SORT_KEY]: null,
