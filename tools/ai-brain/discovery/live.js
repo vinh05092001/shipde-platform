@@ -121,10 +121,7 @@ async function enumerateLiveSources(options = {}) {
         : null;
       // A filtered listing is not evidence of disappearance. Validate every
       // row, including namespaced/preset IDs, before making it authoritative.
-      if (
-        !identifiers ||
-        identifiers.some((model) => typeof model !== 'string' || !/^[\w@][\w@./:+-]*$/.test(model))
-      ) {
+      if (!identifiers || identifiers.some((model) => typeof model !== 'string' || !model.trim())) {
         record(source, [], 'INCOMPLETE_LISTING', url);
         continue;
       }

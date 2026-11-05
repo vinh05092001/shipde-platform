@@ -48,11 +48,12 @@ The operator approved both parts in this one Work Item on 2026-11-02, supersedin
 
 ## In scope
 
-Live discovery, sourced priors, ordered repeatable refresh, 48-hour dispatch freshness refusal, daily scheduling, writer liveness/cooldown, host commit handoff, pre-review merge and publication guards, different-family two-phase review, persisted four-round history, quota-aware writer escalation, optional disjoint repair lanes, review metrics and summary.
+Slice A (this PR): Live discovery, sourced priors, ordered repeatable refresh, 48-hour dispatch freshness refusal (AC-166-01, 02, 03, 10).
+Slice B (next PR): Daily scheduling, writer liveness/cooldown, host commit handoff, pre-review merge and publication guards, different-family two-phase review, persisted four-round history, quota-aware writer escalation, optional disjoint repair lanes, review metrics and summary (AC-166-04..09).
 
 ## Out of scope
 
-Product APIs/UI/database, auth stores, new model credentials, automatic PR merge, `.github/`, gate configs, allowlists, baselines and semgrep rules; executing reference scripts.
+Product APIs/UI/database, auth stores, new model credentials, automatic PR merge, `.github/`, gate configs, allowlists, baselines and semgrep rules; executing reference scripts; Slice B unattended coordinator runtime and metrics (deferred).
 
 ## Business rules and edge cases
 
@@ -90,12 +91,12 @@ Adds `ai:refresh-catalogue`, `ai:metrics` and a coordinator CLI; versioned disco
 | AC-166-01 | Refresh and current public payloads | Ordered calls, provenance preserved, failures never fabricated | unit + live log |
 | AC-166-02 | Discovery succeeds, changes, fails or stays unchanged | Honest additions/removals; failure preserves history; freshness only on success | unit + live log |
 | AC-166-03 | Catalogue age exceeds 48h | Dispatch dry-run refuses STALE_CATALOGUE | unit |
-| AC-166-04 | Writer alive or dead inside cooldown | No overlapping writer; bounded reroute; sandbox output host commit | unit |
-| AC-166-05 | Main merge, publication guards, red/pending CI | Clean/CSV-only merge; reject bad push; red skips reviewer | unit |
-| AC-166-06 | Review family, prompts, history and budget | Full two-phase exact-SHA review; four failures STUCK | unit |
-| AC-166-07 | Quota, failed round, risk and launch limit | Exclusion/escalation and only configured OpenCode routes | unit |
-| AC-166-08 | Optional findings fan-out | <=3 disjoint worktrees, shared lane 1, fixed merges, conflict stop | unit |
-| AC-166-09 | Review metrics and daily loop | One row/review; correct summary; single-flight daily refresh | unit |
+| AC-166-04 | Writer alive or dead inside cooldown | No overlapping writer; bounded reroute; sandbox output host commit | unit (deferred to Slice B) |
+| AC-166-05 | Main merge, publication guards, red/pending CI | Clean/CSV-only merge; reject bad push; red skips reviewer | unit (deferred to Slice B) |
+| AC-166-06 | Review family, prompts, history and budget | Full two-phase exact-SHA review; four failures STUCK | unit (deferred to Slice B) |
+| AC-166-07 | Quota, failed round, risk and launch limit | Exclusion/escalation and only configured OpenCode routes | unit (deferred to Slice B) |
+| AC-166-08 | Optional findings fan-out | <=3 disjoint worktrees, shared lane 1, fixed merges, conflict stop | unit (deferred to Slice B) |
+| AC-166-09 | Review metrics and daily loop | One row/review; correct summary; single-flight daily refresh | unit (deferred to Slice B) |
 | AC-166-10 | Handoff | One row, LF, ten-section PR body, exact checks and source changes | docs-inspection; test not applicable: handoff document |
 
 ## Task breakdown
