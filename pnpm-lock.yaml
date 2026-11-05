@@ -39,7 +39,7 @@ importers:
         specifier: 1.11.3
         version: 1.11.3
       markdown-it:
-        specifier: ^14.1.0
+        specifier: 14.1.0
         version: 14.1.0
       markdownlint:
         specifier: 0.42.0
