@@ -50,7 +50,7 @@ function resolveCreatorModelAlias(creator, model, config) {
 }
 
 function aaRows(html) {
-  const chunks = [...html.matchAll(/self\.__next_f\.push\((.*?)\)<\/script>/gs)]
+  const chunks = [...html.matchAll(/self\.__next_f\.push\((.*?)\);?\s*<\/script>/gs)]
     .map((m) => {
       try {
         return JSON.parse(m[1])[1] || '';
@@ -91,7 +91,21 @@ function aaRows(html) {
       if (!name) return null;
       const score = Number(row.intelligenceIndex);
       if (!Number.isFinite(score) || score < 0 || score > 100) return null;
-      return { name, intelligenceIndex: score };
+      return {
+        name,
+        intelligenceIndex: score,
+        ...Object.fromEntries(
+          ['aaCodingIndex', 'aaAgenticIndex']
+            .filter(
+              (key) =>
+                typeof row[key] === 'number' &&
+                Number.isFinite(row[key]) &&
+                row[key] >= 0 &&
+                row[key] <= 100
+            )
+            .map((key) => [key, row[key]])
+        ),
+      };
     })
     .filter(Boolean);
   if (!validated.length) throw new Error('PRIORS_AA_SCHEMA_CHANGED');
@@ -445,6 +459,8 @@ function resolveDescriptorSources(config) {
           metricNames: s.metricNames,
           roleWeights: s.roleWeights,
           trustLevel: s.trustLevel,
+          score_scale: s.score_scale || 'percent',
+          verified: s.verified !== false,
         };
       })
       .filter(Boolean);
@@ -476,7 +492,22 @@ async function publicDocuments(options = {}) {
 
   for (const entry of entries) {
     const { kind, url, id } = entry;
-    const response = await fetcher(url, { signal: AbortSignal.timeout(30000) });
+    if (entry.verified === false || (entry.score_scale && entry.score_scale !== 'percent'))
+      throw new Error('PRIORS_PUBLIC_SOURCE_UNVERIFIED_OR_SCALE_INVALID');
+    let response;
+    try {
+      response = await fetcher(url, { signal: AbortSignal.timeout(30000) });
+    } catch (error) {
+      const code = error.cause?.code || error.code || 'FETCH_FAILED';
+      throw new Error(
+        'PRIORS_PUBLIC_FETCH_FAILED: ' +
+          id +
+          ': ' +
+          String(code)
+            .replace(/[^A-Z0-9_]/gi, '')
+            .slice(0, 80)
+      );
+    }
     if (!response.ok) throw new Error('PRIORS_PUBLIC_HTTP_' + response.status);
 
     let rows;
@@ -498,7 +529,13 @@ async function publicDocuments(options = {}) {
     }
 
     if (!Array.isArray(rows) || !rows.length) throw new Error('PRIORS_PUBLIC_SCHEMA_CHANGED');
-    const source = { id, url, retrievedAt };
+    const source = {
+      id,
+      url,
+      retrievedAt,
+      score_scale: entry.score_scale || 'percent',
+      verified: entry.verified !== false,
+    };
     const models = rows
       .map((row) => {
         let benchmarks = {};
@@ -513,6 +550,8 @@ async function publicDocuments(options = {}) {
           }
         } else if (kind === 'aa') {
           benchmarks.intelligenceIndex = row.intelligenceIndex;
+          for (const key of ['aaCodingIndex', 'aaAgenticIndex'])
+            if (typeof row[key] === 'number') benchmarks[key] = row[key];
         } else {
           for (const [name, value] of Object.entries({
             benchlm: row.displayScore,
