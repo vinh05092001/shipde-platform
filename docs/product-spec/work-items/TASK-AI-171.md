@@ -59,30 +59,20 @@ Bounded single vertical delivery of unified route identity, scoped health regist
 
 ## In scope
 
+This Pull Request delivers Slice A only: canonical route identity. Scoped health, candidate
+adapters, unified selection, JEV advisory and the budget contract are deferred to Slices B and C
+of the same Work Item; see the Slice plan section.
+
 - `tools/ai-brain/route-identity.js`:
   - `createRouteIdentity`, `canonicalCandidateKey`, `parseRouteIdentity`, `distinguishPathway`, `resolveModelPrefix`.
   - Component escaping to allow double colons `::` and percent encodings in keys.
   - Private email registration and hashing (`registerPrivateEmail`, `hashEmail`, `maskEmailsInString`) preventing PII leakage.
-  - Shared quota scope linking (`linkSharedQuotaScopes`) across pathways.
+  - Explicit provider handling that preserves a provider's own slash-namespaced model id (`meta-llama/Llama-3.3-70B-Instruct`).
   - Combo route identity expansion (`expandComboIdentity`).
-- `tools/ai-brain/scoped-health.js`:
-  - `ErrorCategory` and `HealthScope` classification with canonical scopes (`gateway`, `account`, `quota_scope`, `model`, `route`, `network`, `local`).
-  - Account-level rate limit (429) scoping preventing false positives on same-model alternate accounts.
-  - Reset elapsed handling: expired `resetAt` requires fresh telemetry and is not admitted blindly.
-  - Model lock registry with non-colliding delimiter keys and immediate expiration cleanup.
-- `tools/ai-brain/unified-selector.js`:
-  - Unified selection pipeline across 9router, direct provider, and AGY pool candidates.
-  - Admission filtering: cost ceiling (strict rejection of unknown cost), capability requirements, author/reviewer domain independence, combo constituent branch health.
-  - Contract-compliant JEV advisory integration with weight profile trade-offs (`LATENCY_FIRST`, `BALANCED`, `QUALITY_FIRST`) and strict rejection of identity leaks (`IDENTITY_PROHIBITED`).
-  - Context-aware caching with instruction, criteria, budget, and live health state hash.
-  - Structured budget interface prioritizing `tokenBudget` over `contextSize`.
-- `tools/ai-brain/candidate-adapters.js`:
-  - Adapters for 9router, direct providers, and AGY pool.
-  - Zero invented fixture defaults on production paths; preserves exact model IDs and casings.
-- `tools/ai-brain/routing.js`:
-  - Production bridge exporting `selectOptimalRoute` and `UnifiedRouteSelector`.
-- `tools/ai-brain/test/unified-routing-offline.test.js`:
-  - 63 tests across 26 test suites verifying all 10 acceptance criteria and all Codex review findings offline.
+- `config/route-identity.json`:
+  - Versioned router-prefix data consumed by `resolveModelPrefix`.
+- `tools/ai-brain/test/task-ai-171-route-identity.test.js`:
+  - Offline tests for AC-AI-171-06 and the branch-preservation half of AC-AI-171-07.
 
 ## Out of scope
 
@@ -126,36 +116,39 @@ N/A — Backend routing and AI brain toolchain; no user interface is modified.
 
 | AC/Test ID | Scenario | Expected result | Evidence required |
 |---|---|---|---|
-| AC-AI-171-01 | Criterion 1: Cùng model, hai account | Account A auth failure isolates to Account A; Account B remains healthy | unit test (`unified-routing-offline.test.js:26`) |
-| AC-AI-171-02 | Criterion 2: Hai đường chung quota | Shared account across 9router and AGY pool shares single quota scope | unit test (`unified-routing-offline.test.js:59`) |
-| AC-AI-171-03 | Criterion 3: DNS không biến thành login-required | DNS failure is classified as NETWORK_DNS with transient cooldown, not AUTH | unit test (`unified-routing-offline.test.js:93`) |
-| AC-AI-171-04 | Criterion 4: Gateway tắt không đánh chết upstream qua đường trực tiếp | ECONNREFUSED on port 20128 blocks 9router gateway, leaving direct route healthy | unit test (`unified-routing-offline.test.js:104`) |
-| AC-AI-171-05 | Criterion 5: ResetAt đã qua và lock đã hết hạn | Expired resetAt requires fresh probe and does not bypass locks; expired lock cleared | unit test (`unified-routing-offline.test.js:134`) |
-| AC-AI-171-06 | Criterion 6: Model ID nhiều dấu slash | Preserves multiple slashes and casing without mutilation | unit test (`unified-routing-offline.test.js:160`) |
-| AC-AI-171-07 | Criterion 7: Combo identity và ràng buộc | Combo retains constituent branches and evaluates branch health/capabilities | unit test (`unified-routing-offline.test.js:174`) |
-| AC-AI-171-08 | Criterion 8: Candidate từ cả ba đường | Aggregates and selects across 9router, direct provider, and AGY pool | unit test (`unified-routing-offline.test.js:202`) |
-| AC-AI-171-09 | Criterion 9: JEV cache hit/miss và undecided | JEV advisory caches properly and falls back deterministically on UNDECIDED | unit test (`unified-routing-offline.test.js:253`) |
-| AC-AI-171-10 | Criterion 10: Budget và context interface | Emits structured budget contract with tokenBudget precedence | unit test (`unified-routing-offline.test.js:286`) |
+| AC-AI-171-01 | Criterion 1: Cùng model, hai account | Account A auth failure isolates to Account A; Account B remains healthy | Slice B (deferred) |
+| AC-AI-171-02 | Criterion 2: Hai đường chung quota | Shared account across 9router and AGY pool shares single quota scope | Slice B (deferred) |
+| AC-AI-171-03 | Criterion 3: DNS không biến thành login-required | DNS failure is classified as NETWORK_DNS with transient cooldown, not AUTH | Slice B (deferred) |
+| AC-AI-171-04 | Criterion 4: Gateway tắt không đánh chết upstream qua đường trực tiếp | ECONNREFUSED on port 20128 blocks 9router gateway, leaving direct route healthy | Slice B (deferred) |
+| AC-AI-171-05 | Criterion 5: ResetAt đã qua và lock đã hết hạn | Expired resetAt requires fresh probe and does not bypass locks; expired lock cleared | Slice B (deferred) |
+| AC-AI-171-06 | Criterion 6: Model ID nhiều dấu slash | Preserves multiple slashes and casing without mutilation | unit test (`task-ai-171-route-identity.test.js`) |
+| AC-AI-171-07 | Criterion 7: Combo identity và ràng buộc | Combo retains constituent branches and evaluates branch health/capabilities | unit test (`task-ai-171-route-identity.test.js`, branch-preservation half); Slice C (role policy) |
+| AC-AI-171-08 | Criterion 8: Candidate từ cả ba đường | Aggregates and selects across 9router, direct provider, and AGY pool | Slice C (deferred) |
+| AC-AI-171-09 | Criterion 9: JEV cache hit/miss và undecided | JEV advisory caches properly and falls back deterministically on UNDECIDED | Slice C (deferred) |
+| AC-AI-171-10 | Criterion 10: Budget và context interface | Emits structured budget contract with tokenBudget precedence | Slice C (deferred) |
 
 ## Task breakdown
 
 - [x] `T01` [P] Design route identity schema with component escaping, private email hashing, and non-colliding candidate keys (`tools/ai-brain/route-identity.js`).
-- [x] `T02` Implement scoped health registry with fine-grained error categories, scopes, model locks, and reset elapsed telemetry requirements (`tools/ai-brain/scoped-health.js`).
-- [x] `T03` [P] Implement candidate adapters for 9router, direct providers, and AGY pool lanes with shared quota auto-linking (`tools/ai-brain/candidate-adapters.js`).
-- [x] `T04` Implement unified route selector with admission gating, cost ceiling enforcement, contract-compliant JEV trade-off advisory, and budget precedence (`tools/ai-brain/unified-selector.js`).
-- [x] `T05` Export production bridge `selectOptimalRoute` from `tools/ai-brain/routing.js`.
-- [x] `T06` [P] Write comprehensive offline unit test suite covering all 10 criteria and all Codex review findings (`tools/ai-brain/test/unified-routing-offline.test.js`).
+- [ ] `T02` Implement scoped health registry with fine-grained error categories, scopes, model locks, and reset elapsed telemetry requirements (`tools/ai-brain/scoped-health.js`) — Slice B, not in this PR.
+- [ ] `T03` [P] Implement candidate adapters for 9router, direct providers, and AGY pool lanes with shared quota auto-linking (`tools/ai-brain/candidate-adapters.js`) — Slice C, not in this PR.
+- [ ] `T04` Implement unified route selector with admission gating, cost ceiling enforcement, contract-compliant JEV trade-off advisory, and budget precedence (`tools/ai-brain/unified-selector.js`) — Slice C, not in this PR.
+- [ ] `T05` Export production bridge `selectOptimalRoute` from `tools/ai-brain/routing.js` — Slice C, not in this PR.
+- [x] `T06` [P] Write offline route identity unit tests for Slice A (`tools/ai-brain/test/task-ai-171-route-identity.test.js`).
 - [x] `T07` Create Work Item `docs/product-spec/work-items/TASK-AI-171.md` and add delivery register row in `FEATURE-DELIVERY-REGISTER.csv`.
 - [x] `T08` Run repository verification suite and record evidence.
 
 ## Author checklist
 
-- [x] Run pnpm ai:check and paste its summary in the PR.
+- [x] `node --test tools/ai-brain/test/task-ai-171-route-identity.test.js` — 2 tests, 0 fail.
+- [x] `pnpm format:check` — exit 0 (6 changed files).
+- [x] Offline check `explicit-provider-preserves-model-namespace` — pass.
+- [x] CI `current-application` and `application-gate` — pass at reviewed SHA `bba97729`.
 
 ## Verification commands
 
 ```bash
-node --test tools/ai-brain/test/unified-routing-offline.test.js
+node --test tools/ai-brain/test/task-ai-171-route-identity.test.js
 pnpm format:check
 pnpm lint
 pnpm test:brain
@@ -177,7 +170,10 @@ pnpm security:secrets
 
 ## Residual limitations
 
-None.
+Slice A (this PR) deliberately ships route identity only. Scoped health (AC-AI-171-01 to 05),
+candidate adapters, unified selection, JEV advisory and the budget contract (AC-AI-171-08 to 10 and
+the role-policy half of AC-AI-171-07) are deferred to Slices B and C of the same Work Item, together
+with their open review findings. No acceptance row assigned to the shipped slice is left unproven.
 
 ## Slice plan (2026-11-05)
 

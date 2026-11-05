@@ -13,16 +13,6 @@ const DEFAULT_PREFIX_TO_PROVIDER = Object.freeze({
 
 const PREFIX_PROVIDER_MAP = DEFAULT_PREFIX_TO_PROVIDER;
 
-// Quota group -> quota family aliases, loaded from the same versioned data.
-const QUOTA_FAMILY_BY_GROUP = Object.freeze({
-  ...ROUTE_IDENTITY_DATA.quotaFamilies,
-});
-
-function getQuotaFamily(group) {
-  if (group === null || group === undefined) return group;
-  return QUOTA_FAMILY_BY_GROUP[group] || group;
-}
-
 function escapePart(str) {
   if (str === null || str === undefined) return '';
   return String(str)
@@ -114,28 +104,6 @@ function sanitizeMetadata(meta) {
   return out;
 }
 
-function getQuotaGroup(id) {
-  if (id?.metadata?.quotaGroup) return id.metadata.quotaGroup;
-  if (id?.metadata?.quotaFamily) {
-    const f = String(id.metadata.quotaFamily).toLowerCase();
-    if (f.includes('argon')) return 'argon';
-    if (f.includes('gemini')) return 'gemini';
-    if (f.includes('claude') || f.includes('gpt') || f.includes('3p') || f.includes('external'))
-      return 'external';
-    return f;
-  }
-  const m = String(id?.outboundModelId || id?.configuredModelId || '').toLowerCase();
-  if (/argon/i.test(m)) return 'argon';
-  if (m.includes('gemini')) return 'gemini';
-  const prov = String(id?.upstreamProviderId || id?.sourceId || '').toLowerCase();
-  if (prov.includes('antigravity') || prov.includes('agy')) {
-    if (m.includes('claude') || m.includes('gpt') || m.includes('opus') || m.includes('sonnet'))
-      return 'external';
-    return 'external';
-  }
-  return undefined;
-}
-
 function distinguishPathway(identity) {
   if (!identity) return UNKNOWN;
   const h = String(identity.harness || '').toLowerCase();
@@ -152,25 +120,49 @@ function distinguishPathway(identity) {
   return 'DIRECT';
 }
 
-function resolveModelPrefix(modelId, customAliases = {}) {
+function lookupProvider(prefix, customAliases) {
+  if (customAliases && customAliases[prefix]) return customAliases[prefix];
+  return DEFAULT_PREFIX_TO_PROVIDER[prefix] || null;
+}
+
+/**
+ * Resolve the provider/model split of a model id, modelled on LiteLLM's
+ * `get_llm_provider` (https://github.com/BerriAI/litellm, utils.py). When an
+ * explicit provider is supplied it wins, and the router prefix is only consumed
+ * when it resolves to that same provider; otherwise a slash-namespaced id
+ * (`meta-llama/Llama-3.3-70B-Instruct`) is the provider's own model id and is
+ * preserved verbatim (BR-ROUTING-06).
+ */
+function resolveModelPrefix(modelId, customAliases = {}, explicitProvider = null) {
   const m = String(modelId || '').trim();
+  const provider = explicitProvider ? String(explicitProvider) : null;
   if (!m) {
-    return { prefix: null, upstreamProviderId: UNKNOWN, outboundModelId: UNKNOWN };
+    return { prefix: null, upstreamProviderId: provider || UNKNOWN, outboundModelId: UNKNOWN };
   }
 
   const slashIdx = m.indexOf('/');
-  if (slashIdx === -1) {
-    const p = customAliases[m] || DEFAULT_PREFIX_TO_PROVIDER[m] || m;
-    return { prefix: null, upstreamProviderId: p, outboundModelId: m };
+  const rawPrefix = slashIdx === -1 ? null : m.slice(0, slashIdx);
+  const remainder = slashIdx === -1 ? m : m.slice(slashIdx + 1);
+  const resolvedPrefix = rawPrefix ? lookupProvider(rawPrefix, customAliases) : null;
+
+  if (provider) {
+    if (rawPrefix && resolvedPrefix === provider) {
+      return { prefix: rawPrefix, upstreamProviderId: provider, outboundModelId: remainder };
+    }
+    return { prefix: null, upstreamProviderId: provider, outboundModelId: m };
   }
 
-  const prefix = m.slice(0, slashIdx);
-  const remainder = m.slice(slashIdx + 1);
-  const resolvedProvider = customAliases[prefix] || DEFAULT_PREFIX_TO_PROVIDER[prefix] || prefix;
+  if (!rawPrefix) {
+    return {
+      prefix: null,
+      upstreamProviderId: lookupProvider(m, customAliases) || m,
+      outboundModelId: m,
+    };
+  }
 
   return {
-    prefix,
-    upstreamProviderId: resolvedProvider,
+    prefix: rawPrefix,
+    upstreamProviderId: resolvedPrefix || rawPrefix,
     outboundModelId: remainder,
   };
 }
@@ -180,8 +172,6 @@ module.exports = {
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
   PREFIX_PROVIDER_MAP,
-  QUOTA_FAMILY_BY_GROUP,
-  getQuotaFamily,
   escapePart,
   unescapePart,
   distinguishPathway,
@@ -191,5 +181,4 @@ module.exports = {
   hashEmail,
   maskEmailsInString,
   sanitizeMetadata,
-  getQuotaGroup,
 };

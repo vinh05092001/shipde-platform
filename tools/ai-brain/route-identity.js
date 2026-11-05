@@ -14,8 +14,6 @@ const {
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
   PREFIX_PROVIDER_MAP,
-  QUOTA_FAMILY_BY_GROUP,
-  getQuotaFamily,
   escapePart,
   unescapePart,
   distinguishPathway,
@@ -25,7 +23,6 @@ const {
   hashEmail,
   maskEmailsInString,
   sanitizeMetadata,
-  getQuotaGroup,
 } = require('./route-identity-utils');
 
 const { expandComboIdentity } = require('./route-identity-combo');
@@ -86,115 +83,11 @@ function parseRouteIdentity(key, defaults = {}) {
   return null;
 }
 
-function linkSharedQuotaScopes(identities, accountLinks) {
-  if (!Array.isArray(identities)) return [];
-  const links =
-    accountLinks instanceof Map
-      ? new Map(accountLinks)
-      : accountLinks && typeof accountLinks === 'object'
-        ? new Map(Object.entries(accountLinks))
-        : new Map();
-
-  function resolveRealAccount(id) {
-    const realRef = id.metadata?.realAccountRef;
-    if (realRef && realRef !== UNKNOWN) {
-      const fromReal = getPrivateEmail(realRef);
-      if (fromReal) return fromReal;
-      return realRef;
-    }
-    const fromPrivate =
-      getPrivateEmail(id.accountRef) ||
-      (id.metadata?.laneId && id.accountRef
-        ? getPrivateEmail(id.metadata.laneId + '::' + id.accountRef)
-        : null);
-    if (fromPrivate) return fromPrivate;
-    if (id.harness === 'agy-pool' || id.pathway === 'AGY_POOL') {
-      return UNKNOWN;
-    }
-    const rawAcc = id.accountRef;
-    return getPrivateEmail(rawAcc) || rawAcc;
-  }
-
-  const accountOccurrences = new Map();
-  for (const id of identities) {
-    const account = resolveRealAccount(id);
-    if (
-      account &&
-      account !== UNKNOWN &&
-      account !== '*' &&
-      !String(account).startsWith('unknown')
-    ) {
-      const prov = id.upstreamProviderId || 'shared';
-      const qGroup = getQuotaGroup(id);
-      const key = qGroup
-        ? JSON.stringify([prov, account, qGroup])
-        : JSON.stringify([prov, account]);
-      if (!accountOccurrences.has(key)) {
-        accountOccurrences.set(key, []);
-      }
-      accountOccurrences.get(key).push(id);
-    }
-  }
-
-  for (const [key, ids] of accountOccurrences.entries()) {
-    const parsedKey = JSON.parse(key);
-    const [prov, account, qGroup] = parsedKey;
-    const baseKey = JSON.stringify([prov, account]);
-    if (!links.has(key) && !links.has(baseKey) && !links.has(account) && ids.length > 1) {
-      const safeAccount = String(account).includes('@') ? hashEmail(account) : account;
-      const canonicalScope = qGroup
-        ? `quota::${prov}::${safeAccount}::${qGroup}`
-        : `quota::${prov}::${safeAccount}`;
-      links.set(key, canonicalScope);
-    }
-  }
-
-  return identities.map((id) => {
-    const realAcc = resolveRealAccount(id);
-    const prov = id.upstreamProviderId || 'shared';
-    const qGroup = getQuotaGroup(id);
-    const groupKey = qGroup ? JSON.stringify([prov, realAcc, qGroup]) : null;
-    const baseKey = JSON.stringify([prov, realAcc]);
-    const safeAcc = String(realAcc).includes('@') ? hashEmail(realAcc) : realAcc;
-    const safeBaseKey = JSON.stringify([prov, safeAcc]);
-    const safeGroupKey = qGroup ? JSON.stringify([prov, safeAcc, qGroup]) : null;
-
-    const targetScope =
-      (groupKey && links.get(groupKey)) ||
-      (safeGroupKey && links.get(safeGroupKey)) ||
-      links.get(baseKey) ||
-      links.get(safeBaseKey) ||
-      links.get(realAcc) ||
-      links.get(safeAcc) ||
-      links.get(id.accountRef) ||
-      links.get(id.connectionId);
-
-    if (targetScope && targetScope !== id.quotaScopeId) {
-      const safeOrigScope =
-        typeof id.quotaScopeId === 'string' && id.quotaScopeId.includes('@')
-          ? maskEmailsInString(id.quotaScopeId)
-          : id.quotaScopeId;
-      return createRouteIdentity({
-        ...id,
-        quotaScopeId: targetScope,
-        metadata: {
-          ...id.metadata,
-          linkedQuotaScope: true,
-          originalQuotaScope: safeOrigScope,
-        },
-      });
-    }
-    return id;
-  });
-}
-
 module.exports = {
   UNKNOWN,
   GATEWAY_PREFIX_SEPARATOR,
   DEFAULT_PREFIX_TO_PROVIDER,
   PREFIX_PROVIDER_MAP,
-  QUOTA_FAMILY_BY_GROUP,
-  getQuotaFamily,
   escapePart,
   unescapePart,
   distinguishPathway,
@@ -202,12 +95,10 @@ module.exports = {
   createRouteIdentity,
   canonicalCandidateKey,
   parseRouteIdentity,
-  linkSharedQuotaScopes,
   expandComboIdentity,
   registerPrivateEmail,
   getPrivateEmail,
   hashEmail,
   maskEmailsInString,
   sanitizeMetadata,
-  getQuotaGroup,
 };

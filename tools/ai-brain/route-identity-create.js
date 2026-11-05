@@ -37,8 +37,9 @@ function createRouteIdentity(input) {
   }
 
   const configuredModelId = input.configuredModelId || input.modelId || input.model || UNKNOWN;
+  const explicitProvider = input.upstreamProviderId || input.upstream || null;
   const { upstreamProviderId: parsedProvider, outboundModelId: parsedOutbound } =
-    resolveModelPrefix(configuredModelId, input.customAliases);
+    resolveModelPrefix(configuredModelId, input.customAliases, explicitProvider);
 
   const upstreamProviderId = input.upstreamProviderId || input.upstream || parsedProvider;
   const outboundModelId = input.outboundModelId || parsedOutbound;
