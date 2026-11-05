@@ -90,11 +90,29 @@ function walkUrls(obj) {
   return obj;
 }
 
+// Key names that carry credentials, matched case-insensitively with "-" or "_" separators, at any depth.
+const SENSITIVE_KEY_RE =
+  /^(x[-_]?)?(api[-_]?key|apikey|key|auth|authorization|bearer|cookie|set[-_]?cookie|password|passwd|secret|client[-_]?secret|credentials?|private[-_]?key|(access|refresh|id|session)[-_]?token|token)$/i;
+const BEARER_RE = /^\s*(bearer|basic|token)\s+\S+/i;
+
+function maskKeys(obj, seen = new Set()) {
+  if (!obj || typeof obj !== 'object' || seen.has(obj)) return obj;
+  seen.add(obj);
+  for (const k of Object.keys(obj)) {
+    const val = obj[k];
+    if (SENSITIVE_KEY_RE.test(k)) obj[k] = '[REDACTED]';
+    else if (typeof val === 'string' && BEARER_RE.test(val)) obj[k] = '[REDACTED]';
+    else if (val && typeof val === 'object') maskKeys(val, seen);
+  }
+  return obj;
+}
+
 function maskCredentials(v) {
   if (typeof v === 'string') return maskUrl(v);
   if (!v || typeof v !== 'object') return v;
   const copy = JSON.parse(JSON.stringify(v));
   walkUrls(copy);
+  maskKeys(copy);
   redactor(copy);
   return copy;
 }
