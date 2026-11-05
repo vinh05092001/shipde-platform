@@ -386,3 +386,30 @@ Re-verified after the split/rewrite commit `c29a90c8` ("[TASK-AI-158] Split into
 - All four operator-specified file targets are <= 300 lines. No further split or rewrite is required.
 - The split commit `c29a90c8` ("[TASK-AI-158] Split into small files: 1086 lines") already satisfies this round's file-target task; the task.md line counts (1074/604/557/419) are stale pre-split figures.
 - No source files modified this round — working tree has only `.oc/` context file changes. Task complete.
+
+## Operator round 2026-11-05g (file-targets only — re-verification, no behavior change)
+
+The four operator file targets already meet the round requirement; no split or rewrite is needed. `task.md` figures (1074/604/557/419) are stale pre-split numbers.
+
+| Command                                             | Result | Evidence                                                                                                                        |
+| --------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `node --test scripts/ai/test/pack-context.test.mjs` | PASS   | 1 suite, 4/4 AC tests pass (AC-AI-158-01..04); 0 fail                                                                          |
+| `python tools/ctx-tools/test_smoke.py`              | PASS   | Ran 3 tests, OK (AC-AI-158-ctx-01..03); 0 fail                                                                                 |
+| `git -c safe.directory=* diff --check`              | PASS   | Working tree diff clean (0 whitespace errors); stray regenerated `.oc/context-pack.md` noise restored before commit            |
+
+### File line counts (all <= 300)
+
+| File                                  | Lines |
+| ------------------------------------- | ----- |
+| scripts/ai/pack-context.mjs           | 177   |
+| scripts/ai/test/pack-context.test.mjs | 204   |
+| scripts/ai/output-path.mjs            | 235   |
+| scripts/ai/parse-args.mjs             | 83    |
+| scripts/ai/config.mjs                 | 57    |
+| scripts/ai/publish.mjs                | 37    |
+| tools/ctx-tools/smoke.py              | 192   |
+| tools/ctx-tools/test_smoke.py         | 115   |
+| tools/ctx-tools/_mcp.py               | 189   |
+| tools/ctx-tools/_sanitize.py          | 121   |
+
+- Slice A = this PR; Slice B = scripts/ai/output-path.mjs, tools/ctx-tools/_mcp.py, tools/ctx-tools/_sanitize.py
