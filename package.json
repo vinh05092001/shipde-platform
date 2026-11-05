@@ -9,6 +9,7 @@
     "pnpm": ">=11.0.0"
   },
   "scripts": {
+    "ai:research": "node scripts/ai/research.mjs",
     "dev": "turbo dev --cache-dir=.turbo/cache",
     "ai:check": "node scripts/ai/prepush-check.mjs",
     "build": "pnpm db:generate && turbo build --cache-dir=.turbo/cache",
@@ -49,6 +50,9 @@
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",
     "guard:status": "node tools/ai-guard/cli.js status"
+  },
+  "dependencies": {
+    "ssrf-guard": "1.0.0"
   },
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
