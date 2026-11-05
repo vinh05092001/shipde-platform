@@ -28,6 +28,7 @@ async function runBulkSupertestSuite() {
     path.resolve(__dirname, '../../../../../../.env'),
   ];
   for (const envPath of envPaths) {
+    if (process.env.DATABASE_URL) break;
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -51,6 +52,11 @@ async function runBulkSupertestSuite() {
     }
   }
 
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL =
+      'postgresql://postgres:postgres@localhost:5433/shipde_dev?schema=public';
+  }
+
   const moduleFixture: TestingModule = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();
@@ -61,7 +67,14 @@ async function runBulkSupertestSuite() {
 
   const prisma = app.get(PrismaService);
 
-  const dbStatus = await prisma.checkReadiness();
+  // Wait for database connection with retry (PrismaService.onModuleInit is non-blocking)
+  let dbStatus = 'down';
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    dbStatus = await prisma.checkReadiness();
+    if (dbStatus === 'up') break;
+    await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+  }
+
   if (dbStatus !== 'up') {
     await app.close();
     throw new Error('PostgreSQL is required for the bulk HTTP integration suite; no offline skip.');
@@ -178,6 +191,30 @@ async function runBulkSupertestSuite() {
       ['branch-north'],
       ['wh-north']
     );
+
+    // The system OPS_CSKH role has no iam:manage_users, so the entity gate would
+    // reject the whole request with 403 before the per-item privilege ceiling
+    // (AC-COM-03-11) can be observed. Grant exactly that one permission through a
+    // tenant custom role; the staff's store scope stays limited to branch-north.
+    const staffManageRole = await prisma.role.create({
+      data: {
+        merchant_id: merchantIdA,
+        name: `Bulk scoped manager ${testSuffix}`,
+        name_lower: `bulk scoped manager ${testSuffix}`,
+        is_system: false,
+      },
+    });
+    const manageUsersPerm = await prisma.permission.findUnique({
+      where: { code: 'iam:manage_users' },
+    });
+    assert.ok(manageUsersPerm, 'iam:manage_users must be seeded before the ceiling test');
+    await prisma.rolePermission.create({
+      data: { role_id: staffManageRole.id, permission_id: manageUsersPerm.id },
+    });
+    await prisma.user.update({
+      where: { id: staffAId },
+      data: { custom_role_id: staffManageRole.id },
+    });
 
     const { userId: staffBId, token: staffTokenB } = await setupUserSession(
       merchantIdB,
