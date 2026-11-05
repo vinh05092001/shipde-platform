@@ -223,7 +223,7 @@ export function useTablecnDataTable<TData extends RowData>({
 
   function onSortingChange(updater: Updater<SortingState>) {
     const next = updater instanceof Function ? updater(sorting) : updater;
-    setState(() => ({ [sortKey]: next }));
+    setState((prev) => ({ ...prev, [sortKey]: next }));
   }
 
   const debouncedWriteFilters = useDebouncedCallback(
@@ -265,7 +265,7 @@ export function useTablecnDataTable<TData extends RowData>({
 
   function onJoinOperatorChange(updater: Updater<JoinOperator>) {
     const next = updater instanceof Function ? updater(joinOperator) : updater;
-    setState(() => ({ [joinOperatorKey]: next }));
+    setState((prev) => ({ ...prev, [joinOperatorKey]: next }));
   }
 
   const table = useTable(
