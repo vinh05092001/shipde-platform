@@ -158,7 +158,7 @@ test('rejects commented Unchanged behaviour beside an empty code span', () => {
   assert.ok(result.problems.some((problem) => problem.includes('Unchanged behaviour')));
 });
 
-test('dependency-free CLI accepts a valid Work Item after production install', () => {
+test('uses pinned markdownlint@0.42.0 (operator decision 04/11) CLI accepts a valid Work Item', () => {
   const scriptPath = fileURLToPath(new URL('../ready-check.mjs', import.meta.url));
   const fixturePath = fileURLToPath(new URL('fixtures/ready-check/valid.md', import.meta.url));
   const result = spawnSync(process.execPath, [scriptPath, fixturePath], {
