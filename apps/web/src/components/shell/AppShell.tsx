@@ -271,7 +271,6 @@ export function AppShell({
     }
     if (!isAuthenticated) {
       // Setup-scoped session (MFA enrollment): live APIs answer 403 until setup completes.
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- session transition cleanup
       setNavigation({ token, targets: [], setupOnly: true });
       return;
     }
