@@ -543,7 +543,7 @@
       "maxProbes": 16,
       "maxRoutesPerAccount": 3
     },
-    "nineRouterWriterCombo": "shipde-writer",
+    "nineRouterWriterCombo": "vinh",
     "nineRouterWriterComboLimits": {
       "contextWindow": 128000,
       "maxOutputTokens": 8192

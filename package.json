@@ -49,7 +49,8 @@
     "verify:inventory": "tsx scripts/verify-inventory.ts",
     "concierge:audit": "tsx scripts/concierge-audit.ts",
     "guard:install": "node tools/ai-guard/cli.js install",
-    "guard:status": "node tools/ai-guard/cli.js status"
+    "guard:status": "node tools/ai-guard/cli.js status",
+    "ai:refresh-catalogue": "node tools/ai-brain/catalogue-refresh.js"
   },
   "devDependencies": {
     "@ast-grep/cli": "0.51.0",
