@@ -31,6 +31,8 @@ test('AC-AI-169-01: chain computes correct total spent and links', () => {
   assert.equal(rec('repair', 'd3', 'a3', 'sha-w2', 'DONE', 1500, 700).ok, true);
   assert.equal(rec('reviewer', 'd4', 'a4', 'sha-w2', 'PASS', 600, 200).ok, true);
   assert.equal(ledger.getSummary('TASK-1').attempts, 4);
+  assert.equal(ledger.getSummary('TASK-1').ms, 4100);
+  assert.equal(ledger.getSummary('TASK-1').tokens, 1700);
 
   const chain = ledger.getChain('TASK-1');
   assert.equal(chain.length, 4);

@@ -9,7 +9,7 @@ const VALID_STAGES = new Set(['writer', 'reviewer', 'repair', 'fallback', 'revie
 const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
-const SENSITIVE_PATHS = [
+const SENSITIVE_KEYS = [
   'key',
   'apiKey',
   'token',
@@ -20,40 +20,21 @@ const SENSITIVE_PATHS = [
   'secret',
   'password',
   'credential',
-  '*.key',
-  '*.apiKey',
-  '*.token',
-  '*.authorization',
-  '*.Authorization',
-  '*.Apikey',
-  '*.ApiKey',
-  '*.secret',
-  '*.password',
-  '*.credential',
-  'providers[*].key',
-  'providers[*].apiKey',
-  'providers[*].token',
-  'providers[*].authorization',
-  'providers[*].Authorization',
-  'providers[*].secret',
-  'providers[*].password',
-  'providers[*].credential',
-  '*[*].key',
-  '*[*].apiKey',
-  '*[*].token',
-  '*[*].authorization',
-  '*[*].Authorization',
-  '*[*].secret',
-  '*[*].password',
-  '*[*].credential',
-  '*.*.key',
-  '*.*.apiKey',
-  '*.*.token',
-  '*.*.authorization',
-  '*.*.Authorization',
-  '*.*.secret',
-  '*.*.password',
-  '*.*.credential',
+];
+const SENSITIVE_SPECIAL = ['["x-api-key"]', '["X-Api-Key"]', '["X-API-KEY"]'];
+
+const SENSITIVE_PATHS = [
+  ...SENSITIVE_KEYS,
+  ...SENSITIVE_KEYS.map((k) => '*.' + k),
+  ...SENSITIVE_KEYS.map((k) => '*.*.' + k),
+  ...SENSITIVE_KEYS.map((k) => 'providers[*].' + k),
+  ...SENSITIVE_KEYS.map((k) => '*[*].' + k),
+  ...SENSITIVE_SPECIAL,
+  ...SENSITIVE_SPECIAL.map((k) => '*' + k),
+  ...SENSITIVE_SPECIAL.map((k) => '*.*' + k),
+  ...SENSITIVE_SPECIAL.map((k) => 'providers[*]' + k),
+  ...SENSITIVE_SPECIAL.map((k) => 'providers[*].headers' + k),
+  ...SENSITIVE_SPECIAL.map((k) => '*[*]' + k),
 ];
 
 const redactor = fastRedact({
