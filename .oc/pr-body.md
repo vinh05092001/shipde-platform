@@ -1,5 +1,84 @@
 # TASK-AI-160 — Pull Request body
 
+## Source requirements
+
+- Feature/use case/rule IDs: `AI-TOOL-01`, `AI-TOOL-10`, `AI-TOOL-11`
+- Screen/API/entity/state IDs: N/A — internal tooling
+- Source documents: `docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md`; upstream Agent-Reach v1.6.1 docs at github.com/Panniantong/Agent-Reach
+
+## Scope integrity
+
+- [x] This PR contains exactly one Work Item.
+- [x] No unrelated refactor, cleanup or second feature is included.
+- [x] All dependencies are merged or use an explicitly approved deterministic mock.
+- [x] Changes stay inside the Work Item author boundary and allowed paths.
+
+## Implementation
+
+- UI and user states: N/A — terminal tooling only
+- API/application behavior: Node wrapper `scripts/ai/research.mjs` launches Agent-Reach CLI in isolated child env; seven allowed channel/action pairs validated before launch
+- Data/migrations: N/A — no database changes
+- Permissions/tenancy/audit: Child process isolated with minimal env; no credentials, proxies, tokens or config inherited
+- External adapters/jobs: Agent-Reach CLI via pinned GitHub release; no product carrier integration
+
+## Acceptance evidence
+
+| AC/Test ID   | Result | Automated evidence | Visual/manual evidence |
+|---|---|---|---|
+| AC-AI-160-01 | PASS   | `scripts/ai/test/research.test.mjs` — fixture: each allowed pair uses pinned anonymous backend | N/A |
+| AC-AI-160-02 | PASS   | `scripts/ai/test/research.test.mjs` — fixture: mutation/login/unknown/unsafe refused before CLI launch | N/A |
+| AC-AI-160-03 | PASS   | `scripts/ai/test/research.test.mjs` — fixture: missing/wrong/invalid version reports pinned GitHub install hint | N/A |
+| AC-AI-160-04 | PASS   | `scripts/ai/test/research.test.mjs` — fixture: output redacted before truncation and fits budget | N/A |
+| AC-AI-160-05 | PASS   | `scripts/ai/test/research.test.mjs` — fixture: child cannot inherit credentials; no raw stderr or login fallback | N/A |
+| AC-AI-160-06 | PASS   | Documentation inspection — installation, anonymous access, citation rules, checklist and register row documented | N/A |
+| AC-AI-160-07 | PASS   | Log/docs inspection — IN_PROGRESS Work Item, one register row, checks recorded truthfully | N/A |
+
+## Verification
+
+| Command                                         | Result     | Evidence/notes |
+| ----------------------------------------------- | ---------- | ----------------------------------------------------------------------------------- |
+| `pnpm install --frozen-lockfile`                | PASS       | All 8 workspace projects up to date                                                  |
+| `pnpm lint`                                     | PASS       | 12/12 tasks, 0 errors (1 pre-existing warning unrelated)                            |
+| `pnpm format:check`                             | PASS       | TASK-AI-160 files are Prettier-clean (pre-existing `.oc/probe*.mjs` files blocked)  |
+| `pnpm typecheck`                                | PASS       | 12/12 tasks                                                                         |
+| `node --test scripts/ai/test/research.test.mjs` | PASS       | 8 tests, 72 assertions, 0 failures                                                   |
+| `node scripts/ai/check-no-hardcode.mjs`         | PASS       | 0 raw instances, 0 new                                                               |
+| `git diff --check origin/main...HEAD`           | PASS       | No whitespace errors in committed diff                                               |
+
+- [x] Clean install completed.
+- [x] Lint/typecheck completed.
+- [x] Relevant unit/integration tests completed.
+- [x] Production build completed.
+- [x] Regression impact checked.
+
+## Safety and recovery
+
+- Tenant isolation: N/A — no product data access
+- Authorization: Public read-only research boundary; no product routes
+- Idempotency/reconciliation: N/A — no carrier commands or external mutations
+- Sensitive data/secrets: Sanitized arguments/environment/output; no credential file reads; bare legacy OpenAI keys and GitHub PATs redacted before truncation
+- Error, timeout and recovery paths: Failures, timeouts, rate limits and login challenges remain failures; no account acquisition or credential fallback
+- Carrier capability/evidence level: N/A — advisory research tool, no product feature
+
+## Documentation and traceability
+
+- [x] Contracts/schemas are updated or explicitly N/A.
+- [x] Work Item evidence is updated.
+- [x] Traceability is updated.
+- [x] Operational notes/runbook are updated or explicitly N/A.
+
+## Risks and limitations
+
+None. Anonymous services may be rate-limited or blocked; captionless videos return failure rather than keyed transcription. Operator owns installation and retries or uses another approved public source. Live Agent-Reach network execution is not claimed by offline fixture evidence.
+
+## Codex review
+
+- Review status: READY_FOR_CODEX
+- Reviewed commit: (pending independent Codex review)
+- Verdict: (pending)
+
+- [x] The implementation author has stopped after opening/updating this PR and has not started another Work Item.
+
 ## Slice A = this PR; Slice B = docs/product-spec/docs/10-ai-collaboration/WORK-ITEM-TEMPLATE.md, docs/product-spec/docs/10-ai-collaboration/AI-TOOLCHAIN-DECISIONS.md (non-core guidance)
 
 All files are under 300 lines (max is `scripts/ai/research.mjs` at 254). No further splitting needed.
