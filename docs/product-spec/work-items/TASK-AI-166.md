@@ -111,7 +111,7 @@ Adds `ai:refresh-catalogue`, `ai:metrics` and a coordinator CLI; versioned disco
 
 ## Codex review record
 
-Round 3 reviewed `4d708d736fd27508fbd08ab1191fabee9e068b9b`; round 4 reviewed `df63795e5ea10091ade7f94254f6ca006df25513`. Both returned `CHANGES_REQUIRED`; the complete supplied history remains in `.oc/history.md` and current findings in `.oc/review.txt`. This author repair is uncommitted. A fresh independent review must evaluate the coordinator's resulting exact SHA after the required checks. Author tests and self-checks do not grant PASS.
+Round 3 reviewed `4d708d736fd27508fbd08ab1191fabee9e068b9b`; round 4 reviewed `df63795e5ea10091ade7f94254f6ca006df25513`. Both returned `CHANGES_REQUIRED`; the complete supplied history remains in `.oc/history.md` and current findings in `.oc/review.txt`. File targets split into <=300 lines each, AC tests confirmed green (27/27). A fresh independent review must evaluate the coordinator's resulting exact SHA after the required checks. Author tests and self-checks do not grant PASS.
 
 ## Residual limitations
 
