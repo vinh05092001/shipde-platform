@@ -186,6 +186,7 @@ export function createValidTestConfig(overrides: Partial<AppConfig> = {}): AppCo
     RBAC_SEED_RETRY_INTERVAL_MS: 1000,
     RBAC_SEED_MAX_ATTEMPTS: 10,
     RBAC_SEED_BACKOFF_FACTOR: 1.5,
+    BULK_ACTION_MAX_ITEMS: 100,
     ...overrides,
   };
 }
