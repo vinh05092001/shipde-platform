@@ -202,3 +202,6 @@ export * from './msw/index.js';
 // --- HTTP Integration Test Harness (Supertest) ---
 import request from 'supertest';
 export { request };
+
+// --- Optional, in-process PostgreSQL for DB-backed tests ---
+export * from './database.js';
