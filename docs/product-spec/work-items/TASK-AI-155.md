@@ -6,8 +6,8 @@
 |---|---|
 | Work Item ID | `TASK-AI-155` |
 | Feature ID | `N/A — reusable UI data table components and dashboard shell pattern` |
-| Status | `IN_PROGRESS` |
-| Delivery order | `293` |
+| Status | `READY_FOR_CODEX` |
+| Delivery order | `294` |
 | Dependencies | `TASK-AI-151` |
 | Assigned author | `GEMINI` |
 | Risk | `LOW` |
