@@ -41,7 +41,10 @@ test('a pack without repomix says so instead of passing as a repomix pack', () =
   }
 });
 
-test('fake repomix package with .cmd and package.json bin', () => {
+test(
+  'fake repomix package with .cmd and package.json bin',
+  { skip: process.platform !== 'win32' },
+  () => {
   const root = tempRoot();
   const bin = path.join(root, 'node_modules', '.bin');
   const dir = path.join(root, 'node_modules', 'repomix');
