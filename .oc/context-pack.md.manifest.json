@@ -1,11 +1,10 @@
 {
   "files": [
-    ".oc/pr-body.md",
+    ".oc/context-pack.md",
     "AGENTS.md",
-    "apps/web/package.json",
-    "apps/web/src/tests/data-table-dashboard.test.ts",
-    "apps/web/src/tests/data-table-tablecn.test.ts",
-    "apps/web/src/tests/fixtures/data-table-shipments.ts"
+    "docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md",
+    "docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md",
+    "docs/product-spec/docs/01-product/PRODUCT-VISION-SCOPE.md"
   ],
-  "createdAt": "2026-11-04T17:45:39.613Z"
+  "createdAt": "2026-11-05T01:17:05.853Z"
 }

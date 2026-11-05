@@ -1,19 +1,24 @@
 VERDICT: CHANGES_REQUIRED
-Reviewed SHA: 2906993600060770d7219ad8b7546c607f04f88e
 
-1. **P1 — CI failing:** contract. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
-
-### contract (job 126758873362) — failing log lines
-```
-  Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
-  Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
-  LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
-Pull Request contract validation failed:
-- missing PR section: ## Scope integrity
-- missing PR section: ## Implementation
---
-- missing PR section: ## Safety and recovery
-- missing PR section: ## Documentation and traceability
-- PR is not marked READY_FOR_CODEX
-##[error]Process completed with exit code 1.
-```
+1. **P1 — push gate refused this branch (SKIP p-task-ai-155 bad=0 g=0).** Fix before anything else:
+.oc/context-pack.md:39: trailing whitespace.
++# Ship Dễ — Operating card
+.oc/context-pack.md:40: trailing whitespace.
++
+.oc/context-pack.md:41: trailing whitespace.
++## Source of truth
+.oc/context-pack.md:42: trailing whitespace.
++
+.oc/context-pack.md:43: trailing whitespace.
++Read these sources before changing code, in this precedence order:
+.oc/context-pack.md:44: trailing whitespace.
++
+.oc/context-pack.md:45: trailing whitespace.
++1. `docs/product-spec/docs/00-control/BASELINE-AND-DECISIONS.md`
+.oc/context-pack.md:46: trailing whitespace.
++2. `docs/product-spec/docs/01-product/PRODUCT-VISION-SCOPE.md`
+.oc/context-pack.md:47: trailing whitespace.
++3. `docs/product-spec/docs/01-product/MASTER-FEATURE-CATALOG.md`
+.oc/context-pack.md:48: trailing whitespace.
++4. Business rules, state machines, API/data contracts and screen specifications under `docs/product-spec/docs/`
+Commit subjects must contain AI-155; leftover conflict markers must be resolved.
