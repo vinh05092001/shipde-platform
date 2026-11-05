@@ -8,9 +8,50 @@ const { Cause } = require('./work-guard');
 const VALID_STAGES = new Set(['writer', 'reviewer', 'repair', 'fallback', 'review']);
 const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
-const SECRET_KEY =
-  /^(api[-_]?key|secret|token|password|passwd|auth|authorization|credential|cookie)$/i;
-const URL_KEY = /^(endpoint|url|uri|route|routeIdentity)$/i;
+
+const SENSITIVE_PATHS = [
+  'key',
+  'apiKey',
+  'token',
+  'authorization',
+  'secret',
+  'password',
+  'credential',
+  '*.key',
+  '*.apiKey',
+  '*.token',
+  '*.authorization',
+  '*.secret',
+  '*.password',
+  '*.credential',
+  'providers[*].key',
+  'providers[*].apiKey',
+  'providers[*].token',
+  'providers[*].authorization',
+  'providers[*].secret',
+  'providers[*].password',
+  'providers[*].credential',
+  '*[*].key',
+  '*[*].apiKey',
+  '*[*].token',
+  '*[*].authorization',
+  '*[*].secret',
+  '*[*].password',
+  '*[*].credential',
+  '*.*.key',
+  '*.*.apiKey',
+  '*.*.token',
+  '*.*.authorization',
+  '*.*.secret',
+  '*.*.password',
+  '*.*.credential',
+];
+
+const redactor = fastRedact({
+  paths: SENSITIVE_PATHS,
+  censor: '[REDACTED]',
+  serialize: false,
+});
 
 function isForbiddenId(id) {
   if (id === null || id === undefined) return false;
@@ -36,7 +77,9 @@ function maskUrl(v) {
       u.password = '';
     }
     for (const [k] of [...u.searchParams.entries()]) {
-      if (SECRET_KEY.test(k)) u.searchParams.set(k, '[REDACTED]');
+      if (/^(key|api[-_]?key|secret|token|password|auth|authorization)$/i.test(k)) {
+        u.searchParams.set(k, '[REDACTED]');
+      }
     }
     return u.toString();
   } catch (_) {
@@ -44,33 +87,26 @@ function maskUrl(v) {
   }
 }
 
-function redactPaths(v, prefix, out) {
-  if (!v || typeof v !== 'object') return;
-  if (Array.isArray(v)) {
-    for (const item of v) redactPaths(item, prefix + '[*]', out);
-    return;
+function walkUrls(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  for (const k of Object.keys(obj)) {
+    const val = obj[k];
+    if (typeof val === 'string' && val.includes('://')) {
+      obj[k] = maskUrl(val);
+    } else if (typeof val === 'object' && val !== null) {
+      walkUrls(val);
+    }
   }
-  for (const [k, val] of Object.entries(v)) {
-    const p = prefix ? prefix + '.' + k : k;
-    if (SECRET_KEY.test(k)) out.secrets.push(p);
-    else if (URL_KEY.test(k)) out.urls.push(p);
-    if (val && typeof val === 'object') redactPaths(val, p, out);
-  }
+  return obj;
 }
 
 function maskCredentials(v) {
   if (typeof v === 'string') return maskUrl(v);
   if (!v || typeof v !== 'object') return v;
-  const out = JSON.parse(JSON.stringify(v));
-  const paths = { secrets: [], urls: [] };
-  redactPaths(out, '', paths);
-  if (paths.urls.length) {
-    fastRedact({ paths: paths.urls, censor: maskUrl, serialize: false })(out);
-  }
-  if (paths.secrets.length) {
-    fastRedact({ paths: paths.secrets, censor: '[REDACTED]', serialize: false })(out);
-  }
-  return out;
+  const copy = JSON.parse(JSON.stringify(v));
+  walkUrls(copy);
+  redactor(copy);
+  return copy;
 }
 
 function writeJson(file, value) {
@@ -81,28 +117,32 @@ function writeJson(file, value) {
   fs.renameSync(tmp, file);
 }
 
-function overLimit(spent, lim, now) {
-  if (!lim) return null;
-  if (Number.isFinite(lim.attempts) && (spent.attempts || 0) >= lim.attempts) return 'attempts';
-  if (Number.isFinite(lim.ms) && (spent.ms || 0) >= lim.ms) return 'ms';
-  if (
-    Number.isFinite(lim.tokens) &&
-    (spent.tokens || 0) + (spent.unknownTokens || 0) >= lim.tokens
-  ) {
-    return 'tokens';
+function checkGoalBudget(goal, limits) {
+  if (!limits || !limits.goal) return null;
+  const g = limits.goal;
+  if (Number.isFinite(g.ms) && (goal.ms || 0) >= g.ms) return Cause.TIME_EXHAUSTED;
+  if (Number.isFinite(g.attempts) && (goal.attempts || 0) >= g.attempts) {
+    return Cause.ATTEMPTS_EXHAUSTED;
+  }
+  if (Number.isFinite(g.tokens) && (goal.tokens || 0) + (goal.unknownTokens || 0) >= g.tokens) {
+    return Cause.TOKENS_EXHAUSTED;
   }
   return null;
 }
 
-function limitCause(k) {
-  return k === 'ms'
-    ? Cause.TIME_EXHAUSTED
-    : k === 'tokens'
-      ? Cause.TOKENS_EXHAUSTED
-      : Cause.ATTEMPTS_EXHAUSTED;
+function findReservation(stages, attemptKey) {
+  for (const [stg, stageObj] of Object.entries(stages || {})) {
+    if (!stageObj || !stageObj.fps) continue;
+    for (const [f, entry] of Object.entries(stageObj.fps)) {
+      if (entry && entry.outcome === 'IN_FLIGHT' && entry.attemptId === attemptKey) {
+        return { stage: stg, fp: f, entry };
+      }
+    }
+  }
+  return null;
 }
 
-function computeGoals(runs) {
+function computeGoals(runs, items) {
   const goals = Object.create(null);
   const seen = new Map();
   for (const r of runs || []) {
@@ -124,12 +164,43 @@ function computeGoals(runs) {
     if (Number.isFinite(r.tokens)) g.tokens += r.tokens;
     else if (r.tokens === 'UNKNOWN') g.tokensUnknown += 1;
   }
+  for (const it of Object.values(items || {})) {
+    if (!it || !it.stages) continue;
+    for (const st of Object.values(it.stages)) {
+      if (!st || !st.fps) continue;
+      for (const entry of Object.values(st.fps)) {
+        if (
+          entry &&
+          entry.outcome === 'IN_FLIGHT' &&
+          entry.goalId &&
+          !isForbiddenId(entry.goalId)
+        ) {
+          const g = (goals[entry.goalId] = goals[entry.goalId] || {
+            attempts: 0,
+            ms: 0,
+            tokens: 0,
+            tokensUnknown: 0,
+            unknownTokens: 0,
+          });
+          const ids = seen.get(entry.goalId) || new Set();
+          const attemptKey = entry.attemptId || 'res-' + entry.goalId;
+          if (!ids.has(attemptKey)) {
+            ids.add(attemptKey);
+            g.attempts += 1;
+          }
+          seen.set(entry.goalId, ids);
+        }
+      }
+    }
+  }
   return goals;
 }
 
 function normalizeAdmit(arg1, arg2, arg3, arg4) {
   if (typeof arg1 === 'object' && arg1 !== null) return Object.assign({ stage: arg1.stage }, arg1);
-  if (typeof arg2 === 'object' && arg2 !== null) return Object.assign({ stage: arg1 }, arg2);
+  if (typeof arg2 === 'object' && arg2 !== null && typeof arg3 !== 'string') {
+    return Object.assign({ stage: arg1 }, arg2);
+  }
   if (typeof arg3 === 'string') return Object.assign({ itemId: arg1, stage: arg2, fp: arg3 }, arg4);
   return { stage: arg1, opts: arg2 };
 }
@@ -180,16 +251,14 @@ module.exports = {
   VALID_STAGES,
   VALID_RETRY_LAYERS,
   FORBIDDEN_IDS,
-  SECRET_KEY,
-  URL_KEY,
+  Cause,
   isForbiddenId,
   assertValidId,
   maskUrl,
-  redactPaths,
   maskCredentials,
   writeJson,
-  overLimit,
-  limitCause,
+  checkGoalBudget,
+  findReservation,
   computeGoals,
   normalizeAdmit,
   normalizeRecord,

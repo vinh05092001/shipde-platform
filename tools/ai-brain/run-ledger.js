@@ -2,10 +2,10 @@
 
 /*
  * RunLedger is a thin execution-chain adapter over ProgressLedger (work-guard).
- * Budget ownership stays in ProgressLedger: admission, caps, attempt counting and
- * goal totals are delegated there. RunLedger only persists writer -> review ->
- * repair links and retry-layer metadata under keys ProgressLedger's validator
- * ignores. Masking uses fast-redact (MIT) with explicit paths and URL parsing.
+ * Budget ownership and reservation stay in ProgressLedger: admission, caps,
+ * attempt counting and goal totals are delegated there. RunLedger only persists
+ * writer -> review -> repair links and retry-layer metadata under keys
+ * ProgressLedger's validator ignores. Masking uses fast-redact.
  */
 
 const { ProgressLedger, Cause, fingerprint } = require('./work-guard');
@@ -15,8 +15,8 @@ const {
   assertValidId,
   maskCredentials,
   writeJson,
-  overLimit,
-  limitCause,
+  checkGoalBudget,
+  findReservation,
   computeGoals,
   normalizeAdmit,
   normalizeRecord,
@@ -38,41 +38,17 @@ class RunLedger {
     return this.progressLedger.load();
   }
 
-  settleAll() {
-    const s = this.progressLedger.load();
-    const pending = s.pending || {};
-    for (const [itemId, byAttempt] of Object.entries(pending)) {
-      for (const p of Object.values(byAttempt || {})) {
-        if (!p || p.inflight) continue;
-        this.progressLedger.recordUnlocked(itemId, p.stage, p.fp, p.outcome, {
-          ms: p.ms,
-          tokens: p.tokensKnown ? p.tokens : undefined,
-        });
-      }
-    }
-    const fresh = this.progressLedger.load();
-    for (const [itemId, byAttempt] of Object.entries(fresh.pending || {})) {
-      for (const [key, p] of Object.entries(byAttempt || {})) {
-        if (p && !p.inflight) delete byAttempt[key];
-      }
-      if (Object.keys(byAttempt || {}).length === 0) delete fresh.pending[itemId];
-    }
-    if (fresh.pending && Object.keys(fresh.pending).length === 0) delete fresh.pending;
-    if (fresh.pending !== undefined || s.pending !== undefined) writeJson(this.file, fresh);
-    return fresh;
-  }
-
   admit(arg1, arg2, arg3, arg4) {
     const a = normalizeAdmit(arg1, arg2, arg3, arg4);
     const opts = a.opts || a;
     const stage = a.stage;
-    let itemId = a.itemId;
+    const itemId = a.itemId;
     const fp0 = a.fp || a.fingerprint;
     assertValidId(itemId, 'itemId');
     assertValidId(opts.goalId, 'goalId');
     assertValidId(fp0, 'fingerprint');
-    const attemptKey = opts.attemptId || opts.jobId;
-    const targetItemId = itemId || (attemptKey ? String(attemptKey) : null);
+    const attemptKey = opts.attemptId || opts.jobId ? String(opts.attemptId || opts.jobId) : null;
+    const targetItemId = itemId || attemptKey;
     assertValidId(targetItemId, 'itemId');
     if (opts.reserve && !targetItemId) return { ok: false, cause: Cause.NO_PROGRESS };
 
@@ -85,13 +61,37 @@ class RunLedger {
 
     return this.progressLedger.locked(() => {
       this.progressLedger.limits = this.limits;
-      const s = this.settleAll();
+      const s = this.progressLedger.load();
       if (!targetItemId) {
-        const over = overLimit(s.goal, this.limits.goal, this.now());
-        if (over) return { ok: false, cause: limitCause(over), limit: over };
+        const cause = checkGoalBudget(s.goal, this.limits);
+        if (cause) {
+          const limit =
+            cause === Cause.TIME_EXHAUSTED
+              ? 'ms'
+              : cause === Cause.ATTEMPTS_EXHAUSTED
+                ? 'attempts'
+                : 'tokens';
+          return { ok: false, cause, limit };
+        }
         return { ok: true };
       }
-      return this.progressLedger.admitUnlocked(targetItemId, stage, fp, opts);
+
+      const res = this.progressLedger.admitUnlocked(targetItemId, stage, fp, {
+        reserve: opts.reserve,
+        pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
+      });
+      if (!res.ok) return res;
+      if (opts.reserve) {
+        const fresh = this.progressLedger.load();
+        const entry = fresh.items?.[targetItemId]?.stages?.[stage]?.fps?.[fp];
+        if (entry) {
+          if (attemptKey) entry.attemptId = attemptKey;
+          if (opts.goalId) entry.goalId = String(opts.goalId);
+          fresh.goals = computeGoals(fresh.runs, fresh.items);
+          writeJson(this.file, fresh);
+        }
+      }
+      return res;
     });
   }
 
@@ -126,73 +126,93 @@ class RunLedger {
       const verdict = String(opts.verdict || opts.outcome || 'DONE');
       const ms = Number(opts.ms) || 0;
       const known = Number.isFinite(opts.tokens);
-      const pending = (s.pending = s.pending || Object.create(null));
-      const byItem = (pending[targetItemId] = pending[targetItemId] || Object.create(null));
-      const current = byItem[attemptKey];
 
-      if (current) {
-        const owner = Object.values(byItem).find(
-          (p) => p && p.fp === fp && p.stage === st && p.attemptId !== attemptKey && p.inflight
-        );
-        if (owner) {
+      const it = s.items[targetItemId] || {};
+      const stages = it.stages || {};
+
+      const found = findReservation(stages, attemptKey);
+      let reservedStage = found ? found.stage : null;
+      let reservedFp = found ? found.fp : null;
+      let reservedEntry = found ? found.entry : null;
+
+      const targetEntry = stages[st]?.fps?.[fp];
+      if (!reservedEntry && targetEntry && targetEntry.outcome === 'IN_FLIGHT') {
+        if (targetEntry.attemptId && targetEntry.attemptId !== attemptKey) {
           return {
             ok: false,
             cause: Cause.NO_PROGRESS,
             reason: 'in-flight-owned-by-other-attempt',
           };
         }
-        current.ms += ms;
-        if (known) {
-          current.tokens = (current.tokens || 0) + opts.tokens;
-          current.tokensKnown = true;
-        }
-        current.outcome = verdict;
-        current.inflight = verdict === 'IN_FLIGHT';
-      } else {
-        const owner = Object.values(byItem).find(
-          (p) => p && p.fp === fp && p.stage === st && p.inflight
-        );
-        if (owner) {
-          return {
-            ok: false,
-            cause: Cause.NO_PROGRESS,
-            reason: 'in-flight-owned-by-other-attempt',
-          };
-        }
-        s = this.settleAll();
-        const item = s.items && s.items[targetItemId];
-        const rec = item && item.stages && item.stages[st] && item.stages[st].fps[fp];
-        if (!rec || rec.outcome !== 'IN_FLIGHT') {
-          const res = this.progressLedger.admitUnlocked(targetItemId, st, fp, {
-            reserve: true,
-            pid:
-              Number.isInteger(opts.pid) && opts.pid > 0
-                ? opts.pid
-                : this.progressLedger.lastPid || process.pid,
-          });
-          if (!res.ok) return res;
-        }
-        s = this.progressLedger.load();
-        const pend = (s.pending = s.pending || Object.create(null));
-        const itemPend = (pend[targetItemId] = pend[targetItemId] || Object.create(null));
-        itemPend[attemptKey] = {
-          attemptId: attemptKey,
-          stage: st,
-          fp,
-          ms,
-          tokens: known ? opts.tokens : 0,
-          tokensKnown: known,
-          outcome: verdict,
-          inflight: verdict === 'IN_FLIGHT',
-        };
+        reservedStage = st;
+        reservedFp = fp;
+        reservedEntry = targetEntry;
       }
 
-      s = this.progressLedger.load();
+      if (reservedEntry && (reservedStage !== st || reservedFp !== fp)) {
+        delete stages[reservedStage].fps[reservedFp];
+        if (Object.keys(stages[reservedStage].fps).length === 0) {
+          delete stages[reservedStage];
+        }
+        stages[st] = stages[st] || { fps: {} };
+        stages[st].fps[fp] = reservedEntry;
+        writeJson(this.file, s);
+      }
+
       const effectiveGoalId =
         opts.goalId ||
+        reservedEntry?.goalId ||
         ((s.runs || []).find((r) => r.attemptId === attemptKey && r.goalId) || {}).goalId ||
         null;
       assertValidId(effectiveGoalId, 'goalId');
+
+      const alreadyRecorded = (s.runs || []).some(
+        (r) => r.attemptId === attemptKey && r.itemId === targetItemId
+      );
+
+      if (verdict === 'IN_FLIGHT') {
+        if (!stages[st]?.fps?.[fp] || stages[st].fps[fp].outcome !== 'IN_FLIGHT') {
+          const admitRes = this.progressLedger.admitUnlocked(targetItemId, st, fp, {
+            reserve: true,
+            pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
+          });
+          if (!admitRes.ok) return admitRes;
+        }
+        s = this.progressLedger.load();
+        const ent = s.items[targetItemId].stages[st].fps[fp];
+        ent.attemptId = attemptKey;
+        if (effectiveGoalId) ent.goalId = effectiveGoalId;
+        if (ms > 0) {
+          s.items[targetItemId].spent.ms += ms;
+          s.goal.ms += ms;
+        }
+        writeJson(this.file, s);
+      } else {
+        if (alreadyRecorded) {
+          stages[st] = stages[st] || { fps: {} };
+          stages[st].fps[fp] = Object.assign({}, stages[st].fps[fp], {
+            outcome: 'IN_FLIGHT',
+            pid: process.pid,
+            at: this.now(),
+            imputedTokens: 0,
+            attemptId: attemptKey,
+          });
+          writeJson(this.file, s);
+        } else if (!reservedEntry) {
+          const admitRes = this.progressLedger.admitUnlocked(targetItemId, st, fp, {
+            reserve: true,
+            pid: Number.isInteger(opts.pid) && opts.pid > 0 ? opts.pid : process.pid,
+          });
+          if (!admitRes.ok) return admitRes;
+        }
+
+        this.progressLedger.recordUnlocked(targetItemId, st, fp, verdict, {
+          ms,
+          tokens: known ? opts.tokens : undefined,
+        });
+      }
+
+      s = this.progressLedger.load();
       const run = {
         decisionId: opts.decisionId || null,
         jobId: opts.jobId || null,
@@ -217,7 +237,7 @@ class RunLedger {
       s.chains[targetItemId] = s.chains[targetItemId] || [];
       s.chains[targetItemId].push(run);
       if (s.items && s.items[targetItemId]) s.items[targetItemId].runs = s.chains[targetItemId];
-      s.goals = computeGoals(s.runs);
+      s.goals = computeGoals(s.runs, s.items);
       writeJson(this.file, s);
       return { ok: true, run };
     });
@@ -234,21 +254,19 @@ class RunLedger {
   }
 
   getSummary(itemId) {
-    return this.progressLedger.locked(() => {
-      const s = this.settleAll();
-      if (itemId) {
-        return (
-          (s.items[itemId] && s.items[itemId].spent) || {
-            attempts: 0,
-            ms: 0,
-            tokens: 0,
-            tokensUnknown: 0,
-            unknownTokens: 0,
-          }
-        );
-      }
-      return s.goal;
-    });
+    const s = this.progressLedger.load();
+    if (itemId) {
+      return (
+        (s.items[itemId] && s.items[itemId].spent) || {
+          attempts: 0,
+          ms: 0,
+          tokens: 0,
+          tokensUnknown: 0,
+          unknownTokens: 0,
+        }
+      );
+    }
+    return s.goal;
   }
 
   block(itemId, reason) {
