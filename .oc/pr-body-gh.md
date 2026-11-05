@@ -91,3 +91,5 @@
 - Verdict: PENDING_INDEPENDENT_REVIEW
 
 - [x] The implementation author has stopped after opening/updating this PR and has not started another Work Item.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)

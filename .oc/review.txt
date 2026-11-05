@@ -1,0 +1,19 @@
+VERDICT: CHANGES_REQUIRED
+Reviewed SHA: 2906993600060770d7219ad8b7546c607f04f88e
+
+1. **P1 — CI failing:** contract. Reproduce locally with the same commands as CI, fix, and re-run them green before committing.
+
+### contract (job 126758873362) — failing log lines
+```
+  Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64
+  LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib
+Pull Request contract validation failed:
+- missing PR section: ## Scope integrity
+- missing PR section: ## Implementation
+--
+- missing PR section: ## Safety and recovery
+- missing PR section: ## Documentation and traceability
+- PR is not marked READY_FOR_CODEX
+##[error]Process completed with exit code 1.
+```
