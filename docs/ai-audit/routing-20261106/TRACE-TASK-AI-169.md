@@ -8,14 +8,14 @@ Dữ liệu: log và code sẵn, không gọi model. Mã scratch ở `scratch-sn
 |---|---|
 | Lượt launch writer | 125 |
 | Có dòng lỗi trong log | 46 |
-| Không gọi tool nào | 63 |
+| Không gọi tool nào | 57 |
 | Số model/route khác nhau đã thử | 33 nhãn |
 | Dòng `route` / `GUARD` / `killed failed` / `killed hung` | 142 / 62 / 58 / 13 |
 | Review có ghi nhận | 44: 28 `CHANGES_REQUIRED`, 4 `SKIP`, 12 trống |
 | `REVIEWER FAILED` / `STUCK` | 7 / 5 |
 | Merge | 0 |
 
-Hơn một nửa số lượt launch (63/125) không làm được gì trước khi kết thúc. Tổng phút writer: UNKNOWN, phép tính từ mtime log không tin được.
+Gần một nửa số lượt launch (57/125) không làm được gì trước khi kết thúc. Tổng phút writer: UNKNOWN, phép tính từ mtime log không tin được.
 
 ## Từng bước
 
@@ -45,7 +45,7 @@ Hơn một nửa số lượt launch (63/125) không làm được gì trước 
 
 Với 169 lúc 09:44, pack chỉ gói `.oc/pr-body-remote.md` và `AGENTS.md` (6.5 KB), không có code liên quan: `pipeline-run37.sh:50` lấy tên file bằng regex trong `review.txt`, nên review CI không nêu file thì pack vô nghĩa. Bản 134 KB trước đó cũng không tới worker.
 
-Code mượn: repomix chạy nguyên bản bằng CLI. 169 không mượn repo ngoài: `run-ledger.js` tự viết và trong lượt này được yêu cầu làm adapter mỏng trên `ProgressLedger` có sẵn của repo. Thời gian mất ở tích hợp, CI, review, gọi lại model: chưa tách được. Bằng chứng gián tiếp: 63/125 lượt không có tool, 46 lượt có lỗi, tức phần lớn mất ở gọi lại model.
+Code mượn: repomix chạy nguyên bản bằng CLI. 169 không mượn repo ngoài: `run-ledger.js` tự viết và trong lượt này được yêu cầu làm adapter mỏng trên `ProgressLedger` có sẵn của repo. Thời gian mất ở tích hợp, CI, review, gọi lại model: chưa tách được. Bằng chứng gián tiếp: 57/125 lượt không có tool, 46 lượt có lỗi, tức phần lớn mất ở gọi lại model.
 
 ## Lỗi có thể giao sửa
 
@@ -58,9 +58,9 @@ Code mượn: repomix chạy nguyên bản bằng CLI. 169 không mượn repo n
 | T5 | Phiếu ghi "Jev rated hard" khi tách bước do `roundsSoFar>=3` | Mock 169: Jev `simple`, phiếu vẫn ghi hard | `route.js` | Mock kiểm câu đúng nguồn | Claude |
 | T6 | Log CI trong review bị cắt | Mẫu contract có `--`, mất mục | `codex-delta-review.sh:22` | Mẫu log đủ 10 mục giữ đủ | Claude |
 | T7 | `route.js:390` bỏ qua `job.lock` (A2) | Job quét 09:14 ghi đè `job.json` | `route.js` `launch()` | Mock: lane có lock thì không ghi | Claude |
-| T8 | Lần launch 0 tool vẫn được tính như một lượt | 63/125 | Ranking, health | Dùng route-log làm fixture | AGY |
+| T8 | Lần launch 0 tool vẫn được tính như một lượt | 57/125 | Ranking, health | Dùng route-log làm fixture | AGY |
 
-Repair không chạy mà review lại cùng SHA: chỉ thấy 1 SHA review 2 lần (`e214960f`) trong 31 file review. Không phải vấn đề chính ở 169, không giao sửa. Kẹt chính là T1, T4.
+Repair không chạy mà review lại cùng SHA: chỉ thấy 1 SHA review 2 lần (`e214960f`) trong 31 file review. Không phải vấn đề chính ở 169. Ở 158 và 164 có thật, xem ALL-ITEMS. Kẹt chính của 169 là T1, T4.
 
 ## Scratch bỏ qua core
 
