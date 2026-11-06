@@ -26,4 +26,3 @@ Fixed two root causes in `tools/ai-brain/work-guard.js`:
 See `.oc/diagnosis.md` for detailed root cause analysis.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-

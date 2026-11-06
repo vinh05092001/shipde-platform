@@ -268,6 +268,20 @@ class ProgressLedger {
 
     this.settleDeadFlights(s);
 
+    let existingReservation = null;
+    if (opts.attemptId && it.stages) {
+      for (const [stName, stObj] of Object.entries(it.stages)) {
+        if (!stObj || !stObj.fps) continue;
+        for (const [fName, entry] of Object.entries(stObj.fps)) {
+          if (entry && entry.outcome === 'IN_FLIGHT' && entry.attemptId === opts.attemptId) {
+            existingReservation = { stage: stName, fp: fName, entry };
+            break;
+          }
+        }
+        if (existingReservation) break;
+      }
+    }
+
     const goalFlight = inFlightGoalMs(s.items, this.now());
     if (!Number.isFinite(goalFlight)) return { ok: false, cause: Cause.GOAL_EXHAUSTED };
     const itemFlight = inFlightMs(it, this.now());
@@ -280,9 +294,11 @@ class ProgressLedger {
     if (itemTimeOver) return { ok: false, cause: Cause.TIME_EXHAUSTED, limit: itemTimeOver };
 
     const over = exceeded(s.goal, lim.goal);
-    if (over) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
+    if (over && (!existingReservation || over !== 'attempts'))
+      return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: over };
     const own = exceeded(it.spent || {}, lim.item);
-    if (own) return { ok: false, cause: limitCause(own), limit: own };
+    if (own && (!existingReservation || own !== 'attempts'))
+      return { ok: false, cause: limitCause(own), limit: own };
     // A token cap is enforced over observed *and* imputed tokens. Usage that could not
     // be observed is charged at the per-attempt cap, so repeated unobserved attempts
     // reach the cap instead of running free.
@@ -316,22 +332,40 @@ class ProgressLedger {
             stages: it.stages || {},
           });
       t.stages = t.stages || {};
-      t.spent.attempts += 1;
-      s.goal.attempts += 1;
-      // The attempt is charged now with an unknown cost, so a reservation that is never
-      // recorded still counts toward the token caps at the conservative per-attempt cap.
       const perAttemptTokens = getPerAttemptTokens(lim);
-      for (const acc of [t.spent, s.goal]) {
-        acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
-        acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
+
+      if (!existingReservation) {
+        t.spent.attempts += 1;
+        s.goal.attempts += 1;
+        // The attempt is charged now with an unknown cost, so a reservation that is never
+        // recorded still counts toward the token caps at the conservative per-attempt cap.
+        for (const acc of [t.spent, s.goal]) {
+          acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
+          acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
+        }
+      } else if (existingReservation.stage !== stage || existingReservation.fp !== fp) {
+        delete t.stages[existingReservation.stage].fps[existingReservation.fp];
+        if (Object.keys(t.stages[existingReservation.stage].fps).length === 0) {
+          delete t.stages[existingReservation.stage];
+        }
       }
+
+      if (opts.ms && isCount(opts.ms)) {
+        t.spent.ms = (t.spent.ms || 0) + opts.ms;
+        s.goal.ms = (s.goal.ms || 0) + opts.ms;
+      }
+
       const st = t.stages[stage] || { fps: {} };
       st.fps = st.fps || {};
       st.fps[fp] = {
         outcome: 'IN_FLIGHT',
         pid: opts.pid,
-        at: this.now(),
-        imputedTokens: perAttemptTokens,
+        at: existingReservation ? existingReservation.entry.at : this.now(),
+        imputedTokens: existingReservation
+          ? existingReservation.entry.imputedTokens
+          : perAttemptTokens,
+        ...(opts.attemptId !== undefined && { attemptId: opts.attemptId }),
+        ...(opts.goalId !== undefined && { goalId: opts.goalId }),
       };
       t.stages[stage] = st;
       s.items[itemId] = t;
@@ -365,8 +399,44 @@ class ProgressLedger {
     if (u.tokens !== undefined && (typeof u.tokens !== 'number' || !isCount(u.tokens)))
       throw new Error('WORK_GUARD_REFUSED: invalid usage.tokens');
 
-    const prev = ((it.stages[stage] || {}).fps || {})[fp];
-    const reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
+    let prev = ((it.stages[stage] || {}).fps || {})[fp];
+    let reserved = Boolean(prev && prev.outcome === 'IN_FLIGHT');
+
+    if (!reserved && u.attemptId && it.stages) {
+      for (const [stName, stObj] of Object.entries(it.stages)) {
+        if (!stObj || !stObj.fps) continue;
+        for (const [fName, entry] of Object.entries(stObj.fps)) {
+          if (entry && entry.outcome === 'IN_FLIGHT' && entry.attemptId === u.attemptId) {
+            delete it.stages[stName].fps[fName];
+            if (Object.keys(it.stages[stName].fps).length === 0) {
+              delete it.stages[stName];
+            }
+            prev = entry;
+            reserved = true;
+            break;
+          }
+        }
+        if (reserved) break;
+      }
+    }
+
+    if (
+      prev &&
+      prev.outcome === 'IN_FLIGHT' &&
+      prev.attemptId &&
+      u.attemptId &&
+      prev.attemptId !== u.attemptId
+    ) {
+      return { ok: false, cause: Cause.NO_PROGRESS, reason: 'in-flight-owned-by-other-attempt' };
+    }
+
+    if (!reserved && !u.reuseAttempt) {
+      const ownAttempts = exceeded(it.spent || {}, this.limits.item);
+      if (ownAttempts) return { ok: false, cause: Cause.ATTEMPTS_EXHAUSTED, limit: ownAttempts };
+      const goalAttempts = exceeded(s.goal || {}, this.limits.goal);
+      if (goalAttempts) return { ok: false, cause: Cause.GOAL_EXHAUSTED, limit: goalAttempts };
+    }
+
     const knownTokens = typeof u.tokens === 'number' && Number.isFinite(u.tokens);
     const perAttemptTokens = getPerAttemptTokens(this.limits);
     const prevImputed = reserved
@@ -402,7 +472,7 @@ class ProgressLedger {
     if (overTokens) return { ok: false, cause: Cause.TOKENS_EXHAUSTED, limit: overTokens };
 
     for (const acc of [it.spent, s.goal]) {
-      if (!reserved) acc.attempts += 1;
+      if (!reserved && !u.reuseAttempt) acc.attempts += 1;
       acc.ms += consumedMs;
       if (knownTokens) {
         acc.tokens += Number(u.tokens);
@@ -411,7 +481,7 @@ class ProgressLedger {
           acc.tokensUnknown = Math.max(0, (acc.tokensUnknown || 0) - 1);
         }
       } else {
-        if (!reserved) {
+        if (!reserved && !u.reuseAttempt) {
           acc.tokensUnknown = (acc.tokensUnknown || 0) + 1;
           acc.unknownTokens = (acc.unknownTokens || 0) + perAttemptTokens;
         }
@@ -423,6 +493,7 @@ class ProgressLedger {
       outcome: String(outcome),
       at: this.now(),
       imputedTokens: knownTokens ? 0 : reserved ? prevImputed : perAttemptTokens,
+      ...(u.attemptId !== undefined && { attemptId: u.attemptId }),
     };
     it.stages[stage] = st;
     s.items[itemId] = it;

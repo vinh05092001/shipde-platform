@@ -9,30 +9,40 @@ const VALID_STAGES = new Set(['writer', 'reviewer', 'repair', 'fallback', 'revie
 const VALID_RETRY_LAYERS = new Set(['pipeline', 'cli', 'gateway']);
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
-const SENSITIVE_KEYS = [
+const SENSITIVE_PATHS = [
   'key',
   'apiKey',
   'token',
   'authorization',
-  'Authorization',
   'secret',
   'password',
   'credential',
-];
-const SENSITIVE_SPECIAL = ['["x-api-key"]', '["X-Api-Key"]', '["X-API-KEY"]'];
-
-const SENSITIVE_PATHS = [
-  ...SENSITIVE_KEYS,
-  ...SENSITIVE_KEYS.map((k) => '*.' + k),
-  ...SENSITIVE_KEYS.map((k) => '*.*.' + k),
-  ...SENSITIVE_KEYS.map((k) => 'providers[*].' + k),
-  ...SENSITIVE_KEYS.map((k) => '*[*].' + k),
-  ...SENSITIVE_SPECIAL,
-  ...SENSITIVE_SPECIAL.map((k) => '*' + k),
-  ...SENSITIVE_SPECIAL.map((k) => '*.*' + k),
-  ...SENSITIVE_SPECIAL.map((k) => 'providers[*]' + k),
-  ...SENSITIVE_SPECIAL.map((k) => 'providers[*].headers' + k),
-  ...SENSITIVE_SPECIAL.map((k) => '*[*]' + k),
+  '*.key',
+  '*.apiKey',
+  '*.token',
+  '*.authorization',
+  '*.secret',
+  '*.password',
+  '*.credential',
+  '*.*.key',
+  '*.*.apiKey',
+  '*.*.token',
+  '*.*.authorization',
+  '*.*.secret',
+  '*.*.password',
+  '*.*.credential',
+  'providers[*].key',
+  'providers[*].apiKey',
+  'providers[*].token',
+  'providers[*].authorization',
+  'providers[*].secret',
+  '*[*].key',
+  '*[*].apiKey',
+  '*[*].token',
+  '*[*].secret',
+  '["x-api-key"]',
+  '*["x-api-key"]',
+  'providers[*]["x-api-key"]',
 ];
 
 const redactor = fastRedact({
@@ -113,18 +123,6 @@ function writeJson(file, value) {
   const tmp = file + '.' + process.pid + '.' + Date.now() + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
   fs.renameSync(tmp, file);
-}
-
-function findReservation(stages, attemptKey) {
-  for (const [stg, stageObj] of Object.entries(stages || {})) {
-    if (!stageObj || !stageObj.fps) continue;
-    for (const [f, entry] of Object.entries(stageObj.fps)) {
-      if (entry && entry.outcome === 'IN_FLIGHT' && entry.attemptId === attemptKey) {
-        return { stage: stg, fp: f, entry };
-      }
-    }
-  }
-  return null;
 }
 
 function computeGoals(runs, items) {
@@ -242,7 +240,6 @@ module.exports = {
   maskUrl,
   maskCredentials,
   writeJson,
-  findReservation,
   computeGoals,
   normalizeAdmit,
   normalizeRecord,
