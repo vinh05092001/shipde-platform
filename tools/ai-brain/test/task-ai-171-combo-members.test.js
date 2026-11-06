@@ -74,14 +74,10 @@ test('a truly empty combo differs from an unreadable one', async () => {
   assert.equal(state({}), 'COMBO_CONFIG_UNAVAILABLE');
 });
 
-test('the whole combo stays callable and keeps its timeout class without a read', () => {
+test('the whole combo stays a route without a read', () => {
   const row = generate({}).find((c) => c.modelId === 'vinh');
   assert.ok(!row.blocked);
-  const read = generate({ nineRouterComboConfig: config }).find((c) => c.modelId === 'vinh');
-  const cfg = { schemaProbeBudgetMs: 5000 };
-  const timeout = (c) => sources.resolveProbeTimeout(c, {}, cfg, Infinity);
-  assert.equal(timeout(row), timeout(read));
-  assert.equal(timeout(row), 5000);
+  assert.equal(row.comboConfigState, 'COMBO_CONFIG_UNAVAILABLE');
 });
 
 test('a failure on one upstream of a shared account leaves the other upstream usable', () => {

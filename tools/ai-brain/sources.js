@@ -712,15 +712,12 @@ function resolveProbeTimeout(candidate, record, dispatchConfig, remainingMs) {
   const fallbackTimeout =
     // A 9router combo fails over across its members inside one call.
     candidate?.harness === 'agy-pool' ||
-    Boolean(candidate?.comboConfigState) ||
     (Array.isArray(candidate?.comboMembers) && candidate.comboMembers.length > 0)
       ? Number(cfg.schemaProbeBudgetMs) || defaultTimeout
       : defaultTimeout;
   // A combo's latency depends on which member 9router reaches, so one
   // measured call does not bound the next.
-  const isCombo =
-    Boolean(candidate?.comboConfigState) ||
-    (Array.isArray(candidate?.comboMembers) && candidate.comboMembers.length > 0);
+  const isCombo = Array.isArray(candidate?.comboMembers) && candidate.comboMembers.length > 0;
   const baseTimeout =
     !isCombo && Number.isFinite(measuredElapsedMs) && measuredElapsedMs > 0
       ? measuredElapsedMs + safetyMarginMs
