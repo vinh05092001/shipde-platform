@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decide, routeKey } = require('../route-decision');
+const { decide, routeKey, scoreProvenance } = require('../route-decision');
 const { buildLaunch, launchBlocker, nextDecisionInput } = require('../route-launch');
 
 const quality = (score) => ({ score, scale: 's', version: 'v' });
@@ -248,4 +248,30 @@ test('model id forms keep their exact text in the argv', () => {
     const launch = buildLaunch(decideWith({ candidates: [candidate] }), options);
     assert.equal(launch.args[2], expected);
   }
+});
+
+test('provenance keeps the source and separates floor quality, quality and rank score', () => {
+  const seen = scoreProvenance({
+    source: 'gw',
+    upstream: 'other',
+    score: 60,
+    scoreBreakdown: { reliability: 100, quality: 60, qualitySource: 'EXTERNAL_PRIOR' },
+  });
+  assert.equal(seen.source, 'gw');
+  assert.equal(seen.floorQuality, 'UNKNOWN');
+  assert.equal(seen.computedQuality, 60);
+  assert.equal(seen.rankScore, 60);
+  assert.equal(seen.scoredBy, 'routing.scoreForProfile');
+  assert.equal(seen.scale, 'UNKNOWN');
+  assert.equal(seen.version, 'UNKNOWN');
+});
+
+test('provenance never infers a source from the upstream or a scorer from nothing', () => {
+  const seen = scoreProvenance({ upstream: 'other', score: 26 });
+  assert.equal(seen.source, 'UNKNOWN');
+  assert.equal(seen.scoredBy, 'UNKNOWN');
+  assert.equal(
+    scoreProvenance({ scoreBreakdown: { evidence: 0 } }).scoredBy,
+    'ranking.scoreCandidate'
+  );
 });

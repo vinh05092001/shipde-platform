@@ -285,7 +285,35 @@ function decide({ runId, candidates, request, states, now, scale, launchCheck })
   };
 }
 
+/**
+ * What a logged candidate can honestly say about its numbers. Route source, the
+ * quality the floor reads, the quality the score was built from and the score
+ * used for ordering are separate facts; a value that was not recorded stays
+ * UNKNOWN. The scoring function is read from the shape of the breakdown it wrote.
+ * No scale or version is recorded where scores are computed, so both are UNKNOWN.
+ */
+function scoreProvenance(candidate) {
+  const c = candidate || {};
+  const b = c.scoreBreakdown || {};
+  const known = (v) => (v === undefined || v === null ? 'UNKNOWN' : v);
+  let scoredBy = 'UNKNOWN';
+  if ('reliability' in b) scoredBy = 'routing.scoreForProfile';
+  else if ('evidence' in b) scoredBy = 'ranking.scoreCandidate';
+  return {
+    source: known(c.source),
+    floorQuality: known(c.quality),
+    computedQuality: known(b.quality),
+    qualitySource: known(b.qualitySource),
+    rankScore: known(c.score),
+    scoredBy,
+    scale: 'UNKNOWN',
+    version: 'UNKNOWN',
+    maxOutputTokens: known(c.maxOutputTokens),
+  };
+}
+
 module.exports = {
+  scoreProvenance,
   classifyFailure,
   filterEligible,
   rankByScale,

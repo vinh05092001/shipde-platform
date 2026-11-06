@@ -1887,7 +1887,7 @@ function buildDryRunLog(parts) {
       c.score === undefined
         ? 'chưa rõ'
         : c.score;
-    return Object.assign(sevenFields(c), {
+    return Object.assign(sevenFields(c), require('./route-decision').scoreProvenance(c), {
       offeringId: key,
       status: c.status === 'passed' ? 'PASS' : c.status || 'unknown',
       score: scoreVal,
