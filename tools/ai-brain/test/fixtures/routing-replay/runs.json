@@ -2,17 +2,82 @@
   "source": "docs/ai-audit/routing-20261106/EVIDENCE-EXCERPTS-2026-11-06.md, audit a3af7c7",
   "request": { "outputTokens": 32000 },
   "cases": {
-    "credit_402": { "item": "TASK-AI-166", "at": "2026-11-06T07:30:00+07:00", "text": "Error: [openrouter/openai/gpt-5.6-luna] [402]: {\"error\":{\"message\":\"This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1305.\"}} (reset after 1s)", "expect": { "class": "CREDIT_BUDGET", "requested": 32000, "affordable": 1305 } },
-    "monthly_402": { "item": "FEAT-COM-03-API", "at": "2026-11-06T08:00:00+07:00", "text": "Error: [kiro/glm-5-agentic] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1s)", "expect": { "class": "QUOTA_MONTHLY" } },
-    "bracket_error": { "item": "TASK-AI-169", "at": "2026-11-06T09:15:00+07:00", "text": "[Error] Service temporarily unavailable. The model did not respond to this request.", "expect": { "class": "UPSTREAM_UNAVAILABLE" } },
-    "capacity": { "item": "TASK-AI-169", "at": "2026-11-05T22:43:00+07:00", "text": "[Error] The model is currently at capacity due to high demand.", "expect": { "class": "UPSTREAM_UNAVAILABLE" } }
+    "credit_402": {
+      "item": "TASK-AI-166",
+      "at": "2026-11-06T07:30:00+07:00",
+      "text": "Error: [openrouter/openai/gpt-5.6-luna] [402]: {\"error\":{\"message\":\"This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1305.\"}} (reset after 1s)",
+      "expect": { "class": "CREDIT_BUDGET", "requested": 32000, "affordable": 1305 }
+    },
+    "monthly_402": {
+      "item": "FEAT-COM-03-API",
+      "at": "2026-11-06T08:00:00+07:00",
+      "text": "Error: [kiro/glm-5-agentic] [402]: {\"message\":\"You have reached the limit.\",\"reason\":\"MONTHLY_REQUEST_COUNT\"} (reset after 1s)",
+      "expect": { "class": "QUOTA_MONTHLY" }
+    },
+    "bracket_error": {
+      "item": "TASK-AI-169",
+      "at": "2026-11-06T09:15:00+07:00",
+      "text": "[Error] Service temporarily unavailable. The model did not respond to this request.",
+      "expect": { "class": "UPSTREAM_UNAVAILABLE" }
+    },
+    "capacity": {
+      "item": "TASK-AI-169",
+      "at": "2026-11-05T22:43:00+07:00",
+      "text": "[Error] The model is currently at capacity due to high demand.",
+      "expect": { "class": "UPSTREAM_UNAVAILABLE" }
+    }
   },
   "candidates": [
-    { "routeKind": "model", "source": "9router", "harness": "opencode", "modelId": "openrouter/openai/gpt-5.6-luna", "account": null, "quality": { "score": 84.5, "scale": "prior-raw", "version": "2026-11-05" }, "budget": { "maxOutputTokens": 1305 } },
-    { "routeKind": "model", "source": "9router", "harness": "opencode", "modelId": "kgw/dots-studio/dots-3-note-preview:free", "account": null, "quality": { "score": 64.4, "scale": "prior-raw", "version": "2026-11-05" } },
-    { "routeKind": "model", "source": "explabs", "harness": "opencode", "modelId": "deepseek-v4.1-flash", "account": null, "quality": { "score": 56.6, "scale": "aa-v5-percentile", "version": "2026-11-04" } },
-    { "routeKind": "combo", "source": "9router", "harness": "opencode", "modelId": "vinh", "account": null, "quality": null },
-    { "routeKind": "agy-pool", "source": "agy-pool", "harness": "agy", "modelId": "gemini-3.8-flash-high", "account": "acct-A", "cwd": "wt-a", "quality": { "score": 52.7, "scale": "aa-v5-percentile", "version": "2026-11-04" } },
-    { "routeKind": "agy-pool", "source": "agy-pool", "harness": "agy", "modelId": "gemini-3.8-flash-medium", "account": "acct-B", "cwd": "wt-a", "quality": null }
+    {
+      "routeKind": "model",
+      "source": "9router",
+      "harness": "opencode",
+      "modelId": "openrouter/openai/gpt-5.6-luna",
+      "account": null,
+      "quality": { "score": 84.5, "scale": "prior-raw", "version": "2026-11-05" },
+      "budget": { "maxOutputTokens": 1305 }
+    },
+    {
+      "routeKind": "model",
+      "source": "9router",
+      "harness": "opencode",
+      "modelId": "kgw/dots-studio/dots-3-note-preview:free",
+      "account": null,
+      "quality": { "score": 64.4, "scale": "prior-raw", "version": "2026-11-05" }
+    },
+    {
+      "routeKind": "model",
+      "source": "explabs",
+      "harness": "opencode",
+      "modelId": "deepseek-v4.1-flash",
+      "account": null,
+      "quality": { "score": 56.6, "scale": "aa-v5-percentile", "version": "2026-11-04" }
+    },
+    {
+      "routeKind": "combo",
+      "source": "9router",
+      "harness": "opencode",
+      "modelId": "vinh",
+      "account": null,
+      "quality": null
+    },
+    {
+      "routeKind": "agy-pool",
+      "source": "agy-pool",
+      "harness": "agy",
+      "modelId": "gemini-3.8-flash-high",
+      "account": "acct-A",
+      "cwd": "wt-a",
+      "quality": { "score": 52.7, "scale": "aa-v5-percentile", "version": "2026-11-04" }
+    },
+    {
+      "routeKind": "agy-pool",
+      "source": "agy-pool",
+      "harness": "agy",
+      "modelId": "gemini-3.8-flash-medium",
+      "account": "acct-B",
+      "cwd": "wt-a",
+      "quality": null
+    }
   ]
 }
