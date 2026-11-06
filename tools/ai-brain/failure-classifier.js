@@ -859,10 +859,12 @@ function classifyFailure(input) {
 
   // Behind a gateway a 401 can come from three layers. Only stated evidence widens it.
   if (effectiveStatus === 401 && input?.gateway && input?.upstream !== input.gateway) {
-    const layer = input.authLayer;
+    const layer =
+      input.authLayer || (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
     const byLayer = {
       'gateway-key': [Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT, HumanAction.REQUIRED],
       'upstream-credential': [Cause.UPSTREAM_CREDENTIAL, Scope.UPSTREAM, HumanAction.NONE],
+      'upstream-route': [Cause.AUTH_SCOPE_UNKNOWN, Scope.UNKNOWN, HumanAction.NONE],
       connection: [Cause.UPSTREAM_CREDENTIAL, Scope.CONNECTION, HumanAction.NONE],
     }[layer] || [Cause.AUTH_SCOPE_UNKNOWN, Scope.UNKNOWN, HumanAction.NONE];
     return addRetryFields({
@@ -1029,6 +1031,23 @@ function classifyFailure(input) {
   });
 }
 
+/**
+ * A gateway reports an upstream refusal as `[provider/model] [401]: ...`. This shows only that the
+ * upstream refused this route, so it never names a connection, an account or the whole upstream.
+ * Provider labels differ from route prefixes, so the model after the first segment is compared.
+ */
+function upstreamAuthSignal(text, route) {
+  const tag = /\[([^\]\s]+\/[^\]\s]+)\]\s*\[401\]:/.exec(String(text || ''));
+  if (!tag) return null;
+  const modelOf = (id) =>
+    String(id || '')
+      .split('/')
+      .slice(1)
+      .join('/');
+  const model = modelOf(route?.modelId || route?.model);
+  return model && model === modelOf(tag[1]) ? { tag: tag[1] } : null;
+}
+
 module.exports = {
   Cause,
   Scope,
@@ -1041,5 +1060,6 @@ module.exports = {
   DEFAULT_COOLDOWNS,
   requiresHumanAction,
   classifyFailure,
+  upstreamAuthSignal,
   isReplayable,
 };

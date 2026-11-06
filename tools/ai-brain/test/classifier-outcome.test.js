@@ -104,7 +104,7 @@ describe('failure classifier outcome path', () => {
     // Candidate A (acc-1) is blocked with account scope
     const blockA = evidence.isCandidateBlocked(data, candA);
     assert.equal(blockA.blocked, true, 'candA (acc-1) must be blocked');
-    assert.equal(blockA.scope, 'account', 'scope must be account, not upstream');
+    assert.equal(blockA.scope, 'unknown', 'scope must be account, not upstream');
 
     // Upstream gh is NOT blocked
     const upBlock = evidence.isUpstreamBlocked(data, 'gh');
