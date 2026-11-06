@@ -200,6 +200,7 @@ test('nextDecisionInput drops only the failed route and keeps another account of
     candidates: [acctA, acctB],
     request: { outputTokens: 1000 },
     scale: 'aa-v5-percentile',
+    retryBudget: 1,
   };
   const decision = decide(input);
   assert.equal(decision.chosen.account, 'acct-A');
@@ -208,6 +209,7 @@ test('nextDecisionInput drops only the failed route and keeps another account of
   assert.equal(failure.class, 'UPSTREAM_UNAVAILABLE');
   const next = nextDecisionInput(input, decision, failure);
 
+  assert.equal(next.retryBudget, 0);
   assert.equal(next.candidates.length, 1);
   assert.equal(next.candidates[0].account, 'acct-B');
   assert.equal(
@@ -222,6 +224,43 @@ test('nextDecisionInput drops only the failed route and keeps another account of
 
   // The same model on another account is still usable on the next decide call.
   assert.equal(decide(next).chosen.account, 'acct-B');
+});
+
+test('nextDecisionInput blocks with exhausted budget and no candidates', () => {
+  const base = {
+    routeKind: 'agy-pool',
+    source: 'agy-pool',
+    harness: 'agy',
+    modelId: 'gemini-3.8-flash-high',
+  };
+  const acctA = Object.assign({}, base, {
+    account: 'acct-A',
+    quality: { score: 52.7, scale: 'aa-v5-percentile', version: 'v' },
+  });
+  const acctB = Object.assign({}, base, {
+    account: 'acct-B',
+    quality: { score: 10, scale: 'aa-v5-percentile', version: 'v' },
+  });
+  const input = {
+    runId: 'r-budget',
+    candidates: [acctA, acctB],
+    request: { outputTokens: 1000 },
+    scale: 'aa-v5-percentile',
+  };
+  const decision = decide(input);
+  const failure = classifyFailure(CASES.bracket_error.text);
+
+  const zero = nextDecisionInput(Object.assign({}, input, { retryBudget: 0 }), decision, failure);
+  assert.equal(zero.status, 'BLOCKED');
+  assert.equal(zero.reason, 'RETRY_BUDGET_EXHAUSTED');
+  assert.equal(Object.prototype.hasOwnProperty.call(zero, 'candidates'), false);
+  assert.equal(zero.failures.length, 1);
+
+  const missing = nextDecisionInput(input, decision, failure);
+  assert.equal(missing.status, 'BLOCKED');
+  assert.equal(missing.reason, 'RETRY_BUDGET_EXHAUSTED');
+  assert.equal(Object.prototype.hasOwnProperty.call(missing, 'candidates'), false);
+  assert.equal(missing.failures.length, 1);
 });
 
 test('decide requires a numeric now when a state carries a cooldownUntil', () => {

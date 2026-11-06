@@ -201,6 +201,19 @@ test('decide never moves a score onto the combo', () => {
   assert.equal(result.chosen.quality.source, 'aa-v5-percentile');
 });
 
+test('chosen keeps the winning score and scale alongside source and version', () => {
+  const result = decide({
+    runId: 'r-quality',
+    candidates: CANDIDATES,
+    request: REQUEST,
+    scale: 'aa-v5-percentile',
+  });
+  assert.equal(result.chosen.quality.score, 56.6);
+  assert.equal(result.chosen.quality.scale, 'aa-v5-percentile');
+  assert.equal(result.chosen.quality.source, 'aa-v5-percentile');
+  assert.equal(result.chosen.quality.version, '2026-11-04');
+});
+
 test('two AGY accounts stay two routes; modelId and account verbatim in chosen', () => {
   const agy = CANDIDATES.filter((c) => c.source === 'agy-pool');
   assert.equal(agy.length, 2);

@@ -184,7 +184,9 @@ function toChosen(candidate) {
     account: c.account === undefined ? null : c.account,
     modelId: c.modelId,
     budget: c.budget,
-    quality: q ? { source: q.scale, version: q.version } : null,
+    quality: q
+      ? { source: q.scale, scale: q.scale, score: q.score, version: q.version }
+      : null,
   };
 }
 

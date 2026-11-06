@@ -128,25 +128,39 @@ function observed(decision, run) {
  * same model stays usable — and appends the failure to `failures`. It never
  * retries and never calls decide itself.
  *
+ * Retries are bounded by `input.retryBudget`: a run may only produce another
+ * input while the budget is a number above 0, and the returned input carries
+ * the budget reduced by one. There is no default; an absent or non-positive
+ * budget fails closed with `RETRY_BUDGET_EXHAUSTED` and no candidates, so a
+ * failed run can never loop forever.
+ *
  * @param {Object} input - the previous decide input
  * @param {Object} decision - the decision that failed
  * @param {Object} failure - classifyFailure(decision failure text)
- * @returns {Object} a new decide input
+ * @returns {Object} a new decide input, or a BLOCKED result
  */
 function nextDecisionInput(input, decision, failure) {
   const src = input || {};
   const d = decision || {};
   const failedKey = d.chosen ? routeKey(d.chosen) : null;
-  const candidates = (src.candidates || []).filter(
-    (c) => failedKey === null || routeKey(c) !== failedKey
-  );
   const failures = Array.isArray(src.failures) ? src.failures.slice() : [];
   failures.push({
     routeKey: failedKey,
     runId: present(d.runId) ? d.runId : UNKNOWN,
     failure: failure === undefined ? null : failure,
   });
-  return Object.assign({}, src, { candidates, failures });
+  const budget = src.retryBudget;
+  if (!(typeof budget === 'number' && budget > 0)) {
+    return {
+      status: 'BLOCKED',
+      reason: 'RETRY_BUDGET_EXHAUSTED',
+      failures,
+    };
+  }
+  const candidates = (src.candidates || []).filter(
+    (c) => failedKey === null || routeKey(c) !== failedKey
+  );
+  return Object.assign({}, src, { candidates, failures, retryBudget: budget - 1 });
 }
 
 module.exports = {
