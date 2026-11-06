@@ -3004,5 +3004,6 @@ module.exports = {
   getWriterComboName,
   isNineRouterCandidate,
   isIndividualNineRouterCandidate,
+  getWriterComboName,
   builtinOpencodeModels,
 };

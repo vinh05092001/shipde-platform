@@ -1169,6 +1169,52 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
  * caller that supplies its own candidates is testing or replaying them, not
  * asking what the machine actually serves.
  */
+// The ticket decides whether routes outside the combo may compete. Absent means they may.
+const ROUTE_SCOPES = new Set(['combo-only', 'combo-and-routes']);
+function routeScopeOf(value) {
+  if (value === undefined || value === null) return 'combo-and-routes';
+  if (!ROUTE_SCOPES.has(value)) throw new Error('ROUTE_SCOPE_INVALID: ' + value);
+  return value;
+}
+
+function comboOriginOf(candidate, comboName, members) {
+  const id = String(candidate.modelId || candidate.model || '');
+  if (Array.isArray(candidate.comboMembers) || id === comboName || id.endsWith('/' + comboName)) {
+    return 'combo';
+  }
+  const viaRouter = require('./writer-combo').isNineRouterCandidate(candidate);
+  return viaRouter && members.has(id) ? 'combo-member' : 'individual';
+}
+
+// Runs where discovery and generated rows have merged, so no entry point escapes it.
+function applyRouteScope(eligible, excludedRoutes, opts, registry) {
+  const candidatesApi = require('./candidates');
+  const comboName = candidatesApi.getWriterComboName(opts, registry);
+  if (!comboName) return eligible;
+  const config = opts.nineRouterComboConfig;
+  const members = new Set(config?.members || []);
+  const refusal = Array.isArray(config?.members)
+    ? 'NOT_IN_COMBO_CONFIG'
+    : 'COMBO_CONFIG_UNAVAILABLE';
+  const kept = [];
+  for (const candidate of eligible) {
+    candidate.routeOrigin = comboOriginOf(candidate, comboName, members);
+    if (opts.routeScope !== 'combo-only' || candidate.routeOrigin !== 'individual') {
+      kept.push(candidate);
+      continue;
+    }
+    const key = candidatesApi.candidateKey(candidate);
+    excludedRoutes.push({
+      offeringId: key,
+      candidateKey: key,
+      reason: refusal,
+      reasonCode: refusal,
+      scope: 'route',
+    });
+  }
+  return kept;
+}
+
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
@@ -1378,6 +1424,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
       ...candidatesApi.generateCandidates({
         harness: opts.harness,
+        role: opts.role,
         registry: resolvedRegistry,
         accounts: accounts || [],
         openCodeIds: (accounts || []).flatMap((account) =>
@@ -1543,7 +1590,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         }
       }
     }
-    Object.defineProperty(eligible, 'excludedRoutes', {
+    const scoped = applyRouteScope(eligible, excludedRoutes, opts, resolvedRegistry);
+    Object.defineProperty(scoped, 'excludedRoutes', {
       value: excludedRoutes,
       enumerable: false,
       writable: true,
@@ -1552,7 +1600,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     if (opts && Array.isArray(opts.excludedRoutes)) {
       opts.excludedRoutes.push(...excludedRoutes);
     }
-    return eligible;
+    return scoped;
   };
   if (!refresh) return buildCandidates();
   return Promise.resolve(persistHealth()).then(buildCandidates);
@@ -2044,6 +2092,17 @@ async function dispatchProfileCommand(args, deps) {
   }
   if (!discCat && Array.isArray(deps && deps.candidates)) discCat = { candidates: [] };
 
+  // An unreadable profile is reported by runProfileDispatch with its usual exit code.
+  let ticket = null;
+  try {
+    const text = require('fs').readFileSync(path.resolve(rootDir, args.profile), 'utf8');
+    ticket = JSON.parse(text.replace(/^﻿/, ''));
+  } catch {
+    ticket = null;
+  }
+  optsWithEvidence.role = ticket?.role;
+  optsWithEvidence.routeScope = routeScopeOf(ticket?.routeScope);
+
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
   const candidateList = assembleForDispatch(
     discCat,
@@ -2208,7 +2267,9 @@ function dispatchCommand(args, deps = {}) {
     return Promise.resolve()
       .then(() => read({ registry, signal: AbortSignal.timeout(3000) }))
       .catch(() => ({ members: null, state: 'COMBO_CONFIG_UNAVAILABLE' }))
-      .then((config) => dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config }));
+      .then((config) =>
+        dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config })
+      );
   }
 
   if (typeof args.profile === 'string') {
@@ -2421,13 +2482,17 @@ function dispatchCommand(args, deps = {}) {
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
+  const ticketRoute = {
+    role: item.role,
+    routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
+  };
   const candidateList = assembleForDispatch(
     discCat,
     accounts,
     registry,
     Array.isArray(deps.candidates) || deps.allowUnprobedCandidates === true
-      ? deps
-      : Object.assign({}, deps, { requireRouteHealth: true })
+      ? { ...deps, ...ticketRoute }
+      : { ...deps, ...ticketRoute, requireRouteHealth: true }
   );
 
   // Filter by explicit pins (--model, --account, --harness)
