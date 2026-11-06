@@ -191,6 +191,8 @@ The PR reached 3.2k lines and every review round found new P1s (STUCK after 20 r
 
 Routing audit follow-up, kept separate from the route-decision PR #514.
 
+AGY remains the assigned author of this Work Item. Claude Code implemented PR #515 only, by operator instruction.
+
 - Defect: `scanSourceQuotas` in `tools/ai-brain/quota-scan.js` returned every scope in the quota state for a source listed in `dispatch.providers`. `onboardSourceRolling` recorded those passes as passes of the gateway, which planned gateway routes for models the gateway does not advertise.
 - Change: that path returns only the requested source's scopes.
 - Allowed paths: `quota-scan.js` and `test/task-ai-171-onboard-scope.test.js` were added to the Control table for this PR by operator instruction; reviewer to confirm.
