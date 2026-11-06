@@ -54,6 +54,8 @@ function launchBlocker(route, options) {
   }
   if ((r.routeKind === 'model' || r.routeKind === 'combo') && r.harness === 'opencode') {
     if (!present(r.source) || !present(r.modelId)) return 'MODEL_UNKNOWN';
+    const gateway = (opts.prefixes || {})[r.source] || r.source;
+    if (String(r.modelId).startsWith(gateway + '/')) return 'PREFIX_ALREADY_PRESENT';
     if (!present(opts.taskFile)) return 'TASK_FILE_MISSING';
     if (!present(opts.message)) return 'MESSAGE_MISSING';
     return null;
@@ -207,7 +209,7 @@ function sameCommand(a, b) {
  * @param {Object} failure - classifyFailure(decision failure text)
  * @returns {Object} a new decide input, or a BLOCKED result
  */
-function nextDecisionInput(input, decision, failure) {
+function nextDecisionInput(input, decision, failure, run) {
   const src = input || {};
   const d = decision || {};
   const failedKey = d.chosen ? routeKey(d.chosen) : null;
@@ -230,7 +232,7 @@ function nextDecisionInput(input, decision, failure) {
   const candidates = (src.candidates || []).filter(
     (c) => failedKey === null || (routeKey(c) !== failedKey && !sameCommand(c, d.chosen))
   );
-  const scoped = applyFailureScope(src, d.chosen, failure, candidates);
+  const scoped = applyFailureScope(src, d.chosen, failure, candidates, run);
   return Object.assign({}, src, scoped, { failures, retryBudget: budget - 1 });
 }
 
@@ -239,11 +241,22 @@ function nextDecisionInput(input, decision, failure) {
  * next decide. A monthly quota failure marks them exhausted; a credit failure caps
  * their budget at what the wallet can afford. Without a quotaScope nothing spreads,
  * and an upstream outage never spreads: it says nothing about a shared wallet.
+ *
+ * The scope on paper is not proof. A gateway may run another account than the one
+ * decided, so a wallet is touched only when the failure is proven to belong to it
+ * (see failureProvesScope). Otherwise only the equivalent call leaves this retry.
  */
-function applyFailureScope(src, chosen, failure, candidates) {
+function failureProvesScope(chosen, failure, run) {
+  if (present(failure && failure.scope)) return failure.scope === chosen.quotaScope;
+  if (accountBinding(chosen) === 'ENFORCED') return true;
+  const seen = (run || {}).executedAccount;
+  return present(chosen.account) && present(seen) && seen === chosen.account;
+}
+
+function applyFailureScope(src, chosen, failure, candidates, run) {
   const scope = chosen ? chosen.quotaScope : undefined;
   const kind = failure && failure.class;
-  if (!present(scope)) return { candidates };
+  if (!present(scope) || !failureProvesScope(chosen, failure, run)) return { candidates };
   const shares = (c) => c.quotaScope === scope;
   if (kind === 'QUOTA_MONTHLY') {
     const states = Object.assign({}, src.states);

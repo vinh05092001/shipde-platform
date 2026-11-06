@@ -170,7 +170,15 @@ function rankByScale(eligible, scale) {
     if (q && q.scale === scale && Number.isFinite(q.score)) ranked.push(c);
     else unknown.push(c);
   }
-  ranked.sort((a, b) => Number(b.quality.score) - Number(a.quality.score));
+  // Ties do not depend on input order: a known budget first, then the route key.
+  const byKey = (a, b) =>
+    routeKeyOf(a) < routeKeyOf(b) ? -1 : routeKeyOf(a) > routeKeyOf(b) ? 1 : 0;
+  ranked.sort(
+    (a, b) =>
+      Number(b.quality.score) - Number(a.quality.score) ||
+      Number(b.budgetKnown === true) - Number(a.budgetKnown === true) ||
+      byKey(a, b)
+  );
   return { ranked, unknown };
 }
 
