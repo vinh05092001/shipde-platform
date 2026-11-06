@@ -94,6 +94,7 @@ while :; do
     fi
     ahead=$(git -C $d rev-list --count origin/$b..HEAD 2>/dev/null || git -C $d rev-list --count origin/main..HEAD)
     read t how label <<<"$(last_launch $id)"
+    if [ "$pr" != "-" ] && [ -s $d/.oc/pr-body.md ] && grep -q "$id" $d/.oc/pr-body.md && grep -q READY_FOR_CODEX $d/.oc/pr-body.md; then h1=$(sha1sum < $d/.oc/pr-body.md); if [ "$h1" != "$(cat $ST/$id.bodysync 2>/dev/null)" ]; then gh pr edit $pr --body-file $d/.oc/pr-body.md >/dev/null 2>&1 && { echo "$h1" > $ST/$id.bodysync; log "synced PR body to #$pr"; }; fi; fi  # 06/11: a contract fix must reach the PR
     if [ "${ahead:-0}" -eq 0 ] && [ "$pr" = "-" ]; then if ! { [ -n "$t" ] && writer_alive "$t" "$how" "$id"; }; then route $wt $id $task; fi; continue; fi  # 06/11: a new branch without commits still needs its first writer
     if [ "${ahead:-0}" -gt 0 ] && [ "$pr" = "-" ] && ! git -C $d diff --name-only origin/main...HEAD | grep -q "work-items/$id.md"; then route $wt $id $task; continue; fi  # not a complete first delivery yet
     if [ "${ahead:-0}" -gt 0 ] && [ "$pr" = "-" ] && [ ! -s $d/.oc/pr-body.md ]; then  # delivery done but no PR body: ask a writer for it, don't wake the coordinator

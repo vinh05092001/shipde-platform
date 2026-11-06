@@ -541,7 +541,7 @@ if (require.main === module) (function main() {
   let jobLine;
   if (open.length) jobLine = 'fix ' + open.length + ' open review finding(s): ' + open.map((x, k) => '(' + (k + 1) + ') ' + x).join(' ');
   else {
-    const err = (taskText.split(/\r?\n/).find((l) => /Error|failed|Timeout|refused|cannot/i.test(l)) || '').replace(/`/g, '').trim().slice(0, 220);
+    let err = ''; try { const pf = require('./ci-failure.js').parseReview(fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8')); err = (pf.kind === 'contract' ? 'PR body misses: ' + pf.missingSections.join(', ') : pf.errorLines[0] || '').slice(0, 220); } catch {}
     jobLine = ciGate ? 'make CI green: ' + ciGate.replace(/\*/g, '').slice(0, 90) + (err ? '; error: ' + err : '') : jobText;
   }
   const jobEvidence = ('Job for ' + a.item + ': ' + jobLine + '. Code touched: ' + (area || 'unknown') +
@@ -571,10 +571,8 @@ if (require.main === module) (function main() {
         step = 'Fix ONLY this finding (finding 1 of ' + starts.length + ' still open). Do not touch the others; the next round will hand you the next one.\n\n' + rv.slice(s, e > 0 ? e : s + 12).join('\n');
       }
     } catch {}
-    if (!step && ciGate) step = 'Step 1 of this job: reproduce the failing CI step locally exactly as CI runs it, find the ROOT CAUSE of the first error, fix only that cause, and write the cause and the command you used in .oc/diagnosis.md. Do not change anything else.\n\nCI: ' + ciGate.replace(/\*/g, '') +
-      taskText.split(/\r?\n/).filter((l) => /Error|failed|Timeout|refused|cannot/i.test(l)).slice(0, 2).map((l) => '\nError seen: ' + l.replace(/`/g, '').trim()).join('');
-    // the real failing lines from the CI log in the review, so the writer starts at the error instead of re-deriving it
-    if (step && ciGate) { let cl = []; try { cl = fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8').split(/\r?\n/).filter((l) => /✖|not ok|Error:|missing PR section|failed:/.test(l) && !/✔/.test(l)).slice(0, 8); } catch {} if (cl.length) step += '\n\nFailing lines from CI:\n' + cl.join('\n'); }
+    // 06/11 B1/B2: a PR contract failure is a PR body edit, a CI failure names its check and real error lines
+    if (!step && ciGate) { let built = ''; try { built = require('./ci-failure.js').buildStep(require('./ci-failure.js').parseReview(fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8'))); } catch {} step = built || ('CI failing: ' + ciGate); }
     if (step) {
       stepTask = path.join(a.cwd, '.oc', 'task-step.md');
       fs.writeFileSync(stepTask, '# THIS ROUND = ONE STEP (' + a.item + ')\n\nJev rated the whole job hard, so it is split into small steps; this round is one of them.\n\n' + step + '\n\nThen run the narrow check for this step, commit "[' + a.item + '] <what this step fixed>" and stop.\n\n---\nFull task for context only (do NOT do the rest now):\n\n' + taskText);
