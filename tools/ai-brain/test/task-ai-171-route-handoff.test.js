@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { launchFromDecision } = require('../route-handoff');
+const { launchFromDecision, firstLaunch, afterFailure } = require('../route-handoff');
 
 const registry = {
   sources: [{ id: 'gw', kind: 'router', servesModels: true, endpoint: 'http://127.0.0.1:1/v1' }],
@@ -42,5 +42,157 @@ test('a route with no dispatch row is refused, not launched as a bare model', ()
   assert.throws(
     () => launchFromDecision({ selected: 'route-a', candidates: [lost] }, request, registry),
     /DECISION_ROUTE_UNRESOLVED/
+  );
+});
+
+const screened = {
+  sources: [...registry.sources, { id: 'cli', kind: 'agent-cli' }],
+  dispatch: {
+    launchModes: { opencode: ['full-access'], claude: ['auto'] },
+    providers: {
+      ...registry.dispatch.providers,
+      cli: { harness: 'paseo', provider: 'claude' },
+    },
+  },
+};
+const offering = (id, over) => ({ ...route, offeringId: id, modelId: 'vendor/' + id, ...over });
+const proof = (c, proofLevel) => ({
+  modelId: c.modelId,
+  gateway: c.gateway,
+  accountId: c.accountId,
+  evidence: [{ status: 'passed', proofLevel, observedAt: new Date(0).toISOString() }],
+});
+const ticket = () => ({
+  workItemId: 'ITEM-1',
+  outputTokens: 32000,
+  minProof: 'HARNESS_PASS',
+  maxFallbacks: 1,
+  request,
+});
+const decided = (...candidates) => ({
+  workItemId: 'ITEM-1',
+  selected: candidates[0].offeringId,
+  candidates,
+});
+const proved = (...candidates) => ({
+  evidenceData: { combinations: candidates.map((c) => proof(c, 'HARNESS_PASS')) },
+  ledger: {},
+});
+
+test('a valid route keeps its exact argv', () => {
+  const a = offering('a');
+  const out = firstLaunch(decided(a), ticket(), proved(a), screened);
+  assert.equal(out.action, 'LAUNCH');
+  const { args } = out.launch;
+  assert.equal(args[args.indexOf('--model') + 1], 'gateway/vendor/a');
+  assert.equal(args[args.indexOf('--mode') + 1], 'full-access');
+});
+
+test('an incompatible launcher flag is stopped before any call', () => {
+  const a = offering('a', { gateway: '', upstream: 'cli' });
+  const out = firstLaunch(decided(a), ticket(), proved(a), screened);
+  assert.equal(out.action, 'BLOCKED');
+  assert.equal(out.rejected[0].reason, 'LAUNCH_MODE_UNSUPPORTED');
+});
+
+test('a ping pass does not qualify a route for work', () => {
+  const a = offering('a');
+  const ctx = { evidenceData: { combinations: [proof(a, 'API_PASS')] }, ledger: {} };
+  const out = firstLaunch(decided(a), ticket(), ctx, screened);
+  assert.equal(out.action, 'BLOCKED');
+  assert.equal(out.rejected[0].reason, 'PROOF_BELOW_TICKET:API_PASS');
+});
+
+test('402 is never resent and refuses the same wallet for this request size', () => {
+  const a = offering('a', { upstream: 'paid' });
+  const same = offering('b', { upstream: 'paid' });
+  const other = offering('c', { upstream: 'free' });
+  const failure = { offeringId: 'a', upstream: 'paid', status: 402, affordable: 592 };
+  const ctx = proved(a, same, other);
+  const out = afterFailure(decided(a, same, other), ticket(), ctx, failure, screened);
+  assert.equal(out.launch.offeringId, 'c');
+  assert.deepStrictEqual(
+    out.rejected.map((r) => r.reason),
+    ['ALREADY_FAILED:NO_CREDIT', 'BUDGET_BELOW_REQUEST']
+  );
+});
+
+test('429 avoids the limited upstream and takes an eligible route', () => {
+  const a = offering('a', { upstream: 'busy' });
+  const same = offering('b', { upstream: 'busy' });
+  const other = offering('c', { upstream: 'free' });
+  const failure = { offeringId: 'a', upstream: 'busy', status: 429 };
+  const ctx = proved(a, same, other);
+  const out = afterFailure(decided(a, same, other), ticket(), ctx, failure, screened);
+  assert.equal(out.launch.offeringId, 'c');
+  assert.equal(out.rejected[1].reason, 'UPSTREAM_RATE_LIMITED');
+});
+
+test('one fallback is the ceiling for the ticket, across routes', () => {
+  const [a, b, c] = ['a', 'b', 'c'].map((id) => offering(id, { upstream: id }));
+  const ctx = proved(a, b, c);
+  const decision = decided(a, b, c);
+  const fail = (id, status) => ({ offeringId: id, upstream: id, status });
+  const first = afterFailure(decision, ticket(), ctx, fail('a', 429), screened);
+  assert.equal(first.launch.offeringId, 'b');
+  const second = afterFailure(decision, ticket(), ctx, fail('b', 500), screened);
+  assert.deepStrictEqual(
+    { action: second.action, reason: second.reason },
+    { action: 'STOP', reason: 'FALLBACK_LIMIT' }
+  );
+});
+
+test('no eligible route left means BLOCKED, without spending the fallback', () => {
+  const a = offering('a');
+  const ctx = proved(a);
+  const failure = { offeringId: 'a', upstream: 'vendor', status: 429 };
+  const out = afterFailure(decided(a), ticket(), ctx, failure, screened);
+  assert.equal(out.action, 'BLOCKED');
+  assert.equal(ctx.ledger.fallbacksUsed, undefined);
+});
+
+test('a decision made for another ticket is refused, whatever routes it holds', () => {
+  const a = offering('a');
+  const decision = { ...decided(a), workItemId: 'ITEM-2' };
+  const out = firstLaunch(decision, ticket(), proved(a), screened);
+  assert.deepStrictEqual(
+    { action: out.action, reason: out.reason },
+    { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET' }
+  );
+});
+
+test('429 takes the one fallback in the same worktree, then 402 stops and keeps it', () => {
+  const [a, b, c] = ['a', 'b', 'c'].map((id) => offering(id, { upstream: id }));
+  const ctx = proved(a, b, c);
+  const decision = decided(a, b, c);
+  const worktree = 'wt-with-partial-diff';
+  const first = afterFailure(
+    decision,
+    ticket(),
+    ctx,
+    { offeringId: 'a', upstream: 'a', status: 429, worktree },
+    screened
+  );
+  const { args } = first.launch;
+  assert.equal(first.action, 'LAUNCH');
+  assert.equal(first.launch.offeringId, 'b');
+  assert.equal(args[args.indexOf('--cwd') + 1], worktree);
+  assert.ok(!args.includes('--new-workspace'));
+  const second = afterFailure(
+    decision,
+    ticket(),
+    ctx,
+    { offeringId: 'b', upstream: 'b', status: 402 },
+    screened
+  );
+  assert.deepStrictEqual(second, {
+    action: 'STOP',
+    reason: 'FALLBACK_LIMIT',
+    used: 1,
+    worktree,
+  });
+  assert.deepStrictEqual(
+    ctx.ledger.failures.map((x) => x.class),
+    ['RATE_LIMITED', 'NO_CREDIT']
   );
 });
