@@ -139,8 +139,9 @@ async function cmdRun(flags, deps = {}) {
   const previous = readJson(freshnessFile);
   const complete = successful.length > 0 && failed.length === 0;
   writeJson(freshnessFile, {
+    listedSources: successful.length,
     lastAttemptAt: now,
-    lastSuccessfulAt: complete ? now : previous.lastSuccessfulAt || null,
+    lastSuccessfulAt: successful.length > 0 ? now : previous.lastSuccessfulAt || null,
     complete,
     failedSources: failed.map(([id, result]) => ({
       id,
@@ -149,7 +150,7 @@ async function cmdRun(flags, deps = {}) {
   });
 
   return {
-    exitCode: complete ? 0 : 1,
+    exitCode: successful.length > 0 ? 0 : 1, // one failing source must not stop the others
     runId,
     dataDir: dataDir.replace(/\\/g, '/'),
     storeFile: storeFile.replace(/\\/g, '/'),
