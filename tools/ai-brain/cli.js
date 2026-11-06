@@ -2190,6 +2190,27 @@ function dispatchCommand(args, deps = {}) {
   // floors and its constraints; JEV advises (never a model); the Controller
   // ranks; rank 1 is pinned and, under --execute, reserved. Async, because the
   // JEV advisory is.
+  if (
+    !args.plan &&
+    !Array.isArray(deps.candidates) &&
+    (args['combo-config'] || deps.readDispatchComboConfig) &&
+    deps.nineRouterComboConfig === undefined
+  ) {
+    const registry = deps.registry || require('./sources').loadSources();
+    if (args['combo-config']) {
+      const config = JSON.parse(fs.readFileSync(args['combo-config'], 'utf8'));
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        throw new Error('Invalid combo configuration: expected an object');
+      }
+      return dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config });
+    }
+    const read = deps.readDispatchComboConfig;
+    return Promise.resolve()
+      .then(() => read({ registry, signal: AbortSignal.timeout(3000) }))
+      .catch(() => ({ members: null, state: 'COMBO_CONFIG_UNAVAILABLE' }))
+      .then((config) => dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config }));
+  }
+
   if (typeof args.profile === 'string') {
     return dispatchProfileCommand(args, deps);
   }
@@ -4727,7 +4748,11 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'quota') return quotaCommand(args);
   if (command === 'quota-scan') return quotaScanCommand(args, deps);
   if (command === 'dispatch') {
-    const result = dispatchCommand(args);
+    const result = dispatchCommand(args, {
+      ...deps,
+      readDispatchComboConfig:
+        deps.readDispatchComboConfig || require('./writer-combo').readComboConfig,
+    });
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a
     // promise. An unhandled rejection would crash silently, so it is caught
     // here and turned into a non-zero exit instead.
