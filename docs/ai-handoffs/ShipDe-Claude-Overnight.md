@@ -1,5 +1,12 @@
 # ShipDe — Claude điều phối hoàn tất luồng tối nay
 
+## R16 — Tận dụng RAM và theo dõi từng luồng
+
+- Trước khi chia luồng, đo RAM vật lý tổng/còn khả dụng, bộ nhớ đã commit so với giới hạn, dấu hiệu paging và mức tăng bộ nhớ của các worker đang chạy. Trên Windows dùng Task Manager hoặc bộ đếm hệ thống/PowerShell; tính cả tiến trình con, test/build, daemon và Docker/WSL nếu đang chạy. Ước lượng theo mức đỉnh của tác vụ tương tự; chưa có số liệu thì mở thử từng luồng và đo lại, không đoán số worker từ RAM tổng.
+- Xếp hàng theo phụ thuộc và quyền ghi. Chỉ mở thêm luồng độc lập khi số đo cho thấy còn dư địa cho tác vụ mới và các dịch vụ đang chạy; kiểm lại sau mỗi lần mở và khi vào build/test nặng. Khi RAM căng, commit gần giới hạn hoặc paging tăng kéo dài, ngừng mở thêm và giảm tải có kiểm soát; giữ diff, không tự tắt dịch vụ chung. Không tăng số worker nếu thiếu quota, worktree riêng hoặc watcher.
+- Claude giữ bảng theo dõi từng luồng: phiếu/worktree, PID hoặc run ID, giai đoạn, RAM quan sát được, tín hiệu tiến triển cuối, lần kiểm tới và hành động. Kiểm ít nhất mỗi 2 phút; lỗi/thoát thì báo ngay, 5 phút không tiến triển thì kiểm PID, log, test và diff. Trước 10 phút phải xác định tình trạng và xử lý: test dài có bằng chứng đang chạy thì tiếp tục theo dõi; luồng kẹt thì dừng đúng phiên, xác nhận đã thoát, giữ diff rồi tối đa một fallback nếu đủ điều kiện; nếu không thì ghi BLOCKED và chuyển việc. Log lặp hoặc PID còn sống đơn thuần không chứng minh tiến triển.
+- Nghiệm thu: ghi RAM trước/sau, mức đỉnh quan sát, số luồng chạy đồng thời, lý do tăng/giảm, và thời gian từ tín hiệu cuối đến phát hiện/xử lý từng luồng kẹt. Nếu chưa đo được, ghi rõ số liệu thiếu và phép đo tiếp theo. Không mở quyền gọi model thật hoặc restart pipeline chung trong giai đoạn đang khóa.
+
 ## R13–R15 — Hai đường review, phạm vi Controller và quy tắc chung cho mọi model
 
 | ID | Yêu cầu | Cách làm và bằng chứng nghiệm thu |
