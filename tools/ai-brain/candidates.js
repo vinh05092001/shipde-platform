@@ -64,8 +64,8 @@ function getWriterComboName(opts, registry) {
   return null;
 }
 
-function resolveComboMembers(opts, registry) {
-  return comboLib.resolveComboMembers(opts, registry, getWriterComboName);
+function resolveComboMembers(opts) {
+  return comboLib.resolveComboMembers(opts);
 }
 
 function resolveComboLimits(source, registry, opts, comboName, members) {
@@ -139,6 +139,46 @@ function resolveComboLimits(source, registry, opts, comboName, members) {
   );
 
   return { contextWindow, maxOutputTokens };
+}
+
+// Membership is what the combo stores; a route is what the router lists. A member
+// with no listing stays in comboMembers for comparison and never becomes a route.
+function comboConfigStateOf(opts) {
+  const config = opts?.nineRouterComboConfig;
+  if (config?.state) return config.state;
+  if (Array.isArray(config?.members)) return config.members.length ? 'READ' : 'EMPTY';
+  return Array.isArray(opts?.nineRouterComboMembers) ? 'INJECTED' : 'COMBO_CONFIG_UNAVAILABLE';
+}
+
+function markComboMembership(candidates, opts) {
+  const name = getWriterComboName(opts, opts?.registry);
+  if (!name) return candidates;
+  const config = opts?.nineRouterComboConfig;
+  const routes = new Set();
+  for (const c of candidates) {
+    const membership = comboLib.comboMembershipOf(c, config || { name });
+    if (!membership) continue;
+    c.comboMembership = membership;
+    routes.add(c.modelId);
+  }
+  for (const c of candidates) {
+    if (!Array.isArray(c.comboMembers)) continue;
+    c.comboConfigState = comboConfigStateOf(opts);
+    c.comboMembersWithoutCatalogue = c.comboMembers.filter((id) => !routes.has(id));
+  }
+  return candidates;
+}
+
+// A source that declares its budget or model listing unproven carries that onto
+// every route, so an unknown limit can never read as permission to spend.
+function markDeclaredLimits(candidates, registry) {
+  const declared = new Map((registry?.sources || []).map((s) => [s.id, s]));
+  for (const c of candidates) {
+    const source = declared.get(c.sourceId || c.source);
+    if (source?.modelListing) c.modelListing = source.modelListing;
+    if (source?.budget?.state === 'UNKNOWN') c.budget = 'UNKNOWN';
+  }
+  return candidates;
 }
 
 /**
@@ -1267,7 +1307,11 @@ function generateCandidates(opts) {
   const previous = ambientModelCatalog;
   ambientModelCatalog = (opts && opts.modelCatalog) || previous;
   try {
-    return markCapabilityDeclarations(generateCandidatesWithCatalog(opts));
+    const registry = opts?.registry || sourcesApi.loadSources(opts?.sourceOpts);
+    return markDeclaredLimits(
+      markComboMembership(markCapabilityDeclarations(generateCandidatesWithCatalog(opts)), opts),
+      registry
+    );
   } finally {
     ambientModelCatalog = previous;
   }
@@ -1392,7 +1436,8 @@ function generateCandidatesWithCatalog(opts) {
               }
             : {}),
         });
-        continue;
+        // Only a combo read from its configuration opens its branches as routes.
+        if (!Array.isArray(o.nineRouterComboConfig?.members)) continue;
       }
 
       // Gateway: expand catalogue into (upstream, model) pairs.
@@ -1445,11 +1490,23 @@ function generateCandidatesWithCatalog(opts) {
           }))
           .filter((item) => item.modelId && !existingIds.has(item.modelId))
       );
+      const comboMembers =
+        comboName && isNineRouter && new Set(o.nineRouterComboConfig?.members || []);
       for (const item of routerCatalogue) {
         if (item && typeof item === 'object' && item.gateway && item.gateway !== source.id)
           continue;
         const fullId =
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
+        if (comboMembers && !comboMembers.has(fullId)) {
+          if (Array.isArray(o.candidateGenerationRejections)) {
+            o.candidateGenerationRejections.push({
+              modelId: fullId,
+              sourceId: source.id,
+              reasonCode: 'NOT_IN_COMBO_CONFIG',
+            });
+          }
+          continue;
+        }
         const resolved = resolveRouterModel(item || fullId, source, registry);
         if (!resolved) continue;
         if (
@@ -2003,14 +2060,19 @@ function generateCandidatesWithCatalog(opts) {
 
   const comboName = getWriterComboName(o, registry);
   if (comboName) {
+    // An unread combo is still the configured route; only a read, empty one is not.
+    const unread = comboConfigStateOf(o) === 'COMBO_CONFIG_UNAVAILABLE';
     const hasActiveCombo = candidates.some(
       (c) =>
         (c.modelId === comboName || c.modelId?.endsWith('/' + comboName)) &&
         Array.isArray(c.comboMembers) &&
-        c.comboMembers.length > 0
+        (c.comboMembers.length > 0 || unread)
     );
     if (hasActiveCombo) {
-      const kept = candidates.filter((c) => !isIndividualNineRouterCandidate(c, comboName));
+      const configured = new Set(o.nineRouterComboConfig?.members || []);
+      const kept = candidates.filter(
+        (c) => !isIndividualNineRouterCandidate(c, comboName) || configured.has(c.modelId)
+      );
       candidates.length = 0;
       candidates.push(...kept);
     }
@@ -2827,6 +2889,30 @@ function siblingRouteProbe(key, probes) {
   return null;
 }
 
+// Reads only records of this exact route. Another gateway's record, or one made
+// under another account, says nothing about it, so the answer stays UNKNOWN.
+function routeStatusOf(c, routeHealth, quotaState) {
+  const healthKey = `${require('./route-health').routeModelKey(c.modelId, c.gateway)}|${c.gateway}`;
+  const h = routeHealth?.paths?.[healthKey];
+  const scopes = quotaState?.scopes || {};
+  const q = [scopes[`${c.gateway}::${c.upstream}`], scopes[c.upstream]].find(
+    (r) => r && r.source === c.gateway && r.upstream === c.upstream
+  );
+  return {
+    health: h ? { state: h.status, key: healthKey, at: h.lastCheckedAt } : 'UNKNOWN',
+    quota: q
+      ? {
+          state: q.code,
+          scope: q.scope,
+          sampleModel: q.model,
+          exactModel: q.model === c.modelId,
+          at: q.at,
+        }
+      : 'UNKNOWN',
+    executionAccount: 'UNKNOWN',
+  };
+}
+
 function annotateCandidates(candidates, evidenceData, opts) {
   const annotOpts =
     opts && Object.prototype.hasOwnProperty.call(opts, 'quotaState')
@@ -2844,6 +2930,7 @@ function annotateCandidates(candidates, evidenceData, opts) {
       c.blocked = false;
       continue;
     }
+    c.routeStatus = routeStatusOf(c, annotOpts.routeHealth, annotOpts.quotaState);
     const key = candidateKey(c);
     const probe =
       evidenceData?.capabilityProbes?.[key] ||
@@ -2878,6 +2965,10 @@ function annotateCandidates(candidates, evidenceData, opts) {
     if (block.blocked) {
       c.blockReason = block.reason;
       c.blockScope = block.scope || 'account';
+    } else if (c.budget === 'UNKNOWN') {
+      c.blocked = true;
+      c.blockReason = 'BUDGET_UNKNOWN';
+      c.blockScope = 'budget';
     }
   }
   return candidates;
@@ -2897,6 +2988,7 @@ module.exports = {
   candidatesFromEvidence,
   mergeCandidates,
   annotateCandidates,
+  routeStatusOf,
   isOpenAiCompatibleSource,
   openAiCompatibleCandidates,
   resolveCandidateContextMeta,

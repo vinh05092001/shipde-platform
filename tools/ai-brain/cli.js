@@ -1390,6 +1390,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             ? catalogueRows
             : (discoveryCat && discoveryCat.candidates) || [],
         evidenceData: opts.evidenceData,
+        nineRouterComboConfig: opts.nineRouterComboConfig,
         fakeRunsDir: opts.fakeRunsDir,
         home: opts.home,
         discoverPool: opts.discoverPool !== false,
@@ -3611,6 +3612,9 @@ function discoveryCommand(args, deps) {
         })
       : assembleForDispatch(discCat, accounts, registry, {
           evidenceData,
+          nineRouterComboConfig: args['combo-config']
+            ? JSON.parse(require('fs').readFileSync(args['combo-config'], 'utf8'))
+            : undefined,
           home,
           fakeRunsDir: poolRuntimeDir,
           discoverPool: Boolean(poolRuntimeDir),
@@ -4052,6 +4056,7 @@ async function orchestrateCommand(args, deps = {}) {
         catalogue: readJsonArg(args.catalogue) || [],
         sourceModels,
         discoveryCatalogue,
+        nineRouterComboConfig: readJsonArg(args['combo-config']) || undefined,
         accounts: inputAccounts,
         externalWorkers: args['external-workers'],
         openCodeIds: Array.isArray(args['opencode-ids'])

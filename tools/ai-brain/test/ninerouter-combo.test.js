@@ -143,6 +143,11 @@ test('run-7 inputs produce writer combo candidates, 0 individual 9router candida
     accounts,
     catalogue,
     sourceModels,
+    nineRouterComboMembers: buildWriterComboModels(
+      sourceModels['9router'] || catalogue,
+      require('../evidence').loadEvidence(runDir),
+      priorsApi.loadPriors()
+    ),
     externalWorkers: ['agy-pool'],
     forWriter: true,
     evidenceDir: runDir,

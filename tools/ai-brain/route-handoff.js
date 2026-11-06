@@ -87,6 +87,7 @@ function routeRefusal(c, ticket, ctx, reg) {
     const path = { id: c.gateway || c.upstream, accountId: c.accountId };
     if (!isEligible(ctx.routeHealth, c.modelId, path, now)) return 'ROUTE_UNHEALTHY';
   }
+  if (c.budget === 'UNKNOWN') return 'BUDGET_UNKNOWN';
   const quota = ctx.quotaState ? getQuotaScopeState(c, ctx.quotaState, { now }) : null;
   if (quota && quota.blocked) return 'QUOTA_BLOCKED';
   if (known(c.maxOutputTokens) && Number(c.maxOutputTokens) < ticket.outputTokens) {
