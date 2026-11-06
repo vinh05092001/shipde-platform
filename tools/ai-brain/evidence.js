@@ -242,6 +242,10 @@ function recordProbe(dir, candidate, item) {
         '',
       stderr: scrubText(item.stderr || ''),
       accountId: candidate.accountId,
+      gateway: candidate.gateway,
+      upstream: candidate.upstream,
+      authLayer: item.authLayer,
+      connectionId: item.connectionId,
     });
 
     const key = candidateKey(candidate);
@@ -272,6 +276,7 @@ function recordProbe(dir, candidate, item) {
     cd.gateway = candidate.gateway || '';
     cd.upstream = candidate.upstream;
     cd.accountId = candidate.accountId || '*';
+    cd.authLayer = classification.authLayer || null;
     cd.quotaScope = candidate.quotaScope || '';
     cd.modelId = candidate.modelId || candidate.model;
 
@@ -402,7 +407,9 @@ function isCandidateBlocked(data, candidate, opts) {
           candObj.accountId &&
           candObj.accountId !== '*' &&
           candObj.accountId === cdAccount &&
-          (!cdUpstream || candObj.upstream === cdUpstream)
+          (!cdUpstream ||
+            candObj.upstream === cdUpstream ||
+            (cd.authLayer === 'gateway-key' && candObj.gateway === cd.gateway))
         ) {
           return {
             blocked: true,

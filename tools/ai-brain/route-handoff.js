@@ -60,6 +60,12 @@ function routeRefusal(c, ticket, ctx, reg) {
   const failed = (ctx.ledger && ctx.ledger.failures) || [];
   const seen = failed.find((f) => f.offeringId === c.offeringId);
   if (seen) return 'ALREADY_FAILED:' + seen.class;
+  const authFailed = failed.find(
+    (f) =>
+      (f.class === 'GATEWAY_KEY_AUTH' && f.gateway === c.gateway && f.accountId === c.accountId) ||
+      (f.class === 'UPSTREAM_AUTH' && f.gateway === c.gateway && f.upstream === c.upstream)
+  );
+  if (authFailed) return authFailed.class;
   const limited = failed.find((f) => f.class === 'RATE_LIMITED' && f.upstream === c.upstream);
   if (limited) return 'UPSTREAM_RATE_LIMITED';
   const broke = failed.find((f) => f.class === 'NO_CREDIT' && f.upstream === c.upstream);
@@ -147,11 +153,19 @@ function afterFailure(decision, ticket, context, failure, registry) {
   const ctx = context || {};
   const ledger = ctx.ledger;
   const f = failure || {};
+  const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
+  const viaGateway = route.gateway && route.gateway !== f.upstream;
+  const authClass = { 'gateway-key': 'GATEWAY_KEY_AUTH', 'upstream-credential': 'UPSTREAM_AUTH' };
   ledger.failures = ledger.failures || [];
   ledger.failures.push({
     offeringId: f.offeringId,
     upstream: f.upstream,
-    class: classifyFailure(f.status, f.message),
+    gateway: route.gateway,
+    accountId: route.accountId,
+    class:
+      Number(f.status) === 401 && viaGateway
+        ? authClass[f.authLayer] || (f.authLayer ? 'CONNECTION_AUTH' : 'AUTH_SCOPE_UNKNOWN')
+        : classifyFailure(f.status, f.message),
     affordable: f.affordable,
   });
   const kept = f.worktree || ledger.worktree;
