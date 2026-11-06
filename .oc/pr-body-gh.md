@@ -4,6 +4,10 @@
 
 - Work Item ID: TASK-AI-169
 
+## Work Item
+
+- Work Item ID: TASK-AI-169
+
 ## Changes
 
 Fixed two root causes in `tools/ai-brain/work-guard.js`:
