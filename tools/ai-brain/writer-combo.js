@@ -422,7 +422,8 @@ function isNineRouterSource(source, key) {
 // the router can serve, never what a combo contains, so an unread combo stays
 // empty and its membership stays UNKNOWN.
 function resolveComboMembers(opts) {
-  if (Array.isArray(opts?.nineRouterComboConfig?.members)) return opts.nineRouterComboConfig.members;
+  if (Array.isArray(opts?.nineRouterComboConfig?.members))
+    return opts.nineRouterComboConfig.members;
   if (Array.isArray(opts?.nineRouterComboMembers)) return opts.nineRouterComboMembers;
   return [];
 }

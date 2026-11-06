@@ -69,8 +69,7 @@ test('a truly empty combo differs from an unreadable one', async () => {
     httpRequest: async () => ({ status: 200, data: { combos: [{ name: 'vinh', models: [] }] } }),
   });
   assert.equal(out.state, 'EMPTY');
-  const state = (extra) =>
-    generate(extra).find((c) => c.modelId === 'vinh').comboConfigState;
+  const state = (extra) => generate(extra).find((c) => c.modelId === 'vinh').comboConfigState;
   assert.equal(state({ nineRouterComboConfig: out }), 'EMPTY');
   assert.equal(state({}), 'COMBO_CONFIG_UNAVAILABLE');
 });
@@ -92,7 +91,16 @@ test('a failure on one upstream of a shared account leaves the other upstream us
   const b = { gateway: '9router', upstream: 'cmc', accountId: account, modelId: 'cmc/b' };
   const data = {
     cooldowns: {
-      k: { scope: 'account', accountId: account, upstream: 'gcli', modelId: 'gcli/a', blockReason: '429', blockedAt: new Date().toISOString(), lastStatus: 'blocked', cooldownUntil },
+      k: {
+        scope: 'account',
+        accountId: account,
+        upstream: 'gcli',
+        modelId: 'gcli/a',
+        blockReason: '429',
+        blockedAt: new Date().toISOString(),
+        lastStatus: 'blocked',
+        resetTime: Date.now() + 60000,
+      },
     },
   };
   const opts = { loadQuotaState: false };
