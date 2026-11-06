@@ -189,16 +189,44 @@ function toChosen(candidate) {
 }
 
 /**
+ * True when any state carries a cooldownUntil. A cooldown cannot be honoured
+ * without a comparable instant, so the caller must supply one.
+ */
+function hasCooldownState(states) {
+  if (!states) return false;
+  for (const key of Object.keys(states)) {
+    const s = states[key];
+    if (s && s.cooldownUntil !== undefined && s.cooldownUntil !== null) return true;
+  }
+  return false;
+}
+
+/**
  * Decide the route for a run.
  *
  * Filters by budget, ranks inside the requested scale, and picks the top
  * scorer. A combo is only ever chosen as itself — it carries no quality, so
  * it never enters the ranked list and never inherits a member score.
  *
- * @param {{runId: string, candidates: Array, request: Object, states?: Object, now?: number|string, scale: string, workKind?: string}} opts
+ * When any state carries a cooldownUntil but `now` is not a number, the
+ * cooldown cannot be evaluated. Rather than silently ignoring it, the decision
+ * fails closed with NOW_REQUIRED.
+ *
+ * @param {{runId: string, candidates: Array, request: Object, states?: Object, now?: number, scale: string, workKind?: string}} opts
  * @returns {{status: string, runId: string, chosen: Object|null, reasons: Array<string>, rejected: Array, unknownQuality: Array}}
  */
 function decide({ runId, candidates, request, states, now, scale }) {
+  const nowIsNumber = typeof now === 'number' && Number.isFinite(now);
+  if (!nowIsNumber && hasCooldownState(states)) {
+    return {
+      status: 'BLOCKED',
+      runId,
+      chosen: null,
+      reasons: ['NOW_REQUIRED'],
+      rejected: [],
+      unknownQuality: [],
+    };
+  }
   const { eligible, rejected } = filterEligible(candidates, request, states, now);
   const { ranked, unknown } = rankByScale(eligible, scale);
   const reasons = [];
