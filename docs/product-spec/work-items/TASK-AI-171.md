@@ -186,3 +186,15 @@ The PR reached 3.2k lines and every review round found new P1s (STUCK after 20 r
 - Slice A (this PR): route identity — `route-identity*.js`, `config/route-identity.json`; AC-AI-171-06 and the branch-preservation half of AC-AI-171-07. Test: `tools/ai-brain/test/task-ai-171-route-identity.test.js`.
 - Slice B (next PR): scoped health — AC-AI-171-01 to 05.
 - Slice C (after B): candidate adapters, unified selector, JEV advisory and budget contract — AC-AI-171-08 to 10 and the role-policy half of AC-AI-171-07. The open review findings on `unified-selector-admission.js`, `candidate-adapters.js` and `unified-selector-jev.js` move with it.
+
+## Onboarding scope fix (2026-11-06, PR #515)
+
+Routing audit follow-up, kept separate from the route-decision PR #514.
+
+- Defect: `scanSourceQuotas` in `tools/ai-brain/quota-scan.js` returned every scope in the quota state for a source listed in `dispatch.providers`. `onboardSourceRolling` recorded those passes as passes of the gateway, which planned gateway routes for models the gateway does not advertise.
+- Change: that path returns only the requested source's scopes.
+- Allowed paths: `quota-scan.js` and `test/task-ai-171-onboard-scope.test.js` are outside the list above. This change is by operator instruction; reviewer to confirm.
+- Evidence: `test/task-ai-171-onboard-scope.test.js`, both cases fail without the fix and pass with it.
+- Offline replay on copied data: first selection through `dispatchCommand --execute` with a mock runner; fallback through `assembleForDispatch` with `refreshRoutes`, not end to end through `dispatch --execute`, using a synthetic catalogue row and a failed direct route. After removing the four records neither suspect route was a candidate.
+- A valid route confirms argv only. It ran with `allowUnprobedCandidates`, so route liveness is not proven.
+- Not changed: existing evidence and route-health records.
