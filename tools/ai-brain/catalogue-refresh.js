@@ -201,9 +201,7 @@ async function refreshCatalogue(options = {}) {
   const priorsFile = options.priorsFile || path.join(__dirname, 'data', 'model-priors-live.json');
   const allStagesOk = stages.every(
     (stage) =>
-      stage.exitCode === 0 ||
-      (stage.command === 'priors refresh' &&
-        fs.existsSync(priorsFile))
+      stage.exitCode === 0 || (stage.command === 'priors refresh' && fs.existsSync(priorsFile))
   );
   const finishedAt = new Date(options.now ?? Date.now()).toISOString();
   const report = {
