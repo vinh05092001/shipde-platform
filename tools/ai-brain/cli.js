@@ -1391,6 +1391,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             : (discoveryCat && discoveryCat.candidates) || [],
         evidenceData: opts.evidenceData,
         nineRouterComboConfig: opts.nineRouterComboConfig,
+        sourceAccess: opts.sourceAccess,
         fakeRunsDir: opts.fakeRunsDir,
         home: opts.home,
         discoverPool: opts.discoverPool !== false,
@@ -3614,6 +3615,9 @@ function discoveryCommand(args, deps) {
           evidenceData,
           nineRouterComboConfig: args['combo-config']
             ? JSON.parse(require('fs').readFileSync(args['combo-config'], 'utf8'))
+            : undefined,
+          sourceAccess: args['source-access']
+            ? JSON.parse(require('fs').readFileSync(args['source-access'], 'utf8'))
             : undefined,
           home,
           fakeRunsDir: poolRuntimeDir,

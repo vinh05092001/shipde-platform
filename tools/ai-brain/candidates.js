@@ -171,12 +171,16 @@ function markComboMembership(candidates, opts) {
 
 // A source that declares its budget or model listing unproven carries that onto
 // every route, so an unknown limit can never read as permission to spend.
-function markDeclaredLimits(candidates, registry) {
+function markDeclaredLimits(candidates, registry, sourceAccess) {
   const declared = new Map((registry?.sources || []).map((s) => [s.id, s]));
   for (const c of candidates) {
     const source = declared.get(c.sourceId || c.source);
     if (source?.modelListing) c.modelListing = source.modelListing;
-    if (source?.budget?.state === 'UNKNOWN') c.budget = 'UNKNOWN';
+    if (source?.budget?.state !== 'UNKNOWN') continue;
+    c.budget = 'UNKNOWN';
+    const prefix = `${c.upstream}/`;
+    const modelId = c.modelId.startsWith(prefix) ? c.modelId.slice(prefix.length) : c.modelId;
+    if (sourceAccess?.[source.id]) Object.assign(c, budgetOf(modelId, sourceAccess[source.id]));
   }
   return candidates;
 }
@@ -263,6 +267,7 @@ function resolveRouterModel(modelId, routerSource, registry, cliSource) {
 }
 
 const { candidateKey } = require('./discovery/identity');
+const { budgetOf } = require('./source-access');
 
 /**
  * The harness a source reaches its models through. A router or agent-cli
@@ -1310,7 +1315,8 @@ function generateCandidates(opts) {
     const registry = opts?.registry || sourcesApi.loadSources(opts?.sourceOpts);
     return markDeclaredLimits(
       markComboMembership(markCapabilityDeclarations(generateCandidatesWithCatalog(opts)), opts),
-      registry
+      registry,
+      opts?.sourceAccess
     );
   } finally {
     ambientModelCatalog = previous;

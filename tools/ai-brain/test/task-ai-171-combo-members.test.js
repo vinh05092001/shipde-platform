@@ -180,3 +180,47 @@ test('route status reads only the exact route and leaves the rest UNKNOWN', () =
   assert.equal(candidates.routeStatusOf(direct, {}, misfiled).quota, 'UNKNOWN');
   assert.equal(candidates.routeStatusOf(c, {}, {}).executionAccount, 'UNKNOWN');
 });
+
+test('xkiro spends only a free allowance its own endpoints reported', async () => {
+  const { readSourceAccess } = require('../source-access');
+  const source = registry.sources.find((s) => s.id === 'xkiro');
+  const seen = [];
+  const access = await readSourceAccess(source, {
+    env: { XKIRO_API_KEY: 'secret-value' },
+    fetch: async (url, init) => {
+      seen.push([url, init.method]);
+      const body = url.endsWith('/usage')
+        ? { free_tokens: { limit_per_day: 1000, remaining: 900 } }
+        : {
+            data: [
+              { id: 'free/a', access_tier: 'free' },
+              { id: 'paid/b', access_tier: 'paid' },
+            ],
+          };
+      return { status: 200, json: async () => body };
+    },
+  });
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every(([, method]) => method === undefined));
+  assert.ok(!JSON.stringify(access).includes('secret-value'));
+  const rows = generate({
+    sourceModels: { xkiro: ['free/a', 'paid/b', 'gone/c'] },
+    sourceAccess: { xkiro: access },
+  }).filter((c) => c.source === 'xkiro');
+  const by = (id) => rows.find((c) => c.modelId === 'xkiro/' + id);
+  assert.equal(by('free/a').budget, 'FREE_ALLOWANCE');
+  assert.equal(by('free/a').budgetRemainingTokens, 900);
+  assert.equal(by('paid/b').budget, 'UNKNOWN');
+  assert.equal(by('gone/c').budget, 'UNKNOWN');
+  assert.equal(by('gone/c').modelListing, 'CONFIGURED_NOT_LIVE');
+  const annotated = candidates.annotateCandidates(rows, {}, { quotaState: null });
+  assert.equal(annotated.filter((c) => c.blockReason === 'BUDGET_UNKNOWN').length, 2);
+});
+
+test('an exhausted or unread allowance spends nothing', () => {
+  const { budgetOf } = require('../source-access');
+  const models = [{ id: 'a', tier: 'free' }];
+  assert.equal(budgetOf('a', { models, freeTokens: { remaining: 0 } }).budget, 'UNKNOWN');
+  assert.equal(budgetOf('a', { models, freeTokens: { remaining: null } }).budget, 'UNKNOWN');
+  assert.equal(budgetOf('a', null).budget, 'UNKNOWN');
+});

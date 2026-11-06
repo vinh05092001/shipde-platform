@@ -88,6 +88,9 @@ function routeRefusal(c, ticket, ctx, reg) {
     if (!isEligible(ctx.routeHealth, c.modelId, path, now)) return 'ROUTE_UNHEALTHY';
   }
   if (c.budget === 'UNKNOWN') return 'BUDGET_UNKNOWN';
+  if (c.budget === 'FREE_ALLOWANCE' && ticket.outputTokens > c.budgetRemainingTokens) {
+    return 'BUDGET_BELOW_REQUEST';
+  }
   const quota = ctx.quotaState ? getQuotaScopeState(c, ctx.quotaState, { now }) : null;
   if (quota && quota.blocked) return 'QUOTA_BLOCKED';
   if (known(c.maxOutputTokens) && Number(c.maxOutputTokens) < ticket.outputTokens) {

@@ -46,6 +46,10 @@
       "endpoint": "https://api.xkiro.com/v1",
       "opencodeProvider": "xkiro",
       "modelListing": "CONFIGURED_NOT_LIVE",
+      "freeAllowance": {
+        "modelsPath": "/models",
+        "usagePath": "/usage"
+      },
       "budget": {
         "state": "UNKNOWN"
       },
