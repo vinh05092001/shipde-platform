@@ -116,7 +116,7 @@ function routeKeyOf(candidate) {
  * @returns {{eligible: Array, rejected: Array<{candidate, reason}>}}
  */
 function filterEligible(candidates, request, states, now) {
-  const reqTokens = Number(request && request.outputTokens);
+  const reqTokens = request ? request.outputTokens : undefined;
   const stateMap = states || {};
   const nowMs = toTime(now);
   const eligible = [];
@@ -140,8 +140,8 @@ function filterEligible(candidates, request, states, now) {
     }
     const budget = c && c.budget;
     const maxOutput = budget && budget.maxOutputTokens;
-    const budgetKnown = Number.isFinite(Number(maxOutput));
-    if (budgetKnown && Number(maxOutput) < reqTokens) {
+    const budgetKnown = typeof maxOutput === 'number' && Number.isFinite(maxOutput);
+    if (budgetKnown && maxOutput < reqTokens) {
       rejected.push({ candidate: c, reason: REJECT_REASONS.BUDGET_BELOW_REQUEST });
       continue;
     }
@@ -184,9 +184,9 @@ function toChosen(candidate) {
     account: c.account === undefined ? null : c.account,
     modelId: c.modelId,
     budget: c.budget,
-    quality: q
-      ? { source: q.scale, scale: q.scale, score: q.score, version: q.version }
-      : null,
+    cwd: c.cwd,
+    quotaScope: c.quotaScope,
+    quality: q ? { source: q.scale, scale: q.scale, score: q.score, version: q.version } : null,
   };
 }
 
@@ -217,7 +217,7 @@ function hasCooldownState(states) {
  * @param {{runId: string, candidates: Array, request: Object, states?: Object, now?: number, scale: string, workKind?: string}} opts
  * @returns {{status: string, runId: string, chosen: Object|null, reasons: Array<string>, rejected: Array, unknownQuality: Array}}
  */
-function decide({ runId, candidates, request, states, now, scale }) {
+function decide({ runId, candidates, request, states, now, scale, launchCheck }) {
   const nowIsNumber = typeof now === 'number' && Number.isFinite(now);
   if (!nowIsNumber && hasCooldownState(states)) {
     return {
@@ -229,8 +229,33 @@ function decide({ runId, candidates, request, states, now, scale }) {
       unknownQuality: [],
     };
   }
-  const { eligible, rejected } = filterEligible(candidates, request, states, now);
-  const { ranked, unknown } = rankByScale(eligible, scale);
+  const blockedBy = (reason) => ({
+    status: 'BLOCKED',
+    runId,
+    chosen: null,
+    reasons: [reason],
+    rejected: [],
+    unknownQuality: [],
+  });
+  // Without the launcher's check a decision could name a route nothing can run.
+  if (typeof launchCheck !== 'function') return blockedBy('LAUNCH_CHECK_REQUIRED');
+  const size = request ? request.outputTokens : undefined;
+  const creditChecked = (candidates || []).some(
+    (c) => c && c.budget && typeof c.budget.maxOutputTokens === 'number'
+  );
+  if (creditChecked && !(Number.isInteger(size) && size > 0)) {
+    return blockedBy('INVALID_REQUEST_SIZE');
+  }
+  const filtered = filterEligible(candidates, request, states, now);
+  const rejected = filtered.rejected;
+  // A route the launcher cannot run must lose here, so the winner is always launchable.
+  const launchable = [];
+  for (const c of filtered.eligible) {
+    const blocker = launchCheck(c);
+    if (blocker) rejected.push({ candidate: c, reason: blocker });
+    else launchable.push(c);
+  }
+  const { ranked, unknown } = rankByScale(launchable, scale);
   const reasons = [];
   if (ranked.length === 0) {
     return {

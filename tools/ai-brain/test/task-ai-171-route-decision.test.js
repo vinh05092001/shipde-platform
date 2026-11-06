@@ -20,12 +20,10 @@ const {
   decide,
   routeKey,
 } = require('../route-decision');
+const decideOpen = (input) => decide({ launchCheck: () => null, ...input });
 
 const FIXTURE = JSON.parse(
-  fs.readFileSync(
-    path.join(__dirname, 'fixtures', 'routing-replay', 'runs.json'),
-    'utf8'
-  )
+  fs.readFileSync(path.join(__dirname, 'fixtures', 'routing-replay', 'runs.json'), 'utf8')
 );
 
 const CASES = FIXTURE.cases;
@@ -39,11 +37,7 @@ function candidateAt(index) {
 test('every fixture case yields its expected class', () => {
   for (const [name, c] of Object.entries(CASES)) {
     const got = classifyFailure(c.text);
-    assert.equal(
-      got.class,
-      c.expect.class,
-      name + ' class is ' + c.expect.class
-    );
+    assert.equal(got.class, c.expect.class, name + ' class is ' + c.expect.class);
   }
 });
 
@@ -113,7 +107,13 @@ test('quota EXHAUSTED and a future cooldown each reject their own route', () => 
 });
 
 test('a cooldown that has already passed leaves the route eligible', () => {
-  const c = { routeKind: 'model', source: '9router', harness: 'opencode', modelId: 'm', account: 'c' };
+  const c = {
+    routeKind: 'model',
+    source: '9router',
+    harness: 'opencode',
+    modelId: 'm',
+    account: 'c',
+  };
   const states = { [routeKey(c)]: { cooldownUntil: '2026-11-06T09:00:00+07:00' } };
   const { eligible, rejected } = filterEligible(
     [c],
@@ -126,7 +126,7 @@ test('a cooldown that has already passed leaves the route eligible', () => {
 });
 
 test('decide forwards now so a cooled-down account is rejected before ranking', () => {
-  const result = decide({
+  const result = decideOpen({
     runId: 'r-now',
     candidates: CANDIDATES,
     request: { outputTokens: 1000 },
@@ -175,7 +175,7 @@ test('scale aa-v5-percentile ranks deepseek then gemini flash; dots and luna go 
 });
 
 test('combo is never chosen; it lands in unknownQuality with null quality', () => {
-  const result = decide({
+  const result = decideOpen({
     runId: 'r-1',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -189,7 +189,7 @@ test('combo is never chosen; it lands in unknownQuality with null quality', () =
 });
 
 test('decide never moves a score onto the combo', () => {
-  const result = decide({
+  const result = decideOpen({
     runId: 'r-2',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -202,7 +202,7 @@ test('decide never moves a score onto the combo', () => {
 });
 
 test('chosen keeps the winning score and scale alongside source and version', () => {
-  const result = decide({
+  const result = decideOpen({
     runId: 'r-quality',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -221,7 +221,7 @@ test('two AGY accounts stay two routes; modelId and account verbatim in chosen',
   assert.equal(ranked.length, 1);
   assert.equal(ranked[0].account, 'acct-A');
   assert.equal(ranked[0].modelId, 'gemini-3.8-flash-high');
-  const result = decide({
+  const result = decideOpen({
     runId: 'r-3',
     candidates: agy,
     request: { outputTokens: 1000 },
@@ -234,7 +234,7 @@ test('two AGY accounts stay two routes; modelId and account verbatim in chosen',
 test('no eligible route with the scale gives BLOCKED and no chosen', () => {
   const { ranked } = rankByScale(CANDIDATES, 'aa-v5-percentile');
   assert.ok(ranked.length > 0, 'sanity: fixture has ranked candidates');
-  const result = decide({
+  const result = decideOpen({
     runId: 'r-4',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -245,13 +245,13 @@ test('no eligible route with the scale gives BLOCKED and no chosen', () => {
 });
 
 test('same input gives identical output twice', () => {
-  const a = decide({
+  const a = decideOpen({
     runId: 'r-5',
     candidates: CANDIDATES,
     request: REQUEST,
     scale: 'aa-v5-percentile',
   });
-  const b = decide({
+  const b = decideOpen({
     runId: 'r-5',
     candidates: CANDIDATES,
     request: REQUEST,

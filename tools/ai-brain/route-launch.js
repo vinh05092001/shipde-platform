@@ -35,6 +35,49 @@ function firstPresent(run, keys) {
 }
 
 /**
+ * Why a route cannot be launched, or null when it can. Pass it to decide() as
+ * launchCheck, bound to the same options, so a route that cannot run never wins.
+ *
+ * @param {Object} route - a candidate or a decision's chosen
+ * @param {{cwd?: string, prefixes?: Object, taskFile?: string, message?: string, busyLanes?: Array<string>, laneBusy?: boolean}} [options]
+ * @returns {string|null}
+ */
+function launchBlocker(route, options) {
+  const r = route || {};
+  const opts = options || {};
+  if (r.routeKind === 'agy-pool') {
+    if (!present(r.account)) return 'LANE_UNKNOWN';
+    if (!present(r.modelId)) return 'MODEL_UNKNOWN';
+    if (!present(opts.cwd) && !present(r.cwd)) return 'CWD_MISSING';
+    if (opts.laneBusy === true || (opts.busyLanes || []).includes(r.account)) return 'LANE_BUSY';
+    return null;
+  }
+  if ((r.routeKind === 'model' || r.routeKind === 'combo') && r.harness === 'opencode') {
+    if (!present(r.source) || !present(r.modelId)) return 'MODEL_UNKNOWN';
+    if (!present(opts.taskFile)) return 'TASK_FILE_MISSING';
+    if (!present(opts.message)) return 'MESSAGE_MISSING';
+    return null;
+  }
+  return 'UNSUPPORTED_ROUTE';
+}
+
+/**
+ * Whether the launcher can bind the requested account. Only an AGY lane job
+ * names its account; an opencode argv has no account, so two accounts of one
+ * model produce the same command and the account is not enforced.
+ */
+function accountBinding(route) {
+  if (!present(route.account)) return 'NOT_REQUESTED';
+  return route.routeKind === 'agy-pool' ? 'ENFORCED' : 'NOT_ENFORCED';
+}
+
+/** Who picks the account that really runs: the lane job, a gateway, or nobody we can name. */
+function accountChosenBy(route, opts) {
+  if (route.routeKind === 'agy-pool') return 'LAUNCHER';
+  return (opts.prefixes || {})[route.source] ? 'GATEWAY' : UNKNOWN;
+}
+
+/**
  * Build the launch for a decision.
  *
  * A decision that is not DECIDED yields `{ status: 'BLOCKED' }` and no command.
@@ -58,8 +101,12 @@ function buildLaunch(decision, options) {
   const requestedRoute = routeKeyOfChosen(chosen);
   const kind = chosen.routeKind;
 
+  const blocker = launchBlocker(chosen, opts);
+  if (blocker === 'LANE_BUSY') return { status: 'BUSY', reason: blocker };
+  if (blocker) return { status: 'BLOCKED', reason: blocker };
+  const account = accountBinding(chosen);
+
   if (kind === 'agy-pool') {
-    if (opts.laneBusy === true) return { status: 'BUSY' };
     const cwd = present(opts.cwd) ? opts.cwd : chosen.cwd;
     return {
       status: 'READY',
@@ -69,29 +116,29 @@ function buildLaunch(decision, options) {
       job: { cwd, model: chosen.modelId, accountId: chosen.account },
       runId,
       requestedRoute,
+      account,
+      accountChosenBy: 'LAUNCHER',
     };
   }
 
-  if ((kind === 'model' || kind === 'combo') && chosen.harness === 'opencode') {
-    const prefixes = opts.prefixes || {};
-    const gateway = prefixes[chosen.source];
-    const modelArg = gateway
-      ? gateway + '/' + chosen.modelId
-      : chosen.source + '/' + chosen.modelId;
-    const args = ['-m', modelArg];
-    if (present(opts.taskFile)) args.push(opts.taskFile);
-    return {
-      status: 'READY',
-      kind,
-      command: 'opencode',
-      args,
-      job: null,
-      runId,
-      requestedRoute,
-    };
-  }
+  const args = ['run', '-m', modelArgOf(chosen, opts), opts.message, '-f', opts.taskFile];
+  return {
+    status: 'READY',
+    kind,
+    command: 'opencode',
+    args,
+    job: null,
+    runId,
+    requestedRoute,
+    account,
+    accountChosenBy: accountChosenBy(chosen, opts),
+    executedAccount: UNKNOWN,
+  };
+}
 
-  return { status: 'BLOCKED', reason: 'UNSUPPORTED_ROUTE' };
+function modelArgOf(route, opts) {
+  const gateway = (opts.prefixes || {})[route.source];
+  return (gateway || route.source) + '/' + route.modelId;
 }
 
 /**
@@ -116,8 +163,29 @@ function observed(decision, run) {
     executedModel: firstPresent(r, ['executedModel', 'model', 'modelId']),
     executedAccount: firstPresent(r, ['executedAccount', 'account', 'accountId']),
     exitCode: present(r.exitCode) ? r.exitCode : UNKNOWN,
+    accountHeld: accountHeld(
+      d.chosen,
+      firstPresent(r, ['executedAccount', 'account', 'accountId'])
+    ),
     failure: present(r.text) ? classifyFailure(r.text) : null,
   };
+}
+
+/** True or false only when the executed account was seen; otherwise UNKNOWN. */
+function accountHeld(chosen, executed) {
+  if (!chosen || !present(chosen.account) || executed === UNKNOWN) return UNKNOWN;
+  return executed === chosen.account;
+}
+
+/** Same harness, source, kind and model on an opencode route means the same command. */
+function sameCommand(a, b) {
+  if (a.routeKind === 'agy-pool' || b.routeKind === 'agy-pool') return false;
+  return (
+    a.source === b.source &&
+    a.harness === b.harness &&
+    a.routeKind === b.routeKind &&
+    a.modelId === b.modelId
+  );
 }
 
 /**
@@ -150,20 +218,55 @@ function nextDecisionInput(input, decision, failure) {
     failure: failure === undefined ? null : failure,
   });
   const budget = src.retryBudget;
-  if (!(typeof budget === 'number' && budget > 0)) {
+  if (!(Number.isInteger(budget) && budget > 0)) {
     return {
       status: 'BLOCKED',
       reason: 'RETRY_BUDGET_EXHAUSTED',
       failures,
     };
   }
+  // A route whose account the launcher cannot bind would repeat the same command,
+  // so it leaves with the failed route instead of counting as a different try.
   const candidates = (src.candidates || []).filter(
-    (c) => failedKey === null || routeKey(c) !== failedKey
+    (c) => failedKey === null || (routeKey(c) !== failedKey && !sameCommand(c, d.chosen))
   );
-  return Object.assign({}, src, { candidates, failures, retryBudget: budget - 1 });
+  const scoped = applyFailureScope(src, d.chosen, failure, candidates);
+  return Object.assign({}, src, scoped, { failures, retryBudget: budget - 1 });
+}
+
+/**
+ * Carry what a failure proves onto routes sharing the same quotaScope, before the
+ * next decide. A monthly quota failure marks them exhausted; a credit failure caps
+ * their budget at what the wallet can afford. Without a quotaScope nothing spreads,
+ * and an upstream outage never spreads: it says nothing about a shared wallet.
+ */
+function applyFailureScope(src, chosen, failure, candidates) {
+  const scope = chosen ? chosen.quotaScope : undefined;
+  const kind = failure && failure.class;
+  if (!present(scope)) return { candidates };
+  const shares = (c) => c.quotaScope === scope;
+  if (kind === 'QUOTA_MONTHLY') {
+    const states = Object.assign({}, src.states);
+    for (const c of candidates.filter(shares)) {
+      states[routeKey(c)] = Object.assign({}, states[routeKey(c)], { quota: 'EXHAUSTED' });
+    }
+    return { candidates, states };
+  }
+  if (kind === 'CREDIT_BUDGET' && Number.isInteger(failure.affordable)) {
+    const capped = candidates.map((c) =>
+      shares(c)
+        ? Object.assign({}, c, {
+            budget: Object.assign({}, c.budget, { maxOutputTokens: failure.affordable }),
+          })
+        : c
+    );
+    return { candidates: capped };
+  }
+  return { candidates };
 }
 
 module.exports = {
+  launchBlocker,
   buildLaunch,
   observed,
   nextDecisionInput,

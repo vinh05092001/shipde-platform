@@ -16,6 +16,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { decide, classifyFailure, routeKey } = require('../route-decision');
+const decideOpen = (input) => decide({ launchCheck: () => null, ...input });
 const { buildLaunch, observed, nextDecisionInput } = require('../route-launch');
 
 const FIXTURE = JSON.parse(
@@ -33,7 +34,7 @@ function modelArgOf(launch) {
 }
 
 test('aa-v5-percentile at 32000 tokens launches the decided deepseek model, never the combo', () => {
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-deep',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -41,7 +42,12 @@ test('aa-v5-percentile at 32000 tokens launches the decided deepseek model, neve
   });
   assert.equal(decision.chosen.modelId, 'deepseek-v4.1-flash');
 
-  const launch = buildLaunch(decision, { cwd: 'wt-a', prefixes: PREFIXES, taskFile: 'task.md' });
+  const launch = buildLaunch(decision, {
+    cwd: 'wt-a',
+    prefixes: PREFIXES,
+    taskFile: 'task.md',
+    message: 'go',
+  });
   assert.equal(launch.status, 'READY');
   assert.equal(launch.command, 'opencode');
   assert.equal(launch.kind, 'model');
@@ -59,7 +65,7 @@ test('a combo given its own quality is launched as itself, no member score subst
       ? Object.assign({}, c, { quality: { score: 99, scale: 'aa-v5-percentile', version: 'v' } })
       : c
   );
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-combo',
     candidates: withQuality,
     request: REQUEST,
@@ -68,13 +74,10 @@ test('a combo given its own quality is launched as itself, no member score subst
   assert.equal(decision.chosen.routeKind, 'combo');
   assert.equal(decision.chosen.modelId, 'vinh');
 
-  const launch = buildLaunch(decision, { prefixes: PREFIXES });
+  const launch = buildLaunch(decision, { prefixes: PREFIXES, taskFile: 'task.md', message: 'go' });
   assert.equal(launch.kind, 'combo');
   assert.equal(modelArgOf(launch), 'ninerouter/vinh');
-  assert.deepEqual(
-    launch.args.filter((a) => a !== '-m'),
-    ['ninerouter/vinh']
-  );
+  assert.equal(launch.args.filter((a) => String(a).includes('vinh')).length, 1);
 });
 
 test('9router model ids keep their slashes and case verbatim in the argv', () => {
@@ -83,29 +86,33 @@ test('9router model ids keep their slashes and case verbatim in the argv', () =>
     quality: { score: 50, scale: 'aa-v5-percentile', version: 'v' },
     budget: { maxOutputTokens: 100000 },
   });
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-slash',
     candidates: [withQuality],
     request: { outputTokens: 1000 },
     scale: 'aa-v5-percentile',
   });
-  const launch = buildLaunch(decision, { prefixes: PREFIXES });
+  const launch = buildLaunch(decision, { prefixes: PREFIXES, taskFile: 'task.md', message: 'go' });
   assert.equal(modelArgOf(launch), 'ninerouter/openrouter/openai/gpt-5.6-luna');
 
   const mixed = Object.assign({}, withQuality, { modelId: 'OpenRouter/OpenAI/GPT-5.6-Luna' });
-  const mixedDecision = decide({
+  const mixedDecision = decideOpen({
     runId: 'r-case',
     candidates: [mixed],
     request: { outputTokens: 1000 },
     scale: 'aa-v5-percentile',
   });
-  const mixedLaunch = buildLaunch(mixedDecision, { prefixes: PREFIXES });
+  const mixedLaunch = buildLaunch(mixedDecision, {
+    prefixes: PREFIXES,
+    taskFile: 'task.md',
+    message: 'go',
+  });
   assert.equal(modelArgOf(mixedLaunch), 'ninerouter/OpenRouter/OpenAI/GPT-5.6-Luna');
 });
 
 test('agy-pool launches a job that keeps the decided model, account and cwd', () => {
   const agy = CANDIDATES.filter((c) => c.routeKind === 'agy-pool');
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-agy',
     candidates: agy,
     request: { outputTokens: 1000 },
@@ -127,7 +134,7 @@ test('agy-pool launches a job that keeps the decided model, account and cwd', ()
 
 test('agy-pool falls back to the decided cwd and reports BUSY without a job', () => {
   const agy = CANDIDATES.filter((c) => c.routeKind === 'agy-pool');
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-agy2',
     candidates: agy,
     request: { outputTokens: 1000 },
@@ -137,12 +144,12 @@ test('agy-pool falls back to the decided cwd and reports BUSY without a job', ()
   assert.equal(fallback.job.cwd, decision.chosen.cwd);
 
   const busy = buildLaunch(decision, { cwd: 'wt-launch', laneBusy: true });
-  assert.deepEqual(busy, { status: 'BUSY' });
+  assert.deepEqual(busy, { status: 'BUSY', reason: 'LANE_BUSY' });
   assert.equal(busy.job, undefined);
 });
 
 test('observed reports UNKNOWN for absent run data and never fakes exit code 0', () => {
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-obs',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -162,7 +169,7 @@ test('observed reports UNKNOWN for absent run data and never fakes exit code 0',
 });
 
 test('observed keeps the run values it was given and classifies present failure text', () => {
-  const decision = decide({
+  const decision = decideOpen({
     runId: 'r-obs2',
     candidates: CANDIDATES,
     request: REQUEST,
@@ -202,7 +209,7 @@ test('nextDecisionInput drops only the failed route and keeps another account of
     scale: 'aa-v5-percentile',
     retryBudget: 1,
   };
-  const decision = decide(input);
+  const decision = decideOpen(input);
   assert.equal(decision.chosen.account, 'acct-A');
 
   const failure = classifyFailure(CASES.bracket_error.text);
@@ -223,7 +230,7 @@ test('nextDecisionInput drops only the failed route and keeps another account of
   assert.equal(next.scale, input.scale);
 
   // The same model on another account is still usable on the next decide call.
-  assert.equal(decide(next).chosen.account, 'acct-B');
+  assert.equal(decideOpen(next).chosen.account, 'acct-B');
 });
 
 test('nextDecisionInput blocks with exhausted budget and no candidates', () => {
@@ -247,7 +254,7 @@ test('nextDecisionInput blocks with exhausted budget and no candidates', () => {
     request: { outputTokens: 1000 },
     scale: 'aa-v5-percentile',
   };
-  const decision = decide(input);
+  const decision = decideOpen(input);
   const failure = classifyFailure(CASES.bracket_error.text);
 
   const zero = nextDecisionInput(Object.assign({}, input, { retryBudget: 0 }), decision, failure);
@@ -273,21 +280,21 @@ test('decide requires a numeric now when a state carries a cooldownUntil', () =>
   };
   const cooldown = { [routeKey(candidate)]: { cooldownUntil: '2099-01-01T00:00:00Z' } };
 
-  const missing = decide(Object.assign({}, base, { states: cooldown }));
+  const missing = decideOpen(Object.assign({}, base, { states: cooldown }));
   assert.equal(missing.status, 'BLOCKED');
   assert.ok(missing.reasons.includes('NOW_REQUIRED'));
 
-  const notNumber = decide(Object.assign({}, base, { states: cooldown, now: 'not-a-number' }));
+  const notNumber = decideOpen(Object.assign({}, base, { states: cooldown, now: 'not-a-number' }));
   assert.equal(notNumber.status, 'BLOCKED');
   assert.ok(notNumber.reasons.includes('NOW_REQUIRED'));
 
   const past = { [routeKey(candidate)]: { cooldownUntil: '2000-01-01T00:00:00Z' } };
-  const allowed = decide(Object.assign({}, base, { states: past, now: 1700000000000 }));
+  const allowed = decideOpen(Object.assign({}, base, { states: past, now: 1700000000000 }));
   assert.equal(allowed.status, 'DECIDED');
 });
 
 test('a non-decided decision has no command and an unsupported route is refused', () => {
-  const blocked = decide({
+  const blocked = decideOpen({
     runId: 'r-none',
     candidates: CANDIDATES,
     request: REQUEST,
