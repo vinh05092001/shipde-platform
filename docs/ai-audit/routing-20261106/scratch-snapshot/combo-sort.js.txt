@@ -1,0 +1,65 @@
+// 05/11 operator: "có điểm mà, thì nó lấy theo điểm chứ sắp xếp làm gì". Keep the 9Router writer combo ordered by
+// score so its `fallback` strategy always tries the strongest live member first. The operator only adds/removes
+// members in the dashboard; this script owns the order.
+//   score  = AA v5 percentile (route.js aaScore); members without an AA row keep their relative order after scored ones
+//   parked = Controller route-health says the 9router route is parked -> moved to the end
+// usage: node combo-sort.js [comboName] [--apply]   (default combo = Controller dispatch.nineRouterWriterCombo)
+const fs = require('fs');
+const path = require('path');
+const R = require('./route.js');
+const HB = require('./health-bridge');
+
+const BASE = 'http://127.0.0.1:20128';
+const MAIN = '<home>/AI/shipde-platform/.worktrees/p-run-main';
+const apply = process.argv.includes('--apply');
+let name = process.argv.slice(2).find((a) => !a.startsWith('--'));
+if (!name) { try { name = JSON.parse(fs.readFileSync(path.join(MAIN, 'tools/ai-brain/sources.json'), 'utf8')).dispatch.nineRouterWriterCombo; } catch {} }
+const cookie = fs.readFileSync(path.join(__dirname, '9r-cookie.txt'), 'utf8').split(/\r?\n/)
+  .filter((l) => l && (!l.startsWith('#') || l.startsWith('#HttpOnly_')))
+  .map((l) => l.replace(/^#HttpOnly_/, '').split('\t')).filter((p) => p.length >= 7).map((p) => `${p[5]}=${p[6]}`).join('; ');
+
+(async () => {
+  const res = await fetch(`${BASE}/api/combos`, { headers: { cookie } });
+  const j = await res.json();
+  const combos = j.combos || j;
+  const c = (Array.isArray(combos) ? combos : []).find((x) => x.name === name);
+  if (!c) { console.error(`combo "${name}" not found (login expired?)`, JSON.stringify(j).slice(0, 80)); process.exit(1); }
+  let h = null; try { h = HB.load(MAIN); } catch {}
+  // live evidence from the latest probe sweep: OK / FAIL per 9router route (probe-live.log, else probe-priors-out.txt)
+  const seen = {};
+  for (const f of ['probe-priors-out.txt', 'probe-live.log']) {
+    try { for (const l of fs.readFileSync(path.join(__dirname, f), 'utf8').split(/\r?\n/)) {
+      const mm = l.match(/\b(OK|FAIL)\b.*?\bninerouter\/(\S+)/); if (mm) seen[mm[2]] = mm[1];
+    } } catch {}
+  }
+  // same paid-route rule as route.js / reviewer-pick: per-token gateways only with their free ids unless the operator set OR_MAX_USD_PER_MTOK
+  const paid = (m) => /^(openrouter|nous|tokenharbor|vercel|requesty)\//.test(m) && !/free/i.test(m) && !!process.env.BLOCK_PAID_ROUTES; // 05/11 operator: callable = usable
+  // 05/11 operator: the per-model writer-size sweep (combo-live.json) beats older evidence; a route-health park still wins.
+  let swept = {}; try { swept = JSON.parse(fs.readFileSync(path.join(__dirname, 'combo-live.json'), 'utf8')); } catch {}
+  const tier = (r) => {
+    if (r.parked) return 2;
+    if (swept[r.m]) return swept[r.m].ok ? 0 : 2;
+    return seen[r.m] === 'FAIL' || paid(r.m) ? 2 : seen[r.m] === 'OK' ? 0 : 1;
+  };
+  const rows = c.models.map((m, i) => {
+    const s = R.aaScore(m);
+    const parked = h ? HB.parked(h, 'ninerouter/' + m) : null;
+    // AA v5 first; models AA does not list use their raw benchmark prior (provisional), as route.js does
+    const prior = s ? null : R.priorScore(m);
+    return { m, i, score: s ? s.pct : prior, provisional: !s && prior != null, parked };
+  });
+  rows.sort((a, b) => (tier(a) - tier(b)) || ((b.score ?? -1) - (a.score ?? -1)) || (a.i - b.i));
+  const cnt = [0, 0, 0]; for (const r of rows) cnt[tier(r)]++;
+  console.error(`live ${cnt[0]}, unknown ${cnt[1]}, failed/parked ${cnt[2]}`);
+  const next = rows.map((r) => r.m);
+  for (const r of rows) console.log(String(r.score ?? '-').padStart(5), r.parked ? 'PARKED ' : '       ', r.m);
+  const changed = next.join('|') !== c.models.join('|');
+  // reviewer-pick needs the writer family: record the member the combo serves first (first live member)
+  const first = rows.find((r) => tier(r) === 0);
+  if (apply && first) { const f = path.join(__dirname, 'combo-served.json'); let o = {}; try { o = JSON.parse(fs.readFileSync(f, 'utf8')); } catch {} o[name] = first.m; fs.writeFileSync(f, JSON.stringify(o)); }
+  if (!apply || !changed) { console.log(changed ? '(dry run; --apply to write)' : 'order already by score'); return; }
+  const put = await fetch(`${BASE}/api/combos/${c.id}`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ ...c, models: next }) });
+  const after = await (await fetch(`${BASE}/api/combos`, { headers: { cookie } })).json();
+  const a = ((after.combos || after) || []).find((x) => x.name === name);
+  console.log('PUT', put.status, '| saved order matches:', a && a.models.join('|') === next.join('|'));
+})();

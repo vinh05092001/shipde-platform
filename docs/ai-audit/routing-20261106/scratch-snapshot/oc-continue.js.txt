@@ -1,0 +1,45 @@
+// 05/11 operator: a good model that sometimes prints its last tool call as text must keep working, not be parked.
+// opencode sees no tool call and ends the run. After a run, if the log ENDS with a provider tool-call tag, resume the
+// SAME session (found by directory: all worktrees share one opencode project, so --continue could hit another item)
+// and ask for the call again. Stops when the log no longer ends with a tag, or a resume made no tool progress.
+// usage: node oc-continue.js <log> <model> [--dry]   (cwd = writer worktree)
+const fs = require('fs');
+const path = require('path');
+const { execSync, spawnSync } = require('child_process');
+
+const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+const read = (f) => { try { return strip(fs.readFileSync(f, 'utf8')); } catch { return ''; } };
+const endsWithTag = (t) => /<\/[a-z0-9_-]+:tool_call>\s*$/i.test(t);
+// 06/11: a run that dies on a passing fault keeps its session, so resume it instead of starting over: model capacity
+// mid-run (a combo fails over only before the first byte) and opencode's grep tool choking on one huge line.
+const lastLine = (t) => t.split(/\r?\n/).filter((l) => l.trim()).pop() || '';
+const passingFault = (t) => /^\s*\[?Error\]?:?\s.*(at capacity|temporarily unavailable|did not respond|response headers timed out|Ripgrep JSON record exceeded)/i.test(lastLine(t));
+const needsResume = (t) => endsWithTag(t) || passingFault(t);
+const toolLines =(t) => (t.match(/^(→|\$|←|✱|⚙) /gm) || []).length;
+const NUDGE = 'The run was interrupted or your last tool call did not run. Continue the task from where you stopped. If grep failed on a huge line, narrow it with a file glob.';
+
+function sessionFor(cwd) {
+  const out = execSync('opencode session list --format json', { cwd, encoding: 'utf8', timeout: 60000, shell: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  const want = path.resolve(cwd).toLowerCase();
+  return JSON.parse(out).filter((s) => path.resolve(s.directory || '').toLowerCase() === want).sort((a, b) => b.updated - a.updated)[0];
+}
+
+const [, , log, model, dry] = process.argv;
+if (require.main === module) {
+  let before = -1;
+  for (;;) {
+    const t = read(log);
+    if (!needsResume(t)) break;
+    const n = toolLines(t);
+    if (n <= before) { fs.appendFileSync(log, '\n[oc-continue] resume made no tool progress, stopping\n'); break; }
+    before = n;
+    const s = sessionFor(process.cwd());
+    if (!s) { fs.appendFileSync(log, '\n[oc-continue] no session for this directory\n'); break; }
+    if (dry) { console.log('would resume', s.id, s.directory); break; }
+    fs.appendFileSync(log, `\n[oc-continue] resuming ${s.id}\n`);
+    const fd = fs.openSync(log, 'a');
+    spawnSync('opencode', ['run', '-m', model, '--session', s.id, JSON.stringify(NUDGE)], { stdio: ['ignore', fd, fd], shell: true });
+    fs.closeSync(fd);
+  }
+}
+module.exports = { endsWithTag, toolLines, needsResume };

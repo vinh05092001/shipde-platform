@@ -1,0 +1,143 @@
+// 04/11 operator: "dùng controller". Writer runs launched by route.js never reached the Controller's
+// route-health store (TASK-AI-147), so route.js grew its own regex cooling. This bridge feeds real writer
+// errors into the Controller store (recordResult: classify + backoff + route_restored on recovery) and lets
+// route.js ask the Controller whether a route is parked. Re-checks are done by `cli.js probe --due`.
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+
+function load(mainTree) {
+  const api = require(path.join(mainTree, 'tools', 'ai-brain', 'route-health.js'));
+  const file = path.join(mainTree, 'tools', 'ai-brain', 'data', 'model-route-health.json');
+  return { api, file, store: api.loadStore(file) };
+}
+
+// opencode label/model -> Controller (modelId, routeId)
+function routeOf(model) {
+  const p = String(model).replace(/^opencode:/, '').split('/');
+  if (p[0] === 'ninerouter' && p.length >= 3) return { modelId: p.slice(1).join('/'), routeId: '9router' }; // Controller discovery format: 9router + alias/model
+  if (p.length >= 2) return { modelId: p.slice(1).join('/'), routeId: p[0] };
+  return null;
+}
+
+function parseError(line) {
+  const code = Number((/\[(\d{3})\]/.exec(line) || [])[1]) ||
+    (/Free usage limit|rate_limit|Too many requests|free-usage-exhausted/i.test(line) ? 429 : /gateway_timeout/i.test(line) ? 504 : 0);
+  return { status: code, message: line.replace(/\x1b\[[0-9;]*m/g, '').slice(0, 400) };
+}
+
+// Ingest writer errors newer than the store's last check for that path.
+function ingest(mainTree, logsDir) {
+  const h = load(mainTree);
+  const seenFile = path.join(__dirname, 'health-bridge-seen.json');
+  let seen = {}; try { seen = JSON.parse(fs.readFileSync(seenFile, 'utf8')); } catch {}
+  const events = [];
+  const recentFails = {}; // normalised route -> failed writer launches in the last 30 min
+  // a) route logs: the fatal "Error:" line opencode prints
+  try {
+    for (const l of fs.readFileSync(path.join(logsDir, 'route-log.jsonl'), 'utf8').trim().split(/\r?\n/).slice(-200)) {
+      let r; try { r = JSON.parse(l); } catch { continue; }
+      if (!r.launch || !r.launch.log || !r.choice || !/^opencode:/.test(r.choice.label)) continue;
+      const fresh = Date.now() - Date.parse(r.at) < 30 * 60e3;
+      if (seen[r.launch.log] && !fresh) continue;
+      let t = ''; try { t = fs.readFileSync(r.launch.log, 'utf8'); } catch { continue; }
+      const err = t.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).filter((x) => /^\s*Error:\s/.test(x)).pop();
+      if (!err) continue;
+      // 05/11: count every failed launch of the last 30 min (already-seen ones too), keyed by the normalised route
+      if (fresh) { const rk = routeOf(r.choice.label); if (rk) recentFails[rk.modelId + '|' + JSON.stringify(rk.routeId)] = (recentFails[rk.modelId + '|' + JSON.stringify(rk.routeId)] || 0) + 1; }
+      if (!seen[r.launch.log]) { events.push({ model: r.choice.label, at: Date.parse(r.at), ...parseError(err) }); seen[r.launch.log] = 1; }
+    }
+  } catch {}
+  // b) opencode's own log: errors it retries silently (429, free-usage limit, gateway_timeout)
+  try {
+    const p = path.join(process.env.USERPROFILE || '', '.local/share/opencode/log/opencode.log');
+    const size = fs.statSync(p).size, len = Math.min(size, 4 * 1024 * 1024), b = Buffer.alloc(len);
+    const fd = fs.openSync(p, 'r'); fs.readSync(fd, b, 0, len, size - len); fs.closeSync(fd);
+    for (const l of b.toString('utf8').split(/\r?\n/)) {
+      if (!/level=ERROR/.test(l) || !/message="stream error"/.test(l)) continue;
+      const at = Date.parse((/timestamp=(\S+)/.exec(l) || [])[1]); const prov = (/providerID=(\S+)/.exec(l) || [])[1]; const mid = (/modelID=(\S+)/.exec(l) || [])[1];
+      if (!at || !prov || !mid || Date.now() - at > 6 * 3600e3) continue;
+      events.push({ model: `${prov}/${mid}`, at, ...parseError(l) });
+    }
+  } catch {}
+  let n = 0;
+  // one event per route: only the NEWEST error counts (replaying history would escalate backoff to 24h)
+  const newest = {}; for (const e of events) { const r = routeOf(e.model); if (!r || !e.status) continue; const k = r.modelId + '|' + JSON.stringify(r.routeId); if (!newest[k] || newest[k].at < e.at) newest[k] = e; }
+  for (const e of Object.values(newest)) {
+    const viaRouter = /^(opencode:)?ninerouter\//.test(String(e.model));
+    const rk = routeOf(e.model); const repeats = rk ? recentFails[rk.modelId + '|' + JSON.stringify(rk.routeId)] || 0 : 0;
+    // a too-small account balance holds for every key of that account (OpenRouter 402 "requires more credits")
+    const allAccountsOut = /accounts unavailable|allRateLimited|all \d+ accounts|requires more credits|can only afford|insufficient (credits|balance)/i.test(e.message);
+    const modelLevel = /model[ _]?not[ _]?found|does not exist|unknown model|no such model|not supported|UnsupportedModel|Request too large|\[413\]|max_tokens. must be|context.?length|tokens per minute/i.test(e.message); // model-level limits hold for every account
+    if (viaRouter && /requires more credits|can only afford|insufficient (credits|balance)/i.test(e.message)) markNoCredit(e.model);
+    if (viaRouter && !allAccountsOut && !modelLevel && repeats < 3) continue; // one account failed; 9router fails over to the next
+    const r = routeOf(e.model); if (!r || !e.status) continue;
+    const rec = h.api.getPathRecord(h.store, r.modelId, r.routeId);
+    if (rec && Date.parse(rec.lastCheckedAt) >= e.at) continue; // already known, or restored after this error
+    h.api.recordResult(h.store, r.modelId, r.routeId, { ok: false, status: e.status, message: e.message }, Date.now()); // backoff counts from now, not from the (older) error time
+    try { h.api.rememberLaunchTpm({ model: r.modelId, gateway: typeof r.routeId === 'object' ? r.routeId.id : r.routeId, accountId: r.routeId.accountId }, e.message, { root: mainTree }); } catch {}
+    n++;
+  }
+  // a route whose writers failed >= 3 times in 30 min is parked even when those errors were already ingested
+  for (const [k, cnt] of Object.entries(recentFails)) {
+    if (cnt < 3) continue;
+    const sep = k.lastIndexOf('|'); const modelId = k.slice(0, sep); const routeId = JSON.parse(k.slice(sep + 1));
+    const rec = h.api.getPathRecord(h.store, modelId, routeId);
+    if (rec && rec.status !== 'AVAILABLE' && rec.nextCheckAt && Date.parse(rec.nextCheckAt) > Date.now()) continue;
+    h.api.recordResult(h.store, modelId, routeId, { ok: false, status: 429, message: `${cnt} failed writer launches in 30 min` }, Date.now());
+    n++;
+  }
+  h.api.saveStore(h.file, h.store);
+  fs.writeFileSync(seenFile, JSON.stringify(seen));
+  return n;
+}
+
+// Controller verdict for a candidate: null = usable, else the parked status.
+const NO_CREDIT_FILE = path.join(__dirname, 'no-credit.json');
+function readNoCredit() { try { return JSON.parse(fs.readFileSync(NO_CREDIT_FILE, 'utf8')); } catch { return {}; } }
+function markNoCredit(routeModel) {
+  const id = String(routeModel).replace(/^opencode:/, '').replace(/^ninerouter\//, '');
+  const alias = id.split('/')[0]; const o = readNoCredit();
+  if (!o[alias]) { o[alias] = { sample: id, at: new Date().toISOString() }; fs.writeFileSync(NO_CREDIT_FILE, JSON.stringify(o)); }
+}
+// re-test flagged accounts at most every 10 min with a writer-size max_tokens
+async function recheckNoCredit(key) {
+  const o = readNoCredit(); const stamp = path.join(__dirname, 'no-credit.stamp');
+  try { if (Date.now() - fs.statSync(stamp).mtimeMs < 10 * 60e3) return o; } catch {}
+  fs.writeFileSync(stamp, String(Date.now()));
+  for (const [alias, v] of Object.entries(o)) {
+    try {
+      const r = await fetch('http://127.0.0.1:20128/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + key }, body: JSON.stringify({ model: v.sample, max_tokens: 32000, stream: false, messages: [{ role: 'user', content: 'Reply with OK.' }] }), signal: AbortSignal.timeout(60000) });
+      const x = await r.text();
+      if (!/requires more credits|can only afford|insufficient (credits|balance)/i.test(x)) delete o[alias];
+    } catch {}
+  }
+  fs.writeFileSync(NO_CREDIT_FILE, JSON.stringify(o));
+  return o;
+}
+
+function parked(h, model, now = Date.now()) {
+  const nid = String(model).replace(/^ninerouter\//, ''); const flagged = readNoCredit()[nid.split('/')[0]];
+  // 05/11 operator: an account's credit limit depends on the model's price, so the account flag holds only for models not proven by a writer-size call.
+  let sweptOk = false; try { const x = JSON.parse(fs.readFileSync(path.join(__dirname, 'combo-live.json'), 'utf8'))[nid]; sweptOk = !!(x && x.ok); } catch {}
+  if (/^ninerouter\//.test(String(model)) && flagged && !/free/i.test(nid) && !sweptOk) return 'NO_CREDIT account (writer-size call refused)';
+  const r = routeOf(model); if (!r) return null;
+  const rec = h.api.getPathRecord(h.store, r.modelId, r.routeId);
+  if (!rec || rec.status === 'AVAILABLE') return null;
+  if (rec.nextCheckAt && Date.parse(rec.nextCheckAt) <= now) return null; // due for re-check: let probe/launch decide
+  return `${rec.status} until ${String(rec.nextCheckAt || '').slice(11, 16)}Z (Controller route-health)`;
+}
+
+// Re-check due routes through the Controller, at most every 10 min, detached.
+function probeDue(mainTree) {
+  const stamp = path.join(__dirname, 'probe-due.stamp');
+  try { if (Date.now() - fs.statSync(stamp).mtimeMs < 10 * 60e3) return; } catch {}
+  fs.writeFileSync(stamp, String(Date.now()));
+  const env = { ...process.env }; for (const n of ['NINEROUTER_API_KEY']) if (!env[n]) { try { env[n] = require('child_process').execFileSync('powershell', ['-NoProfile', '-Command', `[Environment]::GetEnvironmentVariable('${n}','User')`], { encoding: 'utf8' }).trim(); } catch {} }
+  if (!env.NINEROUTER_API_KEY) return; // without the key every probe would read as AUTH_NEEDED
+  spawn('node', ['tools/ai-brain/cli.js', 'probe', '--due'], { cwd: mainTree, detached: true, stdio: 'ignore', env }).unref();
+  spawn('node', ['-e', "require('./health-bridge').recheckNoCredit(process.env.NINEROUTER_API_KEY)"], { cwd: __dirname, detached: true, stdio: 'ignore', env }).unref();
+}
+
+module.exports = { load, ingest, parked, probeDue, routeOf, markNoCredit, recheckNoCredit, readNoCredit };
+if (require.main === module) console.log('ingested', ingest(process.argv[2], process.argv[3]));

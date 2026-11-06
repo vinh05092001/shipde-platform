@@ -1,0 +1,26 @@
+# audit 03/11 #44: writer MCP children (jcodemunch/serena/server-memory) left running after their writer died.
+# Kill only when the parent process is gone AND the process is older than 2h. Live sessions keep their parent.
+$all = Get-CimInstance Win32_Process
+$ids = @{}; $all | % { $ids[[int]$_.ProcessId] = $true }
+$all | ? { $_.CommandLine -match 'jcodemunch_mcp|serena|server-memory' -and $_.CreationDate -lt (Get-Date).AddHours(-2) -and -not $ids[[int]$_.ParentProcessId] } | % {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; "killed orphan $($_.ProcessId) $($_.Name)" } catch {}
+}
+
+# 05/11: a superseded opencode writer survives the pipeline's kill (it runs under a detached sh), so two writers
+# work one item and eat RAM/quota. Each item has exactly one live writer: its LATEST route launch. An opencode
+# process older than 5 min that started more than 90 s away from every latest opencode launch is superseded.
+$log = Join-Path $PSScriptRoot '..\..\..\..\..\..\..\AI\shipde-platform\.worktrees\logs\night\route-log.jsonl'
+if (-not (Test-Path $log)) { $log = '<home>\AI\shipde-platform\.worktrees\logs\night\route-log.jsonl' }
+$latest = @{}
+Get-Content $log -Tail 400 | % { try { $r = $_ | ConvertFrom-Json } catch { return }; if ($r.launch -and $r.item) { $latest[$r.item] = $r } }
+$starts = @($latest.Values | ? { $_.launch.how -like 'opencode*' } | % { [datetime]::Parse($_.at).ToLocalTime() })
+$all | ? { $_.Name -eq 'opencode.exe' -and $_.CommandLine -match ' run -m ' -and $_.CreationDate -lt (Get-Date).AddMinutes(-5) } | % {
+  $c = $_.CreationDate
+  $near = $starts | ? { [math]::Abs(($_ - $c).TotalSeconds) -le 90 }
+  if (-not $near) { try { taskkill /PID $_.ProcessId /T /F | Out-Null; "killed superseded writer $($_.ProcessId) started $($c.ToString('HH:mm'))" } catch {} }
+}
+
+# 05/11: writers ran `find / -name ...` over the whole disk for hours (100% CPU). No legitimate search takes 10 min.
+$all | ? { $_.Name -eq 'find.exe' -and $_.ExecutablePath -like '*\Git\usr\bin\find.exe' -and $_.CreationDate -lt (Get-Date).AddMinutes(-10) } | % {
+  try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; "killed runaway find $($_.ProcessId)" } catch {}
+}
