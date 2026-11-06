@@ -3,8 +3,8 @@
 : "${AR=}"  # default = ChatGPT review account in <lane>; AR=1 -> agentrouter
 # 04/11 operator: <lane> Codex is in use by the operator; review via agentrouter until 04/11-20:41
 [ -z "$AR" ] && [ $(date +%s) -lt 1793799673 ] && AR=1
-# 05/11 08:35: <lane> ChatGPT Codex refresh token revoked (401 token_revoked) -> agentrouter until operator re-logs <lane> and sets AGY01_CODEX_OK=1
-[ -z "$AR" ] && [ -z "$AGY01_CODEX_OK" ] && AR=1
+# 05/11 08:35: <lane> ChatGPT Codex refresh token revoked (401 token_revoked) -> agentrouter until operator re-logs <lane> and sets <LANE>_CODEX_OK=1
+[ -z "$AR" ] && [ -z "$<LANE>_CODEX_OK" ] && AR=1
 # agentrouter keys from the User env (names only here; values never printed); rotate per review
 for n in AGENTROUTER_API_KEY AGENTROUTER_API_KEY_2; do [ -z "$(printenv $n)" ] && export $n="$(powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('$n','User')" | tr -d '\r\n')"; done
 ARKEYS=""; for n in AGENTROUTER_API_KEY AGENTROUTER_API_KEY_2; do [ -n "$(printenv $n)" ] && ARKEYS="$ARKEYS $n"; done
