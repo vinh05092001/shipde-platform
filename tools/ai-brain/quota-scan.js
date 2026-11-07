@@ -2905,7 +2905,8 @@ async function scanSourceQuotas(src, options = {}) {
     if (options.persist !== false) {
       saveQuotaState(quotaState, options);
     }
-    return Object.values(quotaState.scopes);
+    // The state holds every source's scopes; a caller records what is returned as this source's proof.
+    return [...new Set(Object.values(quotaState.scopes))].filter((r) => r && r.source === src.id);
   }
   const targets = Array.isArray(options.targets)
     ? options.targets
