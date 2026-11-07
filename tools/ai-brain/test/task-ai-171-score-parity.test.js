@@ -76,6 +76,26 @@ function both(rows) {
   ];
 }
 
+test('empty assessment preserves legacy profile scores without ctx.profile', () => {
+  const rows = [candidate('fixture/evidenced', null), candidate('fixture/high-quality', null)];
+  rows[0].quality = 10;
+  rows[0].evidence = [{ status: 'passed', level: 'OUTCOME' }];
+  rows[1].quality = 90;
+  const ctx = { ...context(), assessment: {} };
+  delete ctx.profile;
+  const result = routing.rankForProfile(structuredClone(rows), profile, {}, ctx);
+  assert.equal(result.chosen, routing.candidateKey(rows[1]));
+  assert.deepEqual(
+    result.ranking.map((row) => row.score),
+    [78, 70]
+  );
+  const explicitProfile = routing.rankForProfile(structuredClone(rows), profile, {}, {
+    ...ctx,
+    profile,
+  });
+  assert.deepEqual(result, explicitProfile);
+});
+
 test('empty assessment preserves legacy execute scores, selection and unsourced parts', () => {
   const rows = [candidate('fixture/evidenced', null), candidate('fixture/high-quality', null)];
   rows[0].quality = 10;

@@ -1798,6 +1798,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
 
     const scoreContext = Object.assign({}, context, {
+      profile,
       taskId: profile.taskId,
       now,
       role: profile.role,
