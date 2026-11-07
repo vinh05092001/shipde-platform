@@ -5569,6 +5569,8 @@ function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
 
 if (require.main === module) {
   // Dry-run stays inference-free whatever is configured; only an explicit --jev-live asks JEV.
+  // Linux pipes are asynchronous: a large --json decision must survive process.exit.
+  process.stdout._handle?.setBlocking?.(true);
   const argv = process.argv.slice(2);
   main(argv, { dryRunOffline: !argv.includes('--jev-live') });
 }
