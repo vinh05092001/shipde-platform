@@ -409,3 +409,7 @@ Limitations: Mock launch and JEV verify orchestration only, not route liveness. 
 ## Dispatch catalogue read
 
 `priors-public.liveModelIds` reparsed the catalogue for every prior match, so dispatch blocked for over 280 seconds on 11904 rows and looked like a stalled refresh. It now rereads only when the file changes.
+
+## Offline integration and live proof (2026-11-08)
+
+Integration of the routing tickets with a measured quality policy and scan-based route evidence. Evidence and open items: `docs/ai-audit/handoff-table-20261108.md`.

@@ -82,28 +82,31 @@ function fixture(t) {
   });
   const run = (offered, quotaState, extra = {}) => {
     const logs = [];
-    const result = dispatchCommand({ 'dry-run': true, root }, {
-      candidates: offered,
-      items: [{ workItemId: profile.taskId, role: profile.role }],
-      accounts: [],
-      registry: { sources: [], dispatch: { routeEvidenceMaxAgeMs: maxAgeMs } },
-      now,
-      priors: [],
-      taskProfile: profile,
-      assessment,
-      quotaState,
-      headrooms: { default: 'open' },
-      reservations: [],
-      home: root,
-      evidenceDir: path.join(root, 'evidence'),
-      decisionDir: path.join(root, 'decisions'),
-      routeHealthFile: path.join(root, 'route-health.json'),
-      run: () => assert.fail('dry-run must never launch a worker'),
-      log: (line) => logs.push(line),
-      error: (line) => assert.fail(line),
-      exit: (code) => assert.equal(code, 0),
-      ...extra,
-    });
+    const result = dispatchCommand(
+      { 'dry-run': true, root },
+      {
+        candidates: offered,
+        items: [{ workItemId: profile.taskId, role: profile.role }],
+        accounts: [],
+        registry: { sources: [], dispatch: { routeEvidenceMaxAgeMs: maxAgeMs } },
+        now,
+        priors: [],
+        taskProfile: profile,
+        assessment,
+        quotaState,
+        headrooms: { default: 'open' },
+        reservations: [],
+        home: root,
+        evidenceDir: path.join(root, 'evidence'),
+        decisionDir: path.join(root, 'decisions'),
+        routeHealthFile: path.join(root, 'route-health.json'),
+        run: () => assert.fail('dry-run must never launch a worker'),
+        log: (line) => logs.push(line),
+        error: (line) => assert.fail(line),
+        exit: (code) => assert.equal(code, 0),
+        ...extra,
+      }
+    );
     assert.equal(result.exitCode, 0);
     const rows = result.decision.candidates;
     const printed = logs.filter((line) => /^  \d+\. /.test(line));
@@ -127,9 +130,18 @@ test('dispatch order: fresh route evidence precedes higher scores in CLI output'
   const { candidates, state, run } = fixture(t);
   for (const offered of [candidates, candidates.slice().reverse()]) {
     const rows = run(offered, state([candidates[0]]));
-    assert.deepEqual(rows.map((row) => row.score), [60, 83, 81, 80]);
-    assert.deepEqual(rows.map((row) => row.hasFreshEvidence), [true, false, false, false]);
-    assert.deepEqual(rows.map((row) => row.scoreBreakdown.quality), [60, 83, 81, 80]);
+    assert.deepEqual(
+      rows.map((row) => row.score),
+      [60, 83, 81, 80]
+    );
+    assert.deepEqual(
+      rows.map((row) => row.hasFreshEvidence),
+      [true, false, false, false]
+    );
+    assert.deepEqual(
+      rows.map((row) => row.scoreBreakdown.quality),
+      [60, 83, 81, 80]
+    );
   }
 });
 
@@ -137,7 +149,10 @@ test('dispatch order: equal evidence groups sort by score regardless of input or
   const { candidates, state, run } = fixture(t);
   for (const proven of [[], candidates]) {
     for (const offered of [candidates, candidates.slice().reverse()]) {
-      assert.deepEqual(run(offered, state(proven)).map((row) => row.score), [83, 81, 80, 60]);
+      assert.deepEqual(
+        run(offered, state(proven)).map((row) => row.score),
+        [83, 81, 80, 60]
+      );
     }
   }
 });
@@ -145,7 +160,10 @@ test('dispatch order: equal evidence groups sort by score regardless of input or
 test('dispatch order: stale evidence cannot promote the lower scoring route', (t) => {
   const { candidates, state, run, maxAgeMs } = fixture(t);
   const rows = run(candidates, state([candidates[0]], maxAgeMs + 1));
-  assert.deepEqual(rows.map((row) => row.score), [83, 81, 80, 60]);
+  assert.deepEqual(
+    rows.map((row) => row.score),
+    [83, 81, 80, 60]
+  );
   assert.ok(rows.every((row) => row.hasFreshEvidence === false));
 });
 
@@ -161,5 +179,8 @@ test('dispatch order: known quality precedes fresh evidence with unknown quality
 test('dispatch order: isolated worker retains the fresh route priority without changing scores', (t) => {
   const { candidates, state, run } = fixture(t);
   const rows = run(candidates.slice().reverse(), state([candidates[0]]), { isolatedWorker: true });
-  assert.deepEqual(rows.map((row) => row.score), [60, 83, 81, 80]);
+  assert.deepEqual(
+    rows.map((row) => row.score),
+    [60, 83, 81, 80]
+  );
 });
