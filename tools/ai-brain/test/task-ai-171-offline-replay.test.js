@@ -90,6 +90,7 @@ function fixture(t, kind) {
     launchModes: { opencode: ['full-access'] },
   };
   const route = (source, modelId, extra = {}) => ({
+    source: source.id,
     gateway: source.id,
     modelId,
     upstream: source.id,
@@ -121,7 +122,7 @@ function fixture(t, kind) {
       ])
     ),
     qualifiedRoles: ['author.foundation'],
-    cost: template.latencyMs,
+    cost: index === selectedIndex ? template.latencyMs : profile.costCeiling,
     evidence: [{ status: 'passed', proofLevel: template.proofLevel, at: template.ts }],
   }));
   const routeHealth = {
@@ -203,44 +204,42 @@ for (const kind of ['individual', 'combo', 'external']) {
       storePath: path.join(f.root, 'quota.json'),
       headrooms: { default: 'open' },
     };
-    const result = await dispatchCommand(
-      {
-        'dry-run': true,
-        root: f.root,
-        item: f.request.workItemId,
-        'route-scope': 'combo-and-routes',
-        'decision-log': decisionFile,
-      },
-      {
-        registry: f.registry,
-        discoveryCatalogue: { candidates: f.rows },
-        readDispatchComboConfig: () =>
-          require('../writer-combo').readComboConfig({
-            name: f.registry.dispatch.nineRouterWriterCombo,
-            endpoint: 'https://fixture.invalid/v1',
-            loadCliToken: () => 'fixture-only',
-            httpRequest: async (req) => {
-              assert.equal(req.method, 'GET');
-              assert.equal(req.path, '/api/combos');
-              return { status: 200, data: { combos: [comboConfig] } };
-            },
-          }),
-        accounts: [],
-        registryAccounts: [],
-        offerings: [],
-        discoverPool: false,
-        env: process.env,
-        ...context,
-        routeHealth: f.routeHealth,
-        evidenceDir: path.join(f.root, 'evidence'),
-        decisionDir: path.join(f.root, 'decisions'),
-        taskProfile: f.profile,
-        assessment,
-        priors: { ranking: [] },
-        log: () => {},
-        exit: () => {},
-      }
-    );
+    const dispatchArgs = {
+      root: f.root,
+      item: f.request.workItemId,
+      'route-scope': 'combo-and-routes',
+      'decision-log': decisionFile,
+    };
+    const dispatchDeps = {
+      registry: f.registry,
+      discoveryCatalogue: { candidates: f.rows },
+      readDispatchComboConfig: () =>
+        require('../writer-combo').readComboConfig({
+          name: f.registry.dispatch.nineRouterWriterCombo,
+          endpoint: 'https://fixture.invalid/v1',
+          loadCliToken: () => 'fixture-only',
+          httpRequest: async (req) => {
+            assert.equal(req.method, 'GET');
+            assert.equal(req.path, '/api/combos');
+            return { status: 200, data: { combos: [comboConfig] } };
+          },
+        }),
+      accounts: [],
+      registryAccounts: [],
+      offerings: [],
+      discoverPool: false,
+      env: process.env,
+      ...context,
+      routeHealth: f.routeHealth,
+      evidenceDir: path.join(f.root, 'evidence'),
+      decisionDir: path.join(f.root, 'decisions'),
+      taskProfile: f.profile,
+      assessment,
+      priors: { ranking: [] },
+      log: () => {},
+      exit: () => {},
+    };
+    const result = await dispatchCommand({ ...dispatchArgs, 'dry-run': true }, dispatchDeps);
     assert.equal(result.exitCode, 0, JSON.stringify(result.decision?.rejected));
     assert.equal(transcript.filter((e) => e.stage === 'onboarding-stub').length, 1);
     const { decision } = result;
@@ -287,18 +286,7 @@ for (const kind of ['individual', 'combo', 'external']) {
       workItemId: f.request.workItemId,
       selected: decision.chosen,
     };
-    const launch = handoff.firstLaunch(replayDecision, f.request, context, f.registry);
-    assert.equal(launch.action, 'LAUNCH');
-    assert.equal(launch.launch.offeringId, selected.offeringId);
-    const args = launch.launch.args;
-    const dispatch = f.registry.dispatch.providers[selected.gateway];
-    assert.equal(args[args.indexOf('--model') + 1], dispatch.modelPrefix + selected.modelId);
-    assert.equal(args[args.indexOf('--provider') + 1], dispatch.provider);
-    assert.equal(args[args.indexOf('--cwd') + 1], f.root);
-    transcript.push(
-      { stage: 'decision', selected: replayDecision.selected },
-      { stage: 'argv', args }
-    );
+    transcript.push({ stage: 'decision', selected: replayDecision.selected });
     const diffFile = path.join(f.root, 'worker.diff');
     const diff = text('sample-code.diff');
     const worker = (adapter, argv) => {
@@ -309,11 +297,37 @@ for (const kind of ['individual', 'combo', 'external']) {
       else fs.writeFileSync(diffFile, diff);
       return { exitCode: 0, stdout: JSON.stringify({ id: 'fake-worker-session' }) };
     };
-    const launched = worker(getHarness(launch.launch.harness), args);
-    assert.equal(
-      readSessionId(getHarness(launch.launch.harness), {}, launched).id,
-      'fake-worker-session'
+    const calls = [];
+    const executed = await dispatchCommand(
+      { ...dispatchArgs, execute: true, branch: f.request.request.branch },
+      {
+        ...dispatchDeps,
+        rethrow: true,
+        run: (adapter, argv, options) => {
+          calls.push({ adapter, argv, options });
+          const dispatch = f.registry.dispatch.providers[selected.gateway];
+          assert.equal(adapter.id, selected.harness);
+          assert.equal(argv[argv.indexOf('--model') + 1], dispatch.modelPrefix + selected.modelId);
+          assert.equal(argv[argv.indexOf('--provider') + 1], dispatch.provider);
+          assert.equal(argv[argv.indexOf('--cwd') + 1], f.root);
+          assert.equal(options.workItemId, f.request.workItemId);
+          const records = require('../decisions').readDecisions({
+            dir: dispatchDeps.decisionDir,
+            now: f.now,
+          });
+          const recorded = records.find((r) => r.stage === 'selected');
+          assert.equal(recorded.chosen, decision.chosen);
+          assert.ok(records.some((r) => r.stage === 'launched' && r.chosen === recorded.chosen));
+          transcript.push({ stage: 'argv', args: argv });
+          return worker(adapter, argv);
+        },
+      }
     );
+    assert.equal(executed.exitCode, 0);
+    assert.equal(executed.chosen, decision.chosen);
+    assert.equal(executed.attempts, 1);
+    assert.equal(calls.length, 1, 'execute must call the injected runner exactly once');
+    assert.equal(readSessionId(calls[0].adapter, {}, executed.result).id, 'fake-worker-session');
     transcript.push({ stage: 'diff', diff: fs.readFileSync(diffFile, 'utf8') });
     if (kind === 'individual') {
       context.ledger.activeWorker = { offeringId: selected.offeringId };
