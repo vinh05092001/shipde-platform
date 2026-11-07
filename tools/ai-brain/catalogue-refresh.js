@@ -53,8 +53,8 @@ function sanitizeScope(rawScope) {
 /**
  * The 48h gate derives from exactly one persisted observation record
  * (freshness.json), which refreshCatalogue replaces atomically and advances
- * `lastSuccessfulAt` only after every stage of one refresh genuinely
- * succeeded (BR-166-01). A failed later attempt keeps the last good
+ * `lastSuccessfulAt` after verified discovery lists at least one source.
+ * Optional probes cannot revoke a finished listing. A failed later attempt keeps the last good
  * observation and never advances it, so a catalogue whose last success is
  * inside the 48h window stays dispatchable even when the newest attempt
  * failed. refresh-report.json is a detail artifact, never a second gate
@@ -88,7 +88,9 @@ function catalogueFreshness(options = {}) {
 function runStage(args, context) {
   return new Promise((resolve) => {
     const stageArgs =
-      args[0] === 'discovery' ? [...args, '--freshness-file', context.discoveryFile] : args;
+      args[0] === 'discovery'
+        ? [...args, '--data-dir', context.dataDir, '--freshness-file', context.discoveryFile]
+        : args;
     const child = spawn(process.execPath, [path.join(__dirname, 'cli.js'), ...stageArgs], {
       windowsHide: true,
       shell: false,
@@ -114,24 +116,26 @@ async function refreshCatalogue(options = {}) {
   const dataDir = options.dataDir || DATA_DIR;
   const freshnessFile = options.freshnessFile || path.join(dataDir, 'freshness.json');
   const reportFile = options.reportFile || path.join(dataDir, 'refresh-report.json');
-  // Last good observation before this run. A failed run preserves it and can
-  // never advance it (BR-166-01); it is captured before any stage runs so a
-  // stage that writes freshness mid-run cannot leak into a failed overall run.
+  // Preserve the last listing when discovery fails; probing is independent.
   const previousFreshness = readJson(freshnessFile, {});
-  // Discovery writes this attempt's observation, not the dispatch gate. A
-  // crash or failed quota stage leaves the previous canonical success intact.
+  // Verify the private discovery observation before publishing it atomically.
   const discoveryFile = freshnessFile + '.' + randomUUID() + '.observation.json';
   const stages = [];
   const stageDefs = [
     { args: ['priors', 'refresh'], name: 'priors refresh' },
     { args: ['discovery', 'run'], name: 'discovery run' },
-    { args: ['quota-scan'], name: 'quota-scan' },
+    ...(options.probe === true ? [{ args: ['quota-scan'], name: 'quota-scan' }] : []),
   ];
+  const log = options.log || console.error;
+  let discovery = null;
+  let discoveryPublished = false;
 
   for (const { args, name } of stageDefs) {
+    const stageStarted = Date.now();
+    log(`Refresh: ${name} started`);
     let result;
     try {
-      result = await (options.run || runStage)(args, { discoveryFile });
+      result = await (options.run || runStage)(args, { discoveryFile, dataDir });
     } catch (error) {
       result = { exitCode: 1, stderr: error.code || 'REFRESH_FAILED' };
     }
@@ -169,10 +173,7 @@ async function refreshCatalogue(options = {}) {
         } else if (!writtenThisRun(freshness.lastAttemptAt, startedEpoch)) {
           stageExitCode = 1;
           stageError = 'DISCOVERY_EVIDENCE_STALE';
-        } else if (
-          !(freshness.listedSources > 0) &&
-          (freshness.complete !== true || (freshness.failedSources || []).length > 0)
-        ) {
+        } else if (!(freshness.listedSources > 0)) {
           stageExitCode = 1;
           stageError = 'DISCOVERY_INCOMPLETE';
         }
@@ -192,8 +193,22 @@ async function refreshCatalogue(options = {}) {
     stages.push({
       command: args.join(' '),
       exitCode: stageExitCode,
+      durationMs: Date.now() - stageStarted,
       ...(stageError ? { error: stageError } : {}),
     });
+    if (name === 'discovery run') {
+      discovery = readJson(discoveryFile, null);
+      if (options.persist !== false && stageExitCode === 0 && discovery?.listedSources > 0) {
+        writeJson(freshnessFile, discovery);
+        discoveryPublished = true;
+      }
+      if (options.persist !== false) {
+        writeJson(reportFile, { startedAt, stages, sources: discovery?.sources || [] });
+      }
+    }
+    log(
+      `Refresh: ${name} ${stageExitCode === 0 ? 'finished' : 'failed'} (${Date.now() - stageStarted}ms)`
+    );
   }
 
   // One failing source must not stop the Controller: a public score fetch failure keeps the
@@ -211,6 +226,7 @@ async function refreshCatalogue(options = {}) {
     finishedAt,
     ok: allStagesOk,
     stages,
+    sources: discovery?.sources || [],
   };
 
   if (options.persist !== false && stages.find((s) => s.command === 'quota-scan')?.exitCode === 0) {
@@ -245,8 +261,7 @@ async function refreshCatalogue(options = {}) {
   }
 
   if (options.persist !== false) {
-    // Detail artifact first, then the single canonical observation record,
-    // each replaced atomically (fsync + rename) by the same verified outcome.
+    // Probe failures belong in the report, never in discovery freshness.
     writeJson(reportFile, report);
     const stageEntries = stages
       .filter((s) => s.exitCode !== 0)
@@ -257,7 +272,6 @@ async function refreshCatalogue(options = {}) {
       // evidence this run produced; fall back to stage-level entries only when
       // the stage crashed before writing its own observation.
       const left = readJson(discoveryFile, {});
-      const discoveryStage = stages.find((s) => s.command === 'discovery run');
       if (
         writtenThisRun(left.lastAttemptAt, startedEpoch) &&
         Array.isArray(left.failedSources) &&
@@ -269,14 +283,13 @@ async function refreshCatalogue(options = {}) {
         ];
       }
     }
-    writeJson(freshnessFile, {
-      lastAttemptAt: report.finishedAt,
-      lastSuccessfulAt: allStagesOk
-        ? report.finishedAt
-        : previousFreshness.lastSuccessfulAt || null,
-      complete: allStagesOk,
-      failedSources,
-    });
+    if (!discoveryPublished)
+      writeJson(freshnessFile, {
+        lastAttemptAt: report.finishedAt,
+        lastSuccessfulAt: previousFreshness.lastSuccessfulAt || null,
+        complete: false,
+        failedSources,
+      });
   }
 
   fs.rmSync(discoveryFile, { force: true });
@@ -285,7 +298,7 @@ async function refreshCatalogue(options = {}) {
 }
 
 if (require.main === module)
-  refreshCatalogue()
+  refreshCatalogue({ probe: process.argv.includes('--probe') })
     .then((result) => {
       console.log(JSON.stringify(result, null, 2));
       process.exitCode = result.ok ? 0 : 1;

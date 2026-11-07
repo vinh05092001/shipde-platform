@@ -2131,12 +2131,14 @@ async function dispatchProfileCommand(args, deps) {
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
     (deps && deps.jevAsk) ||
-    jev.buildAskFromSource(jevSource, {
-      home: optsWithEvidence.home,
-      env: (deps && deps.env) || process.env,
-      httpClient: deps && deps.jevHttpClient,
-      timeoutMs: deps && deps.jevTimeoutMs,
-    });
+    (args.execute === true &&
+      jev.buildAskFromSource(jevSource, {
+        home: optsWithEvidence.home,
+        env: (deps && deps.env) || process.env,
+        httpClient: deps && deps.jevHttpClient,
+        timeoutMs: deps && deps.jevTimeoutMs,
+      })) ||
+    undefined;
 
   return require('./routing').runProfileDispatch(
     args,
@@ -2174,6 +2176,7 @@ function dispatchCommand(args, deps = {}) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const execute = args.execute === true;
   const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
+  const isDryRun = dryRunFlag || !execute;
   const log = deps.log || console.log;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
@@ -2292,7 +2295,7 @@ function dispatchCommand(args, deps = {}) {
     return dispatchProfileCommand(args, deps);
   }
 
-  if (deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
+  if (!isDryRun && deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
     const routeHealthApi = require('./route-health');
     // Same order as orchestrate and next: args, then deps, then root, then default.
     const healthFile =
@@ -2338,8 +2341,6 @@ function dispatchCommand(args, deps = {}) {
         );
       });
   }
-
-  const isDryRun = dryRunFlag || !execute;
 
   // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
@@ -2466,6 +2467,7 @@ function dispatchCommand(args, deps = {}) {
   const env = (deps && deps.env) || process.env;
   const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
   const newSources =
+    isDryRun ||
     (deps && deps.onboardingPrepared) ||
     isCandidateInjected ||
     args['onboarding-prepared'] ||
@@ -2501,6 +2503,7 @@ function dispatchCommand(args, deps = {}) {
   const ticketRoute = {
     role: item.role,
     routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
+    ...(isDryRun ? { refreshRoutes: false } : {}),
   };
   const candidateList = assembleForDispatch(
     discCat,
@@ -2604,21 +2607,10 @@ function dispatchCommand(args, deps = {}) {
         { ...item, id: item.workItemId },
         { ...deps, enforceProofFloors: deps.enforceProofFloors === true }
       );
-    // Production uses the same cached advisory assessment as the live writer.
-    // Injected candidate fixtures remain offline unless they provide an ask.
-    if (
-      !deps.assessment &&
-      (!Array.isArray(deps.candidates) || typeof deps.jevAsk === 'function')
-    ) {
+    // Dry-run reaches JEV only in explicit fixture mode.
+    if (!deps.assessment && deps.jevFixture === true && typeof deps.jevAsk === 'function') {
       const jevSource = sourcesApi.getSource('jev', registry);
-      const ask =
-        deps.jevAsk ||
-        require('./jev').buildJevAsk(jevSource, {
-          home: deps.home,
-          env: deps.env || process.env,
-          httpClient: deps.jevHttpClient,
-          timeoutMs: deps.jevTimeoutMs,
-        });
+      const ask = deps.jevAsk;
       return require('./writer-selection')
         .assessOnce(profile, jevSource, ask, deps, routing)
         .then((assessment) =>
