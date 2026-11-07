@@ -199,9 +199,11 @@ async function refreshCatalogue(options = {}) {
   // One failing source must not stop the Controller: a public score fetch failure keeps the
   // last scores, and discovery passes when at least one source listed its models.
   const priorsFile = options.priorsFile || path.join(__dirname, 'data', 'model-priors-live.json');
+  const keptPriors = readJson(priorsFile, null);
   const allStagesOk = stages.every(
     (stage) =>
-      stage.exitCode === 0 || (stage.command === 'priors refresh' && fs.existsSync(priorsFile))
+      stage.exitCode === 0 ||
+      (stage.command === 'priors refresh' && Array.isArray(keptPriors?.ranking))
   );
   const finishedAt = new Date(options.now ?? Date.now()).toISOString();
   const report = {

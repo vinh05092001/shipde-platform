@@ -135,13 +135,17 @@ async function cmdRun(flags, deps = {}) {
     );
   });
   const successful = [...results].filter(([, result]) => completeListing(result));
+  // An enumerated source with no model is not a listing, so it cannot make a catalogue fresh.
+  const listed = successful.filter(([, result]) =>
+    (result.catalogs || []).some((entry) => (entry.models || []).length > 0)
+  );
   const freshnessFile = flags['freshness-file'] || path.join(dataDir, 'freshness.json');
   const previous = readJson(freshnessFile);
   const complete = successful.length > 0 && failed.length === 0;
   writeJson(freshnessFile, {
-    listedSources: successful.length,
+    listedSources: listed.length,
     lastAttemptAt: now,
-    lastSuccessfulAt: successful.length > 0 ? now : previous.lastSuccessfulAt || null,
+    lastSuccessfulAt: listed.length > 0 ? now : previous.lastSuccessfulAt || null,
     complete,
     failedSources: failed.map(([id, result]) => ({
       id,
@@ -150,7 +154,7 @@ async function cmdRun(flags, deps = {}) {
   });
 
   return {
-    exitCode: successful.length > 0 ? 0 : 1, // one failing source must not stop the others
+    exitCode: listed.length > 0 ? 0 : 1, // one failing source must not stop the others
     runId,
     dataDir: dataDir.replace(/\\/g, '/'),
     storeFile: storeFile.replace(/\\/g, '/'),

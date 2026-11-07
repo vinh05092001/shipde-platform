@@ -6,7 +6,7 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const { cmdRun } = require('../discovery');
-const { catalogueFreshness } = require('../catalogue-refresh');
+const { catalogueFreshness, refreshCatalogue } = require('../catalogue-refresh');
 
 const router = (id, endpoint) => ({
   id,
@@ -72,4 +72,53 @@ test('the 48h limit still applies to a partial success', (t) => {
     JSON.stringify({ lastSuccessfulAt: old, listedSources: 1, complete: false })
   );
   assert.equal(catalogueFreshness({ dataDir: dir }).code, 'STALE_CATALOGUE');
+});
+
+test('an empty listing is not a success, even beside a failed source', async (t) => {
+  const dir = dataDir(t);
+  const server = http.createServer((_, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ data: [] }));
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  t.after(() => server.close());
+  const empty = `http://127.0.0.1:${server.address().port}/v1`;
+  const registry = { sources: [router('empty', empty), router('bad', closedPort)] };
+  const run = await cmdRun({ 'data-dir': dir }, { ...noLive, registry });
+  const doc = JSON.parse(fs.readFileSync(path.join(dir, 'freshness.json'), 'utf8'));
+  assert.equal(doc.lastSuccessfulAt, null);
+  assert.notEqual(run.exitCode, 0);
+  assert.equal(catalogueFreshness({ dataDir: dir }).code, 'STALE_CATALOGUE');
+});
+
+test('a corrupt priors file cannot stand in for a failed score fetch', async (t) => {
+  const dir = dataDir(t);
+  const freshnessFile = path.join(dir, 'freshness.json');
+  const priorsFile = path.join(dir, 'priors.json');
+  fs.writeFileSync(priorsFile, 'not-json');
+  const run = async (args, context) => {
+    if (args[0] === 'priors') return { exitCode: 1, stderr: 'fetch failed' };
+    if (args[0] === 'discovery') {
+      const at = new Date().toISOString();
+      fs.writeFileSync(
+        context.discoveryFile,
+        JSON.stringify({
+          lastAttemptAt: at,
+          lastSuccessfulAt: at,
+          complete: true,
+          listedSources: 1,
+        })
+      );
+    }
+    return { exitCode: 0, stderr: '' };
+  };
+  const report = await refreshCatalogue({
+    dataDir: dir,
+    freshnessFile,
+    priorsFile,
+    reportFile: path.join(dir, 'report.json'),
+    run,
+    verifyEvidence: false,
+  });
+  assert.equal(report.ok, false);
 });
