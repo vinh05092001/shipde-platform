@@ -1,0 +1,43 @@
+// 05/11 operator: "sao ko gọi từng model trong combo". Call EVERY combo member once with a writer-size request, one lane
+// per source (alias) so sources run in parallel and a slow one cannot hold the others. Results: combo-live.json
+// {model:{ok,status,msg,at}} rewritten as it goes. usage: node combo-sweep.js cs.txt   (needs NINEROUTER_API_KEY)
+const fs = require('fs');
+const path = require('path');
+const OUT = path.join(__dirname, 'combo-live.json');
+const models = fs.readFileSync(process.argv[2], 'utf8').trim().split(/\r?\n/).map((l) => l.trim().split(/\s+/).pop());
+const bySrc = {};
+for (const m of models) (bySrc[m.split('/')[0]] = bySrc[m.split('/')[0]] || []).push(m);
+let res = {}; try { res = JSON.parse(fs.readFileSync(OUT, 'utf8')); } catch {}
+const save = () => { try { fs.writeFileSync(OUT + '.tmp', JSON.stringify(res)); fs.renameSync(OUT + '.tmp', OUT); } catch {} }; // a reader may hold the file on Windows: the next save catches up
+
+async function call(model, maxTokens) {
+  try {
+    const r = await fetch('http://127.0.0.1:20128/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.NINEROUTER_API_KEY },
+      body: JSON.stringify({ model, max_tokens: maxTokens, stream: false, messages: [{ role: 'user', content: 'Reply with OK.' }] }),
+      signal: AbortSignal.timeout(60000),
+    });
+    const x = (await r.text()).replace(/\s*data: \[DONE\]\s*$/, '');
+    let j = null; try { j = JSON.parse(x); } catch {}
+    const ok = r.status === 200 && j && Array.isArray(j.choices) && !j.error;
+    return { ok, status: r.status, msg: ok ? '' : String(j ? JSON.stringify(j.error || j) : x).slice(0, 200) };
+  } catch (e) { return { ok: false, status: 0, msg: e.name }; }
+}
+
+async function lane(src) {
+  for (const m of bySrc[src]) {
+    if (res[m]) continue;
+    let r = await call(m, 32000);
+    // a model whose own output limit is lower is not dead: retry at a size it accepts
+    if (!r.ok && /max_tokens|max_output|maximum.*tokens/i.test(r.msg) && !/afford|credits/i.test(r.msg)) r = await call(m, 4096);
+    res[m] = { ...r, at: new Date().toISOString() };
+    save();
+  }
+}
+
+(async () => {
+  await Promise.all(Object.keys(bySrc).map(lane));
+  const ok = Object.values(res).filter((r) => r.ok).length;
+  console.log('done', Object.keys(res).length, 'ok', ok);
+})();

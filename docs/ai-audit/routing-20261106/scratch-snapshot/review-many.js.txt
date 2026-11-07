@@ -1,0 +1,49 @@
+// 05/11 operator: "sao ko chia nhiều model ra review". Run the picked reviewers IN PARALLEL on one review prompt and
+// merge: any CHANGES_REQUIRED wins; PASS needs every reviewer that returned a verdict to pass. A reviewer with no
+// verdict counts as absent and is logged; if none returns a verdict the review stays empty (REVIEWER FAILED).
+// usage: node review-many.js <tag> <model> [model...]   (cwd = logs/night, rvprompt-<tag>.txt must exist)
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+const [, , tag, ...models] = process.argv;
+const R9 = path.join(__dirname, 'r9.js');
+const RESULTS = path.join(__dirname, 'reviewer-results.jsonl');
+const prompt = 'rvprompt-' + tag + '.txt';
+
+const run = (cmd, args, opts) => new Promise((res) => {
+  const c = spawn(cmd, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { out += d; });
+  const t = setTimeout(() => c.kill(), 30 * 60e3);
+  c.on('close', () => { clearTimeout(t); res(out); });
+  c.on('error', (e) => { clearTimeout(t); res(String(e.message)); });
+});
+
+async function one(model, i) {
+  const raw = `review-raw-${tag}.${i}.txt`;
+  let log;
+  if (model.startsWith('ninerouter/')) {
+    log = await run('node', [R9, model.slice('ninerouter/'.length), prompt, raw], { cwd: process.cwd() });
+  } else {
+    const d = `oc-${tag}-${i}`; fs.mkdirSync(d, { recursive: true }); fs.copyFileSync(prompt, path.join(d, 'prompt.md'));
+    log = await run('opencode', ['run', '-m', model, 'Follow prompt.md exactly. Do not use any tools. Output only the review.', '-f', JSON.stringify(path.resolve(d, 'prompt.md'))], { cwd: d, shell: true });
+    fs.writeFileSync(raw, log.replace(/\x1b\[[0-9;]*m/g, ''));
+  }
+  let text = ''; try { text = fs.readFileSync(raw, 'utf8').replace(/\r/g, ''); } catch {}
+  const at = text.search(/^VERDICT:/m);
+  const body = at >= 0 ? text.slice(at).trim() : '';
+  fs.appendFileSync(`rvlog-${tag}.log`, `--- reviewer ${model}\n${log.slice(-600)}\n`);
+  fs.appendFileSync(RESULTS, JSON.stringify({ model, ok: !!body, at: new Date().toISOString(), tag }) + '\n');
+  return { model, body, verdict: (body.match(/^VERDICT:\s*(\w+)/) || [])[1] || null };
+}
+
+(async () => {
+  const rs = (await Promise.all(models.map(one))).filter((r) => r.body);
+  if (!rs.length) { fs.writeFileSync(`review-${tag}.txt`, ''); console.log('no reviewer returned a verdict'); return; }
+  const changes = rs.filter((r) => r.verdict !== 'PASS');
+  const sha = (rs.map((r) => (r.body.match(/^Reviewed SHA:.*$/m) || [])[0]).find(Boolean)) || '';
+  const out = [`VERDICT: ${changes.length ? 'CHANGES_REQUIRED' : 'PASS'}`, sha, '',
+    `Reviewers: ${rs.map((r) => r.model.replace(/^ninerouter\//, '') + '=' + r.verdict).join(', ')}`, ''];
+  for (const r of changes.length ? changes : rs) out.push(`## ${r.model.replace(/^ninerouter\//, '')}`, r.body.replace(/^VERDICT:.*\n?/m, '').replace(/^Reviewed SHA:.*\n?/m, '').trim(), '');
+  fs.writeFileSync(`review-${tag}.txt`, out.join('\n'));
+  console.log(out[0], out[3]);
+})();

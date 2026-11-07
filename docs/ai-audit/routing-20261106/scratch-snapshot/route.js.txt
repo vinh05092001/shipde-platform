@@ -1,0 +1,668 @@
+#!/usr/bin/env node
+// Single entry point for handing work to a writer. Every dispatch goes:
+//   Controller ranking -> live check -> family exclusion -> Jev -> launch -> log.
+// Usage:
+//   node route.js --item FEAT-COM-05 --cwd <worktree> --task <task.md>
+//                 [--role author.foundation] [--exclude-family gpt,gemini]
+//                 [--dry-run]
+// Nothing about models is hardcoded here: candidates come from the Controller
+// (`cli.js dispatch --dry-run`) and from the latest live probe of scored models
+// (probe-priors-out.txt, produced by probe-priors.js over model-priors.json).
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const { execFileSync, spawn } = require('child_process');
+
+const SCRATCH = __dirname;
+const REPO = '<home>/AI/shipde-platform';
+const MAIN_TREE = REPO + '/.worktrees/p-run-main'; // detached at origin/main
+const LOGS = REPO + '/.worktrees/logs/night';
+const AGY = '<runs>';
+const PROBE_OUT = path.join(SCRATCH, 'probe-priors-out.txt');
+// The reviewer model the pipeline really uses (env RVM, else the review script's default).
+function reviewerModel() {
+  // 05/11: reviewer is now picked per PR AFTER the writer (reviewer-pick.js, family != writer), so writers need no
+  // reviewer-family exclusion unless the fixed Codex reviewer is forced (USE_CODEX_REVIEW).
+  if (!process.env.USE_CODEX_REVIEW) return '';
+  if (process.env.RVM) return process.env.RVM;
+  try { return (fs.readFileSync(path.join(SCRATCH, 'codex-delta-review.sh'), 'utf8').match(/RVM:-([^}\s]+)/) || [])[1] || ''; } catch { return ''; }
+}
+// Live JSON with a small file cache (no hard-coded model data).
+function liveJson(url, name, maxAgeMin) {
+  const f = path.join(SCRATCH, 'live-' + name + '.json');
+  try { if (Date.now() - fs.statSync(f).mtimeMs < maxAgeMin * 60e3) return JSON.parse(fs.readFileSync(f, 'utf8')); } catch {}
+  try { const out = execFileSync('curl', ['-s', '-m', '20', url], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }); const j = JSON.parse(out); fs.writeFileSync(f, out); return j; } catch {}
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+}
+// agentrouter models = what its public pricing endpoint lists for the default group (audit #54: no fixed list).
+function orPrice(id) {
+  const j = liveJson('https://openrouter.ai/api/v1/models', 'openrouter-models', 360);
+  const m = j && Array.isArray(j.data) && j.data.find((x) => x.id === id);
+  if (!m || !m.pricing) return null;
+  const p = (Number(m.pricing.prompt) + Number(m.pricing.completion)) * 1e6;
+  return Number.isFinite(p) ? p : null;
+}
+function arModels() {
+  const j = liveJson('https://agentrouter.org/api/pricing', 'agentrouter-pricing', 60);
+  const rows = (j && (j.data || j)) || [];
+  return (Array.isArray(rows) ? rows : []).filter((m) => m && m.model_name && (!m.enable_groups || m.enable_groups.includes('default'))).map((m) => m.model_name);
+}
+// Each agentrouter key is its own account and quota: one exhausted key never cools the other.
+const AR_ACCOUNTS = [{ kind: 'codex-ar', env: 'AGENTROUTER_API_KEY' }, { kind: 'codex-ar2', env: 'AGENTROUTER_API_KEY_2' }].filter((a) => process.env[a.env]);
+const PROBE_MAX_AGE_MIN = 90;
+const MIN_WEEKLY = 0.05;
+// 04/11 operator: no fixed score floors (MIN_SCORE/RISK_FLOOR removed); Jev decides per task with full evidence.
+let AA_ROWS = null;
+// Artificial Analysis Intelligence Index v5 for a route id: match the base model name, prefer the row whose
+// reasoning variant matches the route (-high/-max/-xhigh...), else the best variant AA lists for that base.
+function aaScore(model) {
+  if (!AA_ROWS) { try { AA_ROWS = JSON.parse(fs.readFileSync(path.join(SCRATCH, 'aa-scores.json'), 'utf8')).rows; } catch { AA_ROWS = []; } }
+  const id = String(model).toLowerCase().split('/').pop().replace(/:.*$/, '').replace(/-free$|-preview$/, '').replace(/[._ ]+/g, '-');
+  const effort = (id.match(/-(max|xhigh|high|medium|low|minimal)$/) || [])[1] || '';
+  const base = id.replace(/-(max|xhigh|high|medium|low|minimal|thinking|agentic)$/g, '').replace(/-(\d{4}|\d{6})$/, '');
+  const rows = AA_ROWS.filter((r) => r.base === base || r.base.startsWith(base + '-') && /^\d{4,}$/.test(r.base.slice(base.length + 1)));
+  if (!rows.length) return null;
+  const exact = rows.find((r) => effort && r.variant === effort);
+  return exact || rows.reduce((b, r) => (r.ii > b.ii ? r : b));
+}
+// This model's record on this item from metrics.csv (at,item,pr,round,label,verdict,tokens): rounds and verdicts.
+function itemHistory(item, c) {
+  let t = ''; try { t = fs.readFileSync(path.join(SCRATCH, 'metrics.csv'), 'utf8'); } catch { return 'none'; }
+  const key = c.lane ? `${c.lane}:${c.model}` : String(c.model);
+  const rows = t.split(/\r?\n/).map((l) => l.split(',')).filter((p) => p[1] === item && p[4] && p[4].includes(String(c.model).split('/').pop()));
+  if (!rows.length) return 'none';
+  const v = {}; for (const p of rows) { const k = (p[5] || '?').replace(/^VERDICT: /, ''); v[k] = (v[k] || 0) + 1; }
+  return `${rows.length} rounds (${Object.entries(v).map(([k, n]) => `${k}=${n}`).join(' ')})`;
+}
+function repoHistory(c) {
+  let t = ''; try { t = fs.readFileSync(path.join(SCRATCH, 'metrics.csv'), 'utf8'); } catch { return 'never used here'; }
+  const m = String(c.model).split('/').pop().replace(/:free$/, '');
+  const rows = t.split(/\r?\n/).map((l) => l.split(',')).filter((p) => p[4] && p[4].includes(m));
+  if (!rows.length) return 'never used here';
+  const pass = rows.filter((p) => /PASS/.test(p[5] || '')).length, ch = rows.filter((p) => /CHANGES/.test(p[5] || '')).length;
+  return `repo record ${rows.length} rounds PASS=${pass} CHANGES=${ch}`;
+}
+// 04/11 operator approved OpenRouter mid-tier writers with a spend cap: at most OR_DAILY_MAX launches per local day.
+const OR_DAILY_MAX = Number(process.env.OR_DAILY_MAX || 0); // 04/11 17:05: all 4 OpenRouter keys can afford only 353–3414 tokens (402 at max_tokens 32000); tiny probes pass, real runs fail
+function orLaunchesToday() {
+  let n = 0; const day = new Date().toLocaleDateString('sv');
+  try { for (const l of fs.readFileSync(`${LOGS}/route-log.jsonl`, 'utf8').trim().split(/\r?\n/).slice(-400)) { let r; try { r = JSON.parse(l); } catch { continue; } if (r.launch && r.choice && /openrouter\//.test(r.choice.label) && new Date(r.at).toLocaleDateString('sv') === day) n++; } } catch {}
+  return n;
+}
+const MAX_PER_MODEL = 3; // per model per 20 min, across items
+const CODEX_SANDBOX_NOTE = '\n\n' + fs.readFileSync(path.join(SCRATCH, 'note.txt'), 'utf8');
+let recentLaunchesCache = null;
+
+function args() {
+  const a = {};
+  const v = process.argv.slice(2);
+  for (let i = 0; i < v.length; i++) {
+    if (!v[i].startsWith('--')) continue;
+    const k = v[i].slice(2);
+    a[k] = v[i + 1] && !v[i + 1].startsWith('--') ? v[++i] : true;
+  }
+  return a;
+}
+
+// Scoreboard lookup (Controller priors: tools/ai-brain/data/model-priors-live.json via cli.js priors refresh).
+let PRIORS;
+function priorScore(model) {
+  if (!PRIORS) { try { PRIORS = JSON.parse(fs.readFileSync('<home>/AI/shipde-platform/tools/ai-brain/data/model-priors-live.json', 'utf8')).ranking.filter((x) => x.score); } catch { PRIORS = []; } }
+  const n = String(model).toLowerCase().split('/').pop().replace(/:.*$/, '').replace(/-(low|medium|high|xhigh|max|thinking)$/, '').replace(/[._ ]/g, '-');
+  let best = null;
+  for (const x of PRIORS) { const c = x.canonical; if (n === c || n.startsWith(c + '-')) { if (!best || c.length > best.canonical.length) best = x; } }
+  // raw benchmark score, not the in-source percentile (normalizedScore made dots-3 preview 96.7 vs raw 64.4)
+  return best ? (Number.isFinite(best.rawScore) ? best.rawScore : best.score) : null;
+}
+function family(model) {
+  // Family = the model's creator in the AA v5 table; otherwise the vendor segment of the id (openrouter-style
+  // "<vendor>/<model>"), otherwise the leading word of the model name. No hard-coded name list.
+  const s = aaScore(model);
+  if (s && s.creator) return String(s.creator).toLowerCase();
+  const parts = String(model).toLowerCase().replace(/^ninerouter\//, '').split('/');
+  if (parts.length >= 3) return parts[parts.length - 2];
+  return (parts[parts.length - 1].match(/^[a-z]+/) || ['other'])[0];
+}
+
+// Live discovery catalogue for the Controller (scratchpad, not the committed store), refreshed every 30 min.
+const DISCOVERY_DIR = path.join(__dirname, 'discovery');
+function ninerouterEnv() {
+  if (process.env.NINEROUTER_API_KEY) return {};
+  try { return { NINEROUTER_API_KEY: execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('NINEROUTER_API_KEY','User')"], { encoding: 'utf8' }).trim() }; } catch { return {}; }
+}
+function refreshDiscovery() {
+  const stamp = path.join(DISCOVERY_DIR, 'refreshed.stamp');
+  try { if (Date.now() - fs.statSync(stamp).mtimeMs < 30 * 60e3) return; } catch {}
+  try {
+    fs.mkdirSync(DISCOVERY_DIR, { recursive: true });
+    execFileSync('node', ['tools/ai-brain/discovery.js', 'run', '--data-dir', DISCOVERY_DIR], { cwd: MAIN_TREE, env: { ...process.env, ...ninerouterEnv() }, timeout: 400000, stdio: 'ignore' });
+    fs.writeFileSync(stamp, String(Date.now()));
+  } catch {}
+}
+
+// 1. Controller ranking (refreshes main first so the ranking code is current).
+function controllerRanking(item, role) {
+  try { execFileSync('git', ['-C', MAIN_TREE, 'fetch', '-q', 'origin']); execFileSync('git', ['-C', MAIN_TREE, 'checkout', '-q', '--detach', 'origin/main']); } catch {}
+  let out = '';
+  try {
+    refreshDiscovery();
+    out = execFileSync('node', ['tools/ai-brain/cli.js', 'dispatch', '--dry-run', '--item', item, '--role', role, '--discovery-dir', DISCOVERY_DIR], { cwd: MAIN_TREE, env: { ...process.env, ...ninerouterEnv() }, encoding: 'utf8', timeout: 400000, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) { out = String(e.stdout || ''); }
+  const rows = [];
+  for (const line of out.split(/\r?\n/)) {
+    const m = line.match(/^\s+\d+\.\s+(\S+)\s+\(score:\s*(\d+|QUALITY_UNKNOWN)\)/);
+    if (!m) continue;
+    const parts = m[1].split('::');
+    // 05/11: Controller 'opencode-direct' rows are direct-provider routes whose last part is already an opencode
+    // '<provider>/<model>' id (cohere/..., amd-radeon/...): launch them as ordinary opencode writers.
+    const kind = parts[0] === 'opencode-direct' ? 'opencode' : parts[0];
+    const model = parts[parts.length - 1];
+    const lane = kind === 'agy-pool' ? (parts[1].match(/agy\d+/) || [null])[0] : null;
+    // Controller has no grade for this model: use the scoreboard's, or skip it.
+    const score = m[2] === 'QUALITY_UNKNOWN' ? priorScore(model) : Number(m[2]);
+    if (score == null && m[2] !== 'QUALITY_UNKNOWN') continue; // ungraded Controller rows stay: AA v5 scores them below
+    rows.push({ origin: m[2] === 'QUALITY_UNKNOWN' ? 'controller+scoreboard' : 'controller', kind, lane, model, score, key: m[1] });
+  }
+  return rows;
+}
+
+// 2a. Scored models that answered the latest live probe (non-Controller routes).
+function probedRoutes() {
+  if (!fs.existsSync(PROBE_OUT)) return { rows: [], ageMin: Infinity };
+  const ageMin = (Date.now() - fs.statSync(PROBE_OUT).mtimeMs) / 60000;
+  const rows = [];
+  for (const line of fs.readFileSync(PROBE_OUT, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^OK\s+([\d.]+)\s+(\S+)\s+(\S+)\s+200\s+(\S+)/);
+    if (!m) continue;
+    const route = m[4];
+    if (/nano|lite|mini\b/i.test(route)) continue; // probe maps these onto the full model's prior
+    // opencode refuses models its config does not list ("Model not found"), even if the provider serves them.
+    if (!opencodeHas(route)) continue;
+    rows.push({ origin: 'probe', kind: 'opencode', lane: null, model: route, score: Number(m[1]), tier: m[2], key: route });
+  }
+  // agentrouter (via codex CLI) serves models the opencode probe cannot reach; reuse the best prior score of the same model family from the probe file.
+  for (const m of arModels()) {
+    const base = m.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    let best = null;
+    for (const line of fs.readFileSync(PROBE_OUT, 'utf8').split(/\r?\n/)) {
+      const x = line.match(/^\w+\s+([\d.]+)\s+\S+\s+(\S+)/); if (!x) continue;
+      if (x[2].replace(/[^a-z0-9]/gi, '').toLowerCase().startsWith(base) && (best == null || Number(x[1]) > best)) best = Number(x[1]);
+    }
+    if (best != null) for (const acc of AR_ACCOUNTS) rows.push({ origin: 'agentrouter', kind: acc.kind, arEnv: acc.env, lane: null, model: m, score: best, key: `${acc.kind}::${m}` });
+  }
+  return { rows, ageMin };
+}
+
+// 2b. Live checks per launch kind.
+function lanes() {
+  let txt = '';
+  try { txt = execFileSync('schtasks', ['/Query', '/FO', 'CSV'], { encoding: 'utf8' }); } catch {}
+  const running = new Set();
+  for (const l of txt.split(/\r?\n/)) { const m = l.match(/ShipDe-(agy\d+)","[^"]*","Running"/); if (m) running.add(m[1]); }
+  // schtasks may report Ready while agy still works: treat a lane as busy for 90 min after launch unless its worktree already committed.
+  try {
+    for (const l of fs.readFileSync(`${LOGS}/route-log.jsonl`, 'utf8').trim().split(/\r?\n/)) {
+      const r = JSON.parse(l); const m = r.choice && /^(agy\d+):/.exec(r.choice.label); if (!m || !r.launch) continue;
+      if (Date.now() - Date.parse(r.at) > 90 * 60000) continue;
+      let c = ''; try { c = execFileSync('git', ['-C', r.cwd, 'log', '-1', `--since=${r.at}`, '--format=%h'], { encoding: 'utf8' }).trim(); } catch {}
+      // a lane whose result.json says the run finished after this launch is free again, commit or not
+      let fin = 0; try { fin = Date.parse(JSON.parse(fs.readFileSync(`${AGY}/${m[1]}/result.json`, 'utf8').replace(/^﻿/, '')).finishedAt) || 0; } catch {}
+      // the pipeline (or coordinator) ended this lane after the launch: result.json never gets finishedAt, but the lane is free
+      try { fin = Math.max(fin, Number(fs.readFileSync(path.join(SCRATCH, 'pipeline-state', `ended-${m[1]}`), 'utf8').trim()) || 0); } catch {}
+      if (!c && fin < Date.parse(r.at)) running.add(m[1]);
+    }
+  } catch {}
+  return running;
+}
+function agyQuota(lane, model) {
+  try {
+    const q = JSON.parse(fs.readFileSync(`${AGY}/${lane}/quota.json`, 'utf8').replace(/^﻿/, ''));
+    const a = Array.isArray(q) ? q : (q.groups || Object.values(q));
+    // pick the group whose own model description mentions the most words of this model id (live quota.json text)
+    const words = String(model || '').toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2);
+    const hits = (x) => words.filter((w) => String(x.models || x.name || '').toLowerCase().includes(w)).length;
+    const g = a.reduce((b, x) => (hits(x) > (b ? hits(b) : 0) ? x : b), null);
+    const reset = g && g.weekly && g.weekly.resetAt && Date.parse(g.weekly.resetAt) < Date.now();
+    const wk = g && g.weekly ? g.weekly.remaining : null; if (wk == null) return null; return { weekly: reset ? 1 : wk, five: g.fiveHour ? g.fiveHour.remaining : null, stale: !!reset };
+  } catch { return null; }
+}
+// audit 03/11 B: DNS/socket errors are NETWORK_ERROR with a 5-min backoff, never "not logged in".
+function agyLoggedIn(lane) {
+  try { const p = `${AGY}/${lane}/err.txt`; const e = fs.readFileSync(p, 'utf8').slice(-2000);
+    if (/no such host|i.o timeout|connection refused|ECONNRESET|ENOTFOUND|dial tcp/i.test(e)) return (Date.now() - fs.statSync(p).mtimeMs) > 5 * 60000 ? true : 'network';
+    return !/Authentication required|Verify your account|authentication failed/i.test(e); } catch { return true; }
+}
+let codexAlive;
+function codexOk() {
+  if (codexAlive !== undefined) return codexAlive;
+  try {
+    const o = execFileSync('codex', ['exec', '--skip-git-repo-check', '-s', 'read-only', 'Reply with exactly: OK'], { encoding: 'utf8', timeout: 90000, input: '' });
+    codexAlive = /\bOK\b/.test(o) && !/usage limit/i.test(o);
+  } catch (e) { const o = String(e.stdout || "") + String(e.stderr || ""); codexAlive = /\bOK\b/.test(String(e.stdout || "")) && !/usage limit/i.test(o); } // codex often answers then lingers past the timeout
+  return codexAlive;
+}
+
+function liveCheck(c, running) {
+  if (c.kind === 'agy-pool') {
+    if (!c.lane) return 'no lane id';
+    if (running.has(c.lane)) return 'lane busy';
+    const li = agyLoggedIn(c.lane); if (li === 'network') return 'network error (retry in 5 min)'; if (!li) return 'lane not logged in';
+    const q = agyQuota(c.lane, c.model);
+    if (!q) return 'no quota data';
+    if (q.weekly < MIN_WEEKLY) return `weekly quota ${q.weekly.toFixed(2)}`;
+    return null;
+  }
+  // operator 2026-11-03: agentrouter Codex is reserved for review, so writers stay independent of the reviewer
+  if (/^codex-ar[0-9]*$/.test(c.kind)) return 'reserved as reviewer';
+  if (c.kind === 'codex') return codexOk() ? null : 'codex usage-limited or unreachable';
+  if (c.kind === 'opencode') return null; // answered the live probe
+  return `kind ${c.kind} not launchable from coordinator`;
+}
+
+
+// Models whose real runs recently hit a usage/quota wall stay excluded for a while,
+// because a tiny probe can still succeed after the real budget is gone.
+const COOLDOWN_H = 3;
+function revived() { try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'revived.json'), 'utf8')); } catch { return {}; } }
+function recentlyExhausted() {
+  const rv = revived();
+  const out = new Set();
+  let lines = [];
+  try { lines = fs.readFileSync(`${LOGS}/route-log.jsonl`, 'utf8').trim().split(/\r?\n/); } catch { return out; }
+  for (const l of lines.slice(-200)) {
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (!r.launch || !r.launch.log || !r.choice) continue;
+    if ((rv[r.choice.label] || 0) > Date.parse(r.at)) continue; // worked again after this run
+    const age = Date.now() - Date.parse(r.at);
+    if (age > 24 * 3600000) continue;
+    let t = ''; try { t = fs.readFileSync(r.launch.log, 'utf8'); } catch {}
+    if (!/agy-runs\/agy\d+\/result\.json$/.test(r.launch.log)) t = t.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).filter((x) => /^\s*(Error|ERROR|error)\b[:\s\[]|APICallError|^\s*\{"error"/.test(x)).join('\n');
+    if (/agy-runs\/agy\d+\/result\.json$/.test(r.launch.log)) { try { t += fs.readFileSync(r.launch.log.replace('result.json', 'err.txt'), 'utf8').slice(-3000); } catch {} if (age <= 5 * 3600000 && /Individual quota reached|RESOURCE_EXHAUSTED/.test(t)) { out.add(r.choice.label); continue; } }
+    // agentrouter "user quota is not enough" is account-wide: cool every model of that provider, not just this one
+    if (age <= COOLDOWN_H * 3600000 && /user quota is not enough|insufficient_quota/i.test(t)) { out.add(r.choice.label); if (/^codex-ar[0-9]*:/.test(String(r.choice.label))) out.add(`${String(r.choice.label).split(":")[0]}:*`); continue; } // audit A: wildcard only for account-wide agentrouter, never all of opencode
+    // audit 03/11 A: a route that answered no-channel / model-not-found is dead for 3h, whatever the harness (codex, agy, opencode).
+    if (age <= COOLDOWN_H * 3600000 && /无可用渠道|no available channel|model_not_found|does not exist|503 Service Unavailable|503.*unavailable/i.test(t)) { out.add(r.choice.label); continue; }
+    if (/rolling 24-hour|free-usage-exhausted/i.test(t)) { out.add(r.choice.label); continue; }
+    if (age <= 3600000 && /concurrency limit|concurrency_rate_limit|Cannot connect to API|Unable to connect|Model not found/i.test(t)) { out.add(r.choice.label); continue; }
+    if (age <= COOLDOWN_H * 3600000 && /Tool execution aborted|usage limit|quota.*exhausted|\[429\]|Unavailable \(reset after/i.test(t)) out.add(r.choice.label);
+  }
+  return out;
+}
+
+
+// Spread load: count opencode runs already in flight per provider.
+const MAX_PER_PROVIDER = 4;
+// opencode retries rate-limit / budget errors silently: the run log stays empty and the writer looks hung for 20 min.
+// The real error is only in opencode's own log, so read its tail and cool those providers.
+function opencodeProviderErrors() {
+  const out = {}; const rvo = revived();
+  try {
+    const p = path.join(process.env.USERPROFILE || '', '.local/share/opencode/log/opencode.log');
+    const size = fs.statSync(p).size, len = Math.min(size, 8 * 1024 * 1024), b = Buffer.alloc(len);
+    const fd = fs.openSync(p, 'r'); fs.readSync(fd, b, 0, len, size - len); fs.closeSync(fd);
+    for (const l of b.toString('utf8').split(/\r?\n/)) {
+      if (!/stream error|Too many requests|Free usage limit|gateway_timeout|Cannot connect to API/i.test(l)) continue;
+      const t = Date.parse((/timestamp=(\S+)/.exec(l) || [])[1]); let prov = (/providerID=(\S+)/.exec(l) || [])[1];
+      const mid = (/modelID=(\S+)/.exec(l) || [])[1];
+      if (prov === 'ninerouter' && mid) prov = `ninerouter/${mid}`; // exact route, not all of 9router
+      if (!t || !prov) continue;
+      if ((rvo[prov] || 0) > t) continue; // worked again after this error
+      const age = Date.now() - t;
+      const daily = /Request too large|\[413\]|reached the limit|MONTHLY_REQUEST|max_tokens. must be|\[40[0-3]\]|Daily usage limit|Free usage limit|balance is too low|quota|insufficient|rate_limit_day/i.test(l), rate = /Too Many Requests|rate[ _]limit|\b429\b|gateway_timeout|Cannot connect to API/i.test(l);
+      if ((daily && age < 8 * 3600000) || (rate && age < 3600000)) out[prov] = daily ? 'daily budget/balance exhausted' : 'rate limited';
+    }
+  } catch {}
+  return out;
+}
+
+// opencode processes older than 2h are hung leftovers (every real run ends far sooner): they must not hold provider slots
+function providerLoad() {
+  const load = {};
+  try {
+    const o = execFileSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'opencode.exe' -and $_.CommandLine -like '*run -m*' -and $_.CreationDate -gt (Get-Date).AddHours(-2) } | ForEach-Object { $_.CommandLine }"], { encoding: 'utf8', timeout: 60000 });
+    for (const line of o.split(/\r?\n/).filter(Boolean)) { const m = line.match(/run -m "?([^"\s/]+)\//); if (m) load[m[1]] = (load[m[1]] || 0) + 1; }
+  } catch {}
+  return load;
+}
+
+
+// A run that finished without producing a commit in its worktree counts as a
+// failure for that item: don't hand the same item to the same model again.
+function modelKey(x) { return String(x).toLowerCase().split(/[/:]/).pop().replace(/[^a-z0-9.]+/g, '-'); }
+function unproductive(item) {
+  const out = new Set();
+  let lines = [];
+  try { lines = fs.readFileSync(`${LOGS}/route-log.jsonl`, 'utf8').trim().split(/\r?\n/); } catch { return out; }
+  for (const l of lines.slice(-300)) {
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (r.item !== item || !r.launch || !r.choice) continue;
+    const started = Date.parse(r.at);
+    if (Date.now() - started < 20 * 60000) continue; // may still be running
+    if (Date.now() - started > 12 * 3600000) continue; // old failures expire (lane overwrites, outages)
+    let last = 0;
+    try { last = Number(execFileSync('git', ['-c', 'safe.directory=*', '-C', r.cwd, 'log', '-1', '--format=%ct'], { encoding: 'utf8' }).trim()) * 1000; } catch {}
+    // A run that died on quota/rate limit says nothing about the model's ability.
+    let t = ''; try { t = fs.readFileSync(r.launch.log, 'utf8').slice(-4000); if (/result\.json$/.test(r.launch.log)) t += fs.readFileSync(r.launch.log.replace('result.json', 'err.txt'), 'utf8').slice(-3000); } catch {}
+    if (/"state":\s*"quota"|RESOURCE_EXHAUSTED|usage limit|rolling 24-hour|free-usage-exhausted|concurrency limit|\[429\]/i.test(t)) continue;
+    // Infra failures are not the model's fault: unknown model id, a hung CLI we killed, and Codex runs (the sandbox cannot commit; the coordinator commits their output afterwards). agy lanes run as other Windows users and cannot write our .git either: same rule.
+    if (/Model not found|killed hung writer|Unexpected server error|rejected permission to use|^\s*Error: \[\d{3}\]/im.test(t) || /^(codex|agy[0-9]+:)/.test(r.choice.label)) continue;
+    if (last < started) out.add(modelKey(r.choice.label));
+  }
+  return out;
+}
+
+// Models whose run on this item produced a commit (a full round) in the last 48h: the item coming back means that round failed review.
+function roundsUsed(item) {
+  const out = new Set(); let lines = [];
+  try { lines = fs.readFileSync(`${LOGS}/route-log.jsonl`, 'utf8').trim().split(/\r?\n/); } catch { return out; }
+  const runs = [];
+  for (const l of lines.slice(-400)) { let r; try { r = JSON.parse(l); } catch { continue; } if (r.item === item && r.launch && r.choice && Date.now() - Date.parse(r.at) < 48 * 3600000) runs.push(r); }
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i], end = i + 1 < runs.length ? Date.parse(runs[i + 1].at) : Date.now();
+    let n = 0; try { n = Number(execFileSync('git', ['-c', 'safe.directory=*', '-C', r.cwd, 'rev-list', '--count', `--since=${r.at}`, `--until=${new Date(end).toISOString()}`, '--no-merges', 'HEAD'], { encoding: 'utf8' }).trim()); } catch {}
+    if (n > 0) out.add(modelKey(r.choice.label));
+  }
+  return out;
+}
+
+// 3. Jev.
+function askJev(question, options, evidence) {
+  try {
+    const out = execFileSync('node', [path.join(SCRATCH, 'ask-jev.js'), question, ...options], { cwd: REPO + '/.worktrees/p-agy-lane', encoding: 'utf8', timeout: 300000, env: { ...process.env, JEV_EVIDENCE: evidence } });
+    const line = out.trim().split(/\r?\n/).pop();
+    return JSON.parse(line);
+  } catch (e) { return { outcome: 'ERROR', reason: String(e.message).slice(0, 120) }; }
+}
+
+// 4. Launch.
+function launch(c, cwd, taskFile, item) {
+  let prompt = fs.readFileSync(taskFile, 'utf8');
+  // 05/11: a branch that conflicts with main is never reviewed, so its commits are never pushed. Conflict comes first, whatever the step says.
+  let conflict = false;
+  try {
+    execFileSync('git', ['-c', 'safe.directory=*', 'fetch', '-q', 'origin', 'main'], { cwd, timeout: 120000, stdio: 'ignore' });
+    execFileSync('git', ['-c', 'safe.directory=*', 'merge-tree', '--write-tree', 'HEAD', 'origin/main'], { cwd, timeout: 60000, stdio: 'ignore' });
+  } catch (e) { conflict = e.status === 1; }
+  if (conflict) prompt = '# DO THIS FIRST\n\nThis branch conflicts with origin/main, so review and push are blocked. Run `git fetch origin main`, merge origin/main, resolve every conflict keeping both sides\' intent, run the checks and commit the merge. Then do the task below.\n\n' + prompt;
+  try { prompt += '\n\n' + fs.readFileSync(path.join(SCRATCH, `scope-${item}.txt`), 'utf8'); } catch {}
+  const tag = `${item}-${Date.now()}`;
+  if (c.kind === 'agy-pool') {
+    fs.writeFileSync(`${AGY}/${c.lane}/job.json`, JSON.stringify({ cwd, model: c.model, accountId: c.lane, printTimeoutSec: 3600, prompt: prompt + CODEX_SANDBOX_NOTE }));
+    execFileSync('schtasks', ['/Run', '/TN', `\\ShipDe\\ShipDe-${c.lane}`]);
+    return { how: `schtasks ShipDe-${c.lane}`, log: `${AGY}/${c.lane}/result.json` };
+  }
+  const log = `${LOGS}/route-${tag}.log`;
+  const fd = fs.openSync(log, 'w');
+  let child;
+  if (/^codex-ar[0-9]*$/.test(c.kind)) {
+    fs.writeFileSync(path.join(cwd, '.oc-codex-task.md'), prompt + CODEX_SANDBOX_NOTE);
+    child = spawn('bash', ['-lc', `codex exec --skip-git-repo-check -c 'model_providers.ar={name="agentrouter",base_url="https://agentrouter.org/v1",env_key="${c.arEnv || 'AGENTROUTER_API_KEY'}",wire_api="responses"}' -c model_provider=ar -c disable_response_storage=true -m "${c.model}" -s workspace-write "$(cat .oc-codex-task.md)" < /dev/null; rm -f .oc-codex-task.md`], { cwd, detached: true, stdio: ['ignore', fd, fd] });
+  } else
+  if (c.kind === 'codex') {
+    fs.writeFileSync(path.join(cwd, '.oc-codex-task.md'), prompt + CODEX_SANDBOX_NOTE);
+    child = spawn('bash', ['-lc', `codex exec -m "${c.model}" -c model_reasoning_effort=medium -s workspace-write "$(cat .oc-codex-task.md)" < /dev/null; rm -f .oc-codex-task.md`], { cwd, detached: true, stdio: ['ignore', fd, fd] });
+  } else {
+    const local = path.join(cwd, '.oc');
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(path.join(local, 'task.md'), prompt + CODEX_SANDBOX_NOTE);
+    child = spawn('bash', ['-lc', `opencode run -m "${c.model}" "Do the task in .oc/task.md. Work in the current directory." -f .oc/task.md < /dev/null; node "${path.join(SCRATCH, 'oc-continue.js').split(path.sep).join('/')}" "${log}" "${c.model}" < /dev/null`], { cwd, detached: true, stdio: ['ignore', fd, fd] });
+  }
+  child.unref();
+  return { how: `${c.kind} pid ${child.pid}`, log };
+}
+
+module.exports = { aaScore, family, liveJson, askJev, priorScore };
+if (require.main === module) (function main() {
+  const a = args();
+  if (!a.item || !a.cwd || !a.task) { console.error('need --item --cwd --task'); process.exit(2); }
+  const role = a.role || 'author.foundation';
+  const exclude = String(a['exclude-family'] || '').split(',').filter(Boolean).concat(a['allow-gpt'] || !reviewerModel() ? [] : [family(reviewerModel())]); // writer family must differ from the actual reviewer's
+  const running = lanes();
+
+  const ctl = controllerRanking(a.item, role);
+  const notes = [];
+  // 04/11 operator: scores come from the Controller (cli.js priors refresh); refresh in the background when older than 1 day, then re-score probe lines.
+  try { const LIVEP = '<home>/AI/shipde-platform/tools/ai-brain/data/model-priors-live.json'; const lockP = path.join(SCRATCH, 'priors.lock'); const old = (Date.now() - fs.statSync(LIVEP).mtimeMs) > 24 * 3600000; let busy = false; try { busy = Date.now() - fs.statSync(lockP).mtimeMs < 3600000; } catch {} if (old && !busy) { fs.writeFileSync(lockP, String(Date.now())); spawn('bash', ['-lc', `cd <home>/AI/shipde-platform && node tools/ai-brain/cli.js priors refresh > /dev/null 2>&1; cd "${SCRATCH}" && node rescore-probe.js > /dev/null; rm -f priors.lock`], { detached: true, stdio: 'ignore' }).unref(); notes.push('Controller priors older than 1 day — background refresh started'); } } catch {}
+  // audit 03/11 #44: sweep orphaned writer MCP children (parent dead, >2h) on every route.
+  try { spawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRATCH, 'sweep-orphans.ps1')], { detached: true, stdio: 'ignore' }).unref(); } catch {}
+  try { execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:/Tools/ctx-tools/start-shared-jcodemunch.ps1'], { timeout: 60000, stdio: 'ignore' }); } catch {}
+  // 05/11 operator: the 9router writer combo is ordered by score + live evidence, refreshed every 30 min
+  try { const st = path.join(SCRATCH, 'combo-sort.stamp'); let old = true; try { old = Date.now() - fs.statSync(st).mtimeMs > 30 * 60e3; } catch {} if (old) { fs.writeFileSync(st, String(Date.now())); spawn('node', [path.join(SCRATCH, 'combo-sort.js'), '--apply'], { cwd: SCRATCH, detached: true, stdio: 'ignore' }).unref(); } } catch {}
+  let probe = probedRoutes();
+  if (probe.ageMin > PROBE_MAX_AGE_MIN) {
+    // Paced probing takes ~1h: refresh it in the background (one at a time) and route on the last result now.
+    const lock = path.join(SCRATCH, 'probe.lock');
+    let fresh = false; try { fresh = Date.now() - fs.statSync(lock).mtimeMs < 2 * 3600000; } catch {}
+    // audit 03/11 E: the inference sweep (1,136 requests) is off; dead routes come from real-run errors (A) and the 0-token /models catalogue.
+    if (!fresh && process.env.ALLOW_PROBE_SWEEP) {
+      fs.writeFileSync(lock, String(Date.now()));
+      spawn('bash', ['-lc', `cd "${SCRATCH}" && node probe-priors.js > probe-priors-new.txt 2> probe-priors-err.txt && [ -s probe-priors-new.txt ] && mv probe-priors-new.txt probe-priors-out.txt && node merge-verified.js >/dev/null && node rescore-probe.js >/dev/null; rm -f probe.lock`], { detached: true, stdio: 'ignore' }).unref();
+    }
+    notes.push(`probe is ${Math.round(probe.ageMin)} min old — sweep disabled (audit E); real-run errors cool dead routes`);
+  }
+
+  // Controller candidates first (its score), then probed routes the Controller
+  // does not rank (prior score). One row per (kind, lane, model).
+  // Every model an agy lane lists that the scoreboard scores is a candidate there, even when the Controller does not list it (e.g. Argon, Opus 5.5).
+  for (const lane of fs.readdirSync(AGY).filter((d) => /^agy\d+$/.test(d))) {
+    let m = ''; try { m = fs.readFileSync(`${AGY}/${lane}/models-out.txt`, 'utf8'); } catch {}
+    for (const id of m.split(/\r?\n/).map((l) => l.split('\t')[0]).filter(Boolean)) {
+      if (/-(low|medium)$/.test(id)) continue; // scores are published for high/max effort; low/medium variants score far lower
+      const s = priorScore(id); if (s != null) ctl.push({ origin: 'scoreboard', kind: 'agy-pool', lane, model: id, score: s, key: `agy-pool::${lane}::${id}` });
+    }
+  }
+  // Controller 'paseo' rows name agy models without a lane: offer them on every agy lane whose models-out lists them.
+  for (const p of ctl.filter((c) => c.kind === 'paseo' && !/-(low|medium)$/.test(c.model))) {
+    for (const lane of fs.readdirSync(AGY).filter((d) => /^agy\d+$/.test(d))) {
+      let m = ''; try { m = fs.readFileSync(`${AGY}/${lane}/models-out.txt`, 'utf8'); } catch {}
+      if (m.split(/\r?\n/).some((l) => l.split('\t')[0] === p.model)) ctl.push({ ...p, kind: 'agy-pool', lane, origin: 'controller-paseo' });
+    }
+  }
+  const seen = new Set();
+  const all = [...ctl, ...probe.rows].filter((c) => { const k = `${c.kind}|${c.lane}|${c.model}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  // 04/11 operator: one scale for everyone = Artificial Analysis Intelligence Index v5 (aa-scores.json, aa-fetch.js),
+  // as the percentile among AA rows. Models AA does not list keep their Controller raw score, marked provisional.
+  for (const c of all) { const s = aaScore(c.model); if (s) { c.score = s.pct; c.aa = s; } else { c.provisional = true; } }
+  all.sort((x, y) => y.score - x.score);
+
+  const cooled = recentlyExhausted();
+  const badModels = unproductive(a.item);
+  const pload = providerLoad();
+  const ocerr = {}; // replaced by Controller route-health (health-bridge); opencodeProviderErrors kept only as reference
+  const HB = require('./health-bridge');
+  let hb = null; try { HB.ingest(MAIN_TREE, LOGS); hb = HB.load(MAIN_TREE); HB.probeDue(MAIN_TREE); } catch (e) { notes.push('health-bridge: ' + e.message); }
+  const eligible = [];
+  const rejected = [];
+  for (const c of all) {
+    if (c.lane && /-(low|medium)$/.test(c.model)) { rejected.push([c, 'low/medium effort variant; use high']); continue; }
+    // 04/11: OpenRouter/Nous/TokenHarbor/Vercel bill real money per token; only their free ids are allowed until the operator approves paid use (set ALLOW_PAID_ROUTES=1).
+    // Paid OpenRouter is allowed by price, not by name: live /api/v1/models price (USD per 1M prompt+completion
+    // tokens) must be <= the operator's cap OR_MAX_USD_PER_MTOK; no cap set = no paid OpenRouter route.
+    const orId = (String(c.model).match(/^ninerouter\/openrouter\/(.+)$/) || [])[1];
+    const orOk = Boolean(orId && !/:free$/.test(orId) && process.env.OR_MAX_USD_PER_MTOK && orPrice(orId) != null && orPrice(orId) <= Number(process.env.OR_MAX_USD_PER_MTOK));
+    if (orOk && orLaunchesToday() >= OR_DAILY_MAX) { rejected.push([c, `OpenRouter daily cap ${OR_DAILY_MAX} launches reached`]); continue; }
+    // 05/11 operator: "cái nào gọi được cho dùng thì dùng" — paid gateways are allowed; a route that cannot pay
+    // (402) or is rate limited is parked by real-call evidence (Controller route-health). BLOCK_PAID_ROUTES=1 restores the old block.
+    if (!orOk && process.env.BLOCK_PAID_ROUTES && /(^|\/)(openrouter|nous|tokenharbor|vercel|requesty)\//.test(String(c.model)) && !/free/i.test(String(c.model))) { rejected.push([c, "paid route (needs operator approval)"]); continue; }
+    if (badModels.has(modelKey(c.model))) { rejected.push([c, 'same model produced no commit for this item']); continue; }
+    if (c.kind === 'opencode' && hb) { const why = HB.parked(hb, c.model); if (why) { rejected.push([c, why]); continue; } }
+    if (c.kind !== 'opencode' && (cooled.has(c.lane ? `${c.lane}:${c.model}` : `${c.kind}:${c.model}`) || cooled.has(`${c.kind}:*`))) { rejected.push([c, `hit usage limit in a run < ${COOLDOWN_H}h ago`]); continue; }
+    if (exclude.includes(family(c.model))) { rejected.push([c, `family ${family(c.model)} excluded`]); continue; }
+    // 04/11 operator: no fixed score floor; the score is evidence for Jev, not a filter.
+    // 04/11: 9router fronts many independent upstreams; one 429 on oc/* must not block dahl/*, groq/*, ...
+    // so for ninerouter the provider key is ninerouter/<alias> and the router-wide opencode-log flag is ignored.
+    const prov = c.kind === 'opencode' ? (c.model.startsWith('ninerouter/') ? c.model.split('/').slice(0, 2).join('/') : c.model.split('/')[0]) : null;
+    const routeKey = c.kind === 'opencode' && c.model.startsWith('ninerouter/') ? c.model : prov;
+    if (routeKey && ocerr[routeKey]) { rejected.push([c, `${routeKey} ${ocerr[routeKey]} (opencode log)`]); continue; }
+    if (prov && !prov.startsWith('ninerouter/') && ocerr[prov]) { rejected.push([c, `provider ${prov} ${ocerr[prov]} (opencode log)`]); continue; }
+    if (prov && (pload[prov] || 0) >= MAX_PER_PROVIDER) { rejected.push([c, `provider ${prov} already runs ${pload[prov]} jobs`]); continue; }
+    if ((recentLaunchesCache = recentLaunchesCache || recentModelLaunches())[modelKey(c.model)] >= MAX_PER_MODEL) { rejected.push([c, `model already launched ${MAX_PER_MODEL}x in the last 20 min`]); continue; }
+    const why = liveCheck(c, running);
+    if (why) { rejected.push([c, why]); continue; }
+    eligible.push(c);
+  }
+  // Escalate early: a model that already ran a full round on this item (committed, yet the item is back here)
+  // only gets it again when nothing stronger is eligible. High-risk items (tenant/auth/money/carrier) prefer
+  // models scoring >= RISK_FLOOR. Both rules fall back to the plain ranking rather than starving the item.
+  const failedRound = roundsUsed(a.item);
+  // escalate only UPWARD: drop a model that already used a round only if an untried model scores at least as high
+  const bestUntried = Math.max(-1, ...eligible.filter((c) => !failedRound.has(modelKey(c.model))).map((c) => Number(c.score) || 0));
+  let pool = eligible.filter((c) => !failedRound.has(modelKey(c.model)) || (Number(c.score) || 0) > bestUntried);
+  for (const c of eligible) if (failedRound.has(modelKey(c.model))) rejected.push([c, 'already used a full round on this item (escalating)']);
+  if (!pool.length) pool = eligible;
+  let taskText = ''; try { taskText = fs.readFileSync(path.resolve(a.cwd, a.task), 'utf8'); } catch {}
+  let changed = ''; try { changed = execFileSync('git', ['-C', a.cwd, 'diff', '--name-only', 'origin/main...HEAD'], { encoding: 'utf8' }); } catch {}
+  // risk from what the branch touches (product code), not from words in the task prose
+  const risky = /^(apps|packages|prisma)\//m.test(changed) && /tenant|rls|auth|rbac|money|vnd|carrier|payment|settlement/i.test(changed);
+  const area = [...new Set(changed.split(/\r?\n/).filter(Boolean).map((p) => p.split('/').slice(0, 2).join('/')))].slice(0, 4).join(', ');
+  const sizeM = taskText.match(/This branch adds (\d+) lines/);
+  let nFind = 0; try { nFind = (fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8').match(/WHERE/g) || []).length; } catch {}
+  // 05/11: what the job really is (a CI-gate verdict has no WHERE lines: the job is "make CI green")
+  let ciGate = ''; try { ciGate = (fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8').match(/CI failing[^\n]*|CI gate: [^)\n]*/) || [''])[0]; } catch {}
+  let roundsSoFar = 0; try { for (const f of fs.readdirSync(path.join(a.cwd, '.oc')).filter((x) => /^history.*\.md$/.test(x))) roundsSoFar += (fs.readFileSync(path.join(a.cwd, '.oc', f), 'utf8').match(/VERDICT: CHANGES_REQUIRED/g) || []).length; } catch {} // archived rounds count too
+  const jobText = sizeM && Number(sizeM[1]) > 400
+    ? `shrink PR from ${sizeM[1]} to <=400 added lines, then fix ${nFind} review finding(s)`
+    : nFind ? `fix ${nFind} review finding(s) at the cited file:line` : ciGate ? `make CI green (${ciGate.slice(0, 120)})` : 'address the review';
+  // 05/11 operator: Jev scores the job; candidates must reach that score (same AA v5 percentile scale)
+  // 05/11 operator: "hỏi đã đúng trọng tâm chưa" — the job question names ONLY what is still open: each open review
+  // finding (file:line + what is wrong; FIXED ones dropped) or, for a CI gate, the failing check plus the concrete error
+  // line from the task brief. Short, one job, one question.
+  let open = [];
+  try {
+    const rv = fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8').replace(/\*/g, '').split(/\r?\n/);
+    for (let i = 0; i < rv.length; i++) {
+      if (!/WHERE:/.test(rv[i]) || /\bFIXED\b/.test(rv[i]) && !/NOT FIXED/.test(rv[i])) continue;
+      const where = rv[i].replace(/^.*WHERE:\s*/, '').replace(/`/g, '').slice(0, 110);
+      const wrong = ((rv.slice(i + 1, i + 4).find((l) => /WRONG:/.test(l)) || '').replace(/^.*WRONG:\s*/, '').replace(/`/g, '')).slice(0, 160);
+      open.push(where + ' - ' + wrong);
+      if (open.length >= 3) break;
+    }
+  } catch {}
+  let jobLine;
+  if (open.length) jobLine = 'fix ' + open.length + ' open review finding(s): ' + open.map((x, k) => '(' + (k + 1) + ') ' + x).join(' ');
+  else {
+    let err = ''; try { const pf = require('./ci-failure.js').parseReview(fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8')); err = (pf.kind === 'contract' ? 'PR body misses: ' + pf.missingSections.join(', ') : pf.errorLines[0] || '').slice(0, 220); } catch {}
+    jobLine = ciGate ? 'make CI green: ' + ciGate.replace(/\*/g, '').slice(0, 90) + (err ? '; error: ' + err : '') : jobText;
+  }
+  const jobEvidence = ('Job for ' + a.item + ': ' + jobLine + '. Code touched: ' + (area || 'unknown') +
+    (risky ? ' (product code: tenant/auth/money/carrier rules)' : ' (internal tooling)') +
+    '. Model scores: Artificial Analysis Intelligence v5 percentile (0-100). Which is the LOWEST score band whose models can do this job correctly?').slice(0, 1200);
+  try { fs.writeFileSync(path.join(SCRATCH, "jev-job-evidence.txt"), jobEvidence); } catch {}
+  // difficulty rubric: the rule is inside each option, so Jev's criterion "Choose <option> when it best fits" carries it
+  const RUBRIC = [
+    ['simple', 'simple: the failing place and the fix are known; a small change in 1-2 files; no design or security reasoning needed'],
+    ['moderate', 'moderate: several files in one module; the writer must read related code to understand the cause; no auth/tenant/money reasoning'],
+    ['hard', 'hard: the cause is unknown and must be investigated, or the fix needs security, tenant-isolation, money or cross-layer design reasoning'],
+  ];
+  const jobQ = 'How hard is this job for a coding model? ' + jobEvidence.replace(/ Which is the LOWEST score band[^?]*\?/, '');
+  const jobJev = askJev(jobQ.slice(0, 600), RUBRIC.map((r) => r[1]), jobEvidence.replace(/ Which is the LOWEST score band[^?]*\?/, ''));
+  try { fs.writeFileSync(path.join(SCRATCH, 'jev-job-ask.json'), JSON.stringify({ options: RUBRIC.map((r) => r[1]), answer: jobJev })); } catch {}
+  const level = jobJev && jobJev.outcome === 'DECIDED' ? (RUBRIC.find((r) => r[1] === jobJev.choice) || [])[0] : null;
+  // 2. hard job -> decompose: one step this round
+  let stepTask = null;
+  // a STUCK item (pipeline's own CHANGES_REQUIRED limit reached) is split too, whatever Jev said
+  if (level === 'hard' || roundsSoFar >= 3) {
+    let step = '';
+    try {
+      const rv = fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8').split(/\r?\n/);
+      const starts = rv.map((l, i) => (/WHERE:/.test(l) && !(/\bFIXED\b/.test(l) && !/NOT FIXED/.test(l)) ? i : -1)).filter((i) => i >= 0);
+      if (starts.length) {
+        const s = starts[0]; const e = rv.findIndex((l, i) => i > s && /WHERE:/.test(l));
+        step = 'Fix ONLY this finding (finding 1 of ' + starts.length + ' still open). Do not touch the others; the next round will hand you the next one.\n\n' + rv.slice(s, e > 0 ? e : s + 12).join('\n');
+      }
+    } catch {}
+    // 06/11 B1/B2: a PR contract failure is a PR body edit, a CI failure names its check and real error lines
+    if (!step && ciGate) { let built = ''; try { built = require('./ci-failure.js').buildStep(require('./ci-failure.js').parseReview(fs.readFileSync(path.join(a.cwd, '.oc', 'review.txt'), 'utf8'))); } catch {} step = built || ('CI failing: ' + ciGate); }
+    if (step) {
+      stepTask = path.join(a.cwd, '.oc', 'task-step.md');
+      fs.writeFileSync(stepTask, '# THIS ROUND = ONE STEP (' + a.item + ')\n\nJev rated the whole job hard, so it is split into small steps; this round is one of them.\n\n' + step + '\n\nThen run the narrow check for this step, commit "[' + a.item + '] <what this step fixed>" and stop.\n\n---\nFull task for context only (do NOT do the rest now):\n\n' + taskText);
+    }
+  }
+  notes.push('job difficulty (Jev): ' + (level ? level + ' (confidence ' + jobJev.confidence + ')' + (stepTask ? ' -> split, this round = one step' : '') : (jobJev.outcome || 'UNDECIDED') + ', whole task'));
+  // 04/11: one option per distinct model (best route kept); duplicate routes split Jev's probability → LOW_CONFIDENCE.
+  // 05/11: the previous launch of THIS item died on a fatal error (e.g. concurrency capacity): try another model this round.
+  // Item-scoped and one round only, so a good model with a passing fault is not parked in route-health.
+  let lastFailed = '';
+  try {
+    const ls = fs.readFileSync(path.join(LOGS, 'route-log.jsonl'), 'utf8').trim().split(/\r?\n/);
+    for (let i = ls.length - 1; i >= 0; i--) {
+      let r; try { r = JSON.parse(ls[i]); } catch { continue; }
+      if (r.item !== a.item || !r.launch || !r.launch.log) continue;
+      if (/^\s*Error:\s/m.test(fs.readFileSync(r.launch.log, 'utf8').replace(/\x1b\[[0-9;]*m/g, ''))) lastFailed = r.choice.label;
+      break;
+    }
+  } catch {}
+  const lblOf = (c) => (c.lane ? `${c.lane}:${c.model}` : `${c.kind}:${c.model}`);
+  const usable = pool.some((c) => lblOf(c) !== lastFailed) ? pool.filter((c) => lblOf(c) !== lastFailed) : pool;
+  const seenM = new Set(); const top = [];
+  // 05/11 operator: "gọi trong controller và jev". Controller candidates decide; probe rows are only the fallback when none of them is usable.
+  const fromController = usable.filter((c) => String(c.origin || '').startsWith('controller'));
+  notes.push(`selection pool: ${fromController.length ? 'controller ' + fromController.length : 'probe fallback, controller had none usable'}`);
+  for (const c of fromController.length ? fromController : usable) { const k = modelKey(String(c.model).replace(/:free$|-free$/, '').replace(/-(agentic|thinking|thinking-agentic)$/, '')); if (seenM.has(k)) continue; seenM.add(k); top.push(c); if (top.length >= 5) break; }
+  const label = (c) => (c.lane ? `${c.lane}:${c.model}` : `${c.kind}:${c.model}`);
+
+  let choice = null;
+  let jev = { outcome: 'SKIPPED' };
+  if (top.length) {
+    // 04/11 operator: ask Jev per task with the task itself, its history and each model's record on THIS item.
+    let rounds = 0; try { rounds = (fs.readFileSync(path.join(a.cwd, '.oc', 'history.md'), 'utf8').match(/VERDICT: CHANGES_REQUIRED/g) || []).length; } catch {}
+    const job = sizeM && Number(sizeM[1]) > 400
+      ? `shrink PR from ${sizeM[1]} to <=400 added lines by deleting code/tests no acceptance criterion needs, then fix ${nFind} review finding(s). Mostly deletion plus small fixes; needs reliable multi-file tool use and exact instruction following`
+      : `fix ${nFind} review finding(s) at the cited file:line, no refactor`;
+    let evidence = `Job for ${a.item} (area: ${area || 'unknown'}): ${job}. Risk: ${risky ? 'HIGH (product tenant/auth/money/carrier code)' : 'normal (internal tooling)'}. Review rounds so far: ${rounds}. ` +
+      `Candidates (AA Intelligence v5 percentile; record on this repo): ` + top.map((c) => `${label(c)} ${c.score}${c.aa ? ' (AA-scored)' : ' (not on AA, probe prior only)'}; ${repoHistory(c)}; this item: ${itemHistory(a.item, c)}`).join(' | ') + `. Which one most likely finishes in one round?`;
+    // 04/11: Jev returns LOW_CONFIDENCE once evidence exceeds ~2KB (measured: 2000 DECIDED, 8000 UNDECIDED) — keep it short.
+    if (evidence.length > 1800) evidence = evidence.slice(0, 1800);
+    try { fs.writeFileSync(path.join(SCRATCH, "jev-last-evidence.txt"), evidence); } catch {}
+    // 05/11 operator + audit #10: Jev rates the job, it never picks a route. Candidates are ranked by Controller score and
+    // split evenly over the rubric's levels: hard takes the top, simple the lower end. Unrated or repeatedly refused jobs take the top.
+    const ranked = [...top].sort((x, y) => (y.score || 0) - (x.score || 0));
+    const li = RUBRIC.findIndex((r) => r[0] === level);
+    const fromTop = li < 0 || roundsSoFar >= 3 ? 0 : RUBRIC.length - 1 - li;
+    choice = ranked[Math.floor(fromTop * ranked.length / RUBRIC.length)];
+    jev = { outcome: level ? 'RATED_' + level.toUpperCase() : 'UNRATED', confidence: jobJev && jobJev.confidence };
+    // 05/11 operator: 9router is called through the Controller's combo, which fails over across its models and accounts by itself.
+    try {
+      const combo = JSON.parse(fs.readFileSync(path.join(MAIN_TREE, 'tools/ai-brain/sources.json'), 'utf8')).dispatch.nineRouterWriterCombo;
+      // 06/11: off until a concurrency-limited head no longer queues writers: the combo's head waited forever instead of failing over.
+      if (process.env.ROUTE_VIA_COMBO && combo && choice && choice.kind === 'opencode' && String(choice.model).startsWith('ninerouter/')) {
+        notes.push(`9router via combo ${combo} (Controller pick ${choice.model})`);
+        choice = { ...choice, model: 'ninerouter/' + combo };
+      }
+    } catch {}
+  }
+
+  if (a['dry-run']) for (const c of ctl) { const lb = `${c.kind}:${c.lane ? c.lane + ':' : ''}${c.model}`; const r = rejected.find(([x]) => x === c); console.log(`  ctl[${c.origin}] ${lb} score=${c.score} -> ${r ? 'REJECTED ' + r[1] : eligible.includes(c) ? 'eligible' : 'dropped'}`); }
+  const record = {
+    at: new Date().toISOString(), item: a.item, role, cwd: a.cwd, exclude,
+    controllerCandidates: ctl.length, probeRoutes: probe.rows.length, notes,
+    top: top.map((c) => ({ label: label(c), score: c.score, origin: c.origin })),
+    rejected: rejected.slice(0, 12).map(([c, w]) => ({ label: label(c), score: c.score, why: w })),
+    jev, choice: choice ? { label: label(choice), score: choice.score, kind: choice.kind } : null,
+  };
+  if (choice && !a['dry-run']) record.launch = launch(choice, a.cwd, stepTask || a.task, a.item);
+  if (stepTask) record.step = path.relative(a.cwd, stepTask);
+  fs.appendFileSync(`${LOGS}/route-log.jsonl`, JSON.stringify(record) + '\n');
+
+  console.log(`${a.item}: ${choice ? label(choice) + ' (score ' + choice.score + ')' : 'NO ELIGIBLE WRITER'} | jev=${jev.outcome}${jev.choice ? ':' + jev.choice : ''}${record.launch ? ' | ' + record.launch.how : a['dry-run'] ? ' | dry-run' : ''}`);
+  console.log('  top: ' + top.map((c) => `${label(c)}=${c.score}`).join(', '));
+  console.log('  rejected: ' + rejected.filter(([c])=>c.kind!=='paseo').slice(0, 400).map(([c, w]) => `${label(c)}=${c.score}(${w})`).join(', ') + ` [+${rejected.filter(([c])=>c.kind==='paseo').length} paseo not launchable]`);
+  if (a['dry-run']) console.log('  paseo: ' + rejected.filter(([c])=>c.kind==='paseo').map(([c]) => `${label(c)}=${c.score}`).join(', '));
+  if (notes.length) console.log('  notes: ' + notes.join('; '));
+})();
+
+function opencodeHas(route) {
+  if (!opencodeHas.cfg) { try { opencodeHas.cfg = JSON.parse(fs.readFileSync(path.join(process.env.USERPROFILE || process.env.HOME, '.config/opencode/opencode.json'), 'utf8')).provider || {}; } catch { opencodeHas.cfg = {}; } }
+  const i = route.indexOf('/'); const p = opencodeHas.cfg[route.slice(0, i)];
+  return !!(p && p.models && Object.prototype.hasOwnProperty.call(p.models, route.slice(i + 1)));
+}
+
+// Launches of the same model in the last 20 min (any item). Free-tier models burn an account per long run,
+// so spreading work across models beats stacking it on one that then exhausts everywhere at once.
+function recentModelLaunches() {
+  const n = {}; let lines = [];
+  try { lines = fs.readFileSync(`${LOGS}/route-log.jsonl`, 'utf8').trim().split(/\r?\n/).slice(-200); } catch { return n; }
+  for (const l of lines) { let r; try { r = JSON.parse(l); } catch { continue; } if (!r.launch || !r.choice) continue;
+    if (Date.now() - Date.parse(r.at) < 20 * 60000) { const k = modelKey(r.choice.label); n[k] = (n[k] || 0) + 1; } }
+  return n;
+}

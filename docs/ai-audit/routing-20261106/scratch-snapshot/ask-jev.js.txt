@@ -1,0 +1,12 @@
+const path=require('path');const fs=require('fs');const root=process.cwd();
+const jev=require(path.join(root,'tools/ai-brain/jev.js'));
+const src=JSON.parse(fs.readFileSync(path.join(root,'tools/ai-brain/sources.json'),'utf8'));
+const list=Array.isArray(src)?src:(src.sources||Object.values(src));
+const s=list.find(x=>x&&x.kind==='decision-service');
+if(!s){console.log('no decision-service source');process.exit(1)}
+const realAsk=jev.buildJevAsk(s,{});
+const [,, q, ...opts]=process.argv; const ev=process.env.JEV_EVIDENCE||'';
+// 05/11 operator: no fixed confidence bar here; Jev's valid choice stands, its confidence is logged.
+// 05/11: advise() drops the real confidence on UNDECIDED; keep the raw reply + evidence so a low score can be read.
+const ask=async(...a)=>{const x=await realAsk(...a);try{fs.appendFileSync(path.join(__dirname,'jev-raw.jsonl'),JSON.stringify({at:new Date().toISOString(),q,opts,ev,raw:x})+'\n')}catch{};return x};
+jev.advise({kind:'pick-writer',prompt:q,evidence:ev,options:opts},{ask,minConfidence:0}).then(r=>console.log(JSON.stringify(r))).catch(e=>console.log('ERR',jev.failureReason?jev.failureReason(e):e.message));
