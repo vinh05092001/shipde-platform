@@ -27,7 +27,7 @@ function fixture(t, prefix) {
     if (args[0] === 'discovery') fs.copyFileSync(files.freshnessFile, context.discoveryFile);
     return { exitCode: 0, stderr: '' };
   };
-  const refresh = (extra = {}) => refreshCatalogue({ ...files, run, ...extra });
+  const refresh = (extra = {}) => refreshCatalogue({ ...files, run, probe: true, ...extra });
   const fresh = () => JSON.parse(fs.readFileSync(files.freshnessFile, 'utf8'));
   return { dir, files, writeFresh, writeQuota, run, refresh, fresh };
 }
@@ -35,6 +35,7 @@ function fixture(t, prefix) {
 test('AC-166-01: refresh stages run in order, reject incomplete evidence, and redact credentials', async (t) => {
   const calls = [];
   const orderedResult = await refreshCatalogue({
+    probe: true,
     persist: false,
     run: async (args) => {
       calls.push(args);
@@ -50,6 +51,7 @@ test('AC-166-01: refresh stages run in order, reject incomplete evidence, and re
     lastAttemptAt: now.toISOString(),
     lastSuccessfulAt: null,
     complete: true,
+    listedSources: 1,
     failedSources: [],
   });
   fs.writeFileSync(f.files.priorsFile, JSON.stringify({ ranking: [{ canonical: 'm-a' }] }));
