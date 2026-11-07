@@ -184,7 +184,7 @@ test('the screened ticket mode reaches first and fallback launches', () => {
     decision,
     work,
     ctx,
-    { offeringId: a.offeringId, status: 500 },
+    { offeringId: a.offeringId, status: 500, phase: 'after-launch', workerStopped: true },
     screened
   );
   assert.equal(fallback.action, 'LAUNCH');

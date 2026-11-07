@@ -159,6 +159,8 @@ test('OpenCode/9Router internal retry keeps its route and does not spend worker 
 test('before-launch failure is local and does not mark the upstream rate limited', (t) => {
   const f = fixture(t);
   f.candidates[1].upstream = f.candidates[0].upstream;
+  // The execution proof must describe the changed route's upstream as well.
+  f.context.evidenceData.combinations[1].upstream = f.candidates[1].upstream;
   const out = afterFailure(
     f.decision,
     f.ticket,
@@ -173,6 +175,7 @@ test('before-launch failure is local and does not mark the upstream rate limited
   );
   assert.equal(out.action, 'LAUNCH');
   assert.equal(out.launch.offeringId, 'b');
+  assert.deepEqual(out.rejected, [{ offeringId: 'a', reason: 'ALREADY_FAILED:LAUNCH_FAILED' }]);
   assert.equal(f.context.ledger.failures[0].class, 'LAUNCH_FAILED');
   assert.equal(f.context.ledger.failures[0].phase, 'before-launch');
   assert.equal(f.context.ledger.worktree, undefined);
