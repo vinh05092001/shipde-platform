@@ -101,8 +101,12 @@ const registry = {
 };
 const proofOf = (c) => ({
   modelId: c.modelId,
+  harness: c.harness,
+  accessPath: c.accessPath,
   gateway: c.gateway,
+  upstream: c.upstream,
   accountId: c.accountId,
+  quotaScope: c.quotaScope,
   evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS', at: new Date().toISOString() }],
 });
 const run = (failure, ticketOver) => {
@@ -125,7 +129,7 @@ const run = (failure, ticketOver) => {
     decision,
     ticket,
     ctx,
-    { offeringId: 'a', upstream: 'up-a', status: 401, ...failure },
+    { offeringId: 'a', upstream: 'up-a', status: 401, workerStopped: true, ...failure },
     registry
   );
   return { first, next, ledger: ctx.ledger };
@@ -228,7 +232,13 @@ const twoOnA = (over) => {
     decision,
     ticket,
     ctx,
-    { offeringId: 'a', upstream: 'up-a', status: 401, message: '[prov/m] [401]: token expired' },
+    {
+      offeringId: 'a',
+      upstream: 'up-a',
+      status: 401,
+      workerStopped: true,
+      message: '[prov/m] [401]: token expired',
+    },
     registry
   );
   return { next, ctx, decision, ticket };
@@ -256,7 +266,7 @@ test('the fallback cap still holds after a route-only 401', () => {
     decision,
     ticket,
     ctx,
-    { offeringId: 'a2', upstream: 'up-a', status: 401, message: '[prov/n] [401]: expired' },
+    { offeringId: 'a2', upstream: 'up-a', status: 401, workerStopped: true, message: '[prov/n] [401]: expired' },
     registry
   );
   assert.equal(again.action, 'STOP');
@@ -278,7 +288,13 @@ test('a confirmed upstream-wide failure removes every route on that upstream', (
     decision,
     ticket,
     ctx,
-    { offeringId: 'a', upstream: 'up-a', status: 401, authLayer: 'upstream-credential' },
+    {
+      offeringId: 'a',
+      upstream: 'up-a',
+      status: 401,
+      workerStopped: true,
+      authLayer: 'upstream-credential',
+    },
     registry
   );
   assert.ok(next.rejected.some((r) => r.offeringId === 'a2' && r.reason === 'UPSTREAM_AUTH'));
@@ -367,7 +383,7 @@ test('a combo route cannot tell which member failed, so it stays unknown', () =>
     decision,
     ticket,
     ctx,
-    { offeringId: 'v', upstream: 'vinh', status: 401, message: body },
+    { offeringId: 'v', upstream: 'vinh', status: 401, workerStopped: true, message: body },
     registry
   );
   assert.equal(ctx.ledger.failures[0].class, 'AUTH_SCOPE_UNKNOWN');
@@ -516,7 +532,14 @@ const failOnConnection = (routes, failure, ledger = {}) => {
     { workItemId: 'W', selected: 'a', candidates: routes },
     ticket,
     { evidenceData: { combinations: routes.map(proofOf) }, ledger, now: Date.now() },
-    { offeringId: 'a', upstream: 'up-a', status: 401, authLayer: 'connection', ...failure },
+    {
+      offeringId: 'a',
+      upstream: 'up-a',
+      status: 401,
+      workerStopped: true,
+      authLayer: 'connection',
+      ...failure,
+    },
     registry
   );
 };

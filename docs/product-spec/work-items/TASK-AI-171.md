@@ -279,3 +279,11 @@ Files: `tools/ai-brain/test/task-ai-171-route-health-evidence.test.js`
 Evidence: `task-ai-171-route-health-evidence.test.js`: 12/12 pass, rerun by Claude. No production code changed and no defect found.
 
 Limitations: Fixtures prove behaviour only, not live quota or liveness.
+
+## Integration of open routing PRs (2026-11-07)
+
+Operator instruction: finish the open slices, then merge them together. This branch merges #525, #518, #523, #520, #524 and #521. Each slice has its own Codex verdict on its PR; this branch gets one review of the combined result.
+
+Three code conflicts were resolved by hand: route-handoff.js imports, afterFailure guards with auth classes, and candidates.js combo reads.
+
+Limitations: offline evidence only; no real task run. TASK-AI-181 ships in the same PR by operator instruction, an exception to one Work Item per PR.
