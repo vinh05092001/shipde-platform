@@ -2065,7 +2065,8 @@ function reportDispatchOutcome(args, deps) {
  */
 async function runProfileDispatch(args, deps) {
   const d = deps || {};
-  const log = d.log || console.log;
+  const output = d.log || console.log;
+  const log = args.json ? () => {} : output;
   const error = d.error || console.error;
   const exit = d.exit || process.exit;
   const rootDir = args.root || d.rootDir || process.cwd();
@@ -2088,10 +2089,12 @@ async function runProfileDispatch(args, deps) {
   }
   const profile = rawProfile;
 
-  const assessment = await assessTask(profile, {
-    ask: d.weightingAsk || d.ask,
-    minConfidence: d.minConfidence,
-  });
+  const assessment =
+    d.assessment ||
+    (await assessTask(profile, {
+      ask: d.weightingAsk || d.ask,
+      minConfidence: d.minConfidence,
+    }));
 
   const evidenceDir =
     d.evidenceDir || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -2100,7 +2103,7 @@ async function runProfileDispatch(args, deps) {
   const annotated = candidatesApi.annotateCandidates(
     (d.candidates || []).map((c) => Object.assign({}, c)),
     evidenceData,
-    { now }
+    { now, quotaState: d.quotaState, quotaStateFile: d.quotaStateFile }
   );
 
   const probe = d.probeCapabilities || require('./capability-probe').probeCapabilities;
@@ -2137,6 +2140,8 @@ async function runProfileDispatch(args, deps) {
     return reviewerHeadroom.status !== 'exhausted' && reviewerHeadroom.status !== 'cooling';
   });
   const rankCtx = {
+    ...d,
+    ...(d.ranking || {}),
     now,
     priors: d.priors,
     taskId: profile.taskId,
@@ -2157,6 +2162,8 @@ async function runProfileDispatch(args, deps) {
     independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  const structured = () =>
+    require('./dispatch-output').dispatchOutput(profile, assessment, d.candidates || [], result);
   if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {
     result.rejected.push(...d.candidates.excludedRoutes);
   }
@@ -2174,7 +2181,6 @@ async function runProfileDispatch(args, deps) {
           d.modelChoiceMinConfidence !== undefined ? d.modelChoiceMinConfidence : d.minConfidence,
         topN: d.modelChoiceTopN,
       });
-      result.chosen = advice.chosen;
       result.modelChoice = advice.advice;
     } catch (err) {
       result.modelChoice = {
@@ -2193,13 +2199,14 @@ async function runProfileDispatch(args, deps) {
       const refusedCode = 'MODEL_SELECTION_NOT_PROVEN';
       log('Refusing to reserve unproven candidates without exploration budget: ' + result.reason);
       if (args.json) {
-        log(
+        output(
           JSON.stringify(
             {
+              ...structured(),
               profile,
               assessment,
               top3: result.top3,
-              rejected: jsonRejectedSlice(result, profile),
+              rejected: jsonRejectedSlice({ ...result, rejected: structured().rejected }, profile),
               rejectedCount: result.rejected.length,
               refused: refusedCode,
               reasonCode: refusedCode,
@@ -2319,13 +2326,14 @@ async function runProfileDispatch(args, deps) {
     }
     for (const [code, count] of byCode) log('  EXCLUDED ' + count + 'x ' + code);
     if (args.json) {
-      log(
+      output(
         JSON.stringify(
           {
+            ...structured(),
             profile,
             assessment,
             top3: result.top3,
-            rejected: jsonRejectedSlice(result, profile),
+            rejected: jsonRejectedSlice({ ...result, rejected: structured().rejected }, profile),
             rejectedCount: result.rejected.length,
             refused: refusedCode,
             reasonCode: result.reasonCode || refusedCode,
@@ -2525,13 +2533,14 @@ async function runProfileDispatch(args, deps) {
   }
 
   if (args.json) {
-    log(
+    output(
       JSON.stringify(
         {
+          ...structured(),
           profile,
           assessment,
           top3: result.top3,
-          rejected: jsonRejectedSlice(result, profile),
+          rejected: jsonRejectedSlice({ ...result, rejected: structured().rejected }, profile),
           rejectedCount: result.rejected.length,
           pinned,
           launchRequest,

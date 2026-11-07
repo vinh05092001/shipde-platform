@@ -1395,6 +1395,22 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         }
       }
       const scoped = applyRouteScope(eligible, excludedRoutes, opts, resolvedRegistry);
+      Object.defineProperty(scoped, 'filters', {
+        value: [
+          require('./dispatch-output').filterStage(
+            'route-health',
+            explicitCandidates,
+            eligible,
+            excludedRoutes.filter((c) => c.scope !== 'route-scope')
+          ),
+          require('./dispatch-output').filterStage(
+            'route-scope',
+            eligible,
+            scoped,
+            excludedRoutes.filter((c) => c.scope === 'route-scope')
+          ),
+        ],
+      });
       Object.defineProperty(scoped, 'excludedRoutes', {
         value: excludedRoutes,
         enumerable: false,
@@ -1598,6 +1614,22 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       }
     }
     const scoped = applyRouteScope(eligible, excludedRoutes, opts, resolvedRegistry);
+    Object.defineProperty(scoped, 'filters', {
+      value: [
+        require('./dispatch-output').filterStage(
+          'route-health',
+          assembled,
+          eligible,
+          excludedRoutes.filter((c) => c.scope !== 'route-scope')
+        ),
+        require('./dispatch-output').filterStage(
+          'route-scope',
+          eligible,
+          scoped,
+          excludedRoutes.filter((c) => c.scope === 'route-scope')
+        ),
+      ],
+    });
     Object.defineProperty(scoped, 'excludedRoutes', {
       value: excludedRoutes,
       enumerable: false,
@@ -2053,7 +2085,7 @@ async function dispatchProfileCommand(args, deps) {
   const { readDiscoveryCatalogue } = require('./discovery/read');
 
   let discCat;
-  if (Array.isArray(deps && deps.discoveryCatalogue)) {
+  if (deps && deps.discoveryCatalogue) {
     discCat = deps.discoveryCatalogue;
   } else if (!(deps && Array.isArray(deps.candidates))) {
     try {
@@ -2141,7 +2173,7 @@ async function dispatchProfileCommand(args, deps) {
   return require('./routing').runProfileDispatch(
     args,
     Object.assign({}, deps, {
-      candidates: candidateList,
+      candidates: require('./dispatch-output').filterPins(candidateList, args, deps),
       capabilityProbeAllowNetwork: args.execute === true && !Array.isArray(deps && deps.candidates),
       registry,
       rootDir,
@@ -2174,7 +2206,8 @@ function dispatchCommand(args, deps = {}) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const execute = args.execute === true;
   const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
-  const log = deps.log || console.log;
+  const output = deps.log || console.log;
+  const log = args.json && !execute && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
 
@@ -2517,22 +2550,7 @@ function dispatchCommand(args, deps = {}) {
   const pinHarness = args.harness || (deps && deps.harness);
   const isPinned = Boolean(pinModel || pinAccount || pinHarness);
 
-  let eligibleCandidates = candidateList.slice();
-  if (isPinned) {
-    if (pinModel) {
-      eligibleCandidates = eligibleCandidates.filter(
-        (c) => c.modelId === pinModel || c.model === pinModel || c.base === pinModel
-      );
-    }
-    if (pinAccount) {
-      eligibleCandidates = eligibleCandidates.filter(
-        (c) => c.accountId === pinAccount || c.account === pinAccount
-      );
-    }
-    if (pinHarness) {
-      eligibleCandidates = eligibleCandidates.filter((c) => c.harness === pinHarness);
-    }
-  }
+  const eligibleCandidates = require('./dispatch-output').filterPins(candidateList, args, deps);
 
   // Handle dry-run
   if (isDryRun) {
@@ -2711,6 +2729,13 @@ function dispatchCommand(args, deps = {}) {
       };
     };
     const decision = rankDryRun(annotated);
+    const structured = () =>
+      require('./dispatch-output').dispatchOutput(
+        profile,
+        assessment,
+        eligibleCandidates,
+        decision
+      );
     if (
       resumed &&
       checkpoint &&
@@ -2739,6 +2764,7 @@ function dispatchCommand(args, deps = {}) {
     }
 
     if (!decision.chosen) {
+      if (args.json) output(JSON.stringify(structured(), null, 2));
       log('No eligible candidate for ' + item.workItemId);
       for (const rej of decision.rejected) {
         log(
@@ -2873,6 +2899,14 @@ function dispatchCommand(args, deps = {}) {
       );
     }
 
+    if (args.json)
+      output(
+        JSON.stringify(
+          { ...structured(), fallback, simulatedFailure, checkpoint: nextCheckpoint },
+          null,
+          2
+        )
+      );
     log('Ranked candidates for ' + item.workItemId + ':');
     for (let i = 0; i < decision.candidates.length; i++) {
       const c = decision.candidates[i];
