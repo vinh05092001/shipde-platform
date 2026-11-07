@@ -2,8 +2,12 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { launchFromDecision, firstLaunch, afterFailure } = require('../route-handoff');
 const { getQuotaScopeState, isScopeBlocked } = require('../quota-scan');
+const { recordProbe, loadEvidence, Level, Status } = require('../evidence');
 
 const registry = {
   sources: [{ id: 'gw', kind: 'router', servesModels: true, endpoint: 'http://127.0.0.1:1/v1' }],
@@ -90,6 +94,63 @@ const decided = (...candidates) => ({
 const proved = (...candidates) => ({
   evidenceData: { combinations: candidates.map((c) => proof(c, 'HARNESS_PASS')) },
   ledger: {},
+});
+
+test('passed execution proof loaded from the Controller store qualifies its route', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'route-handoff-proof-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const a = offering('stored', { accessPath: 'gateway' });
+  recordProbe(dir, a, { status: Status.PASSED, level: Level.HARNESS });
+  const evidenceData = loadEvidence(dir);
+  assert.equal(evidenceData.combinations[0].model, a.modelId);
+  assert.equal(evidenceData.combinations[0].evidence[0].proofLevel, 'HARNESS_PASS');
+  const out = firstLaunch(decided(a), ticket(), { evidenceData, ledger: {} }, screened);
+  assert.equal(out.action, 'LAUNCH');
+  assert.equal(out.launch.offeringId, a.offeringId);
+});
+
+for (const status of [Status.FAILED, Status.UNKNOWN, undefined]) {
+  test('execution proof with status ' + status + ' does not qualify a route', () => {
+    const a = offering('a');
+    const ctx = proved(a);
+    ctx.evidenceData.combinations[0].evidence = [
+      { status, level: Level.HARNESS, proofLevel: 'HARNESS_PASS' },
+    ];
+    const out = firstLaunch(decided(a), ticket(), ctx, screened);
+    assert.equal(out.action, 'BLOCKED');
+    assert.equal(out.rejected[0].reason, 'PROOF_BELOW_TICKET:NONE');
+  });
+}
+
+test('failed stronger proof cannot promote passed API proof to execution proof', () => {
+  const a = offering('a');
+  const ctx = proved(a);
+  const items = [
+    { status: Status.FAILED, proofLevel: 'WORK_ITEM_PASS' },
+    { status: Status.PASSED, proofLevel: 'API_PASS' },
+  ];
+  ctx.evidenceData.combinations[0].evidence = items;
+  const out = firstLaunch(decided(a), ticket(), ctx, screened);
+  assert.equal(out.action, 'BLOCKED');
+  assert.equal(out.rejected[0].reason, 'PROOF_BELOW_TICKET:API_PASS');
+  items.push({ status: Status.PASSED, proofLevel: 'HARNESS_PASS' });
+  assert.equal(firstLaunch(decided(a), ticket(), ctx, screened).action, 'LAUNCH');
+});
+
+test('an unknown harness is refused and the next eligible route launches', () => {
+  const a = offering('a', { harness: 'unknown-harness' });
+  const b = offering('b');
+  const ctx = proved(a, b);
+  const out = firstLaunch(decided(a, b), ticket(), ctx, screened);
+  assert.equal(out.action, 'LAUNCH');
+  assert.equal(out.launch.offeringId, b.offeringId);
+  assert.equal(out.launch.harness, b.harness);
+  assert.deepStrictEqual(out.rejected, [
+    { offeringId: a.offeringId, reason: 'LAUNCHER_UNAVAILABLE' },
+  ]);
+  const blocked = firstLaunch(decided(a), ticket(), ctx, screened);
+  assert.equal(blocked.action, 'BLOCKED');
+  assert.deepStrictEqual(blocked.rejected, out.rejected);
 });
 
 test('active quota auth blocks refuse launch until retryAfter expires', () => {
