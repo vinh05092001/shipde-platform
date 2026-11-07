@@ -242,6 +242,11 @@ function recordProbe(dir, candidate, item) {
         '',
       stderr: scrubText(item.stderr || ''),
       accountId: candidate.accountId,
+      gateway: candidate.gateway,
+      upstream: candidate.upstream,
+      modelId: candidate.modelId || candidate.model,
+      authLayer: item.authLayer,
+      connectionId: item.connectionId,
     });
 
     const key = candidateKey(candidate);
@@ -272,6 +277,8 @@ function recordProbe(dir, candidate, item) {
     cd.gateway = candidate.gateway || '';
     cd.upstream = candidate.upstream;
     cd.accountId = candidate.accountId || '*';
+    cd.authLayer = classification.authLayer || null;
+    cd.connectionId = classification.connectionId || null;
     cd.quotaScope = candidate.quotaScope || '';
     cd.modelId = candidate.modelId || candidate.model;
 
@@ -398,7 +405,14 @@ function isCandidateBlocked(data, candidate, opts) {
       if (cd.scope === Scope.ACCOUNT || cd.scope === 'account') {
         const cdAccount = cd.accountId || key.split('::')[4];
         const cdUpstream = cd.upstream || key.split('::')[3];
-        if (candObj.accountId && candObj.accountId !== '*' && candObj.accountId === cdAccount) {
+        if (
+          candObj.accountId &&
+          candObj.accountId !== '*' &&
+          candObj.accountId === cdAccount &&
+          (!cdUpstream ||
+            candObj.upstream === cdUpstream ||
+            (cd.authLayer === 'gateway-key' && candObj.gateway === cd.gateway))
+        ) {
           return {
             blocked: true,
             reason: cd.blockReason,
@@ -409,6 +423,16 @@ function isCandidateBlocked(data, candidate, opts) {
       }
 
       // Access path scope: "a 404 excludes that model on that access path only"
+      if (cd.scope === Scope.CONNECTION) {
+        if (
+          cd.connectionId &&
+          candObj.connectionId === cd.connectionId &&
+          candObj.gateway === cd.gateway
+        ) {
+          return { blocked: true, reason: cd.blockReason, since: cd.blockedAt, scope: cd.scope };
+        }
+      }
+
       if (cd.scope === Scope.ACCESS_PATH || cd.scope === 'access_path') {
         const cdAccessPath = cd.accessPath || key.split('::')[1];
         const cdModel = cd.modelId || key.split('::')[6];
@@ -488,7 +512,7 @@ function isCandidateBlocked(data, candidate, opts) {
         : quotaScan.loadQuotaState(opts || {});
     if (quotaState) {
       const scopeState = quotaScan.getQuotaScopeState(candObj, quotaState);
-      if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, now, { routeCandidate: candObj })) {
         return {
           blocked: true,
           reason: `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`,

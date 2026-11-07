@@ -198,6 +198,28 @@ Files: `tools/ai-brain/ranking.js` `tools/ai-brain/routing.js` `tools/ai-brain/t
 Evidence: `task-ai-171-score-parity.test.js` with routing, ranking and candidates tests: 61/61 pass, rerun by Claude. Author: 12 leaf failures exist with both baseline and this repair; CI ai-brain-tests is the regression evidence.
 
 Limitations: No producer supplies measured scores yet, so production still ranks on unsourced legacy values. Not wired from cli.js. Most of the 20 audited values remain unsourced.
+## Build a task from the real check failure (2026-11-07)
+
+Outcome: A failed check produces a task stating only the true failure.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/check-failure-task.js` `tools/ai-brain/test/task-ai-171-check-failure-task.test.js`
+
+Evidence: `task-ai-171-check-failure-task.test.js`: 12/12 pass, rerun by Claude; author proved each AC by disabling it.
+
+Limitations: Helper only, not wired to route.js yet. TASK-AI-169 replay uses synthetic fixtures. Hardcode guard not run locally.
+## JEV decision contract that cannot override the Controller (2026-11-07)
+
+Outcome: JEV is skipped for clear tasks, sees only the filtered shortlist, and low confidence, errors, timeouts or outside IDs never override the Controller.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/jev.js` `tools/ai-brain/routing.js` `tools/ai-brain/jev-wrapper.js` `tools/ai-brain/test/task-ai-171-jev-contract.test.js`
+
+Evidence: `task-ai-171-jev-contract.test.js`: 13/13 pass, rerun by Claude. Full `tools/ai-brain` local run: 3082 tests, 3036 pass, 45 fail; the comparison run on main did not finish, so CI ai-brain-tests is the regression evidence.
+
+Limitations: Mock evidence only, not real JEV. Removes the wrapper's minConfidence 0 bypass, so more real asks may end UNDECIDED. cli.js join point not wired.
 ## Onboarding scope fix (2026-11-06, PR #515)
 
 Routing audit follow-up, kept separate from the route-decision PR #514.
@@ -211,3 +233,175 @@ AGY remains the assigned author of this Work Item. Claude Code implemented PR #5
 - Offline replay on copied data: first selection through `dispatchCommand --execute` with a mock runner; fallback through `assembleForDispatch` with `refreshRoutes`, not end to end through `dispatch --execute`, using a synthetic catalogue row and a failed direct route. After removing the four records neither suspect route was a candidate.
 - A valid route confirms argv only. It ran with `allowUnprobedCandidates`, so route liveness is not proven.
 - Not changed: existing evidence and route-health records.
+
+## Fallback keeps the diff and stops at its limit (2026-11-07)
+
+Outcome: After one fallback a worker chain stops, keeps the diff and never runs two writers on one worktree.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/route-handoff.js` `tools/ai-brain/test/task-ai-171-route-handoff.test.js` `tools/ai-brain/test/task-ai-171-fallback-chain.test.js`
+
+Evidence: `task-ai-171-fallback-chain.test.js` plus `task-ai-171-route-handoff.test.js`: 19/19 pass, rerun by Claude; new suite with old route-handoff: 1 pass, 6 fail per author.
+
+Limitations: Stub execution with JSON reload, not a live restart. Caller must persist ledger and record activeWorker; not wired to the pipeline.
+## Structured decision launch (2026-11-07, PR #516)
+
+Outcome: a launch runs only from a structured Controller decision; proof must match the actual execution route, failed evidence does not qualify, and an unresolved dispatch route is refused or falls back.
+
+Evidence: `task-ai-171-route-handoff.test.js` 26/26 on `137e2eb7`; Codex PASS on `137e2eb7`.
+
+Limitations: offline stub evidence; not yet wired into the pipeline.
+
+## Combo membership fix (2026-11-07, PR #518)
+
+Outcome: combo membership is separated from call eligibility; health lookups stay on the exact route and account.
+
+Evidence: `task-ai-171-combo-members.test.js` and `task-ai-171-route-handoff.test.js` pass; Codex PASS on `be54bd6d`.
+
+Limitations: offline evidence only.
+## 401 scope fix (2026-11-07, PR #520)
+
+Scope: a 401 behind a gateway blocks only as far as its evidence reaches. One route failing on its credential no longer removes other models or upstreams on the same gateway key. Base: PR #518.
+
+Rules:
+
+- A matching error tag drops only the failed route from that ticket's retry; it never blocks the whole upstream or the shared key.
+- The tag counts only when its model matches the failed route.
+- `connection` scope applies only with a confirmed connection ID.
+- A whole upstream is blocked only by explicit `upstream-credential` evidence, which no error string produces.
+- A stored scan 401 naming one model behind a gateway blocks only that model.
+- Upstream rows with no model and direct-source rows keep their existing behaviour.
+
+Files outside the Allowed paths above, needed by this fix: `tools/ai-brain/failure-classifier.js`, `routing.js`, `evidence.js`, `route-handoff.js`, `quota-scan.js`, `capability-probe.js`, `probe-order.js`, `hermes-session.js`, plus `task-ai-171-auth-scope.test.js`, `candidates.test.js` and `classifier-outcome.test.js`.
+
+Evidence on `3886b2d5`: `task-ai-171-auth-scope.test.js` 24/24; focused run 229/229; full `tools/ai-brain` suite 3245 tests, 3176 pass, 68 fail, with no test failing only on this commit compared with `6c506ece`. The full suite is not green.
+
+Limitations: the upstream reading of the four stored 2026-11-05 cases is an inference from error text; SQLite holds no record confirming it, and no request ID links client and gateway. Candidates carry no `connectionId` today, so the `connection` path is proven only by tests. AC-AI-171-01 and the other deferred rows in the Acceptance matrix are not closed by this fix.
+
+## Prove route evidence stays within its route (2026-11-07)
+
+Outcome: Twelve offline cases prove auth, quota and evidence do not spread beyond their route.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/test/task-ai-171-route-health-evidence.test.js`
+
+Evidence: `task-ai-171-route-health-evidence.test.js`: 12/12 pass, rerun by Claude. No production code changed and no defect found.
+
+Limitations: Fixtures prove behaviour only, not live quota or liveness.
+
+## Integration of open routing PRs (2026-11-07)
+
+Operator instruction: finish the open slices, then merge them together. This branch merges #525, #518, #523, #520, #524 and #521. Each slice has its own Codex verdict on its PR; this branch gets one review of the combined result.
+
+Three code conflicts were resolved by hand: route-handoff.js imports, afterFailure guards with auth classes, and candidates.js combo reads.
+
+Limitations: offline evidence only; no real task run. TASK-AI-181 ships in the same PR by operator instruction, an exception to one Work Item per PR.
+
+## Dispatch route scope (folded from TASK-AI-181)
+
+This scope shipped inside the TASK-AI-171 integration PR, which may change only one Work Item.
+
+### Control
+
+| Field | Value |
+|---|---|
+| Work Item ID | `TASK-AI-181` |
+| Feature ID | `N/A — AI dispatch` |
+| Status | `READY_FOR_CODEX` |
+| Delivery order | `305` |
+| Dependencies | `TASK-AI-171` (available on assigned base) |
+| Assigned author | `Codex CLI — temporary operator dispatch; not Controller selection` |
+| Risk | `LOW` |
+| Allowed paths | `tools/ai-brain/{cli,candidates,ranking}.js`; `tools/ai-brain/test/task-ai-181-route-scope.test.js`; this Work Item; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/report.md` |
+| Reviewer | Fresh independent review; author never approves or merges |
+| Branch | `fix/task-ai-181-dispatch-combo-read` |
+| Pull Request | `#521` |
+
+### Business outcome
+
+Dispatch obeys the writer ticket's combo scope and records why other routes were refused, including after advisory/probe reentry and during execution.
+
+### Source references
+
+- `BASELINE-AND-DECISIONS.md` — Change control; `PRODUCT-VISION-SCOPE.md` — Boundaries; `MASTER-FEATURE-CATALOG.md` — Shared platform (all under `docs/product-spec/docs/`).
+- `docs/product-spec/docs/10-ai-collaboration/AGENT-CONTRACT-DETAILS.md` — Role separation, Pull Request evidence.
+- `TASK-AI-171.md` — Business rules `BR-ROUTING-07/08` (combo constituents and JEV advisory); `.oc/task.md` — F521 findings P1-1 through P2-3 and combo read check; operator Ticket A overrides commit/push instructions.
+
+### Preconditions and dependencies
+
+Assigned HEAD `e77cb9fbe8cf0c81bc23631c213e761a21076a5d`; base branch `6c506ece23568fcf60c89bbc0284de86a6314c0e`. Offline fake registry, combo configuration, JEV and launcher only. Delivery order is max(304, 304) + 1 from local `origin/main` (`1b7a969df3bcb8563f42752f2d77a4809bf9d93c`) and the base branch; no network refresh.
+
+### Ambiguity and clarification markers
+
+None. Assumptions: `comboMembers` identifies the whole-combo route kind only when source metadata proves 9Router; model names alone prove neither source nor route kind. Absent scope allows individual routes. Non-writer behavior and generation callers without a role remain compatible.
+
+### Author boundary and slice sizing rule
+
+One bounded Work Item. Operator assigns Codex CLI as temporary writer; no ranking-selection claim. Reuse assembly, scope, source identity, candidate keys, JEV assessment, ranking and decision persistence. No scoring, JEV policy, dependencies, credentials, production network/model calls, gates or git configuration changes. Coordinator verifies and commits; author leaves edits uncommitted.
+
+### In scope / Out of scope
+
+In scope: the six F521 findings and read-order check. Out of scope: Controller ranking implementation, unrelated dispatch-wiring failures and external liveness proof.
+
+### Business rules and edge cases
+
+`BR-181-01`: A direct/non-9Router suffix collision is individual. `BR-181-02`: retain inventory before scope; combo-only refuses individuals with `NOT_IN_COMBO_CONFIG`, or `COMBO_CONFIG_UNAVAILABLE` when unread. `BR-181-03`: injected candidates and reentry obey the same scope. `BR-181-04`: preserve exclusions in decision records before launch; scoped routes never return. `BR-181-05`: retain registry-supplied launch prefix.
+
+### Constitution check
+
+Tenant scope, RBAC, VND and carrier reconciliation: N/A (offline AI toolchain only). Audit/sensitive data: fake fixtures, temporary stores, no credential reads. Lowest useful tests cover negative scope, unread configuration, reinjection, durable records and launch argv; no application UI, schema or migration changes.
+
+### UI states / API, event and data impact
+
+No UI. Internal generator `routeScope: combo-and-routes` retains inventory for the shared scope filter; other callers keep existing behavior. Internal `routeScopeExclusions` carries prior refusals through reentry, and ranking accepts `excludedRoutes` before persisting its decision. Canonical reasons above remain unchanged.
+
+### Acceptance matrix
+
+All executable evidence is in `tools/ai-brain/test/task-ai-181-route-scope.test.js`.
+
+| AC/Test ID | Scenario | Expected result | Evidence required |
+|---|---|---|---|
+| P1-1 | Combo-name collisions | Source and combo route kind required; real combo kept | unit: `P1-1: combo origin requires the router source and the combo route kind` |
+| P1-2 | Inventory absent from discovery | Default/combined scope keep individual; limited scope records refusal; no-role caller compatible | unit: both `P1-2:` tests |
+| P1-3 | Injected candidates, read/unread config | Same scope and reasons | unit: `P1-3: injected candidates receive the same scope check and reasons` |
+| P2-1 | JEV/probe reentry and execute | Both reasons retained; excluded route cannot launch | integration: four `P2-1:` tests (both reasons, both paths) |
+| P2-2 | Combo and individual launch | Registry `ninerouter/` prefix applied once | integration: `P2-2: launch argv preserves the registry prefix for combo and individual 9router routes` |
+| P2-3 | Contract and register | This Work Item; exactly one READY_FOR_CODEX row, order 305 | docs-inspection; test not applicable: delivery metadata |
+| READ | Reviewer profile reads combo early | One wasted read; no writer combo enabled | unit: `combo read order: reviewer profile wastes one read but does not enable a writer combo` |
+
+### Task breakdown / Author checklist
+
+- [x] Write and reproduce failing regression tests, then apply narrow fixes.
+- [x] Verify named offline suites and prefix behavior; report existing failures separately.
+- [x] Add contract/register and `.oc/report.md`; leave independent review and commit to coordinator.
+- [ ] Coordinator runs dependency-backed checks and fresh independent review.
+
+### Verification commands
+
+`node --test tools/ai-brain/test/task-ai-181-route-scope.test.js tools/ai-brain/test/task-ai-66*.test.js tools/ai-brain/test/*dispatch*.test.js`; `node scripts/ai/check-no-hardcode.mjs`; `pnpm security:secrets`. Format changed supported files with Prettier `--end-of-line auto`. Exact results and environment limitations: `.oc/report.md`.
+
+### Codex review record
+
+No independent verdict yet. Temporary Codex writer does not approve its own work.
+
+### Known limitations
+
+Combo config is read before ticket role resolution when a reader is supplied. READ test demonstrates a wasted reviewer read without a wrong candidate result; left unchanged. Owner: coordinator; next action: consider read optimization separately. The four base dispatch-wiring failures remain outside scope. No live route liveness, remote CI or merge evidence is claimed.
+
+### Residual limitations
+
+Dependency-backed guard/format checks require installed tooling. Coordinator owns reruns and independent review before publication; see `.oc/report.md`.
+
+### Controller reads the combo itself and refuses routes outside the ticket scope (2026-11-07)
+
+Outcome: A ticket's route scope is enforced at every entry point, and each refused route keeps its reason through JEV and execute.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` `tools/ai-brain/candidates.js` `tools/ai-brain/cli.js` `tools/ai-brain/ranking.js` `tools/ai-brain/test/task-ai-181-route-scope.test.js` `docs/product-spec/work-items/TASK-AI-181.md`
+
+Evidence: `task-ai-181-route-scope.test.js`: 14/14 pass, rerun by Claude; each P1 fails on e77cb9fb per author. Full suite before the A2 repair: 3235 tests, 46 fail; 1 new subtest compared with 6c506ece, repaired in A2. `repo-integration-group-6.test.js` needs tsx, absent in the worktree, so CI ai-brain-tests is its evidence.
+
+Limitations: Mock launch and JEV verify orchestration only, not route liveness. Combo read before role is a wasted read, recorded as a known limitation. Base #518 is not merged.

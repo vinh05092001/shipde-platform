@@ -284,13 +284,24 @@ function candidateIdentityKey(candidate) {
 
 async function adviseModelChoice(result, profile, options) {
   const opts = options || {};
-  const top = ((result && result.ranking) || []).slice(0, Math.max(1, Number(opts.topN) || 5));
+  const eligibleRanking = ((result && result.ranking) || []).filter(
+    (candidate) =>
+      candidate &&
+      !candidate.blocked &&
+      candidate.status !== 'blocked' &&
+      candidate.isAlive !== false &&
+      candidate.headroomStatus !== 'exhausted' &&
+      candidate.headroomStatus !== 'cooling'
+  );
+  const top = eligibleRanking.slice(0, Math.max(1, Number(opts.topN) || 5));
   const question = jevModelChoiceQuestion(profile, top);
   const advised = await jev.adviseOrReason(question, {
     ask: typeof opts.ask === 'function' ? opts.ask : undefined,
-    minConfidence: Number.isFinite(Number(opts.minConfidence))
-      ? Number(opts.minConfidence)
-      : undefined,
+    recordTurn: opts.recordTurn,
+    minConfidence:
+      opts.minConfidence != null && Number.isFinite(Number(opts.minConfidence))
+        ? Number(opts.minConfidence)
+        : undefined,
   });
   const eligible = new Set(top.map((candidate) => candidate.candidateKey));
   let chosen = result.chosen;
@@ -300,7 +311,10 @@ async function adviseModelChoice(result, profile, options) {
     eligible.has(advised.choice)
   ) {
     chosen = advised.choice;
-  } else if (advised.outcome === jev.Outcome.UNDECIDED || advised.outcome === 'UNDECIDED') {
+  } else if (
+    !eligibleRanking.some((candidate) => candidate.candidateKey === chosen) &&
+    advised.outcome === jev.Outcome.UNDECIDED
+  ) {
     // TASK-AI-147: When Jev is UNDECIDED, Controller deterministically selects the highest-scoring candidate among alive/unblocked routes
     const ranking = (result && result.ranking) || [];
     const aliveCandidates = ranking.filter(
@@ -326,6 +340,7 @@ async function adviseModelChoice(result, profile, options) {
   return {
     chosen,
     advice: {
+      turn: advised.turn,
       outcome: chosen === advised.choice && advised.handledBy === 'jev' ? 'DECIDED' : 'UNDECIDED',
       choice: chosen === advised.choice && advised.handledBy === 'jev' ? advised.choice : null,
       confidence: advised.handledBy === 'jev' ? advised.confidence : 0,
@@ -409,6 +424,7 @@ async function assessTask(profile, opts) {
       ask,
       minConfidence,
       scoreMinConfidence,
+      recordTurn: options.recordTurn,
       reasoningController: () => ({
         outcome: jev.Outcome.DECIDED,
         choice: fallbackId,
@@ -567,6 +583,7 @@ async function assessTask(profile, opts) {
 
   return {
     jevOutcome: jevDecided ? jev.Outcome.DECIDED : jev.Outcome.UNDECIDED,
+    jevTurn: advisoryResult.turn,
     decidedBy,
     weightProfile: chosenProfile,
     weights,
@@ -748,7 +765,20 @@ function sameFailureDomain(candidate, failed, classification) {
     }
     return sameRoute();
   }
+  if (scope === 'connection') {
+    return (
+      Boolean(classification.connectionId) &&
+      candidate.connectionId === classification.connectionId &&
+      sameRoute()
+    );
+  }
   if (scope === 'account') {
+    // A key shared behind a gateway is condemned only by evidence naming that key.
+    const viaGateway = failed.gateway && failed.upstream && failed.gateway !== failed.upstream;
+    const bare401 = classification.evidence?.httpStatus === 401 && !classification.authLayer;
+    if (viaGateway && bare401) return false;
+    if (viaGateway && classification.authLayer && candidate.gateway !== failed.gateway)
+      return false;
     return (
       candidate.accountId &&
       failed.accountId &&
