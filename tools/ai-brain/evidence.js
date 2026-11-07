@@ -398,7 +398,12 @@ function isCandidateBlocked(data, candidate, opts) {
       if (cd.scope === Scope.ACCOUNT || cd.scope === 'account') {
         const cdAccount = cd.accountId || key.split('::')[4];
         const cdUpstream = cd.upstream || key.split('::')[3];
-        if (candObj.accountId && candObj.accountId !== '*' && candObj.accountId === cdAccount) {
+        if (
+          candObj.accountId &&
+          candObj.accountId !== '*' &&
+          candObj.accountId === cdAccount &&
+          (!cdUpstream || candObj.upstream === cdUpstream)
+        ) {
           return {
             blocked: true,
             reason: cd.blockReason,

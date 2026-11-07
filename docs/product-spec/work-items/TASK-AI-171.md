@@ -219,3 +219,11 @@ Outcome: a launch runs only from a structured Controller decision; proof must ma
 Evidence: `task-ai-171-route-handoff.test.js` 26/26 on `137e2eb7`; Codex PASS on `137e2eb7`.
 
 Limitations: offline stub evidence; not yet wired into the pipeline.
+
+## Combo membership fix (2026-11-07, PR #518)
+
+Outcome: combo membership is separated from call eligibility; health lookups stay on the exact route and account.
+
+Evidence: `task-ai-171-combo-members.test.js` and `task-ai-171-route-handoff.test.js` pass; Codex PASS on `be54bd6d`.
+
+Limitations: offline evidence only.

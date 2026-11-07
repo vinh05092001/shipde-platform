@@ -90,6 +90,10 @@ function routeRefusal(c, ticket, ctx, reg) {
     const path = { id: c.gateway || c.upstream, accountId: c.accountId };
     if (!isEligible(ctx.routeHealth, c.modelId, path, now)) return 'ROUTE_UNHEALTHY';
   }
+  if (c.budget === 'UNKNOWN') return 'BUDGET_UNKNOWN';
+  if (c.budget === 'FREE_ALLOWANCE' && ticket.outputTokens > c.budgetRemainingTokens) {
+    return 'BUDGET_BELOW_REQUEST';
+  }
   const quotaOptions = { now, registry: reg, candidate: c };
   const quota = ctx.quotaState ? getQuotaScopeState(c, ctx.quotaState, quotaOptions) : null;
   if (isScopeBlocked(quota, now, quotaOptions)) return 'QUOTA_BLOCKED';

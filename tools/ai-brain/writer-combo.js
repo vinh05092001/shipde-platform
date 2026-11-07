@@ -418,28 +418,70 @@ function isNineRouterSource(source, key) {
   );
 }
 
-function resolveComboMembers(opts, registry, getWriterComboName) {
-  if (Array.isArray(opts && opts.nineRouterComboMembers)) return opts.nineRouterComboMembers;
-  const comboName =
-    typeof getWriterComboName === 'function'
-      ? getWriterComboName(opts, registry)
-      : opts?.nineRouterWriterCombo;
-  if (!comboName) return [];
-  try {
-    const evidenceDir = (opts && opts.evidenceDir) || path.join(__dirname, 'data', 'evidence');
-    const evidenceData = (opts && opts.evidence) || evidenceApi.loadEvidence(evidenceDir);
-    const priorsApi = require('./priors');
-    const priorsData = (opts && opts.priors) || priorsApi.loadPriors();
-    const listing =
-      (opts &&
-        opts.sourceModels &&
-        (opts.sourceModels['9router'] || opts.sourceModels['ninerouter'])) ||
-      (opts && opts.catalogue) ||
-      [];
-    return buildWriterComboModels(listing, evidenceData, priorsData);
-  } catch {
-    return [];
+// Members come only from the combo's stored configuration. A listing says what
+// the router can serve, never what a combo contains, so an unread combo stays
+// empty and its membership stays UNKNOWN.
+function resolveComboConfig(opts) {
+  const name = opts?.nineRouterWriterCombo ?? resolveComboName(opts || {});
+  const config = opts?.nineRouterComboConfig;
+  return config?.name === name ? config : null;
+}
+
+function resolveComboMembers(opts) {
+  const config = resolveComboConfig(opts);
+  if (opts?.nineRouterComboConfig && !config) return [];
+  if (Array.isArray(config?.members)) return config.members;
+  if (Array.isArray(opts?.nineRouterComboMembers)) return opts.nineRouterComboMembers;
+  return [];
+}
+
+// GET only. Returns names and member IDs, never the admin token or a raw body.
+async function readComboConfig(opts = {}) {
+  const name = resolveComboName(opts);
+  const resolved = resolveEndpoint(opts);
+  if (!name || !resolved.host || !resolved.port || !resolved.protocol) {
+    throw new Error('CONFIG_MISSING: combo name and 9router endpoint are required');
   }
+  const unavailable = (status) => ({
+    name,
+    members: null,
+    state: 'COMBO_CONFIG_UNAVAILABLE',
+    status,
+  });
+  const cliToken = (opts.loadCliToken || loadCliToken)();
+  let res;
+  try {
+    res = await (opts.httpRequest || httpRequest)({
+      host: resolved.host,
+      port: resolved.port,
+      protocol: resolved.protocol,
+      path: '/api/combos',
+      method: 'GET',
+      headers: cliToken ? { 'x-9r-cli-token': cliToken } : {},
+    });
+  } catch {
+    return unavailable('REQUEST_FAILED');
+  }
+  if (res.status !== 200 || !res.data) return unavailable(res.status);
+  const combo = (res.data.combos || []).find((c) => c && c.name === name);
+  if (!combo) return unavailable('COMBO_NOT_FOUND');
+  const members = (combo.models || []).filter((m) => typeof m === 'string');
+  return {
+    name,
+    state: members.length ? 'READ' : 'EMPTY',
+    strategy: combo.strategy || 'UNKNOWN',
+    members,
+    readVia: 'GET /api/combos',
+    readAt: new Date().toISOString(),
+  };
+}
+
+// MEMBER and NOT_MEMBER need a read configuration; without one the answer is UNKNOWN.
+function comboMembershipOf(candidate, config) {
+  if (!isIndividualNineRouterCandidate(candidate, config?.name)) return null;
+  if (!Array.isArray(config?.members)) return { combo: config?.name || null, state: 'UNKNOWN' };
+  const state = config.members.includes(candidate.modelId) ? 'MEMBER' : 'NOT_MEMBER';
+  return { combo: config.name, state, readVia: config.readVia, readAt: config.readAt };
 }
 
 module.exports = {
@@ -452,6 +494,9 @@ module.exports = {
   isIndividualNineRouterCandidate,
   isNineRouterSource,
   resolveComboMembers,
+  resolveComboConfig,
+  readComboConfig,
+  comboMembershipOf,
   resolveEndpoint,
   httpRequest,
   assertLoopbackHost,

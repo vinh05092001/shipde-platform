@@ -652,12 +652,21 @@ describe('candidate generation', () => {
 
   // F2: model-source accessPath resolves to router endpoint, not source id
   test('model-source candidate carries router endpoint as accessPath, not source id (F2)', () => {
-    const registry = sourcesApi.loadSources();
+    const base = sourcesApi.loadSources();
+    const routed = {
+      id: 'routed-f2',
+      kind: 'model-source',
+      servesModels: true,
+      reachedVia: '9router',
+      routerAlias: 'kr',
+      credential: { type: 'oauth', store: '9router:providerConnections' },
+    };
+    const registry = { ...base, sources: [...base.sources, routed] };
     const catalogue = ['kr/invented-model-f2'];
     const result = candidates.generateCandidates({ registry, catalogue });
 
-    const krCandidate = result.find((c) => c.upstream === 'kr' && c.source === 'xkiro');
-    assert.ok(krCandidate, 'xkiro model-source candidate exists');
+    const krCandidate = result.find((c) => c.upstream === 'kr' && c.source === 'routed-f2');
+    assert.ok(krCandidate, 'router-reached model-source candidate exists');
     // accessPath must be the router endpoint URL, not '9router'.
     assert.ok(
       krCandidate.accessPath.startsWith('http'),

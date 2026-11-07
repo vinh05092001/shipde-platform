@@ -41,19 +41,24 @@
       "label": "xKiro",
       "kind": "model-source",
       "servesModels": true,
-      "reachedVia": "9router",
-      "routerAlias": "kr",
+      "harness": "opencode-direct",
+      "accessPath": "direct",
+      "endpoint": "https://api.xkiro.com/v1",
+      "opencodeProvider": "xkiro",
+      "modelListing": "CONFIGURED_NOT_LIVE",
+      "freeAllowance": {
+        "modelsPath": "/models",
+        "usagePath": "/usage"
+      },
+      "budget": {
+        "state": "UNKNOWN"
+      },
       "credential": {
-        "type": "oauth",
-        "store": "9router:providerConnections"
+        "type": "api-key",
+        "env": "XKIRO_API_KEY"
       },
       "verify": {
         "method": "completion"
-      },
-      "quota": {
-        "unit": "credit",
-        "perMonth": 50,
-        "scope": "account"
       }
     },
     {
