@@ -384,16 +384,19 @@ test('AA dry-run and execute share sourced parts and equal a hand replay', (t) =
   };
   const dry = dispatchCommand({ item: 'TASK-AI-171', role: 'writer', 'dry-run': true }, deps);
   let executed;
-  dispatchCommand({ item: 'TASK-AI-171', role: 'writer', execute: true }, {
-    ...deps,
-    run: () => {
-      executed = require('../decisions')
-        .readDecisions({ dir: deps.decisionDir, now: at })
-        .filter((r) => r.stage === 'selected')
-        .at(-1);
-      return { exitCode: 0, stdout: '{"id":"fixture-session","status":"completed"}' };
-    },
-  });
+  dispatchCommand(
+    { item: 'TASK-AI-171', role: 'writer', execute: true },
+    {
+      ...deps,
+      run: () => {
+        executed = require('../decisions')
+          .readDecisions({ dir: deps.decisionDir, now: at })
+          .filter((r) => r.stage === 'selected')
+          .at(-1);
+        return { exitCode: 0, stdout: '{"id":"fixture-session","status":"completed"}' };
+      },
+    }
+  );
   assert.ok(executed, 'stub execute must launch a measured candidate');
   assert.equal(executed.chosen, dry.decision.chosen);
   for (const c of dry.decision.candidates) {
@@ -439,13 +442,16 @@ test('AA rejects stale, wrong-unit, foreign-model and foreign-version rows; unkn
     assert.deepEqual(candidate.measurements, {}, JSON.stringify(patch));
   }
   const unknown = { ...original, modelId: `${modelId}-unknown` };
-  const result = dispatchCommand({ item: 'TASK-AI-171', role: 'writer', execute: true }, {
-    ...f.deps,
-    candidates: [unknown],
-    scoringPolicyFile: defaultPolicyFile,
-    now: at,
-    run: () => assert.fail('Unknown model must not launch'),
-  });
+  const result = dispatchCommand(
+    { item: 'TASK-AI-171', role: 'writer', execute: true },
+    {
+      ...f.deps,
+      candidates: [unknown],
+      scoringPolicyFile: defaultPolicyFile,
+      now: at,
+      run: () => assert.fail('Unknown model must not launch'),
+    }
+  );
   assert.equal(result.decision.chosen, null);
   assert.equal(result.decision.reasonCode, 'SCORING_INPUTS_UNVERIFIED');
 });
