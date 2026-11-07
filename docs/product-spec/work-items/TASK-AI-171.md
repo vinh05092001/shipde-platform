@@ -186,3 +186,15 @@ The PR reached 3.2k lines and every review round found new P1s (STUCK after 20 r
 - Slice A (this PR): route identity — `route-identity*.js`, `config/route-identity.json`; AC-AI-171-06 and the branch-preservation half of AC-AI-171-07. Test: `tools/ai-brain/test/task-ai-171-route-identity.test.js`.
 - Slice B (next PR): scoped health — AC-AI-171-01 to 05.
 - Slice C (after B): candidate adapters, unified selector, JEV advisory and budget contract — AC-AI-171-08 to 10 and the role-policy half of AC-AI-171-07. The open review findings on `unified-selector-admission.js`, `candidate-adapters.js` and `unified-selector-jev.js` move with it.
+
+## JEV decision contract that cannot override the Controller (2026-11-07)
+
+Outcome: JEV is skipped for clear tasks, sees only the filtered shortlist, and low confidence, errors, timeouts or outside IDs never override the Controller.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/jev.js` `tools/ai-brain/routing.js` `tools/ai-brain/jev-wrapper.js` `tools/ai-brain/test/task-ai-171-jev-contract.test.js`
+
+Evidence: `task-ai-171-jev-contract.test.js`: 13/13 pass, rerun by Claude. Full `tools/ai-brain` local run: 3082 tests, 3036 pass, 45 fail; the comparison run on main did not finish, so CI ai-brain-tests is the regression evidence.
+
+Limitations: Mock evidence only, not real JEV. Removes the wrapper's minConfidence 0 bypass, so more real asks may end UNDECIDED. cli.js join point not wired.
