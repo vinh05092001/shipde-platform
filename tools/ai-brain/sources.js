@@ -389,7 +389,8 @@ function describeAll(options) {
 /**
  * How a registry account's `provider` reaches a running session.
  *
- * Returns { harness, provider, modelPrefix } or null. The lookup lives in
+ * Returns { harness, provider, modelPrefix, modelIdIsExact? } or null. Derived
+ * direct routes take exact API IDs, including any provider namespace. The lookup lives in
  * sources.json so that adding a provider is a row rather than a branch in the
  * executor — the `if/else` chain in dispatch.sh is what this replaces.
  */
@@ -412,20 +413,26 @@ function dispatchRoute(provider, registry) {
       return null;
     const key = source.opencodeProvider || source.id;
     if (isRetired(key, reg) || isDeferred(key, reg)) return null;
-    route = { harness: 'opencode-direct', provider: 'opencode', modelPrefix: key + '/' };
+    route = {
+      harness: 'opencode-direct',
+      provider: 'opencode',
+      modelPrefix: key + '/',
+      modelIdIsExact: true,
+    };
   }
   return {
     harness: route.harness,
     provider: route.provider,
     modelPrefix: route.modelPrefix || '',
+    ...(route.modelIdIsExact ? { modelIdIsExact: true } : {}),
   };
 }
 
-/** The model id as the harness expects it, prefix applied once. */
+/** Exact API IDs retain their namespace; legacy routes accept an applied prefix. */
 function qualifyModel(model, route) {
   const name = String(model || '');
   const prefix = (route && route.modelPrefix) || '';
-  if (!name || !prefix || name.startsWith(prefix)) return name;
+  if (!name || !prefix || (!route.modelIdIsExact && name.startsWith(prefix))) return name;
   return prefix + name;
 }
 

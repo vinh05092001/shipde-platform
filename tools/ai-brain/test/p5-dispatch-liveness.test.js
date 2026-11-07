@@ -89,6 +89,7 @@ test('P5 derives direct dispatch from registry metadata and preserves explicit r
     harness: 'opencode-direct',
     provider: 'opencode',
     modelPrefix: 'fixture-provider/',
+    modelIdIsExact: true,
   });
   const fallback = { ...source, id: 'another-direct', opencodeProvider: undefined };
   assert.equal(dispatchRoute(fallback.id, { sources: [fallback] }).modelPrefix, fallback.id + '/');
@@ -119,8 +120,20 @@ test('P5 exact direct route reaches isolated launch without changing model ident
   assert.equal(launch.harness, 'opencode-direct');
   assert.equal(launch.model, source.opencodeProvider + '/' + candidate.modelId);
   assert.equal(launch.args[launch.args.indexOf('--model') + 1], launch.model);
+  const explicitRegistry = {
+    ...registry,
+    dispatch: {
+      providers: {
+        [source.id]: {
+          harness: 'opencode-direct',
+          provider: 'opencode',
+          modelPrefix: source.opencodeProvider + '/',
+        },
+      },
+    },
+  };
   chosen.modelId = launch.model;
-  assert.equal(launchFromDecision(decision, request, registry).model, launch.model);
+  assert.equal(launchFromDecision(decision, request, explicitRegistry).model, launch.model);
   assert.throws(
     () => launchFromDecision(decision, { ...request, isolatedWorker: false }, registry),
     /REQUIRES_ISOLATION/
@@ -225,6 +238,39 @@ test('P5b scan matches exact API IDs even when their namespace equals the dispat
         httpStatus: 200,
       }) + '\n'
     );
+  }
+});
+
+test('P5e admitted API namespace survives transport qualification at launch', (t) => {
+  const namespaced = {
+    ...candidate,
+    offeringId: 'fixture-namespaced',
+    modelId: 'fixture-provider/leaf',
+  };
+  const opts = fixture(t, [
+    { modelId: namespaced.modelId },
+    { modelId: 'leaf', reason: 'AUTH', httpStatus: 401 },
+  ]);
+  const inputs = [namespaced, { ...candidate, modelId: 'leaf' }];
+  for (const explicit of [true, false]) {
+    const rows = assembleForDispatch({ candidates: inputs }, [], registry, {
+      ...opts,
+      ...(explicit ? { candidates: inputs } : {}),
+    });
+    assert.deepEqual(
+      rows.map((row) => row.modelId),
+      [namespaced.modelId]
+    );
+    assert.equal(rows[0].scanLiveness.status, 'passed');
+    const decision = JSON.parse(JSON.stringify({ selected: rows[0].offeringId, candidates: rows }));
+    const launch = launchFromDecision(
+      decision,
+      { cwd: 'fixture-worktree', prompt: 'fake task', isolatedWorker: true },
+      registry
+    );
+    assert.equal(launch.model, source.opencodeProvider + '/' + namespaced.modelId);
+    assert.equal(launch.args[launch.args.indexOf('--model') + 1], launch.model);
+    assert.equal(launch.model.slice(launch.model.indexOf('/') + 1), namespaced.modelId);
   }
 });
 
