@@ -17,11 +17,11 @@ Status words follow that document. Owner of all rows: Claude as coordinator, Cod
 | 7 Offline full flow | OFFLINE PASS | Replay hash equal twice, `d3fd47e6e5888bcf` at `f50cac91`; #530 `b4e3c390` Codex PASS | Replay not repeated after P5 |
 | 8 Live calls | LIVE PASS, small | Controller-selected ticket `414b623c` on `agy04`, rerun 9/9, Codex PASS; decision-supervised ticket `9bdccdfb` on `cmc`, 5/5, Codex PASS | A product ticket is still unproven |
 | 9 Repo and tools | PARTIAL | #531 `899725f8` Codex PASS, audit 69 rows, 57 without execution evidence | 0/65 AGY list found, backlog below |
-| 10 Review and handoff | THIS FILE | Codex verdicts per SHA above | Merge decision belongs to the operator |
+| 10 Review and handoff | THIS FILE | Integration #537 Codex PASS at `661a7b55` | Merge decision belongs to the operator |
 
 Scans (isolated files, health and evidence stores untouched): Controller full scan 126 alive of 2111 routes on 17 sources; 9Router 150 of 1232 returned 200; free models through OpenCode 62 of 148.
 
-Full suite on `35c35d69`, serial: 3428 tests, 3384 pass, 43 fail, 1 skip, against 44 fail on `d82e0db4`. R3 is the only failing name outside the base list and it also fails on main in isolation.
+Full suite on `037df02a`, serial: 3428 tests, 3384 pass, 43 fail, 1 skip, against 44 fail on `d82e0db4`. Integration `661a7b55`: Codex PASS, 101/101 on changed test files; CI `ai-brain-tests` green on Linux. R3 is the only failing name outside the base list and it also fails on main in isolation.
 
 ## Requirements
 
@@ -54,5 +54,6 @@ Full suite on `35c35d69`, serial: 3428 tests, 3384 pass, 43 fail, 1 skip, agains
 - `ag/` routes have no credential in 9Router, 27 of 27.
 - 503 results on `cl`, `bzl`, `nous` conflict with earlier successful free calls and are unclassified.
 - `opencode-zen` AUTH results conflict with successful OpenCode CLI calls.
+- `route.js` review still reports one finding: a crash inside the small recovery window leaves a gate file that blocks that worktree until removed by hand; it fails closed.
 - `route.js` lives outside the repository, and its AA ordering can differ from the Controller's first rank by the operator decision of 2026-11-04.
 - Backlog not started: old PRs, 19 stale register rows, OneDrive, worktree cleanup, hooks, ai-memory drain.
