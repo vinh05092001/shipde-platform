@@ -200,10 +200,10 @@ describe('evidence store', () => {
     });
     const data = evidence.loadEvidence(dir);
 
-    // Candidate A is blocked with account scope
+    // A bare 401 behind a gateway names no layer, so only A itself is blocked
     const blockA = evidence.isCandidateBlocked(data, candA);
     assert.equal(blockA.blocked, true);
-    assert.equal(blockA.scope, 'account');
+    assert.equal(blockA.scope, 'unknown');
 
     // Candidate B on same upstream is NOT blocked
     const blockB = evidence.isCandidateBlocked(data, candB);

@@ -4,6 +4,7 @@ const { resolveRoute } = require('./executor');
 const { getHarness } = require('./harness');
 const { loadSources, dispatchRoute } = require('./sources');
 const { classifyFailure, isEligible } = require('./route-health');
+const { upstreamAuthSignal } = require('./failure-classifier');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
 const { proofLevelOf, ProofRank, Status } = require('./evidence');
 
@@ -43,6 +44,7 @@ function launchFromDecision(decision, request, registry) {
     gateway: chosen.gateway || '',
     upstream: chosen.upstream,
     quotaScope: chosen.quotaScope,
+    mode: r.mode,
     prompt: r.prompt,
     branch: r.branch,
     base: r.base,
@@ -62,6 +64,16 @@ function routeRefusal(c, ticket, ctx, reg) {
   const failed = (ctx.ledger && ctx.ledger.failures) || [];
   const seen = failed.find((f) => f.offeringId === c.offeringId);
   if (seen) return 'ALREADY_FAILED:' + seen.class;
+  const authFailed = failed.find(
+    (f) =>
+      (f.class === 'GATEWAY_KEY_AUTH' && f.gateway === c.gateway && f.accountId === c.accountId) ||
+      (f.class === 'UPSTREAM_AUTH' && f.gateway === c.gateway && f.upstream === c.upstream) ||
+      (f.class === 'CONNECTION_AUTH' &&
+        f.connectionId &&
+        f.connectionId === c.connectionId &&
+        f.gateway === c.gateway)
+  );
+  if (authFailed) return authFailed.class;
   const limited = failed.find((f) => f.class === 'RATE_LIMITED' && f.upstream === c.upstream);
   if (limited) return 'UPSTREAM_RATE_LIMITED';
   const broke = failed.find((f) => f.class === 'NO_CREDIT' && f.upstream === c.upstream);
@@ -140,6 +152,22 @@ function firstLaunch(decision, ticket, context, registry) {
   if (decision.workItemId !== ticket.workItemId) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
+  const ledger = (context && context.ledger) || {};
+  if (ledger.activeWorker) {
+    return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
+  }
+  if (
+    ledger.failures &&
+    ledger.failures.length &&
+    Number(ledger.fallbacksUsed || 0) >= Number(ticket.maxFallbacks)
+  ) {
+    return {
+      action: 'STOP',
+      reason: 'FALLBACK_LIMIT',
+      used: Number(ledger.fallbacksUsed || 0),
+      worktree: ledger.worktree,
+    };
+  }
   const { eligible, rejected } = screenRoutes(decision, ticket, context, registry);
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
   const request = {
@@ -155,16 +183,49 @@ function firstLaunch(decision, ticket, context, registry) {
  * fallback is a ceiling across workers and launchers. A failed route is never
  * sent the same request again. A worktree the failed worker left is kept: the
  * fallback continues inside it, and a stop reports it for review.
+ * The caller checkpoints this ledger and records activeWorker on actual launch.
+ * Internal harness retries never call this worker-change boundary. A post-launch
+ * failure needs confirmed termination, even if no edits have been reported yet.
  */
 function afterFailure(decision, ticket, context, failure, registry) {
   const ctx = context || {};
   const ledger = ctx.ledger;
   const f = failure || {};
+  const beforeLaunch = f.phase === 'before-launch';
+  if (ledger.activeWorker && (beforeLaunch || ledger.activeWorker.offeringId !== f.offeringId)) {
+    return { action: 'STOP', reason: 'WORKER_STILL_ACTIVE', worktree: ledger.worktree };
+  }
+  if (!beforeLaunch && f.workerStopped !== true) {
+    return {
+      action: 'STOP',
+      reason: 'WORKER_STOP_REQUIRED',
+      worktree: f.worktree || ledger.worktree,
+    };
+  }
+  delete ledger.activeWorker;
+  const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
+  const viaGateway = route.gateway && route.gateway !== f.upstream;
+  const authClass = {
+    'gateway-key': 'GATEWAY_KEY_AUTH',
+    'upstream-credential': 'UPSTREAM_AUTH',
+    'upstream-route': 'UPSTREAM_ROUTE_AUTH',
+    connection: 'CONNECTION_AUTH',
+  };
+  const stated = f.authLayer === 'connection' && !f.connectionId ? null : f.authLayer;
+  const authLayer = stated || (upstreamAuthSignal(f.message, route) ? 'upstream-route' : null);
   ledger.failures = ledger.failures || [];
   ledger.failures.push({
     offeringId: f.offeringId,
     upstream: f.upstream,
-    class: classifyFailure(f.status, f.message),
+    gateway: route.gateway,
+    accountId: route.accountId,
+    connectionId: f.connectionId,
+    class: beforeLaunch
+      ? 'LAUNCH_FAILED'
+      : Number(f.status) === 401 && viaGateway
+        ? authClass[authLayer] || 'AUTH_SCOPE_UNKNOWN'
+        : classifyFailure(f.status, f.message),
+    phase: beforeLaunch ? 'before-launch' : 'after-launch',
     affordable: f.affordable,
   });
   const kept = f.worktree || ledger.worktree;

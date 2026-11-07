@@ -194,6 +194,7 @@ function httpRequest({
   body,
   endpoint,
   registry,
+  signal,
   transport: injectedTransport,
   httpTransport = http,
   httpsTransport = https,
@@ -234,6 +235,7 @@ function httpRequest({
         path: reqPath,
         method: method || 'GET',
         headers: reqHeaders,
+        signal,
       },
       (res) => {
         let data = '';
@@ -457,6 +459,7 @@ async function readComboConfig(opts = {}) {
       protocol: resolved.protocol,
       path: '/api/combos',
       method: 'GET',
+      signal: opts.signal,
       headers: cliToken ? { 'x-9r-cli-token': cliToken } : {},
     });
   } catch {
