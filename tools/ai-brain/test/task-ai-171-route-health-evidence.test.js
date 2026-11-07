@@ -87,7 +87,7 @@ for (const authLayer of [undefined, 'connection']) {
   });
 }
 
-test('confirmed gateway-key auth still blocks the shared key', (t) => {
+test('confirmed gateway-key auth blocks the shared key but isolates another account', (t) => {
   const dir = scratch(t);
   evidence.recordProbe(dir, route(), {
     status: 'failed',
@@ -102,6 +102,16 @@ test('confirmed gateway-key auth still blocks the shared key', (t) => {
     }).blocked,
     true
   );
+  for (const other of [
+    route({ accountId: 'fixture-other-key' }),
+    route({ accountId: 'fixture-other-key', modelId: 'fixture-upstream/other' }),
+  ]) {
+    assert.equal(
+      evidence.isCandidateBlocked(data, other, { loadQuotaState: false }).blocked,
+      false,
+      'gateway-key auth must not block another account'
+    );
+  }
 });
 
 test('xkiro direct cannot borrow a 9Router success or cooldown', () => {
@@ -231,6 +241,7 @@ test('harness proof is bound to the exact route and never becomes work-item proo
   for (const other of [
     route({ harness: 'fixture-other-harness' }),
     route({ gateway: 'xkiro' }),
+    route({ accountId: 'fixture-other-key' }),
     route({ quotaScope: 'fixture-other-budget' }),
     route({ modelId: 'fixture-upstream/other' }),
   ]) {
