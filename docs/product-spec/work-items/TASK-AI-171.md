@@ -200,3 +200,15 @@ AGY remains the assigned author of this Work Item. Claude Code implemented PR #5
 - Offline replay on copied data: first selection through `dispatchCommand --execute` with a mock runner; fallback through `assembleForDispatch` with `refreshRoutes`, not end to end through `dispatch --execute`, using a synthetic catalogue row and a failed direct route. After removing the four records neither suspect route was a candidate.
 - A valid route confirms argv only. It ran with `allowUnprobedCandidates`, so route liveness is not proven.
 - Not changed: existing evidence and route-health records.
+
+## Fallback keeps the diff and stops at its limit (2026-11-07)
+
+Outcome: After one fallback a worker chain stops, keeps the diff and never runs two writers on one worktree.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/route-handoff.js` `tools/ai-brain/test/task-ai-171-route-handoff.test.js` `tools/ai-brain/test/task-ai-171-fallback-chain.test.js`
+
+Evidence: `task-ai-171-fallback-chain.test.js` plus `task-ai-171-route-handoff.test.js`: 19/19 pass, rerun by Claude; new suite with old route-handoff: 1 pass, 6 fail per author.
+
+Limitations: Stub execution with JSON reload, not a live restart. Caller must persist ledger and record activeWorker; not wired to the pipeline.
