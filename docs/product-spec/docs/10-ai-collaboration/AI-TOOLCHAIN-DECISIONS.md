@@ -576,6 +576,29 @@ The action connects to an OpenAI-compatible endpoint using credentials provided 
 
 If any of these secrets are absent, or if the Pull Request originates from a fork, `.github/workflows/pr-agent.yml` skips execution cleanly, posts an informational notice, and completes successfully without failing.
 
+## Focused context packing: yamadashy/repomix (TASK-AI-158)
+
+Operator approved on 2026-11-01. Ship Dễ uses [repomix](https://github.com/yamadashy/repomix) (MIT License) as a root devDependency to pack a focused, token-budgeted repository context for writer and reviewer prompts.
+
+### Purpose
+
+A full-tree prompt wastes quota and review rounds. `pnpm ai:pack` packs only the paths that matter for one prompt (for example the files in a Pull Request diff plus its Work Item) into one XML file, with a hard token ceiling, so the next writer or reviewer turn stays smaller and still complete.
+
+### Usage
+
+```bash
+pnpm ai:pack -- --paths "apps/api/src/**/*.ts,docs/product-spec/work-items/TASK-AI-158.md" --out .oc/context.xml --max-tokens 40000
+```
+
+The command prints only a summary (`files`, estimated tokens, output path). It never prints packed file contents. It exits non-zero when the pack exceeds `--max-tokens` or when repomix's built-in secret check finds anything. Root `repomix.config.json` keeps comments, includes `apps/**`, `packages/**`, `prisma/**` and `docs/product-spec/docs/**`, and ignores `node_modules`, lockfiles, build output, `.worktrees`, `.env*`, secrets, generated clients, test snapshots and binary assets.
+
+### Secrets
+
+The pack never includes secrets or `.env` files. Ignore patterns drop every `.env` variant at the root and in nested directories, including `.env.example`, with no exception. The nested pattern is `**/**/.env*` because repomix 1.18.1 rewrites `**/.env*` as a directory-only pattern. Key and certificate files are also ignored, and `security.enableSecurityCheck` is on. A secret hit fails the command.
+
+### Boundary
+
+Advisory tooling only. A packed context does not change a gate, an allowlist, a baseline, a review verdict or the status flow. Authors and reviewers still read the Work Item and the source specifications.
 ## TASK-AI-166 — Live refresh and unattended coordination (operator 2026-11-02)
 
 Run `pnpm ai:refresh-catalogue` daily on the authenticated operator host. It runs
