@@ -185,3 +185,66 @@ test('truncated contract output preserves only observed sections and requests fu
   assert.deepEqual(task.failures[0].missingSections, ['Verification']);
   assert.match(task.task, /incomplete; obtain the full check output/);
 });
+
+test('passing TAP diagnostics cannot replace the failed test assertion', () => {
+  const log = `TAP version 13
+ok 1 - handles an expected error
+  ---
+  Error: expected fixture diagnostic from passing test
+  ...
+not ok 2 - persists record
+  ---
+  error: |-
+    Expected values to be strictly equal:
+    0 !== 1
+  ...`;
+  for (const output of [
+    log,
+    log
+      .split('\n')
+      .map((line) => `2026-01-01T00:00:00.000Z ${line}`)
+      .join('\r\n'),
+  ]) {
+    const task = buildCheckFailureTask(output, { check: 'brain.tests' });
+    assert.equal(task.failures.length, 1);
+    assert.equal(task.failures[0].kind, 'test');
+    assert.equal(task.failures[0].check, 'brain.tests');
+    for (const text of [task.failures[0].firstError, task.task]) {
+      assert.match(text, /not ok 2 - persists record/);
+      assert.match(text, /Expected values to be strictly equal:\n\s*0 !== 1/);
+      assert.doesNotMatch(text, /expected fixture diagnostic|handles an expected error/);
+    }
+  }
+});
+
+test('passing TAP diagnostics alone do not assign a code change', () => {
+  const task = buildCheckFailureTask(
+    `ok 1 - handles an expected error
+  ---
+  error: |-
+    Error: fake expected diagnostic
+  ...`,
+    { check: 'brain.tests' }
+  );
+  assert.deepEqual(task.failures, [{ kind: 'unknown', check: 'brain.tests', codeChange: false }]);
+  assert.doesNotMatch(task.task, /fake expected diagnostic/);
+});
+
+test('infrastructure evidence after a passing TAP diagnostic is retained', () => {
+  for (const ending of ['  ...\n', '']) {
+    const task = buildCheckFailureTask(
+      `ok 1 - handles an expected error
+  ---
+  Error: fake expected diagnostic
+${ending}Failed to pull image example.invalid/fake:fixture`,
+      { check: 'brain.tests' }
+    );
+    assert.deepEqual(
+      task.failures.map((failure) => failure.kind),
+      ['infra']
+    );
+    assert.match(task.task, /Failed to pull image example\.invalid\/fake:fixture/);
+    assert.match(task.task, /No code change assigned/);
+    assert.doesNotMatch(task.task, /fake expected diagnostic/);
+  }
+});

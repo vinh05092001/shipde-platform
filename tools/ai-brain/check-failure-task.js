@@ -87,14 +87,30 @@ function buildCheckFailureTask(log, { check = '' } = {}) {
       let fallback;
       let current;
       let failedTest;
+      let passingTestIndent;
       for (let index = 0; index < block.lines.length; index++) {
         const raw = block.lines[index];
         const line = raw.trim();
+        const indent = raw.length - raw.trimStart().length;
+        if (/^(?:not )?ok\b/.test(line)) {
+          passingTestIndent = /^ok\b/.test(line) ? indent : undefined;
+        }
+        // Passing TAP YAML is expected diagnostic output, not failure evidence.
+        if (passingTestIndent !== undefined && line === '---' && indent > passingTestIndent) {
+          while (index + 1 < block.lines.length) {
+            const next = block.lines[index + 1];
+            const nextIndent = next.length - next.trimStart().length;
+            if (next.trim() && nextIndent < indent) break;
+            index++;
+            if (next.trim() === '...' && nextIndent === indent) break;
+          }
+          passingTestIndent = undefined;
+          continue;
+        }
         if (/^(?:##\[error\]\s*)?Process completed with exit code\b/i.test(line)) continue;
         const infra = isInfra(line);
         let firstError = line;
         if (/^error:\s*[|>][-+]?$/i.test(line)) {
-          const indent = raw.length - raw.trimStart().length;
           const diagnostic = [];
           while (index + 1 < block.lines.length) {
             const next = block.lines[index + 1];
