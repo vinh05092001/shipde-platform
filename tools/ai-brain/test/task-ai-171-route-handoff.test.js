@@ -3,6 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { launchFromDecision, firstLaunch, afterFailure } = require('../route-handoff');
+const { getQuotaScopeState, isScopeBlocked } = require('../quota-scan');
 
 const registry = {
   sources: [{ id: 'gw', kind: 'router', servesModels: true, endpoint: 'http://127.0.0.1:1/v1' }],
@@ -45,6 +46,14 @@ test('a route with no dispatch row is refused, not launched as a bare model', ()
   );
 });
 
+test('an explicit harness cannot bypass a missing dispatch row', () => {
+  const lost = { ...route, gateway: '', upstream: 'unknown' };
+  assert.throws(
+    () => launchFromDecision({ selected: lost.offeringId, candidates: [lost] }, request, registry),
+    /DECISION_ROUTE_UNRESOLVED/
+  );
+});
+
 const screened = {
   sources: [...registry.sources, { id: 'cli', kind: 'agent-cli' }],
   dispatch: {
@@ -57,9 +66,13 @@ const screened = {
 };
 const offering = (id, over) => ({ ...route, offeringId: id, modelId: 'vendor/' + id, ...over });
 const proof = (c, proofLevel) => ({
+  harness: c.harness,
+  accessPath: c.accessPath,
   modelId: c.modelId,
   gateway: c.gateway,
+  upstream: c.upstream,
   accountId: c.accountId,
+  quotaScope: c.quotaScope,
   evidence: [{ status: 'passed', proofLevel, observedAt: new Date(0).toISOString() }],
 });
 const ticket = () => ({
@@ -77,6 +90,66 @@ const decided = (...candidates) => ({
 const proved = (...candidates) => ({
   evidenceData: { combinations: candidates.map((c) => proof(c, 'HARNESS_PASS')) },
   ledger: {},
+});
+
+test('active quota auth blocks refuse launch until retryAfter expires', () => {
+  const a = offering('a');
+  const ctx = {
+    ...proved(a),
+    now: 1000,
+    quotaState: {
+      scopes: { [a.quotaScope]: { code: 'AUTH', status: 401, retryAfter: 2000 } },
+    },
+  };
+  const entry = getQuotaScopeState(a, ctx.quotaState, { now: ctx.now, registry: screened });
+  assert.equal(isScopeBlocked(entry, ctx.now), true);
+  const out = firstLaunch(decided(a), ticket(), ctx, screened);
+  assert.equal(out.action, 'BLOCKED');
+  assert.equal(out.rejected[0].reason, 'QUOTA_BLOCKED');
+  ctx.now = 2000;
+  assert.equal(firstLaunch(decided(a), ticket(), ctx, screened).action, 'LAUNCH');
+});
+
+test('the screened ticket mode reaches first and fallback launches', () => {
+  const a = offering('a', { gateway: '', upstream: 'cli' });
+  const b = offering('b', { gateway: '', upstream: 'cli' });
+  const ctx = proved(a, b);
+  const work = { ...ticket(), mode: 'auto', request: { ...request, mode: 'full-access' } };
+  const decision = decided(a, b);
+  const first = firstLaunch(decision, work, ctx, screened);
+  assert.equal(first.action, 'LAUNCH');
+  assert.equal(first.launch.args[first.launch.args.indexOf('--mode') + 1], work.mode);
+  const fallback = afterFailure(
+    decision,
+    work,
+    ctx,
+    { offeringId: a.offeringId, status: 500 },
+    screened
+  );
+  assert.equal(fallback.action, 'LAUNCH');
+  assert.equal(fallback.launch.args[fallback.launch.args.indexOf('--mode') + 1], work.mode);
+});
+
+for (const field of ['harness', 'accessPath', 'upstream', 'quotaScope']) {
+  test('proof for another ' + field + ' cannot qualify the execution route', () => {
+    const a = offering('a', { accessPath: 'gateway' });
+    const ctx = proved({ ...a, [field]: 'another-route' });
+    const out = firstLaunch(decided(a), ticket(), ctx, screened);
+    assert.equal(out.action, 'BLOCKED');
+    assert.equal(out.rejected[0].reason, 'PROOF_BELOW_TICKET:NONE');
+    assert.equal(firstLaunch(decided(a), ticket(), proved(a), screened).action, 'LAUNCH');
+  });
+}
+
+test('screening refuses an unknown dispatch provider even with an explicit harness', () => {
+  const a = offering('a', { gateway: '', upstream: 'unknown' });
+  const reg = {
+    ...screened,
+    dispatch: { ...screened.dispatch, launchModes: { unknown: ['full-access'] } },
+  };
+  const out = firstLaunch(decided(a), ticket(), proved(a), reg);
+  assert.equal(out.action, 'BLOCKED');
+  assert.equal(out.rejected[0].reason, 'LAUNCHER_UNAVAILABLE');
 });
 
 test('a valid route keeps its exact argv', () => {
