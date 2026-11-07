@@ -99,7 +99,8 @@ async function fixture(t) {
     });
     await new Promise((resolve) => setImmediate(resolve));
     process.exitCode = 0;
-    return { code, value: JSON.parse(lines.join('\n')) };
+    // Profile dispatch prints its banner first; the decision is the last JSON block.
+    return { code, value: JSON.parse(lines.filter((l) => String(l).startsWith('{')).pop()) };
   };
   return { run, deps, candidates, root };
 }
@@ -128,7 +129,9 @@ test('item and profile make identical decisions with the same registry, quota an
   assert.equal(profile.code, 1);
   assert.equal(item.value.chosen, null);
   assert.deepEqual(profile.value.ranking, item.value.ranking);
-  assert.deepEqual(profile.value.rejected, item.value.rejected);
+  const refused = (v) => v.filters.flatMap((f) => f.rejected);
+  assert.ok(refused(item.value).length > 0);
+  assert.deepEqual(refused(profile.value), refused(item.value));
   assert.ok(item.value.filters.some((f) => f.stage === 'pin:model' && f.after.length === 0));
 });
 
