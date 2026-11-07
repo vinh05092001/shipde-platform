@@ -2608,7 +2608,9 @@ function dispatchCommand(args, deps = {}) {
     // Injected candidate fixtures remain offline unless they provide an ask.
     if (
       !deps.assessment &&
-      (!Array.isArray(deps.candidates) || typeof deps.jevAsk === 'function')
+      (!Array.isArray(deps.candidates) ||
+        typeof deps.jevAsk === 'function' ||
+        typeof deps.jevHttpClient === 'function')
     ) {
       const jevSource = sourcesApi.getSource('jev', registry);
       const ask =

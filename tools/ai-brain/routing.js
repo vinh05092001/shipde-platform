@@ -234,6 +234,8 @@ function jevQuestion(profile) {
         : 'standard';
   return {
     kind: 'assess-task-profile',
+    key: 'weightProfile',
+    skipReason: profile.skipReason,
     prompt:
       'Assess this task profile for live routing and score quality, latency, and cost priorities. Keep the legacy choice as fallback. Never choose a model, provider or account. Task class: ' +
       taskClass +
@@ -264,16 +266,29 @@ function jevQuestion(profile) {
 
 function jevModelChoiceQuestion(profile, candidates) {
   const options = (candidates || []).map((candidate) => candidate.candidateKey);
-  const rankedCandidates = (candidates || []).map((candidate) =>
-    Object.assign({}, candidate, {
-      quotaStatus: candidate.headroomStatus || candidate.quotaStatus || 'unknown',
-    })
-  );
+  const rankedCandidates = (candidates || []).map((candidate) => ({
+    routeId: candidate.candidateKey,
+    score: candidate.score,
+    quality: candidate.quality,
+    latencyMs: candidate.latencyMs,
+    cost: candidate.cost,
+    quotaStatus: candidate.headroomStatus || candidate.quotaStatus || 'unknown',
+  }));
   return {
     kind: 'select-eligible-model',
     prompt:
       'Choose the best candidate from the eligible ranked options for this task. Return one option only.',
-    evidence: JSON.stringify({ profile, candidates: rankedCandidates }),
+    evidence: JSON.stringify({
+      task: {
+        role: profile.role,
+        complexity: profile.complexity,
+        requiredCapabilities: profile.requiredCapabilities,
+        proofFloor: profile.proofFloor,
+        qualityFloor: profile.qualityFloor,
+        costCeiling: profile.costCeiling,
+      },
+      candidates: rankedCandidates,
+    }),
     options,
   };
 }
