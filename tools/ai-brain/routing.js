@@ -2087,9 +2087,10 @@ async function runProfileDispatch(args, deps) {
     return { exitCode: 2, profileErrors: errors };
   }
   const profile = rawProfile;
+  const isDryRun = args.execute !== true;
 
   const assessment = await assessTask(profile, {
-    ask: d.weightingAsk || d.ask,
+    ask: isDryRun ? undefined : d.weightingAsk || d.ask,
     minConfidence: d.minConfidence,
   });
 
@@ -2104,13 +2105,14 @@ async function runProfileDispatch(args, deps) {
   );
 
   const probe = d.probeCapabilities || require('./capability-probe').probeCapabilities;
-  await probe(annotated, profile, {
-    ...d,
-    evidenceDir,
-    registry: d.registry || sourceRegistry.loadSources(),
-    externalWorkers: d.externalWorkers || args['external-workers'],
-    allowNetwork: args.execute === true && d.capabilityProbeAllowNetwork === true,
-  });
+  if (!isDryRun)
+    await probe(annotated, profile, {
+      ...d,
+      evidenceDir,
+      registry: d.registry || sourceRegistry.loadSources(),
+      externalWorkers: d.externalWorkers || args['external-workers'],
+      allowNetwork: args.execute === true && d.capabilityProbeAllowNetwork === true,
+    });
 
   const independentReviewerCandidates = annotated.filter((candidate) => {
     if (
@@ -2166,7 +2168,7 @@ async function runProfileDispatch(args, deps) {
       : typeof d.ask === 'function'
         ? d.ask
         : undefined;
-  if (result.ranking.length && typeof askForModelChoice === 'function') {
+  if (!isDryRun && result.ranking.length && typeof askForModelChoice === 'function') {
     try {
       const advice = await adviseModelChoice(result, profile, {
         ask: askForModelChoice,
