@@ -2087,7 +2087,7 @@ async function runProfileDispatch(args, deps) {
     return { exitCode: 2, profileErrors: errors };
   }
   const profile = rawProfile;
-  const isDryRun = args.execute !== true;
+  const isDryRun = args.execute !== true && d.dryRunOffline === true;
 
   const assessment = await assessTask(profile, {
     ask: isDryRun ? undefined : d.weightingAsk || d.ask,

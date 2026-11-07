@@ -2131,7 +2131,7 @@ async function dispatchProfileCommand(args, deps) {
   const jevSource = sourcesApi.getSource('jev', registry);
   const jevAsk =
     (deps && deps.jevAsk) ||
-    (args.execute === true &&
+    (!(args.execute !== true && deps && deps.dryRunOffline === true) &&
       jev.buildAskFromSource(jevSource, {
         home: optsWithEvidence.home,
         env: (deps && deps.env) || process.env,
@@ -2177,6 +2177,8 @@ function dispatchCommand(args, deps = {}) {
   const execute = args.execute === true;
   const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
   const isDryRun = dryRunFlag || !execute;
+  // Only the real CLI entry sets this: injected test seams keep their paths.
+  const noInference = isDryRun && deps.dryRunOffline === true;
   const log = deps.log || console.log;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
@@ -2295,7 +2297,7 @@ function dispatchCommand(args, deps = {}) {
     return dispatchProfileCommand(args, deps);
   }
 
-  if (!isDryRun && deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
+  if (!noInference && deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
     const routeHealthApi = require('./route-health');
     // Same order as orchestrate and next: args, then deps, then root, then default.
     const healthFile =
@@ -2467,7 +2469,7 @@ function dispatchCommand(args, deps = {}) {
   const env = (deps && deps.env) || process.env;
   const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
   const newSources =
-    isDryRun ||
+    noInference ||
     (deps && deps.onboardingPrepared) ||
     isCandidateInjected ||
     args['onboarding-prepared'] ||
@@ -2503,7 +2505,7 @@ function dispatchCommand(args, deps = {}) {
   const ticketRoute = {
     role: item.role,
     routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
-    ...(isDryRun ? { refreshRoutes: false } : {}),
+    ...(noInference ? { refreshRoutes: false } : {}),
   };
   const candidateList = assembleForDispatch(
     discCat,
@@ -2607,10 +2609,22 @@ function dispatchCommand(args, deps = {}) {
         { ...item, id: item.workItemId },
         { ...deps, enforceProofFloors: deps.enforceProofFloors === true }
       );
-    // Dry-run reaches JEV only in explicit fixture mode.
-    if (!deps.assessment && deps.jevFixture === true && typeof deps.jevAsk === 'function') {
+    // Production uses the same cached advisory assessment as the live writer.
+    // Injected candidate fixtures remain offline unless they provide an ask.
+    if (
+      !noInference &&
+      !deps.assessment &&
+      (!Array.isArray(deps.candidates) || typeof deps.jevAsk === 'function')
+    ) {
       const jevSource = sourcesApi.getSource('jev', registry);
-      const ask = deps.jevAsk;
+      const ask =
+        deps.jevAsk ||
+        require('./jev').buildJevAsk(jevSource, {
+          home: deps.home,
+          env: deps.env || process.env,
+          httpClient: deps.jevHttpClient,
+          timeoutMs: deps.jevTimeoutMs,
+        });
       return require('./writer-selection')
         .assessOnce(profile, jevSource, ask, deps, routing)
         .then((assessment) =>
@@ -5462,5 +5476,6 @@ function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
 }
 
 if (require.main === module) {
-  main();
+  // An explicit JEV_ENDPOINT asks for that endpoint; otherwise dry-run stays inference-free.
+  main(process.argv.slice(2), { dryRunOffline: !process.env.JEV_ENDPOINT });
 }
