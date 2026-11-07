@@ -140,7 +140,20 @@ function loadSources(options) {
       source.modelMeta = {};
     }
   }
-  return { version: doc.version || 0, sources, retired, dispatch: doc.dispatch || {}, file };
+  const registry = {
+    version: doc.version || 0,
+    sources,
+    retired,
+    dispatch: doc.dispatch || {},
+    file,
+  };
+  registry.dispatch.providers = { ...registry.dispatch.providers };
+  for (const source of sources) {
+    if (registry.dispatch.providers[source.id.toLowerCase()]) continue;
+    const route = dispatchRoute(source.id, registry);
+    if (route) registry.dispatch.providers[source.id.toLowerCase()] = route;
+  }
+  return registry;
 }
 
 function bySource(registry) {
@@ -383,8 +396,24 @@ function describeAll(options) {
 function dispatchRoute(provider, registry) {
   const reg = registry || loadSources();
   const table = ((reg && reg.dispatch) || {}).providers || {};
-  const route = table[String(provider || '').toLowerCase()];
-  if (!route) return null;
+  let route = table[String(provider || '').toLowerCase()];
+  if (!route) {
+    const source = getSource(provider, reg);
+    if (
+      !source ||
+      refuseReason(provider, reg) ||
+      source.enabled === false ||
+      source.servesModels === false ||
+      source.kind !== Kind.MODEL_SOURCE ||
+      source.accessPath === 'cli' ||
+      !/^https?:\/\//i.test(source.endpoint || '') ||
+      !(source.credential?.env || source.credential?.name || source.apiKeyEnv)
+    )
+      return null;
+    const key = source.opencodeProvider || source.id;
+    if (isRetired(key, reg) || isDeferred(key, reg)) return null;
+    route = { harness: 'opencode-direct', provider: 'opencode', modelPrefix: key + '/' };
+  }
   return {
     harness: route.harness,
     provider: route.provider,

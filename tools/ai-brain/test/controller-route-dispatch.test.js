@@ -156,6 +156,32 @@ test('healthy catalogue dispatch selects the Controller ranking rather than cata
   );
 });
 
+test('P5 dispatch --scan-file excludes exact failed routes before Controller ranking', async (t) => {
+  const f = fixture(t);
+  const scanFile = path.join(f.deps.rootDir, 'scan.jsonl');
+  const failed = f.rows[1];
+  fs.writeFileSync(
+    scanFile,
+    JSON.stringify({
+      sourceId: failed.gateway,
+      accountId: failed.accountId,
+      modelId: failed.modelId,
+      httpStatus: 401,
+      reason: 'AUTH',
+      elapsedMs: 12,
+      evidence: 'fake response',
+    }) + '\n'
+  );
+  const rank = t.mock.method(routing, 'rankForProfile');
+  const result = await cli.dispatchCommand({ ...f.args, 'scan-file': scanFile }, f.deps);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.decision.chosen, candidateKey(f.rows[0]));
+  assert.ok(
+    rank.mock.calls.every((call) => !JSON.stringify(call.arguments[0]).includes(failed.modelId))
+  );
+  assert.ok(result.decision.rejected.some((r) => r.reason === 'AUTH'));
+});
+
 test('Controller ranking failure rejects dispatch without a pool probe or chosen output', async (t) => {
   const f = fixture(t);
   const failure = new Error('FIXTURE_CONTROLLER_RANKING_FAILED');

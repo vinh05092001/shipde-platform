@@ -1116,6 +1116,7 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     routePath
   );
   if (rec) return rec.status === 'AVAILABLE';
+  if (candidate.scanLiveness?.status === 'passed') return true;
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
   if (options && options.allowMissingRouteHealth === true) return true;
@@ -1226,6 +1227,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
+  const { readScanLiveness, withScanLiveness } = require('./scan-liveness');
+  const scan = readScanLiveness(opts.scanFile);
   const routeHealthApi = require('./route-health');
   const routeHealthExplicit = opts.routeHealth !== undefined;
   const requireRouteHealth = opts.requireRouteHealth === true || !Array.isArray(opts.candidates);
@@ -1346,7 +1349,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         resolvedRegistry,
         accounts,
         opts.candidates
-      );
+      ).map((candidate) => withScanLiveness(candidate, scan, resolvedRegistry));
       const eligible = [];
       const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
@@ -1363,10 +1366,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             if (rec) {
               isEligible = rec.status === 'AVAILABLE';
             } else if (enforceEmptyHealth) {
-              isEligible = Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+              isEligible =
+                candidate.scanLiveness?.status === 'passed' ||
+                Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
             }
           }
         }
+        if (candidate.scanLiveness?.status === 'failed') isEligible = false;
         if (isEligible) {
           eligible.push(candidate);
         } else {
@@ -1383,7 +1389,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               routeHealth && modelId && gateway
                 ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
                 : null;
-            const reason = rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+            const reason =
+              candidate.scanLiveness?.status === 'failed'
+                ? candidate.scanLiveness.reason
+                : rec
+                  ? rec.status || 'ROUTE_UNAVAILABLE'
+                  : 'ROUTE_PROBE_UNPROVEN';
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1568,8 +1579,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const eligible = [];
     const excludedRoutes = [...(opts.routeScopeExclusions || [])];
     const seenExcluded = new Set();
-    for (const candidate of assembled) {
+    for (const rawCandidate of assembled) {
+      const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
       if (
+        candidate.scanLiveness?.status !== 'failed' &&
         isCandidateRouteEligible(
           routeHealth,
           candidate,
@@ -1597,12 +1610,15 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
               : null;
           const reason =
-            candidate &&
-            (candidate.credentialEnvMissing || candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
-              ? 'CREDENTIAL_ENV_MISSING'
-              : rec
-                ? rec.status || 'ROUTE_UNAVAILABLE'
-                : 'ROUTE_PROBE_UNPROVEN';
+            candidate.scanLiveness?.status === 'failed'
+              ? candidate.scanLiveness.reason
+              : candidate &&
+                  (candidate.credentialEnvMissing ||
+                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
+                ? 'CREDENTIAL_ENV_MISSING'
+                : rec
+                  ? rec.status || 'ROUTE_UNAVAILABLE'
+                  : 'ROUTE_PROBE_UNPROVEN';
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
@@ -2112,6 +2128,7 @@ async function dispatchProfileCommand(args, deps) {
     evidenceData = {};
   }
   const optsWithEvidence = Object.assign({}, deps, {
+    scanFile: args['scan-file'] || deps?.scanFile,
     evidenceData,
     routeHealthFile: args['route-health'] || (deps && deps.routeHealthFile) || undefined,
     accounts,
@@ -2536,6 +2553,7 @@ function dispatchCommand(args, deps = {}) {
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
   const ticketRoute = {
+    scanFile: args['scan-file'] || deps.scanFile,
     role: item.role,
     routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
     ...(noInference ? { refreshRoutes: false } : {}),
