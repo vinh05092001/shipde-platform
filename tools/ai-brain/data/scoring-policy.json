@@ -1,0 +1,19 @@
+{
+  "version": "AA-II-5.0.1-percentile-v1",
+  "source": "https://artificialanalysis.ai/leaderboards/models",
+  "rationale": "Operator decision 2026-11-04: one quality scale for everyone, Artificial Analysis Intelligence Index v5. Coordinator clarification 2026-11-07: measure pct, retain ii as provenance; one dimension implies weight 1.",
+  "maxAgeMs": 2592000000,
+  "freshnessSource": "tools/ai-brain/priors.js:16,535-542 (STALE_AFTER_MS applied by isStale)",
+  "priorsFile": "aa-intelligence.json",
+  "notMeasured": ["latency", "cost", "reliability"],
+  "dimensions": {
+    "quality": {
+      "weight": 1,
+      "min": 0,
+      "max": 100,
+      "unit": "percentile among Artificial Analysis rows",
+      "direction": "higher",
+      "measurement": { "store": "priors", "metric": "quality" }
+    }
+  }
+}

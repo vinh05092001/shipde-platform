@@ -43,7 +43,38 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
   ) {
     throw Object.assign(new Error('SCORING_POLICY_INVALID'), { code: 'SCORING_POLICY_INVALID' });
   }
-  return { scoringPolicy: policy, scoringPolicyStatus: 'SCORING_POLICY_LOADED' };
+  let scoringPriors;
+  if (policy.priorsFile) {
+    const data = JSON.parse(
+      fs.readFileSync(path.resolve(path.dirname(file), policy.priorsFile), 'utf8')
+    );
+    scoringPriors = {
+      ranking: data.rows.map((row) => {
+        const modelId = row.variant ? `${row.base}-${row.variant}` : row.base;
+        const modelVersion = `${data.version}:${row.name}`;
+        return {
+          modelId,
+          modelVersion,
+          measurements: {
+            quality: {
+              value: row.pct,
+              unit: data.unit,
+              samples: 1,
+              source: data.source,
+              observedAt: data.observedAt,
+              modelId,
+              modelVersion,
+            },
+          },
+        };
+      }),
+    };
+  }
+  return {
+    scoringPolicy: policy,
+    scoringPolicyStatus: 'SCORING_POLICY_LOADED',
+    ...(scoringPriors ? { scoringPriors } : {}),
+  };
 }
 
 function joinMeasurements(candidates, assessment, context = {}) {
@@ -56,6 +87,14 @@ function joinMeasurements(candidates, assessment, context = {}) {
     });
   const priors = context.priors || require('./priors').loadPriors();
   for (const candidate of candidates) {
+    const snapshotRows = (assessment.scoringPriors?.ranking || []).filter(
+      (r) => r.modelId === candidate.modelId
+    );
+    // This is the operator-defined AA observation version, not a provider revision.
+    // Never replace an explicit route version, nor infer a base/variant alias.
+    if (!candidate.modelVersion && snapshotRows.length === 1) {
+      candidate.modelVersion = snapshotRows[0].modelVersion;
+    }
     const key = candidateKey(candidate);
     const evidence = (context.evidenceData?.combinations || [])
       .filter((c) => matchesCandidate(candidate, c))
@@ -65,7 +104,10 @@ function joinMeasurements(candidates, assessment, context = {}) {
     const stores = {
       evidence,
       'route-health': route?.candidateKey === key ? [route] : [],
-      priors: (priors.ranking || []).filter((r) => r.modelId === candidate.modelId),
+      priors: [
+        ...snapshotRows,
+        ...(priors.ranking || []).filter((r) => r.modelId === candidate.modelId),
+      ],
     };
     candidate.measurements = {};
     for (const [dimension, rule] of Object.entries(assessment.scoringPolicy.dimensions)) {
