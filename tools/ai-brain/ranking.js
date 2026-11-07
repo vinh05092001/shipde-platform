@@ -745,6 +745,9 @@ function rankAndRecord(candidates, context) {
     : 'REFUSED: no candidate qualifies';
 
   const decisionEntry = {
+    ...(ctx.assessment?.scoringPolicyStatus
+      ? { scoringPolicyStatus: ctx.assessment.scoringPolicyStatus }
+      : {}),
     ...(ctx.assessment?.scoringPolicy &&
     !winner &&
     eligible.length &&
@@ -778,7 +781,7 @@ function rankAndRecord(candidates, context) {
   };
 
   // Write through decisions.js — the single writer for the log.
-  if (!ctx.dryRun && chosen) {
+  if (!ctx.dryRun && (chosen || ctx.assessment?.scoringPolicyStatus)) {
     try {
       decisions.recordDecision(decisionEntry, ctx.decisionOpts);
     } catch (err) {

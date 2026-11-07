@@ -2223,10 +2223,13 @@ async function runProfileDispatch(args, deps) {
   }
   const profile = rawProfile;
 
-  const assessment = await assessTask(profile, {
-    ask: d.weightingAsk || d.ask,
-    minConfidence: d.minConfidence,
-  });
+  const assessment = {
+    ...(await assessTask(profile, {
+      ask: d.weightingAsk || d.ask,
+      minConfidence: d.minConfidence,
+    })),
+    ...d.scoringAssessment,
+  };
 
   const evidenceDir =
     d.evidenceDir || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -2292,6 +2295,7 @@ async function runProfileDispatch(args, deps) {
     independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  if (d.scoringAssessment) require('./scoring-policy').printSources(result, log);
   if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {
     result.rejected.push(...d.candidates.excludedRoutes);
   }
@@ -2373,6 +2377,9 @@ async function runProfileDispatch(args, deps) {
   );
   const selectedHasIndependentReviewer = Boolean(selectedIndependentReviewer);
   const decisionRecorded = {
+    ...(assessment.scoringPolicyStatus
+      ? { scoringPolicyStatus: assessment.scoringPolicyStatus }
+      : {}),
     stage: decisions.Stage.SELECTED,
     workItemId: profile.taskId,
     role: profile.role,

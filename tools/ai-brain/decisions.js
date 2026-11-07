@@ -137,11 +137,29 @@ function capDecision(entry) {
         summary.scoreBreakdown = Object.fromEntries(
           Object.entries(summary.scoreBreakdown).map(([k, v]) => [
             k,
-            v && typeof v === 'object'
+            k === 'measurements' && v && typeof v === 'object'
               ? Object.fromEntries(
-                  Object.entries(v).filter(([, x]) => x === null || typeof x !== 'object')
+                  Object.entries(v).map(([dimension, m]) => [
+                    dimension,
+                    {
+                      ...Object.fromEntries(
+                        Object.entries(m || {}).filter(
+                          ([, x]) => x === null || typeof x !== 'object'
+                        )
+                      ),
+                      rule: Object.fromEntries(
+                        Object.entries(m?.rule || {}).filter(
+                          ([, x]) => x === null || typeof x !== 'object'
+                        )
+                      ),
+                    },
+                  ])
                 )
-              : v,
+              : v && typeof v === 'object'
+                ? Object.fromEntries(
+                    Object.entries(v).filter(([, x]) => x === null || typeof x !== 'object')
+                  )
+                : v,
           ])
         );
       }
