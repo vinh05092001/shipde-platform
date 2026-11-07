@@ -212,3 +212,10 @@ Files: `tools/ai-brain/route-handoff.js` `tools/ai-brain/test/task-ai-171-route-
 Evidence: `task-ai-171-fallback-chain.test.js` plus `task-ai-171-route-handoff.test.js`: 19/19 pass, rerun by Claude; new suite with old route-handoff: 1 pass, 6 fail per author.
 
 Limitations: Stub execution with JSON reload, not a live restart. Caller must persist ledger and record activeWorker; not wired to the pipeline.
+## Structured decision launch (2026-11-07, PR #516)
+
+Outcome: a launch runs only from a structured Controller decision; proof must match the actual execution route, failed evidence does not qualify, and an unresolved dispatch route is refused or falls back.
+
+Evidence: `task-ai-171-route-handoff.test.js` 26/26 on `137e2eb7`; Codex PASS on `137e2eb7`.
+
+Limitations: offline stub evidence; not yet wired into the pipeline.

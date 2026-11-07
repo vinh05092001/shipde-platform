@@ -535,7 +535,7 @@
   ],
   "dispatch": {
     "launchModes": {
-      "claude": ["plan","default","acceptEdits","auto","bypassPermissions"],
+      "claude": ["plan", "default", "acceptEdits", "auto", "bypassPermissions"],
       "opencode": ["full-access"],
       "codex": ["auto", "auto-review", "full-access"]
     },
