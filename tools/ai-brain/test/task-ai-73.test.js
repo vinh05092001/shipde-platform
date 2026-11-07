@@ -244,7 +244,7 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
         JEV_ENDPOINT: `http://127.0.0.1:${port}/v1/systemone`,
       });
 
-      const res = await spawnCli(['dispatch', '--profile', profilePath, '--json'], {
+      const res = await spawnCli(['dispatch', '--profile', profilePath, '--json', '--jev-live'], {
         cwd: REPO_ROOT,
         env,
         timeout: 10000,
@@ -278,6 +278,15 @@ describe('TASK-AI-73: Live JEV and evidence-based candidate selection', () => {
       );
       assert.equal(parsed.assessment.jevModel, 'jev-latest');
       assert.ok(parsed.assessment.probabilities, 'decision must retain JEV probabilities');
+
+      // A configured endpoint alone never makes a dry-run spend inference.
+      const seen = serverRequests.length;
+      await spawnCli(['dispatch', '--profile', profilePath, '--json'], {
+        cwd: REPO_ROOT,
+        env,
+        timeout: 10000,
+      });
+      assert.equal(serverRequests.length, seen, 'dry-run with JEV_ENDPOINT must not call JEV');
     } finally {
       server.close();
     }

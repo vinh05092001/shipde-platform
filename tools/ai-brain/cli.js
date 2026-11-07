@@ -5476,6 +5476,7 @@ function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
 }
 
 if (require.main === module) {
-  // An explicit JEV_ENDPOINT asks for that endpoint; otherwise dry-run stays inference-free.
-  main(process.argv.slice(2), { dryRunOffline: !process.env.JEV_ENDPOINT });
+  // Dry-run stays inference-free whatever is configured; only an explicit --jev-live asks JEV.
+  const argv = process.argv.slice(2);
+  main(argv, { dryRunOffline: !argv.includes('--jev-live') });
 }
