@@ -5,7 +5,7 @@ const { getHarness } = require('./harness');
 const { loadSources, dispatchRoute } = require('./sources');
 const { classifyFailure, isEligible } = require('./route-health');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
-const { proofLevelOf, ProofRank } = require('./evidence');
+const { proofLevelOf, ProofRank, Status } = require('./evidence');
 
 /**
  * The launch for one route of a structured Controller decision. The route comes
@@ -76,7 +76,7 @@ function routeRefusal(c, ticket, ctx, reg) {
       {},
       reg
     );
-    getHarness(route.harnessName);
+    if (!getHarness(route.harnessName)) return 'LAUNCHER_UNAVAILABLE';
   } catch {
     route = null;
   }
@@ -101,13 +101,14 @@ function routeRefusal(c, ticket, ctx, reg) {
       (e) =>
         e.harness === route.harnessName &&
         (e.accessPath || '') === (c.accessPath || '') &&
-        e.modelId === c.modelId &&
+        (e.model || e.modelId) === c.modelId &&
         (e.gateway || '') === (c.gateway || '') &&
         (e.upstream || '') === (c.upstream || '') &&
         (e.accountId || '*') === (c.accountId || '*') &&
         (e.quotaScope || '') === (c.quotaScope || '')
     )
-    .flatMap((e) => e.evidence || []);
+    .flatMap((e) => e.evidence || [])
+    .filter((e) => e && e.status === Status.PASSED);
   const proof = proofs.length ? proofLevelOf(proofs) : 'NONE';
   if (!(ProofRank[proof] >= ProofRank[ticket.minProof])) return 'PROOF_BELOW_TICKET:' + proof;
   return null;
