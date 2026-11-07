@@ -1309,7 +1309,7 @@ function scoreMeasurements(candidate, assessment, ctx) {
 function scoreForProfile(candidate, assessment, ctx) {
   if (assessment?.scoringPolicy) return scoreMeasurements(candidate, assessment, ctx);
   // Preserve the historical dispatch contract when no profile snapshot exists.
-  if (!assessment && !ctx?.profile) {
+  if (!assessment?.weights && !ctx?.profile) {
     const scores = {
       evidence: ranking.evidenceScore(candidate),
       capability: ranking.capabilityScore(candidate, ctx?.kind || ctx?.role),

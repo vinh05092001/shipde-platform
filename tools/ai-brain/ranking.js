@@ -411,6 +411,7 @@ function extractBaseName(modelId) {
 function scoreCandidate(candidate, allCandidates, workKind, ctx) {
   const scored = require('./routing').scoreForProfile(candidate, ctx?.assessment, {
     ...ctx,
+    taskId: ctx?.profile?.taskId ?? ctx?.taskId,
     kind: workKind,
     candidates: allCandidates,
   });
@@ -459,6 +460,9 @@ function resolveCatalogue(candidate, cataloguesByPath) {
  */
 function rankAndRecord(candidates, context) {
   const ctx = context || {};
+  const profileScoring = Boolean(
+    ctx.profile || ctx.assessment?.weights || ctx.assessment?.scoringPolicy
+  );
   const workItemId = ctx.workItemId || 'unassigned';
   const role = ctx.role || 'author.foundation';
   const kind = ctx.kind || role;
@@ -647,7 +651,7 @@ function rankAndRecord(candidates, context) {
     } else if (c.scoreBreakdown && c.scoreBreakdown.qualityLabel) {
       delete c.scoreBreakdown.qualityLabel;
     }
-    if (ctx.assessment || ctx.profile) {
+    if (profileScoring) {
       c.qualityLabel = Number.isFinite(breakdown.quality) ? undefined : 'QUALITY_UNKNOWN';
       if (!c.qualityLabel) delete breakdown.qualityLabel;
     }
@@ -658,7 +662,7 @@ function rankAndRecord(candidates, context) {
 
   // ── 3. Sort by score (descending), scored models before unscored ──
   eligible.sort((a, b) => {
-    if (ctx.assessment || ctx.profile) return require('./routing').compareProfileScores(a, b, ctx);
+    if (profileScoring) return require('./routing').compareProfileScores(a, b, ctx);
     const aKnown = a.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(a.quality);
     const bKnown = b.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(b.quality);
     if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);

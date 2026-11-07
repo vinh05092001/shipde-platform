@@ -76,6 +76,66 @@ function both(rows) {
   ];
 }
 
+test('empty assessment preserves legacy execute scores, selection and unsourced parts', () => {
+  const rows = [candidate('fixture/evidenced', null), candidate('fixture/high-quality', null)];
+  rows[0].quality = 10;
+  rows[0].evidence = [{ status: 'passed', level: 'OUTCOME' }];
+  rows[1].quality = 90;
+  const ctx = context();
+  delete ctx.profile;
+  delete ctx.assessment;
+  const legacy = ranking.rankAndRecord(structuredClone(rows), ctx);
+  assert.equal(legacy.chosen, routing.candidateKey(rows[0]));
+  const empty = ranking.rankAndRecord(structuredClone(rows), { ...ctx, assessment: {} });
+  assert.equal(empty.chosen, legacy.chosen);
+  assert.deepEqual(empty.candidates, legacy.candidates);
+  for (const row of empty.candidates) {
+    for (const part of Object.keys(ranking.WEIGHTS)) {
+      assert.equal(row.scoreBreakdown.sources[part], 'unsourced', part);
+    }
+  }
+});
+
+test('empty assessment preserves legacy execute tie ordering', () => {
+  const rows = [candidate('z/first', null), candidate('a/second', null)];
+  rows.forEach((row) => {
+    row.quality = 80;
+  });
+  const ctx = context();
+  delete ctx.profile;
+  delete ctx.assessment;
+  const legacy = ranking.rankAndRecord(structuredClone(rows), ctx);
+  const empty = ranking.rankAndRecord(structuredClone(rows), { ...ctx, assessment: {} });
+  assert.equal(legacy.chosen, routing.candidateKey(rows[0]));
+  assert.equal(empty.chosen, legacy.chosen);
+  assert.deepEqual(empty.candidates, legacy.candidates);
+});
+
+test('profile task own reservation has identical execute and dry-run scores without ctx.taskId', () => {
+  const rows = [candidate('fixture/quality-a', null), candidate('fixture/quality-b', null)];
+  rows[0].quality = 80;
+  rows[1].quality = 70;
+  const ctx = {
+    ...context(),
+    assessment: { weights: { quality: 1, latency: 0, cost: 0 } },
+    reservations: [{ offeringId: routing.candidateKey(rows[0]), workItemId: profile.taskId }],
+  };
+  assert.equal(ctx.taskId, undefined);
+  const dry = routing.rankForProfile(structuredClone(rows), profile, ctx.assessment, ctx);
+  assert.equal(dry.chosen, routing.candidateKey(rows[0]));
+  assert.deepEqual(
+    dry.ranking.map((row) => row.score),
+    [65, 55]
+  );
+  const execute = ranking.rankAndRecord(structuredClone(rows), ctx);
+  assert.equal(execute.chosen, dry.chosen);
+  assert.deepEqual(
+    execute.candidates.map((c) => [c.offeringId, c.score, c.scoreBreakdown]),
+    dry.ranking.map((c) => [c.candidateKey, c.score, c.scoreBreakdown])
+  );
+  assert.equal(execute.candidates[0].scoreBreakdown.busyPenalty, 0);
+});
+
 test('legacy snapshot keeps selecting and marks legacy parts unsourced', () => {
   const rows = [candidate('legacy/unknown', null), candidate('legacy/known', null)];
   rows[1].quality = 80;
