@@ -1444,7 +1444,10 @@ function generateCandidatesWithCatalog(opts) {
             : {}),
         });
         // Dispatch retains inventory so its shared scope filter can record every refusal.
-        if (o.routeScope !== 'combo-and-routes' && !Array.isArray(comboLib.resolveComboConfig(o)?.members))
+        if (
+          o.routeScope !== 'combo-and-routes' &&
+          !Array.isArray(comboLib.resolveComboConfig(o)?.members)
+        )
           continue;
       }
 

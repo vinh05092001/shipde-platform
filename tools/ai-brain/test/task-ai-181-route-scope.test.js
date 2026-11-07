@@ -405,3 +405,13 @@ test('combo read order: reviewer profile wastes one read but does not enable a w
     false
   );
 });
+
+test('a config for another combo does not establish membership', () => {
+  const { byModel, excluded } = assemble({
+    role: 'writer',
+    routeScope: 'combo-only',
+    nineRouterComboConfig: { name: 'different-team', state: 'READ', members: ['b/out'] },
+  });
+  assert.equal(byModel['b/out'], undefined);
+  assert.ok(excluded.includes('COMBO_CONFIG_UNAVAILABLE'));
+});

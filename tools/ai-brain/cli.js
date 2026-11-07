@@ -1195,7 +1195,8 @@ function applyRouteScope(eligible, excludedRoutes, opts, registry) {
   const candidatesApi = require('./candidates');
   const comboName = candidatesApi.getWriterComboName(opts, registry);
   if (!comboName) return eligible;
-  const config = opts.nineRouterComboConfig;
+  // A config for another combo proves nothing about this one.
+  const config = opts.nineRouterComboConfig?.name === comboName ? opts.nineRouterComboConfig : null;
   const members = new Set(config?.members || []);
   const refusal = Array.isArray(config?.members)
     ? 'NOT_IN_COMBO_CONFIG'

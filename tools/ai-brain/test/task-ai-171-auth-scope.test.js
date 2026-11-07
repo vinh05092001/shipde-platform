@@ -266,7 +266,13 @@ test('the fallback cap still holds after a route-only 401', () => {
     decision,
     ticket,
     ctx,
-    { offeringId: 'a2', upstream: 'up-a', status: 401, workerStopped: true, message: '[prov/n] [401]: expired' },
+    {
+      offeringId: 'a2',
+      upstream: 'up-a',
+      status: 401,
+      workerStopped: true,
+      message: '[prov/n] [401]: expired',
+    },
     registry
   );
   assert.equal(again.action, 'STOP');
