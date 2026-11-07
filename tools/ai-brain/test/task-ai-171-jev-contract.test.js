@@ -109,6 +109,25 @@ test('wrapper preserves the existing confidence floor', async () => {
   assert.equal(result.reason, 'LOW_CONFIDENCE');
 });
 
+for (const location of ['source', 'options']) {
+  for (const minConfidence of [0, '', false]) {
+    test(`wrapper rejects falsy ${location} confidence ${JSON.stringify(minConfidence)}`, async () => {
+      const config = location === 'source' ? { source: { minConfidence } } : { minConfidence };
+      const ask = async () => ({ choice: 'implementation', confidence: 0.2 });
+      const result = await wrapper.run(question, { ...config, ask });
+      assert.equal(result.outcome, 'UNDECIDED');
+      assert.equal(result.reason, 'LOW_CONFIDENCE');
+
+      const atFloor = await wrapper.run(question, {
+        ...config,
+        ask: async () => ({ choice: 'implementation', confidence: jev.DEFAULT_MIN_CONFIDENCE }),
+      });
+      assert.equal(atFloor.outcome, 'DECIDED');
+      assert.equal(atFloor.choice, 'implementation');
+    });
+  }
+}
+
 test('missing named answer, score-only selection and invalid confidence fail closed', async () => {
   const scores = Object.fromEntries(
     ['qualityImportance', 'latencyImportance', 'costImportance'].map((name) => [
