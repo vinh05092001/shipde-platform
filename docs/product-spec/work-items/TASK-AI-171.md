@@ -219,3 +219,15 @@ Files outside the Allowed paths above, needed by this fix: `tools/ai-brain/failu
 Evidence on `3886b2d5`: `task-ai-171-auth-scope.test.js` 24/24; focused run 229/229; full `tools/ai-brain` suite 3245 tests, 3176 pass, 68 fail, with no test failing only on this commit compared with `6c506ece`. The full suite is not green.
 
 Limitations: the upstream reading of the four stored 2026-11-05 cases is an inference from error text; SQLite holds no record confirming it, and no request ID links client and gateway. Candidates carry no `connectionId` today, so the `connection` path is proven only by tests. AC-AI-171-01 and the other deferred rows in the Acceptance matrix are not closed by this fix.
+
+## Prove route evidence stays within its route (2026-11-07)
+
+Outcome: Twelve offline cases prove auth, quota and evidence do not spread beyond their route.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/test/task-ai-171-route-health-evidence.test.js`
+
+Evidence: `task-ai-171-route-health-evidence.test.js`: 12/12 pass, rerun by Claude. No production code changed and no defect found.
+
+Limitations: Fixtures prove behaviour only, not live quota or liveness.
