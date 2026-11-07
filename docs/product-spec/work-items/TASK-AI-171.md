@@ -186,3 +186,15 @@ The PR reached 3.2k lines and every review round found new P1s (STUCK after 20 r
 - Slice A (this PR): route identity — `route-identity*.js`, `config/route-identity.json`; AC-AI-171-06 and the branch-preservation half of AC-AI-171-07. Test: `tools/ai-brain/test/task-ai-171-route-identity.test.js`.
 - Slice B (next PR): scoped health — AC-AI-171-01 to 05.
 - Slice C (after B): candidate adapters, unified selector, JEV advisory and budget contract — AC-AI-171-08 to 10 and the role-policy half of AC-AI-171-07. The open review findings on `unified-selector-admission.js`, `candidate-adapters.js` and `unified-selector-jev.js` move with it.
+
+## Build a task from the real check failure (2026-11-07)
+
+Outcome: A failed check produces a task stating only the true failure.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/check-failure-task.js` `tools/ai-brain/test/task-ai-171-check-failure-task.test.js`
+
+Evidence: `task-ai-171-check-failure-task.test.js`: 12/12 pass, rerun by Claude; author proved each AC by disabling it.
+
+Limitations: Helper only, not wired to route.js yet. TASK-AI-169 replay uses synthetic fixtures. Hardcode guard not run locally.
