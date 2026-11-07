@@ -9,7 +9,7 @@ const routing = require('../routing');
 const { candidateKey } = require('../candidates');
 
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(process.cwd(), '.oc/dispatch-fixture-'));
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'dispatch-fixture-'));
   t.after(() => {
     process.exitCode = 0;
     fs.rmSync(root, { recursive: true, force: true });
