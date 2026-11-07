@@ -200,3 +200,11 @@ AGY remains the assigned author of this Work Item. Claude Code implemented PR #5
 - Offline replay on copied data: first selection through `dispatchCommand --execute` with a mock runner; fallback through `assembleForDispatch` with `refreshRoutes`, not end to end through `dispatch --execute`, using a synthetic catalogue row and a failed direct route. After removing the four records neither suspect route was a candidate.
 - A valid route confirms argv only. It ran with `allowUnprobedCandidates`, so route liveness is not proven.
 - Not changed: existing evidence and route-health records.
+
+## Structured decision launch (2026-11-07, PR #516)
+
+Outcome: a launch runs only from a structured Controller decision; proof must match the actual execution route, failed evidence does not qualify, and an unresolved dispatch route is refused or falls back.
+
+Evidence: `task-ai-171-route-handoff.test.js` 26/26 on `137e2eb7`; Codex PASS on `137e2eb7`.
+
+Limitations: offline stub evidence; not yet wired into the pipeline.

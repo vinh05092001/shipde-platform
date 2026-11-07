@@ -534,6 +534,11 @@
     }
   ],
   "dispatch": {
+    "launchModes": {
+      "claude": ["plan", "default", "acceptEdits", "auto", "bypassPermissions"],
+      "opencode": ["full-access"],
+      "codex": ["auto", "auto-review", "full-access"]
+    },
     "routeHealthFile": "tools/ai-brain/data/model-route-health.json",
     "hermesOrchestrator": {
       "qualityFloor": 60,
