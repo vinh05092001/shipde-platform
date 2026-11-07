@@ -9,8 +9,7 @@ test('prior matching reads an unchanged catalogue once', (t) => {
   const stat = { mtimeMs: 1794000000000, size: 1 };
   const read = t.mock.method(fs, 'readFileSync', (file, ...rest) =>
     String(file).endsWith('catalogue.jsonl')
-      ? '{"modelId":"fixture/model"}
-'
+      ? '{"modelId":"fixture/model"}\n'
       : read.mock.original(file, ...rest)
   );
   t.mock.method(fs, 'existsSync', () => true);
