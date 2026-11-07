@@ -43,6 +43,7 @@ function launchFromDecision(decision, request, registry) {
     gateway: chosen.gateway || '',
     upstream: chosen.upstream,
     quotaScope: chosen.quotaScope,
+    mode: r.mode,
     prompt: r.prompt,
     branch: r.branch,
     base: r.base,
@@ -140,6 +141,22 @@ function firstLaunch(decision, ticket, context, registry) {
   if (decision.workItemId !== ticket.workItemId) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
+  const ledger = (context && context.ledger) || {};
+  if (ledger.activeWorker) {
+    return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
+  }
+  if (
+    ledger.failures &&
+    ledger.failures.length &&
+    Number(ledger.fallbacksUsed || 0) >= Number(ticket.maxFallbacks)
+  ) {
+    return {
+      action: 'STOP',
+      reason: 'FALLBACK_LIMIT',
+      used: Number(ledger.fallbacksUsed || 0),
+      worktree: ledger.worktree,
+    };
+  }
   const { eligible, rejected } = screenRoutes(decision, ticket, context, registry);
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
   const request = {
@@ -155,16 +172,32 @@ function firstLaunch(decision, ticket, context, registry) {
  * fallback is a ceiling across workers and launchers. A failed route is never
  * sent the same request again. A worktree the failed worker left is kept: the
  * fallback continues inside it, and a stop reports it for review.
+ * The caller checkpoints this ledger and records activeWorker on actual launch.
+ * Internal harness retries never call this worker-change boundary. A post-launch
+ * failure needs confirmed termination, even if no edits have been reported yet.
  */
 function afterFailure(decision, ticket, context, failure, registry) {
   const ctx = context || {};
   const ledger = ctx.ledger;
   const f = failure || {};
+  const beforeLaunch = f.phase === 'before-launch';
+  if (ledger.activeWorker && (beforeLaunch || ledger.activeWorker.offeringId !== f.offeringId)) {
+    return { action: 'STOP', reason: 'WORKER_STILL_ACTIVE', worktree: ledger.worktree };
+  }
+  if (!beforeLaunch && f.workerStopped !== true) {
+    return {
+      action: 'STOP',
+      reason: 'WORKER_STOP_REQUIRED',
+      worktree: f.worktree || ledger.worktree,
+    };
+  }
+  delete ledger.activeWorker;
   ledger.failures = ledger.failures || [];
   ledger.failures.push({
     offeringId: f.offeringId,
     upstream: f.upstream,
-    class: classifyFailure(f.status, f.message),
+    class: beforeLaunch ? 'LAUNCH_FAILED' : classifyFailure(f.status, f.message),
+    phase: beforeLaunch ? 'before-launch' : 'after-launch',
     affordable: f.affordable,
   });
   const kept = f.worktree || ledger.worktree;

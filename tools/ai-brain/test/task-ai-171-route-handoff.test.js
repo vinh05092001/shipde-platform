@@ -184,7 +184,7 @@ test('the screened ticket mode reaches first and fallback launches', () => {
     decision,
     work,
     ctx,
-    { offeringId: a.offeringId, status: 500 },
+    { offeringId: a.offeringId, status: 500, phase: 'after-launch', workerStopped: true },
     screened
   );
   assert.equal(fallback.action, 'LAUNCH');
@@ -241,7 +241,13 @@ test('402 is never resent and refuses the same wallet for this request size', ()
   const a = offering('a', { upstream: 'paid' });
   const same = offering('b', { upstream: 'paid' });
   const other = offering('c', { upstream: 'free' });
-  const failure = { offeringId: 'a', upstream: 'paid', status: 402, affordable: 592 };
+  const failure = {
+    offeringId: 'a',
+    upstream: 'paid',
+    status: 402,
+    affordable: 592,
+    workerStopped: true,
+  };
   const ctx = proved(a, same, other);
   const out = afterFailure(decided(a, same, other), ticket(), ctx, failure, screened);
   assert.equal(out.launch.offeringId, 'c');
@@ -255,7 +261,7 @@ test('429 avoids the limited upstream and takes an eligible route', () => {
   const a = offering('a', { upstream: 'busy' });
   const same = offering('b', { upstream: 'busy' });
   const other = offering('c', { upstream: 'free' });
-  const failure = { offeringId: 'a', upstream: 'busy', status: 429 };
+  const failure = { offeringId: 'a', upstream: 'busy', status: 429, workerStopped: true };
   const ctx = proved(a, same, other);
   const out = afterFailure(decided(a, same, other), ticket(), ctx, failure, screened);
   assert.equal(out.launch.offeringId, 'c');
@@ -266,7 +272,7 @@ test('one fallback is the ceiling for the ticket, across routes', () => {
   const [a, b, c] = ['a', 'b', 'c'].map((id) => offering(id, { upstream: id }));
   const ctx = proved(a, b, c);
   const decision = decided(a, b, c);
-  const fail = (id, status) => ({ offeringId: id, upstream: id, status });
+  const fail = (id, status) => ({ offeringId: id, upstream: id, status, workerStopped: true });
   const first = afterFailure(decision, ticket(), ctx, fail('a', 429), screened);
   assert.equal(first.launch.offeringId, 'b');
   const second = afterFailure(decision, ticket(), ctx, fail('b', 500), screened);
@@ -279,7 +285,7 @@ test('one fallback is the ceiling for the ticket, across routes', () => {
 test('no eligible route left means BLOCKED, without spending the fallback', () => {
   const a = offering('a');
   const ctx = proved(a);
-  const failure = { offeringId: 'a', upstream: 'vendor', status: 429 };
+  const failure = { offeringId: 'a', upstream: 'vendor', status: 429, workerStopped: true };
   const out = afterFailure(decided(a), ticket(), ctx, failure, screened);
   assert.equal(out.action, 'BLOCKED');
   assert.equal(ctx.ledger.fallbacksUsed, undefined);
@@ -304,7 +310,7 @@ test('429 takes the one fallback in the same worktree, then 402 stops and keeps 
     decision,
     ticket(),
     ctx,
-    { offeringId: 'a', upstream: 'a', status: 429, worktree },
+    { offeringId: 'a', upstream: 'a', status: 429, worktree, workerStopped: true },
     screened
   );
   const { args } = first.launch;
@@ -316,7 +322,7 @@ test('429 takes the one fallback in the same worktree, then 402 stops and keeps 
     decision,
     ticket(),
     ctx,
-    { offeringId: 'b', upstream: 'b', status: 402 },
+    { offeringId: 'b', upstream: 'b', status: 402, workerStopped: true },
     screened
   );
   assert.deepStrictEqual(second, {
