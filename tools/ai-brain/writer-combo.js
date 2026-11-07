@@ -421,9 +421,16 @@ function isNineRouterSource(source, key) {
 // Members come only from the combo's stored configuration. A listing says what
 // the router can serve, never what a combo contains, so an unread combo stays
 // empty and its membership stays UNKNOWN.
+function resolveComboConfig(opts) {
+  const name = opts?.nineRouterWriterCombo ?? resolveComboName(opts || {});
+  const config = opts?.nineRouterComboConfig;
+  return config?.name === name ? config : null;
+}
+
 function resolveComboMembers(opts) {
-  if (Array.isArray(opts?.nineRouterComboConfig?.members))
-    return opts.nineRouterComboConfig.members;
+  const config = resolveComboConfig(opts);
+  if (opts?.nineRouterComboConfig && !config) return [];
+  if (Array.isArray(config?.members)) return config.members;
   if (Array.isArray(opts?.nineRouterComboMembers)) return opts.nineRouterComboMembers;
   return [];
 }
@@ -487,6 +494,7 @@ module.exports = {
   isIndividualNineRouterCandidate,
   isNineRouterSource,
   resolveComboMembers,
+  resolveComboConfig,
   readComboConfig,
   comboMembershipOf,
   resolveEndpoint,

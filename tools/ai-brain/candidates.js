@@ -144,7 +144,8 @@ function resolveComboLimits(source, registry, opts, comboName, members) {
 // Membership is what the combo stores; a route is what the router lists. A member
 // with no listing stays in comboMembers for comparison and never becomes a route.
 function comboConfigStateOf(opts) {
-  const config = opts?.nineRouterComboConfig;
+  const config = comboLib.resolveComboConfig(opts);
+  if (opts?.nineRouterComboConfig && !config) return 'COMBO_CONFIG_UNAVAILABLE';
   if (config?.state) return config.state;
   if (Array.isArray(config?.members)) return config.members.length ? 'READ' : 'EMPTY';
   return Array.isArray(opts?.nineRouterComboMembers) ? 'INJECTED' : 'COMBO_CONFIG_UNAVAILABLE';
@@ -153,7 +154,7 @@ function comboConfigStateOf(opts) {
 function markComboMembership(candidates, opts) {
   const name = getWriterComboName(opts, opts?.registry);
   if (!name) return candidates;
-  const config = opts?.nineRouterComboConfig;
+  const config = comboLib.resolveComboConfig(opts);
   const routes = new Set();
   for (const c of candidates) {
     const membership = comboLib.comboMembershipOf(c, config || { name });
@@ -1443,7 +1444,7 @@ function generateCandidatesWithCatalog(opts) {
             : {}),
         });
         // Only a combo read from its configuration opens its branches as routes.
-        if (!Array.isArray(o.nineRouterComboConfig?.members)) continue;
+        if (!Array.isArray(comboLib.resolveComboConfig(o)?.members)) continue;
       }
 
       // Gateway: expand catalogue into (upstream, model) pairs.
@@ -1497,13 +1498,15 @@ function generateCandidatesWithCatalog(opts) {
           .filter((item) => item.modelId && !existingIds.has(item.modelId))
       );
       const comboMembers =
-        comboName && isNineRouter && new Set(o.nineRouterComboConfig?.members || []);
+        comboName && isNineRouter && new Set(comboLib.resolveComboConfig(o)?.members || []);
       for (const item of routerCatalogue) {
         if (item && typeof item === 'object' && item.gateway && item.gateway !== source.id)
           continue;
         const fullId =
           typeof item === 'string' ? item : (item && (item.modelId || item.model || item.id)) || '';
-        if (comboMembers && !comboMembers.has(fullId)) {
+        const resolved = resolveRouterModel(item || fullId, source, registry);
+        if (!resolved) continue;
+        if (comboMembers && !comboMembers.has(resolved.innerModelId)) {
           if (Array.isArray(o.candidateGenerationRejections)) {
             o.candidateGenerationRejections.push({
               modelId: fullId,
@@ -1513,8 +1516,6 @@ function generateCandidatesWithCatalog(opts) {
           }
           continue;
         }
-        const resolved = resolveRouterModel(item || fullId, source, registry);
-        if (!resolved) continue;
         if (
           item &&
           typeof item === 'object' &&
@@ -2075,7 +2076,7 @@ function generateCandidatesWithCatalog(opts) {
         (c.comboMembers.length > 0 || unread)
     );
     if (hasActiveCombo) {
-      const configured = new Set(o.nineRouterComboConfig?.members || []);
+      const configured = new Set(comboLib.resolveComboConfig(o)?.members || []);
       const kept = candidates.filter(
         (c) => !isIndividualNineRouterCandidate(c, comboName) || configured.has(c.modelId)
       );
@@ -2898,7 +2899,10 @@ function siblingRouteProbe(key, probes) {
 // Reads only records of this exact route. Another gateway's record, or one made
 // under another account, says nothing about it, so the answer stays UNKNOWN.
 function routeStatusOf(c, routeHealth, quotaState) {
-  const healthKey = `${require('./route-health').routeModelKey(c.modelId, c.gateway)}|${c.gateway}`;
+  const healthKey = require('./route-health').healthKey(c.modelId, {
+    id: c.gateway,
+    accountId: c.accountId,
+  });
   const h = routeHealth?.paths?.[healthKey];
   const scopes = quotaState?.scopes || {};
   const q = [scopes[`${c.gateway}::${c.upstream}`], scopes[c.upstream]].find(

@@ -134,6 +134,62 @@ test('membership is UNKNOWN without a read configuration and NOT_MEMBER only wit
   assert.equal(combo.comboMembershipOf(c, config).state, 'NOT_MEMBER');
 });
 
+test('configured branches survive a router-prefixed catalogue ID', () => {
+  const options = { nineRouterComboConfig: { ...config, members: ['gcli/a'] } };
+  for (const listing of [
+    ['gcli/a'],
+    ['ninerouter/gcli/a'],
+    [{ modelId: 'ninerouter/gcli/a', gateway: '9router' }],
+  ]) {
+    const list = generate({
+      ...options,
+      catalogue: listing,
+      sourceModels: { '9router': ['gcli/a', 'ninerouter/gcli/a'] },
+    });
+    assert.equal(route(list, 'gcli/a')?.comboMembership.state, 'MEMBER');
+    assert.deepEqual(route(list, 'vinh').comboMembersWithoutCatalogue, []);
+  }
+});
+
+test('another combo configuration cannot supply selected combo membership', () => {
+  const options = {
+    nineRouterWriterCombo: 'vinh',
+    nineRouterComboConfig: { ...config, name: 'other', members: ['gcli/b'] },
+    nineRouterComboMembers: ['gcli/b'],
+  };
+  assert.deepEqual(combo.resolveComboMembers(options), []);
+  const list = generate({
+    ...options,
+    catalogue: [{ modelId: 'gcli/b', gateway: '9router' }],
+    sourceModels: { '9router': ['gcli/b'] },
+  });
+  const selected = route(list, 'vinh');
+  assert.deepEqual(selected.comboMembers, []);
+  assert.equal(selected.comboConfigState, 'COMBO_CONFIG_UNAVAILABLE');
+  assert.equal(route(list, 'gcli/b'), undefined);
+});
+
+test('route status prefers exact account health and never borrows another account', () => {
+  const c = { gateway: '9router', upstream: 'gcli', modelId: 'gcli/a', accountId: 'a' };
+  const health = {
+    paths: {
+      'gcli/a|9router': { status: 'AVAILABLE' },
+      'gcli/a|9router@a': { status: 'AUTH_NEEDED', lastCheckedAt: 'T' },
+      'gcli/a|9router@b': { status: 'AVAILABLE' },
+    },
+  };
+  assert.deepEqual(candidates.routeStatusOf(c, health, {}).health, {
+    state: 'AUTH_NEEDED',
+    key: 'gcli/a|9router@a',
+    at: 'T',
+  });
+  assert.equal(
+    candidates.routeStatusOf({ ...c, accountId: 'b' }, health, {}).health.state,
+    'AVAILABLE'
+  );
+  assert.equal(candidates.routeStatusOf({ ...c, accountId: 'c' }, health, {}).health, 'UNKNOWN');
+});
+
 test('xkiro is a direct OpenCode route, not 9Router', () => {
   const rows = generate({ nineRouterComboConfig: config }).filter((c) => c.source === 'xkiro');
   assert.ok(rows.length > 0);
