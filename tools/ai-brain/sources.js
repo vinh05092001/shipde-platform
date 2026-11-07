@@ -390,7 +390,8 @@ function describeAll(options) {
  * How a registry account's `provider` reaches a running session.
  *
  * Returns { harness, provider, modelPrefix, modelIdIsExact? } or null. Derived
- * direct routes take exact API IDs, including any provider namespace. The lookup lives in
+ * routes with an explicit OpenCode provider take exact API IDs, including any namespace.
+ * Legacy writers keep their source provider and accept qualified model IDs. The lookup lives in
  * sources.json so that adding a provider is a row rather than a branch in the
  * executor — the `if/else` chain in dispatch.sh is what this replaces.
  */
@@ -414,10 +415,10 @@ function dispatchRoute(provider, registry) {
     const key = source.opencodeProvider || source.id;
     if (isRetired(key, reg) || isDeferred(key, reg)) return null;
     route = {
-      harness: 'opencode-direct',
-      provider: 'opencode',
+      harness: source.opencodeProvider ? 'opencode-direct' : source.harness || 'opencode-direct',
+      provider: source.opencodeProvider ? 'opencode' : source.id,
       modelPrefix: key + '/',
-      modelIdIsExact: true,
+      ...(source.opencodeProvider ? { modelIdIsExact: true } : {}),
     };
   }
   return {
