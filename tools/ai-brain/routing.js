@@ -1685,7 +1685,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const quality = c.quality == null ? NaN : Number(c.quality);
+    const quality = assessment.scoringPolicy && c.quality == null ? NaN : Number(c.quality);
     if (Number.isFinite(quality) && quality < Number(profile.qualityFloor)) {
       reject('QUALITY_FLOOR_NOT_MET', 'candidate');
       continue;
