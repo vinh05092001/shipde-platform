@@ -65,7 +65,10 @@ function routeRefusal(c, ticket, ctx, reg) {
     (f) =>
       (f.class === 'GATEWAY_KEY_AUTH' && f.gateway === c.gateway && f.accountId === c.accountId) ||
       (f.class === 'UPSTREAM_AUTH' && f.gateway === c.gateway && f.upstream === c.upstream) ||
-      (f.class === 'CONNECTION_AUTH' && f.connectionId && f.connectionId === c.connectionId)
+      (f.class === 'CONNECTION_AUTH' &&
+        f.connectionId &&
+        f.connectionId === c.connectionId &&
+        f.gateway === c.gateway)
   );
   if (authFailed) return authFailed.class;
   const limited = failed.find((f) => f.class === 'RATE_LIMITED' && f.upstream === c.upstream);
@@ -163,7 +166,8 @@ function afterFailure(decision, ticket, context, failure, registry) {
     'upstream-route': 'UPSTREAM_ROUTE_AUTH',
     connection: 'CONNECTION_AUTH',
   };
-  const authLayer = f.authLayer || (upstreamAuthSignal(f.message, route) ? 'upstream-route' : null);
+  const stated = f.authLayer === 'connection' && !f.connectionId ? null : f.authLayer;
+  const authLayer = stated || (upstreamAuthSignal(f.message, route) ? 'upstream-route' : null);
   ledger.failures = ledger.failures || [];
   ledger.failures.push({
     offeringId: f.offeringId,

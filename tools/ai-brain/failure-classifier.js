@@ -859,8 +859,10 @@ function classifyFailure(input) {
 
   // Behind a gateway a 401 can come from three layers. Only stated evidence widens it.
   if (effectiveStatus === 401 && input?.gateway && input?.upstream !== input.gateway) {
+    // A connection layer without a confirmed ID says nothing about any connection.
+    const stated = input.authLayer === 'connection' && !input.connectionId ? null : input.authLayer;
     const layer =
-      input.authLayer || (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
+      stated || (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
     const byLayer = {
       'gateway-key': [Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT, HumanAction.REQUIRED],
       'upstream-credential': [Cause.UPSTREAM_CREDENTIAL, Scope.UPSTREAM, HumanAction.NONE],

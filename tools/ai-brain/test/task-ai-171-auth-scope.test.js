@@ -496,3 +496,46 @@ test('hermes-session refuses the probed model and qualifies its sibling', async 
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
 });
+
+test('a connection layer without a confirmed ID stays unknown', () => {
+  const cls = classify({ authLayer: 'connection' });
+  assert.equal(cls.scope, 'unknown');
+  assert.equal(cls.cause, 'auth_scope_unknown');
+  assert.equal(cls.connectionId, null);
+});
+
+const failOnConnection = (routes, failure, ledger = {}) => {
+  const ticket = {
+    workItemId: 'W',
+    outputTokens: 1,
+    minProof: 'HARNESS_PASS',
+    maxFallbacks: 1,
+    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' },
+  };
+  return handoff.afterFailure(
+    { workItemId: 'W', selected: 'a', candidates: routes },
+    ticket,
+    { evidenceData: { combinations: routes.map(proofOf) }, ledger, now: Date.now() },
+    { offeringId: 'a', upstream: 'up-a', status: 401, authLayer: 'connection', ...failure },
+    registry
+  );
+};
+
+test('a connection failure stays inside the gateway that saw it', () => {
+  const sameGateway = { ...A2, connectionId: 'c1' };
+  const otherGateway = { ...B, gateway: 'gw2', offeringId: 'b2', connectionId: 'c1' };
+  const next = failOnConnection([{ ...A, connectionId: 'c1' }, sameGateway, otherGateway], {
+    connectionId: 'c1',
+  });
+  const refused = next.rejected.filter((r) => r.reason === 'CONNECTION_AUTH');
+  assert.deepEqual(
+    refused.map((r) => r.offeringId),
+    ['a2']
+  );
+});
+
+test('a retry ledger ignores a connection layer with no ID', () => {
+  const ledger = {};
+  failOnConnection([A, A2, B], {}, ledger);
+  assert.equal(ledger.failures[0].class, 'AUTH_SCOPE_UNKNOWN');
+});
