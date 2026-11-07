@@ -268,6 +268,7 @@ for (const [config, reason] of refusalCases) {
     };
     const result = await dispatchCommand(args, {
       ...deps,
+      jevFixture: true,
       jevAsk: async () => {
         asks++;
         return { choice: 'BALANCED', confidence: 1 };
@@ -303,6 +304,7 @@ for (const [config, reason] of refusalCases) {
     };
     const result = dispatchCommand(args, {
       ...deps,
+      jevFixture: true,
       jevAsk: async () => {
         throw new Error('execute must not ask JEV');
       },

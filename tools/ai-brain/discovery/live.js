@@ -49,12 +49,14 @@ function catalogue(source, models) {
 async function enumerateLiveSources(options = {}) {
   const sources = [],
     results = {};
+  let sourceStarted = Date.now();
   const record = (source, models, reason, request) => {
     sources.push(source);
     results[source.id] = {
       status: reason ? 'unknown' : 'enumerated',
       reason: reason || null,
       catalogs: reason ? [] : [catalogue(source, models)],
+      durationMs: Date.now() - sourceStarted,
       ...(request ? { requests: [{ url: request }] } : {}),
     };
   };
@@ -72,6 +74,7 @@ async function enumerateLiveSources(options = {}) {
   const disabled = new Set(config.disabled_providers || []);
   for (const [id, provider] of Object.entries(config.provider || {})) {
     if (disabled.has(id)) continue;
+    sourceStarted = Date.now();
     const source = {
       id: 'opencode:' + id,
       kind: 'orchestrator',
@@ -141,6 +144,7 @@ async function enumerateLiveSources(options = {}) {
     }
   }
   const local = { id: 'agy-local', kind: 'agent-cli', harness: 'agy', account: 'current-user' };
+  sourceStarted = Date.now();
   try {
     const result = await (options.runCommand || runner.runCommand)('agy', ['models'], {
       timeoutMs: 60000,
@@ -155,6 +159,7 @@ async function enumerateLiveSources(options = {}) {
     record(local, [], error.code || 'MODELS_COMMAND_FAILED', 'agy models');
   }
   for (const lane of options.lanes || pool.discoverAccounts(options)) {
+    sourceStarted = Date.now();
     const source = {
       id: lane,
       kind: 'agent-cli',
