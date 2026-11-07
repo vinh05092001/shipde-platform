@@ -198,6 +198,17 @@ Files: `tools/ai-brain/check-failure-task.js` `tools/ai-brain/test/task-ai-171-c
 Evidence: `task-ai-171-check-failure-task.test.js`: 12/12 pass, rerun by Claude; author proved each AC by disabling it.
 
 Limitations: Helper only, not wired to route.js yet. TASK-AI-169 replay uses synthetic fixtures. Hardcode guard not run locally.
+## JEV decision contract that cannot override the Controller (2026-11-07)
+
+Outcome: JEV is skipped for clear tasks, sees only the filtered shortlist, and low confidence, errors, timeouts or outside IDs never override the Controller.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/jev.js` `tools/ai-brain/routing.js` `tools/ai-brain/jev-wrapper.js` `tools/ai-brain/test/task-ai-171-jev-contract.test.js`
+
+Evidence: `task-ai-171-jev-contract.test.js`: 13/13 pass, rerun by Claude. Full `tools/ai-brain` local run: 3082 tests, 3036 pass, 45 fail; the comparison run on main did not finish, so CI ai-brain-tests is the regression evidence.
+
+Limitations: Mock evidence only, not real JEV. Removes the wrapper's minConfidence 0 bypass, so more real asks may end UNDECIDED. cli.js join point not wired.
 ## Onboarding scope fix (2026-11-06, PR #515)
 
 Routing audit follow-up, kept separate from the route-decision PR #514.

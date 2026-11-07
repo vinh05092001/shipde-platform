@@ -144,7 +144,7 @@ function postJson(url, body, headers, options) {
   });
 }
 
-function normalizeAdvice(raw) {
+function normalizeAdvice(raw, key) {
   if (!raw || typeof raw !== 'object') return raw;
   if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
   if (raw.answers && typeof raw.answers === 'object') {
@@ -160,7 +160,7 @@ function normalizeAdvice(raw) {
         };
       }
     }
-    if (Object.keys(scores).length) {
+    if ((!key || key === 'weightProfile') && Object.keys(scores).length) {
       const legacy = raw.answers.weightProfile;
       return {
         scores,
@@ -171,11 +171,12 @@ function normalizeAdvice(raw) {
         usage: raw.usage || null,
       };
     }
-    const answer =
-      raw.answers.weightProfile ||
-      raw.answers.advisory ||
-      raw.answers.choice ||
-      raw.answers[Object.keys(raw.answers)[0]];
+    const answer = key
+      ? raw.answers[key]
+      : raw.answers.weightProfile ||
+        raw.answers.advisory ||
+        raw.answers.choice ||
+        raw.answers[Object.keys(raw.answers)[0]];
     if (answer && typeof answer === 'object' && answer.type === 'choice') {
       return {
         choice: answer.choice,
@@ -201,6 +202,12 @@ function normalizeAdvice(raw) {
     };
   }
   return raw;
+}
+
+function questionKey(question) {
+  return (
+    question.key || (question.kind === 'select-eligible-model' ? 'eligibleModel' : 'weightProfile')
+  );
 }
 
 function advisoryNamesIdentity(raw) {
@@ -238,10 +245,9 @@ function buildJevAsk(source, options) {
       const value = String(option);
       criteria[value] = 'Choose ' + value + ' when it best fits the supplied state.';
     }
-    const questionKey =
-      question.kind === 'select-eligible-model' ? 'eligibleModel' : 'weightProfile';
+    const key = questionKey(question);
     const questions = {
-      [questionKey]: {
+      [key]: {
         type: 'choice',
         instructions: question.prompt,
         criteria,
@@ -291,7 +297,7 @@ function buildJevAsk(source, options) {
       { authorization: 'Bearer ' + credential.value },
       options
     );
-    return normalizeAdvice(raw);
+    return normalizeAdvice(raw, key);
   };
 }
 
@@ -312,16 +318,63 @@ function validateClosedQuestion(question) {
 }
 
 async function advise(question, options) {
+  question = question || {};
+  const opts = options || {};
+  const started = Date.now();
+  let called = false;
+  let observed;
+  const result = await evaluateAdvice(question, {
+    ...opts,
+    ask:
+      typeof opts.ask === 'function'
+        ? async (q) => {
+            called = true;
+            observed = await opts.ask(q);
+            return observed;
+          }
+        : undefined,
+  });
+  const usage = Object.fromEntries(
+    Object.entries(observed?.usage || {}).filter(
+      ([key, value]) =>
+        /^(input|output|total|prompt|completion|cache_read|cache_write)_tokens$/.test(key) &&
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value >= 0
+    )
+  );
+  const turn = {
+    called,
+    callReason: called ? 'CLOSED_QUESTION' : result.reason,
+    questionKind: question.kind || 'advisory',
+    questionKey: questionKey(question),
+    outcome: result.outcome,
+    reason: result.outcome === Outcome.DECIDED ? 'VALID_ADVICE' : result.reason,
+    confidence:
+      typeof observed?.confidence === 'number' && Number.isFinite(observed.confidence)
+        ? observed.confidence
+        : null,
+    latencyMs: Date.now() - started,
+    usage: Object.keys(usage).length ? usage : null,
+  };
+  if (typeof opts.recordTurn === 'function') opts.recordTurn(turn);
+  return { ...result, turn };
+}
+
+async function evaluateAdvice(question, options) {
+  if (/^[A-Z][A-Z0-9_]*$/.test(question.skipReason || '')) return undecided(question.skipReason);
   const invalid = validateClosedQuestion(question);
   if (invalid) return undecided(invalid);
 
   const opts = options || {};
-  const minConfidence = Number.isFinite(Number(opts.minConfidence))
-    ? Number(opts.minConfidence)
-    : DEFAULT_MIN_CONFIDENCE;
-  const scoreMinConfidence = Number.isFinite(Number(opts.scoreMinConfidence))
-    ? Number(opts.scoreMinConfidence)
-    : minConfidence;
+  const minConfidence =
+    opts.minConfidence != null && Number.isFinite(Number(opts.minConfidence))
+      ? Number(opts.minConfidence)
+      : DEFAULT_MIN_CONFIDENCE;
+  const scoreMinConfidence =
+    opts.scoreMinConfidence != null && Number.isFinite(Number(opts.scoreMinConfidence))
+      ? Number(opts.scoreMinConfidence)
+      : minConfidence;
   const ask = opts.ask;
   if (typeof ask !== 'function') return undecided('UNREACHABLE');
 
@@ -329,6 +382,7 @@ async function advise(question, options) {
   try {
     raw = await ask({
       kind: question.kind || 'advisory',
+      key: questionKey(question),
       prompt: String(question.prompt || ''),
       evidence: String(question.evidence),
       options: question.options.slice(),
@@ -341,7 +395,7 @@ async function advise(question, options) {
 
   if (!raw || typeof raw !== 'object') return undecided('MALFORMED_OUTPUT');
   if (advisoryNamesIdentity(raw)) return undecided('IDENTITY_PROHIBITED');
-  if (raw.scores && typeof raw.scores === 'object') {
+  if (question.kind === 'assess-task-profile' && raw.scores && typeof raw.scores === 'object') {
     const scoreNames = ['qualityImportance', 'latencyImportance', 'costImportance'];
     const scores = {};
     let confidentDimensions = 0;
@@ -379,7 +433,9 @@ async function advise(question, options) {
   const choice = raw.choice === undefined ? null : String(raw.choice);
   const confidence = Number(raw.confidence);
   if (!question.options.includes(choice)) return undecided('MALFORMED_OUTPUT');
-  if (!Number.isFinite(confidence)) return undecided('MALFORMED_OUTPUT');
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    return undecided('MALFORMED_OUTPUT');
+  }
   if (confidence < minConfidence) return undecided('LOW_CONFIDENCE');
 
   return {
