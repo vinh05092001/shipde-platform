@@ -409,13 +409,42 @@ function extractBaseName(modelId) {
  * excluded and the total is renormalised over the weights that are present.
  */
 function scoreCandidate(candidate, allCandidates, workKind, ctx) {
-  const scored = require('./routing').scoreForProfile(candidate, ctx?.assessment, {
-    ...ctx,
-    taskId: ctx?.profile?.taskId ?? ctx?.taskId,
-    kind: workKind,
-    candidates: allCandidates,
-  });
-  return { total: scored.score, breakdown: scored.breakdown };
+  if (ctx?.assessment?.scoringPolicy) {
+    const scored = require('./routing').scoreForProfile(candidate, ctx.assessment, {
+      ...ctx,
+      taskId: ctx.profile?.taskId ?? ctx.taskId,
+      kind: workKind,
+      candidates: allCandidates,
+    });
+    return { total: scored.score, breakdown: scored.breakdown };
+  }
+
+  const scores = {
+    evidence: evidenceScore(candidate),
+    capability: capabilityScore(candidate, workKind),
+    headroom: headroomScore(candidate, ctx),
+    spread: spreadPenalty(candidate, ctx, allCandidates),
+    cost: costScore(candidate),
+  };
+  let total = 0;
+  let weightSum = 0;
+  for (const [key, weight] of Object.entries(WEIGHTS)) {
+    const value = scores[key];
+    if (value === undefined || value === null) continue;
+    total += value * weight;
+    weightSum += weight;
+  }
+  const parts = {
+    ...scores,
+    quality: Number.isFinite(candidate.quality) ? candidate.quality : null,
+  };
+  return {
+    total: weightSum > 0 ? Math.round(total / weightSum) : 0,
+    breakdown: {
+      ...parts,
+      sources: Object.fromEntries(Object.keys(parts).map((key) => [key, 'unsourced'])),
+    },
+  };
 }
 
 /**
@@ -460,9 +489,7 @@ function resolveCatalogue(candidate, cataloguesByPath) {
  */
 function rankAndRecord(candidates, context) {
   const ctx = context || {};
-  const profileScoring = Boolean(
-    ctx.profile || ctx.assessment?.weights || ctx.assessment?.scoringPolicy
-  );
+  const profileScoring = Boolean(ctx.assessment?.scoringPolicy);
   const workItemId = ctx.workItemId || 'unassigned';
   const role = ctx.role || 'author.foundation';
   const kind = ctx.kind || role;

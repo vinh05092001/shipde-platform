@@ -1310,31 +1310,19 @@ function scoreForProfile(candidate, assessment, ctx) {
   if (assessment?.scoringPolicy) return scoreMeasurements(candidate, assessment, ctx);
   // Preserve the historical dispatch contract when no profile snapshot exists.
   if (!assessment?.weights && !ctx?.profile) {
-    const scores = {
-      evidence: ranking.evidenceScore(candidate),
-      capability: ranking.capabilityScore(candidate, ctx?.kind || ctx?.role),
-      headroom: ranking.headroomScore(candidate, ctx),
-      spread: ranking.spreadPenalty(candidate, ctx, ctx?.candidates || []),
-      cost: ranking.costScore(candidate),
-    };
-
-    let total = 0;
-    let weightSum = 0;
-    for (const [key, weight] of Object.entries(ranking.WEIGHTS)) {
-      const value = scores[key];
-      if (value === undefined || value === null) continue;
-      total += value * weight;
-      weightSum += weight;
-    }
-
-    const norm = weightSum > 0 ? Math.round(total / weightSum) : 0;
+    const legacy = ranking.scoreCandidate(
+      candidate,
+      ctx?.candidates || [],
+      ctx?.kind || ctx?.role,
+      {
+        ...ctx,
+        assessment: undefined,
+      }
+    );
     return {
-      score: norm,
+      score: legacy.total,
       reservationsHeld: 0,
-      breakdown: legacyParts({
-        ...scores,
-        quality: Number.isFinite(candidate.quality) ? candidate.quality : null,
-      }),
+      breakdown: legacy.breakdown,
     };
   }
 
