@@ -11,7 +11,7 @@
 | Dependencies | `TASK-AI-167` |
 | Assigned author | `AGY` |
 | Risk | `LOW` |
-| Allowed paths | `tools/ai-brain/route-identity.js`; `tools/ai-brain/route-identity-utils.js`; `tools/ai-brain/route-identity-create.js`; `tools/ai-brain/route-identity-combo.js`; `config/route-identity.json`; `tools/ai-brain/test/task-ai-171-route-identity.test.js`; `tools/ai-brain/scoped-health.js`; `tools/ai-brain/scoped-health-classifier.js`; `tools/ai-brain/scoped-health-eval.js`; `tools/ai-brain/unified-selector.js`; `tools/ai-brain/unified-selector-admission.js`; `tools/ai-brain/unified-selector-jev.js`; `tools/ai-brain/candidate-adapters.js`; `tools/ai-brain/candidate-adapters-common.js`; `tools/ai-brain/candidate-adapters-direct.js`; `tools/ai-brain/candidate-adapters-agy.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/test/unified-routing-offline.test.js`; `docs/product-spec/work-items/TASK-AI-171.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md` |
+| Allowed paths | `tools/ai-brain/route-identity.js`; `tools/ai-brain/route-identity-utils.js`; `tools/ai-brain/route-identity-create.js`; `tools/ai-brain/route-identity-combo.js`; `config/route-identity.json`; `tools/ai-brain/test/task-ai-171-route-identity.test.js`; `tools/ai-brain/scoped-health.js`; `tools/ai-brain/scoped-health-classifier.js`; `tools/ai-brain/scoped-health-eval.js`; `tools/ai-brain/unified-selector.js`; `tools/ai-brain/unified-selector-admission.js`; `tools/ai-brain/unified-selector-jev.js`; `tools/ai-brain/candidate-adapters.js`; `tools/ai-brain/candidate-adapters-common.js`; `tools/ai-brain/candidate-adapters-direct.js`; `tools/ai-brain/candidate-adapters-agy.js`; `tools/ai-brain/routing.js`; `tools/ai-brain/agy-quota.js`; `tools/ai-brain/test/unified-routing-offline.test.js`; `docs/product-spec/work-items/TASK-AI-171.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv`; `.oc/pr-body.md`; `tools/ai-brain/quota-scan.js` (PR #515, operator instruction); `tools/ai-brain/test/task-ai-171-onboard-scope.test.js` (PR #515) |
 | Reviewer | `Codex — fresh independent task` |
 | Branch | `feat/routing-core-selection` |
 | Pull Request | `N/A — authoring stage` |
@@ -198,3 +198,16 @@ Files: `tools/ai-brain/check-failure-task.js` `tools/ai-brain/test/task-ai-171-c
 Evidence: `task-ai-171-check-failure-task.test.js`: 12/12 pass, rerun by Claude; author proved each AC by disabling it.
 
 Limitations: Helper only, not wired to route.js yet. TASK-AI-169 replay uses synthetic fixtures. Hardcode guard not run locally.
+## Onboarding scope fix (2026-11-06, PR #515)
+
+Routing audit follow-up, kept separate from the route-decision PR #514.
+
+AGY remains the assigned author of this Work Item. Claude Code implemented PR #515 only, by operator instruction.
+
+- Defect: `scanSourceQuotas` in `tools/ai-brain/quota-scan.js` returned every scope in the quota state for a source listed in `dispatch.providers`. `onboardSourceRolling` recorded those passes as passes of the gateway, which planned gateway routes for models the gateway does not advertise.
+- Change: that path returns only the requested source's scopes.
+- Allowed paths: `quota-scan.js` and `test/task-ai-171-onboard-scope.test.js` were added to the Control table for this PR by operator instruction; reviewer to confirm.
+- Evidence: `test/task-ai-171-onboard-scope.test.js`, both cases fail without the fix and pass with it.
+- Offline replay on copied data: first selection through `dispatchCommand --execute` with a mock runner; fallback through `assembleForDispatch` with `refreshRoutes`, not end to end through `dispatch --execute`, using a synthetic catalogue row and a failed direct route. After removing the four records neither suspect route was a candidate.
+- A valid route confirms argv only. It ran with `allowUnprobedCandidates`, so route liveness is not proven.
+- Not changed: existing evidence and route-health records.
