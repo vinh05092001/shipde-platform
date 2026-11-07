@@ -64,7 +64,9 @@ function dispatchOutput(profile, assessment, candidates, result) {
       .concat(candidates.map(row))
       .map((c) => [c.candidateKey, c])
   );
-  const rejected = [...filters.flatMap((f) => f.rejected), ...(result.rejected || [])].map((c) =>
+  // The first refusal of a route stands: ranking reasons come before filter stages, as in the
+  // rejected slice every profile consumer already reads.
+  const rejected = [...(result.rejected || []), ...filters.flatMap((f) => f.rejected)].map((c) =>
     row({ ...inputs.get(c.candidateKey || c.offeringId), ...c })
   );
   filters.push(filterStage('ranking', candidates, ranking, result.rejected || []));
@@ -78,7 +80,7 @@ function dispatchOutput(profile, assessment, candidates, result) {
       ? row(ranking.find((c) => (c.candidateKey || c.offeringId) === result.chosen))
       : null,
     ranking: ranking.map(row),
-    rejected: [...new Map(rejected.map((c) => [c.candidateKey, c])).values()],
+    rejected: [...new Map(rejected.reverse().map((c) => [c.candidateKey, c])).values()].reverse(),
     reason: result.reason || null,
     reasonCode: result.reasonCode || result.refused || null,
     filters,

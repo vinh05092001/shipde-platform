@@ -2081,7 +2081,7 @@ function reportDispatchOutcome(args, deps) {
 async function runProfileDispatch(args, deps) {
   const d = deps || {};
   const output = d.log || console.log;
-  const log = args.json ? () => {} : output;
+  const log = output;
   const error = d.error || console.error;
   const exit = d.exit || process.exit;
   const rootDir = args.root || d.rootDir || process.cwd();
@@ -2198,6 +2198,7 @@ async function runProfileDispatch(args, deps) {
           d.modelChoiceMinConfidence !== undefined ? d.modelChoiceMinConfidence : d.minConfidence,
         topN: d.modelChoiceTopN,
       });
+      result.chosen = advice.chosen;
       result.modelChoice = advice.advice;
     } catch (err) {
       result.modelChoice = {
@@ -2223,7 +2224,7 @@ async function runProfileDispatch(args, deps) {
               profile,
               assessment,
               top3: result.top3,
-              rejected: jsonRejectedSlice({ ...result, rejected: structured().rejected }, profile),
+              rejected: jsonRejectedSlice(result, profile),
               rejectedCount: result.rejected.length,
               refused: refusedCode,
               reasonCode: refusedCode,
@@ -2350,7 +2351,7 @@ async function runProfileDispatch(args, deps) {
             profile,
             assessment,
             top3: result.top3,
-            rejected: jsonRejectedSlice({ ...result, rejected: structured().rejected }, profile),
+            rejected: jsonRejectedSlice(result, profile),
             rejectedCount: result.rejected.length,
             refused: refusedCode,
             reasonCode: result.reasonCode || refusedCode,
@@ -2557,7 +2558,7 @@ async function runProfileDispatch(args, deps) {
           profile,
           assessment,
           top3: result.top3,
-          rejected: jsonRejectedSlice({ ...result, rejected: structured().rejected }, profile),
+          rejected: jsonRejectedSlice(result, profile),
           rejectedCount: result.rejected.length,
           pinned,
           launchRequest,
