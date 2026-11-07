@@ -87,16 +87,18 @@ function buildCheckFailureTask(log, { check = '' } = {}) {
       let fallback;
       let current;
       let failedTest;
-      let passingTestIndent;
+      let nonFailureTestIndent;
       for (let index = 0; index < block.lines.length; index++) {
         const raw = block.lines[index];
         const line = raw.trim();
         const indent = raw.length - raw.trimStart().length;
         if (/^(?:not )?ok\b/.test(line)) {
-          passingTestIndent = /^ok\b/.test(line) ? indent : undefined;
+          const todo = /\s+#\s*TODO\b/i.test(line);
+          nonFailureTestIndent = /^ok\b/.test(line) || todo ? indent : undefined;
+          if (todo) continue;
         }
-        // Passing TAP YAML is expected diagnostic output, not failure evidence.
-        if (passingTestIndent !== undefined && line === '---' && indent > passingTestIndent) {
+        // Passing and TODO TAP YAML are diagnostics, not actionable failures.
+        if (nonFailureTestIndent !== undefined && line === '---' && indent > nonFailureTestIndent) {
           while (index + 1 < block.lines.length) {
             const next = block.lines[index + 1];
             const nextIndent = next.length - next.trimStart().length;
@@ -104,7 +106,7 @@ function buildCheckFailureTask(log, { check = '' } = {}) {
             index++;
             if (next.trim() === '...' && nextIndent === indent) break;
           }
-          passingTestIndent = undefined;
+          nonFailureTestIndent = undefined;
           continue;
         }
         if (/^(?:##\[error\]\s*)?Process completed with exit code\b/i.test(line)) continue;

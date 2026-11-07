@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const { buildCheckFailureTask } = require('../check-failure-task');
 
 test('contract-only replay names exactly missing sections and ignores RunLedger spec prose', () => {
@@ -247,4 +248,66 @@ ${ending}Failed to pull image example.invalid/fake:fixture`,
     assert.match(task.task, /No code change assigned/);
     assert.doesNotMatch(task.task, /fake expected diagnostic/);
   }
+});
+
+test('real TAP TODO assertion cannot replace the ordinary failed assertion', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--test-reporter=tap',
+      '-e',
+      `const test = require('node:test');
+const assert = require('node:assert/strict');
+test('fake TODO assertion', { todo: true }, () => assert.equal(1, 2));
+test('fake ordinary failure', () => assert.equal(0, 1));`,
+    ],
+    // Run as a standalone Node process, outside the parent's test IPC context.
+    { encoding: 'utf8', env: { ...process.env, NODE_TEST_CONTEXT: undefined } }
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /^# fail 1$/m);
+  assert.match(result.stdout, /^# todo 1$/m);
+  for (const output of [
+    result.stdout,
+    result.stdout
+      .trimEnd()
+      .split('\n')
+      .map((line) => `2026-01-01T00:00:00.000Z ${line}`)
+      .join('\r\n'),
+  ]) {
+    const task = buildCheckFailureTask(output, { check: 'brain.tests' });
+    assert.equal(task.failures.length, 1);
+    assert.equal(task.failures[0].kind, 'test');
+    assert.equal(task.failures[0].check, 'brain.tests');
+    for (const text of [task.failures[0].firstError, task.task]) {
+      assert.match(text, /fake ordinary failure/);
+      assert.match(text, /0 !== 1/);
+      assert.doesNotMatch(text, /fake TODO assertion|1 !== 2/);
+    }
+  }
+});
+
+test('TODO-only TAP diagnostics do not assign a code change', () => {
+  const task = buildCheckFailureTask(
+    `not ok 1 - fake deferred assertion # TODO expected failure
+  ---
+  error: |-
+    Error: fake TODO diagnostic
+  ...`,
+    { check: 'brain.tests' }
+  );
+  assert.deepEqual(task.failures, [{ kind: 'unknown', check: 'brain.tests', codeChange: false }]);
+  assert.doesNotMatch(task.task, /fake deferred assertion|fake TODO diagnostic/);
+});
+
+test('TODO TAP headings cannot replace the true failure fallback', () => {
+  const task = buildCheckFailureTask(
+    `not ok 1 - fake deferred assertion # TODO
+not ok 2 - fake ordinary failure`,
+    { check: 'brain.tests' }
+  );
+  assert.equal(task.failures.length, 1);
+  assert.equal(task.failures[0].firstError, 'not ok 2 - fake ordinary failure');
+  assert.doesNotMatch(task.task, /fake deferred assertion/);
 });
