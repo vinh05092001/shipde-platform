@@ -249,3 +249,21 @@ Outcome: combo membership is separated from call eligibility; health lookups sta
 Evidence: `task-ai-171-combo-members.test.js` and `task-ai-171-route-handoff.test.js` pass; Codex PASS on `be54bd6d`.
 
 Limitations: offline evidence only.
+## 401 scope fix (2026-11-07, PR #520)
+
+Scope: a 401 behind a gateway blocks only as far as its evidence reaches. One route failing on its credential no longer removes other models or upstreams on the same gateway key. Base: PR #518.
+
+Rules:
+
+- A matching error tag drops only the failed route from that ticket's retry; it never blocks the whole upstream or the shared key.
+- The tag counts only when its model matches the failed route.
+- `connection` scope applies only with a confirmed connection ID.
+- A whole upstream is blocked only by explicit `upstream-credential` evidence, which no error string produces.
+- A stored scan 401 naming one model behind a gateway blocks only that model.
+- Upstream rows with no model and direct-source rows keep their existing behaviour.
+
+Files outside the Allowed paths above, needed by this fix: `tools/ai-brain/failure-classifier.js`, `routing.js`, `evidence.js`, `route-handoff.js`, `quota-scan.js`, `capability-probe.js`, `probe-order.js`, `hermes-session.js`, plus `task-ai-171-auth-scope.test.js`, `candidates.test.js` and `classifier-outcome.test.js`.
+
+Evidence on `3886b2d5`: `task-ai-171-auth-scope.test.js` 24/24; focused run 229/229; full `tools/ai-brain` suite 3245 tests, 3176 pass, 68 fail, with no test failing only on this commit compared with `6c506ece`. The full suite is not green.
+
+Limitations: the upstream reading of the four stored 2026-11-05 cases is an inference from error text; SQLite holds no record confirming it, and no request ID links client and gateway. Candidates carry no `connectionId` today, so the `connection` path is proven only by tests. AC-AI-171-01 and the other deferred rows in the Acceptance matrix are not closed by this fix.

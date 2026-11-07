@@ -26,6 +26,7 @@ const Cause = {
   ACCOUNT_QUOTA_EXHAUSTED: 'account_quota_exhausted',
   GENUINE_CAPACITY: 'genuine_capacity',
   ACCOUNT_AUTH_FAILED: 'account_auth_failed',
+  AUTH_SCOPE_UNKNOWN: 'auth_scope_unknown',
   EXHAUSTION_HIDING: 'exhaustion_hiding',
   HARNESS_FAILED: 'harness_failed',
   LAUNCH_CONFIG: 'launch_config',
@@ -48,6 +49,7 @@ const Scope = {
   UPSTREAM: 'upstream',
   ACCOUNT: 'account',
   ACCESS_PATH: 'access_path',
+  CONNECTION: 'connection',
   GATEWAY: 'gateway',
   HARNESS: 'harness',
   LOCAL: 'local',
@@ -251,6 +253,7 @@ const DEFAULT_COOLDOWNS = {
   [Cause.ACCOUNT_QUOTA_EXHAUSTED]: 60 * 60 * 1000, // 1 hour
   [Cause.GENUINE_CAPACITY]: 10 * 60 * 1000, // 10 minutes
   [Cause.ACCOUNT_AUTH_FAILED]: null, // never recovers
+  [Cause.AUTH_SCOPE_UNKNOWN]: 5 * 60 * 1000, // only the failed attempt
   [Cause.EXHAUSTION_HIDING]: 60 * 60 * 1000, // 1 hour
   [Cause.HARNESS_FAILED]: 5 * 60 * 1000, // 5 minutes
   [Cause.LAUNCH_CONFIG]: 5 * 60 * 1000, // 5 minutes (finite cooldown)
@@ -854,6 +857,30 @@ function classifyFailure(input) {
     });
   }
 
+  // Behind a gateway a 401 can come from three layers. Only stated evidence widens it.
+  if (effectiveStatus === 401 && input?.gateway && input?.upstream !== input.gateway) {
+    // A connection layer without a confirmed ID says nothing about any connection.
+    const stated = input.authLayer === 'connection' && !input.connectionId ? null : input.authLayer;
+    const layer =
+      stated || (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
+    const byLayer = {
+      'gateway-key': [Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT, HumanAction.REQUIRED],
+      'upstream-credential': [Cause.UPSTREAM_CREDENTIAL, Scope.UPSTREAM, HumanAction.NONE],
+      'upstream-route': [Cause.AUTH_SCOPE_UNKNOWN, Scope.UNKNOWN, HumanAction.NONE],
+      connection: [Cause.UPSTREAM_CREDENTIAL, Scope.CONNECTION, HumanAction.NONE],
+    }[layer] || [Cause.AUTH_SCOPE_UNKNOWN, Scope.UNKNOWN, HumanAction.NONE];
+    return addRetryFields({
+      cause: byLayer[0],
+      scope: byLayer[1],
+      cooldownMs: DEFAULT_COOLDOWNS[byLayer[0]],
+      humanAction: byLayer[2],
+      authLayer: layer || null,
+      connectionId: input.connectionId || null,
+      evidence,
+      resetTime: null,
+    });
+  }
+
   // Account auth failure on 401 or auth text with account
   if (
     (effectiveStatus === 401 && accountId && accountId !== '*') ||
@@ -1006,6 +1033,23 @@ function classifyFailure(input) {
   });
 }
 
+/**
+ * A gateway reports an upstream refusal as `[provider/model] [401]: ...`. This shows only that the
+ * upstream refused this route, so it never names a connection, an account or the whole upstream.
+ * Provider labels differ from route prefixes, so the model after the first segment is compared.
+ */
+function upstreamAuthSignal(text, route) {
+  const tag = /\[([^\]\s]+\/[^\]\s]+)\]\s*\[401\]:/.exec(String(text || ''));
+  if (!tag) return null;
+  const modelOf = (id) =>
+    String(id || '')
+      .split('/')
+      .slice(1)
+      .join('/');
+  const model = modelOf(route?.modelId || route?.model);
+  return model && model === modelOf(tag[1]) ? { tag: tag[1] } : null;
+}
+
 module.exports = {
   Cause,
   Scope,
@@ -1018,5 +1062,6 @@ module.exports = {
   DEFAULT_COOLDOWNS,
   requiresHumanAction,
   classifyFailure,
+  upstreamAuthSignal,
   isReplayable,
 };

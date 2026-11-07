@@ -4,6 +4,7 @@ const { resolveRoute } = require('./executor');
 const { getHarness } = require('./harness');
 const { loadSources, dispatchRoute } = require('./sources');
 const { classifyFailure, isEligible } = require('./route-health');
+const { upstreamAuthSignal } = require('./failure-classifier');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
 const { proofLevelOf, ProofRank, Status } = require('./evidence');
 
@@ -63,6 +64,16 @@ function routeRefusal(c, ticket, ctx, reg) {
   const failed = (ctx.ledger && ctx.ledger.failures) || [];
   const seen = failed.find((f) => f.offeringId === c.offeringId);
   if (seen) return 'ALREADY_FAILED:' + seen.class;
+  const authFailed = failed.find(
+    (f) =>
+      (f.class === 'GATEWAY_KEY_AUTH' && f.gateway === c.gateway && f.accountId === c.accountId) ||
+      (f.class === 'UPSTREAM_AUTH' && f.gateway === c.gateway && f.upstream === c.upstream) ||
+      (f.class === 'CONNECTION_AUTH' &&
+        f.connectionId &&
+        f.connectionId === c.connectionId &&
+        f.gateway === c.gateway)
+  );
+  if (authFailed) return authFailed.class;
   const limited = failed.find((f) => f.class === 'RATE_LIMITED' && f.upstream === c.upstream);
   if (limited) return 'UPSTREAM_RATE_LIMITED';
   const broke = failed.find((f) => f.class === 'NO_CREDIT' && f.upstream === c.upstream);
@@ -192,11 +203,28 @@ function afterFailure(decision, ticket, context, failure, registry) {
     };
   }
   delete ledger.activeWorker;
+  const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
+  const viaGateway = route.gateway && route.gateway !== f.upstream;
+  const authClass = {
+    'gateway-key': 'GATEWAY_KEY_AUTH',
+    'upstream-credential': 'UPSTREAM_AUTH',
+    'upstream-route': 'UPSTREAM_ROUTE_AUTH',
+    connection: 'CONNECTION_AUTH',
+  };
+  const stated = f.authLayer === 'connection' && !f.connectionId ? null : f.authLayer;
+  const authLayer = stated || (upstreamAuthSignal(f.message, route) ? 'upstream-route' : null);
   ledger.failures = ledger.failures || [];
   ledger.failures.push({
     offeringId: f.offeringId,
     upstream: f.upstream,
-    class: beforeLaunch ? 'LAUNCH_FAILED' : classifyFailure(f.status, f.message),
+    gateway: route.gateway,
+    accountId: route.accountId,
+    connectionId: f.connectionId,
+    class: beforeLaunch
+      ? 'LAUNCH_FAILED'
+      : Number(f.status) === 401 && viaGateway
+        ? authClass[authLayer] || 'AUTH_SCOPE_UNKNOWN'
+        : classifyFailure(f.status, f.message),
     phase: beforeLaunch ? 'before-launch' : 'after-launch',
     affordable: f.affordable,
   });

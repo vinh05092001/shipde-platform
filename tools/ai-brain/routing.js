@@ -765,7 +765,20 @@ function sameFailureDomain(candidate, failed, classification) {
     }
     return sameRoute();
   }
+  if (scope === 'connection') {
+    return (
+      Boolean(classification.connectionId) &&
+      candidate.connectionId === classification.connectionId &&
+      sameRoute()
+    );
+  }
   if (scope === 'account') {
+    // A key shared behind a gateway is condemned only by evidence naming that key.
+    const viaGateway = failed.gateway && failed.upstream && failed.gateway !== failed.upstream;
+    const bare401 = classification.evidence?.httpStatus === 401 && !classification.authLayer;
+    if (viaGateway && bare401) return false;
+    if (viaGateway && classification.authLayer && candidate.gateway !== failed.gateway)
+      return false;
     return (
       candidate.accountId &&
       failed.accountId &&

@@ -727,6 +727,10 @@ function getSourcePrefixes(source) {
     .map((p) => `${p}/`);
 }
 
+function isOneModelProbe(entry) {
+  return Boolean(entry.model && entry.upstream && entry.upstream !== entry.source);
+}
+
 function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
   if (!scopeEntry) return false;
   if (scopeEntry.error && !scopeEntry.code) return true;
@@ -758,6 +762,11 @@ function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
     }
   } else if (!BLOCKING_CODES.has(scopeEntry.code)) {
     return false;
+  } else if (scopeEntry.code === 'AUTH' && isOneModelProbe(scopeEntry)) {
+    // One model's 401 behind a gateway says nothing about its sibling models.
+    const cand = options.routeCandidate || options.candidate || options.cand;
+    const strip = (id) => String(id || '').replace(/^(ninerouter\/|9router\/)/, '');
+    if (cand && strip(cand.modelId || cand.model) !== strip(scopeEntry.model)) return false;
   }
 
   // Check retryAfter / expiresAt
