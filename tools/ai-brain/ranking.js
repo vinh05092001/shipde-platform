@@ -409,25 +409,12 @@ function extractBaseName(modelId) {
  * excluded and the total is renormalised over the weights that are present.
  */
 function scoreCandidate(candidate, allCandidates, workKind, ctx) {
-  const scores = {
-    evidence: evidenceScore(candidate),
-    capability: capabilityScore(candidate, workKind),
-    headroom: headroomScore(candidate, ctx),
-    spread: spreadPenalty(candidate, ctx, allCandidates),
-    cost: costScore(candidate),
-  };
-
-  let total = 0;
-  let weightSum = 0;
-  for (const [key, weight] of Object.entries(WEIGHTS)) {
-    const value = scores[key];
-    if (value === undefined || value === null) continue;
-    total += value * weight;
-    weightSum += weight;
-  }
-
-  const norm = weightSum > 0 ? Math.round(total / weightSum) : 0;
-  return { total: norm, breakdown: scores };
+  const scored = require('./routing').scoreForProfile(candidate, ctx?.assessment, {
+    ...ctx,
+    kind: workKind,
+    candidates: allCandidates,
+  });
+  return { total: scored.score, breakdown: scored.breakdown };
 }
 
 /**
@@ -660,11 +647,18 @@ function rankAndRecord(candidates, context) {
     } else if (c.scoreBreakdown && c.scoreBreakdown.qualityLabel) {
       delete c.scoreBreakdown.qualityLabel;
     }
-    c.scoreSource = 'evidence+capability+headroom+spread+cost';
+    if (ctx.assessment || ctx.profile) {
+      c.qualityLabel = Number.isFinite(breakdown.quality) ? undefined : 'QUALITY_UNKNOWN';
+      if (!c.qualityLabel) delete breakdown.qualityLabel;
+    }
+    c.scoreSource = breakdown.policy
+      ? 'profile-measurements'
+      : 'evidence+capability+headroom+spread+cost';
   }
 
   // ── 3. Sort by score (descending), scored models before unscored ──
   eligible.sort((a, b) => {
+    if (ctx.assessment || ctx.profile) return require('./routing').compareProfileScores(a, b, ctx);
     const aKnown = a.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(a.quality);
     const bKnown = b.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(b.quality);
     if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
@@ -678,6 +672,7 @@ function rankAndRecord(candidates, context) {
   // against it. Proving is the escape hatch, not the default.
   let winner = null;
   for (const cand of eligible) {
+    if (ctx.assessment?.scoringPolicy && !Number.isFinite(cand.score)) continue;
     const proven =
       Array.isArray(cand.qualifiedRoles) &&
       cand.qualifiedRoles.some((r) => r === kind || r === '*');
@@ -701,22 +696,30 @@ function rankAndRecord(candidates, context) {
 
   const chosen = winner ? sevenWayKey(winner) : null;
   const reason = winner
-    ? 'Score ' +
-      winner.score +
-      ' (evidence=' +
-      winner.scoreBreakdown.evidence +
-      ', capability=' +
-      winner.scoreBreakdown.capability +
-      ', headroom=' +
-      winner.scoreBreakdown.headroom +
-      ', spread=' +
-      winner.scoreBreakdown.spread +
-      ', cost=' +
-      winner.scoreBreakdown.cost +
-      ')'
+    ? winner.scoreBreakdown.policy
+      ? 'Score ' + winner.score + ' (policy ' + winner.scoreBreakdown.policy.version + ')'
+      : 'Score ' +
+        winner.score +
+        ' (evidence=' +
+        winner.scoreBreakdown.evidence +
+        ', capability=' +
+        winner.scoreBreakdown.capability +
+        ', headroom=' +
+        winner.scoreBreakdown.headroom +
+        ', spread=' +
+        winner.scoreBreakdown.spread +
+        ', cost=' +
+        winner.scoreBreakdown.cost +
+        ')'
     : 'REFUSED: no candidate qualifies';
 
   const decisionEntry = {
+    ...(ctx.assessment?.scoringPolicy &&
+    !winner &&
+    eligible.length &&
+    eligible.every((c) => !Number.isFinite(c.score))
+      ? { reasonCode: 'SCORING_INPUTS_UNVERIFIED' }
+      : {}),
     stage: decisions.Stage.SELECTED,
     workItemId,
     role,
