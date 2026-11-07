@@ -394,3 +394,7 @@ Files: `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv
 Evidence: `task-ai-181-route-scope.test.js`: 14/14 pass, rerun by Claude; each P1 fails on e77cb9fb per author. Full suite before the A2 repair: 3235 tests, 46 fail; 1 new subtest compared with 6c506ece, repaired in A2. `repo-integration-group-6.test.js` needs tsx, absent in the worktree, so CI ai-brain-tests is its evidence.
 
 Limitations: Mock launch and JEV verify orchestration only, not route liveness. Combo read before role is a wasted read, recorded as a known limitation. Base #518 is not merged.
+
+## Dispatch catalogue read
+
+`priors-public.liveModelIds` reparsed the catalogue for every prior match, so dispatch blocked for over 280 seconds on 11904 rows and looked like a stalled refresh. It now rereads only when the file changes.

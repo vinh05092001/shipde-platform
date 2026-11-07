@@ -190,6 +190,8 @@ function loadRegistryPrefixes(registry) {
   return prefixes;
 }
 
+const livePrefixCache = new WeakMap();
+
 function getRouterPrefixes(config) {
   const cfg = config || defaultDescriptor;
   const prefixes = new Set();
@@ -216,13 +218,19 @@ function getRouterPrefixes(config) {
     }
   }
   if (Array.isArray(liveList)) {
-    for (const id of liveList) {
-      if (typeof id === 'string') {
-        addModelPrefixes(prefixes, id);
-        const colonIdx = id.indexOf('::');
-        if (colonIdx > 0) prefixes.add(id.slice(0, colonIdx).toLowerCase());
+    let livePrefixes = livePrefixCache.get(liveList);
+    if (!livePrefixes) {
+      livePrefixes = new Set();
+      for (const id of liveList) {
+        if (typeof id === 'string') {
+          addModelPrefixes(livePrefixes, id);
+          const colonIdx = id.indexOf('::');
+          if (colonIdx > 0) livePrefixes.add(id.slice(0, colonIdx).toLowerCase());
+        }
       }
+      livePrefixCache.set(liveList, livePrefixes);
     }
+    for (const prefix of livePrefixes) prefixes.add(prefix);
   }
 
   return prefixes;
