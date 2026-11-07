@@ -2018,6 +2018,7 @@ function buildDryRunLog(parts) {
   }
   return {
     schemaVersion: 1,
+    scoringPolicyStatus: decision.scoringPolicyStatus,
     mode: 'dry-run',
     workItemId: parts.item.workItemId,
     generatedAt: new Date(parts.now).toISOString(),
@@ -2057,6 +2058,7 @@ function buildDryRunLog(parts) {
       reason: decision.reason,
       ordered: (decision.candidates || []).map((c) => ({
         offeringId: c.offeringId,
+        scoreBreakdown: c.scoreBreakdown,
         score:
           (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
           c.score === null ||
@@ -2178,6 +2180,16 @@ async function dispatchProfileCommand(args, deps) {
       : Object.assign({}, optsWithEvidence, { requireRouteHealth: true })
   );
   const jevSource = sourcesApi.getSource('jev', registry);
+  const scoring = require('./scoring-policy');
+  const scoringAssessment = scoring.loadScoringPolicy(
+    args['scoring-policy'] || deps.scoringPolicyFile
+  );
+  scoring.joinMeasurements(candidateList, scoringAssessment, {
+    ...optsWithEvidence,
+    evidenceData,
+    evidenceDir,
+    now: deps.now,
+  });
   const jevAsk =
     (deps && deps.jevAsk) ||
     (!(args.execute !== true && deps && deps.dryRunOffline === true) &&
@@ -2193,6 +2205,7 @@ async function dispatchProfileCommand(args, deps) {
     args,
     Object.assign({}, deps, {
       candidates: require('./dispatch-output').filterPins(candidateList, args, deps),
+      scoringAssessment,
       capabilityProbeAllowNetwork: args.execute === true && !Array.isArray(deps && deps.candidates),
       registry,
       rootDir,
@@ -2518,6 +2531,10 @@ function dispatchCommand(args, deps = {}) {
   const rollingOnboard = require('./rolling-onboard');
   const env = (deps && deps.env) || process.env;
   const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
+  const scoring = require('./scoring-policy');
+  const scoringAssessment = scoring.loadScoringPolicy(
+    args['scoring-policy'] || deps.scoringPolicyFile
+  );
   const newSources =
     noInference ||
     (deps && deps.onboardingPrepared) ||
@@ -2607,6 +2624,13 @@ function dispatchCommand(args, deps = {}) {
       evidenceData,
       annotateOpts
     );
+    scoring.joinMeasurements(annotated, scoringAssessment, {
+      ...deps,
+      evidenceData,
+      evidenceDir,
+      now,
+      routeHealthFile: args['route-health'] || deps.routeHealthFile,
+    });
     applyHarnessVerification(annotated);
 
     for (const c of annotated) {
@@ -2708,9 +2732,12 @@ function dispatchCommand(args, deps = {}) {
       );
     }
     const fallbackProfile = routing.controllerFallbackProfile(profile);
-    const assessment = deps.assessment || {
-      weightProfile: fallbackProfile,
-      weights: routing.WEIGHT_PROFILES[fallbackProfile],
+    const assessment = {
+      ...(deps.assessment || {
+        weightProfile: fallbackProfile,
+        weights: routing.WEIGHT_PROFILES[fallbackProfile],
+      }),
+      ...scoringAssessment,
     };
     const rankDryRun = (offered) => {
       const result = routing.rankForProfile(offered, profile, assessment, {
@@ -2730,6 +2757,7 @@ function dispatchCommand(args, deps = {}) {
       // Retain the dispatch CLI's existing output/checkpoint field names.
       return {
         ...result,
+        scoringPolicyStatus: scoringAssessment.scoringPolicyStatus,
         candidates: result.ranking.map((candidate) => ({
           ...candidate,
           offeringId: candidate.candidateKey,
@@ -2762,6 +2790,7 @@ function dispatchCommand(args, deps = {}) {
         eligibleCandidates,
         decision
       );
+    scoring.printSources(decision, log);
     if (
       resumed &&
       checkpoint &&
@@ -3047,6 +3076,13 @@ function dispatchCommand(args, deps = {}) {
         evidenceData,
         annotateOpts
       );
+      scoring.joinMeasurements(annotated, scoringAssessment, {
+        ...deps,
+        evidenceData,
+        evidenceDir,
+        now,
+        routeHealthFile: args['route-health'] || deps.routeHealthFile,
+      });
       applyHarnessVerification(annotated);
 
       for (const c of annotated) {
@@ -3101,8 +3137,10 @@ function dispatchCommand(args, deps = {}) {
 
       const decision = ranking.rankAndRecord(annotated, {
         ...rankingContext,
+        assessment: { ...deps.assessment, ...scoringAssessment },
         excludedRoutes: candidateList.excludedRoutes,
       });
+      scoring.printSources(decision, log);
       lastDecision = decision;
 
       if (!decision.chosen) {

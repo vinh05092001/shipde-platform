@@ -187,6 +187,17 @@ The PR reached 3.2k lines and every review round found new P1s (STUCK after 20 r
 - Slice B (next PR): scoped health — AC-AI-171-01 to 05.
 - Slice C (after B): candidate adapters, unified selector, JEV advisory and budget contract — AC-AI-171-08 to 10 and the role-policy half of AC-AI-171-07. The open review findings on `unified-selector-admission.js`, `candidate-adapters.js` and `unified-selector-jev.js` move with it.
 
+## One scorer for dry-run and execute, with unsourced parts labelled (2026-11-07)
+
+Outcome: Dry-run and execute rank one snapshot through one scorer; legacy values stay in force but are labelled unsourced.
+
+Author: Codex CLI as temporary writer, because the Controller had no ranking; not a Controller selection. Claude verified and committed.
+
+Files: `tools/ai-brain/ranking.js` `tools/ai-brain/routing.js` `tools/ai-brain/test/task-ai-171-score-parity.test.js`
+
+Evidence: `task-ai-171-score-parity.test.js` with routing, ranking and candidates tests: 61/61 pass, rerun by Claude. Author: 12 leaf failures exist with both baseline and this repair; CI ai-brain-tests is the regression evidence.
+
+Limitations: No producer supplies measured scores yet, so production still ranks on unsourced legacy values. Not wired from cli.js. Most of the 20 audited values remain unsourced.
 ## Build a task from the real check failure (2026-11-07)
 
 Outcome: A failed check produces a task stating only the true failure.
