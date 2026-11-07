@@ -55,13 +55,17 @@ Configure DSH and 9Router exactly as recorded in `AI-TOOLCHAIN-DECISIONS.md`: lo
 
 Use `FEATURE-DELIVERY-REGISTER.csv` in ascending `delivery_order`. Dependencies must be `MERGED`. In a planning-only task, Codex creates the feature branch from latest `main`, creates/fills the Work Item, chooses `GEMINI` or `9ROUTER`, records risk and allowed paths, and changes only that row to `READY_FOR_AUTHOR`. It changes no production code.
 
+`READY_FOR_AUTHOR` requires `pnpm ai:ready <work-item>` to pass on the completed file before the register transition or author handoff. The definition-of-ready check rejects clarification markers anywhere (including comments and code blocks), nonempty Open questions, missing acceptance rows or Proof, empty Unchanged behaviour, and missing source-document links under Source references. Every acceptance row names a test or runnable command in Proof, and each unchanged behaviour names its regression test. A passing check verifies document readiness; the author still runs the declared proofs and the reviewer verifies their meaning.
+
+Items that fail return to planning with every problem printed by the command. Resolve the questions using approved sources, complete the missing evidence and regression coverage, then rerun the check before assignment. Never send a failing item to an author to guess the answers. This procedure applies to each item at handoff; existing Work Items are not bulk-rewritten.
+
 Foundation items run before product features. Use `CODEX-PLANNING-PROMPT.md`.
 
 ### 2. Controller starts the assigned author
 
 The human runs `powershell -ExecutionPolicy Bypass -File .\\scripts\\ai\\control.ps1 -Action Resume`. The controller discovers the earliest remote `READY_FOR_AUTHOR` branch, reads the assigned author from its Work Item, parks the Codex worktree, checks out the branch only in the correct author worktree, copies the completed prompt and opens Gemini/Antigravity or DSH/9Router. No Work Item ID, slug, branch or author is retyped.
 
-The author verifies branch, Work Item, allowed scope and readiness before editing. It implements one Work Item, runs the required checks, updates evidence, opens one Pull Request, marks `READY_FOR_CODEX` and stops.
+The author verifies branch, Work Item, allowed scope and readiness before editing, including rerunning `pnpm ai:ready <work-item>` on the handed-off file. A failure returns the item and the listed problems to planning before implementation. It implements one Work Item, runs the required checks, updates evidence, opens one Pull Request, marks `READY_FOR_CODEX` and stops.
 
 ### 3. CI verifies the handoff
 
