@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const { Level, ProofLevel, Status } = require('./evidence');
-const { dispatchRoute } = require('./sources');
 
 const identity = (sourceId, accountId, modelId) => JSON.stringify([sourceId, accountId, modelId]);
 
@@ -49,20 +48,15 @@ function readScanLiveness(file) {
   return latest;
 }
 
-function withScanLiveness(candidate, latest, registry) {
+function withScanLiveness(candidate, latest) {
   if (!latest.size) return candidate;
   const sourceId = candidate.sourceId || candidate.source || candidate.gateway;
-  const prefix =
-    candidate.harness === 'opencode-direct' ? dispatchRoute(sourceId, registry)?.modelPrefix : '';
-  // Remove only the declared transport prefix, never an API model namespace or alias.
-  const modelId =
-    prefix && candidate.modelId?.startsWith(prefix)
-      ? candidate.modelId.slice(prefix.length)
-      : candidate.modelId;
-  const record = latest.get(identity(sourceId, candidate.accountId, modelId));
+  // A transport prefix can also be an API namespace. Never infer a different API ID.
+  const record = latest.get(identity(sourceId, candidate.accountId, candidate.modelId));
   if (!record) return candidate;
-  // Raw response evidence can contain sensitive material; retain only typed metadata.
-  return { ...candidate, scanLiveness: record, evidence: [...(candidate.evidence || []), record] };
+  // Admission-only proof: neither serialization nor downstream candidate copies
+  // may promote a scan observation into durable routing evidence.
+  return Object.defineProperty({ ...candidate }, 'scanLiveness', { value: record });
 }
 
 module.exports = { readScanLiveness, withScanLiveness };

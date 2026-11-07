@@ -27,7 +27,6 @@ const candidate = {
   accountId: 'fixture-account',
   modelId: 'org/Exact-Model',
 };
-const transportCandidate = { ...candidate, modelId: 'fixture-provider/' + candidate.modelId };
 
 function fixture(t, rows) {
   const scratch = path.resolve(__dirname, '../../../.oc');
@@ -133,16 +132,16 @@ test('P5 scan adds API proof to exact candidates in both assembly paths without 
   const original = JSON.stringify(candidate);
   const scanBefore = fs.readFileSync(opts.scanFile, 'utf8');
   for (const explicit of [true, false]) {
-    const input = explicit ? candidate : transportCandidate;
+    const input = candidate;
     const rows = assembleForDispatch({ candidates: [input] }, [], registry, {
       ...opts,
       ...(explicit ? { candidates: [input] } : {}),
     });
     const row = rows.find((c) => c.modelId === input.modelId);
     assert.ok(row, 'API proof admits an exact route with missing health');
-    assert.equal(row.evidence.at(-1).proofLevel, 'API_PASS');
-    assert.equal(row.evidence.at(-1).status, 'passed');
-    assert.equal(row.evidence.at(-1).elapsedMs, 17);
+    assert.equal(row.scanLiveness.proofLevel, 'API_PASS');
+    assert.equal(row.scanLiveness.status, 'passed');
+    assert.equal(row.scanLiveness.elapsedMs, 17);
     assert.equal(require('../evidence').isHarnessProven(row.evidence), false);
   }
   assert.equal(JSON.stringify(candidate), original);
@@ -156,7 +155,7 @@ for (const reason of ['AUTH', 'QUOTA', 'NO_CHANNEL']) {
     (t) => {
       const opts = fixture(t, [{}, { reason, httpStatus: 403 }]);
       for (const explicit of [true, false]) {
-        const input = explicit ? candidate : transportCandidate;
+        const input = candidate;
         const rows = assembleForDispatch({ candidates: [input] }, [], registry, {
           ...opts,
           allowUnprobedCandidates: true,
@@ -188,6 +187,63 @@ test('P5 scan identity never borrows source aliases, accounts, model aliases or 
   assert.equal(rows[0].scanLiveness, undefined);
 });
 
+test('P5b scan matches exact API IDs even when their namespace equals the dispatch prefix', (t) => {
+  const namespaced = { ...candidate, modelId: 'fixture-provider/leaf' };
+  const opts = fixture(t, [
+    { modelId: 'leaf', reason: 'AUTH', httpStatus: 401 },
+    { modelId: namespaced.modelId },
+  ]);
+  for (const explicit of [true, false]) {
+    const assemble = () =>
+      assembleForDispatch({ candidates: [namespaced] }, [], registry, {
+        ...opts,
+        allowUnprobedCandidates: true,
+        ...(explicit ? { candidates: [namespaced] } : {}),
+      });
+    const rows = assemble();
+    assert.equal(rows.length, 1, 'failure of leaf must not exclude fixture-provider/leaf');
+    assert.equal(rows[0].scanLiveness.status, 'passed');
+    fs.appendFileSync(
+      opts.scanFile,
+      JSON.stringify({
+        sourceId: source.id,
+        accountId: candidate.accountId,
+        modelId: namespaced.modelId,
+        reason: 'AUTH',
+        httpStatus: 401,
+      }) + '\n'
+    );
+    assert.equal(assemble().length, 0, 'failure of the exact namespaced ID must exclude it');
+    // Restore the success so both assembly paths start with the same observations.
+    fs.appendFileSync(
+      opts.scanFile,
+      JSON.stringify({
+        sourceId: source.id,
+        accountId: candidate.accountId,
+        modelId: namespaced.modelId,
+        reason: 'OK',
+        httpStatus: 200,
+      }) + '\n'
+    );
+  }
+});
+
+test('P5b scan proof remains ephemeral and preserves existing candidate evidence', (t) => {
+  const opts = fixture(t, [{}]);
+  const { Level, Status, ProofLevel } = require('../evidence');
+  const existing = [
+    { level: Level.HARNESS, status: Status.PASSED, proofLevel: ProofLevel.HARNESS_PASS },
+  ];
+  const input = { ...candidate, evidence: existing };
+  const [row] = assembleForDispatch(null, [], registry, { ...opts, candidates: [input] });
+  assert.equal(row.scanLiveness.proofLevel, 'API_PASS', 'admission can use local scan proof');
+  const saved = JSON.parse(JSON.stringify(row));
+  assert.equal(saved.scanLiveness, undefined);
+  assert.deepEqual(saved.evidence, existing, 'scan proof must not join persistent evidence');
+  assert.equal({ ...row }.scanLiveness, undefined, 'candidate copies drop admission-only proof');
+  assert.deepEqual(input, { ...candidate, evidence: existing });
+});
+
 test('P5 latest success replaces failure; scan is opt-in and malformed input fails closed', (t) => {
   const opts = fixture(t, [{ reason: 'AUTH', httpStatus: 401 }, {}]);
   const assemble = (extra) =>
@@ -197,7 +253,7 @@ test('P5 latest success replaces failure; scan is opt-in and malformed input fai
       probeEvidence: () => true,
       ...extra,
     });
-  assert.equal(assemble()[0].evidence.at(-1).status, 'passed');
+  assert.equal(assemble()[0].scanLiveness.status, 'passed');
   assert.equal(assemble({ scanFile: undefined })[0].scanLiveness, undefined);
   fs.appendFileSync(opts.scanFile, 'not json\n');
   assert.throws(() => assemble(), /SCAN_INVALID_LINE:3/);
