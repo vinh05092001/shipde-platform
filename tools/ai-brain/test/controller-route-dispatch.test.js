@@ -182,6 +182,40 @@ test('P5 dispatch --scan-file excludes exact failed routes before Controller ran
   assert.ok(result.decision.rejected.some((r) => r.reason === 'AUTH'));
 });
 
+test('P5b dispatch fallback never serializes successful scan proof', async (t) => {
+  const f = fixture(t);
+  const scanFile = path.join(f.deps.rootDir, 'scan.jsonl');
+  fs.writeFileSync(
+    scanFile,
+    f.rows
+      .map((row) =>
+        JSON.stringify({
+          sourceId: row.gateway,
+          accountId: row.accountId,
+          modelId: row.modelId,
+          httpStatus: 200,
+          reason: 'OK',
+          elapsedMs: 17,
+          evidence: 'fake scan response',
+        })
+      )
+      .join('\n') + '\n'
+  );
+  const result = await cli.dispatchCommand(
+    { ...f.args, 'scan-file': scanFile, 'simulate-failure': 'first' },
+    f.deps
+  );
+  assert.equal(result.exitCode, 0);
+  const saved = JSON.parse(fs.readFileSync(f.deps.decisionLogFile, 'utf8'));
+  assert.equal(saved.firstChoice, candidateKey(f.rows[1]));
+  assert.equal(saved.fallback.chosen, candidateKey(f.rows[0]));
+  assert.ok(saved.fallback.decision.ranking.length > 0, 'exercise nested fallback ranking');
+  const serialized = JSON.stringify(saved);
+  assert.equal(serialized.includes('scanLiveness'), false);
+  assert.equal(serialized.includes('API_PASS'), false);
+  assert.equal(serialized.includes('fake scan response'), false);
+});
+
 test('Controller ranking failure rejects dispatch without a pool probe or chosen output', async (t) => {
   const f = fixture(t);
   const failure = new Error('FIXTURE_CONTROLLER_RANKING_FAILED');
