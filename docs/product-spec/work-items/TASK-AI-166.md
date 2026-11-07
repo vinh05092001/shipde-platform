@@ -57,7 +57,7 @@ Product APIs/UI/database, auth stores, new model credentials, automatic PR merge
 
 ## Business rules and edge cases
 
-- BR-166-01: Refresh priors, discovery, quota in that order; failed stages keep last good evidence and cannot mark a catalogue fresh. An unchanged successful listing can advance observation freshness. Failed listings cannot remove candidates.
+- BR-166-01 (amended 2026-11-06: a refresh succeeds when at least one source listed its models; failed sources stay listed and a failing public score fetch keeps the last scores): Refresh priors, discovery, quota in that order; failed stages keep last good evidence and cannot mark a catalogue fresh. An unchanged successful listing can advance observation freshness. Failed listings cannot remove candidates.
 - BR-166-02: Scores retain source URLs, retrieval time, verified flag and declared scale. Benchmark evidence never averages distinct benchmarks; existing prior normalization stays separate.
 - BR-166-03: Live dispatch dry-run fails with `STALE_CATALOGUE` after 48 hours, or for missing/invalid evidence; fixture-injected candidate tests do not assert live freshness.
 - BR-166-04: Writer alive means live PID OR current launch log modified within 180 seconds. Dead reroutes occur at most once per item per 480 seconds; unknown liveness fails closed.

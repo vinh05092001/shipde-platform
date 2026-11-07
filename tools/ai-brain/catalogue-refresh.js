@@ -169,7 +169,10 @@ async function refreshCatalogue(options = {}) {
         } else if (!writtenThisRun(freshness.lastAttemptAt, startedEpoch)) {
           stageExitCode = 1;
           stageError = 'DISCOVERY_EVIDENCE_STALE';
-        } else if (freshness.complete !== true || (freshness.failedSources || []).length > 0) {
+        } else if (
+          !(freshness.listedSources > 0) &&
+          (freshness.complete !== true || (freshness.failedSources || []).length > 0)
+        ) {
           stageExitCode = 1;
           stageError = 'DISCOVERY_INCOMPLETE';
         }
@@ -193,7 +196,15 @@ async function refreshCatalogue(options = {}) {
     });
   }
 
-  const allStagesOk = stages.every((stage) => stage.exitCode === 0);
+  // One failing source must not stop the Controller: a public score fetch failure keeps the
+  // last scores, and discovery passes when at least one source listed its models.
+  const priorsFile = options.priorsFile || path.join(__dirname, 'data', 'model-priors-live.json');
+  const keptPriors = readJson(priorsFile, null);
+  const allStagesOk = stages.every(
+    (stage) =>
+      stage.exitCode === 0 ||
+      (stage.command === 'priors refresh' && Array.isArray(keptPriors?.ranking))
+  );
   const finishedAt = new Date(options.now ?? Date.now()).toISOString();
   const report = {
     startedAt,
@@ -241,14 +252,13 @@ async function refreshCatalogue(options = {}) {
       .filter((s) => s.exitCode !== 0)
       .map((s) => ({ id: s.command, reason: s.error || 'FAILED' }));
     let failedSources = stageEntries;
-    if (!allStagesOk) {
+    {
       // Keep the discovery stage's per-source failure detail when it is the
       // evidence this run produced; fall back to stage-level entries only when
       // the stage crashed before writing its own observation.
       const left = readJson(discoveryFile, {});
       const discoveryStage = stages.find((s) => s.command === 'discovery run');
       if (
-        discoveryStage?.exitCode !== 0 &&
         writtenThisRun(left.lastAttemptAt, startedEpoch) &&
         Array.isArray(left.failedSources) &&
         left.failedSources.length > 0
