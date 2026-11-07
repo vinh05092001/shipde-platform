@@ -2,9 +2,9 @@
 
 const { resolveRoute } = require('./executor');
 const { getHarness } = require('./harness');
-const { loadSources } = require('./sources');
+const { loadSources, dispatchRoute } = require('./sources');
 const { classifyFailure, isEligible } = require('./route-health');
-const { getQuotaScopeState } = require('./quota-scan');
+const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
 const { proofLevelOf, ProofRank } = require('./evidence');
 
 /**
@@ -21,6 +21,7 @@ function launchFromDecision(decision, request, registry) {
   if (!chosen) throw new Error('DECISION_ROUTE_MISSING');
   const provider = chosen.gateway || chosen.source || chosen.upstream;
   const reg = registry || loadSources();
+  if (!dispatchRoute(provider, reg)) throw new Error('DECISION_ROUTE_UNRESOLVED');
   const route = resolveRoute(
     {
       provider,
@@ -37,6 +38,7 @@ function launchFromDecision(decision, request, registry) {
     candidateKey: key,
     provider: route.provider,
     model: route.model,
+    mode: r.mode,
     accountId: chosen.accountId,
     gateway: chosen.gateway || '',
     upstream: chosen.upstream,
@@ -66,6 +68,7 @@ function routeRefusal(c, ticket, ctx, reg) {
   if (broke && !(Number(broke.affordable) >= ticket.outputTokens)) return 'BUDGET_BELOW_REQUEST';
 
   const provider = c.gateway || c.source || c.upstream;
+  if (!dispatchRoute(provider, reg)) return 'LAUNCHER_UNAVAILABLE';
   let route = null;
   try {
     route = resolveRoute(
@@ -87,17 +90,22 @@ function routeRefusal(c, ticket, ctx, reg) {
     const path = { id: c.gateway || c.upstream, accountId: c.accountId };
     if (!isEligible(ctx.routeHealth, c.modelId, path, now)) return 'ROUTE_UNHEALTHY';
   }
-  const quota = ctx.quotaState ? getQuotaScopeState(c, ctx.quotaState, { now }) : null;
-  if (quota && quota.blocked) return 'QUOTA_BLOCKED';
+  const quotaOptions = { now, registry: reg, candidate: c };
+  const quota = ctx.quotaState ? getQuotaScopeState(c, ctx.quotaState, quotaOptions) : null;
+  if (isScopeBlocked(quota, now, quotaOptions)) return 'QUOTA_BLOCKED';
   if (known(c.maxOutputTokens) && Number(c.maxOutputTokens) < ticket.outputTokens) {
     return 'BUDGET_BELOW_REQUEST';
   }
   const proofs = ((ctx.evidenceData || {}).combinations || [])
     .filter(
       (e) =>
+        e.harness === route.harnessName &&
+        (e.accessPath || '') === (c.accessPath || '') &&
         e.modelId === c.modelId &&
         (e.gateway || '') === (c.gateway || '') &&
-        (e.accountId || '*') === (c.accountId || '*')
+        (e.upstream || '') === (c.upstream || '') &&
+        (e.accountId || '*') === (c.accountId || '*') &&
+        (e.quotaScope || '') === (c.quotaScope || '')
     )
     .flatMap((e) => e.evidence || []);
   const proof = proofs.length ? proofLevelOf(proofs) : 'NONE';
@@ -129,7 +137,11 @@ function firstLaunch(decision, ticket, context, registry) {
   }
   const { eligible, rejected } = screenRoutes(decision, ticket, context, registry);
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
-  const request = { ...ticket.request, offeringId: eligible[0].offeringId };
+  const request = {
+    ...ticket.request,
+    mode: ticket.mode || MODE,
+    offeringId: eligible[0].offeringId,
+  };
   return { action: 'LAUNCH', launch: launchFromDecision(decision, request, registry), rejected };
 }
 
