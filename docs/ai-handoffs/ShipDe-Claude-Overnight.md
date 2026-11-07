@@ -1,4 +1,108 @@
-# ShipDe — Claude điều phối hoàn tất luồng tối nay
+# ShipDe — Kế hoạch hoàn tất luồng, bàn giao 07/11/2026
+
+## Lệnh thực hiện hiện hành
+
+Claude tự điều phối và thực hiện hết phạm vi bên dưới, không chờ người dùng duyệt từng bước và không hẹn xong khi chưa có bằng chứng. **Phần kế hoạch này ưu tiên hơn các trạng thái hoặc giới hạn giai đoạn cũ trong phụ lục.** Không dùng “chưa được giao scoring/JEV” để đứng chờ nữa. Việc gọi kiểm thật chỉ trong quyền và ngân sách sẵn có theo mục 8. Merge/restart dịch vụ chung vẫn cần quyền hiện hành rõ ràng, không suy từ “làm hết”.
+
+Mục tiêu cuối: cùng một phiếu đi qua nguồn/catalogue → bằng chứng đủ điều kiện → điểm có nguồn → quyết định Controller/JEV → argv nguyên vẹn → worker tạo diff → kiểm test/review; gặp lỗi thì giữ diff và fallback/dừng đúng giới hạn. Không lấy số PR merge, fixture PASS hay lệnh dựng được thay cho kết quả này.
+
+## 0. Chốt trạng thái và giám sát trước khi mở lượt
+
+- Đọc AGENTS.md, Work Item, hướng dẫn Karpathy #519 và R01–R16 trong phụ lục. Đo RAM khả dụng/commit/paging và tiến trình đang có. Không restart phiên đang làm chỉ để nạp hướng dẫn.
+- Kiểm GitHub/local HEAD, PR, branch và diff thực. Các số dưới đây là mốc báo cáo để tìm lại, không phải trạng thái hiện tại: main từng 185459dc; #528 e57af507; #526 5ff595e6; SCORE/ROUTE chưa commit; OC2 17/17 chưa review; ORDER/H/G đã push chưa PR.
+- Tạo bảng RUNS từng phiếu: owner, vai trò/model/route, worktree/PID/run ID, SHA, giai đoạn, tín hiệu tiến triển cuối, lần kiểm tiếp, RAM, blocker và bước tiếp. Ghi nguồn lựa chọn; Codex làm tác giả tạm không được ghi là Controller chọn.
+- Kiểm mọi worker/review/CI/refresh ít nhất mỗi 2 phút. 5 phút đứng thì xem PID/log/test/diff; trước 10 phút phải hành động. Test dài có heartbeat hợp lệ tiếp tục theo dõi; log lặp/PID sống không đủ. Nếu không giám sát nổi thì giảm concurrency.
+- **Đạt:** bảng bao phủ tất cả việc đang chạy; không phiên kẹt vô chủ; RAM và số luồng có số đo, không đoán.
+
+## 1. Hoàn tất #528 — cache catalogue và lỗi dispatch treo
+
+**Điểm bắt đầu:** priors.js/liveModelIds/getRouterPrefixes và test cache; báo cáo 11.904 dòng bị đọc lại nhiều lần, >280 giây xuống 9 giây/377 ứng viên. Đọc diff hiện tại để xác nhận đường gây lặp, không chỉ dựa vào profile kể lại.
+- Chốt test cú pháp/format/cache tại exact HEAD. Kiểm cache đổi khi file thay, file thiếu/lỗi đọc, không tái dùng dữ liệu từ checkout khác. So trước/sau cùng catalogue và phiếu; ghi thời gian, số đọc file, số ứng viên.
+- Gọi Codex độc lập review và sửa finding. Xem CI exact SHA. Không push test đang lỗi cú pháp.
+- Dùng worktree cố định tại SHA được kiểm. route.js tự checkout origin/main ở p-run-main: thêm cách trỏ checkout kiểm đã được kiểm soát hoặc fixture integration; ghi SHA thực chạy, không sửa trực tiếp worktree tự reset rồi tưởng fix có hiệu lực.
+- **Đạt:** test cache/đổi file đạt, không regression mới so base trong điều kiện tương đương, review đúng SHA, dispatch hoàn thành và có phép đo tái hiện. Không bắt buộc merge để kiểm một SHA riêng.
+
+## 2. Refresh chỉ liệt kê, dry-run không âm thầm tiêu inference
+
+**Điểm bắt đầu:** catalogue-refresh.js, quota-scan.js, rolling-onboard.js và nhánh dispatch freshness; đối chiếu #512 đã merge.
+- Trace refresh đến từng endpoint. Tách liệt kê /models và metadata khỏi scanScope/probe gọi completions. Refresh mặc định không gọi inference; chỉ probe khi người gọi yêu cầu rõ qua cơ chế cấu hình hiện có.
+- Ghi kết quả từng nguồn thành công/thất bại, thời gian và freshness thật. Một nguồn lỗi không làm mất mọi nguồn thành công. Không sửa timestamp hoặc nới gate 48 giờ để qua.
+- Dry-run offline: chặn mạng/spawn trước; dùng snapshot/mock. Kiểm đọc combo admin và JEV là yêu cầu cần có chế độ fixture riêng, không coi localhost là tự động không tốn phí nếu nó proxy inference.
+- Với lượt 280 giây/refresh 25 phút cũ: phân loại từ log phần CPU, chờ nguồn và inference; số nào chưa đo thì ghi đã kiểm mấy log và cần dữ liệu gì. Không chạy refresh dài lại nếu chưa biết nó tiến triển ở đâu.
+- **Đạt:** mock ghi 0 inference trong refresh liệt kê/dry-run offline; catalogue mới đúng đường dispatch đọc; thiếu/stale thật trả lý do cụ thể; nguồn thành công vẫn sử dụng theo contract #512.
+
+## 3. Truy vì sao chọn 61 thay vì 76 — sửa đúng điểm nối
+
+**Điểm bắt đầu:** scratch/route.js:controllerRanking và cli.js dispatch --item/--profile; #516/#521/#527, sources.js:dispatchRoute/qualifyModel, executor.js:resolveRoute.
+- Lấy cùng phiếu, thời điểm, snapshot và policy, ghi candidate trước/sau mỗi lọc; giải thích route 76 bị loại hoặc vì sao 61 thắng. Điểm khác thang không được so. Không khẳng định route 76 phải thắng nếu nó không launch được, thiếu quota/ngân sách hoặc năng lực.
+- Không parse “Ranked candidates” để mất identity; dùng quyết định cấu trúc của chính phiếu. Giữ source/gateway/modelId/account đã xác minh, scoreBreakdown và reason qua reentry.
+- Đọc nhánh thật vinh bằng readComboConfig. Phân biệt gọi cả vinh, chọn nhánh riêng qua 9Router và nguồn ngoài. Nhánh chỉ có catalogue không biến thành thành viên; membership không chứng minh liveness. Explicit config override 0 admin GET; auto read một lần/dispatch, lỗi đọc có mã và không suy danh sách.
+- **Đạt:** --item và --profile qua entry point thật cho cùng chính sách/quyết định trên cùng dữ liệu; record giải thích mọi loại/đổi; argv giữ prefix registry đúng một lần và model ID nguyên văn. Không “find theo model” hoặc mượn quyết định TASK-AI-158 cho R4.
+
+## 4. Chốt SCORE/ROUTE và policy thật cho #526
+
+**Điểm bắt đầu:** phần CODEX POLICY đã viết, scoringPolicy loader, ranking.js:scoreCandidate/rankAndRecord, routing.js:scoreForProfile/rankForProfile, priors.js, cli.js.
+- Đóng gói thay đổi SCORE và ROUTE đang dở: kiểm diff/worktree, test 88/88 hoặc test 195 dòng là mốc cũ; chạy lại đúng HEAD, commit/draft đúng phạm vi, review.
+- Trace đủ 20 mục từng audit, 15 hardcode là mốc phải xác minh lại. Bảng mỗi trọng số/điểm/bonus/phạt/ngưỡng: giá trị, file:hàm, nguồn, đơn vị/thang/version, số mẫu, độ mới và ảnh hưởng.
+- Nạp phép đo đã có: benchmark đúng model/version làm tham chiếu; lịch sử chỉ tính sau diff/test/review xác minh. Không dùng launch count/ping/PASS bị bác làm điểm coding. Không đoán alias; model ID gọi không bị đổi để khớp benchmark.
+- Claude tự đề xuất policy từ số liệu và tiêu chí phiếu, kèm rationale/replay để Codex kiểm. Không hỏi chung “anh chọn trọng số nào” rồi đứng chờ. Không bịa trọng số, không chuyển WEIGHTS sang JSON rồi báo real; nếu chưa có dữ liệu đủ cho công thức, nộp chính xác phép đo còn thiếu và dùng trạng thái chưa đủ bằng chứng. Phần nạp/điểm nối vẫn phải hoàn tất trên fixture.
+- Dry-run và execute dùng cùng nguồn policy/cùng dữ liệu. Quyết định phải ghi điểm từng phần, nguồn và version; không âm thầm fallback về unsourced nếu phiếu yêu cầu measured.
+- **Đạt:** policy được loader thực nạp và đi vào dispatch; có ca dùng dữ liệu đo thực tái tính được kết quả, số tiêu chí đã có/thiếu rõ; 4.000 ca 0 lệch chỉ ghi tương thích, không nhận là hết hardcode. Các 19 ca không chọn được phải phân loại. Không có số đo thì REAL SCORE chưa đạt, nhưng chốt patch và tiếp tục việc độc lập.
+
+## 5. Nối JEV bằng call path thực, không dựa tên wrapper
+
+**Điểm bắt đầu:** cli.js gọi jev.js, jev-wrapper.js, ask-jev.js local, assessTask/buildJevAsk/adviseModelChoice.
+- So contract mới trong jev.js với đúng hàm pipeline gọi. Không ai require wrapper không có nghĩa mọi thay đổi #525 đều vô hiệu; tránh thêm ask trùng.
+- Phiếu rõ (sửa PR body thiếu mục) skip có lý do. Phiếu mơ hồ hỏi phân loại bằng key đúng. Khi cần hỏi chọn, chỉ gửi routeId trong shortlist đã qua lọc, context tối thiểu có evidence; JEV không mở lại route đã chặn và không ghi đè budget/auth.
+- Ghi schema/key, loại câu hỏi, call/skip reason, confidence, probabilities được phép, thời gian và usage quan sát được. Không công khai prompt/body thô/secret.
+- Test DECIDED hợp lệ, outside ID, thiếu options/evidence, confidence thấp, timeout và parser. Ca đủ bằng chứng mà UNDECIDED phải điều tra payload/ngưỡng/parser, không hạ ngưỡng ép quyết định. Ca lỗi có kết quả fallback/BLOCKED cụ thể.
+- **Đạt:** trace từ cli.js tới request mock và response thể hiện contract đúng; đếm số gọi, skip, DECIDED/UNDECIDED theo lý do, không gọi dư. Live JEV theo cổng mục 8, không nhận mock là live.
+
+## 6. Hoàn tất OC2 và cơ chế lỗi giữa chừng
+
+- Đọc verdict OC/OC2 và diff, sửa finding, chạy lại 17/17 tại SHA cuối và Codex review lại. Chưa cài patch vào runtime thật trước khi kiểm.
+- Dùng mock đo OpenCode có tới endpoint không, max_tokens thực và số request khi 402/429. Một request tới mock trước rồi mới chạy ma trận, không lặp bốn ca khi init còn kẹt. Có dependency đã cài thì dùng lại, không dựng thêm hạ tầng chỉ để tránh đọc lỗi đầu tiên.
+- Timeout chỉ chặn thời gian, không chứng minh trần request/tiền. Tách retry OpenCode, đổi account/model trong 9Router và đổi worker Controller. 402 không gửi lại cùng yêu cầu; 429 áp đúng phạm vi có bằng chứng.
+- Với cùng phiếu: A tạo diff rồi lỗi → xác nhận A dừng → B cùng worktree đọc diff → B lỗi thì dừng ở trần một fallback. Ledger qua restart; không hai worker ghi chung; thiếu connectionId thì không chặn cả account/upstream theo suy đoán.
+- **Đạt:** exit code/log/argv/số request từ mock, test restart/diff/limit và Codex PASS đúng SHA. Nếu client không thể đảm bảo yêu cầu, ghi điều kiện live bị chặn và giải pháp nhỏ nhất để kiểm tiếp; không ép bật worker thật.
+
+## 7. Nghiệm thu offline trọn luồng trước khi gọi thật
+
+Claude giữ integration worktree cố định, ghép các commit đã kiểm; review riêng các conflict. Dùng đúng entry point route.js/pipeline, không gọi helper thay rồi nhận là pipeline.
+- Phiếu cụ thể có scope, quyền repo, test, budget, policy/version và runId.
+- Snapshot/mock catalogue và vinh thật đã che, nguồn ngoài, JEV fixture; chặn network/spawn không mong muốn trước.
+- Đi trọn: phiếu → nguồn/nhánh → điều kiện → điểm → JEV/skip → quyết định → executor/argv → stub diff/test → lỗi/fallback/dừng.
+- **Đạt:** một artifact có mốc thời gian, exact SHA code/policy/data, route/ID/prefix, lý do loại, score breakdown và số request/spawn; hai route cùng model/account không gộp nhầm, combo không ghi công model con chưa xác nhận. Codex độc lập replay được. Báo OFFLINE PASS, không LIVE PASS.
+
+## 8. Ca gọi model/JEV thật có giới hạn
+
+Đây là nghiệm thu có điều kiện đã được giao, không tự chi thêm tiền: dùng route miễn phí đã xác minh hoặc ngân sách đã được phép, credential qua cơ chế sẵn có; không đọc file credential hoặc in key.
+- Tự kiểm các nguồn hiện có và quota trước giao; không hỏi người dùng chọn tên model thay Controller. Nếu mọi route thiếu bằng chứng, chỉ nêu đúng quyền/quota/phép đo còn thiếu. Không nạp credit, mua gói hay gọi trả phí không có trần.
+- Sau mục 6–7: một bài harness nhỏ trong worktree riêng đọc file, sửa một dòng, chạy test; sau đó một phiếu thực nhỏ nếu harness đạt. JEV một ca nhỏ nếu cần kiểm live và được phép.
+- Tối đa một fallback mỗi phiếu, watcher toàn thời gian; lỗi đầu tiên giữ log và sửa nguyên nhân, không thử hết model. Kiểm diff và chạy lại test độc lập; account/model gateway không trả thì ghi không quan sát được và số request đã đối chiếu, không bịa danh tính.
+- **Đạt:** log cùng runId từ quyết định tới kết quả, diff/SHA/test độc lập, usage/chi phí nếu trả về; thiếu usage ghi số request đã đo và nguồn thiếu. Ghi riêng MODEL CALL VERIFIED, REAL SCORE VERIFIED, JEV VERIFIED và LIVE TASK PASS, chỉ đánh đạt phần có bằng chứng.
+
+## 9. Repo/công cụ và các việc dở — dùng đúng, không chặn nghiệm thu
+
+- Graphify local đã cài theo báo cáo: kiểm version/index đúng SHA trước dùng; query/path định hướng, mở code/test kiểm lại vì lazy require có thể thiếu cạnh. Không reindex chỉ để đo RAM khi nó chặn luồng chính.
+- Mỗi phiếu ghi repo/ref/file:test tái sử dụng. Dùng jcodemunch/rg, Repomix kiểm pack thực vào prompt, Context7 chỉ tra API version khi cần. Model ngoài cũng đọc quy tắc và tài liệu qua công cụ hoặc context đã rà, không có dữ liệu bắt buộc thì không giao.
+- Chốt ORDER/H/G đã push thành PR kiểm chứng theo phạm vi và base; không tạo PR trùng. Kiểm lịch sử 54 PR đã rà; 0/65 chỉ nghĩa chưa đối soát được danh sách gốc. Không để tìm danh sách chặn phần core.
+- PR cũ/register/OneDrive/dọn >60 worktree/hooks/ai-memory là backlog sau mốc offline; không đổi dịch vụ hoặc xóa thư mục dở tự tiện.
+- **Đạt:** bảng đã cài/đã nối/đã quan sát dùng và số liệu đọc/dùng repo; diff/PR/SHA cho phần thực hiện. Không coi có file skill là worker đã dùng.
+
+## 10. Review, bàn giao và quyền tự quyết
+
+- Mỗi phiếu một thay đổi hành vi đủ nhỏ, mục tiêu khoảng 400 dòng; tách theo AC nhưng không thêm tầng kiến trúc. Kiểm code/test/gỡ fix khi cần, chạy liên quan đúng HEAD; kết quả base so cùng điều kiện.
+- Codex CLI tài khoản chính hoặc Codex qua AgentRouter review độc lập; nếu Codex là tác giả dùng phiên fresh, không tự duyệt. Gửi PR/base/HEAD/AC/test/risks; verdict file:dòng và evidence. Model reviewer khác chỉ bổ sung khi phiếu yêu cầu Codex.
+- Được viết/sửa/push/draft, cập nhật Work Item/register đúng sự thật; tự sửa tái hiện được hoặc giao Codex làm writer khi Controller đang hỏng, ghi rõ tạm thời. Không cần chờ cấp lượt để phân tích offline hoặc tiếp tục phiếu khác.
+- Hết fallback dừng phiếu, không dừng kế hoạch. Không reset bằng đổi tên; chỉ mở lượt sau bản sửa nguyên nhân/AC mới có bằng chứng và log quan hệ. Chỉ hỏi khi cần quyền thật, key thiếu hoặc ngân sách, sau khi làm mọi phần độc lập.
+- Chưa được merge, restart pipeline/daemon chung, sửa combo vận hành, ghi đè health/evidence thật, thay gate/baseline/allowlist/.github, force-push/reset --hard/--no-verify/--admin. Không đổi quyền plugin sang Allow all actions, không đọc credential, không xuất raw log/PII/prompt đầy đủ ra public.
+- Bảng bàn giao cập nhật liên tục: mục 0–10 + A–H/R01–R16, owner, trạng thái, PR/HEAD, test pass/fail/skip, CI/review, thời gian, request/token quan sát được, blocker/người gỡ và bước tiếp. Nếu còn việc chạy thì watcher còn chạy; không dừng progress.log chỉ vì writer đã xong.
+- **Hoàn tất** khi mỗi yêu cầu có verdict và bằng chứng; phần không chạy được có blocker cụ thể, số đo đã thử và cách gỡ. Không hứa mốc xong thay kết quả.
+
+---
+
+# Phụ lục: yêu cầu gốc A–H/R01–R16 (giữ để đối chiếu)
 
 ## Quyền tự quyết — lệnh mới nhất, thay mọi giới hạn giai đoạn cũ mâu thuẫn
 
