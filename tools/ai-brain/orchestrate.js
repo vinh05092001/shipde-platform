@@ -3236,6 +3236,7 @@ function buildProfile(item, o, forbiddenFailureDomains) {
   return {
     taskId: item.id,
     description: item.objective || item.title || item.description || item.id,
+    ...(item.skipReason ? { skipReason: item.skipReason } : {}),
     role,
     complexity: item.complexity || 'standard',
     requiredCapabilities,
