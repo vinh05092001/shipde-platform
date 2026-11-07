@@ -1442,8 +1442,9 @@ function generateCandidatesWithCatalog(opts) {
               }
             : {}),
         });
-        // Only a combo read from its configuration opens its branches as routes.
-        if (!Array.isArray(o.nineRouterComboConfig?.members)) continue;
+        // Dispatch retains inventory so its shared scope filter can record every refusal.
+        if (o.routeScope !== 'combo-and-routes' && !Array.isArray(o.nineRouterComboConfig?.members))
+          continue;
       }
 
       // Gateway: expand catalogue into (upstream, model) pairs.
@@ -1497,7 +1498,10 @@ function generateCandidatesWithCatalog(opts) {
           .filter((item) => item.modelId && !existingIds.has(item.modelId))
       );
       const comboMembers =
-        comboName && isNineRouter && new Set(o.nineRouterComboConfig?.members || []);
+        comboName &&
+        isNineRouter &&
+        o.routeScope !== 'combo-and-routes' &&
+        new Set(o.nineRouterComboConfig?.members || []);
       for (const item of routerCatalogue) {
         if (item && typeof item === 'object' && item.gateway && item.gateway !== source.id)
           continue;
@@ -2065,7 +2069,7 @@ function generateCandidatesWithCatalog(opts) {
   candidates.push(...poolAccountCandidates(o));
 
   const comboName = getWriterComboName(o, registry);
-  if (comboName) {
+  if (comboName && o.routeScope !== 'combo-and-routes') {
     // An unread combo is still the configured route; only a read, empty one is not.
     const unread = comboConfigStateOf(o) === 'COMBO_CONFIG_UNAVAILABLE';
     const hasActiveCombo = candidates.some(

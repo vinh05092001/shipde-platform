@@ -1165,9 +1165,7 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
  * gateway-derived and pool-derived candidates. Merges evidence-only candidates
  * so models seen in evidence history participate in selection.
  *
- * If `options.candidates` is provided, that array is returned directly: a
- * caller that supplies its own candidates is testing or replaying them, not
- * asking what the machine actually serves.
+ * Injected candidates skip inventory generation, but still obey health and scope.
  */
 // The ticket decides whether routes outside the combo may compete. Absent means they may.
 const ROUTE_SCOPES = new Set(['combo-only', 'combo-and-routes']);
@@ -1177,12 +1175,18 @@ function routeScopeOf(value) {
   return value;
 }
 
-function comboOriginOf(candidate, comboName, members) {
+function comboOriginOf(candidate, members) {
   const id = String(candidate.modelId || candidate.model || '');
-  if (Array.isArray(candidate.comboMembers) || id === comboName || id.endsWith('/' + comboName)) {
+  const { gateway, source, sourceId, reachedVia } = candidate;
+  const viaRouter = require('./writer-combo').isNineRouterCandidate({
+    gateway,
+    source,
+    sourceId,
+    reachedVia,
+  });
+  if (viaRouter && Array.isArray(candidate.comboMembers)) {
     return 'combo';
   }
-  const viaRouter = require('./writer-combo').isNineRouterCandidate(candidate);
   return viaRouter && members.has(id) ? 'combo-member' : 'individual';
 }
 
@@ -1198,7 +1202,7 @@ function applyRouteScope(eligible, excludedRoutes, opts, registry) {
     : 'COMBO_CONFIG_UNAVAILABLE';
   const kept = [];
   for (const candidate of eligible) {
-    candidate.routeOrigin = comboOriginOf(candidate, comboName, members);
+    candidate.routeOrigin = comboOriginOf(candidate, members);
     if (opts.routeScope !== 'combo-only' || candidate.routeOrigin !== 'individual') {
       kept.push(candidate);
       continue;
@@ -1343,7 +1347,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         opts.candidates
       );
       const eligible = [];
-      const excludedRoutes = [];
+      const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
         let isEligible = true;
@@ -1389,7 +1393,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           }
         }
       }
-      Object.defineProperty(eligible, 'excludedRoutes', {
+      const scoped = applyRouteScope(eligible, excludedRoutes, opts, resolvedRegistry);
+      Object.defineProperty(scoped, 'excludedRoutes', {
         value: excludedRoutes,
         enumerable: false,
         writable: true,
@@ -1398,7 +1403,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       if (opts && Array.isArray(opts.excludedRoutes)) {
         opts.excludedRoutes.push(...excludedRoutes);
       }
-      return eligible;
+      return scoped;
     };
     if (!refresh) return buildExplicit();
     return Promise.resolve(persistHealth()).then(buildExplicit);
@@ -1425,6 +1430,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       ...candidatesApi.generateCandidates({
         harness: opts.harness,
         role: opts.role,
+        routeScope: 'combo-and-routes', // Inventory first; applyRouteScope records refusals.
         registry: resolvedRegistry,
         accounts: accounts || [],
         openCodeIds: (accounts || []).flatMap((account) =>
@@ -1543,7 +1549,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       assembled.push(...directCandidates);
     }
     const eligible = [];
-    const excludedRoutes = [];
+    const excludedRoutes = [...(opts.routeScopeExclusions || [])];
     const seenExcluded = new Set();
     for (const candidate of assembled) {
       if (
@@ -1921,7 +1927,16 @@ function buildDryRunLog(parts) {
   for (const r of (fallback.decision && fallback.decision.rejected) || []) {
     rejected.set(r.offeringId, r);
   }
-  const candidates = (parts.annotated || []).map((c) => {
+  const inputCandidates = new Map(
+    (parts.annotated || []).map((c) => [parts.candidatesApi.candidateKey(c), c])
+  );
+  // Assembly exclusions are inputs too; retain each identity once without ranking it.
+  for (const key of rejected.keys()) {
+    if (inputCandidates.has(key)) continue;
+    const identity = require('./discovery/identity').parseCandidateKey(key);
+    inputCandidates.set(key, { ...identity, accountId: identity?.account });
+  }
+  const candidates = [...inputCandidates.values()].map((c) => {
     const key = parts.candidatesApi.candidateKey(c);
     const isUnscored =
       c.qualityLabel === 'QUALITY_UNKNOWN' ||
@@ -2611,6 +2626,7 @@ function dispatchCommand(args, deps = {}) {
             registry,
             accounts,
             candidates: candidateList,
+            routeScopeExclusions: candidateList.excludedRoutes,
             assessment,
           })
         );
@@ -2638,6 +2654,7 @@ function dispatchCommand(args, deps = {}) {
         dispatchCommand(args, {
           ...deps,
           candidates: annotated,
+          routeScopeExclusions: candidateList.excludedRoutes,
           capabilitiesPrepared: true,
           registry,
           accounts,
@@ -3021,7 +3038,10 @@ function dispatchCommand(args, deps = {}) {
         ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
       };
 
-      const decision = ranking.rankAndRecord(annotated, rankingContext);
+      const decision = ranking.rankAndRecord(annotated, {
+        ...rankingContext,
+        excludedRoutes: candidateList.excludedRoutes,
+      });
       lastDecision = decision;
 
       if (!decision.chosen) {

@@ -493,7 +493,7 @@ function rankAndRecord(candidates, context) {
     }
   }
 
-  const rejected = [];
+  const rejected = [...(ctx.excludedRoutes || [])];
   const eligible = [];
 
   // ── 1. Filter ───────────────────────────────────────────────────
