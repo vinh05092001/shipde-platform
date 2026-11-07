@@ -2632,7 +2632,9 @@ function dispatchCommand(args, deps = {}) {
     if (
       !noInference &&
       !deps.assessment &&
-      (!Array.isArray(deps.candidates) || typeof deps.jevAsk === 'function')
+      (!Array.isArray(deps.candidates) ||
+        typeof deps.jevAsk === 'function' ||
+        typeof deps.jevHttpClient === 'function')
     ) {
       const jevSource = sourcesApi.getSource('jev', registry);
       const ask =
