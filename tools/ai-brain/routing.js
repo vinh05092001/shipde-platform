@@ -2240,12 +2240,17 @@ async function runProfileDispatch(args, deps) {
   const profile = rawProfile;
   const isDryRun = args.execute !== true && d.dryRunOffline === true;
 
-  const assessment = {
-    ...(d.assessment ||
-      (await assessTask(profile, {
-        ask: isDryRun ? undefined : d.weightingAsk || d.ask,
+  // A supplied assessment may contain only scoring inputs. Complete its JEV
+  // metadata through the existing offline fallback before applying overrides.
+  const baseAssessment = d.assessment?.jevOutcome
+    ? d.assessment
+    : await assessTask(profile, {
+        ask: isDryRun || d.assessment ? undefined : d.weightingAsk || d.ask,
         minConfidence: d.minConfidence,
-      }))),
+      });
+  const assessment = {
+    ...baseAssessment,
+    ...d.assessment,
     ...d.scoringAssessment,
   };
 

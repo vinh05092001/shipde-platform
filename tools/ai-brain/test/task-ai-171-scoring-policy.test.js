@@ -213,6 +213,19 @@ test('profile CLI loads policy and joins recorded measurements', async (t) => {
   assert.equal(saved.chosen, candidateKey(f.rows[1]));
   assert.equal(saved.ranking[0].scoreBreakdown.measurements.latency.value, 10);
 });
+test('loaded policy preserves QUALITY_UNKNOWN alongside sourced latency in dry-run output', (t) => {
+  const f = fixture(t);
+  const result = dispatchCommand({ 'dry-run': true }, f.deps);
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.decision.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
+  for (const candidate of result.decision.candidates) {
+    assert.equal(candidate.qualityLabel, 'QUALITY_UNKNOWN');
+    const line = f.logs.find((entry) => entry.includes(candidate.candidateKey));
+    assert.match(line, /latency=sourced/);
+    assert.match(line, /QUALITY_UNKNOWN/);
+  }
+});
+
 test('measurement join rejects stale, wrong-unit, unversioned and foreign-route evidence', (t) => {
   const { joinMeasurements } = require('../scoring-policy');
   const f = fixture(t);

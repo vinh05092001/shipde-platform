@@ -125,7 +125,8 @@ function printSources(decision, log) {
     const label = Object.entries(parts)
       .map(([k, v]) => `${k}=${v}`)
       .join(', ');
-    log(`${c.offeringId || c.candidateKey}: ${label}`);
+    const qualityLabel = c.qualityLabel || b.qualityLabel;
+    log(`${c.offeringId || c.candidateKey}: ${[label, qualityLabel].filter(Boolean).join(', ')}`);
   }
 }
 
