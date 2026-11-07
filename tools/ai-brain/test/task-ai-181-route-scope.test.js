@@ -153,6 +153,54 @@ test('P1-2: source inventory survives unrestricted scopes and is explicitly refu
   }
 });
 
+test('P1-2: OpenCode agent-CLI inventory survives until the shared scope filter', () => {
+  const source = {
+    id: 'fixture-opencode',
+    kind: 'agent-cli',
+    harness: 'opencode',
+    accessPath: 'cli',
+    reachedVia: '9router',
+    modelPrefix: 'ninerouter/',
+  };
+  const inventory = { ...registry, sources: [source] };
+  const modelId = source.modelPrefix + 'b/out';
+  const accounts = [{ id: 'fixture-account', provider: source.id, models: [modelId] }];
+  const options = {
+    allowUnprobedCandidates: true,
+    evidenceData: {},
+    offerings: [],
+    registryAccounts: [],
+    discoverPool: false,
+  };
+  const unscoped = assembleForDispatch({ candidates: [] }, accounts, inventory, options);
+  assert.deepEqual(
+    unscoped.map((c) => c.modelId),
+    [modelId]
+  );
+  assert.deepEqual(unscoped.excludedRoutes, []);
+  for (const [config, reason] of refusalCases) {
+    for (const routeScope of ['combo-and-routes', undefined, 'combo-only']) {
+      const list = assembleForDispatch({ candidates: [] }, accounts, inventory, {
+        ...options,
+        role: 'writer',
+        routeScope,
+        nineRouterComboConfig: config,
+      });
+      if (routeScope === 'combo-only') {
+        assert.equal(list.length, 0);
+        assert.ok(list.excludedRoutes.some((r) => r.reason === reason));
+      } else {
+        assert.deepEqual(
+          list.map((c) => c.modelId),
+          [modelId]
+        );
+        assert.equal(list[0].routeOrigin, 'individual');
+        assert.deepEqual(list.excludedRoutes, []);
+      }
+    }
+  }
+});
+
 test('P1-3: injected candidates receive the same scope check and reasons', () => {
   for (const [config, reason] of refusalCases) {
     const list = assembleForDispatch(null, [], registry, {

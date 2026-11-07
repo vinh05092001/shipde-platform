@@ -1808,7 +1808,11 @@ function generateCandidatesWithCatalog(opts) {
       const accessPath = accessPathOf(source, registry);
       if (!harness || !accessPath) continue;
       if (source.reachedVia) {
-        if (comboName && comboLib.isNineRouterSource(source)) {
+        if (
+          comboName &&
+          comboLib.isNineRouterSource(source) &&
+          o.routeScope !== 'combo-and-routes'
+        ) {
           continue;
         }
         // OpenCode reaches 9Router models via ninerouter/ prefix.
