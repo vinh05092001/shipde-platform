@@ -3,10 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const descriptor = require('./priors-sources/public.json');
 
+let liveIdsCache = null;
+
+// Dispatch matches priors per candidate; reparsing the catalogue each time blocks it for minutes.
 function liveModelIds() {
   const file = path.join(__dirname, 'data/discovery/catalogue.jsonl');
   if (!fs.existsSync(file)) return [];
-  return fs
+  const { mtimeMs, size } = fs.statSync(file);
+  if (liveIdsCache?.mtimeMs === mtimeMs && liveIdsCache.size === size) return liveIdsCache.ids;
+  const ids = fs
     .readFileSync(file, 'utf8')
     .split(/\r?\n/)
     .filter(Boolean)
@@ -14,6 +19,8 @@ function liveModelIds() {
       const row = JSON.parse(line);
       return row.modelId || row.model || [];
     });
+  liveIdsCache = { mtimeMs, size, ids };
+  return ids;
 }
 
 function resolveCreatorModelAlias(creator, model, config) {
