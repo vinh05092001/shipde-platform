@@ -1,13 +1,18 @@
 'use strict';
 
 const { safeText } = require('./coordinator-text');
+const { stripVTControlCharacters } = require('node:util');
+
+function normalizedText(value) {
+  return safeText(stripVTControlCharacters(String(value ?? '')));
+}
 
 // Port of .oc/ci-failure.js parseReview/buildStep: keep the PR-body-only
 // boundary without making the tracked module depend on ignored scratch files.
 function parseReview(text) {
   const missingSections = [];
   const uncheckedItems = [];
-  const lines = text.split('\n').map((line) => line.replace(/^-\s+/, ''));
+  const lines = text.split('\n').map((line) => line.trim().replace(/^-\s+/, ''));
   for (const line of lines) {
     const section = line.match(/^missing PR section: ##\s*(.+)$/);
     const unchecked = line.match(/^unchecked checklist item:\s*(.+)$/i);
@@ -68,7 +73,7 @@ function unknown(check = '') {
  */
 function buildCheckFailureTask(log, { check = '' } = {}) {
   const failures = [];
-  let block = check ? { kind: 'ci', check: safeText(check), lines: [] } : null;
+  let block = check ? { kind: 'ci', check: normalizedText(check), lines: [] } : null;
   function finish() {
     if (!block) return;
     if (block.kind === 'contract') {
@@ -81,17 +86,34 @@ function buildCheckFailureTask(log, { check = '' } = {}) {
     } else {
       let fallback;
       let current;
-      for (const line of block.lines) {
+      let failedTest;
+      for (let index = 0; index < block.lines.length; index++) {
+        const raw = block.lines[index];
+        const line = raw.trim();
         if (/^(?:##\[error\]\s*)?Process completed with exit code\b/i.test(line)) continue;
         const infra = isInfra(line);
+        let firstError = line;
+        if (/^error:\s*[|>][-+]?$/i.test(line)) {
+          const indent = raw.length - raw.trimStart().length;
+          const diagnostic = [];
+          while (index + 1 < block.lines.length) {
+            const next = block.lines[index + 1];
+            if (next.trim() && next.length - next.trimStart().length <= indent) break;
+            diagnostic.push(next);
+            index++;
+          }
+          if (!diagnostic.some((entry) => entry.trim())) continue;
+          firstError = [...(failedTest ? [failedTest] : []), ...diagnostic].join('\n');
+        }
         if (infra || isError(line)) {
           const kind = infra ? 'infra' : 'test';
           // Different failure classes in one check must remain separate tasks.
           if (!current || current.kind !== kind) {
-            current = { kind, check: block.check, firstError: line, codeChange: !infra };
+            current = { kind, check: block.check, firstError, codeChange: !infra };
             failures.push(current);
           }
         } else if (/^(?:not ok\b|FAIL(?:ED)?\b|✖)/.test(line)) {
+          if (/^not ok\b/.test(line)) failedTest = line;
           fallback ||= line;
         }
       }
@@ -105,17 +127,19 @@ function buildCheckFailureTask(log, { check = '' } = {}) {
     }
   }
 
-  const lines = safeText(log)
-    .replace(/\x1b\[[0-9;]*m/g, '')
-    .split(/\r?\n/);
+  const lines = normalizedText(log).split(/\r?\n/);
   for (const raw of lines) {
     // GitHub Actions timestamps precede diagnostics in downloaded check logs.
-    const line = raw.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s+/, '').trim();
+    const content = raw.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z[ \t]/, '').trimEnd();
+    const line = content.trim();
     const ci = line.match(/^P1 — CI failing:\s*(?:\*\*(.+?)\*\*|(.+?))\.?$/);
     if (/^Pull Request contract validation failed:?$/.test(line) || ci) {
       const nestedContract = !ci && block?.kind === 'ci';
       // A check heading followed directly by validator output is one failure.
-      if (!nestedContract || block.lines.some((entry) => isError(entry) || isInfra(entry)))
+      if (
+        !nestedContract ||
+        block.lines.some((entry) => isError(entry.trim()) || isInfra(entry.trim()))
+      )
         finish();
       block = {
         kind: ci ? 'ci' : 'contract',
@@ -123,7 +147,7 @@ function buildCheckFailureTask(log, { check = '' } = {}) {
         lines: [],
       };
     } else if (block) {
-      block.lines.push(line);
+      block.lines.push(content);
     }
   }
   finish();

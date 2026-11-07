@@ -96,6 +96,41 @@ Error: Authorization: Bearer fake-bearer-secret password=fake-password-secret`);
   assert.match(serialized, /redacted/i);
 });
 
+test('ANSI formatting cannot bypass masking in evidence, task or caller check metadata', () => {
+  const secret = 'fake-only-review-value';
+  for (const check of ['unit', `unit token\x1b[0m=${secret}`]) {
+    const task = buildCheckFailureTask(`Error: password\x1b[0m=${secret}`, { check });
+    assert.ok(!JSON.stringify(task).includes(secret));
+    assert.equal(task.failures[0].firstError, 'Error: password="[REDACTED]"');
+    assert.equal(task.failures[0].check, check === 'unit' ? 'unit' : 'unit token="[REDACTED]"');
+    assert.match(task.task, /password="\[REDACTED\]"/);
+  }
+});
+
+test('multiline TAP errors retain the assertion and failed test name instead of the YAML marker', () => {
+  const log = `not ok 1 - persists record
+  error: |-
+    Expected values to be strictly equal:
+    0 !== 1`;
+  for (const output of [
+    log,
+    `${log}\n  code: ERR_ASSERTION\n  ...\nError: later cleanup failure`
+      .split('\n')
+      .map((line) => `2026-01-01T00:00:00.000Z ${line}`)
+      .join('\r\n'),
+  ]) {
+    const task = buildCheckFailureTask(output, { check: 'brain.tests' });
+    assert.equal(task.failures.length, 1);
+    assert.equal(task.failures[0].kind, 'test');
+    assert.equal(task.failures[0].check, 'brain.tests');
+    for (const text of [task.failures[0].firstError, task.task]) {
+      assert.match(text, /not ok 1 - persists record/);
+      assert.match(text, /Expected values to be strictly equal:\n\s*0 !== 1/);
+      assert.doesNotMatch(text, /error: \|-|later cleanup|ERR_ASSERTION/);
+    }
+  }
+});
+
 test('real validator format handles timestamps, bullets, colon and unnamed unchecked items', () => {
   const task =
     buildCheckFailureTask(`2026-01-01T00:00:00.000Z Pull Request contract validation failed:
