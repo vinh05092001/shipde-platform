@@ -149,6 +149,29 @@ test('B02/B74: decision mode preserves chosen-null and refuses inconsistent iden
   assert.equal((await run({ ...args, decision: 'discovery.json' })).exitCode, 2);
   assert.deepEqual(effects, []);
 });
+for (const chosen of ['route', null]) {
+  test(`B02/B74: decision mode rejects duplicate route identities with chosen ${chosen}`, async (t) => {
+    const row = { ...candidate, candidateKey: 'route' };
+    const data = {
+      schemaVersion: 1,
+      chosen,
+      selected: chosen ? row : null,
+      ranking: [row, { ...row }],
+      rejected: [],
+    };
+    const { run, effects, lines } = guarded(t, data);
+    const { task, item, snapshot: unused, ...args } = options();
+    assert.equal(
+      require('../route-handoff').decisionFromDispatch(data).reasonCode,
+      'CONTROLLER_DECISION_INVALID'
+    );
+    const result = await run({ ...args, decision: 'discovery.json' });
+    assert.equal(result.exitCode, 2);
+    assert.match(lines.at(-1), /COORDINATOR_DECISION_INVALID/);
+    assert.deepEqual(effects, []);
+  });
+}
+
 test('B74: formatter redacts stable JSON and projects a scalar receipt without the child', () => {
   const launch = { pid: 17, status: 'started', child: {} };
   launch.child.self = launch.child;

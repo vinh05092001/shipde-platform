@@ -2245,6 +2245,7 @@ function coordinatorDispatchCommand(args, deps) {
       if (
         data.schemaVersion !== 1 ||
         !Array.isArray(data.ranking) ||
+        new Set(data.ranking.map((c) => c.candidateKey)).size !== data.ranking.length ||
         !Array.isArray(data.rejected) ||
         (data.chosen === null
           ? data.selected !== null
