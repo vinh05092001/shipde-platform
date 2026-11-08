@@ -7,6 +7,64 @@ const { classifyFailure, isEligible } = require('./route-health');
 const { upstreamAuthSignal } = require('./failure-classifier');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
 const { proofLevelOf, ProofRank, Status } = require('./evidence');
+const { decisionRow } = require('./dispatch-output');
+
+/** Adapt dispatch JSON without interpreting keys, scoring, pruning or choosing a writer. */
+function decisionFromDispatch(input, options = {}) {
+  const blocked = (reasonCode) => ({
+    workItemId: options.workItemId,
+    controllerStatus: 'ERROR',
+    selected: null,
+    candidates: [],
+    rejected: [],
+    reasonCode,
+  });
+  let d = input;
+  if (typeof input === 'string') {
+    try {
+      d = JSON.parse(input);
+    } catch {
+      return blocked('CONTROLLER_JSON_INVALID');
+    }
+  }
+  if (
+    !d ||
+    d.schemaVersion !== 1 ||
+    !Array.isArray(d.ranking) ||
+    !Array.isArray(d.rejected) ||
+    !(d.chosen === null || (typeof d.chosen === 'string' && d.chosen))
+  ) {
+    return blocked('CONTROLLER_DECISION_INVALID');
+  }
+  const keys = d.ranking.map((c) => c?.candidateKey);
+  const selected = d.ranking.find((c) => c?.candidateKey === d.chosen);
+  if (
+    keys.some((k) => typeof k !== 'string' || !k) ||
+    new Set(keys).size !== keys.length ||
+    (d.chosen
+      ? !selected ||
+        !selected.modelId ||
+        !selected.harness ||
+        JSON.stringify(decisionRow(selected)) !== JSON.stringify(decisionRow(d.selected || {}))
+      : d.selected !== null)
+  ) {
+    return blocked('CONTROLLER_DECISION_INVALID');
+  }
+  const refused = !d.chosen && (d.ranking.length || d.rejected.length);
+  if (options.error || (options.exitCode != null && options.exitCode !== 0 && !refused)) {
+    return blocked('CONTROLLER_EXECUTION_ERROR');
+  }
+  return {
+    ...d,
+    workItemId: d.profile?.taskId || options.workItemId,
+    controllerStatus: d.chosen ? 'READY' : refused ? 'REFUSED' : 'EMPTY',
+    selected: d.chosen,
+    candidates: d.ranking.map((c) => ({ ...decisionRow(c), offeringId: c.candidateKey })),
+    reasonCode:
+      d.reasonCode ||
+      (refused ? 'CONTROLLER_REFUSED' : d.chosen ? null : 'CONTROLLER_EMPTY_CANDIDATES'),
+  };
+}
 
 /**
  * The launch for one route of a structured Controller decision. The route comes
@@ -18,6 +76,12 @@ function launchFromDecision(decision, request, registry) {
   const d = decision || {};
   const r = request || {};
   const key = r.offeringId || d.selected;
+  if (
+    d.controllerStatus &&
+    (d.controllerStatus !== 'READY' || !d.selected || key !== d.selected || key !== d.chosen)
+  ) {
+    throw new Error('CONTROLLER_CHOICE_REQUIRED');
+  }
   const chosen = (d.candidates || []).find((c) => c && c.offeringId === key);
   if (!chosen) throw new Error('DECISION_ROUTE_MISSING');
   const provider = chosen.gateway || chosen.source || chosen.upstream;
@@ -137,9 +201,11 @@ function screenRoutes(decision, ticket, context, registry) {
   const reg = registry || loadSources();
   const all = (decision.candidates || []).slice();
   const rank = (c) => (c.offeringId === decision.selected ? 1 : 0);
-  all.sort((a, b) => rank(b) - rank(a) || Number(b.score || 0) - Number(a.score || 0));
+  if (!decision.controllerStatus) {
+    all.sort((a, b) => rank(b) - rank(a) || Number(b.score || 0) - Number(a.score || 0));
+  }
   const eligible = [];
-  const rejected = [];
+  const rejected = decision.controllerStatus ? [...(decision.rejected || [])] : [];
   for (const c of all) {
     const reason = routeRefusal(c, ticket, ctx, reg);
     if (reason) rejected.push({ offeringId: c.offeringId, reason });
@@ -150,6 +216,12 @@ function screenRoutes(decision, ticket, context, registry) {
 
 /** The first launch of a ticket: the best usable route, or BLOCKED. */
 function firstLaunch(decision, ticket, context, registry) {
+  if (decision.controllerStatus && decision.controllerStatus !== 'READY') {
+    return { action: 'BLOCKED', reason: decision.reasonCode, rejected: decision.rejected };
+  }
+  if (decision.controllerStatus && decision.selected !== decision.chosen) {
+    return { action: 'BLOCKED', reason: 'CONTROLLER_CHOICE_REQUIRED', rejected: decision.rejected };
+  }
   if (decision.workItemId !== ticket.workItemId) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
@@ -170,11 +242,17 @@ function firstLaunch(decision, ticket, context, registry) {
     };
   }
   const { eligible, rejected } = screenRoutes(decision, ticket, context, registry);
+  const chosen = decision.controllerStatus
+    ? eligible.find((c) => c.offeringId === decision.selected)
+    : eligible[0];
+  if (decision.controllerStatus && !chosen) {
+    return { action: 'BLOCKED', reason: 'CONTROLLER_CHOICE_UNAVAILABLE', rejected };
+  }
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
   const request = {
     ...ticket.request,
     mode: ticket.mode || MODE,
-    offeringId: eligible[0].offeringId,
+    offeringId: chosen.offeringId,
   };
   return { action: 'LAUNCH', launch: launchFromDecision(decision, request, registry), rejected };
 }
@@ -243,4 +321,10 @@ function afterFailure(decision, ticket, context, failure, registry) {
   return { ...next, worktree: kept };
 }
 
-module.exports = { launchFromDecision, screenRoutes, firstLaunch, afterFailure };
+module.exports = {
+  decisionFromDispatch,
+  launchFromDecision,
+  screenRoutes,
+  firstLaunch,
+  afterFailure,
+};
