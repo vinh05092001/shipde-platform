@@ -464,3 +464,7 @@ Evidence: new tests before implementation 0 pass / 11 fail; after implementation
 11 pass / 0 fail. PR 01 existing suites: 53 pass / 0 fail; handoff/fallback: 33 pass / 0 fail.
 Prettier 3.9.6 uses repo settings; the hardcode guard passes with zero new instances.
 Offline evidence only. External cutover, live routes, CI, independent review and commit remain with the coordinator; `.oc/route.js` was neither copied nor changed.
+
+## Worker playbook (2026-11-08)
+
+- `docs/product-spec/docs/10-ai-collaboration/WORKER-PLAYBOOK.md` gives every worker one guide: roles, four shared rules, graphify, tool state measured at `5c574f7a` (42 declared, 5 with a command, 2 gates), reference repositories, no-hardcode, reuse, fixing and hand-back checks. Linked from the four start prompts.
