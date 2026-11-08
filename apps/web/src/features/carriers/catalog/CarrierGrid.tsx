@@ -90,8 +90,8 @@ export const CarrierGrid: React.FC<CarrierGridProps> = ({
         <CarrierCard
           key={carrier.id}
           carrier={carrier}
-          onClick={() => onCardClick?.(carrier)}
-          onViewServices={() => onViewServices?.(carrier)}
+          onClick={onCardClick ? () => onCardClick(carrier) : undefined}
+          onViewServices={onViewServices ? () => onViewServices(carrier) : undefined}
           showServicesButton={true}
         />
       ))}

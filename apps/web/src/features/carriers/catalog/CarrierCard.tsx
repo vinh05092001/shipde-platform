@@ -125,20 +125,22 @@ export const CarrierCard: React.FC<CarrierCardProps> = ({
         </div>
       </div>
 
-      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClick?.();
-          }}
-          className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
-          aria-label={`Chi tiết ${carrier.name}`}
-          title="Chi tiết"
-        >
-          <ExternalLink className="w-4 h-4" />
-        </button>
-      </div>
+      {onClick && (
+        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onClick?.();
+            }}
+            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+            aria-label={`Chi tiết ${carrier.name}`}
+            title="Chi tiết"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </article>
   );
 };

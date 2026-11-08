@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo } from 'react';
+import { useDialogFocus } from './useDialogFocus';
 import { X, ChevronRight, Info, AlertTriangle } from 'lucide-react';
 import { CanonicalStatusResponse, StatusCategory } from './types';
 import { STATUS_CATEGORY_LABELS } from './types';
@@ -10,6 +11,7 @@ export interface CanonicalStatusReferenceModalProps {
   isOpen: boolean;
   onClose: () => void;
   className?: string;
+  requestFeedback?: React.ReactNode;
 }
 
 const CATEGORY_ORDER: StatusCategory[] = [
@@ -74,6 +76,7 @@ export const CanonicalStatusReferenceModal: React.FC<CanonicalStatusReferenceMod
   isOpen,
   onClose,
   className = '',
+  requestFeedback,
 }) => {
   const groupedStatuses = useMemo(() => {
     const groups: Record<StatusCategory, CanonicalStatusResponse[]> = {
@@ -90,10 +93,13 @@ export const CanonicalStatusReferenceModal: React.FC<CanonicalStatusReferenceMod
     return groups;
   }, [statuses]);
 
+  const dialogRef = useDialogFocus(isOpen, onClose);
   if (!isOpen) return null;
 
   return (
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-labelledby="status-reference-title"
@@ -125,109 +131,117 @@ export const CanonicalStatusReferenceModal: React.FC<CanonicalStatusReferenceMod
           </button>
         </div>
 
-        <div className="p-5 overflow-y-auto flex-1">
-          <div className="mb-5 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
-            <div className="flex items-start gap-2">
-              <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold mb-1">Quy tắc tách biệt quan trọng (BR-CAR-04)</p>
-                <ul className="space-y-1 list-disc list-inside">
-                  <li>
-                    <strong>Trạng thái lệnh (COMMAND):</strong> CREATING, CREATED, CREATE_FAILED,
-                    CREATE_OUTCOME_UNKNOWN — chỉ tồn tại trước khi vận đơn được tạo thành công.
+        {requestFeedback}
+        {!requestFeedback && (
+          <>
+            <div className="p-5 overflow-y-auto flex-1">
+              <div className="mb-5 p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-800">
+                <div className="flex items-start gap-2">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold mb-1">Quy tắc tách biệt quan trọng (BR-CAR-04)</p>
+                    <ul className="space-y-1 list-disc list-inside">
+                      <li>
+                        <strong>Trạng thái lệnh (COMMAND):</strong> CREATING, CREATED,
+                        CREATE_FAILED, CREATE_OUTCOME_UNKNOWN — chỉ tồn tại trước khi vận đơn được
+                        tạo thành công.
+                      </li>
+                      <li>
+                        <strong>Trạng thái vận hành:</strong> DRAFT → READY_TO_PICK → PICKING →
+                        PICKED → IN_TRANSIT → OUT_FOR_DELIVERY →
+                        DELIVERED/DELIVERY_FAILED/RETURNING/RETURNED/CANCELLED/LOST/DAMAGED — vòng
+                        đời thực của kiện hàng.
+                      </li>
+                      <li>
+                        Không bao giờ gộp hoặc ánh xạ trạng thái lệnh sang trạng thái vận hành.
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {CATEGORY_ORDER.map((category) => {
+                const categoryStatuses = groupedStatuses[category];
+                if (categoryStatuses.length === 0) return null;
+
+                return (
+                  <section
+                    key={category}
+                    className="mb-6"
+                    data-testid={`status-category-${category.toLowerCase()}`}
+                  >
+                    <div className="flex items-center gap-2 mb-3">
+                      <div
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full border ${CATEGORY_COLORS[category]}`}
+                      >
+                        {CATEGORY_ICONS[category]}
+                        <span>{STATUS_CATEGORY_LABELS[category]}</span>
+                        <span className="px-1.5 py-0.5 bg-white/50 rounded text-[10px] font-mono">
+                          {categoryStatuses.length}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      {categoryStatuses.map((status) => (
+                        <article
+                          key={status.code}
+                          className="bg-white border border-slate-200 rounded-xl p-4 space-y-2 transition hover:border-slate-300"
+                          data-testid={`status-item-${status.code}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className="font-mono text-xs font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                                  {status.code}
+                                </span>
+                                <h4 className="font-bold text-sm text-slate-900">{status.label}</h4>
+                                <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-white border border-slate-200 rounded">
+                                  Stage: {status.stage_order}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500">{status.description}</p>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+
+              <div className="pt-4 border-t border-slate-200">
+                <h4 className="font-bold text-sm text-slate-700 mb-3">
+                  Nguyên tắc ánh xạ (BR-CAR-05, BR-CAR-06)
+                </h4>
+                <ul className="space-y-2 text-xs text-slate-600">
+                  <li className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Không bao giờ mặc định:</strong> Trạng thái raw không xác định →
+                      UNMAPPED (null), không bao giờ rơi vào IN_TRANSIT.
+                    </span>
                   </li>
-                  <li>
-                    <strong>Trạng thái vận hành:</strong> DRAFT → READY_TO_PICK → PICKING → PICKED →
-                    IN_TRANSIT → OUT_FOR_DELIVERY →
-                    DELIVERED/DELIVERY_FAILED/RETURNING/RETURNED/CANCELLED/LOST/DAMAGED — vòng đời
-                    thực của kiện hàng.
+                  <li className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Giữ nguyên raw status:</strong> Downstream tracking và settlement phải
+                      giữ nguyên chuỗi raw của hãng.
+                    </span>
                   </li>
-                  <li>Không bao giờ gộp hoặc ánh xạ trạng thái lệnh sang trạng thái vận hành.</li>
+                  <li className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Độ tin cậy bằng chứng:</strong> GHN/GHTK = VERIFIED_OFFICIAL;
+                      VIETTEL_POST/JT = CONFIRMATION_REQUIRED (cần xác nhận đối tác).
+                    </span>
+                  </li>
                 </ul>
               </div>
             </div>
-          </div>
-
-          {CATEGORY_ORDER.map((category) => {
-            const categoryStatuses = groupedStatuses[category];
-            if (categoryStatuses.length === 0) return null;
-
-            return (
-              <section
-                key={category}
-                className="mb-6"
-                data-testid={`status-category-${category.toLowerCase()}`}
-              >
-                <div className="flex items-center gap-2 mb-3">
-                  <div
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-full border ${CATEGORY_COLORS[category]}`}
-                  >
-                    {CATEGORY_ICONS[category]}
-                    <span>{STATUS_CATEGORY_LABELS[category]}</span>
-                    <span className="px-1.5 py-0.5 bg-white/50 rounded text-[10px] font-mono">
-                      {categoryStatuses.length}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  {categoryStatuses.map((status) => (
-                    <article
-                      key={status.code}
-                      className="bg-white border border-slate-200 rounded-xl p-4 space-y-2 transition hover:border-slate-300"
-                      data-testid={`status-item-${status.code}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1">
-                            <span className="font-mono text-xs font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
-                              {status.code}
-                            </span>
-                            <h4 className="font-bold text-sm text-slate-900">{status.label}</h4>
-                            <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-white border border-slate-200 rounded">
-                              Stage: {status.stage_order}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-500">{status.description}</p>
-                        </div>
-                        <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            );
-          })}
-
-          <div className="pt-4 border-t border-slate-200">
-            <h4 className="font-bold text-sm text-slate-700 mb-3">
-              Nguyên tắc ánh xạ (BR-CAR-05, BR-CAR-06)
-            </h4>
-            <ul className="space-y-2 text-xs text-slate-600">
-              <li className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Không bao giờ mặc định:</strong> Trạng thái raw không xác định → UNMAPPED
-                  (null), không bao giờ rơi vào IN_TRANSIT.
-                </span>
-              </li>
-              <li className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Giữ nguyên raw status:</strong> Downstream tracking và settlement phải giữ
-                  nguyên chuỗi raw của hãng.
-                </span>
-              </li>
-              <li className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Độ tin cậy bằng chứng:</strong> GHN/GHTK = VERIFIED_OFFICIAL;
-                  VIETTEL_POST/JT = CONFIRMATION_REQUIRED (cần xác nhận đối tác).
-                </span>
-              </li>
-            </ul>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </div>
   );

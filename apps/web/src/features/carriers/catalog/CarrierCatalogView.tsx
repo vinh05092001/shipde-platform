@@ -19,6 +19,7 @@ import {
   CarrierEvidenceLevel,
 } from './types';
 import { fetchCarriers, fetchCarrierDetail, fetchStatuses, fetchFeeComponents } from './api';
+import { RequestFeedback, catalogRequestError, type CatalogRequestError } from './RequestFeedback';
 import { CarrierGrid } from './CarrierGrid';
 import { CarrierServiceList } from './CarrierServiceList';
 import { CanonicalStatusReferenceModal } from './CanonicalStatusReferenceModal';
@@ -95,17 +96,25 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
   const [isForbidden, setIsForbidden] = useState<boolean>(initialForbidden);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchInput, setSearchInput] = useState('');
   const [evidenceFilter, setEvidenceFilter] = useState<'ALL' | CarrierEvidenceLevel>('ALL');
   const [activeFilter, setActiveFilter] = useState<'ALL' | 'true' | 'false'>('ALL');
 
   const [selectedCarrierDetail, setSelectedCarrierDetail] =
     useState<CarrierDetailResponseEnvelope | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<CatalogRequestError | null>(null);
+  const [detailCarrier, setDetailCarrier] = useState<CarrierResponse | null>(null);
 
   const [statuses, setStatuses] = useState<CanonicalStatusListResponse['data']>([]);
   const [feeComponents, setFeeComponents] = useState<FeeComponentListResponse['data']>([]);
-  const [taxonomyLoading, setTaxonomyLoading] = useState(true);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [feeLoading, setFeeLoading] = useState(true);
+  const [statusError, setStatusError] = useState<CatalogRequestError | null>(null);
+  const [feeError, setFeeError] = useState<CatalogRequestError | null>(null);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const setValidationError = (field: string, message: string) =>
+    setValidationErrors((previous) => ({ ...previous, [field]: message }));
 
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showFeeModal, setShowFeeModal] = useState(false);
@@ -151,7 +160,6 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     try {
       const response = await fetchCarriers();
       setCarriers(response.data);
-      setCorrelationId(response.catalog_revision);
     } catch (err: any) {
       if (err.status === 403) {
         setIsForbidden(true);
@@ -161,7 +169,7 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
       } else if (err.status === 401) {
         setError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
       } else {
-        setError(err.message || 'Không thể tải danh mục hãng vận chuyển');
+        setError('Không thể tải danh mục hãng vận chuyển. Vui lòng thử lại.');
         setCorrelationId(err.correlationId);
       }
     } finally {
@@ -169,33 +177,52 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     }
   }, [isForbidden]);
 
-  const fetchTaxonomyData = useCallback(async () => {
-    setTaxonomyLoading(true);
+  const fetchStatusData = useCallback(async () => {
+    setStatusLoading(true);
+    setStatusError(null);
     try {
-      const [statusesRes, feesRes] = await Promise.all([fetchStatuses(), fetchFeeComponents()]);
-      setStatuses(statusesRes.data);
-      setFeeComponents(feesRes.data);
-    } catch (err: any) {
-      console.warn('Failed to load taxonomy data:', err);
+      setStatuses((await fetchStatuses()).data);
+    } catch (error: unknown) {
+      setStatuses([]);
+      setStatusError(catalogRequestError(error));
     } finally {
-      setTaxonomyLoading(false);
+      setStatusLoading(false);
     }
   }, []);
+  const fetchFeeData = useCallback(async () => {
+    setFeeLoading(true);
+    setFeeError(null);
+    try {
+      setFeeComponents((await fetchFeeComponents()).data);
+    } catch (error: unknown) {
+      setFeeComponents([]);
+      setFeeError(catalogRequestError(error));
+    } finally {
+      setFeeLoading(false);
+    }
+  }, []);
+  const fetchTaxonomyData = useCallback(() => {
+    void fetchStatusData();
+    void fetchFeeData();
+  }, [fetchStatusData, fetchFeeData]);
 
   const handleViewServices = async (carrier: CarrierResponse) => {
+    setDetailCarrier(carrier);
+    setSelectedCarrierDetail(null);
     setDetailLoading(true);
     setDetailError(null);
     try {
-      const detail = await fetchCarrierDetail(carrier.code);
-      setSelectedCarrierDetail(detail);
-    } catch (err: any) {
-      setDetailError(err.message || 'Không thể tải chi tiết dịch vụ');
+      setSelectedCarrierDetail(await fetchCarrierDetail(carrier.code));
+    } catch (error: unknown) {
+      setDetailError(catalogRequestError(error));
     } finally {
       setDetailLoading(false);
     }
   };
 
   const clearFilters = useCallback(() => {
+    setValidationErrors({});
+    setSearchInput('');
     setSearchQuery('');
     setEvidenceFilter('ALL');
     setActiveFilter('ALL');
@@ -319,7 +346,6 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             <button
               type="button"
               onClick={() => setShowStatusModal(true)}
-              disabled={taxonomyLoading}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition disabled:opacity-50"
             >
               <Info className="w-3.5 h-3.5" />
@@ -328,7 +354,6 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             <button
               type="button"
               onClick={() => setShowFeeModal(true)}
-              disabled={taxonomyLoading}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition disabled:opacity-50"
             >
               <Calculator className="w-3.5 h-3.5" />
@@ -346,12 +371,28 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             type="text"
             id="input-search-carrier"
             aria-label="Tìm kiếm hãng vận chuyển"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            value={searchInput}
+            aria-invalid={!!validationErrors.search}
+            aria-describedby={validationErrors.search ? 'search-error' : undefined}
+            onChange={(e) => {
+              const value = e.target.value;
+              const invalid = value.length > 200 || /[\u0000-\u001f\u007f]/u.test(value);
+              setValidationError(
+                'search',
+                invalid ? 'Tìm kiếm tối đa 200 ký tự và không chứa ký tự điều khiển.' : ''
+              );
+              setSearchInput(value);
+              if (!invalid) setSearchQuery(value);
+            }}
             placeholder="Tìm theo tên, mã hãng, mô tả..."
             data-testid="input-search-carrier"
             className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
           />
+          {validationErrors.search && (
+            <p id="search-error" role="alert">
+              {validationErrors.search}
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -359,7 +400,19 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             id="filter-evidence"
             aria-label="Lọc theo mức độ bằng chứng"
             value={evidenceFilter}
-            onChange={(e) => setEvidenceFilter(e.target.value as any)}
+            aria-invalid={!!validationErrors.evidence}
+            aria-describedby={validationErrors.evidence ? 'evidence-error' : undefined}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (
+                value === 'ALL' ||
+                value === 'VERIFIED_OFFICIAL' ||
+                value === 'CONFIRMATION_REQUIRED'
+              ) {
+                setEvidenceFilter(value);
+                setValidationError('evidence', '');
+              } else setValidationError('evidence', 'Mức độ bằng chứng không hợp lệ.');
+            }}
             data-testid="filter-evidence"
             className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-blue-500 transition"
           >
@@ -374,7 +427,15 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             id="filter-active"
             aria-label="Lọc theo trạng thái hoạt động"
             value={activeFilter}
-            onChange={(e) => setActiveFilter(e.target.value as any)}
+            aria-invalid={!!validationErrors.active}
+            aria-describedby={validationErrors.active ? 'active-error' : undefined}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === 'ALL' || value === 'true' || value === 'false') {
+                setActiveFilter(value);
+                setValidationError('active', '');
+              } else setValidationError('active', 'Trạng thái hoạt động không hợp lệ.');
+            }}
             data-testid="filter-active"
             className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-medium focus:bg-white focus:outline-hidden focus:border-blue-500 transition"
           >
@@ -385,6 +446,16 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             ))}
           </select>
 
+          {validationErrors.evidence && (
+            <p id="evidence-error" role="alert">
+              {validationErrors.evidence}
+            </p>
+          )}
+          {validationErrors.active && (
+            <p id="active-error" role="alert">
+              {validationErrors.active}
+            </p>
+          )}
           {hasFilters && (
             <button
               type="button"
@@ -406,7 +477,7 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
             carriers={filteredCarriers}
             loading={loading && !initialCarriers}
             onViewServices={handleViewServices}
-            onCardClick={() => {}}
+            onCardClick={handleViewServices}
             emptyMessage={
               hasFilters
                 ? 'Không tìm thấy hãng vận chuyển phù hợp với bộ lọc'
@@ -427,20 +498,38 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
       )}
 
       {/* Service Detail Modal */}
-      {selectedCarrierDetail && (
+      {detailCarrier && (
         <CarrierServiceList
-          carrierCode={selectedCarrierDetail.data.code}
-          carrierName={selectedCarrierDetail.data.name}
-          services={selectedCarrierDetail.data.services}
+          carrierCode={detailCarrier.code}
+          carrierName={detailCarrier.name}
+          services={selectedCarrierDetail?.data.services || []}
           isOpen={true}
-          onClose={() => setSelectedCarrierDetail(null)}
-          evidenceLevel={selectedCarrierDetail.data.evidence_level}
+          onClose={() => setDetailCarrier(null)}
+          evidenceLevel={detailCarrier.evidence_level}
+          requestFeedback={
+            detailLoading || detailError ? (
+              <RequestFeedback
+                loading={detailLoading}
+                error={detailError}
+                onRetry={() => void handleViewServices(detailCarrier)}
+              />
+            ) : null
+          }
         />
       )}
 
       {/* Canonical Status Reference Modal */}
       <CanonicalStatusReferenceModal
         statuses={statuses}
+        requestFeedback={
+          statusLoading || statusError ? (
+            <RequestFeedback
+              loading={statusLoading}
+              error={statusError}
+              onRetry={fetchStatusData}
+            />
+          ) : null
+        }
         isOpen={showStatusModal}
         onClose={() => setShowStatusModal(false)}
       />
@@ -448,6 +537,11 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
       {/* Fee Taxonomy Reference Modal */}
       <FeeTaxonomyReferenceModal
         feeComponents={feeComponents}
+        requestFeedback={
+          feeLoading || feeError ? (
+            <RequestFeedback loading={feeLoading} error={feeError} onRetry={fetchFeeData} />
+          ) : null
+        }
         isOpen={showFeeModal}
         onClose={() => setShowFeeModal(false)}
       />

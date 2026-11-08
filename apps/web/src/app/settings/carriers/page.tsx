@@ -23,7 +23,7 @@ export default function CarriersSettingsPage({
   initialForbidden = false,
   initialCorrelationId = null,
 }: CarriersSettingsPageProps) {
-  const { user, token } = useAuth();
+  const { token } = useAuth();
   const [activeTab, setActiveTab] = useState<'accounts' | 'catalog'>('accounts');
 
   // Carrier Accounts state
@@ -60,8 +60,6 @@ export default function CarriersSettingsPage({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial accounts fetch
     fetchAccounts();
   }, [fetchAccounts]);
-
-  const canManageCarriers = user && ['OWNER', 'OPS_CSKH'].includes(user.role);
 
   return (
     <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8">
@@ -111,7 +109,7 @@ export default function CarriersSettingsPage({
           </div>
         </div>
 
-        {/* TAB 1: Carrier Accounts (Placeholder - Slice A / FEAT-CAR-02 scope) */}
+        {/* TAB 1: Read-only accounts; connection actions belong to FEAT-CAR-02 */}
         {activeTab === 'accounts' && (
           <div className="space-y-5" data-testid="carrier-accounts-tab">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
@@ -126,15 +124,6 @@ export default function CarriersSettingsPage({
                   </p>
                 </div>
               </div>
-              {canManageCarriers && (
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-xs transition"
-                  data-testid="connect-carrier-button"
-                >
-                  <span>+ Kết nối hãng mới</span>
-                </button>
-              )}
             </div>
 
             {accountsForbidden ? (
@@ -225,19 +214,10 @@ export default function CarriersSettingsPage({
                     Chưa có tài khoản hãng vận chuyển nào
                   </h3>
                   <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                    Kết nối tài khoản GHN, GHTK, Viettel Post hoặc J&T để bắt đầu tạo vận đơn và
-                    theo dõi hàng hóa.
+                    Danh mục hãng vận chuyển cung cấp thông tin tham khảo. Kết nối tài khoản được
+                    triển khai riêng trong tính năng quản lý kết nối.
                   </p>
                 </div>
-                {canManageCarriers && (
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-xs transition"
-                    data-testid="empty-connect-carrier-button"
-                  >
-                    <span>+ Kết nối hãng đầu tiên</span>
-                  </button>
-                )}
               </div>
             ) : (
               <div className="space-y-4" data-testid="accounts-list">
@@ -260,44 +240,6 @@ export default function CarriersSettingsPage({
                           {acc.status || 'unknown'}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
-                          title="Chỉnh sửa"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                            />
-                          </svg>
-                        </button>
-                        <button
-                          className="p-1.5 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
-                          title="Kiểm tra"
-                        >
-                          <svg
-                            className="w-4 h-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                            />
-                          </svg>
-                        </button>
-                      </div>
                     </div>
                   </div>
                 ))}
@@ -307,7 +249,7 @@ export default function CarriersSettingsPage({
         )}
 
         {/* TAB 2: Carrier Catalog (FEAT-CAR-01 Slice B) */}
-        {activeTab === 'catalog' && (
+        <div hidden={activeTab !== 'catalog'}>
           <CarrierCatalogView
             initialCarriers={initialCarriers}
             initialLoading={initialLoading}
@@ -315,7 +257,7 @@ export default function CarriersSettingsPage({
             initialForbidden={initialForbidden}
             initialCorrelationId={initialCorrelationId}
           />
-        )}
+        </div>
       </div>
     </div>
   );

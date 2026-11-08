@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+import { chromium, expect, type Page } from '@playwright/test';
 import * as assert from 'node:assert';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -395,14 +398,7 @@ async function runCarrierCatalogTests() {
     'Empty state must render correct message'
   );
 
-  // Empty with filters - should show clear filters button
-  const emptyFilteredHtml = renderWithAuth(
-    React.createElement(CarrierCatalogView, {
-      initialLoading: false,
-      initialCarriers: MOCK_CARRIERS,
-    })
-  );
-  // We can't easily test the filtered empty state without interaction, but we verify the clear filters button exists in the component
+  // Filtered-empty DOM and clear action are exercised in runInteractionTests.
   console.log('✅ EMPTY state verified');
 
   // 6. UI State: SUCCESS with all carriers and partial badges
@@ -609,26 +605,280 @@ async function runCarrierCatalogTests() {
   assert.strictEqual(ACTIVE_OPTIONS[2].value, 'false', 'Third must be false');
   console.log('✅ Filter constants verified');
 
-  // 13. RECOVERY state - retry preserves filters (verification via component structure)
-  console.log('\n13. Testing RECOVERY State Structure...');
-  // The recovery state is tested by verifying the retry button exists in error state
-  // and that searchQuery, evidenceFilter, activeFilter are maintained in component state
-  // This is verified by the component implementation using useState for filters
-  const recoveryCheckHtml = renderWithAuth(
-    React.createElement(CarrierCatalogView, {
-      initialLoading: false,
-      initialError: 'Test error',
-      initialCorrelationId: 'corr-test',
-      initialCarriers: [],
-    })
-  );
-  assert.ok(
-    recoveryCheckHtml.includes('data-testid="catalog-retry-button"'),
-    'Retry button must exist for recovery'
-  );
-  console.log('✅ RECOVERY state structure verified');
+  await runInteractionTests();
 
   console.log('\n✅ ALL FEAT-CAR-01 SLICE B CARRIER CATALOG UI STATE AND COMPONENT TESTS PASSED');
 }
 
-void runCarrierCatalogTests();
+void runCarrierCatalogTests().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+
+// Controlled transport fixtures exercise real React effects, DOM events and API decoding.
+// These fixtures never enter the production bundle or the live browser journey.
+async function runInteractionTests() {
+  const require = createRequire(import.meta.url);
+  const { build } = require(createRequire(require.resolve('tsx')).resolve('esbuild'));
+  const bundle = await build({
+    stdin: {
+      contents: `import React from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { CarrierCatalogView } from './src/features/carriers/catalog/CarrierCatalogView';
+        import Settings from './src/app/settings/carriers/page';
+        import { AuthProvider } from './src/context/AuthContext';
+        const root = createRoot(document.getElementById('root'));
+        window.mountCatalog = (settings = false) => root.render(
+          settings ? <AuthProvider><Settings /></AuthProvider> : <CarrierCatalogView />);`,
+      resolveDir: resolve(process.cwd()),
+      loader: 'tsx',
+    },
+    bundle: true,
+    write: false,
+    platform: 'browser',
+    define: {
+      'process.env': '{}',
+      'process.env.NODE_ENV': '"test"',
+      'process.env.NEXT_PUBLIC_API_URL': '"http://catalog.test"',
+    },
+    tsconfig: resolve('tsconfig.json'),
+  });
+  const browser = await chromium.launch({ headless: true });
+  const failures: string[] = [];
+  async function check(name: string, action: (page: Page) => Promise<void>) {
+    const page = await browser.newPage();
+    page.on('pageerror', (error) => console.error('Browser error:', error.message));
+    try {
+      await page.route('http://catalog.test/', (route) =>
+        route.fulfill({ contentType: 'text/html', body: '<div id="root"></div>' })
+      );
+      await page.goto('http://catalog.test/');
+      await page.route('**/api/v1/**', (route) => {
+        const path = new URL(route.request().url()).pathname;
+        const data = path.endsWith('/carriers')
+          ? MOCK_CARRIERS
+          : path.endsWith('/statuses')
+            ? MOCK_STATUSES
+            : path.endsWith('/fee-components')
+              ? MOCK_FEES
+              : path.endsWith('/carrier-accounts')
+                ? [
+                    {
+                      id: 'account-fixture',
+                      carrier_code: 'GHN',
+                      alias: 'Test account',
+                      environment: 'sandbox',
+                      status: 'ACTIVE',
+                    },
+                  ]
+                : path.includes('/carriers/')
+                  ? MOCK_CARRIER_DETAIL.data
+                  : [];
+        return route.fulfill({ json: { catalog_revision: 'CATALOG-2026-10-31', data } });
+      });
+      await page.addScriptTag({ content: bundle.outputFiles[0].text });
+      await page.evaluate(() => (window as unknown as { mountCatalog: () => void }).mountCatalog());
+      await expect(page.getByTestId('carrier-card-GHN')).toBeVisible();
+      await action(page);
+      console.log(`PASS interaction: ${name}`);
+    } catch (error) {
+      failures.push(name);
+      console.error(`FAIL interaction: ${name}: ${String(error).slice(0, 500)}`);
+    } finally {
+      await page.close();
+    }
+  }
+  try {
+    for (const status of [500, 403]) {
+      await check(`detail ${status}, loading and retry`, async (page) => {
+        let calls = 0;
+        let release!: () => void;
+        const pending = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        await page.route('**/carrier-catalog/carriers/GHN', async (route) => {
+          calls++;
+          if (calls === 1) await pending;
+          await route.fulfill(
+            calls === 1
+              ? {
+                  status,
+                  json: {
+                    error: { message: 'unsafe backend diagnostic' },
+                    meta: { correlation_id: 'detail-correlation' },
+                  },
+                }
+              : { json: { data: { ...MOCK_CARRIERS[0], services: [] } } }
+          );
+        });
+        const opener = page.getByTestId('view-services-GHN');
+        await opener.click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog.getByRole('status')).toBeVisible();
+        release();
+        await expect(dialog.getByRole('alert')).toContainText('detail-correlation');
+        await expect(dialog).not.toContainText('unsafe backend diagnostic');
+        if (status === 403) await expect(dialog).toContainText('iam:carrier_catalog:read');
+        await dialog.getByRole('button', { name: 'Thử lại' }).click();
+        await expect(dialog).toContainText('chưa có dịch vụ');
+        assert.equal(calls, 2);
+        await page.keyboard.press('Escape');
+        await expect(opener).toBeFocused();
+      });
+    }
+    await check('partial taxonomy and reference retry', async (page) => {
+      let calls = 0;
+      await page.route('**/carrier-catalog/fee-components', (route) => {
+        calls++;
+        return route.fulfill(
+          calls === 1
+            ? { status: 500, json: { meta: { correlation_id: 'fee-correlation' } } }
+            : { json: { data: MOCK_FEES } }
+        );
+      });
+      await page.getByRole('button', { name: 'Làm mới danh mục' }).click();
+      await page.getByRole('button', { name: 'Hệ thống Phí', exact: true }).click();
+      await expect(page.getByRole('dialog').getByRole('alert')).toContainText('fee-correlation');
+      await expect(page.getByRole('dialog')).not.toContainText('BASE_FREIGHT');
+      await page.getByRole('dialog').getByRole('button', { name: 'Thử lại' }).click();
+      await expect(page.getByRole('dialog')).toContainText('BASE_FREIGHT');
+      assert.equal(calls, 2);
+      await page.keyboard.press('Escape');
+      await page.getByRole('button', { name: 'Trạng thái Canonical', exact: true }).click();
+      await expect(page.getByRole('dialog')).toContainText(MOCK_STATUSES[0].code);
+    });
+    for (const status of [500, 403]) {
+      await check(`status reference ${status}, partial success and retry`, async (page) => {
+        let calls = 0;
+        await page.route('**/carrier-catalog/statuses', (route) => {
+          calls++;
+          return route.fulfill(
+            calls === 1
+              ? { status, json: { meta: { correlation_id: 'status-correlation' } } }
+              : { json: { data: MOCK_STATUSES } }
+          );
+        });
+        await page.getByRole('button', { name: 'Làm mới danh mục' }).click();
+        await page.getByRole('button', { name: 'Trạng thái Canonical', exact: true }).click();
+        await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
+          'status-correlation'
+        );
+        if (status === 403)
+          await expect(page.getByRole('dialog')).toContainText('iam:carrier_catalog:read');
+        await page.getByRole('dialog').getByRole('button', { name: 'Thử lại' }).click();
+        await expect(page.getByRole('dialog')).toContainText(MOCK_STATUSES[0].code);
+        assert.equal(calls, 2);
+        await page.keyboard.press('Escape');
+        await page.getByRole('button', { name: 'Hệ thống Phí', exact: true }).click();
+        await expect(page.getByRole('dialog')).toContainText('BASE_FREIGHT');
+      });
+    }
+    await check('accounts expose no unfinished operations', async (page) => {
+      await page.evaluate(() => {
+        localStorage.setItem(
+          'shipde_user',
+          JSON.stringify({ id: 'test-owner', role: 'OWNER', full_name: 'Test Owner' })
+        );
+        localStorage.setItem(
+          'shipde_merchant',
+          JSON.stringify({ id: 'test-shop', name: 'Test Shop' })
+        );
+        localStorage.setItem('shipde_token', 'ui-test-fixture');
+        (window as unknown as { mountCatalog: (settings: boolean) => void }).mountCatalog(true);
+      });
+      await expect(page.getByTestId('carrier-account-account-fixture')).toBeVisible();
+      await expect(page.getByRole('button', { name: /Kết nối/ })).toHaveCount(0);
+      await expect(page.locator('button[title="Chỉnh sửa"], button[title="Kiểm tra"]')).toHaveCount(
+        0
+      );
+      await page.getByTestId('tab-catalog').click();
+      await page.getByTestId('input-search-carrier').fill('GHN');
+      await page.getByTestId('tab-accounts').click();
+      await page.getByTestId('tab-catalog').click();
+      await expect(page.getByTestId('input-search-carrier')).toHaveValue('GHN');
+      await expect(page.getByTestId('carrier-card-GHTK')).toHaveCount(0);
+    });
+    await check('inline validation and filtered empty recovery', async (page) => {
+      const search = page.getByTestId('input-search-carrier');
+      await search.fill('x'.repeat(201));
+      await expect(search).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.locator('#search-error')).toBeVisible();
+      await search.fill('no-matching-carrier');
+      await expect(search).toHaveAttribute('aria-invalid', 'false');
+      await expect(page.getByTestId('carrier-grid-empty')).toContainText('phù hợp với bộ lọc');
+      await page.getByTestId('carrier-grid-empty').getByRole('button').click();
+      await expect(search).toHaveValue('');
+      for (const id of ['filter-evidence', 'filter-active']) {
+        const filter = page.getByTestId(id);
+        await filter.evaluate((element: HTMLSelectElement) => {
+          element.add(new Option('invalid', 'INVALID'));
+          element.value = 'INVALID';
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        await expect(filter).toHaveAttribute('aria-invalid', 'true');
+        await expect(page.getByTestId('carrier-card-GHN')).toBeVisible();
+        await filter.selectOption('ALL');
+        await expect(filter).toHaveAttribute('aria-invalid', 'false');
+      }
+    });
+    for (const name of ['Trạng thái Canonical', 'Hệ thống Phí', 'Xem dịch vụ (GHN)']) {
+      await check(`focus contract: ${name}`, async (page) => {
+        const opener = page.getByRole('button', { name, exact: true });
+        await opener.click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toBeVisible();
+        await expect
+          .poll(() => dialog.evaluate((el) => el.contains(document.activeElement)))
+          .toBe(true);
+        for (const key of ['Shift+Tab', 'Tab', 'Tab']) {
+          await page.keyboard.press(key);
+          assert.equal(await dialog.evaluate((el) => el.contains(document.activeElement)), true);
+        }
+        await page.keyboard.press('Escape');
+        await expect(dialog).toHaveCount(0);
+        await expect(opener).toBeFocused();
+      });
+    }
+    await check('carrier detail action opens real detail', async (page) => {
+      await page.getByRole('button', { name: 'Chi tiết Giao Hàng Nhanh', exact: true }).click();
+      await expect(page.getByRole('dialog')).toContainText('Dịch vụ của Giao Hàng Nhanh');
+      await expect(page.getByRole('dialog')).toContainText(
+        MOCK_CARRIER_DETAIL.data.services[0].code
+      );
+    });
+    await check('list failure retry preserves filters and calls API', async (page) => {
+      await page.getByTestId('input-search-carrier').fill('GHN');
+      await page.getByTestId('filter-evidence').selectOption('VERIFIED_OFFICIAL');
+      let calls = 0;
+      await page.route('**/carrier-catalog/carriers', (route) => {
+        calls++;
+        return route.fulfill(
+          calls === 1
+            ? { status: 500, json: { meta: { correlation_id: 'list-correlation' } } }
+            : { json: { data: MOCK_CARRIERS } }
+        );
+      });
+      await page.getByRole('button', { name: 'Làm mới danh mục' }).click();
+      await expect(page.getByTestId('catalog-error-banner')).toContainText('list-correlation');
+      await page.getByTestId('catalog-retry-button').click();
+      await expect(page.getByTestId('carrier-card-GHN')).toBeVisible();
+      await expect(page.getByTestId('carrier-card-GHTK')).toHaveCount(0);
+      await expect(page.getByTestId('input-search-carrier')).toHaveValue('GHN');
+      await expect(page.getByTestId('filter-evidence')).toHaveValue('VERIFIED_OFFICIAL');
+      assert.equal(calls, 2);
+    });
+    await check('real list 403 envelope', async (page) => {
+      await page.route('**/carrier-catalog/carriers', (route) =>
+        route.fulfill({ status: 403, json: { error: { code: 'FORBIDDEN' } } })
+      );
+      await page.getByRole('button', { name: 'Làm mới danh mục' }).click();
+      await expect(page.getByTestId('catalog-forbidden-banner')).toContainText(
+        'iam:carrier_catalog:read'
+      );
+      await expect(page.getByTestId('carrier-grid')).toHaveCount(0);
+    });
+  } finally {
+    await browser.close();
+  }
+  assert.deepEqual(failures, [], 'All catalog interaction regressions must pass');
+}
