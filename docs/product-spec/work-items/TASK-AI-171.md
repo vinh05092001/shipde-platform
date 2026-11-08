@@ -483,3 +483,27 @@ Additional candidate/discovery/dispatch-json/route-handoff compatibility: **130 
 0 fail**. Repo Prettier and hardcode guard pass (zero new hardcode instances).
 No external script copied or changed; no network or commit. External cutover,
 remote CI and independent review remain coordinator responsibilities.
+
+## PR 03 — Keep liveness and quota failures within their actual route (2026-11-08)
+
+Ported coordinator observation boundaries for B24/B27/B28/B29/B30/B32/B33/B61
+through existing scan, quota and health modules. Exact source/account/model scans
+reuse quota classification (including outer 503/inner errors), retain observation
+time and retry evidence, and discard response text. Older observations cannot
+replace newer failures. Structured completion evidence tolerates a post-answer
+timeout; error prose is not completion. Family quota admission combines all
+windows, preserves five-hour exhaustion and requires fresh telemetry after reset.
+An explicitly unavailable health store refuses admission. Selection does not read
+raw provider logs or credentials; due probes remain explicit existing commands.
+
+Offline evidence: new `task-ai-171-route-pr03-observations` suite before changes:
+**9 tests, 0 pass, 9 fail**. After changes plus existing `task-ai-171-auth-scope`,
+`task-ai-171-onboard-scope`, `task-ai-171-route-health-evidence`:
+**50 tests, 50 pass, 0 fail**. Additional P5 liveness/PR 02 compatibility with the
+new suite: **25 tests, 25 pass, 0 fail**. No network, external script changes or
+commit; live evidence, remote CI and independent review remain outstanding.
+
+Changed JavaScript formatted with offline Prettier 3.9.6 and repo settings;
+`git diff --check` passes. The hardcode guard could not execute:
+`ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`. No dependency install or
+network fallback was attempted; coordinator must rerun this gate with dependencies.

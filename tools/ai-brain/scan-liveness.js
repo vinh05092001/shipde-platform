@@ -2,10 +2,11 @@
 
 const fs = require('fs');
 const { Level, ProofLevel, Status } = require('./evidence');
+const { classifyQuotaResponse } = require('./quota-scan');
 
 const identity = (sourceId, accountId, modelId) => JSON.stringify([sourceId, accountId, modelId]);
 
-// File order is observation order. No alias expansion, credential reads or persistence.
+// Explicit observation time wins; file order breaks ties for legacy rows.
 function readScanLiveness(file) {
   const latest = new Map();
   if (!file) return latest;
@@ -31,17 +32,31 @@ function readScanLiveness(file) {
     ) {
       throw new Error('SCAN_INVALID_LINE:' + (index + 1));
     }
+    const at = row.observedAt || row.at || observedAt;
+    if (!Number.isFinite(Date.parse(at))) throw new Error('SCAN_INVALID_LINE:' + (index + 1));
+    const classified =
+      row.body !== undefined || row.snippet !== undefined
+        ? classifyQuotaResponse(
+            row.httpStatus,
+            row.body ?? row.snippet,
+            row.headers,
+            Date.parse(at)
+          )
+        : { reason: row.reason, retryAfter: null };
     const passed =
-      row.reason === 'OK' &&
+      classified.reason === 'OK' &&
       Number.isInteger(row.httpStatus) &&
       row.httpStatus >= 200 &&
       row.httpStatus < 300;
-    latest.set(identity(row.sourceId, row.accountId, row.modelId), {
-      reason: row.reason,
+    const key = identity(row.sourceId, row.accountId, row.modelId);
+    if (Date.parse(latest.get(key)?.observedAt) > Date.parse(at)) return;
+    latest.set(key, {
+      reason: classified.reason,
       status: passed ? Status.PASSED : Status.FAILED,
       level: Level.API,
       proofLevel: ProofLevel.API_PASS,
-      observedAt,
+      observedAt: at,
+      retryAfter: classified.retryAfter,
       ...(Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0 ? { elapsedMs: row.elapsedMs } : {}),
     });
   });

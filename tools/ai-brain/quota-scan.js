@@ -733,6 +733,7 @@ function isOneModelProbe(entry) {
 
 function isScopeBlocked(scopeEntry, now = Date.now(), options = {}) {
   if (!scopeEntry) return false;
+  if (scopeEntry.requiresProbe === true) return true;
   if (scopeEntry.error && !scopeEntry.code) return true;
   if (!scopeEntry.code) return false;
   const isSourceScoped =
@@ -2166,9 +2167,9 @@ async function scanCliLanes(quotaState, options = {}) {
       }
       if (reading && reading.available && Array.isArray(reading.rows)) {
         let allFamiliesExhausted = reading.rows.length > 0;
-        for (const row of reading.rows) {
+        for (const row of mergeQuotaWindows(reading.rows, now)) {
           const remaining = Number(row.remainingPercent);
-          const isExhausted = Number.isFinite(remaining) && remaining <= 0;
+          const isExhausted = row.known === false || (Number.isFinite(remaining) && remaining <= 0);
           if (!isExhausted) {
             allFamiliesExhausted = false;
             poolHasAnyQuota = true;
@@ -2181,9 +2182,16 @@ async function scanCliLanes(quotaState, options = {}) {
             scope: famScope,
             upstream: row.family,
             model: null,
-            code: isExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK,
+            code:
+              row.known === false
+                ? QUOTA_STATUS_CODES.STATE_ERROR
+                : isExhausted
+                  ? QUOTA_STATUS_CODES.QUOTA
+                  : QUOTA_STATUS_CODES.OK,
             status: isExhausted ? 429 : 200,
-            reason: isExhausted ? 'QUOTA_EXHAUSTED' : 'OK',
+            reason:
+              row.known === false ? 'TELEMETRY_REQUIRED' : isExhausted ? 'QUOTA_EXHAUSTED' : 'OK',
+            requiresProbe: row.known === false,
             at: new Date(now).toISOString(),
             retryAfter: isExhausted && row.resetsAt ? row.resetsAt : null,
             evidence: 'QUOTA_READING',
@@ -2191,7 +2199,12 @@ async function scanCliLanes(quotaState, options = {}) {
           quotaState.scopes[famScope] = famEntry;
           quotaState.scopes[`agy-pool::${famScope}`] = famEntry;
         }
-        const accCode = allFamiliesExhausted ? QUOTA_STATUS_CODES.QUOTA : QUOTA_STATUS_CODES.OK;
+        const accCode =
+          reading.rows.length === 0
+            ? QUOTA_STATUS_CODES.STATE_ERROR
+            : allFamiliesExhausted
+              ? QUOTA_STATUS_CODES.QUOTA
+              : QUOTA_STATUS_CODES.OK;
         const accEntry = {
           source: 'agy-pool',
           accountId: accId,
@@ -2199,8 +2212,14 @@ async function scanCliLanes(quotaState, options = {}) {
           upstream: 'agy-pool',
           model: null,
           code: accCode,
-          status: allFamiliesExhausted ? 429 : 200,
-          reason: allFamiliesExhausted ? 'QUOTA_EXHAUSTED' : 'OK',
+          requiresProbe: reading.rows.length === 0,
+          status: accCode === QUOTA_STATUS_CODES.OK ? 200 : 429,
+          reason:
+            accCode === QUOTA_STATUS_CODES.STATE_ERROR
+              ? 'TELEMETRY_REQUIRED'
+              : allFamiliesExhausted
+                ? 'QUOTA_EXHAUSTED'
+                : 'OK',
           at: new Date(now).toISOString(),
           retryAfter: null,
           evidence: 'QUOTA_READING',
@@ -3014,7 +3033,24 @@ async function syncNinerouterModelsToOpenCode(options = {}) {
   };
 }
 
+// One family shares every reported window; a later weekly row cannot erase a spent short window.
+function mergeQuotaWindows(rows, now) {
+  const families = new Map();
+  for (const row of rows) {
+    const known =
+      row.known !== false &&
+      Number.isFinite(row.remainingPercent) &&
+      (!row.resetsAt || Date.parse(row.resetsAt) > now);
+    const current = families.get(row.family);
+    if (!current || !known || (current.known && row.remainingPercent < current.remainingPercent)) {
+      families.set(row.family, { ...row, known });
+    }
+  }
+  return [...families.values()];
+}
+
 module.exports = {
+  mergeQuotaWindows,
   DEFAULT_QUOTA_STATE_FILE,
   QUOTA_STATUS_CODES,
   BLOCKING_CODES,

@@ -1103,7 +1103,8 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     return false;
   }
   if (options && options.allowUnprobedCandidates === true) return true;
-  if (!routeHealth) return true;
+  if (!routeHealth)
+    return !(options && (options.requireRouteHealth || options.routeHealth === null));
   const modelId = candidate && candidate.modelId;
   const gateway =
     candidate &&
