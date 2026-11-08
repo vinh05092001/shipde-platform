@@ -201,3 +201,16 @@ test('a renamed model takes its origin: a release tag on one side, lowest score 
   assert.equal(q.matchedVia, 'aa-origin-release-tag');
   assert.equal(quality(a, 'gcli/grok-4.7-turbo'), undefined);
 });
+
+test('origin join never strips an unpublished effort, merges distinct models, or ignores policy tags', (t) => {
+  const grok = [
+    { name: 'Grok 4.7 (Low)', base: 'grok-4-7', variant: 'low', ii: 30, pct: 54 },
+    { name: 'Grok 4.7 (High)', base: 'grok-4-7', variant: 'high', ii: 35, pct: 63 },
+  ];
+  assert.equal(quality(policyDir(t, grok), 'gateway/grok4.7-xhigh'), undefined);
+  const synth = [
+    { name: 'Synthetic', base: 'synthetic', variant: '', ii: 5, pct: 10 },
+    { name: 'Synthetic Thinking', base: 'synthetic-thinking', variant: '', ii: 50, pct: 90 },
+  ];
+  assert.equal(quality(policyDir(t, synth), 'gateway/synthetic-free').value, 10);
+});

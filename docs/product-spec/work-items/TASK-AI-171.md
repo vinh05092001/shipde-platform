@@ -435,3 +435,4 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## AA origin names
 
 - A route whose name differs from AA (renamed by a source) is joined to its origin through the shared prior matcher or a trailing numeric release tag; several candidates take the lowest score. Dispatch FEAT-CAR-01: 103 of 236 models scored (87 before).
+- Review 08/11: the shared prior matcher was dropped from the origin join (it stripped efforts and merged distinct models); release-tag rule only. Dispatch: 102 of 235 scored.
