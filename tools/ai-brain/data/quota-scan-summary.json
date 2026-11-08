@@ -1,6 +1,15 @@
 {
-  "scanFinishedAt": "2026-11-08T05:54:07.863Z",
+  "scanFinishedAt": "2026-11-02T10:36:02.639Z",
   "command": "quota-scan",
-  "observedScopes": 0,
-  "statusCounts": {}
+  "observedScopes": 111,
+  "statusCounts": {
+    "UNSCANNABLE": 1,
+    "UNSCOPED": 5,
+    "DISCOVERY_FAILED": 14,
+    "AUTH": 38,
+    "UNAVAILABLE": 35,
+    "OK": 11,
+    "QUOTA": 5,
+    "ERROR": 2
+  }
 }
