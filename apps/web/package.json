@@ -19,7 +19,8 @@
     "db:generate": "prisma generate",
     "version:next": "next --version",
     "test:a11y": "playwright test",
-    "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs"
+    "test:lighthouse": "lhci autorun --config=./lighthouserc.cjs",
+    "test:interactions": "playwright test -c playwright.interactions.config.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
