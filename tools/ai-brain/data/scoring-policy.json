@@ -20,5 +20,8 @@
     }
   },
   "deploymentTags": ["free"],
-  "deploymentTagsRationale": "OpenRouter-style pricing tier of the same weights; any other tag (revision, quantization) is a different model and stays unscored."
+  "deploymentTagsRationale": "OpenRouter-style pricing tier of the same weights; any other tag (revision, quantization) is a different model and stays unscored.",
+  "modelPageBase": "https://artificialanalysis.ai/models/",
+  "modelPageConcurrency": 4,
+  "modelPageRationale": "AA model pages embed records for deprecated models the leaderboard table hides; they are the same index on the same scale."
 }

@@ -109,3 +109,29 @@ test('aa-snapshot parses leaderboard rows into midrank percentiles', () => {
     ]
   );
 });
+
+test('aa-snapshot reads each embedded record by its own slug, including deprecated ones', () => {
+  const { parseRecords, releaseSlugs, rowsFromRecords } = require('../aa-snapshot');
+  const page =
+    '{\\"list\\":[{\\"releaseSlug\\":\\"m-1\\"},{\\"releaseSlug\\":\\"m-2\\"}],' +
+    '\\"a\\":{\\"slug\\":\\"m-1-high\\",\\"name\\":\\"M 1 (High)\\",\\"release\\":{\\"slug\\":\\"m-1\\"},\\"deprecated\\":true,\\"intelligenceIndex\\":40},' +
+    '\\"b\\":{\\"slug\\":\\"m-2\\",\\"name\\":\\"M 2\\",\\"intelligenceIndex\\":20},' +
+    '\\"c\\":{\\"slug\\":\\"m-3\\",\\"name\\":\\"M 3\\",\\"intelligenceIndex\\":null}}';
+  const records = parseRecords(page);
+  assert.deepEqual(
+    records.map((r) => [r.slug, r.ii, r.deprecated, r.release]),
+    [
+      ['m-1-high', 40, true, 'm-1'],
+      ['m-2', 20, false, null],
+    ]
+  );
+  assert.deepEqual(releaseSlugs(page), ['m-1', 'm-2']);
+  const { rows } = rowsFromRecords(records);
+  assert.deepEqual(
+    rows.map((r) => [r.base, r.variant, r.pct]),
+    [
+      ['m-1', 'high', 75],
+      ['m-2', '', 25],
+    ]
+  );
+});
