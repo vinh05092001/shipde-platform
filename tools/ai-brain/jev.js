@@ -348,6 +348,7 @@ async function advise(question, options) {
     callReason: called ? 'CLOSED_QUESTION' : result.reason,
     questionKind: question.kind || 'advisory',
     questionKey: questionKey(question),
+    questionType: 'choice',
     outcome: result.outcome,
     reason: result.outcome === Outcome.DECIDED ? 'VALID_ADVICE' : result.reason,
     confidence:

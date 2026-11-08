@@ -75,6 +75,7 @@ async function assessOnce(profile, source, ask, options, routing) {
     ask,
     source,
     minConfidence: source && source.minConfidence,
+    recordTurn: options.recordTurn,
   });
   const entry = { ask: options.jevAsk, result };
   cache.set(key, entry);

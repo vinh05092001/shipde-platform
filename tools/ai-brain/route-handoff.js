@@ -49,6 +49,7 @@ function launchFromDecision(decision, request, registry) {
     branch: r.branch,
     base: r.base,
     cwd: r.cwd,
+    isolatedWorker: r.isolatedWorker,
     title: r.title,
     labels: r.labels || {},
     newWorkspace: r.newWorkspace,

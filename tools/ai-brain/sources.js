@@ -140,7 +140,20 @@ function loadSources(options) {
       source.modelMeta = {};
     }
   }
-  return { version: doc.version || 0, sources, retired, dispatch: doc.dispatch || {}, file };
+  const registry = {
+    version: doc.version || 0,
+    sources,
+    retired,
+    dispatch: doc.dispatch || {},
+    file,
+  };
+  registry.dispatch.providers = { ...registry.dispatch.providers };
+  for (const source of sources) {
+    if (registry.dispatch.providers[source.id.toLowerCase()]) continue;
+    const route = dispatchRoute(source.id, registry);
+    if (route) registry.dispatch.providers[source.id.toLowerCase()] = route;
+  }
+  return registry;
 }
 
 function bySource(registry) {
@@ -376,27 +389,51 @@ function describeAll(options) {
 /**
  * How a registry account's `provider` reaches a running session.
  *
- * Returns { harness, provider, modelPrefix } or null. The lookup lives in
+ * Returns { harness, provider, modelPrefix, modelIdIsExact? } or null. Derived
+ * routes with an explicit OpenCode provider take exact API IDs, including any namespace.
+ * Legacy writers keep their source provider and accept qualified model IDs. The lookup lives in
  * sources.json so that adding a provider is a row rather than a branch in the
  * executor — the `if/else` chain in dispatch.sh is what this replaces.
  */
 function dispatchRoute(provider, registry) {
   const reg = registry || loadSources();
   const table = ((reg && reg.dispatch) || {}).providers || {};
-  const route = table[String(provider || '').toLowerCase()];
-  if (!route) return null;
+  let route = table[String(provider || '').toLowerCase()];
+  if (!route) {
+    const source = getSource(provider, reg);
+    if (
+      !source ||
+      refuseReason(provider, reg) ||
+      source.enabled === false ||
+      source.servesModels === false ||
+      source.kind !== Kind.MODEL_SOURCE ||
+      source.accessPath === 'cli' ||
+      !/^https?:\/\//i.test(source.endpoint || '') ||
+      !(source.credential?.env || source.credential?.name || source.apiKeyEnv)
+    )
+      return null;
+    const key = source.opencodeProvider || source.id;
+    if (isRetired(key, reg) || isDeferred(key, reg)) return null;
+    route = {
+      harness: source.opencodeProvider ? 'opencode-direct' : source.harness || 'opencode-direct',
+      provider: source.opencodeProvider ? 'opencode' : source.id,
+      modelPrefix: key + '/',
+      ...(source.opencodeProvider ? { modelIdIsExact: true } : {}),
+    };
+  }
   return {
     harness: route.harness,
     provider: route.provider,
     modelPrefix: route.modelPrefix || '',
+    ...(route.modelIdIsExact ? { modelIdIsExact: true } : {}),
   };
 }
 
-/** The model id as the harness expects it, prefix applied once. */
+/** Exact API IDs retain their namespace; legacy routes accept an applied prefix. */
 function qualifyModel(model, route) {
   const name = String(model || '');
   const prefix = (route && route.modelPrefix) || '';
-  if (!name || !prefix || name.startsWith(prefix)) return name;
+  if (!name || !prefix || (!route.modelIdIsExact && name.startsWith(prefix))) return name;
   return prefix + name;
 }
 
