@@ -431,6 +431,9 @@ Integration of the routing tickets with a measured quality policy and scan-based
 - Route IDs join AA rows by last path segment; only a policy-declared deployment tag is stripped; an unnamed effort takes the lowest published effort.
 - Evidence: 22/22 focused tests; dry-run FEAT-CAR-01 scored 76 of 234 models (was 6). Models absent from AA stay QUALITY_UNKNOWN.
 
+## AA deprecated records (aa-snapshot deep mode)
+
+- With `modelPageBase` in the policy, aa-snapshot reads the records AA embeds in model pages, including deprecated models the leaderboard table hides. Live run 2026-11-08: 115 rows (10 deprecated), dispatch FEAT-CAR-01 scored 87 of 236 models (was 76). AA publishes no index for the rest.
 ## Scoring scale label (dispatch output)
 
 - With an active scoring policy, `scoreScale` names the policy version and range and the decision carries `scoringPolicyStatus`; without a policy the profile label stays.

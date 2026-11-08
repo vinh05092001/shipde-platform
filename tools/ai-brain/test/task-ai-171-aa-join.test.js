@@ -109,3 +109,71 @@ test('aa-snapshot parses leaderboard rows into midrank percentiles', () => {
     ]
   );
 });
+
+test('aa-snapshot reads each embedded record by its own slug, including deprecated ones', () => {
+  const { parseRecords, releaseSlugs, rowsFromRecords } = require('../aa-snapshot');
+  const page =
+    '{"list":[{"releaseSlug":"m-1"},{"releaseSlug":"m-2"}],' +
+    '"a":{"slug":"m-1-high","name":"M 1 (High)","release":{"slug":"m-1"},"deprecated":true,"intelligenceIndex":40},' +
+    '"b":{"slug":"m-2","name":"M 2","intelligenceIndex":20},' +
+    '"c":{"slug":"m-3","name":"M 3","intelligenceIndex":null}}';
+  const records = parseRecords(page);
+  const wrapped = '<script>self.__next_f.push([1,' + JSON.stringify(page) + '])</script>';
+  assert.deepEqual(parseRecords(wrapped), records);
+  assert.deepEqual(
+    records.map((r) => [r.slug, r.ii, r.deprecated, r.release]),
+    [
+      ['m-1-high', 40, true, 'm-1'],
+      ['m-2', 20, false, null],
+    ]
+  );
+  assert.deepEqual(releaseSlugs(page), ['m-1', 'm-2']);
+  const { rows } = rowsFromRecords(records);
+  assert.deepEqual(
+    rows.map((r) => [r.base, r.variant, r.pct]),
+    [
+      ['m-1', 'high', 75],
+      ['m-2', '', 25],
+    ]
+  );
+});
+
+test('braces inside record strings do not drop or merge records', () => {
+  const { parseRecords } = require('../aa-snapshot');
+  const page =
+    '[{"slug":"a","name":"A {","intelligenceIndex":40},' +
+    '{"slug":"b","name":"B }","intelligenceIndex":20}]';
+  assert.deepEqual(
+    parseRecords(page).map((r) => [r.slug, r.ii]),
+    [
+      ['a', 40],
+      ['b', 20],
+    ]
+  );
+});
+
+test('a malformed payload chunk breaks the stream instead of joining its neighbours', () => {
+  const { parseRecords } = require('../aa-snapshot');
+  const push = (s) => `self.__next_f.push([1,${s}])`;
+  const page =
+    push(JSON.stringify('{"slug":"x","name":"X",')) +
+    push('"bad\\q"') +
+    push(JSON.stringify('"intelligenceIndex":50}{"slug":"y","name":"Y","intelligenceIndex":30}'));
+  assert.deepEqual(
+    parseRecords(page).map((r) => r.slug),
+    ['y']
+  );
+});
+
+test('an escape at the end of a chunk cannot swallow the break marker', () => {
+  const { parseRecords } = require('../aa-snapshot');
+  const push = (s) => `self.__next_f.push([1,${s}])`;
+  const page =
+    push(JSON.stringify('{"bad":"\\')) +
+    push('"bad\\q"') +
+    push(JSON.stringify('"foo"}{"slug":"y","name":"Y","intelligenceIndex":30}'));
+  assert.deepEqual(
+    parseRecords(page).map((r) => r.slug),
+    ['y']
+  );
+});
