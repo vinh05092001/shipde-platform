@@ -29,6 +29,7 @@
  * that could leak a secret would make the whole store radioactive.
  */
 
+const { escapePart, unescapePart } = require('../route-identity-utils');
 const GATEWAY_PREFIX_SEPARATOR = '::';
 
 /**
@@ -40,15 +41,20 @@ const GATEWAY_PREFIX_SEPARATOR = '::';
  */
 function candidateKey(identity) {
   const i = identity || {};
-  return [
-    i.harness || '',
-    i.accessPath || '',
-    i.gateway || '',
-    i.upstream || '',
-    i.account !== undefined ? i.account : i.accountId || '*',
-    i.quotaScope || '',
-    i.modelId || i.model || '',
-  ].join(GATEWAY_PREFIX_SEPARATOR);
+  return (
+    [
+      i.harness || '',
+      i.accessPath || '',
+      i.gateway || '',
+      i.upstream || '',
+      i.account !== undefined ? i.account : i.accountId || '*',
+      i.quotaScope || '',
+      i.modelId || i.model || '',
+    ]
+      // Preserve legacy URL colons; encode separators and boundary colons only.
+      .map((part) => String(part).replace(/%|::|\u241f|^:|:$/g, escapePart))
+      .join(GATEWAY_PREFIX_SEPARATOR)
+  );
 }
 
 /**
@@ -57,7 +63,7 @@ function candidateKey(identity) {
  */
 function parseCandidateKey(key) {
   if (typeof key !== 'string') return null;
-  const parts = key.includes('::') ? key.split('::') : key.split('\u241f');
+  const parts = (key.includes('::') ? key.split('::') : key.split('\u241f')).map(unescapePart);
   if (parts.length === 7) {
     return {
       harness: parts[0],

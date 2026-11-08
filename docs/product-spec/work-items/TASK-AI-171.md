@@ -460,3 +460,23 @@ Evidence: new tests before implementation 0 pass / 11 fail; after implementation
 11 pass / 0 fail. PR 01 existing suites: 53 pass / 0 fail; handoff/fallback: 33 pass / 0 fail.
 Prettier 3.9.6 uses repo settings; the hardcode guard passes with zero new instances.
 Offline evidence only. External cutover, live routes, CI, independent review and commit remain with the coordinator; `.oc/route.js` was neither copied nor changed.
+
+## PR 02 — Preserve full route identity and admit all sources once (2026-11-08)
+
+Operator-assigned author scope covers B20/B22/B57/B58/B59/B62/B73. Reuse the
+existing pool inventory, combo candidate/scope rules and real-route resolver.
+Injected routes now use the shared admission function, including credential refusals
+and account-bound registry alias lookup. Deduplicate injected and refreshed inventory
+before admission; preserve accounts, slash/case IDs, vendors and effort variants.
+The shared discovery identity helper reuses route-identity component escaping and
+decoding so delimiter/percent values cannot merge distinct routes. Ordinary keys
+without encoded characters retain their representation; parsed keys round-trip.
+Combo selection remains a real candidate and its resolved launch evidence names it.
+
+Offline evidence: new PR 02 suite before implementation **0 pass / 5 fail**;
+after implementation **5 pass / 0 fail**. Existing `task-ai-171-route-identity`,
+`task-ai-171-combo-members`, `task-ai-181-route-scope`: **33 pass / 0 fail**.
+Additional candidate/discovery/dispatch-json/route-handoff compatibility: **130 pass /
+0 fail**. Repo Prettier and hardcode guard pass (zero new hardcode instances).
+No external script copied or changed; no network or commit. External cutover,
+remote CI and independent review remain coordinator responsibilities.

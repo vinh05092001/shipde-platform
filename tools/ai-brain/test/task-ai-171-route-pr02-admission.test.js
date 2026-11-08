@@ -1,0 +1,117 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { assembleForDispatch } = require('../cli');
+const { candidateKey } = require('../candidates');
+const { launchFromDecision } = require('../route-handoff');
+const registry = {
+  sources: [],
+  dispatch: { providers: {} },
+};
+const row = (over = {}) => ({
+  harness: 'paseo',
+  accessPath: 'cli',
+  gateway: 'fixture-router',
+  upstream: 'vendor',
+  source: 'fixture-router',
+  accountId: 'lane-a',
+  quotaScope: 'lane-a',
+  modelId: 'vendor/Case/mini:free',
+  ...over,
+});
+const assemble = (candidates, over = {}) =>
+  assembleForDispatch({ candidates: [] }, [], registry, {
+    candidates,
+    evidenceData: {},
+    offerings: [],
+    registryAccounts: [],
+    discoverPool: false,
+    routeHealth: null,
+    allowUnprobedCandidates: true,
+    ...over,
+  });
+
+test('PR02: dedupe once without dropping accounts, slash IDs, vendors or effort variants', () => {
+  const routes = [
+    row(),
+    row({ accountId: 'lane-b', quotaScope: 'lane-b' }),
+    row({ modelId: 'other/Case/mini:free' }),
+    row({ modelId: 'vendor/Case/mini:thinking' }),
+    row({ harness: 'agy-pool', gateway: 'agy-pool', modelId: 'fixture-low' }),
+    row({ harness: 'direct-http', gateway: 'direct' }),
+  ];
+  const actual = assemble([...routes, ...routes]);
+  assert.equal(actual.length, routes.length);
+  assert.deepEqual(actual.map(candidateKey), routes.map(candidateKey));
+  assert.equal(actual[4].quality, undefined, 'unknown effort quality stays unknown');
+});
+
+test('PR02: probe injection cannot bypass a missing credential refusal', () => {
+  const c = row({
+    credentialEnvMissing: true,
+    blocked: true,
+    blockReason: 'CREDENTIAL_ENV_MISSING',
+  });
+  const actual = assemble([c], { probeEvidence: () => true });
+  assert.equal(actual.length, 0);
+  assert.equal(actual.excludedRoutes[0].reasonCode, 'CREDENTIAL_ENV_MISSING');
+});
+
+test('PR02: injected real route uses the same registry alias and account health lookup', () => {
+  const health = require('../route-health');
+  const store = { paths: {} };
+  health.recordResult(
+    store,
+    'vendor/Case/mini:free',
+    { id: 'fixture-router', accountId: 'lane-a' },
+    {
+      ok: true,
+      status: 200,
+    },
+    Date.now()
+  );
+  const c = row({ modelId: 'transport/vendor/Case/mini:free' });
+  const reg = { ...registry, sources: [{ id: 'fixture-router', aliases: ['transport'] }] };
+  const actual = assembleForDispatch(null, [], reg, {
+    candidates: [c],
+    routeHealth: store,
+    evidenceData: {},
+  });
+  assert.equal(actual.length, 1);
+  assert.equal(actual[0].modelId, c.modelId);
+});
+
+test('PR02: duplicate combo candidate keeps its own selected model and resolved launch evidence', () => {
+  const sources = require('../sources').loadSources();
+  const c = row({
+    gateway: '9router',
+    source: '9router',
+    modelId: 'fixture-team',
+    routeKind: 'combo',
+    comboMembers: ['vendor/Case/mini:free'],
+  });
+  const actual = assemble([c, c]);
+  assert.equal(actual.length, 1);
+  const key = candidateKey(actual[0]);
+  const launched = launchFromDecision(
+    { selected: key, candidates: [{ ...actual[0], offeringId: key }] },
+    { prompt: 'fixture', mode: 'full-access' },
+    sources
+  );
+  assert.equal(launched.offeringId, key);
+  assert.ok(launched.model.endsWith('/fixture-team'));
+  assert.deepEqual(actual[0].comboMembers, c.comboMembers);
+});
+
+test('PR02: delimiter and percent components cannot collapse separate route identities', () => {
+  const { mergeCandidates } = require('../candidates');
+  const { parseCandidateKey } = require('../discovery/identity');
+  const a = row({ accountId: 'lane::part', quotaScope: 'quota', modelId: 'vendor/A%3A::B' });
+  const b = row({ accountId: 'lane', quotaScope: 'part::quota', modelId: a.modelId });
+  assert.equal(mergeCandidates([a], [b]).length, 2);
+  assert.equal(parseCandidateKey(candidateKey(a)).modelId, a.modelId);
+  assert.equal(parseCandidateKey(candidateKey(a)).account, a.accountId);
+  const boundary = row({ accessPath: 'http://fixture.invalid/v1', accountId: ':lane:' });
+  assert.equal(parseCandidateKey(candidateKey(boundary)).account, boundary.accountId);
+  assert.equal(parseCandidateKey(candidateKey(boundary)).accessPath, boundary.accessPath);
+});
