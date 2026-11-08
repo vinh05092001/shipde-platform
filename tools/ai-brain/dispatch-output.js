@@ -12,8 +12,12 @@ function row(c) {
     upstream: c.upstream || null,
     modelId: c.modelId || null,
     accountId: c.accountId || c.account || null,
+    connectionId: c.connectionId || null,
+    quotaScope: c.quotaScope || null,
+    accessPath: c.accessPath || null,
     score: c.score ?? null,
     scoreBreakdown: c.scoreBreakdown || null,
+    qualityLabel: c.qualityLabel || c.scoreBreakdown?.qualityLabel || null,
     reasonCode: c.reasonCode || null,
     reason: c.reason || c.blockReason || null,
   };
@@ -95,4 +99,4 @@ function dispatchOutput(profile, assessment, candidates, result) {
   };
 }
 
-module.exports = { filterStage, filterPins, dispatchOutput };
+module.exports = { filterStage, filterPins, dispatchOutput, decisionRow: row };
