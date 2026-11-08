@@ -417,6 +417,9 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## Register reconciliation (PR #540)
 
 - Report: `docs/ai-audit/register-reconcile-20261108.md`. Offline author, data fetched by the coordinator.
+## Open PR (PR #541)
+
+- Report: `docs/ai-audit/open-prs-20261108.md`. Offline author, data fetched by the coordinator.
 ## 9Router 503 classification (PR #538)
 
 - 9Router answers 503 with the upstream status inside; 895 scan results were classified by that inner code (rate limit, no credit, model gone, auth, other) in `docs/ai-audit/handoff-table-20261108.md`.
