@@ -170,7 +170,12 @@ function originRows(id, modelId, byBase, deploymentTags) {
     for (const [base, list] of byBase) if (base.startsWith(p + '-')) family.push(...list);
     if (family.length && p.split('-').length >= 2) return lowest(family, 'aa-origin-family');
   }
-  return [];
+  // Last resort (operator 2026-11-08, e.g. MiniMax-M2.7, deprecated without an index): the
+  // vendor's lowest published score, when the first name segment names an AA vendor family.
+  const vendor = own.split('-')[0];
+  const vendorRows = [];
+  for (const [base, list] of byBase) if (base.split('-')[0] === vendor) vendorRows.push(...list);
+  return vendorRows.length ? lowest(vendorRows, 'aa-origin-vendor') : [];
 }
 
 function joinMeasurements(candidates, assessment, context = {}) {
