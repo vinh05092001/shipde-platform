@@ -414,6 +414,11 @@ Limitations: Mock launch and JEV verify orchestration only, not route liveness. 
 
 Integration of the routing tickets with a measured quality policy and scan-based route evidence. Evidence and open items: `docs/ai-audit/handoff-table-20261108.md`.
 
+## 9Router 503 classification (PR #538)
+
+- 9Router answers 503 with the upstream status inside; 895 scan results were classified by that inner code (rate limit, no credit, model gone, auth, other) in `docs/ai-audit/handoff-table-20261108.md`.
+- `cl`/`bzl` conflicts with earlier successful free calls are burst rate limits during the scan; `nous` is model gone. No backoff rescan was run.
+/^>>>>>>> /d
 ## AA scoring restore (PR #539)
 
 - The #537 integration dropped `2bc5eef9`; this restores the AA Intelligence percentile policy.
