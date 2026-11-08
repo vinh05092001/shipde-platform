@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Updated 21 register rows to `MERGED`; retained 7 ambiguous rows unchanged (4 by the author, 3 after review). No other register columns except `status` and `pr` were changed. Duplicate TASK-AI-167 rows remain separate and both reference the same merged PR.
+Updated 19 register rows to `MERGED`; retained 9 ambiguous rows unchanged (4 by the author, 5 after review). No other register columns except `status` and `pr` were changed. Duplicate TASK-AI-167 rows remain separate and both reference the same merged PR.
 
 ## Evidence and method
 
@@ -30,8 +30,6 @@ All existing MERGED rows have matching PR evidence, and their recorded PR number
 | 269 | TASK-AI-156 | IN_PROGRESS | MERGED | #488 | None |
 | 270 | TASK-AI-157 | READY_FOR_CODEX | MERGED | #489 | None |
 | 271 | TASK-AI-153 | IN_PROGRESS | MERGED | #492 | None |
-| 296 | TASK-AI-163 | IN_PROGRESS | MERGED | #502 | None |
-| 273 | TASK-AI-162 | IN_PROGRESS | MERGED | #499 | None |
 | 291 | TASK-AI-159 | IN_PROGRESS | MERGED | #498 | None |
 | 272 | TASK-AI-161 | IN_PROGRESS | MERGED | #495 | None |
 | 293 | TASK-AI-167 | READY_FOR_CODEX | MERGED | #503 | None |
@@ -53,8 +51,9 @@ All existing MERGED rows have matching PR evidence, and their recorded PR number
 
 `docs/product-spec/scripts/validate_spec.py` does not exist in this checkout; the requested conditional validator could not be run.
 
-Parsed the original and updated CSV: same header, 280 rows in the same order, exactly 21 status changes and 19 PR-cell changes; every other cell is identical. Each changed row has exact-ID merged evidence. `git diff --check` passed. No application code changed.
+Parsed the original and updated CSV: same header, 280 rows in the same order, exactly 19 status changes and 18 PR-cell changes; every other cell is identical. Each changed row has exact-ID merged evidence. `git diff --check` passed. No application code changed.
 
 ## Review correction
 
 TASK-AI-154, TASK-AI-155 and TASK-AI-166 stay IN_PROGRESS: #491, #493 and #497 defer acceptance criteria to Slice B (Codex review on 2551d90e).
+TASK-AI-162 and TASK-AI-163 stay as on main: #499 and #502 record validation still owed by the coordinator.
