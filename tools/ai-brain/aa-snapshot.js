@@ -73,7 +73,7 @@ function parseRecords(html) {
       continue;
     }
     if (inString) {
-      if (c === '\\') k++;
+      if (c === '\\' && t[k + 1] !== CHUNK_BREAK) k++;
       else if (c === '"') inString = false;
       continue;
     }
