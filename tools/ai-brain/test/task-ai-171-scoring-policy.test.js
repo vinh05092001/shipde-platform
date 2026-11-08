@@ -315,8 +315,8 @@ test('valid policy with incomplete evidence refuses execute and reports unknown 
   );
 });
 
-const aaFile = path.join(__dirname, '../data/aa-intelligence.json');
-const defaultPolicyFile = path.join(__dirname, '../data/scoring-policy.json');
+const aaFile = path.join(__dirname, 'fixtures/aa-policy/aa-intelligence.json');
+const defaultPolicyFile = path.join(__dirname, 'fixtures/aa-policy/scoring-policy.json');
 test('AA join binds the observation version and labels how each route was matched', (t) => {
   const { loadScoringPolicy, joinMeasurements } = require('../scoring-policy');
   const f = fixture(t);
@@ -361,7 +361,7 @@ test('AA join binds the observation version and labels how each route was matche
 });
 test('AA policy loads one measured percentile dimension and reuses priors freshness', () => {
   const { loadScoringPolicy } = require('../scoring-policy');
-  const loaded = loadScoringPolicy();
+  const loaded = loadScoringPolicy(defaultPolicyFile);
   assert.equal(loaded.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
   const p = loaded.scoringPolicy;
   const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
@@ -436,7 +436,7 @@ test('AA dry-run and execute share sourced parts and equal a hand replay', (t) =
 });
 test('AA rejects stale, wrong-unit, foreign-model and foreign-version rows; unknown refuses execute', (t) => {
   const { loadScoringPolicy, joinMeasurements } = require('../scoring-policy');
-  const loaded = loadScoringPolicy();
+  const loaded = loadScoringPolicy(defaultPolicyFile);
   const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
   const row = data.rows[0];
   const modelId = row.variant ? `${row.base}-${row.variant}` : row.base;

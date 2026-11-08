@@ -44,10 +44,24 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
     throw Object.assign(new Error('SCORING_POLICY_INVALID'), { code: 'SCORING_POLICY_INVALID' });
   }
   let scoringPriors;
+  let data = null;
   if (policy.priorsFile) {
-    const data = JSON.parse(
-      fs.readFileSync(path.resolve(path.dirname(file), policy.priorsFile), 'utf8')
-    );
+    // The AA snapshot is fetched at runtime (aa-snapshot.js), never committed. Without it every
+    // route is QUALITY_UNKNOWN; the policy still loads so nothing is scored on another scale.
+    try {
+      data = JSON.parse(
+        fs.readFileSync(path.resolve(path.dirname(file), policy.priorsFile), 'utf8')
+      );
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      return {
+        scoringPolicy: policy,
+        scoringPolicyStatus: 'SCORING_POLICY_LOADED',
+        scoringPriorsStatus: 'AA_SNAPSHOT_MISSING',
+      };
+    }
+  }
+  if (data) {
     scoringPriors = {
       ranking: data.rows.map((row) => {
         const modelId = row.variant ? `${row.base}-${row.variant}` : row.base;

@@ -1,3 +1,5 @@
 # Live-fetched priors are written by `refreshPriors` at runtime.
 # Only the curated baseline (model-priors.json) is checked in.
 model-priors-live.json
+# Artificial Analysis snapshot, written by aa-snapshot.js at runtime.
+aa-intelligence.json

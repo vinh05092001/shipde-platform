@@ -61,3 +61,27 @@ test('a revision or quantization tag is a different model and stays unscored', (
   assert.equal(quality(a, 'gateway/kimi-k3.1-pro:unmeasured-revision'), undefined);
   assert.equal(quality(a, 'gateway/kimi-k3.1-pro:free').value, 76.8);
 });
+
+test('a missing runtime AA snapshot loads the policy and scores nothing', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-missing-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const src = path.join(__dirname, 'fixtures/aa-policy/scoring-policy.json');
+  fs.copyFileSync(src, path.join(dir, 'scoring-policy.json'));
+  const loaded = loadScoringPolicy(path.join(dir, 'scoring-policy.json'));
+  assert.equal(loaded.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
+  assert.equal(loaded.scoringPriorsStatus, 'AA_SNAPSHOT_MISSING');
+  assert.equal(quality(loaded, 'gcli/grok-4.7'), undefined);
+});
+
+test('aa-snapshot parses leaderboard rows into midrank percentiles', () => {
+  const { parseRows } = require('../aa-snapshot');
+  const html =
+    '<table><tr><td>A (High)</td><td>x</td><td>c</td><td>40</td></tr>' +
+    '<tr><td>B</td><td>x</td><td>c</td><td>20</td></tr>' +
+    '<tr><td>C 1.5</td><td>x</td><td>c</td><td>20</td></tr><tr><td>bad</td><td>x</td></tr></table>';
+  const { rows } = parseRows(html);
+  assert.deepEqual(
+    rows.map((r) => [r.base, r.variant, r.pct]),
+    [['a', 'high', 83.3], ['b', '', 33.3], ['c-1-5', '', 33.3]]
+  );
+});
