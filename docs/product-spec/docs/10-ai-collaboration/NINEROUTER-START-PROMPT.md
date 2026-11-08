@@ -40,3 +40,5 @@ Verify before writing code:
 ```text
 Read the current Codex findings on <PR_URL>. Fix only findings that remain within the approved low-risk scope for <WORK_ITEM_ID>. If any finding requires a prohibited domain or two correction rounds have failed, stop with BLOCKED_FOR_GEMINI. Otherwise rerun all checks, update evidence, push, set READY_FOR_CODEX and stop.
 ```
+
+Before starting, read and follow [WORKER-PLAYBOOK.md](WORKER-PLAYBOOK.md): writer selection, the four shared rules, graphify, attached tools with their real state, reference repositories, no-hardcode, reuse and the hand-back checks.
