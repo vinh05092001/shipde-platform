@@ -1102,7 +1102,6 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   ) {
     return false;
   }
-  if (options && options.allowUnprobedCandidates === true) return true;
   if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
   const gateway =
@@ -1118,6 +1117,8 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     routePath
   );
   if (rec) return rec.status === 'AVAILABLE';
+  // Unprobed admission never overrides a known failure on this route/account.
+  if (options && options.allowUnprobedCandidates === true) return true;
   if (candidate.scanLiveness?.status === 'passed') return true;
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.

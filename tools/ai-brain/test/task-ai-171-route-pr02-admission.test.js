@@ -81,6 +81,27 @@ test('PR02: injected real route uses the same registry alias and account health 
   assert.equal(actual[0].modelId, c.modelId);
 });
 
+test('PR02: allowing unprobed injection preserves known account health failures', () => {
+  const health = require('../route-health');
+  const store = { paths: {} };
+  const failed = row();
+  const unprobed = row({ accountId: 'lane-b', quotaScope: 'lane-b' });
+  const routePath = { id: failed.gateway, accountId: failed.accountId };
+  store.paths[health.healthKey(failed.modelId, routePath)] = { status: 'AUTH_NEEDED' };
+  assert.equal(health.getPathRecord(store, failed.modelId, routePath).status, 'AUTH_NEEDED');
+
+  const actual = assemble([failed, unprobed], {
+    routeHealth: store,
+    allowUnprobedCandidates: true,
+    probeEvidence: () => false,
+  });
+  assert.deepEqual(actual.map(candidateKey), [candidateKey(unprobed)]);
+  assert.deepEqual(
+    actual.excludedRoutes.map(({ candidateKey: key, reasonCode }) => ({ key, reasonCode })),
+    [{ key: candidateKey(failed), reasonCode: 'AUTH_NEEDED' }]
+  );
+});
+
 test('PR02: duplicate combo candidate keeps its own selected model and resolved launch evidence', () => {
   const sources = require('../sources').loadSources();
   const c = row({
