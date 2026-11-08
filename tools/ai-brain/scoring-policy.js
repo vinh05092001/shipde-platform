@@ -161,7 +161,21 @@ function originRows(id, modelId, byBase, deploymentTags) {
   own = tagless(own);
   const candidates = [];
   for (const [base, list] of byBase) if (tagless(base) === own) candidates.push(...list);
-  return candidates.length ? lowest(candidates, 'aa-origin-release-tag') : [];
+  if (candidates.length) return lowest(candidates, 'aa-origin-release-tag');
+  // Operator 2026-11-08: when AA lists no base for the name, take its prefix family
+  // (`glm-5` -> AA `glm-5-3*`). Trailing segments are dropped one at a time; a family needs
+  // at least two segments so a bare vendor word never matches. Lowest family score only.
+  for (let p = own; p.includes('-'); p = p.slice(0, p.lastIndexOf('-'))) {
+    const family = [];
+    for (const [base, list] of byBase) if (base.startsWith(p + '-')) family.push(...list);
+    if (family.length && p.split('-').length >= 2) return lowest(family, 'aa-origin-family');
+  }
+  // Last resort (operator 2026-11-08, e.g. MiniMax-M2.7, deprecated without an index): the
+  // vendor's lowest published score, when the first name segment names an AA vendor family.
+  const vendor = own.split('-')[0];
+  const vendorRows = [];
+  for (const [base, list] of byBase) if (base.split('-')[0] === vendor) vendorRows.push(...list);
+  return vendorRows.length ? lowest(vendorRows, 'aa-origin-vendor') : [];
 }
 
 function joinMeasurements(candidates, assessment, context = {}) {

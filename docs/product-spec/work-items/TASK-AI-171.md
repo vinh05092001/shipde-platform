@@ -447,6 +447,7 @@ Integration of the routing tickets with a measured quality policy and scan-based
 
 - `docs/ai-audit/handoff-table-20261108.md` records #538 to #545, live scoring 103 of 236 (measured after merge), the FEAT-CAR-01 Slice B product ticket and the remaining blockers.
 
+R03 audit follow-up (2026-11-08): `docs/ai-audit/65-items-status-20261108.md` records evidence against local `origin/main` at `be926f075348e0204cf4172fe1f9e59d7cfba750`, remaining work order and separate owners for items 61–65. It does not declare system completion.
 ## AA variant takes its base (operator 2026-11-08)
 
 - A known AA base followed by a variant AA does not publish (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes the base result at its lowest published score; longest base wins. Dispatch FEAT-CAR-01: 124 of 236 models scored (103 before).
@@ -483,3 +484,7 @@ Additional candidate/discovery/dispatch-json/route-handoff compatibility: **130 
 0 fail**. Repo Prettier and hardcode guard pass (zero new hardcode instances).
 No external script copied or changed; no network or commit. External cutover,
 remote CI and independent review remain coordinator responsibilities.
+## AA prefix family (operator 2026-11-08)
+
+- A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
+- Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
