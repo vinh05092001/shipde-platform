@@ -132,7 +132,37 @@ function aaRowsFor(modelId, rows, deploymentTags) {
     const hit = list.filter((r) => r.variant === variant);
     if (hit.length) return hit;
   }
-  return [];
+  return originRows(id, modelId, byBase, deploymentTags);
+}
+
+// Sources rename models. When no AA base matches directly, resolve the model's origin:
+// first through the shared prior matcher (configured aliases, deployment and effort words),
+// then by a trailing numeric release tag that one side carries and the other omits
+// (`deepseek-v4.1-flash` = AA `DeepSeek V4.1 Flash 1017`). Several candidates take the
+// lowest published score, so an equivalent is never scored above what AA measured.
+function originRows(id, modelId, byBase, deploymentTags) {
+  let own = id;
+  for (const t of deploymentTags) if (own.endsWith('-' + t)) own = own.slice(0, -t.length - 1);
+  // A known AA base followed by an unpublished suffix is that model at an unmeasured setting.
+  for (const base of byBase.keys()) if (own.startsWith(base + '-')) return [];
+  const lowest = (list, via) => {
+    const low = Math.min(...list.map((r) => r.measurements.quality.value));
+    return [{ ...list.find((r) => r.measurements.quality.value === low), via }];
+  };
+  const ranking = [];
+  for (const [base, list] of byBase) {
+    for (const r of list) ranking.push({ canonical: r.modelId, aliases: [base], row: r });
+  }
+  const match = require('./priors').matchModelPrior(modelId, ranking);
+  if (match && match.entry && match.entry.row) {
+    const list = byBase.get(match.entry.row.base) || [match.entry.row];
+    return lowest(list, 'aa-origin-alias');
+  }
+  const tagless = (s) => s.replace(/-\d{3,8}$/, '');
+  own = tagless(own);
+  const candidates = [];
+  for (const [base, list] of byBase) if (tagless(base) === own) candidates.push(...list);
+  return candidates.length ? lowest(candidates, 'aa-origin-release-tag') : [];
 }
 
 function joinMeasurements(candidates, assessment, context = {}) {
@@ -159,11 +189,13 @@ function joinMeasurements(candidates, assessment, context = {}) {
                 ...r.measurements.quality,
                 modelId: candidate.modelId,
                 aaModelId: r.modelId,
-                matchedVia: r.lowestEffort
-                  ? 'aa-lowest-effort'
-                  : r.variant
-                    ? 'aa-base-effort'
-                    : 'aa-base',
+                matchedVia: r.via
+                  ? r.via
+                  : r.lowestEffort
+                    ? 'aa-lowest-effort'
+                    : r.variant
+                      ? 'aa-base-effort'
+                      : 'aa-base',
               },
             },
           })

@@ -177,3 +177,27 @@ test('an escape at the end of a chunk cannot swallow the break marker', () => {
     ['y']
   );
 });
+
+test('a renamed model takes its origin: a release tag on one side, lowest score when several', (t) => {
+  const a = policyDir(t, [
+    ...rows,
+    {
+      name: 'DeepSeek V4.1 Flash 1017 (High)',
+      base: 'deepseek-v4-1-flash-1017',
+      variant: 'high',
+      ii: 30,
+      pct: 58,
+    },
+    {
+      name: 'DeepSeek V4.1 Flash 1017 (Max)',
+      base: 'deepseek-v4-1-flash-1017',
+      variant: 'max',
+      ii: 33,
+      pct: 61,
+    },
+  ]);
+  const q = quality(a, 'oc/deepseek-v4.1-flash-free');
+  assert.equal(q.value, 58);
+  assert.equal(q.matchedVia, 'aa-origin-release-tag');
+  assert.equal(quality(a, 'gcli/grok-4.7-turbo'), undefined);
+});

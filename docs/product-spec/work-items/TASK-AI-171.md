@@ -431,3 +431,7 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## AA deprecated records (aa-snapshot deep mode)
 
 - With `modelPageBase` in the policy, aa-snapshot reads the records AA embeds in model pages, including deprecated models the leaderboard table hides. Live run 2026-11-08: 115 rows (10 deprecated), dispatch FEAT-CAR-01 scored 87 of 236 models (was 76). AA publishes no index for the rest.
+
+## AA origin names
+
+- A route whose name differs from AA (renamed by a source) is joined to its origin through the shared prior matcher or a trailing numeric release tag; several candidates take the lowest score. Dispatch FEAT-CAR-01: 103 of 236 models scored (87 before).
