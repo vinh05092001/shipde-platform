@@ -157,7 +157,7 @@ test('a malformed payload chunk breaks the stream instead of joining its neighbo
   const push = (s) => `self.__next_f.push([1,${s}])`;
   const page =
     push(JSON.stringify('{"slug":"x","name":"X",')) +
-    push('"bad\q"') +
+    push('"bad\\q"') +
     push(JSON.stringify('"intelligenceIndex":50}{"slug":"y","name":"Y","intelligenceIndex":30}'));
   assert.deepEqual(
     parseRecords(page).map((r) => r.slug),
@@ -169,8 +169,11 @@ test('an escape at the end of a chunk cannot swallow the break marker', () => {
   const { parseRecords } = require('../aa-snapshot');
   const push = (s) => `self.__next_f.push([1,${s}])`;
   const page =
-    push(JSON.stringify('{"bad":"\')) +
-    push('"bad\q"') +
+    push(JSON.stringify('{"bad":"\\')) +
+    push('"bad\\q"') +
     push(JSON.stringify('"foo"}{"slug":"y","name":"Y","intelligenceIndex":30}'));
-  assert.deepEqual(parseRecords(page).map((r) => r.slug), ['y']);
+  assert.deepEqual(
+    parseRecords(page).map((r) => r.slug),
+    ['y']
+  );
 });
