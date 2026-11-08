@@ -128,6 +128,39 @@ test('PR03: merging quota windows keeps the last exhausted reset so the block su
   assert.equal(after[0].known, true);
   assert.equal(after[0].remainingPercent, 0);
 });
+for (const [label, unknown] of [
+  ['expired', { remainingPercent: 0, resetsAt: '2026-11-07T23:59:59Z' }],
+  ['missing', { remainingPercent: null }],
+  ['explicit unknown', { remainingPercent: 80, known: false }],
+]) {
+  for (const reverse of [false, true]) {
+    test(`PR03: ${label} quota window requires telemetry in ${reverse ? 'reverse' : 'forward'} order`, async () => {
+      const windows = [
+        { family: 'fixture', window: 'fiveHour', ...unknown },
+        {
+          family: 'fixture',
+          window: 'weekly',
+          remainingPercent: 80,
+          resetsAt: '2026-11-15T00:00:00Z',
+        },
+      ];
+      if (reverse) windows.reverse();
+      const state = { scopes: {} };
+      await quota.scanCliLanes(state, {
+        now: Date.parse(at),
+        source: 'agy-pool',
+        registry: { sources: [] },
+        poolAccounts: ['a'],
+        poolRuntime: { quotaReading: () => ({ available: true, rows: windows }) },
+      });
+      const scope = state.scopes['a:fixture'];
+      assert.equal(scope.code, 'STATE_ERROR');
+      assert.equal(scope.requiresProbe, true);
+      assert.equal(quota.isScopeBlocked(scope, Date.parse(at)), true);
+      assert.equal(quota.mergeQuotaWindows(windows, Date.parse(at))[0].known, false);
+    });
+  }
+}
 test('PR03: stale execution success never clears newer matching failure or another account', () => {
   const store = { version: 1, paths: {}, events: [] };
   const route = { id: 'fixture-gw', accountId: 'a' };

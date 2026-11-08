@@ -528,3 +528,30 @@ Both new tests fail on `19707394` (suite 9 pass / 2 fail) and pass after
 (16 pass / 0 fail) together with `task-ai-171-route-pr02-admission`.
 Changed files pass Prettier 3.9.6. The hardcode guard remains BLOCKED_BY_SANDBOX:
 `ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`.
+
+## PR 03 — fallback repair: preserve unknown family telemetry (2026-11-09)
+
+Operator assigned fallback repair after two Controller-chosen writers did not
+converge. Fixed the P1 finding in `.oc/findings.md` at reviewed SHA `1690c184`:
+`mergeQuotaWindows` now keeps `known:false` whenever any family window is unknown
+or expired, regardless of row order (BR-ROUTING-05). A usable weekly window cannot
+release a family that requires a fresh telemetry probe.
+
+Six cases exercise expired, missing and explicit unknown short windows in both
+orders through `scanCliLanes`, checking `STATE_ERROR`, `requiresProbe:true` and
+blocked admission. Before the fix the requested two suites had **19 pass / 3 fail**;
+all three forward-order regression cases failed with `OK` instead of `STATE_ERROR`.
+After the fix: **22 tests, 22 pass, 0 fail, 0 skipped** using:
+
+```bash
+node --test tools/ai-brain/test/task-ai-171-route-pr03-observations.test.js tools/ai-brain/test/task-ai-171-route-pr02-admission.test.js
+```
+
+Offline evidence only; no network, credential reads or commit. The hardcode guard
+cannot load the missing `@typescript-eslint/parser`; no dependency install was
+attempted. Independent review and remote CI remain outstanding.
+Formatting could not run: `npx.cmd --offline prettier@3.9.6` returned
+`ENOTCACHED`; the shared installation directory also lacks the executable.
+`git diff --check` passes. Graph query `node C:/Tools/graphify/q.js 5c574f7a
+scanCliLanes` located the quota path; that graph is stale relative to `1690c184`,
+so the current quota implementation and executable regressions supplied proof.

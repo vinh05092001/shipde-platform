@@ -3063,7 +3063,12 @@ function mergeQuotaWindows(rows, now) {
         : !current.known || (known && !currentSpent)
           ? row.resetsAt
           : current.resetsAt;
-    families.set(row.family, { ...current, remainingPercent: remainingPercent_, resetsAt, known });
+    families.set(row.family, {
+      ...current,
+      remainingPercent: remainingPercent_,
+      resetsAt,
+      known: current.known && known,
+    });
   }
   return [...families.values()];
 }
