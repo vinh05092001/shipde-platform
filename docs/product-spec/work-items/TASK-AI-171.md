@@ -414,6 +414,9 @@ Limitations: Mock launch and JEV verify orchestration only, not route liveness. 
 
 Integration of the routing tickets with a measured quality policy and scan-based route evidence. Evidence and open items: `docs/ai-audit/handoff-table-20261108.md`.
 
+## Register reconciliation (PR #540)
+
+- Report: `docs/ai-audit/register-reconcile-20261108.md`. Offline author, data fetched by the coordinator.
 ## Open PR (PR #541)
 
 - Report: `docs/ai-audit/open-prs-20261108.md`. Offline author, data fetched by the coordinator.
@@ -431,3 +434,6 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## AA deprecated records (aa-snapshot deep mode)
 
 - With `modelPageBase` in the policy, aa-snapshot reads the records AA embeds in model pages, including deprecated models the leaderboard table hides. Live run 2026-11-08: 115 rows (10 deprecated), dispatch FEAT-CAR-01 scored 87 of 236 models (was 76). AA publishes no index for the rest.
+## Scoring scale label (dispatch output)
+
+- With an active scoring policy, `scoreScale` names the policy version and range and the decision carries `scoringPolicyStatus`; without a policy the profile label stays.

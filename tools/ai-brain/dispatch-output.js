@@ -74,7 +74,15 @@ function dispatchOutput(profile, assessment, candidates, result) {
     schemaVersion: 1,
     profile,
     assessment,
-    scoreScale: 'controller:weighted-profile',
+    scoreScale: assessment.scoringPolicy
+      ? `policy:${assessment.scoringPolicy.version}:0-1`
+      : 'controller:weighted-profile',
+    ...(assessment.scoringPolicyStatus
+      ? { scoringPolicyStatus: assessment.scoringPolicyStatus }
+      : {}),
+    ...(assessment.scoringPriorsStatus
+      ? { scoringPriorsStatus: assessment.scoringPriorsStatus }
+      : {}),
     chosen: result.chosen || null,
     selected: ranking.find((c) => (c.candidateKey || c.offeringId) === result.chosen)
       ? row(ranking.find((c) => (c.candidateKey || c.offeringId) === result.chosen))
