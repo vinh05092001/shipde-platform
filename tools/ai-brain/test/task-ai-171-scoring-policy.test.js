@@ -317,6 +317,53 @@ test('valid policy with incomplete evidence refuses execute and reports unknown 
 
 const aaFile = path.join(__dirname, 'fixtures/aa-policy/aa-intelligence.json');
 const defaultPolicyFile = path.join(__dirname, 'fixtures/aa-policy/scoring-policy.json');
+
+test('dispatch JSON names the loaded policy scale and preserves scoring statuses', (t) => {
+  const f = fixture(t);
+  const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
+  const p = JSON.parse(fs.readFileSync(defaultPolicyFile, 'utf8'));
+  fs.copyFileSync(aaFile, path.join(f.dir, p.priorsFile));
+  const candidates = f.rows.map((candidate, i) => {
+    const { modelVersion, ...route } = candidate;
+    const row = data.rows[i];
+    return { ...route, modelId: row.variant ? `${row.base}-${row.variant}` : row.base };
+  });
+  const dispatchJson = () => {
+    f.logs.length = 0;
+    dispatchCommand(
+      { item: 'TASK-AI-171', role: 'writer', 'dry-run': true, json: true },
+      {
+        ...f.deps,
+        candidates,
+        evidenceData: { combinations: [] },
+        now: Date.parse(data.observedAt),
+      }
+    );
+    return JSON.parse(f.logs.find((line) => line.startsWith('{')));
+  };
+  for (const version of [p.version, `${p.version}-revision`]) {
+    fs.writeFileSync(f.policyFile, JSON.stringify({ ...p, version }));
+    const decision = dispatchJson();
+    assert.equal(decision.scoreScale, `policy:${version}:0-1`);
+    assert.equal(decision.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
+    assert.equal(Object.hasOwn(decision, 'scoringPriorsStatus'), false);
+    assert.equal(decision.ranking.length, candidates.length);
+    for (const row of decision.ranking) {
+      assert.equal(row.scoreBreakdown.policy.version, version);
+      assert.ok(row.score >= 0 && row.score <= 1);
+    }
+  }
+  fs.unlinkSync(path.join(f.dir, p.priorsFile));
+  const inactive = dispatchJson();
+  assert.equal(inactive.scoreScale, 'controller:weighted-profile');
+  assert.equal(inactive.scoringPolicyStatus, 'SCORING_POLICY_INACTIVE');
+  assert.equal(inactive.scoringPriorsStatus, 'AA_SNAPSHOT_MISSING');
+  fs.unlinkSync(f.policyFile);
+  const missing = dispatchJson();
+  assert.equal(missing.scoreScale, 'controller:weighted-profile');
+  assert.equal(missing.scoringPolicyStatus, 'SCORING_POLICY_MISSING');
+  assert.equal(Object.hasOwn(missing, 'scoringPriorsStatus'), false);
+});
 test('AA join binds the observation version and labels how each route was matched', (t) => {
   const { loadScoringPolicy, joinMeasurements } = require('../scoring-policy');
   const f = fixture(t);
