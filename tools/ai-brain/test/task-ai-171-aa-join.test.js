@@ -62,7 +62,10 @@ test('gateway path and deployment tag do not hide the AA base', (t) => {
 
 test('a named effort takes that published effort only', (t) => {
   assert.equal(quality(policyDir(t, rows), 'gcli/grok-4.7-high').value, 62.6);
-  assert.equal(quality(policyDir(t, rows), 'gcli/grok-4.7-xhigh'), undefined);
+  // Operator 2026-11-08: an unpublished variant takes its base at the lowest published score.
+  const v = quality(policyDir(t, rows), 'gcli/grok-4.7-xhigh');
+  assert.equal(v.value, 54);
+  assert.equal(v.matchedVia, 'aa-origin-variant');
 });
 
 test('no effort named takes the lowest published effort, never a higher one', (t) => {
@@ -199,7 +202,7 @@ test('a renamed model takes its origin: a release tag on one side, lowest score 
   const q = quality(a, 'oc/deepseek-v4.1-flash-free');
   assert.equal(q.value, 58);
   assert.equal(q.matchedVia, 'aa-origin-release-tag');
-  assert.equal(quality(a, 'gcli/grok-4.7-turbo'), undefined);
+  assert.equal(quality(a, 'gcli/grok-4.7-turbo').matchedVia, 'aa-origin-variant');
 });
 
 test('origin join never strips an unpublished effort, merges distinct models, or ignores policy tags', (t) => {
@@ -213,4 +216,16 @@ test('origin join never strips an unpublished effort, merges distinct models, or
     { name: 'Synthetic Thinking', base: 'synthetic-thinking', variant: '', ii: 50, pct: 90 },
   ];
   assert.equal(quality(policyDir(t, synth), 'gateway/synthetic-free').value, 10);
+});
+
+test('a deployment tag on an exact AA base never falls back to a shorter parent', (t) => {
+  const a = policyDir(t, [
+    { name: 'GLM-5', base: 'glm-5', variant: '', ii: 10, pct: 20 },
+    { name: 'GLM-5.3', base: 'glm-5-3', variant: '', ii: 40, pct: 80 },
+    { name: 'GPT-6', base: 'gpt-6', variant: '', ii: 20, pct: 30 },
+    { name: 'GPT-6.1', base: 'gpt-6-1', variant: '', ii: 45, pct: 85 },
+  ]);
+  assert.equal(quality(a, 'gateway/glm-5.3-free').value, 80);
+  assert.equal(quality(a, 'gateway/gpt-6.1-free').value, 85);
+  assert.equal(quality(a, 'gateway/glm-5.3-prime').value, 80);
 });
