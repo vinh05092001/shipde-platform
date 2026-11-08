@@ -413,3 +413,7 @@ Limitations: Mock launch and JEV verify orchestration only, not route liveness. 
 ## Offline integration and live proof (2026-11-08)
 
 Integration of the routing tickets with a measured quality policy and scan-based route evidence. Evidence and open items: `docs/ai-audit/handoff-table-20261108.md`.
+
+## Register reconciliation (PR #540)
+
+- Report: `docs/ai-audit/register-reconcile-20261108.md`. Offline author, data fetched by the coordinator.
