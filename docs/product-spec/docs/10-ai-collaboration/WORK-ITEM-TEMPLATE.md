@@ -30,7 +30,11 @@ List technical and business prerequisites with evidence that they are merged or 
 
 ## Ambiguity and clarification markers
 
-Every ambiguous requirement, rule gap, unresolved dependency, or unverified assumption must be explicitly tagged with `[NEEDS CLARIFICATION]`. If an unresolved `[NEEDS CLARIFICATION]` marker remains when assigned, the author must STOP immediately and mark the item `BLOCKED` with written evidence; the author must never guess, assume intent, or silently choose an interpretation.
+Record every ambiguous requirement, rule gap, unresolved dependency or unverified assumption in Open questions using the marker below. Resolve and remove every question before `READY_FOR_AUTHOR`; Open questions must be empty when authoring starts. Any clarification marker anywhere in the file blocks readiness, including examples, comments and code blocks. If a question is discovered after assignment, the author must STOP, mark the item `BLOCKED` and return it to planning with written evidence; never guess or silently choose an interpretation.
+
+## Open questions
+
+- [NEEDS CLARIFICATION: <question requiring an approved decision>]
 
 ## Author boundary
 
@@ -50,6 +54,12 @@ List observable behaviors, including frontend, backend, persistence, permission,
 ## Out of scope
 
 Explicitly list adjacent behavior that must not be added in this Pull Request.
+
+## Unchanged behaviour
+
+<!-- List what must keep working; pair each behaviour with a named regression test or runnable command. Replace the placeholder; this section must not be empty. -->
+
+- `<Existing behaviour to preserve>`: regression test `<test name or command>`.
 
 ## Business rules and edge cases
 
@@ -76,9 +86,11 @@ Describe commands/queries, idempotency, errors, migrations, entities, events, jo
 
 ## Acceptance matrix
 
-| AC/Test ID | Scenario | Expected result | Evidence required |
-|---|---|---|---|
-| `<ID>` | `<Given/When>` | `<Then>` | `<unit/integration/e2e test, docs-inspection, screenshot or log; "test not applicable: <justification>" if the row is non-executable>` |
+Every acceptance row, including documentation checks, must have a concrete test name or runnable verification command in Proof. Blank cells and placeholders do not establish readiness.
+
+| AC/Test ID | Scenario | Expected result | Evidence required | Proof |
+|---|---|---|---|---|
+| `<ID>` | `<Given/When>` | `<Then>` | `<unit/integration/e2e test, docs-inspection, screenshot or log; "test not applicable: <justification>" if the row is non-executable>` | `<test name or runnable command>` |
 
 ## Task breakdown
 
@@ -97,6 +109,8 @@ Numbered implementation sequence ordered API/backend before UI, with the failing
 ## Verification commands
 
 List exact repository commands. All must run from a clean checkout.
+
+Before assignment: `pnpm ai:ready <work-item-path>` must pass. Return failing items to planning with every listed problem; rerun after clarification.
 
 ## Codex review record
 
