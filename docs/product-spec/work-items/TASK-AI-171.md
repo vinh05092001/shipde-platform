@@ -442,3 +442,7 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## Scoring scale label (dispatch output)
 
 - With an active scoring policy, `scoreScale` names the policy version and range and the decision carries `scoringPolicyStatus`; without a policy the profile label stays.
+
+## Handoff table final update
+
+- `docs/ai-audit/handoff-table-20261108.md` records #538 to #545, live scoring 103 of 236 (measured after merge), the FEAT-CAR-01 Slice B product ticket and the remaining blockers.
