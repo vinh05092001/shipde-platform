@@ -229,3 +229,16 @@ test('a deployment tag on an exact AA base never falls back to a shorter parent'
   assert.equal(quality(a, 'gateway/gpt-6.1-free').value, 85);
   assert.equal(quality(a, 'gateway/glm-5.3-prime').value, 80);
 });
+
+test('a name AA does not list takes its prefix family at the lowest score; a lone vendor word never matches', (t) => {
+  const a = policyDir(t, [
+    { name: 'GLM-5.3', base: 'glm-5-3', variant: '', ii: 40, pct: 80 },
+    { name: 'GLM-5.3-Flash', base: 'glm-5-3-flash', variant: '', ii: 20, pct: 40 },
+    { name: 'Kimi K3.1 Pro', base: 'kimi-k3-1-pro', variant: '', ii: 40, pct: 77 },
+  ]);
+  const q = quality(a, 'gateway/glm-5');
+  assert.equal(q.value, 40);
+  assert.equal(q.matchedVia, 'aa-origin-family');
+  assert.equal(quality(a, 'gateway/kimi'), undefined);
+  assert.equal(quality(a, 'gateway/unrelated-model'), undefined);
+});
