@@ -414,6 +414,9 @@ Limitations: Mock launch and JEV verify orchestration only, not route liveness. 
 
 Integration of the routing tickets with a measured quality policy and scan-based route evidence. Evidence and open items: `docs/ai-audit/handoff-table-20261108.md`.
 
+## Open PR (PR #541)
+
+- Report: `docs/ai-audit/open-prs-20261108.md`. Offline author, data fetched by the coordinator.
 ## 9Router 503 classification (PR #538)
 
 - 9Router answers 503 with the upstream status inside; 895 scan results were classified by that inner code (rate limit, no credit, model gone, auth, other) in `docs/ai-audit/handoff-table-20261108.md`.
