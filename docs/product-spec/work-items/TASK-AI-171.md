@@ -425,4 +425,3 @@ Integration of the routing tickets with a measured quality policy and scan-based
 - The AA snapshot is fetched at runtime by `tools/ai-brain/aa-snapshot.js` and gitignored; a missing snapshot scores nothing.
 - Route IDs join AA rows by last path segment; only a policy-declared deployment tag is stripped; an unnamed effort takes the lowest published effort.
 - Evidence: 22/22 focused tests; dry-run FEAT-CAR-01 scored 76 of 234 models (was 6). Models absent from AA stay QUALITY_UNKNOWN.
->>>>>>> origin/main
