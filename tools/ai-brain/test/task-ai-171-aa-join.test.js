@@ -113,11 +113,13 @@ test('aa-snapshot parses leaderboard rows into midrank percentiles', () => {
 test('aa-snapshot reads each embedded record by its own slug, including deprecated ones', () => {
   const { parseRecords, releaseSlugs, rowsFromRecords } = require('../aa-snapshot');
   const page =
-    '{\\"list\\":[{\\"releaseSlug\\":\\"m-1\\"},{\\"releaseSlug\\":\\"m-2\\"}],' +
-    '\\"a\\":{\\"slug\\":\\"m-1-high\\",\\"name\\":\\"M 1 (High)\\",\\"release\\":{\\"slug\\":\\"m-1\\"},\\"deprecated\\":true,\\"intelligenceIndex\\":40},' +
-    '\\"b\\":{\\"slug\\":\\"m-2\\",\\"name\\":\\"M 2\\",\\"intelligenceIndex\\":20},' +
-    '\\"c\\":{\\"slug\\":\\"m-3\\",\\"name\\":\\"M 3\\",\\"intelligenceIndex\\":null}}';
+    '{"list":[{"releaseSlug":"m-1"},{"releaseSlug":"m-2"}],' +
+    '"a":{"slug":"m-1-high","name":"M 1 (High)","release":{"slug":"m-1"},"deprecated":true,"intelligenceIndex":40},' +
+    '"b":{"slug":"m-2","name":"M 2","intelligenceIndex":20},' +
+    '"c":{"slug":"m-3","name":"M 3","intelligenceIndex":null}}';
   const records = parseRecords(page);
+  const wrapped = '<script>self.__next_f.push([1,' + JSON.stringify(page) + '])</script>';
+  assert.deepEqual(parseRecords(wrapped), records);
   assert.deepEqual(
     records.map((r) => [r.slug, r.ii, r.deprecated, r.release]),
     [
@@ -132,6 +134,20 @@ test('aa-snapshot reads each embedded record by its own slug, including deprecat
     [
       ['m-1', 'high', 75],
       ['m-2', '', 25],
+    ]
+  );
+});
+
+test('braces inside record strings do not drop or merge records', () => {
+  const { parseRecords } = require('../aa-snapshot');
+  const page =
+    '[{"slug":"a","name":"A {","intelligenceIndex":40},' +
+    '{"slug":"b","name":"B }","intelligenceIndex":20}]';
+  assert.deepEqual(
+    parseRecords(page).map((r) => [r.slug, r.ii]),
+    [
+      ['a', 40],
+      ['b', 20],
     ]
   );
 });

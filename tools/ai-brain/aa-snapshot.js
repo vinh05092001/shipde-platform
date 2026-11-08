@@ -40,55 +40,63 @@ function parseRows(html) {
 // AA pages embed full model records (slug, name, deprecated, release, intelligenceIndex) in their
 // payload, including deprecated models the leaderboard table hides. Each record's own enclosing
 // object is parsed; a record is identified by its own slug, never by a neighbour's.
-function parseRecords(html) {
-  const t = html.replace(/\\"/g, '"');
-  const out = new Map();
-  const re = /"intelligenceIndex":(-?[0-9.]+)/g;
+// Next.js pages carry their data as JSON string literals in self.__next_f.push([1, "..."]);
+// decode each literal so the scanner sees real JSON, not an escaped string.
+function pagePayload(html) {
+  const parts = [];
+  const re = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
   let m;
-  while ((m = re.exec(t))) {
-    let depth = 0;
-    let start = -1;
-    for (let k = m.index; k >= 0; k--) {
-      if (t[k] === '}') depth++;
-      else if (t[k] === '{') {
-        if (depth === 0) {
-          start = k;
-          break;
-        }
-        depth--;
-      }
-    }
-    if (start < 0) continue;
-    let d = 0;
-    let end = -1;
-    for (let k = start; k < t.length; k++) {
-      if (t[k] === '{') d++;
-      else if (t[k] === '}' && --d === 0) {
-        end = k;
-        break;
-      }
-    }
-    let o;
+  while ((m = re.exec(html))) {
     try {
-      o = JSON.parse(t.slice(start, end + 1));
+      parts.push(JSON.parse(m[1]));
     } catch {
+      /* a malformed chunk is skipped */
+    }
+  }
+  return parts.length ? parts.join('') : html;
+}
+
+function parseRecords(html) {
+  const t = pagePayload(html);
+  const out = new Map();
+  // One pass over structural braces only: characters inside JSON strings (with escapes) never count.
+  const starts = [];
+  let inString = false;
+  for (let k = 0; k < t.length; k++) {
+    const c = t[k];
+    if (inString) {
+      if (c === '\\') k++;
+      else if (c === '"') inString = false;
       continue;
     }
-    if (typeof o.slug !== 'string' || typeof o.name !== 'string') continue;
-    if (!Number.isFinite(o.intelligenceIndex) || out.has(o.slug)) continue;
-    out.set(o.slug, {
-      slug: o.slug,
-      name: o.name,
-      ii: o.intelligenceIndex,
-      deprecated: o.deprecated === true,
-      release: o.release && typeof o.release.slug === 'string' ? o.release.slug : null,
-    });
+    if (c === '"') inString = true;
+    else if (c === '{') starts.push(k);
+    else if (c === '}' && starts.length) {
+      const start = starts.pop();
+      const span = t.slice(start, k + 1);
+      if (!span.includes('"intelligenceIndex":')) continue;
+      let o;
+      try {
+        o = JSON.parse(span);
+      } catch {
+        continue;
+      }
+      if (typeof o.slug !== 'string' || typeof o.name !== 'string') continue;
+      if (!Number.isFinite(o.intelligenceIndex) || out.has(o.slug)) continue;
+      out.set(o.slug, {
+        slug: o.slug,
+        name: o.name,
+        ii: o.intelligenceIndex,
+        deprecated: o.deprecated === true,
+        release: o.release && typeof o.release.slug === 'string' ? o.release.slug : null,
+      });
+    }
   }
   return [...out.values()];
 }
 
 function releaseSlugs(html) {
-  const t = html.replace(/\\"/g, '"');
+  const t = pagePayload(html);
   return [...new Set([...t.matchAll(/"releaseSlug":"([a-z0-9.-]+)"/g)].map((x) => x[1]))];
 }
 
