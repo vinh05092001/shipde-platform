@@ -35,8 +35,6 @@ All existing MERGED rows have matching PR evidence, and their recorded PR number
 | 291 | TASK-AI-159 | IN_PROGRESS | MERGED | #498 | None |
 | 272 | TASK-AI-161 | IN_PROGRESS | MERGED | #495 | None |
 | 304 | TASK-AI-154 | IN_PROGRESS | MERGED | #491 | None |
-| 294 | TASK-AI-155 | IN_PROGRESS | MERGED | #493 | None |
-| 298 | TASK-AI-166 | IN_PROGRESS | MERGED | #497 | #512 |
 | 293 | TASK-AI-167 | READY_FOR_CODEX | MERGED | #503 | None |
 | 299 | TASK-AI-167 | READY_FOR_CODEX | MERGED | #503 | None |
 | 292 | TASK-AI-165 | IN_PROGRESS | MERGED | #501 | None |
@@ -57,3 +55,7 @@ All existing MERGED rows have matching PR evidence, and their recorded PR number
 `docs/product-spec/scripts/validate_spec.py` does not exist in this checkout; the requested conditional validator could not be run.
 
 Parsed the original and updated CSV: same header, 280 rows in the same order, exactly 24 status changes and 22 PR-cell changes; every other cell is identical. Each changed row has exact-ID merged evidence. `git diff --check` passed. No application code changed.
+
+## Review correction
+
+TASK-AI-155 and TASK-AI-166 stay IN_PROGRESS: #493 and #497 defer acceptance criteria to Slice B (Codex review on 2551d90e).
