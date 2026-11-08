@@ -84,14 +84,20 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
 // segment counts as an effort only when AA publishes that variant for that base. A route
 // that names no effort while AA scores only per effort takes the lowest published effort,
 // so a score is never higher than AA measured. No vocabulary lives here: it comes from the rows.
-function aaRowsFor(modelId, rows) {
+function aaRowsFor(modelId, rows, deploymentTags) {
   if (typeof modelId !== 'string' || !rows.length) return [];
-  const id = modelId
+  if (!Array.isArray(deploymentTags)) deploymentTags = [];
+  let id = modelId
     .split('/')
     .pop()
-    .replace(/:[^:]*$/, '')
     .toLowerCase()
     .replace(/[._ ]+/g, '-');
+  // Only a configured deployment tag is the same model; any other tag (revision, quantization) stays unknown.
+  const tag = id.match(/:([^:]+)$/);
+  if (tag) {
+    if (!deploymentTags.includes(tag[1])) return [];
+    id = id.slice(0, tag.index);
+  }
   const byBase = new Map();
   for (const r of rows) {
     if (!r.base) continue;
@@ -129,7 +135,7 @@ function joinMeasurements(candidates, assessment, context = {}) {
     // A joined AA row is attributed to this route's model ID; the AA row it came from stays as provenance.
     const snapshotRows = exactRows.length
       ? exactRows
-      : aaRowsFor(candidate.modelId, snapshot).map((r) => ({
+      : aaRowsFor(candidate.modelId, snapshot, assessment.scoringPolicy.deploymentTags).map((r) => ({
           ...r,
           modelId: candidate.modelId,
           measurements: {

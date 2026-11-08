@@ -16,7 +16,7 @@ function policyDir(t, rows) {
   fs.writeFileSync(
     path.join(dir, 'policy.json'),
     JSON.stringify({
-      version: 'T', source: 'https://aa.example/models', rationale: 'test', maxAgeMs: 86400000, priorsFile: 'aa.json',
+      version: 'T', source: 'https://aa.example/models', rationale: 'test', maxAgeMs: 86400000, priorsFile: 'aa.json', deploymentTags: ['free'],
       dimensions: { quality: { weight: 1, min: 0, max: 100, unit: 'pct', direction: 'higher', measurement: { store: 'priors', metric: 'quality' } } },
     })
   );
@@ -53,4 +53,11 @@ test('no effort named takes the lowest published effort, never a higher one', (t
 
 test('a model AA does not publish stays unscored', (t) => {
   assert.equal(quality(policyDir(t, rows), 'kr/glm-5'), undefined);
+});
+
+test('a revision or quantization tag is a different model and stays unscored', (t) => {
+  const a = policyDir(t, rows);
+  assert.equal(quality(a, 'gateway/kimi-k3.1-pro:q4_K_M'), undefined);
+  assert.equal(quality(a, 'gateway/kimi-k3.1-pro:unmeasured-revision'), undefined);
+  assert.equal(quality(a, 'gateway/kimi-k3.1-pro:free').value, 76.8);
 });
