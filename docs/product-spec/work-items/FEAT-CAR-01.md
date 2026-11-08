@@ -531,3 +531,10 @@ pnpm build
 - Live quote calculation and serviceability checks require valid merchant carrier accounts and are delivered in `FEAT-QTE-01` and `FEAT-AVL-01`.
 - Live partner verification for `VIETTEL_POST` and `JT` remains tracked under open issues `OI-001` and `OI-002`; their catalog services are marked `CONFIRMATION_REQUIRED` until partner evidence is verified.
 - Existing prototype adapter cleanup for `ghn.adapter.ts` and `ghtk.adapter.ts` unknown status defaults is governed under tracking feature `FEAT-TRK-01`.
+
+## Slice B delivery evidence (PR #543)
+
+- Tab "Danh mục hãng vận chuyển" at `/settings/carriers`; components under `apps/web/src/features/carriers/catalog/`; data only from the Slice A API.
+- States: loading (`aria-busy`), empty with clear filters, validation, error with correlation ID and Retry, forbidden 403, partial `CONFIRMATION_REQUIRED`, success, recovery keeping tab and filters; deep links and 404 not-found.
+- Evidence: `apps/web/src/tests/carrier-catalog.test.ts` (all steps pass), `npx tsc --noEmit -p apps/web`, eslint clean. Three Codex review rounds; findings fixed with assertions.
+- Open: Playwright spec `apps/web/e2e/carrier-catalog.spec.ts` not yet run against a live API; screenshots pending.

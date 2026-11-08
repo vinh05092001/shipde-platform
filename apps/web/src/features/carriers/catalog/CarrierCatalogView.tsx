@@ -108,7 +108,7 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     useState<CarrierDetailResponseEnvelope | null>(null);
   const detailRequestId = useRef(0);
   const [detailNotFound, setDetailNotFound] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(carrierCode !== null);
   const [detailError, setDetailError] = useState<CatalogRequestError | null>(null);
   const [detailCarrier, setDetailCarrier] = useState<CarrierResponse | null>(null);
 
@@ -212,17 +212,10 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     void fetchFeeData();
   }, [fetchStatusData, fetchFeeData]);
 
-  const handleViewServices = useCallback(async (carrier: CarrierResponse | string) => {
-    const requestId = ++detailRequestId.current;
-    setDetailCarrier(typeof carrier === 'string' ? null : carrier);
-    setSelectedCarrierDetail(null);
-    setDetailNotFound(false);
-    setDetailLoading(true);
-    setDetailError(null);
+  // Only awaited updates, so an effect may start it; stale responses are dropped by request id.
+  const loadDetail = useCallback(async (code: string, requestId: number) => {
     try {
-      const response = await fetchCarrierDetail(
-        typeof carrier === 'string' ? carrier : carrier.code
-      );
+      const response = await fetchCarrierDetail(code);
       if (requestId !== detailRequestId.current) return;
       setDetailCarrier(response.data);
       setSelectedCarrierDetail(response);
@@ -237,6 +230,19 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     }
   }, []);
 
+  const handleViewServices = useCallback(
+    async (carrier: CarrierResponse | string) => {
+      const requestId = ++detailRequestId.current;
+      setDetailCarrier(typeof carrier === 'string' ? null : carrier);
+      setSelectedCarrierDetail(null);
+      setDetailNotFound(false);
+      setDetailLoading(true);
+      setDetailError(null);
+      await loadDetail(typeof carrier === 'string' ? carrier : carrier.code, requestId);
+    },
+    [loadDetail]
+  );
+
   const closeDetail = useCallback(() => {
     ++detailRequestId.current;
     setDetailCarrier(null);
@@ -246,13 +252,26 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     setDetailNotFound(false);
   }, []);
 
+  // Leaving a deep link closes the detail during render (no effect setState); the effect's
+  // cleanup has already invalidated any request still in flight for the previous code.
+  const [previousCarrierCode, setPreviousCarrierCode] = useState(carrierCode);
+  if (previousCarrierCode !== carrierCode) {
+    setPreviousCarrierCode(carrierCode);
+    setDetailCarrier(null);
+    setSelectedCarrierDetail(null);
+    setDetailError(null);
+    setDetailNotFound(false);
+    setDetailLoading(carrierCode !== null);
+  }
+
   useEffect(() => {
-    if (carrierCode !== null) void handleViewServices(carrierCode);
-    else closeDetail();
+    if (carrierCode === null) return undefined;
+    const requests = detailRequestId;
+    void loadDetail(carrierCode, ++requests.current);
     return () => {
-      ++detailRequestId.current;
+      ++requests.current;
     };
-  }, [carrierCode, handleViewServices, closeDetail]);
+  }, [carrierCode, loadDetail]);
 
   const clearFilters = useCallback(() => {
     setValidationErrors({});

@@ -4,7 +4,9 @@ import { useEffect, useRef } from 'react';
 export function useDialogFocus(isOpen: boolean, onClose: () => void) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
   useEffect(() => {
     if (!isOpen || !ref.current) return;
     const dialog = ref.current;
