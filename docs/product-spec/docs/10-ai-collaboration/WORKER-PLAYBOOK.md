@@ -75,8 +75,9 @@ only entries with a `command` run, and only `gate: true` entries run automatical
 | axe-core | accessibility | `@axe-core/playwright` inside Playwright specs | used, manifest says not installed |
 | msw, supertest, nock | API mocking and HTTP tests | inside unit and integration tests | installed or not, no command |
 | openapi-typescript | API types from OpenAPI | per Work Item | installed, no command |
-| semgrep, ast-grep | security and structural review | not yet runnable | not installed |
-| trivy, syft | vulnerabilities, SBOM | not yet runnable | not installed |
+| semgrep | security review | `pnpm security:semgrep` | present on this machine, manifest says not installed |
+| ast-grep | structural search | `sg run -p '<pattern>' <paths>` | installed 2026-11-08, manifest says not installed |
+| trivy, syft, k6 | vulnerabilities, SBOM, load | `trivy fs --scanners vuln .`; `syft dir:. -o spdx-json`; `k6 run <script>` | installed 2026-11-08 via winget, manifest says not installed |
 
 The remaining entries (storybook, k6, pact-js, prism, hoverfly, toxiproxy, renovate, context7,
 tokentracker, vietnamese-provinces, lighthouse-ci, compose, agent-scan) are declared only. Add
@@ -98,7 +99,7 @@ a project dependency only when a Work Item needs it, with execution evidence at 
 | forwardemail/supertest | API handler tests | assert status, canonical error body, tenant scope |
 | openapi-ts/openapi-typescript | API contract types | regenerate types when the OpenAPI changes; commit both |
 | nestjs/nest | API modules in `apps/api` | follow existing module, guard and DTO patterns |
-| semgrep/semgrep | security and correctness review | `semgrep scan --config auto <paths>` on the diff |
+| semgrep/semgrep | security and correctness review | `pnpm security:semgrep` (rule tests in `tools/semgrep/rules`, then scan with `--error`); never substitute `--config auto` |
 | ast-grep/ast-grep | structural search for patterns and regressions | `sg run -p '<pattern>' <paths>`; `sgconfig.yml` at repo root |
 | aquasecurity/trivy | dependency and image vulnerabilities | `trivy fs --scanners vuln .` |
 | anchore/syft | SBOM | `syft dir:. -o spdx-json > sbom.json` |
@@ -157,7 +158,7 @@ quality scores, provider or account lists, and numeric attempt or probe caps und
 7. **Hand back.** Commit on the Work Item branch, update the Work Item file, open the PR with the
    ten sections and exact command output; state what is unverified.
 8. **Review and repair.** The independent reviewer returns a verdict at the exact SHA; fix each
-   finding by section 7; ask for a delta review; merge only on PASS with green CI.
+   finding by section 7; request a new independent review of the whole PR at the new head (state which findings the new commits address); merge only on PASS with green CI.
 
 ## 7. Fixing a review finding
 
@@ -165,7 +166,7 @@ quality scores, provider or account lists, and numeric attempt or probe caps und
 2. Write a test that reproduces it and fails on the reviewed SHA.
 3. Fix the cause at WHERE; keep the change inside the finding.
 4. Run the new test, the suites named in the review and the commands in section 8.
-5. Ask for a delta review of the fix only.
+5. Request a new independent review of the whole PR at the new head SHA, naming the findings the fix addresses.
 
 ## 8. Before handing back
 
