@@ -468,6 +468,7 @@ Offline evidence only. External cutover, live routes, CI, independent review and
 ## Worker playbook (2026-11-08)
 
 - `docs/product-spec/docs/10-ai-collaboration/WORKER-PLAYBOOK.md` gives every worker one guide: roles, four shared rules, graphify, tool state measured at `5c574f7a` (42 declared, 5 with a command, 2 gates), reference repositories, no-hardcode, reuse, fixing and hand-back checks. Linked from the four start prompts.
+Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`): context-pack now resolves the repository root and candidates with `fs.realpathSync`, refuses outside/unresolvable targets with sanitized manifest/result reasons, and rechecks fallback reads. Windows junction regression: before 0/8 pass (six outside-content assertions fail); after 8/8 pass. Existing context-related tests plus regression: 17/17 pass. Broader selected files: 117/118 pass, failing the AGY advertised-model test at `task-ai-141.test.js:100` (outside this repair). Hardcode guard blocked by missing `@typescript-eslint/parser`. Formatted with cached Prettier 3.9.6; no network or commit.
 ## AA prefix family (operator 2026-11-08)
 
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
