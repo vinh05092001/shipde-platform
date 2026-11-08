@@ -150,6 +150,8 @@ function originRows(id, modelId, byBase, deploymentTags) {
   // (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes that base's result, at its lowest published
   // score. The longest matching base wins so `glm-5-3-flash-x` prefers `glm-5-3-flash` over
   // `glm-5-3`. The shared prior matcher is not used: it merges aliases across distinct models.
+  // An exact base after the deployment tag is that model, never a shorter parent.
+  if (byBase.has(own)) return lowest(byBase.get(own), 'aa-origin-deployment-tag');
   let parent = null;
   for (const base of byBase.keys()) {
     if (own.startsWith(base + '-') && (!parent || base.length > parent.length)) parent = base;

@@ -217,3 +217,15 @@ test('origin join never strips an unpublished effort, merges distinct models, or
   ];
   assert.equal(quality(policyDir(t, synth), 'gateway/synthetic-free').value, 10);
 });
+
+test('a deployment tag on an exact AA base never falls back to a shorter parent', (t) => {
+  const a = policyDir(t, [
+    { name: 'GLM-5', base: 'glm-5', variant: '', ii: 10, pct: 20 },
+    { name: 'GLM-5.3', base: 'glm-5-3', variant: '', ii: 40, pct: 80 },
+    { name: 'GPT-6', base: 'gpt-6', variant: '', ii: 20, pct: 30 },
+    { name: 'GPT-6.1', base: 'gpt-6-1', variant: '', ii: 45, pct: 85 },
+  ]);
+  assert.equal(quality(a, 'gateway/glm-5.3-free').value, 80);
+  assert.equal(quality(a, 'gateway/gpt-6.1-free').value, 85);
+  assert.equal(quality(a, 'gateway/glm-5.3-prime').value, 80);
+});
