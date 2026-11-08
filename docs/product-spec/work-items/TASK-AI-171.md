@@ -414,6 +414,9 @@ Limitations: Mock launch and JEV verify orchestration only, not route liveness. 
 
 Integration of the routing tickets with a measured quality policy and scan-based route evidence. Evidence and open items: `docs/ai-audit/handoff-table-20261108.md`.
 
+## Register reconciliation (PR #540)
+
+- Report: `docs/ai-audit/register-reconcile-20261108.md`. Offline author, data fetched by the coordinator.
 ## Open PR (PR #541)
 
 - Report: `docs/ai-audit/open-prs-20261108.md`. Offline author, data fetched by the coordinator.
@@ -436,3 +439,6 @@ Integration of the routing tickets with a measured quality policy and scan-based
 
 - A route whose name differs from AA (renamed by a source) is joined to its origin through the shared prior matcher or a trailing numeric release tag; several candidates take the lowest score. Dispatch FEAT-CAR-01: 103 of 236 models scored (87 before).
 - Review 08/11: the shared prior matcher was dropped from the origin join (it stripped efforts and merged distinct models); release-tag rule only. Dispatch: 102 of 235 scored.
+## Scoring scale label (dispatch output)
+
+- With an active scoring policy, `scoreScale` names the policy version and range and the decision carries `scoringPolicyStatus`; without a policy the profile label stays.
