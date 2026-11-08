@@ -19,33 +19,43 @@ function safeRelative(file) {
     : null;
 }
 
-function collectManifest(items, root, sources) {
+function resolveSource(root, file) {
+  let realPath;
+  try {
+    realPath = fs.realpathSync(path.join(root, file));
+  } catch {
+    throw new Error('CONTEXT_PATH_UNRESOLVABLE');
+  }
+  const relative = path.relative(root, realPath);
+  if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+    throw new Error('CONTEXT_PATH_OUTSIDE_ROOT');
+  }
+  return realPath;
+}
+
+function collectManifest(items, root, sources, refusals) {
   const files = new Set();
-  for (const item of items || []) {
-    for (const candidate of [...(item.allowedPaths || []), ...(sources || [])]) {
-      const relative = safeRelative(candidate);
-      if (
-        relative &&
-        fs.existsSync(path.join(root, relative)) &&
-        fs.statSync(path.join(root, relative)).isFile()
-      ) {
-        files.add(relative);
-      }
+  const seen = new Set();
+  function add(candidate) {
+    const relative = safeRelative(candidate);
+    if (!relative || seen.has(relative)) return;
+    seen.add(relative);
+    let resolved;
+    try {
+      resolved = resolveSource(root, relative);
+    } catch (error) {
+      refusals.push({ file: relative, reason: error.message });
+      return;
     }
+    if (fs.statSync(resolved).isFile()) files.add(relative);
+  }
+  for (const item of items || []) {
+    for (const candidate of [...(item.allowedPaths || []), ...(sources || [])]) add(candidate);
     const specText = String(item.specText || item.sourceText || '');
     const citedPaths = [
       ...specText.matchAll(/(?:^|[\s(])((?:docs|tools)\/[A-Za-z0-9_./-]+\.md)(?::\d+(?:-\d+)?)?/gm),
     ].map((match) => match[1]);
-    for (const candidate of citedPaths) {
-      const relative = safeRelative(candidate);
-      if (
-        relative &&
-        fs.existsSync(path.join(root, relative)) &&
-        fs.statSync(path.join(root, relative)).isFile()
-      ) {
-        files.add(relative);
-      }
-    }
+    for (const candidate of citedPaths) add(candidate);
   }
   return [...files].sort();
 }
@@ -55,7 +65,7 @@ function assertPackSize(files, root, options = {}) {
   const maxTotalBytes = Number(options.maxTotalBytes) || DEFAULT_MAX_TOTAL_BYTES;
   let totalBytes = 0;
   for (const file of files) {
-    const size = fs.statSync(path.join(root, file)).size;
+    const size = fs.statSync(resolveSource(root, file)).size;
     if (size > maxFileBytes) throw new Error('CONTEXT_FILE_TOO_LARGE: ' + file);
     totalBytes += size;
     if (totalBytes > maxTotalBytes) throw new Error('CONTEXT_PACK_TOO_LARGE');
@@ -78,28 +88,30 @@ function fallbackReason(repomix, includeArg, attempted) {
 }
 
 function createContextPack(items, options = {}) {
-  const root = path.resolve(options.root || process.cwd());
+  const root = fs.realpathSync(path.resolve(options.root || process.cwd()));
   const requestedOutput = options.output ? path.resolve(options.output) : null;
   const outputDir = path.resolve(
     options.outputDir ||
       (requestedOutput && path.dirname(requestedOutput)) ||
       path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
   );
-  const manifest = collectManifest(items, root, options.sources);
+  const refusals = [];
+  const manifest = collectManifest(items, root, options.sources, refusals);
   assertPackSize(manifest, root, options);
   fs.mkdirSync(outputDir, { recursive: true });
   const output =
     requestedOutput || path.join(outputDir, 'context-' + Date.now() + '-' + process.pid + '.md');
   fs.writeFileSync(
     output + '.manifest.json',
-    JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
+    JSON.stringify({ files: manifest, refusals, createdAt: new Date().toISOString() }, null, 2) +
+      '\n',
     'utf8'
   );
   const includeArg = manifest.join(',');
   const repomix = resolveRepomix(root);
   let content = null;
   let attempted = false;
-  if (repomix && includeArg.length <= 4000) {
+  if (manifest.length && repomix && includeArg.length <= 4000) {
     attempted = true;
     const result = cp.spawnSync(repomix, ['--include', includeArg, '--output', output], {
       cwd: root,
@@ -120,28 +132,34 @@ function createContextPack(items, options = {}) {
       manifest
         .map(
           (file) =>
-            '## ' + file + '\n\n```\n' + fs.readFileSync(path.join(root, file), 'utf8') + '\n```'
+            '## ' +
+            file +
+            '\n\n```\n' +
+            fs.readFileSync(resolveSource(root, file), 'utf8') +
+            '\n```'
         )
         .join('\n\n');
     fs.writeFileSync(output, content, 'utf8');
   }
   fs.writeFileSync(
     output + '.manifest.json',
-    JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
+    JSON.stringify({ files: manifest, refusals, createdAt: new Date().toISOString() }, null, 2) +
+      '\n',
     'utf8'
   );
-  return { path: output, files: manifest, content, packer, packerReason };
+  return { path: output, files: manifest, refusals, content, packer, packerReason };
 }
 
 async function createContextPackAsync(items, options = {}) {
-  const root = path.resolve(options.root || process.cwd());
+  const root = fs.realpathSync(path.resolve(options.root || process.cwd()));
   const requestedOutput = options.output ? path.resolve(options.output) : null;
   const outputDir = path.resolve(
     options.outputDir ||
       (requestedOutput && path.dirname(requestedOutput)) ||
       path.join(root, 'tools', 'ai-brain', 'data', 'context-packs')
   );
-  const manifest = collectManifest(items, root, options.sources);
+  const refusals = [];
+  const manifest = collectManifest(items, root, options.sources, refusals);
   assertPackSize(manifest, root, options);
   await fs.promises.mkdir(outputDir, { recursive: true });
   const output =
@@ -149,14 +167,15 @@ async function createContextPackAsync(items, options = {}) {
   const manifestPath = output + '.manifest.json';
   await fs.promises.writeFile(
     manifestPath,
-    JSON.stringify({ files: manifest, createdAt: new Date().toISOString() }, null, 2) + '\n',
+    JSON.stringify({ files: manifest, refusals, createdAt: new Date().toISOString() }, null, 2) +
+      '\n',
     'utf8'
   );
   const includeArg = manifest.join(',');
   const repomix = resolveRepomix(root);
   let content = null;
   let attempted = false;
-  if (repomix && includeArg.length <= 4000) {
+  if (manifest.length && repomix && includeArg.length <= 4000) {
     attempted = true;
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000;
     const completed = await new Promise((resolve) => {
@@ -192,7 +211,7 @@ async function createContextPackAsync(items, options = {}) {
   if (!content) {
     const sections = [];
     for (const file of manifest) {
-      const source = await fs.promises.readFile(path.join(root, file));
+      const source = await fs.promises.readFile(resolveSource(root, file));
       if (source.length > (Number(options.maxFileBytes) || DEFAULT_MAX_FILE_BYTES)) {
         throw new Error('CONTEXT_FILE_TOO_LARGE: ' + file);
       }
@@ -201,7 +220,7 @@ async function createContextPackAsync(items, options = {}) {
     content = '# Focused context pack\n\n' + sections.join('\n\n');
     await fs.promises.writeFile(output, content, 'utf8');
   }
-  return { path: output, files: manifest, content, packer, packerReason };
+  return { path: output, files: manifest, refusals, content, packer, packerReason };
 }
 
 module.exports = { createContextPack, createContextPackAsync, resolveRepomix, safeRelative };
