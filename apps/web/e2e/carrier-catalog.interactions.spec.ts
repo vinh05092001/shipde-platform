@@ -1,4 +1,5 @@
-﻿import { createRequire } from 'node:module';
+import AxeBuilder from '@axe-core/playwright';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test, expect } from '@playwright/test';
 import type {
@@ -242,6 +243,12 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('carrier-card-GHN')).toBeVisible();
 });
 
+// AC-CAR-01-11: each opened dialog passes axe on the same rules as the live journey.
+async function expectAccessibleDialog(page: import('@playwright/test').Page) {
+  const result = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
+  expect(result.violations).toEqual([]);
+}
+
 test('late detail responses cannot replace the selected carrier', async ({ page }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -302,6 +309,7 @@ test('keyboard detail control is visibly revealed without hover', async ({ page 
     .toBe('1');
   await page.keyboard.press('Enter');
   await expect(page.getByRole('dialog')).toContainText(MOCK_CARRIER_DETAIL.data.services[0].code);
+  await expectAccessibleDialog(page);
 });
 for (const status of [500, 403]) {
   test(`detail ${status}, loading and retry`, async ({ page }) => {
@@ -356,10 +364,12 @@ test('partial taxonomy and reference retry', async ({ page }) => {
   await expect(page.getByRole('dialog')).not.toContainText('BASE_FREIGHT');
   await page.getByRole('dialog').getByRole('button', { name: 'Thử lại' }).click();
   await expect(page.getByRole('dialog')).toContainText('BASE_FREIGHT');
+  await expectAccessibleDialog(page);
   expect(calls).toBe(2);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Trạng thái Canonical', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText(MOCK_STATUSES[0].code);
+  await expectAccessibleDialog(page);
 });
 for (const status of [500, 403]) {
   test(`status reference ${status}, partial success and retry`, async ({ page }) => {
