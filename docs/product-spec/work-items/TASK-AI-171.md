@@ -446,3 +446,11 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## Handoff table final update
 
 - `docs/ai-audit/handoff-table-20261108.md` records #538 to #545, live scoring 103 of 236 (measured after merge), the FEAT-CAR-01 Slice B product ticket and the remaining blockers.
+
+## PR 12 — Explicit coordinator inputs and offline output
+
+Operator-assigned author scope: `coordinator-options.js`, `cli.js`, `dispatch-output.js`, `route-handoff.js` and `task-ai-171-route-pr12-options.test.js` under `tools/ai-brain/`, plus this section. `dispatch --offline [--dry-run]` requires explicit `--root` (absolute), `--runtime` and `--code-sha`; ordinary mode also requires `--item`, `--cwd`, `--task` and `--snapshot`, while `--decision` consumes a structured decision without selecting again. Runtime JSON inputs are pre-sanitized exports: ordinary snapshots contain `candidates`, registry-qualified `launcherModels`, `registry`, `profile` and optional accounts/health/quota/evidence/priors/assessment metadata. Task paths resolve from the checkout; selection stages no prompts. The launch caller supplies an optional sandbox note as text.
+
+Outcome: existing assembly/admission and Controller ranking produce stable redacted JSON, retain every refusal and exact selected identity, and emit only scalar launch receipts. Offline mode reads metadata and performs no process/network/credential/cache/task side effects. Credential bootstrap (B15), raw user config (B23) and workstation startup/orphan maintenance (B54) remain separate operator-owned operations. The caller supplies the code SHA; offline inspection does not run Git or establish live liveness, independent review or cutover.
+
+Evidence: new tests fail on unchanged production code (8 tests, 0 pass, 8 fail) and pass after this change (8 tests, 8 pass, 0 fail). Combined `node --test` run with `dispatch-json.test.js`, `task-ai-171-route-handoff.test.js`, `task-ai-142-dryrun-priors.test.js` and `dispatch-wiring.test.js`: 46 tests, 42 pass, 4 fail; the same four dispatch-wiring failures reproduce at base `be926f07`. Repository Prettier and the explicit five-file no-hardcode scan pass. No network or commit; coordinator owns review and commit.
