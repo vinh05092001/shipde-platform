@@ -317,7 +317,7 @@ test('valid policy with incomplete evidence refuses execute and reports unknown 
 
 const aaFile = path.join(__dirname, '../data/aa-intelligence.json');
 const defaultPolicyFile = path.join(__dirname, '../data/scoring-policy.json');
-test('AA exact variant join binds only the named observation version', (t) => {
+test('AA join binds the observation version and labels how each route was matched', (t) => {
   const { loadScoringPolicy, joinMeasurements } = require('../scoring-policy');
   const f = fixture(t);
   const data = {
@@ -342,12 +342,21 @@ test('AA exact variant join binds only the named observation version', (t) => {
   };
   fs.writeFileSync(f.policyFile, JSON.stringify(p));
   const loaded = loadScoringPolicy(f.policyFile);
-  for (const modelId of ['synthetic-high', 'synthetic', 'alias/synthetic-high']) {
+  const via = {
+    'synthetic-high': undefined,
+    synthetic: 'aa-lowest-effort',
+    'alias/synthetic-high': 'aa-base-effort',
+    'synthetic-low': null,
+  };
+  for (const [modelId, expected] of Object.entries(via)) {
     const candidate = { ...f.rows[0], modelId, modelVersion: undefined };
     joinMeasurements([candidate], loaded, f.deps);
-    assert.equal(Boolean(candidate.measurements.quality), modelId === 'synthetic-high');
-    if (modelId === 'synthetic-high')
-      assert.equal(candidate.modelVersion, `${data.version}:${data.rows[0].name}`);
+    if (expected === null) {
+      assert.equal(candidate.measurements.quality, undefined);
+      continue;
+    }
+    assert.equal(candidate.measurements.quality.matchedVia, expected);
+    assert.equal(candidate.modelVersion, `${data.version}:${data.rows[0].name}`);
   }
 });
 test('AA policy loads one measured percentile dimension and reuses priors freshness', () => {

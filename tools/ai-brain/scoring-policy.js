@@ -55,6 +55,8 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
         return {
           modelId,
           modelVersion,
+          base: row.base,
+          variant: row.variant || '',
           measurements: {
             quality: {
               value: row.pct,
@@ -77,6 +79,41 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
   };
 }
 
+// A route ID carries a gateway/vendor path and a deployment tag (`:free`) that AA does not.
+// The last path segment, normalised the way AA bases are, names the AA base; a trailing
+// segment counts as an effort only when AA publishes that variant for that base. A route
+// that names no effort while AA scores only per effort takes the lowest published effort,
+// so a score is never higher than AA measured. No vocabulary lives here: it comes from the rows.
+function aaRowsFor(modelId, rows) {
+  if (typeof modelId !== 'string' || !rows.length) return [];
+  const id = modelId
+    .split('/')
+    .pop()
+    .replace(/:[^:]*$/, '')
+    .toLowerCase()
+    .replace(/[._ ]+/g, '-');
+  const byBase = new Map();
+  for (const r of rows) {
+    if (!r.base) continue;
+    if (!byBase.has(r.base)) byBase.set(r.base, []);
+    byBase.get(r.base).push(r);
+  }
+  const plain = byBase.get(id);
+  if (plain) {
+    const exact = plain.filter((r) => !r.variant);
+    if (exact.length) return exact;
+    const low = Math.min(...plain.map((r) => r.measurements.quality.value));
+    return [{ ...plain.find((r) => r.measurements.quality.value === low), lowestEffort: true }];
+  }
+  for (const [base, list] of byBase) {
+    if (!id.startsWith(base + '-')) continue;
+    const variant = id.slice(base.length + 1);
+    const hit = list.filter((r) => r.variant === variant);
+    if (hit.length) return hit;
+  }
+  return [];
+}
+
 function joinMeasurements(candidates, assessment, context = {}) {
   if (!assessment.scoringPolicy) return;
   const health = require('./route-health');
@@ -87,11 +124,25 @@ function joinMeasurements(candidates, assessment, context = {}) {
     });
   const priors = context.priors || require('./priors').loadPriors();
   for (const candidate of candidates) {
-    const snapshotRows = (assessment.scoringPriors?.ranking || []).filter(
-      (r) => r.modelId === candidate.modelId
-    );
+    const snapshot = assessment.scoringPriors?.ranking || [];
+    const exactRows = snapshot.filter((r) => r.modelId === candidate.modelId);
+    // A joined AA row is attributed to this route's model ID; the AA row it came from stays as provenance.
+    const snapshotRows = exactRows.length
+      ? exactRows
+      : aaRowsFor(candidate.modelId, snapshot).map((r) => ({
+          ...r,
+          modelId: candidate.modelId,
+          measurements: {
+            quality: {
+              ...r.measurements.quality,
+              modelId: candidate.modelId,
+              aaModelId: r.modelId,
+              matchedVia: r.lowestEffort ? 'aa-lowest-effort' : r.variant ? 'aa-base-effort' : 'aa-base',
+            },
+          },
+        }));
     // This is the operator-defined AA observation version, not a provider revision.
-    // Never replace an explicit route version, nor infer a base/variant alias.
+    // Never replace an explicit route version.
     if (!candidate.modelVersion && snapshotRows.length === 1) {
       candidate.modelVersion = snapshotRows[0].modelVersion;
     }
