@@ -66,6 +66,14 @@ test('PR03: native completion proof survives timeout but error prose containing 
     'passed'
   );
 });
+test('PR03: synthetic file timestamp never outranks an explicit newer failure', (t) => {
+  const records = read(t, [
+    row({ reason: 'RATE', httpStatus: 429, observedAt: '2026-11-07T00:00:00Z' }),
+    row({ observedAt: undefined }),
+  ]);
+  assert.equal(scan.withScanLiveness(row(), records).scanLiveness.status, 'failed');
+  assert.equal(scan.withScanLiveness(row(), records).scanLiveness.reason, 'RATE');
+});
 test('PR03: quota windows retain five-hour exhaustion, unknown and expired telemetry', async () => {
   const windows = [
     { family: 'fixture', window: 'weekly', remainingPercent: 80 },
@@ -103,6 +111,22 @@ test('PR03: quota windows retain five-hour exhaustion, unknown and expired telem
     ),
     true
   );
+});
+test('PR03: merging quota windows keeps the last exhausted reset so the block survives', () => {
+  const fiveReset = new Date(Date.parse(at) + 3600 * 1000).toISOString();
+  const weekReset = new Date(Date.parse(at) + 7 * 86400 * 1000).toISOString();
+  const merged = quota.mergeQuotaWindows(
+    [
+      { family: 'fixture', window: 'fiveHour', remainingPercent: 0, resetsAt: fiveReset },
+      { family: 'fixture', window: 'weekly', remainingPercent: 0, resetsAt: weekReset },
+    ],
+    Date.parse(at)
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].resetsAt, weekReset);
+  const after = quota.mergeQuotaWindows(merged, Date.parse(fiveReset) + 1);
+  assert.equal(after[0].known, true);
+  assert.equal(after[0].remainingPercent, 0);
 });
 test('PR03: stale execution success never clears newer matching failure or another account', () => {
   const store = { version: 1, paths: {}, events: [] };

@@ -9,6 +9,7 @@ const identity = (sourceId, accountId, modelId) => JSON.stringify([sourceId, acc
 // Explicit observation time wins; file order breaks ties for legacy rows.
 function readScanLiveness(file) {
   const latest = new Map();
+  const explicitKeys = new Set();
   if (!file) return latest;
   const observedAt = fs.statSync(file).mtime.toISOString();
   const lines = fs
@@ -32,7 +33,8 @@ function readScanLiveness(file) {
     ) {
       throw new Error('SCAN_INVALID_LINE:' + (index + 1));
     }
-    const at = row.observedAt || row.at || observedAt;
+    const explicit = row.observedAt || row.at;
+    const at = explicit || observedAt;
     if (!Number.isFinite(Date.parse(at))) throw new Error('SCAN_INVALID_LINE:' + (index + 1));
     const classified =
       row.body !== undefined || row.snippet !== undefined
@@ -49,7 +51,15 @@ function readScanLiveness(file) {
       row.httpStatus >= 200 &&
       row.httpStatus < 300;
     const key = identity(row.sourceId, row.accountId, row.modelId);
-    if (Date.parse(latest.get(key)?.observedAt) > Date.parse(at)) return;
+    const previous = latest.get(key);
+    // Explicit observation time outranks the synthetic file mtime; among explicit rows the later
+    // time wins, among legacy rows the later file row wins. A legacy row never beats an explicit.
+    if (previous) {
+      if (explicitKeys.has(key) && !explicit) return;
+      if (explicitKeys.has(key) && Date.parse(previous.observedAt) > Date.parse(at)) return;
+    }
+    if (explicit) explicitKeys.add(key);
+    else explicitKeys.delete(key);
     latest.set(key, {
       reason: classified.reason,
       status: passed ? Status.PASSED : Status.FAILED,

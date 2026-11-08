@@ -3034,6 +3034,7 @@ async function syncNinerouterModelsToOpenCode(options = {}) {
 }
 
 // One family shares every reported window; a later weekly row cannot erase a spent short window.
+// A family stays blocked until the last exhausted window resets, so keep the furthest reset.
 function mergeQuotaWindows(rows, now) {
   const families = new Map();
   for (const row of rows) {
@@ -3042,9 +3043,27 @@ function mergeQuotaWindows(rows, now) {
       Number.isFinite(row.remainingPercent) &&
       (!row.resetsAt || Date.parse(row.resetsAt) > now);
     const current = families.get(row.family);
-    if (!current || !known || (current.known && row.remainingPercent < current.remainingPercent)) {
+    if (!current) {
       families.set(row.family, { ...row, known });
+      continue;
     }
+    const remainingPercent_ =
+      current.known && row.known !== false && Number.isFinite(row.remainingPercent)
+        ? Math.min(current.remainingPercent, row.remainingPercent)
+        : known
+          ? row.remainingPercent
+          : current.remainingPercent;
+    const currentSpent = current.known && current.remainingPercent <= 0;
+    const rowSpent = known && row.remainingPercent <= 0;
+    const resetsAt =
+      currentSpent && rowSpent && current.resetsAt && row.resetsAt
+        ? Date.parse(current.resetsAt) > Date.parse(row.resetsAt)
+          ? current.resetsAt
+          : row.resetsAt
+        : !current.known || (known && !currentSpent)
+          ? row.resetsAt
+          : current.resetsAt;
+    families.set(row.family, { ...current, remainingPercent: remainingPercent_, resetsAt, known });
   }
   return [...families.values()];
 }

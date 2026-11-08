@@ -507,3 +507,24 @@ Changed JavaScript formatted with offline Prettier 3.9.6 and repo settings;
 `git diff --check` passes. The hardcode guard could not execute:
 `ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`. No dependency install or
 network fallback was attempted; coordinator must rerun this gate with dependencies.
+
+## PR 03 — repair round 1: review findings (2026-11-09)
+
+Finding Piant1 (synthetic file timestamp outranked an explicit newer failure)
+fixed in `tools/ai-brain/scan-liveness.js`: each record now tracks whether its
+time came from an explicit `observedAt`/`at`. An explicit timestamp always wins;
+the file mtime is used only to break ties between legacy rows in file order.
+Test `PR03: synthetic file timestamp never outranks an explicit newer failure`.
+
+Finding 2 (merging quota windows released an exhausted route prematurely bodily)
+fixed in `tools/ai-brain/quota-scan.js` `mergeQuotaWindows`: a family keeps the
+lowest remaining percent and,756 when several windows are exhausted, the
+**furthest** reset. The block therefore survives until the last binding window
+resets, and unknown/expired telemetry still reports `known:false`.
+Test `PR03: merging quota windows keeps the last exhausted reset so the block
+survives`.
+
+Both new tests fail on `19707394` (suite 9 pass / 2 fail) and pass after
+(16 pass / 0 fail) together with `task-ai-171-route-pr02-admission`.
+Changed files pass Prettier 3.9.6. The hardcode guard remains BLOCKED_BY_SANDBOX:
+`ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`.
