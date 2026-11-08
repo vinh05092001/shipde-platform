@@ -50,11 +50,14 @@ function pagePayload(html) {
     try {
       parts.push(JSON.parse(m[1]));
     } catch {
-      /* a malformed chunk is skipped */
+      // A malformed chunk breaks the stream: nothing may join across it.
+      parts.push(CHUNK_BREAK);
     }
   }
   return parts.length ? parts.join('') : html;
 }
+// U+0000 cannot appear raw in valid JSON, so it can only be a break marker.
+const CHUNK_BREAK = '\u0000';
 
 function parseRecords(html) {
   const t = pagePayload(html);
@@ -64,6 +67,11 @@ function parseRecords(html) {
   let inString = false;
   for (let k = 0; k < t.length; k++) {
     const c = t[k];
+    if (c === CHUNK_BREAK) {
+      starts.length = 0;
+      inString = false;
+      continue;
+    }
     if (inString) {
       if (c === '\\') k++;
       else if (c === '"') inString = false;

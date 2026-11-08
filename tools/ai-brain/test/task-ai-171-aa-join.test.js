@@ -151,3 +151,16 @@ test('braces inside record strings do not drop or merge records', () => {
     ]
   );
 });
+
+test('a malformed payload chunk breaks the stream instead of joining its neighbours', () => {
+  const { parseRecords } = require('../aa-snapshot');
+  const push = (s) => `self.__next_f.push([1,${s}])`;
+  const page =
+    push(JSON.stringify('{"slug":"x","name":"X",')) +
+    push('"bad\q"') +
+    push(JSON.stringify('"intelligenceIndex":50}{"slug":"y","name":"Y","intelligenceIndex":30}'));
+  assert.deepEqual(
+    parseRecords(page).map((r) => r.slug),
+    ['y']
+  );
+});
