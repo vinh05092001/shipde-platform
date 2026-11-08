@@ -314,3 +314,213 @@ test('valid policy with incomplete evidence refuses execute and reports unknown 
     'SCORING_POLICY_LOADED'
   );
 });
+
+const aaFile = path.join(__dirname, 'fixtures/aa-policy/aa-intelligence.json');
+const defaultPolicyFile = path.join(__dirname, 'fixtures/aa-policy/scoring-policy.json');
+
+test('dispatch JSON names the loaded policy scale and preserves scoring statuses', (t) => {
+  const f = fixture(t);
+  const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
+  const p = JSON.parse(fs.readFileSync(defaultPolicyFile, 'utf8'));
+  fs.copyFileSync(aaFile, path.join(f.dir, p.priorsFile));
+  const candidates = f.rows.map((candidate, i) => {
+    const { modelVersion, ...route } = candidate;
+    const row = data.rows[i];
+    return { ...route, modelId: row.variant ? `${row.base}-${row.variant}` : row.base };
+  });
+  const dispatchJson = () => {
+    f.logs.length = 0;
+    dispatchCommand(
+      { item: 'TASK-AI-171', role: 'writer', 'dry-run': true, json: true },
+      {
+        ...f.deps,
+        candidates,
+        evidenceData: { combinations: [] },
+        now: Date.parse(data.observedAt),
+      }
+    );
+    return JSON.parse(f.logs.find((line) => line.startsWith('{')));
+  };
+  for (const version of [p.version, `${p.version}-revision`]) {
+    fs.writeFileSync(f.policyFile, JSON.stringify({ ...p, version }));
+    const decision = dispatchJson();
+    assert.equal(decision.scoreScale, `policy:${version}:0-1`);
+    assert.equal(decision.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
+    assert.equal(Object.hasOwn(decision, 'scoringPriorsStatus'), false);
+    assert.equal(decision.ranking.length, candidates.length);
+    for (const row of decision.ranking) {
+      assert.equal(row.scoreBreakdown.policy.version, version);
+      assert.ok(row.score >= 0 && row.score <= 1);
+    }
+  }
+  fs.unlinkSync(path.join(f.dir, p.priorsFile));
+  const inactive = dispatchJson();
+  assert.equal(inactive.scoreScale, 'controller:weighted-profile');
+  assert.equal(inactive.scoringPolicyStatus, 'SCORING_POLICY_INACTIVE');
+  assert.equal(inactive.scoringPriorsStatus, 'AA_SNAPSHOT_MISSING');
+  fs.unlinkSync(f.policyFile);
+  const missing = dispatchJson();
+  assert.equal(missing.scoreScale, 'controller:weighted-profile');
+  assert.equal(missing.scoringPolicyStatus, 'SCORING_POLICY_MISSING');
+  assert.equal(Object.hasOwn(missing, 'scoringPriorsStatus'), false);
+});
+test('AA join binds the observation version and labels how each route was matched', (t) => {
+  const { loadScoringPolicy, joinMeasurements } = require('../scoring-policy');
+  const f = fixture(t);
+  const data = {
+    version: 'fixture-AA-version',
+    source: 'fixture://AA',
+    observedAt: new Date(now).toISOString(),
+    unit: 'fixture-points',
+    rows: [{ name: 'Synthetic (high)', base: 'synthetic', variant: 'high', pct: 4 }],
+  };
+  fs.writeFileSync(path.join(f.dir, 'aa.json'), JSON.stringify(data));
+  const p = policy();
+  p.priorsFile = 'aa.json';
+  p.dimensions = {
+    quality: {
+      weight: 1,
+      min: 0,
+      max: 10,
+      direction: 'higher',
+      unit: data.unit,
+      measurement: { store: 'priors', metric: 'quality' },
+    },
+  };
+  fs.writeFileSync(f.policyFile, JSON.stringify(p));
+  const loaded = loadScoringPolicy(f.policyFile);
+  const via = {
+    'synthetic-high': undefined,
+    synthetic: 'aa-lowest-effort',
+    'alias/synthetic-high': 'aa-base-effort',
+    'synthetic-low': null,
+  };
+  for (const [modelId, expected] of Object.entries(via)) {
+    const candidate = { ...f.rows[0], modelId, modelVersion: undefined };
+    joinMeasurements([candidate], loaded, f.deps);
+    if (expected === null) {
+      assert.equal(candidate.measurements.quality, undefined);
+      continue;
+    }
+    assert.equal(candidate.measurements.quality.matchedVia, expected);
+    assert.equal(candidate.modelVersion, `${data.version}:${data.rows[0].name}`);
+  }
+});
+test('AA policy loads one measured percentile dimension and reuses priors freshness', () => {
+  const { loadScoringPolicy } = require('../scoring-policy');
+  const loaded = loadScoringPolicy(defaultPolicyFile);
+  assert.equal(loaded.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
+  const p = loaded.scoringPolicy;
+  const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
+  assert.equal(p.maxAgeMs, require('../priors').STALE_AFTER_MS);
+  assert.deepEqual(Object.keys(p.dimensions), ['quality']);
+  assert.deepEqual(p.notMeasured, ['latency', 'cost', 'reliability']);
+  assert.deepEqual(p.dimensions.quality, {
+    weight: 1,
+    min: data.min,
+    max: data.max,
+    unit: data.unit,
+    direction: 'higher',
+    measurement: { store: 'priors', metric: 'quality' },
+  });
+  // Independently replay aa-fetch's midrank formula over the complete population.
+  for (const row of data.rows) {
+    const population = Object.entries(data.population);
+    const lower = population
+      .filter(([ii]) => Number(ii) < row.ii)
+      .reduce((n, [, count]) => n + count, 0);
+    const tied = data.population[row.ii];
+    const size = population.reduce((n, [, count]) => n + count, 0);
+    assert.equal(row.pct, Math.round(((lower + tied / 2) / size) * 1000) / 10);
+  }
+});
+test('AA dry-run and execute share sourced parts and equal a hand replay', (t) => {
+  const f = fixture(t);
+  const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
+  const rows = data.rows.slice(0, f.rows.length);
+  const candidates = f.rows.map((c, i) => {
+    const { modelVersion, ...route } = c;
+    const row = rows[i];
+    return { ...route, modelId: row.variant ? `${row.base}-${row.variant}` : row.base };
+  });
+  const at = Date.parse(data.observedAt);
+  const deps = {
+    ...f.deps,
+    candidates,
+    evidenceData: { combinations: [] },
+    now: at,
+    scoringPolicyFile: defaultPolicyFile,
+  };
+  const dry = dispatchCommand({ item: 'TASK-AI-171', role: 'writer', 'dry-run': true }, deps);
+  let executed;
+  dispatchCommand(
+    { item: 'TASK-AI-171', role: 'writer', execute: true },
+    {
+      ...deps,
+      run: () => {
+        executed = require('../decisions')
+          .readDecisions({ dir: deps.decisionDir, now: at })
+          .filter((r) => r.stage === 'selected')
+          .at(-1);
+        return { exitCode: 0, stdout: '{"id":"fixture-session","status":"completed"}' };
+      },
+    }
+  );
+  assert.ok(executed, 'stub execute must launch a measured candidate');
+  assert.equal(executed.chosen, dry.decision.chosen);
+  for (const c of dry.decision.candidates) {
+    const replay = executed.candidates.find((r) => r.offeringId === c.offeringId);
+    assert.deepEqual(replay.scoreBreakdown, c.scoreBreakdown);
+    const m = c.scoreBreakdown.measurements.quality;
+    const row = rows.find((r) => `AA-II-5.0.1:${r.name}` === m.modelVersion);
+    assert.ok(row);
+    const p = JSON.parse(fs.readFileSync(defaultPolicyFile, 'utf8'));
+    const rule = p.dimensions.quality;
+    const byHand = (row.pct - rule.min) / (rule.max - rule.min);
+    assert.equal(c.scoreBreakdown.quality, byHand);
+    assert.equal(c.score, byHand);
+    assert.equal(m.source, data.source);
+    assert.equal(m.observedAt, data.observedAt);
+    assert.equal(c.scoreBreakdown.policy.version, p.version);
+  }
+});
+test('AA rejects stale, wrong-unit, foreign-model and foreign-version rows; unknown refuses execute', (t) => {
+  const { loadScoringPolicy, joinMeasurements } = require('../scoring-policy');
+  const loaded = loadScoringPolicy(defaultPolicyFile);
+  const data = JSON.parse(fs.readFileSync(aaFile, 'utf8'));
+  const row = data.rows[0];
+  const modelId = row.variant ? `${row.base}-${row.variant}` : row.base;
+  const f = fixture(t);
+  const at = Date.parse(data.observedAt);
+  const original = { ...f.rows[0], modelId, modelVersion: `AA-II-5.0.1:${row.name}` };
+  for (const patch of [
+    { now: at + loaded.scoringPolicy.maxAgeMs + 1 },
+    { now: at - 1 },
+    { candidate: { modelId: `${modelId}-alias` } },
+    { candidate: { modelId: `${row.base}-unmeasured-variant` } },
+    { candidate: { modelVersion: 'foreign-version' } },
+    { unit: 'raw index' },
+    { foreignModel: true },
+  ]) {
+    const assessment = structuredClone(loaded);
+    if (patch.unit) assessment.scoringPriors.ranking[0].measurements.quality.unit = patch.unit;
+    if (patch.foreignModel)
+      assessment.scoringPriors.ranking[0].measurements.quality.modelId = 'foreign';
+    const candidate = { ...original, ...patch.candidate };
+    joinMeasurements([candidate], assessment, { ...f.deps, now: patch.now ?? at });
+    assert.deepEqual(candidate.measurements, {}, JSON.stringify(patch));
+  }
+  const unknown = { ...original, modelId: `${modelId}-unknown` };
+  const result = dispatchCommand(
+    { item: 'TASK-AI-171', role: 'writer', execute: true },
+    {
+      ...f.deps,
+      candidates: [unknown],
+      scoringPolicyFile: defaultPolicyFile,
+      now: at,
+      run: () => assert.fail('Unknown model must not launch'),
+    }
+  );
+  assert.equal(result.decision.chosen, null);
+  assert.equal(result.decision.reasonCode, 'SCORING_INPUTS_UNVERIFIED');
+});
