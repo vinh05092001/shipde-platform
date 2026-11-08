@@ -454,6 +454,9 @@ Operator-assigned author scope: `coordinator-options.js`, `cli.js`, `dispatch-ou
 Outcome: existing assembly/admission and Controller ranking produce stable redacted JSON, retain every refusal and exact selected identity, and emit only scalar launch receipts. Offline mode reads metadata and performs no process/network/credential/cache/task side effects. Credential bootstrap (B15), raw user config (B23) and workstation startup/orphan maintenance (B54) remain separate operator-owned operations. The caller supplies the code SHA; offline inspection does not run Git or establish live liveness, independent review or cutover.
 
 Evidence: new tests fail on unchanged production code (8 tests, 0 pass, 8 fail) and pass after this change (8 tests, 8 pass, 0 fail). Combined `node --test` run with `dispatch-json.test.js`, `task-ai-171-route-handoff.test.js`, `task-ai-142-dryrun-priors.test.js` and `dispatch-wiring.test.js`: 46 tests, 42 pass, 4 fail; the same four dispatch-wiring failures reproduce at base `be926f07`. Repository Prettier and the explicit five-file no-hardcode scan pass. No network or commit; coordinator owns review and commit.
+## AA variant takes its base (operator 2026-11-08)
+
+- A known AA base followed by a variant AA does not publish (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes the base result at its lowest published score; longest base wins. Dispatch FEAT-CAR-01: 124 of 236 models scored (103 before).
 ## PR 01 — Preserve the Controller's selected writer and score (2026-11-08)
 
 Operator-assigned Codex author scope: `tools/ai-brain/{dispatch-output,route-handoff}.js`, `tools/ai-brain/test/task-ai-171-route-pr01-consumer.test.js`, plus this section.
