@@ -464,3 +464,5 @@ Evidence: new tests before implementation 0 pass / 11 fail; after implementation
 11 pass / 0 fail. PR 01 existing suites: 53 pass / 0 fail; handoff/fallback: 33 pass / 0 fail.
 Prettier 3.9.6 uses repo settings; the hardcode guard passes with zero new instances.
 Offline evidence only. External cutover, live routes, CI, independent review and commit remain with the coordinator; `.oc/route.js` was neither copied nor changed.
+
+Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`): context-pack now resolves the repository root and candidates with `fs.realpathSync`, refuses outside/unresolvable targets with sanitized manifest/result reasons, and rechecks fallback reads. Windows junction regression: before 0/8 pass (six outside-content assertions fail); after 8/8 pass. Existing context-related tests plus regression: 17/17 pass. Broader selected files: 117/118 pass, failing the AGY advertised-model test at `task-ai-141.test.js:100` (outside this repair). Hardcode guard blocked by missing `@typescript-eslint/parser`. Formatted with cached Prettier 3.9.6; no network or commit.
