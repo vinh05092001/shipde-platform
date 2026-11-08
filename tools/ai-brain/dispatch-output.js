@@ -121,4 +121,10 @@ function serializeDispatchOutput(value, metadata = {}) {
   return require('./coordinator-text').safeText(stable);
 }
 
-module.exports = { filterStage, filterPins, dispatchOutput, decisionRow: row, serializeDispatchOutput };
+module.exports = {
+  filterStage,
+  filterPins,
+  dispatchOutput,
+  decisionRow: row,
+  serializeDispatchOutput,
+};
