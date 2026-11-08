@@ -450,3 +450,16 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## AA variant takes its base (operator 2026-11-08)
 
 - A known AA base followed by a variant AA does not publish (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes the base result at its lowest published score; longest base wins. Dispatch FEAT-CAR-01: 124 of 236 models scored (103 before).
+## PR 01 — Preserve the Controller's selected writer and score (2026-11-08)
+
+Operator-assigned Codex author scope: `tools/ai-brain/{dispatch-output,route-handoff}.js`, `tools/ai-brain/test/task-ai-171-route-pr01-consumer.test.js`, plus this section.
+Rows B09/B10/B19/B21/B60/B70/B72 reuse Controller scoring and explicit route fields.
+`decisionFromDispatch(json, { exitCode, error, workItemId })` adapts dispatch output for
+the existing handoff; it preserves scores, scale, provenance, order and refusals.
+Strict envelopes launch only the chosen offering; unavailable/null choices block.
+Fallback requires a fresh Controller choice; legacy decision callers stay compatible.
+Malformed JSON, execution errors, empty inventory and policy refusals remain distinct.
+Evidence: new tests before implementation 0 pass / 11 fail; after implementation
+11 pass / 0 fail. PR 01 existing suites: 53 pass / 0 fail; handoff/fallback: 33 pass / 0 fail.
+Prettier 3.9.6 uses repo settings; the hardcode guard passes with zero new instances.
+Offline evidence only. External cutover, live routes, CI, independent review and commit remain with the coordinator; `.oc/route.js` was neither copied nor changed.
