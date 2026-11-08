@@ -278,13 +278,13 @@ function orderCandidatesForProbe(candidates, profile, options = {}) {
   for (const c of candidates) {
     const scopeState = quotaScan.getQuotaScopeState(c, quotaState);
     if (c.blockScope === 'quota-scope') {
-      if (!scopeState || !quotaScan.isScopeBlocked(scopeState, now)) {
+      if (!scopeState || !quotaScan.isScopeBlocked(scopeState, now, { routeCandidate: c })) {
         c.blocked = false;
         delete c.blockReason;
         delete c.blockScope;
       }
     } else if (!c.blocked) {
-      if (scopeState && quotaScan.isScopeBlocked(scopeState, now)) {
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, now, { routeCandidate: c })) {
         c.blocked = true;
         c.blockReason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`;
         c.blockScope = 'quota-scope';
@@ -421,13 +421,13 @@ async function probeCapabilities(candidates, profile, options = {}) {
   for (const c of orderedCandidates) {
     const scopeState = quotaScan.getQuotaScopeState(c, quotaState);
     if (c.blockScope === 'quota-scope') {
-      if (!scopeState || !quotaScan.isScopeBlocked(scopeState, probeNow)) {
+      if (!scopeState || !quotaScan.isScopeBlocked(scopeState, probeNow, { routeCandidate: c })) {
         c.blocked = false;
         delete c.blockReason;
         delete c.blockScope;
       }
     } else if (!c.blocked) {
-      if (scopeState && quotaScan.isScopeBlocked(scopeState, probeNow)) {
+      if (scopeState && quotaScan.isScopeBlocked(scopeState, probeNow, { routeCandidate: c })) {
         c.blocked = true;
         c.blockReason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source}`;
         c.blockScope = 'quota-scope';

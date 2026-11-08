@@ -61,7 +61,9 @@ async function enumerateRegistry(registry, ctx) {
   const routers = sources.filter((s) => s.kind === 'router');
   const rest = sources.filter((s) => s.kind !== 'router');
   for (const source of [...routers, ...rest]) {
-    results.set(source.id, await enumerate(source, fullCtx));
+    const started = Date.now();
+    const result = await enumerate(source, fullCtx);
+    results.set(source.id, { ...result, durationMs: Date.now() - started });
   }
   return results;
 }
@@ -80,10 +82,12 @@ async function cmdRun(flags, deps = {}) {
 
   const ctx = {
     registry,
-    httpGet: (url, opts) =>
-      httpGetModels(url, { envName: opts && opts.envName, timeoutMs: opts && opts.timeoutMs }),
-    runCommand,
-    resolveCommand: (name) => classifyPresence(resolveCommand(name, {})),
+    httpGet:
+      deps.httpGet ||
+      ((url, opts) =>
+        httpGetModels(url, { envName: opts && opts.envName, timeoutMs: opts && opts.timeoutMs })),
+    runCommand: deps.runCommand || runCommand,
+    resolveCommand: deps.resolveCommand || ((name) => classifyPresence(resolveCommand(name, {}))),
   };
 
   const live = await require('./discovery/live').enumerateLiveSources({
@@ -135,12 +139,29 @@ async function cmdRun(flags, deps = {}) {
     );
   });
   const successful = [...results].filter(([, result]) => completeListing(result));
+  // An enumerated source with no model is not a listing, so it cannot make a catalogue fresh.
+  const listed = successful.filter(([, result]) =>
+    (result.catalogs || []).some((entry) => (entry.models || []).length > 0)
+  );
   const freshnessFile = flags['freshness-file'] || path.join(dataDir, 'freshness.json');
   const previous = readJson(freshnessFile);
   const complete = successful.length > 0 && failed.length === 0;
+  const sources = [...results].map(([id, res]) => ({
+    id,
+    kind: (registry.sources.find((s) => s.id === id) || {}).kind,
+    status: res.status,
+    durationMs: res.durationMs,
+    incomplete: failed.some(([failedId]) => failedId === id),
+    reason:
+      res.reason || (failed.some(([failedId]) => failedId === id) ? 'INCOMPLETE_LISTING' : null),
+    advertised: reconciled.perSourceNarrow[id] ? reconciled.perSourceNarrow[id].advertised : 0,
+    catalogs: (res.catalogs || []).map((c) => ({ upstream: c.upstream, count: c.count })),
+  }));
   writeJson(freshnessFile, {
+    sources,
+    listedSources: listed.length,
     lastAttemptAt: now,
-    lastSuccessfulAt: complete ? now : previous.lastSuccessfulAt || null,
+    lastSuccessfulAt: listed.length > 0 ? now : previous.lastSuccessfulAt || null,
     complete,
     failedSources: failed.map(([id, result]) => ({
       id,
@@ -149,21 +170,12 @@ async function cmdRun(flags, deps = {}) {
   });
 
   return {
-    exitCode: complete ? 0 : 1,
+    exitCode: listed.length > 0 ? 0 : 1, // one failing source must not stop the others
     runId,
     dataDir: dataDir.replace(/\\/g, '/'),
     storeFile: storeFile.replace(/\\/g, '/'),
     snapshotFile: snapFile.replace(/\\/g, '/'),
-    sources: [...results].map(([id, res]) => ({
-      id,
-      kind: (registry.sources.find((s) => s.id === id) || {}).kind,
-      status: res.status,
-      incomplete: failed.some(([failedId]) => failedId === id),
-      reason:
-        res.reason || (failed.some(([failedId]) => failedId === id) ? 'INCOMPLETE_LISTING' : null),
-      advertised: reconciled.perSourceNarrow[id] ? reconciled.perSourceNarrow[id].advertised : 0,
-      catalogs: (res.catalogs || []).map((c) => ({ upstream: c.upstream, count: c.count })),
-    })),
+    sources,
     perState: reconciled.perState,
     aliases: reconciled.snapshot.aliases.length,
     writeSkipped: current.size ? reconciled.transitions.length : null,

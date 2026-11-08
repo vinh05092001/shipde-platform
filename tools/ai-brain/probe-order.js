@@ -39,7 +39,10 @@ function preferKnownGood(result, candidates, options = {}) {
     for (const row of result.ranking) {
       const c = byKey.get(row.candidateKey) || row;
       const scopeState = quotaScan.getQuotaScopeState(c, quotaState, { ...options, now });
-      if (scopeState && quotaScan.isScopeBlocked(scopeState, now, options)) {
+      if (
+        scopeState &&
+        quotaScan.isScopeBlocked(scopeState, now, { ...options, routeCandidate: c })
+      ) {
         result.rejected.push({
           candidateKey: row.candidateKey,
           reasonCode: `QUOTA_SCOPE_${scopeState.code}`,

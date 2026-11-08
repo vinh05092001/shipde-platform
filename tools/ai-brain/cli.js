@@ -1116,6 +1116,7 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     routePath
   );
   if (rec) return rec.status === 'AVAILABLE';
+  if (candidate.scanLiveness?.status === 'passed') return true;
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
   if (options && options.allowMissingRouteHealth === true) return true;
@@ -1165,16 +1166,69 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
  * gateway-derived and pool-derived candidates. Merges evidence-only candidates
  * so models seen in evidence history participate in selection.
  *
- * If `options.candidates` is provided, that array is returned directly: a
- * caller that supplies its own candidates is testing or replaying them, not
- * asking what the machine actually serves.
+ * Injected candidates skip inventory generation, but still obey health and scope.
  */
+// The ticket decides whether routes outside the combo may compete. Absent means they may.
+const ROUTE_SCOPES = new Set(['combo-only', 'combo-and-routes']);
+function routeScopeOf(value) {
+  if (value === undefined || value === null) return 'combo-and-routes';
+  if (!ROUTE_SCOPES.has(value)) throw new Error('ROUTE_SCOPE_INVALID: ' + value);
+  return value;
+}
+
+function comboOriginOf(candidate, members) {
+  const id = String(candidate.modelId || candidate.model || '');
+  const { gateway, source, sourceId, reachedVia } = candidate;
+  const viaRouter = require('./writer-combo').isNineRouterCandidate({
+    gateway,
+    source,
+    sourceId,
+    reachedVia,
+  });
+  if (viaRouter && Array.isArray(candidate.comboMembers)) {
+    return 'combo';
+  }
+  return viaRouter && members.has(id) ? 'combo-member' : 'individual';
+}
+
+// Runs where discovery and generated rows have merged, so no entry point escapes it.
+function applyRouteScope(eligible, excludedRoutes, opts, registry) {
+  const candidatesApi = require('./candidates');
+  const comboName = candidatesApi.getWriterComboName(opts, registry);
+  if (!comboName) return eligible;
+  // A config for another combo proves nothing about this one.
+  const config = opts.nineRouterComboConfig?.name === comboName ? opts.nineRouterComboConfig : null;
+  const members = new Set(config?.members || []);
+  const refusal = Array.isArray(config?.members)
+    ? 'NOT_IN_COMBO_CONFIG'
+    : 'COMBO_CONFIG_UNAVAILABLE';
+  const kept = [];
+  for (const candidate of eligible) {
+    candidate.routeOrigin = comboOriginOf(candidate, members);
+    if (opts.routeScope !== 'combo-only' || candidate.routeOrigin !== 'individual') {
+      kept.push(candidate);
+      continue;
+    }
+    const key = candidatesApi.candidateKey(candidate);
+    excludedRoutes.push({
+      offeringId: key,
+      candidateKey: key,
+      reason: refusal,
+      reasonCode: refusal,
+      scope: 'route',
+    });
+  }
+  return kept;
+}
+
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
+  const { readScanLiveness, withScanLiveness } = require('./scan-liveness');
+  const scan = readScanLiveness(opts.scanFile);
   const routeHealthApi = require('./route-health');
   const routeHealthExplicit = opts.routeHealth !== undefined;
   const requireRouteHealth = opts.requireRouteHealth === true || !Array.isArray(opts.candidates);
@@ -1295,9 +1349,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         resolvedRegistry,
         accounts,
         opts.candidates
-      );
+      ).map((candidate) => withScanLiveness(candidate, scan, resolvedRegistry));
       const eligible = [];
-      const excludedRoutes = [];
+      const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
         let isEligible = true;
@@ -1312,10 +1366,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             if (rec) {
               isEligible = rec.status === 'AVAILABLE';
             } else if (enforceEmptyHealth) {
-              isEligible = Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
+              isEligible =
+                candidate.scanLiveness?.status === 'passed' ||
+                Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
             }
           }
         }
+        if (candidate.scanLiveness?.status === 'failed') isEligible = false;
         if (isEligible) {
           eligible.push(candidate);
         } else {
@@ -1332,7 +1389,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               routeHealth && modelId && gateway
                 ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
                 : null;
-            const reason = rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+            const reason =
+              candidate.scanLiveness?.status === 'failed'
+                ? candidate.scanLiveness.reason
+                : rec
+                  ? rec.status || 'ROUTE_UNAVAILABLE'
+                  : 'ROUTE_PROBE_UNPROVEN';
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1343,7 +1405,24 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           }
         }
       }
-      Object.defineProperty(eligible, 'excludedRoutes', {
+      const scoped = applyRouteScope(eligible, excludedRoutes, opts, resolvedRegistry);
+      Object.defineProperty(scoped, 'filters', {
+        value: [
+          require('./dispatch-output').filterStage(
+            'route-health',
+            explicitCandidates,
+            eligible,
+            excludedRoutes.filter((c) => c.scope !== 'route-scope')
+          ),
+          require('./dispatch-output').filterStage(
+            'route-scope',
+            eligible,
+            scoped,
+            excludedRoutes.filter((c) => c.scope === 'route-scope')
+          ),
+        ],
+      });
+      Object.defineProperty(scoped, 'excludedRoutes', {
         value: excludedRoutes,
         enumerable: false,
         writable: true,
@@ -1352,7 +1431,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       if (opts && Array.isArray(opts.excludedRoutes)) {
         opts.excludedRoutes.push(...excludedRoutes);
       }
-      return eligible;
+      return scoped;
     };
     if (!refresh) return buildExplicit();
     return Promise.resolve(persistHealth()).then(buildExplicit);
@@ -1378,6 +1457,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const assembled = assembleCandidates(discoveryCat, offs, resolvedRegistry, accounts, null, [
       ...candidatesApi.generateCandidates({
         harness: opts.harness,
+        role: opts.role,
+        routeScope: 'combo-and-routes', // Inventory first; applyRouteScope records refusals.
         registry: resolvedRegistry,
         accounts: accounts || [],
         openCodeIds: (accounts || []).flatMap((account) =>
@@ -1390,6 +1471,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             ? catalogueRows
             : (discoveryCat && discoveryCat.candidates) || [],
         evidenceData: opts.evidenceData,
+        nineRouterComboConfig: opts.nineRouterComboConfig,
+        sourceAccess: opts.sourceAccess,
         fakeRunsDir: opts.fakeRunsDir,
         home: opts.home,
         discoverPool: opts.discoverPool !== false,
@@ -1494,10 +1577,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       assembled.push(...directCandidates);
     }
     const eligible = [];
-    const excludedRoutes = [];
+    const excludedRoutes = [...(opts.routeScopeExclusions || [])];
     const seenExcluded = new Set();
-    for (const candidate of assembled) {
+    for (const rawCandidate of assembled) {
+      const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
       if (
+        candidate.scanLiveness?.status !== 'failed' &&
         isCandidateRouteEligible(
           routeHealth,
           candidate,
@@ -1525,12 +1610,15 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
               : null;
           const reason =
-            candidate &&
-            (candidate.credentialEnvMissing || candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
-              ? 'CREDENTIAL_ENV_MISSING'
-              : rec
-                ? rec.status || 'ROUTE_UNAVAILABLE'
-                : 'ROUTE_PROBE_UNPROVEN';
+            candidate.scanLiveness?.status === 'failed'
+              ? candidate.scanLiveness.reason
+              : candidate &&
+                  (candidate.credentialEnvMissing ||
+                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
+                ? 'CREDENTIAL_ENV_MISSING'
+                : rec
+                  ? rec.status || 'ROUTE_UNAVAILABLE'
+                  : 'ROUTE_PROBE_UNPROVEN';
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
@@ -1541,7 +1629,24 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         }
       }
     }
-    Object.defineProperty(eligible, 'excludedRoutes', {
+    const scoped = applyRouteScope(eligible, excludedRoutes, opts, resolvedRegistry);
+    Object.defineProperty(scoped, 'filters', {
+      value: [
+        require('./dispatch-output').filterStage(
+          'route-health',
+          assembled,
+          eligible,
+          excludedRoutes.filter((c) => c.scope !== 'route-scope')
+        ),
+        require('./dispatch-output').filterStage(
+          'route-scope',
+          eligible,
+          scoped,
+          excludedRoutes.filter((c) => c.scope === 'route-scope')
+        ),
+      ],
+    });
+    Object.defineProperty(scoped, 'excludedRoutes', {
       value: excludedRoutes,
       enumerable: false,
       writable: true,
@@ -1550,7 +1655,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     if (opts && Array.isArray(opts.excludedRoutes)) {
       opts.excludedRoutes.push(...excludedRoutes);
     }
-    return eligible;
+    return scoped;
   };
   if (!refresh) return buildCandidates();
   return Promise.resolve(persistHealth()).then(buildCandidates);
@@ -1871,7 +1976,16 @@ function buildDryRunLog(parts) {
   for (const r of (fallback.decision && fallback.decision.rejected) || []) {
     rejected.set(r.offeringId, r);
   }
-  const candidates = (parts.annotated || []).map((c) => {
+  const inputCandidates = new Map(
+    (parts.annotated || []).map((c) => [parts.candidatesApi.candidateKey(c), c])
+  );
+  // Assembly exclusions are inputs too; retain each identity once without ranking it.
+  for (const key of rejected.keys()) {
+    if (inputCandidates.has(key)) continue;
+    const identity = require('./discovery/identity').parseCandidateKey(key);
+    inputCandidates.set(key, { ...identity, accountId: identity?.account });
+  }
+  const candidates = [...inputCandidates.values()].map((c) => {
     const key = parts.candidatesApi.candidateKey(c);
     const isUnscored =
       c.qualityLabel === 'QUALITY_UNKNOWN' ||
@@ -1904,6 +2018,7 @@ function buildDryRunLog(parts) {
   }
   return {
     schemaVersion: 1,
+    scoringPolicyStatus: decision.scoringPolicyStatus,
     mode: 'dry-run',
     workItemId: parts.item.workItemId,
     generatedAt: new Date(parts.now).toISOString(),
@@ -1943,6 +2058,7 @@ function buildDryRunLog(parts) {
       reason: decision.reason,
       ordered: (decision.candidates || []).map((c) => ({
         offeringId: c.offeringId,
+        scoreBreakdown: c.scoreBreakdown,
         score:
           (c.scoreBreakdown && c.scoreBreakdown.quality === null) ||
           c.score === null ||
@@ -1987,7 +2103,7 @@ async function dispatchProfileCommand(args, deps) {
   const { readDiscoveryCatalogue } = require('./discovery/read');
 
   let discCat;
-  if (Array.isArray(deps && deps.discoveryCatalogue)) {
+  if (deps && deps.discoveryCatalogue) {
     discCat = deps.discoveryCatalogue;
   } else if (!(deps && Array.isArray(deps.candidates))) {
     try {
@@ -2014,6 +2130,7 @@ async function dispatchProfileCommand(args, deps) {
     evidenceData = {};
   }
   const optsWithEvidence = Object.assign({}, deps, {
+    scanFile: args['scan-file'] || deps?.scanFile,
     evidenceData,
     routeHealthFile: args['route-health'] || (deps && deps.routeHealthFile) || undefined,
     accounts,
@@ -2042,6 +2159,17 @@ async function dispatchProfileCommand(args, deps) {
   }
   if (!discCat && Array.isArray(deps && deps.candidates)) discCat = { candidates: [] };
 
+  // An unreadable profile is reported by runProfileDispatch with its usual exit code.
+  let ticket = null;
+  try {
+    const text = require('fs').readFileSync(path.resolve(rootDir, args.profile), 'utf8');
+    ticket = JSON.parse(text.replace(/^﻿/, ''));
+  } catch {
+    ticket = null;
+  }
+  optsWithEvidence.role = ticket?.role;
+  optsWithEvidence.routeScope = routeScopeOf(ticket?.routeScope);
+
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
   const candidateList = assembleForDispatch(
     discCat,
@@ -2052,19 +2180,32 @@ async function dispatchProfileCommand(args, deps) {
       : Object.assign({}, optsWithEvidence, { requireRouteHealth: true })
   );
   const jevSource = sourcesApi.getSource('jev', registry);
+  const scoring = require('./scoring-policy');
+  const scoringAssessment = scoring.loadScoringPolicy(
+    args['scoring-policy'] || deps.scoringPolicyFile
+  );
+  scoring.joinMeasurements(candidateList, scoringAssessment, {
+    ...optsWithEvidence,
+    evidenceData,
+    evidenceDir,
+    now: deps.now,
+  });
   const jevAsk =
     (deps && deps.jevAsk) ||
-    jev.buildAskFromSource(jevSource, {
-      home: optsWithEvidence.home,
-      env: (deps && deps.env) || process.env,
-      httpClient: deps && deps.jevHttpClient,
-      timeoutMs: deps && deps.jevTimeoutMs,
-    });
+    (!(args.execute !== true && deps && deps.dryRunOffline === true) &&
+      jev.buildAskFromSource(jevSource, {
+        home: optsWithEvidence.home,
+        env: (deps && deps.env) || process.env,
+        httpClient: deps && deps.jevHttpClient,
+        timeoutMs: deps && deps.jevTimeoutMs,
+      })) ||
+    undefined;
 
   return require('./routing').runProfileDispatch(
     args,
     Object.assign({}, deps, {
-      candidates: candidateList,
+      candidates: require('./dispatch-output').filterPins(candidateList, args, deps),
+      scoringAssessment,
       capabilityProbeAllowNetwork: args.execute === true && !Array.isArray(deps && deps.candidates),
       registry,
       rootDir,
@@ -2097,7 +2238,11 @@ function dispatchCommand(args, deps = {}) {
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const execute = args.execute === true;
   const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
-  const log = deps.log || console.log;
+  const isDryRun = dryRunFlag || !execute;
+  // Only the real CLI entry sets this: injected test seams keep their paths.
+  const noInference = isDryRun && deps.dryRunOffline === true;
+  const output = deps.log || console.log;
+  const log = args.json && !execute && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
 
@@ -2188,11 +2333,34 @@ function dispatchCommand(args, deps = {}) {
   // floors and its constraints; JEV advises (never a model); the Controller
   // ranks; rank 1 is pinned and, under --execute, reserved. Async, because the
   // JEV advisory is.
+  if (
+    !args.plan &&
+    !Array.isArray(deps.candidates) &&
+    (args['combo-config'] || deps.readDispatchComboConfig) &&
+    deps.nineRouterComboConfig === undefined
+  ) {
+    const registry = deps.registry || require('./sources').loadSources();
+    if (args['combo-config']) {
+      const config = JSON.parse(fs.readFileSync(args['combo-config'], 'utf8'));
+      if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        throw new Error('Invalid combo configuration: expected an object');
+      }
+      return dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config });
+    }
+    const read = deps.readDispatchComboConfig;
+    return Promise.resolve()
+      .then(() => read({ registry, signal: AbortSignal.timeout(3000) }))
+      .catch(() => ({ members: null, state: 'COMBO_CONFIG_UNAVAILABLE' }))
+      .then((config) =>
+        dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config })
+      );
+  }
+
   if (typeof args.profile === 'string') {
     return dispatchProfileCommand(args, deps);
   }
 
-  if (deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
+  if (!noInference && deps && deps.refreshRoutes === true && !Array.isArray(deps.candidates)) {
     const routeHealthApi = require('./route-health');
     // Same order as orchestrate and next: args, then deps, then root, then default.
     const healthFile =
@@ -2238,8 +2406,6 @@ function dispatchCommand(args, deps = {}) {
         );
       });
   }
-
-  const isDryRun = dryRunFlag || !execute;
 
   // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
@@ -2365,7 +2531,12 @@ function dispatchCommand(args, deps = {}) {
   const rollingOnboard = require('./rolling-onboard');
   const env = (deps && deps.env) || process.env;
   const evidenceData = (deps && deps.evidenceData) || evidence.loadEvidence(evidenceDir);
+  const scoring = require('./scoring-policy');
+  const scoringAssessment = scoring.loadScoringPolicy(
+    args['scoring-policy'] || deps.scoringPolicyFile
+  );
   const newSources =
+    noInference ||
     (deps && deps.onboardingPrepared) ||
     isCandidateInjected ||
     args['onboarding-prepared'] ||
@@ -2398,13 +2569,19 @@ function dispatchCommand(args, deps = {}) {
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
+  const ticketRoute = {
+    scanFile: args['scan-file'] || deps.scanFile,
+    role: item.role,
+    routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
+    ...(noInference ? { refreshRoutes: false } : {}),
+  };
   const candidateList = assembleForDispatch(
     discCat,
     accounts,
     registry,
     Array.isArray(deps.candidates) || deps.allowUnprobedCandidates === true
-      ? deps
-      : Object.assign({}, deps, { requireRouteHealth: true })
+      ? { ...deps, ...ticketRoute }
+      : { ...deps, ...ticketRoute, requireRouteHealth: true }
   );
 
   // Filter by explicit pins (--model, --account, --harness)
@@ -2413,22 +2590,7 @@ function dispatchCommand(args, deps = {}) {
   const pinHarness = args.harness || (deps && deps.harness);
   const isPinned = Boolean(pinModel || pinAccount || pinHarness);
 
-  let eligibleCandidates = candidateList.slice();
-  if (isPinned) {
-    if (pinModel) {
-      eligibleCandidates = eligibleCandidates.filter(
-        (c) => c.modelId === pinModel || c.model === pinModel || c.base === pinModel
-      );
-    }
-    if (pinAccount) {
-      eligibleCandidates = eligibleCandidates.filter(
-        (c) => c.accountId === pinAccount || c.account === pinAccount
-      );
-    }
-    if (pinHarness) {
-      eligibleCandidates = eligibleCandidates.filter((c) => c.harness === pinHarness);
-    }
-  }
+  const eligibleCandidates = require('./dispatch-output').filterPins(candidateList, args, deps);
 
   // Handle dry-run
   if (isDryRun) {
@@ -2462,6 +2624,13 @@ function dispatchCommand(args, deps = {}) {
       evidenceData,
       annotateOpts
     );
+    scoring.joinMeasurements(annotated, scoringAssessment, {
+      ...deps,
+      evidenceData,
+      evidenceDir,
+      now,
+      routeHealthFile: args['route-health'] || deps.routeHealthFile,
+    });
     applyHarnessVerification(annotated);
 
     for (const c of annotated) {
@@ -2503,8 +2672,11 @@ function dispatchCommand(args, deps = {}) {
     // Production uses the same cached advisory assessment as the live writer.
     // Injected candidate fixtures remain offline unless they provide an ask.
     if (
+      !noInference &&
       !deps.assessment &&
-      (!Array.isArray(deps.candidates) || typeof deps.jevAsk === 'function')
+      (!Array.isArray(deps.candidates) ||
+        typeof deps.jevAsk === 'function' ||
+        typeof deps.jevHttpClient === 'function')
     ) {
       const jevSource = sourcesApi.getSource('jev', registry);
       const ask =
@@ -2523,6 +2695,7 @@ function dispatchCommand(args, deps = {}) {
             registry,
             accounts,
             candidates: candidateList,
+            routeScopeExclusions: candidateList.excludedRoutes,
             assessment,
           })
         );
@@ -2550,6 +2723,7 @@ function dispatchCommand(args, deps = {}) {
         dispatchCommand(args, {
           ...deps,
           candidates: annotated,
+          routeScopeExclusions: candidateList.excludedRoutes,
           capabilitiesPrepared: true,
           registry,
           accounts,
@@ -2558,9 +2732,12 @@ function dispatchCommand(args, deps = {}) {
       );
     }
     const fallbackProfile = routing.controllerFallbackProfile(profile);
-    const assessment = deps.assessment || {
-      weightProfile: fallbackProfile,
-      weights: routing.WEIGHT_PROFILES[fallbackProfile],
+    const assessment = {
+      ...(deps.assessment || {
+        weightProfile: fallbackProfile,
+        weights: routing.WEIGHT_PROFILES[fallbackProfile],
+      }),
+      ...scoringAssessment,
     };
     const rankDryRun = (offered) => {
       const result = routing.rankForProfile(offered, profile, assessment, {
@@ -2580,6 +2757,7 @@ function dispatchCommand(args, deps = {}) {
       // Retain the dispatch CLI's existing output/checkpoint field names.
       return {
         ...result,
+        scoringPolicyStatus: scoringAssessment.scoringPolicyStatus,
         candidates: result.ranking.map((candidate) => ({
           ...candidate,
           offeringId: candidate.candidateKey,
@@ -2605,6 +2783,14 @@ function dispatchCommand(args, deps = {}) {
       };
     };
     const decision = rankDryRun(annotated);
+    const structured = () =>
+      require('./dispatch-output').dispatchOutput(
+        profile,
+        assessment,
+        eligibleCandidates,
+        decision
+      );
+    scoring.printSources(decision, log);
     if (
       resumed &&
       checkpoint &&
@@ -2633,6 +2819,7 @@ function dispatchCommand(args, deps = {}) {
     }
 
     if (!decision.chosen) {
+      if (args.json) output(JSON.stringify(structured(), null, 2));
       log('No eligible candidate for ' + item.workItemId);
       for (const rej of decision.rejected) {
         log(
@@ -2767,6 +2954,14 @@ function dispatchCommand(args, deps = {}) {
       );
     }
 
+    if (args.json)
+      output(
+        JSON.stringify(
+          { ...structured(), fallback, simulatedFailure, checkpoint: nextCheckpoint },
+          null,
+          2
+        )
+      );
     log('Ranked candidates for ' + item.workItemId + ':');
     for (let i = 0; i < decision.candidates.length; i++) {
       const c = decision.candidates[i];
@@ -2881,6 +3076,13 @@ function dispatchCommand(args, deps = {}) {
         evidenceData,
         annotateOpts
       );
+      scoring.joinMeasurements(annotated, scoringAssessment, {
+        ...deps,
+        evidenceData,
+        evidenceDir,
+        now,
+        routeHealthFile: args['route-health'] || deps.routeHealthFile,
+      });
       applyHarnessVerification(annotated);
 
       for (const c of annotated) {
@@ -2933,7 +3135,12 @@ function dispatchCommand(args, deps = {}) {
         ...(deps?.quotaState ? { quotaState: deps.quotaState } : {}),
       };
 
-      const decision = ranking.rankAndRecord(annotated, rankingContext);
+      const decision = ranking.rankAndRecord(annotated, {
+        ...rankingContext,
+        assessment: { ...deps.assessment, ...scoringAssessment },
+        excludedRoutes: candidateList.excludedRoutes,
+      });
+      scoring.printSources(decision, log);
       lastDecision = decision;
 
       if (!decision.chosen) {
@@ -3611,6 +3818,12 @@ function discoveryCommand(args, deps) {
         })
       : assembleForDispatch(discCat, accounts, registry, {
           evidenceData,
+          nineRouterComboConfig: args['combo-config']
+            ? JSON.parse(require('fs').readFileSync(args['combo-config'], 'utf8'))
+            : undefined,
+          sourceAccess: args['source-access']
+            ? JSON.parse(require('fs').readFileSync(args['source-access'], 'utf8'))
+            : undefined,
           home,
           fakeRunsDir: poolRuntimeDir,
           discoverPool: Boolean(poolRuntimeDir),
@@ -4052,6 +4265,7 @@ async function orchestrateCommand(args, deps = {}) {
         catalogue: readJsonArg(args.catalogue) || [],
         sourceModels,
         discoveryCatalogue,
+        nineRouterComboConfig: readJsonArg(args['combo-config']) || undefined,
         accounts: inputAccounts,
         externalWorkers: args['external-workers'],
         openCodeIds: Array.isArray(args['opencode-ids'])
@@ -4718,7 +4932,11 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'quota') return quotaCommand(args);
   if (command === 'quota-scan') return quotaScanCommand(args, deps);
   if (command === 'dispatch') {
-    const result = dispatchCommand(args);
+    const result = dispatchCommand(args, {
+      ...deps,
+      readDispatchComboConfig:
+        deps.readDispatchComboConfig || require('./writer-combo').readComboConfig,
+    });
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a
     // promise. An unhandled rejection would crash silently, so it is caught
     // here and turned into a non-zero exit instead.
@@ -5350,5 +5568,9 @@ function createRefreshRouteHealth(routeArgs = {}, routeDeps = {}) {
 }
 
 if (require.main === module) {
-  main();
+  // Dry-run stays inference-free whatever is configured; only an explicit --jev-live asks JEV.
+  // Linux pipes are asynchronous: a large --json decision must survive process.exit.
+  process.stdout._handle?.setBlocking?.(true);
+  const argv = process.argv.slice(2);
+  main(argv, { dryRunOffline: !argv.includes('--jev-live') });
 }

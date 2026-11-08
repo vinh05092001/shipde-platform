@@ -234,6 +234,8 @@ function jevQuestion(profile) {
         : 'standard';
   return {
     kind: 'assess-task-profile',
+    key: 'weightProfile',
+    skipReason: profile.skipReason,
     prompt:
       'Assess this task profile for live routing and score quality, latency, and cost priorities. Keep the legacy choice as fallback. Never choose a model, provider or account. Task class: ' +
       taskClass +
@@ -264,16 +266,29 @@ function jevQuestion(profile) {
 
 function jevModelChoiceQuestion(profile, candidates) {
   const options = (candidates || []).map((candidate) => candidate.candidateKey);
-  const rankedCandidates = (candidates || []).map((candidate) =>
-    Object.assign({}, candidate, {
-      quotaStatus: candidate.headroomStatus || candidate.quotaStatus || 'unknown',
-    })
-  );
+  const rankedCandidates = (candidates || []).map((candidate) => ({
+    routeId: candidate.candidateKey,
+    score: candidate.score,
+    quality: candidate.quality,
+    latencyMs: candidate.latencyMs,
+    cost: candidate.cost,
+    quotaStatus: candidate.headroomStatus || candidate.quotaStatus || 'unknown',
+  }));
   return {
     kind: 'select-eligible-model',
     prompt:
       'Choose the best candidate from the eligible ranked options for this task. Return one option only.',
-    evidence: JSON.stringify({ profile, candidates: rankedCandidates }),
+    evidence: JSON.stringify({
+      task: {
+        role: profile.role,
+        complexity: profile.complexity,
+        requiredCapabilities: profile.requiredCapabilities,
+        proofFloor: profile.proofFloor,
+        qualityFloor: profile.qualityFloor,
+        costCeiling: profile.costCeiling,
+      },
+      candidates: rankedCandidates,
+    }),
     options,
   };
 }
@@ -284,13 +299,24 @@ function candidateIdentityKey(candidate) {
 
 async function adviseModelChoice(result, profile, options) {
   const opts = options || {};
-  const top = ((result && result.ranking) || []).slice(0, Math.max(1, Number(opts.topN) || 5));
+  const eligibleRanking = ((result && result.ranking) || []).filter(
+    (candidate) =>
+      candidate &&
+      !candidate.blocked &&
+      candidate.status !== 'blocked' &&
+      candidate.isAlive !== false &&
+      candidate.headroomStatus !== 'exhausted' &&
+      candidate.headroomStatus !== 'cooling'
+  );
+  const top = eligibleRanking.slice(0, Math.max(1, Number(opts.topN) || 5));
   const question = jevModelChoiceQuestion(profile, top);
   const advised = await jev.adviseOrReason(question, {
     ask: typeof opts.ask === 'function' ? opts.ask : undefined,
-    minConfidence: Number.isFinite(Number(opts.minConfidence))
-      ? Number(opts.minConfidence)
-      : undefined,
+    recordTurn: opts.recordTurn,
+    minConfidence:
+      opts.minConfidence != null && Number.isFinite(Number(opts.minConfidence))
+        ? Number(opts.minConfidence)
+        : undefined,
   });
   const eligible = new Set(top.map((candidate) => candidate.candidateKey));
   let chosen = result.chosen;
@@ -300,7 +326,10 @@ async function adviseModelChoice(result, profile, options) {
     eligible.has(advised.choice)
   ) {
     chosen = advised.choice;
-  } else if (advised.outcome === jev.Outcome.UNDECIDED || advised.outcome === 'UNDECIDED') {
+  } else if (
+    !eligibleRanking.some((candidate) => candidate.candidateKey === chosen) &&
+    advised.outcome === jev.Outcome.UNDECIDED
+  ) {
     // TASK-AI-147: When Jev is UNDECIDED, Controller deterministically selects the highest-scoring candidate among alive/unblocked routes
     const ranking = (result && result.ranking) || [];
     const aliveCandidates = ranking.filter(
@@ -326,6 +355,7 @@ async function adviseModelChoice(result, profile, options) {
   return {
     chosen,
     advice: {
+      turn: advised.turn,
       outcome: chosen === advised.choice && advised.handledBy === 'jev' ? 'DECIDED' : 'UNDECIDED',
       choice: chosen === advised.choice && advised.handledBy === 'jev' ? advised.choice : null,
       confidence: advised.handledBy === 'jev' ? advised.confidence : 0,
@@ -409,6 +439,7 @@ async function assessTask(profile, opts) {
       ask,
       minConfidence,
       scoreMinConfidence,
+      recordTurn: options.recordTurn,
       reasoningController: () => ({
         outcome: jev.Outcome.DECIDED,
         choice: fallbackId,
@@ -567,6 +598,7 @@ async function assessTask(profile, opts) {
 
   return {
     jevOutcome: jevDecided ? jev.Outcome.DECIDED : jev.Outcome.UNDECIDED,
+    jevTurn: advisoryResult.turn,
     decidedBy,
     weightProfile: chosenProfile,
     weights,
@@ -748,7 +780,20 @@ function sameFailureDomain(candidate, failed, classification) {
     }
     return sameRoute();
   }
+  if (scope === 'connection') {
+    return (
+      Boolean(classification.connectionId) &&
+      candidate.connectionId === classification.connectionId &&
+      sameRoute()
+    );
+  }
   if (scope === 'account') {
+    // A key shared behind a gateway is condemned only by evidence naming that key.
+    const viaGateway = failed.gateway && failed.upstream && failed.gateway !== failed.upstream;
+    const bare401 = classification.evidence?.httpStatus === 401 && !classification.authLayer;
+    if (viaGateway && bare401) return false;
+    if (viaGateway && classification.authLayer && candidate.gateway !== failed.gateway)
+      return false;
     return (
       candidate.accountId &&
       failed.accountId &&
@@ -1215,7 +1260,117 @@ function evidenceAgePenalty(candidate, now) {
  * unpriced candidate is never scored as cheap and an unmeasured one never as
  * fast.
  */
+function legacyParts(parts) {
+  return {
+    ...parts,
+    sources: Object.fromEntries(Object.keys(parts).map((key) => [key, 'unsourced'])),
+  };
+}
+
+function scoreMeasurements(candidate, assessment, ctx) {
+  const policy = assessment && assessment.scoringPolicy;
+  const now = ctx?.now ?? Date.now();
+  const parts = Object.assign(Object.create(null), { quality: null });
+  const measurements = {};
+  let provenance = null;
+  let total = 0;
+  let weight = 0;
+  // No inferred benchmark aliases, proof-tier scores, default weights or penalties.
+  // Linear normalization uses the policy's declared unit and bounds, never a
+  // mixture of raw benchmark points and a different scorer's numeric scale.
+  if (
+    policy?.version &&
+    policy.source &&
+    policy.rationale &&
+    Number.isFinite(policy.maxAgeMs) &&
+    policy.maxAgeMs > 0
+  ) {
+    provenance = {
+      version: policy.version,
+      source: policy.source,
+      rationale: policy.rationale,
+      maxAgeMs: policy.maxAgeMs,
+    };
+    for (const [dimension, rule] of Object.entries(policy.dimensions || {})) {
+      const measured = candidate.measurements?.[dimension];
+      const at = Date.parse(measured?.observedAt);
+      const valid =
+        rule &&
+        Number.isFinite(rule.weight) &&
+        rule.weight > 0 &&
+        Number.isFinite(rule.min) &&
+        Number.isFinite(rule.max) &&
+        rule.max > rule.min &&
+        rule.unit &&
+        (rule.direction === 'higher' || rule.direction === 'lower') &&
+        measured &&
+        Number.isFinite(measured.value) &&
+        measured.source &&
+        Number.isInteger(measured.samples) &&
+        measured.samples > 0 &&
+        Number.isFinite(at) &&
+        at <= now &&
+        now - at <= policy.maxAgeMs &&
+        measured.unit === rule.unit &&
+        measured.value >= rule.min &&
+        measured.value <= rule.max &&
+        candidate.modelId &&
+        candidate.modelVersion &&
+        measured.modelId === candidate.modelId &&
+        measured.modelVersion === candidate.modelVersion;
+      if (!valid) {
+        parts[dimension] = null;
+        continue;
+      }
+      const fraction = (measured.value - rule.min) / (rule.max - rule.min);
+      const part = rule.direction === 'higher' ? fraction : 1 - fraction;
+      parts[dimension] = part;
+      measurements[dimension] = {
+        value: measured.value,
+        unit: measured.unit,
+        source: measured.source,
+        samples: measured.samples,
+        observedAt: measured.observedAt,
+        modelId: measured.modelId,
+        modelVersion: measured.modelVersion,
+        rule: {
+          weight: rule.weight,
+          min: rule.min,
+          max: rule.max,
+          unit: rule.unit,
+          direction: rule.direction,
+        },
+      };
+      total += part * rule.weight;
+      weight += rule.weight;
+    }
+  }
+  const breakdown = { ...parts, measurements, policy: provenance };
+  if (breakdown.quality === null) breakdown.qualityLabel = 'QUALITY_UNKNOWN';
+  const score = weight > 0 ? total / weight : null;
+  return { score: Number.isFinite(score) ? score : null, breakdown, reservationsHeld: 0 };
+}
+
 function scoreForProfile(candidate, assessment, ctx) {
+  if (assessment?.scoringPolicy) return scoreMeasurements(candidate, assessment, ctx);
+  // Preserve the historical dispatch contract when no profile snapshot exists.
+  if (!assessment?.weights && !ctx?.profile) {
+    const legacy = ranking.scoreCandidate(
+      candidate,
+      ctx?.candidates || [],
+      ctx?.kind || ctx?.role,
+      {
+        ...ctx,
+        assessment: undefined,
+      }
+    );
+    return {
+      score: legacy.total,
+      reservationsHeld: 0,
+      breakdown: legacy.breakdown,
+    };
+  }
+
   const now = (ctx && ctx.now) || Date.now();
   const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
   candidate.priorUnknown = Boolean(prior && (prior.priorUnknown || prior.score === null));
@@ -1365,9 +1520,37 @@ function scoreForProfile(candidate, assessment, ctx) {
 
   return {
     score,
-    breakdown,
+    breakdown: legacyParts(breakdown),
     reservationsHeld: busy,
   };
+}
+
+function compareProfileScores(a, b, ctx) {
+  const aKnown = Number.isFinite(a.scoreBreakdown.quality) && a.qualityLabel !== 'QUALITY_UNKNOWN';
+  const bKnown = Number.isFinite(b.scoreBreakdown.quality) && b.qualityLabel !== 'QUALITY_UNKNOWN';
+  if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+  if (a.scoreBreakdown.policy || b.scoreBreakdown.policy) {
+    const aScored = Number.isFinite(a.score),
+      bScored = Number.isFinite(b.score);
+    if (aScored !== bScored) return Number(bScored) - Number(aScored);
+    return aScored && bScored ? b.score - a.score : 0;
+  }
+  const fresh = (c) =>
+    c.hasFreshEvidence ??
+    require('./route-evidence').hasFreshOkOrCompletion(c, ctx?.quotaState, ctx || {});
+  const aProven = Boolean(fresh(a)),
+    bProven = Boolean(fresh(b));
+  if (aProven !== bProven) return Number(bProven) - Number(aProven);
+  if (b.score !== a.score) return b.score - a.score;
+  const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
+  const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;
+  if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
+  const aLiveBench = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.liveBench) || 0;
+  const bLiveBench = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.liveBench) || 0;
+  if (bLiveBench !== aLiveBench) return bLiveBench - aLiveBench;
+  const held = (c) => c.reservationsHeld ?? c.scoreBreakdown.busyPenalty ?? 0;
+  if (held(a) !== held(b)) return held(a) - held(b);
+  return (a.candidateKey || candidateKey(a)).localeCompare(b.candidateKey || candidateKey(b));
 }
 
 /**
@@ -1517,7 +1700,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const quality = Number(c.quality);
+    const quality = assessment.scoringPolicy && c.quality == null ? NaN : Number(c.quality);
     if (Number.isFinite(quality) && quality < Number(profile.qualityFloor)) {
       reject('QUALITY_FLOOR_NOT_MET', 'candidate');
       continue;
@@ -1648,6 +1831,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
 
     const scoreContext = Object.assign({}, context, {
+      profile,
       taskId: profile.taskId,
       now,
       role: profile.role,
@@ -1674,25 +1858,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     );
   }
 
-  ranked.sort((a, b) => {
-    const aKnown =
-      Number.isFinite(a.scoreBreakdown.quality) && a.qualityLabel !== 'QUALITY_UNKNOWN';
-    const bKnown =
-      Number.isFinite(b.scoreBreakdown.quality) && b.qualityLabel !== 'QUALITY_UNKNOWN';
-    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-    const aProven = Boolean(a.hasFreshEvidence);
-    const bProven = Boolean(b.hasFreshEvidence);
-    if (aProven !== bProven) return Number(bProven) - Number(aProven);
-    if (b.score !== a.score) return b.score - a.score;
-    const aPriorBonus = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.bonus) || 0;
-    const bPriorBonus = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.bonus) || 0;
-    if (bPriorBonus !== aPriorBonus) return bPriorBonus - aPriorBonus;
-    const aLiveBench = Number(a.scoreBreakdown.prior && a.scoreBreakdown.prior.liveBench) || 0;
-    const bLiveBench = Number(b.scoreBreakdown.prior && b.scoreBreakdown.prior.liveBench) || 0;
-    if (bLiveBench !== aLiveBench) return bLiveBench - aLiveBench;
-    if (a.reservationsHeld !== b.reservationsHeld) return a.reservationsHeld - b.reservationsHeld;
-    return a.candidateKey.localeCompare(b.candidateKey);
-  });
+  ranked.sort((a, b) => compareProfileScores(a, b, context));
 
   const allZero =
     ranked.length > 0 &&
@@ -1707,9 +1873,18 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       return c.score - (Number(priorContribution) || 0) === 0;
     });
   const top3 = ranked.slice(0, 3);
-  const deterministicChosen = top3.length ? top3[0].candidateKey : null;
+  const deterministicChosen =
+    top3.length && (!assessment.scoringPolicy || Number.isFinite(top3[0].score))
+      ? top3[0].candidateKey
+      : null;
   const chosen = deterministicChosen;
-  const reasonCode = allZero ? 'MODEL_SELECTION_NOT_PROVEN' : null;
+  const reasonCode = assessment.scoringPolicy
+    ? ranked.length && ranked.every((c) => !Number.isFinite(c.score))
+      ? 'SCORING_INPUTS_UNVERIFIED'
+      : null
+    : allZero
+      ? 'MODEL_SELECTION_NOT_PROVEN'
+      : null;
   const topScore =
     top3.length > 0 &&
     ((top3[0].scoreBreakdown &&
@@ -1723,6 +1898,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
         ? top3[0].score
         : null;
   const weightsLabel =
+    assessment.scoringPolicy?.version ||
     assessment.weightProfile ||
     assessment.weightSource ||
     (assessment.weights ? JSON.stringify(assessment.weights) : 'default');
@@ -1744,7 +1920,11 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     ranking: ranked,
     needsCapabilityProbe,
     rejected,
-    refused: chosen ? null : 'NO_CANDIDATE_MEETS_PROFILE',
+    refused: chosen
+      ? null
+      : reasonCode === 'SCORING_INPUTS_UNVERIFIED'
+        ? reasonCode
+        : 'NO_CANDIDATE_MEETS_PROFILE',
     reasonCode,
     reason,
     modelChoice: {
@@ -2035,7 +2215,8 @@ function reportDispatchOutcome(args, deps) {
  */
 async function runProfileDispatch(args, deps) {
   const d = deps || {};
-  const log = d.log || console.log;
+  const output = d.log || console.log;
+  const log = output;
   const error = d.error || console.error;
   const exit = d.exit || process.exit;
   const rootDir = args.root || d.rootDir || process.cwd();
@@ -2057,11 +2238,21 @@ async function runProfileDispatch(args, deps) {
     return { exitCode: 2, profileErrors: errors };
   }
   const profile = rawProfile;
+  const isDryRun = args.execute !== true && d.dryRunOffline === true;
 
-  const assessment = await assessTask(profile, {
-    ask: d.weightingAsk || d.ask,
-    minConfidence: d.minConfidence,
-  });
+  // A supplied assessment may contain only scoring inputs. Complete its JEV
+  // metadata through the existing offline fallback before applying overrides.
+  const baseAssessment = d.assessment?.jevOutcome
+    ? d.assessment
+    : await assessTask(profile, {
+        ask: isDryRun || d.assessment ? undefined : d.weightingAsk || d.ask,
+        minConfidence: d.minConfidence,
+      });
+  const assessment = {
+    ...baseAssessment,
+    ...d.assessment,
+    ...d.scoringAssessment,
+  };
 
   const evidenceDir =
     d.evidenceDir || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
@@ -2070,17 +2261,18 @@ async function runProfileDispatch(args, deps) {
   const annotated = candidatesApi.annotateCandidates(
     (d.candidates || []).map((c) => Object.assign({}, c)),
     evidenceData,
-    { now }
+    { now, quotaState: d.quotaState, quotaStateFile: d.quotaStateFile }
   );
 
   const probe = d.probeCapabilities || require('./capability-probe').probeCapabilities;
-  await probe(annotated, profile, {
-    ...d,
-    evidenceDir,
-    registry: d.registry || sourceRegistry.loadSources(),
-    externalWorkers: d.externalWorkers || args['external-workers'],
-    allowNetwork: args.execute === true && d.capabilityProbeAllowNetwork === true,
-  });
+  if (!isDryRun)
+    await probe(annotated, profile, {
+      ...d,
+      evidenceDir,
+      registry: d.registry || sourceRegistry.loadSources(),
+      externalWorkers: d.externalWorkers || args['external-workers'],
+      allowNetwork: args.execute === true && d.capabilityProbeAllowNetwork === true,
+    });
 
   const independentReviewerCandidates = annotated.filter((candidate) => {
     if (
@@ -2107,6 +2299,8 @@ async function runProfileDispatch(args, deps) {
     return reviewerHeadroom.status !== 'exhausted' && reviewerHeadroom.status !== 'cooling';
   });
   const rankCtx = {
+    ...d,
+    ...(d.ranking || {}),
     now,
     priors: d.priors,
     taskId: profile.taskId,
@@ -2127,6 +2321,9 @@ async function runProfileDispatch(args, deps) {
     independentReviewerCandidates,
   };
   const result = rankForProfile(annotated, profile, assessment, rankCtx);
+  const structured = () =>
+    require('./dispatch-output').dispatchOutput(profile, assessment, d.candidates || [], result);
+  if (d.scoringAssessment) require('./scoring-policy').printSources(result, log);
   if (d.candidates && d.candidates.excludedRoutes && Array.isArray(d.candidates.excludedRoutes)) {
     result.rejected.push(...d.candidates.excludedRoutes);
   }
@@ -2136,7 +2333,7 @@ async function runProfileDispatch(args, deps) {
       : typeof d.ask === 'function'
         ? d.ask
         : undefined;
-  if (result.ranking.length && typeof askForModelChoice === 'function') {
+  if (!isDryRun && result.ranking.length && typeof askForModelChoice === 'function') {
     try {
       const advice = await adviseModelChoice(result, profile, {
         ask: askForModelChoice,
@@ -2163,9 +2360,10 @@ async function runProfileDispatch(args, deps) {
       const refusedCode = 'MODEL_SELECTION_NOT_PROVEN';
       log('Refusing to reserve unproven candidates without exploration budget: ' + result.reason);
       if (args.json) {
-        log(
+        output(
           JSON.stringify(
             {
+              ...structured(),
               profile,
               assessment,
               top3: result.top3,
@@ -2208,6 +2406,9 @@ async function runProfileDispatch(args, deps) {
   );
   const selectedHasIndependentReviewer = Boolean(selectedIndependentReviewer);
   const decisionRecorded = {
+    ...(assessment.scoringPolicyStatus
+      ? { scoringPolicyStatus: assessment.scoringPolicyStatus }
+      : {}),
     stage: decisions.Stage.SELECTED,
     workItemId: profile.taskId,
     role: profile.role,
@@ -2289,9 +2490,10 @@ async function runProfileDispatch(args, deps) {
     }
     for (const [code, count] of byCode) log('  EXCLUDED ' + count + 'x ' + code);
     if (args.json) {
-      log(
+      output(
         JSON.stringify(
           {
+            ...structured(),
             profile,
             assessment,
             top3: result.top3,
@@ -2495,9 +2697,10 @@ async function runProfileDispatch(args, deps) {
   }
 
   if (args.json) {
-    log(
+    output(
       JSON.stringify(
         {
+          ...structured(),
           profile,
           assessment,
           top3: result.top3,
@@ -2594,6 +2797,7 @@ module.exports = {
   candidateKey,
   formatTopEntry,
   scoreForProfile,
+  compareProfileScores,
   latencyScoreOf,
   qualityScoreOf,
   costScoreOf,

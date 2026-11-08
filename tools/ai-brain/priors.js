@@ -190,6 +190,8 @@ function loadRegistryPrefixes(registry) {
   return prefixes;
 }
 
+const livePrefixCache = new WeakMap();
+
 function getRouterPrefixes(config) {
   const cfg = config || defaultDescriptor;
   const prefixes = new Set();
@@ -216,13 +218,19 @@ function getRouterPrefixes(config) {
     }
   }
   if (Array.isArray(liveList)) {
-    for (const id of liveList) {
-      if (typeof id === 'string') {
-        addModelPrefixes(prefixes, id);
-        const colonIdx = id.indexOf('::');
-        if (colonIdx > 0) prefixes.add(id.slice(0, colonIdx).toLowerCase());
+    let livePrefixes = livePrefixCache.get(liveList);
+    if (!livePrefixes) {
+      livePrefixes = new Set();
+      for (const id of liveList) {
+        if (typeof id === 'string') {
+          addModelPrefixes(livePrefixes, id);
+          const colonIdx = id.indexOf('::');
+          if (colonIdx > 0) livePrefixes.add(id.slice(0, colonIdx).toLowerCase());
+        }
       }
+      livePrefixCache.set(liveList, livePrefixes);
     }
+    for (const prefix of livePrefixes) prefixes.add(prefix);
   }
 
   return prefixes;
@@ -454,18 +462,11 @@ function priorFor(candidate, role, priors, now) {
     }
   }
 
-  const sourceDates = (match.sources || [])
-    .map((source) => source && source.retrievedAt)
-    .filter(Boolean);
   const retrievalDate =
     match.retrievedAt ||
     (priors && priors.generatedAt) ||
     (match.sources && match.sources.length ? match.sources[0].retrievedAt : null);
-  const stale =
-    match.stale === true ||
-    (sourceDates.length > 0
-      ? sourceDates.some((date) => isStale(date, now))
-      : isStale(retrievalDate, now));
+  const stale = priorEvidenceIsStale(match, now, retrievalDate);
 
   const resolvedBaseId = resolved.matchedBaseId || match.matchedBaseId;
   const canonicalId = resolvedBaseId || match.canonical || canonical;
@@ -540,6 +541,22 @@ function isStale(retrievedAt, now) {
     timestamp > currentTime + CLOCK_SKEW_TOLERANCE_MS ||
     currentTime - timestamp > STALE_AFTER_MS
   );
+}
+
+// A new document or source listing does not renew retained benchmark evidence.
+// Legacy rows without per-benchmark provenance still use their row/document date.
+function priorEvidenceIsStale(row, now, fallbackDate) {
+  if (row.stale === true) return true;
+  const dates = [];
+  if (row.retrievedAt !== undefined) dates.push(row.retrievedAt);
+  for (const source of row.sources || []) dates.push(source && source.retrievedAt);
+  const benchmarks = Array.isArray(row.benchmarks)
+    ? row.benchmarks
+    : Object.values(row.benchmarks || {});
+  for (const benchmark of benchmarks) {
+    if (benchmark && benchmark.source) dates.push(benchmark.source.retrievedAt);
+  }
+  return (dates.length ? dates : [fallbackDate]).some((date) => isStale(date, now));
 }
 
 function benchmarkScore(match) {
@@ -1209,12 +1226,7 @@ function applyNormalizationAndTiers(rows, config, now) {
         : null;
     }
 
-    if (now) {
-      row.stale =
-        !row.sources ||
-        row.sources.length === 0 ||
-        row.sources.some((source) => isStale(source.retrievedAt, now));
-    }
+    row.stale = priorEvidenceIsStale(row, now);
   }
 
   // 5. Provisional scores can never outrank official scores
@@ -1685,7 +1697,14 @@ function arePriorsStale(priorsDoc, now) {
   const sourceDates = (p.sources || []).map((s) => s && s.retrievedAt).filter(Boolean);
   const retrievalDate = p.generatedAt || (sourceDates.length ? sourceDates[0] : null);
   if (isStale(retrievalDate, now)) return true;
-  return p.ranking.some((item) => item && (item.stale === true || isStale(item.retrievedAt, now)));
+  return p.ranking.some(
+    (item) =>
+      item &&
+      (priorEvidenceIsStale(item, now, retrievalDate) ||
+        Object.values(item.efforts || {}).some((effort) =>
+          priorEvidenceIsStale(effort, now, item.retrievedAt || retrievalDate)
+        ))
+  );
 }
 
 module.exports = {

@@ -2421,7 +2421,7 @@ async function launchHermesSession(options, deps) {
         scopeState &&
         blockedCodes.has(scopeState.code) &&
         (quotaScanApi.isScopeBlocked
-          ? quotaScanApi.isScopeBlocked(scopeState, nowProbe, opts)
+          ? quotaScanApi.isScopeBlocked(scopeState, nowProbe, { ...opts, routeCandidate: c })
           : true);
       if (isBlocked) {
         const reason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source || scopeState.reason || 'blocked'}`;

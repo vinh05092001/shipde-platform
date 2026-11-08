@@ -1482,6 +1482,7 @@ async function runDueCli(options) {
 }
 
 module.exports = {
+  routeModelKey,
   unverifiedRecord,
   atomicRenameSync,
   DEFAULT_ROUTE_HEALTH_PATH,
