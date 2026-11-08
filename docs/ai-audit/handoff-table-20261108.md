@@ -32,7 +32,7 @@ Full suite on `037df02a`, serial: 3428 tests, 3384 pass, 43 fail, 1 skip, agains
 | R03 | BLOCKED | Original list of 65 not found; 140 PRs mention agy |
 | R04 | PARTIAL | #531; audit shows most tools have no execution evidence |
 | R05 | OFFLINE PASS | Merged #527 |
-| R06 | PARTIAL | Scans are per route; 503 groups not classified |
+| R06 | PARTIAL | Scans are per route; 503 groups classified by inner code, see Limits; no backoff retry |
 | R07 | TODO | Not replayed on TASK-AI-169 in this run |
 | R08 | PARTIAL | 70 rules inventoried, 37 numeric hardcodes, 35 unjustified; quality scale sourced |
 | R09 | LIVE PASS, one case | Low confidence on two dimensions fell back to preset |
@@ -52,7 +52,7 @@ Full suite on `037df02a`, serial: 3428 tests, 3384 pass, 43 fail, 1 skip, agains
 - A blocked `route.js` run overwrote `lastSuccessfulAt` in the scratch catalogue at 21:48. A real list-only discovery replaced it. `discovery.js:164` still records success when one source lists; changing it is a gate decision for the operator.
 - Earlier refresh runs at about 17:50 and 18:10 made inference calls whose routes and cost cannot be traced.
 - `ag/` routes have no credential in 9Router, 27 of 27.
-- 503 results on `cl`, `bzl`, `nous` conflict with earlier successful free calls and are unclassified.
+- 503 from 9Router wraps the upstream status; classified from the inner code over 895 results in the 9Router scan: 386 rate limit (429), 182+11+19 no credit, 88+3+4 model gone, 57+2+1 auth, the rest other (87 of them `codebuddy-intl` 403 `request illegal`). `cl`: 341 rate limit, 96 no credit, 2 auth, 1 model gone, 1 server error; `bzl`: 30 rate limit, 3 no credit; `nous`: 82 model gone. The conflict with earlier free calls is a burst rate limit during the scan, not a dead route; the scan did not retry after backoff.
 - `opencode-zen` AUTH results conflict with successful OpenCode CLI calls.
 - `route.js` review still reports one finding: a crash inside the small recovery window leaves a gate file that blocks that worktree until removed by hand; it fails closed.
 - `route.js` lives outside the repository, and its AA ordering can differ from the Controller's first rank by the operator decision of 2026-11-04.
