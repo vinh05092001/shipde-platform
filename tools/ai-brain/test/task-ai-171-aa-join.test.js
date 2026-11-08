@@ -62,7 +62,10 @@ test('gateway path and deployment tag do not hide the AA base', (t) => {
 
 test('a named effort takes that published effort only', (t) => {
   assert.equal(quality(policyDir(t, rows), 'gcli/grok-4.7-high').value, 62.6);
-  assert.equal(quality(policyDir(t, rows), 'gcli/grok-4.7-xhigh'), undefined);
+  // Operator 2026-11-08: an unpublished variant takes its base at the lowest published score.
+  const v = quality(policyDir(t, rows), 'gcli/grok-4.7-xhigh');
+  assert.equal(v.value, 54);
+  assert.equal(v.matchedVia, 'aa-origin-variant');
 });
 
 test('no effort named takes the lowest published effort, never a higher one', (t) => {
@@ -199,7 +202,7 @@ test('a renamed model takes its origin: a release tag on one side, lowest score 
   const q = quality(a, 'oc/deepseek-v4.1-flash-free');
   assert.equal(q.value, 58);
   assert.equal(q.matchedVia, 'aa-origin-release-tag');
-  assert.equal(quality(a, 'gcli/grok-4.7-turbo'), undefined);
+  assert.equal(quality(a, 'gcli/grok-4.7-turbo').matchedVia, 'aa-origin-variant');
 });
 
 test('origin join never strips an unpublished effort, merges distinct models, or ignores policy tags', (t) => {

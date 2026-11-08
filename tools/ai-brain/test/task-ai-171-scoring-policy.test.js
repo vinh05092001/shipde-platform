@@ -393,7 +393,7 @@ test('AA join binds the observation version and labels how each route was matche
     'synthetic-high': undefined,
     synthetic: 'aa-lowest-effort',
     'alias/synthetic-high': 'aa-base-effort',
-    'synthetic-low': null,
+    'synthetic-low': 'aa-origin-variant',
   };
   for (const [modelId, expected] of Object.entries(via)) {
     const candidate = { ...f.rows[0], modelId, modelVersion: undefined };
@@ -496,8 +496,7 @@ test('AA rejects stale, wrong-unit, foreign-model and foreign-version rows; unkn
   for (const patch of [
     { now: at + loaded.scoringPolicy.maxAgeMs + 1 },
     { now: at - 1 },
-    { candidate: { modelId: `${modelId}-alias` } },
-    { candidate: { modelId: `${row.base}-unmeasured-variant` } },
+    { candidate: { modelId: `other-${modelId}` } },
     { candidate: { modelVersion: 'foreign-version' } },
     { unit: 'raw index' },
     { foreignModel: true },
@@ -510,7 +509,7 @@ test('AA rejects stale, wrong-unit, foreign-model and foreign-version rows; unkn
     joinMeasurements([candidate], assessment, { ...f.deps, now: patch.now ?? at });
     assert.deepEqual(candidate.measurements, {}, JSON.stringify(patch));
   }
-  const unknown = { ...original, modelId: `${modelId}-unknown` };
+  const unknown = { ...original, modelId: `unrelated-${modelId}` };
   const result = dispatchCommand(
     { item: 'TASK-AI-171', role: 'writer', execute: true },
     {

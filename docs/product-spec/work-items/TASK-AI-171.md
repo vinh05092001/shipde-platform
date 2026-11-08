@@ -446,3 +446,7 @@ Integration of the routing tickets with a measured quality policy and scan-based
 ## Handoff table final update
 
 - `docs/ai-audit/handoff-table-20261108.md` records #538 to #545, live scoring 103 of 236 (measured after merge), the FEAT-CAR-01 Slice B product ticket and the remaining blockers.
+
+## AA variant takes its base (operator 2026-11-08)
+
+- A known AA base followed by a variant AA does not publish (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes the base result at its lowest published score; longest base wins. Dispatch FEAT-CAR-01: 124 of 236 models scored (103 before).

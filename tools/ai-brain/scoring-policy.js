@@ -142,13 +142,19 @@ function aaRowsFor(modelId, rows, deploymentTags) {
 function originRows(id, modelId, byBase, deploymentTags) {
   let own = id;
   for (const t of deploymentTags) if (own.endsWith('-' + t)) own = own.slice(0, -t.length - 1);
-  // A known AA base followed by an unpublished suffix is that model at an unmeasured setting. The shared prior
-  // matcher is not used: it strips efforts and merges aliases across distinct AA models.
-  for (const base of byBase.keys()) if (own.startsWith(base + '-')) return [];
   const lowest = (list, via) => {
     const low = Math.min(...list.map((r) => r.measurements.quality.value));
     return [{ ...list.find((r) => r.measurements.quality.value === low), via }];
   };
+  // Operator 2026-11-08: a known AA base followed by a variant AA does not publish
+  // (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes that base's result, at its lowest published
+  // score. The longest matching base wins so `glm-5-3-flash-x` prefers `glm-5-3-flash` over
+  // `glm-5-3`. The shared prior matcher is not used: it merges aliases across distinct models.
+  let parent = null;
+  for (const base of byBase.keys()) {
+    if (own.startsWith(base + '-') && (!parent || base.length > parent.length)) parent = base;
+  }
+  if (parent) return lowest(byBase.get(parent), 'aa-origin-variant');
   const tagless = (s) => s.replace(/-\d{3,8}$/, '');
   own = tagless(own);
   const candidates = [];
