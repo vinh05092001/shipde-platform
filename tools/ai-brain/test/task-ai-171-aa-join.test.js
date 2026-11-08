@@ -11,13 +11,33 @@ function policyDir(t, rows) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(
     path.join(dir, 'aa.json'),
-    JSON.stringify({ source: 'https://aa.example/models', version: 'AA-T', unit: 'pct', observedAt: new Date().toISOString(), rows })
+    JSON.stringify({
+      source: 'https://aa.example/models',
+      version: 'AA-T',
+      unit: 'pct',
+      observedAt: new Date().toISOString(),
+      rows,
+    })
   );
   fs.writeFileSync(
     path.join(dir, 'policy.json'),
     JSON.stringify({
-      version: 'T', source: 'https://aa.example/models', rationale: 'test', maxAgeMs: 86400000, priorsFile: 'aa.json', deploymentTags: ['free'],
-      dimensions: { quality: { weight: 1, min: 0, max: 100, unit: 'pct', direction: 'higher', measurement: { store: 'priors', metric: 'quality' } } },
+      version: 'T',
+      source: 'https://aa.example/models',
+      rationale: 'test',
+      maxAgeMs: 86400000,
+      priorsFile: 'aa.json',
+      deploymentTags: ['free'],
+      dimensions: {
+        quality: {
+          weight: 1,
+          min: 0,
+          max: 100,
+          unit: 'pct',
+          direction: 'higher',
+          measurement: { store: 'priors', metric: 'quality' },
+        },
+      },
     })
   );
   return loadScoringPolicy(path.join(dir, 'policy.json'));
@@ -62,15 +82,15 @@ test('a revision or quantization tag is a different model and stays unscored', (
   assert.equal(quality(a, 'gateway/kimi-k3.1-pro:free').value, 76.8);
 });
 
-test('a missing runtime AA snapshot loads the policy and scores nothing', (t) => {
+test('a missing runtime AA snapshot leaves the policy inactive and says why', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-missing-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const src = path.join(__dirname, 'fixtures/aa-policy/scoring-policy.json');
   fs.copyFileSync(src, path.join(dir, 'scoring-policy.json'));
   const loaded = loadScoringPolicy(path.join(dir, 'scoring-policy.json'));
-  assert.equal(loaded.scoringPolicyStatus, 'SCORING_POLICY_LOADED');
+  assert.equal(loaded.scoringPolicy, undefined);
+  assert.equal(loaded.scoringPolicyStatus, 'SCORING_POLICY_INACTIVE');
   assert.equal(loaded.scoringPriorsStatus, 'AA_SNAPSHOT_MISSING');
-  assert.equal(quality(loaded, 'gcli/grok-4.7'), undefined);
 });
 
 test('aa-snapshot parses leaderboard rows into midrank percentiles', () => {
@@ -82,6 +102,10 @@ test('aa-snapshot parses leaderboard rows into midrank percentiles', () => {
   const { rows } = parseRows(html);
   assert.deepEqual(
     rows.map((r) => [r.base, r.variant, r.pct]),
-    [['a', 'high', 83.3], ['b', '', 33.3], ['c-1-5', '', 33.3]]
+    [
+      ['a', 'high', 83.3],
+      ['b', '', 33.3],
+      ['c-1-5', '', 33.3],
+    ]
   );
 });

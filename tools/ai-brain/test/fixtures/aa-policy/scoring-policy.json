@@ -5,11 +5,7 @@
   "maxAgeMs": 2592000000,
   "freshnessSource": "tools/ai-brain/priors.js:16,535-542 (STALE_AFTER_MS applied by isStale)",
   "priorsFile": "aa-intelligence.json",
-  "notMeasured": [
-    "latency",
-    "cost",
-    "reliability"
-  ],
+  "notMeasured": ["latency", "cost", "reliability"],
   "dimensions": {
     "quality": {
       "weight": 1,
@@ -23,8 +19,6 @@
       }
     }
   },
-  "deploymentTags": [
-    "free"
-  ],
+  "deploymentTags": ["free"],
   "deploymentTagsRationale": "OpenRouter-style pricing tier of the same weights; any other tag (revision, quantization) is a different model and stays unscored."
 }

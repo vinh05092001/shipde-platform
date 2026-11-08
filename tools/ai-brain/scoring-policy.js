@@ -46,17 +46,18 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
   let scoringPriors;
   let data = null;
   if (policy.priorsFile) {
-    // The AA snapshot is fetched at runtime (aa-snapshot.js), never committed. Without it every
-    // route is QUALITY_UNKNOWN; the policy still loads so nothing is scored on another scale.
+    // The AA snapshot is fetched at runtime (aa-snapshot.js), never committed.
     try {
       data = JSON.parse(
         fs.readFileSync(path.resolve(path.dirname(file), policy.priorsFile), 'utf8')
       );
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
+      // No snapshot: the policy is inactive and dispatch keeps the profile scorer it had before,
+      // reported by status, rather than refusing every route.
       return {
-        scoringPolicy: policy,
-        scoringPolicyStatus: 'SCORING_POLICY_LOADED',
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
         scoringPriorsStatus: 'AA_SNAPSHOT_MISSING',
       };
     }
@@ -149,18 +150,24 @@ function joinMeasurements(candidates, assessment, context = {}) {
     // A joined AA row is attributed to this route's model ID; the AA row it came from stays as provenance.
     const snapshotRows = exactRows.length
       ? exactRows
-      : aaRowsFor(candidate.modelId, snapshot, assessment.scoringPolicy.deploymentTags).map((r) => ({
-          ...r,
-          modelId: candidate.modelId,
-          measurements: {
-            quality: {
-              ...r.measurements.quality,
-              modelId: candidate.modelId,
-              aaModelId: r.modelId,
-              matchedVia: r.lowestEffort ? 'aa-lowest-effort' : r.variant ? 'aa-base-effort' : 'aa-base',
+      : aaRowsFor(candidate.modelId, snapshot, assessment.scoringPolicy.deploymentTags).map(
+          (r) => ({
+            ...r,
+            modelId: candidate.modelId,
+            measurements: {
+              quality: {
+                ...r.measurements.quality,
+                modelId: candidate.modelId,
+                aaModelId: r.modelId,
+                matchedVia: r.lowestEffort
+                  ? 'aa-lowest-effort'
+                  : r.variant
+                    ? 'aa-base-effort'
+                    : 'aa-base',
+              },
             },
-          },
-        }));
+          })
+        );
     // This is the operator-defined AA observation version, not a provider revision.
     // Never replace an explicit route version.
     if (!candidate.modelVersion && snapshotRows.length === 1) {
