@@ -77,6 +77,8 @@ Additionally, on-demand Model Context Protocol (MCP) servers provide diagnostic 
 | ------------------- | ------------------------------------ | ---------------------------------------- | ----------------------------------------- |
 | Chrome DevTools MCP | `ChromeDevTools/chrome-devtools-mcp` | Deep runtime CDP diagnostics             | Stopped by default; on-demand via profile |
 | Playwright MCP      | `microsoft/playwright-mcp`           | Stateful interactive browser exploration | Stopped by default; on-demand via profile |
+| Serena MCP          | `oraios/serena` (`v2.1.0`)           | Semantic code indexing & LSP symbols     | Local venv; on-demand code context        |
+| jcodemunch MCP      | `jcodemunch-mcp` (`1.108.401`)       | Fast token-efficient AST search & symbols | Local venv; on-demand code context        |
 
 Carrier APIs, bank APIs, SMS/Zalo and production object storage are mocked or disabled until a dedicated Work Item contains verified credentials, capability evidence and safe fallback behavior.
 
