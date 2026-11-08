@@ -26,6 +26,27 @@ export default function CarriersSettingsPage({
   const { token } = useAuth();
   const [activeTab, setActiveTab] = useState<'accounts' | 'catalog'>('accounts');
 
+  const [carrierCode, setCarrierCode] = useState<string | null>(null);
+  useEffect(() => {
+    const readLocation = () => {
+      const params = new URLSearchParams(window.location.search);
+      const catalog = params.get('tab') === 'catalog';
+      setActiveTab(catalog ? 'catalog' : 'accounts');
+      setCarrierCode(catalog ? params.get('carrier') : null);
+    };
+    readLocation();
+    window.addEventListener('popstate', readLocation);
+    return () => window.removeEventListener('popstate', readLocation);
+  }, []);
+  const returnToCatalog = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'catalog');
+    url.searchParams.delete('carrier');
+    window.history.replaceState(null, '', url);
+    setCarrierCode(null);
+    setActiveTab('catalog');
+  };
+
   // Carrier Accounts state
   const [accounts, setAccounts] = useState<any[]>([]);
   const [accountsLoading, setAccountsLoading] = useState<boolean>(true);
@@ -88,6 +109,7 @@ export default function CarriersSettingsPage({
                   ? 'bg-blue-50 border border-blue-200 text-blue-700'
                   : 'bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
               }`}
+              aria-pressed={activeTab === 'accounts'}
               data-testid="tab-accounts"
             >
               <Database className="w-3.5 h-3.5" />
@@ -101,6 +123,7 @@ export default function CarriersSettingsPage({
                   ? 'bg-orange-50 border border-orange-200 text-orange-700'
                   : 'bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-300'
               }`}
+              aria-pressed={activeTab === 'catalog'}
               data-testid="tab-catalog"
             >
               <Truck className="w-3.5 h-3.5" />
@@ -251,6 +274,8 @@ export default function CarriersSettingsPage({
         {/* TAB 2: Carrier Catalog (FEAT-CAR-01 Slice B) */}
         <div hidden={activeTab !== 'catalog'}>
           <CarrierCatalogView
+            carrierCode={carrierCode}
+            onReturnToCatalog={returnToCatalog}
             initialCarriers={initialCarriers}
             initialLoading={initialLoading}
             initialError={initialError}

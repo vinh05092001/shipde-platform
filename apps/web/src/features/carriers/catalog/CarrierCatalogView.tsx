@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Search,
   Filter,
@@ -26,6 +26,8 @@ import { CanonicalStatusReferenceModal } from './CanonicalStatusReferenceModal';
 import { FeeTaxonomyReferenceModal } from './FeeTaxonomyReferenceModal';
 
 export interface CarrierCatalogViewProps {
+  carrierCode?: string | null;
+  onReturnToCatalog?: () => void;
   initialCarriers?: CarrierResponse[] | null;
   initialLoading?: boolean;
   initialError?: string | null;
@@ -81,6 +83,8 @@ function getInitials(code: string): string {
 }
 
 export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
+  carrierCode = null,
+  onReturnToCatalog,
   initialCarriers = null,
   initialLoading = false,
   initialError = null,
@@ -102,6 +106,8 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
 
   const [selectedCarrierDetail, setSelectedCarrierDetail] =
     useState<CarrierDetailResponseEnvelope | null>(null);
+  const detailRequestId = useRef(0);
+  const [detailNotFound, setDetailNotFound] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<CatalogRequestError | null>(null);
   const [detailCarrier, setDetailCarrier] = useState<CarrierResponse | null>(null);
@@ -206,19 +212,47 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
     void fetchFeeData();
   }, [fetchStatusData, fetchFeeData]);
 
-  const handleViewServices = async (carrier: CarrierResponse) => {
-    setDetailCarrier(carrier);
+  const handleViewServices = useCallback(async (carrier: CarrierResponse | string) => {
+    const requestId = ++detailRequestId.current;
+    setDetailCarrier(typeof carrier === 'string' ? null : carrier);
     setSelectedCarrierDetail(null);
+    setDetailNotFound(false);
     setDetailLoading(true);
     setDetailError(null);
     try {
-      setSelectedCarrierDetail(await fetchCarrierDetail(carrier.code));
+      const response = await fetchCarrierDetail(
+        typeof carrier === 'string' ? carrier : carrier.code
+      );
+      if (requestId !== detailRequestId.current) return;
+      setDetailCarrier(response.data);
+      setSelectedCarrierDetail(response);
     } catch (error: unknown) {
-      setDetailError(catalogRequestError(error));
+      if (requestId !== detailRequestId.current) return;
+      const failure = catalogRequestError(error);
+      setDetailNotFound(failure.status === 404);
+      if (failure.status === 404) setDetailCarrier(null);
+      setDetailError(failure);
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestId.current) setDetailLoading(false);
     }
-  };
+  }, []);
+
+  const closeDetail = useCallback(() => {
+    ++detailRequestId.current;
+    setDetailCarrier(null);
+    setSelectedCarrierDetail(null);
+    setDetailLoading(false);
+    setDetailError(null);
+    setDetailNotFound(false);
+  }, []);
+
+  useEffect(() => {
+    if (carrierCode !== null) void handleViewServices(carrierCode);
+    else closeDetail();
+    return () => {
+      ++detailRequestId.current;
+    };
+  }, [carrierCode, handleViewServices, closeDetail]);
 
   const clearFilters = useCallback(() => {
     setValidationErrors({});
@@ -470,8 +504,29 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
         </div>
       </div>
 
+      {detailNotFound && (
+        <div role="alert" data-testid="catalog-not-found" className="p-5 space-y-3">
+          <p>404 — Không tìm thấy hãng vận chuyển.</p>
+          <button
+            type="button"
+            onClick={() => {
+              closeDetail();
+              onReturnToCatalog?.();
+            }}
+          >
+            Quay lại danh mục
+          </button>
+        </div>
+      )}
+      {!detailCarrier && !detailNotFound && carrierCode !== null && (
+        <RequestFeedback
+          loading={detailLoading}
+          error={detailError}
+          onRetry={() => void handleViewServices(carrierCode)}
+        />
+      )}
       {/* Carrier Grid */}
-      {!error && (
+      {!error && !detailNotFound && (
         <div className="space-y-4" role="region" aria-label="Danh sách hãng vận chuyển">
           <CarrierGrid
             carriers={filteredCarriers}
@@ -504,7 +559,7 @@ export const CarrierCatalogView: React.FC<CarrierCatalogViewProps> = ({
           carrierName={detailCarrier.name}
           services={selectedCarrierDetail?.data.services || []}
           isOpen={true}
-          onClose={() => setDetailCarrier(null)}
+          onClose={closeDetail}
           evidenceLevel={detailCarrier.evidence_level}
           requestFeedback={
             detailLoading || detailError ? (

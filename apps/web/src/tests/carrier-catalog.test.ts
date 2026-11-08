@@ -643,6 +643,12 @@ async function runInteractionTests() {
     },
     tsconfig: resolve('tsconfig.json'),
   });
+  const { compile } = require('tailwindcss');
+  const css = (await compile('@tailwind utilities;')).build([
+    'opacity-0',
+    'group-hover:opacity-100',
+    'group-focus-within:opacity-100',
+  ]);
   const browser = await chromium.launch({ headless: true });
   const failures: string[] = [];
   async function check(name: string, action: (page: Page) => Promise<void>) {
@@ -676,6 +682,7 @@ async function runInteractionTests() {
                   : [];
         return route.fulfill({ json: { catalog_revision: 'CATALOG-2026-10-31', data } });
       });
+      await page.addStyleTag({ content: css });
       await page.addScriptTag({ content: bundle.outputFiles[0].text });
       await page.evaluate(() => (window as unknown as { mountCatalog: () => void }).mountCatalog());
       await expect(page.getByTestId('carrier-card-GHN')).toBeVisible();
@@ -689,6 +696,73 @@ async function runInteractionTests() {
     }
   }
   try {
+    await check('late detail responses cannot replace the selected carrier', async (page) => {
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route('**/carrier-catalog/carriers/GHN', async (route) => {
+        await pending;
+        await route.fulfill({ json: MOCK_CARRIER_DETAIL });
+      });
+      await page.route('**/carrier-catalog/carriers/GHTK', (route) =>
+        route.fulfill({ json: { data: { ...MOCK_CARRIERS[1], services: [] } } })
+      );
+      await page.getByTestId('view-services-GHN').click();
+      await expect(page.getByRole('dialog').getByRole('status')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await page.getByTestId('view-services-GHTK').click();
+      await expect(page.getByRole('dialog')).toContainText('chưa có dịch vụ');
+      const lateResponse = page.waitForResponse('**/carrier-catalog/carriers/GHN');
+      release();
+      await lateResponse;
+      // Flush the delivered response through fetch and React before inspecting the dialog.
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+      await expect(page.getByRole('dialog')).toContainText(MOCK_CARRIERS[1].name);
+      await expect(page.getByRole('dialog')).toContainText('chưa có dịch vụ');
+      await expect(page.getByRole('dialog')).not.toContainText(
+        MOCK_CARRIER_DETAIL.data.services[0].code
+      );
+    });
+    for (const suffix of ['?tab=catalog', '?tab=catalog&carrier=UNKNOWN']) {
+      await check(`direct catalog URL ${suffix}`, async (page) => {
+        await page.route('**/carrier-catalog/carriers/UNKNOWN', (route) =>
+          route.fulfill({ status: 404, json: { error: { code: 'RESOURCE_NOT_FOUND' } } })
+        );
+        await page.evaluate((query) => {
+          history.replaceState(null, '', '/settings/carriers' + query);
+          (window as unknown as { mountCatalog: (settings: boolean) => void }).mountCatalog(true);
+        }, suffix);
+        await expect(page.getByTestId('tab-catalog')).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.getByTestId('carrier-accounts-tab')).toHaveCount(0);
+        if (suffix.includes('UNKNOWN')) {
+          await expect(page.getByTestId('catalog-not-found')).toBeVisible();
+          await page.getByRole('button', { name: 'Quay lại danh mục' }).click();
+          await expect(page.getByTestId('catalog-not-found')).toHaveCount(0);
+          assert.equal(new URL(page.url()).searchParams.has('carrier'), false);
+        }
+        await expect(page.getByTestId('carrier-card-GHN')).toBeVisible();
+      });
+    }
+    await check('keyboard detail control is visibly revealed without hover', async (page) => {
+      await page.mouse.move(0, 0);
+      const detail = page.getByRole('button', { name: 'Chi tiết Giao Hàng Nhanh', exact: true });
+      for (
+        let i = 0;
+        i < 20 && !(await detail.evaluate((el) => el === document.activeElement));
+        i++
+      ) {
+        await page.keyboard.press('Tab');
+      }
+      await expect(detail).toBeFocused();
+      await expect
+        .poll(() => detail.evaluate((el) => getComputedStyle(el.parentElement!).opacity))
+        .toBe('1');
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('dialog')).toContainText(
+        MOCK_CARRIER_DETAIL.data.services[0].code
+      );
+    });
     for (const status of [500, 403]) {
       await check(`detail ${status}, loading and retry`, async (page) => {
         let calls = 0;

@@ -126,7 +126,7 @@ export const CarrierCard: React.FC<CarrierCardProps> = ({
       </div>
 
       {onClick && (
-        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
           <button
             type="button"
             onClick={(e) => {
