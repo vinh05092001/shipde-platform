@@ -109,7 +109,7 @@ function launchFromDecision(decision, request, registry) {
     upstream: chosen.upstream,
     quotaScope: chosen.quotaScope,
     mode: r.mode,
-    prompt: r.prompt,
+    prompt: r.sandboxNote ? [r.prompt, r.sandboxNote].filter(Boolean).join('\n\n') : r.prompt,
     branch: r.branch,
     base: r.base,
     cwd: r.cwd,

@@ -2233,7 +2233,91 @@ async function dispatchProfileCommand(args, deps) {
  * Chooses candidate through the brain (discovery + offerings, evidence/cooldowns,
  * quota/reservations/load, ranked by ranking.js).
  */
+function coordinatorDispatchCommand(args, deps) {
+  try {
+    const options = require('./coordinator-options').coordinatorOptions(args);
+    const data = JSON.parse(require('node:fs').readFileSync(options.input, 'utf8'));
+    const formatter = require('./dispatch-output');
+    let decision = data;
+    if (options.decision) {
+      const selected = data.ranking?.find((c) => c.candidateKey === data.chosen);
+      const { isDeepStrictEqual } = require('node:util');
+      if (
+        data.schemaVersion !== 1 ||
+        !Array.isArray(data.ranking) ||
+        new Set(data.ranking.map((c) => c.candidateKey)).size !== data.ranking.length ||
+        !Array.isArray(data.rejected) ||
+        (data.chosen === null
+          ? data.selected !== null
+          : !selected || !isDeepStrictEqual(data.selected, selected)) ||
+        (data.codeSha && data.codeSha !== options.codeSha)
+      )
+        throw new Error('COORDINATOR_DECISION_INVALID');
+    } else {
+      if (
+        !Array.isArray(data.candidates) ||
+        !Array.isArray(data.launcherModels) ||
+        !data.profile ||
+        !data.registry
+      )
+        throw new Error('COORDINATOR_SNAPSHOT_INVALID');
+      const profile = { ...data.profile, taskId: options.item, role: options.role };
+      const registry = data.registry;
+      const candidates = assembleForDispatch({ candidates: [] }, data.accounts || [], registry, {
+        candidates: data.candidates,
+        routeHealth: data.routeHealth || { paths: {} },
+        evidenceData: data.evidenceData || {},
+        role: options.role,
+        routeScope: profile.routeScope,
+      });
+      const { dispatchRoute, qualifyModel } = require('./sources');
+      const supported = (c) => {
+        const route = dispatchRoute(c.gateway || c.source || c.upstream, registry);
+        return (
+          !String(c.harness).startsWith('opencode') ||
+          Boolean(route && data.launcherModels.includes(qualifyModel(c.modelId, route)))
+        );
+      };
+      const kept = candidates.filter(supported);
+      const rejected = candidates
+        .filter((c) => !supported(c))
+        .map((c) => ({ ...c, reasonCode: 'LAUNCHER_MODEL_UNKNOWN' }));
+      kept.filters = [
+        ...candidates.filters,
+        formatter.filterStage('launcher-model', candidates, kept, rejected),
+      ];
+      const routing = require('./routing');
+      const weightProfile = routing.controllerFallbackProfile(profile);
+      const assessment = data.assessment || {
+        weightProfile,
+        weights: routing.WEIGHT_PROFILES[weightProfile],
+      };
+      const result = routing.rankForProfile(kept, profile, assessment, {
+        registry,
+        accounts: data.accounts || [],
+        evidenceData: data.evidenceData || {},
+        quotaState: data.quotaState || { accounts: {} },
+        priors: data.priors || { ranking: [] },
+        useStoredQuota: false,
+        loadQuotaState: false,
+        dryRun: true,
+      });
+      decision = formatter.dispatchOutput(profile, assessment, kept, result);
+    }
+    const serialized = formatter.serializeDispatchOutput(
+      { ...decision, coordinator: options },
+      { codeSha: options.codeSha }
+    );
+    (deps.log || console.log)(serialized);
+    return { exitCode: decision.chosen ? 0 : 1, dryRun: true, output: JSON.parse(serialized) };
+  } catch (error) {
+    (deps.error || console.error)(require('./coordinator-text').errorText(error));
+    return { exitCode: 2, dryRun: true };
+  }
+}
+
 function dispatchCommand(args, deps = {}) {
+  if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
   const execute = args.execute === true;
@@ -4935,7 +5019,9 @@ function main(argv = process.argv.slice(2), deps = {}) {
     const result = dispatchCommand(args, {
       ...deps,
       readDispatchComboConfig:
-        deps.readDispatchComboConfig || require('./writer-combo').readComboConfig,
+        args.offline !== undefined
+          ? undefined
+          : deps.readDispatchComboConfig || require('./writer-combo').readComboConfig,
     });
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a
     // promise. An unhandled rejection would crash silently, so it is caught

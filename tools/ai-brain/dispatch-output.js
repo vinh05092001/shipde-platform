@@ -99,4 +99,32 @@ function dispatchOutput(profile, assessment, candidates, result) {
   };
 }
 
-module.exports = { filterStage, filterPins, dispatchOutput, decisionRow: row };
+function serializeDispatchOutput(value, metadata = {}) {
+  const { launch, codeSha } = metadata;
+  const receipt = {};
+  for (const key of 'pid status exitCode signal offeringId harness model accountId'.split(' ')) {
+    if (launch && ['string', 'number', 'boolean'].includes(typeof launch[key]))
+      receipt[key] = launch[key];
+  }
+  const { launch: ignored, ...decision } = value;
+  const stable = JSON.stringify(
+    { ...decision, codeSha: codeSha || null, ...(launch ? { launch: receipt } : {}) },
+    (_, entry) =>
+      entry && typeof entry === 'object' && !Array.isArray(entry)
+        ? Object.fromEntries(
+            Object.keys(entry)
+              .sort()
+              .map((key) => [key, entry[key]])
+          )
+        : entry
+  );
+  return require('./coordinator-text').safeText(stable);
+}
+
+module.exports = {
+  filterStage,
+  filterPins,
+  dispatchOutput,
+  decisionRow: row,
+  serializeDispatchOutput,
+};
