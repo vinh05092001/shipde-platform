@@ -1,6 +1,6 @@
 'use strict';
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -11,6 +11,11 @@ const { recordProbe, loadEvidence, Level, Status } = require('../evidence');
 const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
 const claimHelper = createWorktreeClaim();
+after(() => {
+  claimHelper.cleanup();
+  assert.equal(fs.existsSync(claimHelper.root), false);
+  assert.equal(fs.existsSync(claimHelper.claim.lockFile), false);
+});
 
 const registry = {
   sources: [{ id: 'gw', kind: 'router', servesModels: true, endpoint: 'http://127.0.0.1:1/v1' }],
@@ -354,4 +359,18 @@ test('429 takes the one fallback in the same worktree, then 402 stops and keeps 
     ctx.ledger.failures.map((x) => x.class),
     ['RATE_LIMITED', 'NO_CREDIT']
   );
+});
+
+test('sibling worktree helpers isolate runtime cleanup and preserve parent fixtures', (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-sibling-'));
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+  const unrelated = path.join(parent, 'keep.txt');
+  fs.writeFileSync(unrelated, 'ok');
+  const h1 = createWorktreeClaim({ worktree: path.join(parent, 'wt1') });
+  const h2 = createWorktreeClaim({ worktree: path.join(parent, 'wt2') });
+  t.after(h2.cleanup);
+  h1.cleanup();
+  assert.equal(fs.readFileSync(unrelated, 'utf8'), 'ok');
+  assert.equal(h2.verifyWorktreeClaim(h2.worktree, h2.claim).ok, true);
+  assert.equal(fs.existsSync(h1.runtimeDir), false);
 });
