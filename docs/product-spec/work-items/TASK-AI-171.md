@@ -768,6 +768,13 @@ When discovery listed at least one source, `tools/ai-brain/discovery.js:169` upd
 Freshness is now evaluated per source via `sourceFreshness` (`tools/ai-brain/catalogue-refresh.js:53-145`) and enforced during candidate assembly (`tools/ai-brain/cli.js:1273-1653`). A source listed this run is admitted; a source failing this run retains prior good evidence if within 48h (`staleListingRetained: true`), but is otherwise rejected with reason `SOURCE_CATALOGUE_STALE`. A legacy freshness file without per-source timestamps fails explicitly for every source and cannot be admitted via the global timestamp. Completed enumerations returning 0 models follow the discovery contract (no-models) and are not marked fresh.
 Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 at HEAD (0/13 on base); 6 catalogue-refresh importer suites pass 31/0.
 
+## Core slice 2a1 — route-health lookup never masks an upstream failure (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`getCandidateRouteHealthRecord` / `candidateExclusionReason` shared by the three lookup sites), `tools/ai-brain/test/task-ai-171-health-lookup.test.js`.
+- Rule: Upstream failure beats gateway AVAILABLE; newer scoped failure beats stale AVAILABLE; no whole-gateway block (unrelated upstream on same gateway remains eligible).
+- Evidence: `tools/ai-brain/test/task-ai-171-health-lookup.test.js` (task-ai-171-health-lookup 4/0).
+- Next: 2a2 execute path.
+
 ## Slice 2a: INT-1 — Controller execute path & outcome recording (2026-11-10)
 
 - Scope: `tools/ai-brain/cli.js` (`dispatchCommand` `--execute` flag, `makeExecuteResult`), `tools/ai-brain/harness.js`, `tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
