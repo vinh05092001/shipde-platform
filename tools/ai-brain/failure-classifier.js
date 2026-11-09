@@ -275,7 +275,9 @@ function requiresHumanAction(cause) {
  */
 function extractInnerStatus(text) {
   if (!text) return null;
-  const match = String(text).match(/[\[(]\s*(401|402|403|404|429)\s*[\])]/);
+  const match =
+    String(text).match(/[\[(]\s*(401|402|403|404|429)\s*[\])]/) ||
+    String(text).match(/[\[(]\s*(503)\s*[\])]/);
   return match ? parseInt(match[1], 10) : null;
 }
 
@@ -1061,6 +1063,8 @@ module.exports = {
   MAX_RESET_MS,
   DEFAULT_COOLDOWNS,
   requiresHumanAction,
+  extractInnerStatus,
+  extractProviderErrorText,
   classifyFailure,
   upstreamAuthSignal,
   isReplayable,

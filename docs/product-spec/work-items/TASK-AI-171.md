@@ -503,6 +503,50 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
 
+## PR 08 outcome — Record worker completion and stop before fallback (2026-11-09)
+
+Scope: rows B26, B51 and B52 (`tools/ai-brain/coordinator-completion.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-route-pr08-completion.test.js`).
+- B51: `validateWorkerTimeout` rejects zero, NaN, negative and non-numeric values with `WORKER_TIMEOUT_INVALID`; `awaitWorkerCompletion` and `superviseWorkerCompletion` clear the timer on exit, ignore late exit events after timeout, call the injected stop-confirmation callback, and block fallback through `route-handoff.afterFailure` until termination is confirmed.
+- B52: worker output is classified via `failure-classifier` (`extractProviderErrorText`, `extractInnerStatus`, `classifyFailure`); exit 0 with an `Error:` line or without a run-bound commit/artifact is not `WORKER_FINISHED`; inner statuses (including inner 503 wrapped by outer status and outer 503 wrapping inner status) govern classification; durable records keep only `code`, `status`, `category` and `scope` with no raw tail.
+- B26: `evaluateLaneHold` and `activeHeldLanes` require an explicit `holdDurationMs` input (`HOLD_DURATION_INVALID`), release a held lane only on evidence bound to the matching `runId` (its commit, result or ended marker) or confirmed stop after expiry, and distinguish run-ended without commit (`COMPLETED_EMPTY`) from `WORKER_FINISHED`.
+- Evidence: `task-ai-171-route-pr08-completion.test.js` fails 0/6 on base `2ce2bb72` and passes 6/6 on HEAD; offline injected readers only, no live worker spawn.
+## PR 13 outcome — refresh catalogues and snapshots outside writer selection (2026-11-09)
+
+Operator-assigned author scope: `tools/ai-brain/{discovery,scoring-policy,public-catalogue-cache,cli}.js`, `tools/ai-brain/test/task-ai-171-route-pr13-refresh.test.js`, plus this section.
+Rows B05, B14, B17 and conflict C7:
+- B05: `public-catalogue-cache.js` helper provides mtime cache reads and fetches with injected fetch and clock; returns `{data, ageMs, stale, error}` with limits as caller inputs (no hardcoded constants); offline mode performs zero network and zero write side effects.
+- B14: `discovery.js` stamps `refreshed.stamp` and advances `lastSuccessfulAt` only on successful live listing; failed discovery runs leave prior stamps untouched; dispatch read path in `cli.js` only reads the catalogue and reports stale status without running any refresh subprocess or network requests.
+- B17: `scoring-policy.js` consumer `loadScoringPolicy` reports missing (`AA_SNAPSHOT_MISSING`), stale (`AA_SNAPSHOT_STALE`), and corrupt (`AA_SNAPSHOT_CORRUPT`) snapshot status truthfully and never triggers automatic network fetches during dispatch selection; refresh remains an explicit maintenance operation.
+- Conflict C7: Selection and dry-run dispatch paths are decoupled from refresh operations, guaranteeing zero background refresh side effects.
+
+Evidence: the suite declared nine tests with no nested subtests, so the previously reported 12 passes was wrong. The previously reported base split (2 pass, 10 fail) was not reproducible: run unchanged on base `2ce2bb72` the suite fails at its top-level `require('../public-catalogue-cache')` before any test registers, so no per-test base count exists; with the PR's production files staged onto `2ce2bb72`, the nine tests all pass, verified 2026-11-09.
+Related suites: `task-ai-171-aa-join.test.js` (15/15), `task-ai-171-scoring-policy.test.js` (15/15), `task-ai-166-partial-refresh.test.js` (5/5), `task-ai-166-refresh.test.js` (3/3), `refresh-lists-only.test.js` (3/3), `task-ai-139.test.js` (3/3), `task-ai-62.test.js` (15/15), `task-ai-73.test.js` (15/15), `task-ai-171-route-pr12-options.test.js` (10/10), `task-ai-171-route-pr01-consumer.test.js` (11/11). Total: 107 pass, 0 fail across all touched domain suites (rerun by the repair, see below).
+
+## PR 13 repair outcome (2026-11-09)
+
+Review findings 1–5 from the Route PR 13 review are fixed and the evidence is reconciled (finding 6). The suite now declares 8 tests: the previous 9 tests were consolidated (related cases merged into one test each) without dropping a verified case, and the five repair behaviours are covered by the three `*-repair` tests.
+
+Fixed findings:
+- Finding 1 (`scoring-policy.js`): snapshot age now always prefers a parseable `observedAt` over file mtime, with or without an injected clock; an old-observation snapshot with a recent mtime is stale either way.
+- Finding 2 (`discovery.js`): `refreshed.stamp` advances only when the whole refresh is complete (`complete = successful.length > 0 && failed.length === 0`); a run with one listed and one failed source no longer advances it. `lastSuccessfulAt` keeps its documented "at least one listed source" contract (`catalogue-refresh.js`).
+- Finding 3 (`public-catalogue-cache.js`): a non-2xx HTTP response (`ok === false` or `status >= 400`) is a fetch failure (`HTTP_<status>`); the error body never replaces the cache.
+- Finding 4 (`public-catalogue-cache.js`): the caller's `timeoutMs` races the whole fetch-and-read (with an `AbortController` signal for standard fetch) and the response body is bounded by `maxBufferBytes` (`FETCH_TIMEOUT`, `RESPONSE_TOO_LARGE`); a standard `fetch` obeys both limits.
+- Finding 5 (`scoring-policy.js` + `data/scoring-policy.json`): the permitted future-clock skew is `options.maxFutureSkewMs` falling back to `policy.maxFutureSkewMs`; no code constant remains, an unconfigured policy gets no future tolerance, and the operator policy declares `maxFutureSkewMs: 60000` to keep its previous behaviour. A negative or non-finite declared skew invalidates the policy.
+- Finding 6 (this section): counts reconciled, commands and base procedure documented.
+
+One existing suite needed a one-line adaptation to the new freshness contract: `task-ai-171-scoring-policy.test.js` ("AA join binds the observation version and labels how each route was matched") now injects its fixed test clock into `loadScoringPolicy` because its fixture snapshot carries a stale `observedAt` with a freshly written file — exactly the case finding 1 makes stale.
+
+Verification (all run offline, 2026-11-09):
+- `node --test tools/ai-brain/test/task-ai-171-route-pr13-refresh.test.js` — HEAD: 8 tests, 8 pass, 0 fail.
+- Same command with the four production files reverted to `76c589f9` — 8 tests, 5 pass, 3 fail; every `*-repair` test fails there (`B05-repair` fetch failures/limits, `B14-repair` stamp, `B17-repair` freshness source and configured skew), the five carried-over cases pass.
+- Base-`2ce2bb72` procedure for evidence: the suite cannot register tests on bare `2ce2bb72` (the helper module is new in this PR); staging the PR's production files onto `2ce2bb72` makes the nine original tests pass 9/9. The truth therefore is: the original suite never demonstrated the five gaps; the new `*-repair` tests do, by failing at `76c589f9` and passing at HEAD.
+- Related suites re-run: `task-ai-171-scoring-policy.test.js` 15/15, `task-ai-171-aa-join.test.js` 15/15, `task-ai-166-partial-refresh.test.js` 5/5, `task-ai-166-refresh.test.js` 3/3, `refresh-lists-only.test.js` 3/3, `refresh-quota.test.js` 18/18, `task-ai-139.test.js` 3/3, `mvp-contract-18.test.js` 18/18 (no failures).
+- `npx prettier@3.9.6 --check` on all seven changed files — pass.
+- `node scripts/ai/check-no-hardcode.mjs` — BLOCKED_IN_SANDBOX: the worktree has no `node_modules` (@typescript-eslint/parser absent; exact error `Cannot find package '@typescript-eslint/parser'`). Manual review of the changed lines found no model IDs, score pairs or cap-named numeric literals; new literals are the status strings, `HTTP_<status>` prefixes and nothing scored.
+- `pnpm lint`, `pnpm security:secrets`, `pnpm test:brain` — BLOCKED_IN_SANDBOX: no node_modules in this worktree; coordinator to run.
+- Size: repair delta over `76c589f9` is 270 additions / 99 deletions (net +171); the whole PR remains ~570 changed lines against the reviewed ~401 because the five repair behaviours each required a reproducing test. The PR13 test file was consolidated (9 verbose tests → 8 compact tests covering the same cases) to offset growth.
+
+Known limitations: offline evidence only; `quota-scan-summary.json` was modified before this repair by an earlier stage and is not part of it; no live catalogue fetch, CI, or independent review is claimed by this section.
 ## PR 02 — Offline unknown-health repair (2026-11-09)
 
 Injected candidates default to unprobed admission through the shared helper. Known
@@ -683,3 +727,6 @@ Resolved merge conflicts by adopting `origin/main` for PR 02 owned files (`ident
 re-applying PR 03's explicit unavailable health guard, and retaining PR 03 scope in
 `scan-liveness.js`, `quota-scan.js`, `route-health.js`, and `task-ai-171-route-pr03-observations.test.js`.
 All 64 tests in PR 03 and PR 02 core suites pass offline. Diff vs `origin/main` isolates only PR 03 changes.
+## CI tool downloads retry and fail loudly (2026-11-09)
+
+Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
