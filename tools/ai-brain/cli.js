@@ -1280,8 +1280,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         )
       : null);
 
-  const candidateSourceId = (candidate) =>
-    candidate?.source || candidate?.sourceId || candidate?.gateway || candidate?.upstream || null;
+  const checkFresh = (c) => {
+    if (!freshnessDoc) return { stale: false };
+    const res = sourceFreshness(c, { freshness: freshnessDoc, now: opts.now });
+    if (res.staleListingRetained) c.staleListingRetained = true;
+    return { stale: !res.admitted, reason: res.code || 'SOURCE_CATALOGUE_STALE' };
+  };
   const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
   const catalogueRows = rawCatalogueRows.map((raw) => {
     if (!raw || typeof raw !== 'object') return raw;
@@ -1385,19 +1389,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
-        const srcId = candidateSourceId(candidate);
-        const srcFresh =
-          freshnessDoc && srcId
-            ? sourceFreshness(srcId, { freshness: freshnessDoc, now: opts.now })
-            : null;
-        const sourceStale = srcFresh && !srcFresh.admitted;
-        if (srcFresh?.staleListingRetained) {
-          candidate.staleListingRetained = true;
-          candidate.listingStatus = 'stale-listing-retained';
-          candidate.sourceStatus = 'stale-listing-retained';
-        }
+        const fresh = checkFresh(candidate);
         const isEligible =
-          !sourceStale &&
+          !fresh.stale &&
           isCandidateRouteEligible(
             routeHealth,
             candidate,
@@ -1424,8 +1418,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               routeHealth && modelId && gateway
                 ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
                 : null;
-            const reason = sourceStale
-              ? srcFresh.code || 'SOURCE_CATALOGUE_STALE'
+            const reason = fresh.stale
+              ? fresh.reason
               : candidate.scanLiveness?.status === 'failed'
                 ? candidate.scanLiveness.reason
                 : candidate.credentialEnvMissing ||
@@ -1620,19 +1614,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const seenExcluded = new Set();
     for (const rawCandidate of candidatesApi.mergeCandidates([], assembled)) {
       const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
-      const srcId = candidateSourceId(candidate);
-      const srcFresh =
-        freshnessDoc && srcId
-          ? sourceFreshness(srcId, { freshness: freshnessDoc, now: opts.now })
-          : null;
-      const sourceStale = srcFresh && !srcFresh.admitted;
-      if (srcFresh?.staleListingRetained) {
-        candidate.staleListingRetained = true;
-        candidate.listingStatus = 'stale-listing-retained';
-        candidate.sourceStatus = 'stale-listing-retained';
-      }
+      const fresh = checkFresh(candidate);
       if (
-        !sourceStale &&
+        !fresh.stale &&
         candidate.scanLiveness?.status !== 'failed' &&
         isCandidateRouteEligible(
           routeHealth,
@@ -1660,8 +1644,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             routeHealth && modelId && gateway
               ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
               : null;
-          const reason = sourceStale
-            ? srcFresh.code || 'SOURCE_CATALOGUE_STALE'
+          const reason = fresh.stale
+            ? fresh.reason
             : candidate.scanLiveness?.status === 'failed'
               ? candidate.scanLiveness.reason
               : candidate &&
@@ -1676,7 +1660,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             candidateKey: key,
             reason,
             reasonCode: String(reason).split(':')[0],
-            scope: sourceStale ? 'route' : candidate && candidate.blockReason ? 'account' : 'route',
+            scope: fresh.stale ? 'route' : candidate && candidate.blockReason ? 'account' : 'route',
           });
         }
       }

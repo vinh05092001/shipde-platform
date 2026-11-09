@@ -58,11 +58,11 @@ function sanitizeScope(rawScope) {
  * with reason SOURCE_CATALOGUE_STALE. Global lastSuccessfulAt alone cannot admit a failed source.
  */
 function sourceFreshness(sourceIdOrObj, options = {}) {
-  const dataDir = options.dataDir || DATA_DIR;
-  const doc = options.freshness || readJson(path.join(dataDir, 'freshness.json'), null);
+  const doc =
+    options.freshness || readJson(path.join(options.dataDir || DATA_DIR, 'freshness.json'), null);
   const now = Number(options.now ?? Date.now());
   const maxAgeMs = options.maxAgeMs ?? MAX_AGE_MS;
-  const sourceId =
+  const id =
     typeof sourceIdOrObj === 'string'
       ? sourceIdOrObj
       : sourceIdOrObj?.id ||
@@ -70,114 +70,54 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
         sourceIdOrObj?.sourceId ||
         sourceIdOrObj?.gateway;
 
-  if (!doc || !sourceId) {
-    return {
-      sourceId: sourceId || null,
-      admitted: false,
-      stale: true,
-      code: 'SOURCE_CATALOGUE_STALE',
-      reason: 'SOURCE_CATALOGUE_STALE',
-      lastSuccessfulAt: null,
-      staleListingRetained: false,
-      status: 'rejected',
-    };
-  }
+  const rej = (ts = null) => ({
+    sourceId: id || null,
+    admitted: false,
+    stale: true,
+    code: 'SOURCE_CATALOGUE_STALE',
+    reason: 'SOURCE_CATALOGUE_STALE',
+    lastSuccessfulAt: ts,
+    staleListingRetained: false,
+    status: 'rejected',
+  });
 
-  const sources = Array.isArray(doc.sources) ? doc.sources : [];
-  const failedSources = Array.isArray(doc.failedSources) ? doc.failedSources : [];
-  const sourceEntry =
-    sources.find((s) => s && s.id === sourceId) ||
-    sources.find((s) => s && (s.id === 'opencode:' + sourceId || s.id.endsWith(':' + sourceId)));
-  const failedEntry =
-    failedSources.find((s) => s && s.id === sourceId) ||
-    failedSources.find(
-      (s) => s && (s.id === 'opencode:' + sourceId || s.id.endsWith(':' + sourceId))
-    );
+  if (!doc || !id) return rej();
+  const match = (s) => s && (s.id === id || s.id === 'opencode:' + id || s.id.endsWith(':' + id));
+  const src = (doc.sources || []).find(match);
+  const failed = (doc.failedSources || []).find(match);
+  if (!src && !failed) return rej();
 
-  if (!sourceEntry && !failedEntry) {
-    return {
-      sourceId,
-      admitted: false,
-      stale: true,
-      code: 'SOURCE_CATALOGUE_STALE',
-      reason: 'SOURCE_CATALOGUE_STALE',
-      lastSuccessfulAt: null,
-      staleListingRetained: false,
-      status: 'rejected',
-    };
-  }
-
-  const isFailedThisRun = Boolean(
-    failedEntry ||
-    (sourceEntry &&
-      (sourceEntry.incomplete === true ||
-        sourceEntry.status !== 'enumerated' ||
-        (sourceEntry.reason && (!sourceEntry.advertised || sourceEntry.advertised === 0))))
+  const failedThisRun = Boolean(
+    failed ||
+    (src && (src.incomplete || src.status !== 'enumerated' || (src.reason && !src.advertised)))
   );
 
-  // (a) Source listed this run: enumerated, not incomplete, not failed, has advertised models or catalogs
-  if (!isFailedThisRun && sourceEntry && sourceEntry.status === 'enumerated') {
-    const listingTimestamp =
-      sourceEntry.lastSuccessfulAt || doc.lastAttemptAt || doc.lastSuccessfulAt;
-    const observed = Date.parse(listingTimestamp);
-    const ageMs = now - observed;
-    const futureSkew = ageMs < 0;
-    const expired = ageMs > maxAgeMs;
-    const stale = !Number.isFinite(ageMs) || futureSkew || expired;
+  if (!failedThisRun && src?.status === 'enumerated') {
+    const ts = src.lastSuccessfulAt || doc.lastAttemptAt || doc.lastSuccessfulAt;
+    const age = now - Date.parse(ts);
+    if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(ts || null);
     return {
-      sourceId,
-      admitted: !stale,
-      stale,
-      code: stale ? 'SOURCE_CATALOGUE_STALE' : null,
-      reason: stale ? 'SOURCE_CATALOGUE_STALE' : null,
-      lastSuccessfulAt: listingTimestamp || null,
+      sourceId: id,
+      admitted: true,
+      stale: false,
+      code: null,
+      reason: null,
+      lastSuccessfulAt: ts || null,
       staleListingRetained: false,
-      status: stale ? 'rejected' : 'admitted',
+      status: 'admitted',
     };
   }
 
-  // Source failed this run or has no successful listing this run.
-  // Rule (d): Global lastSuccessfulAt alone cannot admit a failed source.
-  const sourceLastGood = sourceEntry && (sourceEntry.lastSuccessfulAt || sourceEntry.lastGoodAt);
-  if (!sourceLastGood) {
-    return {
-      sourceId,
-      admitted: false,
-      stale: true,
-      code: 'SOURCE_CATALOGUE_STALE',
-      reason: 'SOURCE_CATALOGUE_STALE',
-      lastSuccessfulAt: null,
-      staleListingRetained: false,
-      status: 'rejected',
-    };
-  }
-
-  const observed = Date.parse(sourceLastGood);
-  const ageMs = now - observed;
-  const futureSkew = ageMs < 0;
-  const expired = ageMs > maxAgeMs;
-  const stale = !Number.isFinite(ageMs) || futureSkew || expired;
-
-  if (stale) {
-    return {
-      sourceId,
-      admitted: false,
-      stale: true,
-      code: 'SOURCE_CATALOGUE_STALE',
-      reason: 'SOURCE_CATALOGUE_STALE',
-      lastSuccessfulAt: sourceLastGood,
-      staleListingRetained: false,
-      status: 'rejected',
-    };
-  }
-
+  const lastGood = src?.lastSuccessfulAt || src?.lastGoodAt;
+  const age = now - Date.parse(lastGood);
+  if (!lastGood || !Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(lastGood || null);
   return {
-    sourceId,
+    sourceId: id,
     admitted: true,
     stale: false,
     code: null,
     reason: null,
-    lastSuccessfulAt: sourceLastGood,
+    lastSuccessfulAt: lastGood,
     staleListingRetained: true,
     status: 'stale-listing-retained',
   };
@@ -209,7 +149,6 @@ function catalogueFreshness(options = {}) {
       lastSuccessfulAt: null,
       ageHours: null,
       doc: doc || null,
-      sources: {},
     };
   }
   const observed = Date.parse(doc.lastSuccessfulAt);
@@ -217,19 +156,12 @@ function catalogueFreshness(options = {}) {
   const futureSkew = ageMs < 0;
   const expired = ageMs > MAX_AGE_MS;
   const stale = !Number.isFinite(ageMs) || futureSkew || expired;
-  const sources = {};
-  if (Array.isArray(doc.sources)) {
-    for (const s of doc.sources) {
-      if (s?.id) sources[s.id] = sourceFreshness(s.id, { ...options, freshness: doc, now });
-    }
-  }
   return {
     stale,
     code: stale ? 'STALE_CATALOGUE' : null,
     lastSuccessfulAt: doc.lastSuccessfulAt || null,
     ageHours: Number.isFinite(ageMs) && ageMs >= 0 ? ageMs / 3600000 : null,
     doc,
-    sources,
   };
 }
 
@@ -347,29 +279,22 @@ async function refreshCatalogue(options = {}) {
     if (name === 'discovery run') {
       discovery = readJson(discoveryFile, null);
       if (options.persist !== false && stageExitCode === 0 && discovery?.listedSources > 0) {
-        if (Array.isArray(discovery.sources)) {
-          for (const src of discovery.sources) {
-            const isFailed = (discovery.failedSources || []).some((f) => f.id === src.id);
-            if (
-              !isFailed &&
-              src.status === 'enumerated' &&
-              !src.incomplete &&
-              (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0))
-            ) {
-              src.lastSuccessfulAt = discovery.lastAttemptAt || startedAt;
-              src.staleListingRetained = false;
-            } else {
-              const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
-              src.lastSuccessfulAt = prev?.lastSuccessfulAt || null;
-              if (
-                src.lastSuccessfulAt &&
-                startedEpoch - Date.parse(src.lastSuccessfulAt) <= MAX_AGE_MS
-              ) {
-                src.staleListingRetained = true;
-              } else {
-                src.staleListingRetained = false;
-              }
-            }
+        for (const src of discovery.sources || []) {
+          const failed = (discovery.failedSources || []).some((f) => f.id === src.id);
+          const ok =
+            !failed &&
+            src.status === 'enumerated' &&
+            !src.incomplete &&
+            (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0));
+          if (ok) {
+            src.lastSuccessfulAt = discovery.lastAttemptAt || startedAt;
+            src.staleListingRetained = false;
+          } else {
+            const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
+            src.lastSuccessfulAt = prev?.lastSuccessfulAt || null;
+            src.staleListingRetained = Boolean(
+              src.lastSuccessfulAt && startedEpoch - Date.parse(src.lastSuccessfulAt) <= MAX_AGE_MS
+            );
           }
         }
         writeJson(freshnessFile, discovery);
