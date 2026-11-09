@@ -66,14 +66,16 @@ function canonical(raw, expect) {
     activeWorker: alias(raw, 'activeWorker', 'active'),
     stopped: raw.stopped === undefined ? null : raw.stopped,
   };
-  if (ledger.activeWorker === undefined) ledger.activeWorker = null;
+  // A present record states its worker explicitly (null = none); absence is not "no worker".
+  if (ledger.activeWorker === undefined) throw new LedgerError(UNREADABLE);
   const ok =
     ledger.version === SCHEMA_VERSION &&
     typeof ledger.item === 'string' &&
     typeof ledger.worktree === 'string' &&
     isCount(ledger.launches) &&
     isCount(ledger.fallbacksUsed) &&
-    ledger.fallbacksUsed <= Math.max(ledger.launches - 1, 0) &&
+    // every launch after the first is a fallback, and both are saved in one write
+    ledger.fallbacksUsed === Math.max(ledger.launches - 1, 0) &&
     Array.isArray(ledger.failures) &&
     validWorker(ledger.activeWorker) &&
     (ledger.stopped === null || typeof ledger.stopped === 'string');
@@ -94,6 +96,7 @@ function fresh(expect) {
       launches: 0,
       fallbacksUsed: 0,
       failures: [],
+      activeWorker: null,
     },
     expect
   );
@@ -175,8 +178,9 @@ function launchAfterFailure(file, decision, ticket, failure, deps) {
   if (!read.ok) return { action: 'STOP', reason: read.reason };
   const ledger = read.ledger;
   const plan = afterFailure(decision, ticket, { ...deps.context, ledger }, failure, deps.registry);
+  // afterFailure deletes activeWorker once the failed worker is confirmed stopped
+  if (ledger.activeWorker === undefined) ledger.activeWorker = null;
   if (plan.action !== 'LAUNCH') {
-    if (ledger.activeWorker === undefined) ledger.activeWorker = null;
     ledger.stopped = plan.action === 'STOP' ? plan.reason : ledger.stopped;
     saveLedger(file, ledger, expect, deps.io);
     return plan;

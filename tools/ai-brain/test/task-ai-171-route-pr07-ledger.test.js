@@ -93,6 +93,12 @@ test('missing file is a fresh ticket; invalid files are unreadable and never res
     unknownVersion: f.valid({ version: 2 }),
     missingCounters: f.valid({ launches: undefined }),
     fallbackAboveLaunches: f.valid({ launches: 1, fallbacksUsed: 1 }),
+    fallbackUndercounted: f.valid({ launches: 2, fallbacksUsed: 0 }),
+    workerFieldMissing: (() => {
+      const v = f.valid({ launches: 1 });
+      delete v.activeWorker;
+      return v;
+    })(),
     wrongItem: f.valid({ item: 'TASK-AI-999' }),
     wrongWorktree: f.valid({ worktree: path.join(f.cwd, 'other') }),
     conflictingVersionAlias: { ...f.valid(), schemaVersion: 99 },
