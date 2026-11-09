@@ -782,3 +782,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Wires direct-http external model sources from catalogue into candidate generation; emits MODELS_UNKNOWN_FOR_SOURCE when uncatalogued; routes direct-http sources to wire model IDs.
 - Depends on: Slice 2b (`fix/task-ai-171-core-s2b-route-launch`).
 - Evidence: 3/3 tests in `task-ai-171-external-sources.test.js` and 5/5 tests in `task-ai-142-opencode-writers.test.js` pass offline.
+
+## Slice 4: A3 — Quota group matching for Antigravity pool candidates (2026-11-10)
+
+- Scope: `tools/ai-brain/agy-pool-runtime.js`, `tools/ai-brain/candidates.js` (`poolAccountCandidates`), `tools/ai-brain/test/task-ai-171-quota-group.test.js`, `tools/ai-brain/test/fixtures/task-ai-171-real-quota-out.json`, `tools/ai-brain/test/task-ai-69.test.js`.
+- Outcome: Matches Antigravity account quotas by exact quota group name and window rather than family; maps display-name aliases; blocks exhausted/unmapped models with QUOTA_EXHAUSTED and QUOTA_GROUP_UNKNOWN.
+- Depends on: Slice 3 (`fix/task-ai-171-core-s3-external-sources`).
+- Evidence: 5/5 tests in `task-ai-171-quota-group.test.js` and 14/14 tests in `task-ai-69.test.js` pass offline.
