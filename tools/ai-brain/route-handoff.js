@@ -233,6 +233,7 @@ function persistedLedgerProblem(ledger, ticket) {
 
 /** The first launch of a ticket: the best usable route, or BLOCKED. */
 function firstLaunch(decision, ticket, context, registry) {
+  const ctx = context || {};
   if (decision.controllerStatus && decision.controllerStatus !== 'READY') {
     return { action: 'BLOCKED', reason: decision.reasonCode, rejected: decision.rejected };
   }
@@ -245,9 +246,6 @@ function firstLaunch(decision, ticket, context, registry) {
   const ledger = (context && context.ledger) || {};
   const unreadable = persistedLedgerProblem(ledger, ticket);
   if (unreadable) return { action: 'BLOCKED', reason: unreadable, rejected: [] };
-  if (ledger.activeWorker) {
-    return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
-  }
   if (
     ledger.failures &&
     ledger.failures.length &&
@@ -268,6 +266,46 @@ function firstLaunch(decision, ticket, context, registry) {
     return { action: 'BLOCKED', reason: 'CONTROLLER_CHOICE_UNAVAILABLE', rejected };
   }
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
+  const claimMod = require('./coordinator-claim');
+  const cwd = ticket?.request?.cwd || ctx.ledger?.worktree;
+  const claim = ctx.worktreeClaim || ctx.claim;
+  const check = claimMod.verifyWorktreeClaim(cwd, claim, ctx);
+  if (!check.ok) {
+    return {
+      action: 'STOP',
+      reason: check.reason,
+      worktree: check.worktree || cwd || null,
+      rejected: [],
+    };
+  }
+  if (
+    typeof ctx.verifyWorktreeClaim === 'function' &&
+    ctx.verifyWorktreeClaim !== claimMod.verifyWorktreeClaim
+  ) {
+    const extraCheck = ctx.verifyWorktreeClaim(cwd, claim, ctx);
+    if (!extraCheck || !extraCheck.ok) {
+      return {
+        action: 'STOP',
+        reason: extraCheck?.reason || 'WORKTREE_CLAIM_REQUIRED',
+        worktree: extraCheck?.worktree || check.worktree || cwd || null,
+        rejected: [],
+      };
+    }
+  }
+  const workerAlive = (w) => {
+    if (!w) return false;
+    if (w.pid != null) {
+      try {
+        return claimMod.isOwnerAlive(w, { ...ctx.options, ...ctx.opts, ...ctx });
+      } catch {
+        return true;
+      }
+    }
+    return true;
+  };
+  if (workerAlive(claim?.activeWorker) || workerAlive(ledger?.activeWorker)) {
+    return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
+  }
   const request = {
     ...ticket.request,
     mode: ticket.mode || MODE,

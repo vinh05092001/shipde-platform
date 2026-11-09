@@ -747,8 +747,16 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Evidence: 112 tests in the 10 files importing route-handoff/coordinator-claim pass at f012f209, 0 fail, 0 skip. Offline evidence only.
 - Entry guard follows in PR 06b (#566); Slice B (.evict recovery, process-ownership findings 3/4/5/8) deferred.
 
+## PR 06 — Give each worktree one confirmed worker owner (Slice A) (2026-11-09)
+
+- Scope (`tools/ai-brain/coordinator-claim.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr06-claim.test.js`): Slice A cut to AC and blocking findings (findings 1, 2, 7, Review d items d1-d4); `process-ownership.js` removed; findings 3, 4, 5, 6, 8 deferred to Slice B.
+- Finding 1 / Item d1: ownership enforced at `route-handoff.firstLaunch`; no name/path exemptions; omitted/unresolved cwd and unconfirmed claims fail closed (`WORKTREE_CLAIM_REQUIRED`).
+- Finding 2 / Items d2 & d4: `verifyWorktreeClaim` probes foreign owner PID under default options, requires matching disk worktree binding, and rejects metadata-only claims; dead predecessor claim rejected for launch/reconcile while fresh claimant recovers exclusively.
+- Finding 7 / Item d3: dead same-item worker record is unlinked without blocking restart; live same-item worker blocks acquisition and prevents `firstLaunch` from launching (`WORKER_STILL_ACTIVE`).
+- Evidence: 4/4 tests pass in `task-ai-171-route-pr06-claim.test.js`. Offline evidence only.
+
 ## Per-source catalogue freshness (2026-11-09)
 
 When discovery listed at least one source, `tools/ai-brain/discovery.js:169` updated the global `lastSuccessfulAt`, and `tools/ai-brain/catalogue-refresh.js:66-85` checked only this global age. A partial refresh therefore masked failed or stale sources by admitting them as fresh.
 Freshness is now evaluated per source via `sourceFreshness` (`tools/ai-brain/catalogue-refresh.js:53-145`) and enforced during candidate assembly (`tools/ai-brain/cli.js:1273-1653`). A source listed this run is admitted; a source failing this run retains prior good evidence if within 48h (`staleListingRetained: true`), but is otherwise rejected with reason `SOURCE_CATALOGUE_STALE`. A legacy freshness file without per-source timestamps fails explicitly for every source and cannot be admitted via the global timestamp. Completed enumerations returning 0 models follow the discovery contract (no-models) and are not marked fresh.
-Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 11/11 at HEAD (0/11 on base); 6 catalogue-refresh importer suites pass 31/0.
+Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 at HEAD (0/13 on base); 6 catalogue-refresh importer suites pass 31/0.
