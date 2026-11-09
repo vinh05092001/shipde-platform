@@ -176,6 +176,17 @@ test('P2 identity: legacy key with %3A in upstream endpoint keeps literal value'
   assert.equal(parsed.upstream, 'vendor%3A', 'legacy %3A must be kept literal, not decoded to :');
 });
 
+// (b2) Legacy endpoint (accessPath) ending with %3A, model id without percent.
+test('P2 identity: legacy key with %3A in the accessPath endpoint keeps literal value', () => {
+  const { parseCandidateKey } = require('../discovery/identity');
+  const legacyKey =
+    'paseo::https://fixture.invalid/a%3A::fixture::vendor::account-b::::vendor/model';
+  const parsed = parseCandidateKey(legacyKey);
+  assert.ok(parsed, 'must parse legacy 7-part key');
+  assert.equal(parsed.accessPath, 'https://fixture.invalid/a%3A');
+  assert.equal(parsed.modelId, 'vendor/model');
+});
+
 // (c) Both %25 and %3A in the same legacy key — combined case.
 test('P2 identity: legacy key with both %25 and %3A keeps both literal', () => {
   const { readDiscoveryCatalogue } = require('../discovery/read');
