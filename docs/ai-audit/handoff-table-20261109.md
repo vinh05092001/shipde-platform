@@ -42,7 +42,7 @@
 |---|---|---|---|
 | R01 Điều phối nhiều worker | ĐANG LÀM | Phiếu theo dòng inventory, WHERE/WRONG/GOAL/VERIFY. Lúc đầu phiếu PR 06/07/13 chưa cụ thể | Giữ mẫu phiếu; thêm "lý do chọn route" lấy từ Controller |
 | R02 Không để phiên chết 10 phút | ĐANG LÀM | Watcher có phát hiện treo 15 phút. Mục tiêu ≤10 phút chưa đạt | Hạ ngưỡng phát hiện treo xuống 5 phút |
-| R03 Kiểm kê repo, 65 PR AGY | ĐANG LÀM | 65 lỗi ngày 03/11 đã đối soát (#550). **Kiểm kê repo trên máy chưa có bảng số đếm** | Chạy kiểm kê: số repo, trùng, đã đọc, đã dùng |
+| R03 Kiểm kê repo, 65 PR AGY | PARTIAL | 65 lỗi ngày 03/11 đã đối soát (#550); danh sách 65 PR AGY chưa tìm lại. **Kiểm kê repo trên máy chưa có bảng số đếm** | Chạy kiểm kê: số repo, trùng, đã đọc, đã dùng |
 | R04 Công cụ cài rồi phải được dùng | ĐANG LÀM | `tool-usage-20261107.md`; manifest khớp repo (#556). Chưa có bằng chứng dùng thật | Mục G |
 | R05 #521 tự đọc vinh | XONG một phần | #518 merged; #521 đóng. Combo chỉ gắn tài khoản đầu (`candidates.js:1414`) | Slice 14 |
 | R06 Health/quota đúng route | ĐANG LÀM | Route 03 (#555) merged. Health không xét tuổi (`cli.js:1125`) | Slice 17 |
@@ -75,7 +75,7 @@
 | Mục | Trạng thái | Bước tiếp theo |
 |---|---|---|
 | 1 Kiểm kê repo trên máy | CHƯA GIAO | Quét các thư mục repo đã cấu hình, dedupe theo remote, ra số đếm |
-| 2 Đối soát 65 PR AGY | XONG | #550 |
+| 2 Đối soát 65 PR AGY | PARTIAL | #550 đối soát **65 lỗi của anh (03/11)**, không phải danh sách 65 PR giao AGY: 4 FIXED, 41 PARTIAL, 8 OPEN, 12 UNVERIFIED, mỗi dòng có file:dòng/test. **Danh sách gốc 65 PR AGY chưa tìm lại được** (git log, docs/, register không có) | Tìm nguồn bàn giao gốc (lịch sử chat/handoff cũ, register 03/11); nếu không có, ghi nơi đã tìm và số truy được |
 | 3 Bảng trọng số hardcode | CHƯA GIAO | Rà route.js, rankForProfile/scoreForProfile, rankAndRecord/scoreCandidate, JEV |
 | 4 Bảng bằng chứng, Codex review đúng SHA | ĐANG LÀM | File này cùng `remaining-work-20261109.md` |
 
