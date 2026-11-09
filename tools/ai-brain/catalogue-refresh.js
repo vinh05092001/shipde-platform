@@ -60,10 +60,10 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
   const id =
     typeof sourceIdOrObj === 'string'
       ? sourceIdOrObj
-      : sourceIdOrObj?.id ||
-        sourceIdOrObj?.source ||
+      : sourceIdOrObj?.gateway ||
         sourceIdOrObj?.sourceId ||
-        sourceIdOrObj?.gateway;
+        sourceIdOrObj?.id ||
+        sourceIdOrObj?.source;
 
   const rej = (ts = null) => ({
     sourceId: id || null,
@@ -397,11 +397,12 @@ async function refreshCatalogue(options = {}) {
     }
     if (!discoveryPublished) {
       const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
+      const sources = (previousFreshness.sources || []).map((s) => ({
+        ...s,
+        staleListingRetained: isRecent(s.lastSuccessfulAt),
+      }));
       writeJson(freshnessFile, {
-        sources: (previousFreshness.sources || []).map((s) => ({
-          ...s,
-          staleListingRetained: isRecent(s.lastSuccessfulAt),
-        })),
+        sources,
         lastAttemptAt: report.finishedAt,
         lastSuccessfulAt: previousFreshness.lastSuccessfulAt || null,
         complete: false,

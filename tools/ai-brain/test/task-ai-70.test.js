@@ -220,6 +220,10 @@ function scenario(prefix) {
   fs.mkdirSync(path.join(home, 'Temp'), { recursive: true });
   fs.mkdirSync(poolRunsDir, { recursive: true });
   writeRegistry(home);
+  const at = new Date().toISOString();
+  const src = (id) => ({ id, status: 'enumerated', advertised: 9, lastSuccessfulAt: at });
+  const fDoc = { lastAttemptAt: at, lastSuccessfulAt: at, sources: [src('9router'), src('codex')] };
+  writeJson(path.join(discoveryDir, 'freshness.json'), fDoc);
   const world = {
     root,
     home,

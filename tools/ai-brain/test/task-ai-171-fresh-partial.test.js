@@ -80,9 +80,7 @@ test('(d) global lastSuccessfulAt alone cannot admit a failed source', () =>
 test('(1) legacy freshness file with only global lastSuccessfulAt -> explicit stale for all sources', () => {
   const at = new Date(NOW).toISOString();
   const legacyDoc = {
-    lastAttemptAt: at,
     lastSuccessfulAt: at,
-    complete: true,
     sources: [S('s1', 'enumerated', 5, null), S('s2', 'unavailable', 0, null)],
   };
   checkSource('s1', false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc);
@@ -124,38 +122,29 @@ test('(4) ordinary dispatch loads persisted freshness through normal reader with
 test('(5) refresh publication retains prior sources missing from new list (survives in failedSources)', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-pub-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const fFile = path.join(dir, 'freshness.json');
   fs.writeFileSync(
-    path.join(dir, 'freshness.json'),
-    JSON.stringify({
-      sources: [S('prior-gw', 'enumerated', 10, h1)],
-      lastAttemptAt: h1,
-      lastSuccessfulAt: h1,
-    })
+    fFile,
+    JSON.stringify({ sources: [S('prior-gw', 'enumerated', 10, h1)], lastSuccessfulAt: h1 })
   );
   const priorsFile = path.join(dir, 'priors.json');
   fs.writeFileSync(priorsFile, JSON.stringify({ ranking: [] }));
+  const at = new Date(NOW).toISOString();
+  const discData = {
+    lastAttemptAt: at,
+    lastSuccessfulAt: at,
+    listedSources: 1,
+    failedSources: [{ id: 'prior-gw', reason: 'HTTP_500' }],
+    sources: [S('9router', 'enumerated', 100, at)],
+  };
   const run = async (args, ctx) => {
-    if (args[0] === 'discovery') {
-      const at = new Date(NOW).toISOString();
-      fs.writeFileSync(
-        ctx.discoveryFile,
-        JSON.stringify({
-          lastAttemptAt: at,
-          lastSuccessfulAt: at,
-          listedSources: 1,
-          complete: false,
-          failedSources: [{ id: 'prior-gw', reason: 'HTTP_500' }],
-          sources: [S('9router', 'enumerated', 100, at)],
-        })
-      );
-    }
+    if (args[0] === 'discovery') fs.writeFileSync(ctx.discoveryFile, JSON.stringify(discData));
     return { exitCode: 0 };
   };
   await refreshCatalogue({ dataDir: dir, priorsFile, run, log: () => {} });
-  const pub = JSON.parse(fs.readFileSync(path.join(dir, 'freshness.json'), 'utf8'));
+  const pub = JSON.parse(fs.readFileSync(fFile, 'utf8'));
   const retained = pub.sources.find((s) => s.id === 'prior-gw');
-  assert.ok(retained, 'prior source omitted from discovery.sources must be retained');
-  assert.equal(retained.lastSuccessfulAt, h1);
+  assert.ok(retained && retained.lastSuccessfulAt === h1, 'prior source must be retained');
   const fresh = sourceFreshness('prior-gw', { freshness: pub, now: NOW });
   assert.equal(fresh.admitted && fresh.staleListingRetained, true);
 });
