@@ -39,9 +39,9 @@
     "roles": ["reviewer"],
     "triggers": ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx"],
     "gate": false,
-    "command": "sg scan",
+    "command": "lint:ast",
     "installed": true,
-    "evidenceRef": "package.json"
+    "evidenceRef": "package.json:devDependencies"
   },
   {
     "id": "axe-core",
@@ -52,7 +52,7 @@
     "gate": false,
     "command": null,
     "installed": true,
-    "evidenceRef": "apps/web/package.json"
+    "evidenceRef": "apps/web/package.json:devDependencies"
   },
   {
     "id": "compose",

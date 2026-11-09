@@ -34,7 +34,7 @@ const INSTALLED_EXPECTATIONS = {
   playwright: {
     file: 'apps/web/package.json',
     section: 'devDependencies',
-    member: '@playwright/test',
+    member: '@playwright/test', ref: "package.json:devDependencies.@playwright/test",
   },
   'axe-core': { file: 'apps/web/package.json', section: 'devDependencies', member: 'axe-core' },
   eslint: { file: 'package.json', section: 'devDependencies', member: 'eslint' },
@@ -54,7 +54,13 @@ const INSTALLED_EXPECTATIONS = {
     section: 'devDependencies',
     member: 'openapi-typescript',
   },
-  pnpm: { file: 'package.json', section: 'packageManager', member: null, pattern: /^pnpm@\d+/ },
+  pnpm: {
+    file: 'package.json',
+    section: 'packageManager',
+    member: null,
+    pattern: /^pnpm@\d+/,
+    ref: 'package.json:packageManager',
+  },
   prettier: { file: 'package.json', section: 'devDependencies', member: 'prettier' },
   prisma: { file: 'package.json', section: 'devDependencies', member: 'prisma' },
   turbo: { file: 'package.json', section: 'devDependencies', member: 'turbo' },
