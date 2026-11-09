@@ -50,13 +50,6 @@ function sanitizeScope(rawScope) {
     );
 }
 
-/**
- * Source freshness evaluates each source independently.
- * A source listed this run is admitted fresh.
- * A source that failed this run retains its prior good listing if within the 48h MAX_AGE_MS gate
- * (marked stale-listing-retained). If older than 48h or never successfully listed, it is rejected
- * with reason SOURCE_CATALOGUE_STALE. Global lastSuccessfulAt alone cannot admit a failed source.
- */
 function sourceFreshness(sourceIdOrObj, options = {}) {
   const doc =
     options.freshness || readJson(path.join(options.dataDir || DATA_DIR, 'freshness.json'), null);
@@ -94,46 +87,29 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
     (src.advertised > 0 ||
       (src.catalogs || []).some((c) => c.count > 0 || (c.models || []).length > 0))
   );
-
   const failedThisRun = Boolean(
     failed ||
     !src ||
     src.incomplete ||
+    src.staleListingRetained ||
     !isEnumerated ||
     !hasModels ||
     (src.reason && !src.advertised)
   );
 
-  if (!failedThisRun && isEnumerated) {
-    const ts = src.lastSuccessfulAt;
-    if (!ts) return rej();
-    const age = now - Date.parse(ts);
-    if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(ts || null);
-    return {
-      sourceId: id,
-      admitted: true,
-      stale: false,
-      code: null,
-      reason: null,
-      lastSuccessfulAt: ts || null,
-      staleListingRetained: false,
-      status: 'admitted',
-    };
-  }
-
-  const lastGood = src?.lastSuccessfulAt || src?.lastGoodAt;
-  if (!lastGood) return rej();
-  const age = now - Date.parse(lastGood);
-  if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(lastGood || null);
+  const ts = failedThisRun ? src?.lastSuccessfulAt || src?.lastGoodAt : src.lastSuccessfulAt;
+  if (!ts) return rej();
+  const age = now - Date.parse(ts);
+  if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(ts || null);
   return {
     sourceId: id,
     admitted: true,
     stale: false,
     code: null,
     reason: null,
-    lastSuccessfulAt: lastGood,
-    staleListingRetained: true,
-    status: 'stale-listing-retained',
+    lastSuccessfulAt: ts,
+    staleListingRetained: failedThisRun,
+    status: failedThisRun ? 'stale-listing-retained' : 'admitted',
   };
 }
 
@@ -293,7 +269,8 @@ async function refreshCatalogue(options = {}) {
     if (name === 'discovery run') {
       discovery = readJson(discoveryFile, null);
       if (options.persist !== false && stageExitCode === 0 && discovery?.listedSources > 0) {
-        for (const src of discovery.sources || []) {
+        discovery.sources = discovery.sources || [];
+        for (const src of discovery.sources) {
           const failed = (discovery.failedSources || []).some((f) => f.id === src.id);
           const ok =
             !failed &&
@@ -309,6 +286,19 @@ async function refreshCatalogue(options = {}) {
             src.staleListingRetained = Boolean(
               src.lastSuccessfulAt && startedEpoch - Date.parse(src.lastSuccessfulAt) <= MAX_AGE_MS
             );
+          }
+        }
+        const seenIds = new Set(discovery.sources.map((s) => s.id));
+        for (const prev of previousFreshness.sources || []) {
+          if (!seenIds.has(prev.id)) {
+            discovery.sources.push({
+              ...prev,
+              staleListingRetained: Boolean(
+                prev.lastSuccessfulAt &&
+                startedEpoch - Date.parse(prev.lastSuccessfulAt) <= MAX_AGE_MS
+              ),
+            });
+            seenIds.add(prev.id);
           }
         }
         writeJson(freshnessFile, discovery);
