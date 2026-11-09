@@ -246,9 +246,6 @@ function firstLaunch(decision, ticket, context, registry) {
   const ledger = (context && context.ledger) || {};
   const unreadable = persistedLedgerProblem(ledger, ticket);
   if (unreadable) return { action: 'BLOCKED', reason: unreadable, rejected: [] };
-  if (ledger.activeWorker) {
-    return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
-  }
   if (
     ledger.failures &&
     ledger.failures.length &&
@@ -272,7 +269,7 @@ function firstLaunch(decision, ticket, context, registry) {
   const claimMod = require('./coordinator-claim');
   const cwd = ticket?.request?.cwd || ctx.ledger?.worktree;
   const claim = ctx.worktreeClaim || ctx.claim;
-  const check = (ctx.verifyWorktreeClaim || claimMod.verifyWorktreeClaim)(cwd, claim, ctx);
+  const check = claimMod.verifyWorktreeClaim(cwd, claim, ctx);
   if (!check.ok) {
     return {
       action: 'STOP',
@@ -281,7 +278,29 @@ function firstLaunch(decision, ticket, context, registry) {
       rejected: [],
     };
   }
-  if (claim?.activeWorker || ledger?.activeWorker) {
+  if (
+    typeof ctx.verifyWorktreeClaim === 'function' &&
+    ctx.verifyWorktreeClaim !== claimMod.verifyWorktreeClaim
+  ) {
+    const extraCheck = ctx.verifyWorktreeClaim(cwd, claim, ctx);
+    if (!extraCheck || !extraCheck.ok) {
+      return {
+        action: 'STOP',
+        reason: extraCheck?.reason || 'WORKTREE_CLAIM_REQUIRED',
+        worktree: extraCheck?.worktree || check.worktree || cwd || null,
+        rejected: [],
+      };
+    }
+  }
+  const workerAlive = (w) => {
+    if (!w) return false;
+    if (claim?.stoppedLeftover && claim.stoppedLeftover.tag === w.tag) return false;
+    if (w.pid != null) {
+      return claimMod.isOwnerAlive(w, { ...ctx.options, ...ctx.opts, ...ctx });
+    }
+    return true;
+  };
+  if (workerAlive(claim?.activeWorker) || workerAlive(ledger?.activeWorker)) {
     return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
   }
   const request = {

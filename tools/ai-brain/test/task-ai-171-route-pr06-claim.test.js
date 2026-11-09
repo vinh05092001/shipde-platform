@@ -64,6 +64,16 @@ test('Finding 1 / Item d1: firstLaunch rejects when no claim, unresolved or omit
   pr07Lock.release();
   eq([chk(path.join(f.dir, 'no-path')).reason], ['WORKTREE_CLAIM_REQUIRED']);
   eq([chk(null).reason], ['WORKTREE_CLAIM_REQUIRED']);
+  const permissive = () => ({ ok: true });
+  const outPermissiveNoClaim = chk(f.worktree, { verifyWorktreeClaim: permissive });
+  assert.notEqual(outPermissiveNoClaim.action, 'LAUNCH');
+  eq(
+    [outPermissiveNoClaim.action, outPermissiveNoClaim.reason],
+    ['STOP', 'WORKTREE_CLAIM_REQUIRED']
+  );
+  const outPermissiveNoCwd = chk(null, { verifyWorktreeClaim: permissive });
+  assert.notEqual(outPermissiveNoCwd.action, 'LAUNCH');
+  eq([outPermissiveNoCwd.action, outPermissiveNoCwd.reason], ['STOP', 'WORKTREE_CLAIM_REQUIRED']);
   const valid = claim.claimWorktree(f.worktree, f.opts(101, 1000));
   assert.equal(chk(f.worktree, { worktreeClaim: valid, ...f.opts(101, 1000) }).action, 'LAUNCH');
   valid.release();
@@ -108,6 +118,35 @@ test('Finding 7 / Item d3: dead worker does not block restart; live worker block
   const res = await claim.acquireWorktreeOwner(f.worktree, 'TASK-AI-171', f.opts(101, 1000));
   eq([res.ok, res.claimed, res.stoppedLeftover?.pid], [true, true, 777]);
   assert.equal(fs.existsSync(workerFile), false);
+  const deadLedger = {
+    version: 1,
+    item: 'TASK-AI-171',
+    worktree: f.worktree,
+    launches: 1,
+    fallbacksUsed: 0,
+    failures: [],
+    activeWorker: { item: 'TASK-AI-171', tag: 'dead', pid: 777, startedAt: 500, offeringId: 'a' },
+  };
+  const restart = handoff.firstLaunch(
+    dec,
+    f.tkt(),
+    { worktreeClaim: res, evidenceData, ledger: deadLedger, ...f.opts(101, 1000) },
+    reg
+  );
+  eq([restart.action, restart.launch?.offeringId], ['LAUNCH', 'a']);
+  assert.notEqual(restart.reason, 'WORKER_STILL_ACTIVE');
+  const liveLedger = {
+    ...deadLedger,
+    activeWorker: { item: 'TASK-AI-171', tag: 'live', pid: 101, startedAt: 1000, offeringId: 'a' },
+  };
+  const liveLedgerOut = handoff.firstLaunch(
+    dec,
+    f.tkt(),
+    { worktreeClaim: res, evidenceData, ledger: liveLedger, ...f.opts(101, 1000) },
+    reg
+  );
+  assert.notEqual(liveLedgerOut.action, 'LAUNCH');
+  eq([liveLedgerOut.action, liveLedgerOut.reason], ['BLOCKED', 'WORKER_STILL_ACTIVE']);
   res.release();
   fs.writeFileSync(
     workerFile,
@@ -145,6 +184,15 @@ test('Item d2: foreign owner PID exit rejects launch/reconcile; fresh claimant r
     ],
     ['WORKTREE_CLAIMED']
   );
+  const permissive = () => ({ ok: true });
+  const outPermissiveStale = handoff.firstLaunch(
+    dec,
+    f.tkt(),
+    { worktreeClaim: stale, verifyWorktreeClaim: permissive, evidenceData, ledger: {} },
+    reg
+  );
+  assert.notEqual(outPermissiveStale.action, 'LAUNCH');
+  eq([outPermissiveStale.action, outPermissiveStale.reason], ['STOP', 'WORKTREE_CLAIMED']);
   const rec = await claim.reconcileWorktreeWorker(f.worktree, 'TASK-AI-171', {
     dir: f.runtimeDir,
     worktreeClaim: stale,

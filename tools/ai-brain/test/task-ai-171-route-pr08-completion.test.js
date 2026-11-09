@@ -4,8 +4,12 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { Cause, Scope } = require('../failure-classifier');
 const { DEFAULT_WORKER_TIMEOUT_MS } = require('../isolation-launcher');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
-function makeFixture() {
+function makeFixture(t) {
+  const claimHelper = createWorktreeClaim();
+  if (t && typeof t.after === 'function') t.after(claimHelper.cleanup);
+  const cwd = claimHelper.worktree;
   const mkCand = (id) => {
     const c = { offeringId: id, modelId: `vendor/model-${id}`, upstream: `up-${id}` };
     return Object.assign(c, { gateway: 'gw', accountId: `acc-${id}`, harness: 'paseo' });
@@ -15,18 +19,22 @@ function makeFixture() {
   const dispatch = { providers, launchModes: { opencode: ['full-access'] } };
   const registry = { sources: [], dispatch };
   const decision = { workItemId: 'TASK-AI-171', selected: 'a', candidates };
-  const request = { cwd: '/wt', branch: 'fix/b', prompt: 'task' };
+  const request = { cwd, branch: 'fix/b', prompt: 'task' };
   const ticket = { workItemId: 'TASK-AI-171', outputTokens: 100, minProof: 'HARNESS_PASS' };
   Object.assign(ticket, { maxFallbacks: 1, request });
   const evidence = [{ status: 'passed', proofLevel: 'HARNESS_PASS' }];
   const activeWorker = { offeringId: 'a', upstream: 'up-a', runId: 'run-1' };
-  const ledger = { launches: 1, fallbacksUsed: 0, worktree: '/wt', activeWorker };
+  const ledger = { launches: 1, fallbacksUsed: 0, worktree: cwd, activeWorker };
   const combinations = candidates.map((c) => ({ ...c, evidence }));
-  const context = { now: 1e6, ledger, evidenceData: { combinations } };
-  const base = { runId: 'run-1', offeringId: 'a', upstream: 'up-a', cwd: '/wt' };
+  const context = { now: 1e6, ledger, evidenceData: { combinations }, ...claimHelper.context };
+  const base = { runId: 'run-1', offeringId: 'a', upstream: 'up-a', cwd };
   Object.assign(base, { workerTimeoutMs: 1000, decision, ticket, context, registry });
   Object.assign(base, { waitForExit: (cb) => cb(0), stopWorker: async () => true });
-  return { context, base: Object.assign(base, { readOutput: () => '', readCommit: () => null }) };
+  return {
+    context,
+    cleanup: claimHelper.cleanup,
+    base: Object.assign(base, { readOutput: () => '', readCommit: () => null }),
+  };
 }
 
 test('B51: validateWorkerTimeout rejects zero, NaN, negative and non-numeric values', () => {
@@ -38,28 +46,28 @@ test('B51: validateWorkerTimeout rejects zero, NaN, negative and non-numeric val
   }
 });
 
-test('B51: exit vs timeout race cleans up timer on exit and ignores late exit', async () => {
+test('B51: exit vs timeout race cleans up timer on exit and ignores late exit', async (t) => {
   const { superviseWorkerCompletion } = require('../coordinator-completion');
   const s = { cleared: [], stops: [], timer: null, exit: null };
   const commit = { runId: 'run-1', workItemId: 'TASK-AI-171', sha: 'abc1234' };
   const o1 = { setTimer: (fn) => ((s.timer = fn), 't1'), clearTimer: (id) => s.cleared.push(id) };
   Object.assign(o1, { waitForExit: (cb) => ((s.exit = cb), cb(0)), readCommit: () => commit });
-  const out1 = await superviseWorkerCompletion({ ...makeFixture().base, ...o1 });
+  const out1 = await superviseWorkerCompletion({ ...makeFixture(t).base, ...o1 });
   if (s.timer) s.timer();
   assert.deepEqual([s.cleared, out1.status, out1.finished], [['t1'], 'WORKER_FINISHED', true]);
 
   const stopWorker = async (id) => (s.stops.push(id), s.exit && s.exit(0), true);
   const o2 = { setTimer: (fn) => (fn(), 't2'), clearTimer: () => {}, stopWorker };
   Object.assign(o2, { waitForExit: (cb) => (s.exit = cb), readCommit: () => commit });
-  const out2 = await superviseWorkerCompletion({ ...makeFixture().base, ...o2 });
+  const out2 = await superviseWorkerCompletion({ ...makeFixture(t).base, ...o2 });
   const got2 = [s.stops, out2.timedOut, out2.finished, out2.record.category];
   assert.deepEqual(got2, [['run-1'], true, false, Cause.TIMEOUT]);
   assert.equal(out2.next.launch.offeringId, 'b');
 });
 
-test('B51: unconfirmed stop on timeout or exit blocks fallback and keeps activeWorker', async () => {
+test('B51: unconfirmed stop on timeout or exit blocks fallback and keeps activeWorker', async (t) => {
   const { superviseWorkerCompletion } = require('../coordinator-completion');
-  const f = makeFixture();
+  const f = makeFixture(t);
   const o = { setTimer: (fn) => (fn(), 't'), clearTimer: () => {}, waitForExit: () => {} };
   const out = await superviseWorkerCompletion({ ...f.base, ...o, stopWorker: async () => false });
   const got = [out.status, out.workerStopped, out.next.action, out.next.reason];
@@ -68,25 +76,25 @@ test('B51: unconfirmed stop on timeout or exit blocks fallback and keeps activeW
   assert.equal(f.context.ledger.fallbacksUsed, 0);
 });
 
-test('B52: exit 0 with an unnumbered Error line or without a commit is not finished', async () => {
+test('B52: exit 0 with an unnumbered Error line or without a commit is not finished', async (t) => {
   const { superviseWorkerCompletion } = require('../coordinator-completion');
   const commit = { runId: 'run-1', workItemId: 'TASK-AI-171', sha: 'deadbeef' };
   const errOpts = { readOutput: () => 'ok\n\x1b[31mError: x\x1b[0m\n', readCommit: () => commit };
-  const wErr = await superviseWorkerCompletion({ ...makeFixture().base, ...errOpts });
+  const wErr = await superviseWorkerCompletion({ ...makeFixture(t).base, ...errOpts });
   assert.notEqual(wErr.status, 'WORKER_FINISHED');
   assert.deepEqual(
     [wErr.finished, wErr.completed, wErr.next.launch.offeringId],
     [false, false, 'b']
   );
 
-  const noC = await superviseWorkerCompletion({ ...makeFixture().base, readOutput: () => 'ok' });
+  const noC = await superviseWorkerCompletion({ ...makeFixture(t).base, readOutput: () => 'ok' });
   const gotNoC = [noC.status, noC.finished, noC.record.category, noC.next.action];
   assert.deepEqual(gotNoC, ['WORKER_NO_COMMIT', false, 'NO_COMMIT_ARTIFACT', 'LAUNCH']);
 });
 
-test('B52: inner 503 and outer 503 classify by inner status with no raw text in records', async () => {
+test('B52: inner 503 and outer 503 classify by inner status with no raw text in records', async (t) => {
   const { superviseWorkerCompletion } = require('../coordinator-completion');
-  const f1 = makeFixture();
+  const f1 = makeFixture(t);
   const notes = [];
   const rawSecret = 'RAW_SECRET_TAIL_DO_NOT_RECORD_999';
   const msg1 = `trace ${rawSecret}\nError: HTTP 500: [p/m] [503]: no capacity available ${rawSecret}`;
@@ -94,10 +102,10 @@ test('B52: inner 503 and outer 503 classify by inner status with no raw text in 
   const in503 = await superviseWorkerCompletion({ ...f1.base, ...o1, readOutput: () => msg1 });
   const got1 = [in503.record.status, in503.record.category, in503.record.scope];
   assert.deepEqual(got1, [503, Cause.GENUINE_CAPACITY, Scope.UPSTREAM]);
-  for (const t of [in503.record, notes, f1.context.ledger])
-    assert.doesNotMatch(JSON.stringify(t), new RegExp(rawSecret));
+  for (const item of [in503.record, notes, f1.context.ledger])
+    assert.doesNotMatch(JSON.stringify(item), new RegExp(rawSecret));
 
-  const f2 = makeFixture();
+  const f2 = makeFixture(t);
   const msg2 = `Error: [gateway/model] [503]: [upstream/model] [429]: rate limit ${rawSecret}`;
   const o2 = { httpStatus: 503, waitForExit: (cb) => cb(1), readOutput: () => msg2 };
   const out503 = await superviseWorkerCompletion({ ...f2.base, ...o2 });
