@@ -746,3 +746,11 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: worktree claims require a live PID bound to the target worktree path and owner metadata before worker launch.
 - Evidence: 112 tests in the 10 files importing route-handoff/coordinator-claim pass at f012f209, 0 fail, 0 skip. Offline evidence only.
 - Entry guard follows in PR 06b (#566); Slice B (.evict recovery, process-ownership findings 3/4/5/8) deferred.
+
+## PR 06 — Give each worktree one confirmed worker owner (Slice A) (2026-11-09)
+
+- Scope (`tools/ai-brain/coordinator-claim.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr06-claim.test.js`): Slice A cut to AC and blocking findings (findings 1, 2, 7, Review d items d1-d4); `process-ownership.js` removed; findings 3, 4, 5, 6, 8 deferred to Slice B.
+- Finding 1 / Item d1: ownership enforced at `route-handoff.firstLaunch`; no name/path exemptions; omitted/unresolved cwd and unconfirmed claims fail closed (`WORKTREE_CLAIM_REQUIRED`).
+- Finding 2 / Items d2 & d4: `verifyWorktreeClaim` probes foreign owner PID under default options, requires matching disk worktree binding, and rejects metadata-only claims; dead predecessor claim rejected for launch/reconcile while fresh claimant recovers exclusively.
+- Finding 7 / Item d3: dead same-item worker record is unlinked without blocking restart; live same-item worker blocks acquisition and prevents `firstLaunch` from launching (`WORKER_STILL_ACTIVE`).
+- Evidence: 4/4 tests pass in `task-ai-171-route-pr06-claim.test.js`. Offline evidence only.
