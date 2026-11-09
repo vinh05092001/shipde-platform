@@ -216,6 +216,21 @@ function screenRoutes(decision, ticket, context, registry) {
 
 /** The first launch of a ticket: the best usable route, or BLOCKED. */
 function firstLaunch(decision, ticket, context, registry) {
+  const ctx = context || {};
+  const cwd = ticket?.request?.cwd || ctx.ledger?.worktree;
+  const claim = ctx.worktreeClaim || ctx.claim;
+  if (cwd) {
+    const claimMod = require('./coordinator-claim');
+    const check = claimMod.verifyWorktreeClaim(cwd, claim, ctx);
+    if (!check.ok && check.reason !== 'WORKTREE_PATH_UNRESOLVED') {
+      return {
+        action: 'STOP',
+        reason: check.reason,
+        worktree: check.worktree || cwd,
+        rejected: [],
+      };
+    }
+  }
   if (decision.controllerStatus && decision.controllerStatus !== 'READY') {
     return { action: 'BLOCKED', reason: decision.reasonCode, rejected: decision.rejected };
   }

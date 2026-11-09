@@ -2,8 +2,6 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const handoff = require('./route-handoff');
-const processOwnership = require('./process-ownership');
 
 const nonEmpty = (v) => typeof v === 'string' && v.trim().length > 0;
 const posInt = (v) => Number.isInteger(v) && v > 0;
@@ -127,14 +125,15 @@ function verifyWorktreeClaim(cwd, claim, options = {}) {
   if (claim.id !== target.id || claim.worktree !== target.worktree) {
     return { ok: false, reason: 'WORKTREE_CLAIM_MISMATCH', worktree: target.worktree };
   }
-  if (nonEmpty(claim.lockFile)) {
-    const disk = parseLockRecord(tryCall(() => io.readFileSync(claim.lockFile, 'utf8')));
-    const same = disk && (claim.claimId ? disk.claimId === claim.claimId : disk.pid === claim.pid);
-    const probe = options.kill || options.getProcessStartedAt || disk?.pid === process.pid;
-    const live = !probe || isOwnerAlive(disk, options);
-    if (!same || (disk.worktree && disk.worktree !== target.worktree) || !live) {
-      return { ok: false, reason: 'WORKTREE_CLAIMED', worktree: target.worktree };
-    }
+  if (!nonEmpty(claim.lockFile) || !nonEmpty(claim.claimId)) {
+    return { ok: false, reason: 'WORKTREE_CLAIM_REQUIRED', worktree: target.worktree };
+  }
+  const disk = parseLockRecord(tryCall(() => io.readFileSync(claim.lockFile, 'utf8')));
+  const same = disk && disk.claimId === claim.claimId;
+  const probe = options.kill || options.getProcessStartedAt || disk?.pid === process.pid;
+  const live = !probe || isOwnerAlive(disk, options);
+  if (!same || (disk.worktree && disk.worktree !== target.worktree) || !live) {
+    return { ok: false, reason: 'WORKTREE_CLAIMED', worktree: target.worktree };
   }
   return { ok: true, id: target.id, worktree: target.worktree };
 }
@@ -167,9 +166,19 @@ async function reconcileWorktreeWorker(cwd, item, options = {}) {
     if (!okPid || !nonEmpty(wItem) || !nonEmpty(p.tag)) {
       return { ok: false, action: 'STOP', reason: 'WORKER_STATE_UNREADABLE', ...base };
     }
-    if (wItem === item) return { ok: true, ...base, activeWorker: { ...p, item: wItem } };
+    if (wItem === item) {
+      if (posInt(p.pid) && !isOwnerAlive({ pid: p.pid, startedAt: p.startedAt }, options)) {
+        io.unlinkSync(workerFile);
+        return { ok: true, ...base, stoppedLeftover: { item: wItem, tag: p.tag, pid: p.pid } };
+      }
+      return { ok: true, ...base, activeWorker: { ...p, item: wItem } };
+    }
+    const stopRun = options.stopRun;
+    if (typeof stopRun !== 'function') {
+      return { ok: false, action: 'STOP', reason: 'STOP_RUN_REQUIRED', ...base };
+    }
     const spec = { tag: p.tag, pid: p.pid, startedAt: p.startedAt };
-    const res = await processOwnership.stopRun(spec, options);
+    const res = await stopRun(spec, options);
     if (!res.stopped) {
       const extra = { run: p.tag, item: wItem, ...base, remainingPids: res.remainingPids };
       return { ok: false, action: 'STOP', reason: 'BLOCKED_WORKER_NOT_STOPPED', ...extra };
@@ -199,31 +208,13 @@ async function acquireWorktreeOwner(cwd, item, options = {}) {
     if (!ok) claim.release();
   }
 }
-function stopFromCheck(check, cwd) {
-  return { action: 'STOP', reason: check.reason, worktree: check.worktree || cwd, rejected: [] };
-}
-function firstLaunch(decision, ticket, context, registry) {
-  const [ctx, cwd] = [context || {}, ticket?.request?.cwd || context?.ledger?.worktree];
-  const claim = ctx.worktreeClaim || ctx.claim;
-  const check = verifyWorktreeClaim(cwd, claim, ctx);
-  if (!check.ok) return stopFromCheck(check, cwd || null);
-  if (claim.activeWorker) return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
-  return handoff.firstLaunch(decision, ticket, ctx, registry);
-}
-function afterFailure(decision, ticket, context, failure, registry) {
-  const [ctx, f] = [context || {}, failure || {}];
-  const stopped = f.workerStopped === true || Boolean(f.stopResult?.stopped === true);
-  if (f.phase !== 'before-launch' && !stopped) {
-    const reason = f.stopResult?.reason || 'WORKER_STOP_REQUIRED';
-    return { action: 'STOP', reason, worktree: f.worktree || ctx.ledger?.worktree };
-  }
-  const next = { ...f, workerStopped: stopped };
-  const out = handoff.afterFailure(decision, ticket, ctx, next, registry);
-  if (out.action !== 'LAUNCH') return out;
-  const cwd = out.worktree || ticket?.request?.cwd;
-  const check = verifyWorktreeClaim(cwd, ctx.worktreeClaim || ctx.claim, ctx);
-  return check.ok ? out : stopFromCheck(check, cwd || null);
-}
-Object.assign(exports, handoff, processOwnership, { parseLockRecord, resolveWorktreePath });
-Object.assign(exports, { worktreeId, claimWorktree, verifyWorktreeClaim, reconcileWorktreeWorker });
-Object.assign(exports, { acquireWorktreeOwner, firstLaunch, afterFailure });
+module.exports = {
+  parseLockRecord,
+  resolveWorktreePath,
+  worktreeId,
+  claimWorktree,
+  verifyWorktreeClaim,
+  reconcileWorktreeWorker,
+  acquireWorktreeOwner,
+  isOwnerAlive,
+};

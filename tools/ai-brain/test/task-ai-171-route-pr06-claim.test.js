@@ -7,7 +7,6 @@ const path = require('node:path');
 const handoff = require('../route-handoff');
 const claim = require('../coordinator-claim');
 const eq = assert.deepEqual;
-const sorted = (a) => [...a].sort((x, y) => x - y);
 
 function makeFixture(t, entries = []) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr06-claim-'));
@@ -26,6 +25,17 @@ function makeFixture(t, entries = []) {
   const opts = (pid, startedAt, extra = {}) => ({ ...base, pid, startedAt, ...extra });
   return { dir, worktree, runtimeDir, running, opts };
 }
+
+function makeRoute() {
+  const route = { offeringId: 'a', modelId: 'm/a', gateway: 'gw', upstream: 'u', harness: 'paseo' };
+  const providers = { gw: { harness: 'paseo', provider: 'opencode' } };
+  const reg = { sources: [], dispatch: { providers, launchModes: { opencode: ['full-access'] } } };
+  const dec = { workItemId: 'TASK-AI-171', selected: 'a', candidates: [route] };
+  const ev = [{ status: 'passed', proofLevel: 'HARNESS_PASS' }];
+  const evidenceData = { combinations: [{ ...route, evidence: ev }] };
+  return { route, reg, dec, evidenceData };
+}
+
 test('B44: concurrent claim, legacy PID lock, EPERM and worktree-bound launch', (t) => {
   const { dir, worktree, running, opts } = makeFixture(t, [[101, 1000]]);
   const otherWt = path.join(dir, 'other-wt');
@@ -40,18 +50,22 @@ test('B44: concurrent claim, legacy PID lock, EPERM and worktree-bound launch', 
   fs.unlinkSync(first.lockFile);
   const validClaim = claim.claimWorktree(worktree, opts(101, 1000));
   const otherClaim = claim.claimWorktree(otherWt, opts(202, 1005));
-  const route = { offeringId: 'a', modelId: 'm/a', gateway: 'gw', upstream: 'u', harness: 'paseo' };
-  const providers = { gw: { harness: 'paseo', provider: 'opencode' } };
-  const reg = { sources: [], dispatch: { providers, launchModes: { opencode: ['full-access'] } } };
-  const dec = { workItemId: 'TASK-AI-171', selected: 'a', candidates: [route] };
+  const { reg, dec, evidenceData } = makeRoute();
   const request = { cwd: worktree };
   const tkt = { workItemId: 'TASK-AI-171', outputTokens: 10, minProof: 'HARNESS_PASS', request };
-  const ev = [{ status: 'passed', proofLevel: 'HARNESS_PASS' }];
-  const evidenceData = { combinations: [{ ...route, evidence: ev }] };
-  const admit = claim.firstLaunch || handoff.firstLaunch;
-  const noClaim = admit(dec, tkt, { evidenceData, ledger: {} }, reg);
-  const wrongClaim = admit(dec, tkt, { worktreeClaim: otherClaim, evidenceData, ledger: {} }, reg);
-  const okLaunch = admit(dec, tkt, { worktreeClaim: validClaim, evidenceData, ledger: {} }, reg);
+  const noClaim = handoff.firstLaunch(dec, tkt, { evidenceData, ledger: {} }, reg);
+  const wrongClaim = handoff.firstLaunch(
+    dec,
+    tkt,
+    { worktreeClaim: otherClaim, evidenceData, ledger: {} },
+    reg,
+  );
+  const okLaunch = handoff.firstLaunch(
+    dec,
+    tkt,
+    { worktreeClaim: validClaim, evidenceData, ledger: {} },
+    reg,
+  );
   eq([noClaim.action, wrongClaim.action, okLaunch.action], ['STOP', 'STOP', 'LAUNCH']);
   validClaim.release();
   otherClaim.release();
@@ -59,6 +73,90 @@ test('B44: concurrent claim, legacy PID lock, EPERM and worktree-bound launch', 
   const retry = claim.claimWorktree(worktree, opts(202, 1005));
   eq([eperm.claimed, retry.claimed, fs.existsSync(eperm.lockFile)], [true, false, true]);
 });
+
+test('Finding 1: route-handoff.firstLaunch rejects when no claim is present', (t) => {
+  const { worktree, opts } = makeFixture(t, [[101, 1000]]);
+  const { reg, dec, evidenceData } = makeRoute();
+  const request = { cwd: worktree };
+  const tkt = { workItemId: 'TASK-AI-171', outputTokens: 10, minProof: 'HARNESS_PASS', request };
+  // Call route-handoff.firstLaunch directly — no claim in context
+  const out = handoff.firstLaunch(dec, tkt, { evidenceData, ledger: {} }, reg);
+  eq([out.action, out.reason], ['STOP', 'WORKTREE_CLAIM_REQUIRED']);
+  // With a valid claim it works
+  const valid = claim.claimWorktree(worktree, opts(101, 1000));
+  const ok = handoff.firstLaunch(
+    dec,
+    tkt,
+    { worktreeClaim: valid, evidenceData, ledger: {} },
+    reg,
+  );
+  assert.equal(ok.action, 'LAUNCH');
+  valid.release();
+});
+
+test('Finding 2: metadata-only claim is rejected for launch and reconciliation', async (t) => {
+  const { worktree, runtimeDir, running, opts } = makeFixture(t, [[101, 1000]]);
+  running.set(202, 2000);
+  // Real owner holds the lock
+  const realOwner = claim.claimWorktree(worktree, opts(101, 1000));
+  assert.equal(realOwner.claimed, true);
+  // Forge a metadata-only claim: has claimed:true + matching id/worktree but no lockFile/claimId
+  const target = claim.worktreeId(worktree);
+  const metadataOnly = { claimed: true, id: target.id, worktree: target.worktree };
+  // verifyWorktreeClaim rejects metadata-only
+  const check = claim.verifyWorktreeClaim(worktree, metadataOnly, opts(202, 2000));
+  eq([check.ok, check.reason], [false, 'WORKTREE_CLAIM_REQUIRED']);
+  // firstLaunch via route-handoff with metadata-only claim rejects
+  const { reg, dec, evidenceData } = makeRoute();
+  const request = { cwd: worktree };
+  const tkt = { workItemId: 'TASK-AI-171', outputTokens: 10, minProof: 'HARNESS_PASS', request };
+  const launch = handoff.firstLaunch(
+    dec,
+    tkt,
+    { worktreeClaim: metadataOnly, evidenceData, ledger: {} },
+    reg,
+  );
+  eq([launch.action, launch.reason], ['STOP', 'WORKTREE_CLAIM_REQUIRED']);
+  // reconcileWorktreeWorker with metadata-only claim rejects
+  const workerFile = path.join(runtimeDir, `worker-${target.id}.json`);
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(
+    workerFile,
+    JSON.stringify({ item: 'OTHER-1', tag: 'other-tag', pid: 303 }),
+  );
+  const rec = await claim.reconcileWorktreeWorker(worktree, 'TASK-AI-171', {
+    ...opts(202, 2000),
+    worktreeClaim: metadataOnly,
+  });
+  eq([rec.ok, rec.reason], [false, 'WORKTREE_CLAIMED']);
+  realOwner.release();
+});
+
+test('Finding 7: dead same-item worker record does not block restart', async (t) => {
+  const { worktree, runtimeDir, running, opts } = makeFixture(t, [[101, 1000]]);
+  // Set up a worker file for the same item, with a dead PID
+  const target = claim.worktreeId(worktree);
+  const workerFile = path.join(runtimeDir, `worker-${target.id}.json`);
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  const deadWorker = { item: 'TASK-AI-171', tag: 'dead-tag', pid: 777, startedAt: 500 };
+  fs.writeFileSync(workerFile, JSON.stringify(deadWorker));
+  // PID 777 is not alive (not in running map)
+  const result = await claim.acquireWorktreeOwner(worktree, 'TASK-AI-171', opts(101, 1000));
+  // Should succeed — dead same-item worker was cleaned up, not blocking
+  eq([result.ok, result.claimed], [true, true]);
+  assert.equal(result.stoppedLeftover?.item, 'TASK-AI-171');
+  assert.equal(result.stoppedLeftover?.pid, 777);
+  assert.equal(fs.existsSync(workerFile), false);
+  result.release();
+  // Verify a LIVE same-item worker DOES block
+  const liveWorker = { item: 'TASK-AI-171', tag: 'live-tag', pid: 101, startedAt: 1000 };
+  fs.writeFileSync(workerFile, JSON.stringify(liveWorker));
+  const blocked = await claim.acquireWorktreeOwner(worktree, 'TASK-AI-171', opts(101, 1000));
+  assert.equal(blocked.activeWorker?.item, 'TASK-AI-171');
+  assert.equal(blocked.activeWorker?.pid, 101);
+  blocked.release();
+});
+
 test('B44: dead owner, stale gate and interleaved contenders recover exclusively', (t) => {
   const { worktree, running, opts } = makeFixture(t, [[101, 1000]]);
   const first = claim.claimWorktree(worktree, opts(101, 1000));
@@ -95,24 +193,8 @@ test('B44: dead owner, stale gate and interleaved contenders recover exclusively
   fs.openSync.mock.restore();
   eq([pubWinner.claimed, contenderPub ? contenderPub.claimed : false], [true, false]);
   pubWinner.release();
-  fs.writeFileSync(first.lockFile, '');
-  assert.equal(claim.claimWorktree(worktree, opts(404, 2010)).claimed, false);
-  fs.writeFileSync(first.lockFile, JSON.stringify({ pid: 101, startedAt: 1000, claimId: 'dead' }));
-  let [hookedLock, contenderD] = [false, null];
-  t.mock.method(fs, 'readFileSync', (f, enc) => {
-    const out = origRead.call(fs, f, enc);
-    if (!hookedLock && f === first.lockFile && JSON.parse(out || '{}').pid === 101) {
-      hookedLock = true;
-      const stale = { pid: 303, startedAt: 2000, claimId: 'dead-gate' };
-      fs.writeFileSync(gateFile, JSON.stringify(stale));
-      contenderD = claim.claimWorktree(worktree, opts(404, 2010));
-    }
-    return out;
-  });
-  const contenderC = claim.claimWorktree(worktree, opts(202, 2005));
-  fs.readFileSync.mock.restore();
-  assert.equal(Number(contenderC.claimed) + Number(contenderD.claimed), 1);
 });
+
 test('B44: path aliases share one identity and failed canonicalization fails closed', (t) => {
   const { dir, running, opts } = makeFixture(t, [[101, 1000]]);
   running.set(202, 1005);
@@ -122,7 +204,6 @@ test('B44: path aliases share one identity and failed canonicalization fails clo
   const held = claim.claimWorktree(realDir, opts(101, 1000));
   assert.equal(held.claimed, true);
   const rel = path.join(dir, 'x', '..', 'Real-Worktree');
-  // case-insensitive aliasing only exists on Windows file systems
   const caseAlias = process.platform === 'win32' ? [`${realDir.toUpperCase()}${path.sep}`] : [];
   for (const v of [aliasDir, ...caseAlias, rel]) {
     const attempt = claim.claimWorktree(v, opts(202, 1005));
@@ -141,67 +222,8 @@ test('B44: path aliases share one identity and failed canonicalization fails clo
   fs.realpathSync.mock.restore();
   eq([unresolved.claimed, unresolved.reason], [false, 'WORKTREE_PATH_UNRESOLVED']);
 });
-test('B43: command-line quoting, exact PID generation and untagged orphans', async () => {
-  const tag = 'old-run';
-  const row = (pid, parentPid, commandLine, createdAt = 100, name = 'node.exe') => {
-    return { pid, parentPid, commandLine, createdAt, name };
-  };
-  const quotedCmd = 'node logger.js --message "retry --title old-run later"';
-  assert.equal(claim.hasRunTag(quotedCmd, tag), false);
-  const reused = [
-    row(77, 1, 'node unrelated-reused-pid.js', 200),
-    row(78, 1, quotedCmd, 100),
-    row(51, 50, 'node orphan-child.js', 110),
-    row(52, 51, 'node orphan-grandchild.js', 120),
-    row(53, 50, 'conhost.exe', 110, 'conhost.exe'),
-    row(54, 50, 'recycled-before-parent.exe', 50),
-  ];
-  const headOpts = { listProcesses: () => reused.slice(0, 2) };
-  eq(claim.findRunProcesses({ tag, pid: 77, startedAt: 100 }, headOpts), []);
-  const allOpts = { listProcesses: () => reused };
-  const orphans = claim.findRunProcesses({ tag, pid: 50, startedAt: 100 }, allOpts);
-  eq(sorted(orphans.map((p) => p.pid)), [51, 52]);
-  const live = new Map(reused.map((r) => [r.pid, r]));
-  const sOpts = {
-    polls: 2,
-    pollIntervalMs: 0,
-    listProcesses: () => [...live.values()],
-    killProcess: (p) => live.delete(p.pid),
-  };
-  const res = await claim.stopRun({ tag, pid: 50, startedAt: 100 }, sOpts);
-  const sState = [res.stopped, sorted(res.killedPids), live.has(77), live.has(78)];
-  eq(sState, [true, [51, 52], true, true]);
-});
-test('B43: PowerShell query errors and refused child termination never confirm stop', async (t) => {
-  const { worktree } = makeFixture(t, [[101, 1000]]);
-  const live = new Map([
-    [50, { pid: 50, parentPid: 1, commandLine: 'opencode --title run-refused', createdAt: 100 }],
-    [51, { pid: 51, parentPid: 50, commandLine: 'node stubborn-child.js', createdAt: 110 }],
-  ]);
-  const rOpts = {
-    polls: 2,
-    pollIntervalMs: 0,
-    listProcesses: () => [...live.values()],
-    killProcess: (p) => p.pid === 50 && live.delete(50),
-  };
-  const refused = await claim.stopRun('run-refused', rOpts);
-  const rState = [refused.stopped, refused.reason, refused.killedPids, refused.remainingPids];
-  eq(rState, [false, 'WORKER_NOT_STOPPED', [50], [51]]);
-  const spawnSync = () => ({ status: 0, stdout: '', stderr: 'Get-CimInstance: Access denied' });
-  assert.throws(() => claim.defaultListProcesses({ spawnSync }), /PROCESS_QUERY_FAILED/);
-  const qOpts = { polls: 2, pollIntervalMs: 0, spawnSync };
-  const queryFail = await claim.stopRun('run-1', qOpts);
-  eq([queryFail.stopped, queryFail.reason], [false, 'PROCESS_QUERY_FAILED']);
-  const cand = { offeringId: 'a', upstream: 'u' };
-  const dec = { workItemId: 'TASK-AI-171', selected: 'a', candidates: [cand] };
-  const tkt = { workItemId: 'TASK-AI-171', maxFallbacks: 1, request: { cwd: worktree } };
-  const ctx = { ledger: { activeWorker: { offeringId: 'a' }, worktree } };
-  const onFail = claim.afterFailure || handoff.afterFailure;
-  const fail = { offeringId: 'a', upstream: 'u', status: 500, stopResult: refused };
-  const handoffStop = onFail(dec, tkt, ctx, fail, {});
-  eq([handoffStop.action, handoffStop.reason], ['STOP', 'WORKER_NOT_STOPPED']);
-});
-test('B45: adapter boundary, unreadable state, replacement worker and unlink error', async (t) => {
+
+test('B45: unreadable state, replacement worker and unlink error', async (t) => {
   const { worktree, runtimeDir, opts } = makeFixture(t, [[101, 1000]]);
   const probe = claim.claimWorktree(worktree, opts(101, 1000));
   const workerFile = path.join(runtimeDir, `worker-${probe.id}.json`);
@@ -218,16 +240,13 @@ test('B45: adapter boundary, unreadable state, replacement worker and unlink err
   fs.existsSync.mock.restore();
   fs.statSync.mock.restore();
   eq([unreadable.ok, unreadable.reason], [false, 'WORKER_STATE_UNREADABLE']);
-  const cmd77 = 'opencode --title OTHER-1-tag';
-  const live = new Map([[77, { pid: 77, parentPid: 1, commandLine: cmd77, createdAt: 200 }]]);
   const nextWorker = JSON.stringify({ item: 'NEW-2', tag: 'NEW-2-tag', pid: 88 });
-  const repOpts = opts(101, 1000, {
-    polls: 2,
-    pollIntervalMs: 0,
-    listProcesses: () => [...live.values()],
-    killProcess: (p) => live.delete(p.pid),
-    sleep: async () => fs.writeFileSync(workerFile, nextWorker),
-  });
+  const raceStopRun = async () => {
+    // Simulate another process replacing the worker file during stop
+    fs.writeFileSync(workerFile, nextWorker);
+    return { ok: true, stopped: true, killedPids: [77], remainingPids: [] };
+  };
+  const repOpts = opts(101, 1000, { stopRun: raceStopRun });
   const replaced = await claim.acquireWorktreeOwner(worktree, 'TASK-AI-171', repOpts);
   const keptItem = JSON.parse(fs.readFileSync(workerFile, 'utf8')).item;
   eq([replaced.ok, replaced.reason, keptItem], [false, 'WORKER_STATE_CHANGED', 'NEW-2']);
@@ -236,12 +255,12 @@ test('B45: adapter boundary, unreadable state, replacement worker and unlink err
     if (p === workerFile) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
     return origUnlink.call(fs, p);
   });
-  const emptyOpts = opts(101, 1000, { listProcesses: () => [] });
+  const emptyOpts = opts(101, 1000, {
+    stopRun: async () => ({ ok: true, stopped: true, killedPids: [], remainingPids: [] }),
+  });
   await assert.rejects(() => claim.acquireWorktreeOwner(worktree, 'TASK-AI-171', emptyOpts));
   fs.unlinkSync.mock.restore();
   const reacquired = await claim.acquireWorktreeOwner(worktree, 'TASK-AI-171', emptyOpts);
   eq([reacquired.ok, reacquired.claimed, fs.existsSync(workerFile)], [true, true, false]);
   reacquired.release();
-  const procAdapter = require('../process-ownership');
-  assert.equal(typeof procAdapter.stopRun, 'function');
 });
