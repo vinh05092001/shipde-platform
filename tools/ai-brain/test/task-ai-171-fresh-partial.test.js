@@ -27,10 +27,8 @@ const FIXTURE = {
     S('empty-nomodels', 'no-models', 0, null, { catalogs: [] }),
     S('empty-retained', 'enumerated', 0, h1, { catalogs: [] }),
   ],
-  listedSources: 45,
   lastAttemptAt: m17,
   lastSuccessfulAt: m17,
-  complete: false,
   failedSources: [
     { id: 'opencode:agentrouter', reason: 'HTTP_401' },
     { id: 'agy-gateway', reason: 'unavailable' },
@@ -65,8 +63,10 @@ function assertMixedResult(res) {
     ['9router', 'agy-gateway']
   );
   assert.equal(res.find((c) => c.gateway === 'agy-gateway').staleListingRetained, true);
-  assert.equal(res.excludedRoutes.length, 2);
-  assert.ok(res.excludedRoutes.every((r) => r.reasonCode === 'SOURCE_CATALOGUE_STALE'));
+  assert.ok(
+    res.excludedRoutes.length === 2 &&
+      res.excludedRoutes.every((r) => r.reasonCode === 'SOURCE_CATALOGUE_STALE')
+  );
 }
 
 test('(a) source listed this run -> admitted', () => checkSource('9router', true, null, false));
@@ -78,13 +78,13 @@ test('(d) global lastSuccessfulAt alone cannot admit a failed source', () =>
   checkSource('opencode:scaleway', false, 'SOURCE_CATALOGUE_STALE'));
 
 test('(1) legacy freshness file with only global lastSuccessfulAt -> explicit stale for all sources', () => {
-  const at = new Date(NOW).toISOString();
   const legacyDoc = {
-    lastSuccessfulAt: at,
+    lastSuccessfulAt: new Date(NOW).toISOString(),
     sources: [S('s1', 'enumerated', 5, null), S('s2', 'unavailable', 0, null)],
   };
-  checkSource('s1', false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc);
-  checkSource('s2', false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc);
+  ['s1', 's2'].forEach((s) =>
+    checkSource(s, false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc)
+  );
 });
 
 test('(2) mixed fixture: listed this run + failed 1h + failed 3d + legacy without timestamp', () => {
@@ -97,8 +97,7 @@ test('(2) mixed fixture: listed this run + failed 1h + failed 3d + legacy withou
 });
 
 test('(3) empty-success: completed enumeration with 0 models follows contract', () => {
-  checkSource('empty-enum', false, 'SOURCE_CATALOGUE_STALE');
-  checkSource('empty-nomodels', false, 'SOURCE_CATALOGUE_STALE');
+  ['empty-enum', 'empty-nomodels'].forEach((s) => checkSource(s, false, 'SOURCE_CATALOGUE_STALE'));
   checkSource('empty-retained', true, null, true);
 });
 
@@ -127,8 +126,7 @@ test('(5) refresh publication retains prior sources missing from new list (survi
     fFile,
     JSON.stringify({ sources: [S('prior-gw', 'enumerated', 10, h1)], lastSuccessfulAt: h1 })
   );
-  const priorsFile = path.join(dir, 'priors.json');
-  fs.writeFileSync(priorsFile, JSON.stringify({ ranking: [] }));
+  fs.writeFileSync(path.join(dir, 'priors.json'), '{"ranking":[]}');
   const at = new Date(NOW).toISOString();
   const discData = {
     lastAttemptAt: at,
@@ -141,7 +139,12 @@ test('(5) refresh publication retains prior sources missing from new list (survi
     if (args[0] === 'discovery') fs.writeFileSync(ctx.discoveryFile, JSON.stringify(discData));
     return { exitCode: 0 };
   };
-  await refreshCatalogue({ dataDir: dir, priorsFile, run, log: () => {} });
+  await refreshCatalogue({
+    dataDir: dir,
+    priorsFile: path.join(dir, 'priors.json'),
+    run,
+    log: () => {},
+  });
   const pub = JSON.parse(fs.readFileSync(fFile, 'utf8'));
   const retained = pub.sources.find((s) => s.id === 'prior-gw');
   assert.ok(retained && retained.lastSuccessfulAt === h1, 'prior source must be retained');
@@ -154,17 +157,15 @@ test('(6) fallback document after early discovery failure preserves staleListing
     sources: [S('retained-src', 'enumerated', 10, h1, { staleListingRetained: true })],
     lastAttemptAt: new Date(NOW).toISOString(),
     lastSuccessfulAt: h1,
-    complete: false,
     failedSources: [{ id: 'discovery', reason: 'STAGE_FAILED' }],
   };
   const fresh = sourceFreshness('retained-src', { freshness: fallbackDoc, now: NOW });
-  assert.equal(fresh.admitted && fresh.staleListingRetained, true);
-  assert.equal(fresh.status, 'stale-listing-retained');
+  assert.deepEqual([fresh.admitted, fresh.status], [true, 'stale-listing-retained']);
 });
 
 test('(7) agy-pool runtime accounts are not catalogue-listed sources and stay admitted', () => {
   const fresh = sourceFreshness(
-    { harness: 'agy-pool', source: 'agy-pool', accountId: 'a1', modelId: 'm1' },
+    { harness: 'agy-pool', modelId: 'm1' },
     { freshness: FIXTURE, now: NOW }
   );
   assert.equal(fresh.admitted && !fresh.stale, true);

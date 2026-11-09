@@ -397,12 +397,11 @@ async function refreshCatalogue(options = {}) {
     }
     if (!discoveryPublished) {
       const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
-      const sources = (previousFreshness.sources || []).map((s) => ({
-        ...s,
-        staleListingRetained: isRecent(s.lastSuccessfulAt),
-      }));
       writeJson(freshnessFile, {
-        sources,
+        sources: (previousFreshness.sources || []).map((s) => ({
+          ...s,
+          staleListingRetained: isRecent(s.lastSuccessfulAt),
+        })),
         lastAttemptAt: report.finishedAt,
         lastSuccessfulAt: previousFreshness.lastSuccessfulAt || null,
         complete: false,

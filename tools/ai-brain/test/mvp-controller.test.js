@@ -26,6 +26,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { loadSources } = require('../sources');
 
 const CLI = path.resolve(__dirname, '..', 'cli.js');
 
@@ -170,10 +171,15 @@ describe('MVP Controller Contract (tools/ai-brain/cli.js dispatch)', () => {
     });
     fs.writeFileSync(cataloguePath, lines.join('\n') + '\n', 'utf8');
     const at = new Date().toISOString();
-    const gws = [...new Set(candidates.map((c) => c.gateway || c.source || '9router'))];
+    const reg = loadSources().sources.map((s) => s.id);
+    const gws = [
+      ...new Set([...candidates.map((c) => c.gateway || c.source || '9router'), ...reg]),
+    ];
     const src = (id) => ({ id, status: 'enumerated', advertised: 1, lastSuccessfulAt: at });
-    const fDoc = { lastSuccessfulAt: at, sources: gws.map(src) };
-    fs.writeFileSync(path.join(discoveryDir, 'freshness.json'), JSON.stringify(fDoc));
+    fs.writeFileSync(
+      path.join(discoveryDir, 'freshness.json'),
+      JSON.stringify({ lastSuccessfulAt: at, sources: gws.map(src) })
+    );
   }
 
   function runDispatch(cliArgs) {

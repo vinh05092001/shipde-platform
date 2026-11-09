@@ -82,14 +82,13 @@ function fixture(t) {
   }
   health.saveStore(routeHealthFile, store);
   fs.mkdirSync(path.join(root, 'discovery'));
-  const nowIso = new Date(now).toISOString();
+  const at = new Date(now).toISOString();
   fs.writeFileSync(
     path.join(root, 'discovery/freshness.json'),
     JSON.stringify({
-      lastSuccessfulAt: nowIso,
-      complete: true,
+      lastSuccessfulAt: at,
       sources: [
-        { id: 'fixture-gateway', status: 'enumerated', advertised: 2, lastSuccessfulAt: nowIso },
+        { id: 'fixture-gateway', status: 'enumerated', advertised: 2, lastSuccessfulAt: at },
       ],
     })
   );

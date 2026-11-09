@@ -221,9 +221,8 @@ function scenario(prefix) {
   fs.mkdirSync(poolRunsDir, { recursive: true });
   writeRegistry(home);
   const at = new Date().toISOString();
-  const src = (id) => ({ id, status: 'enumerated', advertised: 9, lastSuccessfulAt: at });
-  const fDoc = { lastAttemptAt: at, lastSuccessfulAt: at, sources: [src('9router'), src('codex')] };
-  writeJson(path.join(discoveryDir, 'freshness.json'), fDoc);
+  const S = (id) => ({ id, status: 'enumerated', advertised: 9, lastSuccessfulAt: at });
+  writeJson(path.join(discoveryDir, 'freshness.json'), { sources: [S('9router'), S('codex')] });
   const world = {
     root,
     home,

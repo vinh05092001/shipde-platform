@@ -1239,7 +1239,7 @@ function applyRouteScope(eligible, excludedRoutes, opts, registry) {
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
-  const { sourceFreshness } = require('./catalogue-refresh');
+  const { sourceFreshness, readJson } = require('./catalogue-refresh');
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
@@ -1270,8 +1270,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const hasFreshness =
     opts.freshness !== undefined ||
     opts.freshnessDoc !== undefined ||
-    (discoveryCat && ('freshnessDoc' in discoveryCat || 'freshness' in discoveryCat)) ||
-    Boolean(opts.discoveryDataDir);
+    Boolean(discoveryCat?.freshnessDoc || discoveryCat?.freshness || opts.discoveryDataDir);
 
   const freshnessDoc =
     opts.freshness ??
@@ -1279,10 +1278,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     discoveryCat?.freshnessDoc ??
     discoveryCat?.freshness?.doc ??
     (opts.discoveryDataDir
-      ? require('./catalogue-refresh').readJson(
-          path.join(opts.discoveryDataDir, 'freshness.json'),
-          null
-        )
+      ? readJson(path.join(opts.discoveryDataDir, 'freshness.json'), null)
       : null);
 
   const checkFresh = (c) => {
