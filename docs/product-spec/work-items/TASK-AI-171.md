@@ -650,3 +650,7 @@ unverified. No network or credential reads.
 ## CI tool downloads retry and fail loudly (2026-11-09)
 
 Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
+
+## Remaining work snapshot (2026-11-09)
+
+Remaining slices, the four new Controller slices (14 combo per account, 15 direct-http launch path, 16 roles and provider policy from configuration, 17 health age and one identity parser) and open operational items are listed in `docs/ai-audit/remaining-work-20261109.md`.
