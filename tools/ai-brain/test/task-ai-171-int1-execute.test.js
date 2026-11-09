@@ -19,60 +19,75 @@ function makeCandidate(modelId, upstream, accountId, cost = 1, quality = 90) {
     accountId,
     quotaScope: accountId,
     modelId,
-    qualifiedRoles: ['author.foundation'],
     cost,
     quality,
+    qualifiedRoles: ['author.foundation'],
   };
   c.candidateKey = candidateKey(c);
   return c;
 }
 
-function createTestHarness() {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-int1-'));
-  const decisionDir = path.join(tempDir, 'decisions');
-  const evidenceDir = path.join(tempDir, 'evidence');
-  const tempWorktree = path.join(tempDir, 'worktree');
-  const promptFile = path.join(tempDir, 'task-prompt.md');
-  const quotaStateFile = path.join(tempDir, 'quota-state.json');
-  const routeHealthFile = path.join(tempDir, 'model-route-health.json');
+function parseJsonLog(logs) {
+  return logs
+    .map((e) => {
+      try {
+        return JSON.parse(e);
+      } catch {}
+    })
+    .find((e) => e?.chosen);
+}
 
-  fs.mkdirSync(decisionDir, { recursive: true });
-  fs.mkdirSync(evidenceDir, { recursive: true });
-  fs.mkdirSync(tempWorktree, { recursive: true });
-  fs.writeFileSync(promptFile, 'Prompt for TASK-AI-171 INT-1 execution test\n', 'utf8');
-  fs.writeFileSync(quotaStateFile, JSON.stringify({ accounts: {} }), 'utf8');
-  routeHealthApi.saveStore(routeHealthFile, {
+function createTestHarness() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'int1-'));
+  const wt = path.join(dir, 'wt');
+  fs.mkdirSync(wt, { recursive: true });
+  const [pFile, qFile, hFile] = ['p.md', 'q.json', 'h.json'].map((f) => path.join(dir, f));
+  fs.writeFileSync(pFile, 'Prompt for TASK-AI-171 INT-1\n');
+  fs.writeFileSync(qFile, '{}');
+  routeHealthApi.saveStore(hFile, {
     version: 1,
-    updatedAt: new Date().toISOString(),
-    paths: {},
+    paths: { 'm-alpha|9router': { modelId: 'm-alpha', routeId: '9router', status: 'AVAILABLE' } },
     events: [],
   });
-
+  const item = 'TASK-AI-171-TEST';
   return {
-    tempDir,
-    decisionDir,
-    evidenceDir,
-    tempWorktree,
-    promptFile,
-    quotaStateFile,
-    routeHealthFile,
+    dir,
+    wt,
+    pFile,
+    hFile,
+    execArgs: () => ({ execute: true, json: true, cwd: wt, 'prompt-file': pFile, item }),
+    dryArgs: () => ({ 'dry-run': true, json: true, item }),
     deps: (now, candidates) => ({
       candidates,
-      quotaStateFile,
-      decisionDir,
-      evidenceDir,
-      routeHealthFile,
       now,
-      home: tempDir,
+      quotaStateFile: qFile,
+      routeHealthFile: hFile,
+      home: dir,
+      decisionDir: dir,
+      evidenceDir: dir,
       maxAttempts: 1,
       concurrency: 1,
     }),
     cleanup: () => {
       try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
+        fs.rmSync(dir, { recursive: true, force: true });
       } catch (_) {}
     },
   };
+}
+
+function runDispatch(env, cands, runFn, now = Date.now()) {
+  let exitCode = -1;
+  const logs = [];
+  const res = dispatchCommand(env.execArgs(), {
+    ...env.deps(now, cands),
+    run: runFn,
+    exit: (c) => {
+      exitCode = c;
+    },
+    log: (m) => logs.push(m),
+  });
+  return { res, exitCode, jsonLog: parseJsonLog(logs) };
 }
 
 describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outcome feedback', () => {
@@ -85,129 +100,108 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
   });
 
   test('INT-1: execute launches chosen candidate with argv identity, records failure to route-health, and feeds next selection', () => {
-    const candidateA = makeCandidate('m-alpha', 'ag', 'ag', 1, 90);
-    const candidateB = makeCandidate('m-beta', 'other-provider', 'mock-scope-b', 2, 80);
+    const cA = makeCandidate('m-alpha', 'ag', 'ag');
+    const cB = makeCandidate('m-beta', 'other-provider', 'mock-scope-b', 2, 80);
     const now = Date.now();
-    let exitCode = -1;
-    let launchedArgs = null;
-    const capturedLogs = [];
-    const baseDeps = env.deps(now, [candidateA, candidateB]);
+    let launched = null;
 
-    const res = dispatchCommand(
-      {
-        execute: true,
-        json: true,
-        cwd: env.tempWorktree,
-        'prompt-file': env.promptFile,
-        item: 'TASK-AI-171-TEST',
-      },
-      {
-        ...baseDeps,
-        run: (adapter, launchArgs, opts) => {
-          launchedArgs = { adapter, launchArgs, opts };
-          return { exitCode: 1, stderr: 'No active credentials for provider: ag', elapsedMs: 150 };
-        },
-        exit: (code) => {
-          exitCode = code;
-        },
-        log: (msg) => capturedLogs.push(msg),
-      }
-    );
+    const runner = (adapter, launchArgs, opts) => {
+      launched = { adapter, launchArgs, opts };
+      return { exitCode: 1, stderr: 'No active credentials for provider: ag', elapsedMs: 150 };
+    };
+    const { res, exitCode, jsonLog } = runDispatch(env, [cA, cB], runner, now);
 
     assert.equal(exitCode, 1);
-    assert.ok(res && res.chosen === candidateA.candidateKey);
+    assert.equal(res?.chosen, cA.candidateKey);
     const chosenIdentity = parseCandidateKey(res.chosen);
     assert.deepEqual(res.launchedArgvIdentity, chosenIdentity);
-    assert.equal(res.launchedArgvIdentity.modelId, 'm-alpha');
-    assert.equal(res.launchedArgvIdentity.upstream, 'ag');
-    assert.equal(res.launchedArgvIdentity.harness, 'hermes');
-    assert.ok(
-      launchedArgs?.launchArgs.some((a) => String(a).includes('Prompt for TASK-AI-171 INT-1'))
-    );
+    assert.ok(launched?.launchArgs.some((a) => String(a).includes('Prompt for TASK-AI-171 INT-1')));
 
-    const jsonLog = capturedLogs.find((e) => {
-      try {
-        return JSON.parse(e)?.chosen;
-      } catch {
-        return false;
-      }
-    });
-    assert.ok(jsonLog);
-    const parsed = JSON.parse(jsonLog);
-    assert.equal(parsed.chosen, candidateA.candidateKey);
-    assert.deepEqual(parsed.launchedArgvIdentity, chosenIdentity);
-    assert.equal(parsed.outcome.status, 'failed');
-    assert.ok(parsed.recorded);
+    assert.equal(jsonLog?.chosen, cA.candidateKey);
+    assert.equal(jsonLog?.outcome?.status, 'failed');
+    assert.ok(jsonLog?.recorded);
+    assert.deepEqual(jsonLog.launchedArgvIdentity, chosenIdentity);
 
     // Stub fails with "No active credentials for provider: ag" -> route-health record written
-    const store = routeHealthApi.loadStore(env.routeHealthFile);
+    const store = routeHealthApi.loadStore(env.hFile);
     const recA = store.paths['m-alpha|ag'];
     assert.ok(recA && recA.status !== 'AVAILABLE');
     assert.ok(Date.parse(recA.nextCheckAt) > now);
     assert.equal(res.recorded.key, 'm-alpha|ag');
     assert.equal(res.recorded.status, recA.status);
 
-    // Next dry-run rejects candidateA and keeps candidateB
-    const dryRun = dispatchCommand(
-      { 'dry-run': true, json: true, item: 'TASK-AI-171-TEST' },
-      { ...baseDeps, now: now + 1000, allowUnprobedCandidates: true, exit: () => {}, log: () => {} }
-    );
-    const rejected = dryRun?.decision?.rejected?.find(
-      (r) => r.offeringId === candidateA.candidateKey
-    );
-    assert.ok(rejected);
-    assert.equal(rejected.reason, recA.status);
-    assert.equal(dryRun.decision.chosen, candidateB.candidateKey);
-    assert.ok(dryRun.decision.candidates.some((c) => c.offeringId === candidateB.candidateKey));
+    // Next dry-run rejects candidateA and keeps candidateB (P1: gateway AVAILABLE does not mask ag failure)
+    const dryRun = dispatchCommand(env.dryArgs(), {
+      ...env.deps(now + 1000, [cA, cB]),
+      allowUnprobedCandidates: true,
+      exit: () => {},
+      log: () => {},
+    });
+    const rej = dryRun?.decision?.rejected?.find((r) => r.offeringId === cA.candidateKey);
+    assert.equal(rej?.reason, recA.status);
+    assert.equal(dryRun.decision.chosen, cB.candidateKey);
+    assert.ok(dryRun.decision.candidates.some((c) => c.offeringId === cB.candidateKey));
   });
 
-  test('INT-1: CLI entrypoint main(["dispatch", "--execute", "--json", ...]) returns structured output and honors --prompt-file', () => {
-    const candidateA = makeCandidate('m-alpha', 'ag', 'ag', 1, 90);
+  test('INT-1: CLI entrypoint main(["dispatch", "--execute", "--json", ...]) returns structured output, masks emails, and validates worker outcome', () => {
+    const cA = makeCandidate('m-alpha', 'ag', 'operator@example.com');
     const now = Date.now();
     let exitCode = -1;
-    let stubCalled = false;
-    const capturedLogs = [];
+    const logs = [];
 
-    const res = main(
-      [
-        'dispatch',
-        '--execute',
-        '--json',
-        '--cwd',
-        env.tempWorktree,
-        '--prompt-file',
-        env.promptFile,
-        '--item',
-        'TASK-AI-171-TEST',
-      ],
-      {
-        ...env.deps(now, [candidateA]),
-        run: () => {
-          stubCalled = true;
-          return { exitCode: 0, stdout: JSON.stringify({ status: 'completed' }) };
-        },
-        exit: (code) => {
-          exitCode = code;
-        },
-        log: (msg) => capturedLogs.push(msg),
-      }
-    );
-
-    assert.ok(stubCalled && exitCode === 0 && res?.chosen === candidateA.candidateKey);
-    assert.deepEqual(res.launchedArgvIdentity, parseCandidateKey(candidateA.candidateKey));
-    assert.equal(res.outcome.status, 'completed');
-    const jsonLog = capturedLogs.find((e) => {
-      try {
-        return JSON.parse(e)?.chosen;
-      } catch {
-        return false;
-      }
+    const argv =
+      `dispatch --execute --json --item TASK-AI-171-TEST --cwd ${env.wt} --prompt-file ${env.pFile}`.split(
+        ' '
+      );
+    const runner = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({ candidateKey: 'suggested-route', explanation: 'worker output' }),
     });
-    assert.ok(jsonLog && JSON.parse(jsonLog).outcome.status === 'completed');
+    const res = main(argv, {
+      ...env.deps(now, [cA]),
+      run: runner,
+      exit: (c) => {
+        exitCode = c;
+      },
+      log: (m) => logs.push(m),
+    });
+
+    assert.ok(exitCode === 0 && res?.chosen);
+    assert.doesNotMatch(res.launchedArgvIdentity.account, /operator@example\.com/);
+    assert.doesNotMatch(res.chosen, /operator@example\.com/);
+    assert.equal(res.outcome.candidateKey, res.chosen);
+    assert.equal(res.outcome.status, 'completed');
+
+    const jsonLog = parseJsonLog(logs);
+    assert.equal(jsonLog?.outcome?.status, 'completed');
+    assert.equal(jsonLog?.outcome?.candidateKey, res.chosen);
+    assert.doesNotMatch(jsonLog?.launchedArgvIdentity?.account, /operator@example\.com/);
+
+    const okRunner = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({ candidateKey: res.chosen, status: 'completed' }),
+    });
+    const { res: res2 } = runDispatch(env, [cA], okRunner, now);
+    assert.equal(res2.outcome.candidateKey, res.chosen);
+    assert.equal(res2.outcome.status, 'completed');
+  });
+
+  test('INT-1: worker stdout spoofed JSON success with non-zero exit is rejected as failure', () => {
+    const cA = makeCandidate('m-alpha', 'ag', 'operator@example.com');
+    const runner = () => ({
+      exitCode: 1,
+      stdout: JSON.stringify({ candidateKey: cA.candidateKey, status: 'passed' }),
+      stderr: 'Worker process crashed',
+    });
+    const { res, exitCode } = runDispatch(env, [cA], runner);
+    assert.equal(exitCode, 1);
+    assert.equal(res.outcome.status, 'failed');
+    assert.equal(res.outcome.candidateKey, res.chosen);
+    assert.deepEqual(res.launchedArgvIdentity, parseCandidateKey(res.chosen));
   });
 
   test('INT-2 Item 1 behavioural proof: routeLaunchStep captures spawn and enforces chosen null vs chosen candidate', () => {
-    const logsDir = path.join(env.tempDir, 'route-logs');
+    const logsDir = path.join(env.dir, 'route-logs');
     fs.mkdirSync(logsDir, { recursive: true });
 
     const spawnCalls = [];
@@ -215,13 +209,19 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       spawnCalls.push({ cmd, args, opts });
       return { pid: 4242, unref: () => {} };
     };
-
     let exitCode = null;
     const fakeExit = (code) => {
       exitCode = code;
     };
     const loggedErrors = [];
     const fakeError = (msg) => loggedErrors.push(msg);
+    const stepDeps = {
+      spawn: fakeSpawn,
+      exit: fakeExit,
+      error: fakeError,
+      logsDir,
+      mainTree: path.resolve(__dirname, '../../..'),
+    };
 
     // Case 1: decision with chosen = null -> 0 spawns and NO_CONTROLLER_CHOICE reason
     const nullDecision = {
@@ -231,14 +231,8 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     };
     const nullRes = routeLaunchApi.routeLaunchStep(
       nullDecision,
-      { item: 'TASK-AI-171-NULL', cwd: env.tempWorktree, task: env.promptFile },
-      {
-        spawn: fakeSpawn,
-        exit: fakeExit,
-        error: fakeError,
-        logsDir,
-        mainTree: path.resolve(__dirname, '../../..'),
-      }
+      { item: 'TASK-AI-171-NULL', cwd: env.wt, task: env.pFile },
+      stepDeps
     );
 
     assert.equal(spawnCalls.length, 0, 'zero spawns on chosen = null');
@@ -258,14 +252,8 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     exitCode = null;
     const chosenRes = routeLaunchApi.routeLaunchStep(
       chosenDecision,
-      { item: 'TASK-AI-171-CHOSEN', cwd: env.tempWorktree, task: env.promptFile },
-      {
-        spawn: fakeSpawn,
-        exit: fakeExit,
-        error: fakeError,
-        logsDir,
-        mainTree: path.resolve(__dirname, '../../..'),
-      }
+      { item: 'TASK-AI-171-CHOSEN', cwd: env.wt, task: env.pFile },
+      stepDeps
     );
 
     assert.equal(spawnCalls.length, 1, 'exactly one spawn on chosen candidate');
