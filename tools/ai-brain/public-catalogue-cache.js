@@ -47,13 +47,65 @@ async function fetchPublicCatalogueCache(options = {}) {
     };
   }
 
-  try {
-    const res = await options.fetch(options.url, {
-      timeoutMs: options.timeoutMs,
-      maxBufferBytes: options.maxBufferBytes,
+  // The caller's limits are enforced here, not trusted to the fetch adapter: the whole
+  // fetch-and-read is raced against `timeoutMs` (with a cancellation signal for
+  // standard fetch) and the response body is read with a byte bound, so a standard
+  // `fetch` also obeys them. A non-2xx HTTP response is a fetch failure: its error
+  // body never replaces the cache.
+  const timeoutMs = Number(options.timeoutMs);
+  const maxBufferBytes = Number(options.maxBufferBytes);
+  const controller = new AbortController();
+  const bounded = (promise) => {
+    if (!(Number.isFinite(timeoutMs) && timeoutMs > 0)) return promise;
+    let timer;
+    const guard = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error('FETCH_TIMEOUT'));
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
     });
-    const freshData =
-      typeof res === 'string' ? JSON.parse(res) : res?.json ? await res.json() : res;
+    return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
+  };
+  const readBodyBounded = async (res) => {
+    if (typeof res === 'string') {
+      if (
+        Number.isFinite(maxBufferBytes) &&
+        maxBufferBytes > 0 &&
+        Buffer.byteLength(res) > maxBufferBytes
+      )
+        throw new Error('RESPONSE_TOO_LARGE');
+      return JSON.parse(res);
+    }
+    if (res && typeof res.body?.getReader === 'function') {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let bytes = 0;
+      let text = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && Number.isFinite(value.byteLength)) bytes += value.byteLength;
+        if (Number.isFinite(maxBufferBytes) && maxBufferBytes > 0 && bytes > maxBufferBytes)
+          throw new Error('RESPONSE_TOO_LARGE');
+        text += decoder.decode(value, { stream: true });
+      }
+      return JSON.parse(text);
+    }
+    return res?.json ? await res.json() : res;
+  };
+
+  try {
+    const res = await bounded(
+      options.fetch(options.url, {
+        timeoutMs: options.timeoutMs,
+        maxBufferBytes: options.maxBufferBytes,
+        signal: controller.signal,
+      })
+    );
+    const status = typeof res?.status === 'number' ? res.status : 0;
+    if (res?.ok === false || status >= 400) throw new Error(`HTTP_${status || 'ERROR'}`);
+    const freshData = await bounded(readBodyBounded(res));
     if (!freshData || typeof freshData !== 'object') throw new Error('INVALID_FETCH_RESPONSE');
     if (file) {
       fs.mkdirSync(path.dirname(file), { recursive: true });

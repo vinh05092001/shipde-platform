@@ -147,7 +147,8 @@ async function cmdRun(flags, deps = {}) {
   const stampFile = flags['stamp-file'] || path.join(dataDir, 'refreshed.stamp');
   const previous = readJson(freshnessFile);
   const complete = successful.length > 0 && failed.length === 0;
-  if (listed.length > 0) {
+  // The stamp claims a complete refresh: with any failed source it must not advance.
+  if (complete) {
     fs.writeFileSync(stampFile, String(Date.now()) + '\n', 'utf8');
   }
   const sources = [...results].map(([id, res]) => ({

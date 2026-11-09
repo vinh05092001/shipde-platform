@@ -27,6 +27,8 @@ function loadScoringPolicy(
     !text(policy.rationale) ||
     !Number.isFinite(policy.maxAgeMs) ||
     policy.maxAgeMs <= 0 ||
+    (policy.maxFutureSkewMs !== undefined &&
+      (!Number.isFinite(policy.maxFutureSkewMs) || policy.maxFutureSkewMs < 0)) ||
     !object(policy.dimensions) ||
     !Object.keys(policy.dimensions).length ||
     Object.entries(policy.dimensions).some(
@@ -77,11 +79,17 @@ function loadScoringPolicy(
         scoringPriorsStatus: 'AA_SNAPSHOT_CORRUPT',
       };
     }
+    // Freshness has one definition: the snapshot's own observation timestamp when
+    // it parses, otherwise the file mtime, so a copied or restored snapshot with a
+    // recent mtime is never fresh. Injecting a clock changes the current time, never
+    // the freshness definition. The permitted future-clock skew is operator
+    // configuration (`policy.maxFutureSkewMs`, override `options.maxFutureSkewMs`),
+    // never a code constant; unconfigured means no future tolerance here.
     const now = Number((options && options.now) ?? Date.now());
     const obs = data.observedAt ? Date.parse(data.observedAt) : NaN;
-    const age =
-      options && options.now !== undefined && Number.isFinite(obs) ? now - obs : now - stat.mtimeMs;
-    if (Number.isFinite(policy.maxAgeMs) && (age > policy.maxAgeMs || age < -60000)) {
+    const age = Number.isFinite(obs) ? now - obs : now - stat.mtimeMs;
+    const maxFutureSkewMs = Number((options && options.maxFutureSkewMs) ?? policy.maxFutureSkewMs);
+    if (Number.isFinite(policy.maxAgeMs) && (age > policy.maxAgeMs || age < -maxFutureSkewMs)) {
       return {
         scoringPolicy: undefined,
         scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
