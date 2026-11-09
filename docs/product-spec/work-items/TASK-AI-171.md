@@ -540,6 +540,37 @@ instances). No assertions removed. No network or commit; remote CI and independe
 review remain unverified. The unrelated pre-existing quota-summary change is
 outside this repair.
 
+## PR 02 repair outcome — explicit key format marker (2026-11-09)
+
+Outcome: legacy pre-upgrade keys keep their literal fields; only keys written with
+the new format are decoded. New-format keys carry an explicit `\x1E` record-separator
+marker in front of the joined key when any field required escaping (`%`, `::`,
+U+241F, boundary colon); keys of plain identities are byte-identical to their
+pre-upgrade form. `parseCandidateKey` decodes only marker-prefixed keys, replacing
+the trial re-encoding whose encoder diverged from `candidateKey` (the literal
+`\u241f` text bug, base 71998e6a `identity.js`).
+
+Where: `tools/ai-brain/discovery/identity.js` (candidateKey/parseCandidateKey) and
+`tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js` (five new P2 cases
+plus the strengthened idempotence case). No other file changed.
+
+Evidence, Windows offline:
+- Suite `task-ai-171-route-pr02-regressions.test.js` on repaired HEAD: 8 tests,
+  8 pass / 0 fail. Same suite with base `71998e6a` discovery/identity.js: 5 new P2
+  tests (a–e) each fail for the right reason; 3 pre-existing tests still pass.
+- All 30 existing test files importing `discovery/identity.js` or `discovery/read.js`
+  combined: 435 tests, 434 pass, 1 fail — the known pre-existing
+  `task-ai-141.test.js` AGY advertised-model failure, which reproduces unchanged
+  with the base identity.js.
+- `task-ai-171-route-identity` + `combo-members` + `task-181-route-scope`: 33/33 pass.
+- Prettier 3.9.6: both files clean. `check-no-hardcode`: pass (0 new instances).
+- `pnpm lint` 12/12, `pnpm typecheck` 12/12, `git diff --check origin/main...HEAD` clean.
+- `pnpm security:secrets` reports the pre-existing `DASHBOARD.html` finding present at
+  base 71998e6a; no hit from this change.
+
+Limitations: offline Windows evidence; Linux CI, fresh independent review and
+external cutover remain unverified. Commit by the repair worker on this branch.
+
 ## PR 02 — CI admission repair, head 903bb345 (2026-11-09)
 
 The shared admission helper had changed injected inventory's missing-health policy:
