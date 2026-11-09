@@ -135,6 +135,39 @@ test('Finding 7 / Item d3: dead worker does not block restart; live worker block
   );
   eq([restart.action, restart.launch?.offeringId], ['LAUNCH', 'a']);
   assert.notEqual(restart.reason, 'WORKER_STILL_ACTIVE');
+  const deadLedgerDiffTag = {
+    ...deadLedger,
+    activeWorker: {
+      item: 'TASK-AI-171',
+      tag: 'diff-dead',
+      pid: 777,
+      startedAt: 500,
+      offeringId: 'a',
+    },
+  };
+  const restartDiffTag = handoff.firstLaunch(
+    dec,
+    f.tkt(),
+    { worktreeClaim: res, evidenceData, ledger: deadLedgerDiffTag, ...f.opts(101, 1000) },
+    reg
+  );
+  eq([restartDiffTag.action, restartDiffTag.launch?.offeringId], ['LAUNCH', 'a']);
+  assert.notEqual(restartDiffTag.reason, 'WORKER_STILL_ACTIVE');
+  const liveLedgerSameTag = {
+    ...deadLedger,
+    activeWorker: { item: 'TASK-AI-171', tag: 'dead', pid: 101, startedAt: 1000, offeringId: 'a' },
+  };
+  const liveLedgerSameTagOut = handoff.firstLaunch(
+    dec,
+    f.tkt(),
+    { worktreeClaim: res, evidenceData, ledger: liveLedgerSameTag, ...f.opts(101, 1000) },
+    reg
+  );
+  assert.notEqual(liveLedgerSameTagOut.action, 'LAUNCH');
+  eq(
+    [liveLedgerSameTagOut.action, liveLedgerSameTagOut.reason],
+    ['BLOCKED', 'WORKER_STILL_ACTIVE']
+  );
   const liveLedger = {
     ...deadLedger,
     activeWorker: { item: 'TASK-AI-171', tag: 'live', pid: 101, startedAt: 1000, offeringId: 'a' },

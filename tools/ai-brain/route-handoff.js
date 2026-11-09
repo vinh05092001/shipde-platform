@@ -294,7 +294,6 @@ function firstLaunch(decision, ticket, context, registry) {
   }
   const workerAlive = (w) => {
     if (!w) return false;
-    if (claim?.stoppedLeftover && claim.stoppedLeftover.tag === w.tag) return false;
     if (w.pid != null) {
       return claimMod.isOwnerAlive(w, { ...ctx.options, ...ctx.opts, ...ctx });
     }
