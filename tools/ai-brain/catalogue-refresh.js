@@ -87,13 +87,26 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
   const failed = (doc.failedSources || []).find(match);
   if (!src && !failed) return rej();
 
-  const failedThisRun = Boolean(
-    failed ||
-    (src && (src.incomplete || src.status !== 'enumerated' || (src.reason && !src.advertised)))
+  const isEnumerated =
+    src && (src.status === 'enumerated' || src.status === 'enumerated-via-route');
+  const hasModels = Boolean(
+    src &&
+    (src.advertised > 0 ||
+      (src.catalogs || []).some((c) => c.count > 0 || (c.models || []).length > 0))
   );
 
-  if (!failedThisRun && src?.status === 'enumerated') {
-    const ts = src.lastSuccessfulAt || doc.lastAttemptAt || doc.lastSuccessfulAt;
+  const failedThisRun = Boolean(
+    failed ||
+    !src ||
+    src.incomplete ||
+    !isEnumerated ||
+    !hasModels ||
+    (src.reason && !src.advertised)
+  );
+
+  if (!failedThisRun && isEnumerated) {
+    const ts = src.lastSuccessfulAt;
+    if (!ts) return rej();
     const age = now - Date.parse(ts);
     if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(ts || null);
     return {
@@ -109,8 +122,9 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
   }
 
   const lastGood = src?.lastSuccessfulAt || src?.lastGoodAt;
+  if (!lastGood) return rej();
   const age = now - Date.parse(lastGood);
-  if (!lastGood || !Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(lastGood || null);
+  if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(lastGood || null);
   return {
     sourceId: id,
     admitted: true,
@@ -283,7 +297,7 @@ async function refreshCatalogue(options = {}) {
           const failed = (discovery.failedSources || []).some((f) => f.id === src.id);
           const ok =
             !failed &&
-            src.status === 'enumerated' &&
+            (src.status === 'enumerated' || src.status === 'enumerated-via-route') &&
             !src.incomplete &&
             (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0));
           if (ok) {

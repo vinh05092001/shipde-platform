@@ -1268,17 +1268,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
 
   const freshnessDoc =
-    opts.freshness ||
-    (discoveryCat && (discoveryCat.freshnessDoc || discoveryCat.freshness?.doc)) ||
-    (opts.discoveryDataDir || opts['discovery-dir'] || opts.dataDir
-      ? require('./catalogue-refresh').readJson(
-          path.join(
-            opts.discoveryDataDir || opts['discovery-dir'] || opts.dataDir,
-            'freshness.json'
-          ),
-          null
-        )
-      : null);
+    opts.freshness || opts.freshnessDoc || (discoveryCat && discoveryCat.freshnessDoc) || null;
 
   const checkFresh = (c) => {
     if (!freshnessDoc) return { stale: false };
@@ -2166,7 +2156,6 @@ async function dispatchProfileCommand(args, deps) {
       if (discCat) {
         discCat.freshness = freshness;
         discCat.stale = freshness.stale;
-        discCat.freshnessDoc = freshness.doc;
       }
     } catch {
       discCat = { candidates: [], freshness, stale: true };
@@ -2661,11 +2650,6 @@ function dispatchCommand(args, deps = {}) {
       path.join(__dirname, 'data', 'discovery');
     try {
       discCat = readDiscoveryCatalogue({ dataDir: discDir });
-      if (discCat) {
-        const { catalogueFreshness } = require('./catalogue-refresh');
-        discCat.freshness = catalogueFreshness({ dataDir: discDir, now: deps?.now });
-        discCat.freshnessDoc = discCat.freshness.doc;
-      }
     } catch {
       discCat = { candidates: [] };
     }
