@@ -2460,19 +2460,6 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
-function isValidWorkerOutcome(parsed, expectedCandidateKey, expectedStatus = 'completed') {
-  return Boolean(
-    parsed &&
-    typeof parsed === 'object' &&
-    parsed.candidateKey === expectedCandidateKey &&
-    typeof parsed.status === 'string' &&
-    (expectedStatus
-      ? parsed.status === expectedStatus ||
-        (expectedStatus === 'completed' && parsed.status === 'passed')
-      : parsed.status.length > 0)
-  );
-}
-
 function dispatchCommand(args, deps = {}) {
   if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
@@ -2489,19 +2476,23 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
-    const mask = (v) => (typeof v === 'string' ? maskEmailsInString(v) : v);
-    const res = {
-      chosen: mask(chosen) || null,
-      launchedArgvIdentity:
-        launchedId && typeof launchedId === 'object'
-          ? Object.fromEntries(Object.entries(launchedId).map(([k, v]) => [k, mask(v)]))
-          : null,
-      outcome: outcome?.candidateKey
-        ? { ...outcome, candidateKey: mask(outcome.candidateKey) }
-        : outcome,
+    const maskValue = (v) =>
+      typeof v === 'string'
+        ? maskEmailsInString(v)
+        : Array.isArray(v)
+          ? v.map(maskValue)
+          : v && typeof v === 'object'
+            ? Object.fromEntries(
+                Object.entries(v).map(([k, val]) => [maskValue(k), maskValue(val)])
+              )
+            : v;
+    const res = maskValue({
+      chosen: chosen || null,
+      launchedArgvIdentity: launchedId || null,
+      outcome: outcome || null,
       recorded: recorded || null,
       ...extra,
-    };
+    });
     if (args.json) output(JSON.stringify(res, null, 2));
     exit(code);
     return { exitCode: code, ...res };
@@ -3515,7 +3506,7 @@ function dispatchCommand(args, deps = {}) {
       // caller that injected a runner switch isolation off silently, with no log
       // line, which is a control that only holds in the configuration nobody
       // tests.
-      if (args['isolated-worker']) {
+      if (args['isolated-worker'] || deps?.isolatedWorker) {
         launcher = require('./isolation-launcher').getIsolatedLauncher();
       }
 
@@ -3594,11 +3585,11 @@ function dispatchCommand(args, deps = {}) {
             role: item.role,
             project: args.project || 'shipde-platform',
           },
-          isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
           printTimeoutSec:
             Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
             (args.timeout ? Number(args.timeout) : 3600),
           timeoutMs: launchTimeoutMs,
+          effort: finalChosenCandidate.effort || args.effort || deps?.effort,
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3687,6 +3678,14 @@ function dispatchCommand(args, deps = {}) {
             decisionDir,
             checkpoint: checkpointFile,
             timeoutMs: launchTimeoutMs,
+            candidateKey: finalChosenKey,
+            candidate: finalChosenCandidate,
+            model: finalChosenCandidate.modelId || finalChosenCandidate.model,
+            modelId: finalChosenCandidate.modelId || finalChosenCandidate.model,
+            account: finalChosenCandidate.accountId || finalChosenCandidate.account,
+            accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
+            harness: harnessName,
+            effort: finalChosenCandidate.effort || args.effort || deps?.effort,
           });
         } catch (err) {
           thrownError = err;
@@ -3807,12 +3806,14 @@ function dispatchCommand(args, deps = {}) {
         source: 'dispatch',
       });
       const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome = isValidWorkerOutcome(parsedOutcome, finalChosenKey)
-        ? parsedOutcome
-        : structuredOutcome(finalChosenKey, launchRes, null, {
-            status: 'completed',
-            checkpoint: checkpointFile,
-          });
+      const baseOutcome = structuredOutcome(finalChosenKey, launchRes, null, {
+        status: 'completed',
+        checkpoint: checkpointFile,
+      });
+      const outcome =
+        parsedOutcome && typeof parsedOutcome === 'object'
+          ? { ...baseOutcome, payload: parsedOutcome }
+          : baseOutcome;
       log('Dispatch succeeded on ' + finalChosenKey);
       return makeExecuteResult(
         0,
@@ -3902,11 +3903,16 @@ function dispatchCommand(args, deps = {}) {
             }
           : null;
       } catch (_) {}
-      const outcome = structuredOutcome(finalChosenKey, launchRes, classification, {
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const baseOutcome = structuredOutcome(finalChosenKey, launchRes, classification, {
         status: 'failed',
         checkpoint: checkpointFile,
         reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
       });
+      const outcome =
+        parsedOutcome && typeof parsedOutcome === 'object'
+          ? { ...baseOutcome, payload: parsedOutcome }
+          : baseOutcome;
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
@@ -5782,7 +5788,6 @@ module.exports = {
   getCandidateRouteHealthRecord,
   candidateExclusionReason,
   isCandidateRouteEligible,
-  isValidWorkerOutcome,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
