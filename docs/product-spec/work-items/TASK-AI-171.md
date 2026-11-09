@@ -758,9 +758,9 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 ## Slice 1: A1 — Gateway error classification (2026-11-10)
 
 - Scope: `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
-- Outcome: Classifies 9Router gateway errors ("No active credentials", "concurrency capacity") as UPSTREAM_CREDENTIAL and GENUINE_CAPACITY with UPSTREAM scope; records failures to model-route-health with bounded backoff.
+- Outcome: Classifies 9Router gateway errors ("No active credentials for provider: <p>" with UPSTREAM scope, "<model> has reached its concurrency capacity" with MODEL scope) as UPSTREAM_CREDENTIAL and GENUINE_CAPACITY; records failures to model-route-health with bounded backoff and validates candidate selection eligibility.
 - Depends on: None (based on origin/main `e3f5f307`).
-- Evidence: 6/6 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
+- Evidence: 8/8 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
 
 ## Slice 2a: INT-1 — Controller execute path & outcome recording (2026-11-10)
 
@@ -789,4 +789,3 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Parses Antigravity account quotas by exact quota group name and window rather than family; maps display-name aliases to quota groups; adds `group` field to parsed quota rows.
 - Depends on: Slice 3 (`fix/task-ai-171-core-s3-external-sources`).
 - Evidence: 3/3 tests in `task-ai-171-quota-group.test.js` and 14/14 tests in `task-ai-69.test.js` pass offline.
-
