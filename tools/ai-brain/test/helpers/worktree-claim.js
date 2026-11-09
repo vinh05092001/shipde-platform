@@ -10,11 +10,14 @@ const systemTmp = os.tmpdir();
 function createWorktreeClaim(options = {}) {
   const baseTmp =
     options.dir || (os.tmpdir() && !os.tmpdir().startsWith('undefined') ? os.tmpdir() : systemTmp);
-  const root = options.worktree
-    ? path.dirname(options.worktree)
-    : fs.mkdtempSync(path.join(baseTmp, 'wt-claim-helper-'));
+  const ownRoot = !options.worktree;
+  const root = ownRoot
+    ? fs.mkdtempSync(path.join(baseTmp, 'wt-claim-helper-'))
+    : path.dirname(options.worktree);
   const worktree = options.worktree || path.join(root, 'worktree');
-  const runtimeDir = options.runtimeDir || path.join(root, 'runtime');
+  const ownRuntime = !options.runtimeDir;
+  const runtimeDir =
+    options.runtimeDir || fs.mkdtempSync(path.join(ownRoot ? root : baseTmp, 'wt-claim-rt-'));
   fs.mkdirSync(worktree, { recursive: true });
   fs.mkdirSync(runtimeDir, { recursive: true });
   const claim = claimWorktree(worktree, { runtimeDir, ...options });
@@ -23,11 +26,10 @@ function createWorktreeClaim(options = {}) {
       claim.release?.();
     } catch {}
     try {
-      if (!options.worktree) {
-        fs.rmSync(root, { recursive: true, force: true });
-      } else if (!options.runtimeDir) {
-        fs.rmSync(runtimeDir, { recursive: true, force: true });
-      }
+      if (ownRuntime) fs.rmSync(runtimeDir, { recursive: true, force: true });
+    } catch {}
+    try {
+      if (ownRoot) fs.rmSync(root, { recursive: true, force: true });
     } catch {}
   };
   const boundVerifier = (cwd, c, opts) =>

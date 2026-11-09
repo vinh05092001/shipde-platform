@@ -1,5 +1,6 @@
 'use strict';
-const test = require('node:test');
+const fs = require('node:fs');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { dispatchOutput } = require('../dispatch-output');
 const { decisionFromDispatch, firstLaunch, launchFromDecision } = require('../route-handoff');
@@ -25,6 +26,11 @@ const registry = {
   },
 };
 const claimHelper = createWorktreeClaim();
+after(() => {
+  claimHelper.cleanup();
+  assert.equal(fs.existsSync(claimHelper.root), false);
+  assert.equal(fs.existsSync(claimHelper.claim.lockFile), false);
+});
 const ticket = {
   workItemId: profile.taskId,
   outputTokens: 1,

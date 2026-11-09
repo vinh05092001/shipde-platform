@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const { classifyFailure, upstreamAuthSignal } = require('../failure-classifier');
 const { sameFailureDomain } = require('../routing');
@@ -13,6 +13,11 @@ const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
 const claimHelper = createWorktreeClaim();
 const { worktree: wt } = claimHelper;
+after(() => {
+  claimHelper.cleanup();
+  assert.equal(fs.existsSync(claimHelper.root), false);
+  assert.equal(fs.existsSync(claimHelper.claim.lockFile), false);
+});
 
 const key = 'gw-shared-key';
 const via = { harness: 'paseo', gateway: 'gw', accountId: key, quotaScope: key };
