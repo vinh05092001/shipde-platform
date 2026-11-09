@@ -233,6 +233,7 @@ function persistedLedgerProblem(ledger, ticket) {
 
 /** The first launch of a ticket: the best usable route, or BLOCKED. */
 function firstLaunch(decision, ticket, context, registry) {
+  const ctx = context || {};
   if (decision.controllerStatus && decision.controllerStatus !== 'READY') {
     return { action: 'BLOCKED', reason: decision.reasonCode, rejected: decision.rejected };
   }
@@ -268,6 +269,21 @@ function firstLaunch(decision, ticket, context, registry) {
     return { action: 'BLOCKED', reason: 'CONTROLLER_CHOICE_UNAVAILABLE', rejected };
   }
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
+  const claimMod = require('./coordinator-claim');
+  const cwd = ticket?.request?.cwd || ctx.ledger?.worktree;
+  const claim = ctx.worktreeClaim || ctx.claim;
+  const check = (ctx.verifyWorktreeClaim || claimMod.verifyWorktreeClaim)(cwd, claim, ctx);
+  if (!check.ok) {
+    return {
+      action: 'STOP',
+      reason: check.reason,
+      worktree: check.worktree || cwd || null,
+      rejected: [],
+    };
+  }
+  if (claim?.activeWorker || ledger?.activeWorker) {
+    return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
+  }
   const request = {
     ...ticket.request,
     mode: ticket.mode || MODE,
