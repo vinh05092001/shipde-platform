@@ -1,8 +1,8 @@
 'use strict';
 
 const { resolveRoute } = require('./executor');
-const { getHarness } = require('./harness');
-const { loadSources, dispatchRoute } = require('./sources');
+const { getHarness, runHarness } = require('./harness');
+const { loadSources, dispatchRoute, getDispatchConfig } = require('./sources');
 const { classifyFailure, isEligible } = require('./route-health');
 const { upstreamAuthSignal } = require('./failure-classifier');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
@@ -101,56 +101,32 @@ function launchFromDecision(decision, request, registry, context) {
   if (!route || !route.provider) throw new Error('DECISION_ROUTE_UNRESOLVED');
   const harness = getHarness(route.harnessName);
   if (!harness) throw new Error('LAUNCHER_UNAVAILABLE');
-  const now = (context && context.now) || Date.now();
-  const cPath = { id: chosen.gateway || chosen.upstream, accountId: chosen.accountId };
-  if (context?.routeHealth && !isEligible(context.routeHealth, chosen.modelId, cPath, now)) {
-    throw new Error('LAUNCH_REFUSED: ROUTE_UNHEALTHY');
-  }
-  if (
-    context?.quotaState &&
-    isScopeBlocked(
-      getQuotaScopeState(chosen, context.quotaState, { now, registry: reg, candidate: chosen }),
-      now
-    )
-  ) {
-    throw new Error('LAUNCH_REFUSED: QUOTA_BLOCKED');
-  }
   const prompt = r.sandboxNote ? [r.prompt, r.sandboxNote].filter(Boolean).join('\n\n') : r.prompt;
   const effort = chosen.effort || chosen.model_reasoning_effort || r.effort;
-  let args;
-  try {
-    args = harness.launch({
-      candidateKey: key,
-      provider: route.provider,
-      model: route.model,
-      mode: r.mode,
-      accountId: chosen.accountId,
-      gateway: chosen.gateway || '',
-      upstream: chosen.upstream,
-      quotaScope: chosen.quotaScope,
-      prompt,
-      branch: r.branch,
-      base: r.base,
-      cwd: r.cwd,
-      isolatedWorker: r.isolatedWorker,
-      title: r.title,
-      labels: r.labels || {},
-      newWorkspace: r.newWorkspace,
-      effort,
-    });
-  } catch (err) {
-    if (route.harnessName !== 'codex') throw err;
-    args = [
-      'exec',
-      '-m',
-      route.model,
-      '-c',
-      `model_reasoning_effort=${effort || 'medium'}`,
-      '-s',
-      'workspace-write',
-      prompt || '',
-    ];
-  }
+  const args = harness.launch({
+    candidateKey: key,
+    provider: route.provider,
+    model: route.model,
+    mode: r.mode,
+    accountId: chosen.accountId,
+    gateway: chosen.gateway || '',
+    upstream: chosen.upstream,
+    quotaScope: chosen.quotaScope,
+    prompt,
+    branch: r.branch,
+    base: r.base,
+    cwd: r.cwd,
+    isolatedWorker: r.isolatedWorker,
+    isolationVerdict: r.isolationVerdict,
+    isolationVerdictPath: r.isolationVerdictPath,
+    title: r.title,
+    labels: r.labels || {},
+    newWorkspace: r.newWorkspace,
+    effort,
+    tokenBudget: r.tokenBudget,
+    outputTokens: r.outputTokens,
+    workerTimeoutMs: r.workerTimeoutMs,
+  });
   if (
     route.harnessName === 'codex' &&
     effort &&
@@ -164,12 +140,19 @@ function launchFromDecision(decision, request, registry, context) {
     harness: route.harnessName,
     model: route.model,
     accountId: chosen.accountId,
+    mode: r.mode,
+    tokenBudget: r.tokenBudget,
+    outputTokens: r.outputTokens,
+    timeoutMs: r.workerTimeoutMs ?? r.timeoutMs,
+    isolatedWorker: Boolean(r.isolatedWorker),
+    check: { candidate: chosen, registry: reg },
     args,
   };
 }
 
 const MODE = 'full-access';
 const known = (v) => v !== undefined && v !== null;
+const normPath = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 
 /** Why a route cannot take this ticket, or null when it can. Ping proof alone never qualifies. */
 function routeRefusal(c, ticket, ctx, reg) {
@@ -214,15 +197,15 @@ function routeRefusal(c, ticket, ctx, reg) {
     const path = { id: c.gateway || c.upstream, accountId: c.accountId };
     if (!isEligible(ctx.routeHealth, c.modelId, path, now)) return 'ROUTE_UNHEALTHY';
   }
-  const tokens = ticket.tokenBudget ?? ticket.outputTokens;
+  const budget = ticket.tokenBudget ?? ticket.outputTokens;
   if (c.budget === 'UNKNOWN') return 'BUDGET_UNKNOWN';
-  if (c.budget === 'FREE_ALLOWANCE' && tokens > c.budgetRemainingTokens) {
+  if (c.budget === 'FREE_ALLOWANCE' && budget > c.budgetRemainingTokens) {
     return 'BUDGET_BELOW_REQUEST';
   }
   const quotaOptions = { now, registry: reg, candidate: c };
   const quota = ctx.quotaState ? getQuotaScopeState(c, ctx.quotaState, quotaOptions) : null;
   if (isScopeBlocked(quota, now, quotaOptions)) return 'QUOTA_BLOCKED';
-  if (known(c.maxOutputTokens) && Number(c.maxOutputTokens) < tokens) {
+  if (known(c.maxOutputTokens) && Number(c.maxOutputTokens) < (ticket.outputTokens ?? budget)) {
     return 'BUDGET_BELOW_REQUEST';
   }
   const proofs = ((ctx.evidenceData || {}).combinations || [])
@@ -297,12 +280,21 @@ function firstLaunch(decision, ticket, context, registry) {
     return { action: 'BLOCKED', reason: 'CONTROLLER_CHOICE_UNAVAILABLE', rejected };
   }
   if (!eligible.length) return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_ROUTE', rejected };
+  const t = normalizeTicket(ticket);
   const request = {
-    ...ticket.request,
-    mode: ticket.mode || MODE,
+    ...t.request,
+    mode: t.mode,
     offeringId: chosen.offeringId,
-    effort: chosen.effort || chosen.model_reasoning_effort || ticket.effort,
+    effort: chosen.effort || chosen.model_reasoning_effort || ticket.effort || t.request.effort,
+    tokenBudget: t.tokenBudget,
+    outputTokens: t.outputTokens,
+    workerTimeoutMs: t.workerTimeoutMs,
   };
+  if (ticket.base || ticket.fetchCheck || ticket.scopeText || ticket.dirtyDiff) {
+    const built = buildLaunchPrompt(request.prompt || '', ticket);
+    if (built.status !== 'ok') return { action: 'BLOCKED', reason: built.error, rejected };
+    request.prompt = built.prompt;
+  }
   return {
     action: 'LAUNCH',
     launch: launchFromDecision(decision, request, registry, context),
@@ -374,92 +366,124 @@ function afterFailure(decision, ticket, context, failure, registry) {
   return { ...next, worktree: kept };
 }
 
-/** Normalize ticket input from ticket spec or coordinator options without dropping mode, tokenBudget or ceiling. */
 function normalizeTicket(spec = {}, options = {}) {
   const req = spec.request || options.request || {};
   const mode = spec.mode || req.mode || options.mode || MODE;
-  const tokenBudget =
-    spec.tokenBudget ?? spec.outputTokens ?? options.tokenBudget ?? options.outputTokens;
+  const tokenBudget = spec.tokenBudget ?? options.tokenBudget;
+  const outputTokens = spec.outputTokens ?? options.outputTokens;
   return {
     workItemId: spec.workItemId || spec.item || options.workItemId,
     mode,
     tokenBudget,
-    outputTokens: tokenBudget,
+    outputTokens,
     minProof: spec.minProof || options.minProof || 'NONE',
     maxFallbacks: spec.maxFallbacks ?? options.maxFallbacks ?? 1,
     workerTimeoutMs: spec.workerTimeoutMs ?? options.workerTimeoutMs,
-    request: { ...req, mode },
+    request: { ...req, mode, tokenBudget, outputTokens },
   };
 }
 
-/** Build prompt from approved task, scope and pinned base, reporting fetch failure and rejecting scope expansion. */
 function buildLaunchPrompt(taskContent, options = {}) {
-  const { base, fetchCheck, dirtyDiff, scopeText, allowedPaths } = options;
-  if (fetchCheck?.failed) {
-    return {
-      status: 'error',
-      error: 'FETCH_FAILED',
-      message: fetchCheck.error || 'git fetch failed',
-    };
-  }
+  const { base, baseSha, fetchCheck, dirtyDiff, scopeText, allowedPaths } = options;
+  if (fetchCheck?.failed) return { status: 'error', error: 'FETCH_FAILED' };
+  const pinned = baseSha || base;
+  if (!pinned || !/^[0-9a-f]{40}$/i.test(String(pinned)))
+    return { status: 'error', error: 'BASE_NOT_IMMUTABLE' };
   const sections = [
     taskContent,
-    base && `Pinned base: ${base}`,
+    `Pinned base: ${pinned}`,
     dirtyDiff && `Worktree diff:\n${dirtyDiff}`,
   ].filter(Boolean);
-  if (scopeText) {
-    if (Array.isArray(allowedPaths)) {
-      const outside = (
-        scopeText.match(/(?:apps|packages|tools|docs|config|scripts)\/[\w./-]+/g) || []
-      ).filter((p) => !allowedPaths.includes(p));
-      if (outside.length > 0) {
-        return {
-          status: 'error',
-          error: 'SCOPE_EXPANSION_FORBIDDEN',
-          message: `Scope attempts to add paths outside allowedPaths: ${outside.join(', ')}`,
-        };
-      }
-    }
-    sections.push(scopeText);
-  }
-  return { status: 'ok', prompt: sections.join('\n\n') };
+  if (!scopeText) return { status: 'ok', prompt: sections.join('\n\n') };
+  const allowed = new Set((allowedPaths || []).map(normPath));
+  if (!allowed.size) return { status: 'error', error: 'SCOPE_UNAUTHORIZED' };
+  const outside = (
+    scopeText.match(/[A-Za-z]:[\\/][^\s"'`,;]+|(?:[\w.@-]+[\\/])+[\w.@-]+\.[A-Za-z0-9]{1,8}/g) || []
+  )
+    .map(normPath)
+    .filter(
+      (p) =>
+        p &&
+        !/^[a-z]+:\/\//i.test(p) &&
+        !allowed.has(p) &&
+        ![...allowed].some((a) => a.startsWith(p + '/') || (a.endsWith('/') && p.startsWith(a)))
+    );
+  if (outside.length) return { status: 'error', error: 'SCOPE_EXPANSION_FORBIDDEN' };
+  return { status: 'ok', prompt: [...sections, scopeText].join('\n\n') };
 }
 
-/** Execute the returned harness and args unchanged through existing launcher or runner, refusing busy lane / unknown harness. */
+function revalidate(launch, options) {
+  const ctx = options.context;
+  const c = launch.check && launch.check.candidate;
+  if (!ctx || !c) return null;
+  const now = ctx.now || Date.now();
+  const route = { id: c.gateway || c.upstream, accountId: c.accountId };
+  if (ctx.routeHealth && !isEligible(ctx.routeHealth, c.modelId, route, now)) {
+    return 'ROUTE_UNHEALTHY';
+  }
+  if (ctx.quotaState) {
+    const quota = getQuotaScopeState(c, ctx.quotaState, {
+      now,
+      registry: launch.check.registry,
+      candidate: c,
+    });
+    if (isScopeBlocked(quota, now)) return 'QUOTA_BLOCKED';
+  }
+  return null;
+}
+
+function laneBusy(lane, options) {
+  if (!lane) return false;
+  const fs = options.fs || require('fs');
+  const path = options.path || require('path');
+  const pool = options.pool || require('./agy-pool-runtime');
+  let dir;
+  try {
+    dir = pool.accountDir(lane, options);
+  } catch {
+    return false;
+  }
+  const files = options.busyFiles || {};
+  const job = files.job ? path.resolve(files.job) : path.join(dir, 'job.json');
+  const result = files.result ? path.resolve(files.result) : path.join(dir, 'result.json');
+  return fs.existsSync(job) && !fs.existsSync(result);
+}
+
 function executeLaunch(launch, options = {}) {
   const adapter = launch?.harness ? getHarness(launch.harness) : null;
   if (!adapter) return { status: 'refused', reason: 'UNKNOWN_HARNESS' };
-  if (typeof options.runner === 'function') return options.runner(adapter, launch.args, options);
   const isAgy = launch.harness === 'agy-pool';
   const lane = isAgy ? launch.accountId || options.lane || options.accountId : null;
-  if (isAgy) {
-    const fs = options.fs || require('fs');
-    const path = options.path || require('path');
-    const runsDir = options.runsDir || (options.pool?.runsDir ? options.pool.runsDir() : null);
-    if (
-      (options.isLaneBusy && options.isLaneBusy(lane)) ||
-      (runsDir &&
-        fs.existsSync(path.join(runsDir, lane, 'job.json')) &&
-        !fs.existsSync(path.join(runsDir, lane, 'result.json')))
-    ) {
-      return { status: 'refused', reason: 'LANE_BUSY', accountId: lane };
-    }
+  if (isAgy && laneBusy(lane, options)) {
+    return { status: 'refused', reason: 'LANE_BUSY', accountId: lane };
   }
-  const timeoutSec = isAgy
-    ? (options.timeoutSec ??
-      options.printTimeoutSec ??
-      Math.round((options.workerTimeoutMs || options.timeoutMs || 3600000) / 1000))
-    : undefined;
+  const denied = revalidate(launch, options);
+  if (denied) return { status: 'refused', reason: denied };
+  const timeoutMs =
+    launch.timeoutMs ??
+    options.timeoutMs ??
+    options.workerTimeoutMs ??
+    (isAgy ? getDispatchConfig(launch.check?.registry, options).agyPoolTimeoutMs : undefined);
+  const runOpts = {
+    ...options,
+    mode: launch.mode,
+    tokenBudget: launch.tokenBudget,
+    outputTokens: launch.outputTokens,
+    timeoutMs,
+  };
+  if (typeof options.runner === 'function') return options.runner(adapter, launch.args, runOpts);
+  const run =
+    options.run ||
+    (launch.isolatedWorker ? require('./isolation-launcher').getIsolatedLauncher() : runHarness);
+  const res = run(adapter, launch.args.slice(), runOpts);
+  const ok = Boolean(res && res.exitCode === 0);
   return {
-    status: 'spawned',
-    pid: options.pid || (isAgy ? 1001 : 1002),
-    exitCode: 0,
+    ...res,
+    status: ok ? 'spawned' : 'failed',
+    ...(!ok && { reason: (res && res.stderr) || 'HARNESS_NONZERO_EXIT' }),
     offeringId: launch.offeringId,
-    harness: launch.harness,
-    model: launch.model || options.model,
     accountId: lane ?? launch.accountId ?? null,
-    ...(timeoutSec !== undefined && { timeoutSec }),
-    args: launch.args,
+    ...(timeoutMs !== undefined && { timeoutSec: Math.round(timeoutMs / 1000) }),
   };
 }
 
