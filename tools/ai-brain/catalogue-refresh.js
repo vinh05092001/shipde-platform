@@ -74,6 +74,26 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
     status: 'rejected',
   });
 
+  // Rule: agy-pool runtime accounts are not catalogue-listed sources.
+  // Source: discovery/adapters.js (agentCliAdapter: CLI harness resolves its models at call time;
+  // the registry declares no catalogue endpoint), discovery.js:128 (Presence-only CLI harnesses
+  // have no catalogue to refresh), and sources.json (agy-pool kind: agent-cli, accessPath: cli, no endpoint).
+  // Because discovery does not list them into freshness, catalogue freshness does not reject them.
+  const harness = typeof sourceIdOrObj === 'object' ? sourceIdOrObj?.harness : null;
+  const source = typeof sourceIdOrObj === 'object' ? sourceIdOrObj?.source : null;
+  if (id === 'agy-pool' || harness === 'agy-pool' || source === 'agy-pool') {
+    return {
+      sourceId: id || 'agy-pool',
+      admitted: true,
+      stale: false,
+      code: null,
+      reason: null,
+      lastSuccessfulAt: null,
+      staleListingRetained: false,
+      status: 'admitted',
+    };
+  }
+
   if (!doc || !id) return rej();
   const match = (s) => s && (s.id === id || s.id === 'opencode:' + id || s.id.endsWith(':' + id));
   const src = (doc.sources || []).find(match);
@@ -269,8 +289,8 @@ async function refreshCatalogue(options = {}) {
     if (name === 'discovery run') {
       discovery = readJson(discoveryFile, null);
       if (options.persist !== false && stageExitCode === 0 && discovery?.listedSources > 0) {
-        discovery.sources = discovery.sources || [];
-        for (const src of discovery.sources) {
+        const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
+        for (const src of discovery.sources || []) {
           const failed = (discovery.failedSources || []).some((f) => f.id === src.id);
           const ok =
             !failed &&
@@ -283,20 +303,15 @@ async function refreshCatalogue(options = {}) {
           } else {
             const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
             src.lastSuccessfulAt = prev?.lastSuccessfulAt || null;
-            src.staleListingRetained = Boolean(
-              src.lastSuccessfulAt && startedEpoch - Date.parse(src.lastSuccessfulAt) <= MAX_AGE_MS
-            );
+            src.staleListingRetained = isRecent(src.lastSuccessfulAt);
           }
         }
-        const seenIds = new Set(discovery.sources.map((s) => s.id));
+        const seenIds = new Set((discovery.sources || []).map((s) => s.id));
         for (const prev of previousFreshness.sources || []) {
           if (!seenIds.has(prev.id)) {
             discovery.sources.push({
               ...prev,
-              staleListingRetained: Boolean(
-                prev.lastSuccessfulAt &&
-                startedEpoch - Date.parse(prev.lastSuccessfulAt) <= MAX_AGE_MS
-              ),
+              staleListingRetained: isRecent(prev.lastSuccessfulAt),
             });
             seenIds.add(prev.id);
           }
@@ -386,11 +401,10 @@ async function refreshCatalogue(options = {}) {
       }
     }
     if (!discoveryPublished) {
+      const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
       const retainedSources = (previousFreshness.sources || []).map((s) => ({
         ...s,
-        staleListingRetained: Boolean(
-          s.lastSuccessfulAt && startedEpoch - Date.parse(s.lastSuccessfulAt) <= MAX_AGE_MS
-        ),
+        staleListingRetained: isRecent(s.lastSuccessfulAt),
       }));
       writeJson(freshnessFile, {
         sources: retainedSources,

@@ -10,15 +10,10 @@ const { assembleForDispatch } = require('../cli');
 const NOW = Date.parse('2026-11-09T16:00:00.000Z');
 const iso = (ms, now = NOW) => new Date(now - ms).toISOString();
 const cand = (id) => ({ harness: 'test', gateway: id, source: id, modelId: `vendor/${id}` });
+const S = (id, status, advertised, lastSuccessfulAt, extra = {}) =>
+  Object.assign({ id, status, advertised, lastSuccessfulAt }, extra);
 
 function buildFixture(now = NOW) {
-  const S = (id, status, advertised, lastSuccessfulAt, extra) => ({
-    id,
-    status,
-    advertised,
-    lastSuccessfulAt,
-    ...extra,
-  });
   return {
     sources: [
       S('9router', 'enumerated', 1205, iso(17 * 60 * 1000, now), {
@@ -74,28 +69,23 @@ function checkSource(id, admitted, code, retained, fix = FIXTURE) {
 test('(a) source listed this run -> admitted', () => {
   checkSource('9router', true, null, false);
 });
-
 test('(b) source failed this run with last good 3 days ago -> rejected with reason', () => {
   checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE');
 });
-
 test('(c) source failed with last good 1 hour ago -> admitted, marked stale-listing-retained', () => {
   checkSource('agy-gateway', true, null, true);
 });
-
 test('(d) global lastSuccessfulAt alone cannot admit a failed source', () => {
   checkSource('opencode:scaleway', false, 'SOURCE_CATALOGUE_STALE');
 });
 
 test('(1) legacy freshness file with only global lastSuccessfulAt -> explicit stale for all sources', () => {
+  const at = new Date(NOW).toISOString();
   const legacyDoc = {
-    lastAttemptAt: new Date(NOW).toISOString(),
-    lastSuccessfulAt: new Date(NOW).toISOString(),
+    lastAttemptAt: at,
+    lastSuccessfulAt: at,
     complete: true,
-    sources: [
-      { id: 's1', status: 'enumerated', advertised: 5 },
-      { id: 's2', status: 'unavailable', advertised: 0 },
-    ],
+    sources: [S('s1', 'enumerated', 5, null), S('s2', 'unavailable', 0, null)],
   };
   checkSource('s1', false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc);
   checkSource('s2', false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc);
@@ -106,7 +96,6 @@ test('(2) mixed fixture: listed this run + failed 1h + failed 3d + legacy withou
   checkSource('agy-gateway', true, null, true);
   checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE');
   checkSource('legacy-src', false, 'SOURCE_CATALOGUE_STALE');
-
   const ids = ['9router', 'agy-gateway', 'opencode:agentrouter', 'legacy-src'];
   const res = dispatchCandidates(ids, FIXTURE);
   assert.equal(res.length, 2);
@@ -132,9 +121,8 @@ test('(4) ordinary dispatch loads persisted freshness through normal reader with
   const ids = ['9router', 'agy-gateway', 'opencode:agentrouter', 'legacy-src'];
   const candidates = ids.map(cand);
   const freshness = catalogueFreshness({ dataDir: dir, now: NOW });
-  const catalogue = { candidates, freshness, freshnessDoc: freshness.doc };
   const res = assembleForDispatch(
-    catalogue,
+    { candidates, freshness, freshnessDoc: freshness.doc },
     [],
     { sources: ids.map((id) => ({ id })), dispatch: { providers: {} } },
     { candidates, now: NOW, allowUnprobedCandidates: true }
@@ -156,9 +144,7 @@ test('(5) refresh publication retains prior sources missing from new list (survi
   fs.writeFileSync(
     path.join(dir, 'freshness.json'),
     JSON.stringify({
-      sources: [
-        { id: 'prior-gw', status: 'enumerated', advertised: 10, lastSuccessfulAt: oneHourAgo },
-      ],
+      sources: [S('prior-gw', 'enumerated', 10, oneHourAgo)],
       lastAttemptAt: oneHourAgo,
       lastSuccessfulAt: oneHourAgo,
     })
@@ -176,7 +162,7 @@ test('(5) refresh publication retains prior sources missing from new list (survi
           listedSources: 1,
           complete: false,
           failedSources: [{ id: 'prior-gw', reason: 'HTTP_500' }],
-          sources: [{ id: '9router', status: 'enumerated', advertised: 100 }],
+          sources: [S('9router', 'enumerated', 100, at)],
         })
       );
     }
@@ -195,15 +181,7 @@ test('(5) refresh publication retains prior sources missing from new list (survi
 test('(6) fallback document after early discovery failure preserves staleListingRetained=true', () => {
   const oneHourAgo = iso(3600 * 1000);
   const fallbackDoc = {
-    sources: [
-      {
-        id: 'retained-src',
-        status: 'enumerated',
-        advertised: 10,
-        lastSuccessfulAt: oneHourAgo,
-        staleListingRetained: true,
-      },
-    ],
+    sources: [S('retained-src', 'enumerated', 10, oneHourAgo, { staleListingRetained: true })],
     lastAttemptAt: new Date(NOW).toISOString(),
     lastSuccessfulAt: oneHourAgo,
     complete: false,
@@ -213,4 +191,16 @@ test('(6) fallback document after early discovery failure preserves staleListing
   assert.equal(fresh.admitted, true);
   assert.equal(fresh.staleListingRetained, true);
   assert.equal(fresh.status, 'stale-listing-retained');
+});
+
+test('(7) agy-pool runtime accounts are not catalogue-listed sources and stay admitted', () => {
+  const poolCand = {
+    harness: 'agy-pool',
+    source: 'agy-pool',
+    accountId: 'agy01',
+    modelId: 'gemini-test-pro',
+  };
+  const fresh = sourceFreshness(poolCand, { freshness: FIXTURE, now: NOW });
+  assert.equal(fresh.admitted, true);
+  assert.equal(fresh.stale, false);
 });
