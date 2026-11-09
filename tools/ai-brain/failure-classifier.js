@@ -864,7 +864,9 @@ function classifyFailure(input) {
     // A connection layer without a confirmed ID says nothing about any connection.
     const stated = input.authLayer === 'connection' && !input.connectionId ? null : input.authLayer;
     const layer =
-      stated || (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
+      stated ||
+      (/no active credentials/i.test(text) ? 'upstream-credential' : null) ||
+      (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
     const byLayer = {
       'gateway-key': [Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT, HumanAction.REQUIRED],
       'upstream-credential': [Cause.UPSTREAM_CREDENTIAL, Scope.UPSTREAM, HumanAction.NONE],
@@ -885,10 +887,11 @@ function classifyFailure(input) {
 
   // Account auth failure on 401 or auth text with account
   if (
-    (effectiveStatus === 401 && accountId && accountId !== '*') ||
-    /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
-      text
-    )
+    !/no active credentials/i.test(text) &&
+    ((effectiveStatus === 401 && accountId && accountId !== '*') ||
+      /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
+        text
+      ))
   ) {
     return addRetryFields({
       cause: Cause.ACCOUNT_AUTH_FAILED,
@@ -901,7 +904,10 @@ function classifyFailure(input) {
   }
 
   // Case 5: upstream credential problem (401 unauthorized on upstream)
-  if (effectiveStatus === 401 || /invalid.*token|invalid.*credential/i.test(text)) {
+  if (
+    effectiveStatus === 401 ||
+    /invalid.*token|invalid.*credential|no active credentials/i.test(text)
+  ) {
     return addRetryFields({
       cause: Cause.UPSTREAM_CREDENTIAL,
       scope: Scope.UPSTREAM,
@@ -958,10 +964,12 @@ function classifyFailure(input) {
     });
   }
 
-  // Case 9: genuine capacity (503 with "no capacity available")
+  // Case 9: genuine capacity (503 with "no capacity available", or concurrency capacity)
   if (
-    (effectiveStatus === 503 || exitCode !== 0) &&
-    /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity/i.test(text)
+    (effectiveStatus === 503 || exitCode !== 0 || /concurrency\s*capacity/i.test(text)) &&
+    /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity|concurrency\s*capacity/i.test(
+      text
+    )
   ) {
     const resetMs = parseResetTime(text);
     return addRetryFields({

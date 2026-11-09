@@ -754,3 +754,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Finding 2 / Items d2 & d4: `verifyWorktreeClaim` probes foreign owner PID under default options, requires matching disk worktree binding, and rejects metadata-only claims; dead predecessor claim rejected for launch/reconcile while fresh claimant recovers exclusively.
 - Finding 7 / Item d3: dead same-item worker record is unlinked without blocking restart; live same-item worker blocks acquisition and prevents `firstLaunch` from launching (`WORKER_STILL_ACTIVE`).
 - Evidence: 4/4 tests pass in `task-ai-171-route-pr06-claim.test.js`. Offline evidence only.
+
+## Slice 1: A1 — Gateway error classification (2026-11-10)
+
+- Scope: `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
+- Outcome: Classifies 9Router gateway errors ("No active credentials", "concurrency capacity") as UPSTREAM_CREDENTIAL and GENUINE_CAPACITY with UPSTREAM scope; records failures to model-route-health with bounded backoff.
+- Depends on: None (based on origin/main `e3f5f307`).
+- Evidence: 6/6 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
