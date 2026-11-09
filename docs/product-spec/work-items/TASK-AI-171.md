@@ -746,4 +746,3 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: worktree claims require a live PID bound to the target worktree path and owner metadata before worker launch.
 - Evidence: 112 tests in the 10 files importing route-handoff/coordinator-claim pass at f012f209, 0 fail, 0 skip. Offline evidence only.
 - Entry guard follows in PR 06b (#566); Slice B (.evict recovery, process-ownership findings 3/4/5/8) deferred.
-
