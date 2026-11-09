@@ -179,6 +179,16 @@ candidate adapters, unified selection, JEV advisory and the budget contract (AC-
 the role-policy half of AC-AI-171-07) are deferred to Slices B and C of the same Work Item, together
 with their open review findings. No acceptance row assigned to the shipped slice is left unproven.
 
+## Route decision and launcher (PR #514)
+
+Draft, not wired to runtime. `route.js` does not call these modules.
+
+- Delivered: `route-decision.js`, `route-launch.js`, `scoreProvenance` in the dry-run log, and their tests.
+- Author of this PR: Claude Code, by operator instruction, with a worker on the first two tickets.
+- Evidence: `task-ai-171-*` and `route-identity` tests; offline replay on fixtures.
+- Not proven: `mvp-controller.test.js` has no complete passing run on this branch. Test 5 passed alone in 103 seconds; the full file was stopped by a timeout. Status UNKNOWN.
+- Open: #512 is not merged. Format-only commit changed no logic.
+
 ## Slice plan (2026-11-05)
 
 The PR reached 3.2k lines and every review round found new P1s (STUCK after 20 rounds), so it ships in slices of the same Work Item:
