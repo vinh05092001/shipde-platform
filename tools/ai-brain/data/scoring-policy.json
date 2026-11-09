@@ -3,6 +3,7 @@
   "source": "https://artificialanalysis.ai/leaderboards/models",
   "rationale": "Operator decision 2026-11-04: one quality scale for everyone, Artificial Analysis Intelligence Index v5. Coordinator clarification 2026-11-07: measure pct, retain ii as provenance; one dimension implies weight 1.",
   "maxAgeMs": 2592000000,
+  "maxFutureSkewMs": 60000,
   "freshnessSource": "tools/ai-brain/priors.js:16,535-542 (STALE_AFTER_MS applied by isStale)",
   "priorsFile": "aa-intelligence.json",
   "notMeasured": ["latency", "cost", "reliability"],

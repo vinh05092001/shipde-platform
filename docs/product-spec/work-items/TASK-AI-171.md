@@ -472,6 +472,25 @@ Evidence: new tests before implementation 0 pass / 11 fail; after implementation
 Prettier 3.9.6 uses repo settings; the hardcode guard passes with zero new instances.
 Offline evidence only. External cutover, live routes, CI, independent review and commit remain with the coordinator; `.oc/route.js` was neither copied nor changed.
 
+## PR 02 — Preserve full route identity and admit all sources once (2026-11-08)
+
+Operator-assigned author scope covers B20/B22/B57/B58/B59/B62/B73. Reuse the
+existing pool inventory, combo candidate/scope rules and real-route resolver.
+Injected routes now use the shared admission function, including credential refusals
+and account-bound registry alias lookup. Deduplicate injected and refreshed inventory
+before admission; preserve accounts, slash/case IDs, vendors and effort variants.
+The shared discovery identity helper reuses route-identity component escaping and
+decoding so delimiter/percent values cannot merge distinct routes. Ordinary keys
+without encoded characters retain their representation; parsed keys round-trip.
+Combo selection remains a real candidate and its resolved launch evidence names it.
+
+Offline evidence: new PR 02 suite before implementation **0 pass / 5 fail**;
+after implementation **5 pass / 0 fail**. Existing `task-ai-171-route-identity`,
+`task-ai-171-combo-members`, `task-ai-181-route-scope`: **33 pass / 0 fail**.
+Additional candidate/discovery/dispatch-json/route-handoff compatibility: **130 pass /
+0 fail**. Repo Prettier and hardcode guard pass (zero new hardcode instances).
+No external script copied or changed; no network or commit. External cutover,
+remote CI and independent review remain coordinator responsibilities.
 ## Tool manifest matches the repository (2026-11-09)
 
 - ast-grep, playwright and axe-core are declared in package.json files and are now `installed`; semgrep and trivy point at the existing `security:semgrep` and `security:trivy` scripts; ledger records in GROUP-3 and GROUP-5 updated to INSTALLED, none promoted to EXECUTION_VERIFIED.
@@ -489,3 +508,150 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 Rows B46, B49, conflict C6. `tools/ai-brain/coordinator-ledger.js` is the only owner of the ledger schema and the only supervised launch path: read and validate against the caller's item and worktree, let `route-handoff.js` decide (unchanged, pure), persist the launch intent, then spawn. A missing file is a fresh ticket; any present but invalid file (truncated, missing or inconsistent counters, wrong item or worktree, unknown version, conflicting aliases) is `LEDGER_UNREADABLE` and blocks. Save refuses anything its own validation rejects and writes via temp file and rename. Old `active` migrates to `activeWorker` only when the aliases agree.
 
 Evidence: `node --test tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js tools/ai-brain/test/task-ai-171-fallback-chain.test.js tools/ai-brain/test/task-ai-171-route-handoff.test.js` → 39/39 pass; the PR 07 file fails on base (module absent). Redesigned after two review rounds (author: Claude, routing stalled with no live writer).
+## PR 08 outcome — Record worker completion and stop before fallback (2026-11-09)
+
+Scope: rows B26, B51 and B52 (`tools/ai-brain/coordinator-completion.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-route-pr08-completion.test.js`).
+- B51: `validateWorkerTimeout` rejects zero, NaN, negative and non-numeric values with `WORKER_TIMEOUT_INVALID`; `awaitWorkerCompletion` and `superviseWorkerCompletion` clear the timer on exit, ignore late exit events after timeout, call the injected stop-confirmation callback, and block fallback through `route-handoff.afterFailure` until termination is confirmed.
+- B52: worker output is classified via `failure-classifier` (`extractProviderErrorText`, `extractInnerStatus`, `classifyFailure`); exit 0 with an `Error:` line or without a run-bound commit/artifact is not `WORKER_FINISHED`; inner statuses (including inner 503 wrapped by outer status and outer 503 wrapping inner status) govern classification; durable records keep only `code`, `status`, `category` and `scope` with no raw tail.
+- B26: `evaluateLaneHold` and `activeHeldLanes` require an explicit `holdDurationMs` input (`HOLD_DURATION_INVALID`), release a held lane only on evidence bound to the matching `runId` (its commit, result or ended marker) or confirmed stop after expiry, and distinguish run-ended without commit (`COMPLETED_EMPTY`) from `WORKER_FINISHED`.
+- Evidence: `task-ai-171-route-pr08-completion.test.js` fails 0/6 on base `2ce2bb72` and passes 6/6 on HEAD; offline injected readers only, no live worker spawn.
+## PR 13 outcome — refresh catalogues and snapshots outside writer selection (2026-11-09)
+
+Operator-assigned author scope: `tools/ai-brain/{discovery,scoring-policy,public-catalogue-cache,cli}.js`, `tools/ai-brain/test/task-ai-171-route-pr13-refresh.test.js`, plus this section.
+Rows B05, B14, B17 and conflict C7:
+- B05: `public-catalogue-cache.js` helper provides mtime cache reads and fetches with injected fetch and clock; returns `{data, ageMs, stale, error}` with limits as caller inputs (no hardcoded constants); offline mode performs zero network and zero write side effects.
+- B14: `discovery.js` stamps `refreshed.stamp` and advances `lastSuccessfulAt` only on successful live listing; failed discovery runs leave prior stamps untouched; dispatch read path in `cli.js` only reads the catalogue and reports stale status without running any refresh subprocess or network requests.
+- B17: `scoring-policy.js` consumer `loadScoringPolicy` reports missing (`AA_SNAPSHOT_MISSING`), stale (`AA_SNAPSHOT_STALE`), and corrupt (`AA_SNAPSHOT_CORRUPT`) snapshot status truthfully and never triggers automatic network fetches during dispatch selection; refresh remains an explicit maintenance operation.
+- Conflict C7: Selection and dry-run dispatch paths are decoupled from refresh operations, guaranteeing zero background refresh side effects.
+
+Evidence: the suite declared nine tests with no nested subtests, so the previously reported 12 passes was wrong. The previously reported base split (2 pass, 10 fail) was not reproducible: run unchanged on base `2ce2bb72` the suite fails at its top-level `require('../public-catalogue-cache')` before any test registers, so no per-test base count exists; with the PR's production files staged onto `2ce2bb72`, the nine tests all pass, verified 2026-11-09.
+Related suites: `task-ai-171-aa-join.test.js` (15/15), `task-ai-171-scoring-policy.test.js` (15/15), `task-ai-166-partial-refresh.test.js` (5/5), `task-ai-166-refresh.test.js` (3/3), `refresh-lists-only.test.js` (3/3), `task-ai-139.test.js` (3/3), `task-ai-62.test.js` (15/15), `task-ai-73.test.js` (15/15), `task-ai-171-route-pr12-options.test.js` (10/10), `task-ai-171-route-pr01-consumer.test.js` (11/11). Total: 107 pass, 0 fail across all touched domain suites (rerun by the repair, see below).
+
+## PR 13 repair outcome (2026-11-09)
+
+Review findings 1–5 from the Route PR 13 review are fixed and the evidence is reconciled (finding 6). The suite now declares 8 tests: the previous 9 tests were consolidated (related cases merged into one test each) without dropping a verified case, and the five repair behaviours are covered by the three `*-repair` tests.
+
+Fixed findings:
+- Finding 1 (`scoring-policy.js`): snapshot age now always prefers a parseable `observedAt` over file mtime, with or without an injected clock; an old-observation snapshot with a recent mtime is stale either way.
+- Finding 2 (`discovery.js`): `refreshed.stamp` advances only when the whole refresh is complete (`complete = successful.length > 0 && failed.length === 0`); a run with one listed and one failed source no longer advances it. `lastSuccessfulAt` keeps its documented "at least one listed source" contract (`catalogue-refresh.js`).
+- Finding 3 (`public-catalogue-cache.js`): a non-2xx HTTP response (`ok === false` or `status >= 400`) is a fetch failure (`HTTP_<status>`); the error body never replaces the cache.
+- Finding 4 (`public-catalogue-cache.js`): the caller's `timeoutMs` races the whole fetch-and-read (with an `AbortController` signal for standard fetch) and the response body is bounded by `maxBufferBytes` (`FETCH_TIMEOUT`, `RESPONSE_TOO_LARGE`); a standard `fetch` obeys both limits.
+- Finding 5 (`scoring-policy.js` + `data/scoring-policy.json`): the permitted future-clock skew is `options.maxFutureSkewMs` falling back to `policy.maxFutureSkewMs`; no code constant remains, an unconfigured policy gets no future tolerance, and the operator policy declares `maxFutureSkewMs: 60000` to keep its previous behaviour. A negative or non-finite declared skew invalidates the policy.
+- Finding 6 (this section): counts reconciled, commands and base procedure documented.
+
+One existing suite needed a one-line adaptation to the new freshness contract: `task-ai-171-scoring-policy.test.js` ("AA join binds the observation version and labels how each route was matched") now injects its fixed test clock into `loadScoringPolicy` because its fixture snapshot carries a stale `observedAt` with a freshly written file — exactly the case finding 1 makes stale.
+
+Verification (all run offline, 2026-11-09):
+- `node --test tools/ai-brain/test/task-ai-171-route-pr13-refresh.test.js` — HEAD: 8 tests, 8 pass, 0 fail.
+- Same command with the four production files reverted to `76c589f9` — 8 tests, 5 pass, 3 fail; every `*-repair` test fails there (`B05-repair` fetch failures/limits, `B14-repair` stamp, `B17-repair` freshness source and configured skew), the five carried-over cases pass.
+- Base-`2ce2bb72` procedure for evidence: the suite cannot register tests on bare `2ce2bb72` (the helper module is new in this PR); staging the PR's production files onto `2ce2bb72` makes the nine original tests pass 9/9. The truth therefore is: the original suite never demonstrated the five gaps; the new `*-repair` tests do, by failing at `76c589f9` and passing at HEAD.
+- Related suites re-run: `task-ai-171-scoring-policy.test.js` 15/15, `task-ai-171-aa-join.test.js` 15/15, `task-ai-166-partial-refresh.test.js` 5/5, `task-ai-166-refresh.test.js` 3/3, `refresh-lists-only.test.js` 3/3, `refresh-quota.test.js` 18/18, `task-ai-139.test.js` 3/3, `mvp-contract-18.test.js` 18/18 (no failures).
+- `npx prettier@3.9.6 --check` on all seven changed files — pass.
+- `node scripts/ai/check-no-hardcode.mjs` — BLOCKED_IN_SANDBOX: the worktree has no `node_modules` (@typescript-eslint/parser absent; exact error `Cannot find package '@typescript-eslint/parser'`). Manual review of the changed lines found no model IDs, score pairs or cap-named numeric literals; new literals are the status strings, `HTTP_<status>` prefixes and nothing scored.
+- `pnpm lint`, `pnpm security:secrets`, `pnpm test:brain` — BLOCKED_IN_SANDBOX: no node_modules in this worktree; coordinator to run.
+- Size: repair delta over `76c589f9` is 270 additions / 99 deletions (net +171); the whole PR remains ~570 changed lines against the reviewed ~401 because the five repair behaviours each required a reproducing test. The PR13 test file was consolidated (9 verbose tests → 8 compact tests covering the same cases) to offset growth.
+
+Known limitations: offline evidence only; `quota-scan-summary.json` was modified before this repair by an earlier stage and is not part of it; no live catalogue fetch, CI, or independent review is claimed by this section.
+## PR 02 — Offline unknown-health repair (2026-11-09)
+
+Injected candidates default to unprobed admission through the shared helper. Known
+route/account failures and credential refusals still take precedence. Explicit
+`requireRouteHealth: true` or `allowUnprobedCandidates: false` retains strict admission.
+
+Reproduction: pointing only the health file at an absent temporary path passed locally;
+this did not reproduce the reported Linux CI failure. Explicitly passing the empty
+store loaded from that absent file reproduced six failures in `task-ai-50.test.js`
+and `task-ai-171-jev-pipeline.test.js`, including the five named failures. Before
+the production repair: 26 pass / 6 fail across those suites and PR02 admission.
+After repair and an additional default-admission/strict-mode regression: 97 pass /
+0 fail across those three suites plus route identity, combo members, route scope,
+TASK-AI-80, TASK-AI-87 and P5 dispatch liveness. These are offline fixtures, not
+Linux CI proof. No network, commit or independent approval was performed.
+
+## PR 02 — Restore health-required injected admission (2026-11-09)
+
+Supersedes the preceding unknown-health repair: revert the injected-candidate
+admission exception from `3feeb9d2`. Injected candidates still need route health
+or explicit probe evidence. Known account failures and credential refusals remain
+ineligible. TASK-AI-50 and JEV dispatch fixtures now carry passed probe evidence;
+PR02 identity fixtures supply model/gateway/account-bound probe evidence. The
+PR02 regression rejects unknown health before supplying evidence. Original default
+health-rule assertions in TASK-AI-141 part E are restored without a strict-mode
+opt-in; its remaining explicit dispatch fixture now supplies probe evidence.
+
+Offline evidence: both original rule tests failed before the revert (0/2 passed).
+After the revert, the three named PR02/dispatch suites reproduced seven failures
+(26/33 passed). After fixture repairs, the four requested files pass 74/74,
+including both rule tests. A second run redirected default health-store loads and
+saves to a fresh temporary directory and also passed 74/74; explicit fixture
+stores remain isolated. Prettier and the no-hardcode guard pass (zero new
+instances). No assertions removed. No network or commit; remote CI and independent
+review remain unverified. The unrelated pre-existing quota-summary change is
+outside this repair.
+
+## PR 02 repair outcome — explicit key format marker (2026-11-09)
+
+Outcome: legacy pre-upgrade keys keep their literal fields; only keys written with
+the new format are decoded. New-format keys carry an explicit `\x1E` record-separator
+marker in front of the joined key when any field required escaping (`%`, `::`,
+U+241F, boundary colon); keys of plain identities are byte-identical to their
+pre-upgrade form. `parseCandidateKey` decodes only marker-prefixed keys, replacing
+the trial re-encoding whose encoder diverged from `candidateKey` (the literal
+`\u241f` text bug, base 71998e6a `identity.js`).
+
+Where: `tools/ai-brain/discovery/identity.js` (candidateKey/parseCandidateKey) and
+`tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js` (five new P2 cases
+plus the strengthened idempotence case). No other file changed.
+
+Evidence, Windows offline:
+- Suite `task-ai-171-route-pr02-regressions.test.js` on HEAD: 12 tests, 12 pass / 0 fail
+  (`node --test tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js`). With base
+  `71998e6a` discovery/identity.js: the 9 P2 cases (a, b, b2, c, d, e and three catalogue cases f)
+  fail; the 3 pre-existing tests pass.
+- All 30 existing test files importing `discovery/identity.js` or `discovery/read.js`
+  combined: 435 tests, 434 pass, 1 fail — the known pre-existing
+  `task-ai-141.test.js` AGY advertised-model failure, which reproduces unchanged
+  with the base identity.js.
+- `task-ai-171-route-identity` + `combo-members` + `task-181-route-scope`: 33/33 pass.
+- Prettier 3.9.6: both files clean. `check-no-hardcode`: pass (0 new instances).
+- `pnpm lint` 12/12, `pnpm typecheck` 12/12, `git diff --check origin/main...HEAD` clean.
+- `pnpm security:secrets` reports the pre-existing `DASHBOARD.html` finding present at
+  base 71998e6a; no hit from this change.
+
+Limitations: offline Windows evidence; Linux CI, fresh independent review and
+external cutover remain unverified. Commit by the repair worker on this branch.
+
+## PR 02 — CI admission repair, head 903bb345 (2026-11-09)
+
+The shared admission helper had changed injected inventory's missing-health policy:
+any unrelated cached route made missing records require probe evidence. Preserve
+its earlier policy (explicit `routeHealth` or `requireRouteHealth` requires evidence)
+while retaining shared credential, known account failure, alias and scan checks.
+Generated production inventory keeps its existing strict admission behavior.
+
+Regression: an absent temporary health file admits an injected fixture, unrelated
+history does not change that result, explicit health/required health rejects it,
+and a known account failure remains refused. It fails on 903bb345 and passes with
+the repair; no existing assertion changed. With default health and decision stores
+redirected to temporary directories, the original reservation test fails on HEAD;
+R3 additionally needs an unrelated synthetic health record to reproduce its exact
+`0 !== 1` failure. Both pass after repair. All five requested files: **84/84 pass**.
+Formatting and the hardcode guard pass. Offline Windows evidence only; Linux CI
+and independent review remain unverified. No network, credential reads or commit.
+
+## PR 02 — Regression tests for the repair at 606c4934 (2026-11-09)
+
+Outcome: committed tests guard the three repaired behaviours: required object
+health beats unprobed admission, legacy unverified evidence cannot admit an
+account-bound offline route, and pre-upgrade keys keep literal `%`/`:` fields.
+Files: `tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js`; fixtures
+are synthetic, with no `.oc` path, model name, score or numeric cap.
+Evidence: all three fail at `7a24c39c` and pass at `606c4934`; base `710fdd5a`
+already passes because the regressions came from this branch after it. Requested
+files: **78/78 pass**; Prettier 3.9.6 and the hardcode guard pass.
+Limitations: offline Windows only; Linux CI, cutover and independent review are
+unverified. No network or credential reads.
+
+## CI tool downloads retry and fail loudly (2026-11-09)
+
+Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
