@@ -264,3 +264,23 @@ test('P2 identity: normalizeCandidateKey is idempotent', () => {
   assert.equal(once, fresh, 'a freshly written key must already be normal form');
   assert.equal(twice, once, 'second normalization must equal first');
 });
+
+// (f) Catalogue ingestion keeps each legacy field literal, one field at a time and combined.
+for (const [label, accessPath, modelId] of [
+  ['model only', 'cli', 'vendor/model%25'],
+  ['endpoint only', 'https://fixture.invalid/a%3A', 'vendor/model'],
+  ['endpoint and model', 'https://fixture.invalid/a%3A', 'vendor/model%25'],
+]) {
+  test(`P2 identity: catalogue keeps legacy ${label} literal`, () => {
+    const { readDiscoveryCatalogue } = require('../discovery/read');
+    const key = ['paseo', accessPath, 'fixture', 'vendor', 'account-b', '', modelId].join('::');
+    const catalogue = readDiscoveryCatalogue({
+      lines: [],
+      evidence: [{ key, passes: 1, attempts: 1 }],
+    });
+    const actual = catalogue.candidates[0];
+    assert.ok(actual, 'candidate must be parsed from legacy key');
+    assert.equal(actual.accessPath, accessPath);
+    assert.equal(actual.modelId, modelId);
+  });
+}

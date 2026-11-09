@@ -555,9 +555,10 @@ Where: `tools/ai-brain/discovery/identity.js` (candidateKey/parseCandidateKey) a
 plus the strengthened idempotence case). No other file changed.
 
 Evidence, Windows offline:
-- Suite `task-ai-171-route-pr02-regressions.test.js` on repaired HEAD: 8 tests,
-  8 pass / 0 fail. Same suite with base `71998e6a` discovery/identity.js: 5 new P2
-  tests (a–e) each fail for the right reason; 3 pre-existing tests still pass.
+- Suite `task-ai-171-route-pr02-regressions.test.js` on HEAD: 12 tests, 12 pass / 0 fail
+  (`node --test tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js`). With base
+  `71998e6a` discovery/identity.js: the 9 P2 cases (a, b, b2, c, d, e and three catalogue cases f)
+  fail; the 3 pre-existing tests pass.
 - All 30 existing test files importing `discovery/identity.js` or `discovery/read.js`
   combined: 435 tests, 434 pass, 1 fail — the known pre-existing
   `task-ai-141.test.js` AGY advertised-model failure, which reproduces unchanged
