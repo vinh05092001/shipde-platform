@@ -1496,6 +1496,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         adapterScript: opts.adapterScript,
         platform: opts.platform,
         keepExhausted: true,
+        listOpencodeModels: opts.listOpencodeModels,
+        opencodeModelsFixture:
+          opts.opencodeModelsFixture ||
+          (opts.fixtureDir ? path.join(opts.fixtureDir, 'opencode-models.txt') : undefined),
+        fixtureDir: opts.fixtureDir,
+        env: opts.env,
       }),
       ...candidatesApi.gatewayAccountCandidates({
         registry: resolvedRegistry,
@@ -1525,6 +1531,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         adapterScript: opts.adapterScript,
         platform: opts.platform,
         keepExhausted: true,
+        listOpencodeModels: opts.listOpencodeModels,
+        opencodeModelsFixture:
+          opts.opencodeModelsFixture ||
+          (opts.fixtureDir ? path.join(opts.fixtureDir, 'opencode-models.txt') : undefined),
+        fixtureDir: opts.fixtureDir,
+        env: opts.env,
       }),
       ...candidatesApi
         .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
@@ -2112,6 +2124,39 @@ function buildDryRunLog(parts) {
 }
 
 /**
+ * Resolve offline fixture paths from args, deps and env once. Callers pass
+ * CLI args + injected deps and get back { fixtureDir, opencodeModelsFixture,
+ * comboFixture, hasOfflineFixture }. Keeps the env-var names (SHIPDE_*) as
+ * the canonical overrides; the three CLI aliases collapse to one lookup each.
+ */
+function resolveFixturePaths(args, deps) {
+  const fixtureDir =
+    args['fixture-dir'] ||
+    args.fixtureDir ||
+    (deps && deps.fixtureDir) ||
+    process.env.SHIPDE_FIXTURE_DIR;
+  const opencodeModelsFixture =
+    args['opencode-models-fixture'] ||
+    args.opencodeModelsFixture ||
+    (deps && (deps.opencodeModelsFixture || deps.modelsFixture)) ||
+    (fixtureDir ? path.join(fixtureDir, 'opencode-models.txt') : undefined) ||
+    (fixtureDir ? path.join(fixtureDir, 'opencode-models.json') : undefined) ||
+    (deps && deps.env && deps.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
+    process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+  const comboFixture =
+    args['combo-fixture'] ||
+    args.comboFixture ||
+    (deps && deps.comboFixture) ||
+    (fixtureDir ? path.join(fixtureDir, 'combos.json') : undefined) ||
+    (deps && deps.env && deps.env.SHIPDE_COMBO_FIXTURE) ||
+    process.env.SHIPDE_COMBO_FIXTURE;
+  const hasOfflineFixture = Boolean(
+    fixtureDir || comboFixture || opencodeModelsFixture || deps?.dryRunOffline === true
+  );
+  return { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture };
+}
+
+/**
  * TASK-AI-65: candidate assembly for a profile dispatch. The same assembly the
  * item path uses (discovery catalogue + offerings + registry pins), so a
  * profile-ranked candidate and an item-ranked candidate are the same kind of
@@ -2168,9 +2213,20 @@ async function dispatchProfileCommand(args, deps) {
   } catch (e) {
     evidenceData = {};
   }
+  const {
+    fixtureDir: profileFixtureDir,
+    opencodeModelsFixture: profileOpencodeModelsFixture,
+    comboFixture: profileComboFixture,
+    hasOfflineFixture: profileOfflineFixture,
+  } = resolveFixturePaths(args, deps);
   const optsWithEvidence = Object.assign({}, deps, {
     scanFile: args['scan-file'] || deps?.scanFile,
     evidenceData,
+    ...(profileFixtureDir ? { fixtureDir: profileFixtureDir } : {}),
+    ...(profileOpencodeModelsFixture
+      ? { opencodeModelsFixture: profileOpencodeModelsFixture }
+      : {}),
+    ...(profileComboFixture ? { comboFixture: profileComboFixture } : {}),
     routeHealthFile: args['route-health'] || (deps && deps.routeHealthFile) || undefined,
     accounts,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
@@ -2231,7 +2287,7 @@ async function dispatchProfileCommand(args, deps) {
   });
   const jevAsk =
     (deps && deps.jevAsk) ||
-    (!(args.execute !== true && deps && deps.dryRunOffline === true) &&
+    (!(args.execute !== true && ((deps && deps.dryRunOffline === true) || profileOfflineFixture)) &&
       jev.buildAskFromSource(jevSource, {
         home: optsWithEvidence.home,
         env: (deps && deps.env) || process.env,
@@ -2362,8 +2418,10 @@ function dispatchCommand(args, deps = {}) {
   const execute = args.execute === true;
   const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
   const isDryRun = dryRunFlag || !execute;
+  const { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture } =
+    resolveFixturePaths(args, deps);
   // Only the real CLI entry sets this: injected test seams keep their paths.
-  const noInference = isDryRun && deps.dryRunOffline === true;
+  const noInference = (isDryRun && deps.dryRunOffline === true) || hasOfflineFixture;
   const output = deps.log || console.log;
   const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
@@ -2401,7 +2459,8 @@ function dispatchCommand(args, deps = {}) {
     !process.env.AGY_RUNS_DIR &&
     !args.close &&
     !args.complete &&
-    !args.fail
+    !args.fail &&
+    !hasOfflineFixture
   ) {
     const freshness = require('./catalogue-refresh').catalogueFreshness({
       dataDir: args['discovery-dir'] || deps.discoveryDataDir,
@@ -2471,7 +2530,7 @@ function dispatchCommand(args, deps = {}) {
   if (
     !args.plan &&
     !Array.isArray(deps.candidates) &&
-    (args['combo-config'] || deps.readDispatchComboConfig) &&
+    (args['combo-config'] || deps.readDispatchComboConfig || comboFixture) &&
     deps.nineRouterComboConfig === undefined
   ) {
     const registry = deps.registry || require('./sources').loadSources();
@@ -2482,12 +2541,27 @@ function dispatchCommand(args, deps = {}) {
       }
       return dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config });
     }
-    const read = deps.readDispatchComboConfig;
+    const read = deps.readDispatchComboConfig || require('./writer-combo').readComboConfig;
     return Promise.resolve()
-      .then(() => read({ registry, signal: AbortSignal.timeout(3000) }))
+      .then(() =>
+        read({
+          registry,
+          signal: AbortSignal.timeout(3000),
+          comboFixture,
+          fixtureDir,
+          env: (deps && deps.env) || process.env,
+        })
+      )
       .catch(() => ({ members: null, state: 'COMBO_CONFIG_UNAVAILABLE' }))
       .then((config) =>
-        dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config })
+        dispatchCommand(args, {
+          ...deps,
+          registry,
+          nineRouterComboConfig: config,
+          ...(fixtureDir ? { fixtureDir } : {}),
+          ...(comboFixture ? { comboFixture } : {}),
+          ...(opencodeModelsFixture ? { opencodeModelsFixture } : {}),
+        })
       );
   }
 
@@ -2704,11 +2778,17 @@ function dispatchCommand(args, deps = {}) {
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
+  const { fixtureDir: dispatchFixtureDir, opencodeModelsFixture: dispatchOpencodeModelsFixture } =
+    resolveFixturePaths(args, deps);
   const ticketRoute = {
     scanFile: args['scan-file'] || deps.scanFile,
     role: item.role,
     routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
     ...(noInference ? { refreshRoutes: false } : {}),
+    ...(dispatchFixtureDir ? { fixtureDir: dispatchFixtureDir } : {}),
+    ...(dispatchOpencodeModelsFixture
+      ? { opencodeModelsFixture: dispatchOpencodeModelsFixture }
+      : {}),
   };
   const candidateList = assembleForDispatch(
     discCat,

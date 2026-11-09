@@ -23,6 +23,11 @@ function offline(t, expectedAttempts = []) {
       t.mock.method(dns, api, deny('dns.' + api));
     }
   }
+  for (const m of [require('node:http'), require('node:https')]) {
+    for (const fn of ['request', 'get']) {
+      t.mock.method(m, fn, deny('http.' + fn));
+    }
+  }
   t.mock.method(globalThis, 'fetch', deny('fetch'));
   const cp = require('node:child_process');
   for (const api of [
@@ -393,3 +398,94 @@ for (const kind of ['individual', 'combo', 'external']) {
     );
   });
 }
+
+test('offline dry-run dispatch with combo and opencode fixtures makes 0 outbound calls and yields a decision', async (t) => {
+  offline(t);
+  const { dispatchCommand } = require('../cli');
+  const taskFixtureDir = path.join(fixtureDir, 'task-ai-171');
+  const comboFixture = path.join(taskFixtureDir, 'combos.json');
+  const opencodeFixture = path.join(taskFixtureDir, 'opencode-models.txt');
+  const envFixture = {
+    ...process.env,
+    NINEROUTER_API_KEY: 'test-fake-key',
+    TYPESAFE_API_KEY: 'test-fake-key',
+    SHIPDE_COMBO_FIXTURE: comboFixture,
+    SHIPDE_OPENCODE_MODELS_FIXTURE: opencodeFixture,
+  };
+  const prevEnv = process.env;
+  process.env = envFixture;
+  t.after(() => {
+    process.env = prevEnv;
+  });
+
+  const result = await dispatchCommand(
+    {
+      'dry-run': true,
+      json: true,
+      'evidence-dir': path.join(__dirname, '..', 'data', 'evidence'),
+      'fixture-dir': taskFixtureDir,
+      'combo-fixture': comboFixture,
+      'opencode-models-fixture': opencodeFixture,
+    },
+    {
+      readDispatchComboConfig: require('../writer-combo').readComboConfig,
+      evidenceDir: path.join(__dirname, '..', 'data', 'evidence'),
+      fixtureDir: taskFixtureDir,
+      comboFixture,
+      opencodeModelsFixture: opencodeFixture,
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    }
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.decision, 'dispatch completes with a non-null decision');
+  assert.ok(result.decision.candidates.length > 0, 'candidates are present in the decision');
+});
+
+test('readComboConfig and builtinOpencodeModels respect fixture overrides with zero outbound calls', async (t) => {
+  offline(t);
+  const combo = require('../writer-combo');
+  const candidatesApi = require('../candidates');
+  const taskFixtureDir = path.join(fixtureDir, 'task-ai-171');
+  const comboFixture = path.join(taskFixtureDir, 'combos.json');
+  const opencodeFixture = path.join(taskFixtureDir, 'opencode-models.txt');
+
+  // Direct option override
+  const comboCfg = await combo.readComboConfig({
+    name: 'vinh',
+    comboFixture,
+  });
+  assert.equal(comboCfg.name, 'vinh');
+  assert.equal(comboCfg.state, 'READ');
+  assert.deepEqual(comboCfg.members, ['fake-gateway/test-member-model']);
+  assert.ok(comboCfg.readVia);
+  assert.ok(comboCfg.readAt);
+
+  const models = candidatesApi.builtinOpencodeModels(
+    { opencodeProvider: 'opencode' },
+    { opencodeModelsFixture: opencodeFixture }
+  );
+  assert.deepEqual(models, ['test-builtin-model-a', 'test-builtin-model-b']);
+
+  // Environment variable override
+  const origComboEnv = process.env.SHIPDE_COMBO_FIXTURE;
+  const origModelsEnv = process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+  process.env.SHIPDE_COMBO_FIXTURE = comboFixture;
+  process.env.SHIPDE_OPENCODE_MODELS_FIXTURE = opencodeFixture;
+  t.after(() => {
+    if (origComboEnv === undefined) delete process.env.SHIPDE_COMBO_FIXTURE;
+    else process.env.SHIPDE_COMBO_FIXTURE = origComboEnv;
+    if (origModelsEnv === undefined) delete process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+    else process.env.SHIPDE_OPENCODE_MODELS_FIXTURE = origModelsEnv;
+  });
+
+  const envComboCfg = await combo.readComboConfig({ name: 'vinh' });
+  assert.equal(envComboCfg.name, 'vinh');
+  assert.equal(envComboCfg.state, 'READ');
+  assert.deepEqual(envComboCfg.members, ['fake-gateway/test-member-model']);
+
+  const envModels = candidatesApi.builtinOpencodeModels({ opencodeProvider: 'opencode' }, {});
+  assert.deepEqual(envModels, ['test-builtin-model-a', 'test-builtin-model-b']);
+});

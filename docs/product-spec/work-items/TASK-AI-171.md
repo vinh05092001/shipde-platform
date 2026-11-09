@@ -789,3 +789,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Matches Antigravity account quotas by exact quota group name and window rather than family; maps display-name aliases; blocks exhausted/unmapped models with QUOTA_EXHAUSTED and QUOTA_GROUP_UNKNOWN.
 - Depends on: Slice 3 (`fix/task-ai-171-core-s3-external-sources`).
 - Evidence: 5/5 tests in `task-ai-171-quota-group.test.js` and 14/14 tests in `task-ai-69.test.js` pass offline.
+
+## Slice 5: C — Offline replay dry-run fixtures (2026-11-10)
+
+- Scope: `tools/ai-brain/writer-combo.js`, `tools/ai-brain/candidates.js` (`builtinOpencodeModels`), `tools/ai-brain/cli.js` (`resolveFixturePaths`), `tools/ai-brain/test/fixtures/task-ai-171/*`, `tools/ai-brain/test/task-ai-171-offline-replay.test.js`.
+- Outcome: Supports offline dry-run dispatch with combo and opencode model fixtures; makes zero outbound network calls and respects CLI and environment fixture overrides.
+- Depends on: Slice 4 (`fix/task-ai-171-core-s4-quota-group`).
+- Evidence: 6/6 tests in `task-ai-171-offline-replay.test.js` pass with strict offline network guards active.

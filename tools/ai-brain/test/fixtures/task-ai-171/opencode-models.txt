@@ -1,0 +1,2 @@
+opencode/test-builtin-model-a
+opencode/test-builtin-model-b

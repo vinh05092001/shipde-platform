@@ -959,19 +959,50 @@ function builtinOpencodeModels(source, o) {
       o?.timeoutMs;
     const timeoutMs = Number(configuredTimeout);
 
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    const fixture =
+      o?.opencodeModelsFixture ||
+      o?.modelsFixture ||
+      (o?.fixtureDir && require('path').join(o.fixtureDir, 'opencode-models.txt')) ||
+      (o?.env && o.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
+      process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+
+    if (!fixture && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       return [];
     }
 
-    const run =
-      o?.listOpencodeModels ||
-      (() =>
+    let run = o?.listOpencodeModels;
+    if (!run && fixture) {
+      run = () => {
+        const fs = require('fs');
+        const raw = typeof fixture === 'object' ? fixture : fs.readFileSync(fixture, 'utf8');
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const list = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed?.models)
+              ? parsed.models
+              : null;
+          if (list) {
+            return list
+              .map((m) => {
+                const s = typeof m === 'string' ? m : m?.id || m?.model || '';
+                return s.includes('/') ? s : `${provider}/${s}`;
+              })
+              .join('\n');
+          }
+        } catch {}
+        return String(raw);
+      };
+    }
+    if (!run) {
+      run = () =>
         require('child_process').execFileSync('opencode', ['models'], {
           encoding: 'utf8',
           timeout: timeoutMs,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'ignore'],
-        }));
+        });
+    }
     models = String(run())
       .split(/\r?\n/)
       .map((l) => l.trim())
