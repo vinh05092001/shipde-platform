@@ -2,12 +2,14 @@
 
 const fs = require('fs');
 const { Level, ProofLevel, Status } = require('./evidence');
+const { classifyQuotaResponse } = require('./quota-scan');
 
 const identity = (sourceId, accountId, modelId) => JSON.stringify([sourceId, accountId, modelId]);
 
-// File order is observation order. No alias expansion, credential reads or persistence.
+// Explicit observation time wins; file order breaks ties for legacy rows.
 function readScanLiveness(file) {
   const latest = new Map();
+  const explicitKeys = new Set();
   if (!file) return latest;
   const observedAt = fs.statSync(file).mtime.toISOString();
   const lines = fs
@@ -31,17 +33,40 @@ function readScanLiveness(file) {
     ) {
       throw new Error('SCAN_INVALID_LINE:' + (index + 1));
     }
+    const explicit = row.observedAt || row.at;
+    const at = explicit || observedAt;
+    if (!Number.isFinite(Date.parse(at))) throw new Error('SCAN_INVALID_LINE:' + (index + 1));
+    const classified =
+      row.body !== undefined || row.snippet !== undefined
+        ? classifyQuotaResponse(
+            row.httpStatus,
+            row.body ?? row.snippet,
+            row.headers,
+            Date.parse(at)
+          )
+        : { reason: row.reason, retryAfter: null };
     const passed =
-      row.reason === 'OK' &&
+      classified.reason === 'OK' &&
       Number.isInteger(row.httpStatus) &&
       row.httpStatus >= 200 &&
       row.httpStatus < 300;
-    latest.set(identity(row.sourceId, row.accountId, row.modelId), {
-      reason: row.reason,
+    const key = identity(row.sourceId, row.accountId, row.modelId);
+    const previous = latest.get(key);
+    // Explicit observation time outranks the synthetic file mtime; among explicit rows the later
+    // time wins, among legacy rows the later file row wins. A legacy row never beats an explicit.
+    if (previous) {
+      if (explicitKeys.has(key) && !explicit) return;
+      if (explicitKeys.has(key) && Date.parse(previous.observedAt) > Date.parse(at)) return;
+    }
+    if (explicit) explicitKeys.add(key);
+    else explicitKeys.delete(key);
+    latest.set(key, {
+      reason: classified.reason,
       status: passed ? Status.PASSED : Status.FAILED,
       level: Level.API,
       proofLevel: ProofLevel.API_PASS,
-      observedAt,
+      observedAt: at,
+      retryAfter: classified.retryAfter,
       ...(Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0 ? { elapsedMs: row.elapsedMs } : {}),
     });
   });

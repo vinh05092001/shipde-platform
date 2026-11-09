@@ -652,6 +652,86 @@ files: **78/78 pass**; Prettier 3.9.6 and the hardcode guard pass.
 Limitations: offline Windows only; Linux CI, cutover and independent review are
 unverified. No network or credential reads.
 
+## PR 03 — Keep liveness and quota failures within their actual route (2026-11-08)
+
+Ported coordinator observation boundaries for B24/B27/B28/B29/B30/B32/B33/B61
+through existing scan, quota and health modules. Exact source/account/model scans
+reuse quota classification (including outer 503/inner errors), retain observation
+time and retry evidence, and discard response text. Older observations cannot
+replace newer failures. Structured completion evidence tolerates a post-answer
+timeout; error prose is not completion. Family quota admission combines all
+windows, preserves five-hour exhaustion and requires fresh telemetry after reset.
+An explicitly unavailable health store refuses admission. Selection does not read
+raw provider logs or credentials; due probes remain explicit existing commands.
+
+Offline evidence: new `task-ai-171-route-pr03-observations` suite before changes:
+**9 tests, 0 pass, 9 fail**. After changes plus existing `task-ai-171-auth-scope`,
+`task-ai-171-onboard-scope`, `task-ai-171-route-health-evidence`:
+**50 tests, 50 pass, 0 fail**. Additional P5 liveness/PR 02 compatibility with the
+new suite: **25 tests, 25 pass, 0 fail**. No network, external script changes or
+commit; live evidence, remote CI and independent review remain outstanding.
+
+Changed JavaScript formatted with offline Prettier 3.9.6 and repo settings;
+`git diff --check` passes. The hardcode guard could not execute:
+`ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`. No dependency install or
+network fallback was attempted; coordinator must rerun this gate with dependencies.
+
+## PR 03 — repair round 1: review findings (2026-11-09)
+
+Finding Piant1 (synthetic file timestamp outranked an explicit newer failure)
+fixed in `tools/ai-brain/scan-liveness.js`: each record now tracks whether its
+time came from an explicit `observedAt`/`at`. An explicit timestamp always wins;
+the file mtime is used only to break ties between legacy rows in file order.
+Test `PR03: synthetic file timestamp never outranks an explicit newer failure`.
+
+Finding 2 (merging quota windows released an exhausted route prematurely bodily)
+fixed in `tools/ai-brain/quota-scan.js` `mergeQuotaWindows`: a family keeps the
+lowest remaining percent and,756 when several windows are exhausted, the
+**furthest** reset. The block therefore survives until the last binding window
+resets, and unknown/expired telemetry still reports `known:false`.
+Test `PR03: merging quota windows keeps the last exhausted reset so the block
+survives`.
+
+Both new tests fail on `19707394` (suite 9 pass / 2 fail) and pass after
+(16 pass / 0 fail) together with `task-ai-171-route-pr02-admission`.
+Changed files pass Prettier 3.9.6. The hardcode guard remains BLOCKED_BY_SANDBOX:
+`ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`.
+
+## PR 03 — fallback repair: preserve unknown family telemetry (2026-11-09)
+
+Operator assigned fallback repair after two Controller-chosen writers did not
+converge. Fixed the P1 finding in `.oc/findings.md` at reviewed SHA `1690c184`:
+`mergeQuotaWindows` now keeps `known:false` whenever any family window is unknown
+or expired, regardless of row order (BR-ROUTING-05). A usable weekly window cannot
+release a family that requires a fresh telemetry probe.
+
+Six cases exercise expired, missing and explicit unknown short windows in both
+orders through `scanCliLanes`, checking `STATE_ERROR`, `requiresProbe:true` and
+blocked admission. Before the fix the requested two suites had **19 pass / 3 fail**;
+all three forward-order regression cases failed with `OK` instead of `STATE_ERROR`.
+After the fix: **22 tests, 22 pass, 0 fail, 0 skipped** using:
+
+```bash
+node --test tools/ai-brain/test/task-ai-171-route-pr03-observations.test.js tools/ai-brain/test/task-ai-171-route-pr02-admission.test.js
+```
+
+Offline evidence only; no network, credential reads or commit. The hardcode guard
+cannot load the missing `@typescript-eslint/parser`; no dependency install was
+attempted. Independent review and remote CI remain outstanding.
+Formatting could not run: `npx.cmd --offline prettier@3.9.6` returned
+`ENOTCACHED`; the shared installation directory also lacks the executable.
+`git diff --check` passes. Graph query `node C:/Tools/graphify/q.js 5c574f7a
+scanCliLanes` located the quota path; that graph is stale relative to `1690c184`,
+so the current quota implementation and executable regressions supplied proof.
+
+## PR 03 update outcome — sync with origin/main (2026-11-09)
+
+Outcome: merged `origin/main` (containing squash-merged PR 02 `0274c68d`) into PR 03.
+Resolved merge conflicts by adopting `origin/main` for PR 02 owned files (`identity.js`,
+`task-ai-171-route-pr02-admission.test.js`), preserving PR 02 updates in `cli.js` while
+re-applying PR 03's explicit unavailable health guard, and retaining PR 03 scope in
+`scan-liveness.js`, `quota-scan.js`, `route-health.js`, and `task-ai-171-route-pr03-observations.test.js`.
+All 64 tests in PR 03 and PR 02 core suites pass offline. Diff vs `origin/main` isolates only PR 03 changes.
 ## CI tool downloads retry and fail loudly (2026-11-09)
 
 Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
