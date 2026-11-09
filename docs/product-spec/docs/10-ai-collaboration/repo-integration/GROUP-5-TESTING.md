@@ -39,7 +39,7 @@ accessibility incomplete/violations become findings, performance budget breaches
     "toolId": "playwright",
     "repo": "microsoft/playwright",
     "state": "WIRED",
-    "evidenceRef": "apps/web/package.json",
+    "evidenceRef": "apps/web/package.json:devDependencies",
     "command": "test:a11y",
     "blocked": false,
     "blockedReason": null,

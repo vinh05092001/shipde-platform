@@ -42,7 +42,7 @@ test('exact group inventory and shared contract, without claiming missing manife
       assert.equal(r.toolId, entry.id);
       assert.equal(r.registrationPending, false);
       if (entry.installed) {
-        assert.notEqual(r.state, 'DECLARED', 'installed entry must not stay DECLARED');
+        assert.equal(r.state, 'INSTALLED', 'installed entry must be exactly INSTALLED');
         assert.equal(r.blocked, false);
       } else {
         assert.equal(r.state, 'DECLARED');

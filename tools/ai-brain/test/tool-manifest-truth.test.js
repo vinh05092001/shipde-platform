@@ -35,7 +35,6 @@ const INSTALLED_EXPECTATIONS = {
     file: 'apps/web/package.json',
     section: 'devDependencies',
     member: '@playwright/test',
-    ref: 'package.json:devDependencies.@playwright/test',
   },
   'axe-core': { file: 'apps/web/package.json', section: 'devDependencies', member: 'axe-core' },
   eslint: { file: 'package.json', section: 'devDependencies', member: 'eslint' },
@@ -133,7 +132,14 @@ describe('GOAL-AUTOCLAW-REPOS-1 — tool-manifest truth (AC-1, AC-2, AC-4)', () 
       'the set of installed entries must equal the verified expectation table'
     );
 
+    const byId = Object.fromEntries(manifest.map((entry) => [entry.id, entry]));
     for (const [id, expect] of Object.entries(INSTALLED_EXPECTATIONS)) {
+      const cited = byId[id].evidenceRef;
+      const base = expect.ref || `${expect.file}:${expect.section}`;
+      assert.ok(
+        cited === base || cited === `${base}.${expect.member}`,
+        `${id}: evidenceRef must cite the verified package section, got ${cited}`
+      );
       const pkg = readJson(expect.file);
       const section = pkg[expect.section];
       if (expect.member === null) {

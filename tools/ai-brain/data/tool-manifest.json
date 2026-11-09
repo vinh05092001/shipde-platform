@@ -162,7 +162,7 @@
     "gate": false,
     "command": "test:a11y",
     "installed": true,
-    "evidenceRef": "apps/web/package.json"
+    "evidenceRef": "apps/web/package.json:devDependencies"
   },
   {
     "id": "playwright-cli",
