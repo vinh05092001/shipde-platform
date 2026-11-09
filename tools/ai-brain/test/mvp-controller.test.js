@@ -169,6 +169,21 @@ describe('MVP Controller Contract (tools/ai-brain/cli.js dispatch)', () => {
       });
     });
     fs.writeFileSync(cataloguePath, lines.join('\n') + '\n', 'utf8');
+    const at = new Date().toISOString();
+    const staleAt = new Date(Date.now() - 4 * 86400000).toISOString();
+    const gws = [...new Set(candidates.map((c) => c.gateway || c.source || '9router'))];
+    const src = (id, lastSuccessfulAt = at) => ({
+      id,
+      status: 'enumerated',
+      advertised: 1,
+      lastSuccessfulAt,
+    });
+    // Freshness: scenario gws, fallback autoclaw (upstream 'zai' outside 'antigravity'), stale codex
+    const sources = [...gws.map((id) => src(id, at)), src('autoclaw', at), src('codex', staleAt)];
+    fs.writeFileSync(
+      path.join(discoveryDir, 'freshness.json'),
+      JSON.stringify({ lastSuccessfulAt: at, sources })
+    );
   }
 
   function runDispatch(cliArgs) {

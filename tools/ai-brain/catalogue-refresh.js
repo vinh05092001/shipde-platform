@@ -50,6 +50,91 @@ function sanitizeScope(rawScope) {
     );
 }
 
+function sourceFreshness(sourceIdOrObj, options = {}) {
+  const doc =
+    options.freshness !== undefined
+      ? options.freshness
+      : readJson(path.join(options.dataDir || DATA_DIR, 'freshness.json'), null);
+  const now = Number(options.now ?? Date.now());
+  const maxAgeMs = options.maxAgeMs ?? MAX_AGE_MS;
+  const id =
+    typeof sourceIdOrObj === 'string'
+      ? sourceIdOrObj
+      : sourceIdOrObj?.gateway ||
+        sourceIdOrObj?.sourceId ||
+        sourceIdOrObj?.id ||
+        sourceIdOrObj?.source;
+
+  const rej = (ts = null) => ({
+    sourceId: id || null,
+    admitted: false,
+    stale: true,
+    code: 'SOURCE_CATALOGUE_STALE',
+    reason: 'SOURCE_CATALOGUE_STALE',
+    lastSuccessfulAt: ts,
+    staleListingRetained: false,
+    status: 'rejected',
+  });
+
+  // Rule: agy-pool runtime accounts are not catalogue-listed sources.
+  // Source: discovery/adapters.js (CLI harness has no catalogue endpoint),
+  // discovery.js:128 (presence-only), and sources.json (agent-cli, no endpoint).
+  if (
+    id === 'agy-pool' ||
+    sourceIdOrObj?.harness === 'agy-pool' ||
+    sourceIdOrObj?.source === 'agy-pool' ||
+    sourceIdOrObj?.kind === 'evidence'
+  ) {
+    return {
+      sourceId: id || 'agy-pool',
+      admitted: true,
+      stale: false,
+      code: null,
+      reason: null,
+      lastSuccessfulAt: null,
+      staleListingRetained: false,
+      status: 'admitted',
+    };
+  }
+
+  if (!doc || !id) return rej();
+  const match = (s) => s && (s.id === id || s.id === 'opencode:' + id || s.id.endsWith(':' + id));
+  const src = (doc.sources || []).find(match);
+  const failed = (doc.failedSources || []).find(match);
+  if (!src && !failed) return rej();
+
+  const isEnum = src && (src.status === 'enumerated' || src.status === 'enumerated-via-route');
+  const hasModels = Boolean(
+    src &&
+    (src.advertised > 0 ||
+      (src.catalogs || []).some((c) => c.count > 0 || (c.models || []).length > 0))
+  );
+  const failedThisRun = Boolean(
+    failed ||
+    !src ||
+    src.incomplete ||
+    src.staleListingRetained ||
+    !isEnum ||
+    !hasModels ||
+    (src.reason && !src.advertised)
+  );
+
+  const ts = failedThisRun ? src?.lastSuccessfulAt || src?.lastGoodAt : src.lastSuccessfulAt;
+  if (!ts) return rej();
+  const age = now - Date.parse(ts);
+  if (!Number.isFinite(age) || age < 0 || age > maxAgeMs) return rej(ts || null);
+  return {
+    sourceId: id,
+    admitted: true,
+    stale: false,
+    code: null,
+    reason: null,
+    lastSuccessfulAt: ts,
+    staleListingRetained: failedThisRun,
+    status: failedThisRun ? 'stale-listing-retained' : 'admitted',
+  };
+}
+
 /**
  * The 48h gate derives from exactly one persisted observation record
  * (freshness.json), which refreshCatalogue replaces atomically and advances
@@ -63,16 +148,18 @@ function sanitizeScope(rawScope) {
 function catalogueFreshness(options = {}) {
   const dataDir = options.dataDir || DATA_DIR;
   const doc = options.freshness || readJson(path.join(dataDir, 'freshness.json'), null);
+  const now = Number(options.now ?? Date.now());
+
   if (!doc || !doc.lastSuccessfulAt) {
     return {
       stale: true,
       code: 'STALE_CATALOGUE',
       lastSuccessfulAt: null,
       ageHours: null,
+      doc: doc || null,
     };
   }
   const observed = Date.parse(doc.lastSuccessfulAt);
-  const now = Number(options.now ?? Date.now());
   const ageMs = now - observed;
   const futureSkew = ageMs < 0;
   const expired = ageMs > MAX_AGE_MS;
@@ -82,6 +169,7 @@ function catalogueFreshness(options = {}) {
     code: stale ? 'STALE_CATALOGUE' : null,
     lastSuccessfulAt: doc.lastSuccessfulAt || null,
     ageHours: Number.isFinite(ageMs) && ageMs >= 0 ? ageMs / 3600000 : null,
+    doc,
   };
 }
 
@@ -199,6 +287,30 @@ async function refreshCatalogue(options = {}) {
     if (name === 'discovery run') {
       discovery = readJson(discoveryFile, null);
       if (options.persist !== false && stageExitCode === 0 && discovery?.listedSources > 0) {
+        const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
+        for (const src of discovery.sources || []) {
+          const failed = (discovery.failedSources || []).some((f) => f.id === src.id);
+          const ok =
+            !failed &&
+            (src.status === 'enumerated' || src.status === 'enumerated-via-route') &&
+            !src.incomplete &&
+            (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0));
+          const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
+          src.lastSuccessfulAt = ok
+            ? discovery.lastAttemptAt || startedAt
+            : prev?.lastSuccessfulAt || null;
+          src.staleListingRetained = !ok && isRecent(src.lastSuccessfulAt);
+        }
+        const seen = new Set((discovery.sources || []).map((s) => s.id));
+        for (const prev of previousFreshness.sources || []) {
+          if (!seen.has(prev.id)) {
+            discovery.sources.push({
+              ...prev,
+              staleListingRetained: isRecent(prev.lastSuccessfulAt),
+            });
+            seen.add(prev.id);
+          }
+        }
         writeJson(freshnessFile, discovery);
         discoveryPublished = true;
       }
@@ -283,13 +395,19 @@ async function refreshCatalogue(options = {}) {
         ];
       }
     }
-    if (!discoveryPublished)
+    if (!discoveryPublished) {
+      const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
       writeJson(freshnessFile, {
+        sources: (previousFreshness.sources || []).map((s) => ({
+          ...s,
+          staleListingRetained: isRecent(s.lastSuccessfulAt),
+        })),
         lastAttemptAt: report.finishedAt,
         lastSuccessfulAt: previousFreshness.lastSuccessfulAt || null,
         complete: false,
         failedSources,
       });
+    }
   }
 
   fs.rmSync(discoveryFile, { force: true });
@@ -310,6 +428,7 @@ if (require.main === module)
 
 module.exports = {
   catalogueFreshness,
+  sourceFreshness,
   refreshCatalogue,
   readJson,
   writeJson,
