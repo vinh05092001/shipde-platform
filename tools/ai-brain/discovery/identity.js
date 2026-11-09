@@ -29,18 +29,22 @@
  * that could leak a secret would make the whole store radioactive.
  */
 
+const { escapePart, unescapePart } = require('../route-identity-utils');
 const GATEWAY_PREFIX_SEPARATOR = '::';
 
 /**
  * A composite, stable, human-readable key for one candidate.
  *
- * Fields are joined with the unit separator. Model ids are arbitrary strings
- * chosen by the router, not by us, so a separator that cannot appear in an id
- * is preferred over punctuation an id might legitimately contain.
+ * Fields are joined with '::'.  When any field value contains a character that
+ * requires escaping (%, ::, U+241F, or a boundary colon), the key is prefixed
+ * with the ASCII record-separator '\x1E' so parsers can unambiguously detect
+ * whether the key was written with component escaping (new format) or as-is
+ * (pre-upgrade/legacy format).  Keys for identities with no special characters
+ * are identical to their legacy form and carry no prefix.
  */
 function candidateKey(identity) {
   const i = identity || {};
-  return [
+  const rawParts = [
     i.harness || '',
     i.accessPath || '',
     i.gateway || '',
@@ -48,7 +52,15 @@ function candidateKey(identity) {
     i.account !== undefined ? i.account : i.accountId || '*',
     i.quotaScope || '',
     i.modelId || i.model || '',
-  ].join(GATEWAY_PREFIX_SEPARATOR);
+  ];
+  // Preserve legacy URL colons; encode separators and boundary colons only.
+  const escaped = rawParts.map((part) => String(part).replace(/%|::|\u241f|^:|:$/g, escapePart));
+  const joined = escaped.join(GATEWAY_PREFIX_SEPARATOR);
+  // Prefix with the format marker only when at least one field was escaped.
+  // This keeps plain-identity keys identical to their pre-upgrade form so
+  // existing stored keys remain valid without any migration.
+  const anyEscaped = rawParts.some((part, idx) => escaped[idx] !== String(part));
+  return anyEscaped ? '\x1E' + joined : joined;
 }
 
 /**
@@ -57,7 +69,15 @@ function candidateKey(identity) {
  */
 function parseCandidateKey(key) {
   if (typeof key !== 'string') return null;
-  const parts = key.includes('::') ? key.split('::') : key.split('\u241f');
+  // Keys written by the current candidateKey() carry the '\x1E' (record-separator)
+  // prefix when at least one field value was escaped.  Those keys are decoded.
+  // All other keys are pre-upgrade/legacy keys whose field values must be kept
+  // verbatim — decoding them would reinterpret literal %25 as %, %3A as :, etc.
+  const isNewFormat = key.startsWith('\x1E');
+  const keyBody = isNewFormat ? key.slice(1) : key;
+  const useUnitSep = !keyBody.includes('::');
+  const rawParts = useUnitSep ? keyBody.split('\u241f') : keyBody.split('::');
+  const parts = isNewFormat ? rawParts.map(unescapePart) : rawParts;
   if (parts.length === 7) {
     return {
       harness: parts[0],
