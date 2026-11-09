@@ -774,3 +774,10 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Rule: Upstream failure beats gateway AVAILABLE; newer scoped failure beats stale AVAILABLE; no whole-gateway block (unrelated upstream on same gateway remains eligible).
 - Evidence: `tools/ai-brain/test/task-ai-171-health-lookup.test.js` (task-ai-171-health-lookup 4/0).
 - Next: 2a2 execute path.
+
+## Slice 2a: INT-1 — Controller execute path & outcome recording (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand` `--execute` flag, `makeExecuteResult`), `tools/ai-brain/harness.js`, `tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+- Outcome: Executes chosen candidate through harness dispatch with bound argv identity, records execution failure to model-route-health store, and returns structured result to CLI entrypoint.
+- Depends on: Slice 1 (`fix/task-ai-171-core-s1-gateway-error-class`).
+- Evidence: 3/3 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
