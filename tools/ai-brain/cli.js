@@ -2418,16 +2418,16 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
-    const maskValue = (v) => {
-      if (typeof v === 'string') return maskEmailsInString(v);
-      if (Array.isArray(v)) return v.map(maskValue);
-      if (v && typeof v === 'object') {
-        return Object.fromEntries(
-          Object.entries(v).map(([k, val]) => [maskValue(k), maskValue(val)])
-        );
-      }
-      return v;
-    };
+    const maskValue = (v) =>
+      typeof v === 'string'
+        ? maskEmailsInString(v)
+        : Array.isArray(v)
+          ? v.map(maskValue)
+          : v && typeof v === 'object'
+            ? Object.fromEntries(
+                Object.entries(v).map(([k, val]) => [maskValue(k), maskValue(val)])
+              )
+            : v;
     const res = maskValue({
       chosen: chosen || null,
       launchedArgvIdentity: launchedId || null,
@@ -3509,6 +3509,7 @@ function dispatchCommand(args, deps = {}) {
             Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
             (args.timeout ? Number(args.timeout) : 3600),
           timeoutMs: launchTimeoutMs,
+          effort: finalChosenCandidate.effort || args.effort || deps?.effort,
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3597,6 +3598,14 @@ function dispatchCommand(args, deps = {}) {
             decisionDir,
             checkpoint: checkpointFile,
             timeoutMs: launchTimeoutMs,
+            candidateKey: finalChosenKey,
+            candidate: finalChosenCandidate,
+            model: finalChosenCandidate.modelId || finalChosenCandidate.model,
+            modelId: finalChosenCandidate.modelId || finalChosenCandidate.model,
+            account: finalChosenCandidate.accountId || finalChosenCandidate.account,
+            accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
+            harness: harnessName,
+            effort: finalChosenCandidate.effort || args.effort || deps?.effort,
           });
         } catch (err) {
           thrownError = err;

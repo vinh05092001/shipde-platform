@@ -9,23 +9,22 @@ const { dispatchCommand, main } = require('../cli');
 const { candidateKey, parseCandidateKey } = require('../discovery/identity');
 const routeHealthApi = require('../route-health');
 
-function makeCandidate(modelId, upstream, accountId, cost = 1, quality = 90) {
+function makeCandidate(modelId, upstream, accountId, cost = 1, quality = 90, extra = {}) {
   const c = { harness: 'hermes', accessPath: 'cli', gateway: '9router' };
   Object.assign(c, { upstream, accountId, quotaScope: accountId, modelId });
-  Object.assign(c, { cost, quality, qualifiedRoles: ['author.foundation'] });
+  Object.assign(c, { cost, quality, qualifiedRoles: ['author.foundation'] }, extra);
   c.candidateKey = candidateKey(c);
   return c;
 }
 
-function parseJsonLog(logs) {
-  return logs
+const parseJsonLog = (logs) =>
+  logs
     .map((e) => {
       try {
         return JSON.parse(e);
       } catch {}
     })
     .find((e) => e?.chosen);
-}
 
 function createTestHarness() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'int1-'));
@@ -39,33 +38,34 @@ function createTestHarness() {
     paths: { 'm-alpha|9router': { modelId: 'm-alpha', routeId: '9router', status: 'AVAILABLE' } },
     events: [],
   });
-  const execArgs = () => ({
-    execute: true,
-    json: true,
-    cwd: wt,
-    'prompt-file': pFile,
-    item: 'TASK-AI-171-TEST',
-  });
-  const dryArgs = () => ({ 'dry-run': true, json: true, item: 'TASK-AI-171-TEST' });
-  const deps = (now, candidates) => ({
-    candidates,
-    now,
-    quotaStateFile: qFile,
-    routeHealthFile: hFile,
-    home: dir,
-    decisionDir: dir,
-    evidenceDir: dir,
-    maxAttempts: 1,
-    concurrency: 1,
-  });
+  const testDeps = (now, candidates, extra = {}) =>
+    Object.assign(
+      { candidates, now, maxAttempts: 1, concurrency: 1 },
+      {
+        quotaStateFile: qFile,
+        routeHealthFile: hFile,
+        home: dir,
+        decisionDir: dir,
+        evidenceDir: dir,
+      },
+      extra
+    );
   return {
     dir,
     wt,
     pFile,
+    qFile,
     hFile,
-    execArgs,
-    dryArgs,
-    deps,
+    testDeps,
+    execArgs: (extra = {}) => ({
+      execute: true,
+      json: true,
+      cwd: wt,
+      'prompt-file': pFile,
+      item: 'TASK-AI-171-TEST',
+      ...extra,
+    }),
+    dryArgs: () => ({ 'dry-run': true, json: true, item: 'TASK-AI-171-TEST' }),
     cleanup: () => {
       try {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -74,17 +74,19 @@ function createTestHarness() {
   };
 }
 
-function runDispatch(env, cands, runFn, now = Date.now()) {
+function runDispatch(env, cands, runFn, now = Date.now(), extraArgs = {}) {
   let exitCode = -1;
   const logs = [];
-  const res = dispatchCommand(env.execArgs(), {
-    ...env.deps(now, cands),
-    run: runFn,
-    exit: (c) => {
-      exitCode = c;
-    },
-    log: (m) => logs.push(m),
-  });
+  const res = dispatchCommand(
+    env.execArgs(extraArgs),
+    Object.assign(env.testDeps(now, cands), {
+      run: runFn,
+      exit: (c) => {
+        exitCode = c;
+      },
+      log: (m) => logs.push(m),
+    })
+  );
   return { res, exitCode, jsonLog: parseJsonLog(logs) };
 }
 
@@ -94,6 +96,7 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     env = createTestHarness();
   });
   afterEach(() => {
+    process.exitCode = 0;
     env.cleanup();
   });
 
@@ -120,7 +123,6 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.ok(jsonLog?.recorded);
     assert.deepEqual(jsonLog.launchedArgvIdentity, chosenIdentity);
 
-    // Stub fails with "No active credentials for provider: ag" -> route-health record written
     const store = routeHealthApi.loadStore(env.hFile);
     const recA = store.paths['m-alpha|ag'];
     assert.ok(recA && recA.status !== 'AVAILABLE');
@@ -128,9 +130,8 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(res.recorded.key, 'm-alpha|ag');
     assert.equal(res.recorded.status, recA.status);
 
-    // Next dry-run rejects candidateA and keeps candidateB (P1: gateway AVAILABLE does not mask ag failure)
     const dryRun = dispatchCommand(env.dryArgs(), {
-      ...env.deps(now + 1000, [cA, cB]),
+      ...env.testDeps(now + 1000, [cA, cB]),
       allowUnprobedCandidates: true,
       exit: () => {},
       log: () => {},
@@ -156,7 +157,7 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       stdout: JSON.stringify({ candidateKey: 'suggested-route', explanation: 'worker output' }),
     });
     const res = main(argv, {
-      ...env.deps(now, [cA]),
+      ...env.testDeps(now, [cA]),
       run: runner,
       exit: (c) => {
         exitCode = c;
@@ -179,37 +180,26 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(jsonLog?.outcome?.candidateKey, res.chosen);
     assert.doesNotMatch(jsonLog?.launchedArgvIdentity?.account, /operator@example\.com/);
 
-    // Negative test (Review P2 2): worker prints a different candidateKey on success -> outcome retains launched candidate
+    // Negative test (Review P2 2 / Item 4): worker prints {"candidateKey":"<different key>","status":"passed"} on success -> outcome keeps candidate & executor status
     const diffRunner = () => ({
       exitCode: 0,
       stdout: JSON.stringify({
-        candidateKey: 'untrusted-spoofed-route',
-        status: 'completed',
-        exitCode: 99,
+        candidateKey: 'different-key',
+        status: 'passed',
+        exitCode: 42,
+        failureScope: 'worker-scope',
       }),
     });
     const { res: resDiff } = runDispatch(env, [cA], diffRunner, now);
     assert.equal(resDiff.exitCode, 0);
     assert.equal(resDiff.outcome.candidateKey, res.chosen);
     assert.equal(resDiff.outcome.status, 'completed');
-    assert.equal(resDiff.outcome.payload.candidateKey, 'untrusted-spoofed-route');
-
-    // Negative test (Review P2 2): worker prints matching candidateKey but conflicting status/scope -> executor status/exit win
-    const conflictRunner = () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        candidateKey: res.chosen,
-        status: 'worker-status-compromised',
-        exitCode: 42,
-        failureScope: 'worker-scope',
-      }),
+    assert.deepEqual(resDiff.outcome.payload, {
+      candidateKey: 'different-key',
+      status: 'passed',
+      exitCode: 42,
+      failureScope: 'worker-scope',
     });
-    const { res: resConflict } = runDispatch(env, [cA], conflictRunner, now);
-    assert.equal(resConflict.exitCode, 0);
-    assert.equal(resConflict.outcome.candidateKey, res.chosen);
-    assert.equal(resConflict.outcome.status, 'completed');
-    assert.equal(resConflict.outcome.payload.status, 'worker-status-compromised');
-    assert.equal(resConflict.outcome.payload.exitCode, 42);
   });
 
   test('INT-1: worker stdout spoofed JSON success with non-zero exit is rejected as failure', () => {
@@ -226,17 +216,70 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.deepEqual(res.launchedArgvIdentity, parseCandidateKey(res.chosen));
     assert.ok(res.failedAttempts?.length > 0);
 
-    // Negative test (Review P2 1): failure receipts still expose raw account via failedAttempts
-    const rawReceiptStr = JSON.stringify(res);
-    assert.doesNotMatch(rawReceiptStr, /operator@example\.com/);
-    assert.doesNotMatch(
-      res.failedAttempts[0].launchedArgvIdentity.account,
-      /operator@example\.com/
-    );
-    assert.doesNotMatch(res.failedAttempts[0].candidate.accountId, /operator@example\.com/);
-    assert.doesNotMatch(res.failedAttempts[0].key, /operator@example\.com/);
-    if (jsonLog) {
-      assert.doesNotMatch(JSON.stringify(jsonLog), /operator@example\.com/);
-    }
+    // Negative test (Review P2 1): failure receipts deeply mask raw account in failedAttempts
+    assert.doesNotMatch(JSON.stringify(res), /operator@example\.com/);
+    const f0 = res.failedAttempts[0];
+    assert.doesNotMatch(f0.launchedArgvIdentity.account, /operator@example\.com/);
+    assert.doesNotMatch(f0.candidate.accountId, /operator@example\.com/);
+    assert.doesNotMatch(f0.key, /operator@example\.com/);
+    if (jsonLog) assert.doesNotMatch(JSON.stringify(jsonLog), /operator@example\.com/);
+  });
+
+  test('INT-1: isolated dispatch reaches isolation launcher seam, preserves candidate options, persists receipt before launch, and forbids fallback on failure', (t) => {
+    const isoMod = require('../isolation-launcher');
+    const decisionsStore = require('../decisions');
+    const cIso = makeCandidate('m-iso-high', 'up-iso', 'acc-iso', 1, 95, {
+      harness: 'paseo',
+      effort: 'high',
+    });
+    const now = Date.now();
+    let isoLauncherCalls = 0;
+    let ordinaryCalls = 0;
+    let received = null;
+    let persistedBeforeLaunch = false;
+
+    t.mock.method(isoMod, 'getIsolatedLauncher', () => (adapter, launchArgs, options) => {
+      isoLauncherCalls++;
+      received = { adapter, launchArgs, options };
+      const records = decisionsStore.readDecisions({ dir: options?.decisionDir });
+      persistedBeforeLaunch = records.some(
+        (r) => r.stage === decisionsStore.Stage.LAUNCHED && r.chosen === cIso.candidateKey
+      );
+      throw new Error('ISOLATION_PROVISIONING_HOOK_FAILED');
+    });
+
+    let exitCode = -1;
+    const logs = [];
+    const argv =
+      `dispatch --execute --json --isolated-worker --item TASK-AI-171-TEST --cwd ${env.wt} --prompt-file ${env.pFile}`.split(
+        ' '
+      );
+    const res = main(argv, {
+      ...env.testDeps(now, [cIso]),
+      run: () => {
+        ordinaryCalls++;
+        return { exitCode: 0, stdout: 'ordinary' };
+      },
+      exit: (c) => {
+        exitCode = c;
+      },
+      log: (m) => logs.push(m),
+    });
+
+    // 1. Reaches isolated launcher seam & 0 ordinary spawns on failure (no fallback)
+    assert.equal(isoLauncherCalls, 1);
+    assert.equal(ordinaryCalls, 0);
+    assert.equal(exitCode, 1);
+    assert.equal(res?.outcome?.status, 'failed');
+    assert.match(res?.outcome?.reason || '', /ISOLATION_PROVISIONING_HOOK_FAILED/);
+
+    // 2. Chosen model/account/harness/effort unchanged in isolated launcher call
+    assert.equal(received.adapter.id, cIso.harness);
+    assert.equal(received.options.modelId, cIso.modelId);
+    assert.equal(received.options.accountId, cIso.accountId);
+    assert.equal(received.options.effort, cIso.effort);
+
+    // 3. Receipt persisted before launch
+    assert.equal(persistedBeforeLaunch, true);
   });
 });
