@@ -2115,7 +2115,9 @@ async function dispatchProfileCommand(args, deps) {
       dataDir: discDir,
       now: deps && deps.now,
     });
-    if (freshness.stale) {
+    // With --json the stale status travels in the catalogue object only: consumers parse the
+    // trailing JSON decision, so no extra line may follow it.
+    if (freshness.stale && !args.json) {
       const error = (deps && deps.error) || console.error;
       error(
         'STALE_CATALOGUE: last successful live enumeration is missing or older than 48h; run pnpm ai:refresh-catalogue'
