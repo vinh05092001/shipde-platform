@@ -71,6 +71,17 @@ A feature is vertical, not UI-only. Where applicable it includes:
 - **Gemini — primary author:** plans and implements complete foundation or vertical Work Items, adds evidence and opens/updates the Pull Request.
 - **Codex — independent reviewer:** fresh review-only task against the full Pull Request, Work Item and sources; `PASS`, `CHANGES_REQUIRED` or `BLOCKED`; does not merge or silently fix. **Human — product and merge owner:** resolves decisions, triggers gates, accepts residual risk and merges only after green CI and Codex `PASS`; the [existing conditional controller merge authorization](docs/product-spec/docs/10-ai-collaboration/AGENT-CONTRACT-DETAILS.md#role-separation) remains unchanged.
 
+## Shared coding guidelines
+
+These practices apply to authors and reviewers using any model. Adapted from [Karpathy-inspired coding guidelines](https://github.com/multica-ai/andrej-karpathy-skills) (MIT). Ship Dễ's source-of-truth order and role boundaries above still apply.
+
+- **Think before coding.** State assumptions that affect the result. Resolve conflicting evidence before editing; raise consequential ambiguity with the operator.
+- **Keep the solution small.** Reuse existing code, tools and tests. Add abstractions or dependencies only when the work item needs them.
+- **Make focused edits.** Keep every change tied to the work item. Follow local style, preserve unrelated behavior, and remove only dead code introduced by your change.
+- **Define and verify success.** Name the expected behavior and the smallest useful check. Report what ran, what passed, and what remains unverified. Scale the process to the task.
+
+For delegated work, include these four rules or explicitly tell the worker to read this section of `AGENTS.md` from its assigned checkout. Review against the work item and actual diff and test evidence.
+
 ## Detailed contract
 
 - [Full contract and section map](docs/product-spec/docs/10-ai-collaboration/AGENT-CONTRACT-DETAILS.md)
