@@ -783,16 +783,23 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Depends on: Slice 2b (`fix/task-ai-171-core-s2b-route-launch`).
 - Evidence: 3/3 tests in `task-ai-171-external-sources.test.js` and 5/5 tests in `task-ai-142-opencode-writers.test.js` pass offline.
 
-## Slice 4: A3 — Quota group matching for Antigravity pool candidates (2026-11-10)
+## Slice 4a: A3 — Quota group parser and rows in Antigravity pool runtime (2026-11-10)
 
-- Scope: `tools/ai-brain/agy-pool-runtime.js`, `tools/ai-brain/candidates.js` (`poolAccountCandidates`), `tools/ai-brain/test/task-ai-171-quota-group.test.js`, `tools/ai-brain/test/fixtures/task-ai-171-real-quota-out.json`, `tools/ai-brain/test/task-ai-69.test.js`.
-- Outcome: Matches Antigravity account quotas by exact quota group name and window rather than family; maps display-name aliases; blocks exhausted/unmapped models with QUOTA_EXHAUSTED and QUOTA_GROUP_UNKNOWN.
+- Scope: `tools/ai-brain/agy-pool-runtime.js`, `tools/ai-brain/test/task-ai-171-quota-group.test.js`, `tools/ai-brain/test/fixtures/task-ai-171-real-quota-out.json`, `tools/ai-brain/test/task-ai-69.test.js`.
+- Outcome: Parses Antigravity account quotas by exact quota group name and window rather than family; maps display-name aliases to quota groups; adds `group` field to parsed quota rows.
 - Depends on: Slice 3 (`fix/task-ai-171-core-s3-external-sources`).
-- Evidence: 5/5 tests in `task-ai-171-quota-group.test.js` and 14/14 tests in `task-ai-69.test.js` pass offline.
+- Evidence: 3/3 tests in `task-ai-171-quota-group.test.js` and 14/14 tests in `task-ai-69.test.js` pass offline.
+
+## Slice 4b: A3 — Antigravity candidate admission by quota group (2026-11-10)
+
+- Scope: `tools/ai-brain/candidates.js` (`poolAccountCandidates`), `tools/ai-brain/test/task-ai-171-quota-group.test.js`.
+- Outcome: Matches candidate models against Antigravity quota groups; blocks exhausted models with QUOTA_EXHAUSTED and unmapped models with QUOTA_GROUP_UNKNOWN.
+- Depends on: Slice 4a (`fix/task-ai-171-core-s4a-quota-parser`).
+- Evidence: 5/5 tests in `task-ai-171-quota-group.test.js` pass offline.
 
 ## Slice 5: C — Offline replay dry-run fixtures (2026-11-10)
 
 - Scope: `tools/ai-brain/writer-combo.js`, `tools/ai-brain/candidates.js` (`builtinOpencodeModels`), `tools/ai-brain/cli.js` (`resolveFixturePaths`), `tools/ai-brain/test/fixtures/task-ai-171/*`, `tools/ai-brain/test/task-ai-171-offline-replay.test.js`.
 - Outcome: Supports offline dry-run dispatch with combo and opencode model fixtures; makes zero outbound network calls and respects CLI and environment fixture overrides.
-- Depends on: Slice 4 (`fix/task-ai-171-core-s4-quota-group`).
+- Depends on: Slice 4b (`fix/task-ai-171-core-s4b-quota-admission`).
 - Evidence: 6/6 tests in `task-ai-171-offline-replay.test.js` pass with strict offline network guards active.
