@@ -56,6 +56,13 @@ describe('TASK-AI-171 Item 1: 9Router gateway error classification', () => {
     });
     assert.equal(res.cause, Cause.ACCOUNT_AUTH_FAILED);
     assert.equal(res.scope, Scope.ACCOUNT);
+
+    const res404 = classifyFailure({
+      httpStatus: 404,
+      body: 'No active credentials for provider: azure',
+    });
+    assert.equal(res404.cause, Cause.ALIAS_MISMATCH);
+    assert.equal(res404.scope, Scope.MODEL);
   });
 });
 
