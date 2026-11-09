@@ -71,7 +71,7 @@ accessibility incomplete/violations become findings, performance budget breaches
     "toolId": "axe-core",
     "repo": "dequelabs/axe-core",
     "state": "INSTALLED",
-    "evidenceRef": "apps/web/package.json",
+    "evidenceRef": "apps/web/package.json:devDependencies",
     "command": null,
     "blocked": false,
     "blockedReason": null,
