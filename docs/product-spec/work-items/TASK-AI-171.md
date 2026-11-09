@@ -447,6 +447,13 @@ Integration of the routing tickets with a measured quality policy and scan-based
 
 - `docs/ai-audit/handoff-table-20261108.md` records #538 to #545, live scoring 103 of 236 (measured after merge), the FEAT-CAR-01 Slice B product ticket and the remaining blockers.
 
+## PR 12 — Explicit coordinator inputs and offline output
+
+Operator-assigned author scope: `coordinator-options.js`, `cli.js`, `dispatch-output.js`, `route-handoff.js` and `task-ai-171-route-pr12-options.test.js` under `tools/ai-brain/`, plus this section. `dispatch --offline [--dry-run]` requires explicit `--root` (absolute), `--runtime` and `--code-sha`; ordinary mode also requires `--item`, `--cwd`, `--task` and `--snapshot`, while `--decision` consumes a structured decision without selecting again. Runtime JSON inputs are pre-sanitized exports: ordinary snapshots contain `candidates`, registry-qualified `launcherModels`, `registry`, `profile` and optional accounts/health/quota/evidence/priors/assessment metadata. Task paths resolve from the checkout; selection stages no prompts. The launch caller supplies an optional sandbox note as text.
+
+Outcome: existing assembly/admission and Controller ranking produce stable redacted JSON, retain every refusal and exact selected identity, and emit only scalar launch receipts. Offline mode reads metadata and performs no process/network/credential/cache/task side effects. Credential bootstrap (B15), raw user config (B23) and workstation startup/orphan maintenance (B54) remain separate operator-owned operations. The caller supplies the code SHA; offline inspection does not run Git or establish live liveness, independent review or cutover.
+
+Evidence: new tests fail on unchanged production code (8 tests, 0 pass, 8 fail) and pass after this change (8 tests, 8 pass, 0 fail). Combined `node --test` run with `dispatch-json.test.js`, `task-ai-171-route-handoff.test.js`, `task-ai-142-dryrun-priors.test.js` and `dispatch-wiring.test.js`: 46 tests, 42 pass, 4 fail; the same four dispatch-wiring failures reproduce at base `be926f07`. Repository Prettier and the explicit five-file no-hardcode scan pass. No network or commit; coordinator owns review and commit.
 R03 audit follow-up (2026-11-08): `docs/ai-audit/65-items-status-20261108.md` records evidence against local `origin/main` at `be926f075348e0204cf4172fe1f9e59d7cfba750`, remaining work order and separate owners for items 61–65. It does not declare system completion.
 ## AA variant takes its base (operator 2026-11-08)
 
@@ -468,3 +475,11 @@ Offline evidence only. External cutover, live routes, CI, independent review and
 ## Tool manifest matches the repository (2026-11-09)
 
 - ast-grep, playwright and axe-core are declared in package.json files and are now `installed`; semgrep and trivy point at the existing `security:semgrep` and `security:trivy` scripts; ledger records in GROUP-3 and GROUP-5 updated to INSTALLED, none promoted to EXECUTION_VERIFIED.
+## Worker playbook (2026-11-08)
+
+- `docs/product-spec/docs/10-ai-collaboration/WORKER-PLAYBOOK.md` gives every worker one guide: roles, four shared rules, graphify, tool state measured at `5c574f7a` (42 declared, 5 with a command, 2 gates), reference repositories, no-hardcode, reuse, fixing and hand-back checks. Linked from the four start prompts.
+Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`): context-pack now resolves the repository root and candidates with `fs.realpathSync`, refuses outside/unresolvable targets with sanitized manifest/result reasons, and rechecks fallback reads. Windows junction regression: before 0/8 pass (six outside-content assertions fail); after 8/8 pass. Existing context-related tests plus regression: 17/17 pass. Broader selected files: 117/118 pass, failing the AGY advertised-model test at `task-ai-141.test.js:100` (outside this repair). Hardcode guard blocked by missing `@typescript-eslint/parser`. Formatted with cached Prettier 3.9.6; no network or commit.
+## AA prefix family (operator 2026-11-08)
+
+- A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
+- Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
