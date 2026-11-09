@@ -557,3 +557,16 @@ R3 additionally needs an unrelated synthetic health record to reproduce its exac
 `0 !== 1` failure. Both pass after repair. All five requested files: **84/84 pass**.
 Formatting and the hardcode guard pass. Offline Windows evidence only; Linux CI
 and independent review remain unverified. No network, credential reads or commit.
+
+## PR 02 — Regression tests for the repair at 606c4934 (2026-11-09)
+
+Outcome: committed tests guard the three repaired behaviours: required object
+health beats unprobed admission, legacy unverified evidence cannot admit an
+account-bound offline route, and pre-upgrade keys keep literal `%`/`:` fields.
+Files: `tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js`; fixtures
+are synthetic, with no `.oc` path, model name, score or numeric cap.
+Evidence: all three fail at `7a24c39c` and pass at `606c4934`; base `710fdd5a`
+already passes because the regressions came from this branch after it. Requested
+files: **78/78 pass**; Prettier 3.9.6 and the hardcode guard pass.
+Limitations: offline Windows only; Linux CI, cutover and independent review are
+unverified. No network or credential reads.
