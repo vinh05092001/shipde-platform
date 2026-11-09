@@ -67,6 +67,7 @@ function cand(overrides) {
       qualifiedRoles: ['author.foundation'],
       capabilities: { contextWindow: 64000 },
       cost: 1,
+      evidence: [{ status: 'passed' }],
     },
     overrides || {}
   );
@@ -109,6 +110,13 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
           candidates,
           registry: registry(),
           evidenceDir,
+          routeHealthFile: path.join(tmp, 'model-route-health.json'),
+          routeHealth: require('../route-health').loadStore(
+            path.join(tmp, 'model-route-health.json'),
+            {
+              allowMissing: true,
+            }
+          ),
           decisionDir,
           home,
           now: NOW,

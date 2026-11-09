@@ -160,7 +160,8 @@ jobs:
       - name: Install Pinned Gitleaks
         run: |
           GITLEAKS_VERSION="8.24.0"
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          curl -sSL --fail --retry 5 --retry-all-errors --retry-delay 5 -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          sudo tar -xzf gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks version
       - run: pnpm build
       - name: Run Foundation Integration Tests
@@ -198,8 +199,8 @@ jobs:
           K6_VERSION="$(node -e "console.log(require('./tools/ecosystem-manifest.json').adopted.find(e=>e.id==='k6').pinned_version_or_commit)")"
           ASSET="k6-v${K6_VERSION}-linux-amd64.tar.gz"
           BASE="https://github.com/grafana/k6/releases/download/v${K6_VERSION}"
-          curl -sSLO "${BASE}/${ASSET}"
-          curl -sSL "${BASE}/k6-v${K6_VERSION}-checksums.txt" | grep " ${ASSET}$" | sha256sum -c -
+          curl -sSLO --fail --retry 5 --retry-all-errors --retry-delay 5 "${BASE}/${ASSET}"
+          curl -sSL --fail --retry 5 --retry-all-errors --retry-delay 5 "${BASE}/k6-v${K6_VERSION}-checksums.txt" | grep " ${ASSET}$" | sha256sum -c -
           tar -xzf "${ASSET}"
           sudo mv "k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
           k6 version
