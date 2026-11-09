@@ -372,6 +372,8 @@ const agyPool = {
       harness: 'agy-pool',
     };
     if (job.resultSchema) payload.resultSchema = job.resultSchema;
+    if (job.printTimeoutSec) payload.printTimeoutSec = job.printTimeoutSec;
+    if (job.timeoutSec) payload.timeoutSec = job.timeoutSec;
 
     if (job.usageFile) {
       fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));

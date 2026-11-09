@@ -34,6 +34,7 @@ const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
 const { atomicRenameSync } = require('./atomic-rename');
+const { maskEmailsInString } = require('./route-identity-utils');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
 
@@ -2377,6 +2378,19 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
+function isValidWorkerOutcome(parsed, expectedCandidateKey, expectedStatus = 'completed') {
+  return Boolean(
+    parsed &&
+    typeof parsed === 'object' &&
+    parsed.candidateKey === expectedCandidateKey &&
+    typeof parsed.status === 'string' &&
+    (expectedStatus
+      ? parsed.status === expectedStatus ||
+        (expectedStatus === 'completed' && parsed.status === 'passed')
+      : parsed.status.length > 0)
+  );
+}
+
 function dispatchCommand(args, deps = {}) {
   if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
@@ -2387,9 +2401,27 @@ function dispatchCommand(args, deps = {}) {
   // Only the real CLI entry sets this: injected test seams keep their paths.
   const noInference = isDryRun && deps.dryRunOffline === true;
   const output = deps.log || console.log;
-  const log = args.json && !execute && !args.plan ? () => {} : output;
+  const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
+  const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
+    const mask = (v) => (typeof v === 'string' ? maskEmailsInString(v) : v);
+    const res = {
+      chosen: mask(chosen) || null,
+      launchedArgvIdentity:
+        launchedId && typeof launchedId === 'object'
+          ? Object.fromEntries(Object.entries(launchedId).map(([k, v]) => [k, mask(v)]))
+          : null,
+      outcome: outcome?.candidateKey
+        ? { ...outcome, candidateKey: mask(outcome.candidateKey) }
+        : outcome,
+      recorded: recorded || null,
+      ...extra,
+    };
+    if (args.json) output(JSON.stringify(res, null, 2));
+    exit(code);
+    return { exitCode: code, ...res };
+  };
 
   // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
   // caller injects fixture candidates (deps.candidates /
@@ -3310,8 +3342,15 @@ function dispatchCommand(args, deps = {}) {
               (rej.scope ? ' [' + rej.scope + ']' : '')
           );
         }
-        exit(1);
-        return { exitCode: 1, decision, attempts: attempt };
+        const lastFail = failedAttempts[failedAttempts.length - 1];
+        return makeExecuteResult(
+          1,
+          lastFail?.key,
+          lastFail?.launchedArgvIdentity,
+          lastFail?.outcome || { status: 'failed', reason: 'NO_ELIGIBLE_CANDIDATE' },
+          lastFail?.recorded,
+          { decision, attempts: attempt }
+        );
       }
 
       finalChosenKey = decision.chosen;
@@ -3362,6 +3401,7 @@ function dispatchCommand(args, deps = {}) {
     let thrownError = null;
     let isFailure = true;
     let sessionHandle = null;
+    let launchedArgvIdentity = null;
     try {
       let launcher = (deps && deps.run) || runHarness;
       // AI-64-P03: an injected runner replaces what runs the harness process; it
@@ -3387,6 +3427,36 @@ function dispatchCommand(args, deps = {}) {
         throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
       }
 
+      const chosenIdentity =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+      const cand = finalChosenCandidate;
+      launchedArgvIdentity = {
+        harness: cand.harness || chosenIdentity.harness || harnessName,
+        accessPath: cand.accessPath || chosenIdentity.accessPath || '',
+        gateway: cand.gateway || chosenIdentity.gateway || '',
+        upstream: cand.upstream || chosenIdentity.upstream || '',
+        account: cand.accountId || cand.account || chosenIdentity.account || '*',
+        quotaScope: cand.quotaScope || chosenIdentity.quotaScope || '',
+        modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
+      };
+
+      const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
+      const promptText = pFile
+        ? fs.readFileSync(
+            fs.existsSync(pFile) ? pFile : path.resolve(args.cwd || deps?.cwd || rootDir, pFile),
+            'utf8'
+          )
+        : args.prompt ||
+          deps?.prompt ||
+          defaultPrompt(item, {
+            isolatedWorker: Boolean(args['isolated-worker'] || deps?.isolatedWorker),
+          });
+      const launchTimeoutMs =
+        Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
+        (Number(args.timeout || deps?.timeout)
+          ? Number(args.timeout || deps?.timeout) * 1000
+          : undefined);
+
       // The loop hands the harness a durable-report path. Under `-z` stdout is
       // the final response prose, so the session id can only come from the
       // report (TASK-AI-63), and a launch that cannot produce one is a launch
@@ -3405,7 +3475,7 @@ function dispatchCommand(args, deps = {}) {
           gateway: finalChosenCandidate.gateway || '',
           upstream: finalChosenCandidate.upstream,
           quotaScope: finalChosenCandidate.quotaScope,
-          prompt: defaultPrompt(item, { isolatedWorker: Boolean(args['isolated-worker']) }),
+          prompt: promptText,
           branch: item.branch,
           base: args.base || (deps && deps.base) || 'main',
           cwd: args.cwd || (deps && deps.cwd) || rootDir,
@@ -3418,6 +3488,11 @@ function dispatchCommand(args, deps = {}) {
             role: item.role,
             project: args.project || 'shipde-platform',
           },
+          isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
+          printTimeoutSec:
+            Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
+            (args.timeout ? Number(args.timeout) : 3600),
+          timeoutMs: launchTimeoutMs,
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3496,7 +3571,7 @@ function dispatchCommand(args, deps = {}) {
 
         try {
           launchRes = launcher(adapter, launchArgs, {
-            cwd: args.cwd || rootDir,
+            cwd: args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
             baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
             branch: item.branch,
@@ -3505,6 +3580,7 @@ function dispatchCommand(args, deps = {}) {
             // same decision log this dispatch records its launch in.
             decisionDir,
             checkpoint: checkpointFile,
+            timeoutMs: launchTimeoutMs,
           });
         } catch (err) {
           thrownError = err;
@@ -3624,9 +3700,22 @@ function dispatchCommand(args, deps = {}) {
         exitCode: 0,
         source: 'dispatch',
       });
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome = isValidWorkerOutcome(parsedOutcome, finalChosenKey)
+        ? parsedOutcome
+        : structuredOutcome(finalChosenKey, launchRes, null, {
+            status: 'completed',
+            checkpoint: checkpointFile,
+          });
       log('Dispatch succeeded on ' + finalChosenKey);
-      exit(0);
-      return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
+      return makeExecuteResult(
+        0,
+        finalChosenKey,
+        launchedArgvIdentity,
+        outcome,
+        { status: 'passed' },
+        { result: launchRes, attempts: attempt }
+      );
     } else {
       evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
         status: 'failed',
@@ -3660,6 +3749,7 @@ function dispatchCommand(args, deps = {}) {
         /timeout|stall|hang/i.test(
           String(rawFail.body || rawFail.stderr || (thrownError && thrownError.message) || '')
         );
+      let lastRecorded = null;
       try {
         const routeHealthApi = require('./route-health');
         const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, deps);
@@ -3677,7 +3767,7 @@ function dispatchCommand(args, deps = {}) {
               : Array.isArray(deps && deps.load)
                 ? deps.load.length
                 : undefined;
-        routeHealthApi.recordExecutionResult(
+        const recordResult = routeHealthApi.recordExecutionResult(
           storeOrPath,
           modelId,
           routeId,
@@ -3696,21 +3786,28 @@ function dispatchCommand(args, deps = {}) {
             saveStore: deps && (deps.saveStore || deps.saver),
           }
         );
+        const pRec = recordResult?.store?.paths?.[recordResult?.key];
+        lastRecorded = recordResult
+          ? {
+              key: recordResult.key,
+              status: pRec?.status || recordResult.recorded?.reason,
+              nextCheckAt: pRec?.nextCheckAt,
+              reason: recordResult.recorded?.reason,
+            }
+          : null;
       } catch (_) {}
-      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome =
-        parsedOutcome && parsedOutcome.candidateKey
-          ? parsedOutcome
-          : structuredOutcome(finalChosenKey, launchRes, classification, {
-              status: 'failed',
-              checkpoint: checkpointFile,
-              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
-            });
+      const outcome = structuredOutcome(finalChosenKey, launchRes, classification, {
+        status: 'failed',
+        checkpoint: checkpointFile,
+        reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+      });
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
         classification: classification,
         outcome,
+        launchedArgvIdentity,
+        recorded: lastRecorded,
       });
       const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
       log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
@@ -3720,8 +3817,15 @@ function dispatchCommand(args, deps = {}) {
   }
 
   log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
-  exit(1);
-  return { exitCode: 1, decision: lastDecision, attempts: attempt, failedAttempts };
+  const lastFail = failedAttempts[failedAttempts.length - 1];
+  return makeExecuteResult(
+    1,
+    lastFail?.key || (lastDecision && lastDecision.chosen),
+    lastFail?.launchedArgvIdentity,
+    lastFail?.outcome || { status: 'failed', reason: 'MAX_ATTEMPTS_EXHAUSTED' },
+    lastFail?.recorded,
+    { decision: lastDecision, attempts: maxAttempts, failedAttempts }
+  );
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
@@ -5102,7 +5206,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
       );
     }
     if (result?.exitCode) process.exitCode = result.exitCode;
-    return;
+    return result;
   }
   if (command === 'shadow') return shadowCommand(args);
   // sweep-import (TASK-AI-142 T3): ingest provider probe sweep into route evidence
@@ -5572,6 +5676,7 @@ module.exports = {
   getCandidateRouteHealthRecord,
   candidateExclusionReason,
   isCandidateRouteEligible,
+  isValidWorkerOutcome,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
