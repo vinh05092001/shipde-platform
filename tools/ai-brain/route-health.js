@@ -159,6 +159,10 @@ function recordUnknownProbe(modelId, routeId, result, now, options) {
 function recordResult(store, modelId, routeId, result, now, options) {
   const key = healthKey(modelId, routeId);
   const previous = store.paths[key] || { failures: 0 };
+  // Replayed observations must not revive a route after a newer failure.
+  if (Date.parse(previous.lastCheckedAt) > now) {
+    return { key, eligible: previous.status === 'AVAILABLE' };
+  }
   const lastCheckedAt = new Date(now).toISOString();
   if (previous.probeCause === 'WRITER_NOT_AUTONOMOUS') {
     return { key, eligible: false };
