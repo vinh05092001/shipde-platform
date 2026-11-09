@@ -27,7 +27,8 @@ jobs:
       - name: Install Pinned Gitleaks
         run: |
           GITLEAKS_VERSION="8.24.0"
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sudo tar -xz -C /usr/local/bin gitleaks
+          curl -sSL --fail --retry 5 --retry-all-errors --retry-delay 5 -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          sudo tar -xzf gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks version
       - name: Run Clean Secret Scan
         run: pnpm security:secrets
@@ -64,8 +65,8 @@ jobs:
           TRIVY_VERSION="$(node -e "const s=require('fs').readFileSync('scripts/verify-trivy.ts','utf8');console.log(s.match(/TRIVY_PINNED_VERSION = '([^']+)'/)[1])")"
           ASSET="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
-          curl -sSLO "${BASE}/${ASSET}"
-          curl -sSL "${BASE}/trivy_${TRIVY_VERSION}_checksums.txt" | grep " ${ASSET}$" | sha256sum -c -
+          curl -sSLO --fail --retry 5 --retry-all-errors --retry-delay 5 "${BASE}/${ASSET}"
+          curl -sSL --fail --retry 5 --retry-all-errors --retry-delay 5 "${BASE}/trivy_${TRIVY_VERSION}_checksums.txt" | grep " ${ASSET}$" | sha256sum -c -
           sudo tar -xzf "${ASSET}" -C /usr/local/bin trivy
           trivy --version
       - name: Trivy vulnerability and misconfiguration gate
