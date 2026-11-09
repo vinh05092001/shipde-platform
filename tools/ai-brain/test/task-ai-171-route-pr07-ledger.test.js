@@ -8,12 +8,15 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const ledgerMod = require('../coordinator-ledger');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
 const { readLedger, saveLedger, launchFirst, launchAfterFailure, SCHEMA_VERSION } = ledgerMod;
 
 function fixture(t) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pr07-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const claimHelper = createWorktreeClaim({ worktree: cwd });
+  t.after(claimHelper.cleanup);
   const file = path.join(cwd, 'ledger.json');
   const candidates = ['a', 'b', 'c'].map((id) => ({
     offeringId: id,
@@ -45,6 +48,7 @@ function fixture(t) {
         evidence: [{ status: 'passed', proofLevel: 'HARNESS_PASS' }],
       })),
     },
+    ...claimHelper.context,
   };
   const spawned = [];
   let n = 0;

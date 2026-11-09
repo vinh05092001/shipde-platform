@@ -9,6 +9,10 @@ const os = require('node:os');
 const path = require('node:path');
 const { orderCandidatesForProbe } = require('../capability-probe');
 const { launchHermesSession } = require('../hermes-session');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
+
+const claimHelper = createWorktreeClaim();
+const { worktree: wt } = claimHelper;
 
 const key = 'gw-shared-key';
 const via = { harness: 'paseo', gateway: 'gw', accountId: key, quotaScope: key };
@@ -116,13 +120,14 @@ const run = (failure, ticketOver) => {
     outputTokens: 1,
     minProof: 'HARNESS_PASS',
     maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' },
+    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
     ...ticketOver,
   };
   const ctx = {
     evidenceData: { combinations: [A, B].map(proofOf) },
     ledger: {},
     now: Date.now(),
+    ...claimHelper.context,
   };
   const first = handoff.firstLaunch(decision, ticket, ctx, registry);
   const next = handoff.afterFailure(
@@ -217,7 +222,7 @@ const twoOnA = (over) => {
     outputTokens: 1,
     minProof: 'HARNESS_PASS',
     maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' },
+    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
     ...over,
   };
   const routes = [A, A2, B];
@@ -226,6 +231,7 @@ const twoOnA = (over) => {
     evidenceData: { combinations: routes.map(proofOf) },
     ledger: {},
     now: Date.now(),
+    ...claimHelper.context,
   };
   handoff.firstLaunch(decision, ticket, ctx, registry);
   const next = handoff.afterFailure(
@@ -287,9 +293,14 @@ test('a confirmed upstream-wide failure removes every route on that upstream', (
     outputTokens: 1,
     minProof: 'HARNESS_PASS',
     maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' },
+    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
   };
-  const ctx = { evidenceData: { combinations: routes.map(proofOf) }, ledger: {}, now: Date.now() };
+  const ctx = {
+    evidenceData: { combinations: routes.map(proofOf) },
+    ledger: {},
+    now: Date.now(),
+    ...claimHelper.context,
+  };
   const next = handoff.afterFailure(
     decision,
     ticket,
@@ -378,12 +389,13 @@ test('a combo route cannot tell which member failed, so it stays unknown', () =>
     outputTokens: 1,
     minProof: 'HARNESS_PASS',
     maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' },
+    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
   };
   const ctx = {
     evidenceData: { combinations: [route, B].map(proofOf) },
     ledger: {},
     now: Date.now(),
+    ...claimHelper.context,
   };
   handoff.afterFailure(
     decision,
@@ -532,12 +544,17 @@ const failOnConnection = (routes, failure, ledger = {}) => {
     outputTokens: 1,
     minProof: 'HARNESS_PASS',
     maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' },
+    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
   };
   return handoff.afterFailure(
     { workItemId: 'W', selected: 'a', candidates: routes },
     ticket,
-    { evidenceData: { combinations: routes.map(proofOf) }, ledger, now: Date.now() },
+    {
+      evidenceData: { combinations: routes.map(proofOf) },
+      ledger,
+      now: Date.now(),
+      ...claimHelper.context,
+    },
     {
       offeringId: 'a',
       upstream: 'up-a',

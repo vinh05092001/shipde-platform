@@ -8,6 +8,9 @@ const path = require('node:path');
 const { launchFromDecision, firstLaunch, afterFailure } = require('../route-handoff');
 const { getQuotaScopeState, isScopeBlocked } = require('../quota-scan');
 const { recordProbe, loadEvidence, Level, Status } = require('../evidence');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
+
+const claimHelper = createWorktreeClaim();
 
 const registry = {
   sources: [{ id: 'gw', kind: 'router', servesModels: true, endpoint: 'http://127.0.0.1:1/v1' }],
@@ -24,7 +27,13 @@ const route = {
   quotaScope: 'acct',
   modelId: 'vendor/org/model-a',
 };
-const request = { prompt: 'p', branch: 'b', base: 'origin/main', cwd: 'wt', title: 't' };
+const request = {
+  prompt: 'p',
+  branch: 'b',
+  base: 'origin/main',
+  cwd: claimHelper.worktree,
+  title: 't',
+};
 
 test('the argv keeps the gateway and the full model of the decision', () => {
   const decision = { selected: 'route-a', candidates: [route] };
@@ -94,6 +103,7 @@ const decided = (...candidates) => ({
 const proved = (...candidates) => ({
   evidenceData: { combinations: candidates.map((c) => proof(c, 'HARNESS_PASS')) },
   ledger: {},
+  ...claimHelper.context,
 });
 
 test('passed execution proof loaded from the Controller store qualifies its route', (t) => {
@@ -104,7 +114,12 @@ test('passed execution proof loaded from the Controller store qualifies its rout
   const evidenceData = loadEvidence(dir);
   assert.equal(evidenceData.combinations[0].model, a.modelId);
   assert.equal(evidenceData.combinations[0].evidence[0].proofLevel, 'HARNESS_PASS');
-  const out = firstLaunch(decided(a), ticket(), { evidenceData, ledger: {} }, screened);
+  const out = firstLaunch(
+    decided(a),
+    ticket(),
+    { evidenceData, ledger: {}, ...claimHelper.context },
+    screened
+  );
   assert.equal(out.action, 'LAUNCH');
   assert.equal(out.launch.offeringId, a.offeringId);
 });
@@ -231,7 +246,11 @@ test('an incompatible launcher flag is stopped before any call', () => {
 
 test('a ping pass does not qualify a route for work', () => {
   const a = offering('a');
-  const ctx = { evidenceData: { combinations: [proof(a, 'API_PASS')] }, ledger: {} };
+  const ctx = {
+    evidenceData: { combinations: [proof(a, 'API_PASS')] },
+    ledger: {},
+    ...claimHelper.context,
+  };
   const out = firstLaunch(decided(a), ticket(), ctx, screened);
   assert.equal(out.action, 'BLOCKED');
   assert.equal(out.rejected[0].reason, 'PROOF_BELOW_TICKET:API_PASS');
@@ -305,7 +324,7 @@ test('429 takes the one fallback in the same worktree, then 402 stops and keeps 
   const [a, b, c] = ['a', 'b', 'c'].map((id) => offering(id, { upstream: id }));
   const ctx = proved(a, b, c);
   const decision = decided(a, b, c);
-  const worktree = 'wt-with-partial-diff';
+  const worktree = claimHelper.worktree;
   const first = afterFailure(
     decision,
     ticket(),

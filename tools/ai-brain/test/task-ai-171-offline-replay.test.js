@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
 // Install before requiring the CLI: even a swallowed connection error fails teardown.
 function offline(t, expectedAttempts = []) {
@@ -195,6 +196,8 @@ for (const kind of ['individual', 'combo', 'external']) {
       name: f.registry.dispatch.nineRouterWriterCombo,
       models: f.rows[1].comboMembers,
     };
+    const claimHelper = createWorktreeClaim({ worktree: f.root });
+    t.after(claimHelper.cleanup);
     const context = {
       ledger: {},
       evidenceData,
@@ -203,6 +206,7 @@ for (const kind of ['individual', 'combo', 'external']) {
       home: f.root,
       storePath: path.join(f.root, 'quota.json'),
       headrooms: { default: 'open' },
+      ...claimHelper.context,
     };
     const dispatchArgs = {
       root: f.root,
