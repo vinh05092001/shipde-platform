@@ -14,7 +14,7 @@ function tryCall(fn) {
 function hasRunTag(commandLine, tag) {
   if (!nonEmpty(tag)) throw new Error('RUN_TAG_INVALID');
   const [s, tokens] = [typeof commandLine === 'string' ? commandLine : '', []];
-  for (let i = 0; i < s.length; ) {
+  for (let i = 0; i < s.length;) {
     while (i < s.length && /\s/.test(s[i])) i += 1;
     if (i >= s.length) break;
     let [val, pre, q, quoted] = ['', '', null, false];
@@ -100,7 +100,7 @@ function findRunProcesses(target, options = {}) {
   for (const [tPid, tStart] of tracked.entries()) {
     if (!byPid.has(tPid)) queue.push({ pid: tPid, createdAt: tStart ?? null });
   }
-  for (let cur; (cur = queue.shift()); ) {
+  for (let cur; (cur = queue.shift());) {
     for (const c of children.get(cur.pid) || []) {
       const older = cur.createdAt != null && c.createdAt != null && c.createdAt < cur.createdAt;
       if (!matched.has(c.pid) && !older) add(c);

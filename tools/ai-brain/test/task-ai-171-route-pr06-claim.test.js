@@ -122,7 +122,9 @@ test('B44: path aliases share one identity and failed canonicalization fails clo
   const held = claim.claimWorktree(realDir, opts(101, 1000));
   assert.equal(held.claimed, true);
   const rel = path.join(dir, 'x', '..', 'Real-Worktree');
-  for (const v of [aliasDir, `${realDir.toUpperCase()}${path.sep}`, rel]) {
+  // case-insensitive aliasing only exists on Windows file systems
+  const caseAlias = process.platform === 'win32' ? [`${realDir.toUpperCase()}${path.sep}`] : [];
+  for (const v of [aliasDir, ...caseAlias, rel]) {
     const attempt = claim.claimWorktree(v, opts(202, 1005));
     eq([attempt.claimed, attempt.id], [false, held.id]);
   }
