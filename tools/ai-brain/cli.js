@@ -1267,11 +1267,17 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         requireRouteHealth ||
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
 
+  const hasFreshness =
+    opts.freshness !== undefined ||
+    opts.freshnessDoc !== undefined ||
+    (discoveryCat && ('freshnessDoc' in discoveryCat || 'freshness' in discoveryCat)) ||
+    Boolean(opts.discoveryDataDir);
+
   const freshnessDoc =
-    opts.freshness ||
-    opts.freshnessDoc ||
-    (discoveryCat &&
-      (discoveryCat.freshnessDoc || (discoveryCat.freshness && discoveryCat.freshness.doc))) ||
+    opts.freshness ??
+    opts.freshnessDoc ??
+    discoveryCat?.freshnessDoc ??
+    discoveryCat?.freshness?.doc ??
     (opts.discoveryDataDir
       ? require('./catalogue-refresh').readJson(
           path.join(opts.discoveryDataDir, 'freshness.json'),
@@ -1280,9 +1286,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : null);
 
   const checkFresh = (c) => {
-    if (!freshnessDoc) return { stale: false };
+    if (!hasFreshness) return { stale: false };
     const res = sourceFreshness(c, { freshness: freshnessDoc, now: opts.now });
     if (res.staleListingRetained) c.staleListingRetained = true;
+    else delete c.staleListingRetained;
     return { stale: !res.admitted, reason: res.code || 'SOURCE_CATALOGUE_STALE' };
   };
   const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
@@ -2164,11 +2171,10 @@ async function dispatchProfileCommand(args, deps) {
       });
       if (discCat) {
         discCat.freshness = freshness;
-        discCat.freshnessDoc = freshness.doc;
         discCat.stale = freshness.stale;
       }
     } catch {
-      discCat = { candidates: [], freshness, freshnessDoc: freshness.doc, stale: true };
+      discCat = { candidates: [], freshness, stale: true };
     }
   }
   const accounts = Array.isArray(deps && deps.accounts)
@@ -2662,7 +2668,6 @@ function dispatchCommand(args, deps = {}) {
       discCat = readDiscoveryCatalogue({ dataDir: discDir });
       const { catalogueFreshness } = require('./catalogue-refresh');
       discCat.freshness = catalogueFreshness({ dataDir: discDir, now: deps && deps.now });
-      discCat.freshnessDoc = discCat.freshness?.doc || null;
       discCat.stale = discCat.freshness?.stale;
     } catch {
       discCat = { candidates: [] };

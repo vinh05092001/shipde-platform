@@ -52,7 +52,9 @@ function sanitizeScope(rawScope) {
 
 function sourceFreshness(sourceIdOrObj, options = {}) {
   const doc =
-    options.freshness || readJson(path.join(options.dataDir || DATA_DIR, 'freshness.json'), null);
+    options.freshness !== undefined
+      ? options.freshness
+      : readJson(path.join(options.dataDir || DATA_DIR, 'freshness.json'), null);
   const now = Number(options.now ?? Date.now());
   const maxAgeMs = options.maxAgeMs ?? MAX_AGE_MS;
   const id =
@@ -75,13 +77,14 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
   });
 
   // Rule: agy-pool runtime accounts are not catalogue-listed sources.
-  // Source: discovery/adapters.js (agentCliAdapter: CLI harness resolves its models at call time;
-  // the registry declares no catalogue endpoint), discovery.js:128 (Presence-only CLI harnesses
-  // have no catalogue to refresh), and sources.json (agy-pool kind: agent-cli, accessPath: cli, no endpoint).
-  // Because discovery does not list them into freshness, catalogue freshness does not reject them.
-  const harness = typeof sourceIdOrObj === 'object' ? sourceIdOrObj?.harness : null;
-  const source = typeof sourceIdOrObj === 'object' ? sourceIdOrObj?.source : null;
-  if (id === 'agy-pool' || harness === 'agy-pool' || source === 'agy-pool') {
+  // Source: discovery/adapters.js (CLI harness has no catalogue endpoint),
+  // discovery.js:128 (presence-only), and sources.json (agent-cli, no endpoint).
+  if (
+    id === 'agy-pool' ||
+    sourceIdOrObj?.harness === 'agy-pool' ||
+    sourceIdOrObj?.source === 'agy-pool' ||
+    sourceIdOrObj?.kind === 'evidence'
+  ) {
     return {
       sourceId: id || 'agy-pool',
       admitted: true,
@@ -100,8 +103,7 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
   const failed = (doc.failedSources || []).find(match);
   if (!src && !failed) return rej();
 
-  const isEnumerated =
-    src && (src.status === 'enumerated' || src.status === 'enumerated-via-route');
+  const isEnum = src && (src.status === 'enumerated' || src.status === 'enumerated-via-route');
   const hasModels = Boolean(
     src &&
     (src.advertised > 0 ||
@@ -112,7 +114,7 @@ function sourceFreshness(sourceIdOrObj, options = {}) {
     !src ||
     src.incomplete ||
     src.staleListingRetained ||
-    !isEnumerated ||
+    !isEnum ||
     !hasModels ||
     (src.reason && !src.advertised)
   );
@@ -147,10 +149,6 @@ function catalogueFreshness(options = {}) {
   const dataDir = options.dataDir || DATA_DIR;
   const doc = options.freshness || readJson(path.join(dataDir, 'freshness.json'), null);
   const now = Number(options.now ?? Date.now());
-
-  if (options.source || options.sourceId) {
-    return sourceFreshness(options.source || options.sourceId, { ...options, freshness: doc, now });
-  }
 
   if (!doc || !doc.lastSuccessfulAt) {
     return {
@@ -297,23 +295,20 @@ async function refreshCatalogue(options = {}) {
             (src.status === 'enumerated' || src.status === 'enumerated-via-route') &&
             !src.incomplete &&
             (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0));
-          if (ok) {
-            src.lastSuccessfulAt = discovery.lastAttemptAt || startedAt;
-            src.staleListingRetained = false;
-          } else {
-            const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
-            src.lastSuccessfulAt = prev?.lastSuccessfulAt || null;
-            src.staleListingRetained = isRecent(src.lastSuccessfulAt);
-          }
+          const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
+          src.lastSuccessfulAt = ok
+            ? discovery.lastAttemptAt || startedAt
+            : prev?.lastSuccessfulAt || null;
+          src.staleListingRetained = !ok && isRecent(src.lastSuccessfulAt);
         }
-        const seenIds = new Set((discovery.sources || []).map((s) => s.id));
+        const seen = new Set((discovery.sources || []).map((s) => s.id));
         for (const prev of previousFreshness.sources || []) {
-          if (!seenIds.has(prev.id)) {
+          if (!seen.has(prev.id)) {
             discovery.sources.push({
               ...prev,
               staleListingRetained: isRecent(prev.lastSuccessfulAt),
             });
-            seenIds.add(prev.id);
+            seen.add(prev.id);
           }
         }
         writeJson(freshnessFile, discovery);
@@ -402,12 +397,11 @@ async function refreshCatalogue(options = {}) {
     }
     if (!discoveryPublished) {
       const isRecent = (ts) => Boolean(ts && startedEpoch - Date.parse(ts) <= MAX_AGE_MS);
-      const retainedSources = (previousFreshness.sources || []).map((s) => ({
-        ...s,
-        staleListingRetained: isRecent(s.lastSuccessfulAt),
-      }));
       writeJson(freshnessFile, {
-        sources: retainedSources,
+        sources: (previousFreshness.sources || []).map((s) => ({
+          ...s,
+          staleListingRetained: isRecent(s.lastSuccessfulAt),
+        })),
         lastAttemptAt: report.finishedAt,
         lastSuccessfulAt: previousFreshness.lastSuccessfulAt || null,
         complete: false,

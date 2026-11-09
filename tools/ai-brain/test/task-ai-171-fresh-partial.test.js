@@ -9,37 +9,34 @@ const { assembleForDispatch } = require('../cli');
 
 const NOW = Date.parse('2026-11-09T16:00:00.000Z');
 const iso = (ms, now = NOW) => new Date(now - ms).toISOString();
-const cand = (id) => ({ harness: 'test', gateway: id, source: id, modelId: `vendor/${id}` });
+const cand = (id) => ({ harness: 'test', gateway: id, source: id, modelId: `v/${id}` });
 const S = (id, status, advertised, lastSuccessfulAt, extra = {}) =>
   Object.assign({ id, status, advertised, lastSuccessfulAt }, extra);
 
-function buildFixture(now = NOW) {
-  return {
-    sources: [
-      S('9router', 'enumerated', 1205, iso(17 * 60 * 1000, now), {
-        catalogs: [{ upstream: 'combo', count: 1 }],
-      }),
-      S('opencode:agentrouter', 'unavailable', 0, iso(3 * 86400 * 1000, now)),
-      S('agy-gateway', 'unavailable', 0, iso(3600 * 1000, now)),
-      S('opencode:scaleway', 'unavailable', 0, null),
-      S('legacy-src', 'enumerated', 10, null),
-      S('empty-enum', 'enumerated', 0, null, { catalogs: [] }),
-      S('empty-nomodels', 'no-models', 0, null, { catalogs: [] }),
-      S('empty-retained', 'enumerated', 0, iso(3600 * 1000, now), { catalogs: [] }),
-    ],
-    listedSources: 45,
-    lastAttemptAt: iso(17 * 60 * 1000, now),
-    lastSuccessfulAt: iso(17 * 60 * 1000, now),
-    complete: false,
-    failedSources: [
-      { id: 'opencode:agentrouter', reason: 'HTTP_401' },
-      { id: 'agy-gateway', reason: 'unavailable' },
-      { id: 'opencode:scaleway', reason: 'HTTP_403' },
-    ],
-  };
-}
-
-const FIXTURE = buildFixture();
+const m17 = iso(1020000),
+  d3 = iso(259200000),
+  h1 = iso(3600000);
+const FIXTURE = {
+  sources: [
+    S('9router', 'enumerated', 1205, m17, { catalogs: [{ upstream: 'c', count: 1 }] }),
+    S('opencode:agentrouter', 'unavailable', 0, d3),
+    S('agy-gateway', 'unavailable', 0, h1),
+    S('opencode:scaleway', 'unavailable', 0, null),
+    S('legacy-src', 'enumerated', 10, null),
+    S('empty-enum', 'enumerated', 0, null, { catalogs: [] }),
+    S('empty-nomodels', 'no-models', 0, null, { catalogs: [] }),
+    S('empty-retained', 'enumerated', 0, h1, { catalogs: [] }),
+  ],
+  listedSources: 45,
+  lastAttemptAt: m17,
+  lastSuccessfulAt: m17,
+  complete: false,
+  failedSources: [
+    { id: 'opencode:agentrouter', reason: 'HTTP_401' },
+    { id: 'agy-gateway', reason: 'unavailable' },
+    { id: 'opencode:scaleway', reason: 'HTTP_403' },
+  ],
+};
 
 function dispatchCandidates(sourceIds, fixture, now = NOW, catalogueExtra = {}) {
   const ids = Array.isArray(sourceIds) ? sourceIds : [sourceIds];
@@ -57,27 +54,28 @@ function checkSource(id, admitted, code, retained, fix = FIXTURE) {
   if (code) assert.equal(fresh.code, code);
   if (retained !== undefined) assert.equal(fresh.staleListingRetained, retained);
   const res = dispatchCandidates(id, fix);
-  if (admitted) {
-    assert.equal(res.length, 1);
-    if (retained) assert.equal(res[0].staleListingRetained, true);
-  } else {
-    assert.equal(res.length, 0);
-    assert.ok(res.excludedRoutes.some((r) => r.reasonCode === code));
-  }
+  assert.equal(res.length, admitted ? 1 : 0);
+  if (admitted && retained) assert.equal(res[0].staleListingRetained, true);
+  if (!admitted) assert.ok(res.excludedRoutes.some((r) => r.reasonCode === code));
 }
 
-test('(a) source listed this run -> admitted', () => {
-  checkSource('9router', true, null, false);
-});
-test('(b) source failed this run with last good 3 days ago -> rejected with reason', () => {
-  checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE');
-});
-test('(c) source failed with last good 1 hour ago -> admitted, marked stale-listing-retained', () => {
-  checkSource('agy-gateway', true, null, true);
-});
-test('(d) global lastSuccessfulAt alone cannot admit a failed source', () => {
-  checkSource('opencode:scaleway', false, 'SOURCE_CATALOGUE_STALE');
-});
+function assertMixedResult(res) {
+  assert.deepEqual(
+    res.map((c) => c.gateway),
+    ['9router', 'agy-gateway']
+  );
+  assert.equal(res.find((c) => c.gateway === 'agy-gateway').staleListingRetained, true);
+  assert.equal(res.excludedRoutes.length, 2);
+  assert.ok(res.excludedRoutes.every((r) => r.reasonCode === 'SOURCE_CATALOGUE_STALE'));
+}
+
+test('(a) source listed this run -> admitted', () => checkSource('9router', true, null, false));
+test('(b) source failed this run with last good 3 days ago -> rejected with reason', () =>
+  checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE'));
+test('(c) source failed with last good 1 hour ago -> admitted, marked stale-listing-retained', () =>
+  checkSource('agy-gateway', true, null, true));
+test('(d) global lastSuccessfulAt alone cannot admit a failed source', () =>
+  checkSource('opencode:scaleway', false, 'SOURCE_CATALOGUE_STALE'));
 
 test('(1) legacy freshness file with only global lastSuccessfulAt -> explicit stale for all sources', () => {
   const at = new Date(NOW).toISOString();
@@ -97,15 +95,7 @@ test('(2) mixed fixture: listed this run + failed 1h + failed 3d + legacy withou
   checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE');
   checkSource('legacy-src', false, 'SOURCE_CATALOGUE_STALE');
   const ids = ['9router', 'agy-gateway', 'opencode:agentrouter', 'legacy-src'];
-  const res = dispatchCandidates(ids, FIXTURE);
-  assert.equal(res.length, 2);
-  assert.deepEqual(
-    res.map((c) => c.gateway),
-    ['9router', 'agy-gateway']
-  );
-  assert.equal(res.find((c) => c.gateway === 'agy-gateway').staleListingRetained, true);
-  assert.equal(res.excludedRoutes.length, 2);
-  assert.ok(res.excludedRoutes.every((r) => r.reasonCode === 'SOURCE_CATALOGUE_STALE'));
+  assertMixedResult(dispatchCandidates(ids, FIXTURE));
 });
 
 test('(3) empty-success: completed enumeration with 0 models follows contract', () => {
@@ -121,32 +111,25 @@ test('(4) ordinary dispatch loads persisted freshness through normal reader with
   const ids = ['9router', 'agy-gateway', 'opencode:agentrouter', 'legacy-src'];
   const candidates = ids.map(cand);
   const freshness = catalogueFreshness({ dataDir: dir, now: NOW });
-  const res = assembleForDispatch(
-    { candidates, freshness, freshnessDoc: freshness.doc },
-    [],
-    { sources: ids.map((id) => ({ id })), dispatch: { providers: {} } },
-    { candidates, now: NOW, allowUnprobedCandidates: true }
+  assertMixedResult(
+    assembleForDispatch(
+      { candidates, freshness, freshnessDoc: freshness.doc },
+      [],
+      { sources: ids.map((id) => ({ id })), dispatch: { providers: {} } },
+      { candidates, now: NOW, allowUnprobedCandidates: true }
+    )
   );
-  assert.equal(res.length, 2);
-  assert.deepEqual(
-    res.map((c) => c.gateway),
-    ['9router', 'agy-gateway']
-  );
-  assert.equal(res.find((c) => c.gateway === 'agy-gateway').staleListingRetained, true);
-  assert.equal(res.excludedRoutes.length, 2);
-  assert.ok(res.excludedRoutes.every((r) => r.reasonCode === 'SOURCE_CATALOGUE_STALE'));
 });
 
 test('(5) refresh publication retains prior sources missing from new list (survives in failedSources)', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-pub-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const oneHourAgo = iso(3600 * 1000);
   fs.writeFileSync(
     path.join(dir, 'freshness.json'),
     JSON.stringify({
-      sources: [S('prior-gw', 'enumerated', 10, oneHourAgo)],
-      lastAttemptAt: oneHourAgo,
-      lastSuccessfulAt: oneHourAgo,
+      sources: [S('prior-gw', 'enumerated', 10, h1)],
+      lastAttemptAt: h1,
+      lastSuccessfulAt: h1,
     })
   );
   const priorsFile = path.join(dir, 'priors.json');
@@ -172,35 +155,56 @@ test('(5) refresh publication retains prior sources missing from new list (survi
   const pub = JSON.parse(fs.readFileSync(path.join(dir, 'freshness.json'), 'utf8'));
   const retained = pub.sources.find((s) => s.id === 'prior-gw');
   assert.ok(retained, 'prior source omitted from discovery.sources must be retained');
-  assert.equal(retained.lastSuccessfulAt, oneHourAgo);
+  assert.equal(retained.lastSuccessfulAt, h1);
   const fresh = sourceFreshness('prior-gw', { freshness: pub, now: NOW });
-  assert.equal(fresh.admitted, true);
-  assert.equal(fresh.staleListingRetained, true);
+  assert.equal(fresh.admitted && fresh.staleListingRetained, true);
 });
 
 test('(6) fallback document after early discovery failure preserves staleListingRetained=true', () => {
-  const oneHourAgo = iso(3600 * 1000);
   const fallbackDoc = {
-    sources: [S('retained-src', 'enumerated', 10, oneHourAgo, { staleListingRetained: true })],
+    sources: [S('retained-src', 'enumerated', 10, h1, { staleListingRetained: true })],
     lastAttemptAt: new Date(NOW).toISOString(),
-    lastSuccessfulAt: oneHourAgo,
+    lastSuccessfulAt: h1,
     complete: false,
     failedSources: [{ id: 'discovery', reason: 'STAGE_FAILED' }],
   };
   const fresh = sourceFreshness('retained-src', { freshness: fallbackDoc, now: NOW });
-  assert.equal(fresh.admitted, true);
-  assert.equal(fresh.staleListingRetained, true);
+  assert.equal(fresh.admitted && fresh.staleListingRetained, true);
   assert.equal(fresh.status, 'stale-listing-retained');
 });
 
 test('(7) agy-pool runtime accounts are not catalogue-listed sources and stay admitted', () => {
-  const poolCand = {
-    harness: 'agy-pool',
-    source: 'agy-pool',
-    accountId: 'agy01',
-    modelId: 'gemini-test-pro',
-  };
-  const fresh = sourceFreshness(poolCand, { freshness: FIXTURE, now: NOW });
-  assert.equal(fresh.admitted, true);
-  assert.equal(fresh.stale, false);
+  const fresh = sourceFreshness(
+    { harness: 'agy-pool', source: 'agy-pool', accountId: 'a1', modelId: 'm1' },
+    { freshness: FIXTURE, now: NOW }
+  );
+  assert.equal(fresh.admitted && !fresh.stale, true);
+});
+
+test('(8) missing/unreadable freshness rejects catalogue sources while admitting pool', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-miss-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const candidates = [cand('9router'), { harness: 'agy-pool', gateway: 'agy-pool', modelId: 'm1' }];
+  const freshness = catalogueFreshness({ dataDir: dir, now: NOW });
+  const res = assembleForDispatch(
+    { candidates, freshness, freshnessDoc: freshness.doc },
+    [],
+    { sources: [{ id: '9router' }], dispatch: { providers: {} } },
+    { candidates, now: NOW, allowUnprobedCandidates: true }
+  );
+  assert.equal(res.length, 1);
+  assert.equal(res[0].gateway, 'agy-pool');
+  assert.equal(res.excludedRoutes[0]?.reasonCode, 'SOURCE_CATALOGUE_STALE');
+});
+
+test('(9) successful fresh listing clears staleListingRetained marker on candidate', () => {
+  const candidates = [{ ...cand('9router'), staleListingRetained: true }];
+  const res = assembleForDispatch(
+    { candidates, freshness: FIXTURE, freshnessDoc: FIXTURE },
+    [],
+    { sources: [{ id: '9router' }], dispatch: { providers: {} } },
+    { candidates, freshness: FIXTURE, now: NOW, allowUnprobedCandidates: true }
+  );
+  assert.equal(res.length, 1);
+  assert.equal(res[0].staleListingRetained, undefined);
 });
