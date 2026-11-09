@@ -30,6 +30,13 @@ function readManifest() {
 // Every entry that legitimately claims `installed: true` must prove itself here: the cited file
 // exists, the cited path resolves, and the named member is really present.
 const INSTALLED_EXPECTATIONS = {
+  'ast-grep': { file: 'package.json', section: 'devDependencies', member: '@ast-grep/cli' },
+  playwright: {
+    file: 'apps/web/package.json',
+    section: 'devDependencies',
+    member: '@playwright/test',
+  },
+  'axe-core': { file: 'apps/web/package.json', section: 'devDependencies', member: 'axe-core' },
   eslint: { file: 'package.json', section: 'devDependencies', member: 'eslint' },
   lefthook: { file: 'package.json', section: 'devDependencies', member: 'lefthook' },
   supertest: { file: 'apps/api/package.json', section: 'devDependencies', member: 'supertest' },
@@ -47,7 +54,13 @@ const INSTALLED_EXPECTATIONS = {
     section: 'devDependencies',
     member: 'openapi-typescript',
   },
-  pnpm: { file: 'package.json', section: 'packageManager', member: null, pattern: /^pnpm@\d+/ },
+  pnpm: {
+    file: 'package.json',
+    section: 'packageManager',
+    member: null,
+    pattern: /^pnpm@\d+/,
+    ref: 'package.json:packageManager',
+  },
   prettier: { file: 'package.json', section: 'devDependencies', member: 'prettier' },
   prisma: { file: 'package.json', section: 'devDependencies', member: 'prisma' },
   turbo: { file: 'package.json', section: 'devDependencies', member: 'turbo' },
@@ -119,7 +132,14 @@ describe('GOAL-AUTOCLAW-REPOS-1 — tool-manifest truth (AC-1, AC-2, AC-4)', () 
       'the set of installed entries must equal the verified expectation table'
     );
 
+    const byId = Object.fromEntries(manifest.map((entry) => [entry.id, entry]));
     for (const [id, expect] of Object.entries(INSTALLED_EXPECTATIONS)) {
+      const cited = byId[id].evidenceRef;
+      const base = expect.ref || `${expect.file}:${expect.section}`;
+      assert.ok(
+        cited === base || cited === `${base}.${expect.member}`,
+        `${id}: evidenceRef must cite the verified package section, got ${cited}`
+      );
       const pkg = readJson(expect.file);
       const section = pkg[expect.section];
       if (expect.member === null) {
