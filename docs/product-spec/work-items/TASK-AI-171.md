@@ -503,6 +503,11 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
 
+## PR 07 — Fallback ceiling survives crashes and restarts (2026-11-09)
+
+Rows B46, B49, conflict C6. `tools/ai-brain/coordinator-ledger.js` is the only owner of the ledger schema and the only supervised launch path: read and validate against the caller's item and worktree, let `route-handoff.js` decide (unchanged, pure), persist the launch intent, then spawn. A missing file is a fresh ticket; any present but invalid file (truncated, missing or inconsistent counters, wrong item or worktree, unknown version, conflicting aliases) is `LEDGER_UNREADABLE` and blocks. Save refuses anything its own validation rejects and writes via temp file and rename. Old `active` migrates to `activeWorker` only when the aliases agree.
+
+Evidence: `node --test tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js tools/ai-brain/test/task-ai-171-fallback-chain.test.js tools/ai-brain/test/task-ai-171-route-handoff.test.js` → 39/39 pass; the PR 07 file fails on base (module absent). Redesigned after two review rounds (author: Claude, routing stalled with no live writer).
 ## PR 08 outcome — Record worker completion and stop before fallback (2026-11-09)
 
 Scope: rows B26, B51 and B52 (`tools/ai-brain/coordinator-completion.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-route-pr08-completion.test.js`).
@@ -647,24 +652,98 @@ files: **78/78 pass**; Prettier 3.9.6 and the hardcode guard pass.
 Limitations: offline Windows only; Linux CI, cutover and independent review are
 unverified. No network or credential reads.
 
+## PR 03 — Keep liveness and quota failures within their actual route (2026-11-08)
+
+Ported coordinator observation boundaries for B24/B27/B28/B29/B30/B32/B33/B61
+through existing scan, quota and health modules. Exact source/account/model scans
+reuse quota classification (including outer 503/inner errors), retain observation
+time and retry evidence, and discard response text. Older observations cannot
+replace newer failures. Structured completion evidence tolerates a post-answer
+timeout; error prose is not completion. Family quota admission combines all
+windows, preserves five-hour exhaustion and requires fresh telemetry after reset.
+An explicitly unavailable health store refuses admission. Selection does not read
+raw provider logs or credentials; due probes remain explicit existing commands.
+
+Offline evidence: new `task-ai-171-route-pr03-observations` suite before changes:
+**9 tests, 0 pass, 9 fail**. After changes plus existing `task-ai-171-auth-scope`,
+`task-ai-171-onboard-scope`, `task-ai-171-route-health-evidence`:
+**50 tests, 50 pass, 0 fail**. Additional P5 liveness/PR 02 compatibility with the
+new suite: **25 tests, 25 pass, 0 fail**. No network, external script changes or
+commit; live evidence, remote CI and independent review remain outstanding.
+
+Changed JavaScript formatted with offline Prettier 3.9.6 and repo settings;
+`git diff --check` passes. The hardcode guard could not execute:
+`ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`. No dependency install or
+network fallback was attempted; coordinator must rerun this gate with dependencies.
+
+## PR 03 — repair round 1: review findings (2026-11-09)
+
+Finding Piant1 (synthetic file timestamp outranked an explicit newer failure)
+fixed in `tools/ai-brain/scan-liveness.js`: each record now tracks whether its
+time came from an explicit `observedAt`/`at`. An explicit timestamp always wins;
+the file mtime is used only to break ties between legacy rows in file order.
+Test `PR03: synthetic file timestamp never outranks an explicit newer failure`.
+
+Finding 2 (merging quota windows released an exhausted route prematurely bodily)
+fixed in `tools/ai-brain/quota-scan.js` `mergeQuotaWindows`: a family keeps the
+lowest remaining percent and,756 when several windows are exhausted, the
+**furthest** reset. The block therefore survives until the last binding window
+resets, and unknown/expired telemetry still reports `known:false`.
+Test `PR03: merging quota windows keeps the last exhausted reset so the block
+survives`.
+
+Both new tests fail on `19707394` (suite 9 pass / 2 fail) and pass after
+(16 pass / 0 fail) together with `task-ai-171-route-pr02-admission`.
+Changed files pass Prettier 3.9.6. The hardcode guard remains BLOCKED_BY_SANDBOX:
+`ERR_MODULE_NOT_FOUND: @typescript-eslint/parser`.
+
+## PR 03 — fallback repair: preserve unknown family telemetry (2026-11-09)
+
+Operator assigned fallback repair after two Controller-chosen writers did not
+converge. Fixed the P1 finding in `.oc/findings.md` at reviewed SHA `1690c184`:
+`mergeQuotaWindows` now keeps `known:false` whenever any family window is unknown
+or expired, regardless of row order (BR-ROUTING-05). A usable weekly window cannot
+release a family that requires a fresh telemetry probe.
+
+Six cases exercise expired, missing and explicit unknown short windows in both
+orders through `scanCliLanes`, checking `STATE_ERROR`, `requiresProbe:true` and
+blocked admission. Before the fix the requested two suites had **19 pass / 3 fail**;
+all three forward-order regression cases failed with `OK` instead of `STATE_ERROR`.
+After the fix: **22 tests, 22 pass, 0 fail, 0 skipped** using:
+
+```bash
+node --test tools/ai-brain/test/task-ai-171-route-pr03-observations.test.js tools/ai-brain/test/task-ai-171-route-pr02-admission.test.js
+```
+
+Offline evidence only; no network, credential reads or commit. The hardcode guard
+cannot load the missing `@typescript-eslint/parser`; no dependency install was
+attempted. Independent review and remote CI remain outstanding.
+Formatting could not run: `npx.cmd --offline prettier@3.9.6` returned
+`ENOTCACHED`; the shared installation directory also lacks the executable.
+`git diff --check` passes. Graph query `node C:/Tools/graphify/q.js 5c574f7a
+scanCliLanes` located the quota path; that graph is stale relative to `1690c184`,
+so the current quota implementation and executable regressions supplied proof.
+
+## PR 03 update outcome — sync with origin/main (2026-11-09)
+
+Outcome: merged `origin/main` (containing squash-merged PR 02 `0274c68d`) into PR 03.
+Resolved merge conflicts by adopting `origin/main` for PR 02 owned files (`identity.js`,
+`task-ai-171-route-pr02-admission.test.js`), preserving PR 02 updates in `cli.js` while
+re-applying PR 03's explicit unavailable health guard, and retaining PR 03 scope in
+`scan-liveness.js`, `quota-scan.js`, `route-health.js`, and `task-ai-171-route-pr03-observations.test.js`.
+All 64 tests in PR 03 and PR 02 core suites pass offline. Diff vs `origin/main` isolates only PR 03 changes.
 ## CI tool downloads retry and fail loudly (2026-11-09)
 
 Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
 
-## PR 06 — Give each worktree one confirmed worker owner (2026-11-09)
+## Selector fix: an assembled quota block survives annotation (2026-11-09)
 
-- Scope (`tools/ai-brain/process-ownership.js`, `tools/ai-brain/coordinator-claim.js`,
-  `tools/ai-brain/test/task-ai-171-route-pr06-claim.test.js`): ports rows `B43`, `B44`, `B45`
-  from `.oc/route.js:495-536` and repairs all 13 review findings on `ab55f507`.
-- `claimWorktree` fails closed on unresolved paths (`WORKTREE_PATH_UNRESOLVED`), preserves live
-  numeric PID-only locks, and serializes recovery/publication via `.recover` and per-record
-  `.evict` gates; `firstLaunch` and `afterFailure` require a verified worktree-bound claim;
-  `reconcileWorktreeWorker`/`acquireWorktreeOwner` use `statSync`/`readFileSync`, verify the
-  worker record is unchanged before `unlinkSync`, and release claims on exceptions.
-- `process-ownership.js` parses unquoted `--title` tokens, requires `-ErrorAction Stop` and
-  valid JSON from PowerShell, requires exact `startedAt` for bare PID matches, seeds absent
-  recorded/tracked parent PIDs for untagged orphans, and distinguishes refused vs killed PIDs.
-- Evidence: `task-ai-171-route-pr06-claim.test.js` fails on base `ab55f507` (0 pass, 6 fail) and
-  passes on HEAD (6 pass, 0 fail); combined with existing PR 06 suites: 60 pass, 0 fail.
-  Offline Windows evidence only; live OS process trees, remote CI and independent review remain
-  with the coordinator.
+`annotateCandidates` (`tools/ai-brain/candidates.js`) set `c.blocked = block.blocked` from route evidence, which cleared a `QUOTA_EXHAUSTED` block that AGY-pool assembly had already measured (live quota at zero), leaving `blocked:false` with `blockReason:'QUOTA_EXHAUSTED'`. The assembled quota block is now kept when evidence finds no block. Evidence: `node --test tools/ai-brain/test/task-ai-171-selector-quota-flag.test.js` fails on base (1/2) and passes on HEAD (2/2); suites importing candidates.js show only failures that also fail on main locally.
+
+## PR 06 — Give each worktree one confirmed worker owner (Slice A) (2026-11-09)
+
+- Scope (`tools/ai-brain/coordinator-claim.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr06-claim.test.js`): Slice A cut to AC and blocking findings (findings 1, 2, 7); `process-ownership.js` removed; findings 3, 4, 5, 6, 8 deferred to Slice B.
+- Finding 1: ownership enforced at `route-handoff.firstLaunch` entry point; calls without a valid worktree claim reject (`WORKTREE_CLAIM_REQUIRED`).
+- Finding 2: `verifyWorktreeClaim` rejects metadata-only claim objects without matching lock record on disk for both launch and reconciliation.
+- Finding 7: dead same-item worker record whose PID is not alive is unlinked and does not block restart.
+- Evidence: 3/3 tests in `task-ai-171-route-pr06-claim.test.js` pass (Finding 1, Finding 2, Finding 7); all 114 tests pass across all 10 suites requiring `route-handoff.js`. Offline evidence only.
