@@ -503,6 +503,11 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
 
+## PR 07 — Fallback ceiling survives crashes and restarts (2026-11-09)
+
+Rows B46, B49, conflict C6. `tools/ai-brain/coordinator-ledger.js` is the only owner of the ledger schema and the only supervised launch path: read and validate against the caller's item and worktree, let `route-handoff.js` decide (unchanged, pure), persist the launch intent, then spawn. A missing file is a fresh ticket; any present but invalid file (truncated, missing or inconsistent counters, wrong item or worktree, unknown version, conflicting aliases) is `LEDGER_UNREADABLE` and blocks. Save refuses anything its own validation rejects and writes via temp file and rename. Old `active` migrates to `activeWorker` only when the aliases agree.
+
+Evidence: `node --test tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js tools/ai-brain/test/task-ai-171-fallback-chain.test.js tools/ai-brain/test/task-ai-171-route-handoff.test.js` → 39/39 pass; the PR 07 file fails on base (module absent). Redesigned after two review rounds (author: Claude, routing stalled with no live writer).
 ## PR 08 outcome — Record worker completion and stop before fallback (2026-11-09)
 
 Scope: rows B26, B51 and B52 (`tools/ai-brain/coordinator-completion.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-route-pr08-completion.test.js`).

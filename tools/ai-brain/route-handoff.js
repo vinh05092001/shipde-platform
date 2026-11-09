@@ -214,6 +214,23 @@ function screenRoutes(decision, ticket, context, registry) {
   return { eligible, rejected };
 }
 
+// TASK-AI-171 PR 07: a persisted ledger (it carries a schema version or a legacy alias) passed in
+// directly is validated by the single schema owner; an invalid one never authorises a launch.
+const PERSISTED_KEYS = ['version', 'schemaVersion', 'active', 'workItemId'];
+function persistedLedgerProblem(ledger, ticket) {
+  if (!ledger || !PERSISTED_KEYS.some((k) => Object.prototype.hasOwnProperty.call(ledger, k))) {
+    return null;
+  }
+  const { checkLedger } = require('./coordinator-ledger');
+  const expect = { item: ticket.workItemId, worktree: ticket.request && ticket.request.cwd };
+  const checked = checkLedger(ledger, expect);
+  if (!checked.ok) return checked.reason;
+  // use the migrated worker state, so a legacy `active` worker still blocks a relaunch
+  ledger.activeWorker = checked.ledger.activeWorker;
+  delete ledger.active;
+  return null;
+}
+
 /** The first launch of a ticket: the best usable route, or BLOCKED. */
 function firstLaunch(decision, ticket, context, registry) {
   if (decision.controllerStatus && decision.controllerStatus !== 'READY') {
@@ -226,6 +243,8 @@ function firstLaunch(decision, ticket, context, registry) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
   const ledger = (context && context.ledger) || {};
+  const unreadable = persistedLedgerProblem(ledger, ticket);
+  if (unreadable) return { action: 'BLOCKED', reason: unreadable, rejected: [] };
   if (ledger.activeWorker) {
     return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
   }
@@ -270,6 +289,8 @@ function afterFailure(decision, ticket, context, failure, registry) {
   const ctx = context || {};
   const ledger = ctx.ledger;
   const f = failure || {};
+  const unreadable = persistedLedgerProblem(ledger, ticket);
+  if (unreadable) return { action: 'STOP', reason: unreadable, worktree: f.worktree };
   const beforeLaunch = f.phase === 'before-launch';
   if (ledger.activeWorker && (beforeLaunch || ledger.activeWorker.offeringId !== f.offeringId)) {
     return { action: 'STOP', reason: 'WORKER_STILL_ACTIVE', worktree: ledger.worktree };
@@ -281,7 +302,7 @@ function afterFailure(decision, ticket, context, failure, registry) {
       worktree: f.worktree || ledger.worktree,
     };
   }
-  delete ledger.activeWorker;
+  ledger.activeWorker = null; // explicit "no worker" keeps a persisted ledger valid for the relaunch check
   const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
   const viaGateway = route.gateway && route.gateway !== f.upstream;
   const authClass = {
