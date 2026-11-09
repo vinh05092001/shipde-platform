@@ -1142,7 +1142,8 @@ test('resolveFallbackRoutes with preResolvedFallback picks probed OK path matchi
   assert.notEqual(resolved[0].route.id, 'gw-unprobed', 'unprobed sibling must never be selected');
 });
 
-test('production defaults require health while explicit candidates can opt out', () => {
+test('production defaults require health while explicit candidates can supply probe evidence', (t) => {
+  const { file } = temporaryStore(t);
   const registry = {
     sources: [
       { id: 'gateway-prod', kind: 'router' },
@@ -1160,7 +1161,10 @@ test('production defaults require health while explicit candidates can opt out',
     { candidates: [model] },
     [{ id: 'prod-acct', provider: 'vendor-prod' }],
     registry,
-    { offerings: [{ provider: 'vendor-prod', accountId: 'prod-acct', model: model.modelId }] }
+    {
+      routeHealthFile: file,
+      offerings: [{ provider: 'vendor-prod', accountId: 'prod-acct', model: model.modelId }],
+    }
   );
   assert.ok(Array.isArray(withoutHealth));
   assert.ok(!withoutHealth.some((c) => c.modelId === model.modelId));
@@ -1169,7 +1173,13 @@ test('production defaults require health while explicit candidates can opt out',
     { candidates: [model] },
     [{ id: 'prod-acct', provider: 'vendor-prod' }],
     registry,
-    { candidates: [model] }
+    {
+      routeHealthFile: file,
+      routeHealth: routes.loadStore(file, { allowMissing: true }),
+      candidates: [{ ...model, accountId: 'prod-acct' }],
+      probeEvidence: (modelId, route) =>
+        modelId === model.modelId && route.id === model.gateway && route.accountId === 'prod-acct',
+    }
   );
   assert.ok(explicitFixture.some((c) => c.modelId === model.modelId));
 

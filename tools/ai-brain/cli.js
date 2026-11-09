@@ -765,7 +765,9 @@ function assembleCandidates(
   gatewayCandidates
 ) {
   if (Array.isArray(injectedCandidates)) {
-    return injectedCandidates.map((c) => Object.assign({}, c));
+    return require('./candidates')
+      .mergeCandidates([], injectedCandidates)
+      .map((c) => ({ ...c }));
   }
 
   const candidatesApi = require('./candidates');
@@ -1092,7 +1094,13 @@ function stripRouteAlias(modelId, gateway, registry) {
   return modelId;
 }
 
-function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+function isCandidateRouteEligible(
+  routeHealth,
+  candidate,
+  options,
+  routeHealthApi,
+  enforceMissingHealth
+) {
   if (
     candidate &&
     (candidate.credentialEnvMissing === true ||
@@ -1100,7 +1108,6 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   ) {
     return false;
   }
-  if (options && options.allowUnprobedCandidates === true) return true;
   if (!routeHealth) return true;
   const modelId = candidate && candidate.modelId;
   const gateway =
@@ -1116,17 +1123,21 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
     routePath
   );
   if (rec) return rec.status === 'AVAILABLE';
+  // Unprobed admission never overrides a known failure on this route/account,
+  // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
+  if (options && options.allowUnprobedCandidates === true && !(options.requireRouteHealth === true))
+    return true;
   if (candidate.scanLiveness?.status === 'passed') return true;
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
   if (options && options.allowMissingRouteHealth === true) return true;
-  const explicit =
-    isExplicit !== undefined ? isExplicit : Boolean(options && options.routeHealth !== undefined);
-  if (
-    explicit ||
-    (options && options.requireRouteHealth === true) ||
-    Object.keys(routeHealth.paths || {}).length > 0
-  ) {
+  const requiresEvidence =
+    enforceMissingHealth !== undefined
+      ? enforceMissingHealth
+      : Boolean(options && options.routeHealth !== undefined) ||
+        (options && options.requireRouteHealth === true) ||
+        Object.keys(routeHealth.paths || {}).length > 0;
+  if (requiresEvidence) {
     if (options && typeof options.probeEvidence === 'function') {
       return Boolean(options.probeEvidence(modelId, routePath));
     }
@@ -1149,6 +1160,9 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
           (c.modelId === modelId || c.model === modelId) &&
           (c.gateway === gateway || c.source === gateway || c.sourceId === gateway) &&
           (!c.accountId || c.accountId === candidate.accountId) &&
+          // Legacy unverified evidence (pre-schema-v2, no account) must not
+          // admit an account-bound candidate it was never tested against.
+          !(c.legacy === true && c.verified === false && !isWildcard) &&
           Array.isArray(c.evidence) &&
           c.evidence.some((e) => e && (e.status === 'passed' || e.status === 1))
       );
@@ -1245,12 +1259,11 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         allowMissing: true,
       });
   const enforceMissingHealth =
-    opts.allowUnprobedCandidates === true
+    opts.allowUnprobedCandidates === true && !(opts.requireRouteHealth === true)
       ? false
       : routeHealthExplicit ||
         requireRouteHealth ||
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
-  const enforceEmptyHealth = routeHealthExplicit || requireRouteHealth;
   const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
   const catalogueRows = rawCatalogueRows.map((raw) => {
     if (!raw || typeof raw !== 'object') return raw;
@@ -1354,25 +1367,16 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
-        let isEligible = true;
-        if (routeHealth) {
-          const modelId = candidate && candidate.modelId;
-          const gateway = candidate && candidate.gateway;
-          if (modelId && gateway) {
-            const routePath = candidate.accountId
-              ? { id: gateway, accountId: candidate.accountId }
-              : gateway;
-            const rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
-            if (rec) {
-              isEligible = rec.status === 'AVAILABLE';
-            } else if (enforceEmptyHealth) {
-              isEligible =
-                candidate.scanLiveness?.status === 'passed' ||
-                Boolean(opts.probeEvidence && opts.probeEvidence(modelId, routePath));
-            }
-          }
-        }
-        if (candidate.scanLiveness?.status === 'failed') isEligible = false;
+        const isEligible =
+          isCandidateRouteEligible(
+            routeHealth,
+            candidate,
+            { ...opts, requireRouteHealth: enforceMissingHealth, registry: resolvedRegistry },
+            routeHealthApi,
+            // Injected inventory retains its explicit-health policy; unrelated
+            // cached routes must not change whether a missing route is admitted.
+            routeHealthExplicit || requireRouteHealth
+          ) && candidate.scanLiveness?.status !== 'failed';
         if (isEligible) {
           eligible.push(candidate);
         } else {
@@ -1392,9 +1396,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             const reason =
               candidate.scanLiveness?.status === 'failed'
                 ? candidate.scanLiveness.reason
-                : rec
-                  ? rec.status || 'ROUTE_UNAVAILABLE'
-                  : 'ROUTE_PROBE_UNPROVEN';
+                : candidate.credentialEnvMissing ||
+                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING'
+                  ? 'CREDENTIAL_ENV_MISSING'
+                  : rec
+                    ? rec.status || 'ROUTE_UNAVAILABLE'
+                    : 'ROUTE_PROBE_UNPROVEN';
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1579,7 +1586,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const eligible = [];
     const excludedRoutes = [...(opts.routeScopeExclusions || [])];
     const seenExcluded = new Set();
-    for (const rawCandidate of assembled) {
+    for (const rawCandidate of candidatesApi.mergeCandidates([], assembled)) {
       const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
       if (
         candidate.scanLiveness?.status !== 'failed' &&
