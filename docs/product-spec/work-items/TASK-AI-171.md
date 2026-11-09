@@ -653,5 +653,18 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 
 ## PR 06 — Give each worktree one confirmed worker owner (2026-11-09)
 
-- Scope (`tools/ai-brain/coordinator-claim.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr06-claim.test.js`): ports rows `B43`, `B44`, `B45` from `.oc/route.js:495-536`. `claimWorktree` canonicalizes paths with `fs.realpathSync`, enforces exclusive `supervisor-<id>.lock` with `.recover` gate and `EPERM`/start-time/`claimId` safety; `stopRun` matches exact `--title` run tags, walks creation-time-checked descendants (`conhost.exe`/self excluded) via `runHarness(null, { killTree })`, and requires an empty re-query; `reconcileWorktreeWorker`/`acquireWorktreeOwner` fail closed on unreadable or unstopped cross-item `worker-<id>.json` state and unlink only after confirmed stop.
-- Evidence: `task-ai-171-route-pr06-claim.test.js` failed before implementation (6 tests, 0 pass, 6 fail) and passes after (6 pass, 0 fail); combined with PR 06 existing suites (`task-ai-171-route-handoff.test.js`, `task-ai-171-fallback-chain.test.js`, `task-ai-171-route-pr01-consumer.test.js`, `task-ai-171-route-pr12-options.test.js`): 60 tests, 60 pass, 0 fail. Offline evidence only; live OS process trees and external cutover remain with the coordinator.
+- Scope (`tools/ai-brain/process-ownership.js`, `tools/ai-brain/coordinator-claim.js`,
+  `tools/ai-brain/test/task-ai-171-route-pr06-claim.test.js`): ports rows `B43`, `B44`, `B45`
+  from `.oc/route.js:495-536` and repairs all 13 review findings on `ab55f507`.
+- `claimWorktree` fails closed on unresolved paths (`WORKTREE_PATH_UNRESOLVED`), preserves live
+  numeric PID-only locks, and serializes recovery/publication via `.recover` and per-record
+  `.evict` gates; `firstLaunch` and `afterFailure` require a verified worktree-bound claim;
+  `reconcileWorktreeWorker`/`acquireWorktreeOwner` use `statSync`/`readFileSync`, verify the
+  worker record is unchanged before `unlinkSync`, and release claims on exceptions.
+- `process-ownership.js` parses unquoted `--title` tokens, requires `-ErrorAction Stop` and
+  valid JSON from PowerShell, requires exact `startedAt` for bare PID matches, seeds absent
+  recorded/tracked parent PIDs for untagged orphans, and distinguishes refused vs killed PIDs.
+- Evidence: `task-ai-171-route-pr06-claim.test.js` fails on base `ab55f507` (0 pass, 6 fail) and
+  passes on HEAD (6 pass, 0 fail); combined with existing PR 06 suites: 60 pass, 0 fail.
+  Offline Windows evidence only; live OS process trees, remote CI and independent review remain
+  with the coordinator.
