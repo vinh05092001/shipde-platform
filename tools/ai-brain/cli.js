@@ -1122,6 +1122,16 @@ function getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, o
   return availableRec;
 }
 
+function candidateExclusionReason(routeHealth, candidate, routeHealthApi, options, fresh) {
+  if (fresh?.stale) return fresh.reason;
+  if (candidate?.scanLiveness?.status === 'failed') return candidate.scanLiveness.reason;
+  if (candidate?.credentialEnvMissing || candidate?.blockReason === 'CREDENTIAL_ENV_MISSING') {
+    return 'CREDENTIAL_ENV_MISSING';
+  }
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
+  return rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+}
+
 function isCandidateRouteEligible(
   routeHealth,
   candidate,
@@ -1434,20 +1444,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const key = candidatesApi.candidateKey(candidate);
           if (!seenExcluded.has(key)) {
             seenExcluded.add(key);
-            const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, {
-              ...opts,
-              registry: resolvedRegistry,
-            });
-            const reason = fresh.stale
-              ? fresh.reason
-              : candidate.scanLiveness?.status === 'failed'
-                ? candidate.scanLiveness.reason
-                : candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING'
-                  ? 'CREDENTIAL_ENV_MISSING'
-                  : rec
-                    ? rec.status || 'ROUTE_UNAVAILABLE'
-                    : 'ROUTE_PROBE_UNPROVEN';
+            const reason = candidateExclusionReason(
+              routeHealth,
+              candidate,
+              routeHealthApi,
+              { ...opts, registry: resolvedRegistry },
+              fresh
+            );
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1653,21 +1656,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         const key = candidatesApi.candidateKey(candidate);
         if (!seenExcluded.has(key)) {
           seenExcluded.add(key);
-          const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, {
-            ...opts,
-            registry: resolvedRegistry,
-          });
-          const reason = fresh.stale
-            ? fresh.reason
-            : candidate.scanLiveness?.status === 'failed'
-              ? candidate.scanLiveness.reason
-              : candidate &&
-                  (candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
-                ? 'CREDENTIAL_ENV_MISSING'
-                : rec
-                  ? rec.status || 'ROUTE_UNAVAILABLE'
-                  : 'ROUTE_PROBE_UNPROVEN';
+          const reason = candidateExclusionReason(
+            routeHealth,
+            candidate,
+            routeHealthApi,
+            { ...opts, registry: resolvedRegistry },
+            fresh
+          );
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
@@ -2410,17 +2405,16 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
-    const maskVal = (v) => (typeof v === 'string' ? maskEmailsInString(v) : v);
-    const sanitizeId = (id) =>
-      id && typeof id === 'object'
-        ? Object.fromEntries(Object.entries(id).map(([k, v]) => [k, maskVal(v)]))
-        : null;
-    const sanitizeOutcome = (out) =>
-      out?.candidateKey ? { ...out, candidateKey: maskEmailsInString(out.candidateKey) } : out;
+    const mask = (v) => (typeof v === 'string' ? maskEmailsInString(v) : v);
     const res = {
-      chosen: typeof chosen === 'string' ? maskEmailsInString(chosen) : chosen || null,
-      launchedArgvIdentity: sanitizeId(launchedId),
-      outcome: sanitizeOutcome(outcome),
+      chosen: mask(chosen) || null,
+      launchedArgvIdentity:
+        launchedId && typeof launchedId === 'object'
+          ? Object.fromEntries(Object.entries(launchedId).map(([k, v]) => [k, mask(v)]))
+          : null,
+      outcome: outcome?.candidateKey
+        ? { ...outcome, candidateKey: mask(outcome.candidateKey) }
+        : outcome,
       recorded: recorded || null,
       ...extra,
     };
@@ -3433,36 +3427,35 @@ function dispatchCommand(args, deps = {}) {
         throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
       }
 
-      const { parseCandidateKey } = require('./discovery/identity');
-      const chosenIdentity = parseCandidateKey(finalChosenKey) || {};
+      const chosenIdentity =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
       const cand = finalChosenCandidate;
       launchedArgvIdentity = {
         harness: cand.harness || chosenIdentity.harness || harnessName,
         accessPath: cand.accessPath || chosenIdentity.accessPath || '',
         gateway: cand.gateway || chosenIdentity.gateway || '',
         upstream: cand.upstream || chosenIdentity.upstream || '',
-        account: maskEmailsInString(
-          cand.accountId || cand.account || chosenIdentity.account || '*'
-        ),
-        quotaScope: maskEmailsInString(cand.quotaScope || chosenIdentity.quotaScope || ''),
+        account: cand.accountId || cand.account || chosenIdentity.account || '*',
+        quotaScope: cand.quotaScope || chosenIdentity.quotaScope || '',
         modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
       };
 
-      const promptFilePath = args['prompt-file'] || args.promptFile || deps?.promptFile;
-      let promptText = null;
-      if (promptFilePath) {
-        const resolved = path.resolve(args.cwd || deps?.cwd || rootDir, promptFilePath);
-        promptText = fs.readFileSync(
-          fs.existsSync(promptFilePath) ? promptFilePath : resolved,
-          'utf8'
-        );
-      } else if (args.prompt || deps?.prompt) {
-        promptText = args.prompt || deps?.prompt;
-      } else {
-        promptText = defaultPrompt(item, {
-          isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
-        });
-      }
+      const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
+      const promptText = pFile
+        ? fs.readFileSync(
+            fs.existsSync(pFile) ? pFile : path.resolve(args.cwd || deps?.cwd || rootDir, pFile),
+            'utf8'
+          )
+        : args.prompt ||
+          deps?.prompt ||
+          defaultPrompt(item, {
+            isolatedWorker: Boolean(args['isolated-worker'] || deps?.isolatedWorker),
+          });
+      const launchTimeoutMs =
+        Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
+        (Number(args.timeout || deps?.timeout)
+          ? Number(args.timeout || deps?.timeout) * 1000
+          : undefined);
 
       // The loop hands the harness a durable-report path. Under `-z` stdout is
       // the final response prose, so the session id can only come from the
@@ -3497,13 +3490,9 @@ function dispatchCommand(args, deps = {}) {
           },
           isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
           printTimeoutSec:
-            Number(args['timeout-sec'] || args.timeoutSec || (deps && deps.timeoutSec)) ||
+            Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
             (args.timeout ? Number(args.timeout) : 3600),
-          timeoutMs:
-            Number(args['timeout-ms'] || args.timeoutMs || (deps && deps.timeoutMs)) ||
-            (Number(args.timeout || (deps && deps.timeout))
-              ? Number(args.timeout || (deps && deps.timeout)) * 1000
-              : undefined),
+          timeoutMs: launchTimeoutMs,
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3591,11 +3580,7 @@ function dispatchCommand(args, deps = {}) {
             // same decision log this dispatch records its launch in.
             decisionDir,
             checkpoint: checkpointFile,
-            timeoutMs:
-              Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
-              (Number(args.timeout || deps?.timeout)
-                ? Number(args.timeout || deps?.timeout) * 1000
-                : undefined),
+            timeoutMs: launchTimeoutMs,
           });
         } catch (err) {
           thrownError = err;
@@ -3801,13 +3786,12 @@ function dispatchCommand(args, deps = {}) {
             saveStore: deps && (deps.saveStore || deps.saver),
           }
         );
+        const pRec = recordResult?.store?.paths?.[recordResult?.key];
         lastRecorded = recordResult
           ? {
               key: recordResult.key,
-              status:
-                recordResult.store?.paths?.[recordResult.key]?.status ||
-                recordResult.recorded?.reason,
-              nextCheckAt: recordResult.store?.paths?.[recordResult.key]?.nextCheckAt,
+              status: pRec?.status || recordResult.recorded?.reason,
+              nextCheckAt: pRec?.nextCheckAt,
               reason: recordResult.recorded?.reason,
             }
           : null;
@@ -5690,6 +5674,7 @@ module.exports = {
   assembleForDispatch,
   stripRouteAlias,
   getCandidateRouteHealthRecord,
+  candidateExclusionReason,
   isValidWorkerOutcome,
   discoveryCommand,
   evidenceCommand,
