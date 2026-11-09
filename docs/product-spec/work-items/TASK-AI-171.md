@@ -754,4 +754,3 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Finding 2 / Items d2 & d4: `verifyWorktreeClaim` probes foreign owner PID under default options, requires matching disk worktree binding, and rejects metadata-only claims; dead predecessor claim rejected for launch/reconcile while fresh claimant recovers exclusively.
 - Finding 7 / Item d3: dead same-item worker record is unlinked without blocking restart; live same-item worker blocks acquisition and prevents `firstLaunch` from launching (`WORKER_STILL_ACTIVE`).
 - Evidence: 4/4 tests pass in `task-ai-171-route-pr06-claim.test.js`. Offline evidence only.
-
