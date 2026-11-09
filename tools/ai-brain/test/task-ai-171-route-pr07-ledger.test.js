@@ -219,4 +219,11 @@ test('route-handoff entry points refuse an invalid persisted ledger passed in di
   const failed = afterFailure(f.decision, f.ticket, ctx(bad), f.failure('a', 429), f.deps.registry);
   assert.deepEqual([failed.action, failed.reason], ['STOP', 'LEDGER_UNREADABLE']);
   assert.equal(firstLaunch(f.decision, f.ticket, ctx(f.valid()), f.deps.registry).action, 'LAUNCH');
+  const legacy = f.valid({ launches: 1 });
+  delete legacy.activeWorker;
+  legacy.active = { tag: 'run-old', offeringId: 'a' };
+  assert.equal(
+    firstLaunch(f.decision, f.ticket, ctx(legacy), f.deps.registry).reason,
+    'WORKER_STILL_ACTIVE'
+  );
 });

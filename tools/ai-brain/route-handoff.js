@@ -224,7 +224,11 @@ function persistedLedgerProblem(ledger, ticket) {
   const { checkLedger } = require('./coordinator-ledger');
   const expect = { item: ticket.workItemId, worktree: ticket.request && ticket.request.cwd };
   const checked = checkLedger(ledger, expect);
-  return checked.ok ? null : checked.reason;
+  if (!checked.ok) return checked.reason;
+  // use the migrated worker state, so a legacy `active` worker still blocks a relaunch
+  ledger.activeWorker = checked.ledger.activeWorker;
+  delete ledger.active;
+  return null;
 }
 
 /** The first launch of a ticket: the best usable route, or BLOCKED. */
