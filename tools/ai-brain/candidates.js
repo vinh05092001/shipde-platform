@@ -1730,15 +1730,60 @@ function generateCandidatesWithCatalog(opts) {
                 .map((e) => (typeof e === 'string' ? e : e && (e.modelId || e.model || e.id)))
                 .filter(Boolean)
             );
-            const models = liveAgyAccountModels(acc, source, accountModels(acc), o).filter(
-              (model) =>
-                // A direct source's own inventory is authoritative for its wire ids.
-                // Another gateway's catalogue may use entirely different aliases.
-                (Array.isArray(source.models) && source.models.includes(model)) ||
-                catalogue.length === 0 ||
-                catalogue.includes(model) ||
-                catalogueModelIds.has(model)
-            );
+            const dRoute = sourcesApi.dispatchRoute(source.id, registry);
+            const prefix = (dRoute && dRoute.modelPrefix) || `${source.id}/`;
+            const declared = accountModels(acc);
+            let models;
+            if (declared.length > 0) {
+              models = liveAgyAccountModels(acc, source, declared, o).filter(
+                (model) =>
+                  // A direct source's own inventory is authoritative for its wire ids.
+                  // Another gateway's catalogue may use entirely different aliases.
+                  (Array.isArray(source.models) && source.models.includes(model)) ||
+                  catalogue.length === 0 ||
+                  catalogue.includes(model) ||
+                  catalogueModelIds.has(model)
+              );
+            } else {
+              const sourceCatalogueModels = new Set();
+              for (const item of catalogue) {
+                if (!item) continue;
+                if (typeof item === 'string') {
+                  const s = item.trim();
+                  if (prefix && s.startsWith(prefix)) {
+                    const bare = s.slice(prefix.length).trim();
+                    if (bare) sourceCatalogueModels.add(bare);
+                  }
+                  continue;
+                }
+                const itemSource =
+                  item.source ||
+                  item.gateway ||
+                  item.sourceId ||
+                  item.upstream ||
+                  (Array.isArray(item.sourceIds) ? item.sourceIds[0] : null);
+                const mId = String(item.modelId || item.model || item.id || '').trim();
+                const matchesSource =
+                  itemSource === source.id ||
+                  (prefix && mId.startsWith(prefix)) ||
+                  (Array.isArray(item.sourceIds) && item.sourceIds.includes(source.id));
+                if (matchesSource && mId) {
+                  const bare =
+                    prefix && mId.startsWith(prefix) ? mId.slice(prefix.length).trim() : mId;
+                  if (bare) sourceCatalogueModels.add(bare);
+                }
+              }
+              models = liveAgyAccountModels(acc, source, Array.from(sourceCatalogueModels), o);
+            }
+
+            if (models.length === 0 && Array.isArray(o.candidateGenerationRejections)) {
+              o.candidateGenerationRejections.push({
+                modelId: '',
+                sourceId: source.id,
+                reasonCode: 'MODELS_UNKNOWN_FOR_SOURCE',
+              });
+            }
+
             for (const model of models) {
               const row = accountModelRow(acc, model) || {};
               let contextWindow = undefined;
@@ -1746,7 +1791,8 @@ function generateCandidatesWithCatalog(opts) {
                 (e) =>
                   typeof e === 'object' &&
                   e &&
-                  (e.modelId || e.model || e.id) === model &&
+                  ((e.modelId || e.model || e.id) === model ||
+                    (prefix && (e.modelId || e.model || e.id) === prefix + model)) &&
                   (!e.gateway || e.gateway === source.id) &&
                   (!e.source || e.source === source.id)
               );
@@ -1800,7 +1846,9 @@ function generateCandidatesWithCatalog(opts) {
             }
           }
         }
-        pushOpencodeProviderWriters(candidates, source, o, bound);
+        if (harness !== 'direct-http') {
+          pushOpencodeProviderWriters(candidates, source, o, bound);
+        }
       }
     }
 

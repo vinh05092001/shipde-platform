@@ -775,3 +775,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 spawns), enforces argv identity on selection (1 spawn), and writes repo SHA and tree path provenance to route log.
 - Depends on: Slice 2a (`fix/task-ai-171-core-s2a-execute-path`).
 - Evidence: 3/3 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+
+## Slice 3: A2 — Direct-HTTP external sources candidate generation (2026-11-10)
+
+- Scope: `tools/ai-brain/candidates.js` (`generateCandidatesWithCatalog`), `tools/ai-brain/test/task-ai-171-external-sources.test.js`, `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
+- Outcome: Wires direct-http external model sources from catalogue into candidate generation; emits MODELS_UNKNOWN_FOR_SOURCE when uncatalogued; routes direct-http sources to wire model IDs.
+- Depends on: Slice 2b (`fix/task-ai-171-core-s2b-route-launch`).
+- Evidence: 3/3 tests in `task-ai-171-external-sources.test.js` and 5/5 tests in `task-ai-142-opencode-writers.test.js` pass offline.
