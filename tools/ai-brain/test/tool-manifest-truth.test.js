@@ -30,6 +30,13 @@ function readManifest() {
 // Every entry that legitimately claims `installed: true` must prove itself here: the cited file
 // exists, the cited path resolves, and the named member is really present.
 const INSTALLED_EXPECTATIONS = {
+  'ast-grep': { file: 'package.json', section: 'devDependencies', member: '@ast-grep/cli' },
+  playwright: {
+    file: 'apps/web/package.json',
+    section: 'devDependencies',
+    member: '@playwright/test',
+  },
+  'axe-core': { file: 'apps/web/package.json', section: 'devDependencies', member: 'axe-core' },
   eslint: { file: 'package.json', section: 'devDependencies', member: 'eslint' },
   lefthook: { file: 'package.json', section: 'devDependencies', member: 'lefthook' },
   supertest: { file: 'apps/api/package.json', section: 'devDependencies', member: 'supertest' },

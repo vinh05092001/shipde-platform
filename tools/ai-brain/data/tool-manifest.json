@@ -28,7 +28,7 @@
     "roles": ["security-review"],
     "triggers": ["**/Dockerfile", "**/*.tf", "**/*.yaml", "**/*.yml", "secrets"],
     "gate": false,
-    "command": null,
+    "command": "security:trivy",
     "installed": false,
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
   },
@@ -39,9 +39,9 @@
     "roles": ["reviewer"],
     "triggers": ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx"],
     "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
+    "command": "sg scan",
+    "installed": true,
+    "evidenceRef": "package.json"
   },
   {
     "id": "axe-core",
@@ -51,8 +51,8 @@
     "triggers": ["**/*.tsx", "**/*.jsx", "ui"],
     "gate": false,
     "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
+    "installed": true,
+    "evidenceRef": "apps/web/package.json"
   },
   {
     "id": "compose",
@@ -160,9 +160,9 @@
     "roles": ["ui"],
     "triggers": ["**/*.tsx", "**/*.jsx", "ui"],
     "gate": false,
-    "command": null,
-    "installed": false,
-    "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
+    "command": "test:a11y",
+    "installed": true,
+    "evidenceRef": "apps/web/package.json"
   },
   {
     "id": "playwright-cli",
@@ -336,7 +336,7 @@
     "roles": ["security-review", "reviewer"],
     "triggers": ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx", "secrets"],
     "gate": false,
-    "command": null,
+    "command": "security:semgrep",
     "installed": false,
     "evidenceRef": "docs/product-spec/docs/10-ai-collaboration/REPOSITORY-CLI-MANIFEST.md"
   },
