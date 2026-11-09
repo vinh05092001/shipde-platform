@@ -34,6 +34,7 @@ const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
 const { atomicRenameSync } = require('./atomic-rename');
+const { maskEmailsInString } = require('./route-identity-utils');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
 
@@ -1094,6 +1095,43 @@ function stripRouteAlias(modelId, gateway, registry) {
   return modelId;
 }
 
+function getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options) {
+  if (!routeHealth?.paths || !candidate || typeof routeHealthApi?.getPathRecord !== 'function') {
+    return null;
+  }
+  const modelId = candidate.modelId || candidate.id;
+  const gw =
+    candidate.gateway ||
+    (options?.harness === 'hermes' && (candidate.sourceId || candidate.source));
+  if (!modelId || (!gw && !candidate.upstream)) return null;
+  const isWildcard = !candidate.accountId || candidate.accountId === '*';
+  const targets = gw === candidate.upstream ? [gw] : [gw, candidate.upstream].filter(Boolean);
+  let availableRec = null;
+  for (const t of targets) {
+    const checkPath = isWildcard ? t : { id: t, accountId: candidate.accountId };
+    const rec = routeHealthApi.getPathRecord(
+      routeHealth,
+      stripRouteAlias(modelId, t, options?.registry),
+      checkPath
+    );
+    if (rec) {
+      if (rec.status !== 'AVAILABLE') return rec;
+      if (!availableRec) availableRec = rec;
+    }
+  }
+  return availableRec;
+}
+
+function candidateExclusionReason(routeHealth, candidate, routeHealthApi, options, fresh) {
+  if (fresh?.stale) return fresh.reason;
+  if (candidate?.scanLiveness?.status === 'failed') return candidate.scanLiveness.reason;
+  if (candidate?.credentialEnvMissing || candidate?.blockReason === 'CREDENTIAL_ENV_MISSING') {
+    return 'CREDENTIAL_ENV_MISSING';
+  }
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
+  return rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+}
+
 function isCandidateRouteEligible(
   routeHealth,
   candidate,
@@ -1118,17 +1156,7 @@ function isCandidateRouteEligible(
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  let rec = null;
-  for (const gw of [gateway, candidate?.upstream]) {
-    if (!gw) continue;
-    const checkPath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
-    rec = routeHealthApi.getPathRecord(
-      routeHealth,
-      stripRouteAlias(modelId, gw, options && options.registry),
-      checkPath
-    );
-    if (rec) break;
-  }
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
   if (rec) return rec.status === 'AVAILABLE';
   // Unprobed admission never overrides a known failure on this route/account,
   // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
@@ -1245,6 +1273,7 @@ function applyRouteScope(eligible, excludedRoutes, opts, registry) {
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
+  const { sourceFreshness, readJson } = require('./catalogue-refresh');
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
@@ -1271,6 +1300,28 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : routeHealthExplicit ||
         requireRouteHealth ||
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
+
+  const hasFreshness =
+    opts.freshness !== undefined ||
+    opts.freshnessDoc !== undefined ||
+    Boolean(discoveryCat?.freshnessDoc || discoveryCat?.freshness || opts.discoveryDataDir);
+
+  const freshnessDoc =
+    opts.freshness ??
+    opts.freshnessDoc ??
+    discoveryCat?.freshnessDoc ??
+    discoveryCat?.freshness?.doc ??
+    (opts.discoveryDataDir
+      ? readJson(path.join(opts.discoveryDataDir, 'freshness.json'), null)
+      : null);
+
+  const checkFresh = (c) => {
+    if (!hasFreshness) return { stale: false };
+    const res = sourceFreshness(c, { freshness: freshnessDoc, now: opts.now });
+    if (res.staleListingRetained) c.staleListingRetained = true;
+    else delete c.staleListingRetained;
+    return { stale: !res.admitted, reason: res.code || 'SOURCE_CATALOGUE_STALE' };
+  };
   const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
   const catalogueRows = rawCatalogueRows.map((raw) => {
     if (!raw || typeof raw !== 'object') return raw;
@@ -1374,7 +1425,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
+        const fresh = checkFresh(candidate);
         const isEligible =
+          !fresh.stale &&
           isCandidateRouteEligible(
             routeHealth,
             candidate,
@@ -1383,35 +1436,21 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             // Injected inventory retains its explicit-health policy; unrelated
             // cached routes must not change whether a missing route is admitted.
             routeHealthExplicit || requireRouteHealth
-          ) && candidate.scanLiveness?.status !== 'failed';
+          ) &&
+          candidate.scanLiveness?.status !== 'failed';
         if (isEligible) {
           eligible.push(candidate);
         } else {
           const key = candidatesApi.candidateKey(candidate);
           if (!seenExcluded.has(key)) {
             seenExcluded.add(key);
-            const modelId = candidate && candidate.modelId;
-            const gateway = candidate && candidate.gateway;
-            let rec = null;
-            if (routeHealth && modelId) {
-              for (const gw of [gateway, candidate?.upstream]) {
-                if (!gw) continue;
-                const routePath = candidate?.accountId
-                  ? { id: gw, accountId: candidate.accountId }
-                  : gw;
-                rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
-                if (rec) break;
-              }
-            }
-            const reason =
-              candidate.scanLiveness?.status === 'failed'
-                ? candidate.scanLiveness.reason
-                : candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING'
-                  ? 'CREDENTIAL_ENV_MISSING'
-                  : rec
-                    ? rec.status || 'ROUTE_UNAVAILABLE'
-                    : 'ROUTE_PROBE_UNPROVEN';
+            const reason = candidateExclusionReason(
+              routeHealth,
+              candidate,
+              routeHealthApi,
+              { ...opts, registry: resolvedRegistry },
+              fresh
+            );
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1610,7 +1649,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const seenExcluded = new Set();
     for (const rawCandidate of candidatesApi.mergeCandidates([], assembled)) {
       const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
+      const fresh = checkFresh(candidate);
       if (
+        !fresh.stale &&
         candidate.scanLiveness?.status !== 'failed' &&
         isCandidateRouteEligible(
           routeHealth,
@@ -1627,37 +1668,19 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         const key = candidatesApi.candidateKey(candidate);
         if (!seenExcluded.has(key)) {
           seenExcluded.add(key);
-          const modelId = candidate && candidate.modelId;
-          const gateway =
-            candidate &&
-            (candidate.gateway ||
-              (opts && opts.harness === 'hermes' && (candidate.sourceId || candidate.source)));
-          const isWildcard = !candidate.accountId || candidate.accountId === '*';
-          let rec = null;
-          if (routeHealth && modelId) {
-            for (const gw of [gateway, candidate?.upstream]) {
-              if (!gw) continue;
-              const routePath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
-              rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
-              if (rec) break;
-            }
-          }
-          const reason =
-            candidate.scanLiveness?.status === 'failed'
-              ? candidate.scanLiveness.reason
-              : candidate &&
-                  (candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
-                ? 'CREDENTIAL_ENV_MISSING'
-                : rec
-                  ? rec.status || 'ROUTE_UNAVAILABLE'
-                  : 'ROUTE_PROBE_UNPROVEN';
+          const reason = candidateExclusionReason(
+            routeHealth,
+            candidate,
+            routeHealthApi,
+            { ...opts, registry: resolvedRegistry },
+            fresh
+          );
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
             reason,
             reasonCode: String(reason).split(':')[0],
-            scope: candidate && candidate.blockReason ? 'account' : 'route',
+            scope: fresh.stale ? 'route' : candidate && candidate.blockReason ? 'account' : 'route',
           });
         }
       }
@@ -2411,6 +2434,19 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
+function isValidWorkerOutcome(parsed, expectedCandidateKey, expectedStatus = 'completed') {
+  return Boolean(
+    parsed &&
+    typeof parsed === 'object' &&
+    parsed.candidateKey === expectedCandidateKey &&
+    typeof parsed.status === 'string' &&
+    (expectedStatus
+      ? parsed.status === expectedStatus ||
+        (expectedStatus === 'completed' && parsed.status === 'passed')
+      : parsed.status.length > 0)
+  );
+}
+
 function dispatchCommand(args, deps = {}) {
   if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
@@ -2421,17 +2457,23 @@ function dispatchCommand(args, deps = {}) {
   const { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture } =
     resolveFixturePaths(args, deps);
   // Only the real CLI entry sets this: injected test seams keep their paths.
-  const noInference = isDryRun && hasOfflineFixture;
+  const noInference = (isDryRun && deps.dryRunOffline === true) || hasOfflineFixture;
   const output = deps.log || console.log;
   const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
   let item = null;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
+    const mask = (v) => (typeof v === 'string' ? maskEmailsInString(v) : v);
     const res = {
-      chosen: chosen || null,
-      launchedArgvIdentity: launchedId || null,
-      outcome,
+      chosen: mask(chosen) || null,
+      launchedArgvIdentity:
+        launchedId && typeof launchedId === 'object'
+          ? Object.fromEntries(Object.entries(launchedId).map(([k, v]) => [k, mask(v)]))
+          : null,
+      outcome: outcome?.candidateKey
+        ? { ...outcome, candidateKey: mask(outcome.candidateKey) }
+        : outcome,
       recorded: recorded || null,
       ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
       ...(extra.assessment || (lastDecision && lastDecision.assessment) || (deps && deps.assessment)
@@ -2472,7 +2514,8 @@ function dispatchCommand(args, deps = {}) {
     !process.env.AGY_RUNS_DIR &&
     !args.close &&
     !args.complete &&
-    !args.fail
+    !args.fail &&
+    !hasOfflineFixture
   ) {
     const freshness = require('./catalogue-refresh').catalogueFreshness({
       dataDir: args['discovery-dir'] || deps.discoveryDataDir,
@@ -2763,6 +2806,9 @@ function dispatchCommand(args, deps = {}) {
       path.join(__dirname, 'data', 'discovery');
     try {
       discCat = readDiscoveryCatalogue({ dataDir: discDir });
+      const { catalogueFreshness } = require('./catalogue-refresh');
+      discCat.freshness = catalogueFreshness({ dataDir: discDir, now: deps && deps.now });
+      discCat.stale = discCat.freshness?.stale;
     } catch {
       discCat = { candidates: [] };
     }
@@ -3514,39 +3560,35 @@ function dispatchCommand(args, deps = {}) {
         throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
       }
 
-      const { parseCandidateKey } = require('./discovery/identity');
-      const chosenIdentity = parseCandidateKey(finalChosenKey) || {};
+      const chosenIdentity =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+      const cand = finalChosenCandidate;
       launchedArgvIdentity = {
-        harness: finalChosenCandidate.harness || chosenIdentity.harness || harnessName,
-        accessPath: finalChosenCandidate.accessPath || chosenIdentity.accessPath || '',
-        gateway: finalChosenCandidate.gateway || chosenIdentity.gateway || '',
-        upstream: finalChosenCandidate.upstream || chosenIdentity.upstream || '',
-        account:
-          finalChosenCandidate.accountId ||
-          finalChosenCandidate.account ||
-          chosenIdentity.account ||
-          '*',
-        quotaScope: finalChosenCandidate.quotaScope || chosenIdentity.quotaScope || '',
-        modelId:
-          finalChosenCandidate.modelId ||
-          finalChosenCandidate.model ||
-          chosenIdentity.modelId ||
-          '',
+        harness: cand.harness || chosenIdentity.harness || harnessName,
+        accessPath: cand.accessPath || chosenIdentity.accessPath || '',
+        gateway: cand.gateway || chosenIdentity.gateway || '',
+        upstream: cand.upstream || chosenIdentity.upstream || '',
+        account: cand.accountId || cand.account || chosenIdentity.account || '*',
+        quotaScope: cand.quotaScope || chosenIdentity.quotaScope || '',
+        modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
       };
 
-      const promptFilePath = args['prompt-file'] || args.promptFile || (deps && deps.promptFile);
-      let promptText = null;
-      if (promptFilePath) {
-        const resolved = path.resolve(args.cwd || (deps && deps.cwd) || rootDir, promptFilePath);
-        const promptPath = fs.existsSync(promptFilePath) ? promptFilePath : resolved;
-        promptText = fs.readFileSync(promptPath, 'utf8');
-      } else if (args.prompt || (deps && deps.prompt)) {
-        promptText = args.prompt || (deps && deps.prompt);
-      } else {
-        promptText = defaultPrompt(item, {
-          isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
-        });
-      }
+      const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
+      const promptText = pFile
+        ? fs.readFileSync(
+            fs.existsSync(pFile) ? pFile : path.resolve(args.cwd || deps?.cwd || rootDir, pFile),
+            'utf8'
+          )
+        : args.prompt ||
+          deps?.prompt ||
+          defaultPrompt(item, {
+            isolatedWorker: Boolean(args['isolated-worker'] || deps?.isolatedWorker),
+          });
+      const launchTimeoutMs =
+        Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
+        (Number(args.timeout || deps?.timeout)
+          ? Number(args.timeout || deps?.timeout) * 1000
+          : undefined);
 
       // The loop hands the harness a durable-report path. Under `-z` stdout is
       // the final response prose, so the session id can only come from the
@@ -3581,13 +3623,9 @@ function dispatchCommand(args, deps = {}) {
           },
           isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
           printTimeoutSec:
-            Number(args['timeout-sec'] || args.timeoutSec || (deps && deps.timeoutSec)) ||
+            Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
             (args.timeout ? Number(args.timeout) : 3600),
-          timeoutMs:
-            Number(args['timeout-ms'] || args.timeoutMs || (deps && deps.timeoutMs)) ||
-            (Number(args.timeout || (deps && deps.timeout))
-              ? Number(args.timeout || (deps && deps.timeout)) * 1000
-              : undefined),
+          timeoutMs: launchTimeoutMs,
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3675,11 +3713,7 @@ function dispatchCommand(args, deps = {}) {
             // same decision log this dispatch records its launch in.
             decisionDir,
             checkpoint: checkpointFile,
-            timeoutMs:
-              Number(args['timeout-ms'] || args.timeoutMs || (deps && deps.timeoutMs)) ||
-              (Number(args.timeout || (deps && deps.timeout))
-                ? Number(args.timeout || (deps && deps.timeout)) * 1000
-                : undefined),
+            timeoutMs: launchTimeoutMs,
           });
         } catch (err) {
           thrownError = err;
@@ -3799,14 +3833,13 @@ function dispatchCommand(args, deps = {}) {
         exitCode: 0,
         source: 'dispatch',
       });
-      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome =
-        parsedOutcome && parsedOutcome.candidateKey
-          ? parsedOutcome
-          : structuredOutcome(finalChosenKey, launchRes, null, {
-              status: 'completed',
-              checkpoint: checkpointFile,
-            });
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome = isValidWorkerOutcome(parsedOutcome, finalChosenKey)
+        ? parsedOutcome
+        : structuredOutcome(finalChosenKey, launchRes, null, {
+            status: 'completed',
+            checkpoint: checkpointFile,
+          });
       log('Dispatch succeeded on ' + finalChosenKey);
       return makeExecuteResult(
         0,
@@ -3886,26 +3919,21 @@ function dispatchCommand(args, deps = {}) {
             saveStore: deps && (deps.saveStore || deps.saver),
           }
         );
+        const pRec = recordResult?.store?.paths?.[recordResult?.key];
         lastRecorded = recordResult
           ? {
               key: recordResult.key,
-              status:
-                recordResult.store?.paths?.[recordResult.key]?.status ||
-                recordResult.recorded?.reason,
-              nextCheckAt: recordResult.store?.paths?.[recordResult.key]?.nextCheckAt,
+              status: pRec?.status || recordResult.recorded?.reason,
+              nextCheckAt: pRec?.nextCheckAt,
               reason: recordResult.recorded?.reason,
             }
           : null;
       } catch (_) {}
-      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome =
-        parsedOutcome && parsedOutcome.candidateKey
-          ? parsedOutcome
-          : structuredOutcome(finalChosenKey, launchRes, classification, {
-              status: 'failed',
-              checkpoint: checkpointFile,
-              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
-            });
+      const outcome = structuredOutcome(finalChosenKey, launchRes, classification, {
+        status: 'failed',
+        checkpoint: checkpointFile,
+        reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+      });
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
@@ -5778,6 +5806,10 @@ module.exports = {
   assembleCandidates,
   assembleForDispatch,
   stripRouteAlias,
+  getCandidateRouteHealthRecord,
+  candidateExclusionReason,
+  isCandidateRouteEligible,
+  isValidWorkerOutcome,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
