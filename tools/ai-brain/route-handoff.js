@@ -8,6 +8,7 @@ const { upstreamAuthSignal } = require('./failure-classifier');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
 const { proofLevelOf, ProofRank, Status } = require('./evidence');
 const { decisionRow } = require('./dispatch-output');
+const coordinatorClaim = require('./coordinator-claim');
 
 /** Adapt dispatch JSON without interpreting keys, scoring, pruning or choosing a writer. */
 function decisionFromDispatch(input, options = {}) {
@@ -225,8 +226,13 @@ function firstLaunch(decision, ticket, context, registry) {
   if (decision.workItemId !== ticket.workItemId) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
+  const claim = context && context.worktreeClaim;
+  if (claim && claim.claimed !== true) {
+    const worktree = claim.worktree || (ticket.request && ticket.request.cwd);
+    return { action: 'STOP', reason: claim.reason || 'WORKTREE_CLAIMED', worktree, rejected: [] };
+  }
   const ledger = (context && context.ledger) || {};
-  if (ledger.activeWorker) {
+  if (ledger.activeWorker || (claim && claim.activeWorker)) {
     return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
   }
   if (
@@ -274,12 +280,11 @@ function afterFailure(decision, ticket, context, failure, registry) {
   if (ledger.activeWorker && (beforeLaunch || ledger.activeWorker.offeringId !== f.offeringId)) {
     return { action: 'STOP', reason: 'WORKER_STILL_ACTIVE', worktree: ledger.worktree };
   }
-  if (!beforeLaunch && f.workerStopped !== true) {
-    return {
-      action: 'STOP',
-      reason: 'WORKER_STOP_REQUIRED',
-      worktree: f.worktree || ledger.worktree,
-    };
+  const stopped =
+    f.workerStopped === true || Boolean(f.stopResult && f.stopResult.stopped === true);
+  if (!beforeLaunch && !stopped) {
+    const reason = (f.stopResult && f.stopResult.reason) || 'WORKER_STOP_REQUIRED';
+    return { action: 'STOP', reason, worktree: f.worktree || ledger.worktree };
   }
   delete ledger.activeWorker;
   const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
@@ -327,4 +332,5 @@ module.exports = {
   screenRoutes,
   firstLaunch,
   afterFailure,
+  ...coordinatorClaim,
 };
