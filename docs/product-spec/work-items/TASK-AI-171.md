@@ -515,3 +515,24 @@ After repair and an additional default-admission/strict-mode regression: 97 pass
 0 fail across those three suites plus route identity, combo members, route scope,
 TASK-AI-80, TASK-AI-87 and P5 dispatch liveness. These are offline fixtures, not
 Linux CI proof. No network, commit or independent approval was performed.
+
+## PR 02 — Restore health-required injected admission (2026-11-09)
+
+Supersedes the preceding unknown-health repair: revert the injected-candidate
+admission exception from `3feeb9d2`. Injected candidates still need route health
+or explicit probe evidence. Known account failures and credential refusals remain
+ineligible. TASK-AI-50 and JEV dispatch fixtures now carry passed probe evidence;
+PR02 identity fixtures supply model/gateway/account-bound probe evidence. The
+PR02 regression rejects unknown health before supplying evidence. Original default
+health-rule assertions in TASK-AI-141 part E are restored without a strict-mode
+opt-in; its remaining explicit dispatch fixture now supplies probe evidence.
+
+Offline evidence: both original rule tests failed before the revert (0/2 passed).
+After the revert, the three named PR02/dispatch suites reproduced seven failures
+(26/33 passed). After fixture repairs, the four requested files pass 74/74,
+including both rule tests. A second run redirected default health-store loads and
+saves to a fresh temporary directory and also passed 74/74; explicit fixture
+stores remain isolated. Prettier and the no-hardcode guard pass (zero new
+instances). No assertions removed. No network or commit; remote CI and independent
+review remain unverified. The unrelated pre-existing quota-summary change is
+outside this repair.

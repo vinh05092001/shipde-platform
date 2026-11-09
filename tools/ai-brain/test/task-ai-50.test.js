@@ -67,6 +67,7 @@ function cand(overrides) {
       qualifiedRoles: ['author.foundation'],
       capabilities: { contextWindow: 64000 },
       cost: 1,
+      evidence: [{ status: 'passed' }],
     },
     overrides || {}
   );

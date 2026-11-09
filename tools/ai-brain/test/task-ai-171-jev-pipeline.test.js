@@ -40,6 +40,7 @@ const candidate = (id, extra = {}) => ({
   quality: 80,
   cost: 1,
   latencyMs: 100,
+  evidence: [{ status: 'passed' }],
   ...extra,
 });
 const answer = (key, choice, confidence = 0.95) => ({

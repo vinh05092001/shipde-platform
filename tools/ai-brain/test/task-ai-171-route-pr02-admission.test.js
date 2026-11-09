@@ -26,8 +26,14 @@ const assemble = (candidates, over = {}) =>
     offerings: [],
     registryAccounts: [],
     discoverPool: false,
-    routeHealth: null,
-    allowUnprobedCandidates: true,
+    routeHealth: { version: 1, paths: {}, events: [] },
+    probeEvidence: (modelId, route) =>
+      candidates.some(
+        (candidate) =>
+          candidate.modelId === modelId &&
+          candidate.gateway === route.id &&
+          candidate.accountId === route.accountId
+      ),
     ...over,
   });
 
@@ -102,7 +108,7 @@ test('PR02: allowing unprobed injection preserves known account health failures'
   );
 });
 
-test('PR02: default injected admission allows unknown health and refuses known failures', () => {
+test('PR02: injected admission requires probe evidence and refuses known failures', () => {
   const health = require('../route-health');
   const failed = row();
   const unknown = row({ accountId: 'lane-b', quotaScope: 'lane-b' });
@@ -112,8 +118,16 @@ test('PR02: default injected admission allows unknown health and refuses known f
   ] = {
     status: 'AUTH_NEEDED',
   };
-  const options = { routeHealth: store, allowUnprobedCandidates: undefined };
-  const actual = assemble([failed, unknown], options);
+  const options = { routeHealth: store, probeEvidence: undefined };
+  assert.equal(assemble([unknown], options).length, 0);
+  const proven = {
+    ...options,
+    probeEvidence: (modelId, route) =>
+      modelId === unknown.modelId &&
+      route.id === unknown.gateway &&
+      route.accountId === unknown.accountId,
+  };
+  const actual = assemble([failed, unknown], proven);
   assert.deepEqual(actual.map(candidateKey), [candidateKey(unknown)]);
   assert.equal(actual.excludedRoutes[0].reasonCode, 'AUTH_NEEDED');
   assert.equal(assemble([unknown], { ...options, requireRouteHealth: true }).length, 0);
