@@ -761,3 +761,9 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Classifies 9Router gateway errors ("No active credentials for provider: <p>" with UPSTREAM scope, "<model> has reached its concurrency capacity" with MODEL scope) as UPSTREAM_CREDENTIAL and GENUINE_CAPACITY; records failures to model-route-health with bounded backoff and validates candidate selection eligibility.
 - Depends on: None (based on origin/main `e3f5f307`).
 - Evidence: 8/8 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
+
+## Per-source catalogue freshness (2026-11-09)
+
+When discovery listed at least one source, `tools/ai-brain/discovery.js:169` updated the global `lastSuccessfulAt`, and `tools/ai-brain/catalogue-refresh.js:66-85` checked only this global age. A partial refresh therefore masked failed or stale sources by admitting them as fresh.
+Freshness is now evaluated per source via `sourceFreshness` (`tools/ai-brain/catalogue-refresh.js:53-145`) and enforced during candidate assembly (`tools/ai-brain/cli.js:1273-1653`). A source listed this run is admitted; a source failing this run retains prior good evidence if within 48h (`staleListingRetained: true`), but is otherwise rejected with reason `SOURCE_CATALOGUE_STALE`. A legacy freshness file without per-source timestamps fails explicitly for every source and cannot be admitted via the global timestamp. Completed enumerations returning 0 models follow the discovery contract (no-models) and are not marked fresh.
+Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 at HEAD (0/13 on base); 6 catalogue-refresh importer suites pass 31/0.

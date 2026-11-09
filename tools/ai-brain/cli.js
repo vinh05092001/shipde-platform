@@ -1239,6 +1239,7 @@ function applyRouteScope(eligible, excludedRoutes, opts, registry) {
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
+  const { sourceFreshness, readJson } = require('./catalogue-refresh');
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
@@ -1265,6 +1266,28 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : routeHealthExplicit ||
         requireRouteHealth ||
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
+
+  const hasFreshness =
+    opts.freshness !== undefined ||
+    opts.freshnessDoc !== undefined ||
+    Boolean(discoveryCat?.freshnessDoc || discoveryCat?.freshness || opts.discoveryDataDir);
+
+  const freshnessDoc =
+    opts.freshness ??
+    opts.freshnessDoc ??
+    discoveryCat?.freshnessDoc ??
+    discoveryCat?.freshness?.doc ??
+    (opts.discoveryDataDir
+      ? readJson(path.join(opts.discoveryDataDir, 'freshness.json'), null)
+      : null);
+
+  const checkFresh = (c) => {
+    if (!hasFreshness) return { stale: false };
+    const res = sourceFreshness(c, { freshness: freshnessDoc, now: opts.now });
+    if (res.staleListingRetained) c.staleListingRetained = true;
+    else delete c.staleListingRetained;
+    return { stale: !res.admitted, reason: res.code || 'SOURCE_CATALOGUE_STALE' };
+  };
   const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
   const catalogueRows = rawCatalogueRows.map((raw) => {
     if (!raw || typeof raw !== 'object') return raw;
@@ -1368,7 +1391,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
+        const fresh = checkFresh(candidate);
         const isEligible =
+          !fresh.stale &&
           isCandidateRouteEligible(
             routeHealth,
             candidate,
@@ -1377,7 +1402,8 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             // Injected inventory retains its explicit-health policy; unrelated
             // cached routes must not change whether a missing route is admitted.
             routeHealthExplicit || requireRouteHealth
-          ) && candidate.scanLiveness?.status !== 'failed';
+          ) &&
+          candidate.scanLiveness?.status !== 'failed';
         if (isEligible) {
           eligible.push(candidate);
         } else {
@@ -1394,8 +1420,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
               routeHealth && modelId && gateway
                 ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
                 : null;
-            const reason =
-              candidate.scanLiveness?.status === 'failed'
+            const reason = fresh.stale
+              ? fresh.reason
+              : candidate.scanLiveness?.status === 'failed'
                 ? candidate.scanLiveness.reason
                 : candidate.credentialEnvMissing ||
                     candidate.blockReason === 'CREDENTIAL_ENV_MISSING'
@@ -1589,7 +1616,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const seenExcluded = new Set();
     for (const rawCandidate of candidatesApi.mergeCandidates([], assembled)) {
       const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
+      const fresh = checkFresh(candidate);
       if (
+        !fresh.stale &&
         candidate.scanLiveness?.status !== 'failed' &&
         isCandidateRouteEligible(
           routeHealth,
@@ -1617,8 +1646,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             routeHealth && modelId && gateway
               ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
               : null;
-          const reason =
-            candidate.scanLiveness?.status === 'failed'
+          const reason = fresh.stale
+            ? fresh.reason
+            : candidate.scanLiveness?.status === 'failed'
               ? candidate.scanLiveness.reason
               : candidate &&
                   (candidate.credentialEnvMissing ||
@@ -1632,7 +1662,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             candidateKey: key,
             reason,
             reasonCode: String(reason).split(':')[0],
-            scope: candidate && candidate.blockReason ? 'account' : 'route',
+            scope: fresh.stale ? 'route' : candidate && candidate.blockReason ? 'account' : 'route',
           });
         }
       }
@@ -2632,6 +2662,9 @@ function dispatchCommand(args, deps = {}) {
       path.join(__dirname, 'data', 'discovery');
     try {
       discCat = readDiscoveryCatalogue({ dataDir: discDir });
+      const { catalogueFreshness } = require('./catalogue-refresh');
+      discCat.freshness = catalogueFreshness({ dataDir: discDir, now: deps && deps.now });
+      discCat.stale = discCat.freshness?.stale;
     } catch {
       discCat = { candidates: [] };
     }
