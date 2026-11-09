@@ -63,7 +63,28 @@ function candidateKey(identity) {
  */
 function parseCandidateKey(key) {
   if (typeof key !== 'string') return null;
-  const parts = (key.includes('::') ? key.split('::') : key.split('\u241f')).map(unescapePart);
+  // Determine whether the key was written with component escaping (new code)
+  // or without (pre-upgrade code).  Pre-upgrade keys used either U+241F or '::'
+  // as separator but never escaped percent or colon characters in values.
+  // Decoding such a key would reinterpret literal percent-encoded identity
+  // fields (%25 -> %, %3A -> :), changing the route identity it represents.
+  //
+  // Detection: split without decoding, re-encode and compare.  If the key
+  // round-trips through candidateKey, it was written with escaping; otherwise
+  // the parts are literal pre-upgrade values that must not be decoded.
+  const useUnitSep = !key.includes('::');
+  const rawParts = useUnitSep ? key.split('\u241f') : key.split('::');
+  const decoded = rawParts.map(unescapePart);
+  // Build a trial identity from the decoded parts and re-encode; if it matches
+  // the original key, the key was written with escaping and decoded values are
+  // correct.  Otherwise keep the raw (literal) parts.
+  const trial =
+    decoded.length >= 6
+      ? decoded
+          .map((part) => String(part).replace(/%|::|\\u241f|^:|:$/g, escapePart))
+          .join(GATEWAY_PREFIX_SEPARATOR)
+      : null;
+  const parts = trial === key ? decoded : rawParts;
   if (parts.length === 7) {
     return {
       harness: parts[0],

@@ -1123,8 +1123,14 @@ function isCandidateRouteEligible(
     routePath
   );
   if (rec) return rec.status === 'AVAILABLE';
-  // Unprobed admission never overrides a known failure on this route/account.
-  if (options && options.allowUnprobedCandidates === true) return true;
+  // Unprobed admission never overrides a known failure on this route/account,
+  // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
+  if (
+    options &&
+    options.allowUnprobedCandidates === true &&
+    !(options.requireRouteHealth === true)
+  )
+    return true;
   if (candidate.scanLiveness?.status === 'passed') return true;
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
@@ -1158,6 +1164,9 @@ function isCandidateRouteEligible(
           (c.modelId === modelId || c.model === modelId) &&
           (c.gateway === gateway || c.source === gateway || c.sourceId === gateway) &&
           (!c.accountId || c.accountId === candidate.accountId) &&
+          // Legacy unverified evidence (pre-schema-v2, no account) must not
+          // admit an account-bound candidate it was never tested against.
+          !(c.legacy === true && c.verified === false && !isWildcard) &&
           Array.isArray(c.evidence) &&
           c.evidence.some((e) => e && (e.status === 'passed' || e.status === 1))
       );
@@ -1254,7 +1263,7 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         allowMissing: true,
       });
   const enforceMissingHealth =
-    opts.allowUnprobedCandidates === true
+    opts.allowUnprobedCandidates === true && !(opts.requireRouteHealth === true)
       ? false
       : routeHealthExplicit ||
         requireRouteHealth ||
