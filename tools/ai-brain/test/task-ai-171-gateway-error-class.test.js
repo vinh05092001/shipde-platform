@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 const { classifyFailure, Cause, Scope, DEFAULT_COOLDOWNS } = require('../failure-classifier');
-const { dispatchCommand } = require('../cli');
+const { dispatchCommand, sameFailureDomain } = require('../cli');
 const routeHealthApi = require('../route-health');
 
 describe('TASK-AI-171 Item 1: 9Router gateway error classification', () => {
@@ -199,5 +199,79 @@ describe('TASK-AI-171 Item 2: failed launch records to route-health', () => {
       undefined,
       'different model on another provider must remain untouched'
     );
+  });
+
+  it('feedback path: model concurrency capacity cools only that model while credential failure cools upstream provider', () => {
+    const modelA = 'dahl/zai-org/GLM-5.3-Flash';
+    const modelB = 'dahl/zai-org/GLM-4';
+    const route = '9router';
+    const now = Date.now();
+
+    const candidateA = {
+      harness: 'hermes',
+      gateway: '9router',
+      upstream: '9router',
+      modelId: modelA,
+    };
+    const candidateB = {
+      harness: 'hermes',
+      gateway: '9router',
+      upstream: '9router',
+      modelId: modelB,
+    };
+
+    // 1. Classification of concurrency capacity produces MODEL scope
+    const rawError = `${modelA} has reached its concurrency capacity`;
+    const capClass = classifyFailure({
+      exitCode: 1,
+      httpStatus: 503,
+      stderr: rawError,
+    });
+    assert.equal(capClass.cause, Cause.GENUINE_CAPACITY);
+    assert.equal(capClass.scope, Scope.MODEL);
+
+    // 2. Feedback via route-health.recordExecutionResult (as cli.js does after failed launch)
+    const store = { version: 1, paths: {}, events: [] };
+    routeHealthApi.recordExecutionResult(store, modelB, route, 'success', { now, persist: false });
+    routeHealthApi.recordExecutionResult(
+      store,
+      modelA,
+      route,
+      {
+        status: 503,
+        ok: false,
+        timedOut: false,
+        reason: rawError,
+        classification: capClass,
+      },
+      { now, persist: false }
+    );
+
+    // 3. Selection eligibility: modelA is cooled; modelB on same route is still eligible
+    assert.equal(routeHealthApi.isEligible(store, modelA, route, now), false);
+    assert.equal(routeHealthApi.isEligible(store, modelB, route, now), true);
+    assert.equal(routeHealthApi.probeCooldown(candidateB, { routeHealth: store, now }), null);
+    assert.strictEqual(routeHealthApi.getProviderRecord(store, '9router', 'dahl'), null);
+    assert.equal(sameFailureDomain(candidateB, candidateA, capClass), false);
+
+    // 4. Exact 9Router credential message still cools upstream provider as designed
+    const credError = 'No active credentials for provider: azure';
+    const credClass = classifyFailure({ exitCode: 1, stderr: credError });
+    assert.equal(credClass.cause, Cause.UPSTREAM_CREDENTIAL);
+    assert.equal(credClass.scope, Scope.UPSTREAM);
+
+    const azureCandA = { gateway: '9router', upstream: 'azure', modelId: 'azure/model-a' };
+    const azureCandB = { gateway: '9router', upstream: 'azure', modelId: 'azure/model-b' };
+    assert.equal(sameFailureDomain(azureCandB, azureCandA, credClass), true);
+
+    routeHealthApi.rememberProbe(
+      azureCandA,
+      { ok: false, status: 404, body: credError },
+      { routeHealth: store, persistRouteHealth: false, now }
+    );
+    const credCooldown = routeHealthApi.probeCooldown(azureCandB, { routeHealth: store, now });
+    assert.ok(credCooldown);
+    assert.match(credCooldown, /PROVIDER_UNAVAILABLE/);
+    assert.equal(routeHealthApi.isEligible(store, azureCandB.modelId, '9router', now), false);
   });
 });
