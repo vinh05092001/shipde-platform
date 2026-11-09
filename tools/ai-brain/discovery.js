@@ -144,8 +144,12 @@ async function cmdRun(flags, deps = {}) {
     (result.catalogs || []).some((entry) => (entry.models || []).length > 0)
   );
   const freshnessFile = flags['freshness-file'] || path.join(dataDir, 'freshness.json');
+  const stampFile = flags['stamp-file'] || path.join(dataDir, 'refreshed.stamp');
   const previous = readJson(freshnessFile);
   const complete = successful.length > 0 && failed.length === 0;
+  if (listed.length > 0) {
+    fs.writeFileSync(stampFile, String(Date.now()) + '\n', 'utf8');
+  }
   const sources = [...results].map(([id, res]) => ({
     id,
     kind: (registry.sources.find((s) => s.id === id) || {}).kind,

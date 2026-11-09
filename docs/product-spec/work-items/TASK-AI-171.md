@@ -483,3 +483,14 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
+
+## PR 13 outcome — refresh catalogues and snapshots outside writer selection (2026-11-09)
+
+Operator-assigned author scope: `tools/ai-brain/{discovery,scoring-policy,public-catalogue-cache,cli}.js`, `tools/ai-brain/test/task-ai-171-route-pr13-refresh.test.js`, plus this section.
+Rows B05, B14, B17 and conflict C7:
+- B05: `public-catalogue-cache.js` helper provides mtime cache reads and fetches with injected fetch and clock; returns `{data, ageMs, stale, error}` with limits as caller inputs (no hardcoded constants); offline mode performs zero network and zero write side effects.
+- B14: `discovery.js` stamps `refreshed.stamp` and advances `lastSuccessfulAt` only on successful live listing; failed discovery runs leave prior stamps untouched; dispatch read path in `cli.js` only reads the catalogue and reports stale status without running any refresh subprocess or network requests.
+- B17: `scoring-policy.js` consumer `loadScoringPolicy` reports missing (`AA_SNAPSHOT_MISSING`), stale (`AA_SNAPSHOT_STALE`), and corrupt (`AA_SNAPSHOT_CORRUPT`) snapshot status truthfully and never triggers automatic network fetches during dispatch selection; refresh remains an explicit maintenance operation.
+- Conflict C7: Selection and dry-run dispatch paths are decoupled from refresh operations, guaranteeing zero background refresh side effects.
+
+Evidence: New suite `task-ai-171-route-pr13-refresh.test.js` reproduced the gaps on base `2ce2bb72` (2 pass, 10 fail) and passes on HEAD (12 pass, 0 fail). Related suites: `task-ai-171-aa-join.test.js` (15/15), `task-ai-171-scoring-policy.test.js` (15/15), `task-ai-166-partial-refresh.test.js` (5/5), `task-ai-166-refresh.test.js` (3/3), `refresh-lists-only.test.js` (3/3), `task-ai-139.test.js` (3/3), `task-ai-62.test.js` (15/15), `task-ai-73.test.js` (15/15), `task-ai-171-route-pr12-options.test.js` (10/10), `task-ai-171-route-pr01-consumer.test.js` (11/11). Total: 107 pass, 0 fail across all touched domain suites.

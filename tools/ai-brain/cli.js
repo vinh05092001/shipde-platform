@@ -2106,15 +2106,31 @@ async function dispatchProfileCommand(args, deps) {
   if (deps && deps.discoveryCatalogue) {
     discCat = deps.discoveryCatalogue;
   } else if (!(deps && Array.isArray(deps.candidates))) {
+    const discDir =
+      (deps && deps.discoveryDataDir) ||
+      args['discovery-dir'] ||
+      path.join(__dirname, 'data', 'discovery');
+    const { catalogueFreshness } = require('./catalogue-refresh');
+    const freshness = catalogueFreshness({
+      dataDir: discDir,
+      now: deps && deps.now,
+    });
+    if (freshness.stale) {
+      const error = (deps && deps.error) || console.error;
+      error(
+        'STALE_CATALOGUE: last successful live enumeration is missing or older than 48h; run pnpm ai:refresh-catalogue'
+      );
+    }
     try {
       discCat = readDiscoveryCatalogue({
-        dataDir:
-          (deps && deps.discoveryDataDir) ||
-          args['discovery-dir'] ||
-          path.join(__dirname, 'data', 'discovery'),
+        dataDir: discDir,
       });
+      if (discCat) {
+        discCat.freshness = freshness;
+        discCat.stale = freshness.stale;
+      }
     } catch {
-      discCat = { candidates: [] };
+      discCat = { candidates: [], freshness, stale: true };
     }
   }
   const accounts = Array.isArray(deps && deps.accounts)

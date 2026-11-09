@@ -7,7 +7,10 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const text = (v) => typeof v === 'string' && v.trim().length > 0;
 
 // Values and dimension names belong to the operator's versioned data, not code.
-function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.json')) {
+function loadScoringPolicy(
+  file = path.join(__dirname, 'data', 'scoring-policy.json'),
+  options = {}
+) {
   let policy;
   try {
     policy = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -47,18 +50,42 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
   let data = null;
   if (policy.priorsFile) {
     // The AA snapshot is fetched at runtime (aa-snapshot.js), never committed.
+    const snapPath = path.resolve(path.dirname(file), policy.priorsFile);
+    let stat;
     try {
-      data = JSON.parse(
-        fs.readFileSync(path.resolve(path.dirname(file), policy.priorsFile), 'utf8')
-      );
+      stat = fs.statSync(snapPath);
     } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-      // No snapshot: the policy is inactive and dispatch keeps the profile scorer it had before,
-      // reported by status, rather than refusing every route.
       return {
         scoringPolicy: undefined,
         scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
-        scoringPriorsStatus: 'AA_SNAPSHOT_MISSING',
+        scoringPriorsStatus: err.code === 'ENOENT' ? 'AA_SNAPSHOT_MISSING' : 'AA_SNAPSHOT_CORRUPT',
+      };
+    }
+    try {
+      data = JSON.parse(fs.readFileSync(snapPath, 'utf8'));
+    } catch {
+      return {
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
+        scoringPriorsStatus: 'AA_SNAPSHOT_CORRUPT',
+      };
+    }
+    if (!data || !Array.isArray(data.rows)) {
+      return {
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
+        scoringPriorsStatus: 'AA_SNAPSHOT_CORRUPT',
+      };
+    }
+    const now = Number((options && options.now) ?? Date.now());
+    const obs = data.observedAt ? Date.parse(data.observedAt) : NaN;
+    const age =
+      options && options.now !== undefined && Number.isFinite(obs) ? now - obs : now - stat.mtimeMs;
+    if (Number.isFinite(policy.maxAgeMs) && (age > policy.maxAgeMs || age < -60000)) {
+      return {
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
+        scoringPriorsStatus: 'AA_SNAPSHOT_STALE',
       };
     }
   }
