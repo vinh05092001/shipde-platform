@@ -1125,11 +1125,7 @@ function isCandidateRouteEligible(
   if (rec) return rec.status === 'AVAILABLE';
   // Unprobed admission never overrides a known failure on this route/account,
   // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
-  if (
-    options &&
-    options.allowUnprobedCandidates === true &&
-    !(options.requireRouteHealth === true)
-  )
+  if (options && options.allowUnprobedCandidates === true && !(options.requireRouteHealth === true))
     return true;
   if (candidate.scanLiveness?.status === 'passed') return true;
   // Admission for a ranked live probe is not proof that the route is alive.
