@@ -602,3 +602,7 @@ already passes because the regressions came from this branch after it. Requested
 files: **78/78 pass**; Prettier 3.9.6 and the hardcode guard pass.
 Limitations: offline Windows only; Linux CI, cutover and independent review are
 unverified. No network or credential reads.
+
+## CI tool downloads retry and fail loudly (2026-11-09)
+
+Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
