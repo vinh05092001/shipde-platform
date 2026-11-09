@@ -2444,9 +2444,13 @@ function poolAccountCandidates(opts) {
           (r) => (family && r.family === family) || r.family === model || r.model === model
         );
         if (familyRows.length > 0) {
-          const isZero = familyRows.some(
-            (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
-          );
+          const empty = (r) =>
+            r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true;
+          // A row naming this exact model decides. Family rows cannot tell one quota group from
+          // another (e.g. a zero "Gemini 4 Argon" group next to a 97% "Gemini Models" group), so a
+          // family is exhausted only when every one of its groups is empty.
+          const exact = familyRows.filter((r) => r.model === model);
+          const isZero = exact.length > 0 ? exact.some(empty) : familyRows.every(empty);
           if (isZero) {
             if (!o.keepExhausted) continue;
             quotaExhausted = true;
