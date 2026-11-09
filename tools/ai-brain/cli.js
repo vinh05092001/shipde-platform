@@ -34,6 +34,7 @@ const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
 const { atomicRenameSync } = require('./atomic-rename');
+const { maskEmailsInString } = require('./route-identity-utils');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
 
@@ -1094,6 +1095,33 @@ function stripRouteAlias(modelId, gateway, registry) {
   return modelId;
 }
 
+function getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options) {
+  if (!routeHealth?.paths || !candidate || typeof routeHealthApi?.getPathRecord !== 'function') {
+    return null;
+  }
+  const modelId = candidate.modelId || candidate.id;
+  const gw =
+    candidate.gateway ||
+    (options?.harness === 'hermes' && (candidate.sourceId || candidate.source));
+  if (!modelId || (!gw && !candidate.upstream)) return null;
+  const isWildcard = !candidate.accountId || candidate.accountId === '*';
+  const targets = gw === candidate.upstream ? [gw] : [gw, candidate.upstream].filter(Boolean);
+  let availableRec = null;
+  for (const t of targets) {
+    const checkPath = isWildcard ? t : { id: t, accountId: candidate.accountId };
+    const rec = routeHealthApi.getPathRecord(
+      routeHealth,
+      stripRouteAlias(modelId, t, options?.registry),
+      checkPath
+    );
+    if (rec) {
+      if (rec.status !== 'AVAILABLE') return rec;
+      if (!availableRec) availableRec = rec;
+    }
+  }
+  return availableRec;
+}
+
 function isCandidateRouteEligible(
   routeHealth,
   candidate,
@@ -1118,17 +1146,7 @@ function isCandidateRouteEligible(
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  let rec = null;
-  for (const gw of [gateway, candidate?.upstream]) {
-    if (!gw) continue;
-    const checkPath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
-    rec = routeHealthApi.getPathRecord(
-      routeHealth,
-      stripRouteAlias(modelId, gw, options && options.registry),
-      checkPath
-    );
-    if (rec) break;
-  }
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
   if (rec) return rec.status === 'AVAILABLE';
   // Unprobed admission never overrides a known failure on this route/account,
   // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
@@ -1390,19 +1408,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const key = candidatesApi.candidateKey(candidate);
           if (!seenExcluded.has(key)) {
             seenExcluded.add(key);
-            const modelId = candidate && candidate.modelId;
-            const gateway = candidate && candidate.gateway;
-            let rec = null;
-            if (routeHealth && modelId) {
-              for (const gw of [gateway, candidate?.upstream]) {
-                if (!gw) continue;
-                const routePath = candidate?.accountId
-                  ? { id: gw, accountId: candidate.accountId }
-                  : gw;
-                rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
-                if (rec) break;
-              }
-            }
+            const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, {
+              ...opts,
+              registry: resolvedRegistry,
+            });
             const reason =
               candidate.scanLiveness?.status === 'failed'
                 ? candidate.scanLiveness.reason
@@ -1615,21 +1624,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         const key = candidatesApi.candidateKey(candidate);
         if (!seenExcluded.has(key)) {
           seenExcluded.add(key);
-          const modelId = candidate && candidate.modelId;
-          const gateway =
-            candidate &&
-            (candidate.gateway ||
-              (opts && opts.harness === 'hermes' && (candidate.sourceId || candidate.source)));
-          const isWildcard = !candidate.accountId || candidate.accountId === '*';
-          let rec = null;
-          if (routeHealth && modelId) {
-            for (const gw of [gateway, candidate?.upstream]) {
-              if (!gw) continue;
-              const routePath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
-              rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
-              if (rec) break;
-            }
-          }
+          const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, {
+            ...opts,
+            registry: resolvedRegistry,
+          });
           const reason =
             candidate.scanLiveness?.status === 'failed'
               ? candidate.scanLiveness.reason
@@ -2355,6 +2353,16 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
+function isValidWorkerOutcome(parsed, expectedCandidateKey) {
+  return Boolean(
+    parsed &&
+    typeof parsed === 'object' &&
+    parsed.candidateKey === expectedCandidateKey &&
+    typeof parsed.status === 'string' &&
+    parsed.status.length > 0
+  );
+}
+
 function dispatchCommand(args, deps = {}) {
   if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
@@ -2369,10 +2377,17 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
+    const maskVal = (v) => (typeof v === 'string' ? maskEmailsInString(v) : v);
+    const sanitizeId = (id) =>
+      id && typeof id === 'object'
+        ? Object.fromEntries(Object.entries(id).map(([k, v]) => [k, maskVal(v)]))
+        : null;
+    const sanitizeOutcome = (out) =>
+      out?.candidateKey ? { ...out, candidateKey: maskEmailsInString(out.candidateKey) } : out;
     const res = {
-      chosen: chosen || null,
-      launchedArgvIdentity: launchedId || null,
-      outcome,
+      chosen: typeof chosen === 'string' ? maskEmailsInString(chosen) : chosen || null,
+      launchedArgvIdentity: sanitizeId(launchedId),
+      outcome: sanitizeOutcome(outcome),
       recorded: recorded || null,
       ...extra,
     };
@@ -3384,32 +3399,29 @@ function dispatchCommand(args, deps = {}) {
 
       const { parseCandidateKey } = require('./discovery/identity');
       const chosenIdentity = parseCandidateKey(finalChosenKey) || {};
+      const cand = finalChosenCandidate;
       launchedArgvIdentity = {
-        harness: finalChosenCandidate.harness || chosenIdentity.harness || harnessName,
-        accessPath: finalChosenCandidate.accessPath || chosenIdentity.accessPath || '',
-        gateway: finalChosenCandidate.gateway || chosenIdentity.gateway || '',
-        upstream: finalChosenCandidate.upstream || chosenIdentity.upstream || '',
-        account:
-          finalChosenCandidate.accountId ||
-          finalChosenCandidate.account ||
-          chosenIdentity.account ||
-          '*',
-        quotaScope: finalChosenCandidate.quotaScope || chosenIdentity.quotaScope || '',
-        modelId:
-          finalChosenCandidate.modelId ||
-          finalChosenCandidate.model ||
-          chosenIdentity.modelId ||
-          '',
+        harness: cand.harness || chosenIdentity.harness || harnessName,
+        accessPath: cand.accessPath || chosenIdentity.accessPath || '',
+        gateway: cand.gateway || chosenIdentity.gateway || '',
+        upstream: cand.upstream || chosenIdentity.upstream || '',
+        account: maskEmailsInString(
+          cand.accountId || cand.account || chosenIdentity.account || '*'
+        ),
+        quotaScope: maskEmailsInString(cand.quotaScope || chosenIdentity.quotaScope || ''),
+        modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
       };
 
-      const promptFilePath = args['prompt-file'] || args.promptFile || (deps && deps.promptFile);
+      const promptFilePath = args['prompt-file'] || args.promptFile || deps?.promptFile;
       let promptText = null;
       if (promptFilePath) {
-        const resolved = path.resolve(args.cwd || (deps && deps.cwd) || rootDir, promptFilePath);
-        const promptPath = fs.existsSync(promptFilePath) ? promptFilePath : resolved;
-        promptText = fs.readFileSync(promptPath, 'utf8');
-      } else if (args.prompt || (deps && deps.prompt)) {
-        promptText = args.prompt || (deps && deps.prompt);
+        const resolved = path.resolve(args.cwd || deps?.cwd || rootDir, promptFilePath);
+        promptText = fs.readFileSync(
+          fs.existsSync(promptFilePath) ? promptFilePath : resolved,
+          'utf8'
+        );
+      } else if (args.prompt || deps?.prompt) {
+        promptText = args.prompt || deps?.prompt;
       } else {
         promptText = defaultPrompt(item, {
           isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
@@ -3544,9 +3556,9 @@ function dispatchCommand(args, deps = {}) {
             decisionDir,
             checkpoint: checkpointFile,
             timeoutMs:
-              Number(args['timeout-ms'] || args.timeoutMs || (deps && deps.timeoutMs)) ||
-              (Number(args.timeout || (deps && deps.timeout))
-                ? Number(args.timeout || (deps && deps.timeout)) * 1000
+              Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
+              (Number(args.timeout || deps?.timeout)
+                ? Number(args.timeout || deps?.timeout) * 1000
                 : undefined),
           });
         } catch (err) {
@@ -3667,14 +3679,13 @@ function dispatchCommand(args, deps = {}) {
         exitCode: 0,
         source: 'dispatch',
       });
-      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome =
-        parsedOutcome && parsedOutcome.candidateKey
-          ? parsedOutcome
-          : structuredOutcome(finalChosenKey, launchRes, null, {
-              status: 'completed',
-              checkpoint: checkpointFile,
-            });
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome = isValidWorkerOutcome(parsedOutcome, finalChosenKey)
+        ? parsedOutcome
+        : structuredOutcome(finalChosenKey, launchRes, null, {
+            status: 'completed',
+            checkpoint: checkpointFile,
+          });
       log('Dispatch succeeded on ' + finalChosenKey);
       return makeExecuteResult(
         0,
@@ -3765,15 +3776,14 @@ function dispatchCommand(args, deps = {}) {
             }
           : null;
       } catch (_) {}
-      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome =
-        parsedOutcome && parsedOutcome.candidateKey
-          ? parsedOutcome
-          : structuredOutcome(finalChosenKey, launchRes, classification, {
-              status: 'failed',
-              checkpoint: checkpointFile,
-              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
-            });
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome = isValidWorkerOutcome(parsedOutcome, finalChosenKey)
+        ? parsedOutcome
+        : structuredOutcome(finalChosenKey, launchRes, classification, {
+            status: 'failed',
+            checkpoint: checkpointFile,
+            reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+          });
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
@@ -5646,6 +5656,8 @@ module.exports = {
   assembleCandidates,
   assembleForDispatch,
   stripRouteAlias,
+  getCandidateRouteHealthRecord,
+  isValidWorkerOutcome,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
