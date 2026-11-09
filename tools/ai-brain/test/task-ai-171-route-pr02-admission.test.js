@@ -102,6 +102,24 @@ test('PR02: allowing unprobed injection preserves known account health failures'
   );
 });
 
+test('PR02: default injected admission allows unknown health and refuses known failures', () => {
+  const health = require('../route-health');
+  const failed = row();
+  const unknown = row({ accountId: 'lane-b', quotaScope: 'lane-b' });
+  const store = { paths: {} };
+  store.paths[
+    health.healthKey(failed.modelId, { id: failed.gateway, accountId: failed.accountId })
+  ] = {
+    status: 'AUTH_NEEDED',
+  };
+  const options = { routeHealth: store, allowUnprobedCandidates: undefined };
+  const actual = assemble([failed, unknown], options);
+  assert.deepEqual(actual.map(candidateKey), [candidateKey(unknown)]);
+  assert.equal(actual.excludedRoutes[0].reasonCode, 'AUTH_NEEDED');
+  assert.equal(assemble([unknown], { ...options, requireRouteHealth: true }).length, 0);
+  assert.equal(assemble([unknown], { ...options, allowUnprobedCandidates: false }).length, 0);
+});
+
 test('PR02: duplicate combo candidate keeps its own selected model and resolved launch evidence', () => {
   const sources = require('../sources').loadSources();
   const c = row({

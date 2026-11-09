@@ -64,6 +64,13 @@ for (const clear of [true, false]) {
         home: dir,
         rootDir: dir,
         evidenceDir: path.join(dir, 'evidence'),
+        routeHealthFile: path.join(dir, 'model-route-health.json'),
+        routeHealth: require('../route-health').loadStore(
+          path.join(dir, 'model-route-health.json'),
+          {
+            allowMissing: true,
+          }
+        ),
         storePath: path.join(dir, 'quota.json'),
         decisionDir: path.join(dir, 'decisions'),
         taskProfile: { ...profile, ...(clear ? { skipReason: 'TASK_ALREADY_CLASSIFIED' } : {}) },

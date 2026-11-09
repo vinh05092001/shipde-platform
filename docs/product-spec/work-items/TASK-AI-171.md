@@ -488,3 +488,19 @@ remote CI and independent review remain coordinator responsibilities.
 
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
+
+## PR 02 — Offline unknown-health repair (2026-11-09)
+
+Injected candidates default to unprobed admission through the shared helper. Known
+route/account failures and credential refusals still take precedence. Explicit
+`requireRouteHealth: true` or `allowUnprobedCandidates: false` retains strict admission.
+
+Reproduction: pointing only the health file at an absent temporary path passed locally;
+this did not reproduce the reported Linux CI failure. Explicitly passing the empty
+store loaded from that absent file reproduced six failures in `task-ai-50.test.js`
+and `task-ai-171-jev-pipeline.test.js`, including the five named failures. Before
+the production repair: 26 pass / 6 fail across those suites and PR02 admission.
+After repair and an additional default-admission/strict-mode regression: 97 pass /
+0 fail across those three suites plus route identity, combo members, route scope,
+TASK-AI-80, TASK-AI-87 and P5 dispatch liveness. These are offline fixtures, not
+Linux CI proof. No network, commit or independent approval was performed.

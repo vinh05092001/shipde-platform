@@ -1360,7 +1360,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           isCandidateRouteEligible(
             routeHealth,
             candidate,
-            { ...opts, requireRouteHealth: enforceMissingHealth, registry: resolvedRegistry },
+            {
+              ...opts,
+              // Injected inventory may lack probe history, but known failures still refuse.
+              allowUnprobedCandidates: opts.allowUnprobedCandidates ?? !opts.requireRouteHealth,
+              requireRouteHealth: enforceMissingHealth,
+              registry: resolvedRegistry,
+            },
             routeHealthApi
           ) && candidate.scanLiveness?.status !== 'failed';
         if (isEligible) {
