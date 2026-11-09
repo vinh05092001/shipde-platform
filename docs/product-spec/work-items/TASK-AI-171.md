@@ -762,19 +762,32 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Depends on: None (based on origin/main `e3f5f307`).
 - Evidence: 8/8 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
 
+## Per-source catalogue freshness (2026-11-09)
+
+When discovery listed at least one source, `tools/ai-brain/discovery.js:169` updated the global `lastSuccessfulAt`, and `tools/ai-brain/catalogue-refresh.js:66-85` checked only this global age. A partial refresh therefore masked failed or stale sources by admitting them as fresh.
+Freshness is now evaluated per source via `sourceFreshness` (`tools/ai-brain/catalogue-refresh.js:53-145`) and enforced during candidate assembly (`tools/ai-brain/cli.js:1273-1653`). A source listed this run is admitted; a source failing this run retains prior good evidence if within 48h (`staleListingRetained: true`), but is otherwise rejected with reason `SOURCE_CATALOGUE_STALE`. A legacy freshness file without per-source timestamps fails explicitly for every source and cannot be admitted via the global timestamp. Completed enumerations returning 0 models follow the discovery contract (no-models) and are not marked fresh.
+Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 at HEAD (0/13 on base); 6 catalogue-refresh importer suites pass 31/0.
+
+## Core slice 2a1 — route-health lookup never masks an upstream failure (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`getCandidateRouteHealthRecord` / `candidateExclusionReason` shared by the three lookup sites), `tools/ai-brain/test/task-ai-171-health-lookup.test.js`.
+- Rule: Upstream failure beats gateway AVAILABLE; newer scoped failure beats stale AVAILABLE; no whole-gateway block (unrelated upstream on same gateway remains eligible).
+- Evidence: `tools/ai-brain/test/task-ai-171-health-lookup.test.js` (task-ai-171-health-lookup 4/0).
+- Next: 2a2 execute path.
+
 ## Slice 2a: INT-1 — Controller execute path & outcome recording (2026-11-10)
 
 - Scope: `tools/ai-brain/cli.js` (`dispatchCommand` `--execute` flag, `makeExecuteResult`), `tools/ai-brain/harness.js`, `tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
 - Outcome: Executes chosen candidate through harness dispatch with bound argv identity, records execution failure to model-route-health store, and returns structured result to CLI entrypoint.
 - Depends on: Slice 1 (`fix/task-ai-171-core-s1-gateway-error-class`).
-- Evidence: 2/2 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+- Evidence: 3/3 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
 
 ## Slice 2b: Route Launch — Controller refusal and runtime provenance (2026-11-10)
 
 - Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-int1-execute.test.js` (test case 3).
 - Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 spawns), enforces argv identity on selection (1 spawn), and writes repo SHA and tree path provenance to route log.
-- Depends on: Slice 2a (`fix/task-ai-171-core-s2a-execute-path`).
-- Evidence: 3/3 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+- Depends on: Slice 2a2 (`fix/task-ai-171-core-s2a2-execute-path`).
+- Evidence: 4/4 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
 
 ## Slice 3: A2 — Direct-HTTP external sources candidate generation (2026-11-10)
 
