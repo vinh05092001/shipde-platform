@@ -969,15 +969,30 @@ function classifyFailure(input) {
     });
   }
 
-  // Case 9: genuine capacity (503 with "no capacity available", or concurrency capacity)
+  // 9Router model concurrency limit: "<model> has reached its concurrency capacity"
+  const is9RouterConcurrency =
+    (!effectiveStatus || effectiveStatus === 503 || exitCode !== 0) &&
+    /has reached its\s+concurrency\s+capacity/i.test(text);
+
+  if (is9RouterConcurrency) {
+    const resetMs = parseResetTime(text);
+    return addRetryFields({
+      cause: Cause.GENUINE_CAPACITY,
+      scope: Scope.MODEL,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
+    });
+  }
+
+  // Case 9: genuine capacity (503 with "no capacity available")
   const isGenuineCapacity =
     (effectiveStatus === 503 || exitCode !== 0) &&
     /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity/i.test(text);
-  const is9RouterConcurrency =
-    (!effectiveStatus || effectiveStatus === 503 || exitCode !== 0) &&
-    /(?:has reached its\s+)?concurrency\s+capacity/i.test(text);
 
-  if (isGenuineCapacity || is9RouterConcurrency) {
+  if (isGenuineCapacity) {
     const resetMs = parseResetTime(text);
     return addRetryFields({
       cause: Cause.GENUINE_CAPACITY,
