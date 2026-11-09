@@ -768,3 +768,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Executes chosen candidate through harness dispatch with bound argv identity, records execution failure to model-route-health store, and returns structured result to CLI entrypoint.
 - Depends on: Slice 1 (`fix/task-ai-171-core-s1-gateway-error-class`).
 - Evidence: 2/2 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+
+## Slice 2b: Route Launch — Controller refusal and runtime provenance (2026-11-10)
+
+- Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-int1-execute.test.js` (test case 3).
+- Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 spawns), enforces argv identity on selection (1 spawn), and writes repo SHA and tree path provenance to route log.
+- Depends on: Slice 2a (`fix/task-ai-171-core-s2a-execute-path`).
+- Evidence: 3/3 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.

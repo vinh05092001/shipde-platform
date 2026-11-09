@@ -8,6 +8,7 @@ const os = require('node:os');
 const { dispatchCommand, main } = require('../cli');
 const { candidateKey, parseCandidateKey } = require('../discovery/identity');
 const routeHealthApi = require('../route-health');
+const routeLaunchApi = require('../route-launch');
 
 function makeCandidate(modelId, upstream, accountId, cost = 1, quality = 90) {
   const c = {
@@ -203,5 +204,104 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       }
     });
     assert.ok(jsonLog && JSON.parse(jsonLog).outcome.status === 'completed');
+  });
+
+  test('INT-2 Item 1 behavioural proof: routeLaunchStep captures spawn and enforces chosen null vs chosen candidate', () => {
+    const logsDir = path.join(env.tempDir, 'route-logs');
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    const spawnCalls = [];
+    const fakeSpawn = (cmd, args, opts) => {
+      spawnCalls.push({ cmd, args, opts });
+      return { pid: 4242, unref: () => {} };
+    };
+
+    let exitCode = null;
+    const fakeExit = (code) => {
+      exitCode = code;
+    };
+    const loggedErrors = [];
+    const fakeError = (msg) => loggedErrors.push(msg);
+
+    // Case 1: decision with chosen = null -> 0 spawns and NO_CONTROLLER_CHOICE reason
+    const nullDecision = {
+      chosen: null,
+      reason: 'REFUSED: no candidate qualifies under quota or route constraints',
+      ranking: [],
+    };
+    const nullRes = routeLaunchApi.routeLaunchStep(
+      nullDecision,
+      { item: 'TASK-AI-171-NULL', cwd: env.tempWorktree, task: env.promptFile },
+      {
+        spawn: fakeSpawn,
+        exit: fakeExit,
+        error: fakeError,
+        logsDir,
+        mainTree: path.resolve(__dirname, '../../..'),
+      }
+    );
+
+    assert.equal(spawnCalls.length, 0, 'zero spawns on chosen = null');
+    assert.equal(exitCode, 3, 'exits with code 3 on chosen = null');
+    assert.equal(nullRes.launched, false);
+    assert.equal(nullRes.spawns, 0);
+    assert.match(nullRes.reason, /NO_CONTROLLER_CHOICE/);
+    assert.ok(loggedErrors.some((e) => e.includes('NO_CONTROLLER_CHOICE')));
+
+    // Case 2: decision with a chosen candidate -> exactly 1 spawn whose argv identity equals decision.chosen
+    const candidateA = makeCandidate('m-alpha', 'ag', 'ag', 1, 90);
+    const chosenDecision = {
+      chosen: candidateA.candidateKey,
+      candidates: [candidateA],
+      ranking: [{ candidateKey: candidateA.candidateKey, score: 90 }],
+    };
+    exitCode = null;
+    const chosenRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-CHOSEN', cwd: env.tempWorktree, task: env.promptFile },
+      {
+        spawn: fakeSpawn,
+        exit: fakeExit,
+        error: fakeError,
+        logsDir,
+        mainTree: path.resolve(__dirname, '../../..'),
+      }
+    );
+
+    assert.equal(spawnCalls.length, 1, 'exactly one spawn on chosen candidate');
+    assert.equal(chosenRes.launched, true);
+    assert.equal(chosenRes.spawns, 1);
+    assert.equal(chosenRes.choice, candidateA.candidateKey);
+
+    const spawnCall = spawnCalls[0];
+    const candidateIndex = spawnCall.args.indexOf('--candidate');
+    assert.ok(candidateIndex !== -1, '--candidate flag present in spawn args');
+    const argvCandidate = spawnCall.args[candidateIndex + 1];
+    assert.equal(argvCandidate, chosenDecision.chosen);
+    assert.deepEqual(parseCandidateKey(argvCandidate), chosenRes.argvIdentity);
+
+    // Verify runtime provenance in route-log.jsonl
+    const logFile = path.join(logsDir, 'route-log.jsonl');
+    assert.ok(fs.existsSync(logFile), 'route-log.jsonl written');
+    const lines = fs
+      .readFileSync(logFile, 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    assert.equal(lines.length, 2);
+
+    const nullLog = lines.find((l) => l.item === 'TASK-AI-171-NULL');
+    assert.ok(
+      nullLog && nullLog.choice === null && nullLog.repoSha && path.isAbsolute(nullLog.treePath)
+    );
+    assert.match(nullLog.noControllerChoice, /NO_CONTROLLER_CHOICE/);
+
+    const chosenLog = lines.find((l) => l.item === 'TASK-AI-171-CHOSEN');
+    assert.ok(
+      chosenLog &&
+        chosenLog.choice.key === candidateA.candidateKey &&
+        chosenLog.repoSha &&
+        path.isAbsolute(chosenLog.treePath)
+    );
   });
 });
