@@ -472,6 +472,9 @@ Evidence: new tests before implementation 0 pass / 11 fail; after implementation
 Prettier 3.9.6 uses repo settings; the hardcode guard passes with zero new instances.
 Offline evidence only. External cutover, live routes, CI, independent review and commit remain with the coordinator; `.oc/route.js` was neither copied nor changed.
 
+## Tool manifest matches the repository (2026-11-09)
+
+- ast-grep, playwright and axe-core are declared in package.json files and are now `installed`; semgrep and trivy point at the existing `security:semgrep` and `security:trivy` scripts; ledger records in GROUP-3 and GROUP-5 updated to INSTALLED, none promoted to EXECUTION_VERIFIED.
 ## Worker playbook (2026-11-08)
 
 - `docs/product-spec/docs/10-ai-collaboration/WORKER-PLAYBOOK.md` gives every worker one guide: roles, four shared rules, graphify, tool state measured at `5c574f7a` (42 declared, 5 with a command, 2 gates), reference repositories, no-hardcode, reuse, fixing and hand-back checks. Linked from the four start prompts.
