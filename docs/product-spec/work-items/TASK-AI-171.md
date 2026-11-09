@@ -796,3 +796,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Supports offline dry-run dispatch with combo and opencode model fixtures; makes zero outbound network calls and respects CLI and environment fixture overrides.
 - Depends on: Slice 4 (`fix/task-ai-171-core-s4-quota-group`).
 - Evidence: 6/6 tests in `task-ai-171-offline-replay.test.js` pass with strict offline network guards active.
+
+## Slice 6: CORE-IN — Ticket markdown parsing and input in dispatch (2026-11-10)
+
+- Scope: `tools/ai-brain/ticket-parser.js`, `tools/ai-brain/orchestrate.js` (`buildProfile`), `tools/ai-brain/cli.js` (`--ticket` option and decision receipt), `tools/ai-brain/test/task-ai-171-core-ticket-input.test.js`.
+- Outcome: Parses work item ticket markdown files for dispatch planning without hardcoded risk lists; populates profile forbidden failure domains, risk domains, and allowed files; attaches `itemSource` and assessment to decision receipts.
+- Depends on: Slice 5 (`fix/task-ai-171-core-s5-offline-replay`).
+- Evidence: 7/7 tests in `task-ai-171-core-ticket-input.test.js` pass.

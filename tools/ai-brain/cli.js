@@ -2421,17 +2421,25 @@ function dispatchCommand(args, deps = {}) {
   const { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture } =
     resolveFixturePaths(args, deps);
   // Only the real CLI entry sets this: injected test seams keep their paths.
-  const noInference = (isDryRun && deps.dryRunOffline === true) || hasOfflineFixture;
+  const noInference = isDryRun && hasOfflineFixture;
   const output = deps.log || console.log;
   const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
+  let item = null;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
     const res = {
       chosen: chosen || null,
       launchedArgvIdentity: launchedId || null,
       outcome,
       recorded: recorded || null,
+      ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
+      ...(extra.assessment || (lastDecision && lastDecision.assessment) || (deps && deps.assessment)
+        ? {
+            assessment:
+              extra.assessment || (lastDecision && lastDecision.assessment) || deps.assessment,
+          }
+        : {}),
       ...extra,
     };
     if (args.json) output(JSON.stringify(res, null, 2));
@@ -2452,6 +2460,11 @@ function dispatchCommand(args, deps = {}) {
     !args['evidence-dir'] &&
     !args.evidenceDir &&
     !(deps && deps.evidenceDir) &&
+    !args['fixture-dir'] &&
+    !args.fixtureDir &&
+    !(deps && deps.fixtureDir) &&
+    !process.env.SHIPDE_FIXTURE_DIR &&
+    !process.env.SHIPDE_COMBO_FIXTURE &&
     !args['pool-runtime-dir'] &&
     !args['agy-runs-dir'] &&
     !(deps && deps.fakeRunsDir) &&
@@ -2459,8 +2472,7 @@ function dispatchCommand(args, deps = {}) {
     !process.env.AGY_RUNS_DIR &&
     !args.close &&
     !args.complete &&
-    !args.fail &&
-    !hasOfflineFixture
+    !args.fail
   ) {
     const freshness = require('./catalogue-refresh').catalogueFreshness({
       dataDir: args['discovery-dir'] || deps.discoveryDataDir,
@@ -2647,8 +2659,28 @@ function dispatchCommand(args, deps = {}) {
   // Work items resolution
   let items = [];
   const targetItemId = args.item || args['work-item'] || (deps && deps.workItemId);
+  const ticketPath = args.ticket || (deps && deps.ticket);
   if (deps && deps.items) {
     items = deps.items;
+  } else if (ticketPath) {
+    const { parseTicket } = require('./ticket-parser');
+    const resolvedPath = path.isAbsolute(ticketPath)
+      ? ticketPath
+      : path.resolve(rootDir, ticketPath);
+    const content =
+      (deps && deps.ticketContent) ||
+      (fs.existsSync(resolvedPath) ? fs.readFileSync(resolvedPath, 'utf8') : '');
+    const parsed = parseTicket(content, ticketPath);
+    items = [
+      {
+        ...parsed,
+        workItemId: parsed.id,
+        role: args.role || (deps && deps.role) || 'author.foundation',
+        branch: args.branch || (deps && deps.branch) || 'feat/' + String(parsed.id).toLowerCase(),
+        itemSource: ticketPath,
+        priority: 0,
+      },
+    ];
   } else if (targetItemId) {
     items = [
       {
@@ -2692,13 +2724,13 @@ function dispatchCommand(args, deps = {}) {
     }
   }
 
-  if (items.length === 0 && !deps.candidates && !args.item) {
+  if (items.length === 0 && !deps.candidates && !args.item && !ticketPath) {
     log('Dispatch: 0 assignments (0 deferred)');
     exit(0);
     return { exitCode: 0, dispatched: 0 };
   }
 
-  const item = items[0] || {
+  item = items[0] || {
     workItemId: targetItemId || 'TASK-DISPATCH',
     role: args.role || (deps && deps.role) || 'author.foundation',
     branch: args.branch || (deps && deps.branch) || 'feat/dispatch-work',
@@ -2998,13 +3030,21 @@ function dispatchCommand(args, deps = {}) {
       };
     };
     const decision = rankDryRun(annotated);
-    const structured = () =>
-      require('./dispatch-output').dispatchOutput(
+    if (item && item.itemSource) {
+      decision.itemSource = item.itemSource;
+    }
+    const structured = () => {
+      const out = require('./dispatch-output').dispatchOutput(
         profile,
         assessment,
         eligibleCandidates,
         decision
       );
+      if (item && item.itemSource) {
+        out.itemSource = item.itemSource;
+      }
+      return out;
+    };
     scoring.printSources(decision, log);
     if (
       resumed &&
@@ -3046,7 +3086,14 @@ function dispatchCommand(args, deps = {}) {
         );
       }
       exit(1);
-      return { exitCode: 1, decision, dryRun: true };
+      return {
+        exitCode: 1,
+        decision,
+        dryRun: true,
+        ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
+        ...(assessment ? { assessment } : {}),
+        profile,
+      };
     }
 
     const simulateFailure = args['simulate-failure'] || (deps && deps.simulateFailure);
@@ -3208,6 +3255,9 @@ function dispatchCommand(args, deps = {}) {
       simulatedFailure,
       checkpoint: nextCheckpoint,
       dryRun: true,
+      ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
+      ...(assessment ? { assessment } : {}),
+      profile,
     };
   }
 
@@ -3357,6 +3407,8 @@ function dispatchCommand(args, deps = {}) {
       });
       scoring.printSources(decision, log);
       lastDecision = decision;
+      if (item && item.itemSource) lastDecision.itemSource = item.itemSource;
+      lastDecision.assessment = { ...deps.assessment, ...scoringAssessment };
 
       if (!decision.chosen) {
         log(
