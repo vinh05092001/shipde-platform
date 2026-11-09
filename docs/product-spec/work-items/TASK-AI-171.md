@@ -483,3 +483,12 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
+
+## PR 07 — Fallback ceiling survives crashes and restarts (2026-11-09)
+
+Scope: Rows B46, B49 and conflict C6.
+Files: `tools/ai-brain/coordinator-ledger.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js`.
+
+Outcome: A versioned schema (`LEDGER_SCHEMA_VERSION = 1`) shared with `route-handoff.js` validates decision ledgers. Truncated JSON, inconsistent counters, wrong item/worktree, or unknown version fail closed as `LEDGER_UNREADABLE`, preventing budget ceiling resets. Writes are atomic via PID-tagged temporary files and rename. `recordLaunchIntent` writes launch count, worktree, and `activeWorker` atomically in one record before worker spawn so crash recovery preserves the counted launch and active worker identity. Old-format ledgers using `active` are migrated on read and guarded by `firstLaunch`/`afterFailure` for backwards compatibility, writing only `activeWorker`.
+
+Evidence: 13 new unit tests pass in `task-ai-171-route-pr07-ledger.test.js` (fail on base 2ce2bb72 due to missing module and unguarded legacy active; 13/13 pass on HEAD). Existing handoff suites pass: `task-ai-171-fallback-chain.test.js` (7/7 pass), `task-ai-171-route-handoff.test.js` (26/26 pass), plus 63 tests across related suites (`route-pr01-consumer`, `route-pr12-options`, `auth-scope`, `offline-replay`, `p5-dispatch-liveness`). Prettier 3.9.6 format check passes.

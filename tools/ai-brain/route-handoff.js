@@ -226,7 +226,8 @@ function firstLaunch(decision, ticket, context, registry) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
   const ledger = (context && context.ledger) || {};
-  if (ledger.activeWorker) {
+  const activeWorker = ledger.activeWorker || ledger.active;
+  if (activeWorker) {
     return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
   }
   if (
@@ -268,10 +269,11 @@ function firstLaunch(decision, ticket, context, registry) {
  */
 function afterFailure(decision, ticket, context, failure, registry) {
   const ctx = context || {};
-  const ledger = ctx.ledger;
+  const ledger = ctx.ledger || {};
   const f = failure || {};
   const beforeLaunch = f.phase === 'before-launch';
-  if (ledger.activeWorker && (beforeLaunch || ledger.activeWorker.offeringId !== f.offeringId)) {
+  const activeWorker = ledger.activeWorker || ledger.active;
+  if (activeWorker && (beforeLaunch || activeWorker.offeringId !== f.offeringId)) {
     return { action: 'STOP', reason: 'WORKER_STILL_ACTIVE', worktree: ledger.worktree };
   }
   if (!beforeLaunch && f.workerStopped !== true) {
@@ -282,6 +284,7 @@ function afterFailure(decision, ticket, context, failure, registry) {
     };
   }
   delete ledger.activeWorker;
+  delete ledger.active;
   const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
   const viaGateway = route.gateway && route.gateway !== f.upstream;
   const authClass = {
