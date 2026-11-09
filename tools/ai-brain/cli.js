@@ -1094,6 +1094,43 @@ function stripRouteAlias(modelId, gateway, registry) {
   return modelId;
 }
 
+function getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options) {
+  if (!routeHealth?.paths || !candidate || typeof routeHealthApi?.getPathRecord !== 'function') {
+    return null;
+  }
+  const modelId = candidate.modelId || candidate.id;
+  const gw =
+    candidate.gateway ||
+    (options?.harness === 'hermes' && (candidate.sourceId || candidate.source));
+  if (!modelId || (!gw && !candidate.upstream)) return null;
+  const isWildcard = !candidate.accountId || candidate.accountId === '*';
+  const targets = gw === candidate.upstream ? [gw] : [gw, candidate.upstream].filter(Boolean);
+  let availableRec = null;
+  for (const t of targets) {
+    const checkPath = isWildcard ? t : { id: t, accountId: candidate.accountId };
+    const rec = routeHealthApi.getPathRecord(
+      routeHealth,
+      stripRouteAlias(modelId, t, options?.registry),
+      checkPath
+    );
+    if (rec) {
+      if (rec.status !== 'AVAILABLE') return rec;
+      if (!availableRec) availableRec = rec;
+    }
+  }
+  return availableRec;
+}
+
+function candidateExclusionReason(routeHealth, candidate, routeHealthApi, options, fresh) {
+  if (fresh?.stale) return fresh.reason;
+  if (candidate?.scanLiveness?.status === 'failed') return candidate.scanLiveness.reason;
+  if (candidate?.credentialEnvMissing || candidate?.blockReason === 'CREDENTIAL_ENV_MISSING') {
+    return 'CREDENTIAL_ENV_MISSING';
+  }
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
+  return rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+}
+
 function isCandidateRouteEligible(
   routeHealth,
   candidate,
@@ -1118,11 +1155,7 @@ function isCandidateRouteEligible(
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  const rec = routeHealthApi.getPathRecord(
-    routeHealth,
-    stripRouteAlias(modelId, gateway, options && options.registry),
-    routePath
-  );
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
   if (rec) return rec.status === 'AVAILABLE';
   // Unprobed admission never overrides a known failure on this route/account,
   // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
@@ -1410,26 +1443,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
           const key = candidatesApi.candidateKey(candidate);
           if (!seenExcluded.has(key)) {
             seenExcluded.add(key);
-            const modelId = candidate && candidate.modelId;
-            const gateway = candidate && candidate.gateway;
-            const routePath =
-              candidate && candidate.accountId
-                ? { id: gateway, accountId: candidate.accountId }
-                : gateway;
-            const rec =
-              routeHealth && modelId && gateway
-                ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
-                : null;
-            const reason = fresh.stale
-              ? fresh.reason
-              : candidate.scanLiveness?.status === 'failed'
-                ? candidate.scanLiveness.reason
-                : candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING'
-                  ? 'CREDENTIAL_ENV_MISSING'
-                  : rec
-                    ? rec.status || 'ROUTE_UNAVAILABLE'
-                    : 'ROUTE_PROBE_UNPROVEN';
+            const reason = candidateExclusionReason(
+              routeHealth,
+              candidate,
+              routeHealthApi,
+              { ...opts, registry: resolvedRegistry },
+              fresh
+            );
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1635,28 +1655,13 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         const key = candidatesApi.candidateKey(candidate);
         if (!seenExcluded.has(key)) {
           seenExcluded.add(key);
-          const modelId = candidate && candidate.modelId;
-          const gateway =
-            candidate &&
-            (candidate.gateway ||
-              (opts && opts.harness === 'hermes' && (candidate.sourceId || candidate.source)));
-          const isWildcard = !candidate.accountId || candidate.accountId === '*';
-          const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-          const rec =
-            routeHealth && modelId && gateway
-              ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
-              : null;
-          const reason = fresh.stale
-            ? fresh.reason
-            : candidate.scanLiveness?.status === 'failed'
-              ? candidate.scanLiveness.reason
-              : candidate &&
-                  (candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
-                ? 'CREDENTIAL_ENV_MISSING'
-                : rec
-                  ? rec.status || 'ROUTE_UNAVAILABLE'
-                  : 'ROUTE_PROBE_UNPROVEN';
+          const reason = candidateExclusionReason(
+            routeHealth,
+            candidate,
+            routeHealthApi,
+            { ...opts, registry: resolvedRegistry },
+            fresh
+          );
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
@@ -5564,6 +5569,9 @@ module.exports = {
   assembleCandidates,
   assembleForDispatch,
   stripRouteAlias,
+  getCandidateRouteHealthRecord,
+  candidateExclusionReason,
+  isCandidateRouteEligible,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,
