@@ -761,3 +761,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Outcome: Classifies 9Router gateway errors ("No active credentials", "concurrency capacity") as UPSTREAM_CREDENTIAL and GENUINE_CAPACITY with UPSTREAM scope; records failures to model-route-health with bounded backoff.
 - Depends on: None (based on origin/main `e3f5f307`).
 - Evidence: 6/6 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
+
+## Slice 2a: INT-1 — Controller execute path & outcome recording (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand` `--execute` flag, `makeExecuteResult`), `tools/ai-brain/harness.js`, `tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+- Outcome: Executes chosen candidate through harness dispatch with bound argv identity, records execution failure to model-route-health store, and returns structured result to CLI entrypoint.
+- Depends on: Slice 1 (`fix/task-ai-171-core-s1-gateway-error-class`).
+- Evidence: 2/2 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.

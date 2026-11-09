@@ -1118,11 +1118,17 @@ function isCandidateRouteEligible(
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  const rec = routeHealthApi.getPathRecord(
-    routeHealth,
-    stripRouteAlias(modelId, gateway, options && options.registry),
-    routePath
-  );
+  let rec = null;
+  for (const gw of [gateway, candidate?.upstream]) {
+    if (!gw) continue;
+    const checkPath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
+    rec = routeHealthApi.getPathRecord(
+      routeHealth,
+      stripRouteAlias(modelId, gw, options && options.registry),
+      checkPath
+    );
+    if (rec) break;
+  }
   if (rec) return rec.status === 'AVAILABLE';
   // Unprobed admission never overrides a known failure on this route/account,
   // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
@@ -1386,14 +1392,17 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             seenExcluded.add(key);
             const modelId = candidate && candidate.modelId;
             const gateway = candidate && candidate.gateway;
-            const routePath =
-              candidate && candidate.accountId
-                ? { id: gateway, accountId: candidate.accountId }
-                : gateway;
-            const rec =
-              routeHealth && modelId && gateway
-                ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
-                : null;
+            let rec = null;
+            if (routeHealth && modelId) {
+              for (const gw of [gateway, candidate?.upstream]) {
+                if (!gw) continue;
+                const routePath = candidate?.accountId
+                  ? { id: gw, accountId: candidate.accountId }
+                  : gw;
+                rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+                if (rec) break;
+              }
+            }
             const reason =
               candidate.scanLiveness?.status === 'failed'
                 ? candidate.scanLiveness.reason
@@ -1612,11 +1621,15 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             (candidate.gateway ||
               (opts && opts.harness === 'hermes' && (candidate.sourceId || candidate.source)));
           const isWildcard = !candidate.accountId || candidate.accountId === '*';
-          const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-          const rec =
-            routeHealth && modelId && gateway
-              ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
-              : null;
+          let rec = null;
+          if (routeHealth && modelId) {
+            for (const gw of [gateway, candidate?.upstream]) {
+              if (!gw) continue;
+              const routePath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
+              rec = routeHealthApi.getPathRecord(routeHealth, modelId, routePath);
+              if (rec) break;
+            }
+          }
           const reason =
             candidate.scanLiveness?.status === 'failed'
               ? candidate.scanLiveness.reason
@@ -2352,9 +2365,21 @@ function dispatchCommand(args, deps = {}) {
   // Only the real CLI entry sets this: injected test seams keep their paths.
   const noInference = isDryRun && deps.dryRunOffline === true;
   const output = deps.log || console.log;
-  const log = args.json && !execute && !args.plan ? () => {} : output;
+  const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
+  const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
+    const res = {
+      chosen: chosen || null,
+      launchedArgvIdentity: launchedId || null,
+      outcome,
+      recorded: recorded || null,
+      ...extra,
+    };
+    if (args.json) output(JSON.stringify(res, null, 2));
+    exit(code);
+    return { exitCode: code, ...res };
+  };
 
   // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
   // caller injects fixture candidates (deps.candidates /
@@ -3272,8 +3297,15 @@ function dispatchCommand(args, deps = {}) {
               (rej.scope ? ' [' + rej.scope + ']' : '')
           );
         }
-        exit(1);
-        return { exitCode: 1, decision, attempts: attempt };
+        const lastFail = failedAttempts[failedAttempts.length - 1];
+        return makeExecuteResult(
+          1,
+          lastFail?.key,
+          lastFail?.launchedArgvIdentity,
+          lastFail?.outcome || { status: 'failed', reason: 'NO_ELIGIBLE_CANDIDATE' },
+          lastFail?.recorded,
+          { decision, attempts: attempt }
+        );
       }
 
       finalChosenKey = decision.chosen;
@@ -3324,6 +3356,7 @@ function dispatchCommand(args, deps = {}) {
     let thrownError = null;
     let isFailure = true;
     let sessionHandle = null;
+    let launchedArgvIdentity = null;
     try {
       let launcher = (deps && deps.run) || runHarness;
       // AI-64-P03: an injected runner replaces what runs the harness process; it
@@ -3349,6 +3382,40 @@ function dispatchCommand(args, deps = {}) {
         throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
       }
 
+      const { parseCandidateKey } = require('./discovery/identity');
+      const chosenIdentity = parseCandidateKey(finalChosenKey) || {};
+      launchedArgvIdentity = {
+        harness: finalChosenCandidate.harness || chosenIdentity.harness || harnessName,
+        accessPath: finalChosenCandidate.accessPath || chosenIdentity.accessPath || '',
+        gateway: finalChosenCandidate.gateway || chosenIdentity.gateway || '',
+        upstream: finalChosenCandidate.upstream || chosenIdentity.upstream || '',
+        account:
+          finalChosenCandidate.accountId ||
+          finalChosenCandidate.account ||
+          chosenIdentity.account ||
+          '*',
+        quotaScope: finalChosenCandidate.quotaScope || chosenIdentity.quotaScope || '',
+        modelId:
+          finalChosenCandidate.modelId ||
+          finalChosenCandidate.model ||
+          chosenIdentity.modelId ||
+          '',
+      };
+
+      const promptFilePath = args['prompt-file'] || args.promptFile || (deps && deps.promptFile);
+      let promptText = null;
+      if (promptFilePath) {
+        const resolved = path.resolve(args.cwd || (deps && deps.cwd) || rootDir, promptFilePath);
+        const promptPath = fs.existsSync(promptFilePath) ? promptFilePath : resolved;
+        promptText = fs.readFileSync(promptPath, 'utf8');
+      } else if (args.prompt || (deps && deps.prompt)) {
+        promptText = args.prompt || (deps && deps.prompt);
+      } else {
+        promptText = defaultPrompt(item, {
+          isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
+        });
+      }
+
       // The loop hands the harness a durable-report path. Under `-z` stdout is
       // the final response prose, so the session id can only come from the
       // report (TASK-AI-63), and a launch that cannot produce one is a launch
@@ -3367,7 +3434,7 @@ function dispatchCommand(args, deps = {}) {
           gateway: finalChosenCandidate.gateway || '',
           upstream: finalChosenCandidate.upstream,
           quotaScope: finalChosenCandidate.quotaScope,
-          prompt: defaultPrompt(item, { isolatedWorker: Boolean(args['isolated-worker']) }),
+          prompt: promptText,
           branch: item.branch,
           base: args.base || (deps && deps.base) || 'main',
           cwd: args.cwd || (deps && deps.cwd) || rootDir,
@@ -3380,6 +3447,15 @@ function dispatchCommand(args, deps = {}) {
             role: item.role,
             project: args.project || 'shipde-platform',
           },
+          isolatedWorker: Boolean(args['isolated-worker'] || (deps && deps.isolatedWorker)),
+          printTimeoutSec:
+            Number(args['timeout-sec'] || args.timeoutSec || (deps && deps.timeoutSec)) ||
+            (args.timeout ? Number(args.timeout) : 3600),
+          timeoutMs:
+            Number(args['timeout-ms'] || args.timeoutMs || (deps && deps.timeoutMs)) ||
+            (Number(args.timeout || (deps && deps.timeout))
+              ? Number(args.timeout || (deps && deps.timeout)) * 1000
+              : undefined),
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3458,7 +3534,7 @@ function dispatchCommand(args, deps = {}) {
 
         try {
           launchRes = launcher(adapter, launchArgs, {
-            cwd: args.cwd || rootDir,
+            cwd: args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
             baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
             branch: item.branch,
@@ -3467,6 +3543,11 @@ function dispatchCommand(args, deps = {}) {
             // same decision log this dispatch records its launch in.
             decisionDir,
             checkpoint: checkpointFile,
+            timeoutMs:
+              Number(args['timeout-ms'] || args.timeoutMs || (deps && deps.timeoutMs)) ||
+              (Number(args.timeout || (deps && deps.timeout))
+                ? Number(args.timeout || (deps && deps.timeout)) * 1000
+                : undefined),
           });
         } catch (err) {
           thrownError = err;
@@ -3586,9 +3667,23 @@ function dispatchCommand(args, deps = {}) {
         exitCode: 0,
         source: 'dispatch',
       });
+      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
+      const outcome =
+        parsedOutcome && parsedOutcome.candidateKey
+          ? parsedOutcome
+          : structuredOutcome(finalChosenKey, launchRes, null, {
+              status: 'completed',
+              checkpoint: checkpointFile,
+            });
       log('Dispatch succeeded on ' + finalChosenKey);
-      exit(0);
-      return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
+      return makeExecuteResult(
+        0,
+        finalChosenKey,
+        launchedArgvIdentity,
+        outcome,
+        { status: 'passed' },
+        { result: launchRes, attempts: attempt }
+      );
     } else {
       evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
         status: 'failed',
@@ -3622,6 +3717,7 @@ function dispatchCommand(args, deps = {}) {
         /timeout|stall|hang/i.test(
           String(rawFail.body || rawFail.stderr || (thrownError && thrownError.message) || '')
         );
+      let lastRecorded = null;
       try {
         const routeHealthApi = require('./route-health');
         const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, deps);
@@ -3639,7 +3735,7 @@ function dispatchCommand(args, deps = {}) {
               : Array.isArray(deps && deps.load)
                 ? deps.load.length
                 : undefined;
-        routeHealthApi.recordExecutionResult(
+        const recordResult = routeHealthApi.recordExecutionResult(
           storeOrPath,
           modelId,
           routeId,
@@ -3658,6 +3754,16 @@ function dispatchCommand(args, deps = {}) {
             saveStore: deps && (deps.saveStore || deps.saver),
           }
         );
+        lastRecorded = recordResult
+          ? {
+              key: recordResult.key,
+              status:
+                recordResult.store?.paths?.[recordResult.key]?.status ||
+                recordResult.recorded?.reason,
+              nextCheckAt: recordResult.store?.paths?.[recordResult.key]?.nextCheckAt,
+              reason: recordResult.recorded?.reason,
+            }
+          : null;
       } catch (_) {}
       const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
       const outcome =
@@ -3673,6 +3779,8 @@ function dispatchCommand(args, deps = {}) {
         candidate: finalChosenCandidate,
         classification: classification,
         outcome,
+        launchedArgvIdentity,
+        recorded: lastRecorded,
       });
       const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
       log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
@@ -3682,8 +3790,15 @@ function dispatchCommand(args, deps = {}) {
   }
 
   log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
-  exit(1);
-  return { exitCode: 1, decision: lastDecision, attempts: attempt, failedAttempts };
+  const lastFail = failedAttempts[failedAttempts.length - 1];
+  return makeExecuteResult(
+    1,
+    lastFail?.key || (lastDecision && lastDecision.chosen),
+    lastFail?.launchedArgvIdentity,
+    lastFail?.outcome || { status: 'failed', reason: 'MAX_ATTEMPTS_EXHAUSTED' },
+    lastFail?.recorded,
+    { decision: lastDecision, attempts: maxAttempts, failedAttempts }
+  );
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
@@ -5064,7 +5179,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
       );
     }
     if (result?.exitCode) process.exitCode = result.exitCode;
-    return;
+    return result;
   }
   if (command === 'shadow') return shadowCommand(args);
   // sweep-import (TASK-AI-142 T3): ingest provider probe sweep into route evidence
