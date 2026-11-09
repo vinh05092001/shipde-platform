@@ -34,7 +34,8 @@ const INSTALLED_EXPECTATIONS = {
   playwright: {
     file: 'apps/web/package.json',
     section: 'devDependencies',
-    member: '@playwright/test', ref: "package.json:devDependencies.@playwright/test",
+    member: '@playwright/test',
+    ref: 'package.json:devDependencies.@playwright/test',
   },
   'axe-core': { file: 'apps/web/package.json', section: 'devDependencies', member: 'axe-core' },
   eslint: { file: 'package.json', section: 'devDependencies', member: 'eslint' },
