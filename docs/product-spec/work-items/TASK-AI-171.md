@@ -735,3 +735,7 @@ All 64 tests in PR 03 and PR 02 core suites pass offline. Diff vs `origin/main` 
 ## CI tool downloads retry and fail loudly (2026-11-09)
 
 Operator-approved change to the three tool-download steps in `.github/workflows/current-application.yml` and `security-baseline.yml`: `curl --fail --retry 5 --retry-all-errors --retry-delay 5`, and gitleaks is saved to a file before `tar`. Versions, checksum checks and gates are unchanged. Cause: on 2026-11-09 more than ten runs failed with `gzip: not in gzip format` / `no properly formatted checksum lines` while the same URLs downloaded correctly from a workstation.
+
+## Selector fix: an assembled quota block survives annotation (2026-11-09)
+
+`annotateCandidates` (`tools/ai-brain/candidates.js`) set `c.blocked = block.blocked` from route evidence, which cleared a `QUOTA_EXHAUSTED` block that AGY-pool assembly had already measured (live quota at zero), leaving `blocked:false` with `blockReason:'QUOTA_EXHAUSTED'`. The assembled quota block is now kept when evidence finds no block. Evidence: `node --test tools/ai-brain/test/task-ai-171-selector-quota-flag.test.js` fails on base (1/2) and passes on HEAD (2/2); suites importing candidates.js show only failures that also fail on main locally.

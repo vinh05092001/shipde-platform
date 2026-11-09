@@ -2982,6 +2982,11 @@ function annotateCandidates(candidates, evidenceData, opts) {
     const block = evidence.isCandidateBlocked
       ? evidence.isCandidateBlocked(evidenceData, c, annotOpts)
       : evidence.isUpstreamBlocked(evidenceData, c, annotOpts);
+    // A quota block measured while assembling the route (for example an AGY lane whose live quota
+    // reads zero) is evidence of its own; evidence that merely finds no block must not clear it.
+    const assembledQuotaBlock =
+      c.blocked === true && String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED');
+    if (assembledQuotaBlock && !block.blocked) continue;
     c.blocked = block.blocked;
     if (block.blocked) {
       c.blockReason = block.reason;
