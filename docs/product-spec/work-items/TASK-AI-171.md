@@ -755,6 +755,13 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 - Finding 7 / Item d3: dead same-item worker record is unlinked without blocking restart; live same-item worker blocks acquisition and prevents `firstLaunch` from launching (`WORKER_STILL_ACTIVE`).
 - Evidence: 4/4 tests pass in `task-ai-171-route-pr06-claim.test.js`. Offline evidence only.
 
+## Slice 1: A1 — Gateway error classification (2026-11-10)
+
+- Scope: `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
+- Outcome: Classifies 9Router gateway errors ("No active credentials for provider: <p>" with UPSTREAM scope, "<model> has reached its concurrency capacity" with MODEL scope) as UPSTREAM_CREDENTIAL and GENUINE_CAPACITY; records failures to model-route-health with bounded backoff and validates candidate selection eligibility.
+- Depends on: None (based on origin/main `e3f5f307`).
+- Evidence: 8/8 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-gateway-error-class.test.js`.
+
 ## Per-source catalogue freshness (2026-11-09)
 
 When discovery listed at least one source, `tools/ai-brain/discovery.js:169` updated the global `lastSuccessfulAt`, and `tools/ai-brain/catalogue-refresh.js:66-85` checked only this global age. A partial refresh therefore masked failed or stale sources by admitting them as fresh.
