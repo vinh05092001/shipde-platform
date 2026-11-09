@@ -82,9 +82,15 @@ function fixture(t) {
   }
   health.saveStore(routeHealthFile, store);
   fs.mkdirSync(path.join(root, 'discovery'));
+  const at = new Date(now).toISOString();
   fs.writeFileSync(
     path.join(root, 'discovery/freshness.json'),
-    JSON.stringify({ lastSuccessfulAt: new Date(now).toISOString(), complete: true })
+    JSON.stringify({
+      lastSuccessfulAt: at,
+      sources: [
+        { id: 'fixture-gateway', status: 'enumerated', advertised: 2, lastSuccessfulAt: at },
+      ],
+    })
   );
   const catalogue = t.mock.method(require('../discovery/read'), 'readDiscoveryCatalogue', () => ({
     candidates: rows,
