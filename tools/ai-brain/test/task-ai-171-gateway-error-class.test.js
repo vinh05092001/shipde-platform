@@ -31,23 +31,54 @@ describe('TASK-AI-171 Item 1: 9Router gateway error classification', () => {
     assert.equal(res.cooldownMs, DEFAULT_COOLDOWNS[Cause.UPSTREAM_CREDENTIAL]);
   });
 
-  it('classifies "<model> has reached its concurrency capacity" without HTTP status as GENUINE_CAPACITY and UPSTREAM scope', () => {
+  it('classifies "<model> has reached its concurrency capacity" as GENUINE_CAPACITY and MODEL scope', () => {
     const res = classifyFailure({
-      stderr: 'mock-model has reached its concurrency capacity',
+      stderr: 'dahl/zai-org/GLM-5.3-Flash has reached its concurrency capacity',
     });
     assert.equal(res.cause, Cause.GENUINE_CAPACITY);
-    assert.equal(res.scope, Scope.UPSTREAM);
+    assert.equal(res.scope, Scope.MODEL);
     assert.equal(res.cooldownMs, DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY]);
   });
 
-  it('classifies "concurrency capacity" with HTTP status as GENUINE_CAPACITY and UPSTREAM scope', () => {
-    const res = classifyFailure({
+  it('negative test (a): generic text "server concurrency capacity is high today" is not GENUINE_CAPACITY', () => {
+    const resWithoutStatus = classifyFailure({
+      body: 'server concurrency capacity is high today',
+    });
+    assert.notEqual(resWithoutStatus.cause, Cause.GENUINE_CAPACITY);
+
+    const res503 = classifyFailure({
       httpStatus: 503,
-      stderr: 'concurrency capacity',
+      body: 'server concurrency capacity is high today',
+    });
+    assert.notEqual(res503.cause, Cause.GENUINE_CAPACITY);
+  });
+
+  it('negative test (b): concurrency capacity is scoped to model and leaves a different model on the same upstream eligible', () => {
+    const modelA = 'dahl/zai-org/GLM-5.3-Flash';
+    const modelB = 'dahl/zai-org/GLM-4';
+    const route = '9router';
+
+    const res = classifyFailure({
+      stderr: `${modelA} has reached its concurrency capacity`,
     });
     assert.equal(res.cause, Cause.GENUINE_CAPACITY);
-    assert.equal(res.scope, Scope.UPSTREAM);
-    assert.equal(res.cooldownMs, DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY]);
+    assert.equal(res.scope, Scope.MODEL);
+
+    const store = { version: 1, paths: {}, events: [] };
+    routeHealthApi.recordExecutionResult(store, modelB, route, 'success', { persist: false });
+    routeHealthApi.recordExecutionResult(store, modelA, route, {
+      ok: false,
+      status: 503,
+      message: `${modelA} has reached its concurrency capacity`,
+      persist: false,
+    });
+
+    assert.notEqual(
+      routeHealthApi.healthKey(modelA, route),
+      routeHealthApi.healthKey(modelB, route)
+    );
+    assert.equal(routeHealthApi.isEligible(store, modelA, route), false);
+    assert.equal(routeHealthApi.isEligible(store, modelB, route), true);
   });
 
   it('preserves ACCOUNT_AUTH_FAILED for unrelated "credentials stored" error (no regression)', () => {
