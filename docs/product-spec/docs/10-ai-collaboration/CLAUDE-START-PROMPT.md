@@ -33,3 +33,5 @@ Final response:
 ```text
 Read all current Codex/review findings on <PR_URL>. Fix every actionable finding for <WORK_ITEM_ID> on the existing branch only. Do not dismiss a finding without code/test evidence or a human-approved specification decision. Rerun the complete verification set, update PR evidence, push, set READY_FOR_CODEX and stop.
 ```
+
+Before starting, read and follow [WORKER-PLAYBOOK.md](WORKER-PLAYBOOK.md): writer selection, the four shared rules, graphify, attached tools with their real state, reference repositories, no-hardcode, reuse and the hand-back checks.

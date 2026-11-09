@@ -26,10 +26,51 @@ const assemble = (candidates, over = {}) =>
     offerings: [],
     registryAccounts: [],
     discoverPool: false,
-    routeHealth: null,
-    allowUnprobedCandidates: true,
+    routeHealth: { version: 1, paths: {}, events: [] },
+    probeEvidence: (modelId, route) =>
+      candidates.some(
+        (candidate) =>
+          candidate.modelId === modelId &&
+          candidate.gateway === route.id &&
+          candidate.accountId === route.accountId
+      ),
     ...over,
   });
+
+test('PR02: implicit health files do not make injected admission depend on unrelated history', (t) => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const health = require('../route-health');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'pr02-admission-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const routeHealthFile = path.join(dir, 'health.json');
+  const candidate = row();
+  const options = { routeHealth: undefined, routeHealthFile, probeEvidence: undefined };
+  assert.deepEqual(assemble([candidate], options).map(candidateKey), [candidateKey(candidate)]);
+  const store = { version: 1, paths: {}, events: [] };
+  health.recordResult(
+    store,
+    'other/model',
+    'other-gateway',
+    { ok: false, status: 429 },
+    Date.now()
+  );
+  health.saveStore(routeHealthFile, store);
+  assert.deepEqual(assemble([candidate], options).map(candidateKey), [candidateKey(candidate)]);
+  assert.equal(assemble([candidate], { ...options, routeHealth: store }).length, 0);
+  assert.equal(assemble([candidate], { ...options, requireRouteHealth: true }).length, 0);
+  health.recordResult(
+    store,
+    candidate.modelId,
+    { id: candidate.gateway, accountId: candidate.accountId },
+    { ok: false, status: 401 },
+    Date.now()
+  );
+  health.saveStore(routeHealthFile, store);
+  const refused = assemble([candidate], options);
+  assert.equal(refused.length, 0);
+  assert.equal(refused.excludedRoutes[0].reasonCode, 'AUTH_NEEDED');
+});
 
 test('PR02: dedupe once without dropping accounts, slash IDs, vendors or effort variants', () => {
   const routes = [
@@ -79,6 +120,53 @@ test('PR02: injected real route uses the same registry alias and account health 
   });
   assert.equal(actual.length, 1);
   assert.equal(actual[0].modelId, c.modelId);
+});
+
+test('PR02: allowing unprobed injection preserves known account health failures', () => {
+  const health = require('../route-health');
+  const store = { paths: {} };
+  const failed = row();
+  const unprobed = row({ accountId: 'lane-b', quotaScope: 'lane-b' });
+  const routePath = { id: failed.gateway, accountId: failed.accountId };
+  store.paths[health.healthKey(failed.modelId, routePath)] = { status: 'AUTH_NEEDED' };
+  assert.equal(health.getPathRecord(store, failed.modelId, routePath).status, 'AUTH_NEEDED');
+
+  const actual = assemble([failed, unprobed], {
+    routeHealth: store,
+    allowUnprobedCandidates: true,
+    probeEvidence: () => false,
+  });
+  assert.deepEqual(actual.map(candidateKey), [candidateKey(unprobed)]);
+  assert.deepEqual(
+    actual.excludedRoutes.map(({ candidateKey: key, reasonCode }) => ({ key, reasonCode })),
+    [{ key: candidateKey(failed), reasonCode: 'AUTH_NEEDED' }]
+  );
+});
+
+test('PR02: injected admission requires probe evidence and refuses known failures', () => {
+  const health = require('../route-health');
+  const failed = row();
+  const unknown = row({ accountId: 'lane-b', quotaScope: 'lane-b' });
+  const store = { paths: {} };
+  store.paths[
+    health.healthKey(failed.modelId, { id: failed.gateway, accountId: failed.accountId })
+  ] = {
+    status: 'AUTH_NEEDED',
+  };
+  const options = { routeHealth: store, probeEvidence: undefined };
+  assert.equal(assemble([unknown], options).length, 0);
+  const proven = {
+    ...options,
+    probeEvidence: (modelId, route) =>
+      modelId === unknown.modelId &&
+      route.id === unknown.gateway &&
+      route.accountId === unknown.accountId,
+  };
+  const actual = assemble([failed, unknown], proven);
+  assert.deepEqual(actual.map(candidateKey), [candidateKey(unknown)]);
+  assert.equal(actual.excludedRoutes[0].reasonCode, 'AUTH_NEEDED');
+  assert.equal(assemble([unknown], { ...options, requireRouteHealth: true }).length, 0);
+  assert.equal(assemble([unknown], { ...options, allowUnprobedCandidates: false }).length, 0);
 });
 
 test('PR02: duplicate combo candidate keeps its own selected model and resolved launch evidence', () => {

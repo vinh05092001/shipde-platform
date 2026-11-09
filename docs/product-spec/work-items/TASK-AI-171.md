@@ -447,6 +447,14 @@ Integration of the routing tickets with a measured quality policy and scan-based
 
 - `docs/ai-audit/handoff-table-20261108.md` records #538 to #545, live scoring 103 of 236 (measured after merge), the FEAT-CAR-01 Slice B product ticket and the remaining blockers.
 
+## PR 12 — Explicit coordinator inputs and offline output
+
+Operator-assigned author scope: `coordinator-options.js`, `cli.js`, `dispatch-output.js`, `route-handoff.js` and `task-ai-171-route-pr12-options.test.js` under `tools/ai-brain/`, plus this section. `dispatch --offline [--dry-run]` requires explicit `--root` (absolute), `--runtime` and `--code-sha`; ordinary mode also requires `--item`, `--cwd`, `--task` and `--snapshot`, while `--decision` consumes a structured decision without selecting again. Runtime JSON inputs are pre-sanitized exports: ordinary snapshots contain `candidates`, registry-qualified `launcherModels`, `registry`, `profile` and optional accounts/health/quota/evidence/priors/assessment metadata. Task paths resolve from the checkout; selection stages no prompts. The launch caller supplies an optional sandbox note as text.
+
+Outcome: existing assembly/admission and Controller ranking produce stable redacted JSON, retain every refusal and exact selected identity, and emit only scalar launch receipts. Offline mode reads metadata and performs no process/network/credential/cache/task side effects. Credential bootstrap (B15), raw user config (B23) and workstation startup/orphan maintenance (B54) remain separate operator-owned operations. The caller supplies the code SHA; offline inspection does not run Git or establish live liveness, independent review or cutover.
+
+Evidence: new tests fail on unchanged production code (8 tests, 0 pass, 8 fail) and pass after this change (8 tests, 8 pass, 0 fail). Combined `node --test` run with `dispatch-json.test.js`, `task-ai-171-route-handoff.test.js`, `task-ai-142-dryrun-priors.test.js` and `dispatch-wiring.test.js`: 46 tests, 42 pass, 4 fail; the same four dispatch-wiring failures reproduce at base `be926f07`. Repository Prettier and the explicit five-file no-hardcode scan pass. No network or commit; coordinator owns review and commit.
+R03 audit follow-up (2026-11-08): `docs/ai-audit/65-items-status-20261108.md` records evidence against local `origin/main` at `be926f075348e0204cf4172fe1f9e59d7cfba750`, remaining work order and separate owners for items 61–65. It does not declare system completion.
 ## AA variant takes its base (operator 2026-11-08)
 
 - A known AA base followed by a variant AA does not publish (`gpt-6.1-sol-pro`, `glm-5.3-prime`) takes the base result at its lowest published score; longest base wins. Dispatch FEAT-CAR-01: 124 of 236 models scored (103 before).
@@ -483,6 +491,117 @@ Additional candidate/discovery/dispatch-json/route-handoff compatibility: **130 
 0 fail**. Repo Prettier and hardcode guard pass (zero new hardcode instances).
 No external script copied or changed; no network or commit. External cutover,
 remote CI and independent review remain coordinator responsibilities.
+## Tool manifest matches the repository (2026-11-09)
+
+- ast-grep, playwright and axe-core are declared in package.json files and are now `installed`; semgrep and trivy point at the existing `security:semgrep` and `security:trivy` scripts; ledger records in GROUP-3 and GROUP-5 updated to INSTALLED, none promoted to EXECUTION_VERIFIED.
+## Worker playbook (2026-11-08)
+
+- `docs/product-spec/docs/10-ai-collaboration/WORKER-PLAYBOOK.md` gives every worker one guide: roles, four shared rules, graphify, tool state measured at `5c574f7a` (42 declared, 5 with a command, 2 gates), reference repositories, no-hardcode, reuse, fixing and hand-back checks. Linked from the four start prompts.
+Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`): context-pack now resolves the repository root and candidates with `fs.realpathSync`, refuses outside/unresolvable targets with sanitized manifest/result reasons, and rechecks fallback reads. Windows junction regression: before 0/8 pass (six outside-content assertions fail); after 8/8 pass. Existing context-related tests plus regression: 17/17 pass. Broader selected files: 117/118 pass, failing the AGY advertised-model test at `task-ai-141.test.js:100` (outside this repair). Hardcode guard blocked by missing `@typescript-eslint/parser`. Formatted with cached Prettier 3.9.6; no network or commit.
+## AA prefix family (operator 2026-11-08)
+
+- A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
+- Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
+
+## PR 02 — Offline unknown-health repair (2026-11-09)
+
+Injected candidates default to unprobed admission through the shared helper. Known
+route/account failures and credential refusals still take precedence. Explicit
+`requireRouteHealth: true` or `allowUnprobedCandidates: false` retains strict admission.
+
+Reproduction: pointing only the health file at an absent temporary path passed locally;
+this did not reproduce the reported Linux CI failure. Explicitly passing the empty
+store loaded from that absent file reproduced six failures in `task-ai-50.test.js`
+and `task-ai-171-jev-pipeline.test.js`, including the five named failures. Before
+the production repair: 26 pass / 6 fail across those suites and PR02 admission.
+After repair and an additional default-admission/strict-mode regression: 97 pass /
+0 fail across those three suites plus route identity, combo members, route scope,
+TASK-AI-80, TASK-AI-87 and P5 dispatch liveness. These are offline fixtures, not
+Linux CI proof. No network, commit or independent approval was performed.
+
+## PR 02 — Restore health-required injected admission (2026-11-09)
+
+Supersedes the preceding unknown-health repair: revert the injected-candidate
+admission exception from `3feeb9d2`. Injected candidates still need route health
+or explicit probe evidence. Known account failures and credential refusals remain
+ineligible. TASK-AI-50 and JEV dispatch fixtures now carry passed probe evidence;
+PR02 identity fixtures supply model/gateway/account-bound probe evidence. The
+PR02 regression rejects unknown health before supplying evidence. Original default
+health-rule assertions in TASK-AI-141 part E are restored without a strict-mode
+opt-in; its remaining explicit dispatch fixture now supplies probe evidence.
+
+Offline evidence: both original rule tests failed before the revert (0/2 passed).
+After the revert, the three named PR02/dispatch suites reproduced seven failures
+(26/33 passed). After fixture repairs, the four requested files pass 74/74,
+including both rule tests. A second run redirected default health-store loads and
+saves to a fresh temporary directory and also passed 74/74; explicit fixture
+stores remain isolated. Prettier and the no-hardcode guard pass (zero new
+instances). No assertions removed. No network or commit; remote CI and independent
+review remain unverified. The unrelated pre-existing quota-summary change is
+outside this repair.
+
+## PR 02 repair outcome — explicit key format marker (2026-11-09)
+
+Outcome: legacy pre-upgrade keys keep their literal fields; only keys written with
+the new format are decoded. New-format keys carry an explicit `\x1E` record-separator
+marker in front of the joined key when any field required escaping (`%`, `::`,
+U+241F, boundary colon); keys of plain identities are byte-identical to their
+pre-upgrade form. `parseCandidateKey` decodes only marker-prefixed keys, replacing
+the trial re-encoding whose encoder diverged from `candidateKey` (the literal
+`\u241f` text bug, base 71998e6a `identity.js`).
+
+Where: `tools/ai-brain/discovery/identity.js` (candidateKey/parseCandidateKey) and
+`tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js` (five new P2 cases
+plus the strengthened idempotence case). No other file changed.
+
+Evidence, Windows offline:
+- Suite `task-ai-171-route-pr02-regressions.test.js` on HEAD: 12 tests, 12 pass / 0 fail
+  (`node --test tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js`). With base
+  `71998e6a` discovery/identity.js: the 9 P2 cases (a, b, b2, c, d, e and three catalogue cases f)
+  fail; the 3 pre-existing tests pass.
+- All 30 existing test files importing `discovery/identity.js` or `discovery/read.js`
+  combined: 435 tests, 434 pass, 1 fail — the known pre-existing
+  `task-ai-141.test.js` AGY advertised-model failure, which reproduces unchanged
+  with the base identity.js.
+- `task-ai-171-route-identity` + `combo-members` + `task-181-route-scope`: 33/33 pass.
+- Prettier 3.9.6: both files clean. `check-no-hardcode`: pass (0 new instances).
+- `pnpm lint` 12/12, `pnpm typecheck` 12/12, `git diff --check origin/main...HEAD` clean.
+- `pnpm security:secrets` reports the pre-existing `DASHBOARD.html` finding present at
+  base 71998e6a; no hit from this change.
+
+Limitations: offline Windows evidence; Linux CI, fresh independent review and
+external cutover remain unverified. Commit by the repair worker on this branch.
+
+## PR 02 — CI admission repair, head 903bb345 (2026-11-09)
+
+The shared admission helper had changed injected inventory's missing-health policy:
+any unrelated cached route made missing records require probe evidence. Preserve
+its earlier policy (explicit `routeHealth` or `requireRouteHealth` requires evidence)
+while retaining shared credential, known account failure, alias and scan checks.
+Generated production inventory keeps its existing strict admission behavior.
+
+Regression: an absent temporary health file admits an injected fixture, unrelated
+history does not change that result, explicit health/required health rejects it,
+and a known account failure remains refused. It fails on 903bb345 and passes with
+the repair; no existing assertion changed. With default health and decision stores
+redirected to temporary directories, the original reservation test fails on HEAD;
+R3 additionally needs an unrelated synthetic health record to reproduce its exact
+`0 !== 1` failure. Both pass after repair. All five requested files: **84/84 pass**.
+Formatting and the hardcode guard pass. Offline Windows evidence only; Linux CI
+and independent review remain unverified. No network, credential reads or commit.
+
+## PR 02 — Regression tests for the repair at 606c4934 (2026-11-09)
+
+Outcome: committed tests guard the three repaired behaviours: required object
+health beats unprobed admission, legacy unverified evidence cannot admit an
+account-bound offline route, and pre-upgrade keys keep literal `%`/`:` fields.
+Files: `tools/ai-brain/test/task-ai-171-route-pr02-regressions.test.js`; fixtures
+are synthetic, with no `.oc` path, model name, score or numeric cap.
+Evidence: all three fail at `7a24c39c` and pass at `606c4934`; base `710fdd5a`
+already passes because the regressions came from this branch after it. Requested
+files: **78/78 pass**; Prettier 3.9.6 and the hardcode guard pass.
+Limitations: offline Windows only; Linux CI, cutover and independent review are
+unverified. No network or credential reads.
 
 ## PR 03 — Keep liveness and quota failures within their actual route (2026-11-08)
 
@@ -555,3 +674,12 @@ Formatting could not run: `npx.cmd --offline prettier@3.9.6` returned
 `git diff --check` passes. Graph query `node C:/Tools/graphify/q.js 5c574f7a
 scanCliLanes` located the quota path; that graph is stale relative to `1690c184`,
 so the current quota implementation and executable regressions supplied proof.
+
+## PR 03 update outcome — sync with origin/main (2026-11-09)
+
+Outcome: merged `origin/main` (containing squash-merged PR 02 `0274c68d`) into PR 03.
+Resolved merge conflicts by adopting `origin/main` for PR 02 owned files (`identity.js`,
+`task-ai-171-route-pr02-admission.test.js`), preserving PR 02 updates in `cli.js` while
+re-applying PR 03's explicit unavailable health guard, and retaining PR 03 scope in
+`scan-liveness.js`, `quota-scan.js`, `route-health.js`, and `task-ai-171-route-pr03-observations.test.js`.
+All 64 tests in PR 03 and PR 02 core suites pass offline. Diff vs `origin/main` isolates only PR 03 changes.

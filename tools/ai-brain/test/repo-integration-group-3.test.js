@@ -33,18 +33,22 @@ test('exact group inventory and shared contract, without claiming missing manife
   for (const r of records) {
     for (const field of MANDATORY_FIELDS) assert.ok(Object.hasOwn(r, field), field);
     assert.equal(r.workItemId, 'GOAL-AUTOCLAW-REPOS-4');
-    assert.equal(r.state, 'DECLARED');
     assert.equal(r.execution, 'NOT_RUN');
     assert.equal(r.acceptance, 'PENDING');
-    assert.equal(r.blocked, true);
-    assert.ok(r.blockedReason.trim());
     assert.ok(Number.isFinite(Date.parse(r.verifiedAt)));
     assert.ok(fs.existsSync(path.join(root, r.caller)), r.caller);
     const entry = manifest.find((m) => m.repo.toLowerCase() === r.repo.toLowerCase());
     if (entry) {
       assert.equal(r.toolId, entry.id);
       assert.equal(r.registrationPending, false);
-      assert.equal(entry.installed, false, 'state must be reconsidered if manifest changes');
+      if (entry.installed) {
+        assert.equal(r.state, 'INSTALLED', 'installed entry must be exactly INSTALLED');
+        assert.equal(r.blocked, false);
+      } else {
+        assert.equal(r.state, 'DECLARED');
+        assert.equal(r.blocked, true);
+        assert.ok(r.blockedReason.trim());
+      }
       assert.equal(r.evidenceRef, entry.evidenceRef);
       assert.equal(r.command, entry.command);
       const result = validateEvidenceRecord(r, root);
@@ -52,6 +56,9 @@ test('exact group inventory and shared contract, without claiming missing manife
     } else {
       assert.equal(r.toolId, null);
       assert.equal(r.registrationPending, true);
+      assert.equal(r.state, 'DECLARED');
+      assert.equal(r.blocked, true);
+      assert.ok(r.blockedReason.trim());
       assert.ok(doc.includes('incomplete contract records'));
       assert.ok(fs.existsSync(path.join(root, r.evidenceRef.split(':')[0])));
       // Do not pass pending records off as complete validator successes.
