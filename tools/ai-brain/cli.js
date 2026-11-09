@@ -1104,21 +1104,47 @@ function getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, o
     (options?.harness === 'hermes' && (candidate.sourceId || candidate.source));
   if (!modelId || (!gw && !candidate.upstream)) return null;
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
-  const targets = gw === candidate.upstream ? [gw] : [gw, candidate.upstream].filter(Boolean);
-  let availableRec = null;
-  for (const t of targets) {
-    const checkPath = isWildcard ? t : { id: t, accountId: candidate.accountId };
-    const rec = routeHealthApi.getPathRecord(
+
+  if (gw) {
+    const gwPath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
+    const gwRec = routeHealthApi.getPathRecord(
       routeHealth,
-      stripRouteAlias(modelId, t, options?.registry),
-      checkPath
+      stripRouteAlias(modelId, gw, options?.registry),
+      gwPath
     );
-    if (rec) {
-      if (rec.status !== 'AVAILABLE') return rec;
-      if (!availableRec) availableRec = rec;
+    if (gwRec) {
+      if (gwRec.status === 'AVAILABLE' && candidate.upstream && candidate.upstream !== gw) {
+        const upPath = isWildcard
+          ? candidate.upstream
+          : { id: candidate.upstream, accountId: candidate.accountId };
+        const upRec = routeHealthApi.getPathRecord(
+          routeHealth,
+          stripRouteAlias(modelId, candidate.upstream, options?.registry),
+          upPath
+        );
+        if (upRec && upRec.status !== 'AVAILABLE') {
+          return upRec;
+        }
+      }
+      return gwRec;
     }
+    return null;
   }
-  return availableRec;
+
+  if (candidate.upstream) {
+    const upPath = isWildcard
+      ? candidate.upstream
+      : { id: candidate.upstream, accountId: candidate.accountId };
+    return (
+      routeHealthApi.getPathRecord(
+        routeHealth,
+        stripRouteAlias(modelId, candidate.upstream, options?.registry),
+        upPath
+      ) || null
+    );
+  }
+
+  return null;
 }
 
 function candidateExclusionReason(routeHealth, candidate, routeHealthApi, options, fresh) {
