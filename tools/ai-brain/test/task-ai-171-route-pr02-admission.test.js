@@ -37,6 +37,41 @@ const assemble = (candidates, over = {}) =>
     ...over,
   });
 
+test('PR02: implicit health files do not make injected admission depend on unrelated history', (t) => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const health = require('../route-health');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'pr02-admission-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const routeHealthFile = path.join(dir, 'health.json');
+  const candidate = row();
+  const options = { routeHealth: undefined, routeHealthFile, probeEvidence: undefined };
+  assert.deepEqual(assemble([candidate], options).map(candidateKey), [candidateKey(candidate)]);
+  const store = { version: 1, paths: {}, events: [] };
+  health.recordResult(
+    store,
+    'other/model',
+    'other-gateway',
+    { ok: false, status: 429 },
+    Date.now()
+  );
+  health.saveStore(routeHealthFile, store);
+  assert.deepEqual(assemble([candidate], options).map(candidateKey), [candidateKey(candidate)]);
+  assert.equal(assemble([candidate], { ...options, routeHealth: store }).length, 0);
+  assert.equal(assemble([candidate], { ...options, requireRouteHealth: true }).length, 0);
+  health.recordResult(
+    store,
+    candidate.modelId,
+    { id: candidate.gateway, accountId: candidate.accountId },
+    { ok: false, status: 401 },
+    Date.now()
+  );
+  health.saveStore(routeHealthFile, store);
+  const refused = assemble([candidate], options);
+  assert.equal(refused.length, 0);
+  assert.equal(refused.excludedRoutes[0].reasonCode, 'AUTH_NEEDED');
+});
+
 test('PR02: dedupe once without dropping accounts, slash IDs, vendors or effort variants', () => {
   const routes = [
     row(),

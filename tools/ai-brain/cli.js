@@ -1094,7 +1094,13 @@ function stripRouteAlias(modelId, gateway, registry) {
   return modelId;
 }
 
-function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthApi, isExplicit) {
+function isCandidateRouteEligible(
+  routeHealth,
+  candidate,
+  options,
+  routeHealthApi,
+  enforceMissingHealth
+) {
   if (
     candidate &&
     (candidate.credentialEnvMissing === true ||
@@ -1123,13 +1129,13 @@ function isCandidateRouteEligible(routeHealth, candidate, options, routeHealthAp
   // Admission for a ranked live probe is not proof that the route is alive.
   // Known failures above still fail closed; only a missing record may pass.
   if (options && options.allowMissingRouteHealth === true) return true;
-  const explicit =
-    isExplicit !== undefined ? isExplicit : Boolean(options && options.routeHealth !== undefined);
-  if (
-    explicit ||
-    (options && options.requireRouteHealth === true) ||
-    Object.keys(routeHealth.paths || {}).length > 0
-  ) {
+  const requiresEvidence =
+    enforceMissingHealth !== undefined
+      ? enforceMissingHealth
+      : Boolean(options && options.routeHealth !== undefined) ||
+        (options && options.requireRouteHealth === true) ||
+        Object.keys(routeHealth.paths || {}).length > 0;
+  if (requiresEvidence) {
     if (options && typeof options.probeEvidence === 'function') {
       return Boolean(options.probeEvidence(modelId, routePath));
     }
@@ -1361,7 +1367,10 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             routeHealth,
             candidate,
             { ...opts, requireRouteHealth: enforceMissingHealth, registry: resolvedRegistry },
-            routeHealthApi
+            routeHealthApi,
+            // Injected inventory retains its explicit-health policy; unrelated
+            // cached routes must not change whether a missing route is admitted.
+            routeHealthExplicit || requireRouteHealth
           ) && candidate.scanLiveness?.status !== 'failed';
         if (isEligible) {
           eligible.push(candidate);

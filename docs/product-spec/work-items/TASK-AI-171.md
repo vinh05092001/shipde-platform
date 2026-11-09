@@ -536,3 +536,21 @@ stores remain isolated. Prettier and the no-hardcode guard pass (zero new
 instances). No assertions removed. No network or commit; remote CI and independent
 review remain unverified. The unrelated pre-existing quota-summary change is
 outside this repair.
+
+## PR 02 — CI admission repair, head 903bb345 (2026-11-09)
+
+The shared admission helper had changed injected inventory's missing-health policy:
+any unrelated cached route made missing records require probe evidence. Preserve
+its earlier policy (explicit `routeHealth` or `requireRouteHealth` requires evidence)
+while retaining shared credential, known account failure, alias and scan checks.
+Generated production inventory keeps its existing strict admission behavior.
+
+Regression: an absent temporary health file admits an injected fixture, unrelated
+history does not change that result, explicit health/required health rejects it,
+and a known account failure remains refused. It fails on 903bb345 and passes with
+the repair; no existing assertion changed. With default health and decision stores
+redirected to temporary directories, the original reservation test fails on HEAD;
+R3 additionally needs an unrelated synthetic health record to reproduce its exact
+`0 !== 1` failure. Both pass after repair. All five requested files: **84/84 pass**.
+Formatting and the hardcode guard pass. Offline Windows evidence only; Linux CI
+and independent review remain unverified. No network, credential reads or commit.
