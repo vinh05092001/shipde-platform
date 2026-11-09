@@ -189,8 +189,18 @@ function launchAfterFailure(file, decision, ticket, failure, deps) {
   return persistAndSpawn(file, ledger, expect, plan, deps);
 }
 
+/** Guard used by route-handoff when a persisted ledger is passed to it directly. */
+function checkLedger(raw, expect) {
+  try {
+    return { ok: true, ledger: canonical(raw, expect) };
+  } catch (e) {
+    return { ok: false, reason: e instanceof LedgerError ? e.reason : UNREADABLE };
+  }
+}
+
 module.exports = {
   SCHEMA_VERSION,
+  checkLedger,
   readLedger,
   saveLedger,
   restartAction,

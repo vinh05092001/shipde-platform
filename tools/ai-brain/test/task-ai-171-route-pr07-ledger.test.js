@@ -206,3 +206,17 @@ test('the fallback ceiling holds across a restart between failure and relaunch',
   assert.equal(f.spawned.length, 2);
   assert.equal(launchFirst(f.file, f.decision, f.ticket, f.deps).action, 'BLOCKED');
 });
+
+test('route-handoff entry points refuse an invalid persisted ledger passed in directly', (t) => {
+  const f = fixture(t);
+  const { firstLaunch, afterFailure } = require('../route-handoff');
+  const ctx = (ledger) => ({ ...f.deps.context, ledger });
+  const bad = f.valid({ launches: 2, fallbacksUsed: 0 });
+  assert.equal(
+    firstLaunch(f.decision, f.ticket, ctx(bad), f.deps.registry).reason,
+    'LEDGER_UNREADABLE'
+  );
+  const failed = afterFailure(f.decision, f.ticket, ctx(bad), f.failure('a', 429), f.deps.registry);
+  assert.deepEqual([failed.action, failed.reason], ['STOP', 'LEDGER_UNREADABLE']);
+  assert.equal(firstLaunch(f.decision, f.ticket, ctx(f.valid()), f.deps.registry).action, 'LAUNCH');
+});
