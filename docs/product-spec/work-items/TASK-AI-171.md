@@ -739,3 +739,10 @@ Operator-approved change to the three tool-download steps in `.github/workflows/
 ## Selector fix: an assembled quota block survives annotation (2026-11-09)
 
 `annotateCandidates` (`tools/ai-brain/candidates.js`) set `c.blocked = block.blocked` from route evidence, which cleared a `QUOTA_EXHAUSTED` block that AGY-pool assembly had already measured (live quota at zero), leaving `blocked:false` with `blockReason:'QUOTA_EXHAUSTED'`. The assembled quota block is now kept when evidence finds no block. Evidence: `node --test tools/ai-brain/test/task-ai-171-selector-quota-flag.test.js` fails on base (1/2) and passes on HEAD (2/2); suites importing candidates.js show only failures that also fail on main locally.
+
+## PR 06a — worktree claims need a live, bound owner record (2026-11-09)
+
+- Scope: `tools/ai-brain/coordinator-claim.js` (`claimWorktree`, `verifyWorktreeClaim`), shared test helper `tools/ai-brain/test/helpers/worktree-claim.js`, and migrated test suites (`task-ai-171-auth-scope`, `task-ai-171-fallback-chain`, `task-ai-171-offline-replay`, `task-ai-171-route-handoff`, `task-ai-171-route-pr01-consumer`, `task-ai-171-route-pr07-ledger`).
+- Outcome: worktree claims require a live PID bound to the target worktree path and owner metadata before worker launch.
+- Evidence: 112 tests in the 10 files importing route-handoff/coordinator-claim pass at f012f209, 0 fail, 0 skip. Offline evidence only.
+- Entry guard follows in PR 06b (#566); Slice B (.evict recovery, process-ownership findings 3/4/5/8) deferred.

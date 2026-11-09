@@ -8,10 +8,13 @@ const path = require('node:path');
 const { firstLaunch, afterFailure } = require('../route-handoff');
 const { resolveRoute, readSessionId } = require('../executor');
 const { getHarness } = require('../harness');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
 function fixture(t) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-d-'));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const claimHelper = createWorktreeClaim({ worktree: cwd });
+  t.after(claimHelper.cleanup);
   const candidates = ['a', 'b', 'c'].map((id) => ({
     offeringId: id,
     modelId: 'fake/' + id,
@@ -43,6 +46,7 @@ function fixture(t) {
         evidence: [{ status: 'passed', proofLevel: 'HARNESS_PASS' }],
       })),
     },
+    ...claimHelper.context,
   };
   const ledgerFile = path.join(cwd, 'ledger.json');
   const checkpoint = () => fs.writeFileSync(ledgerFile, JSON.stringify(context.ledger));
