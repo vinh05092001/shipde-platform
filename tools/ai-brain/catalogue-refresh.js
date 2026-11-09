@@ -51,6 +51,139 @@ function sanitizeScope(rawScope) {
 }
 
 /**
+ * Source freshness evaluates each source independently.
+ * A source listed this run is admitted fresh.
+ * A source that failed this run retains its prior good listing if within the 48h MAX_AGE_MS gate
+ * (marked stale-listing-retained). If older than 48h or never successfully listed, it is rejected
+ * with reason SOURCE_CATALOGUE_STALE. Global lastSuccessfulAt alone cannot admit a failed source.
+ */
+function sourceFreshness(sourceIdOrObj, options = {}) {
+  const dataDir = options.dataDir || DATA_DIR;
+  const doc = options.freshness || readJson(path.join(dataDir, 'freshness.json'), null);
+  const now = Number(options.now ?? Date.now());
+  const maxAgeMs = options.maxAgeMs ?? MAX_AGE_MS;
+  const sourceId =
+    typeof sourceIdOrObj === 'string'
+      ? sourceIdOrObj
+      : sourceIdOrObj?.id ||
+        sourceIdOrObj?.source ||
+        sourceIdOrObj?.sourceId ||
+        sourceIdOrObj?.gateway;
+
+  if (!doc || !sourceId) {
+    return {
+      sourceId: sourceId || null,
+      admitted: false,
+      stale: true,
+      code: 'SOURCE_CATALOGUE_STALE',
+      reason: 'SOURCE_CATALOGUE_STALE',
+      lastSuccessfulAt: null,
+      staleListingRetained: false,
+      status: 'rejected',
+    };
+  }
+
+  const sources = Array.isArray(doc.sources) ? doc.sources : [];
+  const failedSources = Array.isArray(doc.failedSources) ? doc.failedSources : [];
+  const sourceEntry =
+    sources.find((s) => s && s.id === sourceId) ||
+    sources.find((s) => s && (s.id === 'opencode:' + sourceId || s.id.endsWith(':' + sourceId)));
+  const failedEntry =
+    failedSources.find((s) => s && s.id === sourceId) ||
+    failedSources.find(
+      (s) => s && (s.id === 'opencode:' + sourceId || s.id.endsWith(':' + sourceId))
+    );
+
+  if (!sourceEntry && !failedEntry) {
+    return {
+      sourceId,
+      admitted: false,
+      stale: true,
+      code: 'SOURCE_CATALOGUE_STALE',
+      reason: 'SOURCE_CATALOGUE_STALE',
+      lastSuccessfulAt: null,
+      staleListingRetained: false,
+      status: 'rejected',
+    };
+  }
+
+  const isFailedThisRun = Boolean(
+    failedEntry ||
+    (sourceEntry &&
+      (sourceEntry.incomplete === true ||
+        sourceEntry.status !== 'enumerated' ||
+        (sourceEntry.reason && (!sourceEntry.advertised || sourceEntry.advertised === 0))))
+  );
+
+  // (a) Source listed this run: enumerated, not incomplete, not failed, has advertised models or catalogs
+  if (!isFailedThisRun && sourceEntry && sourceEntry.status === 'enumerated') {
+    const listingTimestamp =
+      sourceEntry.lastSuccessfulAt || doc.lastAttemptAt || doc.lastSuccessfulAt;
+    const observed = Date.parse(listingTimestamp);
+    const ageMs = now - observed;
+    const futureSkew = ageMs < 0;
+    const expired = ageMs > maxAgeMs;
+    const stale = !Number.isFinite(ageMs) || futureSkew || expired;
+    return {
+      sourceId,
+      admitted: !stale,
+      stale,
+      code: stale ? 'SOURCE_CATALOGUE_STALE' : null,
+      reason: stale ? 'SOURCE_CATALOGUE_STALE' : null,
+      lastSuccessfulAt: listingTimestamp || null,
+      staleListingRetained: false,
+      status: stale ? 'rejected' : 'admitted',
+    };
+  }
+
+  // Source failed this run or has no successful listing this run.
+  // Rule (d): Global lastSuccessfulAt alone cannot admit a failed source.
+  const sourceLastGood = sourceEntry && (sourceEntry.lastSuccessfulAt || sourceEntry.lastGoodAt);
+  if (!sourceLastGood) {
+    return {
+      sourceId,
+      admitted: false,
+      stale: true,
+      code: 'SOURCE_CATALOGUE_STALE',
+      reason: 'SOURCE_CATALOGUE_STALE',
+      lastSuccessfulAt: null,
+      staleListingRetained: false,
+      status: 'rejected',
+    };
+  }
+
+  const observed = Date.parse(sourceLastGood);
+  const ageMs = now - observed;
+  const futureSkew = ageMs < 0;
+  const expired = ageMs > maxAgeMs;
+  const stale = !Number.isFinite(ageMs) || futureSkew || expired;
+
+  if (stale) {
+    return {
+      sourceId,
+      admitted: false,
+      stale: true,
+      code: 'SOURCE_CATALOGUE_STALE',
+      reason: 'SOURCE_CATALOGUE_STALE',
+      lastSuccessfulAt: sourceLastGood,
+      staleListingRetained: false,
+      status: 'rejected',
+    };
+  }
+
+  return {
+    sourceId,
+    admitted: true,
+    stale: false,
+    code: null,
+    reason: null,
+    lastSuccessfulAt: sourceLastGood,
+    staleListingRetained: true,
+    status: 'stale-listing-retained',
+  };
+}
+
+/**
  * The 48h gate derives from exactly one persisted observation record
  * (freshness.json), which refreshCatalogue replaces atomically and advances
  * `lastSuccessfulAt` after verified discovery lists at least one source.
@@ -63,25 +196,40 @@ function sanitizeScope(rawScope) {
 function catalogueFreshness(options = {}) {
   const dataDir = options.dataDir || DATA_DIR;
   const doc = options.freshness || readJson(path.join(dataDir, 'freshness.json'), null);
+  const now = Number(options.now ?? Date.now());
+
+  if (options.source || options.sourceId) {
+    return sourceFreshness(options.source || options.sourceId, { ...options, freshness: doc, now });
+  }
+
   if (!doc || !doc.lastSuccessfulAt) {
     return {
       stale: true,
       code: 'STALE_CATALOGUE',
       lastSuccessfulAt: null,
       ageHours: null,
+      doc: doc || null,
+      sources: {},
     };
   }
   const observed = Date.parse(doc.lastSuccessfulAt);
-  const now = Number(options.now ?? Date.now());
   const ageMs = now - observed;
   const futureSkew = ageMs < 0;
   const expired = ageMs > MAX_AGE_MS;
   const stale = !Number.isFinite(ageMs) || futureSkew || expired;
+  const sources = {};
+  if (Array.isArray(doc.sources)) {
+    for (const s of doc.sources) {
+      if (s?.id) sources[s.id] = sourceFreshness(s.id, { ...options, freshness: doc, now });
+    }
+  }
   return {
     stale,
     code: stale ? 'STALE_CATALOGUE' : null,
     lastSuccessfulAt: doc.lastSuccessfulAt || null,
     ageHours: Number.isFinite(ageMs) && ageMs >= 0 ? ageMs / 3600000 : null,
+    doc,
+    sources,
   };
 }
 
@@ -199,6 +347,31 @@ async function refreshCatalogue(options = {}) {
     if (name === 'discovery run') {
       discovery = readJson(discoveryFile, null);
       if (options.persist !== false && stageExitCode === 0 && discovery?.listedSources > 0) {
+        if (Array.isArray(discovery.sources)) {
+          for (const src of discovery.sources) {
+            const isFailed = (discovery.failedSources || []).some((f) => f.id === src.id);
+            if (
+              !isFailed &&
+              src.status === 'enumerated' &&
+              !src.incomplete &&
+              (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0))
+            ) {
+              src.lastSuccessfulAt = discovery.lastAttemptAt || startedAt;
+              src.staleListingRetained = false;
+            } else {
+              const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
+              src.lastSuccessfulAt = prev?.lastSuccessfulAt || null;
+              if (
+                src.lastSuccessfulAt &&
+                startedEpoch - Date.parse(src.lastSuccessfulAt) <= MAX_AGE_MS
+              ) {
+                src.staleListingRetained = true;
+              } else {
+                src.staleListingRetained = false;
+              }
+            }
+          }
+        }
         writeJson(freshnessFile, discovery);
         discoveryPublished = true;
       }
@@ -283,13 +456,21 @@ async function refreshCatalogue(options = {}) {
         ];
       }
     }
-    if (!discoveryPublished)
+    if (!discoveryPublished) {
+      const retainedSources = (previousFreshness.sources || []).map((s) => ({
+        ...s,
+        staleListingRetained: Boolean(
+          s.lastSuccessfulAt && startedEpoch - Date.parse(s.lastSuccessfulAt) <= MAX_AGE_MS
+        ),
+      }));
       writeJson(freshnessFile, {
+        sources: retainedSources,
         lastAttemptAt: report.finishedAt,
         lastSuccessfulAt: previousFreshness.lastSuccessfulAt || null,
         complete: false,
         failedSources,
       });
+    }
   }
 
   fs.rmSync(discoveryFile, { force: true });
@@ -310,6 +491,7 @@ if (require.main === module)
 
 module.exports = {
   catalogueFreshness,
+  sourceFreshness,
   refreshCatalogue,
   readJson,
   writeJson,
