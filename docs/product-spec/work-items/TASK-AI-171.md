@@ -483,3 +483,16 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
+
+## PR 05 — Launch the exact selected harness, account and model effort (2026-11-09)
+
+Operator-assigned author scope: `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr05-launch.test.js`, and this section.
+Rows B38, B39, B41, B42, B47, B50:
+- B50: Execute returned harness and argv unchanged; unknown harness refused; no supervised model-only rebind to OpenCode.
+- B41: Native Codex preserves selected high/max effort in argv array without shell interpolation; metacharacters in model/path remain single arguments.
+- B39: AGY pool launch derives lane, account, model and timeout from input/request; busy lane is refused with `LANE_BUSY` and not overwritten.
+- B42: OpenCode launch preserves task path with spaces in argv, appends no detached `oc-continue` child process, and bounds worker continuation strictly through handoff ceiling.
+- B38: Prompt construction reports fetch failure instead of treating it as clean merge, preserves dirty diff, and forbids scope text from adding paths outside allowedPaths.
+- B47: Ticket normalization carries spec.mode and tokenBudget; health/quota changed since Controller decision refuses launch at spawn time.
+
+Evidence: All 6 new PR 05 tests fail on base `2ce2bb72` (0 pass, 6 fail) and pass on HEAD (6 pass, 0 fail). All 7 suites importing `route-handoff` pass with 102/102 tests green. Formatted with Prettier 3.9.6. Fake receipts only; no worker spawned.
