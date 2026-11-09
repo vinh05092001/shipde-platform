@@ -108,7 +108,11 @@ test('Finding 2 / Item d4: metadata-only and missing worktree disk binding rejec
 });
 
 test('Finding 7 / Item d3: dead worker does not block restart; live worker blocks firstLaunch', async (t) => {
-  const f = fixture(t, [[101, 1000]]);
+  const f = fixture(t, [
+    [101, 1000],
+    [102, 'EPERM'],
+    [103, 1000],
+  ]);
   const target = claim.worktreeId(f.worktree);
   const workerFile = path.join(f.runtimeDir, `worker-${target.id}.json`);
   fs.writeFileSync(
@@ -125,59 +129,85 @@ test('Finding 7 / Item d3: dead worker does not block restart; live worker block
     launches: 1,
     fallbacksUsed: 0,
     failures: [],
-    activeWorker: { item: 'TASK-AI-171', tag: 'dead', pid: 777, startedAt: 500, offeringId: 'a' },
   };
-  const restart = handoff.firstLaunch(
-    dec,
-    f.tkt(),
-    { worktreeClaim: res, evidenceData, ledger: deadLedger, ...f.opts(101, 1000) },
-    reg
-  );
+  const launchWith = (worker, extraOpts = {}) =>
+    handoff.firstLaunch(
+      dec,
+      f.tkt(),
+      {
+        worktreeClaim: res,
+        evidenceData,
+        ledger: { ...deadLedger, activeWorker: worker },
+        ...f.opts(101, 1000, extraOpts),
+      },
+      reg
+    );
+  const restart = launchWith({
+    item: 'TASK-AI-171',
+    tag: 'dead',
+    pid: 777,
+    startedAt: 500,
+    offeringId: 'a',
+  });
   eq([restart.action, restart.launch?.offeringId], ['LAUNCH', 'a']);
   assert.notEqual(restart.reason, 'WORKER_STILL_ACTIVE');
-  const deadLedgerDiffTag = {
-    ...deadLedger,
-    activeWorker: {
-      item: 'TASK-AI-171',
-      tag: 'diff-dead',
-      pid: 777,
-      startedAt: 500,
-      offeringId: 'a',
-    },
-  };
-  const restartDiffTag = handoff.firstLaunch(
-    dec,
-    f.tkt(),
-    { worktreeClaim: res, evidenceData, ledger: deadLedgerDiffTag, ...f.opts(101, 1000) },
-    reg
-  );
+  const restartDiffTag = launchWith({
+    item: 'TASK-AI-171',
+    tag: 'diff-dead',
+    pid: 777,
+    startedAt: 500,
+    offeringId: 'a',
+  });
   eq([restartDiffTag.action, restartDiffTag.launch?.offeringId], ['LAUNCH', 'a']);
   assert.notEqual(restartDiffTag.reason, 'WORKER_STILL_ACTIVE');
-  const liveLedgerSameTag = {
-    ...deadLedger,
-    activeWorker: { item: 'TASK-AI-171', tag: 'dead', pid: 101, startedAt: 1000, offeringId: 'a' },
-  };
-  const liveLedgerSameTagOut = handoff.firstLaunch(
-    dec,
-    f.tkt(),
-    { worktreeClaim: res, evidenceData, ledger: liveLedgerSameTag, ...f.opts(101, 1000) },
-    reg
+  const restartMismatched = launchWith({
+    item: 'TASK-AI-171',
+    tag: 'recycled-pid',
+    pid: 101,
+    startedAt: 500,
+    offeringId: 'a',
+  });
+  eq([restartMismatched.action, restartMismatched.launch?.offeringId], ['LAUNCH', 'a']);
+  assert.notEqual(restartMismatched.reason, 'WORKER_STILL_ACTIVE');
+  const epermProbeOut = launchWith({
+    item: 'TASK-AI-171',
+    tag: 'eperm-probe',
+    pid: 102,
+    startedAt: 1000,
+    offeringId: 'a',
+  });
+  assert.notEqual(epermProbeOut.action, 'LAUNCH');
+  eq([epermProbeOut.action, epermProbeOut.reason], ['BLOCKED', 'WORKER_STILL_ACTIVE']);
+  const queryThrowsOut = launchWith(
+    { item: 'TASK-AI-171', tag: 'query-throws', pid: 103, startedAt: 1000, offeringId: 'a' },
+    {
+      getProcessStartedAt: (p) => {
+        if (p === 103) throw new Error('probe start-time query failed');
+        return 1000;
+      },
+    }
   );
+  assert.notEqual(queryThrowsOut.action, 'LAUNCH');
+  eq([queryThrowsOut.action, queryThrowsOut.reason], ['BLOCKED', 'WORKER_STILL_ACTIVE']);
+  const liveLedgerSameTagOut = launchWith({
+    item: 'TASK-AI-171',
+    tag: 'dead',
+    pid: 101,
+    startedAt: 1000,
+    offeringId: 'a',
+  });
   assert.notEqual(liveLedgerSameTagOut.action, 'LAUNCH');
   eq(
     [liveLedgerSameTagOut.action, liveLedgerSameTagOut.reason],
     ['BLOCKED', 'WORKER_STILL_ACTIVE']
   );
-  const liveLedger = {
-    ...deadLedger,
-    activeWorker: { item: 'TASK-AI-171', tag: 'live', pid: 101, startedAt: 1000, offeringId: 'a' },
-  };
-  const liveLedgerOut = handoff.firstLaunch(
-    dec,
-    f.tkt(),
-    { worktreeClaim: res, evidenceData, ledger: liveLedger, ...f.opts(101, 1000) },
-    reg
-  );
+  const liveLedgerOut = launchWith({
+    item: 'TASK-AI-171',
+    tag: 'live',
+    pid: 101,
+    startedAt: 1000,
+    offeringId: 'a',
+  });
   assert.notEqual(liveLedgerOut.action, 'LAUNCH');
   eq([liveLedgerOut.action, liveLedgerOut.reason], ['BLOCKED', 'WORKER_STILL_ACTIVE']);
   res.release();
