@@ -1,165 +1,195 @@
 'use strict';
 
+// TASK-AI-171 Route PR 07 — the ticket ledger survives crashes and restarts.
+// This module is the only owner of the ledger schema and the only path that spawns a worker:
+// read + validate -> route-handoff decides (pure) -> launch intent persisted -> spawn.
+// A missing ledger file is a fresh ticket; any present but invalid file is LEDGER_UNREADABLE
+// and never resets the fallback ceiling.
+
 const fs = require('node:fs');
 const path = require('node:path');
+const { firstLaunch, afterFailure } = require('./route-handoff');
 
-const LEDGER_SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 1;
+const UNREADABLE = 'LEDGER_UNREADABLE';
+
+class LedgerError extends Error {
+  constructor(reason) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+
+const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isCount = (v) => Number.isInteger(v) && v >= 0;
+
+// Order-insensitive comparison for alias migration.
+function sameValue(a, b) {
+  if (isObject(a) && isObject(b)) {
+    const ka = Object.keys(a).sort();
+    const kb = Object.keys(b).sort();
+    return ka.length === kb.length && ka.every((k, i) => k === kb[i] && sameValue(a[k], b[k]));
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((x, i) => sameValue(x, b[i]));
+  }
+  return a === b;
+}
+
+// Old names are read only for migration, and only when they agree with the canonical name.
+function alias(raw, canonical, legacy) {
+  const hasC = Object.prototype.hasOwnProperty.call(raw, canonical);
+  const hasL = Object.prototype.hasOwnProperty.call(raw, legacy);
+  if (hasC && hasL && !sameValue(raw[canonical], raw[legacy])) throw new LedgerError(UNREADABLE);
+  return hasC ? raw[canonical] : raw[legacy];
+}
+
+function validWorker(w) {
+  return w === null || (isObject(w) && typeof w.tag === 'string' && w.tag.length > 0);
+}
 
 /**
- * Validate a coordinator decision ledger.
- * Missing file is fresh. Corrupted/truncated/inconsistent/wrong-item/unknown-version
- * fails closed as LEDGER_UNREADABLE (never resets the fallback ceiling).
+ * Validate and canonicalise a parsed ledger against the caller's expected item and worktree.
+ * Every field is required; the caller's expectation is the reference, never the ledger itself.
  */
-function validateLedger(ledger, options = {}) {
-  const bad = () => ({ ok: false, reason: 'LEDGER_UNREADABLE' });
-  if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) return bad();
-
-  if (
-    ledger.version !== undefined &&
-    ledger.schemaVersion !== undefined &&
-    ledger.version !== ledger.schemaVersion
-  ) {
-    return bad();
+function canonical(raw, expect) {
+  if (!isObject(raw)) throw new LedgerError(UNREADABLE);
+  if (!expect || !expect.item || !expect.worktree)
+    throw new LedgerError('LEDGER_EXPECTATION_MISSING');
+  const ledger = {
+    version: alias(raw, 'version', 'schemaVersion'),
+    item: alias(raw, 'item', 'workItemId'),
+    worktree: raw.worktree,
+    launches: raw.launches,
+    fallbacksUsed: raw.fallbacksUsed,
+    failures: raw.failures,
+    activeWorker: alias(raw, 'activeWorker', 'active'),
+    stopped: raw.stopped === undefined ? null : raw.stopped,
+  };
+  if (ledger.activeWorker === undefined) ledger.activeWorker = null;
+  const ok =
+    ledger.version === SCHEMA_VERSION &&
+    typeof ledger.item === 'string' &&
+    typeof ledger.worktree === 'string' &&
+    isCount(ledger.launches) &&
+    isCount(ledger.fallbacksUsed) &&
+    ledger.fallbacksUsed <= Math.max(ledger.launches - 1, 0) &&
+    Array.isArray(ledger.failures) &&
+    validWorker(ledger.activeWorker) &&
+    (ledger.stopped === null || typeof ledger.stopped === 'string');
+  if (!ok) throw new LedgerError(UNREADABLE);
+  if (ledger.item !== expect.item) throw new LedgerError(UNREADABLE);
+  if (path.resolve(ledger.worktree) !== path.resolve(expect.worktree)) {
+    throw new LedgerError(UNREADABLE);
   }
-  const ver = ledger.version !== undefined ? ledger.version : ledger.schemaVersion;
-  if (ver !== undefined && (!Number.isInteger(ver) || ver !== LEDGER_SCHEMA_VERSION)) return bad();
-  if (options.expectedVersion !== undefined && ver !== undefined && ver !== options.expectedVersion)
-    return bad();
-
-  if (
-    ledger.item !== undefined &&
-    ledger.workItemId !== undefined &&
-    ledger.item !== ledger.workItemId
-  ) {
-    return bad();
-  }
-
-  const checkActive = (a) =>
-    a === undefined ||
-    (a &&
-      typeof a === 'object' &&
-      !Array.isArray(a) &&
-      (typeof a.tag === 'string'
-        ? a.tag.length > 0
-        : typeof a.offeringId === 'string' || typeof a.sessionId === 'string'));
-  if (!checkActive(ledger.active) || !checkActive(ledger.activeWorker)) return bad();
-
-  if (ledger.active !== undefined && ledger.activeWorker !== undefined) {
-    if (JSON.stringify(ledger.active) !== JSON.stringify(ledger.activeWorker)) {
-      return bad();
-    }
-  }
-
-  const hasL = ledger.launches !== undefined;
-  const hasF = ledger.fallbacksUsed !== undefined;
-  if (ver !== undefined && (!hasL || !hasF)) return bad();
-
-  const isCount = (v) => v === undefined || (Number.isInteger(v) && v >= 0);
-  if (!isCount(ledger.launches) || !isCount(ledger.fallbacksUsed)) return bad();
-
-  if (hasL) {
-    const l = ledger.launches;
-    const f = ledger.fallbacksUsed || 0;
-    if (l === 0 && f > 0) return bad();
-    if (l > 0 && hasF && (f < l - 1 || f > l)) return bad();
-  }
-
-  if (ledger.failures !== undefined && !Array.isArray(ledger.failures)) return bad();
-
-  for (const field of ['stopped', 'worktree', 'item', 'workItemId']) {
-    if (ledger[field] !== undefined && typeof ledger[field] !== 'string') return bad();
-  }
-
-  const expItem = options.item || options.workItemId;
-  const legItem = ledger.item || ledger.workItemId;
-  if (expItem && legItem && legItem !== expItem) return bad();
-
-  const expWorktree = options.worktree || options.cwd;
-  if (expWorktree && ledger.worktree && path.resolve(ledger.worktree) !== path.resolve(expWorktree))
-    return bad();
-
-  const isCounted = hasL || ver !== undefined;
-  if (isCounted) {
-    if (expItem && !legItem) return bad();
-    if (expWorktree && !ledger.worktree) return bad();
-  }
-
-  return { ok: true };
-}
-
-/** @returns {{ ok: true, ledger: object } | { ok: false, reason: string }} */
-function readLedger(file, options = {}) {
-  let raw;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    if (e.code === 'ENOENT') return { ok: true, ledger: {} };
-    return { ok: false, reason: 'LEDGER_UNREADABLE' };
-  }
-  let ledger;
-  try {
-    ledger = JSON.parse(raw);
-  } catch {
-    return { ok: false, reason: 'LEDGER_UNREADABLE' };
-  }
-  if (
-    ledger &&
-    typeof ledger === 'object' &&
-    !Array.isArray(ledger) &&
-    Object.keys(ledger).length === 0
-  ) {
-    return { ok: false, reason: 'LEDGER_UNREADABLE' };
-  }
-  const v = validateLedger(ledger, options);
-  if (!v.ok) return v;
-
-  if (ledger.active && !ledger.activeWorker) {
-    ledger.activeWorker = ledger.active;
-    delete ledger.active;
-  }
-  return { ok: true, ledger };
-}
-
-/** Atomic write: write to a PID+timestamp tmp file, then rename into place. */
-function saveLedger(file, ledger) {
-  const toWrite = { ...ledger, version: LEDGER_SCHEMA_VERSION };
-  if (toWrite.active) {
-    toWrite.activeWorker = toWrite.activeWorker || toWrite.active;
-    delete toWrite.active;
-  }
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 1));
-  fs.renameSync(tmp, file);
-}
-
-/** Determine action on restart from validated ledger. */
-function restartAction(ledger) {
-  const active = ledger.activeWorker || ledger.active;
-  if (active) return { action: 'STOP_WORKER', active, note: 'interrupted worker found on restart' };
-  if (ledger.stopped) return { action: 'STOP', reason: ledger.stopped, note: 'already stopped' };
-  if (ledger.launches > 0)
-    return { action: 'STOP', reason: 'FALLBACK_LIMIT', note: 'nothing active after restart' };
-  return { action: 'FRESH' };
-}
-
-/** Record launch intent atomically in one ledger record before spawning. */
-function recordLaunchIntent(ledger, opts, file) {
-  ledger.version = LEDGER_SCHEMA_VERSION;
-  ledger.launches = (ledger.launches || 0) + 1;
-  ledger.fallbacksUsed = ledger.fallbacksUsed || 0;
-  if (opts.item || opts.workItemId) ledger.item = opts.item || opts.workItemId;
-  if (opts.worktree || opts.cwd) ledger.worktree = opts.worktree || opts.cwd;
-  ledger.activeWorker = { offeringId: opts.offeringId, upstream: opts.upstream, tag: opts.tag };
-  delete ledger.active;
-  saveLedger(file, ledger);
   return ledger;
 }
 
+function fresh(expect) {
+  return canonical(
+    {
+      version: SCHEMA_VERSION,
+      item: expect.item,
+      worktree: expect.worktree,
+      launches: 0,
+      fallbacksUsed: 0,
+      failures: [],
+    },
+    expect
+  );
+}
+
+/** @returns {{ok:true, ledger:object} | {ok:false, reason:string}} */
+function readLedger(file, expect, io = fs) {
+  let text;
+  try {
+    text = io.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') return { ok: false, reason: UNREADABLE };
+    text = null;
+  }
+  try {
+    return {
+      ok: true,
+      ledger: text === null ? fresh(expect) : canonical(JSON.parse(text), expect),
+    };
+  } catch (e) {
+    return { ok: false, reason: e instanceof LedgerError ? e.reason : UNREADABLE };
+  }
+}
+
+/** Atomic save of the canonical shape; refuses anything its own validation would reject. */
+function saveLedger(file, ledger, expect, io = fs) {
+  const value = canonical(ledger, expect);
+  const tmp = `${file}.${process.pid}.tmp`;
+  io.writeFileSync(tmp, JSON.stringify(value, null, 1));
+  io.renameSync(tmp, file);
+  return value;
+}
+
+/** What a restarted coordinator must do before any new launch. */
+function restartAction(ledger) {
+  if (ledger.activeWorker) return { action: 'STOP_WORKER', worker: ledger.activeWorker };
+  if (ledger.stopped) return { action: 'STOP', reason: ledger.stopped };
+  return { action: 'CONTINUE' };
+}
+
+// Persist the launch intent, then spawn. No persisted receipt, no spawn.
+function persistAndSpawn(file, ledger, expect, plan, deps) {
+  const tag = deps.tag();
+  const next = {
+    ...ledger,
+    launches: ledger.launches + 1,
+    activeWorker: { tag, offeringId: plan.launch && plan.launch.offeringId },
+  };
+  const receipt = saveLedger(file, next, expect, deps.io);
+  const run = deps.spawn(plan.launch, { tag });
+  return { ...plan, receipt, run };
+}
+
+/**
+ * The only supervised launch path. deps: { spawn(launch, {tag}), tag(), io?, registry? }.
+ * Returns the handoff plan; LAUNCH carries the persisted receipt and the spawn result.
+ */
+function launchFirst(file, decision, ticket, deps) {
+  const expect = { item: ticket.workItemId, worktree: ticket.request && ticket.request.cwd };
+  const read = readLedger(file, expect, deps.io);
+  if (!read.ok) return { action: 'BLOCKED', reason: read.reason, rejected: [] };
+  const restart = restartAction(read.ledger);
+  if (restart.action !== 'CONTINUE')
+    return { action: 'BLOCKED', reason: restart.action, rejected: [] };
+  const plan = firstLaunch(
+    decision,
+    ticket,
+    { ...deps.context, ledger: read.ledger },
+    deps.registry
+  );
+  if (plan.action !== 'LAUNCH') return plan;
+  return persistAndSpawn(file, read.ledger, expect, plan, deps);
+}
+
+/** After a failed run: record it, then at most the allowed fallback through the same path. */
+function launchAfterFailure(file, decision, ticket, failure, deps) {
+  const expect = { item: ticket.workItemId, worktree: ticket.request && ticket.request.cwd };
+  const read = readLedger(file, expect, deps.io);
+  if (!read.ok) return { action: 'STOP', reason: read.reason };
+  const ledger = read.ledger;
+  const plan = afterFailure(decision, ticket, { ...deps.context, ledger }, failure, deps.registry);
+  if (plan.action !== 'LAUNCH') {
+    if (ledger.activeWorker === undefined) ledger.activeWorker = null;
+    ledger.stopped = plan.action === 'STOP' ? plan.reason : ledger.stopped;
+    saveLedger(file, ledger, expect, deps.io);
+    return plan;
+  }
+  ledger.activeWorker = null;
+  return persistAndSpawn(file, ledger, expect, plan, deps);
+}
+
 module.exports = {
-  LEDGER_SCHEMA_VERSION,
+  SCHEMA_VERSION,
   readLedger,
-  validateLedger,
   saveLedger,
   restartAction,
-  recordLaunchIntent,
+  launchFirst,
+  launchAfterFailure,
 };

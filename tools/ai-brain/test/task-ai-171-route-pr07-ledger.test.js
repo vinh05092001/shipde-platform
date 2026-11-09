@@ -1,374 +1,202 @@
 'use strict';
 
+// TASK-AI-171 Route PR 07 — the fallback ceiling survives crashes and restarts (rows B46, B49, C6).
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const cp = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const ledgerMod = require('../coordinator-ledger');
 
-const {
-  LEDGER_SCHEMA_VERSION,
-  readLedger,
-  validateLedger,
-  saveLedger,
-  restartAction,
-  recordLaunchIntent,
-} = require('../coordinator-ledger');
-const { firstLaunch, afterFailure } = require('../route-handoff');
+const { readLedger, saveLedger, launchFirst, launchAfterFailure, SCHEMA_VERSION } = ledgerMod;
 
-function tmp(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return path.join(dir, 'ledger.json');
+function fixture(t) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'pr07-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const file = path.join(cwd, 'ledger.json');
+  const candidates = ['a', 'b', 'c'].map((id) => ({
+    offeringId: id,
+    modelId: 'fake/' + id,
+    upstream: id,
+    gateway: 'fake-gateway',
+    accountId: id,
+    harness: 'paseo',
+  }));
+  const registry = {
+    sources: [],
+    dispatch: {
+      providers: { 'fake-gateway': { harness: 'paseo', provider: 'opencode' } },
+      launchModes: { opencode: ['full-access', 'plan'] },
+    },
+  };
+  const decision = { workItemId: 'TASK-AI-171', selected: 'a', candidates };
+  const ticket = {
+    workItemId: 'TASK-AI-171',
+    outputTokens: 100,
+    minProof: 'HARNESS_PASS',
+    maxFallbacks: 1,
+    request: { cwd, branch: 'fake-branch', prompt: 'fake ticket' },
+  };
+  const context = {
+    evidenceData: {
+      combinations: candidates.map((c) => ({
+        ...c,
+        evidence: [{ status: 'passed', proofLevel: 'HARNESS_PASS' }],
+      })),
+    },
+  };
+  const spawned = [];
+  let n = 0;
+  const deps = {
+    registry,
+    context,
+    tag: () => `run-${++n}`,
+    spawn: (launch, meta) => {
+      // the receipt must already be on disk when spawn is called
+      const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+      spawned.push({ launch, meta, onDisk });
+      return { pid: 1000 + spawned.length };
+    },
+  };
+  const expect = { item: 'TASK-AI-171', worktree: cwd };
+  const valid = (over) => ({
+    version: SCHEMA_VERSION,
+    item: 'TASK-AI-171',
+    worktree: cwd,
+    launches: 0,
+    fallbacksUsed: 0,
+    failures: [],
+    activeWorker: null,
+    stopped: null,
+    ...over,
+  });
+  const write = (v) => fs.writeFileSync(file, typeof v === 'string' ? v : JSON.stringify(v));
+  const failure = (id, status) => ({
+    offeringId: id,
+    upstream: id,
+    status,
+    phase: 'after-launch',
+    worktree: cwd,
+    workerStopped: true,
+  });
+  return { cwd, file, decision, ticket, deps, spawned, expect, valid, write, failure };
 }
 
-const cand = { offeringId: 'c1', harness: 'paseo', gateway: 'gw', upstream: 'up', modelId: 'm1' };
-const dec = { workItemId: 'TASK-171', selected: 'c1', candidates: [cand] };
-const tkt = {
-  workItemId: 'TASK-171',
-  outputTokens: 100,
-  minProof: 'HARNESS_PASS',
-  maxFallbacks: 1,
-  request: { cwd: '/w', branch: 'b', prompt: 'p' },
-};
-const ev = {
-  combinations: [
-    {
-      harness: 'paseo',
-      modelId: 'm1',
-      gateway: 'gw',
-      upstream: 'up',
-      evidence: [{ status: 'passed', proofLevel: 'HARNESS_PASS' }],
-    },
-  ],
-};
-const reg = {
-  sources: [{ id: 'gw', kind: 'agent-cli' }],
-  dispatch: {
-    providers: { gw: { harness: 'paseo', provider: 'opencode' } },
-    launchModes: { opencode: ['full-access'] },
-  },
-};
-const fail = (offeringId = 'c1', extra = {}) => ({
-  offeringId,
-  phase: 'after-launch',
-  workerStopped: true,
-  ...extra,
-});
-
-// ── B46: Schema & validation ─────────────────────────────────────────────
-
-test('B46: missing ledger file returns fresh empty ledger', (t) => {
-  const r = readLedger(tmp(t));
-  assert.equal(r.ok, true);
-  assert.deepEqual(r.ledger, {});
-});
-
-test('B46: truncated JSON is LEDGER_UNREADABLE', (t) => {
-  const file = tmp(t);
-  fs.writeFileSync(file, '{ "launches": 1, "fallback');
-  assert.deepEqual(readLedger(file), { ok: false, reason: 'LEDGER_UNREADABLE' });
-});
-
-test('B46: inconsistent counters and conflicting aliases fail closed as LEDGER_UNREADABLE', (t) => {
-  const file = tmp(t);
-  for (const bad of [
-    { launches: -1, fallbacksUsed: 0 },
-    { launches: 1, fallbacksUsed: 0.5 },
-    { launches: 0, fallbacksUsed: 1 },
-    { launches: 3, fallbacksUsed: 1 },
-    { version: 1, schemaVersion: 99, launches: 1, fallbacksUsed: 0 },
-    { version: 1, launches: 1, fallbacksUsed: 0, item: 'A', workItemId: 'B' },
-    {
-      version: 1,
-      launches: 1,
-      fallbacksUsed: 0,
-      active: { tag: 'W1' },
-      activeWorker: { tag: 'W2' },
-    },
-  ]) {
-    const originalContent = JSON.stringify(bad, null, 2);
-    fs.writeFileSync(file, originalContent);
-    assert.equal(readLedger(file).reason, 'LEDGER_UNREADABLE');
-    assert.equal(fs.readFileSync(file, 'utf8'), originalContent);
+test('missing file is a fresh ticket; invalid files are unreadable and never reset the budget', (t) => {
+  const f = fixture(t);
+  assert.equal(readLedger(f.file, f.expect).ok, true);
+  const cases = {
+    truncated: '{"version":1,"item":"TASK',
+    emptyObject: {},
+    versionOnly: { version: 1 },
+    unknownVersion: f.valid({ version: 2 }),
+    missingCounters: f.valid({ launches: undefined }),
+    fallbackAboveLaunches: f.valid({ launches: 1, fallbacksUsed: 1 }),
+    wrongItem: f.valid({ item: 'TASK-AI-999' }),
+    wrongWorktree: f.valid({ worktree: path.join(f.cwd, 'other') }),
+    conflictingVersionAlias: { ...f.valid(), schemaVersion: 99 },
+    conflictingItemAlias: { ...f.valid(), workItemId: 'TASK-AI-999' },
+    conflictingWorkerAlias: f.valid({ activeWorker: { tag: 'x' }, active: { tag: 'y' } }),
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    f.write(value);
+    assert.deepEqual(
+      readLedger(f.file, f.expect),
+      { ok: false, reason: 'LEDGER_UNREADABLE' },
+      name
+    );
+    const out = launchFirst(f.file, f.decision, f.ticket, f.deps);
+    assert.equal(out.action, 'BLOCKED', name);
+    assert.equal(f.spawned.length, 0, `${name}: nothing spawned`);
   }
 });
 
-test('B46: wrong or missing item or worktree fails closed as LEDGER_UNREADABLE', (t) => {
-  const file = tmp(t);
-  fs.writeFileSync(
-    file,
-    JSON.stringify({ launches: 1, fallbacksUsed: 0, item: 'TASK-171', worktree: '/path/a' })
-  );
-  assert.equal(readLedger(file, { item: 'TASK-999' }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(readLedger(file, { worktree: '/path/b' }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(readLedger(file, { item: 'TASK-171', worktree: '/path/a' }).ok, true);
-
-  const file2 = tmp(t);
-  fs.writeFileSync(file2, JSON.stringify({ launches: 1, fallbacksUsed: 0 }));
-  assert.equal(readLedger(file2, { item: 'TASK-171' }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(readLedger(file2, { worktree: '/path/a' }).reason, 'LEDGER_UNREADABLE');
-});
-
-test('B46: unknown version or missing counters fail closed as LEDGER_UNREADABLE', (t) => {
-  assert.equal(validateLedger({ version: 2 }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(validateLedger({ schemaVersion: 99 }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(validateLedger({ version: '1' }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(validateLedger({ version: LEDGER_SCHEMA_VERSION }).reason, 'LEDGER_UNREADABLE');
-  assert.equal(
-    validateLedger({ version: LEDGER_SCHEMA_VERSION, launches: 1, fallbacksUsed: 0 }).ok,
-    true
-  );
-
-  const file1 = tmp(t);
-  fs.writeFileSync(file1, JSON.stringify({ version: 1 }));
-  assert.equal(readLedger(file1).reason, 'LEDGER_UNREADABLE');
-
-  const fileEmpty = tmp(t);
-  fs.writeFileSync(fileEmpty, '{}');
-  assert.equal(readLedger(fileEmpty).reason, 'LEDGER_UNREADABLE');
-});
-
-test('B46: atomic save writes via tmp and rename, survives simulated rename failure', (t) => {
-  const file = tmp(t);
-  const initial = { launches: 1, fallbacksUsed: 0 };
-  saveLedger(file, initial);
-  assert.deepEqual(readLedger(file).ledger, { ...initial, version: LEDGER_SCHEMA_VERSION });
-
-  const origRename = fs.renameSync;
-  t.after(() => {
-    fs.renameSync = origRename;
-  });
-  fs.renameSync = () => {
-    throw new Error('SIMULATED_RENAME_CRASH');
-  };
-  assert.throws(
-    () => saveLedger(file, { launches: 2, fallbacksUsed: 1 }),
-    /SIMULATED_RENAME_CRASH/
-  );
-
-  fs.renameSync = origRename;
-  const recovered = readLedger(file);
-  assert.equal(recovered.ok, true);
-  assert.equal(recovered.ledger.launches, 1);
-});
-
-test('B46: handoff entry points validate ledger and reject unreadable state', () => {
-  const badLedgers = [
-    undefined,
-    null,
-    { ok: false, reason: 'LEDGER_UNREADABLE' },
-    { version: 99, launches: 1, fallbacksUsed: 0 },
-    { version: 1, launches: -1, fallbacksUsed: 0 },
-    { version: 1, launches: 3, fallbacksUsed: 1 },
-  ];
-  for (const bad of badLedgers) {
-    const first = firstLaunch(dec, tkt, { ledger: bad }, reg);
-    assert.equal(first.action, 'BLOCKED');
-    assert.equal(first.reason, 'LEDGER_UNREADABLE');
-
-    const stopped = afterFailure(dec, tkt, { ledger: bad, worktree: '/w' }, fail(), reg);
-    assert.equal(stopped.action, 'STOP');
-    assert.equal(stopped.reason, 'LEDGER_UNREADABLE');
-  }
-});
-
-// ── B49: Pre-spawn persistence and ordering ──────────────────────────────
-
-test('B49: recordLaunchIntent writes launch count and activeWorker in one record', (t) => {
-  const file = tmp(t);
-  const ledger = {};
-  recordLaunchIntent(
-    ledger,
-    { offeringId: 'o1', upstream: 'u1', tag: 'TAG-1', item: 'T1', worktree: '/w' },
-    file
-  );
-  assert.equal(ledger.launches, 1);
-  assert.equal(ledger.fallbacksUsed, 0);
-  assert.deepEqual(ledger.activeWorker, { offeringId: 'o1', upstream: 'u1', tag: 'TAG-1' });
-
-  const disk = readLedger(file);
-  assert.equal(disk.ok, true);
-  assert.equal(disk.ledger.launches, 1);
-  assert.equal(disk.ledger.activeWorker.tag, 'TAG-1');
-  assert.equal(disk.ledger.version, LEDGER_SCHEMA_VERSION);
-});
-
-test('B49: failed intent write prevents spawn and leaves disk state unchanged', (t) => {
-  const file = tmp(t);
-  saveLedger(file, { launches: 1, fallbacksUsed: 0, item: 'TASK-171', worktree: '/w' });
-  const origRename = fs.renameSync;
-  t.after(() => {
-    fs.renameSync = origRename;
-  });
-
-  let spawnCalled = false;
-  fs.renameSync = () => {
-    throw new Error('SIMULATED_RENAME_FAILURE');
-  };
-  assert.throws(
-    () =>
-      firstLaunch(
-        dec,
-        tkt,
-        {
-          ledger: { launches: 1, fallbacksUsed: 0, item: 'TASK-171', worktree: '/w' },
-          ledgerFile: file,
-          evidenceData: ev,
-          launcher: () => {
-            spawnCalled = true;
-          },
-        },
-        reg
-      ),
-    /SIMULATED_RENAME_FAILURE/
-  );
-  assert.equal(spawnCalled, false);
-  fs.renameSync = origRename;
-
-  const disk = readLedger(file);
-  assert.equal(disk.ledger.launches, 1);
-  assert.equal(disk.ledger.activeWorker, undefined);
-});
-
-test('B49: intent rename precedes spawn, and caller contract drives real spawn execution', (t) => {
-  const file = tmp(t);
-  const sequence = [];
-  const origRename = fs.renameSync;
-  t.after(() => {
-    fs.renameSync = origRename;
-  });
-
-  fs.renameSync = (from, to) => {
-    sequence.push('rename');
-    origRename(from, to);
-  };
-  const launcher = () => {
-    sequence.push('spawn');
-    return cp.spawn(process.execPath, ['-e', 'process.exit(0)']);
-  };
-
-  const res = firstLaunch(
-    dec,
-    tkt,
-    { ledger: {}, ledgerFile: file, evidenceData: ev, launcher },
-    reg
-  );
-  assert.equal(res.action, 'LAUNCH');
-  assert.deepEqual(sequence, ['rename', 'spawn']);
-  assert.ok(res.run && res.run.pid);
-  res.run.kill();
-
-  const disk = readLedger(file);
-  assert.equal(disk.ok, true);
-  assert.equal(disk.ledger.launches, 1);
-  assert.equal(disk.ledger.activeWorker.offeringId, 'c1');
-  assert.deepEqual(restartAction(disk.ledger), {
-    action: 'STOP_WORKER',
-    active: disk.ledger.activeWorker,
-    note: 'interrupted worker found on restart',
-  });
-});
-
-test('B49: launch throws leaves launch counted and enables afterFailure recovery', (t) => {
-  const file = tmp(t);
-  const throwingLauncher = () => {
-    const err = new Error('SPAWN_ENOENT');
-    err.code = 'ENOENT';
-    throw err;
-  };
-
-  assert.throws(
-    () =>
-      firstLaunch(
-        dec,
-        tkt,
-        { ledger: {}, ledgerFile: file, evidenceData: ev, launcher: throwingLauncher },
-        reg
-      ),
-    /SPAWN_ENOENT/
-  );
-
-  const disk = readLedger(file);
-  assert.equal(disk.ok, true);
-  assert.equal(disk.ledger.launches, 1);
-  assert.equal(disk.ledger.activeWorker.offeringId, 'c1');
-  assert.ok(disk.ledger.activeWorker.tag.startsWith('TASK-171-'));
-
-  const recovered = afterFailure(
-    dec,
-    tkt,
-    { ledger: disk.ledger, ledgerFile: file, evidenceData: ev },
-    fail('c1', { message: 'SPAWN_ENOENT' }),
-    reg
-  );
-  assert.equal(recovered.worktree, '/w');
-  const diskAfter = readLedger(file);
-  assert.equal(diskAfter.ledger.launches, 1);
-  assert.equal(diskAfter.ledger.failures[0].class, 'UNAVAILABLE_NOW');
-  assert.equal(diskAfter.ledger.activeWorker, undefined);
-});
-
-test('B48+B49: restartAction handles stopped, active worker, ceiling, and fresh ledger', () => {
-  assert.equal(restartAction({ stopped: 'DONE' }).action, 'STOP');
-  assert.equal(
-    restartAction({ stopped: 'FALLBACK_LIMIT', activeWorker: { tag: 'T' } }).action,
-    'STOP_WORKER'
-  );
-  assert.equal(restartAction({ activeWorker: { tag: 'T' } }).action, 'STOP_WORKER');
-  assert.equal(restartAction({ active: { tag: 'T' } }).action, 'STOP_WORKER');
-  assert.equal(restartAction({ launches: 1 }).action, 'STOP');
-  assert.equal(restartAction({}).action, 'FRESH');
-});
-
-// ── C6: Compatibility for legacy "active" field ─────────────────────────
-
-test('C6: readLedger migrates legacy active to activeWorker and saveLedger writes only activeWorker', (t) => {
-  const file = tmp(t);
-  fs.writeFileSync(
-    file,
-    JSON.stringify({
-      launches: 1,
-      fallbacksUsed: 0,
-      active: { offeringId: 'leg-1', tag: 'T-LEGACY' },
-    })
-  );
-  const read = readLedger(file);
+test('old "active" migrates to activeWorker; agreeing aliases in any key order are accepted', (t) => {
+  const f = fixture(t);
+  const legacy = f.valid({ launches: 1 });
+  delete legacy.activeWorker;
+  legacy.active = { tag: 'run-old', offeringId: 'a' };
+  f.write(legacy);
+  const read = readLedger(f.file, f.expect);
   assert.equal(read.ok, true);
-  assert.equal(read.ledger.activeWorker.tag, 'T-LEGACY');
-  assert.equal(read.ledger.active, undefined);
-
-  saveLedger(file, read.ledger);
-  const rawWritten = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.equal(rawWritten.active, undefined);
-  assert.equal(rawWritten.activeWorker.tag, 'T-LEGACY');
-  assert.equal(rawWritten.version, LEDGER_SCHEMA_VERSION);
+  assert.deepEqual(read.ledger.activeWorker, { tag: 'run-old', offeringId: 'a' });
+  assert.equal('active' in read.ledger, false);
+  f.write({
+    ...f.valid({ activeWorker: { tag: 't', offeringId: 'a' } }),
+    active: { offeringId: 'a', tag: 't' },
+  });
+  assert.equal(readLedger(f.file, f.expect).ok, true);
 });
 
-test('C6: route-handoff firstLaunch and afterFailure guard legacy active field', () => {
-  const decision = { workItemId: 'TASK-1', candidates: [{ offeringId: 'a' }] };
-  const ticket = { workItemId: 'TASK-1', maxFallbacks: 1 };
+test('save refuses a ledger its own validation rejects and writes atomically', (t) => {
+  const f = fixture(t);
+  assert.throws(() => saveLedger(f.file, f.valid({ launches: 0, fallbacksUsed: 1 }), f.expect));
+  assert.equal(fs.existsSync(f.file), false);
+  const io = {
+    writeFileSync: fs.writeFileSync,
+    renameSync: () => {
+      throw new Error('crash at rename');
+    },
+  };
+  f.write(f.valid());
+  assert.throws(() => saveLedger(f.file, f.valid({ launches: 1 }), f.expect, io));
+  assert.equal(
+    readLedger(f.file, f.expect).ledger.launches,
+    0,
+    'old ledger intact after a crash at rename'
+  );
+});
 
-  const blocked = firstLaunch(decision, ticket, { ledger: { active: { tag: 'LEGACY-TAG' } } });
-  assert.equal(blocked.action, 'BLOCKED');
-  assert.equal(blocked.reason, 'WORKER_STILL_ACTIVE');
+test('launch intent is persisted before spawn; a failed write means no spawn', (t) => {
+  const f = fixture(t);
+  const out = launchFirst(f.file, f.decision, f.ticket, f.deps);
+  assert.equal(out.action, 'LAUNCH');
+  assert.equal(f.spawned.length, 1);
+  assert.equal(f.spawned[0].onDisk.launches, 1);
+  assert.equal(f.spawned[0].onDisk.activeWorker.tag, f.spawned[0].meta.tag);
 
-  const ctx = { ledger: { active: { offeringId: 'other', tag: 'LEGACY-TAG' }, worktree: '/w' } };
-  const stopped = afterFailure(decision, ticket, ctx, {
-    offeringId: 'a',
-    phase: 'after-launch',
-    workerStopped: true,
-  });
-  assert.equal(stopped.action, 'STOP');
-  assert.equal(stopped.reason, 'WORKER_STILL_ACTIVE');
-  assert.equal(ctx.ledger.active.tag, 'LEGACY-TAG');
+  const g = fixture(t);
+  const io = {
+    readFileSync: fs.readFileSync,
+    writeFileSync: () => {
+      throw new Error('disk full');
+    },
+    renameSync: fs.renameSync,
+  };
+  assert.throws(() => launchFirst(g.file, g.decision, g.ticket, { ...g.deps, io }));
+  assert.equal(g.spawned.length, 0, 'no receipt, no spawn');
+});
 
-  const ctx2 = { ledger: { active: { offeringId: 'a', tag: 'LEGACY-TAG' }, worktree: '/w' } };
-  afterFailure(decision, ticket, ctx2, {
-    offeringId: 'a',
-    phase: 'after-launch',
-    workerStopped: true,
-  });
-  assert.equal(ctx2.ledger.active, undefined);
+test('restart: an interrupted worker blocks relaunch; a launch that throws keeps it counted', (t) => {
+  const f = fixture(t);
+  const throwing = {
+    ...f.deps,
+    spawn: () => {
+      throw new Error('launcher crashed');
+    },
+  };
+  assert.throws(() => launchFirst(f.file, f.decision, f.ticket, throwing));
+  const after = readLedger(f.file, f.expect).ledger;
+  assert.equal(after.launches, 1, 'the attempt stays counted');
+  assert.ok(after.activeWorker, 'the possibly-running worker stays known');
+  const again = launchFirst(f.file, f.decision, f.ticket, f.deps);
+  assert.deepEqual([again.action, again.reason], ['BLOCKED', 'STOP_WORKER']);
+  assert.equal(f.spawned.length, 0);
+});
+
+test('the fallback ceiling holds across a restart between failure and relaunch', (t) => {
+  const f = fixture(t);
+  assert.equal(launchFirst(f.file, f.decision, f.ticket, f.deps).action, 'LAUNCH');
+  const second = launchAfterFailure(f.file, f.decision, f.ticket, f.failure('a', 429), f.deps);
+  assert.equal(second.action, 'LAUNCH');
+  const mid = readLedger(f.file, f.expect).ledger;
+  assert.deepEqual([mid.launches, mid.fallbacksUsed], [2, 1]);
+  // coordinator restarts here: only the file survives
+  const third = launchAfterFailure(f.file, f.decision, f.ticket, f.failure('b', 402), f.deps);
+  assert.deepEqual([third.action, third.reason], ['STOP', 'FALLBACK_LIMIT']);
+  const end = readLedger(f.file, f.expect).ledger;
+  assert.deepEqual([end.launches, end.stopped, end.activeWorker], [2, 'FALLBACK_LIMIT', null]);
+  assert.equal(f.spawned.length, 2);
+  assert.equal(launchFirst(f.file, f.decision, f.ticket, f.deps).action, 'BLOCKED');
 });

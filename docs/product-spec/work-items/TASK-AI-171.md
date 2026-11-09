@@ -486,29 +486,6 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 
 ## PR 07 — Fallback ceiling survives crashes and restarts (2026-11-09)
 
-Scope: Rows B46, B49 and conflict C6.
-Files: `tools/ai-brain/coordinator-ledger.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js`.
+Rows B46, B49, conflict C6. `tools/ai-brain/coordinator-ledger.js` is the only owner of the ledger schema and the only supervised launch path: read and validate against the caller's item and worktree, let `route-handoff.js` decide (unchanged, pure), persist the launch intent, then spawn. A missing file is a fresh ticket; any present but invalid file (truncated, missing or inconsistent counters, wrong item or worktree, unknown version, conflicting aliases) is `LEDGER_UNREADABLE` and blocks. Save refuses anything its own validation rejects and writes via temp file and rename. Old `active` migrates to `activeWorker` only when the aliases agree.
 
-Outcome: A versioned schema (`LEDGER_SCHEMA_VERSION = 1`) shared with `route-handoff.js` validates decision ledgers. Truncated JSON, inconsistent counters, wrong item/worktree, or unknown version fail closed as `LEDGER_UNREADABLE`, preventing budget ceiling resets. Writes are atomic via PID-tagged temporary files and rename. `recordLaunchIntent` writes launch count, worktree, and `activeWorker` atomically in one record before worker spawn so crash recovery preserves the counted launch and active worker identity. Old-format ledgers using `active` are migrated on read and guarded by `firstLaunch`/`afterFailure` for backwards compatibility, writing only `activeWorker`.
-
-Evidence: 13 new unit tests pass in `task-ai-171-route-pr07-ledger.test.js` (fail on base 2ce2bb72 due to missing module and unguarded legacy active; 13/13 pass on HEAD). Existing handoff suites pass: `task-ai-171-fallback-chain.test.js` (7/7 pass), `task-ai-171-route-handoff.test.js` (26/26 pass), plus 63 tests across related suites (`route-pr01-consumer`, `route-pr12-options`, `auth-scope`, `offline-replay`, `p5-dispatch-liveness`). Prettier 3.9.6 format check passes.
-
-## PR 07 repair outcome (2026-11-09)
-
-Scope: Repair findings 1–6 from PR #557 review on base 9e31d2b6.
-Files changed: `tools/ai-brain/coordinator-ledger.js`, `tools/ai-brain/route-handoff.js`, `tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js`.
-
-Outcome:
-- Shared validation wired in `route-handoff.js` (`firstLaunch` and `afterFailure`); missing, unknown-version, and inconsistent ledger states fail closed as `LEDGER_UNREADABLE`, preventing unauthorized launches (Finding 1).
-- `validateLedger` requires counters for versioned records, and rejects counted ledgers missing expected item/worktree; `readLedger` treats existing `{}` as `LEDGER_UNREADABLE` (Finding 2).
-- Contradictory version, item, and worker aliases fail closed without rewriting disk files (Finding 3).
-- `recordLaunchIntent` is wired into `firstLaunch` and `afterFailure` before spawn; atomic rename precedes spawn, and write failures throw to prevent spawn (Finding 4).
-- `restartAction` checks active worker before stopped state, ensuring interrupted workers are handled via `STOP_WORKER` and not skipped (Finding 5).
-- Boundary injection tests drive throwing launcher and real child process spawn, verifying disk state retains launch counts and worker identity upon throw (Finding 6).
-
-Evidence:
-- `task-ai-171-route-pr07-ledger.test.js`: 14/14 pass (repaired tests fail on base 9e31d2b6, pass on HEAD).
-- Existing suites importing changed modules: `task-ai-171-fallback-chain.test.js` (7/7 pass), `task-ai-171-route-handoff.test.js` (26/26 pass), `task-ai-171-route-pr01-consumer.test.js` (11/11 pass), `task-ai-171-route-pr12-options.test.js` (10/10 pass), `task-ai-171-auth-scope.test.js` (27/27 pass), `task-ai-171-offline-replay.test.js` (4/4 pass), `p5-dispatch-liveness.test.js` (11/11 pass). Total: 110/110 pass.
-- Prettier 3.9.6 check passes cleanly.
-- Diff under ~350 lines (328 insertions across 3 code/test files).
-- No-hardcode guard blocked by environment (`Cannot find package '@typescript-eslint/parser'`); unverified in this sandbox.
+Evidence: `node --test tools/ai-brain/test/task-ai-171-route-pr07-ledger.test.js tools/ai-brain/test/task-ai-171-fallback-chain.test.js tools/ai-brain/test/task-ai-171-route-handoff.test.js` → 39/39 pass; the PR 07 file fails on base (module absent). Redesigned after two review rounds (author: Claude, routing stalled with no live writer).

@@ -8,7 +8,6 @@ const { upstreamAuthSignal } = require('./failure-classifier');
 const { getQuotaScopeState, isScopeBlocked } = require('./quota-scan');
 const { proofLevelOf, ProofRank, Status } = require('./evidence');
 const { decisionRow } = require('./dispatch-output');
-const { validateLedger, recordLaunchIntent, saveLedger } = require('./coordinator-ledger');
 
 /** Adapt dispatch JSON without interpreting keys, scoring, pruning or choosing a writer. */
 function decisionFromDispatch(input, options = {}) {
@@ -226,30 +225,8 @@ function firstLaunch(decision, ticket, context, registry) {
   if (decision.workItemId !== ticket.workItemId) {
     return { action: 'BLOCKED', reason: 'DECISION_FOR_OTHER_TICKET', rejected: [] };
   }
-  const ctx = context || {};
-  if ('ledger' in ctx) {
-    if (!ctx.ledger || ctx.ledger.ok === false) {
-      return {
-        action: 'BLOCKED',
-        reason: ctx.ledger?.reason || 'LEDGER_UNREADABLE',
-        rejected: decision.rejected || [],
-      };
-    }
-    const v = validateLedger(ctx.ledger, {
-      item: ticket.workItemId,
-      worktree: ticket.request?.cwd,
-    });
-    if (!v.ok) {
-      return {
-        action: 'BLOCKED',
-        reason: v.reason || 'LEDGER_UNREADABLE',
-        rejected: decision.rejected || [],
-      };
-    }
-  }
-  const ledger = ctx.ledger || {};
-  const activeWorker = ledger.activeWorker || ledger.active;
-  if (activeWorker) {
+  const ledger = (context && context.ledger) || {};
+  if (ledger.activeWorker) {
     return { action: 'BLOCKED', reason: 'WORKER_STILL_ACTIVE', rejected: [] };
   }
   if (
@@ -277,33 +254,7 @@ function firstLaunch(decision, ticket, context, registry) {
     mode: ticket.mode || MODE,
     offeringId: chosen.offeringId,
   };
-  const launch = launchFromDecision(decision, request, registry);
-  const ledgerFile = ctx.ledgerFile || ctx.ledgerPath;
-  if (ledgerFile) {
-    const chosenRoute =
-      (decision.candidates || []).find((c) => c.offeringId === chosen.offeringId) || {};
-    const tag =
-      ticket.request?.tag ||
-      (ledger.activeWorker && ledger.activeWorker.tag) ||
-      `${ticket.workItemId}-${ctx.now || Date.now()}`;
-    recordLaunchIntent(
-      ledger,
-      {
-        offeringId: chosen.offeringId,
-        upstream: chosenRoute.upstream || chosenRoute.gateway || chosen.offeringId,
-        tag,
-        item: ticket.workItemId,
-        worktree: ticket.request?.cwd || ledger.worktree,
-      },
-      ledgerFile
-    );
-  }
-  if (ctx.launcher || ctx.spawn) {
-    const spawnFn = ctx.launcher || ctx.spawn;
-    const run = spawnFn(launch);
-    return { action: 'LAUNCH', launch, run, rejected };
-  }
-  return { action: 'LAUNCH', launch, rejected };
+  return { action: 'LAUNCH', launch: launchFromDecision(decision, request, registry), rejected };
 }
 
 /**
@@ -319,27 +270,8 @@ function afterFailure(decision, ticket, context, failure, registry) {
   const ctx = context || {};
   const ledger = ctx.ledger;
   const f = failure || {};
-  if (!ledger || ledger.ok === false) {
-    return {
-      action: 'STOP',
-      reason: ledger?.reason || 'LEDGER_UNREADABLE',
-      worktree: f.worktree,
-    };
-  }
-  const v = validateLedger(ledger, {
-    item: ticket?.workItemId,
-    worktree: f.worktree || ledger.worktree || ticket?.request?.cwd,
-  });
-  if (!v.ok) {
-    return {
-      action: 'STOP',
-      reason: v.reason || 'LEDGER_UNREADABLE',
-      worktree: f.worktree || ledger.worktree,
-    };
-  }
   const beforeLaunch = f.phase === 'before-launch';
-  const activeWorker = ledger.activeWorker || ledger.active;
-  if (activeWorker && (beforeLaunch || activeWorker.offeringId !== f.offeringId)) {
+  if (ledger.activeWorker && (beforeLaunch || ledger.activeWorker.offeringId !== f.offeringId)) {
     return { action: 'STOP', reason: 'WORKER_STILL_ACTIVE', worktree: ledger.worktree };
   }
   if (!beforeLaunch && f.workerStopped !== true) {
@@ -350,7 +282,6 @@ function afterFailure(decision, ticket, context, failure, registry) {
     };
   }
   delete ledger.activeWorker;
-  delete ledger.active;
   const route = (decision.candidates || []).find((c) => c.offeringId === f.offeringId) || {};
   const viaGateway = route.gateway && route.gateway !== f.upstream;
   const authClass = {
@@ -378,8 +309,6 @@ function afterFailure(decision, ticket, context, failure, registry) {
   });
   const kept = f.worktree || ledger.worktree;
   if (kept) ledger.worktree = kept;
-  const ledgerFile = ctx.ledgerFile || ctx.ledgerPath;
-  if (ledgerFile) saveLedger(ledgerFile, ledger);
   const used = Number(ledger.fallbacksUsed || 0);
   if (used >= Number(ticket.maxFallbacks)) {
     return { action: 'STOP', reason: 'FALLBACK_LIMIT', used, worktree: kept };
@@ -388,16 +317,8 @@ function afterFailure(decision, ticket, context, failure, registry) {
     ? { ...ticket, request: { ...ticket.request, cwd: kept, newWorkspace: false } }
     : ticket;
   const next = firstLaunch(decision, resumed, ctx, registry);
-  if (next.action === 'LAUNCH') {
-    ledger.fallbacksUsed = used + 1;
-    if (ledgerFile) saveLedger(ledgerFile, ledger);
-  }
+  if (next.action === 'LAUNCH') ledger.fallbacksUsed = used + 1;
   return { ...next, worktree: kept };
-}
-
-function authorizedLaunch(decision, ticket, context, launcher, registry) {
-  const ctx = { ...context, launcher: launcher || context?.launcher };
-  return firstLaunch(decision, ticket, ctx, registry);
 }
 
 module.exports = {
@@ -406,5 +327,4 @@ module.exports = {
   screenRoutes,
   firstLaunch,
   afterFailure,
-  authorizedLaunch,
 };
