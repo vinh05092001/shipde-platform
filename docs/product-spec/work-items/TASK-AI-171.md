@@ -503,6 +503,13 @@ Operator finding 61 (context security, separate from routing; `.oc/item61.md:1`)
 - A name AA does not list takes its prefix family (`glm-5` -> `glm-5-3*`) at the lowest family score; trailing segments drop one at a time and a family needs two segments. Dispatch FEAT-CAR-01: 187 of 236 models scored. Risk: an older model can inherit a newer family floor (`claude-opus-4-6` from `claude-opus-5*`); label `aa-origin-family`.
 - Vendor floor (operator 2026-11-08, MiniMax-M2.7 is deprecated on AA without an index): when no family matches, the vendor lowest published score, label `aa-origin-vendor`. Dispatch: 207 of 236 models scored.
 
+## PR 08 outcome — Record worker completion and stop before fallback (2026-11-09)
+
+Scope: rows B26, B51 and B52 (`tools/ai-brain/coordinator-completion.js`, `tools/ai-brain/failure-classifier.js`, `tools/ai-brain/test/task-ai-171-route-pr08-completion.test.js`).
+- B51: `validateWorkerTimeout` rejects zero, NaN, negative and non-numeric values with `WORKER_TIMEOUT_INVALID`; `awaitWorkerCompletion` and `superviseWorkerCompletion` clear the timer on exit, ignore late exit events after timeout, call the injected stop-confirmation callback, and block fallback through `route-handoff.afterFailure` until termination is confirmed.
+- B52: worker output is classified via `failure-classifier` (`extractProviderErrorText`, `extractInnerStatus`, `classifyFailure`); exit 0 with an `Error:` line or without a run-bound commit/artifact is not `WORKER_FINISHED`; inner statuses (including inner 503 wrapped by outer status and outer 503 wrapping inner status) govern classification; durable records keep only `code`, `status`, `category` and `scope` with no raw tail.
+- B26: `evaluateLaneHold` and `activeHeldLanes` require an explicit `holdDurationMs` input (`HOLD_DURATION_INVALID`), release a held lane only on evidence bound to the matching `runId` (its commit, result or ended marker) or confirmed stop after expiry, and distinguish run-ended without commit (`COMPLETED_EMPTY`) from `WORKER_FINISHED`.
+- Evidence: `task-ai-171-route-pr08-completion.test.js` fails 0/6 on base `2ce2bb72` and passes 6/6 on HEAD; offline injected readers only, no live worker spawn.
 ## PR 13 outcome — refresh catalogues and snapshots outside writer selection (2026-11-09)
 
 Operator-assigned author scope: `tools/ai-brain/{discovery,scoring-policy,public-catalogue-cache,cli}.js`, `tools/ai-brain/test/task-ai-171-route-pr13-refresh.test.js`, plus this section.
