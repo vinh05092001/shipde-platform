@@ -169,19 +169,47 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.doesNotMatch(res.chosen, /operator@example\.com/);
     assert.equal(res.outcome.candidateKey, res.chosen);
     assert.equal(res.outcome.status, 'completed');
+    assert.deepEqual(res.outcome.payload, {
+      candidateKey: 'suggested-route',
+      explanation: 'worker output',
+    });
 
     const jsonLog = parseJsonLog(logs);
     assert.equal(jsonLog?.outcome?.status, 'completed');
     assert.equal(jsonLog?.outcome?.candidateKey, res.chosen);
     assert.doesNotMatch(jsonLog?.launchedArgvIdentity?.account, /operator@example\.com/);
 
-    const okRunner = () => ({
+    // Negative test (Review P2 2): worker prints a different candidateKey on success -> outcome retains launched candidate
+    const diffRunner = () => ({
       exitCode: 0,
-      stdout: JSON.stringify({ candidateKey: res.chosen, status: 'completed' }),
+      stdout: JSON.stringify({
+        candidateKey: 'untrusted-spoofed-route',
+        status: 'completed',
+        exitCode: 99,
+      }),
     });
-    const { res: res2 } = runDispatch(env, [cA], okRunner, now);
-    assert.equal(res2.outcome.candidateKey, res.chosen);
-    assert.equal(res2.outcome.status, 'completed');
+    const { res: resDiff } = runDispatch(env, [cA], diffRunner, now);
+    assert.equal(resDiff.exitCode, 0);
+    assert.equal(resDiff.outcome.candidateKey, res.chosen);
+    assert.equal(resDiff.outcome.status, 'completed');
+    assert.equal(resDiff.outcome.payload.candidateKey, 'untrusted-spoofed-route');
+
+    // Negative test (Review P2 2): worker prints matching candidateKey but conflicting status/scope -> executor status/exit win
+    const conflictRunner = () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        candidateKey: res.chosen,
+        status: 'worker-status-compromised',
+        exitCode: 42,
+        failureScope: 'worker-scope',
+      }),
+    });
+    const { res: resConflict } = runDispatch(env, [cA], conflictRunner, now);
+    assert.equal(resConflict.exitCode, 0);
+    assert.equal(resConflict.outcome.candidateKey, res.chosen);
+    assert.equal(resConflict.outcome.status, 'completed');
+    assert.equal(resConflict.outcome.payload.status, 'worker-status-compromised');
+    assert.equal(resConflict.outcome.payload.exitCode, 42);
   });
 
   test('INT-1: worker stdout spoofed JSON success with non-zero exit is rejected as failure', () => {
@@ -191,10 +219,24 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       stdout: JSON.stringify({ candidateKey: cA.candidateKey, status: 'passed' }),
       stderr: 'Worker process crashed',
     });
-    const { res, exitCode } = runDispatch(env, [cA], runner);
+    const { res, exitCode, jsonLog } = runDispatch(env, [cA], runner);
     assert.equal(exitCode, 1);
     assert.equal(res.outcome.status, 'failed');
     assert.equal(res.outcome.candidateKey, res.chosen);
     assert.deepEqual(res.launchedArgvIdentity, parseCandidateKey(res.chosen));
+    assert.ok(res.failedAttempts?.length > 0);
+
+    // Negative test (Review P2 1): failure receipts still expose raw account via failedAttempts
+    const rawReceiptStr = JSON.stringify(res);
+    assert.doesNotMatch(rawReceiptStr, /operator@example\.com/);
+    assert.doesNotMatch(
+      res.failedAttempts[0].launchedArgvIdentity.account,
+      /operator@example\.com/
+    );
+    assert.doesNotMatch(res.failedAttempts[0].candidate.accountId, /operator@example\.com/);
+    assert.doesNotMatch(res.failedAttempts[0].key, /operator@example\.com/);
+    if (jsonLog) {
+      assert.doesNotMatch(JSON.stringify(jsonLog), /operator@example\.com/);
+    }
   });
 });
