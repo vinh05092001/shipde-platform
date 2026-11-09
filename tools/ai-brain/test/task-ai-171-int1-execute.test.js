@@ -214,4 +214,39 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(res2.outcome.candidateKey, res.chosen);
     assert.equal(res2.outcome.status, 'completed');
   });
+
+  test('INT-1: worker stdout spoofed JSON success with non-zero exit is rejected as failure', () => {
+    const candidateA = makeCandidate('m-alpha', 'ag', 'operator@example.com', 1, 90);
+    const now = Date.now();
+    let exitCode = -1;
+    const res = dispatchCommand(
+      {
+        execute: true,
+        json: true,
+        cwd: env.tempWorktree,
+        'prompt-file': env.promptFile,
+        item: 'TASK-AI-171-TEST',
+      },
+      {
+        ...env.deps(now, [candidateA]),
+        run: () => ({
+          exitCode: 1,
+          stdout: JSON.stringify({
+            candidateKey: candidateA.candidateKey,
+            status: 'passed',
+          }),
+          stderr: 'Worker process crashed',
+        }),
+        exit: (code) => {
+          exitCode = code;
+        },
+        log: () => {},
+      }
+    );
+
+    assert.equal(exitCode, 1);
+    assert.equal(res.outcome.status, 'failed');
+    assert.equal(res.outcome.candidateKey, res.chosen);
+    assert.deepEqual(res.launchedArgvIdentity, parseCandidateKey(res.chosen));
+  });
 });

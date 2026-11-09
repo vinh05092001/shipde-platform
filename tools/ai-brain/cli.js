@@ -2353,13 +2353,16 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
-function isValidWorkerOutcome(parsed, expectedCandidateKey) {
+function isValidWorkerOutcome(parsed, expectedCandidateKey, expectedStatus = 'completed') {
   return Boolean(
     parsed &&
     typeof parsed === 'object' &&
     parsed.candidateKey === expectedCandidateKey &&
     typeof parsed.status === 'string' &&
-    parsed.status.length > 0
+    (expectedStatus
+      ? parsed.status === expectedStatus ||
+        (expectedStatus === 'completed' && parsed.status === 'passed')
+      : parsed.status.length > 0)
   );
 }
 
@@ -3776,14 +3779,11 @@ function dispatchCommand(args, deps = {}) {
             }
           : null;
       } catch (_) {}
-      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
-      const outcome = isValidWorkerOutcome(parsedOutcome, finalChosenKey)
-        ? parsedOutcome
-        : structuredOutcome(finalChosenKey, launchRes, classification, {
-            status: 'failed',
-            checkpoint: checkpointFile,
-            reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
-          });
+      const outcome = structuredOutcome(finalChosenKey, launchRes, classification, {
+        status: 'failed',
+        checkpoint: checkpointFile,
+        reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+      });
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
