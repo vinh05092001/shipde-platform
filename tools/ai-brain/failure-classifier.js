@@ -865,7 +865,7 @@ function classifyFailure(input) {
     const stated = input.authLayer === 'connection' && !input.connectionId ? null : input.authLayer;
     const layer =
       stated ||
-      (/no active credentials/i.test(text) ? 'upstream-credential' : null) ||
+      (/no active credentials for provider:\s*\S+/i.test(text) ? 'upstream-credential' : null) ||
       (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
     const byLayer = {
       'gateway-key': [Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT, HumanAction.REQUIRED],
@@ -885,9 +885,13 @@ function classifyFailure(input) {
     });
   }
 
+  const is9RouterNoCreds =
+    (!effectiveStatus || effectiveStatus === 401) &&
+    /no active credentials for provider:\s*\S+/i.test(text);
+
   // Account auth failure on 401 or auth text with account
   if (
-    !/no active credentials/i.test(text) &&
+    !is9RouterNoCreds &&
     ((effectiveStatus === 401 && accountId && accountId !== '*') ||
       /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
         text
@@ -906,7 +910,8 @@ function classifyFailure(input) {
   // Case 5: upstream credential problem (401 unauthorized on upstream)
   if (
     effectiveStatus === 401 ||
-    /invalid.*token|invalid.*credential|no active credentials/i.test(text)
+    /invalid.*token|invalid.*credential/i.test(text) ||
+    is9RouterNoCreds
   ) {
     return addRetryFields({
       cause: Cause.UPSTREAM_CREDENTIAL,
@@ -965,12 +970,14 @@ function classifyFailure(input) {
   }
 
   // Case 9: genuine capacity (503 with "no capacity available", or concurrency capacity)
-  if (
-    (effectiveStatus === 503 || exitCode !== 0 || /concurrency\s*capacity/i.test(text)) &&
-    /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity|concurrency\s*capacity/i.test(
-      text
-    )
-  ) {
+  const isGenuineCapacity =
+    (effectiveStatus === 503 || exitCode !== 0) &&
+    /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity/i.test(text);
+  const is9RouterConcurrency =
+    (!effectiveStatus || effectiveStatus === 503 || exitCode !== 0) &&
+    /(?:has reached its\s+)?concurrency\s+capacity/i.test(text);
+
+  if (isGenuineCapacity || is9RouterConcurrency) {
     const resetMs = parseResetTime(text);
     return addRetryFields({
       cause: Cause.GENUINE_CAPACITY,
