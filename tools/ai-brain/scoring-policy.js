@@ -7,7 +7,10 @@ const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const text = (v) => typeof v === 'string' && v.trim().length > 0;
 
 // Values and dimension names belong to the operator's versioned data, not code.
-function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.json')) {
+function loadScoringPolicy(
+  file = path.join(__dirname, 'data', 'scoring-policy.json'),
+  options = {}
+) {
   let policy;
   try {
     policy = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -24,6 +27,8 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
     !text(policy.rationale) ||
     !Number.isFinite(policy.maxAgeMs) ||
     policy.maxAgeMs <= 0 ||
+    (policy.maxFutureSkewMs !== undefined &&
+      (!Number.isFinite(policy.maxFutureSkewMs) || policy.maxFutureSkewMs < 0)) ||
     !object(policy.dimensions) ||
     !Object.keys(policy.dimensions).length ||
     Object.entries(policy.dimensions).some(
@@ -47,18 +52,48 @@ function loadScoringPolicy(file = path.join(__dirname, 'data', 'scoring-policy.j
   let data = null;
   if (policy.priorsFile) {
     // The AA snapshot is fetched at runtime (aa-snapshot.js), never committed.
+    const snapPath = path.resolve(path.dirname(file), policy.priorsFile);
+    let stat;
     try {
-      data = JSON.parse(
-        fs.readFileSync(path.resolve(path.dirname(file), policy.priorsFile), 'utf8')
-      );
+      stat = fs.statSync(snapPath);
     } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
-      // No snapshot: the policy is inactive and dispatch keeps the profile scorer it had before,
-      // reported by status, rather than refusing every route.
       return {
         scoringPolicy: undefined,
         scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
-        scoringPriorsStatus: 'AA_SNAPSHOT_MISSING',
+        scoringPriorsStatus: err.code === 'ENOENT' ? 'AA_SNAPSHOT_MISSING' : 'AA_SNAPSHOT_CORRUPT',
+      };
+    }
+    try {
+      data = JSON.parse(fs.readFileSync(snapPath, 'utf8'));
+    } catch {
+      return {
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
+        scoringPriorsStatus: 'AA_SNAPSHOT_CORRUPT',
+      };
+    }
+    if (!data || !Array.isArray(data.rows)) {
+      return {
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
+        scoringPriorsStatus: 'AA_SNAPSHOT_CORRUPT',
+      };
+    }
+    // Freshness has one definition: the snapshot's own observation timestamp when
+    // it parses, otherwise the file mtime, so a copied or restored snapshot with a
+    // recent mtime is never fresh. Injecting a clock changes the current time, never
+    // the freshness definition. The permitted future-clock skew is operator
+    // configuration (`policy.maxFutureSkewMs`, override `options.maxFutureSkewMs`),
+    // never a code constant; unconfigured means no future tolerance here.
+    const now = Number((options && options.now) ?? Date.now());
+    const obs = data.observedAt ? Date.parse(data.observedAt) : NaN;
+    const age = Number.isFinite(obs) ? now - obs : now - stat.mtimeMs;
+    const maxFutureSkewMs = Number((options && options.maxFutureSkewMs) ?? policy.maxFutureSkewMs);
+    if (Number.isFinite(policy.maxAgeMs) && (age > policy.maxAgeMs || age < -maxFutureSkewMs)) {
+      return {
+        scoringPolicy: undefined,
+        scoringPolicyStatus: 'SCORING_POLICY_INACTIVE',
+        scoringPriorsStatus: 'AA_SNAPSHOT_STALE',
       };
     }
   }

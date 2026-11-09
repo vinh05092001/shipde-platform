@@ -388,7 +388,9 @@ test('AA join binds the observation version and labels how each route was matche
     },
   };
   fs.writeFileSync(f.policyFile, JSON.stringify(p));
-  const loaded = loadScoringPolicy(f.policyFile);
+  // The snapshot's observedAt is the fixed test clock; inject it, since PR 13
+  // freshness reads the observation, never the file's recent write time.
+  const loaded = loadScoringPolicy(f.policyFile, { now });
   const via = {
     'synthetic-high': undefined,
     synthetic: 'aa-lowest-effort',
