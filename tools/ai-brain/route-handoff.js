@@ -221,14 +221,24 @@ function firstLaunch(decision, ticket, context, registry) {
   const claim = ctx.worktreeClaim || ctx.claim;
   if (cwd) {
     const claimMod = require('./coordinator-claim');
-    const check = claimMod.verifyWorktreeClaim(cwd, claim, ctx);
-    if (!check.ok && check.reason !== 'WORKTREE_PATH_UNRESOLVED') {
-      return {
-        action: 'STOP',
-        reason: check.reason,
-        worktree: check.worktree || cwd,
-        rejected: [],
-      };
+    // Only enforce claim when the worktree path resolves to a real directory;
+    // an unresolvable cwd (e.g. not yet created) is handled downstream.
+    let target;
+    try {
+      target = claimMod.worktreeId(cwd, ctx);
+    } catch {
+      target = null;
+    }
+    if (target) {
+      const check = claimMod.verifyWorktreeClaim(cwd, claim, ctx);
+      if (!check.ok) {
+        return {
+          action: 'STOP',
+          reason: check.reason,
+          worktree: check.worktree || cwd,
+          rejected: [],
+        };
+      }
     }
   }
   if (decision.controllerStatus && decision.controllerStatus !== 'READY') {
