@@ -1221,10 +1221,25 @@ function qualityScoreOf(candidate, now) {
 function resolveEffectiveQuality(candidate, assessment, ctx, options) {
   const now = (ctx && ctx.now) || Date.now();
   const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  const explicitQuality =
+    candidate &&
+    candidate.quality !== null &&
+    candidate.quality !== undefined &&
+    Number.isFinite(Number(candidate.quality))
+      ? Number(candidate.quality)
+      : null;
+  const measuredQuality =
+    candidate?.measurements?.quality != null
+      ? Number.isFinite(Number(candidate.measurements.quality.value))
+        ? Number(candidate.measurements.quality.value)
+        : Number.isFinite(Number(candidate.measurements.quality))
+          ? Number(candidate.measurements.quality)
+          : null
+      : null;
+  const internalQuality = explicitQuality !== null ? explicitQuality : measuredQuality;
   if (candidate && prior) {
     candidate.priorUnknown = Boolean(prior.priorUnknown || prior.score === null);
   }
-  const internalQuality = qualityScoreOf(candidate, now);
   const priorUsable =
     prior &&
     !prior.stale &&
@@ -1256,11 +1271,22 @@ function resolveEffectiveQuality(candidate, assessment, ctx, options) {
       : internalQuality;
   const isQualityUnknown = quality === null || !Number.isFinite(quality);
   const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
+  const qualitySource =
+    effectivePriorUsable && priorHasScore
+      ? internalQuality !== null
+        ? 'blended'
+        : prior.source || 'prior'
+      : explicitQuality !== null
+        ? 'explicit'
+        : measuredQuality !== null
+          ? candidate.measurements?.quality?.source || 'measurement'
+          : undefined;
 
   if (options && options.details) {
     return {
       quality,
       qualityLabel,
+      qualitySource,
       isQualityUnknown,
       rawQualityWeight,
       priorQualityWeight,

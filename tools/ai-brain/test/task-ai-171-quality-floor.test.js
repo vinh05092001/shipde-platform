@@ -460,3 +460,285 @@ test('TASK-AI-171 P1 (b): active scoringPolicy with below-floor effective qualit
   const rejection = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
   assert.ok(rejection, 'rejection reason must be QUALITY_FLOOR_NOT_MET');
 });
+
+// --- QF-PROOF-VS-QUALITY Tests ---
+
+test('TASK-AI-171 QF (legacy): candidate with prior 15 and passed API evidence is still REJECTED under floor 70', () => {
+  const lowPriors = buildPriors([
+    {
+      canonical: 'low-model',
+      codingTier: 'T4',
+      reviewTier: 'T4',
+      score: 15,
+      benchmarks: [{ name: 'aaCodingIndex', score: 15 }],
+    },
+  ]);
+  const candidate = makeCandidate('low-model', {
+    evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+  });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment();
+
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: lowPriors,
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.equal(result.chosen, null);
+  assert.equal(result.ranking.length, 0);
+  const rej = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
+  assert.ok(rej, 'candidate must be rejected with QUALITY_FLOOR_NOT_MET');
+});
+
+test('TASK-AI-171 QF (legacy): proof-only evidence gives quality UNKNOWN, admitted under floor 70, and ranked after known candidate', () => {
+  const priors = buildPriors([
+    {
+      canonical: 'known-quality-model',
+      codingTier: 'T1',
+      reviewTier: 'T1',
+      score: 85,
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 85 },
+        { name: 'aaAgenticIndex', score: 85 },
+      ],
+    },
+  ]);
+  const knownCandidate = makeCandidate('known-quality-model', {
+    upstream: 'up-known',
+    accountId: 'acc-known',
+    quotaScope: 'acc-known',
+    quality: 85,
+  });
+  const proofOnlyCandidate = makeCandidate('proof-only-model', {
+    upstream: 'up-proof',
+    accountId: 'acc-proof',
+    quotaScope: 'acc-proof',
+    evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+  });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment();
+
+  const result = routing.rankForProfile([proofOnlyCandidate, knownCandidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors,
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.equal(result.ranking.length, 2, 'both candidates must be admitted');
+  assert.ok(
+    result.ranking[0].candidateKey.includes('known-quality-model'),
+    'known candidate ranks first'
+  );
+  assert.ok(
+    result.ranking[1].candidateKey.includes('proof-only-model'),
+    'proof-only ranks after known'
+  );
+  assert.equal(
+    result.ranking[1].qualityLabel,
+    'QUALITY_UNKNOWN',
+    'proof-only candidate has QUALITY_UNKNOWN'
+  );
+  assert.equal(
+    result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined
+  );
+
+  // Alone: admitted and chosen, reason says unknown
+  const solo = routing.rankForProfile([proofOnlyCandidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+  assert.ok(solo.chosen, 'proof-only candidate must be chosen when alone');
+  assert.match(solo.reason, /score chưa rõ/);
+});
+
+test('TASK-AI-171 QF (legacy): candidate with valid quality 85 is eligible under floor 70', () => {
+  const candidate = makeCandidate('valid-85-model', {
+    quality: 85,
+    evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+  });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment();
+
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.ok(result.chosen);
+  assert.equal(result.ranking.length, 1);
+  assert.equal(result.ranking[0].scoreBreakdown.quality, 85);
+});
+
+test('TASK-AI-171 QF (active policy): candidate with prior 15 and passed API evidence is still REJECTED under floor 70', () => {
+  const activeScoringPolicy = {
+    version: 'fixture-v1',
+    source: 'fixture://policy',
+    rationale: 'Synthetic quality policy',
+    maxAgeMs: 100000,
+    dimensions: {
+      quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+    },
+  };
+  const lowPriors = buildPriors([
+    {
+      canonical: 'low-policy-model',
+      codingTier: 'T4',
+      reviewTier: 'T4',
+      score: 15,
+      benchmarks: [{ name: 'aaCodingIndex', score: 15 }],
+    },
+  ]);
+  const candidate = makeCandidate('low-policy-model', {
+    evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+  });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment({ scoringPolicy: activeScoringPolicy });
+
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: lowPriors,
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.equal(result.chosen, null);
+  assert.equal(result.ranking.length, 0);
+  const rej = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
+  assert.ok(rej, 'candidate must be rejected with QUALITY_FLOOR_NOT_MET');
+});
+
+test('TASK-AI-171 QF (active policy): proof-only evidence gives quality UNKNOWN, admitted under floor 70, ranked after known', () => {
+  const activeScoringPolicy = {
+    version: 'fixture-v1',
+    source: 'fixture://policy',
+    rationale: 'Synthetic quality policy',
+    maxAgeMs: 100000,
+    dimensions: {
+      quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+      latency: { weight: 1, min: 0, max: 1000, unit: 'ms', direction: 'lower' },
+    },
+  };
+  const knownCandidate = makeCandidate('known-policy-model', {
+    upstream: 'up-known-pol',
+    accountId: 'acc-known-pol',
+    quotaScope: 'acc-known-pol',
+    modelVersion: 'v1',
+    quality: 85,
+    measurements: {
+      quality: {
+        value: 85,
+        unit: 'points',
+        source: 'benchmark',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/known-policy-model',
+        modelVersion: 'v1',
+      },
+      latency: {
+        value: 300,
+        unit: 'ms',
+        source: 'live',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/known-policy-model',
+        modelVersion: 'v1',
+      },
+    },
+  });
+  const proofOnlyCandidate = makeCandidate('proof-only-policy-model', {
+    upstream: 'up-proof-pol',
+    accountId: 'acc-proof-pol',
+    quotaScope: 'acc-proof-pol',
+    modelVersion: 'v1',
+    evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+    measurements: {
+      latency: {
+        value: 200,
+        unit: 'ms',
+        source: 'live',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/proof-only-policy-model',
+        modelVersion: 'v1',
+      },
+    },
+  });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment({ scoringPolicy: activeScoringPolicy });
+
+  const result = routing.rankForProfile([proofOnlyCandidate, knownCandidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.equal(result.ranking.length, 2, 'both candidates must be admitted');
+  assert.ok(result.ranking[0].candidateKey.includes('known-policy-model'), 'known ranks first');
+  assert.ok(
+    result.ranking[1].candidateKey.includes('proof-only-policy-model'),
+    'proof-only ranks after known'
+  );
+  assert.equal(result.ranking[1].qualityLabel, 'QUALITY_UNKNOWN');
+  assert.equal(
+    result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined
+  );
+
+  // Alone: admitted and chosen, reason says unknown
+  const solo = routing.rankForProfile([proofOnlyCandidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+  assert.ok(solo.chosen, 'proof-only candidate must be chosen when alone');
+  assert.match(solo.reason, /score chưa rõ/);
+});
+
+test('TASK-AI-171 QF (active policy): candidate with valid quality 85 is eligible under floor 70', () => {
+  const activeScoringPolicy = {
+    version: 'fixture-v1',
+    source: 'fixture://policy',
+    rationale: 'Synthetic quality policy',
+    maxAgeMs: 100000,
+    dimensions: {
+      quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+    },
+  };
+  const candidate = makeCandidate('valid-policy-85-model', {
+    modelVersion: 'v1',
+    evidence: [{ status: 'passed', proofLevel: 'API_PASS' }],
+    measurements: {
+      quality: {
+        value: 85,
+        unit: 'points',
+        source: 'benchmark',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/valid-policy-85-model',
+        modelVersion: 'v1',
+      },
+    },
+  });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment({ scoringPolicy: activeScoringPolicy });
+
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.ok(result.chosen);
+  assert.equal(result.ranking.length, 1);
+});
