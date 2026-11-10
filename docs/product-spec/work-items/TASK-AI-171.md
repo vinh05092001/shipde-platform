@@ -856,6 +856,14 @@ Scope: rows B12, B35, B36, B65, B69 and B71 (`tools/ai-brain/outcome-history.js`
   - Reader `sourceFreshness` unchanged: the #567 per-source rule is kept, continuing to require per-source evidence rather than falling back to the document timestamp.
 - Evidence: new test fails 2/3 on base 119fa297, passes on head; 10 related test files 67/68, the one failure task-ai-147 R4 fails identically on main.
 
+## PR 09 outcome — Lane ownership acquisition before agy-pool worker execution (2026-11-10)
+
+Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task-ai-171-r3-lane-ownership.test.js`.
+- AC B39 / BR lane ownership: `agyPool.launch` routes job publication through existing `lane-launcher.launch(accountDir, payload, opts)`. The existing lane lock and active-job occupancy recheck ensure atomicity before any scheduler call or worker run.
+- When a lane is busy or held, `agyPool.launch` returns a structured refusal (`LANE_BUSY`) without overwriting `job.json`, and `cli.js` (`dispatchCommand` `--execute`) records the launch failure without invoking the worker runner.
+- Evidence: `task-ai-171-r3-lane-ownership.test.js` fails on base `119fa297` (0/1 pass, 2 runner calls) and passes on HEAD (1/1 pass, exactly one launcher call, second refused lane-busy, shared `job.json` not overwritten).
+- Regression verification: `task-ai-171-int1-execute.test.js` (5/5), `task-ai-69.test.js` (14/14), `lane-launcher.test.js` (24/24), `task-ai-126.test.js` (11/11).
+
 ## PR 09 outcome — Quality floor: one effective quality for scoring and admission (2026-11-10)
 
 - Scope: `tools/ai-brain/routing.js` (`resolveEffectiveQuality`, `scoreForProfile`, admission check), `tools/ai-brain/test/task-ai-171-quality-floor.test.js`.
