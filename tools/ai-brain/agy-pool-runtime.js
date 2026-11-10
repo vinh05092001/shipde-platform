@@ -290,18 +290,6 @@ function submitJob(accountId, job, options) {
   }
 }
 
-function isLaneOccupied(dir) {
-  const jobFile = path.join(dir, 'job.json');
-  if (!fs.existsSync(jobFile)) return false;
-  try {
-    const stored = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
-    if (stored && stored.jobId && !laneLauncher.readResult(dir, stored)) {
-      return true;
-    }
-  } catch {}
-  return false;
-}
-
 function submitLocked(accountId, job, opts, dir) {
   const jobId = accountId + '/' + randomUUID();
   const pid =
@@ -311,14 +299,14 @@ function submitLocked(accountId, job, opts, dir) {
   // Timeout: retain <lane>/lock to protect active worker; return explicit state.
   // Scheduler throw: pre-adapter failure releases lock; post-spawn failure retains it.
   // Result mismatch: waitForResult waits for matching jobId; mismatch times out.
-  if (isLaneOccupied(dir)) {
+  if (laneLauncher.activeJobWithoutResult(dir)) {
     return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
   }
   const laneLock = laneLauncher.acquireLaneLock(dir, { jobId, pid }, opts);
   if (!laneLock.ok) {
     return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
   }
-  if (isLaneOccupied(dir)) {
+  if (laneLauncher.activeJobWithoutResult(dir)) {
     laneLauncher.releaseLaneLock(dir, laneLock.owner);
     return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
   }
