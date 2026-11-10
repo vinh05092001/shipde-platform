@@ -828,3 +828,13 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Outcome: Parses work item ticket markdown files for dispatch planning without hardcoded risk lists; populates profile forbidden failure domains, risk domains, and allowed files; attaches `itemSource` and assessment to decision receipts.
 - Depends on: Slice 5 (`fix/task-ai-171-core-s5-offline-replay`).
 - Evidence: 7/7 tests in `task-ai-171-core-ticket-input.test.js` pass.
+
+## Source freshness outcome — per-source lastSuccessfulAt from the producer (2026-11-10)
+
+- Scope: `tools/ai-brain/discovery.js`, `tools/ai-brain/catalogue-refresh.js`, `tools/ai-brain/test/task-ai-171-source-freshness.test.js`.
+- Outcome:
+  - Successful sources stamped: `discovery.js` and `catalogue-refresh.js` stamp `lastSuccessfulAt` (and `lastAttemptAt`) for each source that listed successfully and has models.
+  - Failed, retained or untouched sources keep prior value: prior `lastSuccessfulAt` is preserved across refreshes; never backfilled from the document timestamp.
+  - Reader `sourceFreshness` unchanged: the #567 per-source rule is kept, continuing to require per-source evidence rather than falling back to the document timestamp.
+- Evidence: new test fails 2/3 on base 119fa297, passes on head; 10 related test files 67/68, the one failure task-ai-147 R4 fails identically on main.
+
