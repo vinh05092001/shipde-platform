@@ -839,3 +839,10 @@ Scope: rows B12, B35, B36, B65, B69 and B71 (`tools/ai-brain/outcome-history.js`
 - B71: `boundedOutcomeSummary` reports structured round/verdict counts only and is clipped to `maxChars`; it states no fictitious "best finisher" claim and asks no question.
 - Wiring: `routing.js` delegates its proof-check `isQualityVerdict` to the shared reader and records a durable `classification` (quality vs outage) with each dispatch outcome, so later readers never re-derive it from free text or commit counts.
 - Evidence: `task-ai-171-route-pr09-history.test.js` passes 11/11 on HEAD; on base `bcafec4d` the file fails at its top-level `require('../outcome-history')` before any test registers. All 55 test files importing `../routing`, run in one `node --test` call, give 808/809 pass; the single failure (`task-ai-147-quota-scan.test.js` "TASK-AI-147 Review R4: production default destination is restored and records outcomes without injected store") reproduces identically on origin/main (`.worktrees/stage-main` at 119fa297). Prettier 3.9.6 and the hardcode guard pass.
+
+## Launch Options Forwarding and Immutable Base Commit Pinning (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand`), `tools/ai-brain/test/task-ai-171-launch-options.test.js`.
+- Outcome: Forwards `tokenBudget`, `outputCeiling`, `workerTimeoutMs`, and `mode` from request/decision/args to adapter and runner; records limit enforcement status in the launch record; pins one resolved 40-hex base commit SHA for adapter and runner, refusing with `BASE_SHA_UNRESOLVED` when unresolvable.
+- Depends on: Slice 6 (`fix/task-ai-171-core-s6-ticket-input`).
+- Evidence: 5/5 tests in `task-ai-171-launch-options.test.js` pass offline.
