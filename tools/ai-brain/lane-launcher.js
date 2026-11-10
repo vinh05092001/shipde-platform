@@ -291,6 +291,7 @@ function cleanup(lane, job, options = {}) {
 
 module.exports = {
   launch,
+  activeJobWithoutResult,
   acquireLaneLock,
   lockLane: acquireLaneLock,
   releaseLaneLock,
