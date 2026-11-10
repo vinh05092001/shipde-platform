@@ -2593,37 +2593,47 @@ function poolAccountCandidates(opts) {
       if (hasRunsDir && quotaReading?.rows?.length > 0) {
         const resolveGroup = pool.resolveModelGroup || ((m, q) => q?.modelGroups?.[m] || null);
         const group = resolveGroup(model, quotaReading, { accountId: acc, options: o });
-        if (!group) {
-          quotaBlockReason = 'QUOTA_GROUP_UNKNOWN';
-          quotaExhausted = true;
-          if (!o.keepExhausted) continue;
-        } else {
-          const rows = quotaReading.rows.filter(
-            (r) =>
-              (r.group && r.group === group) ||
-              (!r.group && r.family === group) ||
-              r.model === model
-          );
-          if (rows.some((r) => r.remainingPercent <= 0 || r.disabled)) {
-            quotaBlockReason = 'QUOTA_EXHAUSTED';
+        const hasGroups =
+          Boolean(group) ||
+          quotaReading.rows.some((r) => Boolean(r.group)) ||
+          Boolean(quotaReading.rawDoc?.command?.data?.groups?.length) ||
+          Boolean(quotaReading.rawDoc?.groups?.length) ||
+          Object.keys(quotaReading.modelGroups || {}).length > 0;
+
+        if (hasGroups) {
+          if (!group) {
+            quotaBlockReason = 'QUOTA_GROUP_UNKNOWN';
             quotaExhausted = true;
             if (!o.keepExhausted) continue;
-          }
-        }
-      }
-      if (quotaBlockReason && quotaBlockReason !== 'QUOTA_EXHAUSTED') {
-        const origPush = candidates.push;
-        candidates.push = (...items) => {
-          for (const it of items) {
-            if (it?.modelId === model) {
-              it.blocked = true;
-              it.blockReason = quotaBlockReason;
-              it.blockScope = 'account';
+          } else {
+            const rows = quotaReading.rows.filter(
+              (r) =>
+                (r.group && r.group === group) ||
+                (!r.group && r.family === group) ||
+                r.model === model
+            );
+            if (rows.some((r) => r.remainingPercent <= 0 || r.disabled)) {
+              quotaBlockReason = 'QUOTA_EXHAUSTED';
+              quotaExhausted = true;
+              if (!o.keepExhausted) continue;
             }
           }
-          candidates.push = origPush;
-          return origPush.apply(candidates, items);
-        };
+        } else {
+          const familyRows = quotaReading.rows.filter(
+            (r) => (family && r.family === family) || r.family === model || r.model === model
+          );
+          if (familyRows.length > 0) {
+            const empty = (r) =>
+              r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true;
+            const exact = familyRows.filter((r) => r.model === model);
+            const isZero = exact.length > 0 ? exact.some(empty) : familyRows.every(empty);
+            if (isZero) {
+              quotaBlockReason = 'QUOTA_EXHAUSTED';
+              quotaExhausted = true;
+              if (!o.keepExhausted) continue;
+            }
+          }
+        }
       }
 
       // Look up catalogue entry for the SAME backend model ID
@@ -2712,7 +2722,7 @@ function poolAccountCandidates(opts) {
         source: 'agy-pool',
         kind: 'agent-cli',
         blocked: quotaExhausted,
-        blockReason: quotaExhausted ? 'QUOTA_EXHAUSTED' : undefined,
+        blockReason: quotaExhausted ? quotaBlockReason || 'QUOTA_EXHAUSTED' : undefined,
         blockScope: quotaExhausted ? 'account' : undefined,
         capabilities: effectiveCapabilities,
         contextWindow,
