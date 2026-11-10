@@ -5,14 +5,7 @@ const os = require('os');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { spawnSync } = require('child_process');
-const {
-  mapFamily,
-  mapWindow,
-  parseNumberValue,
-  parseTsvRows,
-  parseFixtureGroups,
-  parseQuota,
-} = require('./agy-quota');
+const { mapFamily, mapWindow, parseNumberValue, parseQuota } = require('./agy-quota');
 
 function isValidAccountId(accountId) {
   return typeof accountId === 'string' && /^agy\d{2}$/.test(accountId);
@@ -370,57 +363,256 @@ function submitLocked(accountId, job, opts, dir) {
   return finish(exp.waitForResult(accountId, startedAt, { ...opts, expectedJobId: jobId }));
 }
 
-function parseQuotaJson(value) {
+const makeQuotaRow = (group, window, pct, rAt, disabled, models) => ({
+  group,
+  window,
+  remainingPercent: pct,
+  resetAt: rAt,
+  resetsAt: rAt,
+  family: mapFamily(group),
+  known: Number.isFinite(pct) || Boolean(disabled),
+  disabled: Boolean(disabled),
+  ...(models ? { models } : {}),
+});
+
+function parseTsvRows(text) {
+  const rows = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const cols = (raw.includes('\t') ? raw.split('\t') : line.split(/\s{2,}/)).map((c) => c.trim());
+    const win = mapWindow(cols[1] || line);
+    if (!win) continue;
+    const r = (cols[3] || line).match(/\d{4}-\d{2}-\d{2}T[\d:]+(?:\.\d+)?Z/)?.[0] || null;
+    if (cols.length >= 3 && cols[0]) {
+      const num = parseNumberValue(cols[2]);
+      const dis = typeof cols[2] === 'string' && /\bdisabled\b/i.test(cols[2]);
+      rows.push(makeQuotaRow(cols[0], win, Number.isFinite(num) ? num : dis ? 0 : null, r, dis));
+      continue;
+    }
+    const m = line.match(/(\d+(?:\.\d+)?)\s*%/);
+    if (m || /\bdisabled\b/i.test(line)) {
+      const wIdx = line.search(/weekly|five\s*hour|\b5h\b|daily|session/i);
+      rows.push(
+        makeQuotaRow(
+          (wIdx > 0 ? line.slice(0, wIdx) : line).trim(),
+          win,
+          m ? Number(m[1]) : 0,
+          r,
+          !m
+        )
+      );
+    }
+  }
+  return rows;
+}
+
+function parseFixtureGroups(doc) {
+  const rows = [];
+  for (const g of doc?.groups || (Array.isArray(doc) ? doc : [])) {
+    const group = g.name || g.id || g.family;
+    if (!group) continue;
+    for (const key of ['fiveHour', 'weekly', 'daily', 'session']) {
+      const w = g[key];
+      if (!w || typeof w !== 'object') continue;
+      const num = parseNumberValue(w.remainingPercent);
+      const frac = parseNumberValue(w.remaining);
+      const pct = Number.isFinite(num)
+        ? num
+        : Number.isFinite(frac)
+          ? Math.round(frac * 100)
+          : null;
+      const hasRemaining =
+        w.remainingPercent !== undefined || w.remaining !== undefined || w.disabled !== undefined;
+      if (hasRemaining) {
+        const rAt = w.resetAt || w.resetsAt || null;
+        rows.push(
+          makeQuotaRow(group, mapWindow(key) || key, pct, rAt, Boolean(w.disabled), g.models)
+        );
+      }
+    }
+  }
+  return rows;
+}
+
+const tokenize = (s) =>
+  String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+function parseCliModelEntries(input) {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return input
+      .map((it) => ({
+        id: (typeof it === 'object' && it ? it.id || it.modelId : it) || '',
+        displayName: (typeof it === 'object' && it ? it.displayName || it.name : it) || '',
+      }))
+      .filter((e) => e.id);
+  }
+  if (typeof input === 'object') {
+    return Object.entries(input).map(([id, val]) => ({
+      id,
+      displayName: typeof val === 'string' ? val : val?.displayName || id,
+    }));
+  }
+  return String(input)
+    .split(/\r?\n/)
+    .map((l) => {
+      const [id, name] = l.trim().split('\t');
+      return id && !id.includes(' ') && /^[a-zA-Z0-9]/.test(id) && !/^[-=_]{3,}/.test(id)
+        ? { id: id.trim(), displayName: (name || id).trim() }
+        : null;
+    })
+    .filter(Boolean);
+}
+
+function extractGroupPatterns(doc) {
+  const groups = [];
+  if (!doc || typeof doc !== 'object') return groups;
+  const addGroup = (name, desc, models) => {
+    if (!name || groups.some((g) => g.name === name)) return;
+    const patterns = (models || []).filter(Boolean).map((p) => ({ p: String(p), exact: true }));
+    const m = String(desc || '').match(/(?:models within this group|models):\s*([^.]+)/i);
+    const sub = m
+      ? m[1].split(/[,;]/)
+      : desc && desc.length < 50 && !desc.includes('Within each group')
+        ? [desc]
+        : [];
+    for (const p of sub.map((s) => s.trim()).filter(Boolean)) patterns.push({ p, exact: false });
+    if (patterns.length === 0) patterns.push({ p: name, exact: false });
+    groups.push({ name, patterns });
+  };
+  const raw = [
+    ...(doc.command?.data?.groups || []),
+    ...(doc.groups || (Array.isArray(doc) ? doc : [])),
+  ];
+  for (const g of raw) addGroup(g?.name || g?.id || g?.family, g?.description, g?.models);
+  for (const r of doc.rows || []) if (r.group) addGroup(r.group);
+  if (typeof doc.response === 'string') {
+    for (const r of parseTsvRows(doc.response)) if (r.group) addGroup(r.group);
+  }
+  return groups;
+}
+
+function matchModelToGroup(entry, groupPatterns) {
+  const id = typeof entry === 'string' ? entry : entry.id || '';
+  const name = typeof entry === 'string' ? entry : entry.displayName || id;
+  const mTokens = new Set([...tokenize(id), ...tokenize(name)]);
+  let best = null,
+    maxScore = 0;
+  for (const g of groupPatterns) {
+    for (const { p, exact } of g.patterns) {
+      if (
+        exact &&
+        (p.toLowerCase() === id.toLowerCase() || p.toLowerCase() === name.toLowerCase())
+      ) {
+        return g.name;
+      }
+      const pTokens = tokenize(p);
+      if (pTokens.length > maxScore && pTokens.every((t) => mTokens.has(t))) {
+        maxScore = pTokens.length;
+        best = g.name;
+      }
+    }
+  }
+  return best;
+}
+
+function buildModelGroupMap(doc, cliModels) {
+  const map = {},
+    groups = extractGroupPatterns(doc);
+  for (const entry of parseCliModelEntries(cliModels)) {
+    const matched = matchModelToGroup(entry, groups);
+    if (matched) map[entry.id] = matched;
+  }
+  return map;
+}
+
+function resolveModelGroup(model, quotaReading, context) {
+  if (!model) return null;
+  const qr = quotaReading || {};
+  if (qr.modelGroups?.[model]) return qr.modelGroups[model];
+  const exact = qr.rows?.find((r) => r.model === model && r.group);
+  if (exact) return exact.group;
+  const opts = context?.options || context || {};
+  const acc = context?.accountId || opts.accountId || qr.account?.email;
+  let text = typeof context === 'string' ? context : null;
+  if (!text && acc && exp.accountDir) {
+    try {
+      text = fs.readFileSync(path.join(exp.accountDir(acc, opts), 'models-out.txt'), 'utf8');
+    } catch {}
+  }
+  const groups = extractGroupPatterns(qr.rawDoc || qr);
+  const entry = text ? parseCliModelEntries(text).find((e) => e.id === model) : null;
+  const matched = matchModelToGroup(entry || { id: model, displayName: model }, groups);
+  if (matched) (qr.modelGroups = qr.modelGroups || {})[model] = matched;
+  return matched || null;
+}
+
+function parseQuotaJson(value, cliModels) {
   const rows = [];
   const models = new Set();
   const doc = value && typeof value === 'object' ? value : {};
-
-  // 1. Real format: JSON wrapper with "response" field holding TSV lines
   if (typeof doc.response === 'string' && doc.response.trim().length > 0) {
-    for (const r of parseTsvRows(doc.response)) {
-      rows.push(r);
+    for (const r of parseTsvRows(doc.response)) rows.push(r);
+  }
+  if (rows.length === 0 && doc.command?.data?.groups) {
+    for (const g of doc.command.data.groups) {
+      for (const b of g?.buckets || []) {
+        const win = mapWindow(b.window || b.name);
+        const frac = parseNumberValue(b.remaining_fraction);
+        if (win && Number.isFinite(frac)) {
+          rows.push(
+            makeQuotaRow(
+              g.name || g.id,
+              win,
+              Math.round(frac * 100),
+              b.reset_time || b.resetAt || null,
+              false
+            )
+          );
+        }
+      }
     }
   }
-
-  // 2. Keep the existing fixture format working if any production path emits it
-  if (rows.length === 0) {
-    for (const r of parseFixtureGroups(doc)) {
-      rows.push(r);
-    }
-  }
-
+  if (rows.length === 0) for (const r of parseFixtureGroups(doc)) rows.push(r);
   for (const m of doc.models || []) if (m) models.add(String(m));
-  for (const g of doc.groups || []) {
+  for (const g of [...(doc.groups || []), ...(doc.command?.data?.groups || [])]) {
     for (const m of g.models || []) if (m) models.add(String(m));
   }
-  if (doc.command && doc.command.data && Array.isArray(doc.command.data.groups)) {
-    for (const g of doc.command.data.groups) {
-      for (const m of g.models || []) if (m) models.add(String(m));
-    }
-  }
-
-  return { rows, models: [...models] };
+  return {
+    rows,
+    models: [...models],
+    modelGroups: buildModelGroupMap(doc, cliModels),
+    rawDoc: doc,
+  };
 }
 
-function parseQuotaOutput(text) {
+function parseQuotaOutput(text, options) {
   const body = String(text || '').trim();
-  if (!body) return { available: false, reason: 'không có out.txt', rows: [], models: [] };
+  if (!body)
+    return { available: false, reason: 'không có out.txt', rows: [], models: [], modelGroups: {} };
   try {
     const parsed = JSON.parse(body);
-    const quota = parseQuotaJson(parsed);
-    if (quota.rows.length > 0) {
-      return { available: true, rows: quota.rows, models: quota.models };
-    }
-    return {
-      available: false,
-      reason: 'không có số liệu quota hợp lệ trong out.txt',
-      rows: [],
-      models: quota.models,
+    const q = parseQuotaJson(
+      parsed,
+      options?.cliModels || options?.models || options?.modelsTxt || null
+    );
+    const base = {
+      rows: q.rows,
+      models: q.models,
+      modelGroups: q.modelGroups || {},
+      rawDoc: parsed,
     };
+    return q.rows.length > 0
+      ? { available: true, ...base }
+      : { available: false, reason: 'không có số liệu quota hợp lệ trong out.txt', ...base };
   } catch {}
-
-  const parsedText = parseQuota(body);
-  return Object.assign({}, parsedText, { models: [] });
+  return Object.assign({}, parseQuota(body), { models: [], modelGroups: {} });
 }
 
 function quotaReading(accountId, options) {
@@ -641,6 +833,11 @@ const exp = {
   submitJob,
   parseQuotaOutput,
   quotaReading,
+  parseQuotaJson,
+  buildModelGroupMap,
+  resolveModelGroup,
+  parseTsvRows,
+  parseFixtureGroups,
   modelIdsFromRuntime,
   discoverPoolModels,
   resetPoolDiscoveryCache,
