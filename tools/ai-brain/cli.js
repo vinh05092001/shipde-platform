@@ -2474,7 +2474,8 @@ function coordinatorDispatchCommand(args, deps) {
 function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance } = {}) {
   const fs = require('fs');
   const path = require('path');
-  if (args.execute === false) {
+  // Only real execution (execute === true) validates a base; a dry-run flag never bypasses it.
+  if (args.execute !== true) {
     return { ok: true, baseSha: null, origin: 'dry-run', targetRepo: null };
   }
 

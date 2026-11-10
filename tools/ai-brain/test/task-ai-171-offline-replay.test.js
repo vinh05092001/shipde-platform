@@ -422,6 +422,8 @@ test('offline dry-run dispatch with combo and opencode fixtures makes 0 outbound
     {
       'dry-run': true,
       json: true,
+      // Pin the item: without it dispatch reads the live register relative to cwd.
+      item: 'TASK-AI-171',
       'evidence-dir': path.join(__dirname, '..', 'data', 'evidence'),
       'fixture-dir': taskFixtureDir,
       'combo-fixture': comboFixture,

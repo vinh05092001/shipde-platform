@@ -300,4 +300,53 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       env.cleanup();
     }
   });
+
+  test('7. Pure --dry-run (execute omitted) makes zero git/child_process calls and returns a decision', (t) => {
+    const env = createTargetRepoEnv();
+    t.after(env.cleanup);
+    const cp = require('node:child_process');
+    const calls = [];
+    for (const api of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) {
+      t.mock.method(cp, api, (...callArgs) => {
+        calls.push(api + ' ' + String(callArgs[0]));
+        throw new Error('CHILD_PROCESS_FORBIDDEN: ' + api);
+      });
+    }
+    const { resolveExecuteBase } = require('../cli');
+    const dryArgs = { 'dry-run': true, root: env.dir, 'base-sha': FAKE_40_HEX };
+    const base = resolveExecuteBase({ targetWorktree: env.dir, args: dryArgs });
+    assert.deepEqual(base, { ok: true, baseSha: null, origin: 'dry-run', targetRepo: null });
+
+    let launcherCalls = 0;
+    const deps = env.getDeps({
+      run: () => {
+        launcherCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      },
+      harnessAdapter: env.fakeAdapter,
+    });
+    const { execute: _omitted, ...pureDryRun } = env.getArgs({ 'dry-run': true });
+    const res = dispatchCommand(pureDryRun, deps);
+    assert.equal(res.exitCode, 0);
+    assert.ok(res.decision && res.decision.chosen, 'dry-run yields a decision');
+    assert.equal(launcherCalls, 0);
+    assert.deepEqual(calls, [], 'pure dry-run never spawns git or any child process');
+  });
+
+  test('8. execute=true with an invalid base is still refused even when a dry-run flag is present', () => {
+    const env = createTargetRepoEnv();
+    try {
+      const { resolveExecuteBase } = require('../cli');
+      for (const extra of [{}, { 'dry-run': true }, { dryRun: true }]) {
+        const res = resolveExecuteBase({
+          targetWorktree: env.dir,
+          args: { execute: true, root: env.dir, 'base-sha': FAKE_40_HEX, ...extra },
+        });
+        assert.equal(res.ok, false);
+        assert.equal(res.code, 'BASE_SHA_UNRESOLVED');
+      }
+    } finally {
+      env.cleanup();
+    }
+  });
 });
