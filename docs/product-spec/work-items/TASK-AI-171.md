@@ -863,3 +863,10 @@ Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task
 - When a lane is busy or held, `agyPool.launch` returns a structured refusal (`LANE_BUSY`) without overwriting `job.json`, and `cli.js` (`dispatchCommand` `--execute`) records the launch failure without invoking the worker runner.
 - Evidence: `task-ai-171-r3-lane-ownership.test.js` fails on base `119fa297` (0/1 pass, 2 runner calls) and passes on HEAD (1/1 pass, exactly one launcher call, second refused lane-busy, shared `job.json` not overwritten).
 - Regression verification: `task-ai-171-int1-execute.test.js` (5/5), `task-ai-69.test.js` (14/14), `lane-launcher.test.js` (24/24), `task-ai-126.test.js` (11/11).
+
+## Lane mailbox ownership outcome — pool submissions respect AGY lane ownership (2026-11-10)
+
+Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools/ai-brain/lane-launcher.js` (export of `activeJobWithoutResult`), `tools/ai-brain/test/task-ai-171-lane-mailbox.test.js`.
+- Outcome: Busy lane refused before any `job.json` write, `result.json` unlink, or adapter call; timeout keeps ownership without synthetic result; proven pre-launch failure releases the matching owner; single lock order `job.lock` -> lane generation lock.
+- Evidence: Busy case fails on base `1296a736`, passes on head; with `r3-lane-ownership` and `task-ai-69` 20/0; independent review found no race by source reading, no multi-process stress run.
+
