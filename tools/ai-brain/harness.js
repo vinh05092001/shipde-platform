@@ -352,6 +352,7 @@ const agyPool = {
     const fs = require('fs');
     const path = require('path');
     const pool = require('./agy-pool-runtime');
+    const laneLauncher = require('./lane-launcher');
     if (!pool.isValidAccountId(job && job.accountId)) {
       return {
         refusal: 'INVALID_ACCOUNT_ID',
@@ -374,12 +375,24 @@ const agyPool = {
     if (job.resultSchema) payload.resultSchema = job.resultSchema;
     if (job.printTimeoutSec) payload.printTimeoutSec = job.printTimeoutSec;
     if (job.timeoutSec) payload.timeoutSec = job.timeoutSec;
+    if (job.pid !== undefined) payload.pid = job.pid;
+
+    const launchResult = laneLauncher.launch(accountDir, payload, opts);
+    if (!launchResult.ok) {
+      const code = launchResult.cause || 'LANE_BUSY';
+      const refusal = code === 'LOCK_HELD' ? 'LANE_BUSY' : code;
+      return {
+        refusal,
+        reason: `${refusal}: ${launchResult.error || launchResult.cause || 'lane is busy'}`,
+        exitCode: 1,
+        state: 'error',
+      };
+    }
 
     if (job.usageFile) {
       fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));
     }
 
-    fs.writeFileSync(path.join(accountDir, 'job.json'), JSON.stringify(payload, null, 2), 'utf8');
     return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
   },
   sessionIdFromResult(job, result) {
