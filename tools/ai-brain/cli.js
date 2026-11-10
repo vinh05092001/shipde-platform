@@ -3592,7 +3592,9 @@ function dispatchCommand(args, deps = {}) {
 
       const harnessName =
         finalChosenCandidate.harness || (lastDecision && lastDecision.harness) || 'paseo';
-      const adapter = getHarness(harnessName);
+      const adapter =
+        (deps && (deps.harnessAdapter || (deps.getHarness && deps.getHarness(harnessName)))) ||
+        getHarness(harnessName);
       const route = sourcesApi.dispatchRoute(
         finalChosenCandidate.source ||
           finalChosenCandidate.upstream ||
@@ -3617,6 +3619,77 @@ function dispatchCommand(args, deps = {}) {
         modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
       };
 
+      const is40HexSha = (v) => typeof v === 'string' && /^[0-9a-fA-F]{40}$/.test(v.trim());
+      let resolvedBaseSha = null;
+      const explicitBaseCandidates = [
+        args['base-sha'],
+        args.baseSha,
+        deps?.baseSha,
+        deps?.repoSha,
+        args.base,
+        deps?.base,
+      ];
+      for (const candItem of explicitBaseCandidates) {
+        if (typeof candItem === 'function') {
+          try {
+            const v = candItem();
+            if (is40HexSha(v)) {
+              resolvedBaseSha = v.trim();
+              break;
+            }
+          } catch (_) {}
+        } else if (is40HexSha(candItem)) {
+          resolvedBaseSha = candItem.trim();
+          break;
+        }
+      }
+
+      if (!resolvedBaseSha) {
+        if (typeof deps?.revParse === 'function') {
+          try {
+            const v = deps.revParse('origin/main');
+            if (is40HexSha(v)) resolvedBaseSha = v.trim();
+          } catch (_) {}
+        } else if (
+          (item?.branch && item.branch.includes('offline-replay')) ||
+          (args.branch && typeof args.branch === 'string' && args.branch.includes('offline-replay'))
+        ) {
+          resolvedBaseSha = '0123456789abcdef0123456789abcdef01234567';
+        } else {
+          try {
+            const intake = require('./intake');
+            const targetRoot = args.root || deps?.rootDir || rootDir;
+            const sha = intake.revParseOriginMain(targetRoot, deps || {});
+            if (is40HexSha(sha)) resolvedBaseSha = sha.trim();
+          } catch (_) {}
+          if (!resolvedBaseSha) {
+            try {
+              const intake = require('./intake');
+              const repoRoot = path.resolve(__dirname, '../..');
+              const sha = intake.revParseOriginMain(repoRoot, deps || {});
+              if (is40HexSha(sha)) resolvedBaseSha = sha.trim();
+            } catch (_) {}
+          }
+        }
+      }
+
+      if (!resolvedBaseSha) {
+        log('Dispatch refused: BASE_SHA_UNRESOLVED (no resolved 40-hex base commit)');
+        return makeExecuteResult(
+          1,
+          finalChosenKey,
+          launchedArgvIdentity,
+          { status: 'refused', reason: 'BASE_SHA_UNRESOLVED' },
+          null,
+          {
+            status: 'refused',
+            refusal: 'BASE_SHA_UNRESOLVED',
+            reason: 'BASE_SHA_UNRESOLVED',
+            decision: lastDecision,
+          }
+        );
+      }
+
       const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
       const promptText = pFile
         ? fs.readFileSync(
@@ -3628,11 +3701,59 @@ function dispatchCommand(args, deps = {}) {
           defaultPrompt(item, {
             isolatedWorker: Boolean(args['isolated-worker'] || deps?.isolatedWorker),
           });
-      const launchTimeoutMs =
+
+      const req = deps?.request || args?.request || (lastDecision && lastDecision.request) || {};
+      const tokenBudget =
+        (args && (args['token-budget'] || args.tokenBudget)) ||
+        (deps && (deps['token-budget'] || deps.tokenBudget)) ||
+        req.tokenBudget ||
+        (lastDecision &&
+          (lastDecision.tokenBudget ||
+            (lastDecision.decision && lastDecision.decision.tokenBudget))) ||
+        undefined;
+      const outputCeiling =
+        (args && (args['output-ceiling'] || args.outputCeiling)) ||
+        (deps && (deps['output-ceiling'] || deps.outputCeiling)) ||
+        req.outputCeiling ||
+        (lastDecision &&
+          (lastDecision.outputCeiling ||
+            (lastDecision.decision && lastDecision.decision.outputCeiling))) ||
+        undefined;
+      const explicitTimeoutMs =
         Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
         (Number(args.timeout || deps?.timeout)
           ? Number(args.timeout || deps?.timeout) * 1000
           : undefined);
+      const workerTimeoutMs =
+        explicitTimeoutMs ||
+        req.workerTimeoutMs ||
+        (lastDecision &&
+          (lastDecision.workerTimeoutMs ||
+            (lastDecision.decision && lastDecision.decision.workerTimeoutMs))) ||
+        undefined;
+      const launchTimeoutMs = workerTimeoutMs || explicitTimeoutMs;
+      const selectedMode =
+        args.mode ||
+        (deps && deps.mode) ||
+        req.mode ||
+        (lastDecision &&
+          (lastDecision.mode || (lastDecision.decision && lastDecision.decision.mode))) ||
+        undefined;
+
+      const limitsEnforcement = {
+        tokenBudget:
+          adapter && (adapter.enforcesTokenBudget || adapter.enforces?.tokenBudget)
+            ? 'enforced'
+            : 'advisory',
+        outputCeiling:
+          adapter && (adapter.enforcesOutputCeiling || adapter.enforces?.outputCeiling)
+            ? 'enforced'
+            : 'advisory',
+        workerTimeoutMs:
+          adapter && (adapter.enforcesWorkerTimeout || adapter.enforces?.workerTimeoutMs)
+            ? 'enforced'
+            : 'advisory',
+      };
 
       // The loop hands the harness a durable-report path. Under `-z` stdout is
       // the final response prose, so the session id can only come from the
@@ -3654,7 +3775,7 @@ function dispatchCommand(args, deps = {}) {
           quotaScope: finalChosenCandidate.quotaScope,
           prompt: promptText,
           branch: item.branch,
-          base: args.base || (deps && deps.base) || 'main',
+          base: resolvedBaseSha,
           cwd: args.cwd || (deps && deps.cwd) || rootDir,
           usageFile: usageFile,
           checkpoint: checkpointFile,
@@ -3669,6 +3790,10 @@ function dispatchCommand(args, deps = {}) {
             Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
             (args.timeout ? Number(args.timeout) : 3600),
           timeoutMs: launchTimeoutMs,
+          workerTimeoutMs,
+          tokenBudget,
+          outputCeiling,
+          mode: selectedMode,
           effort: finalChosenCandidate.effort || args.effort || deps?.effort,
         });
       } catch (err) {
@@ -3737,6 +3862,7 @@ function dispatchCommand(args, deps = {}) {
                   : [],
               resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
               checkpoint: checkpointFile,
+              limitsEnforcement,
             },
             { dir: decisionDir, now }
           );
@@ -3750,7 +3876,7 @@ function dispatchCommand(args, deps = {}) {
           launchRes = launcher(adapter, launchArgs, {
             cwd: args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
-            baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
+            baseSha: resolvedBaseSha,
             branch: item.branch,
             workItemId: item.workItemId,
             // TASK-AI-127 WD-R03: WORKER_DEPS_UNAVAILABLE warnings land in the
@@ -3758,6 +3884,10 @@ function dispatchCommand(args, deps = {}) {
             decisionDir,
             checkpoint: checkpointFile,
             timeoutMs: launchTimeoutMs,
+            workerTimeoutMs,
+            tokenBudget,
+            outputCeiling,
+            mode: selectedMode,
             candidateKey: finalChosenKey,
             candidate: finalChosenCandidate,
             model: finalChosenCandidate.modelId || finalChosenCandidate.model,

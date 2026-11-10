@@ -828,3 +828,10 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Outcome: Parses work item ticket markdown files for dispatch planning without hardcoded risk lists; populates profile forbidden failure domains, risk domains, and allowed files; attaches `itemSource` and assessment to decision receipts.
 - Depends on: Slice 5 (`fix/task-ai-171-core-s5-offline-replay`).
 - Evidence: 7/7 tests in `task-ai-171-core-ticket-input.test.js` pass.
+
+## Launch Options Forwarding and Immutable Base Commit Pinning (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand`), `tools/ai-brain/test/task-ai-171-launch-options.test.js`.
+- Outcome: Forwards `tokenBudget`, `outputCeiling`, `workerTimeoutMs`, and `mode` from request/decision/args to adapter and runner; records limit enforcement status in the launch record; pins one resolved 40-hex base commit SHA for adapter and runner, refusing with `BASE_SHA_UNRESOLVED` when unresolvable.
+- Depends on: Slice 6 (`fix/task-ai-171-core-s6-ticket-input`).
+- Evidence: 5/5 tests in `task-ai-171-launch-options.test.js` pass offline.
