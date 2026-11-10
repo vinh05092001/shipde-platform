@@ -2487,6 +2487,7 @@ function dispatchCommand(args, deps = {}) {
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
   let item = null;
+  let lastDecision = null;
   const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
     const maskValue = (v) =>
       typeof v === 'string'
@@ -3363,7 +3364,6 @@ function dispatchCommand(args, deps = {}) {
     args['max-attempts'] || args.maxAttempts || (deps && deps.maxAttempts) || 3
   );
   let attempt = 0;
-  let lastDecision = null;
   const decisionsStore = require('./decisions');
   const failureClassifier = require('./failure-classifier');
   const nowForWriter = (deps && deps.now) || Date.now();
