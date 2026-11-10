@@ -846,3 +846,12 @@ Scope: rows B12, B35, B36, B65, B69 and B71 (`tools/ai-brain/outcome-history.js`
 - Outcome: Forwards `tokenBudget`, `outputCeiling`, `workerTimeoutMs`, and `mode` from request/decision/args to adapter and runner; records limit enforcement status in the launch record; pins one resolved 40-hex base commit SHA for adapter and runner, refusing with `BASE_SHA_UNRESOLVED` when unresolvable.
 - Depends on: Slice 6 (`fix/task-ai-171-core-s6-ticket-input`).
 - Evidence: 5/5 tests in `task-ai-171-launch-options.test.js` pass offline.
+
+## Source freshness outcome — per-source lastSuccessfulAt from the producer (2026-11-10)
+
+- Scope: `tools/ai-brain/discovery.js`, `tools/ai-brain/catalogue-refresh.js`, `tools/ai-brain/test/task-ai-171-source-freshness.test.js`.
+- Outcome:
+  - Successful sources stamped: `discovery.js` and `catalogue-refresh.js` stamp `lastSuccessfulAt` (and `lastAttemptAt`) for each source that listed successfully and has models.
+  - Failed, retained or untouched sources keep prior value: prior `lastSuccessfulAt` is preserved across refreshes; never backfilled from the document timestamp.
+  - Reader `sourceFreshness` unchanged: the #567 per-source rule is kept, continuing to require per-source evidence rather than falling back to the document timestamp.
+- Evidence: new test fails 2/3 on base 119fa297, passes on head; 10 related test files 67/68, the one failure task-ai-147 R4 fails identically on main.

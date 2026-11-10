@@ -297,8 +297,9 @@ async function refreshCatalogue(options = {}) {
             (src.advertised > 0 || (src.catalogs || []).some((c) => c.count > 0));
           const prev = (previousFreshness.sources || []).find((s) => s.id === src.id);
           src.lastSuccessfulAt = ok
-            ? discovery.lastAttemptAt || startedAt
-            : prev?.lastSuccessfulAt || null;
+            ? src.lastSuccessfulAt || discovery.lastAttemptAt || startedAt
+            : prev?.lastSuccessfulAt || src.lastSuccessfulAt || null;
+          src.lastAttemptAt = src.lastAttemptAt || discovery.lastAttemptAt || startedAt;
           src.staleListingRetained = !ok && isRecent(src.lastSuccessfulAt);
         }
         const seen = new Set((discovery.sources || []).map((s) => s.id));
