@@ -785,6 +785,6 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 ## Slice 2b: Route Launch — Controller refusal and runtime provenance (2026-11-10)
 
 - Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-int1-execute.test.js` (test case 3).
-- Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 spawns), enforces argv identity on selection (1 spawn), and writes repo SHA and tree path provenance to route log.
+- Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 child processes of any kind, no process.exit), requires valid persisted provenance before execution, enforces argv identity on selection (1 spawn bound to `--offering`), closes parent descriptors, handles async child errors, and guarantees custom launcher mutual exclusivity.
 - Depends on: Slice 2a2 (`fix/task-ai-171-core-s2a2-execute-path`).
-- Evidence: 4/4 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+- Evidence: 5/5 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.

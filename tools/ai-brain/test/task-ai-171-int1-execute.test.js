@@ -287,10 +287,26 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
   test('INT-1: routeLaunchStep behaviour: chosen = null refuses spawn; chosen candidate launches exactly one spawn with matching argv identity', () => {
     const logsDir = path.join(env.dir, 'logs');
     fs.mkdirSync(logsDir, { recursive: true });
-    const spawnCalls = [];
+    const childCalls = [];
     const fakeSpawn = (cmd, args, opts) => {
-      spawnCalls.push({ cmd, args, opts });
-      return { pid: 4242, unref: () => {} };
+      const listeners = {};
+      const child = {
+        pid: 4242,
+        unref: () => {},
+        on: (ev, fn) => {
+          listeners[ev] = fn;
+          return child;
+        },
+        emit: (ev, ...data) => {
+          if (listeners[ev]) listeners[ev](...data);
+        },
+      };
+      childCalls.push({ type: 'spawn', cmd, args, opts, child });
+      return child;
+    };
+    const fakeExecFileSync = (cmd, args, opts) => {
+      childCalls.push({ type: 'execFileSync', cmd, args, opts });
+      return '1111222233334444555566667777888899990000';
     };
     let exitCode = null;
     const fakeExit = (code) => {
@@ -298,15 +314,25 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     };
     const loggedErrors = [];
     const fakeError = (msg) => loggedErrors.push(msg);
+    let closedFd = null;
+    const trackingFs = {
+      ...fs,
+      closeSync: (fd) => {
+        closedFd = fd;
+        return fs.closeSync(fd);
+      },
+    };
     const stepDeps = {
       spawn: fakeSpawn,
+      execFileSync: fakeExecFileSync,
       exit: fakeExit,
       error: fakeError,
+      fs: trackingFs,
       logsDir,
       mainTree: path.resolve(__dirname, '../../..'),
     };
 
-    // Case 1: decision with chosen = null -> 0 spawns and NO_CONTROLLER_CHOICE reason
+    // Case 1: decision with chosen = null -> 0 child processes of any kind, NO_CONTROLLER_CHOICE reason, no process.exit
     const nullDecision = {
       chosen: null,
       reason: 'REFUSED: no candidate qualifies under quota or route constraints',
@@ -318,38 +344,153 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       stepDeps
     );
 
-    assert.equal(spawnCalls.length, 0, 'zero spawns on chosen = null');
-    assert.equal(exitCode, 3, 'exits with code 3 on chosen = null');
+    assert.equal(childCalls.length, 0, 'zero child_process calls of any kind on chosen = null');
+    assert.equal(exitCode, null, 'never calls process.exit itself on chosen = null');
     assert.equal(nullRes.launched, false);
     assert.equal(nullRes.spawns, 0);
-    assert.match(nullRes.reason, /NO_CONTROLLER_CHOICE/);
+    assert.equal(nullRes.reason, 'NO_CONTROLLER_CHOICE');
+    assert.ok(nullRes.detail && nullRes.detail.includes('REFUSED'));
     assert.ok(loggedErrors.some((e) => e.includes('NO_CONTROLLER_CHOICE')));
 
-    // Case 2: decision with a chosen candidate -> exactly 1 spawn whose argv identity equals decision.chosen
     const candidateA = makeCandidate('m-alpha', 'ag', 'ag', 1, 90);
     const chosenDecision = {
       chosen: candidateA.candidateKey,
       candidates: [candidateA],
       ranking: [{ candidateKey: candidateA.candidateKey, score: 90 }],
     };
-    exitCode = null;
+
+    // Case 2: unavailable git -> zero dispatch spawns, PROVENANCE_UNAVAILABLE
+    const badGitDeps = {
+      ...stepDeps,
+      execFileSync: () => {
+        throw new Error('git not found');
+      },
+    };
+    const noGitRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-NO-GIT', cwd: env.wt, task: env.pFile },
+      badGitDeps
+    );
+    assert.equal(noGitRes.launched, false);
+    assert.equal(noGitRes.reason, 'PROVENANCE_UNAVAILABLE');
+    assert.equal(
+      childCalls.filter((c) => c.type === 'spawn').length,
+      0,
+      'zero dispatch on unavailable git'
+    );
+
+    // Case 3: unwritable log -> zero dispatch spawns, PROVENANCE_UNAVAILABLE
+    const unwritableFs = {
+      ...fs,
+      mkdirSync: fs.mkdirSync.bind(fs),
+      appendFileSync: () => {
+        throw new Error('EACCES: permission denied');
+      },
+    };
+    const unwritableLogDeps = {
+      ...stepDeps,
+      fs: unwritableFs,
+    };
+    const badLogRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-BAD-LOG', cwd: env.wt, task: env.pFile },
+      unwritableLogDeps
+    );
+    assert.equal(badLogRes.launched, false);
+    assert.equal(badLogRes.reason, 'PROVENANCE_UNAVAILABLE');
+    assert.equal(
+      childCalls.filter((c) => c.type === 'spawn').length,
+      0,
+      'zero dispatch on unwritable log'
+    );
+
+    // Case 4: custom launcher mutual exclusivity -> launcher spawns once and returns undefined => exactly 1 dispatch
+    let launcherSpawnCount = 0;
+    const customLauncher = (payload, cwd, taskFile, item, launchDeps) => {
+      launcherSpawnCount += 1;
+      launchDeps.spawn('dummy-launcher', ['arg']);
+      return undefined;
+    };
+    const launcherDeps = {
+      ...stepDeps,
+      launcher: customLauncher,
+    };
+    const customRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-CUSTOM-LAUNCHER', cwd: env.wt, task: env.pFile },
+      launcherDeps
+    );
+    assert.equal(launcherSpawnCount, 1, 'custom launcher invoked once');
+    assert.equal(customRes.launched, false);
+    assert.equal(customRes.reason, 'INVALID_LAUNCHER_RESULT');
+    const customSpawns = childCalls.filter((c) => c.type === 'spawn');
+    assert.equal(customSpawns.length, 1, 'launcher spawned once and fallback never dispatched');
+    childCalls.length = 0; // reset for subsequent cases
+
+    // Case 5: spawn failure closes parent log descriptor
+    let closedOnFail = null;
+    const failFs = {
+      ...fs,
+      closeSync: (fd) => {
+        closedOnFail = fd;
+        return fs.closeSync(fd);
+      },
+    };
+    const throwSpawn = () => {
+      throw new Error('EAGAIN: resource temporarily unavailable');
+    };
+    const failSpawnDeps = {
+      ...stepDeps,
+      spawn: throwSpawn,
+      fs: failFs,
+    };
+    const failRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-FAIL-SPAWN', cwd: env.wt, task: env.pFile },
+      failSpawnDeps
+    );
+    assert.equal(failRes.launched, false);
+    assert.equal(failRes.reason, 'SPAWN_ERROR');
+    assert.ok(closedOnFail !== null, 'parent closed descriptor on spawn failure');
+
+    // Case 6: chosen candidate launches exactly 1 spawn with --offering and provenance persisted BEFORE spawn
+    let logPersistedBeforeSpawn = false;
+    const trackingSpawn = (cmd, args, opts) => {
+      const logFile = path.join(logsDir, 'route-log.jsonl');
+      logPersistedBeforeSpawn =
+        fs.existsSync(logFile) && fs.readFileSync(logFile, 'utf8').includes('TASK-AI-171-CHOSEN');
+      return fakeSpawn(cmd, args, opts);
+    };
+    closedFd = null;
+    const chosenDeps = {
+      ...stepDeps,
+      spawn: trackingSpawn,
+    };
     const chosenRes = routeLaunchApi.routeLaunchStep(
       chosenDecision,
       { item: 'TASK-AI-171-CHOSEN', cwd: env.wt, task: env.pFile },
-      stepDeps
+      chosenDeps
     );
 
-    assert.equal(spawnCalls.length, 1, 'exactly one spawn on chosen candidate');
     assert.equal(chosenRes.launched, true);
     assert.equal(chosenRes.spawns, 1);
     assert.equal(chosenRes.choice, candidateA.candidateKey);
+    assert.equal(logPersistedBeforeSpawn, true, 'provenance record persisted BEFORE dispatch');
+    assert.ok(closedFd !== null, 'parent closed log descriptor after successful spawn');
 
+    const spawnCalls = childCalls.filter((c) => c.type === 'spawn');
+    assert.equal(spawnCalls.length, 1, 'exactly one dispatch spawn');
     const spawnCall = spawnCalls[0];
-    const candidateIndex = spawnCall.args.indexOf('--candidate');
-    assert.ok(candidateIndex !== -1, '--candidate flag present in spawn args');
-    const argvCandidate = spawnCall.args[candidateIndex + 1];
+    const offeringIndex = spawnCall.args.indexOf('--offering');
+    assert.ok(offeringIndex !== -1, '--offering flag present in spawn args');
+    const argvCandidate = spawnCall.args[offeringIndex + 1];
     assert.equal(argvCandidate, chosenDecision.chosen);
     assert.deepEqual(parseCandidateKey(argvCandidate), chosenRes.argvIdentity);
+
+    // Case 7: asynchronous child spawn failure ('error' event) handled and recorded
+    assert.doesNotThrow(() => {
+      spawnCall.child.emit('error', new Error('ASYNC_EAGAIN'));
+    });
 
     // Verify runtime provenance in route-log.jsonl
     const logFile = path.join(logsDir, 'route-log.jsonl');
@@ -359,20 +500,23 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       .trim()
       .split('\n')
       .map((l) => JSON.parse(l));
-    assert.equal(lines.length, 2);
 
     const nullLog = lines.find((l) => l.item === 'TASK-AI-171-NULL');
-    assert.ok(
-      nullLog && nullLog.choice === null && nullLog.repoSha && path.isAbsolute(nullLog.treePath)
-    );
+    assert.ok(nullLog && nullLog.choice === null && path.isAbsolute(nullLog.treePath));
     assert.match(nullLog.noControllerChoice, /NO_CONTROLLER_CHOICE/);
 
-    const chosenLog = lines.find((l) => l.item === 'TASK-AI-171-CHOSEN');
+    const chosenLog = lines.find((l) => l.item === 'TASK-AI-171-CHOSEN' && l.choice);
     assert.ok(
       chosenLog &&
         chosenLog.choice.key === candidateA.candidateKey &&
         chosenLog.repoSha &&
         path.isAbsolute(chosenLog.treePath)
     );
+
+    const asyncFailLog = lines.find(
+      (l) => l.item === 'TASK-AI-171-CHOSEN' && l.status === 'spawn_failed'
+    );
+    assert.ok(asyncFailLog, 'async spawn error recorded to route log');
+    assert.match(asyncFailLog.error, /ASYNC_EAGAIN/);
   });
 });
