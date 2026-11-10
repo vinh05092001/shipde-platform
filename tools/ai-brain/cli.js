@@ -31,7 +31,7 @@
 const path = require('path');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
-const { runCheck, currentBranch, headSha } = require('./facts');
+const { runCheck, currentBranch, headSha, commitExists } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
 const { atomicRenameSync } = require('./atomic-rename');
 const { maskEmailsInString } = require('./route-identity-utils');
@@ -3620,60 +3620,76 @@ function dispatchCommand(args, deps = {}) {
       };
 
       const is40HexSha = (v) => typeof v === 'string' && /^[0-9a-fA-F]{40}$/.test(v.trim());
-      let resolvedBaseSha = null;
-      const explicitBaseCandidates = [
-        args['base-sha'],
-        args.baseSha,
-        deps?.baseSha,
-        deps?.repoSha,
-        args.base,
-        deps?.base,
-      ];
-      for (const candItem of explicitBaseCandidates) {
-        if (typeof candItem === 'function') {
-          try {
-            const v = candItem();
-            if (is40HexSha(v)) {
-              resolvedBaseSha = v.trim();
-              break;
-            }
-          } catch (_) {}
-        } else if (is40HexSha(candItem)) {
-          resolvedBaseSha = candItem.trim();
-          break;
-        }
-      }
+      const targetWorktree = args.root || deps?.rootDir || deps?.treePath || rootDir;
+      const checkCommit =
+        typeof deps?.commitExists === 'function' ? deps.commitExists : commitExists;
 
-      if (!resolvedBaseSha) {
-        if (typeof deps?.revParse === 'function') {
+      let resolvedBaseSha = null;
+      let explicitCandidateSupplied = false;
+
+      const explicitArg = args['base-sha'] ?? args.baseSha ?? args.base;
+      if (explicitArg !== undefined && explicitArg !== null) {
+        explicitCandidateSupplied = true;
+        let val = typeof explicitArg === 'function' ? null : explicitArg;
+        if (typeof explicitArg === 'function') {
           try {
-            const v = deps.revParse('origin/main');
-            if (is40HexSha(v)) resolvedBaseSha = v.trim();
+            val = explicitArg();
           } catch (_) {}
-        } else if (
-          (item?.branch && item.branch.includes('offline-replay')) ||
-          (args.branch && typeof args.branch === 'string' && args.branch.includes('offline-replay'))
-        ) {
-          resolvedBaseSha = '0123456789abcdef0123456789abcdef01234567';
-        } else {
-          try {
-            const intake = require('./intake');
-            const targetRoot = args.root || deps?.rootDir || rootDir;
-            const sha = intake.revParseOriginMain(targetRoot, deps || {});
-            if (is40HexSha(sha)) resolvedBaseSha = sha.trim();
-          } catch (_) {}
-          if (!resolvedBaseSha) {
-            try {
-              const intake = require('./intake');
-              const repoRoot = path.resolve(__dirname, '../..');
-              const sha = intake.revParseOriginMain(repoRoot, deps || {});
-              if (is40HexSha(sha)) resolvedBaseSha = sha.trim();
-            } catch (_) {}
+        }
+        if (is40HexSha(val)) {
+          const trimmed = val.trim();
+          if (checkCommit(trimmed, targetWorktree)) {
+            resolvedBaseSha = trimmed;
           }
         }
       }
 
+      if (!resolvedBaseSha && !explicitCandidateSupplied) {
+        const depCandidates = [deps?.baseSha, deps?.base, deps?.repoSha];
+        for (const candItem of depCandidates) {
+          if (candItem !== undefined && candItem !== null) {
+            explicitCandidateSupplied = true;
+            let val = typeof candItem === 'function' ? null : candItem;
+            if (typeof candItem === 'function') {
+              try {
+                val = candItem();
+              } catch (_) {}
+            }
+            if (is40HexSha(val)) {
+              resolvedBaseSha = val.trim();
+              break;
+            }
+          }
+        }
+      }
+
+      if (!resolvedBaseSha && !explicitCandidateSupplied) {
+        if (typeof deps?.revParse === 'function') {
+          try {
+            const v = deps.revParse('origin/main');
+            if (is40HexSha(v)) {
+              const trimmed = v.trim();
+              if (checkCommit(trimmed, targetWorktree)) {
+                resolvedBaseSha = trimmed;
+              }
+            }
+          } catch (_) {}
+        } else {
+          try {
+            const intake = require('./intake');
+            const sha = intake.revParseOriginMain(targetWorktree, deps || {});
+            if (is40HexSha(sha)) {
+              const trimmed = sha.trim();
+              if (checkCommit(trimmed, targetWorktree)) {
+                resolvedBaseSha = trimmed;
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
       if (!resolvedBaseSha) {
+        error('Dispatch refused: BASE_SHA_UNRESOLVED (no resolved 40-hex base commit)');
         log('Dispatch refused: BASE_SHA_UNRESOLVED (no resolved 40-hex base commit)');
         return makeExecuteResult(
           1,
