@@ -34,6 +34,7 @@ const { auditManifest } = require('./manifest-audit');
 const { runCheck, currentBranch, headSha } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
 const { atomicRenameSync } = require('./atomic-rename');
+const { maskEmailsInString } = require('./route-identity-utils');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
 
@@ -1094,6 +1095,69 @@ function stripRouteAlias(modelId, gateway, registry) {
   return modelId;
 }
 
+function getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options) {
+  if (!routeHealth?.paths || !candidate || typeof routeHealthApi?.getPathRecord !== 'function') {
+    return null;
+  }
+  const modelId = candidate.modelId || candidate.id;
+  const gw =
+    candidate.gateway ||
+    (options?.harness === 'hermes' && (candidate.sourceId || candidate.source));
+  if (!modelId || (!gw && !candidate.upstream)) return null;
+  const isWildcard = !candidate.accountId || candidate.accountId === '*';
+
+  if (gw) {
+    const gwPath = isWildcard ? gw : { id: gw, accountId: candidate.accountId };
+    const gwRec = routeHealthApi.getPathRecord(
+      routeHealth,
+      stripRouteAlias(modelId, gw, options?.registry),
+      gwPath
+    );
+    if (gwRec) {
+      if (gwRec.status === 'AVAILABLE' && candidate.upstream && candidate.upstream !== gw) {
+        const upPath = isWildcard
+          ? candidate.upstream
+          : { id: candidate.upstream, accountId: candidate.accountId };
+        const upRec = routeHealthApi.getPathRecord(
+          routeHealth,
+          stripRouteAlias(modelId, candidate.upstream, options?.registry),
+          upPath
+        );
+        if (upRec && upRec.status !== 'AVAILABLE') {
+          return upRec;
+        }
+      }
+      return gwRec;
+    }
+    return null;
+  }
+
+  if (candidate.upstream) {
+    const upPath = isWildcard
+      ? candidate.upstream
+      : { id: candidate.upstream, accountId: candidate.accountId };
+    return (
+      routeHealthApi.getPathRecord(
+        routeHealth,
+        stripRouteAlias(modelId, candidate.upstream, options?.registry),
+        upPath
+      ) || null
+    );
+  }
+
+  return null;
+}
+
+function candidateExclusionReason(routeHealth, candidate, routeHealthApi, options, fresh) {
+  if (fresh?.stale) return fresh.reason;
+  if (candidate?.scanLiveness?.status === 'failed') return candidate.scanLiveness.reason;
+  if (candidate?.credentialEnvMissing || candidate?.blockReason === 'CREDENTIAL_ENV_MISSING') {
+    return 'CREDENTIAL_ENV_MISSING';
+  }
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
+  return rec ? rec.status || 'ROUTE_UNAVAILABLE' : 'ROUTE_PROBE_UNPROVEN';
+}
+
 function isCandidateRouteEligible(
   routeHealth,
   candidate,
@@ -1108,7 +1172,8 @@ function isCandidateRouteEligible(
   ) {
     return false;
   }
-  if (!routeHealth) return true;
+  if (!routeHealth)
+    return !(options && (options.requireRouteHealth || options.routeHealth === null));
   const modelId = candidate && candidate.modelId;
   const gateway =
     candidate &&
@@ -1117,11 +1182,7 @@ function isCandidateRouteEligible(
   if (!modelId || !gateway) return Boolean(modelId);
   const isWildcard = !candidate.accountId || candidate.accountId === '*';
   const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-  const rec = routeHealthApi.getPathRecord(
-    routeHealth,
-    stripRouteAlias(modelId, gateway, options && options.registry),
-    routePath
-  );
+  const rec = getCandidateRouteHealthRecord(routeHealth, candidate, routeHealthApi, options);
   if (rec) return rec.status === 'AVAILABLE';
   // Unprobed admission never overrides a known failure on this route/account,
   // and explicit requireRouteHealth takes precedence over allowUnprobedCandidates.
@@ -1238,6 +1299,7 @@ function applyRouteScope(eligible, excludedRoutes, opts, registry) {
 function assembleForDispatch(discoveryCat, accounts, registry, options) {
   const candidatesApi = require('./candidates');
   const { expandOfferings } = require('./offerings');
+  const { sourceFreshness, readJson } = require('./catalogue-refresh');
   const opts = options || {};
 
   const resolvedRegistry = registry || require('./sources').loadSources();
@@ -1264,6 +1326,28 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       : routeHealthExplicit ||
         requireRouteHealth ||
         Boolean(routeHealth && Object.keys(routeHealth.paths || {}).length > 0);
+
+  const hasFreshness =
+    opts.freshness !== undefined ||
+    opts.freshnessDoc !== undefined ||
+    Boolean(discoveryCat?.freshnessDoc || discoveryCat?.freshness || opts.discoveryDataDir);
+
+  const freshnessDoc =
+    opts.freshness ??
+    opts.freshnessDoc ??
+    discoveryCat?.freshnessDoc ??
+    discoveryCat?.freshness?.doc ??
+    (opts.discoveryDataDir
+      ? readJson(path.join(opts.discoveryDataDir, 'freshness.json'), null)
+      : null);
+
+  const checkFresh = (c) => {
+    if (!hasFreshness) return { stale: false };
+    const res = sourceFreshness(c, { freshness: freshnessDoc, now: opts.now });
+    if (res.staleListingRetained) c.staleListingRetained = true;
+    else delete c.staleListingRetained;
+    return { stale: !res.admitted, reason: res.code || 'SOURCE_CATALOGUE_STALE' };
+  };
   const rawCatalogueRows = (discoveryCat && discoveryCat.candidates) || [];
   const catalogueRows = rawCatalogueRows.map((raw) => {
     if (!raw || typeof raw !== 'object') return raw;
@@ -1367,7 +1451,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
       const excludedRoutes = [...(opts.routeScopeExclusions || [])];
       const seenExcluded = new Set();
       for (const candidate of explicitCandidates) {
+        const fresh = checkFresh(candidate);
         const isEligible =
+          !fresh.stale &&
           isCandidateRouteEligible(
             routeHealth,
             candidate,
@@ -1376,32 +1462,21 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
             // Injected inventory retains its explicit-health policy; unrelated
             // cached routes must not change whether a missing route is admitted.
             routeHealthExplicit || requireRouteHealth
-          ) && candidate.scanLiveness?.status !== 'failed';
+          ) &&
+          candidate.scanLiveness?.status !== 'failed';
         if (isEligible) {
           eligible.push(candidate);
         } else {
           const key = candidatesApi.candidateKey(candidate);
           if (!seenExcluded.has(key)) {
             seenExcluded.add(key);
-            const modelId = candidate && candidate.modelId;
-            const gateway = candidate && candidate.gateway;
-            const routePath =
-              candidate && candidate.accountId
-                ? { id: gateway, accountId: candidate.accountId }
-                : gateway;
-            const rec =
-              routeHealth && modelId && gateway
-                ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
-                : null;
-            const reason =
-              candidate.scanLiveness?.status === 'failed'
-                ? candidate.scanLiveness.reason
-                : candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING'
-                  ? 'CREDENTIAL_ENV_MISSING'
-                  : rec
-                    ? rec.status || 'ROUTE_UNAVAILABLE'
-                    : 'ROUTE_PROBE_UNPROVEN';
+            const reason = candidateExclusionReason(
+              routeHealth,
+              candidate,
+              routeHealthApi,
+              { ...opts, registry: resolvedRegistry },
+              fresh
+            );
             excludedRoutes.push({
               offeringId: key,
               candidateKey: key,
@@ -1486,6 +1561,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         adapterScript: opts.adapterScript,
         platform: opts.platform,
         keepExhausted: true,
+        listOpencodeModels: opts.listOpencodeModels,
+        opencodeModelsFixture:
+          opts.opencodeModelsFixture ||
+          (opts.fixtureDir ? path.join(opts.fixtureDir, 'opencode-models.txt') : undefined),
+        fixtureDir: opts.fixtureDir,
+        env: opts.env,
       }),
       ...candidatesApi.gatewayAccountCandidates({
         registry: resolvedRegistry,
@@ -1515,6 +1596,12 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         adapterScript: opts.adapterScript,
         platform: opts.platform,
         keepExhausted: true,
+        listOpencodeModels: opts.listOpencodeModels,
+        opencodeModelsFixture:
+          opts.opencodeModelsFixture ||
+          (opts.fixtureDir ? path.join(opts.fixtureDir, 'opencode-models.txt') : undefined),
+        fixtureDir: opts.fixtureDir,
+        env: opts.env,
       }),
       ...candidatesApi
         .candidatesFromEvidence(opts.evidenceData, { accounts: evidenceAccounts })
@@ -1588,7 +1675,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
     const seenExcluded = new Set();
     for (const rawCandidate of candidatesApi.mergeCandidates([], assembled)) {
       const candidate = withScanLiveness(rawCandidate, scan, resolvedRegistry);
+      const fresh = checkFresh(candidate);
       if (
+        !fresh.stale &&
         candidate.scanLiveness?.status !== 'failed' &&
         isCandidateRouteEligible(
           routeHealth,
@@ -1605,33 +1694,19 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
         const key = candidatesApi.candidateKey(candidate);
         if (!seenExcluded.has(key)) {
           seenExcluded.add(key);
-          const modelId = candidate && candidate.modelId;
-          const gateway =
-            candidate &&
-            (candidate.gateway ||
-              (opts && opts.harness === 'hermes' && (candidate.sourceId || candidate.source)));
-          const isWildcard = !candidate.accountId || candidate.accountId === '*';
-          const routePath = isWildcard ? gateway : { id: gateway, accountId: candidate.accountId };
-          const rec =
-            routeHealth && modelId && gateway
-              ? routeHealthApi.getPathRecord(routeHealth, modelId, routePath)
-              : null;
-          const reason =
-            candidate.scanLiveness?.status === 'failed'
-              ? candidate.scanLiveness.reason
-              : candidate &&
-                  (candidate.credentialEnvMissing ||
-                    candidate.blockReason === 'CREDENTIAL_ENV_MISSING')
-                ? 'CREDENTIAL_ENV_MISSING'
-                : rec
-                  ? rec.status || 'ROUTE_UNAVAILABLE'
-                  : 'ROUTE_PROBE_UNPROVEN';
+          const reason = candidateExclusionReason(
+            routeHealth,
+            candidate,
+            routeHealthApi,
+            { ...opts, registry: resolvedRegistry },
+            fresh
+          );
           excludedRoutes.push({
             offeringId: key,
             candidateKey: key,
             reason,
             reasonCode: String(reason).split(':')[0],
-            scope: candidate && candidate.blockReason ? 'account' : 'route',
+            scope: fresh.stale ? 'route' : candidate && candidate.blockReason ? 'account' : 'route',
           });
         }
       }
@@ -2098,6 +2173,50 @@ function buildDryRunLog(parts) {
 }
 
 /**
+ * Resolve offline fixture paths from args, deps and env once. Callers pass
+ * CLI args + injected deps and get back { fixtureDir, opencodeModelsFixture,
+ * comboFixture, hasOfflineFixture }. Keeps the env-var names (SHIPDE_*) as
+ * the canonical overrides; the three CLI aliases collapse to one lookup each.
+ */
+function resolveFixturePaths(args, deps) {
+  const fsMod = (deps && deps.fs) || require('fs');
+  const env = (deps && deps.env) || process.env;
+  const fixtureDir =
+    args['fixture-dir'] || args.fixtureDir || (deps && deps.fixtureDir) || env.SHIPDE_FIXTURE_DIR;
+
+  let dirModelsFixture;
+  if (fixtureDir) {
+    const txtPath = path.join(fixtureDir, 'opencode-models.txt');
+    const jsonPath = path.join(fixtureDir, 'opencode-models.json');
+    if (fsMod.existsSync(txtPath)) {
+      dirModelsFixture = txtPath;
+    } else if (fsMod.existsSync(jsonPath)) {
+      dirModelsFixture = jsonPath;
+    }
+  }
+
+  const opencodeModelsFixture =
+    args['opencode-models-fixture'] ||
+    args.opencodeModelsFixture ||
+    (deps && (deps.opencodeModelsFixture || deps.modelsFixture)) ||
+    (deps && deps.env && deps.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
+    env.SHIPDE_OPENCODE_MODELS_FIXTURE ||
+    dirModelsFixture;
+
+  const dirComboFixture = fixtureDir ? path.join(fixtureDir, 'combos.json') : undefined;
+  const comboFixture =
+    args['combo-fixture'] ||
+    args.comboFixture ||
+    (deps && deps.comboFixture) ||
+    (deps && deps.env && deps.env.SHIPDE_COMBO_FIXTURE) ||
+    env.SHIPDE_COMBO_FIXTURE ||
+    dirComboFixture;
+
+  const hasOfflineFixture = Boolean(fixtureDir || comboFixture || opencodeModelsFixture);
+  return { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture };
+}
+
+/**
  * TASK-AI-65: candidate assembly for a profile dispatch. The same assembly the
  * item path uses (discovery catalogue + offerings + registry pins), so a
  * profile-ranked candidate and an item-ranked candidate are the same kind of
@@ -2154,9 +2273,20 @@ async function dispatchProfileCommand(args, deps) {
   } catch (e) {
     evidenceData = {};
   }
+  const {
+    fixtureDir: profileFixtureDir,
+    opencodeModelsFixture: profileOpencodeModelsFixture,
+    comboFixture: profileComboFixture,
+    hasOfflineFixture: profileOfflineFixture,
+  } = resolveFixturePaths(args, deps);
   const optsWithEvidence = Object.assign({}, deps, {
     scanFile: args['scan-file'] || deps?.scanFile,
     evidenceData,
+    ...(profileFixtureDir ? { fixtureDir: profileFixtureDir } : {}),
+    ...(profileOpencodeModelsFixture
+      ? { opencodeModelsFixture: profileOpencodeModelsFixture }
+      : {}),
+    ...(profileComboFixture ? { comboFixture: profileComboFixture } : {}),
     routeHealthFile: args['route-health'] || (deps && deps.routeHealthFile) || undefined,
     accounts,
     discoveryDataDir: (deps && deps.discoveryDataDir) || args['discovery-dir'] || undefined,
@@ -2217,7 +2347,7 @@ async function dispatchProfileCommand(args, deps) {
   });
   const jevAsk =
     (deps && deps.jevAsk) ||
-    (!(args.execute !== true && deps && deps.dryRunOffline === true) &&
+    (!(args.execute !== true && ((deps && deps.dryRunOffline === true) || profileOfflineFixture)) &&
       jev.buildAskFromSource(jevSource, {
         home: optsWithEvidence.home,
         env: (deps && deps.env) || process.env,
@@ -2348,12 +2478,45 @@ function dispatchCommand(args, deps = {}) {
   const execute = args.execute === true;
   const dryRunFlag = Boolean(args['dry-run'] || args.dryRun);
   const isDryRun = dryRunFlag || !execute;
+  const { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture } =
+    resolveFixturePaths(args, deps);
   // Only the real CLI entry sets this: injected test seams keep their paths.
-  const noInference = isDryRun && deps.dryRunOffline === true;
+  const noInference = isDryRun && (deps.dryRunOffline === true || hasOfflineFixture);
   const output = deps.log || console.log;
-  const log = args.json && !execute && !args.plan ? () => {} : output;
+  const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
   const exit = deps.exit || process.exit;
+  let item = null;
+  let lastDecision = null;
+  const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
+    const maskValue = (v) =>
+      typeof v === 'string'
+        ? maskEmailsInString(v)
+        : Array.isArray(v)
+          ? v.map(maskValue)
+          : v && typeof v === 'object'
+            ? Object.fromEntries(
+                Object.entries(v).map(([k, val]) => [maskValue(k), maskValue(val)])
+              )
+            : v;
+    const res = maskValue({
+      chosen: chosen || null,
+      launchedArgvIdentity: launchedId || null,
+      outcome: outcome || null,
+      recorded: recorded || null,
+      ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
+      ...(extra.assessment || (lastDecision && lastDecision.assessment) || (deps && deps.assessment)
+        ? {
+            assessment:
+              extra.assessment || (lastDecision && lastDecision.assessment) || deps.assessment,
+          }
+        : {}),
+      ...extra,
+    });
+    if (args.json) output(JSON.stringify(res, null, 2));
+    exit(code);
+    return { exitCode: code, ...res };
+  };
 
   // BR-166-03: a live dispatch dry-run refuses on stale evidence unless the
   // caller injects fixture candidates (deps.candidates /
@@ -2368,6 +2531,11 @@ function dispatchCommand(args, deps = {}) {
     !args['evidence-dir'] &&
     !args.evidenceDir &&
     !(deps && deps.evidenceDir) &&
+    !args['fixture-dir'] &&
+    !args.fixtureDir &&
+    !(deps && deps.fixtureDir) &&
+    !process.env.SHIPDE_FIXTURE_DIR &&
+    !process.env.SHIPDE_COMBO_FIXTURE &&
     !args['pool-runtime-dir'] &&
     !args['agy-runs-dir'] &&
     !(deps && deps.fakeRunsDir) &&
@@ -2375,7 +2543,8 @@ function dispatchCommand(args, deps = {}) {
     !process.env.AGY_RUNS_DIR &&
     !args.close &&
     !args.complete &&
-    !args.fail
+    !args.fail &&
+    !hasOfflineFixture
   ) {
     const freshness = require('./catalogue-refresh').catalogueFreshness({
       dataDir: args['discovery-dir'] || deps.discoveryDataDir,
@@ -2414,6 +2583,22 @@ function dispatchCommand(args, deps = {}) {
     return { exitCode: 2 };
   }
 
+  if (execute && hasOfflineFixture) {
+    error('Dispatch refused: REPLAY_FIXTURE_WITH_EXECUTE (replay fixtures apply only to dry-run).');
+    return makeExecuteResult(
+      2,
+      null,
+      null,
+      { status: 'refused', reason: 'REPLAY_FIXTURE_WITH_EXECUTE' },
+      null,
+      {
+        error: 'REPLAY_FIXTURE_WITH_EXECUTE',
+        code: 'REPLAY_FIXTURE_WITH_EXECUTE',
+        reason: 'REPLAY_FIXTURE_WITH_EXECUTE',
+      }
+    );
+  }
+
   // TASK-AI-65: report a structured execution outcome for a pinned candidate.
   // The evidence store and cooldowns are updated through routing.js before any
   // next ranking round, so a failure is seen by the Controller, not just logged.
@@ -2445,7 +2630,7 @@ function dispatchCommand(args, deps = {}) {
   if (
     !args.plan &&
     !Array.isArray(deps.candidates) &&
-    (args['combo-config'] || deps.readDispatchComboConfig) &&
+    (args['combo-config'] || deps.readDispatchComboConfig || comboFixture) &&
     deps.nineRouterComboConfig === undefined
   ) {
     const registry = deps.registry || require('./sources').loadSources();
@@ -2456,12 +2641,27 @@ function dispatchCommand(args, deps = {}) {
       }
       return dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config });
     }
-    const read = deps.readDispatchComboConfig;
+    const read = deps.readDispatchComboConfig || require('./writer-combo').readComboConfig;
     return Promise.resolve()
-      .then(() => read({ registry, signal: AbortSignal.timeout(3000) }))
+      .then(() =>
+        read({
+          registry,
+          signal: AbortSignal.timeout(3000),
+          comboFixture,
+          fixtureDir,
+          env: (deps && deps.env) || process.env,
+        })
+      )
       .catch(() => ({ members: null, state: 'COMBO_CONFIG_UNAVAILABLE' }))
       .then((config) =>
-        dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config })
+        dispatchCommand(args, {
+          ...deps,
+          registry,
+          nineRouterComboConfig: config,
+          ...(fixtureDir ? { fixtureDir } : {}),
+          ...(comboFixture ? { comboFixture } : {}),
+          ...(opencodeModelsFixture ? { opencodeModelsFixture } : {}),
+        })
       );
   }
 
@@ -2547,8 +2747,28 @@ function dispatchCommand(args, deps = {}) {
   // Work items resolution
   let items = [];
   const targetItemId = args.item || args['work-item'] || (deps && deps.workItemId);
+  const ticketPath = args.ticket || (deps && deps.ticket);
   if (deps && deps.items) {
     items = deps.items;
+  } else if (ticketPath) {
+    const { parseTicket } = require('./ticket-parser');
+    const resolvedPath = path.isAbsolute(ticketPath)
+      ? ticketPath
+      : path.resolve(rootDir, ticketPath);
+    const content =
+      (deps && deps.ticketContent) ||
+      (fs.existsSync(resolvedPath) ? fs.readFileSync(resolvedPath, 'utf8') : '');
+    const parsed = parseTicket(content, ticketPath);
+    items = [
+      {
+        ...parsed,
+        workItemId: parsed.id,
+        role: args.role || (deps && deps.role) || 'author.foundation',
+        branch: args.branch || (deps && deps.branch) || 'feat/' + String(parsed.id).toLowerCase(),
+        itemSource: ticketPath,
+        priority: 0,
+      },
+    ];
   } else if (targetItemId) {
     items = [
       {
@@ -2592,13 +2812,13 @@ function dispatchCommand(args, deps = {}) {
     }
   }
 
-  if (items.length === 0 && !deps.candidates && !args.item) {
+  if (items.length === 0 && !deps.candidates && !args.item && !ticketPath) {
     log('Dispatch: 0 assignments (0 deferred)');
     exit(0);
     return { exitCode: 0, dispatched: 0 };
   }
 
-  const item = items[0] || {
+  item = items[0] || {
     workItemId: targetItemId || 'TASK-DISPATCH',
     role: args.role || (deps && deps.role) || 'author.foundation',
     branch: args.branch || (deps && deps.branch) || 'feat/dispatch-work',
@@ -2631,6 +2851,9 @@ function dispatchCommand(args, deps = {}) {
       path.join(__dirname, 'data', 'discovery');
     try {
       discCat = readDiscoveryCatalogue({ dataDir: discDir });
+      const { catalogueFreshness } = require('./catalogue-refresh');
+      discCat.freshness = catalogueFreshness({ dataDir: discDir, now: deps && deps.now });
+      discCat.stale = discCat.freshness?.stale;
     } catch {
       discCat = { candidates: [] };
     }
@@ -2678,11 +2901,17 @@ function dispatchCommand(args, deps = {}) {
 
   const accounts = deps && deps.accounts !== undefined ? deps.accounts : listAccounts() || [];
   const routeHealthApi = require('./route-health');
+  const { fixtureDir: dispatchFixtureDir, opencodeModelsFixture: dispatchOpencodeModelsFixture } =
+    resolveFixturePaths(args, deps);
   const ticketRoute = {
     scanFile: args['scan-file'] || deps.scanFile,
     role: item.role,
     routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
     ...(noInference ? { refreshRoutes: false } : {}),
+    ...(dispatchFixtureDir ? { fixtureDir: dispatchFixtureDir } : {}),
+    ...(dispatchOpencodeModelsFixture
+      ? { opencodeModelsFixture: dispatchOpencodeModelsFixture }
+      : {}),
   };
   const candidateList = assembleForDispatch(
     discCat,
@@ -2892,13 +3121,21 @@ function dispatchCommand(args, deps = {}) {
       };
     };
     const decision = rankDryRun(annotated);
-    const structured = () =>
-      require('./dispatch-output').dispatchOutput(
+    if (item && item.itemSource) {
+      decision.itemSource = item.itemSource;
+    }
+    const structured = () => {
+      const out = require('./dispatch-output').dispatchOutput(
         profile,
         assessment,
         eligibleCandidates,
         decision
       );
+      if (item && item.itemSource) {
+        out.itemSource = item.itemSource;
+      }
+      return out;
+    };
     scoring.printSources(decision, log);
     if (
       resumed &&
@@ -2940,7 +3177,14 @@ function dispatchCommand(args, deps = {}) {
         );
       }
       exit(1);
-      return { exitCode: 1, decision, dryRun: true };
+      return {
+        exitCode: 1,
+        decision,
+        dryRun: true,
+        ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
+        ...(assessment ? { assessment } : {}),
+        profile,
+      };
     }
 
     const simulateFailure = args['simulate-failure'] || (deps && deps.simulateFailure);
@@ -3102,6 +3346,9 @@ function dispatchCommand(args, deps = {}) {
       simulatedFailure,
       checkpoint: nextCheckpoint,
       dryRun: true,
+      ...(item && item.itemSource ? { itemSource: item.itemSource } : {}),
+      ...(assessment ? { assessment } : {}),
+      profile,
     };
   }
 
@@ -3117,7 +3364,6 @@ function dispatchCommand(args, deps = {}) {
     args['max-attempts'] || args.maxAttempts || (deps && deps.maxAttempts) || 3
   );
   let attempt = 0;
-  let lastDecision = null;
   const decisionsStore = require('./decisions');
   const failureClassifier = require('./failure-classifier');
   const nowForWriter = (deps && deps.now) || Date.now();
@@ -3251,6 +3497,8 @@ function dispatchCommand(args, deps = {}) {
       });
       scoring.printSources(decision, log);
       lastDecision = decision;
+      if (item && item.itemSource) lastDecision.itemSource = item.itemSource;
+      lastDecision.assessment = { ...deps.assessment, ...scoringAssessment };
 
       if (!decision.chosen) {
         log(
@@ -3271,8 +3519,15 @@ function dispatchCommand(args, deps = {}) {
               (rej.scope ? ' [' + rej.scope + ']' : '')
           );
         }
-        exit(1);
-        return { exitCode: 1, decision, attempts: attempt };
+        const lastFail = failedAttempts[failedAttempts.length - 1];
+        return makeExecuteResult(
+          1,
+          lastFail?.key,
+          lastFail?.launchedArgvIdentity,
+          lastFail?.outcome || { status: 'failed', reason: 'NO_ELIGIBLE_CANDIDATE' },
+          lastFail?.recorded,
+          { decision, attempts: attempt }
+        );
       }
 
       finalChosenKey = decision.chosen;
@@ -3323,6 +3578,7 @@ function dispatchCommand(args, deps = {}) {
     let thrownError = null;
     let isFailure = true;
     let sessionHandle = null;
+    let launchedArgvIdentity = null;
     try {
       let launcher = (deps && deps.run) || runHarness;
       // AI-64-P03: an injected runner replaces what runs the harness process; it
@@ -3330,7 +3586,7 @@ function dispatchCommand(args, deps = {}) {
       // caller that injected a runner switch isolation off silently, with no log
       // line, which is a control that only holds in the configuration nobody
       // tests.
-      if (args['isolated-worker']) {
+      if (args['isolated-worker'] || deps?.isolatedWorker) {
         launcher = require('./isolation-launcher').getIsolatedLauncher();
       }
 
@@ -3347,6 +3603,36 @@ function dispatchCommand(args, deps = {}) {
       if (candidateKey !== finalChosenKey) {
         throw new Error('CANDIDATE_KEY_CHANGED_BEFORE_LAUNCH');
       }
+
+      const chosenIdentity =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+      const cand = finalChosenCandidate;
+      launchedArgvIdentity = {
+        harness: cand.harness || chosenIdentity.harness || harnessName,
+        accessPath: cand.accessPath || chosenIdentity.accessPath || '',
+        gateway: cand.gateway || chosenIdentity.gateway || '',
+        upstream: cand.upstream || chosenIdentity.upstream || '',
+        account: cand.accountId || cand.account || chosenIdentity.account || '*',
+        quotaScope: cand.quotaScope || chosenIdentity.quotaScope || '',
+        modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
+      };
+
+      const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
+      const promptText = pFile
+        ? fs.readFileSync(
+            fs.existsSync(pFile) ? pFile : path.resolve(args.cwd || deps?.cwd || rootDir, pFile),
+            'utf8'
+          )
+        : args.prompt ||
+          deps?.prompt ||
+          defaultPrompt(item, {
+            isolatedWorker: Boolean(args['isolated-worker'] || deps?.isolatedWorker),
+          });
+      const launchTimeoutMs =
+        Number(args['timeout-ms'] || args.timeoutMs || deps?.timeoutMs) ||
+        (Number(args.timeout || deps?.timeout)
+          ? Number(args.timeout || deps?.timeout) * 1000
+          : undefined);
 
       // The loop hands the harness a durable-report path. Under `-z` stdout is
       // the final response prose, so the session id can only come from the
@@ -3366,7 +3652,7 @@ function dispatchCommand(args, deps = {}) {
           gateway: finalChosenCandidate.gateway || '',
           upstream: finalChosenCandidate.upstream,
           quotaScope: finalChosenCandidate.quotaScope,
-          prompt: defaultPrompt(item, { isolatedWorker: Boolean(args['isolated-worker']) }),
+          prompt: promptText,
           branch: item.branch,
           base: args.base || (deps && deps.base) || 'main',
           cwd: args.cwd || (deps && deps.cwd) || rootDir,
@@ -3379,6 +3665,11 @@ function dispatchCommand(args, deps = {}) {
             role: item.role,
             project: args.project || 'shipde-platform',
           },
+          printTimeoutSec:
+            Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
+            (args.timeout ? Number(args.timeout) : 3600),
+          timeoutMs: launchTimeoutMs,
+          effort: finalChosenCandidate.effort || args.effort || deps?.effort,
         });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
@@ -3457,7 +3748,7 @@ function dispatchCommand(args, deps = {}) {
 
         try {
           launchRes = launcher(adapter, launchArgs, {
-            cwd: args.cwd || rootDir,
+            cwd: args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
             baseSha: args['base-sha'] || (deps && deps.baseSha) || undefined,
             branch: item.branch,
@@ -3466,6 +3757,15 @@ function dispatchCommand(args, deps = {}) {
             // same decision log this dispatch records its launch in.
             decisionDir,
             checkpoint: checkpointFile,
+            timeoutMs: launchTimeoutMs,
+            candidateKey: finalChosenKey,
+            candidate: finalChosenCandidate,
+            model: finalChosenCandidate.modelId || finalChosenCandidate.model,
+            modelId: finalChosenCandidate.modelId || finalChosenCandidate.model,
+            account: finalChosenCandidate.accountId || finalChosenCandidate.account,
+            accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
+            harness: harnessName,
+            effort: finalChosenCandidate.effort || args.effort || deps?.effort,
           });
         } catch (err) {
           thrownError = err;
@@ -3585,9 +3885,24 @@ function dispatchCommand(args, deps = {}) {
         exitCode: 0,
         source: 'dispatch',
       });
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const baseOutcome = structuredOutcome(finalChosenKey, launchRes, null, {
+        status: 'completed',
+        checkpoint: checkpointFile,
+      });
+      const outcome =
+        parsedOutcome && typeof parsedOutcome === 'object'
+          ? { ...baseOutcome, payload: parsedOutcome }
+          : baseOutcome;
       log('Dispatch succeeded on ' + finalChosenKey);
-      exit(0);
-      return { exitCode: 0, chosen: finalChosenKey, result: launchRes, attempts: attempt };
+      return makeExecuteResult(
+        0,
+        finalChosenKey,
+        launchedArgvIdentity,
+        outcome,
+        { status: 'passed' },
+        { result: launchRes, attempts: attempt }
+      );
     } else {
       evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
         status: 'failed',
@@ -3621,6 +3936,7 @@ function dispatchCommand(args, deps = {}) {
         /timeout|stall|hang/i.test(
           String(rawFail.body || rawFail.stderr || (thrownError && thrownError.message) || '')
         );
+      let lastRecorded = null;
       try {
         const routeHealthApi = require('./route-health');
         const storeOrPath = routeHealthApi.resolveRouteHealthFile(args, deps);
@@ -3638,7 +3954,7 @@ function dispatchCommand(args, deps = {}) {
               : Array.isArray(deps && deps.load)
                 ? deps.load.length
                 : undefined;
-        routeHealthApi.recordExecutionResult(
+        const recordResult = routeHealthApi.recordExecutionResult(
           storeOrPath,
           modelId,
           routeId,
@@ -3657,21 +3973,33 @@ function dispatchCommand(args, deps = {}) {
             saveStore: deps && (deps.saveStore || deps.saver),
           }
         );
+        const pRec = recordResult?.store?.paths?.[recordResult?.key];
+        lastRecorded = recordResult
+          ? {
+              key: recordResult.key,
+              status: pRec?.status || recordResult.recorded?.reason,
+              nextCheckAt: pRec?.nextCheckAt,
+              reason: recordResult.recorded?.reason,
+            }
+          : null;
       } catch (_) {}
-      const parsedOutcome = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
+      const parsedOutcome = launchRes?.stdout ? parseLastJson(launchRes.stdout) : null;
+      const baseOutcome = structuredOutcome(finalChosenKey, launchRes, classification, {
+        status: 'failed',
+        checkpoint: checkpointFile,
+        reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
+      });
       const outcome =
-        parsedOutcome && parsedOutcome.candidateKey
-          ? parsedOutcome
-          : structuredOutcome(finalChosenKey, launchRes, classification, {
-              status: 'failed',
-              checkpoint: checkpointFile,
-              reason: rawFail.body || rawFail.stderr || (thrownError && thrownError.message),
-            });
+        parsedOutcome && typeof parsedOutcome === 'object'
+          ? { ...baseOutcome, payload: parsedOutcome }
+          : baseOutcome;
       failedAttempts.push({
         key: finalChosenKey,
         candidate: finalChosenCandidate,
         classification: classification,
         outcome,
+        launchedArgvIdentity,
+        recorded: lastRecorded,
       });
       const scrubbedStderr = decisionsStore.scrubText(rawFail.stderr);
       log('Candidate failed: ' + finalChosenKey + (scrubbedStderr ? ' — ' + scrubbedStderr : ''));
@@ -3681,8 +4009,15 @@ function dispatchCommand(args, deps = {}) {
   }
 
   log('Max dispatch attempts (' + maxAttempts + ') reached without success.');
-  exit(1);
-  return { exitCode: 1, decision: lastDecision, attempts: attempt, failedAttempts };
+  const lastFail = failedAttempts[failedAttempts.length - 1];
+  return makeExecuteResult(
+    1,
+    lastFail?.key || (lastDecision && lastDecision.chosen),
+    lastFail?.launchedArgvIdentity,
+    lastFail?.outcome || { status: 'failed', reason: 'MAX_ATTEMPTS_EXHAUSTED' },
+    lastFail?.recorded,
+    { decision: lastDecision, attempts: maxAttempts, failedAttempts }
+  );
 }
 
 const SHADOW_FLAGS = new Set(['project', 'compare', 'json', 'dry-run', 'dryRun']);
@@ -5063,7 +5398,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
       );
     }
     if (result?.exitCode) process.exitCode = result.exitCode;
-    return;
+    return result;
   }
   if (command === 'shadow') return shadowCommand(args);
   // sweep-import (TASK-AI-142 T3): ingest provider probe sweep into route evidence
@@ -5530,6 +5865,9 @@ module.exports = {
   assembleCandidates,
   assembleForDispatch,
   stripRouteAlias,
+  getCandidateRouteHealthRecord,
+  candidateExclusionReason,
+  isCandidateRouteEligible,
   discoveryCommand,
   evidenceCommand,
   reviewCommand,

@@ -959,19 +959,67 @@ function builtinOpencodeModels(source, o) {
       o?.timeoutMs;
     const timeoutMs = Number(configuredTimeout);
 
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    const env = (o && o.env) || process.env;
+    const fsMod = (o && o.fs) || require('fs');
+    const pathMod = require('path');
+    const fixtureDir =
+      o?.fixtureDir || (o?.env && o.env.SHIPDE_FIXTURE_DIR) || env.SHIPDE_FIXTURE_DIR;
+
+    let dirModelsFixture;
+    if (fixtureDir) {
+      const txtPath = pathMod.join(fixtureDir, 'opencode-models.txt');
+      const jsonPath = pathMod.join(fixtureDir, 'opencode-models.json');
+      if (fsMod.existsSync(txtPath)) {
+        dirModelsFixture = txtPath;
+      } else if (fsMod.existsSync(jsonPath)) {
+        dirModelsFixture = jsonPath;
+      }
+    }
+
+    const fixture =
+      o?.opencodeModelsFixture ||
+      o?.modelsFixture ||
+      (o?.env && o.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
+      env.SHIPDE_OPENCODE_MODELS_FIXTURE ||
+      dirModelsFixture;
+
+    if (!fixture && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       return [];
     }
 
-    const run =
-      o?.listOpencodeModels ||
-      (() =>
+    let run = o?.listOpencodeModels;
+    if (!run && fixture) {
+      run = () => {
+        const fs = require('fs');
+        const raw = typeof fixture === 'object' ? fixture : fs.readFileSync(fixture, 'utf8');
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const list = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed?.models)
+              ? parsed.models
+              : null;
+          if (list) {
+            return list
+              .map((m) => {
+                const s = typeof m === 'string' ? m : m?.id || m?.model || '';
+                return s.includes('/') ? s : `${provider}/${s}`;
+              })
+              .join('\n');
+          }
+        } catch {}
+        return String(raw);
+      };
+    }
+    if (!run) {
+      run = () =>
         require('child_process').execFileSync('opencode', ['models'], {
           encoding: 'utf8',
           timeout: timeoutMs,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'ignore'],
-        }));
+        });
+    }
     models = String(run())
       .split(/\r?\n/)
       .map((l) => l.trim())
@@ -1062,7 +1110,14 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
       }
     }
   }
-  if (Array.isArray(opts.catalogue)) {
+  const sourceHarness =
+    source.harness ||
+    (reg &&
+      reg.dispatch &&
+      reg.dispatch.providers &&
+      reg.dispatch.providers[String(source.id).toLowerCase()] &&
+      reg.dispatch.providers[String(source.id).toLowerCase()].harness);
+  if (Array.isArray(opts.catalogue) && sourceHarness !== 'direct-http') {
     const prefix = key + '/';
     const altPrefix = source.id + '/';
     for (const item of opts.catalogue) {
@@ -1322,6 +1377,94 @@ function generateCandidates(opts) {
   } finally {
     ambientModelCatalog = previous;
   }
+}
+
+function isSourceInGenerationInput(source, o, registry) {
+  if (!source) return false;
+  const isGlobalRegistry = Boolean(registry && registry.file);
+  if (!isGlobalRegistry) {
+    return true;
+  }
+  const sourceId = source.id;
+  if (!sourceId) return false;
+
+  if (o.source === sourceId || o.sourceId === sourceId) return true;
+  if (Array.isArray(o.sources)) {
+    if (o.sources.some((s) => (typeof s === 'string' ? s === sourceId : s && s.id === sourceId))) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(o.accounts)) {
+    if (
+      o.accounts.some(
+        (a) =>
+          a &&
+          (a.source === sourceId ||
+            a.gateway === sourceId ||
+            a.provider === sourceId ||
+            a.sourceId === sourceId)
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (o.sourceModels && typeof o.sourceModels === 'object') {
+    if (
+      o.sourceModels[sourceId] ||
+      (source.opencodeProvider && o.sourceModels[source.opencodeProvider])
+    ) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(o.catalogue)) {
+    const dRoute = sourcesApi.dispatchRoute(sourceId, registry);
+    const prefix = (dRoute && dRoute.modelPrefix) || `${sourceId}/`;
+    const inCatalogue = o.catalogue.some((item) => {
+      if (!item) return false;
+      if (typeof item === 'string') {
+        return prefix && item.trim().startsWith(prefix);
+      }
+      const itemSource =
+        item.source ||
+        item.gateway ||
+        item.sourceId ||
+        item.upstream ||
+        (Array.isArray(item.sourceIds) ? item.sourceIds[0] : null);
+      const mId = String(item.modelId || item.model || item.id || '').trim();
+      return (
+        itemSource === sourceId ||
+        (prefix && mId.startsWith(prefix)) ||
+        (Array.isArray(item.sourceIds) && item.sourceIds.includes(sourceId))
+      );
+    });
+    if (inCatalogue) return true;
+  }
+
+  if (
+    o.env &&
+    source.credential?.env &&
+    o.env[source.credential.env] !== undefined &&
+    String(o.env[source.credential.env]).trim().length > 0
+  ) {
+    return true;
+  }
+
+  const hasExplicitFixtures =
+    Array.isArray(o.catalogue) ||
+    Array.isArray(o.accounts) ||
+    Array.isArray(o.sources) ||
+    Boolean(o.sourceModels);
+  if (!hasExplicitFixtures) {
+    const envName = source.credential?.env;
+    if (envName && process.env[envName] && String(process.env[envName]).trim().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function generateCandidatesWithCatalog(opts) {
@@ -1730,15 +1873,64 @@ function generateCandidatesWithCatalog(opts) {
                 .map((e) => (typeof e === 'string' ? e : e && (e.modelId || e.model || e.id)))
                 .filter(Boolean)
             );
-            const models = liveAgyAccountModels(acc, source, accountModels(acc), o).filter(
-              (model) =>
-                // A direct source's own inventory is authoritative for its wire ids.
-                // Another gateway's catalogue may use entirely different aliases.
-                (Array.isArray(source.models) && source.models.includes(model)) ||
-                catalogue.length === 0 ||
-                catalogue.includes(model) ||
-                catalogueModelIds.has(model)
-            );
+            const dRoute = sourcesApi.dispatchRoute(source.id, registry);
+            const prefix = (dRoute && dRoute.modelPrefix) || `${source.id}/`;
+            const declared = accountModels(acc);
+            let models;
+            if (declared.length > 0) {
+              models = liveAgyAccountModels(acc, source, declared, o).filter(
+                (model) =>
+                  // A direct source's own inventory is authoritative for its wire ids.
+                  // Another gateway's catalogue may use entirely different aliases.
+                  (Array.isArray(source.models) && source.models.includes(model)) ||
+                  catalogue.length === 0 ||
+                  catalogue.includes(model) ||
+                  catalogueModelIds.has(model)
+              );
+            } else {
+              const sourceCatalogueModels = new Set();
+              for (const item of catalogue) {
+                if (!item) continue;
+                if (typeof item === 'string') {
+                  const s = item.trim();
+                  if (prefix && s.startsWith(prefix)) {
+                    const bare = s.slice(prefix.length).trim();
+                    if (bare) sourceCatalogueModels.add(bare);
+                  }
+                  continue;
+                }
+                const itemSource =
+                  item.source ||
+                  item.gateway ||
+                  item.sourceId ||
+                  item.upstream ||
+                  (Array.isArray(item.sourceIds) ? item.sourceIds[0] : null);
+                const mId = String(item.modelId || item.model || item.id || '').trim();
+                const matchesSource =
+                  itemSource === source.id ||
+                  (prefix && mId.startsWith(prefix)) ||
+                  (Array.isArray(item.sourceIds) && item.sourceIds.includes(source.id));
+                if (matchesSource && mId) {
+                  const bare =
+                    prefix && mId.startsWith(prefix) ? mId.slice(prefix.length).trim() : mId;
+                  if (bare) sourceCatalogueModels.add(bare);
+                }
+              }
+              models = liveAgyAccountModels(acc, source, Array.from(sourceCatalogueModels), o);
+            }
+
+            if (
+              models.length === 0 &&
+              Array.isArray(o.candidateGenerationRejections) &&
+              isSourceInGenerationInput(source, o, registry)
+            ) {
+              o.candidateGenerationRejections.push({
+                modelId: '',
+                sourceId: source.id,
+                reasonCode: 'MODELS_UNKNOWN_FOR_SOURCE',
+              });
+            }
+
             for (const model of models) {
               const row = accountModelRow(acc, model) || {};
               let contextWindow = undefined;
@@ -1746,7 +1938,8 @@ function generateCandidatesWithCatalog(opts) {
                 (e) =>
                   typeof e === 'object' &&
                   e &&
-                  (e.modelId || e.model || e.id) === model &&
+                  ((e.modelId || e.model || e.id) === model ||
+                    (prefix && (e.modelId || e.model || e.id) === prefix + model)) &&
                   (!e.gateway || e.gateway === source.id) &&
                   (!e.source || e.source === source.id)
               );
@@ -2312,7 +2505,12 @@ function poolAccountCandidates(opts) {
   const runtimeDir = pool.runsDir(o);
   let hasRunsDir = false;
   try {
-    hasRunsDir = Boolean(shouldDiscoverPool && runtimeDir && fs.existsSync(runtimeDir));
+    hasRunsDir = Boolean(
+      shouldDiscoverPool &&
+      runtimeDir &&
+      fs.existsSync(runtimeDir) &&
+      (!o.spawnSync || o.fakeRunsDir || o.runsDir)
+    );
   } catch {}
 
   if (shouldDiscoverPool) {
@@ -2439,17 +2637,49 @@ function poolAccountCandidates(opts) {
       // Keep exhausted routes in the candidate set so Controller can record
       // the quota rejection in the structured dispatch decision.
       let quotaExhausted = false;
-      if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
-        const familyRows = quotaReading.rows.filter(
-          (r) => (family && r.family === family) || r.family === model || r.model === model
-        );
-        if (familyRows.length > 0) {
-          const isZero = familyRows.some(
-            (r) => r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true
-          );
-          if (isZero) {
-            if (!o.keepExhausted) continue;
+      let quotaBlockReason;
+      if (hasRunsDir && quotaReading?.rows?.length > 0) {
+        const resolveGroup = pool.resolveModelGroup || ((m, q) => q?.modelGroups?.[m] || null);
+        const group = resolveGroup(model, quotaReading, { accountId: acc, options: o });
+        const hasGroups =
+          Boolean(group) ||
+          quotaReading.rows.some((r) => Boolean(r.group)) ||
+          Boolean(quotaReading.rawDoc?.command?.data?.groups?.length) ||
+          Boolean(quotaReading.rawDoc?.groups?.length) ||
+          Object.keys(quotaReading.modelGroups || {}).length > 0;
+
+        if (hasGroups) {
+          if (!group) {
+            quotaBlockReason = 'QUOTA_GROUP_UNKNOWN';
             quotaExhausted = true;
+            if (!o.keepExhausted) continue;
+          } else {
+            const rows = quotaReading.rows.filter(
+              (r) =>
+                (r.group && r.group === group) ||
+                (!r.group && r.family === group) ||
+                r.model === model
+            );
+            if (rows.some((r) => r.remainingPercent <= 0 || r.disabled)) {
+              quotaBlockReason = 'QUOTA_EXHAUSTED';
+              quotaExhausted = true;
+              if (!o.keepExhausted) continue;
+            }
+          }
+        } else {
+          const familyRows = quotaReading.rows.filter(
+            (r) => (family && r.family === family) || r.family === model || r.model === model
+          );
+          if (familyRows.length > 0) {
+            const empty = (r) =>
+              r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true;
+            const exact = familyRows.filter((r) => r.model === model);
+            const isZero = exact.length > 0 ? exact.some(empty) : familyRows.every(empty);
+            if (isZero) {
+              quotaBlockReason = 'QUOTA_EXHAUSTED';
+              quotaExhausted = true;
+              if (!o.keepExhausted) continue;
+            }
           }
         }
       }
@@ -2540,7 +2770,7 @@ function poolAccountCandidates(opts) {
         source: 'agy-pool',
         kind: 'agent-cli',
         blocked: quotaExhausted,
-        blockReason: quotaExhausted ? 'QUOTA_EXHAUSTED' : undefined,
+        blockReason: quotaExhausted ? quotaBlockReason || 'QUOTA_EXHAUSTED' : undefined,
         blockScope: quotaExhausted ? 'account' : undefined,
         capabilities: effectiveCapabilities,
         contextWindow,
@@ -2982,6 +3212,11 @@ function annotateCandidates(candidates, evidenceData, opts) {
     const block = evidence.isCandidateBlocked
       ? evidence.isCandidateBlocked(evidenceData, c, annotOpts)
       : evidence.isUpstreamBlocked(evidenceData, c, annotOpts);
+    // A quota block measured while assembling the route (for example an AGY lane whose live quota
+    // reads zero) is evidence of its own; evidence that merely finds no block must not clear it.
+    const assembledQuotaBlock =
+      c.blocked === true && String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED');
+    if (assembledQuotaBlock && !block.blocked) continue;
     c.blocked = block.blocked;
     if (block.blocked) {
       c.blockReason = block.reason;

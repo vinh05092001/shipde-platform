@@ -864,7 +864,9 @@ function classifyFailure(input) {
     // A connection layer without a confirmed ID says nothing about any connection.
     const stated = input.authLayer === 'connection' && !input.connectionId ? null : input.authLayer;
     const layer =
-      stated || (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
+      stated ||
+      (/no active credentials for provider:\s*\S+/i.test(text) ? 'upstream-credential' : null) ||
+      (upstreamAuthSignal(rawBodyText || text, input) ? 'upstream-route' : null);
     const byLayer = {
       'gateway-key': [Cause.ACCOUNT_AUTH_FAILED, Scope.ACCOUNT, HumanAction.REQUIRED],
       'upstream-credential': [Cause.UPSTREAM_CREDENTIAL, Scope.UPSTREAM, HumanAction.NONE],
@@ -883,12 +885,17 @@ function classifyFailure(input) {
     });
   }
 
+  const is9RouterNoCreds =
+    (!effectiveStatus || effectiveStatus === 401) &&
+    /no active credentials for provider:\s*\S+/i.test(text);
+
   // Account auth failure on 401 or auth text with account
   if (
-    (effectiveStatus === 401 && accountId && accountId !== '*') ||
-    /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
-      text
-    )
+    !is9RouterNoCreds &&
+    ((effectiveStatus === 401 && accountId && accountId !== '*') ||
+      /authentication failed|login.required|not logged in|requires login|no [a-z0-9 -]*credentials stored/i.test(
+        text
+      ))
   ) {
     return addRetryFields({
       cause: Cause.ACCOUNT_AUTH_FAILED,
@@ -901,7 +908,11 @@ function classifyFailure(input) {
   }
 
   // Case 5: upstream credential problem (401 unauthorized on upstream)
-  if (effectiveStatus === 401 || /invalid.*token|invalid.*credential/i.test(text)) {
+  if (
+    effectiveStatus === 401 ||
+    /invalid.*token|invalid.*credential/i.test(text) ||
+    is9RouterNoCreds
+  ) {
     return addRetryFields({
       cause: Cause.UPSTREAM_CREDENTIAL,
       scope: Scope.UPSTREAM,
@@ -958,11 +969,30 @@ function classifyFailure(input) {
     });
   }
 
+  // 9Router model concurrency limit: "<model> has reached its concurrency capacity"
+  const is9RouterConcurrency =
+    (!effectiveStatus || effectiveStatus === 503 || exitCode !== 0) &&
+    /has reached its\s+concurrency\s+capacity/i.test(text);
+
+  if (is9RouterConcurrency) {
+    const resetMs = parseResetTime(text);
+    return addRetryFields({
+      cause: Cause.GENUINE_CAPACITY,
+      scope: Scope.MODEL,
+      cooldownMs: resetMs ?? DEFAULT_COOLDOWNS[Cause.GENUINE_CAPACITY],
+      humanAction: HumanAction.NONE,
+      evidence,
+      resetTime: resetMs ? classificationNow + resetMs : null,
+      retryAfterMs: resetMs,
+    });
+  }
+
   // Case 9: genuine capacity (503 with "no capacity available")
-  if (
+  const isGenuineCapacity =
     (effectiveStatus === 503 || exitCode !== 0) &&
-    /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity/i.test(text)
-  ) {
+    /no capacity available|capacity.{0,10}unavailable|server.{0,10}capacity/i.test(text);
+
+  if (isGenuineCapacity) {
     const resetMs = parseResetTime(text);
     return addRetryFields({
       cause: Cause.GENUINE_CAPACITY,

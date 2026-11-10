@@ -1,9 +1,11 @@
 'use strict';
-const test = require('node:test');
+const fs = require('node:fs');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { dispatchOutput } = require('../dispatch-output');
 const { decisionFromDispatch, firstLaunch, launchFromDecision } = require('../route-handoff');
 const routing = require('../routing');
+const { createWorktreeClaim } = require('./helpers/worktree-claim');
 
 const profile = { taskId: 'TASK-AI-171', role: 'researcher', proofFloor: 'NONE', costCeiling: 10 };
 const now = Date.parse('2026-11-08T00:00:00Z');
@@ -23,11 +25,17 @@ const registry = {
     launchModes: { opencode: ['full-access'] },
   },
 };
+const claimHelper = createWorktreeClaim();
+after(() => {
+  claimHelper.cleanup();
+  assert.equal(fs.existsSync(claimHelper.root), false);
+  assert.equal(fs.existsSync(claimHelper.claim.lockFile), false);
+});
 const ticket = {
   workItemId: profile.taskId,
   outputTokens: 1,
   minProof: 'HARNESS_PASS',
-  request: {},
+  request: { cwd: claimHelper.worktree },
 };
 function envelope() {
   const rows = Array.from({ length: 7 }, (_, i) => ({
@@ -83,6 +91,7 @@ for (const difficulty of ['simple', 'hard', 'unrated']) {
           evidence: [{ status: 'passed', proofLevel: ticket.minProof }],
         })),
       },
+      ...claimHelper.context,
     };
     assert.equal(firstLaunch(decision, ticket, context, registry).launch.offeringId, input.chosen);
   });

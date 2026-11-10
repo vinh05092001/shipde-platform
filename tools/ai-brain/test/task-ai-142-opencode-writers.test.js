@@ -30,14 +30,13 @@ function source(extra) {
 const gen = (src) => generateCandidates({ registry: { version: 2, sources: [src] }, accounts: [] });
 
 describe('probed opencode providers become writer candidates', () => {
+  // TASK-AI-171 A2: direct-http sources launch through harness 'direct-http' (harness.js:539 -> opencodeDirect) with wire model id
   test('a source with an opencode provider key yields x/m1', () => {
-    const out = gen(source({ opencodeProvider: 'x' })).filter(
-      (c) => c.harness === 'opencode-direct'
-    );
+    const out = gen(source({ opencodeProvider: 'x' })).filter((c) => c.harness === 'direct-http');
     assert.equal(out.length, 1);
-    assert.equal(out[0].modelId, 'x/m1');
+    assert.equal(out[0].modelId, 'm1');
     assert.equal(out[0].gateway, 'opencode-provider-x-options');
-    assert.equal(out[0].upstream, 'x');
+    assert.equal(out[0].upstream, 'opencode-provider-x-options');
     assert.deepEqual(out[0].capabilities, { contextWindow: 65536 });
   });
 
@@ -57,10 +56,11 @@ describe('probed opencode providers become writer candidates', () => {
     );
   });
 
+  // TASK-AI-171 A2: direct-http sources launch through harness 'direct-http' using source id and wire model id
   test('a source without an opencode provider key yields opencode-direct using source id', () => {
-    const out = gen(source({})).filter((c) => c.harness === 'opencode-direct');
+    const out = gen(source({})).filter((c) => c.harness === 'direct-http');
     assert.equal(out.length, 1);
-    assert.equal(out[0].modelId, 'opencode-provider-x-options/m1');
+    assert.equal(out[0].modelId, 'm1');
     assert.equal(out[0].gateway, 'opencode-provider-x-options');
     assert.equal(out[0].upstream, 'opencode-provider-x-options');
   });

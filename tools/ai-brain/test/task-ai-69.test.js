@@ -645,6 +645,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         project: 'shipde-platform',
         'decision-dir': decisionDir,
         'evidence-dir': evidenceDir,
+        'route-health': path.join(root, 'route-health.json'),
         item: 'TASK-AI-999',
         home,
       },
@@ -653,6 +654,7 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
         candidates: [poolCand],
         evidenceDir,
         decisionDir,
+        routeHealthFile: path.join(root, 'route-health.json'),
         home,
         log: fakeLog,
         exit: () => {},
@@ -757,37 +759,46 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
     const directParsed = parseQuotaOutput(realFixtureJson);
     assert.equal(directParsed.available, true);
     assert.equal(directParsed.rows.length, 4);
+    // TASK-AI-171 A3: quota rows gain group and resetAt for quota group matching
     assert.deepEqual(directParsed.rows, [
       {
+        group: 'Gemini Models',
         family: 'gemini',
         window: 'weekly',
         remainingPercent: 85,
         known: true,
         disabled: false,
+        resetAt: '2026-10-08T08:45:02Z',
         resetsAt: '2026-10-08T08:45:02Z',
       },
       {
+        group: 'Gemini Models',
         family: 'gemini',
         window: 'fiveHour',
         remainingPercent: 100,
         known: true,
         disabled: false,
+        resetAt: '2026-10-02T01:26:02Z',
         resetsAt: '2026-10-02T01:26:02Z',
       },
       {
+        group: 'Claude and GPT models',
         family: 'claude-gpt',
         window: 'weekly',
         remainingPercent: 100,
         known: true,
         disabled: false,
+        resetAt: '2026-10-08T20:26:02Z',
         resetsAt: '2026-10-08T20:26:02Z',
       },
       {
+        group: 'Claude and GPT models',
         family: 'claude-gpt',
         window: 'fiveHour',
         remainingPercent: 100,
         known: true,
         disabled: false,
+        resetAt: '2026-10-02T01:26:02Z',
         resetsAt: '2026-10-02T01:26:02Z',
       },
     ]);
