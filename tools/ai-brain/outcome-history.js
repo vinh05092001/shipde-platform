@@ -74,40 +74,31 @@ function routeKeyOf(record) {
   return null;
 }
 
-function isExplicitReviewRecord(record) {
-  if (!record) return false;
-  const nest = inner(record);
-  const stage = token(str(record.stage, nest.stage));
-  if (stage === 'review' || stage === 'review_completed' || stage === 'review_result') return true;
-  const role = token(str(record.role, nest.role));
-  if (role === 'reviewer' || role.startsWith('reviewer_') || role.startsWith('reviewer.'))
-    return true;
-  if (str(record.reviewer, nest.reviewer)) return true;
-  if (record.review && typeof record.review === 'object') return true;
-  return false;
-}
-
-function reviewedShaOf(record) {
+function explicitReviewSha(record) {
   if (!record) return null;
   const nest = inner(record);
-  const direct = str(
-    record.reviewedSha,
-    record.reviewedCommit,
-    nest.reviewedSha,
-    nest.reviewedCommit
-  );
-  if (direct) return direct;
-  if (isExplicitReviewRecord(record)) {
-    return str(
-      record.commit,
-      record.sha,
-      nest.commit,
-      nest.sha,
-      record.review && record.review.sha,
-      record.review && record.review.commit
-    );
-  }
-  return null;
+  const rev =
+    record.review && typeof record.review === 'object'
+      ? record.review
+      : nest.review && typeof nest.review === 'object'
+        ? nest.review
+        : null;
+  if (!rev) return null;
+  const verdict = token(str(rev.verdict, rev.reviewVerdict, rev.status, rev.decision));
+  if (!QUALITY.has(verdict)) return null;
+  return str(rev.reviewedSha, rev.sha, rev.reviewedCommit);
+}
+
+// Evidence is an explicit reviewed commit bound to the verdict: record.reviewedSha,
+// or review.reviewedSha / review.sha when the same review object carries the verdict
+// (changes_required/refused). Explicit review SHA always wins.
+// role/reviewer/commit/sha/headSha/targetSha alone never count.
+function reviewedShaOf(record) {
+  if (!record) return null;
+  const explicitReview = explicitReviewSha(record);
+  if (explicitReview) return explicitReview;
+  const nest = inner(record);
+  return str(record.reviewedSha, record.reviewedCommit, nest.reviewedSha, nest.reviewedCommit);
 }
 
 function declaredVerdict(record) {
@@ -169,7 +160,18 @@ function isQualityRoundFailure(record, workItemId, options) {
     return false;
   const recordRunId = str(record.runId, inner(record).runId);
   if (scope.runId && recordRunId !== scope.runId) return false;
-  const verdict = declaredVerdict(record) || token(record.status) || token(inner(record).status);
+  const nest = inner(record);
+  const rev =
+    record.review && typeof record.review === 'object'
+      ? record.review
+      : nest.review && typeof nest.review === 'object'
+        ? nest.review
+        : null;
+  const revVerdict = rev
+    ? token(str(rev.verdict, rev.reviewVerdict, rev.status, rev.decision))
+    : null;
+  const verdict =
+    declaredVerdict(record) || revVerdict || token(record.status) || token(nest.status);
   return QUALITY.has(verdict) && Boolean(reviewedShaOf(record)) && !isInfrastructureOutcome(record);
 }
 

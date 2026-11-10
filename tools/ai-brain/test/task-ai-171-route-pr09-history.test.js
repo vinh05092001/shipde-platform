@@ -260,3 +260,35 @@ test('Finding 5 / P2 VERIFY: comparator prefers known quality over unknown in bo
     'unknown vs known must be negative (known preferred)'
   );
 });
+
+test('PR09-FIX2 VERIFY (a): reviewer refusal with launch-only commit produces no failed round', () => {
+  const records = [
+    {
+      workItemId: W,
+      candidateKey: A,
+      role: 'reviewer',
+      stage: 'failed',
+      status: 'refused',
+      commit: 'launch-only-sha',
+    },
+  ];
+  const failed = history.failedRounds(records, W);
+  assert.equal(failed.has(A), false);
+  assert.equal(failed.size, 0);
+  assert.equal(history.reviewedShaOf(records[0]), null);
+});
+
+test('PR09-FIX2 VERIFY (b): explicit nested review sha wins over generic dispatch commit', () => {
+  const records = [
+    {
+      workItemId: W,
+      candidateKey: A,
+      commit: 'dispatch-sha',
+      review: { verdict: 'changes_required', sha: 'actually-reviewed-sha' },
+    },
+  ];
+  const failed = history.failedRounds(records, W);
+  assert.equal(failed.has(A), true);
+  assert.deepEqual([...failed.get(A)], ['actually-reviewed-sha']);
+  assert.equal(history.reviewedShaOf(records[0]), 'actually-reviewed-sha');
+});
