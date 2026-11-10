@@ -1211,6 +1211,102 @@ function qualityScoreOf(candidate, now) {
   return Math.max(1, Math.min(100, Math.round(base - recencyPenalty)));
 }
 
+/**
+ * Floor-only quality resolver for admission checks against profile.qualityFloor.
+ *
+ * Bounds:
+ * - Profile quality floor is bounded in [0, 100] (matching PROFILE_SCHEMA).
+ * - Returned quality value is bounded in [0, 100] or null when unknown.
+ *
+ * Units:
+ * - Explicit candidate quality: 'points' (0-100).
+ * - Validated measurement (active policy): 'fraction_scaled_100' (0-100, derived from f in [0, 1] * 100).
+ * - Valid external prior: 'points' (0-100).
+ *
+ * Source order (admission contract):
+ * 1. Explicit candidate.quality (valid finite number in [0, 100], no boolean/empty string coercion).
+ * 2. Validated measurement via scoreMeasurements(candidate, assessment, ctx).breakdown.quality * 100
+ *    when scoring policy is active. Invalid, null, stale, wrong-unit, or wrong-model/version
+ *    measurements yield unknown (never coerced to 0).
+ * 3. Valid external prior via priorFor(candidate, role, priors, now). Missing, unknown, or
+ *    stale priors yield unknown (never fallback to numeric 0).
+ *
+ * Proof evidence (API_PASS, HARNESS_PASS, WORK_ITEM_PASS) is proof of execution, not floor evidence.
+ *
+ * @param {object} candidate
+ * @param {object} assessment
+ * @param {object} ctx
+ * @returns {{ known: boolean, value: number|null, units: string|null, source: string }}
+ */
+function resolveFloorQuality(candidate, assessment, ctx) {
+  // 1. Explicit candidate.quality
+  if (
+    candidate &&
+    candidate.quality !== null &&
+    candidate.quality !== undefined &&
+    typeof candidate.quality !== 'boolean' &&
+    (typeof candidate.quality !== 'string' || candidate.quality.trim() !== '') &&
+    Number.isFinite(Number(candidate.quality))
+  ) {
+    const val = Number(candidate.quality);
+    if (val >= 0 && val <= 100) {
+      return {
+        known: true,
+        value: val,
+        units: 'points',
+        source: 'explicit',
+      };
+    }
+  }
+
+  // 2. Validated measurement via scoreMeasurements breakdown under active scoring policy
+  if (assessment && assessment.scoringPolicy) {
+    const scored = scoreMeasurements(candidate, assessment, ctx);
+    const fraction = scored && scored.breakdown ? scored.breakdown.quality : null;
+    if (fraction !== null && fraction !== undefined && Number.isFinite(fraction)) {
+      const val = Math.max(0, Math.min(100, fraction * 100));
+      const source =
+        (scored.breakdown.measurements &&
+          scored.breakdown.measurements.quality &&
+          scored.breakdown.measurements.quality.source) ||
+        'measurement';
+      return {
+        known: true,
+        value: val,
+        units: 'fraction_scaled_100',
+        source,
+      };
+    }
+  }
+
+  // 3. Valid external prior via priorFor
+  const now = (ctx && ctx.now) || Date.now();
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  if (
+    prior &&
+    !prior.stale &&
+    prior.score !== null &&
+    prior.score !== undefined &&
+    !prior.priorUnknown &&
+    Number.isFinite(prior.score)
+  ) {
+    const val = Math.max(0, Math.min(100, prior.score));
+    return {
+      known: true,
+      value: val,
+      units: 'points',
+      source: prior.source || 'prior',
+    };
+  }
+
+  return {
+    known: false,
+    value: null,
+    units: null,
+    source: 'unknown',
+  };
+}
+
 function reliabilityScoreOf(candidate) {
   const items = (candidate && candidate.evidence) || [];
   let passed = 0;
@@ -1691,10 +1787,23 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const quality = assessment.scoringPolicy && c.quality == null ? NaN : Number(c.quality);
-    if (Number.isFinite(quality) && quality < Number(profile.qualityFloor)) {
-      reject('QUALITY_FLOOR_NOT_MET', 'candidate');
-      continue;
+    // TASK-AI-171: Floor admission check using resolveFloorQuality.
+    // Bounds: profile.qualityFloor is bounded in [0, 100].
+    // Admission checks candidate's floor quality (bounded in [0, 100], units 'points' or 'fraction_scaled_100').
+    // Only candidates with known floor quality below qualityFloor are rejected.
+    // Candidates with unknown quality (including proof-only evidence) are admitted (not rejected for floor).
+    const qualityFloorValue = Number(profile.qualityFloor);
+    if (Number.isFinite(qualityFloorValue) && qualityFloorValue > 0) {
+      const floorCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
+      const floorQuality = resolveFloorQuality(c, assessment, floorCtx);
+      if (
+        floorQuality.known &&
+        Number.isFinite(floorQuality.value) &&
+        floorQuality.value < qualityFloorValue
+      ) {
+        reject('QUALITY_FLOOR_NOT_MET', 'candidate');
+        continue;
+      }
     }
     const cost = blendedCost(c);
     if (cost !== null && cost > Number(profile.costCeiling)) {
@@ -2794,6 +2903,7 @@ module.exports = {
   compareProfileScores,
   latencyScoreOf,
   qualityScoreOf,
+  resolveFloorQuality,
   costScoreOf,
   blendedCost,
   stallAssessment,

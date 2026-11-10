@@ -422,9 +422,14 @@ test('policy normalizes different measured units before weighting and omits unkn
   assert.equal(routing.scoreForProfile(row, mixed, context()).score, 0.4);
 });
 
-test('no-policy admission still treats unknown quality as below the floor', () => {
+test('no-policy admission preserves UNKNOWN quality under a positive floor', () => {
   const row = { ...candidate('fixture/unknown-quality', null), quality: null };
   const result = routing.rankForProfile([row], { ...profile, qualityFloor: 1 }, {}, context());
-  assert.equal(result.chosen, null);
-  assert.ok(result.rejected.some((entry) => entry.reasonCode === 'QUALITY_FLOOR_NOT_MET'));
+  assert.equal(result.chosen, routing.candidateKey(row));
+  assert.equal(result.ranking.length, 1);
+  assert.equal(result.ranking[0].qualityLabel, 'QUALITY_UNKNOWN');
+  assert.equal(
+    result.rejected.some((entry) => entry.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    false
+  );
 });
