@@ -863,3 +863,65 @@ test('TASK-AI-171 QF (active policy): candidate with valid quality 85 is eligibl
   assert.ok(result.chosen);
   assert.equal(result.ranking.length, 1);
 });
+
+// --- Whitespace-only explicit quality tests (TASK-AI-171) ---
+
+test("TASK-AI-171: whitespace-only quality ' ' with valid measurement 85 resolves to measurement floor and is admitted under floor 70", () => {
+  const assessment = testAssessment({ scoringPolicy: measurementPolicy() });
+  const profile = testProfile({ qualityFloor: 70 });
+  const ctx = {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+    role: profile.role,
+  };
+  const candidate = measuredCandidate('whitespace-measured-model', {
+    value: 85,
+    source: 'measurement',
+  });
+  candidate.quality = ' ';
+
+  const floor = routing.resolveFloorQuality(candidate, assessment, ctx);
+  assert.equal(floor.known, true, 'valid measurement is floor evidence when quality is whitespace');
+  assert.equal(floor.value, 85, 'floor value is derived from measurement');
+  assert.equal(floor.source, 'measurement', 'floor source must be measurement');
+
+  const result = routing.rankForProfile([candidate], profile, assessment, ctx);
+  assert.equal(result.ranking.length, 1, 'candidate must be admitted under floor 70');
+  assert.equal(
+    result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined,
+    'candidate must not be rejected by quality floor'
+  );
+  assert.ok(result.chosen, 'candidate must be chosen');
+  assert.ok(result.chosen.includes('whitespace-measured-model'));
+});
+
+test("TASK-AI-171: whitespace-only quality ' ' with no measurement/prior yields UNKNOWN and is admitted", () => {
+  const candidate = makeCandidate('whitespace-unknown-model', { quality: ' ' });
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment();
+  const ctx = {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+    role: profile.role,
+  };
+
+  const floor = routing.resolveFloorQuality(candidate, assessment, ctx);
+  assert.equal(floor.known, false, 'whitespace-only quality must yield UNKNOWN floor quality');
+  assert.equal(floor.value, null, 'unknown floor quality must be null');
+  assert.equal(floor.source, 'unknown', 'unknown floor quality source must be unknown');
+
+  const result = routing.rankForProfile([candidate], profile, assessment, ctx);
+  assert.equal(result.ranking.length, 1, 'candidate with unknown quality must be admitted');
+  assert.equal(
+    result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined,
+    'candidate with unknown quality must not be rejected by quality floor'
+  );
+  assert.ok(result.chosen, 'candidate must be chosen');
+  assert.ok(result.chosen.includes('whitespace-unknown-model'));
+});

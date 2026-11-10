@@ -1245,7 +1245,7 @@ function resolveFloorQuality(candidate, assessment, ctx) {
     candidate.quality !== null &&
     candidate.quality !== undefined &&
     typeof candidate.quality !== 'boolean' &&
-    candidate.quality !== '' &&
+    (typeof candidate.quality !== 'string' || candidate.quality.trim() !== '') &&
     Number.isFinite(Number(candidate.quality))
   ) {
     const val = Number(candidate.quality);
