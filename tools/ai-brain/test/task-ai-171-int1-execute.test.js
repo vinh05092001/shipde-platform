@@ -284,7 +284,7 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(persistedBeforeLaunch, true);
   });
 
-  test('INT-1: routeLaunchStep behaviour: chosen = null refuses spawn; chosen candidate launches exactly one spawn with matching argv identity', () => {
+  test('INT-1: routeLaunchStep behaviour: chosen = null refuses spawn; chosen candidate launches bounded processes with matching argv identity, log safety, launcher tracking, and async error completion', async () => {
     const logsDir = path.join(env.dir, 'logs');
     fs.mkdirSync(logsDir, { recursive: true });
     const childCalls = [];
@@ -351,6 +351,9 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(nullRes.reason, 'NO_CONTROLLER_CHOICE');
     assert.ok(nullRes.detail && nullRes.detail.includes('REFUSED'));
     assert.ok(loggedErrors.some((e) => e.includes('NO_CONTROLLER_CHOICE')));
+    const nullOutcome = await nullRes.completion;
+    assert.equal(nullOutcome.launched, false);
+    assert.equal(nullOutcome.reason, 'NO_CONTROLLER_CHOICE');
 
     const candidateA = makeCandidate('m-alpha', 'ag', 'ag', 1, 90);
     const chosenDecision = {
@@ -404,7 +407,39 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
       'zero dispatch on unwritable log'
     );
 
-    // Case 4: custom launcher mutual exclusivity -> launcher spawns once and returns undefined => exactly 1 dispatch
+    // Case 4: output log open failure -> LOG_OPEN_FAILED refusal, zero unread pipes created, zero dispatch
+    const badOpenLogFs = {
+      ...fs,
+      openSync: () => {
+        throw new Error('EACCES: permission denied opening route-tag.log');
+      },
+    };
+    const badOpenLogDeps = {
+      ...stepDeps,
+      fs: badOpenLogFs,
+    };
+    const badOpenLogRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-BAD-OPEN-LOG', cwd: env.wt, task: env.pFile },
+      badOpenLogDeps
+    );
+    assert.equal(badOpenLogRes.launched, false);
+    assert.equal(badOpenLogRes.reason, 'LOG_OPEN_FAILED');
+    assert.equal(badOpenLogRes.spawns, 0);
+    assert.ok(
+      badOpenLogRes.detail && badOpenLogRes.detail.includes('Failed to open execution output log')
+    );
+    assert.equal(
+      childCalls.filter((c) => c.type === 'spawn').length,
+      0,
+      'zero dispatch spawns when output log cannot be opened'
+    );
+    const logFailOutcome = await badOpenLogRes.completion;
+    assert.equal(logFailOutcome.launched, false);
+    assert.equal(logFailOutcome.reason, 'LOG_OPEN_FAILED');
+
+    // Case 5: custom launcher mutual exclusivity and outcome tracking
+    // Subcase 5a: launcher spawns once and returns undefined => acknowledges dispatch, reports launch state unknown/failed
     let launcherSpawnCount = 0;
     const customLauncher = (payload, cwd, taskFile, item, launchDeps) => {
       launcherSpawnCount += 1;
@@ -423,11 +458,56 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(launcherSpawnCount, 1, 'custom launcher invoked once');
     assert.equal(customRes.launched, false);
     assert.equal(customRes.reason, 'INVALID_LAUNCHER_RESULT');
+    assert.equal(
+      customRes.spawns,
+      1,
+      'acknowledges dispatch that occurred before returning invalid'
+    );
+    assert.match(customRes.detail, /launch state unknown\/failed/);
+    assert.equal(customRes.status, 'launch_state_unknown/failed');
     const customSpawns = childCalls.filter((c) => c.type === 'spawn');
     assert.equal(customSpawns.length, 1, 'launcher spawned once and fallback never dispatched');
+
+    // Subcase 5b: launcher spawns once and throws => acknowledges dispatch, reports launch state unknown/failed
+    const crashingLauncher = (payload, cwd, taskFile, item, launchDeps) => {
+      launchDeps.spawn('crashing-launcher', ['arg']);
+      throw new Error('CRASH_AFTER_SPAWN');
+    };
+    const crashDeps = {
+      ...stepDeps,
+      launcher: crashingLauncher,
+    };
+    const crashRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-CRASH-LAUNCHER', cwd: env.wt, task: env.pFile },
+      crashDeps
+    );
+    assert.equal(crashRes.launched, false);
+    assert.equal(crashRes.reason, 'LAUNCHER_ERROR');
+    assert.equal(crashRes.spawns, 1, 'acknowledges dispatch that occurred before exception');
+    assert.match(crashRes.detail, /launch state unknown\/failed/);
+    assert.equal(crashRes.status, 'launch_state_unknown/failed');
+
+    // Subcase 5c: launcher fails before spawn => spawns: 0, no execution occurred
+    const failEarlyLauncher = () => {
+      throw new Error('FAIL_BEFORE_SPAWN');
+    };
+    const earlyFailDeps = {
+      ...stepDeps,
+      launcher: failEarlyLauncher,
+    };
+    const earlyFailRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-EARLY-FAIL', cwd: env.wt, task: env.pFile },
+      earlyFailDeps
+    );
+    assert.equal(earlyFailRes.spawns, 0, 'zero spawns when launcher fails before dispatch');
+    assert.equal(earlyFailRes.status, 'failed');
+    assert.doesNotMatch(earlyFailRes.detail, /launch state unknown/);
+
     childCalls.length = 0; // reset for subsequent cases
 
-    // Case 5: spawn failure closes parent log descriptor
+    // Case 6: spawn failure closes parent log descriptor
     let closedOnFail = null;
     const failFs = {
       ...fs,
@@ -453,7 +533,10 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(failRes.reason, 'SPAWN_ERROR');
     assert.ok(closedOnFail !== null, 'parent closed descriptor on spawn failure');
 
-    // Case 6: chosen candidate launches exactly 1 spawn with --offering and provenance persisted BEFORE spawn
+    childCalls.length = 0; // reset for process-count checks
+
+    // Case 7: selected execution process count contract (P2 1)
+    // Synchronous git rev-parse (1) + dispatch spawn (1) = exactly 2 bounded child processes without pre-supplied repoSha
     let logPersistedBeforeSpawn = false;
     const trackingSpawn = (cmd, args, opts) => {
       const logFile = path.join(logsDir, 'route-log.jsonl');
@@ -478,8 +561,19 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(logPersistedBeforeSpawn, true, 'provenance record persisted BEFORE dispatch');
     assert.ok(closedFd !== null, 'parent closed log descriptor after successful spawn');
 
+    // Verify bounded process counts: exactly 2 child processes (1 git rev-parse HEAD + 1 dispatch spawn)
+    assert.equal(
+      childCalls.length,
+      2,
+      'exactly two child processes for selection: 1 bounded git SHA provenance lookup + 1 execution dispatch'
+    );
+    assert.equal(
+      childCalls.filter((c) => c.type === 'execFileSync').length,
+      1,
+      'exactly 1 synchronous git rev-parse HEAD subprocess'
+    );
     const spawnCalls = childCalls.filter((c) => c.type === 'spawn');
-    assert.equal(spawnCalls.length, 1, 'exactly one dispatch spawn');
+    assert.equal(spawnCalls.length, 1, 'exactly 1 execution dispatch spawn');
     const spawnCall = spawnCalls[0];
     const offeringIndex = spawnCall.args.indexOf('--offering');
     assert.ok(offeringIndex !== -1, '--offering flag present in spawn args');
@@ -487,10 +581,83 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(argvCandidate, chosenDecision.chosen);
     assert.deepEqual(parseCandidateKey(argvCandidate), chosenRes.argvIdentity);
 
-    // Case 7: asynchronous child spawn failure ('error' event) handled and recorded
-    assert.doesNotThrow(() => {
-      spawnCall.child.emit('error', new Error('ASYNC_EAGAIN'));
-    });
+    // Subcase 7b: pre-supplied repoSha -> exactly 1 child process (0 git subprocesses + 1 dispatch spawn)
+    childCalls.length = 0;
+    const preShaDeps = {
+      ...chosenDeps,
+      repoSha: '2222333344445555666677778888999900001111',
+    };
+    const preShaRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-PRE-SHA', cwd: env.wt, task: env.pFile },
+      preShaDeps
+    );
+    assert.equal(preShaRes.launched, true);
+    assert.equal(childCalls.length, 1, 'exactly one child process when repoSha is pre-supplied');
+    assert.equal(childCalls[0].type, 'spawn', 'the single process is the dispatch spawn');
+
+    // Case 8: asynchronous child spawn failure ('error' event) reaches caller as structured failure outcome (P2 2)
+    let callbackOutcome = null;
+    const asyncChosenRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      {
+        item: 'TASK-AI-171-ASYNC-ERR',
+        cwd: env.wt,
+        task: env.pFile,
+        onCompletion: (outcome) => {
+          callbackOutcome = outcome;
+        },
+      },
+      chosenDeps
+    );
+    assert.equal(asyncChosenRes.launched, true, 'initially launched before async event');
+    const asyncSpawnCall = childCalls.filter((c) => c.type === 'spawn').slice(-1)[0];
+
+    // Emit asynchronous error on child process
+    asyncSpawnCall.child.emit('error', new Error('ASYNC_EAGAIN'));
+
+    // Check that the returned result was updated to failed, not launched
+    assert.equal(
+      asyncChosenRes.launched,
+      false,
+      'result updated to launched: false on async error'
+    );
+    assert.equal(asyncChosenRes.status, 'failed', 'result updated to status: failed');
+    assert.equal(asyncChosenRes.reason, 'SPAWN_ERROR');
+    assert.equal(asyncChosenRes.spawns, 0);
+
+    // Await completion promise
+    const asyncOutcome = await asyncChosenRes.completion;
+    assert.equal(
+      asyncOutcome.launched,
+      false,
+      'awaited completion outcome reports launched: false'
+    );
+    assert.equal(
+      asyncOutcome.status,
+      'failed',
+      'awaited completion outcome reports status: failed'
+    );
+    assert.equal(asyncOutcome.reason, 'SPAWN_ERROR');
+    assert.match(asyncOutcome.detail, /ASYNC_EAGAIN/);
+
+    // Check that callback received the structured failure
+    assert.ok(callbackOutcome !== null, 'onCompletion callback was invoked');
+    assert.equal(callbackOutcome.launched, false);
+    assert.equal(callbackOutcome.status, 'failed');
+
+    // Case 9: asynchronous child spawn success ('spawn' event)
+    const asyncSuccessRes = routeLaunchApi.routeLaunchStep(
+      chosenDecision,
+      { item: 'TASK-AI-171-ASYNC-OK', cwd: env.wt, task: env.pFile },
+      chosenDeps
+    );
+    const successSpawnCall = childCalls.filter((c) => c.type === 'spawn').slice(-1)[0];
+    successSpawnCall.child.emit('spawn');
+    const successOutcome = await asyncSuccessRes.completion;
+    assert.equal(successOutcome.launched, true);
+    assert.equal(successOutcome.status, 'spawned');
+    assert.equal(successOutcome.spawns, 1);
 
     // Verify runtime provenance in route-log.jsonl
     const logFile = path.join(logsDir, 'route-log.jsonl');
@@ -514,7 +681,7 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     );
 
     const asyncFailLog = lines.find(
-      (l) => l.item === 'TASK-AI-171-CHOSEN' && l.status === 'spawn_failed'
+      (l) => l.item === 'TASK-AI-171-ASYNC-ERR' && l.status === 'spawn_failed'
     );
     assert.ok(asyncFailLog, 'async spawn error recorded to route log');
     assert.match(asyncFailLog.error, /ASYNC_EAGAIN/);

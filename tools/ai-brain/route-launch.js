@@ -6,6 +6,11 @@ const { execFileSync, spawn } = require('child_process');
 const { parseCandidateKey } = require('./discovery/identity');
 const { serializeDispatchOutput } = require('./dispatch-output');
 
+/**
+ * Resolves repository root and commit SHA for runtime provenance.
+ * Process count contract: executes at most 1 synchronous `git rev-parse HEAD`
+ * process when repoSha is not pre-supplied in deps.
+ */
 function getTreeProvenance(treePath, deps = {}) {
   const tree = path.resolve(treePath || path.resolve(__dirname, '../..'));
   if (typeof deps.repoSha === 'string' && deps.repoSha.length >= 7) {
@@ -33,6 +38,26 @@ function appendLog(fsApi, logFile, logsDir, entry) {
   } catch {}
 }
 
+function withCompletion(result) {
+  const p = Promise.resolve(result);
+  result.completion = p;
+  result.promise = p;
+  result.wait = () => p;
+  return result;
+}
+
+/**
+ * Executes or refuses route launch based on Controller decision.
+ *
+ * Process-count contract:
+ * - When decision.chosen is null / refused: exactly 0 child processes of any kind
+ *   run (neither git rev-parse nor execution dispatch).
+ * - When decision.chosen is present:
+ *   - If deps.repoSha is provided: 0 git subprocesses, exactly 1 execution dispatch spawn.
+ *   - If deps.repoSha is omitted: exactly 1 bounded synchronous git subprocess
+ *     (`git rev-parse HEAD`) for provenance, followed by exactly 1 execution dispatch spawn.
+ *     Total bounded child processes: 2 (1 provenance + 1 dispatch).
+ */
 function routeLaunchStep(decision, options = {}, deps = {}) {
   const item = options.item || (decision && decision.workItemId) || 'UNKNOWN';
   const role = options.role || (decision && decision.role) || 'author.foundation';
@@ -64,7 +89,7 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
       choice: null,
       noControllerChoice: detail,
     });
-    return {
+    return withCompletion({
       launched: false,
       choice: null,
       reason: 'NO_CONTROLLER_CHOICE',
@@ -72,14 +97,14 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
       exitCode: 3,
       spawns: 0,
       provenance: { repoSha: null, treePath: path.resolve(mainTree) },
-    };
+    });
   }
 
   const provenance = getTreeProvenance(mainTree, deps);
   if (!provenance || !provenance.repoSha) {
     const detail = 'Missing or unavailable git commit SHA';
     logErr(`PROVENANCE_UNAVAILABLE ${item}: ${detail}`);
-    return {
+    return withCompletion({
       launched: false,
       choice: chosenKey,
       reason: 'PROVENANCE_UNAVAILABLE',
@@ -87,7 +112,7 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
       exitCode: 1,
       spawns: 0,
       provenance: provenance || { repoSha: null, treePath: path.resolve(mainTree) },
-    };
+    });
   }
 
   const chosenCandidate = (decision.candidates || []).find(
@@ -149,7 +174,7 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
   } catch (err) {
     const detail = `Failed to persist runtime provenance record: ${err.message}`;
     logErr(`PROVENANCE_PERSIST_FAILED ${item}: ${detail}`);
-    return {
+    return withCompletion({
       launched: false,
       choice: chosenKey,
       reason: 'PROVENANCE_UNAVAILABLE',
@@ -157,102 +182,206 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
       exitCode: 1,
       spawns: 0,
       provenance,
-    };
+    });
   }
 
-  const launchDeps = { spawn: spawnFn, fs: fsApi, logsDir, mainTree };
+  let launcherSpawns = 0;
+  const wrappedSpawn = (...args) => {
+    launcherSpawns += 1;
+    return spawnFn(...args);
+  };
+  const launchDeps = { spawn: wrappedSpawn, fs: fsApi, logsDir, mainTree };
   let launchRecord = null;
   if (deps.launcher) {
     try {
       launchRecord = deps.launcher(payload, cwd, taskFile, item, launchDeps);
     } catch (err) {
       logErr(`LAUNCHER_ERROR ${item}: ${err.message}`);
-      return {
+      const detail =
+        launcherSpawns > 0
+          ? `${err.message} (launch state unknown/failed; dispatch may have occurred)`
+          : err.message;
+      return withCompletion({
         launched: false,
+        status: launcherSpawns > 0 ? 'launch_state_unknown/failed' : 'failed',
         choice: chosenKey,
         reason: 'LAUNCHER_ERROR',
-        detail: err.message,
-        spawns: 0,
+        detail,
+        spawns: launcherSpawns,
         provenance,
-      };
+      });
     }
     if (!launchRecord || typeof launchRecord !== 'object') {
-      return {
+      const detail =
+        launcherSpawns > 0
+          ? 'Custom launcher returned invalid result after dispatch (launch state unknown/failed)'
+          : 'Custom launcher returned invalid result without fallback (no execution occurred)';
+      return withCompletion({
         launched: false,
+        status: launcherSpawns > 0 ? 'launch_state_unknown/failed' : 'failed',
         choice: chosenKey,
         reason: 'INVALID_LAUNCHER_RESULT',
-        detail: 'Custom launcher returned invalid result without fallback',
+        detail,
+        spawns: launcherSpawns,
+        provenance,
+      });
+    }
+    return withCompletion({
+      launched: true,
+      choice: chosenKey,
+      argvIdentity: parsedIdentity,
+      launchRecord,
+      spawns: launcherSpawns > 0 ? launcherSpawns : 1,
+      provenance,
+    });
+  }
+
+  let fd = null;
+  if (typeof fsApi.openSync === 'function') {
+    try {
+      fd = fsApi.openSync(log, 'w');
+    } catch (err) {
+      const detail = `Failed to open execution output log: ${err.message}`;
+      logErr(`LOG_OPEN_FAILED ${item}: ${detail}`);
+      return withCompletion({
+        launched: false,
+        choice: chosenKey,
+        reason: 'LOG_OPEN_FAILED',
+        detail,
+        exitCode: 1,
         spawns: 0,
         provenance,
-      };
-    }
-  } else {
-    let fd = null;
-    try {
-      try {
-        if (typeof fsApi.openSync === 'function') fd = fsApi.openSync(log, 'w');
-      } catch {}
-      const stdio = fd !== null ? ['ignore', fd, fd] : ['ignore', 'pipe', 'pipe'];
-      let child = null;
-      try {
-        child = spawnFn(process.execPath, dispatchArgs, {
-          cwd: mainTree,
-          detached: true,
-          stdio,
-          env: { ...process.env },
-        });
-      } catch (spawnErr) {
-        logErr(`SPAWN_ERROR ${item}: ${spawnErr.message}`);
-        return {
-          launched: false,
-          choice: chosenKey,
-          reason: 'SPAWN_ERROR',
-          detail: spawnErr.message,
-          spawns: 0,
-          provenance,
-        };
-      }
-      if (child && typeof child.unref === 'function') child.unref();
-      if (child && typeof child.on === 'function') {
-        child.on('error', (err) => {
-          logErr(`CHILD_SPAWN_ASYNC_ERROR ${item}: ${err.message || err}`);
-          appendLog(fsApi, logFile, logsDir, {
-            at: new Date().toISOString(),
-            item,
-            role,
-            cwd,
-            repoSha: provenance.repoSha,
-            treePath: provenance.treePath,
-            choice: { key: chosenKey, identity: parsedIdentity },
-            status: 'spawn_failed',
-            error: err && err.message ? err.message : String(err),
-          });
-        });
-      }
-      launchRecord = {
-        how: `cli.js dispatch --execute pid ${child ? child.pid : 0}`,
-        log,
-        child,
-        tag,
-        dispatchArgs,
-      };
-    } finally {
-      if (fd !== null && typeof fsApi.closeSync === 'function') {
-        try {
-          fsApi.closeSync(fd);
-        } catch {}
-      }
+      });
     }
   }
 
-  return {
-    launched: true,
-    choice: chosenKey,
-    argvIdentity: parsedIdentity,
-    launchRecord,
-    spawns: 1,
-    provenance,
-  };
+  const stdio = fd !== null ? ['ignore', fd, fd] : ['ignore', 'ignore', 'ignore'];
+  let child = null;
+  try {
+    try {
+      child = spawnFn(process.execPath, dispatchArgs, {
+        cwd: mainTree,
+        detached: true,
+        stdio,
+        env: { ...process.env },
+      });
+    } catch (spawnErr) {
+      logErr(`SPAWN_ERROR ${item}: ${spawnErr.message}`);
+      return withCompletion({
+        launched: false,
+        choice: chosenKey,
+        reason: 'SPAWN_ERROR',
+        detail: spawnErr.message,
+        exitCode: 1,
+        spawns: 0,
+        provenance,
+      });
+    }
+
+    launchRecord = {
+      how: `cli.js dispatch --execute pid ${child ? child.pid : 0}`,
+      log,
+      child,
+      tag,
+      dispatchArgs,
+    };
+
+    let resolveCompletion;
+    const completionPromise = new Promise((resolve) => {
+      resolveCompletion = resolve;
+    });
+
+    const result = {
+      launched: true,
+      choice: chosenKey,
+      argvIdentity: parsedIdentity,
+      launchRecord,
+      spawns: 1,
+      provenance,
+      completion: completionPromise,
+      promise: completionPromise,
+      wait: () => completionPromise,
+    };
+
+    let settled = false;
+    const notifyCompletion = (outcome) => {
+      if (settled) return;
+      settled = true;
+      resolveCompletion(outcome);
+      if (typeof options.onCompletion === 'function') {
+        try {
+          options.onCompletion(outcome);
+        } catch {}
+      }
+      if (typeof deps.onCompletion === 'function') {
+        try {
+          deps.onCompletion(outcome);
+        } catch {}
+      }
+    };
+
+    if (child && typeof child.unref === 'function') child.unref();
+
+    if (child && typeof child.on === 'function') {
+      child.on('spawn', () => {
+        notifyCompletion({
+          launched: true,
+          status: 'spawned',
+          choice: chosenKey,
+          argvIdentity: parsedIdentity,
+          launchRecord,
+          spawns: 1,
+          provenance,
+        });
+      });
+      child.on('error', (err) => {
+        const detail = err && err.message ? err.message : String(err);
+        logErr(`CHILD_SPAWN_ASYNC_ERROR ${item}: ${detail}`);
+        appendLog(fsApi, logFile, logsDir, {
+          at: new Date().toISOString(),
+          item,
+          role,
+          cwd,
+          repoSha: provenance.repoSha,
+          treePath: provenance.treePath,
+          choice: { key: chosenKey, identity: parsedIdentity },
+          status: 'spawn_failed',
+          error: detail,
+        });
+        result.launched = false;
+        result.status = 'failed';
+        result.reason = 'SPAWN_ERROR';
+        result.detail = detail;
+        result.spawns = 0;
+        notifyCompletion({
+          launched: false,
+          status: 'failed',
+          choice: chosenKey,
+          reason: 'SPAWN_ERROR',
+          detail,
+          exitCode: 1,
+          spawns: 0,
+          provenance,
+          launchRecord: {
+            ...launchRecord,
+            status: 'failed',
+            error: detail,
+          },
+        });
+      });
+    }
+
+    if (options.waitCompletion || options.async) {
+      return completionPromise;
+    }
+    return result;
+  } finally {
+    if (fd !== null && typeof fsApi.closeSync === 'function') {
+      try {
+        fsApi.closeSync(fd);
+      } catch {}
+    }
+  }
 }
 
 module.exports = { getTreeProvenance, routeLaunchStep };

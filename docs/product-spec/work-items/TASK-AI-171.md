@@ -784,7 +784,12 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 
 ## Slice 2b: Route Launch — Controller refusal and runtime provenance (2026-11-10)
 
-- Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-int1-execute.test.js` (test case 3).
-- Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 child processes of any kind, no process.exit), requires valid persisted provenance before execution, enforces argv identity on selection (1 spawn bound to `--offering`), closes parent descriptors, handles async child errors, and guarantees custom launcher mutual exclusivity.
+- Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-int1-execute.test.js` (test 5).
+- Outcome: Encapsulates coordinator launch step in tracked repository module; refuses execution on null choice with `NO_CONTROLLER_CHOICE` (0 child processes of any kind, no process.exit). When candidate is chosen: bounds process count to 1 synchronous git SHA lookup (`git rev-parse HEAD`) when SHA is not pre-supplied, plus exactly 1 execution dispatch spawn bound to `--offering` (total 2 bounded child processes; 1 dispatch if repoSha pre-supplied). Requires valid persisted provenance before execution; refuses with `LOG_OPEN_FAILED` on unopenable output log without creating unread pipes (stdio ignore); tracks custom launcher spawns and reports `launch state unknown/failed` if launcher fails after dispatch; closes parent descriptors; and delivers asynchronous spawn errors to caller via `completion` promise / callback as structured failure (`launched: false, status: 'failed', reason: 'SPAWN_ERROR'`).
 - Depends on: Slice 2a2 (`fix/task-ai-171-core-s2a2-execute-path`).
-- Evidence: 5/5 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js`.
+- Evidence: 5/5 tests pass offline via `node --test tools/ai-brain/test/task-ai-171-int1-execute.test.js` (tests: 5, suites: 1, pass: 5, fail: 0):
+  - Test 1: `INT-1: execute launches chosen candidate with argv identity, records failure to route-health, and feeds next selection` (PASS)
+  - Test 2: `INT-1: CLI entrypoint main(["dispatch", "--execute", "--json", ...]) returns structured output, masks emails, and validates worker outcome` (PASS)
+  - Test 3: `INT-1: worker stdout spoofed JSON success with non-zero exit is rejected as failure` (PASS)
+  - Test 4: `INT-1: isolated dispatch reaches isolation launcher seam, preserves candidate options, persists receipt before launch, and forbids fallback on failure` (PASS)
+  - Test 5: `INT-1: routeLaunchStep behaviour: chosen = null refuses spawn; chosen candidate launches bounded processes with matching argv identity, log safety, launcher tracking, and async error completion` (PASS)
