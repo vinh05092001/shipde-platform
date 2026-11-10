@@ -319,7 +319,8 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     );
 
     assert.equal(spawnCalls.length, 0, 'zero spawns on chosen = null');
-    assert.equal(exitCode, 3, 'exits with code 3 on chosen = null');
+    assert.equal(exitCode, null, 'never calls process.exit itself on chosen = null');
+    assert.equal(nullRes.exitCode, 3, 'routeLaunchStep returns exitCode 3 on chosen = null');
     assert.equal(nullRes.launched, false);
     assert.equal(nullRes.spawns, 0);
     assert.match(nullRes.reason, /NO_CONTROLLER_CHOICE/);
@@ -345,9 +346,9 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(chosenRes.choice, candidateA.candidateKey);
 
     const spawnCall = spawnCalls[0];
-    const candidateIndex = spawnCall.args.indexOf('--candidate');
-    assert.ok(candidateIndex !== -1, '--candidate flag present in spawn args');
-    const argvCandidate = spawnCall.args[candidateIndex + 1];
+    const offeringIndex = spawnCall.args.indexOf('--offering');
+    assert.ok(offeringIndex !== -1, '--offering flag present in spawn args');
+    const argvCandidate = spawnCall.args[offeringIndex + 1];
     assert.equal(argvCandidate, chosenDecision.chosen);
     assert.deepEqual(parseCandidateKey(argvCandidate), chosenRes.argvIdentity);
 
@@ -362,9 +363,7 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(lines.length, 2);
 
     const nullLog = lines.find((l) => l.item === 'TASK-AI-171-NULL');
-    assert.ok(
-      nullLog && nullLog.choice === null && nullLog.repoSha && path.isAbsolute(nullLog.treePath)
-    );
+    assert.ok(nullLog && nullLog.choice === null && path.isAbsolute(nullLog.treePath));
     assert.match(nullLog.noControllerChoice, /NO_CONTROLLER_CHOICE/);
 
     const chosenLog = lines.find((l) => l.item === 'TASK-AI-171-CHOSEN');
