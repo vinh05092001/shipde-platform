@@ -46,6 +46,7 @@ const sourceRegistry = require('./sources');
 const BACKEND_MODEL_PREFIXES = registryPrefixes(sourceRegistry.loadSources());
 const { contextRefusal, hasLauncherWriter } = require('./harness');
 const { Cause, Scope, classifyFailure } = require('./failure-classifier');
+const outcomeHistory = require('./outcome-history');
 
 /**
  * Roles that execute code writing or workspace modifications.
@@ -906,8 +907,9 @@ function isModelScopeFailure(cause, scope) {
 const INFRASTRUCTURE_TEXT =
   /quota|rate[\s_-]*limit|too many requests|\b429\b|cooldown|exhaust|capacity|timed?\s*out|timeout|econnrefused|etimedout|network|unavailable/i;
 
-/** Review verdicts and proof states that are about quality, not availability. */
-const QUALITY_VERDICTS = new Set(['changes_required', 'refused', 'refuse', 'rejected', 'reject']);
+/** Review verdicts and proof states that are about quality, not availability.
+ *  The vocabulary and the "quality vs outage" decision live in outcome-history.js
+ *  so the structured reader and this proof check cannot drift. */
 
 /** Normalize a cause, scope, status or block reason to its classification token. */
 function failureToken(value) {
@@ -966,17 +968,6 @@ function isInfrastructureBlock(block) {
   return isInfrastructureFailure(block.cause, block.scope, [block.reason, block.cause].join(' '));
 }
 
-/** Did this evidence item record a quality outcome rather than an outage? */
-function isQualityVerdict(item) {
-  if (!item) return false;
-  if (item.revoked === true || failureToken(item.status) === 'revoked') return true;
-  for (const field of ['verdict', 'review', 'reviewVerdict', 'reviewStatus', 'decision']) {
-    if (QUALITY_VERDICTS.has(failureToken(item[field]))) return true;
-  }
-  const status = failureToken(item.status);
-  return status === 'changes_required' || status === 'refused';
-}
-
 /**
  * May this source path lend its WORK_ITEM_PASS to another candidate?
  *
@@ -989,7 +980,7 @@ function isQualityVerdict(item) {
 function sourcePathLendsProof(evidenceData, combo, parsed) {
   if (!isInfrastructureBlock(evidence.isCandidateBlocked(evidenceData, parsed))) return false;
   for (const item of combo.evidence || []) {
-    if (isQualityVerdict(item)) return false;
+    if (outcomeHistory.isQualityVerdict(item)) return false;
     if (failureToken(item.status) !== 'failed') continue;
     const { cause, scope } = itemClassification(item);
     if (!isInfrastructureFailure(cause, scope, failureText(item))) return false;
@@ -2190,6 +2181,9 @@ function reportDispatchOutcome(args, deps) {
         : 'OUTCOME_REPORTED'
       : 'PROGRESS_REPORTED',
   };
+  // Persist the quality-vs-outage classification with the outcome so later
+  // readers never have to re-derive it from free text or commit counts.
+  recorded.classification = outcomeHistory.classifyOutcome(recorded);
   decisions.recordDecision(recorded, { dir: d.decisionDir, now });
 
   log(
