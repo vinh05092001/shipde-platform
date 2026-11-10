@@ -879,6 +879,24 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Outcome: Busy lane refused before any `job.json` write, `result.json` unlink, or adapter call; timeout keeps ownership without synthetic result; proven pre-launch failure releases the matching owner; single lock order `job.lock` -> lane generation lock.
 - Evidence: Busy case fails on base `1296a736`, passes on head; with `r3-lane-ownership` and `task-ai-69` 20/0; independent review found no race by source reading, no multi-process stress run.
 
+## PR 09 outcome — Quality floor: resolveFloorQuality, source precedence & admission separation (2026-11-10)
+
+- Scope: `tools/ai-brain/routing.js` (`resolveFloorQuality`, admission check in `rankForProfile`), `tools/ai-brain/test/task-ai-171-quality-floor.test.js`, `tools/ai-brain/test/task-ai-142-hermes-candidates.test.js`.
+- One resolver: Single source of truth `resolveFloorQuality(candidate, assessment, ctx)` resolves floor quality for admission.
+- Source precedence:
+  1. Explicit `candidate.quality`: finite number in [0, 100], units `points`, source `explicit`.
+  2. Validated measurement: `scoreMeasurements(candidate, assessment, ctx)` breakdown `quality` (fraction 0-1) scaled x100 into [0, 100], units `fraction_scaled_100`, source from measurement under active scoring policy.
+  3. Valid external prior: `priorFor(candidate, role, priors, now)` when non-stale, finite score, and not `priorUnknown`, clamped to [0, 100], units `points`, source from prior.
+- Unknown never 0: If neither explicit quality, validated measurement, nor valid prior is available (or if measurements are null/stale), returns `{ known: false, value: null, units: null, source: 'unknown' }`. Unknown quality is never coerced to 0.
+- Proof not floor evidence: Proof-only evidence (e.g. `evidence: [{ status: 'passed', proofLevel: 'API_PASS' }]`) demonstrates execution proof, not benchmark quality. Floor quality remains `known: false`, `value: null` (UNKNOWN).
+- Whitespace-only explicit quality is not evidence: A string quality that is empty after trim (e.g. `' '`) is not explicit evidence; resolution continues to the measurement, then the prior, else UNKNOWN.
+- Floor admission separate from ranking:
+  - Admission: Only candidates with known floor quality strictly below `qualityFloor` (`floorQuality.known && floorQuality.value < qualityFloorValue`) are rejected with `QUALITY_FLOOR_NOT_MET`. Candidates with unknown quality (including proof-only evidence) are admitted under `qualityFloor > 0` (and `qualityFloor: 0` admits unknown quality).
+  - Ranking: Candidates follow the evidence and scoring policy contracts (e.g. #414 quality-unknown contract); candidates with unknown quality are ordered after known-scored candidates, and proof-only candidates retain finite ranking quality without corrupting floor admission evidence.
+- H3 rationale: Test H3 in `test/task-ai-142-hermes-candidates.test.js` tests probe order and fallback among ELIGIBLE models. Fixture priors provide `cl/openai/gpt-6-astra` (93) and `cbai/deepseek-v4.1-flash` (34). Production Hermes orchestrator floor is 60, which rejects the prior-34 model at admission. To test multi-candidate probe order and fallback across both fixture models, H3 explicitly sets test `qualityFloor: 34`. In production assembly without override (floor 60), the prior-34 route is rejected with `QUALITY_FLOOR_NOT_MET`, leaving only the prior-93 route eligible; upon simulated 404 failure, the weaker model is never probed or spawned and no session launches.
+- User decision 2026-11-11: no-policy unknown quality is admitted; #537 score-parity expectation updated (old: rejected QUALITY_FLOOR_NOT_MET -> new: admitted as QUALITY_UNKNOWN).
+- Evidence: Offline suites `tools/ai-brain/test/task-ai-171-quality-floor.test.js` (15/15), `tools/ai-brain/test/task-ai-142-quality-unknown.test.js` (6/6), `tools/ai-brain/test/task-ai-142-hermes-candidates.test.js` (24/24), `tools/ai-brain/test/task-ai-142-quality-priors.test.js` (4/4) all pass cleanly (49/49).
+
 ## FU-584: Every execute path validates a target-bound pinned base (2026-11-10)
 
 - Scope: `tools/ai-brain/cli.js` (`dispatchCommand`, `resolveExecuteBase`), `tools/ai-brain/test/task-ai-171-pinned-base.test.js`.

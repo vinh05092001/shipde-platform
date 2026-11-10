@@ -368,6 +368,9 @@ test('TASK-AI-142 H3: production assembly probes an untested stronger model befo
     skipDecisionLog: true,
     now: NOW,
     env: { FIXTURE_KEY: 'test-fixture-value' },
+    // Both fixture models must be eligible for this probe-order test;
+    // 34 = the fixture prior of the weaker model; production floor stays 60.
+    qualityFloor: 34,
   };
   const selected = hermesSessionApi.selectReasoningCandidate(options, deps);
   assert.equal(selected.candidate.modelId, models[1]);
@@ -380,6 +383,86 @@ test('TASK-AI-142 H3: production assembly probes an untested stronger model befo
     healthApi.getPathRecord(routeHealth, models[1], { id: 'fixture', accountId: 'account' }).status,
     'UNSUPPORTED'
   );
+});
+
+test('TASK-AI-142 H3: production assembly without override enforces floor 60: prior-34 rejected and never probed on fallback', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-ranked-probe-default-floor-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Fixed clock: the priors fixture is dated 2026-10-13 and goes stale after 30 days.
+  const NOW = Date.parse('2026-10-14T12:00:00.000Z');
+  const models = ['cbai/deepseek-v4.1-flash', 'cl/openai/gpt-6-astra'];
+  const registry = {
+    sources: [
+      {
+        id: 'fixture',
+        kind: 'router',
+        endpoint: 'https://fixture.example/v1',
+        credential: { type: 'api-key', env: 'FIXTURE_KEY' },
+        modelMeta: Object.fromEntries(models.map((id) => [id, { contextWindow: 128000 }])),
+      },
+    ],
+  };
+  const accounts = [{ id: 'account', provider: 'fixture', enabled: true }];
+  const routeHealth = { version: 1, paths: {}, events: [] };
+  healthApi.recordResult(
+    routeHealth,
+    models[0],
+    { id: 'fixture', accountId: 'account' },
+    { ok: true },
+    NOW
+  );
+  const probed = [];
+  const spawned = [];
+  const deps = {
+    registry,
+    accountList: accounts,
+    readDiscoveryCatalogue: () => ({ candidates: [] }),
+    routeHealth,
+    evidenceData: {},
+    priorsData: require('../priors').loadPriors(
+      path.join(__dirname, 'fixtures', 'priors-20261013.json')
+    ),
+    assembleForDispatch: (d, a, r, o) =>
+      cliApi.assembleForDispatch(d, a, r, { ...o, offerings: [], registryAccounts: [] }),
+    probe: async (c) => {
+      probed.push(c.modelId);
+      return c.modelId === models[1]
+        ? { ok: false, status: 404, body: 'model not found' }
+        : { ok: true, status: 200 };
+    },
+    spawn: async (_command, args) => {
+      spawned.push(args);
+      return { exitCode: 0 };
+    },
+  };
+  const options = {
+    rootDir: root,
+    homeDir: root, // hermetic: no host Codex login joins the pool
+    skipDecisionLog: true,
+    now: NOW,
+    env: { FIXTURE_KEY: 'test-fixture-value' },
+  };
+  const selected = hermesSessionApi.selectReasoningCandidate(options, deps);
+  assert.equal(selected.candidate.modelId, models[1]);
+  assert.equal(selected.ranking.length, 1);
+  assert.equal(selected.ranking[0].modelId, models[1]);
+  assert.ok(!selected.ranking.some((r) => (r.modelId || '').includes(models[0])));
+  const floorRejection = (selected.rejected || []).find(
+    (r) => (r.candidateKey || '').includes(models[0]) && r.reasonCode === 'QUALITY_FLOOR_NOT_MET'
+  );
+  assert.ok(floorRejection, 'prior-34 route must be rejected QUALITY_FLOOR_NOT_MET');
+
+  await assert.rejects(
+    async () => {
+      await hermesSessionApi.launchHermesSession(options, deps);
+    },
+    (err) => {
+      assert.ok(err);
+      return true;
+    }
+  );
+  assert.deepEqual(probed, [models[1]], 'weaker model must never be probed');
+  assert.equal(spawned.length, 0, 'no session launches and weaker model is never spawned');
 });
 
 test('TASK-AI-142 H3: router source with modelMeta yields hermes candidates with contextWindow from that source', () => {
