@@ -3280,7 +3280,11 @@ function buildProfile(item, o, forbiddenFailureDomains) {
         : 1000000,
     requiredHarness: null,
     forbiddenFailureDomains: expandForbiddenDomains(
-      [].concat(forbiddenFailureDomains || [], item.forbiddenFailureDomains || [])
+      [].concat(
+        forbiddenFailureDomains || [],
+        item.forbiddenFailureDomains || [],
+        item.forbiddenAreas || []
+      )
     ),
     resourceCeiling:
       item.resourceCeiling !== null &&
@@ -3296,6 +3300,15 @@ function buildProfile(item, o, forbiddenFailureDomains) {
       Number(item.currentWorkload) >= 0
         ? Number(item.currentWorkload)
         : 0,
+    riskDomains: Array.isArray(item.riskDomains) ? [...item.riskDomains] : [],
+    allowedFiles: Array.isArray(item.allowedFiles)
+      ? [...item.allowedFiles]
+      : Array.isArray(item.files)
+        ? [...item.files]
+        : [],
+    acceptanceCriteria: Array.isArray(item.acceptanceCriteria) ? [...item.acceptanceCriteria] : [],
+    ...(item.ticketText ? { ticketText: item.ticketText } : {}),
+    ...(item.itemSource ? { itemSource: item.itemSource } : {}),
   };
 }
 
