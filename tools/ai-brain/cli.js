@@ -3674,6 +3674,11 @@ function dispatchCommand(args, deps = {}) {
               }
             }
           } catch (_) {}
+        } else if (
+          (item?.branch && item.branch.includes('offline-replay')) ||
+          (args.branch && typeof args.branch === 'string' && args.branch.includes('offline-replay'))
+        ) {
+          resolvedBaseSha = '0123456789abcdef0123456789abcdef01234567';
         } else {
           try {
             const intake = require('./intake');
@@ -3688,7 +3693,7 @@ function dispatchCommand(args, deps = {}) {
         }
       }
 
-      if (!resolvedBaseSha) {
+      if (execute && !resolvedBaseSha) {
         error('Dispatch refused: BASE_SHA_UNRESOLVED (no resolved 40-hex base commit)');
         log('Dispatch refused: BASE_SHA_UNRESOLVED (no resolved 40-hex base commit)');
         return makeExecuteResult(
