@@ -347,15 +347,24 @@ function executePlan(plan, options) {
   // TASK-AI-171 R2: executePlan must refuse to execute without a validated target.
   // The frozen target must be created by resolveExecuteTarget (provenance check
   // via WeakSet rejects forged {ok:true} objects from plan files or flags).
-  const { isValidTarget } = require('./execute-target');
-  const executeTarget = opts.executeTarget || null;
+  // A direct caller that supplies no target gets one resolved here (validated,
+  // never a bare branch name); a supplied object must carry provenance.
+  const { isValidTarget, resolveExecuteTarget } = require('./execute-target');
+  let executeTarget = null;
   if (!dryRun) {
-    if (!executeTarget || !isValidTarget(executeTarget) || !executeTarget.ok) {
-      const reason = !executeTarget
-        ? 'EXECUTE_TARGET_MISSING'
-        : !isValidTarget(executeTarget)
-          ? 'EXECUTE_TARGET_FORGED'
-          : executeTarget.code || 'EXECUTE_TARGET_INVALID';
+    executeTarget =
+      opts.executeTarget !== undefined && opts.executeTarget !== null
+        ? opts.executeTarget
+        : resolveExecuteTarget(
+            { execute: true, cwd: opts.cwd, 'base-sha': opts.baseSha },
+            { rootDir: opts.rootDir, gitRoot: opts.gitRoot, commitExists: opts.commitExists }
+          );
+    if (!isValidTarget(executeTarget) || !executeTarget.ok) {
+      const reason = !isValidTarget(executeTarget)
+        ? executeTarget && executeTarget.ok === false && executeTarget.code
+          ? executeTarget.code
+          : 'EXECUTE_TARGET_FORGED'
+        : executeTarget.code || 'EXECUTE_TARGET_INVALID';
       return {
         dryRun: false,
         executedAt: new Date(opts.now || Date.now()).toISOString(),
@@ -548,8 +557,10 @@ function executePlan(plan, options) {
       accountId: a.accountId,
       prompt: promptFor(a, opts),
       branch: isReview ? null : a.branch,
-      base: (executeTarget && executeTarget.baseSha) || opts.base || 'main',
-      cwd: (executeTarget && executeTarget.cwd) || opts.cwd,
+      // Execute: only the validated target's pinned SHA and cwd. Dry run: a
+      // preview vector that is never run, unchanged from before.
+      base: executeTarget ? executeTarget.baseSha : opts.base || 'main',
+      cwd: executeTarget ? executeTarget.cwd : opts.cwd,
       isolatedWorker: Boolean(opts.isolatedWorker),
       usageFile: usageReportPath(opts, a),
       title: workerName(a.workItemId),
