@@ -959,19 +959,67 @@ function builtinOpencodeModels(source, o) {
       o?.timeoutMs;
     const timeoutMs = Number(configuredTimeout);
 
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    const env = (o && o.env) || process.env;
+    const fsMod = (o && o.fs) || require('fs');
+    const pathMod = require('path');
+    const fixtureDir =
+      o?.fixtureDir || (o?.env && o.env.SHIPDE_FIXTURE_DIR) || env.SHIPDE_FIXTURE_DIR;
+
+    let dirModelsFixture;
+    if (fixtureDir) {
+      const txtPath = pathMod.join(fixtureDir, 'opencode-models.txt');
+      const jsonPath = pathMod.join(fixtureDir, 'opencode-models.json');
+      if (fsMod.existsSync(txtPath)) {
+        dirModelsFixture = txtPath;
+      } else if (fsMod.existsSync(jsonPath)) {
+        dirModelsFixture = jsonPath;
+      }
+    }
+
+    const fixture =
+      o?.opencodeModelsFixture ||
+      o?.modelsFixture ||
+      (o?.env && o.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
+      env.SHIPDE_OPENCODE_MODELS_FIXTURE ||
+      dirModelsFixture;
+
+    if (!fixture && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       return [];
     }
 
-    const run =
-      o?.listOpencodeModels ||
-      (() =>
+    let run = o?.listOpencodeModels;
+    if (!run && fixture) {
+      run = () => {
+        const fs = require('fs');
+        const raw = typeof fixture === 'object' ? fixture : fs.readFileSync(fixture, 'utf8');
+        try {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const list = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed?.models)
+              ? parsed.models
+              : null;
+          if (list) {
+            return list
+              .map((m) => {
+                const s = typeof m === 'string' ? m : m?.id || m?.model || '';
+                return s.includes('/') ? s : `${provider}/${s}`;
+              })
+              .join('\n');
+          }
+        } catch {}
+        return String(raw);
+      };
+    }
+    if (!run) {
+      run = () =>
         require('child_process').execFileSync('opencode', ['models'], {
           encoding: 'utf8',
           timeout: timeoutMs,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'ignore'],
-        }));
+        });
+    }
     models = String(run())
       .split(/\r?\n/)
       .map((l) => l.trim())

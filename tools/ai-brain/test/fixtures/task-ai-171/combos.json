@@ -1,0 +1,9 @@
+{
+  "combos": [
+    {
+      "name": "vinh",
+      "strategy": "ROUND_ROBIN",
+      "models": ["fake-gateway/test-member-model"]
+    }
+  ]
+}

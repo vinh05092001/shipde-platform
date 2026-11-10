@@ -440,6 +440,69 @@ function resolveComboMembers(opts) {
 // GET only. Returns names and member IDs, never the admin token or a raw body.
 async function readComboConfig(opts = {}) {
   const name = resolveComboName(opts);
+  const env = opts.env || process.env;
+  const fixtureDir =
+    opts.fixtureDir || (opts.env && opts.env.SHIPDE_FIXTURE_DIR) || env.SHIPDE_FIXTURE_DIR;
+  const fixture =
+    opts.comboFixture ||
+    opts.comboConfigFixture ||
+    opts.fixture ||
+    (opts.env && opts.env.SHIPDE_COMBO_FIXTURE) ||
+    env.SHIPDE_COMBO_FIXTURE ||
+    (fixtureDir ? require('path').join(fixtureDir, 'combos.json') : undefined);
+
+  if (fixture) {
+    let raw;
+    if (typeof fixture === 'object') {
+      raw = fixture;
+    } else {
+      const fs = opts.fs || require('fs');
+      try {
+        raw = JSON.parse(fs.readFileSync(fixture, 'utf8'));
+      } catch {
+        return {
+          name,
+          members: null,
+          state: 'COMBO_CONFIG_UNAVAILABLE',
+          status: 'FIXTURE_READ_FAILED',
+        };
+      }
+    }
+    let combo = null;
+    if (raw && Array.isArray(raw.combos)) {
+      combo = name ? raw.combos.find((c) => c && c.name === name) || null : raw.combos[0] || null;
+    } else if (Array.isArray(raw)) {
+      combo = name ? raw.find((c) => c && c.name === name) || null : raw[0] || null;
+    } else if (raw && typeof raw === 'object') {
+      if (name && raw.name && raw.name !== name) {
+        combo = null;
+      } else {
+        combo = raw;
+      }
+    }
+    const resolvedName = name || combo?.name || null;
+    if (!combo) {
+      return {
+        name: resolvedName,
+        members: null,
+        state: 'COMBO_CONFIG_UNAVAILABLE',
+        status: 'COMBO_NOT_FOUND',
+      };
+    }
+    const members = (combo.members || combo.models || []).filter((m) => typeof m === 'string');
+    return {
+      name: resolvedName,
+      state: combo.state || (members.length ? 'READ' : 'EMPTY'),
+      strategy: combo.strategy || 'UNKNOWN',
+      members,
+      readVia:
+        opts.readVia ||
+        combo.readVia ||
+        (typeof fixture === 'string' ? `fixture:${fixture}` : 'fixture'),
+      readAt: combo.readAt || new Date().toISOString(),
+    };
+  }
+
   const resolved = resolveEndpoint(opts);
   if (!name || !resolved.host || !resolved.port || !resolved.protocol) {
     throw new Error('CONFIG_MISSING: combo name and 9router endpoint are required');

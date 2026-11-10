@@ -814,3 +814,10 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Outcome: Matches candidate models against Antigravity quota groups; blocks exhausted models with QUOTA_EXHAUSTED and unmapped models with QUOTA_GROUP_UNKNOWN.
 - Depends on: Slice 4a (`fix/task-ai-171-core-s4a-quota-parser`).
 - Evidence: 5/5 tests in `task-ai-171-quota-group.test.js` pass offline.
+
+## Slice 5: C — Offline replay dry-run fixtures (2026-11-10)
+
+- Scope: `tools/ai-brain/writer-combo.js`, `tools/ai-brain/candidates.js` (`builtinOpencodeModels`), `tools/ai-brain/cli.js` (`resolveFixturePaths`), `tools/ai-brain/test/fixtures/task-ai-171/*`, `tools/ai-brain/test/task-ai-171-offline-replay.test.js`.
+- Outcome: Supports offline dry-run dispatch with combo and opencode model fixtures; makes zero outbound network calls and respects CLI and environment fixture overrides.
+- Depends on: Slice 4b (`fix/task-ai-171-core-s4b-quota-admission`).
+- Evidence: 6/6 tests in `task-ai-171-offline-replay.test.js` pass with strict offline network guards active.
