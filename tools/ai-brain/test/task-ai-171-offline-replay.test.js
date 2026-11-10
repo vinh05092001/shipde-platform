@@ -536,6 +536,57 @@ test('replay fixture with --execute is refused with REPLAY_FIXTURE_WITH_EXECUTE 
   assert.equal(result.chosen, null);
 });
 
+test('CLI-style deps {dryRunOffline:true} + --execute with NO fixture is not refused for REPLAY_FIXTURE_WITH_EXECUTE', async (t) => {
+  offline(t);
+  const { dispatchCommand } = require('../cli');
+
+  const origDirEnv = process.env.SHIPDE_FIXTURE_DIR;
+  const origComboEnv = process.env.SHIPDE_COMBO_FIXTURE;
+  const origModelsEnv = process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+  delete process.env.SHIPDE_FIXTURE_DIR;
+  delete process.env.SHIPDE_COMBO_FIXTURE;
+  delete process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+  t.after(() => {
+    if (origDirEnv !== undefined) process.env.SHIPDE_FIXTURE_DIR = origDirEnv;
+    if (origComboEnv !== undefined) process.env.SHIPDE_COMBO_FIXTURE = origComboEnv;
+    if (origModelsEnv !== undefined) process.env.SHIPDE_OPENCODE_MODELS_FIXTURE = origModelsEnv;
+  });
+
+  const launcherCalls = [];
+  let exitCode = null;
+  const result = await dispatchCommand(
+    {
+      execute: true,
+      item: 'TASK-AI-171-NO-FIXTURE-EXECUTE',
+    },
+    {
+      dryRunOffline: true,
+      candidates: [],
+      run: (...args) => {
+        launcherCalls.push(args);
+        return { exitCode: 0 };
+      },
+      exit: (code) => {
+        exitCode = code;
+      },
+      log: () => {},
+      error: () => {},
+    }
+  );
+
+  assert.notEqual(
+    result?.outcome?.reason,
+    'REPLAY_FIXTURE_WITH_EXECUTE',
+    'not refused for REPLAY_FIXTURE_WITH_EXECUTE'
+  );
+  assert.notEqual(
+    result?.error,
+    'REPLAY_FIXTURE_WITH_EXECUTE',
+    'error is not REPLAY_FIXTURE_WITH_EXECUTE'
+  );
+  assert.notEqual(exitCode, 2, 'exitCode is not 2 from refusal');
+});
+
 test('readComboConfig returns COMBO_NOT_FOUND and no members when requested combo is missing', async (t) => {
   offline(t);
   const combo = require('../writer-combo');

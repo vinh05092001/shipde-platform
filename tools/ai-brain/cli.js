@@ -2212,9 +2212,7 @@ function resolveFixturePaths(args, deps) {
     env.SHIPDE_COMBO_FIXTURE ||
     dirComboFixture;
 
-  const hasOfflineFixture = Boolean(
-    fixtureDir || comboFixture || opencodeModelsFixture || deps?.dryRunOffline === true
-  );
+  const hasOfflineFixture = Boolean(fixtureDir || comboFixture || opencodeModelsFixture);
   return { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture };
 }
 
