@@ -793,3 +793,10 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
   - Test 3: `INT-1: worker stdout spoofed JSON success with non-zero exit is rejected as failure` (PASS)
   - Test 4: `INT-1: isolated dispatch reaches isolation launcher seam, preserves candidate options, persists receipt before launch, and forbids fallback on failure` (PASS)
   - Test 5: `INT-1: routeLaunchStep behaviour: chosen = null refuses spawn; chosen candidate launches bounded processes with matching argv identity, log safety, launcher tracking, and async error completion` (PASS)
+
+## Slice 3: A2 — Direct-HTTP external sources candidate generation (2026-11-10)
+
+- Scope: `tools/ai-brain/candidates.js` (`generateCandidatesWithCatalog`), `tools/ai-brain/test/task-ai-171-external-sources.test.js`, `tools/ai-brain/test/task-ai-142-opencode-writers.test.js`.
+- Outcome: Wires direct-http external model sources from catalogue into candidate generation; emits MODELS_UNKNOWN_FOR_SOURCE when uncatalogued; routes direct-http sources to wire model IDs.
+- Depends on: Slice 2b (`fix/task-ai-171-core-s2b-route-launch`).
+- Evidence: 3/3 tests in `task-ai-171-external-sources.test.js` and 5/5 tests in `task-ai-142-opencode-writers.test.js` pass offline.
