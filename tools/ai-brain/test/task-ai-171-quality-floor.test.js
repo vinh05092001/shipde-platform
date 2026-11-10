@@ -107,27 +107,85 @@ test('TASK-AI-171 (a): candidate with prior-derived quality 15 is rejected by qu
   assert.ok(rejection, 'rejection reason must be QUALITY_FLOOR_NOT_MET');
 });
 
-// --- Test (b): unknown quality, floor 70 -> not admitted ---
-test('TASK-AI-171 (b): candidate with unknown quality is not admitted when floor is 70', () => {
-  // Priors that do NOT include the candidate model -> quality unknown
-  const priorsWithoutCandidate = buildPriors([]);
+// --- Test (b): unknown quality admitted, ranked after known candidate, reason says unknown ---
+test('TASK-AI-171 (b): candidate with unknown quality is admitted, ranked after known candidate, reason says unknown', () => {
+  const mixedPriors = buildPriors([
+    {
+      canonical: 'high-quality-model',
+      codingTier: 'T1',
+      reviewTier: 'T1',
+      score: 85,
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 85 },
+        { name: 'aaAgenticIndex', score: 85 },
+      ],
+    },
+  ]);
 
-  const candidate = makeCandidate('unknown-quality-model-xyz');
+  const highCandidate = makeCandidate('high-quality-model', {
+    upstream: 'up-high',
+    accountId: 'acc-high',
+    quotaScope: 'acc-high',
+  });
+  const unknownCandidate = makeCandidate('unknown-quality-model-xyz', {
+    upstream: 'up-unknown',
+    accountId: 'acc-unknown',
+    quotaScope: 'acc-unknown',
+  });
   const profile = testProfile({ qualityFloor: 70 });
   const assessment = testAssessment();
 
-  const result = routing.rankForProfile([candidate], profile, assessment, {
+  // 1. When ranked alongside a known candidate: unknown is admitted and ranked after known
+  const result = routing.rankForProfile([unknownCandidate, highCandidate], profile, assessment, {
     now: FIXTURE_NOW,
-    priors: priorsWithoutCandidate,
+    priors: mixedPriors,
     loadQuotaState: false,
     useStoredQuota: false,
   });
 
-  assert.equal(result.chosen, null, 'unknown-quality candidate must not be chosen');
-  assert.ok(result.ranking.length === 0, 'unknown-quality candidate must not be in ranking');
-  assert.ok(result.rejected.length > 0, 'unknown-quality candidate must be rejected');
-  const rejection = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
-  assert.ok(rejection, 'rejection reason must be QUALITY_FLOOR_NOT_MET');
+  assert.ok(result.chosen, 'a candidate must be chosen');
+  assert.ok(
+    result.chosen.includes('high-quality-model'),
+    'known candidate must be chosen over unknown'
+  );
+  assert.equal(result.ranking.length, 2, 'both candidates must be admitted in ranking');
+  assert.ok(
+    result.ranking[0].candidateKey.includes('high-quality-model'),
+    'known candidate must rank first'
+  );
+  assert.ok(
+    result.ranking[1].candidateKey.includes('unknown-quality-model-xyz'),
+    'unknown-quality candidate must rank after known candidate'
+  );
+  assert.equal(
+    result.ranking[1].qualityLabel,
+    'QUALITY_UNKNOWN',
+    'unknown candidate must keep QUALITY_UNKNOWN label'
+  );
+  assert.equal(
+    result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined,
+    'unknown-quality candidate must not be rejected by quality floor'
+  );
+
+  // 2. When unknown candidate is evaluated alone: admitted and chosen, reason says unknown
+  const soloResult = routing.rankForProfile([unknownCandidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.ok(soloResult.chosen, 'unknown candidate must be admitted and chosen when alone');
+  assert.ok(
+    soloResult.chosen.includes('unknown-quality-model-xyz'),
+    'chosen candidate must be unknown candidate'
+  );
+  assert.match(
+    soloResult.reason,
+    /score chưa rõ/,
+    'decision reason must say unknown score (score chưa rõ)'
+  );
 });
 
 // --- Test (c): quality 85 -> admitted and chosen over (a) ---
@@ -237,7 +295,7 @@ test('TASK-AI-171: qualityFloor 0 admits candidates with unknown quality', () =>
 });
 
 // --- P1 Tests: active scoringPolicy with missing c.quality and floor 70 ---
-test('TASK-AI-171 P1 (a): active scoringPolicy with unknown effective quality is rejected by quality floor 70', () => {
+test('TASK-AI-171 P1 (a): active scoringPolicy with unknown effective quality is admitted, ranked after known candidate, reason says unknown', () => {
   const activeScoringPolicy = {
     version: 'fixture-v1',
     source: 'fixture://policy',
@@ -245,35 +303,111 @@ test('TASK-AI-171 P1 (a): active scoringPolicy with unknown effective quality is
     maxAgeMs: 100000,
     dimensions: {
       quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+      latency: { weight: 1, min: 0, max: 1000, unit: 'ms', direction: 'lower' },
     },
   };
 
-  const priorsEmpty = buildPriors([]);
-  const candidate = makeCandidate('unknown-quality-policy-model');
-  assert.equal(candidate.quality, undefined);
+  const highCandidate = makeCandidate('high-quality-policy-model', {
+    upstream: 'up-high',
+    accountId: 'acc-high',
+    quotaScope: 'acc-high',
+    modelVersion: 'v1',
+    quality: 85,
+    measurements: {
+      quality: {
+        value: 85,
+        unit: 'points',
+        source: 'benchmark',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/high-quality-policy-model',
+        modelVersion: 'v1',
+      },
+      latency: {
+        value: 400,
+        unit: 'ms',
+        source: 'live',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/high-quality-policy-model',
+        modelVersion: 'v1',
+      },
+    },
+  });
+
+  const unknownCandidate = makeCandidate('unknown-quality-policy-model', {
+    upstream: 'up-unknown',
+    accountId: 'acc-unknown',
+    quotaScope: 'acc-unknown',
+    modelVersion: 'v1',
+    measurements: {
+      latency: {
+        value: 200,
+        unit: 'ms',
+        source: 'live',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/unknown-quality-policy-model',
+        modelVersion: 'v1',
+      },
+    },
+  });
+  assert.equal(unknownCandidate.quality, undefined);
 
   const profile = testProfile({ qualityFloor: 70 });
   const assessment = testAssessment({ scoringPolicy: activeScoringPolicy });
 
-  const result = routing.rankForProfile([candidate], profile, assessment, {
+  // 1. When ranked alongside a known candidate: unknown is admitted and ranked after known
+  const result = routing.rankForProfile([unknownCandidate, highCandidate], profile, assessment, {
     now: FIXTURE_NOW,
-    priors: priorsEmpty,
+    priors: buildPriors([]),
     loadQuotaState: false,
     useStoredQuota: false,
   });
 
-  assert.equal(
-    result.chosen,
-    null,
-    'unknown-quality candidate must not be chosen under active scoring policy'
+  assert.ok(result.chosen, 'known candidate must be chosen');
+  assert.ok(
+    result.chosen.includes('high-quality-policy-model'),
+    'known candidate must be chosen over unknown'
+  );
+  assert.equal(result.ranking.length, 2, 'both candidates must be admitted in ranking');
+  assert.ok(
+    result.ranking[0].candidateKey.includes('high-quality-policy-model'),
+    'known candidate must rank first'
   );
   assert.ok(
-    result.ranking.length === 0,
-    'unknown-quality candidate must not be in ranking under active scoring policy'
+    result.ranking[1].candidateKey.includes('unknown-quality-policy-model'),
+    'unknown candidate must rank after known'
   );
-  assert.ok(result.rejected.length > 0, 'unknown-quality candidate must be rejected');
-  const rejection = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
-  assert.ok(rejection, 'rejection reason must be QUALITY_FLOOR_NOT_MET');
+  assert.equal(
+    result.ranking[1].qualityLabel,
+    'QUALITY_UNKNOWN',
+    'unknown candidate must retain QUALITY_UNKNOWN label'
+  );
+  assert.equal(
+    result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined,
+    'unknown candidate must not be rejected by quality floor'
+  );
+
+  // 2. When unknown candidate is evaluated alone: admitted and chosen, reason says unknown
+  const soloResult = routing.rankForProfile([unknownCandidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.ok(soloResult.chosen, 'unknown candidate must be admitted and chosen when alone');
+  assert.ok(
+    soloResult.chosen.includes('unknown-quality-policy-model'),
+    'chosen candidate must be unknown candidate'
+  );
+  assert.match(
+    soloResult.reason,
+    /score chưa rõ/,
+    'decision reason must say unknown score (score chưa rõ)'
+  );
 });
 
 test('TASK-AI-171 P1 (b): active scoringPolicy with below-floor effective quality is rejected by quality floor 70', () => {

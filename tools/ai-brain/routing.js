@@ -1734,12 +1734,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     const qualityCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
     const qualityDetails = resolveEffectiveQuality(c, assessment, qualityCtx, { details: true });
     const effectiveQuality = qualityDetails.quality;
-    if (
-      qualityFloorValue > 0 &&
-      (effectiveQuality === null ||
-        !Number.isFinite(effectiveQuality) ||
-        effectiveQuality < qualityFloorValue)
-    ) {
+    const isQualityKnown =
+      Number.isFinite(effectiveQuality) && qualityDetails.qualityLabel !== 'QUALITY_UNKNOWN';
+    if (qualityFloorValue > 0 && isQualityKnown && effectiveQuality < qualityFloorValue) {
       reject('QUALITY_FLOOR_NOT_MET', 'candidate');
       continue;
     }
