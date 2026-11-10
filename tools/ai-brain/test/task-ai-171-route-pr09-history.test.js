@@ -112,7 +112,7 @@ test('B69: the only failed candidate, or no candidate, is a truthful BLOCKED', (
   assert.deepEqual([empty.action, empty.reason], ['BLOCKED', 'NO_ELIGIBLE_CANDIDATE']);
 });
 
-test('B69: the last failed route is not re-launched when an untried alt exists', () => {
+test('B69: the last failed route is not re-launched and does not downgrade to lower quality', () => {
   const plan = history.escalationPlan(
     [
       { candidateKey: A, score: 8, qualityKnown: true },
@@ -120,8 +120,9 @@ test('B69: the last failed route is not re-launched when an untried alt exists',
     ],
     { failedRoutes: new Set([A]), lastFailedRoute: { routeKey: A } }
   );
-  assert.notEqual(plan.launch, A);
+  assert.deepEqual([plan.action, plan.launch], ['BLOCKED', null]);
   assert.ok(plan.rejected.some((r) => r.routeKey === A && r.reason === 'LAST_FAILED_THIS_ITEM'));
+  assert.ok(plan.rejected.some((r) => r.routeKey === B && r.reason === 'UNTRIED_UNKNOWN_OR_LOWER'));
 });
 
 test('B71: the summary is bounded and makes no best-finisher claim or question', () => {
@@ -167,4 +168,95 @@ test('B35: reportDispatchOutcome persists a structured quality-vs-outage classif
   assert.ok(rec, 'failed outcome must be recorded');
   assert.equal(rec.classification.infrastructure, true);
   assert.equal(history.isInfrastructureOutcome(rec), true);
+});
+
+test('Finding 1 / B65 VERIFY: baseline preserves last failure and blocks lower-quality or unknown untried candidate', () => {
+  const lower = history.escalationPlan(
+    [
+      { candidateKey: A, score: 8, qualityKnown: true },
+      { candidateKey: B, score: 4, qualityKnown: true },
+    ],
+    { failedRoutes: new Set([A]), lastFailedRoute: { routeKey: A } }
+  );
+  assert.deepEqual([lower.action, lower.launch], ['BLOCKED', null]);
+
+  const unknown = history.escalationPlan(
+    [
+      { candidateKey: A, score: 8, qualityKnown: true },
+      { candidateKey: B, score: 9, qualityKnown: false },
+    ],
+    { failedRoutes: new Set([A]), lastFailedRoute: { routeKey: A } }
+  );
+  assert.deepEqual([unknown.action, unknown.launch], ['BLOCKED', null]);
+});
+
+test('Finding 2 / B69 VERIFY: singleton failure in failedRoutes blocks without lastFailedRoute', () => {
+  const plan = history.escalationPlan([{ candidateKey: A, score: 5, qualityKnown: true }], {
+    failedRoutes: new Set([A]),
+  });
+  assert.deepEqual(
+    [plan.action, plan.reason, plan.launch],
+    ['BLOCKED', 'ONLY_FAILED_CANDIDATE', null]
+  );
+});
+
+test('Finding 3 / B69 VERIFY: exact runId query excludes different runId and untagged legacy records', () => {
+  const records = [
+    {
+      workItemId: W,
+      candidateKey: A,
+      stage: 'failed',
+      at: '2026-11-09T09:00:00Z',
+      verdict: 'changes_required',
+      reviewedSha: 's0',
+    },
+    {
+      workItemId: W,
+      candidateKey: A,
+      stage: 'failed',
+      runId: 'run-1',
+      at: '2026-11-09T10:00:00Z',
+      verdict: 'changes_required',
+      reviewedSha: 's1',
+    },
+    {
+      workItemId: W,
+      candidateKey: B,
+      stage: 'failed',
+      runId: 'run-2',
+      at: '2026-11-09T11:00:00Z',
+      verdict: 'changes_required',
+      reviewedSha: 's2',
+    },
+  ];
+  const failed = history.failedRounds(records, { workItemId: W, runId: 'run-2' });
+  assert.deepEqual([...failed.keys()], [B]);
+  assert.deepEqual([...failed.get(B)], ['s2']);
+  assert.equal(failed.has(A), false);
+
+  const last = history.lastFailedRoute(records, { workItemId: W, runId: 'run-2' });
+  assert.ok(last);
+  assert.equal(last.routeKey, B);
+});
+
+test('Finding 4 / B35/B36 VERIFY: refused status with headSha alone is not review evidence', () => {
+  const records = [
+    { workItemId: W, candidateKey: A, status: 'refused', headSha: 'head-unrelated-sha' },
+  ];
+  const failed = history.failedRounds(records, W);
+  assert.equal(failed.has(A), false);
+  assert.equal(failed.size, 0);
+});
+
+test('Finding 5 / P2 VERIFY: comparator prefers known quality over unknown in both argument orders', () => {
+  const known = { candidateKey: A, score: 5, qualityKnown: true };
+  const unknown = { candidateKey: B, score: 9, qualityKnown: false };
+  assert.ok(
+    history.defaultCompare(known, unknown) > 0,
+    'known vs unknown must be positive (known preferred)'
+  );
+  assert.ok(
+    history.defaultCompare(unknown, known) < 0,
+    'unknown vs known must be negative (known preferred)'
+  );
 });

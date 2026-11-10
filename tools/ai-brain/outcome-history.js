@@ -74,12 +74,38 @@ function routeKeyOf(record) {
   return null;
 }
 
+function isExplicitReviewRecord(record) {
+  if (!record) return false;
+  const nest = inner(record);
+  const stage = token(str(record.stage, nest.stage));
+  if (stage === 'review' || stage === 'review_completed' || stage === 'review_result') return true;
+  const role = token(str(record.role, nest.role));
+  if (role === 'reviewer' || role.startsWith('reviewer_') || role.startsWith('reviewer.'))
+    return true;
+  if (str(record.reviewer, nest.reviewer)) return true;
+  if (record.review && typeof record.review === 'object') return true;
+  return false;
+}
+
 function reviewedShaOf(record) {
   if (!record) return null;
   const nest = inner(record);
-  for (const key of ['reviewedSha', 'sha', 'targetSha', 'headSha']) {
-    const value = str(record[key], nest[key]);
-    if (value) return value;
+  const direct = str(
+    record.reviewedSha,
+    record.reviewedCommit,
+    nest.reviewedSha,
+    nest.reviewedCommit
+  );
+  if (direct) return direct;
+  if (isExplicitReviewRecord(record)) {
+    return str(
+      record.commit,
+      record.sha,
+      nest.commit,
+      nest.sha,
+      record.review && record.review.sha,
+      record.review && record.review.commit
+    );
   }
   return null;
 }
@@ -121,9 +147,28 @@ function isQualityVerdict(item) {
   return status === 'changes_required' || status === 'refused';
 }
 
-function isQualityRoundFailure(record, workItemId) {
+// When runId is specified, only records matching that exact runId are counted; untagged legacy records are excluded.
+function parseScope(workItemId, options) {
+  if (workItemId && typeof workItemId === 'object') {
+    return {
+      workItemId: workItemId.workItemId != null ? String(workItemId.workItemId) : null,
+      runId: workItemId.runId != null ? String(workItemId.runId) : null,
+    };
+  }
+  const opts = options || {};
+  return {
+    workItemId: workItemId != null ? String(workItemId) : null,
+    runId: opts.runId != null ? String(opts.runId) : null,
+  };
+}
+
+function isQualityRoundFailure(record, workItemId, options) {
   if (!record) return false;
-  if (workItemId != null && String(record.workItemId || '') !== String(workItemId)) return false;
+  const scope = parseScope(workItemId, options);
+  if (scope.workItemId != null && String(record.workItemId || '') !== scope.workItemId)
+    return false;
+  const recordRunId = str(record.runId, inner(record).runId);
+  if (scope.runId && recordRunId !== scope.runId) return false;
   const verdict = declaredVerdict(record) || token(record.status) || token(inner(record).status);
   return QUALITY.has(verdict) && Boolean(reviewedShaOf(record)) && !isInfrastructureOutcome(record);
 }
@@ -152,10 +197,12 @@ function verdictHistory(records, workItemId) {
 }
 
 // routeKey -> Set(reviewedSha) for each failed round this Work Item ran.
-function failedRounds(records, workItemId) {
+// When runId is specified, only records matching that exact runId are counted; untagged legacy records are excluded.
+function failedRounds(records, workItemId, options) {
+  const scope = parseScope(workItemId, options);
   const out = new Map();
   for (const record of records || []) {
-    if (!isQualityRoundFailure(record, workItemId)) continue;
+    if (!isQualityRoundFailure(record, scope)) continue;
     const key = routeKeyOf(record);
     if (!key) continue;
     const shas = out.get(key) || new Set();
@@ -165,22 +212,25 @@ function failedRounds(records, workItemId) {
   return out;
 }
 
-function roundsUsed(records, workItemId) {
-  return new Set(failedRounds(records, workItemId).keys());
+function roundsUsed(records, workItemId, options) {
+  return new Set(failedRounds(records, workItemId, options).keys());
 }
 
 // Newest structured failure for this Work Item, optionally one run. Item/run
 // scope keeps one local failure from penalising every run of the model.
+// When runId is specified, only records matching that exact runId are counted; untagged legacy records are excluded.
 function lastFailedRoute(records, workItemId, options) {
-  const opts = options || {};
+  const scope = parseScope(workItemId, options);
   const scoped = (records || [])
-    .filter((r) => r && String(r.workItemId || '') === String(workItemId))
+    .filter(
+      (r) => r && (scope.workItemId == null || String(r.workItemId || '') === scope.workItemId)
+    )
     .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
   for (const record of scoped) {
     const key = routeKeyOf(record);
     if (!key || !isStructuredFailure(record)) continue;
-    const runId = record.runId || inner(record).runId;
-    if (opts.runId && runId && runId !== opts.runId) continue;
+    const recordRunId = str(record.runId, inner(record).runId);
+    if (scope.runId && recordRunId !== scope.runId) continue;
     return { routeKey: key, at: record.at || null, sha: reviewedShaOf(record) };
   }
   return null;
@@ -188,7 +238,7 @@ function lastFailedRoute(records, workItemId, options) {
 
 // Known quality first, then higher score.
 function defaultCompare(a, b) {
-  const known = Number(Boolean(b && b.qualityKnown)) - Number(Boolean(a && a.qualityKnown));
+  const known = Number(Boolean(a && a.qualityKnown)) - Number(Boolean(b && b.qualityKnown));
   if (known) return known;
   return Number((a && a.score) || 0) - Number((b && b.score) || 0);
 }
@@ -208,37 +258,61 @@ function escalationPlan(eligible, options) {
     opts.failedRoutes instanceof Set ? opts.failedRoutes : new Set(opts.failedRoutes || []);
   const last = opts.lastFailedRoute || null;
   const lastKey = last && typeof last === 'object' ? routeKeyOf(last) || last.routeKey : last;
-  let pool = list;
-  if (lastKey) {
-    const alternates = list.filter((c) => routeKeyOf(c) !== lastKey);
-    if (!alternates.length && routeKeyOf(list[0]) === lastKey)
-      return { action: 'BLOCKED', reason: 'ONLY_FAILED_CANDIDATE', launch: null, rejected };
-    if (alternates.length) {
-      pool = alternates;
-      rejected.push({ routeKey: lastKey, reason: 'LAST_FAILED_THIS_ITEM' });
-    }
-  }
+
+  const isTried = (c) => {
+    const k = routeKeyOf(c);
+    return failed.has(k) || (lastKey != null && k === lastKey);
+  };
+
+  if (list.length === 1 && isTried(list[0]))
+    return { action: 'BLOCKED', reason: 'ONLY_FAILED_CANDIDATE', launch: null, rejected };
 
   const best = (rows) =>
     rows.reduce((pick, c) => (pick == null || compare(c, pick) > 0 ? c : pick), null);
-  const tried = pool.filter((c) => failed.has(routeKeyOf(c)));
-  const untried = pool.filter((c) => !failed.has(routeKeyOf(c)));
+  const tried = list.filter(isTried);
+  const untried = list.filter((c) => !isTried(c));
   const bestTried = best(tried);
   const eligibleUntried = best(
     untried.filter(
       (c) => c.qualityKnown === true && (bestTried == null || compare(c, bestTried) >= 0)
     )
   );
-  const launch = eligibleUntried || bestTried || best(pool);
-  const launchKey = routeKeyOf(launch);
 
-  for (const c of pool) {
-    if (routeKeyOf(c) === launchKey) continue;
+  let launch = null;
+  if (lastKey) {
+    launch = eligibleUntried || null;
+  } else {
+    launch = eligibleUntried || bestTried || best(list);
+  }
+
+  if (!launch) {
+    for (const c of list) {
+      const k = routeKeyOf(c);
+      rejected.push({
+        routeKey: k,
+        reason:
+          lastKey && k === lastKey
+            ? 'LAST_FAILED_THIS_ITEM'
+            : failed.has(k)
+              ? 'TRIED_ROUND_NO_HIGHER_UNTRIED'
+              : 'UNTRIED_UNKNOWN_OR_LOWER',
+      });
+    }
+    return { action: 'BLOCKED', reason: 'NO_ELIGIBLE_CANDIDATE', launch: null, rejected };
+  }
+
+  const launchKey = routeKeyOf(launch);
+  for (const c of list) {
+    const k = routeKeyOf(c);
+    if (k === launchKey) continue;
     rejected.push({
-      routeKey: routeKeyOf(c),
-      reason: failed.has(routeKeyOf(c))
-        ? 'TRIED_ROUND_NO_HIGHER_UNTRIED'
-        : 'UNTRIED_UNKNOWN_OR_LOWER',
+      routeKey: k,
+      reason:
+        lastKey && k === lastKey
+          ? 'LAST_FAILED_THIS_ITEM'
+          : failed.has(k)
+            ? 'TRIED_ROUND_NO_HIGHER_UNTRIED'
+            : 'UNTRIED_UNKNOWN_OR_LOWER',
     });
   }
   return {
@@ -253,7 +327,7 @@ function escalationPlan(eligible, options) {
 // Bounded structured counts only: no "best finisher" claim and no question.
 function boundedOutcomeSummary(records, workItemId, options) {
   const opts = options || {};
-  const failed = failedRounds(records, workItemId);
+  const failed = failedRounds(records, workItemId, options);
   const routes = [...verdictHistory(records, workItemId).values()].map((entry) => ({
     routeKey: entry.routeKey,
     rounds: entry.rounds,
@@ -280,6 +354,7 @@ module.exports = {
   failedRounds,
   roundsUsed,
   lastFailedRoute,
+  defaultCompare,
   escalationPlan,
   boundedOutcomeSummary,
 };
