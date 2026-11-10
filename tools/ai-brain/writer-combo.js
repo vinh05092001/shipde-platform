@@ -440,13 +440,16 @@ function resolveComboMembers(opts) {
 // GET only. Returns names and member IDs, never the admin token or a raw body.
 async function readComboConfig(opts = {}) {
   const name = resolveComboName(opts);
+  const env = opts.env || process.env;
+  const fixtureDir =
+    opts.fixtureDir || (opts.env && opts.env.SHIPDE_FIXTURE_DIR) || env.SHIPDE_FIXTURE_DIR;
   const fixture =
     opts.comboFixture ||
     opts.comboConfigFixture ||
     opts.fixture ||
-    (opts.fixtureDir && require('path').join(opts.fixtureDir, 'combos.json')) ||
     (opts.env && opts.env.SHIPDE_COMBO_FIXTURE) ||
-    process.env.SHIPDE_COMBO_FIXTURE;
+    env.SHIPDE_COMBO_FIXTURE ||
+    (fixtureDir ? require('path').join(fixtureDir, 'combos.json') : undefined);
 
   if (fixture) {
     let raw;
@@ -467,11 +470,15 @@ async function readComboConfig(opts = {}) {
     }
     let combo = null;
     if (raw && Array.isArray(raw.combos)) {
-      combo = raw.combos.find((c) => c && (name ? c.name === name : true)) || raw.combos[0];
+      combo = name ? raw.combos.find((c) => c && c.name === name) || null : raw.combos[0] || null;
     } else if (Array.isArray(raw)) {
-      combo = raw.find((c) => c && (name ? c.name === name : true)) || raw[0];
+      combo = name ? raw.find((c) => c && c.name === name) || null : raw[0] || null;
     } else if (raw && typeof raw === 'object') {
-      combo = raw;
+      if (name && raw.name && raw.name !== name) {
+        combo = null;
+      } else {
+        combo = raw;
+      }
     }
     const resolvedName = name || combo?.name || null;
     if (!combo) {

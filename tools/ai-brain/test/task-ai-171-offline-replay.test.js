@@ -489,3 +489,162 @@ test('readComboConfig and builtinOpencodeModels respect fixture overrides with z
   const envModels = candidatesApi.builtinOpencodeModels({ opencodeProvider: 'opencode' }, {});
   assert.deepEqual(envModels, ['test-builtin-model-a', 'test-builtin-model-b']);
 });
+
+test('replay fixture with --execute is refused with REPLAY_FIXTURE_WITH_EXECUTE and zero launcher calls', async (t) => {
+  offline(t);
+  const { dispatchCommand } = require('../cli');
+  const taskFixtureDir = path.join(fixtureDir, 'task-ai-171');
+  const comboFixture = path.join(taskFixtureDir, 'combos.json');
+
+  const origComboEnv = process.env.SHIPDE_COMBO_FIXTURE;
+  process.env.SHIPDE_COMBO_FIXTURE = comboFixture;
+  t.after(() => {
+    if (origComboEnv === undefined) delete process.env.SHIPDE_COMBO_FIXTURE;
+    else process.env.SHIPDE_COMBO_FIXTURE = origComboEnv;
+  });
+
+  const launcherCalls = [];
+  let exitCode = null;
+  const result = await dispatchCommand(
+    {
+      execute: true,
+      item: 'TASK-AI-171-REPLAY-EXECUTE',
+    },
+    {
+      run: (...args) => {
+        launcherCalls.push(args);
+        return { exitCode: 0 };
+      },
+      exit: (code) => {
+        exitCode = code;
+      },
+      log: () => {},
+      error: () => {},
+    }
+  );
+
+  assert.equal(
+    launcherCalls.length,
+    0,
+    'zero launcher calls when execute is attempted with fixture env'
+  );
+  assert.equal(result.exitCode, 2, 'exitCode is 2 on refusal');
+  assert.equal(exitCode, 2, 'deps.exit called with 2');
+  assert.equal(result.outcome?.status, 'refused');
+  assert.equal(result.outcome?.reason, 'REPLAY_FIXTURE_WITH_EXECUTE');
+  assert.equal(result.error, 'REPLAY_FIXTURE_WITH_EXECUTE');
+  assert.equal(result.chosen, null);
+});
+
+test('readComboConfig returns COMBO_NOT_FOUND and no members when requested combo is missing', async (t) => {
+  offline(t);
+  const combo = require('../writer-combo');
+  const taskFixtureDir = path.join(fixtureDir, 'task-ai-171');
+  const comboFixture = path.join(taskFixtureDir, 'combos.json');
+
+  // combos.json has only 'vinh', request 'reviewer'
+  const comboCfg = await combo.readComboConfig({
+    name: 'reviewer',
+    comboFixture,
+  });
+
+  assert.equal(comboCfg.name, 'reviewer');
+  assert.equal(comboCfg.state, 'COMBO_CONFIG_UNAVAILABLE');
+  assert.equal(comboCfg.status, 'COMBO_NOT_FOUND');
+  assert.equal(comboCfg.members, null);
+});
+
+test('precedence: explicit arg/dep > per-file env > directory default for combo and models', async (t) => {
+  offline(t);
+  const combo = require('../writer-combo');
+  const candidatesApi = require('../candidates');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'precedence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const dirCombos = path.join(root, 'combos.json');
+  const dirModels = path.join(root, 'opencode-models.txt');
+  fs.writeFileSync(
+    dirCombos,
+    JSON.stringify({ combos: [{ name: 'test-combo', members: ['dir-member'] }] })
+  );
+  fs.writeFileSync(dirModels, 'opencode/dir-model-1\n');
+
+  const envCombos = path.join(root, 'override-combos.json');
+  const envModels = path.join(root, 'override-models.txt');
+  fs.writeFileSync(
+    envCombos,
+    JSON.stringify({ combos: [{ name: 'test-combo', members: ['env-member'] }] })
+  );
+  fs.writeFileSync(envModels, 'opencode/env-model-1\n');
+
+  const explicitCombos = path.join(root, 'explicit-combos.json');
+  const explicitModels = path.join(root, 'explicit-models.txt');
+  fs.writeFileSync(
+    explicitCombos,
+    JSON.stringify({ combos: [{ name: 'test-combo', members: ['explicit-member'] }] })
+  );
+  fs.writeFileSync(explicitModels, 'opencode/explicit-model-1\n');
+
+  // Test 1: per-file env override wins over directory default
+  const origDirEnv = process.env.SHIPDE_FIXTURE_DIR;
+  const origComboEnv = process.env.SHIPDE_COMBO_FIXTURE;
+  const origModelsEnv = process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+
+  process.env.SHIPDE_FIXTURE_DIR = root;
+  process.env.SHIPDE_COMBO_FIXTURE = envCombos;
+  process.env.SHIPDE_OPENCODE_MODELS_FIXTURE = envModels;
+
+  t.after(() => {
+    if (origDirEnv === undefined) delete process.env.SHIPDE_FIXTURE_DIR;
+    else process.env.SHIPDE_FIXTURE_DIR = origDirEnv;
+    if (origComboEnv === undefined) delete process.env.SHIPDE_COMBO_FIXTURE;
+    else process.env.SHIPDE_COMBO_FIXTURE = origComboEnv;
+    if (origModelsEnv === undefined) delete process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+    else process.env.SHIPDE_OPENCODE_MODELS_FIXTURE = origModelsEnv;
+  });
+
+  const envComboCfg = await combo.readComboConfig({ name: 'test-combo' });
+  assert.deepEqual(envComboCfg.members, ['env-member'], 'env override wins over directory default');
+
+  const envModelsList = candidatesApi.builtinOpencodeModels({ opencodeProvider: 'opencode' }, {});
+  assert.deepEqual(envModelsList, ['env-model-1'], 'env override wins over directory default');
+
+  // Test 2: explicit arg/dep wins over per-file env override
+  const explicitComboCfg = await combo.readComboConfig({
+    name: 'test-combo',
+    comboFixture: explicitCombos,
+  });
+  assert.deepEqual(
+    explicitComboCfg.members,
+    ['explicit-member'],
+    'explicit arg wins over env override'
+  );
+
+  const explicitModelsList = candidatesApi.builtinOpencodeModels(
+    { opencodeProvider: 'opencode' },
+    { opencodeModelsFixture: explicitModels }
+  );
+  assert.deepEqual(explicitModelsList, ['explicit-model-1'], 'explicit arg wins over env override');
+});
+
+test('directory containing only opencode-models.json loads models without spawning opencode', async (t) => {
+  offline(t);
+  const candidatesApi = require('../candidates');
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'json-models-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const jsonModels = path.join(root, 'opencode-models.json');
+  fs.writeFileSync(jsonModels, JSON.stringify(['json-only-model-a', 'json-only-model-b']));
+
+  const models = candidatesApi.builtinOpencodeModels(
+    { opencodeProvider: 'opencode' },
+    { fixtureDir: root }
+  );
+  assert.deepEqual(
+    models,
+    ['json-only-model-a', 'json-only-model-b'],
+    'loads models from opencode-models.json'
+  );
+});

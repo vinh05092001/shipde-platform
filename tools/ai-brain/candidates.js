@@ -959,12 +959,29 @@ function builtinOpencodeModels(source, o) {
       o?.timeoutMs;
     const timeoutMs = Number(configuredTimeout);
 
+    const env = (o && o.env) || process.env;
+    const fsMod = (o && o.fs) || require('fs');
+    const pathMod = require('path');
+    const fixtureDir =
+      o?.fixtureDir || (o?.env && o.env.SHIPDE_FIXTURE_DIR) || env.SHIPDE_FIXTURE_DIR;
+
+    let dirModelsFixture;
+    if (fixtureDir) {
+      const txtPath = pathMod.join(fixtureDir, 'opencode-models.txt');
+      const jsonPath = pathMod.join(fixtureDir, 'opencode-models.json');
+      if (fsMod.existsSync(txtPath)) {
+        dirModelsFixture = txtPath;
+      } else if (fsMod.existsSync(jsonPath)) {
+        dirModelsFixture = jsonPath;
+      }
+    }
+
     const fixture =
       o?.opencodeModelsFixture ||
       o?.modelsFixture ||
-      (o?.fixtureDir && require('path').join(o.fixtureDir, 'opencode-models.txt')) ||
       (o?.env && o.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
-      process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+      env.SHIPDE_OPENCODE_MODELS_FIXTURE ||
+      dirModelsFixture;
 
     if (!fixture && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       return [];

@@ -2179,26 +2179,39 @@ function buildDryRunLog(parts) {
  * the canonical overrides; the three CLI aliases collapse to one lookup each.
  */
 function resolveFixturePaths(args, deps) {
+  const fsMod = (deps && deps.fs) || require('fs');
+  const env = (deps && deps.env) || process.env;
   const fixtureDir =
-    args['fixture-dir'] ||
-    args.fixtureDir ||
-    (deps && deps.fixtureDir) ||
-    process.env.SHIPDE_FIXTURE_DIR;
+    args['fixture-dir'] || args.fixtureDir || (deps && deps.fixtureDir) || env.SHIPDE_FIXTURE_DIR;
+
+  let dirModelsFixture;
+  if (fixtureDir) {
+    const txtPath = path.join(fixtureDir, 'opencode-models.txt');
+    const jsonPath = path.join(fixtureDir, 'opencode-models.json');
+    if (fsMod.existsSync(txtPath)) {
+      dirModelsFixture = txtPath;
+    } else if (fsMod.existsSync(jsonPath)) {
+      dirModelsFixture = jsonPath;
+    }
+  }
+
   const opencodeModelsFixture =
     args['opencode-models-fixture'] ||
     args.opencodeModelsFixture ||
     (deps && (deps.opencodeModelsFixture || deps.modelsFixture)) ||
-    (fixtureDir ? path.join(fixtureDir, 'opencode-models.txt') : undefined) ||
-    (fixtureDir ? path.join(fixtureDir, 'opencode-models.json') : undefined) ||
     (deps && deps.env && deps.env.SHIPDE_OPENCODE_MODELS_FIXTURE) ||
-    process.env.SHIPDE_OPENCODE_MODELS_FIXTURE;
+    env.SHIPDE_OPENCODE_MODELS_FIXTURE ||
+    dirModelsFixture;
+
+  const dirComboFixture = fixtureDir ? path.join(fixtureDir, 'combos.json') : undefined;
   const comboFixture =
     args['combo-fixture'] ||
     args.comboFixture ||
     (deps && deps.comboFixture) ||
-    (fixtureDir ? path.join(fixtureDir, 'combos.json') : undefined) ||
     (deps && deps.env && deps.env.SHIPDE_COMBO_FIXTURE) ||
-    process.env.SHIPDE_COMBO_FIXTURE;
+    env.SHIPDE_COMBO_FIXTURE ||
+    dirComboFixture;
+
   const hasOfflineFixture = Boolean(
     fixtureDir || comboFixture || opencodeModelsFixture || deps?.dryRunOffline === true
   );
@@ -2470,7 +2483,7 @@ function dispatchCommand(args, deps = {}) {
   const { fixtureDir, opencodeModelsFixture, comboFixture, hasOfflineFixture } =
     resolveFixturePaths(args, deps);
   // Only the real CLI entry sets this: injected test seams keep their paths.
-  const noInference = (isDryRun && deps.dryRunOffline === true) || hasOfflineFixture;
+  const noInference = isDryRun && (deps.dryRunOffline === true || hasOfflineFixture);
   const output = deps.log || console.log;
   const log = args.json && !args.plan ? () => {} : output;
   const error = deps.error || console.error;
@@ -2556,6 +2569,22 @@ function dispatchCommand(args, deps = {}) {
     error('Dispatch refused: --execute and --dry-run are exclusive.');
     exit(2);
     return { exitCode: 2 };
+  }
+
+  if (execute && hasOfflineFixture) {
+    error('Dispatch refused: REPLAY_FIXTURE_WITH_EXECUTE (replay fixtures apply only to dry-run).');
+    return makeExecuteResult(
+      2,
+      null,
+      null,
+      { status: 'refused', reason: 'REPLAY_FIXTURE_WITH_EXECUTE' },
+      null,
+      {
+        error: 'REPLAY_FIXTURE_WITH_EXECUTE',
+        code: 'REPLAY_FIXTURE_WITH_EXECUTE',
+        reason: 'REPLAY_FIXTURE_WITH_EXECUTE',
+      }
+    );
   }
 
   // TASK-AI-65: report a structured execution outcome for a pinned candidate.
