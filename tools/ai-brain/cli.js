@@ -3620,7 +3620,12 @@ function dispatchCommand(args, deps = {}) {
       };
 
       const is40HexSha = (v) => typeof v === 'string' && /^[0-9a-fA-F]{40}$/.test(v.trim());
-      const targetWorktree = args.root || deps?.rootDir || deps?.treePath || rootDir;
+      const explicitWorktree = args.root || deps?.treePath;
+      const targetWorktree =
+        explicitWorktree ||
+        (deps?.rootDir && fs.existsSync(path.join(deps.rootDir, '.git')) ? deps.rootDir : null) ||
+        (rootDir && fs.existsSync(path.join(rootDir, '.git')) ? rootDir : null) ||
+        path.resolve(__dirname, '../..');
       const checkCommit =
         typeof deps?.commitExists === 'function' ? deps.commitExists : commitExists;
 
@@ -3675,8 +3680,11 @@ function dispatchCommand(args, deps = {}) {
             }
           } catch (_) {}
         } else if (
-          (item?.branch && item.branch.includes('offline-replay')) ||
-          (args.branch && typeof args.branch === 'string' && args.branch.includes('offline-replay'))
+          deps?.discoveryCatalogue &&
+          ((item?.branch && item.branch.includes('offline-replay')) ||
+            (args.branch &&
+              typeof args.branch === 'string' &&
+              args.branch.includes('offline-replay')))
         ) {
           resolvedBaseSha = '0123456789abcdef0123456789abcdef01234567';
         } else {

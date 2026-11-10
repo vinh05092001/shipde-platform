@@ -238,4 +238,31 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       env.cleanup();
     }
   });
+
+  test('5. Execute with branch feat/offline-replay and no base is refused with BASE_SHA_UNRESOLVED before any launcher call', () => {
+    const env = createTargetRepoEnv();
+    try {
+      let launcherCalls = 0;
+      const runner = () => {
+        launcherCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+      const deps = env.getDeps({ run: runner, harnessAdapter: env.fakeAdapter });
+      const res = dispatchCommand(env.getArgs({ branch: 'feat/offline-replay' }), deps);
+
+      assert.equal(
+        launcherCalls,
+        0,
+        'zero launcher calls when branch feat/offline-replay supplied with no base'
+      );
+      assert.equal(res.exitCode, 1);
+      const isRefused =
+        res.refusal === 'BASE_SHA_UNRESOLVED' ||
+        res.reason === 'BASE_SHA_UNRESOLVED' ||
+        res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
+      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED');
+    } finally {
+      env.cleanup();
+    }
+  });
 });
