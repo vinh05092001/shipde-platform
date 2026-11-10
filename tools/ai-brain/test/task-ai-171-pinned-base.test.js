@@ -349,4 +349,57 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       env.cleanup();
     }
   });
+
+  test('9. Production git-root resolver (no injected seam) still refuses a non-git target and a fake SHA', () => {
+    const env = createTargetRepoEnv();
+    const notGit = fs.mkdtempSync(path.join(os.tmpdir(), 'pinned-base-not-git-'));
+    try {
+      const { resolveExecuteBase } = require('../cli');
+      const badTarget = resolveExecuteBase({
+        targetWorktree: notGit,
+        args: { execute: true, root: notGit, 'base-sha': env.realSha },
+      });
+      assert.equal(badTarget.ok, false);
+      assert.equal(badTarget.code, 'TARGET_WORKTREE_UNRESOLVED');
+
+      const fakeSha = resolveExecuteBase({
+        targetWorktree: env.dir,
+        args: { execute: true, root: env.dir, 'base-sha': FAKE_40_HEX },
+      });
+      assert.equal(fakeSha.ok, false);
+      assert.equal(fakeSha.code, 'BASE_SHA_UNRESOLVED');
+    } finally {
+      fs.rmSync(notGit, { recursive: true, force: true });
+      env.cleanup();
+    }
+  });
+
+  test('10. An injected git root must be a non-empty absolute path and cannot bypass the conflict check', () => {
+    const env = createTargetRepoEnv();
+    try {
+      const { resolveExecuteBase } = require('../cli');
+      const args = { execute: true, root: env.dir, 'base-sha': env.realSha };
+      for (const bad of ['', '   ', 'relative/root', null, 42]) {
+        const res = resolveExecuteBase({
+          targetWorktree: env.dir,
+          args,
+          deps: { gitRoot: () => bad },
+        });
+        assert.equal(res.code, 'TARGET_WORKTREE_UNRESOLVED', JSON.stringify(bad));
+      }
+      const other = path.join(os.tmpdir(), 'pinned-base-other-root');
+      const conflict = resolveExecuteBase({
+        targetWorktree: env.dir,
+        args,
+        deps: {
+          treePath: os.tmpdir(),
+          gitRoot: (dir) => (path.resolve(dir) === path.resolve(env.dir) ? env.dir : other),
+          commitExists: () => true,
+        },
+      });
+      assert.equal(conflict.code, 'TARGET_WORKTREE_CONFLICT');
+    } finally {
+      env.cleanup();
+    }
+  });
 });

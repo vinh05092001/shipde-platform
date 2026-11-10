@@ -2487,18 +2487,25 @@ function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance }
   const branchName = args.branch || deps?.branch || (deps?.item && deps.item.branch);
 
   const { execFileSync } = require('child_process');
+  const defaultGitRoot = (resolved) => {
+    const out = execFileSync('git', ['-C', resolved, 'rev-parse', '--show-toplevel'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 5000,
+    });
+    return out.trim();
+  };
+  // Internal seam (like deps.commitExists); never wired to CLI flags, data or env.
+  const resolveGitRoot = typeof deps.gitRoot === 'function' ? deps.gitRoot : defaultGitRoot;
   const canonicalGitRoot = (dir) => {
     if (!dir || typeof dir !== 'string') return null;
     const resolved = path.resolve(dir);
     if (!fs.existsSync(resolved)) return null;
     try {
-      const out = execFileSync('git', ['-C', resolved, 'rev-parse', '--show-toplevel'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 5000,
-      });
-      const top = out.trim();
-      return top ? path.resolve(top) : null;
+      const top = resolveGitRoot(resolved);
+      if (typeof top !== 'string') return null;
+      const trimmed = top.trim();
+      return trimmed && path.isAbsolute(trimmed) ? path.resolve(trimmed) : null;
     } catch (_) {
       return null;
     }
