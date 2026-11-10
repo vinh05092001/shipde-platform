@@ -626,7 +626,12 @@ function measuredCandidate(modelCanonical, qualityMeasurement) {
 test('TASK-AI-171 QF (measurement): validated breakdown.quality x100 meets or fails the floor', () => {
   const assessment = testAssessment({ scoringPolicy: measurementPolicy() });
   const profile = testProfile({ qualityFloor: 70 });
-  const ctx = { now: FIXTURE_NOW, priors: buildPriors([]), loadQuotaState: false, useStoredQuota: false };
+  const ctx = {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  };
   const meets = measuredCandidate('measured-85-model', { value: 85 });
   const fails = measuredCandidate('measured-40-model', { value: 40 });
   assert.equal(meets.quality, undefined);
@@ -657,7 +662,12 @@ test('TASK-AI-171 QF (measurement): validated breakdown.quality x100 meets or fa
 test('TASK-AI-171 QF (measurement): null or stale measurement is UNKNOWN for the floor, never 0', () => {
   const assessment = testAssessment({ scoringPolicy: measurementPolicy() });
   const profile = testProfile({ qualityFloor: 70 });
-  const ctx = { now: FIXTURE_NOW, priors: buildPriors([]), loadQuotaState: false, useStoredQuota: false };
+  const ctx = {
+    now: FIXTURE_NOW,
+    priors: buildPriors([]),
+    loadQuotaState: false,
+    useStoredQuota: false,
+  };
   const nullMeasured = measuredCandidate('measured-null-model', { value: null });
   const staleMeasured = measuredCandidate('measured-stale-model', {
     value: 40,
@@ -665,7 +675,10 @@ test('TASK-AI-171 QF (measurement): null or stale measurement is UNKNOWN for the
   });
 
   for (const candidate of [nullMeasured, staleMeasured]) {
-    const floor = routing.resolveFloorQuality(candidate, assessment, { ...ctx, role: profile.role });
+    const floor = routing.resolveFloorQuality(candidate, assessment, {
+      ...ctx,
+      role: profile.role,
+    });
     assert.equal(floor.known, false, candidate.modelId + ' floor quality must be UNKNOWN');
     assert.equal(floor.value, null, candidate.modelId + ' floor quality must not be 0');
 
