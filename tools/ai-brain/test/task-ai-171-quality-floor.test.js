@@ -248,8 +248,8 @@ test('TASK-AI-171 (c): candidate with quality 85 is admitted and chosen over low
   assert.equal(lowRejection.reasonCode, 'QUALITY_FLOOR_NOT_MET');
 });
 
-// --- Test: resolveEffectiveQuality returns prior-derived quality ---
-test('TASK-AI-171: resolveEffectiveQuality returns prior score when candidate has no internal quality', () => {
+// --- Test: resolveFloorQuality uses a valid external prior as floor evidence ---
+test('TASK-AI-171: resolveFloorQuality uses a valid external prior as floor evidence when candidate has no internal quality', () => {
   const testPriors = buildPriors([
     {
       canonical: 'prior-model',
@@ -261,16 +261,40 @@ test('TASK-AI-171: resolveEffectiveQuality returns prior score when candidate ha
   ]);
 
   const candidate = makeCandidate('prior-model');
-  const quality = routing.resolveEffectiveQuality(candidate, testAssessment(), {
+  assert.equal(candidate.quality, undefined);
+  const expected = priors.priorFor(candidate, 'writer', testPriors, FIXTURE_NOW);
+  assert.ok(Number.isFinite(expected.score) && expected.score > 0, 'fixture prior must be valid');
+
+  const floor = routing.resolveFloorQuality(candidate, testAssessment(), {
     now: FIXTURE_NOW,
     role: 'writer',
     priors: testPriors,
   });
+  assert.equal(floor.known, true, 'valid external prior is floor evidence');
+  assert.equal(floor.value, expected.score, 'floor value is the priorFor score');
+  assert.equal(floor.units, 'points');
 
-  assert.ok(Number.isFinite(quality), 'effective quality must be finite');
-  // Prior score 42 relative to top 100 -> normalized score from priorFor
-  // The exact value depends on priorFor normalization, but it must be a positive number
-  assert.ok(quality > 0, 'effective quality must be positive, got: ' + quality);
+  // Admission reads the same resolver: prior below floor rejects, at/above floor admits.
+  const below = routing.rankForProfile(
+    [candidate],
+    testProfile({ qualityFloor: expected.score + 1 }),
+    testAssessment(),
+    { now: FIXTURE_NOW, priors: testPriors, loadQuotaState: false, useStoredQuota: false }
+  );
+  assert.equal(below.ranking.length, 0);
+  assert.ok(below.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'));
+
+  const meets = routing.rankForProfile(
+    [candidate],
+    testProfile({ qualityFloor: expected.score }),
+    testAssessment(),
+    { now: FIXTURE_NOW, priors: testPriors, loadQuotaState: false, useStoredQuota: false }
+  );
+  assert.equal(meets.ranking.length, 1, 'prior meeting the floor is admitted');
+  assert.equal(
+    meets.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined
+  );
 });
 
 // --- Test: qualityFloor 0 admits unknown quality ---
@@ -492,7 +516,7 @@ test('TASK-AI-171 QF (legacy): candidate with prior 15 and passed API evidence i
   assert.ok(rej, 'candidate must be rejected with QUALITY_FLOOR_NOT_MET');
 });
 
-test('TASK-AI-171 QF (legacy): proof-only evidence gives quality UNKNOWN, admitted under floor 70, and ranked after known candidate', () => {
+test('TASK-AI-171 QF (legacy): proof-only evidence is not floor evidence (floor UNKNOWN, admitted under floor 70); ranking follows the #414 evidence contract and orders after known candidate', () => {
   const priors = buildPriors([
     {
       canonical: 'known-quality-model',
@@ -520,6 +544,15 @@ test('TASK-AI-171 QF (legacy): proof-only evidence gives quality UNKNOWN, admitt
   const profile = testProfile({ qualityFloor: 70 });
   const assessment = testAssessment();
 
+  // Floor resolver: proof of execution is not quality evidence -> UNKNOWN, never 0.
+  const floor = routing.resolveFloorQuality(proofOnlyCandidate, assessment, {
+    now: FIXTURE_NOW,
+    role: profile.role,
+    priors,
+  });
+  assert.equal(floor.known, false, 'proof-only evidence is not floor evidence');
+  assert.equal(floor.value, null, 'unknown floor quality is never coerced to 0');
+
   const result = routing.rankForProfile([proofOnlyCandidate, knownCandidate], profile, assessment, {
     now: FIXTURE_NOW,
     priors,
@@ -536,17 +569,16 @@ test('TASK-AI-171 QF (legacy): proof-only evidence gives quality UNKNOWN, admitt
     result.ranking[1].candidateKey.includes('proof-only-model'),
     'proof-only ranks after known'
   );
-  assert.equal(
-    result.ranking[1].qualityLabel,
-    'QUALITY_UNKNOWN',
-    'proof-only candidate has QUALITY_UNKNOWN'
-  );
+  // Ranking/labels behave as on main (#414, task-ai-142-quality-unknown): passed
+  // evidence yields a finite ranking quality, so the label is not QUALITY_UNKNOWN.
+  assert.ok(Number.isFinite(result.ranking[1].scoreBreakdown.quality));
+  assert.notEqual(result.ranking[1].qualityLabel, 'QUALITY_UNKNOWN');
   assert.equal(
     result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
     undefined
   );
 
-  // Alone: admitted and chosen, reason says unknown
+  // Alone: admitted by the floor and chosen
   const solo = routing.rankForProfile([proofOnlyCandidate], profile, assessment, {
     now: FIXTURE_NOW,
     priors: buildPriors([]),
@@ -554,7 +586,96 @@ test('TASK-AI-171 QF (legacy): proof-only evidence gives quality UNKNOWN, admitt
     useStoredQuota: false,
   });
   assert.ok(solo.chosen, 'proof-only candidate must be chosen when alone');
-  assert.match(solo.reason, /score chưa rõ/);
+  assert.ok(solo.chosen.includes('proof-only-model'));
+  assert.equal(
+    solo.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined
+  );
+});
+
+// --- Floor source 2: validated scoreMeasurements breakdown.quality (0-1) x100 ---
+function measurementPolicy() {
+  return {
+    version: 'fixture-v1',
+    source: 'fixture://policy',
+    rationale: 'Synthetic quality policy',
+    maxAgeMs: 100000,
+    dimensions: {
+      quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+    },
+  };
+}
+
+function measuredCandidate(modelCanonical, qualityMeasurement) {
+  return makeCandidate(modelCanonical, {
+    modelVersion: 'v1',
+    measurements: {
+      quality: {
+        unit: 'points',
+        source: 'benchmark',
+        samples: 1,
+        observedAt: new Date(FIXTURE_NOW).toISOString(),
+        modelId: 'test-gw/' + modelCanonical,
+        modelVersion: 'v1',
+        ...qualityMeasurement,
+      },
+    },
+  });
+}
+
+test('TASK-AI-171 QF (measurement): validated breakdown.quality x100 meets or fails the floor', () => {
+  const assessment = testAssessment({ scoringPolicy: measurementPolicy() });
+  const profile = testProfile({ qualityFloor: 70 });
+  const ctx = { now: FIXTURE_NOW, priors: buildPriors([]), loadQuotaState: false, useStoredQuota: false };
+  const meets = measuredCandidate('measured-85-model', { value: 85 });
+  const fails = measuredCandidate('measured-40-model', { value: 40 });
+  assert.equal(meets.quality, undefined);
+  assert.equal(fails.quality, undefined);
+
+  const floorMeets = routing.resolveFloorQuality(meets, assessment, { ...ctx, role: profile.role });
+  assert.equal(floorMeets.known, true);
+  assert.equal(floorMeets.value, 85);
+  assert.equal(floorMeets.units, 'fraction_scaled_100');
+  const floorFails = routing.resolveFloorQuality(fails, assessment, { ...ctx, role: profile.role });
+  assert.equal(floorFails.known, true);
+  assert.equal(floorFails.value, 40);
+  assert.equal(floorFails.units, 'fraction_scaled_100');
+
+  const admitted = routing.rankForProfile([meets], profile, assessment, ctx);
+  assert.equal(admitted.ranking.length, 1, 'measured 85 meets floor 70');
+  assert.equal(
+    admitted.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+    undefined
+  );
+
+  const rejected = routing.rankForProfile([fails], profile, assessment, ctx);
+  assert.equal(rejected.chosen, null);
+  assert.equal(rejected.ranking.length, 0, 'measured 40 fails floor 70');
+  assert.ok(rejected.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'));
+});
+
+test('TASK-AI-171 QF (measurement): null or stale measurement is UNKNOWN for the floor, never 0', () => {
+  const assessment = testAssessment({ scoringPolicy: measurementPolicy() });
+  const profile = testProfile({ qualityFloor: 70 });
+  const ctx = { now: FIXTURE_NOW, priors: buildPriors([]), loadQuotaState: false, useStoredQuota: false };
+  const nullMeasured = measuredCandidate('measured-null-model', { value: null });
+  const staleMeasured = measuredCandidate('measured-stale-model', {
+    value: 40,
+    observedAt: new Date(FIXTURE_NOW - 10 * 100000).toISOString(),
+  });
+
+  for (const candidate of [nullMeasured, staleMeasured]) {
+    const floor = routing.resolveFloorQuality(candidate, assessment, { ...ctx, role: profile.role });
+    assert.equal(floor.known, false, candidate.modelId + ' floor quality must be UNKNOWN');
+    assert.equal(floor.value, null, candidate.modelId + ' floor quality must not be 0');
+
+    const result = routing.rankForProfile([candidate], profile, assessment, ctx);
+    assert.equal(result.ranking.length, 1, candidate.modelId + ' is admitted, not floor-rejected');
+    assert.equal(
+      result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET'),
+      undefined
+    );
+  }
 });
 
 test('TASK-AI-171 QF (legacy): candidate with valid quality 85 is eligible under floor 70', () => {

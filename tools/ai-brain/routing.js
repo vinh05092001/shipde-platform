@@ -1212,93 +1212,99 @@ function qualityScoreOf(candidate, now) {
 }
 
 /**
- * Resolve the effective quality for a candidate by blending internal quality
- * (evidence + declared) with external priors. Used by both scoreForProfile
- * and the admission floor check.
- * When options?.details is true, returns the full quality blend breakdown.
- * Otherwise returns the numeric quality score or null.
+ * Floor-only quality resolver for admission checks against profile.qualityFloor.
+ *
+ * Bounds:
+ * - Profile quality floor is bounded in [0, 100] (matching PROFILE_SCHEMA).
+ * - Returned quality value is bounded in [0, 100] or null when unknown.
+ *
+ * Units:
+ * - Explicit candidate quality: 'points' (0-100).
+ * - Validated measurement (active policy): 'fraction_scaled_100' (0-100, derived from f in [0, 1] * 100).
+ * - Valid external prior: 'points' (0-100).
+ *
+ * Source order (admission contract):
+ * 1. Explicit candidate.quality (valid finite number in [0, 100], no boolean/empty string coercion).
+ * 2. Validated measurement via scoreMeasurements(candidate, assessment, ctx).breakdown.quality * 100
+ *    when scoring policy is active. Invalid, null, stale, wrong-unit, or wrong-model/version
+ *    measurements yield unknown (never coerced to 0).
+ * 3. Valid external prior via priorFor(candidate, role, priors, now). Missing, unknown, or
+ *    stale priors yield unknown (never fallback to numeric 0).
+ *
+ * Proof evidence (API_PASS, HARNESS_PASS, WORK_ITEM_PASS) is proof of execution, not floor evidence.
+ *
+ * @param {object} candidate
+ * @param {object} assessment
+ * @param {object} ctx
+ * @returns {{ known: boolean, value: number|null, units: string|null, source: string }}
  */
-function resolveEffectiveQuality(candidate, assessment, ctx, options) {
-  const now = (ctx && ctx.now) || Date.now();
-  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
-  const explicitQuality =
+function resolveFloorQuality(candidate, assessment, ctx) {
+  // 1. Explicit candidate.quality
+  if (
     candidate &&
     candidate.quality !== null &&
     candidate.quality !== undefined &&
+    typeof candidate.quality !== 'boolean' &&
+    candidate.quality !== '' &&
     Number.isFinite(Number(candidate.quality))
-      ? Number(candidate.quality)
-      : null;
-  const measuredQuality =
-    candidate?.measurements?.quality != null
-      ? Number.isFinite(Number(candidate.measurements.quality.value))
-        ? Number(candidate.measurements.quality.value)
-        : Number.isFinite(Number(candidate.measurements.quality))
-          ? Number(candidate.measurements.quality)
-          : null
-      : null;
-  const internalQuality = explicitQuality !== null ? explicitQuality : measuredQuality;
-  if (candidate && prior) {
-    candidate.priorUnknown = Boolean(prior.priorUnknown || prior.score === null);
+  ) {
+    const val = Number(candidate.quality);
+    if (val >= 0 && val <= 100) {
+      return {
+        known: true,
+        value: val,
+        units: 'points',
+        source: 'explicit',
+      };
+    }
   }
-  const priorUsable =
+
+  // 2. Validated measurement via scoreMeasurements breakdown under active scoring policy
+  if (assessment && assessment.scoringPolicy) {
+    const scored = scoreMeasurements(candidate, assessment, ctx);
+    const fraction = scored && scored.breakdown ? scored.breakdown.quality : null;
+    if (fraction !== null && fraction !== undefined && Number.isFinite(fraction)) {
+      const val = Math.max(0, Math.min(100, fraction * 100));
+      const source =
+        (scored.breakdown.measurements &&
+          scored.breakdown.measurements.quality &&
+          scored.breakdown.measurements.quality.source) ||
+        'measurement';
+      return {
+        known: true,
+        value: val,
+        units: 'fraction_scaled_100',
+        source,
+      };
+    }
+  }
+
+  // 3. Valid external prior via priorFor
+  const now = (ctx && ctx.now) || Date.now();
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  if (
     prior &&
     !prior.stale &&
     prior.score !== null &&
-    (!prior.priorUnknown || internalQuality === null);
-  const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
-  const internalEvidence =
-    storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
-  const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
-  const hasQualityFailure = internalEvidence.some((item) => evidence.isQualityFailure(item));
-  const rawQualityWeight =
-    assessment && assessment.weights && assessment.weights.quality !== undefined
-      ? assessment.weights.quality
-      : WEIGHT_PROFILES.BALANCED.quality;
-  const qualityWeight = Number(rawQualityWeight);
-  const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
-  const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
-  const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
-  const priorHasScore = Number.isFinite(prior && prior.score);
-  const effectivePriorWeight =
-    priorHasScore && effectivePriorUsable ? priorWeight * priorQualityWeight : 0;
-  const quality =
-    effectivePriorUsable && priorHasScore
-      ? Math.round(
-          internalQuality === null
-            ? prior.score
-            : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
-        )
-      : internalQuality;
-  const isQualityUnknown = quality === null || !Number.isFinite(quality);
-  const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
-  const qualitySource =
-    effectivePriorUsable && priorHasScore
-      ? internalQuality !== null
-        ? 'blended'
-        : prior.source || 'prior'
-      : explicitQuality !== null
-        ? 'explicit'
-        : measuredQuality !== null
-          ? candidate.measurements?.quality?.source || 'measurement'
-          : undefined;
-
-  if (options && options.details) {
+    prior.score !== undefined &&
+    !prior.priorUnknown &&
+    Number.isFinite(prior.score)
+  ) {
+    const val = Math.max(0, Math.min(100, prior.score));
     return {
-      quality,
-      qualityLabel,
-      qualitySource,
-      isQualityUnknown,
-      rawQualityWeight,
-      priorQualityWeight,
-      prior,
-      priorUsable,
-      effectivePriorUsable,
-      priorHasScore,
-      effectivePriorWeight,
-      internalQuality,
+      known: true,
+      value: val,
+      units: 'points',
+      source: prior.source || 'prior',
     };
   }
-  return quality;
+
+  return {
+    known: false,
+    value: null,
+    units: null,
+    source: 'unknown',
+  };
 }
 
 function reliabilityScoreOf(candidate) {
@@ -1453,23 +1459,48 @@ function scoreForProfile(candidate, assessment, ctx) {
   }
 
   const now = (ctx && ctx.now) || Date.now();
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  candidate.priorUnknown = Boolean(prior && (prior.priorUnknown || prior.score === null));
   const latency = latencyScoreOf(candidate);
-  const qualityDetails =
-    ctx?.qualityDetails || resolveEffectiveQuality(candidate, assessment, ctx, { details: true });
-  const {
-    quality,
-    qualityLabel,
-    prior,
-    priorUsable,
-    effectivePriorUsable,
-    priorHasScore,
-    effectivePriorWeight,
-    priorQualityWeight,
-    rawQualityWeight,
-  } = qualityDetails;
+  const internalQuality = qualityScoreOf(candidate, now);
+  const priorUsable =
+    prior &&
+    !prior.stale &&
+    prior.score !== null &&
+    (!prior.priorUnknown || internalQuality === null);
+  const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
+  const internalEvidence =
+    storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
+  const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
+  const hasQualityFailure = internalEvidence.some((item) => evidence.isQualityFailure(item));
+  const qualityWeight = Number(
+    assessment && assessment.weights && assessment.weights.quality !== undefined
+      ? assessment.weights.quality
+      : 33
+  );
+  const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
+  const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
+  const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
+  const priorHasScore = Number.isFinite(prior && prior.score);
+  const effectivePriorWeight =
+    priorHasScore && effectivePriorUsable ? priorWeight * priorQualityWeight : 0;
+  const quality =
+    effectivePriorUsable && priorHasScore
+      ? Math.round(
+          internalQuality === null
+            ? prior.score
+            : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
+        )
+      : internalQuality;
+  const isQualityUnknown = quality === null || !Number.isFinite(quality);
+  const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
+  const rawQualityWeight =
+    assessment && assessment.weights && assessment.weights.quality !== undefined
+      ? assessment.weights.quality
+      : 33;
   let wQuality = rawQualityWeight;
   let wReliability = 0;
   if (assessment && assessment.weights && assessment.weights.reliability !== undefined) {
@@ -1481,11 +1512,11 @@ function scoreForProfile(candidate, assessment, ctx) {
   const wLatency =
     assessment && assessment.weights && assessment.weights.latency !== undefined
       ? assessment.weights.latency
-      : WEIGHT_PROFILES.BALANCED.latency;
+      : 34;
   const wCost =
     assessment && assessment.weights && assessment.weights.cost !== undefined
       ? assessment.weights.cost
-      : WEIGHT_PROFILES.BALANCED.cost;
+      : 33;
 
   // Renormalize over known dimensions so unknown sub-scores (e.g. unpriced
   // candidates or unmeasured latency) do not penalize candidates against
@@ -1756,15 +1787,23 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
+    // TASK-AI-171: Floor admission check using resolveFloorQuality.
+    // Bounds: profile.qualityFloor is bounded in [0, 100].
+    // Admission checks candidate's floor quality (bounded in [0, 100], units 'points' or 'fraction_scaled_100').
+    // Only candidates with known floor quality below qualityFloor are rejected.
+    // Candidates with unknown quality (including proof-only evidence) are admitted (not rejected for floor).
     const qualityFloorValue = Number(profile.qualityFloor);
-    const qualityCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
-    const qualityDetails = resolveEffectiveQuality(c, assessment, qualityCtx, { details: true });
-    const effectiveQuality = qualityDetails.quality;
-    const isQualityKnown =
-      Number.isFinite(effectiveQuality) && qualityDetails.qualityLabel !== 'QUALITY_UNKNOWN';
-    if (qualityFloorValue > 0 && isQualityKnown && effectiveQuality < qualityFloorValue) {
-      reject('QUALITY_FLOOR_NOT_MET', 'candidate');
-      continue;
+    if (Number.isFinite(qualityFloorValue) && qualityFloorValue > 0) {
+      const floorCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
+      const floorQuality = resolveFloorQuality(c, assessment, floorCtx);
+      if (
+        floorQuality.known &&
+        Number.isFinite(floorQuality.value) &&
+        floorQuality.value < qualityFloorValue
+      ) {
+        reject('QUALITY_FLOOR_NOT_MET', 'candidate');
+        continue;
+      }
     }
     const cost = blendedCost(c);
     if (cost !== null && cost > Number(profile.costCeiling)) {
@@ -1898,7 +1937,6 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       role: profile.role,
       priors,
       dispatchConfig,
-      qualityDetails,
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
     const isQualityUnknown =
@@ -2865,7 +2903,7 @@ module.exports = {
   compareProfileScores,
   latencyScoreOf,
   qualityScoreOf,
-  resolveEffectiveQuality,
+  resolveFloorQuality,
   costScoreOf,
   blendedCost,
   stallAssessment,
