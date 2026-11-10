@@ -1428,7 +1428,8 @@ function scoreForProfile(candidate, assessment, ctx) {
 
   const now = (ctx && ctx.now) || Date.now();
   const latency = latencyScoreOf(candidate);
-  const qualityDetails = resolveEffectiveQuality(candidate, assessment, ctx, { details: true });
+  const qualityDetails =
+    ctx?.qualityDetails || resolveEffectiveQuality(candidate, assessment, ctx, { details: true });
   const {
     quality,
     qualityLabel,
@@ -1730,22 +1731,17 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     }
 
     const qualityFloorValue = Number(profile.qualityFloor);
-    if (qualityFloorValue > 0) {
-      if (assessment.scoringPolicy && c.quality == null) {
-        // Under an active scoring policy, quality comes from normalized measurements;
-        // null candidate quality is evaluated during scoring rather than admission.
-      } else {
-        const qualityCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
-        const effectiveQuality = resolveEffectiveQuality(c, assessment, qualityCtx);
-        if (
-          effectiveQuality === null ||
-          !Number.isFinite(effectiveQuality) ||
-          effectiveQuality < qualityFloorValue
-        ) {
-          reject('QUALITY_FLOOR_NOT_MET', 'candidate');
-          continue;
-        }
-      }
+    const qualityCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
+    const qualityDetails = resolveEffectiveQuality(c, assessment, qualityCtx, { details: true });
+    const effectiveQuality = qualityDetails.quality;
+    if (
+      qualityFloorValue > 0 &&
+      (effectiveQuality === null ||
+        !Number.isFinite(effectiveQuality) ||
+        effectiveQuality < qualityFloorValue)
+    ) {
+      reject('QUALITY_FLOOR_NOT_MET', 'candidate');
+      continue;
     }
     const cost = blendedCost(c);
     if (cost !== null && cost > Number(profile.costCeiling)) {
@@ -1879,6 +1875,7 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       role: profile.role,
       priors,
       dispatchConfig,
+      qualityDetails,
     });
     const scored = scoreForProfile(c, assessment, scoreContext);
     const isQualityUnknown =

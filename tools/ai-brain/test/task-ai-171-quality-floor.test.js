@@ -235,3 +235,94 @@ test('TASK-AI-171: qualityFloor 0 admits candidates with unknown quality', () =>
     'candidate with unknown quality should be admitted when floor is 0'
   );
 });
+
+// --- P1 Tests: active scoringPolicy with missing c.quality and floor 70 ---
+test('TASK-AI-171 P1 (a): active scoringPolicy with unknown effective quality is rejected by quality floor 70', () => {
+  const activeScoringPolicy = {
+    version: 'fixture-v1',
+    source: 'fixture://policy',
+    rationale: 'Synthetic quality policy',
+    maxAgeMs: 100000,
+    dimensions: {
+      quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+    },
+  };
+
+  const priorsEmpty = buildPriors([]);
+  const candidate = makeCandidate('unknown-quality-policy-model');
+  assert.equal(candidate.quality, undefined);
+
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment({ scoringPolicy: activeScoringPolicy });
+
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: priorsEmpty,
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.equal(
+    result.chosen,
+    null,
+    'unknown-quality candidate must not be chosen under active scoring policy'
+  );
+  assert.ok(
+    result.ranking.length === 0,
+    'unknown-quality candidate must not be in ranking under active scoring policy'
+  );
+  assert.ok(result.rejected.length > 0, 'unknown-quality candidate must be rejected');
+  const rejection = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
+  assert.ok(rejection, 'rejection reason must be QUALITY_FLOOR_NOT_MET');
+});
+
+test('TASK-AI-171 P1 (b): active scoringPolicy with below-floor effective quality is rejected by quality floor 70', () => {
+  const activeScoringPolicy = {
+    version: 'fixture-v1',
+    source: 'fixture://policy',
+    rationale: 'Synthetic quality policy',
+    maxAgeMs: 100000,
+    dimensions: {
+      quality: { weight: 1, min: 0, max: 100, unit: 'points', direction: 'higher' },
+    },
+  };
+
+  const lowQualityPriors = buildPriors([
+    {
+      canonical: 'low-quality-policy-model',
+      codingTier: 'T4',
+      reviewTier: 'T4',
+      score: 15,
+      benchmarks: [
+        { name: 'aaCodingIndex', score: 15 },
+        { name: 'aaAgenticIndex', score: 15 },
+      ],
+    },
+  ]);
+
+  const candidate = makeCandidate('low-quality-policy-model');
+  assert.equal(candidate.quality, undefined);
+
+  const profile = testProfile({ qualityFloor: 70 });
+  const assessment = testAssessment({ scoringPolicy: activeScoringPolicy });
+
+  const result = routing.rankForProfile([candidate], profile, assessment, {
+    now: FIXTURE_NOW,
+    priors: lowQualityPriors,
+    loadQuotaState: false,
+    useStoredQuota: false,
+  });
+
+  assert.equal(
+    result.chosen,
+    null,
+    'below-floor candidate must not be chosen under active scoring policy'
+  );
+  assert.ok(
+    result.ranking.length === 0,
+    'below-floor candidate must not be in ranking under active scoring policy'
+  );
+  assert.ok(result.rejected.length > 0, 'below-floor candidate must be rejected');
+  const rejection = result.rejected.find((r) => r.reasonCode === 'QUALITY_FLOOR_NOT_MET');
+  assert.ok(rejection, 'rejection reason must be QUALITY_FLOOR_NOT_MET');
+});
