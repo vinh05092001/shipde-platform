@@ -12,6 +12,7 @@ const { getHarness, runHarness, progressVerdict, ProgressStatus } = require('../
 const jev = require('../jev');
 
 const NOW = Date.parse('2026-09-28T00:00:00Z');
+const VALID_40_HEX = '0123456789abcdef0123456789abcdef01234567';
 
 function registry() {
   return {
@@ -121,6 +122,11 @@ describe('TASK-AI-50 Hermes pinned adapter and Jev advisory', () => {
           home,
           now: NOW,
           run,
+          // TASK-AI-171 R2: inject internal seams so resolveExecuteTarget does not
+          // call real git on a temp dir that is not a git repository.
+          gitRoot: () => tmp,
+          commitExists: () => true,
+          baseSha: VALID_40_HEX,
           log: () => {},
           error: () => {},
           exit: () => {},

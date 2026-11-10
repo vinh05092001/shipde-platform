@@ -280,10 +280,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
         harnessAdapter: env.fakeAdapter,
         discoveryCatalogue: { candidates: [cand] },
       });
-      const res = dispatchCommand(
-        env.getArgs({ branch: 'task-ai-171-offline-replay' }),
-        deps
-      );
+      const res = dispatchCommand(env.getArgs({ branch: 'task-ai-171-offline-replay' }), deps);
 
       assert.equal(
         launcherCalls,
@@ -450,10 +447,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       // No explicit --base-sha arg — the checkpoint resume path skips the
       // if(!finalChosenKey) block which contains resolveExecuteBase.
       // The bug is that resolvedBaseSha remains undefined on the resume path.
-      const res = dispatchCommand(
-        env.getArgs({ 'base-sha': FAKE_40_HEX }),
-        deps
-      );
+      const res = dispatchCommand(env.getArgs({ 'base-sha': FAKE_40_HEX }), deps);
 
       assert.equal(res.exitCode, 1, 'checkpoint resume with invalid base must exit 1');
       assert.equal(adapterCalls, 0, 'zero adapter calls on invalid base during checkpoint resume');
@@ -502,7 +496,10 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
         res.refusal === 'BASE_SHA_UNRESOLVED' ||
         res.reason === 'BASE_SHA_UNRESOLVED' ||
         res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
-      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.baseSha');
+      assert.ok(
+        isRefused,
+        'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.baseSha'
+      );
     } finally {
       env.cleanup();
     }
@@ -572,7 +569,10 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
         res.refusal === 'BASE_SHA_UNRESOLVED' ||
         res.reason === 'BASE_SHA_UNRESOLVED' ||
         res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
-      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.repoSha');
+      assert.ok(
+        isRefused,
+        'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.repoSha'
+      );
     } finally {
       env.cleanup();
     }

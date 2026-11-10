@@ -9,6 +9,8 @@ const { dispatchCommand } = require('../cli');
 const { candidateKey } = require('../discovery/identity');
 const routeHealthApi = require('../route-health');
 
+const VALID_40_HEX = '0123456789abcdef0123456789abcdef01234567';
+
 function makeCandidate(modelId, upstream, accountId, cost = 1, quality = 90, extra = {}) {
   const c = { harness: 'agy-pool', accessPath: 'pool', gateway: 'agy-pool' };
   Object.assign(c, { upstream, accountId, quotaScope: accountId, modelId });
@@ -46,6 +48,11 @@ function createTestHarness() {
         home: dir,
         decisionDir: dir,
         evidenceDir: dir,
+        // TASK-AI-171 R2: inject internal seams so resolveExecuteTarget does not
+        // call real git on a temp dir that is not a git repository.
+        gitRoot: () => wt,
+        commitExists: () => true,
+        baseSha: VALID_40_HEX,
       },
       extra
     );

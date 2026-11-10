@@ -2472,227 +2472,13 @@ function coordinatorDispatchCommand(args, deps) {
 }
 
 function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance } = {}) {
-  const fs = require('fs');
-  const path = require('path');
-  // Only real execution (execute === true) validates a base; a dry-run flag never bypasses it.
-  if (args.execute !== true) {
-    return { ok: true, baseSha: null, origin: 'dry-run', targetRepo: null };
-  }
-
-  const is40HexSha = (v) => typeof v === 'string' && /^[0-9a-fA-F]{40}$/.test(v.trim());
-  const factsApi = require('./facts');
-  const checkCommit =
-    typeof deps.commitExists === 'function' ? deps.commitExists : factsApi.commitExists;
-
-  const branchName = args.branch || deps?.branch || (deps?.item && deps.item.branch);
-
-  const { execFileSync } = require('child_process');
-  const defaultGitRoot = (resolved) => {
-    const out = execFileSync('git', ['-C', resolved, 'rev-parse', '--show-toplevel'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 5000,
-    });
-    return out.trim();
-  };
-  // Internal seam (like deps.commitExists); never wired to CLI flags, data or env.
-  const resolveGitRoot = typeof deps.gitRoot === 'function' ? deps.gitRoot : defaultGitRoot;
-  const canonicalGitRoot = (dir) => {
-    if (!dir || typeof dir !== 'string') return null;
-    const resolved = path.resolve(dir);
-    if (!fs.existsSync(resolved)) return null;
-    try {
-      const top = resolveGitRoot(resolved);
-      if (typeof top !== 'string') return null;
-      const trimmed = top.trim();
-      return trimmed && path.isAbsolute(trimmed) ? path.resolve(trimmed) : null;
-    } catch (_) {
-      return null;
-    }
-  };
-
-  const explicitTargets = [];
-  if (args.root !== undefined && args.root !== null && args.root !== '') {
-    explicitTargets.push({ name: 'args.root', path: args.root });
-  }
-  if (deps?.treePath) {
-    explicitTargets.push({ name: 'deps.treePath', path: deps.treePath });
-  }
-  const prov = provenance || deps?.provenance || args?.provenance;
-  if (prov?.treePath) {
-    explicitTargets.push({ name: 'provenance.treePath', path: prov.treePath });
-  }
-  if (targetWorktree && !explicitTargets.some((t) => t.path === targetWorktree)) {
-    explicitTargets.push({ name: 'targetWorktree', path: targetWorktree });
-  }
-  // P1-3: Include args.cwd / deps.cwd in the target set so validation covers
-  // the repo the adapter and runner actually use.
-  const cwdPath = args.cwd || deps?.cwd;
-  if (cwdPath && typeof cwdPath === 'string' && !explicitTargets.some((t) => t.path === cwdPath)) {
-    explicitTargets.push({ name: 'args.cwd', path: cwdPath });
-  }
-
-  let targetRepo = null;
-  if (explicitTargets.length > 0) {
-    const canonicalRoots = new Map();
-    for (const t of explicitTargets) {
-      const root = canonicalGitRoot(t.path);
-      if (!root) {
-        return {
-          ok: false,
-          code: 'TARGET_WORKTREE_UNRESOLVED',
-          detail: `target worktree ${t.path} not a git repository`,
-        };
-      }
-      canonicalRoots.set(t.name, root);
-    }
-    const uniqueRoots = Array.from(new Set(canonicalRoots.values()));
-    if (uniqueRoots.length > 1) {
-      return {
-        ok: false,
-        code: 'TARGET_WORKTREE_CONFLICT',
-        detail: 'authoritative target worktrees resolve to different git roots',
-      };
-    }
-    targetRepo = uniqueRoots[0];
-  } else {
-    if (deps?.rootDir) {
-      targetRepo = canonicalGitRoot(deps.rootDir);
-    }
-    if (!targetRepo) {
-      targetRepo = canonicalGitRoot(process.cwd());
-    }
-    if (!targetRepo) {
-      return {
-        ok: false,
-        code: 'TARGET_WORKTREE_UNRESOLVED',
-        detail: 'no target worktree resolved',
-      };
-    }
-  }
-
-  // Precedence 1: Explicit --base-sha / baseSha / base
-  const explicitArg = args['base-sha'] ?? args.baseSha ?? args.base;
-  if (explicitArg !== undefined && explicitArg !== null) {
-    let val = typeof explicitArg === 'function' ? null : explicitArg;
-    if (typeof explicitArg === 'function') {
-      try {
-        val = explicitArg();
-      } catch (_) {}
-    }
-    if (is40HexSha(val)) {
-      const trimmed = val.trim();
-      if (checkCommit(trimmed, targetRepo)) {
-        return { ok: true, baseSha: trimmed, origin: 'explicit', targetRepo };
-      }
-    }
-    return {
-      ok: false,
-      code: 'BASE_SHA_UNRESOLVED',
-      detail: 'explicit base SHA unresolvable in target repo',
-    };
-  }
-
-  // Precedence 2: deps.baseSha / base / repoSha
-  const depCandidates = [deps?.baseSha, deps?.base, deps?.repoSha];
-  for (const candItem of depCandidates) {
-    if (candItem !== undefined && candItem !== null) {
-      let val = typeof candItem === 'function' ? null : candItem;
-      if (typeof candItem === 'function') {
-        try {
-          val = candItem();
-        } catch (_) {}
-      }
-      if (is40HexSha(val)) {
-        const trimmed = val.trim();
-        if (checkCommit(trimmed, targetRepo)) {
-          return { ok: true, baseSha: trimmed, origin: 'deps', targetRepo };
-        }
-        return {
-          ok: false,
-          code: 'BASE_SHA_UNRESOLVED',
-          detail: 'dependency base SHA unresolvable in target repo',
-        };
-      }
-      return {
-        ok: false,
-        code: 'BASE_SHA_UNRESOLVED',
-        detail: 'invalid dependency base SHA',
-      };
-    }
-  }
-
-  // Precedence 3: provenance repoSha
-  const provSha = prov && (prov.repoSha || prov.baseSha);
-  if (provSha !== undefined && provSha !== null) {
-    let val = typeof provSha === 'function' ? null : provSha;
-    if (typeof provSha === 'function') {
-      try {
-        val = provSha();
-      } catch (_) {}
-    }
-    if (is40HexSha(val)) {
-      const trimmed = val.trim();
-      if (checkCommit(trimmed, targetRepo)) {
-        return { ok: true, baseSha: trimmed, origin: 'provenance', targetRepo };
-      }
-    }
-    return {
-      ok: false,
-      code: 'BASE_SHA_UNRESOLVED',
-      detail: 'provenance base SHA unresolvable in target repo',
-    };
-  }
-
-  // Precedence 4: branch tip via rev-parse
-  if (branchName && typeof branchName === 'string') {
-    const trimmedBranch = branchName.trim();
-    if (/^[a-zA-Z0-9._\-/]+$/.test(trimmedBranch) && !trimmedBranch.startsWith('-')) {
-      for (const ref of [
-        trimmedBranch,
-        `refs/heads/${trimmedBranch}`,
-        `refs/remotes/origin/${trimmedBranch}`,
-      ]) {
-        try {
-          const out = execFileSync(
-            'git',
-            ['-C', targetRepo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
-            {
-              encoding: 'utf8',
-              stdio: ['ignore', 'pipe', 'pipe'],
-              timeout: 5000,
-            }
-          );
-          const sha = out.trim();
-          if (is40HexSha(sha) && checkCommit(sha, targetRepo)) {
-            return { ok: true, baseSha: sha, origin: 'branch', targetRepo };
-          }
-        } catch (_) {}
-      }
-    }
-  }
-
-  // Precedence 5: default origin/main via intake.revParseOriginMain
-  try {
-    if (typeof deps.revParse === 'function') {
-      const v = deps.revParse('origin/main');
-      if (is40HexSha(v) && checkCommit(v.trim(), targetRepo)) {
-        return { ok: true, baseSha: v.trim(), origin: 'default', targetRepo };
-      }
-    } else {
-      const intake = require('./intake');
-      const sha = intake.revParseOriginMain(targetRepo, deps || {});
-      if (is40HexSha(sha) && checkCommit(sha.trim(), targetRepo)) {
-        return { ok: true, baseSha: sha.trim(), origin: 'default', targetRepo };
-      }
-    }
-  } catch (_) {}
-
-  return {
-    ok: false,
-    code: 'BASE_SHA_UNRESOLVED',
-    detail: 'no resolved 40-hex base commit in target repo',
-  };
+  // TASK-AI-171 R2: delegate to the one shared execute-target module.
+  const { resolveExecuteTarget } = require('./execute-target');
+  return resolveExecuteTarget(args, {
+    ...deps,
+    treePath: deps?.treePath || targetWorktree || undefined,
+    provenance: provenance || deps?.provenance || args?.provenance,
+  });
 }
 
 function dispatchCommand(args, deps = {}) {
@@ -2943,13 +2729,25 @@ function dispatchCommand(args, deps = {}) {
   // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
     const { executePlan } = require('./executor');
+    const { resolveExecuteTarget } = require('./execute-target');
     const plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    // TASK-AI-171 R2: resolve once and pass the frozen validated target.
+    const planTarget = resolveExecuteTarget(
+      { ...args, execute: !isDryRun },
+      { ...deps, rootDir, executeMode: !isDryRun }
+    );
+    if (!isDryRun && !planTarget.ok) {
+      error(`Plan refused: ${planTarget.code} (${planTarget.detail || 'unresolved target'})`);
+      exit(1);
+      return { exitCode: 1, refusal: planTarget.code };
+    }
     const result = executePlan(plan, {
       dryRun: isDryRun,
       isolatedWorker: args['isolated-worker'] || false,
       project: args.project || 'shipde-platform',
-      cwd: args.cwd || (deps && deps.cwd) || undefined,
-      base: args.base || (deps && deps.base) || undefined,
+      cwd: planTarget.cwd || args.cwd || (deps && deps.cwd) || undefined,
+      base: (planTarget.ok && planTarget.baseSha) || args.base || (deps && deps.base) || undefined,
+      executeTarget: planTarget,
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       run: deps && deps.run,
     });
@@ -3792,16 +3590,12 @@ function dispatchCommand(args, deps = {}) {
     }
 
     // P1-1: Base validation runs on every execute path, including checkpoint resume.
-    const baseResolution = resolveExecuteBase({
-      targetWorktree:
-        (args.root !== undefined && args.root !== null && args.root !== '' ? args.root : null) ||
-        deps?.treePath ||
-        deps?.provenance?.treePath ||
-        args?.provenance?.treePath ||
-        null,
-      args,
-      deps: { ...deps, item },
+    // TASK-AI-171 R2: ONE shared execute target via execute-target.js.
+    const baseResolution = require('./execute-target').resolveExecuteTarget(args, {
+      ...deps,
+      item,
       provenance: deps?.provenance || args?.provenance,
+      rootDir,
     });
 
     if (!baseResolution.ok) {
@@ -3828,10 +3622,7 @@ function dispatchCommand(args, deps = {}) {
           '*',
         quotaScope: candForRefusal.quotaScope || chosenIdentityForRefusal.quotaScope || '',
         modelId:
-          candForRefusal.modelId ||
-          candForRefusal.model ||
-          chosenIdentityForRefusal.modelId ||
-          '',
+          candForRefusal.modelId || candForRefusal.model || chosenIdentityForRefusal.modelId || '',
       };
       return makeExecuteResult(
         1,
@@ -3915,8 +3706,6 @@ function dispatchCommand(args, deps = {}) {
         quotaScope: cand.quotaScope || chosenIdentity.quotaScope || '',
         modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
       };
-
-
 
       const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
       const promptText = pFile
@@ -4004,7 +3793,7 @@ function dispatchCommand(args, deps = {}) {
           prompt: promptText,
           branch: item.branch,
           base: resolvedBaseSha,
-          cwd: args.cwd || (deps && deps.cwd) || rootDir,
+          cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
           usageFile: usageFile,
           checkpoint: checkpointFile,
           maxAttempts: 1,
@@ -4102,7 +3891,7 @@ function dispatchCommand(args, deps = {}) {
 
         try {
           launchRes = launcher(adapter, launchArgs, {
-            cwd: args.cwd || (deps && deps.cwd) || rootDir,
+            cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
             baseSha: resolvedBaseSha,
             branch: item.branch,

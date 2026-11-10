@@ -344,6 +344,28 @@ function executePlan(plan, options) {
     run = require('./isolation-launcher').getIsolatedLauncher();
   }
 
+  // TASK-AI-171 R2: executePlan must refuse to execute without a validated target.
+  // The frozen target must be created by resolveExecuteTarget (provenance check
+  // via WeakSet rejects forged {ok:true} objects from plan files or flags).
+  const { isValidTarget } = require('./execute-target');
+  const executeTarget = opts.executeTarget || null;
+  if (!dryRun) {
+    if (!executeTarget || !isValidTarget(executeTarget) || !executeTarget.ok) {
+      const reason = !executeTarget
+        ? 'EXECUTE_TARGET_MISSING'
+        : !isValidTarget(executeTarget)
+          ? 'EXECUTE_TARGET_FORGED'
+          : executeTarget.code || 'EXECUTE_TARGET_INVALID';
+      return {
+        dryRun: false,
+        executedAt: new Date(opts.now || Date.now()).toISOString(),
+        records: [],
+        summary: { launched: 0, resumed: 0, refused: 1, failed: 0 },
+        refusal: reason,
+      };
+    }
+  }
+
   const now = opts.now || Date.now();
   const registry = opts.registry || loadSources();
   const logOpts = { dir: opts.decisionDir, now };
@@ -526,8 +548,8 @@ function executePlan(plan, options) {
       accountId: a.accountId,
       prompt: promptFor(a, opts),
       branch: isReview ? null : a.branch,
-      base: opts.base || 'main',
-      cwd: opts.cwd,
+      base: (executeTarget && executeTarget.baseSha) || opts.base || 'main',
+      cwd: (executeTarget && executeTarget.cwd) || opts.cwd,
       isolatedWorker: Boolean(opts.isolatedWorker),
       usageFile: usageReportPath(opts, a),
       title: workerName(a.workItemId),
