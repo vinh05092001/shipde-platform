@@ -2457,7 +2457,12 @@ function poolAccountCandidates(opts) {
   const runtimeDir = pool.runsDir(o);
   let hasRunsDir = false;
   try {
-    hasRunsDir = Boolean(shouldDiscoverPool && runtimeDir && fs.existsSync(runtimeDir) && (!o.spawnSync || o.fakeRunsDir || o.runsDir));
+    hasRunsDir = Boolean(
+      shouldDiscoverPool &&
+      runtimeDir &&
+      fs.existsSync(runtimeDir) &&
+      (!o.spawnSync || o.fakeRunsDir || o.runsDir)
+    );
   } catch {}
 
   if (shouldDiscoverPool) {
