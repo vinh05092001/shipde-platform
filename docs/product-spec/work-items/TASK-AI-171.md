@@ -870,6 +870,8 @@ Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task
 - Outcome: Enforces that base commit is strictly accepted as a 40-hex SHA verified via `commitExists` (`git cat-file -e <sha>^{commit}`) in the target worktree; refuses branch names and unresolvable SHAs with `BASE_SHA_UNRESOLVED` before any launcher call; eliminates fallback to the tool repository and branch-name commit fabrication.
 - Depends on: Launch Options Forwarding (`fix/task-ai-171-launch-options`, PR #581).
 - Evidence: `task-ai-171-pinned-base.test.js` fails 1/4 on base 1296a736 (3/4 fail on branch names, fake SHAs, and tool-repo fallback) and passes 4/4 on HEAD; `task-ai-171-launch-options.test.js` (5/5) and `task-ai-171-int1-execute.test.js` (5/5) pass.
+- Dry-run vs execute (`resolveExecuteBase`): `execute === true` always validates a real pinned base; a dry-run flag (e.g. `deps.dryRunOffline` or an offline profile fixture) never bypasses that validation. Pure dry-run (`execute` omitted or `false`) performs no base validation and makes no git call.
+- Git root seam: `deps.gitRoot` is an internal dependency-injection seam, like `deps.commitExists`, used only by tests (e.g. offline replay execute fixtures). The production default (`git rev-parse --show-toplevel` in the resolved target) is unchanged, and the seam is not reachable from CLI flags, environment variables or data files. No test-name special case exists in production code.
 
 ## Lane mailbox ownership outcome — pool submissions respect AGY lane ownership (2026-11-10)
 
