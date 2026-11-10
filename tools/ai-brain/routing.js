@@ -1220,6 +1220,70 @@ function qualityScoreOf(candidate, now) {
   return Math.max(1, Math.min(100, Math.round(base - recencyPenalty)));
 }
 
+/**
+ * Resolve the effective quality for a candidate by blending internal quality
+ * (evidence + declared) with external priors. Used by both scoreForProfile
+ * and the admission floor check.
+ * When options?.details is true, returns the full quality blend breakdown.
+ * Otherwise returns the numeric quality score or null.
+ */
+function resolveEffectiveQuality(candidate, assessment, ctx, options) {
+  const now = (ctx && ctx.now) || Date.now();
+  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
+  if (candidate && prior) {
+    candidate.priorUnknown = Boolean(prior.priorUnknown || prior.score === null);
+  }
+  const internalQuality = qualityScoreOf(candidate, now);
+  const priorUsable =
+    prior &&
+    !prior.stale &&
+    prior.score !== null &&
+    (!prior.priorUnknown || internalQuality === null);
+  const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
+  const internalEvidence =
+    storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
+  const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
+  const hasQualityFailure = internalEvidence.some((item) => evidence.isQualityFailure(item));
+  const rawQualityWeight =
+    assessment && assessment.weights && assessment.weights.quality !== undefined
+      ? assessment.weights.quality
+      : WEIGHT_PROFILES.BALANCED.quality;
+  const qualityWeight = Number(rawQualityWeight);
+  const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
+  const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
+  const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
+  const priorHasScore = Number.isFinite(prior && prior.score);
+  const effectivePriorWeight =
+    priorHasScore && effectivePriorUsable ? priorWeight * priorQualityWeight : 0;
+  const quality =
+    effectivePriorUsable && priorHasScore
+      ? Math.round(
+          internalQuality === null
+            ? prior.score
+            : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
+        )
+      : internalQuality;
+  const isQualityUnknown = quality === null || !Number.isFinite(quality);
+  const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
+
+  if (options && options.details) {
+    return {
+      quality,
+      qualityLabel,
+      isQualityUnknown,
+      rawQualityWeight,
+      priorQualityWeight,
+      prior,
+      priorUsable,
+      effectivePriorUsable,
+      priorHasScore,
+      effectivePriorWeight,
+      internalQuality,
+    };
+  }
+  return quality;
+}
+
 function reliabilityScoreOf(candidate) {
   const items = (candidate && candidate.evidence) || [];
   let passed = 0;
@@ -1372,48 +1436,22 @@ function scoreForProfile(candidate, assessment, ctx) {
   }
 
   const now = (ctx && ctx.now) || Date.now();
-  const prior = priorFor(candidate, ctx && ctx.role, ctx && ctx.priors, now);
-  candidate.priorUnknown = Boolean(prior && (prior.priorUnknown || prior.score === null));
   const latency = latencyScoreOf(candidate);
-  const internalQuality = qualityScoreOf(candidate, now);
-  const priorUsable =
-    prior &&
-    !prior.stale &&
-    prior.score !== null &&
-    (!prior.priorUnknown || internalQuality === null);
-  const storedEvidence = evidence.getEvidence(ctx && ctx.evidenceData, candidate) || [];
-  const internalEvidence =
-    storedEvidence.length > 0 ? storedEvidence : (candidate && candidate.evidence) || [];
-  const evidenceCount = internalEvidence.filter((item) => item && item.status === 'passed').length;
-  const hasQualityFailure = internalEvidence.some((item) => evidence.isQualityFailure(item));
-  const qualityWeight = Number(
-    assessment && assessment.weights && assessment.weights.quality !== undefined
-      ? assessment.weights.quality
-      : 33
-  );
-  const priorQualityWeight = Math.max(0, Math.min(100, qualityWeight)) / 100;
-  const effectivePriorUsable = Boolean(priorUsable && !hasQualityFailure);
-  const priorWeight = effectivePriorUsable ? 1 / (1 + evidenceCount) : 0;
-  const priorHasScore = Number.isFinite(prior && prior.score);
-  const effectivePriorWeight =
-    priorHasScore && effectivePriorUsable ? priorWeight * priorQualityWeight : 0;
-  const quality =
-    effectivePriorUsable && priorHasScore
-      ? Math.round(
-          internalQuality === null
-            ? prior.score
-            : internalQuality * (1 - effectivePriorWeight) + prior.score * effectivePriorWeight
-        )
-      : internalQuality;
-  const isQualityUnknown = quality === null || !Number.isFinite(quality);
-  const qualityLabel = isQualityUnknown ? 'QUALITY_UNKNOWN' : undefined;
+  const qualityDetails = resolveEffectiveQuality(candidate, assessment, ctx, { details: true });
+  const {
+    quality,
+    qualityLabel,
+    prior,
+    priorUsable,
+    effectivePriorUsable,
+    priorHasScore,
+    effectivePriorWeight,
+    priorQualityWeight,
+    rawQualityWeight,
+  } = qualityDetails;
   const reliability = reliabilityScoreOf(candidate);
   const cost = costScoreOf(candidate);
 
-  const rawQualityWeight =
-    assessment && assessment.weights && assessment.weights.quality !== undefined
-      ? assessment.weights.quality
-      : 33;
   let wQuality = rawQualityWeight;
   let wReliability = 0;
   if (assessment && assessment.weights && assessment.weights.reliability !== undefined) {
@@ -1425,11 +1463,11 @@ function scoreForProfile(candidate, assessment, ctx) {
   const wLatency =
     assessment && assessment.weights && assessment.weights.latency !== undefined
       ? assessment.weights.latency
-      : 34;
+      : WEIGHT_PROFILES.BALANCED.latency;
   const wCost =
     assessment && assessment.weights && assessment.weights.cost !== undefined
       ? assessment.weights.cost
-      : 33;
+      : WEIGHT_PROFILES.BALANCED.cost;
 
   // Renormalize over known dimensions so unknown sub-scores (e.g. unpriced
   // candidates or unmeasured latency) do not penalize candidates against
@@ -1700,10 +1738,23 @@ function rankForProfile(candidates, profile, assessment, ctx) {
       continue;
     }
 
-    const quality = assessment.scoringPolicy && c.quality == null ? NaN : Number(c.quality);
-    if (Number.isFinite(quality) && quality < Number(profile.qualityFloor)) {
-      reject('QUALITY_FLOOR_NOT_MET', 'candidate');
-      continue;
+    const qualityFloorValue = Number(profile.qualityFloor);
+    if (qualityFloorValue > 0) {
+      if (assessment.scoringPolicy && c.quality == null) {
+        // Under an active scoring policy, quality comes from normalized measurements;
+        // null candidate quality is evaluated during scoring rather than admission.
+      } else {
+        const qualityCtx = { now, role: profile.role, priors, evidenceData: context.evidenceData };
+        const effectiveQuality = resolveEffectiveQuality(c, assessment, qualityCtx);
+        if (
+          effectiveQuality === null ||
+          !Number.isFinite(effectiveQuality) ||
+          effectiveQuality < qualityFloorValue
+        ) {
+          reject('QUALITY_FLOOR_NOT_MET', 'candidate');
+          continue;
+        }
+      }
     }
     const cost = blendedCost(c);
     if (cost !== null && cost > Number(profile.costCeiling)) {
@@ -2800,6 +2851,7 @@ module.exports = {
   compareProfileScores,
   latencyScoreOf,
   qualityScoreOf,
+  resolveEffectiveQuality,
   costScoreOf,
   blendedCost,
   stallAssessment,

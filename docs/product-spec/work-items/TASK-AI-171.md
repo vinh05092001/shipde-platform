@@ -828,3 +828,10 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Outcome: Parses work item ticket markdown files for dispatch planning without hardcoded risk lists; populates profile forbidden failure domains, risk domains, and allowed files; attaches `itemSource` and assessment to decision receipts.
 - Depends on: Slice 5 (`fix/task-ai-171-core-s5-offline-replay`).
 - Evidence: 7/7 tests in `task-ai-171-core-ticket-input.test.js` pass.
+
+## PR 09 outcome — Quality floor: one effective quality for scoring and admission (2026-11-10)
+
+- Scope: `tools/ai-brain/routing.js` (`resolveEffectiveQuality`, `scoreForProfile`, admission check), `tools/ai-brain/test/task-ai-171-quality-floor.test.js`.
+- Outcome: Resolves candidate effective quality once (blending evidence and external priors) shared by scoring and admission; enforces hard quality floor against effective quality; unknown quality never satisfies a hard floor (`qualityFloor > 0`), rejecting with `QUALITY_FLOOR_NOT_MET`, while floor 0 admits unknown quality.
+- Evidence: Offline suite `tools/ai-brain/test/task-ai-171-quality-floor.test.js` fails 1 pass / 4 fail on base `119fa297` (behaviour assertions fail: low-quality candidate with prior-derived quality 15 admitted/chosen instead of rejected; unknown quality admitted/chosen instead of rejected; low-quality candidate not rejected when competing with high-quality candidate; `resolveEffectiveQuality` missing) and passes 5/5 on HEAD.
+
