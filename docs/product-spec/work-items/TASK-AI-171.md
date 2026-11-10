@@ -878,3 +878,10 @@ Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task
 Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools/ai-brain/lane-launcher.js` (export of `activeJobWithoutResult`), `tools/ai-brain/test/task-ai-171-lane-mailbox.test.js`.
 - Outcome: Busy lane refused before any `job.json` write, `result.json` unlink, or adapter call; timeout keeps ownership without synthetic result; proven pre-launch failure releases the matching owner; single lock order `job.lock` -> lane generation lock.
 - Evidence: Busy case fails on base `1296a736`, passes on head; with `r3-lane-ownership` and `task-ai-69` 20/0; independent review found no race by source reading, no multi-process stress run.
+
+## FU-584: Every execute path validates a target-bound pinned base (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand`, `resolveExecuteBase`), `tools/ai-brain/test/task-ai-171-pinned-base.test.js`.
+- P1-1 Checkpoint resume validates base: `resolveExecuteBase` moved outside `if (!finalChosenKey)`, so checkpoint resume paths always validate the base before reservation, adapter, or runner calls.
+- P1-2 Dependency SHA always verified: `deps.baseSha` / `deps.base` / `deps.repoSha` are verified with `commitExists` regardless of whether `explicitTargets` are present; previously skipped when target came from `deps.rootDir` or `cwd`.
+- P1-3 cwd included in target set: `args.cwd` / `deps.cwd` added to `explicitTargets` so the adapter/runner cwd repo is validated; `root=A, cwd=B` with different git roots is refused as `TARGET_WORKTREE_CONFLICT`.

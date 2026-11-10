@@ -2525,6 +2525,12 @@ function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance }
   if (targetWorktree && !explicitTargets.some((t) => t.path === targetWorktree)) {
     explicitTargets.push({ name: 'targetWorktree', path: targetWorktree });
   }
+  // P1-3: Include args.cwd / deps.cwd in the target set so validation covers
+  // the repo the adapter and runner actually use.
+  const cwdPath = args.cwd || deps?.cwd;
+  if (cwdPath && typeof cwdPath === 'string' && !explicitTargets.some((t) => t.path === cwdPath)) {
+    explicitTargets.push({ name: 'args.cwd', path: cwdPath });
+  }
 
   let targetRepo = null;
   if (explicitTargets.length > 0) {
@@ -2599,17 +2605,14 @@ function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance }
       }
       if (is40HexSha(val)) {
         const trimmed = val.trim();
-        if (explicitTargets.length > 0) {
-          if (checkCommit(trimmed, targetRepo)) {
-            return { ok: true, baseSha: trimmed, origin: 'deps', targetRepo };
-          }
-          return {
-            ok: false,
-            code: 'BASE_SHA_UNRESOLVED',
-            detail: 'dependency base SHA unresolvable in target repo',
-          };
+        if (checkCommit(trimmed, targetRepo)) {
+          return { ok: true, baseSha: trimmed, origin: 'deps', targetRepo };
         }
-        return { ok: true, baseSha: trimmed, origin: 'deps', targetRepo };
+        return {
+          ok: false,
+          code: 'BASE_SHA_UNRESOLVED',
+          detail: 'dependency base SHA unresolvable in target repo',
+        };
       }
       return {
         ok: false,
@@ -3774,41 +3777,6 @@ function dispatchCommand(args, deps = {}) {
         modelId: candEarly.modelId || candEarly.model || chosenIdentityEarly.modelId || '',
       };
 
-      const baseResolution = resolveExecuteBase({
-        targetWorktree:
-          (args.root !== undefined && args.root !== null && args.root !== '' ? args.root : null) ||
-          deps?.treePath ||
-          deps?.provenance?.treePath ||
-          args?.provenance?.treePath ||
-          null,
-        args,
-        deps: { ...deps, item },
-        provenance: deps?.provenance || args?.provenance,
-      });
-
-      if (!baseResolution.ok) {
-        error(
-          `Dispatch refused: ${baseResolution.code} (${baseResolution.detail || 'unresolved base'})`
-        );
-        log(
-          `Dispatch refused: ${baseResolution.code} (${baseResolution.detail || 'unresolved base'})`
-        );
-        return makeExecuteResult(
-          1,
-          finalChosenKey,
-          preLaunchArgvIdentity,
-          { status: 'refused', reason: baseResolution.code },
-          null,
-          {
-            status: 'refused',
-            refusal: baseResolution.code,
-            reason: baseResolution.code,
-            decision: lastDecision,
-          }
-        );
-      }
-      var resolvedBaseSha = baseResolution.baseSha;
-
       finalDecisionLog = {
         item,
         now,
@@ -3822,6 +3790,64 @@ function dispatchCommand(args, deps = {}) {
       };
       if (checkpointFile) writeJsonFile(checkpointFile, buildDryRunLog(finalDecisionLog));
     }
+
+    // P1-1: Base validation runs on every execute path, including checkpoint resume.
+    const baseResolution = resolveExecuteBase({
+      targetWorktree:
+        (args.root !== undefined && args.root !== null && args.root !== '' ? args.root : null) ||
+        deps?.treePath ||
+        deps?.provenance?.treePath ||
+        args?.provenance?.treePath ||
+        null,
+      args,
+      deps: { ...deps, item },
+      provenance: deps?.provenance || args?.provenance,
+    });
+
+    if (!baseResolution.ok) {
+      error(
+        `Dispatch refused: ${baseResolution.code} (${baseResolution.detail || 'unresolved base'})`
+      );
+      log(
+        `Dispatch refused: ${baseResolution.code} (${baseResolution.detail || 'unresolved base'})`
+      );
+      const chosenIdentityForRefusal =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+      const candForRefusal = finalChosenCandidate;
+      const harnessForRefusal =
+        candForRefusal.harness || (lastDecision && lastDecision.harness) || 'paseo';
+      const refusalArgvIdentity = {
+        harness: candForRefusal.harness || chosenIdentityForRefusal.harness || harnessForRefusal,
+        accessPath: candForRefusal.accessPath || chosenIdentityForRefusal.accessPath || '',
+        gateway: candForRefusal.gateway || chosenIdentityForRefusal.gateway || '',
+        upstream: candForRefusal.upstream || chosenIdentityForRefusal.upstream || '',
+        account:
+          candForRefusal.accountId ||
+          candForRefusal.account ||
+          chosenIdentityForRefusal.account ||
+          '*',
+        quotaScope: candForRefusal.quotaScope || chosenIdentityForRefusal.quotaScope || '',
+        modelId:
+          candForRefusal.modelId ||
+          candForRefusal.model ||
+          chosenIdentityForRefusal.modelId ||
+          '',
+      };
+      return makeExecuteResult(
+        1,
+        finalChosenKey,
+        refusalArgvIdentity,
+        { status: 'refused', reason: baseResolution.code },
+        null,
+        {
+          status: 'refused',
+          refusal: baseResolution.code,
+          reason: baseResolution.code,
+          decision: lastDecision,
+        }
+      );
+    }
+    var resolvedBaseSha = baseResolution.baseSha;
 
     if (isPinned) log('PINNED');
     log(

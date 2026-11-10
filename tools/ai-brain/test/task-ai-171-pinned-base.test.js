@@ -402,4 +402,240 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       env.cleanup();
     }
   });
+
+  // P1-1: checkpoint resume with invalid base is refused
+  test('11. Checkpoint resume with invalid base is refused — zero reservation, adapter, runner calls', () => {
+    const env = createTargetRepoEnv();
+    try {
+      let adapterCalls = 0;
+      let runnerCalls = 0;
+
+      const trackingAdapter = {
+        id: 'test-harness',
+        command: 'test-cmd',
+        launch: (job) => {
+          adapterCalls += 1;
+          return ['fake-harness-run', job.prompt];
+        },
+        sessionIdFrom: () => 'fake-session-123',
+      };
+
+      const runner = () => {
+        runnerCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+
+      // Write a checkpoint file that has a chosen candidate — triggers resume path
+      const cand = makeCandidate();
+      const ckFile = path.join(env.dir, 'checkpoint-resume.json');
+      fs.writeFileSync(
+        ckFile,
+        JSON.stringify({
+          chosen: candidateKey(cand),
+          harness: 'hermes',
+          source: 'test-provider',
+          accountId: 'test-account',
+          modelId: 'test-model',
+        })
+      );
+
+      const deps = env.getDeps({
+        run: runner,
+        harnessAdapter: trackingAdapter,
+        checkpointFile: ckFile,
+        // Supply an invalid base SHA via deps — should be refused even on resume
+        baseSha: FAKE_40_HEX,
+      });
+
+      // No explicit --base-sha arg — the checkpoint resume path skips the
+      // if(!finalChosenKey) block which contains resolveExecuteBase.
+      // The bug is that resolvedBaseSha remains undefined on the resume path.
+      const res = dispatchCommand(
+        env.getArgs({ 'base-sha': FAKE_40_HEX }),
+        deps
+      );
+
+      assert.equal(res.exitCode, 1, 'checkpoint resume with invalid base must exit 1');
+      assert.equal(adapterCalls, 0, 'zero adapter calls on invalid base during checkpoint resume');
+      assert.equal(runnerCalls, 0, 'zero runner calls on invalid base during checkpoint resume');
+      const isRefused =
+        res.refusal === 'BASE_SHA_UNRESOLVED' ||
+        res.reason === 'BASE_SHA_UNRESOLVED' ||
+        res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
+      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED on checkpoint resume');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  // P1-2: deps.baseSha / deps.base / deps.repoSha without explicit targets and a verifier
+  // returning false must be refused before reservation/launch
+  test('12. deps.baseSha without explicit targets and commitExists returning false is refused', () => {
+    const env = createTargetRepoEnv();
+    try {
+      let runnerCalls = 0;
+      const runner = () => {
+        runnerCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+
+      // No explicit --root or treePath; target comes from deps.rootDir.
+      // deps.baseSha is a valid 40-hex but commitExists returns false.
+      const deps = env.getDeps({
+        run: runner,
+        harnessAdapter: env.fakeAdapter,
+        rootDir: env.dir,
+        baseSha: FAKE_40_HEX,
+        gitRoot: () => env.dir,
+        commitExists: () => false,
+      });
+
+      // Remove root from args so explicitTargets is empty and target comes from deps.rootDir
+      const args = env.getArgs();
+      delete args.root;
+
+      const res = dispatchCommand(args, deps);
+
+      assert.equal(runnerCalls, 0, 'zero runner calls when deps.baseSha fails commitExists');
+      assert.equal(res.exitCode, 1, 'must refuse when deps.baseSha fails verification');
+      const isRefused =
+        res.refusal === 'BASE_SHA_UNRESOLVED' ||
+        res.reason === 'BASE_SHA_UNRESOLVED' ||
+        res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
+      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.baseSha');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('13. deps.base without explicit targets and commitExists returning false is refused', () => {
+    const env = createTargetRepoEnv();
+    try {
+      let runnerCalls = 0;
+      const runner = () => {
+        runnerCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+
+      const deps = env.getDeps({
+        run: runner,
+        harnessAdapter: env.fakeAdapter,
+        rootDir: env.dir,
+        base: FAKE_40_HEX,
+        gitRoot: () => env.dir,
+        commitExists: () => false,
+      });
+
+      const args = env.getArgs();
+      delete args.root;
+
+      const res = dispatchCommand(args, deps);
+
+      assert.equal(runnerCalls, 0, 'zero runner calls when deps.base fails commitExists');
+      assert.equal(res.exitCode, 1);
+      const isRefused =
+        res.refusal === 'BASE_SHA_UNRESOLVED' ||
+        res.reason === 'BASE_SHA_UNRESOLVED' ||
+        res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
+      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.base');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  test('14. deps.repoSha without explicit targets and commitExists returning false is refused', () => {
+    const env = createTargetRepoEnv();
+    try {
+      let runnerCalls = 0;
+      const runner = () => {
+        runnerCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+
+      const deps = env.getDeps({
+        run: runner,
+        harnessAdapter: env.fakeAdapter,
+        rootDir: env.dir,
+        repoSha: FAKE_40_HEX,
+        gitRoot: () => env.dir,
+        commitExists: () => false,
+      });
+
+      const args = env.getArgs();
+      delete args.root;
+
+      const res = dispatchCommand(args, deps);
+
+      assert.equal(runnerCalls, 0, 'zero runner calls when deps.repoSha fails commitExists');
+      assert.equal(res.exitCode, 1);
+      const isRefused =
+        res.refusal === 'BASE_SHA_UNRESOLVED' ||
+        res.reason === 'BASE_SHA_UNRESOLVED' ||
+        res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
+      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED for unverified deps.repoSha');
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  // P1-3: two-repo test (root=A, cwd=B) -> conflict refusal
+  test('15. Two-repo conflict: root=A, cwd=B with different git roots is refused with TARGET_WORKTREE_CONFLICT', () => {
+    const env = createTargetRepoEnv();
+    // Create a second, independent git repo for cwd
+    const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'pinned-base-repo-B-'));
+    execFileSync('git', ['init', dirB], { stdio: 'ignore' });
+    execFileSync('git', ['-C', dirB, 'config', 'user.name', 'Test User'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', dirB, 'config', 'user.email', 'test@example.com'], {
+      stdio: 'ignore',
+    });
+    fs.writeFileSync(path.join(dirB, 'file.txt'), 'repo B content\n');
+    execFileSync('git', ['-C', dirB, 'add', 'file.txt'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', dirB, 'commit', '-m', 'Initial commit in repo B'], {
+      stdio: 'ignore',
+    });
+
+    try {
+      let reservationCalls = 0;
+      let adapterCalls = 0;
+      let runnerCalls = 0;
+
+      const trackingAdapter = {
+        id: 'test-harness',
+        command: 'test-cmd',
+        launch: (job) => {
+          adapterCalls += 1;
+          return ['fake-harness-run', job.prompt];
+        },
+        sessionIdFrom: () => 'fake-session-123',
+      };
+
+      const runner = () => {
+        runnerCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+
+      const deps = env.getDeps({
+        run: runner,
+        harnessAdapter: trackingAdapter,
+      });
+
+      // root=A (env.dir), cwd=B (dirB) — different repos
+      const res = dispatchCommand(
+        env.getArgs({ root: env.dir, cwd: dirB, 'base-sha': env.realSha }),
+        deps
+      );
+
+      assert.equal(res.exitCode, 1, 'two-repo conflict must exit 1');
+      assert.equal(adapterCalls, 0, 'zero adapter calls on two-repo conflict');
+      assert.equal(runnerCalls, 0, 'zero runner calls on two-repo conflict');
+      const isRefused =
+        res.refusal === 'TARGET_WORKTREE_CONFLICT' ||
+        res.reason === 'TARGET_WORKTREE_CONFLICT' ||
+        res.outcome?.reason === 'TARGET_WORKTREE_CONFLICT';
+      assert.ok(isRefused, 'refusal reason must be TARGET_WORKTREE_CONFLICT');
+    } finally {
+      fs.rmSync(dirB, { recursive: true, force: true });
+      env.cleanup();
+    }
+  });
 });
