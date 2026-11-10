@@ -807,3 +807,10 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Outcome: Parses Antigravity account quotas by exact quota group name and window rather than family; maps display-name aliases to quota groups; adds `group` field to parsed quota rows.
 - Depends on: Slice 3 (`fix/task-ai-171-core-s3-external-sources`).
 - Evidence: 3/3 tests in `task-ai-171-quota-group.test.js` and 14/14 tests in `task-ai-69.test.js` pass offline.
+
+## Slice 4b: A3 — Antigravity candidate admission by quota group (2026-11-10)
+
+- Scope: `tools/ai-brain/candidates.js` (`poolAccountCandidates`), `tools/ai-brain/test/task-ai-171-quota-group.test.js`.
+- Outcome: Matches candidate models against Antigravity quota groups; blocks exhausted models with QUOTA_EXHAUSTED and unmapped models with QUOTA_GROUP_UNKNOWN.
+- Depends on: Slice 4a (`fix/task-ai-171-core-s4a-quota-parser`).
+- Evidence: 5/5 tests in `task-ai-171-quota-group.test.js` pass offline.

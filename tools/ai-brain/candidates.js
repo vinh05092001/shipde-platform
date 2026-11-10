@@ -2589,21 +2589,49 @@ function poolAccountCandidates(opts) {
       // Keep exhausted routes in the candidate set so Controller can record
       // the quota rejection in the structured dispatch decision.
       let quotaExhausted = false;
-      if (hasRunsDir && quotaReading && Array.isArray(quotaReading.rows)) {
-        const familyRows = quotaReading.rows.filter(
-          (r) => (family && r.family === family) || r.family === model || r.model === model
-        );
-        if (familyRows.length > 0) {
-          const empty = (r) =>
-            r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true;
-          // A row naming this exact model decides. Family rows cannot tell one quota group from
-          // another (e.g. a zero "Gemini 4 Argon" group next to a 97% "Gemini Models" group), so a
-          // family is exhausted only when every one of its groups is empty.
-          const exact = familyRows.filter((r) => r.model === model);
-          const isZero = exact.length > 0 ? exact.some(empty) : familyRows.every(empty);
-          if (isZero) {
-            if (!o.keepExhausted) continue;
+      let quotaBlockReason;
+      if (hasRunsDir && quotaReading?.rows?.length > 0) {
+        const resolveGroup = pool.resolveModelGroup || ((m, q) => q?.modelGroups?.[m] || null);
+        const group = resolveGroup(model, quotaReading, { accountId: acc, options: o });
+        const hasGroups =
+          Boolean(group) ||
+          quotaReading.rows.some((r) => Boolean(r.group)) ||
+          Boolean(quotaReading.rawDoc?.command?.data?.groups?.length) ||
+          Boolean(quotaReading.rawDoc?.groups?.length) ||
+          Object.keys(quotaReading.modelGroups || {}).length > 0;
+
+        if (hasGroups) {
+          if (!group) {
+            quotaBlockReason = 'QUOTA_GROUP_UNKNOWN';
             quotaExhausted = true;
+            if (!o.keepExhausted) continue;
+          } else {
+            const rows = quotaReading.rows.filter(
+              (r) =>
+                (r.group && r.group === group) ||
+                (!r.group && r.family === group) ||
+                r.model === model
+            );
+            if (rows.some((r) => r.remainingPercent <= 0 || r.disabled)) {
+              quotaBlockReason = 'QUOTA_EXHAUSTED';
+              quotaExhausted = true;
+              if (!o.keepExhausted) continue;
+            }
+          }
+        } else {
+          const familyRows = quotaReading.rows.filter(
+            (r) => (family && r.family === family) || r.family === model || r.model === model
+          );
+          if (familyRows.length > 0) {
+            const empty = (r) =>
+              r.remainingPercent === 0 || r.remainingPercent <= 0 || r.disabled === true;
+            const exact = familyRows.filter((r) => r.model === model);
+            const isZero = exact.length > 0 ? exact.some(empty) : familyRows.every(empty);
+            if (isZero) {
+              quotaBlockReason = 'QUOTA_EXHAUSTED';
+              quotaExhausted = true;
+              if (!o.keepExhausted) continue;
+            }
           }
         }
       }
@@ -2694,7 +2722,7 @@ function poolAccountCandidates(opts) {
         source: 'agy-pool',
         kind: 'agent-cli',
         blocked: quotaExhausted,
-        blockReason: quotaExhausted ? 'QUOTA_EXHAUSTED' : undefined,
+        blockReason: quotaExhausted ? quotaBlockReason || 'QUOTA_EXHAUSTED' : undefined,
         blockScope: quotaExhausted ? 'account' : undefined,
         capabilities: effectiveCapabilities,
         contextWindow,
