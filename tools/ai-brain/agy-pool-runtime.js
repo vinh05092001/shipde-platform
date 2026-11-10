@@ -186,7 +186,7 @@ function runAdapter(accountId, options) {
     const stderrText = (res.stderr || '').trim();
     let defaultStderr = '';
     if (isTimeout) {
-      defaultStderr = 'ADAPTER_TIMEOUT';
+      defaultStderr = stderrText ? `ADAPTER_TIMEOUT\n${stderrText}` : 'ADAPTER_TIMEOUT';
     } else if (res.error) {
       defaultStderr = res.error.message || String(res.error);
     } else if (res.signal) {
@@ -196,7 +196,8 @@ function runAdapter(accountId, options) {
       exitCode: res.status === null ? -1 : res.status,
       signal: res.signal || null,
       stdout: res.stdout || '',
-      stderr: stderrText || defaultStderr,
+      stderr: isTimeout ? defaultStderr : stderrText || defaultStderr,
+      timedOut: isTimeout,
     };
   }
 
@@ -220,7 +221,7 @@ function runAdapter(accountId, options) {
   const stderrText = (res.stderr || '').trim();
   let defaultStderr = '';
   if (isTimeout) {
-    defaultStderr = 'ADAPTER_TIMEOUT';
+    defaultStderr = stderrText ? `ADAPTER_TIMEOUT\n${stderrText}` : 'ADAPTER_TIMEOUT';
   } else if (res.error) {
     defaultStderr = res.error.message || String(res.error);
   } else if (res.signal) {
@@ -230,7 +231,8 @@ function runAdapter(accountId, options) {
     exitCode: res.status === null ? -1 : res.status,
     signal: res.signal || null,
     stdout: res.stdout || '',
-    stderr: stderrText || defaultStderr,
+    stderr: isTimeout ? defaultStderr : stderrText || defaultStderr,
+    timedOut: isTimeout,
   };
 }
 
@@ -322,6 +324,7 @@ function submitLocked(accountId, job, opts, dir) {
   }
 
   let shouldRelease = false;
+  let adapterCalled = false;
   try {
     const resultFile = path.join(dir, 'result.json');
     const startedAt = Date.now();
@@ -376,27 +379,30 @@ function submitLocked(accountId, job, opts, dir) {
         });
       }
     }
+    adapterCalled = true;
     const launch = exp.runAdapter(accountId, opts);
     if (launch.exitCode !== 0) {
-      const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
-      const reason =
-        launch.stderr ||
-        launch.stdout ||
-        (isTimeout
-          ? 'ADAPTER_TIMEOUT'
-          : launch.signal
-            ? `ADAPTER_SIGNAL_${launch.signal}`
-            : `ADAPTER_EXIT_${launch.exitCode}`);
+      const isTimeout = Boolean(
+        launch.timedOut ||
+        launch.isTimeout ||
+        (launch.error && launch.error.code === 'ETIMEDOUT') ||
+        (launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'))
+      );
+      const reason = isTimeout
+        ? 'ADAPTER_TIMEOUT'
+        : launch.stderr ||
+          launch.stdout ||
+          (launch.signal ? `ADAPTER_SIGNAL_${launch.signal}` : `ADAPTER_EXIT_${launch.exitCode}`);
       const errorResult = {
         jobId,
-        state: 'error',
+        state: isTimeout ? 'timeout' : 'error',
         exitCode: launch.exitCode,
         reason,
       };
-      try {
-        fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
-      } catch {}
       if (!isTimeout) {
+        try {
+          fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
+        } catch {}
         shouldRelease = true;
       }
       return finish(errorResult);
@@ -406,6 +412,16 @@ function submitLocked(accountId, job, opts, dir) {
       shouldRelease = true;
     }
     return finish(finalResult);
+  } catch (err) {
+    if (!adapterCalled) {
+      shouldRelease = true;
+      return {
+        state: 'error',
+        exitCode: 1,
+        reason: 'PRE_LAUNCH_FAILED: ' + String((err && err.message) || err),
+      };
+    }
+    throw err;
   } finally {
     if (shouldRelease) {
       laneLauncher.releaseLaneLock(dir, laneLock.owner);

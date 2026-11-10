@@ -216,3 +216,105 @@ test('submission lifecycle: clean completion releases lane lock, timeout retains
   );
   assert.equal(refusedRes.state, 'busy', 'lane remains busy while timeout holds ownership');
 });
+
+test('fake scheduler times out and writes stderr: lane still owned, no result.json written, state is timeout', (t) => {
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-timeout-stderr-'));
+  const prevRunsDir = process.env.AGY_POOL_RUNS_DIR;
+  process.env.AGY_POOL_RUNS_DIR = runsDir;
+  t.after(() => {
+    if (prevRunsDir !== undefined) {
+      process.env.AGY_POOL_RUNS_DIR = prevRunsDir;
+    } else {
+      delete process.env.AGY_POOL_RUNS_DIR;
+    }
+    try {
+      fs.rmSync(runsDir, { recursive: true, force: true });
+    } catch (_) {}
+  });
+
+  const accountId = 'agy04';
+  const accountDir = pool.accountDir(accountId, { runsDir });
+  fs.mkdirSync(accountDir, { recursive: true });
+
+  // Fake scheduler times out AND writes stderr text
+  t.mock.method(pool, 'runAdapter', () => ({
+    exitCode: -1,
+    timedOut: true,
+    stderr: 'ADAPTER_TIMEOUT: scheduler timed out\nsome stderr warning details',
+  }));
+
+  const res = pool.submitJob(
+    accountId,
+    { command: 'models', cwd: runsDir },
+    { runsDir, timeoutMs: 1000 }
+  );
+
+  // 1. state is timeout/unknown
+  assert.ok(
+    res.state === 'timeout' || res.state === 'unknown',
+    `state must be timeout or unknown, got ${res.state}`
+  );
+
+  // 2. no result.json written
+  const resultFile = path.join(accountDir, 'result.json');
+  assert.equal(fs.existsSync(resultFile), false, 'no result.json written on timeout');
+
+  // 3. lane is still owned: subsequent submitJob is refused as busy
+  const busyRes = pool.submitJob(
+    accountId,
+    { command: 'models', cwd: runsDir },
+    { runsDir, timeoutMs: 25 }
+  );
+  assert.equal(busyRes.state, 'busy', 'lane must remain owned while worker activity is unknown');
+});
+
+test('proven pre-launch failure: job write throws -> lane released, error returned', (t) => {
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-throw-release-'));
+  const prevRunsDir = process.env.AGY_POOL_RUNS_DIR;
+  process.env.AGY_POOL_RUNS_DIR = runsDir;
+  t.after(() => {
+    if (prevRunsDir !== undefined) {
+      process.env.AGY_POOL_RUNS_DIR = prevRunsDir;
+    } else {
+      delete process.env.AGY_POOL_RUNS_DIR;
+    }
+    try {
+      fs.rmSync(runsDir, { recursive: true, force: true });
+    } catch (_) {}
+  });
+
+  const accountId = 'agy05';
+  const accountDir = pool.accountDir(accountId, { runsDir });
+  fs.mkdirSync(accountDir, { recursive: true });
+
+  // Mock writeFileSync to throw specifically when writing job.json
+  const realWriteFileSync = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', (file, content, options) => {
+    if (typeof file === 'string' && file.endsWith('job.json')) {
+      throw new Error('DISK_IO_ERROR: job write failure');
+    }
+    return realWriteFileSync(file, content, options);
+  });
+
+  const res = pool.submitJob(
+    accountId,
+    { command: 'models', cwd: runsDir },
+    { runsDir, timeoutMs: 1000 }
+  );
+
+  // 1. Error returned (not an unhandled throw)
+  assert.equal(res.state, 'error', 'pre-launch failure returns error state');
+  assert.match(
+    res.reason,
+    /PRE_LAUNCH_FAILED|DISK_IO_ERROR/,
+    'pre-launch failure reason is returned'
+  );
+
+  // 2. Lane lock is released: probe lock succeeds
+  const probeLock = laneLauncher.acquireLaneLock(accountDir, {
+    jobId: 'probe-job-after-throw',
+    pid: process.pid,
+  });
+  assert.equal(probeLock.ok, true, 'lane lock must be released after proven pre-launch failure');
+  laneLauncher.releaseLaneLock(accountDir, probeLock.owner);
+});
