@@ -124,7 +124,7 @@ async function cmdRun(flags, deps = {}) {
     appendLine(storeFile, line);
   }
 
-  const { readJson, writeJson } = require('./catalogue-refresh');
+  const { readJson, writeJson, MAX_AGE_MS } = require('./catalogue-refresh');
   // Presence-only CLI harnesses have no catalogue to refresh. Their unknown
   // state must not permanently block successfully refreshed live listings.
   const completeListing = (result) =>
@@ -151,17 +151,42 @@ async function cmdRun(flags, deps = {}) {
   if (complete) {
     fs.writeFileSync(stampFile, String(Date.now()) + '\n', 'utf8');
   }
-  const sources = [...results].map(([id, res]) => ({
-    id,
-    kind: (registry.sources.find((s) => s.id === id) || {}).kind,
-    status: res.status,
-    durationMs: res.durationMs,
-    incomplete: failed.some(([failedId]) => failedId === id),
-    reason:
-      res.reason || (failed.some(([failedId]) => failedId === id) ? 'INCOMPLETE_LISTING' : null),
-    advertised: reconciled.perSourceNarrow[id] ? reconciled.perSourceNarrow[id].advertised : 0,
-    catalogs: (res.catalogs || []).map((c) => ({ upstream: c.upstream, count: c.count })),
-  }));
+  const isRecent = (ts) => Boolean(ts && Date.now() - Date.parse(ts) <= MAX_AGE_MS);
+  const sources = [...results].map(([id, res]) => {
+    const isFailed = failed.some(([failedId]) => failedId === id);
+    const advertised = reconciled.perSourceNarrow[id]
+      ? reconciled.perSourceNarrow[id].advertised
+      : 0;
+    const hasModels =
+      (res.catalogs || []).some((c) => c.count > 0 || (c.models || []).length > 0) ||
+      advertised > 0;
+    const ok = !isFailed && completeListing(res) && hasModels;
+    const prev = (previous.sources || []).find((s) => s.id === id);
+    const lastSuccessfulAt = ok ? now : prev?.lastSuccessfulAt || null;
+    return {
+      id,
+      kind: (registry.sources.find((s) => s.id === id) || {}).kind,
+      status: res.status,
+      durationMs: res.durationMs,
+      incomplete: isFailed,
+      reason: res.reason || (isFailed ? 'INCOMPLETE_LISTING' : null),
+      advertised,
+      catalogs: (res.catalogs || []).map((c) => ({ upstream: c.upstream, count: c.count })),
+      lastAttemptAt: now,
+      lastSuccessfulAt,
+      staleListingRetained: !ok && isRecent(lastSuccessfulAt),
+    };
+  });
+  const seen = new Set([...results].map(([id]) => id));
+  for (const prev of previous.sources || []) {
+    if (!seen.has(prev.id)) {
+      sources.push({
+        ...prev,
+        staleListingRetained: isRecent(prev.lastSuccessfulAt),
+      });
+      seen.add(prev.id);
+    }
+  }
   writeJson(freshnessFile, {
     sources,
     listedSources: listed.length,

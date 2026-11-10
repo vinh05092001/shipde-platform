@@ -829,9 +829,35 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Depends on: Slice 5 (`fix/task-ai-171-core-s5-offline-replay`).
 - Evidence: 7/7 tests in `task-ai-171-core-ticket-input.test.js` pass.
 
+## PR 09 outcome — Escalate from run-linked review evidence (2026-11-09)
+
+Scope: rows B12, B35, B36, B65, B69 and B71 (`tools/ai-brain/outcome-history.js`, a narrow use in `tools/ai-brain/routing.js`, `tools/ai-brain/test/task-ai-171-route-pr09-history.test.js`).
+- B12: `verdictHistory` keys rounds and verdicts by the full route identity (`candidateKey`/`writerCandidateKey`/`chosen`), never the leaf model name, so shared suffixes and same-model/different-account routes never merge; each verdict is attributed only to the route its record names.
+- B35/B36: a failed round is an actual `changes_required`/refused review bound to a reviewed `reviewedSha`, and only then; a missing commit, an unrelated commit between launches, and quota/rate-limit/timeout/sandbox/harness outages are excluded from quality failures.
+- B65: `escalationPlan` escalates only to an untried candidate whose quality is `known` and whose score ties or beats the best tried route under the Controller comparator; the retained route is preferred and never listed as rejected.
+- B69: `lastFailedRoute` and `failedRounds` are Work Item- and run-scoped (`runId`), so a local launch failure on one run is not a provider penalty on every run; when the only candidate has failed the plan is a truthful `BLOCKED`/`ONLY_FAILED_CANDIDATE`, and an empty pool is `NO_ELIGIBLE_CANDIDATE`.
+- B71: `boundedOutcomeSummary` reports structured round/verdict counts only and is clipped to `maxChars`; it states no fictitious "best finisher" claim and asks no question.
+- Wiring: `routing.js` delegates its proof-check `isQualityVerdict` to the shared reader and records a durable `classification` (quality vs outage) with each dispatch outcome, so later readers never re-derive it from free text or commit counts.
+- Evidence: `task-ai-171-route-pr09-history.test.js` passes 11/11 on HEAD; on base `bcafec4d` the file fails at its top-level `require('../outcome-history')` before any test registers. All 55 test files importing `../routing`, run in one `node --test` call, give 808/809 pass; the single failure (`task-ai-147-quota-scan.test.js` "TASK-AI-147 Review R4: production default destination is restored and records outcomes without injected store") reproduces identically on origin/main (`.worktrees/stage-main` at 119fa297). Prettier 3.9.6 and the hardcode guard pass.
+
+## Launch Options Forwarding and Immutable Base Commit Pinning (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand`), `tools/ai-brain/test/task-ai-171-launch-options.test.js`.
+- Outcome: Forwards `tokenBudget`, `outputCeiling`, `workerTimeoutMs`, and `mode` from request/decision/args to adapter and runner; records limit enforcement status in the launch record; pins one resolved 40-hex base commit SHA for adapter and runner, refusing with `BASE_SHA_UNRESOLVED` when unresolvable.
+- Depends on: Slice 6 (`fix/task-ai-171-core-s6-ticket-input`).
+- Evidence: 5/5 tests in `task-ai-171-launch-options.test.js` pass offline.
+
+## Source freshness outcome — per-source lastSuccessfulAt from the producer (2026-11-10)
+
+- Scope: `tools/ai-brain/discovery.js`, `tools/ai-brain/catalogue-refresh.js`, `tools/ai-brain/test/task-ai-171-source-freshness.test.js`.
+- Outcome:
+  - Successful sources stamped: `discovery.js` and `catalogue-refresh.js` stamp `lastSuccessfulAt` (and `lastAttemptAt`) for each source that listed successfully and has models.
+  - Failed, retained or untouched sources keep prior value: prior `lastSuccessfulAt` is preserved across refreshes; never backfilled from the document timestamp.
+  - Reader `sourceFreshness` unchanged: the #567 per-source rule is kept, continuing to require per-source evidence rather than falling back to the document timestamp.
+- Evidence: new test fails 2/3 on base 119fa297, passes on head; 10 related test files 67/68, the one failure task-ai-147 R4 fails identically on main.
+
 ## PR 09 outcome — Quality floor: one effective quality for scoring and admission (2026-11-10)
 
 - Scope: `tools/ai-brain/routing.js` (`resolveEffectiveQuality`, `scoreForProfile`, admission check), `tools/ai-brain/test/task-ai-171-quality-floor.test.js`.
 - Outcome: Resolves candidate effective quality once (blending evidence and external priors) shared by scoring and admission; enforces hard quality floor against effective quality; unknown quality never satisfies a hard floor (`qualityFloor > 0`), rejecting with `QUALITY_FLOOR_NOT_MET`, while floor 0 admits unknown quality.
 - Evidence: Offline suite `tools/ai-brain/test/task-ai-171-quality-floor.test.js` fails 1 pass / 4 fail on base `119fa297` (behaviour assertions fail: low-quality candidate with prior-derived quality 15 admitted/chosen instead of rejected; unknown quality admitted/chosen instead of rejected; low-quality candidate not rejected when competing with high-quality candidate; `resolveEffectiveQuality` missing) and passes 5/5 on HEAD.
-
