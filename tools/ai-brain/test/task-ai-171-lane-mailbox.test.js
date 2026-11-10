@@ -146,3 +146,73 @@ test('idle lane: models submission succeeds without active writer collision', (t
   assert.equal(res.exitCode, 0, 'idle submission succeeds with exitCode 0');
   assert.match(res.stdout, /fixture-model-a/, 'models listing output is returned');
 });
+
+test('submission lifecycle: clean completion releases lane lock, timeout retains it', (t) => {
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-mailbox-lifecycle-'));
+  const prevRunsDir = process.env.AGY_POOL_RUNS_DIR;
+  process.env.AGY_POOL_RUNS_DIR = runsDir;
+  t.after(() => {
+    if (prevRunsDir !== undefined) {
+      process.env.AGY_POOL_RUNS_DIR = prevRunsDir;
+    } else {
+      delete process.env.AGY_POOL_RUNS_DIR;
+    }
+    try {
+      fs.rmSync(runsDir, { recursive: true, force: true });
+    } catch (_) {}
+  });
+
+  const accountId = 'agy03';
+  const accountDir = pool.accountDir(accountId, { runsDir });
+  fs.mkdirSync(accountDir, { recursive: true });
+
+  // 1. Clean completion releases the matching generation of the lane lock
+  t.mock.method(pool, 'runAdapter', (acc, opts) => {
+    const dir = pool.accountDir(acc, opts);
+    const job = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+    fs.writeFileSync(
+      path.join(dir, 'result.json'),
+      JSON.stringify({
+        jobId: job.jobId,
+        exitCode: 0,
+        stdout: 'fixture-completed\n',
+      }),
+      'utf8'
+    );
+    return { exitCode: 0 };
+  });
+
+  const cleanRes = pool.submitJob(
+    accountId,
+    { command: 'models', cwd: runsDir },
+    { runsDir, timeoutMs: 1000 }
+  );
+  assert.equal(cleanRes.exitCode, 0, 'clean completion succeeds');
+
+  // Verify lane lock was released: acquireLaneLock succeeds for next owner
+  const probeLock = laneLauncher.acquireLaneLock(accountDir, {
+    jobId: 'probe-job-1',
+    pid: process.pid,
+  });
+  assert.equal(probeLock.ok, true, 'lane lock is released after clean completion');
+  laneLauncher.releaseLaneLock(accountDir, probeLock.owner);
+
+  // 2. Timeout retains the lane lock to protect running worker
+  t.mock.method(pool, 'runAdapter', () => ({ exitCode: 0 }));
+
+  const timeoutRes = pool.submitJob(
+    accountId,
+    { command: 'models', cwd: runsDir },
+    { runsDir, timeoutMs: 25 }
+  );
+  assert.equal(timeoutRes.state, 'error', 'timeout returns error state');
+  assert.equal(timeoutRes.reason, 'POOL_TIMEOUT', 'timeout reason is POOL_TIMEOUT');
+
+  // Verify lane lock is still held: subsequent submitJob is refused as busy
+  const refusedRes = pool.submitJob(
+    accountId,
+    { command: 'models', cwd: runsDir },
+    { runsDir, timeoutMs: 25 }
+  );
+  assert.equal(refusedRes.state, 'busy', 'lane remains busy while timeout holds ownership');
+});

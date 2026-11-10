@@ -6,6 +6,7 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 const { spawnSync } = require('child_process');
 const { mapFamily, mapWindow, parseNumberValue, parseQuota } = require('./agy-quota');
+const laneLauncher = require('./lane-launcher');
 
 function isValidAccountId(accountId) {
   return typeof accountId === 'string' && /^agy\d{2}$/.test(accountId);
@@ -287,80 +288,129 @@ function submitJob(accountId, job, options) {
   }
 }
 
-function submitLocked(accountId, job, opts, dir) {
-  const resultFile = path.join(dir, 'result.json');
-  const startedAt = Date.now();
-  // Allocate the pool job identity at submission, persist it before execution,
-  // and retain its receipt after the account mailbox is reused by another job.
-  const jobId = accountId + '/' + randomUUID();
-  // The producer bounds each agy call by the same configured pool wait, so a run
-  // never outlives the controller waiting for it.
-  const boundMs = poolTimeoutMs(opts);
-  const printTimeoutSec = Number.isFinite(boundMs) ? Math.max(1, Math.floor(boundMs / 1000)) : null;
-  const submitted = { ...job, accountId, jobId, printTimeoutSec };
-  const receiptDir = path.join(dir, 'jobs');
-  fs.mkdirSync(receiptDir, { recursive: true });
-  const receiptFile = path.join(receiptDir, jobId.split('/')[1] + '.json');
-  const receipt = { jobId, accountId, candidateKey: job.candidateKey || null };
-  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, state: 'submitted' }), 'utf8');
-  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(submitted, null, 2), 'utf8');
-  const finish = (result) => {
-    // Capture listing output before releasing this job's account lock. A
-    // caller must never reread the shared mailbox after another job owns it.
-    const bound = {
-      ...result,
-      jobId,
-      accountId,
-      ...(job.command === 'models' && result?.exitCode === 0
-        ? { stdout: result.stdout ?? exp.readOutText(accountId, opts) }
-        : {}),
-    };
-    fs.writeFileSync(
-      receiptFile,
-      JSON.stringify({
-        ...receipt,
-        state: result?.state || 'error',
-        exitCode: result?.exitCode ?? null,
-      }),
-      'utf8'
-    );
-    return bound;
-  };
-  // A stale result that cannot be removed could be read back as this job's
-  // output; only an already-absent file is safe to ignore.
+function isLaneOccupied(dir) {
+  const jobFile = path.join(dir, 'job.json');
+  if (!fs.existsSync(jobFile)) return false;
   try {
-    fs.unlinkSync(resultFile);
-  } catch (err) {
-    if (!err || err.code !== 'ENOENT') {
-      return finish({
+    const stored = JSON.parse(fs.readFileSync(jobFile, 'utf8'));
+    if (stored && stored.jobId && !laneLauncher.readResult(dir, stored)) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function submitLocked(accountId, job, opts, dir) {
+  const jobId = accountId + '/' + randomUUID();
+  const pid =
+    opts.pid !== undefined ? opts.pid : job && job.pid !== undefined ? job.pid : process.pid;
+
+  // Lock order: job.lock -> <lane>/lock; unwind job.lock immediately on refusal.
+  // Timeout: retain <lane>/lock to protect active worker; return explicit state.
+  // Scheduler throw: pre-adapter failure releases lock; post-spawn failure retains it.
+  // Result mismatch: waitForResult waits for matching jobId; mismatch times out.
+  if (isLaneOccupied(dir)) {
+    return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
+  }
+  const laneLock = laneLauncher.acquireLaneLock(dir, { jobId, pid }, opts);
+  if (!laneLock.ok) {
+    return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
+  }
+  if (isLaneOccupied(dir)) {
+    laneLauncher.releaseLaneLock(dir, laneLock.owner);
+    return { state: 'busy', exitCode: 1, reason: 'POOL_ACCOUNT_BUSY' };
+  }
+
+  let shouldRelease = false;
+  try {
+    const resultFile = path.join(dir, 'result.json');
+    const startedAt = Date.now();
+    // Allocate the pool job identity at submission, persist it before execution,
+    // and retain its receipt after the account mailbox is reused by another job.
+    // The producer bounds each agy call by the same configured pool wait, so a run
+    // never outlives the controller waiting for it.
+    const boundMs = poolTimeoutMs(opts);
+    const printTimeoutSec = Number.isFinite(boundMs)
+      ? Math.max(1, Math.floor(boundMs / 1000))
+      : null;
+    const submitted = { ...job, accountId, jobId, printTimeoutSec };
+    const receiptDir = path.join(dir, 'jobs');
+    fs.mkdirSync(receiptDir, { recursive: true });
+    const receiptFile = path.join(receiptDir, jobId.split('/')[1] + '.json');
+    const receipt = { jobId, accountId, candidateKey: job.candidateKey || null };
+    fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, state: 'submitted' }), 'utf8');
+    fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(submitted, null, 2), 'utf8');
+    const finish = (result) => {
+      // Capture listing output before releasing this job's account lock. A
+      // caller must never reread the shared mailbox after another job owns it.
+      const bound = {
+        ...result,
+        jobId,
+        accountId,
+        ...(job.command === 'models' && result?.exitCode === 0
+          ? { stdout: result.stdout ?? exp.readOutText(accountId, opts) }
+          : {}),
+      };
+      fs.writeFileSync(
+        receiptFile,
+        JSON.stringify({
+          ...receipt,
+          state: result?.state || 'error',
+          exitCode: result?.exitCode ?? null,
+        }),
+        'utf8'
+      );
+      return bound;
+    };
+    // A stale result that cannot be removed could be read back as this job's
+    // output; only an already-absent file is safe to ignore.
+    try {
+      fs.unlinkSync(resultFile);
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') {
+        shouldRelease = true;
+        return finish({
+          state: 'error',
+          exitCode: 1,
+          reason: 'POOL_STALE_RESULT_UNREMOVABLE: ' + String((err && err.code) || err),
+        });
+      }
+    }
+    const launch = exp.runAdapter(accountId, opts);
+    if (launch.exitCode !== 0) {
+      const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
+      const reason =
+        launch.stderr ||
+        launch.stdout ||
+        (isTimeout
+          ? 'ADAPTER_TIMEOUT'
+          : launch.signal
+            ? `ADAPTER_SIGNAL_${launch.signal}`
+            : `ADAPTER_EXIT_${launch.exitCode}`);
+      const errorResult = {
+        jobId,
         state: 'error',
-        exitCode: 1,
-        reason: 'POOL_STALE_RESULT_UNREMOVABLE: ' + String((err && err.code) || err),
-      });
+        exitCode: launch.exitCode,
+        reason,
+      };
+      try {
+        fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
+      } catch {}
+      if (!isTimeout) {
+        shouldRelease = true;
+      }
+      return finish(errorResult);
+    }
+    const finalResult = exp.waitForResult(accountId, startedAt, { ...opts, expectedJobId: jobId });
+    if (finalResult?.reason !== 'POOL_TIMEOUT') {
+      shouldRelease = true;
+    }
+    return finish(finalResult);
+  } finally {
+    if (shouldRelease) {
+      laneLauncher.releaseLaneLock(dir, laneLock.owner);
     }
   }
-  const launch = exp.runAdapter(accountId, opts);
-  if (launch.exitCode !== 0) {
-    const isTimeout = Boolean(launch.stderr && launch.stderr.includes('ADAPTER_TIMEOUT'));
-    const reason =
-      launch.stderr ||
-      launch.stdout ||
-      (isTimeout
-        ? 'ADAPTER_TIMEOUT'
-        : launch.signal
-          ? `ADAPTER_SIGNAL_${launch.signal}`
-          : `ADAPTER_EXIT_${launch.exitCode}`);
-    const errorResult = {
-      state: 'error',
-      exitCode: launch.exitCode,
-      reason,
-    };
-    try {
-      fs.writeFileSync(resultFile, JSON.stringify(errorResult, null, 2), 'utf8');
-    } catch {}
-    return finish(errorResult);
-  }
-  return finish(exp.waitForResult(accountId, startedAt, { ...opts, expectedJobId: jobId }));
 }
 
 const makeQuotaRow = (group, window, pct, rAt, disabled, models) => ({
