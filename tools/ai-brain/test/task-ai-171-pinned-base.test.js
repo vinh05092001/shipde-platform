@@ -265,4 +265,39 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       env.cleanup();
     }
   });
+
+  test('6. Execute with branch task-ai-171-offline-replay and injected discoveryCatalogue without valid base is refused before launcher call', () => {
+    const env = createTargetRepoEnv();
+    try {
+      let launcherCalls = 0;
+      const runner = () => {
+        launcherCalls += 1;
+        return { exitCode: 0, stdout: '' };
+      };
+      const cand = makeCandidate();
+      const deps = env.getDeps({
+        run: runner,
+        harnessAdapter: env.fakeAdapter,
+        discoveryCatalogue: { candidates: [cand] },
+      });
+      const res = dispatchCommand(
+        env.getArgs({ branch: 'task-ai-171-offline-replay' }),
+        deps
+      );
+
+      assert.equal(
+        launcherCalls,
+        0,
+        'zero launcher calls when branch task-ai-171-offline-replay has no real commit in repo'
+      );
+      assert.equal(res.exitCode, 1);
+      const isRefused =
+        res.refusal === 'BASE_SHA_UNRESOLVED' ||
+        res.reason === 'BASE_SHA_UNRESOLVED' ||
+        res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
+      assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED');
+    } finally {
+      env.cleanup();
+    }
+  });
 });
