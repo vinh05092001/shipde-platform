@@ -869,4 +869,3 @@ Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task
 Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools/ai-brain/lane-launcher.js` (export of `activeJobWithoutResult`), `tools/ai-brain/test/task-ai-171-lane-mailbox.test.js`.
 - Outcome: Busy lane refused before any `job.json` write, `result.json` unlink, or adapter call; timeout keeps ownership without synthetic result; proven pre-launch failure releases the matching owner; single lock order `job.lock` -> lane generation lock.
 - Evidence: Busy case fails on base `1296a736`, passes on head; with `r3-lane-ownership` and `task-ai-69` 20/0; independent review found no race by source reading, no multi-process stress run.
-
