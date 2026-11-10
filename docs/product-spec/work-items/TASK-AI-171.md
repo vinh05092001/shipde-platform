@@ -828,3 +828,12 @@ Evidence: `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` passes 13/13 a
 - Outcome: Parses work item ticket markdown files for dispatch planning without hardcoded risk lists; populates profile forbidden failure domains, risk domains, and allowed files; attaches `itemSource` and assessment to decision receipts.
 - Depends on: Slice 5 (`fix/task-ai-171-core-s5-offline-replay`).
 - Evidence: 7/7 tests in `task-ai-171-core-ticket-input.test.js` pass.
+
+## PR 09 outcome — Lane ownership acquisition before agy-pool worker execution (2026-11-10)
+
+Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task-ai-171-r3-lane-ownership.test.js`.
+- AC B39 / BR lane ownership: `agyPool.launch` routes job publication through existing `lane-launcher.launch(accountDir, payload, opts)`. The existing lane lock and active-job occupancy recheck ensure atomicity before any scheduler call or worker run.
+- When a lane is busy or held, `agyPool.launch` returns a structured refusal (`LANE_BUSY`) without overwriting `job.json`, and `cli.js` (`dispatchCommand` `--execute`) records the launch failure without invoking the worker runner.
+- Evidence: `task-ai-171-r3-lane-ownership.test.js` fails on base `119fa297` (0/1 pass, 2 runner calls) and passes on HEAD (1/1 pass, exactly one launcher call, second refused lane-busy, shared `job.json` not overwritten).
+- Regression verification: `task-ai-171-int1-execute.test.js` (5/5), `task-ai-69.test.js` (14/14), `lane-launcher.test.js` (24/24), `task-ai-126.test.js` (11/11).
+
