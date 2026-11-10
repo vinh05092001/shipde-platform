@@ -1062,7 +1062,14 @@ function pushOpencodeProviderWriters(out, source, o, bound) {
       }
     }
   }
-  if (Array.isArray(opts.catalogue)) {
+  const sourceHarness =
+    source.harness ||
+    (reg &&
+      reg.dispatch &&
+      reg.dispatch.providers &&
+      reg.dispatch.providers[String(source.id).toLowerCase()] &&
+      reg.dispatch.providers[String(source.id).toLowerCase()].harness);
+  if (Array.isArray(opts.catalogue) && sourceHarness !== 'direct-http') {
     const prefix = key + '/';
     const altPrefix = source.id + '/';
     for (const item of opts.catalogue) {
@@ -1322,6 +1329,94 @@ function generateCandidates(opts) {
   } finally {
     ambientModelCatalog = previous;
   }
+}
+
+function isSourceInGenerationInput(source, o, registry) {
+  if (!source) return false;
+  const isGlobalRegistry = Boolean(registry && registry.file);
+  if (!isGlobalRegistry) {
+    return true;
+  }
+  const sourceId = source.id;
+  if (!sourceId) return false;
+
+  if (o.source === sourceId || o.sourceId === sourceId) return true;
+  if (Array.isArray(o.sources)) {
+    if (o.sources.some((s) => (typeof s === 'string' ? s === sourceId : s && s.id === sourceId))) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(o.accounts)) {
+    if (
+      o.accounts.some(
+        (a) =>
+          a &&
+          (a.source === sourceId ||
+            a.gateway === sourceId ||
+            a.provider === sourceId ||
+            a.sourceId === sourceId)
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (o.sourceModels && typeof o.sourceModels === 'object') {
+    if (
+      o.sourceModels[sourceId] ||
+      (source.opencodeProvider && o.sourceModels[source.opencodeProvider])
+    ) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(o.catalogue)) {
+    const dRoute = sourcesApi.dispatchRoute(sourceId, registry);
+    const prefix = (dRoute && dRoute.modelPrefix) || `${sourceId}/`;
+    const inCatalogue = o.catalogue.some((item) => {
+      if (!item) return false;
+      if (typeof item === 'string') {
+        return prefix && item.trim().startsWith(prefix);
+      }
+      const itemSource =
+        item.source ||
+        item.gateway ||
+        item.sourceId ||
+        item.upstream ||
+        (Array.isArray(item.sourceIds) ? item.sourceIds[0] : null);
+      const mId = String(item.modelId || item.model || item.id || '').trim();
+      return (
+        itemSource === sourceId ||
+        (prefix && mId.startsWith(prefix)) ||
+        (Array.isArray(item.sourceIds) && item.sourceIds.includes(sourceId))
+      );
+    });
+    if (inCatalogue) return true;
+  }
+
+  if (
+    o.env &&
+    source.credential?.env &&
+    o.env[source.credential.env] !== undefined &&
+    String(o.env[source.credential.env]).trim().length > 0
+  ) {
+    return true;
+  }
+
+  const hasExplicitFixtures =
+    Array.isArray(o.catalogue) ||
+    Array.isArray(o.accounts) ||
+    Array.isArray(o.sources) ||
+    Boolean(o.sourceModels);
+  if (!hasExplicitFixtures) {
+    const envName = source.credential?.env;
+    if (envName && process.env[envName] && String(process.env[envName]).trim().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function generateCandidatesWithCatalog(opts) {
@@ -1776,7 +1871,11 @@ function generateCandidatesWithCatalog(opts) {
               models = liveAgyAccountModels(acc, source, Array.from(sourceCatalogueModels), o);
             }
 
-            if (models.length === 0 && Array.isArray(o.candidateGenerationRejections)) {
+            if (
+              models.length === 0 &&
+              Array.isArray(o.candidateGenerationRejections) &&
+              isSourceInGenerationInput(source, o, registry)
+            ) {
               o.candidateGenerationRejections.push({
                 modelId: '',
                 sourceId: source.id,
@@ -1846,9 +1945,7 @@ function generateCandidatesWithCatalog(opts) {
             }
           }
         }
-        if (harness !== 'direct-http') {
-          pushOpencodeProviderWriters(candidates, source, o, bound);
-        }
+        pushOpencodeProviderWriters(candidates, source, o, bound);
       }
     }
 
@@ -2360,7 +2457,12 @@ function poolAccountCandidates(opts) {
   const runtimeDir = pool.runsDir(o);
   let hasRunsDir = false;
   try {
-    hasRunsDir = Boolean(shouldDiscoverPool && runtimeDir && fs.existsSync(runtimeDir));
+    hasRunsDir = Boolean(
+      shouldDiscoverPool &&
+      runtimeDir &&
+      fs.existsSync(runtimeDir) &&
+      (!o.spawnSync || o.fakeRunsDir || o.runsDir)
+    );
   } catch {}
 
   if (shouldDiscoverPool) {
