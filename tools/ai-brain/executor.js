@@ -381,6 +381,16 @@ function executePlan(plan, options) {
     }
   }
 
+  // TASK-AI-171: the validated runner options are built ONCE and used for
+  // EVERY runner call (probe, resume, launch).
+  const runnerOpts = executeTarget
+    ? Object.assign({}, opts, {
+        cwd: executeTarget.cwd,
+        baseSha: executeTarget.baseSha,
+        base: executeTarget.baseSha,
+      })
+    : opts;
+
   const now = opts.now || Date.now();
   const registry = opts.registry || loadSources();
   const logOpts = { dir: opts.decisionDir, now };
@@ -523,7 +533,7 @@ function executePlan(plan, options) {
       const probe = adapter.inspect(existing.sessionId);
       let probeRes;
       try {
-        probeRes = run(adapter, probe.slice(), opts);
+        probeRes = run(adapter, probe.slice(), runnerOpts);
       } catch (err) {
         probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
       }
@@ -639,13 +649,6 @@ function executePlan(plan, options) {
     );
 
     // AI-24-R02 / R06: one call, fail closed, no retry.
-    const runnerOpts = executeTarget
-      ? Object.assign({}, opts, {
-          cwd: executeTarget.cwd,
-          baseSha: executeTarget.baseSha,
-          base: executeTarget.baseSha,
-        })
-      : opts;
     let res;
     try {
       res = run(adapter, record.args.slice(), runnerOpts);

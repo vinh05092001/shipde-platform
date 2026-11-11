@@ -544,4 +544,70 @@ describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', ()
     assert.deepEqual(calls, []);
     assert.equal(run.calls.length, 0);
   });
+
+  test('P1-2: existing Paseo writer probe and resume both receive validated cwd, base and baseSha despite conflicting raw opts', () => {
+    const decisions = require('../decisions');
+    const run = okRun();
+    const targetDir = tmpDir('ai171-et-val-target-');
+    const rawDir = tmpDir('ai171-et-raw-cwd-');
+    const decDir = tmpDir('ai171-et-resume-dec-');
+    try {
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.LAUNCHED,
+          workItemId: 'TASK-AI-99',
+          sessionId: 'sess-paseo-1',
+          branch: 'feat/task-ai-99-x',
+          harness: 'paseo',
+        },
+        { dir: decDir }
+      );
+      const target = resolveExecuteTarget(
+        { execute: true, cwd: targetDir, 'base-sha': VALID_40_HEX },
+        { gitRoot: () => targetDir, commitExists: () => true }
+      );
+      assert.equal(target.ok, true);
+      const paseoPlan = {
+        assignments: [
+          {
+            workItemId: 'TASK-AI-99',
+            role: 'author.foundation',
+            branch: 'feat/task-ai-99-x',
+            accountId: 'ninerouter',
+            harness: 'paseo',
+            provider: 'oc',
+            model: 'kr/claude-sonnet-4.5-agentic',
+            alternatives: [],
+          },
+        ],
+        utilisation: { maxImplementation: 2 },
+      };
+      const res = executePlan(paseoPlan, {
+        registry,
+        run,
+        dryRun: false,
+        cwd: rawDir,
+        baseSha: '1111111111111111111111111111111111111111',
+        base: 'raw-branch-conflict',
+        executeTarget: target,
+        decisionDir: decDir,
+      });
+      assert.equal(res.summary.resumed, 1);
+      assert.equal(run.calls.length, 2);
+      // Probe call (inspect)
+      assert.equal(run.calls[0][0], 'inspect');
+      assert.equal(run.calls[0].options.cwd, targetDir);
+      assert.equal(run.calls[0].options.baseSha, VALID_40_HEX);
+      assert.equal(run.calls[0].options.base, VALID_40_HEX);
+      // Resume call (send)
+      assert.equal(run.calls[1][0], 'send');
+      assert.equal(run.calls[1].options.cwd, targetDir);
+      assert.equal(run.calls[1].options.baseSha, VALID_40_HEX);
+      assert.equal(run.calls[1].options.base, VALID_40_HEX);
+    } finally {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+      fs.rmSync(rawDir, { recursive: true, force: true });
+      fs.rmSync(decDir, { recursive: true, force: true });
+    }
+  });
 });
