@@ -228,3 +228,139 @@ describe('pinned offering through dispatch --execute --offering', () => {
     }
   });
 });
+
+// ── Findings 3-4: one path rule and an honest launch outcome ───────────
+const { routeLaunchStep } = require('../route-launch');
+
+function launchEnv() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lf-rl-'));
+  const wt = path.join(dir, 'wt');
+  fs.mkdirSync(path.join(wt, '.oc'), { recursive: true });
+  fs.writeFileSync(path.join(wt, '.oc', 'task.md'), 'task\n');
+  const spawns = [];
+  const spawn = (cmd, args, opts) => {
+    const listeners = {};
+    const child = {
+      pid: 1,
+      unref: () => {},
+      on: (ev, fn) => ((listeners[ev] = fn), child),
+      emit: (ev, ...d) => listeners[ev] && listeners[ev](...d),
+    };
+    spawns.push({ args, opts, child });
+    return child;
+  };
+  const sha = '1111222233334444555566667777888899990000';
+  const deps = {
+    spawn,
+    fs,
+    mainTree: dir,
+    logsDir: path.join(dir, 'logs'),
+    repoSha: sha,
+    execFileSync: () => sha,
+    error: () => {},
+  };
+  const decision = { chosen: 'hermes::cli::9router::up::acc::acc::m-x' };
+  return {
+    dir,
+    wt,
+    spawns,
+    deps,
+    decision,
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+describe('route launch path rule (finding 3)', () => {
+  test('relative cwd and task resolve once against the invocation directory', () => {
+    const e = launchEnv();
+    try {
+      routeLaunchStep(
+        e.decision,
+        { item: 'T', cwd: 'wt', task: 'wt/.oc/task.md', invocationCwd: e.dir },
+        e.deps
+      );
+      const args = e.spawns[0].args;
+      assert.equal(args[args.indexOf('--cwd') + 1], e.wt);
+      assert.equal(args[args.indexOf('--prompt-file') + 1], path.join(e.wt, '.oc', 'task.md'));
+    } finally {
+      e.cleanup();
+    }
+  });
+
+  test('a path that does not exist is refused before any spawn', () => {
+    const e = launchEnv();
+    try {
+      const res = routeLaunchStep(
+        e.decision,
+        { item: 'T', cwd: 'no-such-dir', task: 'x.md', invocationCwd: e.dir },
+        e.deps
+      );
+      assert.equal(res.launched, false);
+      assert.equal(res.reason, 'TARGET_PATH_INVALID');
+      assert.equal(res.exitCode, 1);
+      assert.equal(e.spawns.length, 0);
+    } finally {
+      e.cleanup();
+    }
+  });
+});
+
+describe('route launch outcome (finding 4)', () => {
+  const start = (e) =>
+    routeLaunchStep(
+      e.decision,
+      { item: 'T', cwd: e.wt, task: path.join(e.wt, '.oc', 'task.md') },
+      e.deps
+    );
+
+  test('a dispatch refusal is reported as refused, never launched', async () => {
+    const e = launchEnv();
+    try {
+      const res = start(e);
+      assert.equal(res.launched, false);
+      assert.equal(res.status, 'subprocess_started');
+      fs.writeFileSync(
+        res.launchRecord.log,
+        'Dispatch refused: TARGET_WORKTREE_UNRESOLVED (target worktree x not a git repository)\n'
+      );
+      e.spawns[0].child.emit('exit', 1);
+      const out = await res.completion;
+      assert.equal(out.launched, false);
+      assert.equal(out.status, 'refused');
+      assert.equal(out.reason, 'TARGET_WORKTREE_UNRESOLVED');
+      assert.equal(out.exitCode, 1);
+    } finally {
+      e.cleanup();
+    }
+  });
+
+  test('exit 0 without a launch receipt is an unknown state, not success', async () => {
+    const e = launchEnv();
+    try {
+      const res = start(e);
+      fs.writeFileSync(res.launchRecord.log, '{"chosen":"k"}\n');
+      e.spawns[0].child.emit('exit', 0);
+      const out = await res.completion;
+      assert.equal(out.launched, false);
+      assert.equal(out.status, 'launch_state_unknown');
+    } finally {
+      e.cleanup();
+    }
+  });
+
+  test('a custom launcher that reports a refusal is not counted as launched', () => {
+    const e = launchEnv();
+    try {
+      const res = routeLaunchStep(
+        e.decision,
+        { item: 'T', cwd: e.wt, task: path.join(e.wt, '.oc', 'task.md') },
+        { ...e.deps, launcher: () => ({ launched: false, exitCode: 1, reason: 'REFUSED_X' }) }
+      );
+      assert.equal(res.launched, false);
+      assert.equal(res.status, 'refused');
+      assert.equal(res.reason, 'REFUSED_X');
+    } finally {
+      e.cleanup();
+    }
+  });
+});

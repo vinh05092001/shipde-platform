@@ -924,3 +924,13 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - r3-lane-ownership, pinned-base and execute-target tests now pass their own temp discovery catalogue/freshness and scoring data through existing seams instead of reading the tree's live data (ignored runtime aa-intelligence.json activated the scoring policy and returned SCORING_INPUTS_UNVERIFIED; dirty catalogue blocked the lane contention path).
 - Assertions unchanged; verified 33/0 with and without the runtime AA snapshot present.
 - No production change.
+
+## Launch fidelity: launch exactly the chosen offering, or refuse (2026-11-11)
+
+- Scope: `tools/ai-brain/ranking.js` (`rankAndRecord`: the selection gate lives here, so a pin must pass through it), `tools/ai-brain/cli.js` (execute forwards `--offering`), `tools/ai-brain/route-launch.js` (`routeLaunchStep`, `outcomeFromDispatch`), tests `task-ai-171-launch-fidelity.test.js`, plus contract updates in `task-ai-171-route-launch.test.js` and `task-ai-171-int1-execute.test.js`.
+- Live evidence (2026-11-11 07:22Z): the route wrapper chose `gemini-4-argon`, but `dispatch --execute` re-ranked and picked `grok-4.7`, was refused `TARGET_WORKTREE_UNRESOLVED` (relative `--cwd` resolved under the dispatch tree), and the wrapper still exited 0 with no launch status.
+- Pinned offering: `--offering <key>` is honoured through the same filter, score and exploration gates. Only that key may win. A pin that fails a gate is refused `OFFERING_NOT_ELIGIBLE: <gate reason>`, and an absent pin `OFFERING_NOT_FOUND`. A pinned route that fails is never replaced on retry. Unpinned selection is unchanged.
+- One path rule: `cwd` and `task` resolve once against the caller's working directory (`options.invocationCwd`, default `process.cwd()`); absolute inputs are kept; a missing path is refused `TARGET_PATH_INVALID` before any spawn.
+- Honest outcome: starting the dispatch subprocess is `status: 'subprocess_started'`, `launched: false`. Completion is decided on the dispatch exit. Exit 0 with outcome `completed` gives `worker_launched` (+ `sessionId`). A `Dispatch refused: CODE` line or a nonzero exit gives `refused` with that reason and `exitCode: 1`. Anything else gives `launch_state_unknown`. A custom launcher that reports `launched: false` or a nonzero `exitCode` is a refusal.
+- Callers: `routeLaunchStep` callers must await `completion` for the launch result. The out-of-repo route wrappers need their own update (absolute paths, `discoveryDir` forwarding, await completion).
+- Evidence: the new tests fail on `ecf642b9` (pinned 6/7, path/outcome 5/5) and pass after the change.

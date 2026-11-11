@@ -348,7 +348,8 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     );
 
     assert.equal(spawnCalls.length, 1, 'exactly one spawn on chosen candidate');
-    assert.equal(chosenRes.launched, true);
+    assert.equal(chosenRes.launched, false, 'a started subprocess is not yet a launch');
+    assert.equal(chosenRes.status, 'subprocess_started');
     assert.equal(chosenRes.spawns, 1);
     assert.equal(chosenRes.choice, candidateA.candidateKey);
 
