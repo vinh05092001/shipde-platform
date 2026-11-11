@@ -364,3 +364,29 @@ describe('route launch outcome (finding 4)', () => {
     }
   });
 });
+
+describe('route launch reads the result after close (review P1)', () => {
+  test('exit before the receipt is flushed does not decide the outcome; close does', async () => {
+    const e = launchEnv();
+    try {
+      const res = routeLaunchStep(
+        e.decision,
+        { item: 'T', cwd: e.wt, task: path.join(e.wt, '.oc', 'task.md') },
+        e.deps
+      );
+      fs.writeFileSync(res.launchRecord.log, '');
+      e.spawns[0].child.emit('exit', 0);
+      fs.writeFileSync(
+        res.launchRecord.log,
+        JSON.stringify({ outcome: { status: 'completed', sessionId: 'late-1' } }) + '\n'
+      );
+      e.spawns[0].child.emit('close', 0);
+      const out = await res.completion;
+      assert.equal(out.launched, true);
+      assert.equal(out.status, 'worker_launched');
+      assert.equal(out.sessionId, 'late-1');
+    } finally {
+      e.cleanup();
+    }
+  });
+});
