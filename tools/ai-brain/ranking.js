@@ -701,8 +701,13 @@ function rankAndRecord(candidates, context) {
   // Unproven capability (qualifiedRoles absent) only gets selected inside an
   // explicit budget. Each prior unproven selection (priorUntested) counts
   // against it. Proving is the escape hatch, not the default.
+  // A pinned offering (dispatch --offering) runs through the same gates and is
+  // the only candidate that may win: never a different key.
+  const pinned =
+    typeof ctx.pinnedOffering === 'string' && ctx.pinnedOffering ? ctx.pinnedOffering : null;
   let winner = null;
   for (const cand of eligible) {
+    if (pinned && sevenWayKey(cand) !== pinned) continue;
     if (ctx.assessment?.scoringPolicy && !Number.isFinite(cand.score)) continue;
     const proven =
       Array.isArray(cand.qualifiedRoles) &&
@@ -726,23 +731,34 @@ function rankAndRecord(candidates, context) {
   }
 
   const chosen = winner ? sevenWayKey(winner) : null;
-  const reason = winner
-    ? winner.scoreBreakdown.policy
-      ? 'Score ' + winner.score + ' (policy ' + winner.scoreBreakdown.policy.version + ')'
-      : 'Score ' +
-        winner.score +
-        ' (evidence=' +
-        winner.scoreBreakdown.evidence +
-        ', capability=' +
-        winner.scoreBreakdown.capability +
-        ', headroom=' +
-        winner.scoreBreakdown.headroom +
-        ', spread=' +
-        winner.scoreBreakdown.spread +
-        ', cost=' +
-        winner.scoreBreakdown.cost +
-        ')'
-    : 'REFUSED: no candidate qualifies';
+  let pinnedRefusal = null;
+  if (pinned && !winner) {
+    const rej = rejected.filter((r) => r.offeringId === pinned).pop();
+    pinnedRefusal = rej
+      ? 'OFFERING_NOT_ELIGIBLE: ' + rej.reason
+      : eligible.some((c) => sevenWayKey(c) === pinned)
+        ? 'OFFERING_NOT_ELIGIBLE: SCORING_INPUTS_UNVERIFIED'
+        : 'OFFERING_NOT_FOUND';
+  }
+  const reason = pinnedRefusal
+    ? 'REFUSED: ' + pinnedRefusal
+    : winner
+      ? winner.scoreBreakdown.policy
+        ? 'Score ' + winner.score + ' (policy ' + winner.scoreBreakdown.policy.version + ')'
+        : 'Score ' +
+          winner.score +
+          ' (evidence=' +
+          winner.scoreBreakdown.evidence +
+          ', capability=' +
+          winner.scoreBreakdown.capability +
+          ', headroom=' +
+          winner.scoreBreakdown.headroom +
+          ', spread=' +
+          winner.scoreBreakdown.spread +
+          ', cost=' +
+          winner.scoreBreakdown.cost +
+          ')'
+      : 'REFUSED: no candidate qualifies';
 
   const decisionEntry = {
     ...(ctx.assessment?.scoringPolicyStatus
@@ -754,6 +770,8 @@ function rankAndRecord(candidates, context) {
     eligible.every((c) => !Number.isFinite(c.score))
       ? { reasonCode: 'SCORING_INPUTS_UNVERIFIED' }
       : {}),
+    ...(pinned ? { pinnedOffering: pinned } : {}),
+    ...(pinnedRefusal ? { reasonCode: pinnedRefusal.split(':')[0] } : {}),
     stage: decisions.Stage.SELECTED,
     workItemId,
     role,
