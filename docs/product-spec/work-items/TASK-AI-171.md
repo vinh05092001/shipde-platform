@@ -912,3 +912,9 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Mode: only an effecting execution resolves a target (E1/E2 `execute === true`; E3 `dryRun === false`, even when `execute` is omitted). A pure dry run makes no git call.
 - E3 boundary: `executePlan` never executes without a validated target. A supplied `opts.executeTarget` must have been created by `resolveExecuteTarget` (module-private `WeakSet`); a forged `{ok:true}` object is refused with `EXECUTE_TARGET_FORGED`. A direct caller that supplies no target gets one resolved inside `executePlan`; `opts.base || 'main'` is no longer used for execution (dry-run preview vectors are unchanged).
 - `resolveExecuteBase` in `cli.js` is a thin delegate to `resolveExecuteTarget` (no duplicated logic), kept because existing pinned-base assertions call it.
+
+## Route launch worker timeout forwarding (2026-11-11)
+
+- Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-route-launch.test.js`.
+- Outcome: routeLaunchStep forwards a validated timeoutMs as --timeout-ms (approved activation case 2 uses 600000). When `options.timeoutMs` (or fallback `options.workerTimeoutMs`) is a positive finite integer, `--timeout-ms <value>` is appended to `dispatchArgs`; when absent, argv is preserved without `--timeout-ms`; when present but invalid (0, -1, 1.5, 'abc', NaN) execution is refused before spawning with reason `TIMEOUT_INVALID`, exitCode 1, spawns 0.
+- Evidence: `tools/ai-brain/test/task-ai-171-route-launch.test.js` Case 11 verifies timeout forwarding, absence preservation, invalid refusal, and CLI receipt via `parseArgs` resolving `workerTimeoutMs` to 600000.

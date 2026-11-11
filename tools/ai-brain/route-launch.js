@@ -129,6 +129,40 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
     kind: parsedIdentity.harness || chosenCandidate.kind,
   };
 
+  const rawTimeout =
+    options.timeoutMs !== undefined
+      ? options.timeoutMs
+      : options.workerTimeoutMs !== undefined
+        ? options.workerTimeoutMs
+        : undefined;
+
+  let validatedTimeoutMs = null;
+  if (rawTimeout !== undefined) {
+    if (typeof rawTimeout === 'number') {
+      if (Number.isFinite(rawTimeout) && Number.isInteger(rawTimeout) && rawTimeout > 0) {
+        validatedTimeoutMs = rawTimeout;
+      }
+    } else if (typeof rawTimeout === 'string' && /^\s*\d+\s*$/.test(rawTimeout)) {
+      const parsed = Number(rawTimeout);
+      if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed > 0) {
+        validatedTimeoutMs = parsed;
+      }
+    }
+    if (validatedTimeoutMs === null) {
+      const detail = `Invalid worker timeout: ${rawTimeout}`;
+      logErr(`TIMEOUT_INVALID ${item}: ${detail}`);
+      return withCompletion({
+        launched: false,
+        choice: chosenKey,
+        reason: 'TIMEOUT_INVALID',
+        detail,
+        exitCode: 1,
+        spawns: 0,
+        provenance,
+      });
+    }
+  }
+
   const tag = options.tag || chosenCandidate.tag || `${item}-${Date.now()}`;
   const log = path.join(logsDir, `route-${tag}.log`);
   const disc = options.discoveryDir || path.join(mainTree, 'tools/ai-brain/data/discovery');
@@ -148,6 +182,9 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
     '--offering',
     chosenKey,
   ];
+  if (validatedTimeoutMs !== null) {
+    dispatchArgs.push('--timeout-ms', String(validatedTimeoutMs));
+  }
   if (process.env.ROUTE_SCAN_FILE) dispatchArgs.push('--scan-file', process.env.ROUTE_SCAN_FILE);
   if (fsApi.existsSync && fsApi.existsSync(disc)) dispatchArgs.push('--discovery-dir', disc);
 
