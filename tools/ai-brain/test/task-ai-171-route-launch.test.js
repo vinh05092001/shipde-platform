@@ -329,7 +329,7 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       asyncSuccessRes.launchRecord.log,
       JSON.stringify({ chosen: 'k', outcome: { status: 'completed', sessionId: 'sess-1' } }) + '\n'
     );
-    successSpawnCall.child.emit('exit', 0);
+    successSpawnCall.child.emit('close', 0);
     const successOutcome = await asyncSuccessRes.completion;
     assert.equal(successOutcome.launched, true);
     assert.equal(successOutcome.status, 'worker_launched');

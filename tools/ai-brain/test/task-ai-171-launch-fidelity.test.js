@@ -323,7 +323,7 @@ describe('route launch outcome (finding 4)', () => {
         res.launchRecord.log,
         'Dispatch refused: TARGET_WORKTREE_UNRESOLVED (target worktree x not a git repository)\n'
       );
-      e.spawns[0].child.emit('exit', 1);
+      e.spawns[0].child.emit('close', 1);
       const out = await res.completion;
       assert.equal(out.launched, false);
       assert.equal(out.status, 'refused');
@@ -339,7 +339,7 @@ describe('route launch outcome (finding 4)', () => {
     try {
       const res = start(e);
       fs.writeFileSync(res.launchRecord.log, '{"chosen":"k"}\n');
-      e.spawns[0].child.emit('exit', 0);
+      e.spawns[0].child.emit('close', 0);
       const out = await res.completion;
       assert.equal(out.launched, false);
       assert.equal(out.status, 'launch_state_unknown');

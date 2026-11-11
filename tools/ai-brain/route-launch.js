@@ -439,7 +439,7 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
     if (child && typeof child.unref === 'function') child.unref();
 
     if (child && typeof child.on === 'function') {
-      child.on('exit', (code) => {
+      child.on('close', (code) => {
         let text = '';
         try {
           if (typeof fsApi.readFileSync === 'function')
