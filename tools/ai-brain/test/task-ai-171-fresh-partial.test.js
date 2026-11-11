@@ -144,6 +144,7 @@ test('(5) refresh publication retains prior sources missing from new list (survi
     priorsFile: path.join(dir, 'priors.json'),
     run,
     log: () => {},
+    now: NOW,
   });
   const pub = JSON.parse(fs.readFileSync(fFile, 'utf8'));
   const retained = pub.sources.find((s) => s.id === 'prior-gw');
