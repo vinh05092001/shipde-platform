@@ -925,6 +925,10 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Assertions unchanged; verified 33/0 with and without the runtime AA snapshot present.
 - No production change.
 
+## Test clock: fresh-partial publication test (2026-11-12)
+
+- `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` case (5) fixed `NOW` at 2026-11-09T16:00Z, but called `refreshCatalogue` without `now`, so the publication's 48 h retention window used the real clock. The test started failing at 2026-11-11T16:00Z on every branch (CI ai-brain-tests on #588/#589). It now passes `now: NOW`. Test-only; no production change.
+
 ## AA snapshot refresh fails on an incomplete model-page fetch (2026-11-11)
 
 - Scope: `tools/ai-brain/aa-snapshot.js` (`deepRecords`), new `tools/ai-brain/test/task-ai-171-aa-snapshot-complete.test.js`.
