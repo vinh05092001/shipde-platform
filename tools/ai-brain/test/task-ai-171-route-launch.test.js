@@ -417,8 +417,15 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       'argv is identical except for the --timeout-ms pair'
     );
 
-    // (3) invalid values (0, -1, 1.5, 'abc', NaN) -> TIMEOUT_INVALID, 0 spawns
+    // (3) invalid values (0, -1, 1.5, 'abc', NaN) -> TIMEOUT_INVALID, 0 spawns, 0 execFileSync
     const invalidValues = [0, -1, 1.5, 'abc', NaN];
+    const failingGitDeps = {
+      ...env.stepDeps,
+      execFileSync: () => {
+        throw new Error('git rev-parse HEAD failed');
+      },
+    };
+
     for (const badVal of invalidValues) {
       env.childCalls.length = 0;
       const resBad = env.step(chosenDecision, `TASK-AI-171-BAD-${badVal}`, env.stepDeps, {
@@ -429,6 +436,29 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       assert.equal(resBad.exitCode, 1);
       assert.equal(resBad.spawns, 0);
       assert.equal(env.spawns().length, 0, `zero spawns on invalid timeout: ${badVal}`);
+      assert.equal(env.execs().length, 0, `zero execFileSync on invalid timeout: ${badVal}`);
+      assert.equal(env.childCalls.length, 0, `zero child calls on invalid timeout: ${badVal}`);
+
+      // Even when deps.repoSha is NOT provided and git would fail
+      env.childCalls.length = 0;
+      let failingGitCalled = false;
+      const gitThrowDeps = {
+        ...env.stepDeps,
+        execFileSync: (...args) => {
+          failingGitCalled = true;
+          return failingGitDeps.execFileSync(...args);
+        },
+      };
+      const resBadGit = env.step(chosenDecision, `TASK-AI-171-BAD-GIT-${badVal}`, gitThrowDeps, {
+        timeoutMs: badVal,
+      });
+      assert.equal(resBadGit.launched, false, `refuses on invalid timeout with failing git: ${badVal}`);
+      assert.equal(resBadGit.reason, 'TIMEOUT_INVALID');
+      assert.equal(resBadGit.exitCode, 1);
+      assert.equal(resBadGit.spawns, 0);
+      assert.equal(failingGitCalled, false, `git not called on invalid timeout: ${badVal}`);
+      assert.equal(env.spawns().length, 0);
+      assert.equal(env.execs().length, 0);
 
       // Also verify via workerTimeoutMs
       env.childCalls.length = 0;
@@ -445,6 +475,42 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       assert.equal(resBadWorker.exitCode, 1);
       assert.equal(resBadWorker.spawns, 0);
       assert.equal(env.spawns().length, 0, `zero spawns on invalid workerTimeoutMs: ${badVal}`);
+      assert.equal(env.execs().length, 0, `zero execFileSync on invalid workerTimeoutMs: ${badVal}`);
+      assert.equal(env.childCalls.length, 0, `zero child calls on invalid workerTimeoutMs: ${badVal}`);
+
+      // workerTimeoutMs with failing git
+      env.childCalls.length = 0;
+      let failingGitWorkerCalled = false;
+      const gitThrowWorkerDeps = {
+        ...env.stepDeps,
+        execFileSync: (...args) => {
+          failingGitWorkerCalled = true;
+          return failingGitDeps.execFileSync(...args);
+        },
+      };
+      const resBadWorkerGit = env.step(
+        chosenDecision,
+        `TASK-AI-171-BAD-WORKER-GIT-${badVal}`,
+        gitThrowWorkerDeps,
+        {
+          workerTimeoutMs: badVal,
+        }
+      );
+      assert.equal(
+        resBadWorkerGit.launched,
+        false,
+        `refuses on invalid workerTimeoutMs with failing git: ${badVal}`
+      );
+      assert.equal(resBadWorkerGit.reason, 'TIMEOUT_INVALID');
+      assert.equal(resBadWorkerGit.exitCode, 1);
+      assert.equal(resBadWorkerGit.spawns, 0);
+      assert.equal(
+        failingGitWorkerCalled,
+        false,
+        `git not called on invalid workerTimeoutMs: ${badVal}`
+      );
+      assert.equal(env.spawns().length, 0);
+      assert.equal(env.execs().length, 0);
     }
 
     // (4) CLI receipt: parse the produced argv with the same arg parser cli.js uses

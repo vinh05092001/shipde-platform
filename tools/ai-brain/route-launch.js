@@ -100,35 +100,6 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
     });
   }
 
-  const provenance = getTreeProvenance(mainTree, deps);
-  if (!provenance || !provenance.repoSha) {
-    const detail = 'Missing or unavailable git commit SHA';
-    logErr(`PROVENANCE_UNAVAILABLE ${item}: ${detail}`);
-    return withCompletion({
-      launched: false,
-      choice: chosenKey,
-      reason: 'PROVENANCE_UNAVAILABLE',
-      detail,
-      exitCode: 1,
-      spawns: 0,
-      provenance: provenance || { repoSha: null, treePath: path.resolve(mainTree) },
-    });
-  }
-
-  const chosenCandidate = (decision.candidates || []).find(
-    (c) => (c.offeringId || c.candidateKey) === chosenKey
-  ) ||
-    (decision.ranking || []).find((r) => r.candidateKey === chosenKey) || { key: chosenKey };
-  const parsedIdentity = parseCandidateKey(chosenKey) || {};
-  const payload = {
-    ...chosenCandidate,
-    key: chosenKey,
-    role,
-    identity: parsedIdentity,
-    model: parsedIdentity.modelId || chosenCandidate.model,
-    kind: parsedIdentity.harness || chosenCandidate.kind,
-  };
-
   const rawTimeout =
     options.timeoutMs !== undefined
       ? options.timeoutMs
@@ -158,10 +129,43 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
         detail,
         exitCode: 1,
         spawns: 0,
-        provenance,
+        provenance: {
+          repoSha:
+            typeof deps.repoSha === 'string' && deps.repoSha.length >= 7 ? deps.repoSha : null,
+          treePath: path.resolve(mainTree),
+        },
       });
     }
   }
+
+  const provenance = getTreeProvenance(mainTree, deps);
+  if (!provenance || !provenance.repoSha) {
+    const detail = 'Missing or unavailable git commit SHA';
+    logErr(`PROVENANCE_UNAVAILABLE ${item}: ${detail}`);
+    return withCompletion({
+      launched: false,
+      choice: chosenKey,
+      reason: 'PROVENANCE_UNAVAILABLE',
+      detail,
+      exitCode: 1,
+      spawns: 0,
+      provenance: provenance || { repoSha: null, treePath: path.resolve(mainTree) },
+    });
+  }
+
+  const chosenCandidate = (decision.candidates || []).find(
+    (c) => (c.offeringId || c.candidateKey) === chosenKey
+  ) ||
+    (decision.ranking || []).find((r) => r.candidateKey === chosenKey) || { key: chosenKey };
+  const parsedIdentity = parseCandidateKey(chosenKey) || {};
+  const payload = {
+    ...chosenCandidate,
+    key: chosenKey,
+    role,
+    identity: parsedIdentity,
+    model: parsedIdentity.modelId || chosenCandidate.model,
+    kind: parsedIdentity.harness || chosenCandidate.kind,
+  };
 
   const tag = options.tag || chosenCandidate.tag || `${item}-${Date.now()}`;
   const log = path.join(logsDir, `route-${tag}.log`);
