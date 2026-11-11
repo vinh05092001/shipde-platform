@@ -457,7 +457,11 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       const res = dispatchCommand(env.getArgs({ 'base-sha': FAKE_40_HEX }), deps);
 
       assert.equal(res.exitCode, 1, 'checkpoint resume with invalid base must exit 1');
-      assert.equal(reservationCalls, 0, 'zero recordReservation calls on checkpoint resume with invalid base');
+      assert.equal(
+        reservationCalls,
+        0,
+        'zero recordReservation calls on checkpoint resume with invalid base'
+      );
       assert.equal(adapterCalls, 0, 'zero adapter calls on invalid base during checkpoint resume');
       assert.equal(runnerCalls, 0, 'zero runner calls on invalid base during checkpoint resume');
       const isRefused =
