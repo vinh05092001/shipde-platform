@@ -925,6 +925,10 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Assertions unchanged; verified 33/0 with and without the runtime AA snapshot present.
 - No production change.
 
+## Test clock: fresh-partial publication test (2026-11-12)
+
+- `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` case (5) fixed `NOW` at 2026-11-09T16:00Z, but called `refreshCatalogue` without `now`, so the publication's 48 h retention window used the real clock. The test started failing at 2026-11-11T16:00Z on every branch (CI ai-brain-tests on #588/#589). It now passes `now: NOW`. Test-only; no production change.
+
 ## Launch fidelity: launch exactly the chosen offering, or refuse (2026-11-11)
 
 - Scope: `tools/ai-brain/ranking.js` (`rankAndRecord`: the selection gate lives here, so a pin must pass through it), `tools/ai-brain/cli.js` (execute forwards `--offering`), `tools/ai-brain/route-launch.js` (`routeLaunchStep`, `outcomeFromDispatch`), tests `task-ai-171-launch-fidelity.test.js`, plus contract updates in `task-ai-171-route-launch.test.js` and `task-ai-171-int1-execute.test.js`.
