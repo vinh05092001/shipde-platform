@@ -133,6 +133,8 @@ async function deepRecords(policy, html, fetchImpl, log = () => {}) {
   const base = policy.modelPageBase;
   if (typeof base !== 'string' || !/^https:\/\//.test(base)) return [...records.values()];
   const queue = releaseSlugs(html);
+  const total = queue.length;
+  const failed = [];
   const workers = Array.from({ length: Number(policy.modelPageConcurrency) || 1 }, async () => {
     while (queue.length) {
       const slug = queue.shift();
@@ -143,16 +145,23 @@ async function deepRecords(policy, html, fetchImpl, log = () => {}) {
         });
         if (!res.ok) {
           log(`${slug}: HTTP ${res.status}`);
+          failed.push(slug);
           continue;
         }
         for (const r of parseRecords(await res.text()))
           if (!records.has(r.slug)) records.set(r.slug, r);
       } catch (e) {
         log(`${slug}: ${e.message}`);
+        failed.push(slug);
       }
     }
   });
   await Promise.all(workers);
+  // A page that could not be fetched would silently drop its models from the
+  // snapshot; fail the refresh instead so the last good snapshot stays.
+  if (failed.length) {
+    throw new Error(`AA_DEEP_INCOMPLETE: ${failed.length} of ${total} model pages failed`);
+  }
   return [...records.values()];
 }
 

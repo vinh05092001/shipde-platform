@@ -924,3 +924,11 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - r3-lane-ownership, pinned-base and execute-target tests now pass their own temp discovery catalogue/freshness and scoring data through existing seams instead of reading the tree's live data (ignored runtime aa-intelligence.json activated the scoring policy and returned SCORING_INPUTS_UNVERIFIED; dirty catalogue blocked the lane contention path).
 - Assertions unchanged; verified 33/0 with and without the runtime AA snapshot present.
 - No production change.
+
+## AA snapshot refresh fails on an incomplete model-page fetch (2026-11-11)
+
+- Scope: `tools/ai-brain/aa-snapshot.js` (`deepRecords`), new `tools/ai-brain/test/task-ai-171-aa-snapshot-complete.test.js`.
+- Defect: a model page that answered non-2xx or threw/timed out was only logged and skipped, and `snapshot()` still replaced `data/aa-intelligence.json` with fewer records, so models could silently lose their quality score.
+- Now: any failed model-page GET makes the refresh throw `AA_DEEP_INCOMPLETE: <failed> of <total> model pages failed` before writing. The previous snapshot is unchanged, no `.tmp` is left, and the CLI exits 1. A page that answers 200 with no records is still accepted (existing contract). Full-success output is unchanged.
+- Evidence: the HTTP 500 and timeout tests fail on `ecf642b9` and pass after the change; the all-200 test and the existing `task-ai-171-aa-join.test.js` pass on both.
+- Not in scope: a daily schedule for `aa-snapshot.js` (operator infra decision; the proposed task definition is recorded in RUNS).
