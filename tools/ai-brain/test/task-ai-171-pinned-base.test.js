@@ -55,6 +55,100 @@ function createTargetRepoEnv() {
   fs.writeFileSync(hFile, JSON.stringify({ version: 1, paths: {}, events: [] }));
 
   const cand = makeCandidate();
+  const discoveryDir = path.join(dir, 'discovery');
+  fs.mkdirSync(discoveryDir, { recursive: true });
+  const catLine = JSON.stringify({
+    type: 'transition',
+    ts: new Date(Date.now() - 60000).toISOString(),
+    runId: 'run-0',
+    key: cand.candidateKey,
+    harness: cand.harness,
+    accessPath: cand.accessPath,
+    gateway: cand.gateway,
+    upstream: cand.upstream,
+    account: cand.accountId,
+    quotaScope: cand.quotaScope,
+    modelId: cand.modelId,
+    base: cand.modelId,
+    sourceIds: [cand.gateway],
+    state: 'AVAILABLE',
+    resultState: 'PASS',
+    passes: 1,
+    failures: [],
+    evidence: [],
+  });
+  fs.writeFileSync(path.join(discoveryDir, 'catalogue.jsonl'), catLine + '\n', 'utf8');
+
+  const freshness = {
+    listedSources: 1,
+    lastAttemptAt: new Date(Date.now() - 60000).toISOString(),
+    lastSuccessfulAt: new Date(Date.now() - 60000).toISOString(),
+    complete: true,
+    sources: [
+      {
+        id: cand.gateway,
+        status: 'enumerated',
+        advertised: 1,
+        lastSuccessfulAt: new Date(Date.now() - 60000).toISOString(),
+      },
+    ],
+    failedSources: [],
+  };
+  fs.writeFileSync(
+    path.join(discoveryDir, 'freshness.json'),
+    JSON.stringify(freshness, null, 2) + '\n',
+    'utf8'
+  );
+
+  const policyFile = path.join(dir, 'scoring-policy.json');
+  const priorsFile = path.join(dir, 'aa-snapshot.json');
+  fs.writeFileSync(
+    policyFile,
+    JSON.stringify(
+      {
+        version: 'test-v1',
+        source: 'https://example.com',
+        rationale: 'test isolation',
+        maxAgeMs: 365 * 86400000,
+        priorsFile: 'aa-snapshot.json',
+        dimensions: {
+          quality: {
+            weight: 1,
+            min: 0,
+            max: 100,
+            unit: 'percentile',
+            direction: 'higher',
+            measurement: { store: 'priors', metric: 'quality' },
+          },
+        },
+      },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    priorsFile,
+    JSON.stringify(
+      {
+        version: 'test-v1',
+        source: 'test',
+        unit: 'percentile',
+        observedAt: new Date(Date.now() - 60000).toISOString(),
+        rows: [
+          {
+            name: cand.modelId,
+            base: cand.modelId,
+            pct: 90,
+          },
+        ],
+      },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  );
+
   let capturedLaunchJob = null;
   const fakeAdapter = {
     id: 'test-harness',
@@ -72,6 +166,8 @@ function createTargetRepoEnv() {
     now: Date.now(),
     maxAttempts: 1,
     concurrency: 1,
+    discoveryDataDir: discoveryDir,
+    scoringPolicyFile: policyFile,
     quotaStateFile: qFile,
     routeHealthFile: hFile,
     home: dir,

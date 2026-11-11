@@ -918,3 +918,9 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Scope: `tools/ai-brain/route-launch.js` (`routeLaunchStep`), `tools/ai-brain/test/task-ai-171-route-launch.test.js`.
 - Outcome: routeLaunchStep forwards a validated timeoutMs as --timeout-ms (approved activation case 2 uses 600000). When `options.timeoutMs` (or fallback `options.workerTimeoutMs`) is a positive finite integer, `--timeout-ms <value>` is appended to `dispatchArgs`; when absent, argv is preserved without `--timeout-ms`; when present but invalid (0, -1, 1.5, 'abc', NaN) execution is refused before spawning with reason `TIMEOUT_INVALID`, exitCode 1, spawns 0.
 - Evidence: `tools/ai-brain/test/task-ai-171-route-launch.test.js` Case 11 verifies timeout forwarding, absence preservation, invalid refusal, and CLI receipt via `parseArgs` resolving `workerTimeoutMs` to 600000.
+
+## Test data isolation (2026-11-11)
+
+- r3-lane-ownership, pinned-base and execute-target tests now pass their own temp discovery catalogue/freshness and scoring data through existing seams instead of reading the tree's live data (ignored runtime aa-intelligence.json activated the scoring policy and returned SCORING_INPUTS_UNVERIFIED; dirty catalogue blocked the lane contention path).
+- Assertions unchanged; verified 33/0 with and without the runtime AA snapshot present.
+- No production change.

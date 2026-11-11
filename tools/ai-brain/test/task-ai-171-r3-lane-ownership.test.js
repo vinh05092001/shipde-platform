@@ -39,10 +39,107 @@ function createTestHarness() {
   const prevRunsDir = process.env.AGY_POOL_RUNS_DIR;
   process.env.AGY_POOL_RUNS_DIR = runsDir;
 
+  const discoveryDir = path.join(dir, 'discovery');
+  fs.mkdirSync(discoveryDir, { recursive: true });
+  const cA = makeCandidate('m-pool', 'agy-pool', 'agy01');
+  const catLine = JSON.stringify({
+    type: 'transition',
+    ts: new Date(Date.now() - 60000).toISOString(),
+    runId: 'run-0',
+    key: cA.candidateKey,
+    harness: cA.harness,
+    accessPath: cA.accessPath,
+    gateway: cA.gateway,
+    upstream: cA.upstream,
+    account: cA.accountId,
+    quotaScope: cA.quotaScope,
+    modelId: cA.modelId,
+    base: cA.modelId,
+    sourceIds: [cA.gateway],
+    state: 'AVAILABLE',
+    resultState: 'PASS',
+    passes: 1,
+    failures: [],
+    evidence: [],
+  });
+  fs.writeFileSync(path.join(discoveryDir, 'catalogue.jsonl'), catLine + '\n', 'utf8');
+
+  const freshness = {
+    listedSources: 1,
+    lastAttemptAt: new Date(Date.now() - 60000).toISOString(),
+    lastSuccessfulAt: new Date(Date.now() - 60000).toISOString(),
+    complete: true,
+    sources: [
+      {
+        id: 'agy-pool',
+        status: 'enumerated',
+        advertised: 1,
+        lastSuccessfulAt: new Date(Date.now() - 60000).toISOString(),
+      },
+    ],
+    failedSources: [],
+  };
+  fs.writeFileSync(
+    path.join(discoveryDir, 'freshness.json'),
+    JSON.stringify(freshness, null, 2) + '\n',
+    'utf8'
+  );
+
+  const policyFile = path.join(dir, 'scoring-policy.json');
+  const priorsFile = path.join(dir, 'aa-snapshot.json');
+  fs.writeFileSync(
+    policyFile,
+    JSON.stringify(
+      {
+        version: 'test-v1',
+        source: 'https://example.com',
+        rationale: 'test isolation',
+        maxAgeMs: 365 * 86400000,
+        priorsFile: 'aa-snapshot.json',
+        dimensions: {
+          quality: {
+            weight: 1,
+            min: 0,
+            max: 100,
+            unit: 'percentile',
+            direction: 'higher',
+            measurement: { store: 'priors', metric: 'quality' },
+          },
+        },
+      },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  );
+  fs.writeFileSync(
+    priorsFile,
+    JSON.stringify(
+      {
+        version: 'test-v1',
+        source: 'test',
+        unit: 'percentile',
+        observedAt: new Date(Date.now() - 60000).toISOString(),
+        rows: [
+          {
+            name: 'm-pool',
+            base: 'm-pool',
+            pct: 90,
+          },
+        ],
+      },
+      null,
+      2
+    ) + '\n',
+    'utf8'
+  );
+
   const testDeps = (now, candidates, extra = {}) =>
     Object.assign(
       { candidates, now, maxAttempts: 1, concurrency: 1 },
       {
+        discoveryDataDir: discoveryDir,
+        scoringPolicyFile: policyFile,
         quotaStateFile: qFile,
         routeHealthFile: hFile,
         home: dir,

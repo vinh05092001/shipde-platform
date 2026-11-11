@@ -112,6 +112,7 @@ describe('TASK-AI-171 R2: E2 --profile uses the one validated execute target', (
     const deps = Object.assign(
       {
         candidates: [cand()],
+        scoringPolicyFile: path.join(dirs.home, 'missing-policy.json'),
         evidenceDir: dirs.evidence,
         decisionDir: dirs.decisions,
         home: dirs.home,
