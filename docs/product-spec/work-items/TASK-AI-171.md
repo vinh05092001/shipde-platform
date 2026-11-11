@@ -929,6 +929,14 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 
 - `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` case (5) fixed `NOW` at 2026-11-09T16:00Z, but called `refreshCatalogue` without `now`, so the publication's 48 h retention window used the real clock. The test started failing at 2026-11-11T16:00Z on every branch (CI ai-brain-tests on #588/#589). It now passes `now: NOW`. Test-only; no production change.
 
+## AA snapshot refresh fails on an incomplete model-page fetch (2026-11-11)
+
+- Scope: `tools/ai-brain/aa-snapshot.js` (`deepRecords`), new `tools/ai-brain/test/task-ai-171-aa-snapshot-complete.test.js`.
+- Defect: a model page that answered non-2xx or threw/timed out was only logged and skipped, and `snapshot()` still replaced `data/aa-intelligence.json` with fewer records, so models could silently lose their quality score.
+- Now: any failed model-page GET makes the refresh throw `AA_DEEP_INCOMPLETE: <failed> of <total> model pages failed` before writing. The previous snapshot is unchanged, no `.tmp` is left, and the CLI exits 1. A page that answers 200 with no records is still accepted (existing contract). Full-success output is unchanged.
+- Evidence: the HTTP 500 and timeout tests fail on `ecf642b9` and pass after the change; the all-200 test and the existing `task-ai-171-aa-join.test.js` pass on both.
+- Not in scope: a daily schedule for `aa-snapshot.js` (operator infra decision; the proposed task definition is recorded in RUNS).
+
 ## Launch fidelity: launch exactly the chosen offering, or refuse (2026-11-11)
 
 - Scope: `tools/ai-brain/ranking.js` (`rankAndRecord`: the selection gate lives here, so a pin must pass through it), `tools/ai-brain/cli.js` (execute forwards `--offering`), `tools/ai-brain/route-launch.js` (`routeLaunchStep`, `outcomeFromDispatch`), tests `task-ai-171-launch-fidelity.test.js`, plus contract updates in `task-ai-171-route-launch.test.js` and `task-ai-171-int1-execute.test.js`.
