@@ -530,6 +530,7 @@ describe('TASK-AI-142: opencode-direct writer configuration and execution', () =
     assert.equal(emptySession.cause, 'HARNESS_EMPTY_RESPONSE');
 
     // 3. Verify executePlan marks empty response as FAILED with HARNESS_EMPTY_RESPONSE
+    const fakeCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-142-fake-'));
     const plan = {
       assignments: [
         {
@@ -539,7 +540,7 @@ describe('TASK-AI-142: opencode-direct writer configuration and execution', () =
           offeringId: 'cand-opencode-direct',
           harness: 'opencode-direct',
           isolatedWorker: true,
-          cwd: 'C:/fake',
+          cwd: fakeCwd,
           model: 'test/m',
           prompt: 'test prompt',
         },
@@ -560,7 +561,10 @@ describe('TASK-AI-142: opencode-direct writer configuration and execution', () =
         routes,
         dryRun: false,
         isolatedWorker: true,
-        cwd: 'C:/fake',
+        cwd: fakeCwd,
+        gitRoot: () => fakeCwd,
+        commitExists: () => true,
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
         decisionDir: fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-142-exec-')),
       });
 
@@ -570,6 +574,9 @@ describe('TASK-AI-142: opencode-direct writer configuration and execution', () =
       assert.match(execResult.records[0].detail, /^HARNESS_EMPTY_RESPONSE/);
     } finally {
       isoMod.getIsolatedLauncher = origIso;
+      try {
+        fs.rmSync(fakeCwd, { recursive: true, force: true });
+      } catch {}
     }
   });
 });

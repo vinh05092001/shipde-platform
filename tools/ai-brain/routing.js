@@ -2628,8 +2628,29 @@ async function runProfileDispatch(args, deps) {
   let reserved = false;
   let reservationId = null;
   let launchRequest = null;
+  let executeTarget = null;
 
   if (execute) {
+    // TASK-AI-171 R2 (E2): the one shared execute target, resolved before any
+    // reservation; a refusal leaves zero reservations and zero launches.
+    executeTarget = require('./execute-target').resolveExecuteTarget(args, { ...d, rootDir });
+    if (!executeTarget.ok) {
+      error(
+        'Dispatch refused: ' +
+          executeTarget.code +
+          ' (' +
+          (executeTarget.detail || 'unresolved target') +
+          ')'
+      );
+      exit(1);
+      return {
+        exitCode: 1,
+        profile,
+        refused: executeTarget.code,
+        reasonCode: executeTarget.code,
+        ranking: result.ranking,
+      };
+    }
     const chosenCandidate = result.ranking.find((c) => c.candidateKey === result.chosen) || {};
     const independentReviewerAvailable = selectedHasIndependentReviewer;
     if (chosenCandidate.probationRequiresIndependentReview && !independentReviewerAvailable) {
@@ -2681,6 +2702,8 @@ async function runProfileDispatch(args, deps) {
       account,
       modelId,
       reservationId,
+      cwd: executeTarget.cwd,
+      baseSha: executeTarget.baseSha,
       independentReviewer: reservedReviewer
         ? {
             candidateKey: candidateKey(reservedReviewer),
@@ -2714,7 +2737,7 @@ async function runProfileDispatch(args, deps) {
     let launchError = null;
 
     try {
-      launchResult = await launcher(launchRequest);
+      launchResult = await launcher(launchRequest, { getHarness: d.getHarness });
       if (
         launchResult &&
         (launchResult.status === 'failed' ||
@@ -2839,8 +2862,12 @@ async function runProfileDispatch(args, deps) {
   };
 }
 
-async function defaultLauncher(request) {
-  const { getHarness } = require('./harness');
+async function defaultLauncher(request, opts) {
+  // Internal seam for tests (like deps.gitRoot); production uses the registry.
+  const getHarness =
+    opts && typeof opts.getHarness === 'function'
+      ? opts.getHarness
+      : require('./harness').getHarness;
   const adapter = getHarness(request.harness);
   if (!adapter) {
     throw new Error('UNKNOWN_HARNESS: ' + request.harness);
@@ -2856,6 +2883,10 @@ async function defaultLauncher(request) {
     modelId: request.modelId,
     model: request.modelId,
     reservationId: request.reservationId,
+    // TASK-AI-171 R2 (E2): the validated execute target, never a recomputed one.
+    cwd: request.cwd,
+    base: request.baseSha,
+    baseSha: request.baseSha,
   };
   const launchArgs = adapter.launch(job);
   if (launchArgs && !Array.isArray(launchArgs) && (launchArgs.refusal || launchArgs.error)) {

@@ -235,6 +235,9 @@ test('Defect 5: REAL cli.js dispatchCommand with --execute then --report-outcome
         root: root,
       },
       {
+        gitRoot: () => root,
+        commitExists: () => true,
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
         exit: (code) => {
           exitCode = code;
         },
@@ -285,6 +288,9 @@ test('Defect 5: REAL cli.js dispatchCommand with --execute then --report-outcome
         root: root,
       },
       {
+        gitRoot: () => root,
+        commitExists: () => true,
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
         exit: (code) => {
           exitCode = code;
         },

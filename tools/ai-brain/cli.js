@@ -31,7 +31,7 @@
 const path = require('path');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('./reconcile');
 const { auditManifest } = require('./manifest-audit');
-const { runCheck, currentBranch, headSha } = require('./facts');
+const { runCheck, currentBranch, headSha, commitExists } = require('./facts');
 const { toPositiveInteger } = require('./source-discovery');
 const { atomicRenameSync } = require('./atomic-rename');
 const { maskEmailsInString } = require('./route-identity-utils');
@@ -2471,6 +2471,16 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
+function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance } = {}) {
+  // TASK-AI-171 R2: delegate to the one shared execute-target module.
+  const { resolveExecuteTarget } = require('./execute-target');
+  return resolveExecuteTarget(args, {
+    ...deps,
+    treePath: deps?.treePath || targetWorktree || undefined,
+    provenance: provenance || deps?.provenance || args?.provenance,
+  });
+}
+
 function dispatchCommand(args, deps = {}) {
   if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
@@ -2719,13 +2729,31 @@ function dispatchCommand(args, deps = {}) {
   // Pre-computed plan file fallback
   if (typeof args.plan === 'string') {
     const { executePlan } = require('./executor');
+    const { resolveExecuteTarget } = require('./execute-target');
     const plan = readJsonOrExit(path.resolve(args.plan), 'plan');
+    // TASK-AI-171 R2: resolve once and pass the frozen validated target.
+    const planTarget = resolveExecuteTarget(
+      { ...args, execute: !isDryRun },
+      { ...deps, rootDir, executeMode: !isDryRun }
+    );
+    if (!isDryRun && !planTarget.ok) {
+      error(`Plan refused: ${planTarget.code} (${planTarget.detail || 'unresolved target'})`);
+      exit(1);
+      return { exitCode: 1, refusal: planTarget.code };
+    }
     const result = executePlan(plan, {
       dryRun: isDryRun,
       isolatedWorker: args['isolated-worker'] || false,
       project: args.project || 'shipde-platform',
-      cwd: args.cwd || (deps && deps.cwd) || undefined,
-      base: args.base || (deps && deps.base) || undefined,
+      cwd: planTarget.cwd || args.cwd || (deps && deps.cwd) || undefined,
+      base: (planTarget.ok && planTarget.baseSha) || args.base || (deps && deps.base) || undefined,
+      baseSha:
+        (planTarget.ok && planTarget.baseSha) ||
+        args['base-sha'] ||
+        args.baseSha ||
+        (deps && deps.baseSha) ||
+        undefined,
+      executeTarget: planTarget,
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       run: deps && deps.run,
     });
@@ -3538,6 +3566,21 @@ function dispatchCommand(args, deps = {}) {
         harness: decision.harness,
       };
 
+      const harnessNameEarly =
+        finalChosenCandidate.harness || (decision && decision.harness) || 'paseo';
+      const chosenIdentityEarly =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+      const candEarly = finalChosenCandidate;
+      const preLaunchArgvIdentity = {
+        harness: candEarly.harness || chosenIdentityEarly.harness || harnessNameEarly,
+        accessPath: candEarly.accessPath || chosenIdentityEarly.accessPath || '',
+        gateway: candEarly.gateway || chosenIdentityEarly.gateway || '',
+        upstream: candEarly.upstream || chosenIdentityEarly.upstream || '',
+        account: candEarly.accountId || candEarly.account || chosenIdentityEarly.account || '*',
+        quotaScope: candEarly.quotaScope || chosenIdentityEarly.quotaScope || '',
+        modelId: candEarly.modelId || candEarly.model || chosenIdentityEarly.modelId || '',
+      };
+
       finalDecisionLog = {
         item,
         now,
@@ -3551,6 +3594,57 @@ function dispatchCommand(args, deps = {}) {
       };
       if (checkpointFile) writeJsonFile(checkpointFile, buildDryRunLog(finalDecisionLog));
     }
+
+    // P1-1: Base validation runs on every execute path, including checkpoint resume.
+    // TASK-AI-171 R2: ONE shared execute target via execute-target.js.
+    const baseResolution = require('./execute-target').resolveExecuteTarget(args, {
+      ...deps,
+      item,
+      provenance: deps?.provenance || args?.provenance,
+      rootDir,
+    });
+
+    if (!baseResolution.ok) {
+      error(
+        `Dispatch refused: ${baseResolution.code} (${baseResolution.detail || 'unresolved base'})`
+      );
+      log(
+        `Dispatch refused: ${baseResolution.code} (${baseResolution.detail || 'unresolved base'})`
+      );
+      const chosenIdentityForRefusal =
+        require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+      const candForRefusal = finalChosenCandidate;
+      const harnessForRefusal =
+        candForRefusal.harness || (lastDecision && lastDecision.harness) || 'paseo';
+      const refusalArgvIdentity = {
+        harness: candForRefusal.harness || chosenIdentityForRefusal.harness || harnessForRefusal,
+        accessPath: candForRefusal.accessPath || chosenIdentityForRefusal.accessPath || '',
+        gateway: candForRefusal.gateway || chosenIdentityForRefusal.gateway || '',
+        upstream: candForRefusal.upstream || chosenIdentityForRefusal.upstream || '',
+        account:
+          candForRefusal.accountId ||
+          candForRefusal.account ||
+          chosenIdentityForRefusal.account ||
+          '*',
+        quotaScope: candForRefusal.quotaScope || chosenIdentityForRefusal.quotaScope || '',
+        modelId:
+          candForRefusal.modelId || candForRefusal.model || chosenIdentityForRefusal.modelId || '',
+      };
+      return makeExecuteResult(
+        1,
+        finalChosenKey,
+        refusalArgvIdentity,
+        { status: 'refused', reason: baseResolution.code },
+        null,
+        {
+          status: 'refused',
+          refusal: baseResolution.code,
+          reason: baseResolution.code,
+          decision: lastDecision,
+        }
+      );
+    }
+    var resolvedBaseSha = baseResolution.baseSha;
 
     if (isPinned) log('PINNED');
     log(
@@ -3618,77 +3712,6 @@ function dispatchCommand(args, deps = {}) {
         quotaScope: cand.quotaScope || chosenIdentity.quotaScope || '',
         modelId: cand.modelId || cand.model || chosenIdentity.modelId || '',
       };
-
-      const is40HexSha = (v) => typeof v === 'string' && /^[0-9a-fA-F]{40}$/.test(v.trim());
-      let resolvedBaseSha = null;
-      const explicitBaseCandidates = [
-        args['base-sha'],
-        args.baseSha,
-        deps?.baseSha,
-        deps?.repoSha,
-        args.base,
-        deps?.base,
-      ];
-      for (const candItem of explicitBaseCandidates) {
-        if (typeof candItem === 'function') {
-          try {
-            const v = candItem();
-            if (is40HexSha(v)) {
-              resolvedBaseSha = v.trim();
-              break;
-            }
-          } catch (_) {}
-        } else if (is40HexSha(candItem)) {
-          resolvedBaseSha = candItem.trim();
-          break;
-        }
-      }
-
-      if (!resolvedBaseSha) {
-        if (typeof deps?.revParse === 'function') {
-          try {
-            const v = deps.revParse('origin/main');
-            if (is40HexSha(v)) resolvedBaseSha = v.trim();
-          } catch (_) {}
-        } else if (
-          (item?.branch && item.branch.includes('offline-replay')) ||
-          (args.branch && typeof args.branch === 'string' && args.branch.includes('offline-replay'))
-        ) {
-          resolvedBaseSha = '0123456789abcdef0123456789abcdef01234567';
-        } else {
-          try {
-            const intake = require('./intake');
-            const targetRoot = args.root || deps?.rootDir || rootDir;
-            const sha = intake.revParseOriginMain(targetRoot, deps || {});
-            if (is40HexSha(sha)) resolvedBaseSha = sha.trim();
-          } catch (_) {}
-          if (!resolvedBaseSha) {
-            try {
-              const intake = require('./intake');
-              const repoRoot = path.resolve(__dirname, '../..');
-              const sha = intake.revParseOriginMain(repoRoot, deps || {});
-              if (is40HexSha(sha)) resolvedBaseSha = sha.trim();
-            } catch (_) {}
-          }
-        }
-      }
-
-      if (!resolvedBaseSha) {
-        log('Dispatch refused: BASE_SHA_UNRESOLVED (no resolved 40-hex base commit)');
-        return makeExecuteResult(
-          1,
-          finalChosenKey,
-          launchedArgvIdentity,
-          { status: 'refused', reason: 'BASE_SHA_UNRESOLVED' },
-          null,
-          {
-            status: 'refused',
-            refusal: 'BASE_SHA_UNRESOLVED',
-            reason: 'BASE_SHA_UNRESOLVED',
-            decision: lastDecision,
-          }
-        );
-      }
 
       const pFile = args['prompt-file'] || args.promptFile || deps?.promptFile;
       const promptText = pFile
@@ -3776,7 +3799,7 @@ function dispatchCommand(args, deps = {}) {
           prompt: promptText,
           branch: item.branch,
           base: resolvedBaseSha,
-          cwd: args.cwd || (deps && deps.cwd) || rootDir,
+          cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
           usageFile: usageFile,
           checkpoint: checkpointFile,
           maxAttempts: 1,
@@ -3874,7 +3897,7 @@ function dispatchCommand(args, deps = {}) {
 
         try {
           launchRes = launcher(adapter, launchArgs, {
-            cwd: args.cwd || (deps && deps.cwd) || rootDir,
+            cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
             baseSha: resolvedBaseSha,
             branch: item.branch,
@@ -5976,6 +5999,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
 }
 
 module.exports = {
+  resolveExecuteBase,
   dispatchCommand,
   parseArgs,
   main,

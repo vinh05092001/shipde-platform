@@ -63,6 +63,10 @@ function createHarnessEnv() {
     home: dir,
     decisionDir: dir,
     evidenceDir: dir,
+    // TASK-AI-171 R2: inject internal seams so resolveExecuteTarget does not
+    // call real git on a temp dir that is not a git repository.
+    gitRoot: () => dir,
+    commitExists: () => true,
     log: () => {},
     error: () => {},
     exit: (code) => {

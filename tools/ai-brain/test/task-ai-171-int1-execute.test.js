@@ -10,6 +10,8 @@ const { candidateKey, parseCandidateKey } = require('../discovery/identity');
 const routeHealthApi = require('../route-health');
 const routeLaunchApi = require('../route-launch');
 
+const VALID_40_HEX = '0123456789abcdef0123456789abcdef01234567';
+
 function makeCandidate(modelId, upstream, accountId, cost = 1, quality = 90, extra = {}) {
   const c = { harness: 'hermes', accessPath: 'cli', gateway: '9router' };
   Object.assign(c, { upstream, accountId, quotaScope: accountId, modelId });
@@ -48,6 +50,11 @@ function createTestHarness() {
         home: dir,
         decisionDir: dir,
         evidenceDir: dir,
+        // TASK-AI-171 R2: inject internal seams so resolveExecuteTarget does not
+        // call real git on a temp dir that is not a git repository.
+        gitRoot: () => dir,
+        commitExists: () => true,
+        baseSha: VALID_40_HEX,
       },
       extra
     );

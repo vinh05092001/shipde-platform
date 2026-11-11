@@ -307,11 +307,22 @@ for (const kind of ['individual', 'combo', 'external']) {
       return { exitCode: 0, stdout: JSON.stringify({ id: 'fake-worker-session' }) };
     };
     const calls = [];
+    // The fixture root is not a git repository: inject the internal git-root and
+    // commit seams so execute still runs the real base checks without spawning git.
+    const fixtureSha = 'f1c7f1c7f1c7f1c7f1c7f1c7f1c7f1c7f1c7f1c7';
+    const fixtureRoot = path.resolve(f.root);
     const executed = await dispatchCommand(
-      { ...dispatchArgs, execute: true, branch: f.request.request.branch },
+      {
+        ...dispatchArgs,
+        execute: true,
+        branch: f.request.request.branch,
+        'base-sha': fixtureSha,
+      },
       {
         ...dispatchDeps,
         rethrow: true,
+        gitRoot: (dir) => (path.resolve(dir) === fixtureRoot ? fixtureRoot : null),
+        commitExists: (sha, repo) => sha === fixtureSha && repo === fixtureRoot,
         run: (adapter, argv, options) => {
           calls.push({ adapter, argv, options });
           const dispatch = f.registry.dispatch.providers[selected.gateway];
@@ -422,6 +433,8 @@ test('offline dry-run dispatch with combo and opencode fixtures makes 0 outbound
     {
       'dry-run': true,
       json: true,
+      // Pin the item: without it dispatch reads the live register relative to cwd.
+      item: 'TASK-AI-171',
       'evidence-dir': path.join(__dirname, '..', 'data', 'evidence'),
       'fixture-dir': taskFixtureDir,
       'combo-fixture': comboFixture,

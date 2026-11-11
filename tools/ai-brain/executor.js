@@ -344,6 +344,53 @@ function executePlan(plan, options) {
     run = require('./isolation-launcher').getIsolatedLauncher();
   }
 
+  // TASK-AI-171 R2: executePlan must refuse to execute without a validated target.
+  // The frozen target must be created by resolveExecuteTarget (provenance check
+  // via WeakSet rejects forged {ok:true} objects from plan files or flags).
+  // A direct caller that supplies no target gets one resolved here (validated,
+  // never a bare branch name); a supplied object must carry provenance.
+  const { isValidTarget, resolveExecuteTarget } = require('./execute-target');
+  let executeTarget = null;
+  if (!dryRun) {
+    executeTarget =
+      opts.executeTarget !== undefined && opts.executeTarget !== null
+        ? opts.executeTarget
+        : resolveExecuteTarget(
+            {
+              execute: true,
+              cwd: opts.cwd,
+              'base-sha': opts.baseSha,
+              baseSha: opts.baseSha,
+              base: opts.base,
+            },
+            { rootDir: opts.rootDir, gitRoot: opts.gitRoot, commitExists: opts.commitExists }
+          );
+    if (!isValidTarget(executeTarget) || !executeTarget.ok) {
+      const reason = !isValidTarget(executeTarget)
+        ? executeTarget && executeTarget.ok === false && executeTarget.code
+          ? executeTarget.code
+          : 'EXECUTE_TARGET_FORGED'
+        : executeTarget.code || 'EXECUTE_TARGET_INVALID';
+      return {
+        dryRun: false,
+        executedAt: new Date(opts.now || Date.now()).toISOString(),
+        records: [],
+        summary: { launched: 0, resumed: 0, refused: 1, failed: 0 },
+        refusal: reason,
+      };
+    }
+  }
+
+  // TASK-AI-171: the validated runner options are built ONCE and used for
+  // EVERY runner call (probe, resume, launch).
+  const runnerOpts = executeTarget
+    ? Object.assign({}, opts, {
+        cwd: executeTarget.cwd,
+        baseSha: executeTarget.baseSha,
+        base: executeTarget.baseSha,
+      })
+    : opts;
+
   const now = opts.now || Date.now();
   const registry = opts.registry || loadSources();
   const logOpts = { dir: opts.decisionDir, now };
@@ -486,7 +533,7 @@ function executePlan(plan, options) {
       const probe = adapter.inspect(existing.sessionId);
       let probeRes;
       try {
-        probeRes = run(adapter, probe.slice(), opts);
+        probeRes = run(adapter, probe.slice(), runnerOpts);
       } catch (err) {
         probeRes = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
       }
@@ -526,8 +573,10 @@ function executePlan(plan, options) {
       accountId: a.accountId,
       prompt: promptFor(a, opts),
       branch: isReview ? null : a.branch,
-      base: opts.base || 'main',
-      cwd: opts.cwd,
+      // Execute: only the validated target's pinned SHA and cwd. Dry run: a
+      // preview vector that is never run, unchanged from before.
+      base: executeTarget ? executeTarget.baseSha : opts.base || 'main',
+      cwd: executeTarget ? executeTarget.cwd : opts.cwd,
       isolatedWorker: Boolean(opts.isolatedWorker),
       usageFile: usageReportPath(opts, a),
       title: workerName(a.workItemId),
@@ -602,7 +651,7 @@ function executePlan(plan, options) {
     // AI-24-R02 / R06: one call, fail closed, no retry.
     let res;
     try {
-      res = run(adapter, record.args.slice(), opts);
+      res = run(adapter, record.args.slice(), runnerOpts);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
     }

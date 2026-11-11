@@ -864,6 +864,15 @@ Scope: `tools/ai-brain/harness.js` (`agyPool.launch`), `tools/ai-brain/test/task
 - Evidence: `task-ai-171-r3-lane-ownership.test.js` fails on base `119fa297` (0/1 pass, 2 runner calls) and passes on HEAD (1/1 pass, exactly one launcher call, second refused lane-busy, shared `job.json` not overwritten).
 - Regression verification: `task-ai-171-int1-execute.test.js` (5/5), `task-ai-69.test.js` (14/14), `lane-launcher.test.js` (24/24), `task-ai-126.test.js` (11/11).
 
+## FU-581-a: Pinned Base Verification in Target Worktree (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand`), `tools/ai-brain/test/task-ai-171-pinned-base.test.js`.
+- Outcome: Enforces that base commit is strictly accepted as a 40-hex SHA verified via `commitExists` (`git cat-file -e <sha>^{commit}`) in the target worktree; refuses branch names and unresolvable SHAs with `BASE_SHA_UNRESOLVED` before any launcher call; eliminates fallback to the tool repository and branch-name commit fabrication.
+- Depends on: Launch Options Forwarding (`fix/task-ai-171-launch-options`, PR #581).
+- Evidence: `task-ai-171-pinned-base.test.js` fails 1/4 on base 1296a736 (3/4 fail on branch names, fake SHAs, and tool-repo fallback) and passes 4/4 on HEAD; `task-ai-171-launch-options.test.js` (5/5) and `task-ai-171-int1-execute.test.js` (5/5) pass.
+- Dry-run vs execute (`resolveExecuteBase`): `execute === true` always validates a real pinned base; a dry-run flag (e.g. `deps.dryRunOffline` or an offline profile fixture) never bypasses that validation. Pure dry-run (`execute` omitted or `false`) performs no base validation and makes no git call.
+- Git root seam: `deps.gitRoot` is an internal dependency-injection seam, like `deps.commitExists`, used only by tests (e.g. offline replay execute fixtures). The production default (`git rev-parse --show-toplevel` in the resolved target) is unchanged, and the seam is not reachable from CLI flags, environment variables or data files. No test-name special case exists in production code.
+
 ## Lane mailbox ownership outcome — pool submissions respect AGY lane ownership (2026-11-10)
 
 Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools/ai-brain/lane-launcher.js` (export of `activeJobWithoutResult`), `tools/ai-brain/test/task-ai-171-lane-mailbox.test.js`.
@@ -887,3 +896,19 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - H3 rationale: Test H3 in `test/task-ai-142-hermes-candidates.test.js` tests probe order and fallback among ELIGIBLE models. Fixture priors provide `cl/openai/gpt-6-astra` (93) and `cbai/deepseek-v4.1-flash` (34). Production Hermes orchestrator floor is 60, which rejects the prior-34 model at admission. To test multi-candidate probe order and fallback across both fixture models, H3 explicitly sets test `qualityFloor: 34`. In production assembly without override (floor 60), the prior-34 route is rejected with `QUALITY_FLOOR_NOT_MET`, leaving only the prior-93 route eligible; upon simulated 404 failure, the weaker model is never probed or spawned and no session launches.
 - User decision 2026-11-11: no-policy unknown quality is admitted; #537 score-parity expectation updated (old: rejected QUALITY_FLOOR_NOT_MET -> new: admitted as QUALITY_UNKNOWN).
 - Evidence: Offline suites `tools/ai-brain/test/task-ai-171-quality-floor.test.js` (15/15), `tools/ai-brain/test/task-ai-142-quality-unknown.test.js` (6/6), `tools/ai-brain/test/task-ai-142-hermes-candidates.test.js` (24/24), `tools/ai-brain/test/task-ai-142-quality-priors.test.js` (4/4) all pass cleanly (49/49).
+
+## FU-584: Every execute path validates a target-bound pinned base (2026-11-10)
+
+- Scope: `tools/ai-brain/cli.js` (`dispatchCommand`, `resolveExecuteBase`), `tools/ai-brain/test/task-ai-171-pinned-base.test.js`.
+- P1-1 Checkpoint resume validates base: `resolveExecuteBase` moved outside `if (!finalChosenKey)`, so checkpoint resume paths always validate the base before reservation, adapter, or runner calls.
+- P1-2 Dependency SHA always verified: `deps.baseSha` / `deps.base` / `deps.repoSha` are verified with `commitExists` regardless of whether `explicitTargets` are present; previously skipped when target came from `deps.rootDir` or `cwd`.
+- P1-3 cwd included in target set: `args.cwd` / `deps.cwd` added to `explicitTargets` so the adapter/runner cwd repo is validated; `root=A, cwd=B` with different git roots is refused as `TARGET_WORKTREE_CONFLICT`.
+
+## FU-584-r2: One validated execute target for every execute path (2026-11-11)
+
+- Scope: NEW `tools/ai-brain/execute-target.js` (`resolveExecuteTarget`, `isValidTarget`), `tools/ai-brain/cli.js` (E1 `dispatchCommand`, E3 `--plan`), `tools/ai-brain/routing.js` (E2 `runProfileDispatch`, `defaultLauncher`), `tools/ai-brain/executor.js` (`executePlan`), `tools/ai-brain/test/task-ai-171-execute-target.test.js`; fixture seams only in `task-ai-171-launch-options`, `task-ai-171-int1-execute`, `task-ai-50`, `task-ai-171-r3-lane-ownership`.
+- One-target rule: every execute path (E1 item dispatch, E2 `--profile`, E3 `--plan` and direct `executePlan`) obtains its target from `resolveExecuteTarget(args, deps)`, which returns a frozen `{ok, code?, targetRepo, cwd, baseSha, origin}`. The cwd formula (`args.cwd || deps.cwd || deps.rootDir || targetRepo`) and the pinned SHA in that object are exactly what the adapter and the runner receive; no path recomputes them. Explicit `root` / `treePath` / provenance / `cwd` targets that resolve to different git roots are refused with `TARGET_WORKTREE_CONFLICT`; there is no fallback to the tool repository. Every SHA origin is verified with `commitExists` in the target repo.
+- Refusal: a non-`ok` target is a structured refusal with zero reservations, zero adapter calls and zero runner calls (E2 resolves before the first `recordReservation`).
+- Mode: only an effecting execution resolves a target (E1/E2 `execute === true`; E3 `dryRun === false`, even when `execute` is omitted). A pure dry run makes no git call.
+- E3 boundary: `executePlan` never executes without a validated target. A supplied `opts.executeTarget` must have been created by `resolveExecuteTarget` (module-private `WeakSet`); a forged `{ok:true}` object is refused with `EXECUTE_TARGET_FORGED`. A direct caller that supplies no target gets one resolved inside `executePlan`; `opts.base || 'main'` is no longer used for execution (dry-run preview vectors are unchanged).
+- `resolveExecuteBase` in `cli.js` is a thin delegate to `resolveExecuteTarget` (no duplicated logic), kept because existing pinned-base assertions call it.
