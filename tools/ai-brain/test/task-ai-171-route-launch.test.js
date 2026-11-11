@@ -7,6 +7,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { candidateKey, parseCandidateKey } = require('../discovery/identity');
 const { routeLaunchStep } = require('../route-launch');
+const { parseArgs } = require('../cli');
 
 function createStepHarness() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rlaunch-')),
@@ -352,5 +353,184 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
     );
     assert.ok(asyncFailLog, 'async spawn error recorded to route log');
     assert.match(asyncFailLog.error, /ASYNC_EAGAIN/);
+  });
+
+  test('Case 11: worker timeout forwarding, absence preservation, invalid refusal, and CLI receipt', () => {
+    // (1) timeoutMs 600000 -> argv contains '--timeout-ms','600000' exactly once
+    env.childCalls.length = 0;
+    const resTimeout = env.step(chosenDecision, 'TASK-AI-171-SAME-ITEM', env.stepDeps, {
+      timeoutMs: 600000,
+    });
+    assert.equal(resTimeout.launched, true);
+    assert.equal(resTimeout.spawns, 1);
+    const spawns600k = env.spawns();
+    assert.equal(spawns600k.length, 1);
+    const argv600k = spawns600k[0].args;
+    const timeoutIndices = argv600k.reduce((acc, arg, idx) => {
+      if (arg === '--timeout-ms') acc.push(idx);
+      return acc;
+    }, []);
+    assert.equal(timeoutIndices.length, 1, "argv contains '--timeout-ms' exactly once");
+    assert.equal(argv600k[timeoutIndices[0] + 1], '600000');
+
+    // Also test options.workerTimeoutMs as fallback when timeoutMs is absent
+    env.childCalls.length = 0;
+    const resWorkerTimeout = env.step(
+      chosenDecision,
+      'TASK-AI-171-WORKER-TIMEOUT-600K',
+      env.stepDeps,
+      {
+        workerTimeoutMs: 600000,
+      }
+    );
+    assert.equal(resWorkerTimeout.launched, true);
+    const workerSpawns = env.spawns();
+    assert.equal(workerSpawns.length, 1);
+    const workerArgv = workerSpawns[0].args;
+    const workerTimeoutIndices = workerArgv.reduce((acc, arg, idx) => {
+      if (arg === '--timeout-ms') acc.push(idx);
+      return acc;
+    }, []);
+    assert.equal(
+      workerTimeoutIndices.length,
+      1,
+      "workerTimeoutMs forwards '--timeout-ms' exactly once"
+    );
+    assert.equal(workerArgv[workerTimeoutIndices[0] + 1], '600000');
+
+    // (2) absent -> argv identical to the current one (no --timeout-ms)
+    env.childCalls.length = 0;
+    const resAbsent = env.step(chosenDecision, 'TASK-AI-171-SAME-ITEM', env.stepDeps);
+    assert.equal(resAbsent.launched, true);
+    const spawnsAbsent = env.spawns();
+    assert.equal(spawnsAbsent.length, 1);
+    const argvAbsent = spawnsAbsent[0].args;
+    assert.equal(argvAbsent.includes('--timeout-ms'), false, 'no --timeout-ms in argv when absent');
+
+    // Compare argv with and without timeoutMs (except the --timeout-ms flag pair)
+    const filteredArgv600k = argv600k.filter(
+      (_, idx) => idx !== timeoutIndices[0] && idx !== timeoutIndices[0] + 1
+    );
+    assert.deepEqual(
+      filteredArgv600k,
+      argvAbsent,
+      'argv is identical except for the --timeout-ms pair'
+    );
+
+    // (3) invalid values (0, -1, 1.5, 'abc', NaN) -> TIMEOUT_INVALID, 0 spawns, 0 execFileSync
+    const invalidValues = [0, -1, 1.5, 'abc', NaN];
+    const failingGitDeps = {
+      ...env.stepDeps,
+      execFileSync: () => {
+        throw new Error('git rev-parse HEAD failed');
+      },
+    };
+
+    for (const badVal of invalidValues) {
+      env.childCalls.length = 0;
+      const resBad = env.step(chosenDecision, `TASK-AI-171-BAD-${badVal}`, env.stepDeps, {
+        timeoutMs: badVal,
+      });
+      assert.equal(resBad.launched, false, `refuses on invalid timeout: ${badVal}`);
+      assert.equal(resBad.reason, 'TIMEOUT_INVALID');
+      assert.equal(resBad.exitCode, 1);
+      assert.equal(resBad.spawns, 0);
+      assert.equal(env.spawns().length, 0, `zero spawns on invalid timeout: ${badVal}`);
+      assert.equal(env.execs().length, 0, `zero execFileSync on invalid timeout: ${badVal}`);
+      assert.equal(env.childCalls.length, 0, `zero child calls on invalid timeout: ${badVal}`);
+
+      // Even when deps.repoSha is NOT provided and git would fail
+      env.childCalls.length = 0;
+      let failingGitCalled = false;
+      const gitThrowDeps = {
+        ...env.stepDeps,
+        execFileSync: (...args) => {
+          failingGitCalled = true;
+          return failingGitDeps.execFileSync(...args);
+        },
+      };
+      const resBadGit = env.step(chosenDecision, `TASK-AI-171-BAD-GIT-${badVal}`, gitThrowDeps, {
+        timeoutMs: badVal,
+      });
+      assert.equal(
+        resBadGit.launched,
+        false,
+        `refuses on invalid timeout with failing git: ${badVal}`
+      );
+      assert.equal(resBadGit.reason, 'TIMEOUT_INVALID');
+      assert.equal(resBadGit.exitCode, 1);
+      assert.equal(resBadGit.spawns, 0);
+      assert.equal(failingGitCalled, false, `git not called on invalid timeout: ${badVal}`);
+      assert.equal(env.spawns().length, 0);
+      assert.equal(env.execs().length, 0);
+
+      // Also verify via workerTimeoutMs
+      env.childCalls.length = 0;
+      const resBadWorker = env.step(
+        chosenDecision,
+        `TASK-AI-171-BAD-WORKER-${badVal}`,
+        env.stepDeps,
+        {
+          workerTimeoutMs: badVal,
+        }
+      );
+      assert.equal(resBadWorker.launched, false, `refuses on invalid workerTimeoutMs: ${badVal}`);
+      assert.equal(resBadWorker.reason, 'TIMEOUT_INVALID');
+      assert.equal(resBadWorker.exitCode, 1);
+      assert.equal(resBadWorker.spawns, 0);
+      assert.equal(env.spawns().length, 0, `zero spawns on invalid workerTimeoutMs: ${badVal}`);
+      assert.equal(
+        env.execs().length,
+        0,
+        `zero execFileSync on invalid workerTimeoutMs: ${badVal}`
+      );
+      assert.equal(
+        env.childCalls.length,
+        0,
+        `zero child calls on invalid workerTimeoutMs: ${badVal}`
+      );
+
+      // workerTimeoutMs with failing git
+      env.childCalls.length = 0;
+      let failingGitWorkerCalled = false;
+      const gitThrowWorkerDeps = {
+        ...env.stepDeps,
+        execFileSync: (...args) => {
+          failingGitWorkerCalled = true;
+          return failingGitDeps.execFileSync(...args);
+        },
+      };
+      const resBadWorkerGit = env.step(
+        chosenDecision,
+        `TASK-AI-171-BAD-WORKER-GIT-${badVal}`,
+        gitThrowWorkerDeps,
+        {
+          workerTimeoutMs: badVal,
+        }
+      );
+      assert.equal(
+        resBadWorkerGit.launched,
+        false,
+        `refuses on invalid workerTimeoutMs with failing git: ${badVal}`
+      );
+      assert.equal(resBadWorkerGit.reason, 'TIMEOUT_INVALID');
+      assert.equal(resBadWorkerGit.exitCode, 1);
+      assert.equal(resBadWorkerGit.spawns, 0);
+      assert.equal(
+        failingGitWorkerCalled,
+        false,
+        `git not called on invalid workerTimeoutMs: ${badVal}`
+      );
+      assert.equal(env.spawns().length, 0);
+      assert.equal(env.execs().length, 0);
+    }
+
+    // (4) CLI receipt: parse the produced argv with the same arg parser cli.js uses
+    // and show workerTimeoutMs resolves to 600000
+    const parsedArgs = parseArgs(argv600k);
+    assert.equal(parsedArgs['timeout-ms'], '600000');
+    const explicitTimeoutMs = Number(parsedArgs['timeout-ms'] || parsedArgs.timeoutMs) || undefined;
+    const workerTimeoutMs = explicitTimeoutMs;
+    assert.equal(workerTimeoutMs, 600000, 'CLI parser resolves workerTimeoutMs to 600000');
   });
 });
