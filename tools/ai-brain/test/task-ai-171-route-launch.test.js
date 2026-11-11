@@ -452,7 +452,11 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       const resBadGit = env.step(chosenDecision, `TASK-AI-171-BAD-GIT-${badVal}`, gitThrowDeps, {
         timeoutMs: badVal,
       });
-      assert.equal(resBadGit.launched, false, `refuses on invalid timeout with failing git: ${badVal}`);
+      assert.equal(
+        resBadGit.launched,
+        false,
+        `refuses on invalid timeout with failing git: ${badVal}`
+      );
       assert.equal(resBadGit.reason, 'TIMEOUT_INVALID');
       assert.equal(resBadGit.exitCode, 1);
       assert.equal(resBadGit.spawns, 0);
@@ -475,8 +479,16 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       assert.equal(resBadWorker.exitCode, 1);
       assert.equal(resBadWorker.spawns, 0);
       assert.equal(env.spawns().length, 0, `zero spawns on invalid workerTimeoutMs: ${badVal}`);
-      assert.equal(env.execs().length, 0, `zero execFileSync on invalid workerTimeoutMs: ${badVal}`);
-      assert.equal(env.childCalls.length, 0, `zero child calls on invalid workerTimeoutMs: ${badVal}`);
+      assert.equal(
+        env.execs().length,
+        0,
+        `zero execFileSync on invalid workerTimeoutMs: ${badVal}`
+      );
+      assert.equal(
+        env.childCalls.length,
+        0,
+        `zero child calls on invalid workerTimeoutMs: ${badVal}`
+      );
 
       // workerTimeoutMs with failing git
       env.childCalls.length = 0;
