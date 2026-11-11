@@ -19,7 +19,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const cp = require('child_process');
 
 // Module-private provenance: a WeakSet of objects created by this module.
 // executePlan checks membership to reject forged targets.
@@ -40,14 +40,13 @@ function resolveExecuteTarget(args, deps) {
   // executePlan with dryRun false is real execution even if args.execute is omitted.
   const isExecute = args.execute === true || deps.executeMode === true;
   if (!isExecute) {
-    const result = Object.freeze({
+    return Object.freeze({
       ok: true,
       baseSha: null,
       origin: 'dry-run',
       targetRepo: null,
+      cwd: null,
     });
-    _validTargets.add(result);
-    return result;
   }
 
   const factsApi = require('./facts');
@@ -57,7 +56,7 @@ function resolveExecuteTarget(args, deps) {
   const provenance = deps.provenance || args.provenance;
 
   const defaultGitRoot = (resolved) => {
-    const out = execFileSync('git', ['-C', resolved, 'rev-parse', '--show-toplevel'], {
+    const out = cp.execFileSync('git', ['-C', resolved, 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5000,
@@ -93,16 +92,21 @@ function resolveExecuteTarget(args, deps) {
   if (prov && prov.treePath) {
     explicitTargets.push({ name: 'provenance.treePath', path: prov.treePath });
   }
-  // P1-3: Include args.cwd / deps.cwd in the target set so validation covers
-  // the repo the adapter and runner actually use.
-  const cwdPath = args.cwd || deps.cwd;
-  if (cwdPath && typeof cwdPath === 'string' && !explicitTargets.some((t) => t.path === cwdPath)) {
-    explicitTargets.push({ name: 'args.cwd', path: cwdPath });
+  // P1-1: The EFFECTIVE cwd (exactly the value adapter and runner use) is always
+  // part of the authoritative target set.
+  const effectiveCwd = args.cwd || deps.cwd || deps.rootDir || null;
+  const cwdName = args.cwd ? 'args.cwd' : deps.cwd ? 'deps.cwd' : 'deps.rootDir';
+  if (
+    effectiveCwd &&
+    typeof effectiveCwd === 'string' &&
+    !explicitTargets.some((t) => t.path === effectiveCwd)
+  ) {
+    explicitTargets.push({ name: cwdName, path: effectiveCwd });
   }
 
   let targetRepo = null;
   if (explicitTargets.length > 0) {
-    const canonicalRoots = new Map();
+    const canonicalRoots = [];
     for (const t of explicitTargets) {
       const root = canonicalGitRoot(t.path);
       if (!root) {
@@ -112,9 +116,9 @@ function resolveExecuteTarget(args, deps) {
           detail: `target worktree ${t.path} not a git repository`,
         });
       }
-      canonicalRoots.set(t.name, root);
+      canonicalRoots.push({ name: t.name, root });
     }
-    const uniqueRoots = Array.from(new Set(canonicalRoots.values()));
+    const uniqueRoots = Array.from(new Set(canonicalRoots.map((c) => c.root)));
     if (uniqueRoots.length > 1) {
       return Object.freeze({
         ok: false,
@@ -140,7 +144,7 @@ function resolveExecuteTarget(args, deps) {
   }
 
   // ONE cwd formula: what the adapter AND runner use.
-  const resolvedCwd = args.cwd || deps.cwd || deps.rootDir || targetRepo;
+  const resolvedCwd = effectiveCwd || targetRepo;
 
   const branchName = args.branch || deps.branch || (deps.item && deps.item.branch);
 
@@ -252,7 +256,7 @@ function resolveExecuteTarget(args, deps) {
         `refs/remotes/origin/${trimmedBranch}`,
       ]) {
         try {
-          const out = execFileSync(
+          const out = cp.execFileSync(
             'git',
             ['-C', targetRepo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
             {
@@ -323,7 +327,18 @@ function resolveExecuteTarget(args, deps) {
  * @returns {boolean}
  */
 function isValidTarget(obj) {
-  return obj != null && typeof obj === 'object' && _validTargets.has(obj);
+  return (
+    obj != null &&
+    typeof obj === 'object' &&
+    _validTargets.has(obj) &&
+    obj.ok === true &&
+    typeof obj.baseSha === 'string' &&
+    obj.baseSha.length === 40 &&
+    typeof obj.cwd === 'string' &&
+    obj.cwd.length > 0 &&
+    typeof obj.targetRepo === 'string' &&
+    obj.targetRepo.length > 0
+  );
 }
 
 module.exports = { resolveExecuteTarget, isValidTarget };

@@ -2747,6 +2747,12 @@ function dispatchCommand(args, deps = {}) {
       project: args.project || 'shipde-platform',
       cwd: planTarget.cwd || args.cwd || (deps && deps.cwd) || undefined,
       base: (planTarget.ok && planTarget.baseSha) || args.base || (deps && deps.base) || undefined,
+      baseSha:
+        (planTarget.ok && planTarget.baseSha) ||
+        args['base-sha'] ||
+        args.baseSha ||
+        (deps && deps.baseSha) ||
+        undefined,
       executeTarget: planTarget,
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       run: deps && deps.run,

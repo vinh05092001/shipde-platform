@@ -356,7 +356,13 @@ function executePlan(plan, options) {
       opts.executeTarget !== undefined && opts.executeTarget !== null
         ? opts.executeTarget
         : resolveExecuteTarget(
-            { execute: true, cwd: opts.cwd, 'base-sha': opts.baseSha },
+            {
+              execute: true,
+              cwd: opts.cwd,
+              'base-sha': opts.baseSha,
+              baseSha: opts.baseSha,
+              base: opts.base,
+            },
             { rootDir: opts.rootDir, gitRoot: opts.gitRoot, commitExists: opts.commitExists }
           );
     if (!isValidTarget(executeTarget) || !executeTarget.ok) {
@@ -633,9 +639,16 @@ function executePlan(plan, options) {
     );
 
     // AI-24-R02 / R06: one call, fail closed, no retry.
+    const runnerOpts = executeTarget
+      ? Object.assign({}, opts, {
+          cwd: executeTarget.cwd,
+          baseSha: executeTarget.baseSha,
+          base: executeTarget.baseSha,
+        })
+      : opts;
     let res;
     try {
-      res = run(adapter, record.args.slice(), opts);
+      res = run(adapter, record.args.slice(), runnerOpts);
     } catch (err) {
       res = { exitCode: -1, stdout: '', stderr: String(err && err.message) };
     }

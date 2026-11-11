@@ -158,8 +158,9 @@ describe('TASK-AI-171 R2: E2 --profile uses the one validated execute target', (
   test('E2 rootDir=A / treePath=B two-repo conflict: refused, zero effects', async () => {
     let launches = 0;
     const { result, exitCode } = await runProfile(
-      { execute: true, launch: true, root: dirs.root },
+      { execute: true, launch: true },
       {
+        rootDir: dirs.root,
         treePath: dirs.other,
         gitRoot: (d) => path.resolve(d),
         commitExists: () => true,
@@ -174,6 +175,21 @@ describe('TASK-AI-171 R2: E2 --profile uses the one validated execute target', (
     assert.equal(result.refused, 'TARGET_WORKTREE_CONFLICT');
     assert.equal(launches, 0);
     assert.equal(reservationCount(dirs.storePath), 0);
+  });
+
+  test('P1-1 direct: deps.rootDir=A with no args.root/args.cwd plus deps.treePath=B produces TARGET_WORKTREE_CONFLICT', () => {
+    const target = resolveExecuteTarget(
+      { execute: true },
+      {
+        rootDir: dirs.root,
+        treePath: dirs.other,
+        gitRoot: (d) => path.resolve(d),
+        commitExists: () => true,
+        baseSha: VALID_40_HEX,
+      }
+    );
+    assert.equal(target.ok, false);
+    assert.equal(target.code, 'TARGET_WORKTREE_CONFLICT');
   });
 
   test('E2 valid target: the default launcher hands result cwd / baseSha to the adapter', async () => {
@@ -239,7 +255,8 @@ describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', ()
   });
   const okRun = () => {
     const calls = [];
-    const run = (adapter, args) => {
+    const run = (adapter, args, options) => {
+      args.options = options;
       calls.push(args);
       return { exitCode: 0, stdout: '{"id":"sess-171","status":"running"}\n', stderr: '' };
     };
@@ -333,9 +350,85 @@ describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', ()
       const args = run.calls[0];
       assert.equal(args[args.indexOf('--cwd') + 1], dir);
       assert.equal(args[args.indexOf('--base') + 1], VALID_40_HEX, 'never the branch name main');
+      assert.ok(args.options, 'runner options passed as third argument');
+      assert.equal(args.options.cwd, dir);
+      assert.equal(args.options.baseSha, VALID_40_HEX);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('P1-2: CLI dispatch --plan --execute --isolated-worker passes validated target baseSha and cwd to runner', () => {
+    const dir = tmpDir('ai171-et-iso-');
+    const isoMod = require('../isolation-launcher');
+    const origIso = isoMod.getIsolatedLauncher;
+    let capturedRunnerOptions = null;
+    let runnerCalls = 0;
+    isoMod.getIsolatedLauncher = () => (adapter, args, options) => {
+      runnerCalls += 1;
+      capturedRunnerOptions = options;
+      if (!options || !options.baseSha) {
+        throw new Error(
+          'ISOLATION_BASE_SHA_MISSING: the caller must pin the base SHA to provision'
+        );
+      }
+      return {
+        exitCode: 0,
+        stdout:
+          '{"type":"step_start"}\n{"type":"text","part":{"text":"done"}}\n{"type":"step_finish"}\n',
+        completionNonce: 'nonce-171-iso',
+        stderr: '',
+      };
+    };
+    try {
+      const planFile = path.join(dir, 'plan.json');
+      fs.writeFileSync(planFile, JSON.stringify(plan()));
+      let exitCode = null;
+      const res = dispatchCommand(
+        {
+          plan: planFile,
+          execute: true,
+          cwd: dir,
+          'isolated-worker': true,
+          'base-sha': VALID_40_HEX,
+        },
+        {
+          gitRoot: () => dir,
+          commitExists: () => true,
+          decisionDir: dir,
+          log: () => {},
+          error: () => {},
+          exit: (c) => {
+            exitCode = c;
+          },
+        }
+      );
+      assert.equal(exitCode, 0);
+      assert.equal(runnerCalls, 1);
+      assert.ok(capturedRunnerOptions);
+      assert.equal(capturedRunnerOptions.cwd, dir);
+      assert.equal(capturedRunnerOptions.baseSha, VALID_40_HEX);
+    } finally {
+      isoMod.getIsolatedLauncher = origIso;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('P1-3: executePlan with dry-run executeTarget passed to dryRun=false is refused with zero runner calls', () => {
+    const run = okRun();
+    const dryRunTarget = resolveExecuteTarget({}, {});
+    assert.equal(dryRunTarget.origin, 'dry-run');
+    const res = executePlan(plan(), {
+      registry,
+      run,
+      dryRun: false,
+      executeTarget: dryRunTarget,
+      decisionDir: tmpDir('ai171-et-dec-'),
+    });
+    assert.equal(res.summary.launched, 0);
+    assert.equal(res.summary.refused, 1);
+    assert.ok(res.refusal, 'refusal reason must be set');
+    assert.equal(run.calls.length, 0, 'zero runner calls');
   });
 
   test('CLI --plan with an invalid base exits 1 with zero runner calls', () => {
