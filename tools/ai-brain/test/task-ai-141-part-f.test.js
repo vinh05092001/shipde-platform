@@ -1080,6 +1080,9 @@ describe('TASK-AI-141 Part F external priors and model choice', () => {
       { profile: profileFile, execute: true, launch: true, root },
       {
         rootDir: root,
+        gitRoot: () => root,
+        commitExists: () => true,
+        baseSha: '0123456789abcdef0123456789abcdef01234567',
         candidates: [writer, reviewer],
         evidenceDir: path.join(root, 'evidence'),
         decisionDir: path.join(root, 'decisions'),

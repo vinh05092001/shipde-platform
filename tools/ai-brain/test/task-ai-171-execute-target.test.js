@@ -234,6 +234,25 @@ describe('TASK-AI-171 R2: E2 --profile uses the one validated execute target', (
     assert.deepEqual(calls, []);
     assert.equal(reservationCount(dirs.storePath), 0);
   });
+
+  test('dry-run git spies installed BEFORE requiring execute-target.js verify zero git calls at load and run', () => {
+    const cp = require('node:child_process');
+    const script = `
+      const cp = require('node:child_process');
+      const calls = [];
+      for (const api of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync']) {
+        cp[api] = (...a) => { calls.push(api); throw new Error('CHILD_PROCESS_FORBIDDEN: ' + api); };
+      }
+      const { resolveExecuteTarget } = require('./execute-target');
+      const res = resolveExecuteTarget({}, {});
+      if (!res.ok || res.origin !== 'dry-run' || calls.length > 0) process.exit(1);
+    `;
+    const res = cp.spawnSync(process.execPath, ['-e', script], {
+      cwd: path.resolve(__dirname, '..'),
+      encoding: 'utf8',
+    });
+    assert.equal(res.status, 0, res.stderr);
+  });
 });
 
 describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', () => {
@@ -353,6 +372,50 @@ describe('TASK-AI-171 R2: E3 executePlan refuses without a validated target', ()
       assert.ok(args.options, 'runner options passed as third argument');
       assert.equal(args.options.cwd, dir);
       assert.equal(args.options.baseSha, VALID_40_HEX);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('P2-4: executePlan with valid opts.base launches that SHA', () => {
+    const run = okRun();
+    const dir = tmpDir('ai171-p2-4-valid-');
+    try {
+      const res = executePlan(plan(), {
+        registry,
+        run,
+        dryRun: false,
+        cwd: dir,
+        base: VALID_40_HEX,
+        gitRoot: () => dir,
+        commitExists: () => true,
+        decisionDir: tmpDir('ai171-p2-4-dec-'),
+      });
+      assert.equal(res.summary.launched, 1);
+      assert.equal(run.calls[0].options.baseSha, VALID_40_HEX);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('P2-4: executePlan with invalid opts.base is refused with zero runner calls', () => {
+    const run = okRun();
+    const dir = tmpDir('ai171-p2-4-inv-');
+    try {
+      const res = executePlan(plan(), {
+        registry,
+        run,
+        dryRun: false,
+        cwd: dir,
+        base: 'invalid-branch-name',
+        gitRoot: () => dir,
+        commitExists: () => false,
+        decisionDir: tmpDir('ai171-p2-4-dec-'),
+      });
+      assert.equal(res.summary.launched, 0);
+      assert.equal(res.summary.refused, 1);
+      assert.equal(res.refusal, 'BASE_SHA_UNRESOLVED');
+      assert.equal(run.calls.length, 0);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

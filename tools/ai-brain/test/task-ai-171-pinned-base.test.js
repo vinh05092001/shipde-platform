@@ -403,6 +403,13 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
   // P1-1: checkpoint resume with invalid base is refused
   test('11. Checkpoint resume with invalid base is refused — zero reservation, adapter, runner calls', () => {
     const env = createTargetRepoEnv();
+    const quotaStore = require('../quota-store');
+    const origRecord = quotaStore.recordReservation;
+    let reservationCalls = 0;
+    quotaStore.recordReservation = (...args) => {
+      reservationCalls += 1;
+      return origRecord(...args);
+    };
     try {
       let adapterCalls = 0;
       let runnerCalls = 0;
@@ -450,6 +457,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       const res = dispatchCommand(env.getArgs({ 'base-sha': FAKE_40_HEX }), deps);
 
       assert.equal(res.exitCode, 1, 'checkpoint resume with invalid base must exit 1');
+      assert.equal(reservationCalls, 0, 'zero recordReservation calls on checkpoint resume with invalid base');
       assert.equal(adapterCalls, 0, 'zero adapter calls on invalid base during checkpoint resume');
       assert.equal(runnerCalls, 0, 'zero runner calls on invalid base during checkpoint resume');
       const isRefused =
@@ -458,6 +466,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
         res.outcome?.reason === 'BASE_SHA_UNRESOLVED';
       assert.ok(isRefused, 'refusal reason must be BASE_SHA_UNRESOLVED on checkpoint resume');
     } finally {
+      quotaStore.recordReservation = origRecord;
       env.cleanup();
     }
   });
@@ -484,9 +493,10 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
         commitExists: () => false,
       });
 
-      // Remove root from args so explicitTargets is empty and target comes from deps.rootDir
+      // Remove root and cwd from args so explicitTargets is empty and target comes from deps.rootDir
       const args = env.getArgs();
       delete args.root;
+      delete args.cwd;
 
       const res = dispatchCommand(args, deps);
 
@@ -525,6 +535,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
 
       const args = env.getArgs();
       delete args.root;
+      delete args.cwd;
 
       const res = dispatchCommand(args, deps);
 
@@ -560,6 +571,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
 
       const args = env.getArgs();
       delete args.root;
+      delete args.cwd;
 
       const res = dispatchCommand(args, deps);
 
@@ -594,8 +606,15 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       stdio: 'ignore',
     });
 
+    const quotaStore = require('../quota-store');
+    const origRecord = quotaStore.recordReservation;
+    let reservationCalls = 0;
+    quotaStore.recordReservation = (...args) => {
+      reservationCalls += 1;
+      return origRecord(...args);
+    };
+
     try {
-      let reservationCalls = 0;
       let adapterCalls = 0;
       let runnerCalls = 0;
 
@@ -626,6 +645,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
       );
 
       assert.equal(res.exitCode, 1, 'two-repo conflict must exit 1');
+      assert.equal(reservationCalls, 0, 'zero recordReservation calls on two-repo conflict');
       assert.equal(adapterCalls, 0, 'zero adapter calls on two-repo conflict');
       assert.equal(runnerCalls, 0, 'zero runner calls on two-repo conflict');
       const isRefused =
@@ -634,6 +654,7 @@ describe('TASK-AI-171: Immutable local base commit pinning and target worktree r
         res.outcome?.reason === 'TARGET_WORKTREE_CONFLICT';
       assert.ok(isRefused, 'refusal reason must be TARGET_WORKTREE_CONFLICT');
     } finally {
+      quotaStore.recordReservation = origRecord;
       fs.rmSync(dirB, { recursive: true, force: true });
       env.cleanup();
     }

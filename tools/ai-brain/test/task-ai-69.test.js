@@ -578,7 +578,16 @@ describe('TASK-AI-69: agy pool quota and first evidence go through the CLI', () 
   });
 
   test('R3: cli dispatch --plan returns structured failure on invalid pool account', () => {
+    const { execFileSync } = require('node:child_process');
     const root = tmpDir('ai69-r3-cli-plan-');
+    execFileSync('git', ['init', root], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'config', 'user.name', 'Test'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'config', 'user.email', 'test@test.local'], { stdio: 'ignore' });
+    fs.writeFileSync(path.join(root, 'dummy.txt'), 'dummy\n');
+    execFileSync('git', ['-C', root, 'add', 'dummy.txt'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'commit', '-m', 'init'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', root, 'update-ref', 'refs/remotes/origin/main', 'HEAD'], { stdio: 'ignore' });
+
     const planFile = path.join(root, 'plan.json');
     const home = path.join(root, 'home');
     fs.mkdirSync(home, { recursive: true });

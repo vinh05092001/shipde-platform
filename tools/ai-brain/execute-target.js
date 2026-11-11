@@ -45,7 +45,6 @@ function resolveExecuteTarget(args, deps) {
       baseSha: null,
       origin: 'dry-run',
       targetRepo: null,
-      cwd: null,
     });
   }
 
