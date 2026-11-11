@@ -924,3 +924,7 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - r3-lane-ownership, pinned-base and execute-target tests now pass their own temp discovery catalogue/freshness and scoring data through existing seams instead of reading the tree's live data (ignored runtime aa-intelligence.json activated the scoring policy and returned SCORING_INPUTS_UNVERIFIED; dirty catalogue blocked the lane contention path).
 - Assertions unchanged; verified 33/0 with and without the runtime AA snapshot present.
 - No production change.
+
+## Test clock: fresh-partial publication test (2026-11-12)
+
+- `tools/ai-brain/test/task-ai-171-fresh-partial.test.js` case (5) fixed `NOW` at 2026-11-09T16:00Z, but called `refreshCatalogue` without `now`, so the publication's 48 h retention window used the real clock. The test started failing at 2026-11-11T16:00Z on every branch (CI ai-brain-tests on #588/#589). It now passes `now: NOW`. Test-only; no production change.
