@@ -242,7 +242,8 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
     const chosenDeps = { ...env.stepDeps, spawn: trackingSpawn };
     const chosenRes = env.step(chosenDecision, 'TASK-AI-171-CHOSEN', chosenDeps);
 
-    assert.equal(chosenRes.launched, true);
+    assert.equal(chosenRes.launched, false, 'a started subprocess is not yet a launch');
+    assert.equal(chosenRes.status, 'subprocess_started');
     assert.equal(chosenRes.spawns, 1);
     assert.equal(chosenRes.choice, candidateA.candidateKey);
     assert.equal(logPersistedBeforeSpawn, true, 'provenance record persisted BEFORE dispatch');
@@ -269,7 +270,8 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
       ...chosenDeps,
       repoSha: '2222333344445555666677778888999900001111',
     });
-    assert.equal(preShaRes.launched, true);
+    assert.equal(preShaRes.launched, false, 'a started subprocess is not yet a launch');
+    assert.equal(preShaRes.status, 'subprocess_started');
     assert.equal(
       env.childCalls.length,
       1,
@@ -286,7 +288,8 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
         callbackOutcome = outcome;
       },
     });
-    assert.equal(asyncChosenRes.launched, true, 'initially launched before async event');
+    assert.equal(asyncChosenRes.launched, false, 'not launched before the dispatch outcome');
+    assert.equal(asyncChosenRes.status, 'subprocess_started');
     const asyncSpawnCall = env.spawns().slice(-1)[0];
 
     asyncSpawnCall.child.emit('error', new Error('ASYNC_EAGAIN'));
@@ -322,9 +325,15 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
     const asyncSuccessRes = env.step(chosenDecision, 'TASK-AI-171-ASYNC-OK', env.stepDeps);
     const successSpawnCall = env.spawns().slice(-1)[0];
     successSpawnCall.child.emit('spawn');
+    fs.writeFileSync(
+      asyncSuccessRes.launchRecord.log,
+      JSON.stringify({ chosen: 'k', outcome: { status: 'completed', sessionId: 'sess-1' } }) + '\n'
+    );
+    successSpawnCall.child.emit('close', 0);
     const successOutcome = await asyncSuccessRes.completion;
     assert.equal(successOutcome.launched, true);
-    assert.equal(successOutcome.status, 'spawned');
+    assert.equal(successOutcome.status, 'worker_launched');
+    assert.equal(successOutcome.sessionId, 'sess-1');
     assert.equal(successOutcome.spawns, 1);
 
     // Case 10: verify runtime provenance in route-log.jsonl
@@ -361,7 +370,8 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
     const resTimeout = env.step(chosenDecision, 'TASK-AI-171-SAME-ITEM', env.stepDeps, {
       timeoutMs: 600000,
     });
-    assert.equal(resTimeout.launched, true);
+    assert.equal(resTimeout.launched, false, 'a started subprocess is not yet a launch');
+    assert.equal(resTimeout.status, 'subprocess_started');
     assert.equal(resTimeout.spawns, 1);
     const spawns600k = env.spawns();
     assert.equal(spawns600k.length, 1);
@@ -383,7 +393,8 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
         workerTimeoutMs: 600000,
       }
     );
-    assert.equal(resWorkerTimeout.launched, true);
+    assert.equal(resWorkerTimeout.launched, false, 'a started subprocess is not yet a launch');
+    assert.equal(resWorkerTimeout.status, 'subprocess_started');
     const workerSpawns = env.spawns();
     assert.equal(workerSpawns.length, 1);
     const workerArgv = workerSpawns[0].args;
@@ -401,7 +412,8 @@ describe('TASK-AI-171: routeLaunchStep decoupling and runtime provenance', () =>
     // (2) absent -> argv identical to the current one (no --timeout-ms)
     env.childCalls.length = 0;
     const resAbsent = env.step(chosenDecision, 'TASK-AI-171-SAME-ITEM', env.stepDeps);
-    assert.equal(resAbsent.launched, true);
+    assert.equal(resAbsent.launched, false, 'a started subprocess is not yet a launch');
+    assert.equal(resAbsent.status, 'subprocess_started');
     const spawnsAbsent = env.spawns();
     assert.equal(spawnsAbsent.length, 1);
     const argvAbsent = spawnsAbsent[0].args;

@@ -3522,6 +3522,7 @@ function dispatchCommand(args, deps = {}) {
         ...rankingContext,
         assessment: { ...deps.assessment, ...scoringAssessment },
         excludedRoutes: candidateList.excludedRoutes,
+        pinnedOffering: typeof args.offering === 'string' ? args.offering : undefined,
       });
       scoring.printSources(decision, log);
       lastDecision = decision;
@@ -3552,7 +3553,12 @@ function dispatchCommand(args, deps = {}) {
           1,
           lastFail?.key,
           lastFail?.launchedArgvIdentity,
-          lastFail?.outcome || { status: 'failed', reason: 'NO_ELIGIBLE_CANDIDATE' },
+          lastFail?.outcome || {
+            status: 'failed',
+            reason: decision.pinnedOffering
+              ? decision.reason.replace(/^REFUSED: /, '')
+              : 'NO_ELIGIBLE_CANDIDATE',
+          },
           lastFail?.recorded,
           { decision, attempts: attempt }
         );

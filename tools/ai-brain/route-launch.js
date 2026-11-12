@@ -38,6 +38,38 @@ function appendLog(fsApi, logFile, logsDir, entry) {
   } catch {}
 }
 
+/**
+ * The launch outcome from the dispatch subprocess itself: exit code plus the
+ * JSON result `dispatch --execute --json` prints (#578). Only exit 0 with an
+ * outcome status `completed` is a worker launch; a refusal line or a nonzero
+ * exit is a refusal; anything else is an unknown launch state, never success.
+ */
+function outcomeFromDispatch(code, text) {
+  const refusal = /Dispatch refused: ([A-Z_]+)/.exec(text || '');
+  let parsed = null;
+  const lines = String(text || '').split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0 && !parsed; i -= 1) {
+    if (!lines[i].startsWith('{')) continue;
+    try {
+      parsed = JSON.parse(lines.slice(i).join('\n'));
+    } catch {}
+  }
+  const outcome = parsed && parsed.outcome;
+  const sessionId =
+    (outcome && (outcome.sessionId || (outcome.payload && outcome.payload.sessionId))) || null;
+  if (code === 0 && outcome && outcome.status === 'completed') {
+    return { launched: true, status: 'worker_launched', ...(sessionId ? { sessionId } : {}) };
+  }
+  if (refusal || code !== 0) {
+    return {
+      launched: false,
+      status: 'refused',
+      reason: (refusal && refusal[1]) || (outcome && outcome.reason) || 'DISPATCH_EXIT_' + code,
+    };
+  }
+  return { launched: false, status: 'launch_state_unknown', reason: 'NO_LAUNCH_RECEIPT' };
+}
+
 function withCompletion(result) {
   const p = Promise.resolve(result);
   result.completion = p;
@@ -61,8 +93,14 @@ function withCompletion(result) {
 function routeLaunchStep(decision, options = {}, deps = {}) {
   const item = options.item || (decision && decision.workItemId) || 'UNKNOWN';
   const role = options.role || (decision && decision.role) || 'author.foundation';
-  const cwd = options.cwd || process.cwd();
-  const taskFile = options.task || options.taskFile || path.join(cwd, '.oc', 'task.md');
+  // One path rule: cwd and task resolve once against the caller's working
+  // directory (absolute inputs are kept), never against the dispatch tree.
+  const invocationCwd = options.invocationCwd || process.cwd();
+  const cwd = path.resolve(invocationCwd, options.cwd || '.');
+  const rawTask = options.task || options.taskFile;
+  const taskFile = rawTask
+    ? path.resolve(invocationCwd, rawTask)
+    : path.join(cwd, '.oc', 'task.md');
   const logErr = deps.error || console.error;
   const mainTree = deps.mainTree || path.resolve(__dirname, '../..');
   const fsApi = deps.fs || fs;
@@ -98,6 +136,23 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
       spawns: 0,
       provenance: { repoSha: null, treePath: path.resolve(mainTree) },
     });
+  }
+
+  if (typeof fsApi.existsSync === 'function') {
+    const missing = [cwd, taskFile].filter((p) => !fsApi.existsSync(p));
+    if (missing.length) {
+      const detail = `Path does not exist: ${missing.join(', ')}`;
+      logErr(`TARGET_PATH_INVALID ${item}: ${detail}`);
+      return withCompletion({
+        launched: false,
+        choice: chosenKey,
+        reason: 'TARGET_PATH_INVALID',
+        detail,
+        exitCode: 1,
+        spawns: 0,
+        provenance: { repoSha: null, treePath: path.resolve(mainTree) },
+      });
+    }
   }
 
   const rawTimeout =
@@ -267,6 +322,23 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
         provenance,
       });
     }
+    // A launcher that reports its own refusal or failure is not a launch.
+    const refused =
+      launchRecord.launched === false ||
+      (launchRecord.exitCode !== undefined && launchRecord.exitCode !== 0);
+    if (refused) {
+      return withCompletion({
+        launched: false,
+        status: 'refused',
+        choice: chosenKey,
+        reason: launchRecord.reason || 'LAUNCHER_REFUSED',
+        detail: launchRecord.detail,
+        launchRecord,
+        exitCode: 1,
+        spawns: launcherSpawns,
+        provenance,
+      });
+    }
     return withCompletion({
       launched: true,
       choice: chosenKey,
@@ -332,8 +404,11 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
       resolveCompletion = resolve;
     });
 
+    // Starting the dispatch subprocess is not a worker launch. `launched` turns
+    // true only on the completion outcome, when dispatch exits with a receipt.
     const result = {
-      launched: true,
+      launched: false,
+      status: 'subprocess_started',
       choice: chosenKey,
       argvIdentity: parsedIdentity,
       launchRecord,
@@ -364,15 +439,37 @@ function routeLaunchStep(decision, options = {}, deps = {}) {
     if (child && typeof child.unref === 'function') child.unref();
 
     if (child && typeof child.on === 'function') {
-      child.on('spawn', () => {
+      child.on('close', (code) => {
+        let text = '';
+        try {
+          if (typeof fsApi.readFileSync === 'function')
+            text = String(fsApi.readFileSync(log, 'utf8'));
+        } catch {}
+        const outcome = outcomeFromDispatch(code, text);
+        appendLog(fsApi, logFile, logsDir, {
+          at: new Date().toISOString(),
+          item,
+          role,
+          cwd,
+          repoSha: provenance.repoSha,
+          treePath: provenance.treePath,
+          choice: { key: chosenKey, identity: parsedIdentity },
+          status: outcome.status,
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
+          ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
+          dispatchExitCode: code,
+        });
+        result.launched = outcome.launched;
+        result.status = outcome.status;
+        if (outcome.reason) result.reason = outcome.reason;
         notifyCompletion({
-          launched: true,
-          status: 'spawned',
+          ...outcome,
           choice: chosenKey,
           argvIdentity: parsedIdentity,
           launchRecord,
           spawns: 1,
           provenance,
+          ...(outcome.launched ? {} : { exitCode: 1 }),
         });
       });
       child.on('error', (err) => {
