@@ -946,3 +946,9 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Honest outcome: starting the dispatch subprocess is `status: 'subprocess_started'`, `launched: false`. Completion is decided when the dispatch process closes (`close`, after its stdio is flushed). Exit 0 with outcome `completed` gives `worker_launched` (+ `sessionId`). A `Dispatch refused: CODE` line or a nonzero exit gives `refused` with that reason and `exitCode: 1`. Anything else gives `launch_state_unknown`. A custom launcher that reports `launched: false` or a nonzero `exitCode` is a refusal.
 - Callers: `routeLaunchStep` callers must await `completion` for the launch result. The out-of-repo route wrappers need their own update (absolute paths, `discoveryDir` forwarding, await completion).
 - Evidence: the new tests fail on `ecf642b9` (pinned 6/7, path/outcome 5/5) and pass after the change.
+
+## AA snapshot: gone pages are skipped, transient failures retried once (2026-11-12)
+
+- Regression from #589 found by a real isolated refresh (2026-11-12 01:03Z): 41 of 524 model pages answer HTTP 404 (AA no longer serves them), so every refresh failed `AA_DEEP_INCOMPLETE` and the snapshot could never refresh.
+- Now: a 404/410 page is skipped (no records to lose, same as a 200 page with no records). Any other failure (5xx, network, timeout) is retried once, then fails the refresh as before.
+- Evidence: an isolated real refresh after the fix succeeded (129 rows, 41 skipped 404, 0 retries, 525 requests, output only in the isolated dir; live `data/aa-intelligence.json` unchanged). The new 404 and retry tests fail on the #589 code.

@@ -105,3 +105,33 @@ test('when every model page answers, the snapshot is written as before', async (
     e.cleanup();
   }
 });
+
+test('a model page AA no longer serves (404) is skipped, not a failure', async () => {
+  const e = setup();
+  try {
+    const res = await snapshot(
+      e.policyFile,
+      fetchWith(() => ({ ok: false, status: 404, text: async () => '' }))
+    );
+    assert.equal(res.rows, 2, 'leaderboard rows still written');
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('a transient failure is retried once before failing the refresh', async () => {
+  const e = setup();
+  try {
+    let calls = 0;
+    const flaky = () => {
+      calls += 1;
+      if (calls === 1) return { ok: false, status: 503, text: async () => '' };
+      return ok(PAGE_2);
+    };
+    const res = await snapshot(e.policyFile, fetchWith(flaky));
+    assert.equal(calls, 2, 'one retry');
+    assert.equal(res.rows, 3);
+  } finally {
+    e.cleanup();
+  }
+});
