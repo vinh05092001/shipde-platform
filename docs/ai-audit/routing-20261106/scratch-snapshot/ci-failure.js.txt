@@ -1,0 +1,79 @@
+// ci-failure.js — tell PR contract failures apart from CI failures.
+// Pure CommonJS module: no file, network or process access.
+
+function parseReview(text) {
+  const hasContract = text.includes('Pull Request contract validation failed');
+  const hasCi = text.includes('P1 — CI failing');
+  const kind = hasContract ? 'contract' : hasCi ? 'ci' : 'none';
+
+  // check: name after "CI failing:", without the trailing dot or bold markers.
+  let check = '';
+  const ciMatch = text.match(/P1 — CI failing:\s*\**\s*([^.\n]+)\./);
+  if (ciMatch) check = ciMatch[1].trim();
+
+  // missingSections: unique section names from "missing PR section: ## X", in order.
+  const missingSections = [];
+  const sectionRe = /missing PR section: ##\s*(.+)$/gm;
+  let m;
+  while ((m = sectionRe.exec(text)) !== null) {
+    const name = m[1].trim();
+    if (!missingSections.includes(name)) missingSections.push(name);
+  }
+
+  // truncated: a bare "--" line inside the block marks a cut extract, so the
+  // listed sections may not be the full set required by the template.
+  let truncated = false;
+  if (kind === 'contract') {
+    for (const raw of text.split('\n')) {
+      if (raw.trim() === '--') { truncated = true; break; }
+    }
+  }
+
+  const notReady = text.includes('PR is not marked READY_FOR_CODEX');
+
+  // errorLines: for 'ci', unique failure lines, at most 8.
+  const errorLines = [];
+  if (kind === 'ci') {
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      if (line.startsWith('✔') || line.includes('✅')) continue;
+      if (line.includes('(0 errors')) continue;
+      if (line.startsWith('✖') || line.startsWith('not ok') || line.includes('Error:')) {
+        if (!errorLines.includes(line)) errorLines.push(line);
+      }
+    }
+    if (errorLines.length > 8) errorLines.length = 8;
+  }
+
+  return { kind, check, missingSections, notReady, errorLines, truncated };
+}
+
+function buildStep(parsed) {
+  const { kind, check, missingSections, notReady, errorLines, truncated } = parsed;
+
+  if (kind === 'none') return '';
+
+  if (kind === 'contract') {
+    const lines = ['Edit only the PR body.'];
+    if (missingSections.length) {
+      lines.push('Missing sections:');
+      for (const s of missingSections) lines.push(`- ${s}`);
+    }
+    if (truncated) lines.push('The list may be incomplete; compare the PR body with every required section of the template.');
+    if (notReady) lines.push('Set READY_FOR_CODEX on the PR.');
+    return lines.join('\n');
+  }
+
+  // ci
+  const lines = [`CI check "${check}" is failing.`];
+  if (errorLines.length) {
+    lines.push('Error lines:');
+    for (const l of errorLines) lines.push(`- ${l}`);
+  } else {
+    lines.push('The log extract holds no error line; read the failing check output.');
+  }
+  return lines.join('\n');
+}
+
+module.exports = { parseReview, buildStep };

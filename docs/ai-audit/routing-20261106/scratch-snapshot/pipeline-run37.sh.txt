@@ -1,0 +1,144 @@
+# Unattended delivery loop: keeps every item moving without the coordinator in the loop.
+# Each pass (every 10 min), per item in items.txt ("worktree|ITEM-ID|idgrep|pr|taskfile"):
+#   new commit        -> push-review.sh (gate checks, push, review; reviewer differs in family from writer)
+#   review CHANGES    -> copy review into .oc/review.txt and re-route a writer via route.js
+#   review PASS       -> write PASS line to pipeline-pass.txt and exit, so the coordinator verifies SHA+CI and merges
+#   writer dead, no commit -> re-route via route.js (route.js applies cooldowns / unproductive rules)
+# It never merges, never force-pushes, never edits product files.
+S=<scratch>
+W=<home>/AI/shipde-platform/.worktrees; L=$W/logs/night; RL=$L/route-log.jsonl; ST=$S/pipeline-state; mkdir -p $ST; WG=$(cygpath -m $S/work-guard-pinned.js)  # pinned PASS copy a96c6ff; never run the guard from a worktree a writer edits
+log(){ echo "$(date +%H:%M) $*" | tee -a $S/pipeline.log; }
+
+last_launch(){ # prints "<epoch-ms> <how> <label>" of the newest launched route for an item
+  [ -f $RL ] || return; grep "\"item\":\"$1\"" $RL | grep '"launch"' | tail -1 | node -e "try{const r=JSON.parse(require('fs').readFileSync(0,'utf8'));console.log(Date.parse(r.at),r.launch.how.replace(/ /g,'_'),r.choice.label)}catch{}"
+}
+own_pid(){ tasklist //FI "PID eq $1" //NH 2>/dev/null | grep -qiE "^(node|opencode|codex|bash|cmd|powershell|conhost)[^ ]* +$1 "; }
+writer_alive(){ # $1=epoch-ms $2=how
+  case "$2" in
+    *pid_*) p=${2##*_}
+      lf=$(ls -t $L/route-$3-*.log 2>/dev/null | head -1); age=99999; [ -n "$lf" ] && age=$(( $(date +%s) - $(stat -c %Y "$lf") ))
+      # the launcher pid can exit while the CLI keeps working: a log written in the last 3 min means alive
+      # 04/11: opencode prints a fatal "Error: [4xx]" in seconds but never exits - kill after 60s silence, not 20 min
+      if [ -n "$lf" ] && [ $age -ge 60 ] && sed 's/\x1b\[[0-9;]*m//g' "$lf" | grep -qE '^Error: (\[|The user rejected permission)'; then own_pid $p && taskkill //PID $p //T //F >/dev/null 2>&1; log "killed failed writer pid $p for $3: $(sed 's/\x1b\[[0-9;]*m//g' "$lf" | grep -E '^Error: ' | tail -1 | sed 's/[[0-9;]*m//g' | cut -c1-120)"; return 1; fi
+      [ $age -lt 180 ] && return 0
+      if own_pid $p; then
+        # alive but silent for 20+ min: a hung CLI (e.g. opencode after "Model not found") - kill its tree, treat as dead
+        [ $age -lt 1200 ] && return 0
+        taskkill //PID $p //T //F >/dev/null 2>&1; log "killed hung writer pid $p for $3 (log silent ${age}s)"
+      fi
+      return 1 ;;
+    schtasks_ShipDe-agy*) lane=${2##*-}; f=<runs>/$lane/result.json
+      fin=$(node -e "try{const j=JSON.parse(require('fs').readFileSync('$f','utf8').replace(/^\uFEFF/,''));console.log(Date.parse(j.finishedAt)||0)}catch{console.log(0)}")
+      [ "$fin" -ge "$1" ] && return 1  # finished after this launch
+      [ "$(cat $ST/ended-$lane 2>/dev/null || echo 0)" -ge "$1" ] && return 1  # already ended after this launch: dead, nothing to end again
+      # the lane has since been given another item's job: this item's writer is gone (never end the lane for it)
+      grep -q "\"cwd\":\"[^\"]*/$wt\"" <runs>/$lane/job.json 2>/dev/null || return 1
+      el=$(( $(date +%s)000 - $1 )); [ $el -lt 900000 ] && return 0  # first 15 min: still starting up
+      [ $el -ge 7200000 ] && return 1
+      # agy writes no log until it ends: judge liveness by files it touches in the worktree (code, test caches)
+      if [ -n "$(find $W/$wt -path '*/node_modules' -prune -o -path '*/.git' -prune -o -type f ! -name pr-body-gh.md ! -name review.txt ! -name history.md ! -name 'task*.md' ! -name '.oc-codex-task.md' -newermt '-20 minutes' -print -quit 2>/dev/null)" ]; then return 0; fi
+      schtasks //end //tn "\\ShipDe\\ShipDe-$lane" >/dev/null 2>&1; date +%s000 > $ST/ended-$lane; log "agy $lane hung on $3 (no worktree writes for 20 min) - ended"; return 1 ;;
+    *) return 1 ;;
+  esac
+}
+route(){ # $1 wt $2 id $3 task
+  # per-item backoff: at most one launch attempt per 8 min, and never while the last writer is still alive
+  [ -f "$W/$1/.oc/$3" ] || { [ -s "$W/$1/.oc/review.txt" ] && cp "$W/$1/.oc/review.txt" "$W/$1/.oc/$3"; }
+  lt=$(cat $ST/$2.lastroute 2>/dev/null || echo 0); [ $(( $(date +%s) - lt )) -lt 300 ] && return
+  read t how label <<<"$(last_launch $2)"; [ -n "$t" ] && writer_alive "$t" "$how" "$id" && return
+  # focused context pack (repomix via tools/ai-brain/context-pack.js) of the files the review names, so writers do not explore the repo
+  d=$W/$1; fl=$(grep -oE "[A-Za-z0-9_./-]+[.](js|mjs|ts|tsx|md|json|csv|yml)" $d/.oc/review.txt 2>/dev/null | sort -u | while read p; do [ -f "$d/$p" ] && echo "$p"; done); [ -n "$fl" ] && node -e "process.stdout.write(JSON.stringify({allowedPaths:process.argv.slice(1).concat([\"AGENTS.md\"])}))" $fl > $d/.oc/pack-spec.json && (cd $d && SHIPDE_REPOMIX_BIN=$S/repomix-1.18.1/node_modules/.bin/repomix.cmd node tools/ai-brain/context-pack.js --spec .oc/pack-spec.json --output .oc/context-pack.md >/dev/null 2>&1)
+  # one route at a time: parallel review subshells otherwise pick the same free lane and overwrite its job.json
+  # a lock older than 15 min was left by a killed pipeline: take it over instead of stalling every route for 10 min
+  [ -d $ST/route.lock ] && [ $(( $(date +%s) - $(stat -c %Y $ST/route.lock) )) -gt 900 ] && rmdir $ST/route.lock
+  for i in $(seq 1 120); do mkdir $ST/route.lock 2>/dev/null && break; sleep 5; done
+  date +%s > $ST/$2.lastroute
+  # the previous writer is gone: drop its scratch dirs (they grew to 100s of MB per clone)
+  rm -rf $W/$1/.oc/tmp $W/$1/.upstream-tmp 2>/dev/null
+  # a pr-body copied from another item (seen 2026-11-03: TASK-AI-155 body in the 160 and 164 clones) makes writers switch to that item: restore it from the PR
+  if [ "$pr" != "-" ] && [ -f $W/$1/.oc/pr-body.md ] && ! grep -q "$2" $W/$1/.oc/pr-body.md; then mv $W/$1/.oc/pr-body.md $W/$1/.oc/pr-body.md.wrong; gh pr view $pr --json body --jq .body > $W/$1/.oc/pr-body.md; log "restored pr-body for $2 from #$pr (held another item's id)"; fi
+  o=$(cd $W/p-run-main && timeout 600 node $S/route.js --item $2 --cwd "<home>/AI/shipde-platform/.worktrees/$1" --task "<home>/AI/shipde-platform/.worktrees/$1/.oc/$3" --allow-gpt 2>&1 | tee $ST/$2.routeout | grep -E "^$2" | head -1)
+  rmdir $ST/route.lock 2>/dev/null; log "route $2: ${o:0:120}"; [ -n "$o" ] || log "route $2 produced no result: $(grep -E 'Error|ENOENT' $ST/$2.routeout | head -1 | cut -c1-160)"
+}
+
+sweep_orphans(){ # a writer replaced by a newer launch is never checked again: end any writer CLI older than 2h (real runs end far sooner)
+  for p in $(powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { ((\$_.Name -eq 'opencode.exe' -and \$_.CommandLine -like '*run -m*') -or (\$_.Name -eq 'codex.exe' -and \$_.CommandLine -like '* exec*') -or (\$_.Name -in 'node.exe','turbo.exe' -and \$_.CommandLine -like '*shipde-platform\.worktrees\p-*')) -and \$_.CreationDate -lt (Get-Date).AddHours(-2) } | ForEach-Object { \$_.ProcessId }" 2>/dev/null | tr -d '\r'); do
+    taskkill //PID $p //T //F >/dev/null 2>&1 && log "ended orphan writer pid $p (running > 2h)"
+  done
+}
+
+# single instance: a second pipeline (an old copy that survived a restart) double-routes lanes and races reviews
+if [ -f $ST/pipeline.pid ] && kill -0 $(cat $ST/pipeline.pid) 2>/dev/null; then echo "pipeline already running as $(cat $ST/pipeline.pid)"; exit 1; fi
+echo $$ > $ST/pipeline.pid; rmdir $ST/route.lock 2>/dev/null
+
+while :; do
+  [ "$(cat $ST/pipeline.pid 2>/dev/null)" = "$$" ] || { log "another pipeline took over (pid $(cat $ST/pipeline.pid)); exiting $$"; exit 0; }
+  sweep_orphans
+  while IFS='|' read wt id grepid pr task; do
+    [ -z "$wt" ] || [ "${wt:0:1}" = "#" ] && continue
+    # work guard (TASK-AI-167, versioned in p-task-ai-167): wrong branch / conflict / cwd blocks this item only
+    gw=$(node $WG check-workspace --cwd $W/$wt --item $grepid 2>/dev/null); if [ $? -ne 0 ]; then
+      [ "$(cat $ST/$id.guard 2>/dev/null)" = "$gw" ] || { echo "$gw" > $ST/$id.guard; log "GUARD $id blocked: $gw"; }; continue; fi; rm -f $ST/$id.guard
+    # agy writers (other Windows users) have re-pointed worktree .git files at private repos: restore the link to our repo
+    if [ -f $W/$wt/.git ] && ! grep -q 'shipde-platform/.git/worktrees/' $W/$wt/.git; then m=$(grep -l "$wt/.git" <home>/AI/shipde-platform/.git/worktrees/*/gitdir 2>/dev/null | head -1); [ -n "$m" ] && printf 'gitdir: <home>/AI/shipde-platform/.git/worktrees/%s
+' "$(basename $(dirname $m))" > $W/$wt/.git && log "restored .git link for $wt"; fi
+    d=$W/$wt; b=$(git -C $d branch --show-current 2>/dev/null) || continue
+    if [ -f $ST/$id.lanes ]; then  # parallel lanes in flight: wait until each committed or 2h passed, then merge them
+      age=$(( $(date +%s) - $(stat -c %Y $ST/$id.lanes) )); done_all=1
+      for lw in $(cat $ST/$id.lanes); do [ "$(git -C $W/$lw rev-list --count $b..HEAD 2>/dev/null || echo 0)" -gt 0 ] || done_all=0; done
+      [ $done_all = 0 ] && [ $age -lt 7200 ] && continue
+      for lw in $(cat $ST/$id.lanes); do lb=$(git -C $W/$lw branch --show-current)
+        if [ "$(git -C $d rev-list --count HEAD..$lb)" -gt 0 ]; then git -C $d merge -q --no-edit $lb 2>/dev/null && log "lane $lw merged" || { git -C $d merge --abort; log "lane $lw CONFLICT, dropped"; }; fi
+        cmd //c rmdir "$(cygpath -w $W/$lw/node_modules)" 2>/dev/null; git -C $d worktree remove --force $W/$lw 2>/dev/null; git -C $d branch -D $lb >/dev/null 2>&1
+      done; rm -f $ST/$id.lanes
+    fi
+    ahead=$(git -C $d rev-list --count origin/$b..HEAD 2>/dev/null || git -C $d rev-list --count origin/main..HEAD)
+    read t how label <<<"$(last_launch $id)"
+    if [ "$pr" != "-" ] && [ -s $d/.oc/pr-body.md ] && grep -q "$id" $d/.oc/pr-body.md && grep -q READY_FOR_CODEX $d/.oc/pr-body.md; then h1=$(sha1sum < $d/.oc/pr-body.md); if [ "$h1" != "$(cat $ST/$id.bodysync 2>/dev/null)" ]; then gh pr edit $pr --body-file $d/.oc/pr-body.md >/dev/null 2>&1 && { echo "$h1" > $ST/$id.bodysync; log "synced PR body to #$pr"; }; fi; fi  # 06/11: a contract fix must reach the PR
+    if [ "${ahead:-0}" -eq 0 ] && [ "$pr" = "-" ]; then if ! { [ -n "$t" ] && writer_alive "$t" "$how" "$id"; }; then route $wt $id $task; fi; continue; fi  # 06/11: a new branch without commits still needs its first writer
+    if [ "${ahead:-0}" -gt 0 ] && [ "$pr" = "-" ] && ! git -C $d diff --name-only origin/main...HEAD | grep -q "work-items/$id.md"; then route $wt $id $task; continue; fi  # not a complete first delivery yet
+    if [ "${ahead:-0}" -gt 0 ] && [ "$pr" = "-" ] && [ ! -s $d/.oc/pr-body.md ]; then  # delivery done but no PR body: ask a writer for it, don't wake the coordinator
+      sed "s/__ID__/$id/g" $S/task-prbody.tmpl > $d/.oc/task-prbody.md; cp -n $S/tmpl-pr-body.md $d/.oc/pr-body-template.md 2>/dev/null; route $wt $id task-prbody.md; continue; fi
+    if [ "${ahead:-0}" -gt 0 ] && [ "$pr" = "-" ]; then log "$(bash $S/open-pr.sh $wt $id 2>&1 | tail -1)"; continue; fi  # items.txt now carries the PR number
+    # a writer still editing this worktree: wait, reviewing or merging now would race its edits
+    if [ -n "$t" ] && writer_alive "$t" "$how" "$id"; then continue; fi
+    hs=$(git -C $d rev-parse HEAD); unrev=0; [ "$pr" != "-" ] && [ "$(cat $ST/$id.reviewed 2>/dev/null)" != "$hs" ] && unrev=1  # pushed head never reviewed
+    if [ "${ahead:-0}" -gt 0 ] || [ $unrev = 1 ]; then
+      [ -f $ST/$id.reviewing ] && kill -0 $(cat $ST/$id.reviewing) 2>/dev/null && continue  # this item is already being reviewed
+      (
+      n=$(cat $ST/$id.n 2>/dev/null || echo 0); n=$((n+1)); echo $n > $ST/$id.n; tag="pl-$(echo $id | tr 'A-Z' 'a-z')-$n"
+      prev=$(cat $ST/$id.prev 2>/dev/null || echo -)
+      if echo "$label" | grep -qiE 'gpt|astra|terra|luna|codex'; then export OC=amd-radeon/DeepSeek-V4.1-Flash; else unset OC; fi
+      gb=$(git -C $d rev-parse origin/main); ga="--ledger $ST/work-ledger.json --item $id --stage review --head $hs --base $gb --inputs $prev"
+      ad=$(node $WG admit $ga --pid $(cat /proc/$BASHPID/winpid)); if [ $? -ne 0 ]; then log "GUARD $id review skipped: $ad"; if echo "$ad" | grep -qE "\"outcome\":\"CONFLICT\"|NO_PROGRESS_SAME_INPUT" && ! echo "$ad" | grep -q FOREIGN; then route $wt $id $task; fi; exit; fi
+      o=$(bash $S/push-review.sh $wt $grepid $pr $tag $prev 2>&1 | tail -1); unset OC
+      node $WG record $ga --outcome "$(oc=$(echo "$o" | grep -oE "VERDICT: [A-Z_]+|CI gate|SKIP|FOREIGN|CONFLICT|WRONGBRANCH" | head -1 | tr -d ":" | tr " " "_"); echo ${oc:-NOT_ATTEMPTED})" >/dev/null
+      log "review $id #$pr: ${o:0:110}"
+      echo "$(date -Iseconds),$id,$pr,$n,${label:-?},$(echo "$o" | grep -oE "VERDICT: [A-Z_]+|CI gate|SKIP|CONFLICT" | head -1),$(echo "$o" | grep -oE "tokens=[0-9,]*" | tr -d "tokens=,")" >> $S/metrics.csv
+      if echo "$o" | grep -q "^CONFLICT"; then route $wt $id $task; exit; fi  # task-fix starts by merging main
+      if echo "$o" | grep -qE "^(SKIP|FOREIGN)"; then  # gate refused the push (bad commit subject, gate file, or diff --check): send the reason back
+        { echo "VERDICT: CHANGES_REQUIRED"; echo; echo "1. **P1 — push gate refused this branch ($o).** Fix before anything else:"; git -C $d diff --check origin/main...HEAD | head -20; git -C $d diff --name-only origin/main...HEAD | grep -E '(allowlist|semgrep|^\.github/|baseline\.json)'; echo "Commit subjects must contain $grepid; leftover conflict markers must be resolved."; } > $d/.oc/review.txt
+        route $wt $id $task; exit; fi
+      rf=$L/review-$tag.txt
+      if [ ! -s "$rf" ]; then log "REVIEWER FAILED $id: empty $rf (see rvlog-$tag.log); head stays unreviewed"; exit; fi
+      git -C $d rev-parse HEAD > $ST/$id.reviewed
+      [ -s "$rf" ] && { echo "## round $n $(date +%m-%d_%H:%M) $(head -1 $rf)"; grep -E "WHERE|Follow-up" $rf | tr -d "*" | sed -E "s/^ *[0-9]+[.] *//" | cut -c1-220 | sed "s/^/- seen: /"; } >> $d/.oc/decisions.md
+      if head -1 $rf 2>/dev/null | grep -q "VERDICT: PASS"; then echo "PASS $pr $tag $(grep -m1 'Reviewed SHA' $rf)" >> $S/pipeline-pass.txt; log "PASS $id #$pr"; exit; fi
+      if grep -q "CHANGES_REQUIRED" $rf 2>/dev/null && [ "$(grep -c "VERDICT: CHANGES_REQUIRED" $d/.oc/history.md 2>/dev/null)" -ge 3 ] 2>/dev/null && ! grep -q "CI gate" <<<"$o"; then cp $rf $d/.oc/review.txt; echo "STUCK $pr $id rounds=$n" >> $S/pipeline-pass.txt; log "STUCK $id after $n rounds"; exit; fi
+      if grep -q "CHANGES_REQUIRED" $rf 2>/dev/null; then cp $rf $d/.oc/review.txt; { echo; echo "## Round $n review ($tag, writer was ${label:-unknown})"; cat $rf; } >> $d/.oc/history.md; echo review-$tag.txt > $ST/$id.prev
+        route $wt $id $task; fi  # fan-out lanes are git worktrees again (cannot commit); disabled after the 2026-11-03 move to standalone clones
+      ) &  echo $! > $ST/$id.reviewing  # reviews run in parallel; the loop moves on to the next item
+    elif [ -n "$t" ] && writer_alive "$t" "$how" "$id"; then :
+    elif ! echo "$b" | grep -qi "$(echo $id | tr A-Z a-z | sed 's/^feat-//')"; then
+      log "WRONGBRANCH $wt is on $b - not committing writer output, needs coordinator"
+    elif echo "$how" | grep -qE "^(codex|schtasks)" && [ -n "$(git -C $d status --porcelain -- . ':!.oc' ':!.oc-codex-task.md' ':!.serena' ':!.upstream-tmp' | head -1)" ]; then
+      # Codex's workspace-write sandbox cannot write the worktree's git metadata (it lives in the main .git), so a Codex
+      # writer can edit but never commit. The coordinator commits that output (allowed mechanical git) and the normal
+      # gates (push-review: subject/gate-file/diff-check, CI, reviewer) judge it.
+      git -C $d add -A . && { git -C $d reset -q -- .oc .oc-codex-task.md 2>/dev/null; true; } && { fx=$(git -C $d diff --cached --name-only -- docs/product-spec/work-items/ | grep -vi "$grepid"); [ -z "$fx" ] || { git -C $d restore --staged -- $fx; log "GUARD $id: unstaged other items' work-item files: $(echo $fx)"; }; true; } && git -C $d commit -q -m "[$id] Address review: writer output (${label:-writer})" && log "committed codex output for $id"
+    else route $wt $id $task
+    fi
+  done < $S/items.txt
+  [ -s $S/pipeline-pass.txt ] && { log "wake coordinator: $(tail -1 $S/pipeline-pass.txt)"; exit 0; }
+  sleep 120  # short pass: dead writers are replaced within ~2 min
+done

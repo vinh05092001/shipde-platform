@@ -1,0 +1,90 @@
+// 05/11 operator: "Đổi reviewer khác họ" — the 9router writer combo "vinh" writes with gpt-4.1 (openai), the same
+// family as the old reviewer. Pick the reviewer per PR from live data:
+//   candidates = models that answered the latest probe (probe-priors-out.txt, OK rows),
+//   score      = AA v5 percentile (route.js aaScore; unscored last),
+//   exclude    = routes the Controller route-health has parked, and the family of THIS item's writer
+//                (latest launch in route-log.jsonl; a 9router combo counts as the family of the model it served).
+// Prints up to 3 opencode model ids, best first. usage: node reviewer-pick.js <review-tag | item-id>
+const fs = require('fs');
+const path = require('path');
+const R = require('./route.js');
+const HB = require('./health-bridge');
+
+const arg = process.argv[2] || '';
+const item = ((arg.match(/task-ai-(\d+)/i) || [])[1] && 'TASK-AI-' + arg.match(/task-ai-(\d+)/i)[1]) || arg;
+const LOGS = '<home>/AI/shipde-platform/.worktrees/logs/night';
+const MAIN = '<home>/AI/shipde-platform/.worktrees/p-run-main';
+
+// writer family of this item
+let writer = '';
+try {
+  for (const l of fs.readFileSync(path.join(LOGS, 'route-log.jsonl'), 'utf8').trim().split(/\r?\n/)) {
+    let r; try { r = JSON.parse(l); } catch { continue; }
+    if (r.item === item && r.launch && r.choice) writer = r.choice.label;
+  }
+} catch {}
+const writerModel = writer.replace(/^[a-z0-9-]+:/, '');
+const writerFamilies = new Set([R.family(writerModel)]);
+// a combo hides its member: use the model the combo actually served in that run, when the log names it
+try {
+  const servedFile = path.join(__dirname, 'combo-served.json');
+  const served = JSON.parse(fs.readFileSync(servedFile, 'utf8'));
+  const base = writerModel.split('/').pop();
+  if (served[base]) writerFamilies.add(R.family(served[base]));
+} catch {}
+
+let h = null; try { h = HB.load(MAIN); } catch {}
+let ocCfg = {}; try { ocCfg = JSON.parse(fs.readFileSync(path.join(process.env.USERPROFILE || process.env.HOME, '.config/opencode/opencode.json'), 'utf8')).provider || {}; } catch {}
+const rows = [];
+for (const line of fs.readFileSync(path.join(__dirname, 'probe-priors-out.txt'), 'utf8').split(/\r?\n/)) {
+  const m = line.match(/^OK\s+\S+\s+\S+\s+\S+\s+200\s+(\S+)/);
+  if (!m) continue;
+  const model = m[1];
+  // direct providers must be declared in opencode.json or opencode answers Model not found; opencode/* are built in
+  const pv = model.slice(0, model.indexOf('/')); const rest = model.slice(model.indexOf('/') + 1);
+  if (pv !== 'opencode' && !(ocCfg[pv] && ocCfg[pv].models && Object.prototype.hasOwnProperty.call(ocCfg[pv].models, rest))) continue;
+  if (writerFamilies.has(R.family(model))) continue;
+  // same paid-route rule as route.js: per-token billing gateways only with their free ids, unless the
+  // operator set a price cap (OR_MAX_USD_PER_MTOK) and the live price is under it
+  const paid = /(^|\/)(openrouter|nous|tokenharbor|vercel|requesty)\//.test(model) && !/free/i.test(model);
+  if (paid && process.env.BLOCK_PAID_ROUTES) continue; // 05/11 operator: callable = usable; 402/429 routes are parked by evidence
+  if (h && HB.parked(h, model)) continue;
+  const s = R.aaScore(model);
+  rows.push({ model, score: s ? s.pct : -1 });
+}
+// one option per distinct model (duplicate routes split Jev's probability -> LOW_CONFIDENCE). Among routes of the
+// same model prefer the one whose last real review produced a verdict (reviewer-results.jsonl), then by score.
+const okReviews = {};
+const failStreak = {}; // consecutive failed real reviews within the last 3 h
+try { for (const l of fs.readFileSync(path.join(__dirname, 'reviewer-results.jsonl'), 'utf8').trim().split(/\r?\n/)) { try {
+  const x = JSON.parse(l); okReviews[x.model] = x.ok;
+  const recent = Date.now() - Date.parse(x.at) < 3 * 3600e3;
+  failStreak[x.model] = x.ok ? 0 : recent ? (failStreak[x.model] || 0) + 1 : failStreak[x.model] || 0;
+} catch {} } } catch {}
+for (let k = rows.length - 1; k >= 0; k--) if ((failStreak[rows[k].model] || 0) >= 2) rows.splice(k, 1); // failed twice in a row: skip
+const base = (m) => m.split('/').pop().toLowerCase().replace(/[:-]free$/, '');
+const seen = new Set();
+const out = rows
+  .sort((a, b) => (b.score - a.score) || ((okReviews[b.model] === true) - (okReviews[a.model] === true)) || ((okReviews[a.model] === false) - (okReviews[b.model] === false)))
+  .filter((r) => { const k = base(r.model); if (seen.has(k)) return false; seen.add(k); return true; });
+// 05/11 operator: ask Jev for every pick. Short, specific evidence (<1800 chars, <=3 options, distinct models).
+let top = out.slice(0, 3);
+if (false) { // 05/11 audit #10: Jev does not pick routes; reviewers stay in Controller score order
+  let deltaKb = '?';
+  try { deltaKb = Math.round(fs.statSync(path.join(LOGS, 'rvprompt-' + arg + '.txt')).size / 1024); } catch {}
+  const label = (r) => r.model.replace(/^ninerouter\//, '');
+  const evidence = (`Review job for ${item}: check a PR delta (~${deltaKb} KB prompt) against its Work Item; find real P0/P1 bugs, no style nits. ` +
+    `Writer of this PR: ${writerModel || 'unknown'} (family ${[...writerFamilies].join('/')}); the reviewer must be a different family. ` +
+    `Candidates (AA v5 percentile, -1 = not on AA; all answered a live call): ` +
+    top.map((r) => `${label(r)} score ${r.score} family ${R.family(r.model)} last review ${okReviews[r.model] === true ? 'returned a verdict' : okReviews[r.model] === false ? 'FAILED (no verdict)' : 'never used'}`).join(' | ') +
+    `. Which one most likely returns a correct, complete review in one call?`).slice(0, 1800);
+  const jev = R.askJev(`Pick the reviewer for ${item}`, top.map(label), evidence);
+  if (jev && jev.outcome === 'DECIDED' && jev.choice) {
+    const i = top.findIndex((r) => label(r) === jev.choice);
+    if (i > 0) top = [top[i], ...top.filter((_, k) => k !== i)];
+  }
+  if (process.env.DEBUG) console.error('jev', JSON.stringify(jev).slice(0, 200));
+  try { fs.appendFileSync(path.join(__dirname, 'reviewer-pick.log'), JSON.stringify({ at: new Date().toISOString(), item, writer, options: top.map(label), jev: jev && { outcome: jev.outcome, choice: jev.choice, confidence: jev.confidence } }) + '\n'); } catch {}
+}
+console.log(top.map((r) => r.model).join(' '));
+if (process.env.DEBUG) console.error('item', item, 'writer', writer, 'families', [...writerFamilies], out.slice(0, 6));

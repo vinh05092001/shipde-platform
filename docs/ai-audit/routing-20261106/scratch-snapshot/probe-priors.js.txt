@@ -1,0 +1,52 @@
+// Probe strong-looking chat models across opencode providers (incl. 9router). Prints model + status only.
+const cfg=require(process.env.HOME+'/.config/opencode/opencode.json');
+const PR=JSON.parse(require('fs').readFileSync('<home>/AI/shipde-platform/tools/ai-brain/data/model-priors-live.json','utf8')).ranking.filter(x=>x.score);
+const norm=s=>String(s).toLowerCase().split('/').pop().replace(/:.*$/,'').replace(/[._ ]/g,'-');
+function prior(m){const n=norm(m);let best=null;for(const x of PR){const c=x.canonical;if(n===c||n.startsWith(c+'-')||n.endsWith('-'+c)||n.includes('-'+c+'-')||n.startsWith(c)){if(!best||c.length>best.canonical.length)best=x}}return best||{score:0,codingTier:'T?',canonical:n,unscored:true}}
+const RX={test:()=>true}; // every chat model; unscored ones are provisional (score 0)
+const SKIP=/image|video|embed|vision|tts|audio|music|translate|3d/i;
+function key(p){const k=p.options&&p.options.apiKey;if(!k)return '';const m=String(k).match(/\{env:([A-Z0-9_]+)\}/);return m?process.env[m[1]]||'':k;}
+async function one(prov,base,k,model){const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),90000);
+ try{const r=await fetch(base.replace(/\/$/,'')+'/chat/completions',{method:'POST',signal:ctl.signal,headers:{'Content-Type':'application/json',...(k?{Authorization:'Bearer '+k}:{})},body:JSON.stringify({model,max_tokens:400,messages:[{role:'user',content:'Reply OK'}]})});
+ const tx=await r.text();let ok=false;try{const j=JSON.parse(tx.replace(/\s*(data:\s*\[DONE\]\s*)+$/,''));const c=j.choices&&j.choices[0];const t=c&&((c.message&&c.message.content)||(c.delta&&c.delta.content)||'');const rs=c&&c.message&&(c.message.reasoning_content||c.message.reasoning||'');ok=r.status===200&&!!c&&!j.error&&(String(t).length>0||String(rs).length>0||!!c.finish_reason)}catch{ok=/data:\s*\{/.test(tx)&&!/error|exhausted|quota|unavailable/i.test(tx)}
+ // Record which model the server says it actually ran; flag it when that differs from the one asked for.
+ let served='';try{served=String(JSON.parse(tx).model||'')}catch{}
+ const nm=s=>String(s).toLowerCase().split('/').pop().replace(/:.*$/,'').replace(/[^a-z0-9]/g,'');
+ const tag=ok&&served?(nm(served)===nm(model)?` served=${served}`:` SERVED-MISMATCH=${served}`):'';
+ const P=prior(model);return `${ok?"OK  ":"FAIL"} ${P.score} ${P.codingTier} ${P.canonical} ${r.status} ${prov}/${model}${tag} ${ok?'':tx.replace(/\s+/g,' ').slice(0,90)}`}catch(e){return `FAIL ERR ${prov}/${model} ${e.name}`}finally{clearTimeout(t)}}
+(async()=>{const jobs=[];for(const [prov,p] of Object.entries(cfg.provider||{})){const base=p.options&&p.options.baseURL;if(!base)continue;if(prov==='tokenharbor')continue;const k=key(p);
+ // The configured model list goes stale (9router kr/* ids changed); prefer the provider's live /models list.
+ let ids=Object.keys(p.models||{});
+ try{const r=await fetch(base.replace(/\/$/,'')+'/models',{headers:k?{Authorization:'Bearer '+k}:{},signal:AbortSignal.timeout(20000)});const j=await r.json();const live=(j.data||[]).map(m=>m.id).filter(Boolean);if(live.length)ids=live;}catch{}
+ for(const m of ids)if(RX.test(m)&&!SKIP.test(m))jobs.push([prov,base,k,m]);}
+ console.error('probing',jobs.length);const out=[];
+ const LIVE = require('path').join(__dirname, 'probe-live.log');
+ require('fs').writeFileSync(LIVE, 'probing ' + jobs.length + ' models, started ' + new Date().toLocaleTimeString() + '\n');
+ const _push = out.push.bind(out);
+ out.push = (...rows) => { for (const l of rows) require('fs').appendFileSync(LIVE, new Date().toLocaleTimeString() + '  ' + l + '\n'); return _push(...rows); };
+ // One serial queue per upstream (9router sub-provider counts separately), best prior first, 3s apart,
+ // so the probe itself does not trip rate limits. 429 retried once after 30s; a billing/auth refusal
+ // (401/402/expired key) skips the rest of that upstream with the same verdict.
+ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ const up=j=>j[0]==='ninerouter'?'ninerouter/'+j[3].split('/')[0]:j[0];
+ const Q={};for(const j of jobs)(Q[up(j)]=Q[up(j)]||[]).push(j);
+ for(const q of Object.values(Q))q.sort((a,b)=>prior(b[3]).score-prior(a[3]).score);
+ const LANE_SIZE=Number(process.env.PROBE_LANE_SIZE||40);const qs=[];for(const q of Object.values(Q)){for(let s=0;s<q.length;s+=LANE_SIZE)qs.push(q.slice(s,s+LANE_SIZE))}let next=0;console.error('lanes',qs.length);
+ await Promise.all(Array.from({length:Math.min(Number(process.env.PROBE_LANES||32),qs.length)},async()=>{while(next<qs.length){const q=qs[next++];let dead=null;
+  for(const j of q){if(dead){const P=prior(j[3]);out.push(`FAIL ${P.score} ${P.codingTier} ${P.canonical} ${dead} ${j[0]}/${j[3]} (skipped: account-level refusal on this upstream)`);continue;}
+   let r=await one(...j);const st=r.split(' ').filter(Boolean)[4];
+   if(st==='429'){await sleep(30000);r=await one(...j);}
+   // Only account-wide refusals skip the upstream; a per-model "premium model" 403 must not hide its free models.
+   if(/^FAIL/.test(r)&&(st==='401'||/api key has expired|insufficient credits|insufficient balance|balance=0|account balance/i.test(r)))dead=st;
+   out.push(r);await sleep(3000);}}}));
+
+ // Built-in opencode provider (OpenCode Zen free tier) has no baseURL in opencode.json, so the loop above never saw it, and the 9router oc/* list is stale. Probe it through the official CLI (04/11).
+ try{const {execFileSync:X,spawn:SP}=require('child_process');
+  const ids=X('opencode',['models','opencode'],{encoding:'utf8',timeout:60000,shell:true}).split(/\r?\n/).map(s=>s.trim()).filter(s=>/^opencode\//.test(s)&&/free|big-pickle/i.test(s)).map(s=>s.slice(9));
+  const run=m=>new Promise(res=>{let o='';const p=SP('opencode',['run','-m','opencode/'+m,'"Reply with the single word OK"'],{shell:true,stdio:['ignore','pipe','pipe']});
+   const tm=setTimeout(()=>p.kill(),150000);p.stdout.on('data',d=>o+=d);p.stderr.on('data',d=>o+=d);
+   p.on('close',()=>{clearTimeout(tm);const P=prior(m)||{score:0,codingTier:'T?',canonical:m};const ok=/\bOK\b/.test(o)&&!/error|unavailable|limit/i.test(o);
+    res((ok?'OK  ':'FAIL')+' '+P.score+' '+P.codingTier+' '+P.canonical+' '+(ok?200:0)+' opencode/'+m+(ok?' served=opencode/'+m:' '+o.replace(/\s+/g,' ').slice(-90)))})});
+  let i=0;await Promise.all(Array.from({length:3},async()=>{while(i<ids.length){out.push(await run(ids[i++]));await sleep(3000)}}));
+ }catch(e){console.error('opencode free probe failed',e.message)}
+ out.sort();console.log(out.join('\n'));})();

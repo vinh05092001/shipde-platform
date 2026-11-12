@@ -1,0 +1,54 @@
+// node r9.js <model> <promptFile> <outFile> : send prompt to 9router as ONE direct chat call (streaming, avoids the
+// 300s header timeout), write the reply. Reports finish_reason, in-stream errors, reasoning length and token usage
+// on stderr. 05/11: first call uses reasoning_effort low; if the model still spends all max_tokens on reasoning and
+// returns no answer (finish=length, empty reply), retry once with reasoning disabled.
+const fs = require('fs');
+const [, , m, p, o] = process.argv;
+const prompt = fs.readFileSync(p, 'utf8');
+
+async function call(extra) {
+  const r = await fetch('http://127.0.0.1:20128/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.NINEROUTER_API_KEY },
+    body: JSON.stringify({ model: m, stream: true, stream_options: { include_usage: true }, max_tokens: 32000, ...extra, messages: [{ role: 'user', content: prompt }] }),
+    signal: AbortSignal.timeout(2400000),
+  });
+  if (!r.ok) { const t = await r.text(); return { http: r.status, error: t.slice(0, 300) }; }
+  let buf = '', out = '', rtext = '', reasoning = 0, finish = '', err = '', usage = null;
+  const dec = new TextDecoder();
+  for await (const ch of r.body) {
+    buf += dec.decode(ch, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line.startsWith('data:')) continue;
+      const d = line.slice(5).trim(); if (d === '[DONE]') continue;
+      try {
+        const j = JSON.parse(d);
+        if (j.error) err = JSON.stringify(j.error).slice(0, 200);
+        if (j.usage) usage = j.usage;
+        const c = j.choices && j.choices[0];
+        if (c && c.delta) { if (c.delta.content) out += c.delta.content; const rc = c.delta.reasoning_content || c.delta.reasoning; if (rc) { reasoning += rc.length; rtext += rc; } }
+        if (c && c.finish_reason) finish = c.finish_reason;
+      } catch {}
+    }
+  }
+  // some upstreams (tokenharbor deepseek) put the whole answer in reasoning_content: use it when content is empty
+  if (!out && /^VERDICT:/m.test(rtext)) out = rtext.slice(rtext.search(/^VERDICT:/m));
+  return { out, reasoning, finish, err, usage };
+}
+
+const report = (tag, x) => console.error(`r9 ${m}${tag}: ` + (x.http ? `HTTP ${x.http} ${x.error}` : `reply ${x.out.length} chars, reasoning ${x.reasoning} chars, finish ${x.finish || '-'}${x.usage ? `, tokens in ${x.usage.prompt_tokens} out ${x.usage.completion_tokens}` : ''}${x.err ? ', ERROR ' + x.err : ''}`));
+
+(async () => {
+  try {
+    let x = await call({ reasoning_effort: process.env.R9_EFFORT || 'low' });
+    report('', x);
+    if (!x.http && !x.out && x.finish === 'length') {
+      x = await call({ reasoning_effort: 'none', thinking: { type: 'disabled' } });
+      report(' (retry, reasoning disabled)', x);
+    }
+    fs.writeFileSync(o, x.out || '');
+    console.log((x.out || 'EMPTY').split('\n')[0].slice(0, 200));
+  } catch (e) { fs.writeFileSync(o, ''); console.error('ERR', e.message); }
+})();

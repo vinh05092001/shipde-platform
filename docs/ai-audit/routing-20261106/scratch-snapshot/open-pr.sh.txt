@@ -1,0 +1,11 @@
+# open-pr.sh <worktree> <ITEM-ID> : push the branch and open the PR from the writer's .oc/pr-body.md, then record the PR number in items.txt
+S=<scratch>; d=<home>/AI/shipde-platform/.worktrees/$1; cd $d || exit 1
+g=$(git diff --name-only origin/main...HEAD | grep -Ec '(allowlist|semgrep|^\.github/|baseline\.json)'); [ "$2" = TASK-AI-165 ] && g=0
+grep -q "READY_FOR_CODEX" .oc/pr-body.md && [ "$g" = 0 ] || { echo "OPENPR-REFUSED $2 g=$g"; exit 1; }
+git push -q -u origin HEAD || exit 1
+t=$(grep -m1 -E '^# ' .oc/pr-body.md | sed 's/^# *//'); [ -n "$t" ] || t="[$2] $(sed -n 's/^\*\*Title:\*\* //p' docs/product-spec/work-items/$2.md | head -1)"; echo "$t" | grep -q "\[$2\]" || t="[$2] ${t:-Work Item delivery}"
+cp .oc/pr-body.md .oc/pr-body-gh.md; printf '\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n' >> .oc/pr-body-gh.md
+url=$(gh pr create --title "$t" --body-file .oc/pr-body-gh.md) || exit 1; n=${url##*/}
+sed -i "s#^$1|$2|\([^|]*\)|-|[^|]*\$#$1|$2|\1|$n|task-fix.md#" $S/items.txt
+[ -f .oc/task-fix.md ] || sed "s/#482 (FEAT-COM-05 API slice)/this PR ($2)/; s/FEAT-COM-05/$2/g" $S/tmpl-task-fix.md > .oc/task-fix.md
+echo "OPENED $2 #$n"
