@@ -142,6 +142,8 @@ function harness(lowStatus = 'AVAILABLE') {
         gitRoot: () => dir,
         commitExists: () => true,
         baseSha: VALID_40_HEX,
+        // Isolated from the runtime tree: no scoring policy, as on a clean checkout.
+        scoringPolicyFile: path.join(dir, 'no-scoring-policy.json'),
         run: runner,
         exit: (c) => {
           exitCode = c;

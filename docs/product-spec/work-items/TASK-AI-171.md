@@ -952,3 +952,8 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - Regression from #589 found by a real isolated refresh (2026-11-12 01:03Z): 41 of 524 model pages answer HTTP 404 (AA no longer serves them), so every refresh failed `AA_DEEP_INCOMPLETE` and the snapshot could never refresh.
 - Now: a 404/410 page is skipped (no records to lose, same as a 200 page with no records). Any other failure (5xx, network, timeout) is retried once, then fails the refresh as before.
 - Evidence: an isolated real refresh after the fix succeeded (129 rows, 41 skipped 404, 0 retries, 525 requests, output only in the isolated dir; live `data/aa-intelligence.json` unchanged). The new 404 and retry tests fail on the #589 code.
+
+## Test isolation: launch tests ignore the runtime scoring policy (2026-11-12)
+
+- `task-ai-171-int1-execute.test.js` and `task-ai-171-launch-fidelity.test.js` read the tree's live scoring policy. After the live AA snapshot refresh in the runtime tree, the policy activated and the synthetic candidates had no finite score, so 6 tests failed there (28/28 on a clean checkout). The harnesses now pass `scoringPolicyFile` pointing at a non-existent file (policy missing, as on clean CI). Test-only; assertions unchanged.
+- Evidence: with the live AA snapshot copied into the test tree, 28 pass / 0 fail (before: 22/6); without it, unchanged.

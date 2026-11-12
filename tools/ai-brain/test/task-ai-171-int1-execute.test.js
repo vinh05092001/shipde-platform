@@ -55,6 +55,8 @@ function createTestHarness() {
         gitRoot: () => dir,
         commitExists: () => true,
         baseSha: VALID_40_HEX,
+        // Isolated from the runtime tree: no scoring policy, as on a clean checkout.
+        scoringPolicyFile: path.join(dir, 'no-scoring-policy.json'),
       },
       extra
     );
