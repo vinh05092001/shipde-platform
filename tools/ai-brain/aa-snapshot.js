@@ -138,22 +138,33 @@ async function deepRecords(policy, html, fetchImpl, log = () => {}) {
   const workers = Array.from({ length: Number(policy.modelPageConcurrency) || 1 }, async () => {
     while (queue.length) {
       const slug = queue.shift();
-      try {
-        const res = await fetchImpl(base + encodeURIComponent(slug), {
-          headers: { 'user-agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(60000),
-        });
-        if (!res.ok) {
-          log(`${slug}: HTTP ${res.status}`);
-          failed.push(slug);
-          continue;
+      // A page AA no longer serves (404/410) has no records to lose: it is
+      // skipped like a page with no records. Any other failure (5xx, network,
+      // timeout) is retried once and then fails the refresh.
+      let text = null;
+      for (let attempt = 1; attempt <= 2 && text === null; attempt += 1) {
+        try {
+          const res = await fetchImpl(base + encodeURIComponent(slug), {
+            headers: { 'user-agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(60000),
+          });
+          if (res.status === 404 || res.status === 410) {
+            log(`${slug}: HTTP ${res.status} (page gone, skipped)`);
+            text = '';
+          } else if (!res.ok) {
+            log(`${slug}: HTTP ${res.status} (attempt ${attempt})`);
+          } else {
+            text = await res.text();
+          }
+        } catch (e) {
+          log(`${slug}: ${e.message} (attempt ${attempt})`);
         }
-        for (const r of parseRecords(await res.text()))
-          if (!records.has(r.slug)) records.set(r.slug, r);
-      } catch (e) {
-        log(`${slug}: ${e.message}`);
-        failed.push(slug);
       }
+      if (text === null) {
+        failed.push(slug);
+        continue;
+      }
+      for (const r of parseRecords(text)) if (!records.has(r.slug)) records.set(r.slug, r);
     }
   });
   await Promise.all(workers);
