@@ -957,3 +957,7 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 
 - `task-ai-171-int1-execute.test.js` and `task-ai-171-launch-fidelity.test.js` read the tree's live scoring policy. After the live AA snapshot refresh in the runtime tree, the policy activated and the synthetic candidates had no finite score, so 6 tests failed there (28/28 on a clean checkout). The harnesses now pass `scoringPolicyFile` pointing at a non-existent file (policy missing, as on clean CI). Test-only; assertions unchanged.
 - Evidence: with the live AA snapshot copied into the test tree, 28 pass / 0 fail (before: 22/6); without it, unchanged.
+
+## Checkpoint source recovery — 2026-11-14
+
+The historical CMC launch resumed a selectedCandidate-only checkpoint. Candidate keys omit source, so reconstruction lost source=9router and selected upstream cmc as the launcher provider. Recover source from the current eligible candidate with the exact same candidateKey, falling back to checkpoint.source when no current source exists. No gateway policy, scoring, quota, candidate availability or lifecycle change. Existing absent-candidate behavior remains unchanged, not newly validated. Three causal cases cover a legacy checkpoint without source, stale checkpoint source, and unchanged fresh selection. Together with base-pinning/fidelity tests31/31pass locally. Independent exact-SHA review and CI remain required before release.
