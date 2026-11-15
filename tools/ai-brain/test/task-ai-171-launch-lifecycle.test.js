@@ -276,7 +276,7 @@ test('scheduler timeout retains open ownership and exits without retry', (t) => 
   assert.equal(JSON.parse(fs.readFileSync(x.checkpoint, 'utf8')).outcome, 'unknown');
 });
 
-test('native result published between cleanup inspection and save is preserved', (t) => {
+test('locked writer result published between cleanup inspection and save is preserved', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cleanup-race-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const adapter = getHarness('agy-pool');

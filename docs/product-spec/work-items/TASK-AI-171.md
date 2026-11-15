@@ -992,3 +992,5 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Invalid account validation precedes the required-report guard. Causal rejection and timeout tests failed before repair; lifecycle plus TASK-AI-69 now pass 27/27.
 
 - Narrow scope amendment: lane-launcher.js adds opt-in onlyIfAbsent publication under its existing operation lock. A causal interleaving test proved cleanup could overwrite a native result between inspection and save; the new check preserves it. Normal result publication is unchanged. Paseo errors without attributable non-start evidence remain unconfirmed; no unsafe automatic release.
+
+- Review limitation: onlyIfAbsent serializes Node saveResult publishers. The native PowerShell worker publishes without lane.op, so a residual native publication race remains; no general cross-process race-free claim. Scheduler exit 0 is an acknowledgement, never proof of worker start or task completion.
