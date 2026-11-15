@@ -3215,7 +3215,9 @@ function annotateCandidates(candidates, evidenceData, opts) {
     // A quota block measured while assembling the route (for example an AGY lane whose live quota
     // reads zero) is evidence of its own; evidence that merely finds no block must not clear it.
     const assembledQuotaBlock =
-      c.blocked === true && String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED');
+      c.blocked === true &&
+      (String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED') ||
+        c.blockReason === 'QUOTA_GROUP_UNKNOWN');
     if (assembledQuotaBlock && !block.blocked) continue;
     c.blocked = block.blocked;
     if (block.blocked) {

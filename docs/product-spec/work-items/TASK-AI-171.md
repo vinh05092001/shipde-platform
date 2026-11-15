@@ -958,7 +958,13 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - `task-ai-171-int1-execute.test.js` and `task-ai-171-launch-fidelity.test.js` read the tree's live scoring policy. After the live AA snapshot refresh in the runtime tree, the policy activated and the synthetic candidates had no finite score, so 6 tests failed there (28/28 on a clean checkout). The harnesses now pass `scoringPolicyFile` pointing at a non-existent file (policy missing, as on clean CI). Test-only; assertions unchanged.
 - Evidence: with the live AA snapshot copied into the test tree, 28 pass / 0 fail (before: 22/6); without it, unchanged.
 
-## Scoped router discovery repair — 2026-11-15
+## Preserve quota-group admission refusal — 2026-11-15
+
+- A fresh single-lane quota observation can leave a model's group unmapped. The actual pool producer correctly marks that route QUOTA_GROUP_UNKNOWN; annotateCandidates previously preserved only QUOTA_EXHAUSTED, so absent cached blocking evidence could clear the group's refusal and allow selection without quota binding.
+- Preserve that existing producer refusal through annotation. No group/brand mapping, quality threshold, quota reset or model preference is introduced. A producer-to-consumer regression first fails after annotation while a distinct mapped group stays eligible; the fix keeps the original account-scoped unknown block without blocking the proven group. Local fixture uses the real poolAccountCandidates and annotateCandidates path, no provider calls.
+- Independent exact-SHA review, affected tests and a fresh actual-data dry-run are required; no author launch or capacity proof is inferred from this patch.
+
+## Scoped router discovery repair evidence — 2026-11-15
 
 - Observed GET /v1/models: HTTP200, 3824 models, 27869ms; listing only, no completion/capacity proof. The router adapter previously forced a 10000ms timeout and discovery always enumerated live CLI/pool sources.
 - `discovery run --source <registered-router-id>` now validates the exact router before creating output and skips all unrelated registry/live/AGY enumeration. Non-router or unknown IDs and a missing source value refuse; omitting the filter preserves existing full-run behavior. The public cli forwards this option. Isolated `--discovery-dir` output remains supported; no hidden priors refresh or quota scan.
