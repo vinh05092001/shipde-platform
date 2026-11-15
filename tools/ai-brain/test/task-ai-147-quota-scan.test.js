@@ -1125,12 +1125,32 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
   // uses DEFAULT_ROUTE_HEALTH_PATH while ensuring the real store is never read or written, proving temp-file persistence
   // Guard this process's I/O instead of hashing shared state another test may update.
   let realStoreAccesses = 0;
-  for (const operation of ['readFileSync', 'writeFileSync']) {
+  const protectedHealthPath = (file) => {
+    if (typeof file !== 'string') return false;
+    const normalize = (value) =>
+      process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+    const resolved = normalize(file);
+    return (
+      resolved === normalize(DEFAULT_ROUTE_HEALTH_PATH) ||
+      resolved === normalize(DEFAULT_ROUTE_HEALTH_PATH + '.tmp')
+    );
+  };
+  for (const operation of [
+    'readFileSync',
+    'writeFileSync',
+    'openSync',
+    'appendFileSync',
+    'renameSync',
+    'copyFileSync',
+    'unlinkSync',
+    'rmSync',
+  ]) {
     const original = fs[operation];
     t.mock.method(fs, operation, (file, ...args) => {
       if (
-        typeof file === 'string' &&
-        path.resolve(file) === path.resolve(DEFAULT_ROUTE_HEALTH_PATH)
+        protectedHealthPath(file) ||
+        ((operation === 'renameSync' || operation === 'copyFileSync') &&
+          protectedHealthPath(args[0]))
       ) {
         realStoreAccesses++;
         throw new Error('TEST_REFUSED_REAL_ROUTE_HEALTH_IO');
@@ -1490,12 +1510,32 @@ test('TASK-AI-147 Review R4: synchronous Hermes: production default destination 
   // uses DEFAULT_ROUTE_HEALTH_PATH while ensuring the real store is never read or written, proving temp-file persistence
   // Guard this process's I/O instead of hashing shared state another test may update.
   let realStoreAccesses = 0;
-  for (const operation of ['readFileSync', 'writeFileSync']) {
+  const protectedHealthPath = (file) => {
+    if (typeof file !== 'string') return false;
+    const normalize = (value) =>
+      process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+    const resolved = normalize(file);
+    return (
+      resolved === normalize(DEFAULT_ROUTE_HEALTH_PATH) ||
+      resolved === normalize(DEFAULT_ROUTE_HEALTH_PATH + '.tmp')
+    );
+  };
+  for (const operation of [
+    'readFileSync',
+    'writeFileSync',
+    'openSync',
+    'appendFileSync',
+    'renameSync',
+    'copyFileSync',
+    'unlinkSync',
+    'rmSync',
+  ]) {
     const original = fs[operation];
     t.mock.method(fs, operation, (file, ...args) => {
       if (
-        typeof file === 'string' &&
-        path.resolve(file) === path.resolve(DEFAULT_ROUTE_HEALTH_PATH)
+        protectedHealthPath(file) ||
+        ((operation === 'renameSync' || operation === 'copyFileSync') &&
+          protectedHealthPath(args[0]))
       ) {
         realStoreAccesses++;
         throw new Error('TEST_REFUSED_REAL_ROUTE_HEALTH_IO');

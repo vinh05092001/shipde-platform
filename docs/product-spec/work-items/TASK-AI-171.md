@@ -1003,3 +1003,5 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Independent compatibility review found missing positive synchronous coverage. Added real foreground Hermes fixtures (guarded backgroundLaunch !== true), retaining original assertions for upstream cooldown/fallback, reservation release, scoped nextCheckAt and default-path persistence. These are separate from real Paseo/AGY background tests; no adapter behavior is overridden under another production harness name.
 
 - Final fixture hardening: synchronous Hermes stdout is response text, not an invented JSON session receipt. R4 guards real-store reads/writes in this process instead of hashing shared data that unrelated parallel tests may change.
+
+- R4 real-store guards cover normalized default path and .tmp sibling, reads/opens/appends/writes/removal and rename/copy source or destination. Separate isolation defect located: TASK-AI-65 report-outcome fixtures provide evidence/home but omit routeHealthFile, so their m-65 health observations reach the checkout default store. This slice does not rewrite those observations or live runtime history.
