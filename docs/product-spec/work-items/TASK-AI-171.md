@@ -958,7 +958,14 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - `task-ai-171-int1-execute.test.js` and `task-ai-171-launch-fidelity.test.js` read the tree's live scoring policy. After the live AA snapshot refresh in the runtime tree, the policy activated and the synthetic candidates had no finite score, so 6 tests failed there (28/28 on a clean checkout). The harnesses now pass `scoringPolicyFile` pointing at a non-existent file (policy missing, as on clean CI). Test-only; assertions unchanged.
 - Evidence: with the live AA snapshot copied into the test tree, 28 pass / 0 fail (before: 22/6); without it, unchanged.
 
-## Checkpoint source recovery — 2026-11-14
+## Scoped router discovery repair — 2026-11-15
+
+- Observed GET /v1/models: HTTP200, 3824 models, 27869ms; listing only, no completion/capacity proof. The router adapter previously forced a 10000ms timeout and discovery always enumerated live CLI/pool sources.
+- `discovery run --source <registered-router-id>` now validates the exact router before creating output and skips all unrelated registry/live/AGY enumeration. Non-router or unknown IDs and a missing source value refuse; omitting the filter preserves existing full-run behavior. The public cli forwards this option. Isolated `--discovery-dir` output remains supported; no hidden priors refresh or quota scan.
+- Router timeout uses positive integer source.verify.timeoutMs (bounded by the Node timer range); absent keeps 10000ms, invalid values refuse before HTTP. 9router declares 60000ms. Existing per-source freshness producer advances only on a complete successful listing; failed/unvisited sources retain prior success timestamps, and catalogues never become route-availability proof.
+- Causal RED before code: source filter still invoked local AGY, unknown source did not refuse, configured timeout stayed10000 (3 failed). GREEN checks also cover public consumer forwarding, no AGY job/live-provider request, preserved unrelated catalogue/timestamps, failure not renewing success, missing filter value, invalid timeout and legacy discovery/freshness regressions. Independent review, hooks/CI and actual isolated refresh remain required before runtime readiness is claimed.
+
+## Checkpoint source recovery evidence — 2026-11-14
 
 The historical CMC launch resumed a selectedCandidate-only checkpoint. Candidate keys omit source, so reconstruction lost source=9router and selected upstream cmc as the launcher provider. Recover source from the current eligible candidate with the exact same candidateKey, falling back to checkpoint.source when no current source exists. No gateway policy, scoring, quota, candidate availability or lifecycle change. Existing absent-candidate behavior remains unchanged, not newly validated. Three causal cases cover a legacy checkpoint without source, stale checkpoint source, and unchanged fresh selection. Together with base-pinning/fidelity tests31/31pass locally. Independent exact-SHA review and CI remain required before release.
 

@@ -119,9 +119,13 @@ function routerAdapter() {
     }
     const verifyPath = (source.verify && source.verify.path) || DEFAULT_MODELS_PATH;
     const url = joinUrl(endpoint, verifyPath);
+    const timeoutMs = source.verify?.timeoutMs === undefined ? 10000 : source.verify.timeoutMs;
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) {
+      throw new Error('INVALID_MODELS_TIMEOUT');
+    }
     const res = await ctx.httpGet(url, {
       envName: source.credential && source.credential.env,
-      timeoutMs: 10000,
+      timeoutMs,
     });
     if (!res.ok || !res.parsed || !Array.isArray(res.parsed.data)) {
       const isUnavailable =

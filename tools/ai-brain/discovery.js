@@ -3,7 +3,7 @@
 /**
  * Ship Dễ — model discovery CLI (W2)
  *
- *   node tools/ai-brain/discovery.js run [--json]
+ *   node tools/ai-brain/discovery.js run [--source <registry-router-id>] [--json]
  *       Enumerate every registry source, diff against the evidence store and
  *       append state transitions; write one snapshot per run.
  *
@@ -70,6 +70,14 @@ async function enumerateRegistry(registry, ctx) {
 
 async function cmdRun(flags, deps = {}) {
   let registry = deps.registry || loadRegistry();
+  const selectedSource = flags.source;
+  if (selectedSource !== undefined) {
+    const source = registry.sources.find((entry) => entry.id === selectedSource);
+    if (!source) throw new Error('UNKNOWN_DISCOVERY_SOURCE');
+    // Narrow refresh currently supports HTTP routers only. Do not accidentally
+    // queue every live CLI/pool while adding other scoped producers later.
+    if (source.kind !== 'router') throw new Error('UNSUPPORTED_DISCOVERY_SOURCE_KIND');
+  }
   const prefixes = registryPrefixes(registry);
   const dataDir = flags['data-dir'] || DEFAULT_DATA_DIR;
   const storeFile = flags['store-file'] || path.join(dataDir, 'catalogue.jsonl');
@@ -90,10 +98,12 @@ async function cmdRun(flags, deps = {}) {
     resolveCommand: deps.resolveCommand || ((name) => classifyPresence(resolveCommand(name, {}))),
   };
 
-  const live = await require('./discovery/live').enumerateLiveSources({
-    ...deps,
-    cwd: process.cwd(),
-  });
+  const live = selectedSource
+    ? { sources: [], results: {} }
+    : await require('./discovery/live').enumerateLiveSources({
+        ...deps,
+        cwd: process.cwd(),
+      });
   const liveIds = new Set(live.sources.map((source) => source.id));
   registry = {
     ...registry,
@@ -101,7 +111,12 @@ async function cmdRun(flags, deps = {}) {
   };
   ctx.registry = registry;
   const results = await enumerateRegistry(
-    { ...registry, sources: registry.sources.filter((source) => !liveIds.has(source.id)) },
+    {
+      ...registry,
+      sources: registry.sources.filter(
+        (source) => !liveIds.has(source.id) && (!selectedSource || source.id === selectedSource)
+      ),
+    },
     ctx
   );
   for (const [id, result] of Object.entries(live.results)) results.set(id, result);
@@ -381,6 +396,8 @@ async function main(argv) {
     if (a === '--json') flags['json'] = true;
     else if (a.startsWith('--') && args[i + 1] && !args[i + 1].startsWith('--')) {
       flags[a.slice(2)] = args[++i];
+    } else if (a === '--source') {
+      throw new Error('DISCOVERY_SOURCE_REQUIRED');
     }
   }
 
