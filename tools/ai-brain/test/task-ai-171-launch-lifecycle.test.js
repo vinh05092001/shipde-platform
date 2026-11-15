@@ -43,6 +43,9 @@ function dispatch(t, kind, mode = 'ack') {
   let calls = 0;
   const adapter = {
     ...actual,
+    onLaunchFailed(job, result) {
+      return actual.onLaunchFailed?.(job, result, { fakeRunsDir: path.join(root, 'pool') });
+    },
     launch(job) {
       return actual.launch(job, { fakeRunsDir: path.join(root, 'pool') });
     },
@@ -94,6 +97,7 @@ function dispatch(t, kind, mode = 'ack') {
           fs.writeFileSync(usageFile, JSON.stringify(report));
         }
         if (mode === 'malformed-report') fs.writeFileSync(usageFile, 'not-json');
+        if (mode === 'timeout') return { exitCode: -1, stdout: '', stderr: 'scheduler timeout' };
         if (mode === 'failure') return { exitCode: 1, stdout: '', stderr: 'scheduler refused' };
         return kind === 'agy-pool'
           ? { exitCode: 0, stdout: 'scheduler accepted' }
@@ -184,9 +188,12 @@ for (const [kind, mode] of [
       x.records.some((r) => r.stage === decisions.Stage.COMPLETED),
       false
     );
-    assert.equal(x.reservations['TASK-AI-171-LIFECYCLE::' + x.key], undefined);
+    assert.equal(Boolean(x.reservations['TASK-AI-171-LIFECYCLE::' + x.key]), mode !== 'failure');
     assert.ok(x.reservations['OTHER-WORK::other-key']);
-    assert.ok(x.records.some((r) => r.stage === decisions.Stage.FAILED && r.detail));
+    assert.equal(
+      x.records.some((r) => r.stage === decisions.Stage.FAILED && r.detail),
+      mode === 'failure'
+    );
   });
 }
 
@@ -233,4 +240,33 @@ test('synchronous process outcome compatibility is unchanged, not proof of task 
     failed.records.some((r) => r.stage === decisions.Stage.COMPLETED),
     false
   );
+});
+
+test('scheduler rejection finalizes only the allocated native job', (t) => {
+  const x = dispatch(t, 'agy-pool', 'failure');
+  const lane = path.join(x.root, 'pool', 'agy01');
+  const job = JSON.parse(fs.readFileSync(path.join(lane, 'job.json'), 'utf8'));
+  assert.ok(
+    fs.existsSync(path.join(lane, 'result.json')),
+    'rejected allocation needs an owned terminal result'
+  );
+  const result = JSON.parse(fs.readFileSync(path.join(lane, 'result.json'), 'utf8'));
+  assert.equal(result.jobId, job.jobId);
+  assert.equal(result.state, 'error');
+  assert.equal(result.exitCode, 1);
+});
+test('scheduler timeout retains open ownership and exits without retry', (t) => {
+  const x = dispatch(t, 'agy-pool', 'timeout');
+  assert.notEqual(x.result.exitCode, 0);
+  assert.equal(x.calls, 1);
+  assert.equal(x.result.outcome.status, 'unknown');
+  assert.ok(x.reservations['TASK-AI-171-LIFECYCLE::' + x.key]);
+  assert.equal(decisions.openWritersDetailed({ dir: x.root }).writers.length, 1);
+  assert.equal(
+    x.records.some(
+      (r) => r.stage === decisions.Stage.FAILED || r.stage === decisions.Stage.COMPLETED
+    ),
+    false
+  );
+  assert.equal(JSON.parse(fs.readFileSync(x.checkpoint, 'utf8')).outcome, 'unknown');
 });

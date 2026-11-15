@@ -3682,6 +3682,8 @@ function dispatchCommand(args, deps = {}) {
     let isFailure = true;
     let sessionHandle = null;
     let handedOff = false;
+    let launchPending = false;
+    let launchAttempted = false;
     let launchedArgvIdentity = null;
     try {
       let launcher = (deps && deps.run) || runHarness;
@@ -3795,43 +3797,46 @@ function dispatchCommand(args, deps = {}) {
       const usageFile = usageReportFile(args, deps, item, now);
       let launchArgs = null;
       try {
-        if (adapter.requiresUsageReport && !usageFile) {
+        const validation = adapter.validateLaunch?.({ accountId: finalChosenCandidate.accountId });
+        if (validation) launchArgs = validation;
+        else if (adapter.requiresUsageReport && !usageFile) {
           throw new Error('HARNESS_USAGE_REPORT_REQUIRED');
         }
-        launchArgs = adapter.launch({
-          candidateKey: finalChosenKey,
-          provider:
-            (route && route.provider) ||
-            finalChosenCandidate.source ||
-            finalChosenCandidate.upstream,
-          model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
-          accountId: finalChosenCandidate.accountId,
-          gateway: finalChosenCandidate.gateway || '',
-          upstream: finalChosenCandidate.upstream,
-          quotaScope: finalChosenCandidate.quotaScope,
-          prompt: promptText,
-          branch: item.branch,
-          base: resolvedBaseSha,
-          cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
-          usageFile: usageFile,
-          checkpoint: checkpointFile,
-          maxAttempts: 1,
-          title: workerName(item.workItemId),
-          labels: {
-            workItem: item.workItemId,
-            role: item.role,
-            project: args.project || 'shipde-platform',
-          },
-          printTimeoutSec:
-            Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
-            (args.timeout ? Number(args.timeout) : 3600),
-          timeoutMs: launchTimeoutMs,
-          workerTimeoutMs,
-          tokenBudget,
-          outputCeiling,
-          mode: selectedMode,
-          effort: finalChosenCandidate.effort || args.effort || deps?.effort,
-        });
+        if (!launchArgs)
+          launchArgs = adapter.launch({
+            candidateKey: finalChosenKey,
+            provider:
+              (route && route.provider) ||
+              finalChosenCandidate.source ||
+              finalChosenCandidate.upstream,
+            model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+            accountId: finalChosenCandidate.accountId,
+            gateway: finalChosenCandidate.gateway || '',
+            upstream: finalChosenCandidate.upstream,
+            quotaScope: finalChosenCandidate.quotaScope,
+            prompt: promptText,
+            branch: item.branch,
+            base: resolvedBaseSha,
+            cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
+            usageFile: usageFile,
+            checkpoint: checkpointFile,
+            maxAttempts: 1,
+            title: workerName(item.workItemId),
+            labels: {
+              workItem: item.workItemId,
+              role: item.role,
+              project: args.project || 'shipde-platform',
+            },
+            printTimeoutSec:
+              Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
+              (args.timeout ? Number(args.timeout) : 3600),
+            timeoutMs: launchTimeoutMs,
+            workerTimeoutMs,
+            tokenBudget,
+            outputCeiling,
+            mode: selectedMode,
+            effort: finalChosenCandidate.effort || args.effort || deps?.effort,
+          });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
         thrownError = err;
@@ -3909,6 +3914,7 @@ function dispatchCommand(args, deps = {}) {
         }
 
         try {
+          launchAttempted = true;
           launchRes = launcher(adapter, launchArgs, {
             cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
@@ -4002,9 +4008,25 @@ function dispatchCommand(args, deps = {}) {
       }
 
       handedOff = adapter.backgroundLaunch === true && !isFailure && Boolean(sessionHandle);
+      if (adapter.backgroundLaunch === true && launchAttempted && isFailure) {
+        launchPending = true;
+        try {
+          const reconciliation = adapter.onLaunchFailed?.(
+            {
+              usageFile,
+              accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
+              candidateKey: finalChosenKey,
+            },
+            launchRes
+          );
+          if (reconciliation?.pending === false) launchPending = false;
+        } catch {
+          /* Uncertainty preserves ownership. */
+        }
+      }
 
       try {
-        if (!handedOff)
+        if (!handedOff && !launchPending)
           decisionsStore.recordDecision(
             {
               stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
@@ -4047,7 +4069,7 @@ function dispatchCommand(args, deps = {}) {
           );
       } catch (err) {}
     } finally {
-      if (!handedOff)
+      if (!handedOff && !launchPending)
         quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
     }
 
@@ -4055,12 +4077,33 @@ function dispatchCommand(args, deps = {}) {
       const finalLogData = buildDryRunLog(finalDecisionLog);
       finalLogData.dryRunDispatch.executeTouched = true;
       finalLogData.dryRunDispatch.launched = true;
-      finalLogData.outcome = handedOff ? 'launched' : isFailure ? 'failed' : 'passed';
+      finalLogData.outcome = launchPending
+        ? 'unknown'
+        : handedOff
+          ? 'launched'
+          : isFailure
+            ? 'failed'
+            : 'passed';
       try {
         writeJsonFile(checkpointFile, finalLogData);
       } catch (err) {}
     }
 
+    if (launchPending) {
+      return makeExecuteResult(
+        1,
+        finalChosenKey,
+        launchedArgvIdentity,
+        structuredOutcome(finalChosenKey, launchRes, null, {
+          status: 'unknown',
+          detail: 'LAUNCH_UNCONFIRMED',
+          checkpoint: checkpointFile,
+          sessionId: sessionHandle,
+        }),
+        { status: 'unknown' },
+        { result: launchRes, attempts: attempt }
+      );
+    }
     if (handedOff) {
       return makeExecuteResult(
         0,

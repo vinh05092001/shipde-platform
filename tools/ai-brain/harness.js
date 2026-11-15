@@ -351,6 +351,51 @@ const agyPool = {
   command: 'schtasks',
   backgroundLaunch: true,
   requiresUsageReport: true,
+  validateLaunch(job) {
+    return require('./agy-pool-runtime').isValidAccountId(job?.accountId)
+      ? null
+      : { refusal: 'INVALID_ACCOUNT_ID', reason: 'INVALID_ACCOUNT_ID', exitCode: 1 };
+  },
+  onLaunchFailed(job, result, opts) {
+    if (!(result?.exitCode > 0)) return { pending: true };
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const pool = require('./agy-pool-runtime');
+      if (!pool.isValidAccountId(job?.accountId) || fs.statSync(job.usageFile).size > 65536)
+        return { pending: true };
+      const report = JSON.parse(fs.readFileSync(job.usageFile, 'utf8'));
+      if (
+        report.accountId !== job.accountId ||
+        typeof report.nativeJobId !== 'string' ||
+        !report.nativeJobId.trim() ||
+        report.launchHandle !== job.accountId + '/' + report.nativeJobId
+      )
+        return { pending: true };
+      const dir = pool.accountDir(job.accountId, opts);
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+      if (
+        stored.jobId !== report.nativeJobId ||
+        stored.accountId !== job.accountId ||
+        stored.candidateKey !== job.candidateKey
+      )
+        return { pending: true };
+      const lane = require('./lane-launcher');
+      if (lane.readResult(dir, stored)) return { pending: true };
+      if (
+        !lane.saveResult(dir, stored, {
+          state: 'error',
+          exitCode: 1,
+          reason: 'SCHEDULER_LAUNCH_FAILED',
+        })
+      )
+        return { pending: true };
+      lane.releaseLaneLock(dir, stored);
+      return { pending: false };
+    } catch {
+      return { pending: true };
+    }
+  },
   launch(job, opts) {
     const fs = require('fs');
     const path = require('path');
@@ -426,6 +471,7 @@ const agyPool = {
     }
   },
   sessionIdFromResult(job, result) {
+    if (!require('./agy-pool-runtime').isValidAccountId(job?.accountId)) return null;
     if (result?.exitCode !== undefined && result.exitCode !== 0) return null;
     if (result?.accountId && result.accountId !== job?.accountId) return null;
     if (!result?.jobId && !result?.launchHandle && result?.exitCode === 0 && job?.usageFile) {
