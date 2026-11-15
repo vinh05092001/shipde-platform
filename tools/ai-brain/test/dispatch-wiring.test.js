@@ -82,6 +82,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit,
         log: () => {},
@@ -97,14 +98,14 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       'launcher args must name top candidate model'
     );
 
-    // Outcome recorded as passed in evidence
+    // Background acknowledgement is not an execution outcome.
     const evData = evidence.loadEvidence(evidenceDir);
     const evA = evidence.getEvidence(evData, candA);
-    assert.equal(evA.length, 1);
-    assert.equal(evA[0].status, 'passed');
+    assert.equal(evA.length, 0, 'background receipt is not passed work evidence');
+    assert.equal(res.outcome.status, 'launched');
   });
 
-  test('first candidate launch fails with 402-inside-503 -> upstream cooled, second candidate launched, both outcomes in evidence', () => {
+  test('unconfirmed background 402-inside-503 does not cool or launch another candidate', () => {
     const cand1 = candidate({
       upstream: 'gh',
       accountId: 'acc-gh',
@@ -146,6 +147,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit,
         log: () => {},
@@ -153,41 +155,19 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       }
     );
 
-    assert.equal(exitCode, 0, 'fallback to second candidate should succeed and exit 0');
-    assert.equal(
-      calls.length,
-      2,
-      'launcher should be invoked twice (first failed, second succeeded)'
-    );
-    assert.match(JSON.stringify(calls[0].args), /gh\/gpt-4o/, 'first attempt should launch cand1');
-    assert.match(
-      JSON.stringify(calls[1].args),
-      /kr\/claude-sonnet/,
-      'second attempt should launch cand2'
-    );
-
+    assert.equal(exitCode, 1, 'unconfirmed background failure is not success');
+    assert.equal(res.outcome.status, 'unknown');
+    assert.equal(calls.length, 1, 'no fallback while first background worker may exist');
+    assert.match(JSON.stringify(calls[0].args), /gh\/gpt-4o/);
     const evData = evidence.loadEvidence(evidenceDir);
-
-    // Upstream gh should be marked blocked / cooled
-    assert.ok(
-      evData.upstreamStatus && evData.upstreamStatus.gh,
-      'gh upstream status must be recorded'
+    assert.equal(evidence.getEvidence(evData, cand1).length, 0);
+    assert.equal(evidence.getEvidence(evData, cand2).length, 0);
+    assert.equal(
+      Boolean(evData.upstreamStatus?.gh),
+      false,
+      'unattributed launcher error must not cool provider'
     );
-    assert.equal(evData.upstreamStatus.gh.lastStatus, 'blocked', 'gh upstream must be cooled');
-    assert.match(
-      String(evData.upstreamStatus.gh.cause).toLowerCase(),
-      /credit_exhausted/,
-      'cause must be credit exhausted'
-    );
-
-    // Both outcomes present in evidence
-    const ev1 = evidence.getEvidence(evData, cand1);
-    assert.equal(ev1.length, 1, 'cand1 must have 1 evidence record');
-    assert.equal(ev1[0].status, 'failed', 'cand1 evidence must be failed');
-
-    const ev2 = evidence.getEvidence(evData, cand2);
-    assert.equal(ev2.length, 1, 'cand2 must have 1 evidence record');
-    assert.equal(ev2[0].status, 'passed', 'cand2 evidence must be passed');
+    assert.ok(quotaStore.getReservations({ home })['TASK-COOL-FALLBACK::' + candidateKey(cand1)]);
   });
 
   test('all candidates excluded -> non-zero exit listing reasons, nothing launched', () => {
@@ -225,6 +205,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit,
         log,
@@ -244,7 +225,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
     );
   });
 
-  test('reservation released after success, failure and thrown error', () => {
+  test('background reservations remain owned after acknowledgement, error or lost acknowledgement', () => {
     // 1. Success case
     {
       const candSuccess = candidate({ modelId: 'gh/m-success' });
@@ -263,6 +244,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
           run: runSuccess,
           routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
+          decisionDir: path.join(tmpDir, 'decisions'),
           home,
           exit: () => {},
           log: () => {},
@@ -275,8 +257,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         Object.keys(afterSuccess).find((k) => k.startsWith('TASK-RES-SUCCESS::'))
           ? 'held'
           : undefined,
-        undefined,
-        'reservation must be released after success'
+        'held',
+        'background reservation must remain until reconciliation'
       );
     }
 
@@ -298,6 +280,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
           run: runFailure,
           routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
+          decisionDir: path.join(tmpDir, 'decisions'),
           home,
           exit: () => {},
           log: () => {},
@@ -309,8 +292,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       const afterFail = quotaStore.getReservations({ home });
       assert.equal(
         Object.keys(afterFail).find((k) => k.startsWith('TASK-RES-FAIL::')) ? 'held' : undefined,
-        undefined,
-        'reservation must be released after failure'
+        'held',
+        'background reservation must remain until reconciliation'
       );
     }
 
@@ -332,6 +315,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
           run: runThrow,
           routeHealthFile: path.join(tmpDir, 'route-health.json'),
           evidenceDir,
+          decisionDir: path.join(tmpDir, 'decisions'),
           home,
           exit: () => {},
           log: () => {},
@@ -343,8 +327,8 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
       const afterThrow = quotaStore.getReservations({ home });
       assert.equal(
         Object.keys(afterThrow).find((k) => k.startsWith('TASK-RES-THROW::')) ? 'held' : undefined,
-        undefined,
-        'reservation must be released after thrown error'
+        'held',
+        'background reservation must remain until reconciliation'
       );
     }
   });
@@ -373,6 +357,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit,
         log,
@@ -429,6 +414,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit: () => {},
         log: () => {},
@@ -464,6 +450,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit: () => {},
         log: () => {},
@@ -512,6 +499,7 @@ describe('Master-queue item 5: dispatch wiring (cli.js dispatch)', () => {
         run,
         routeHealthFile: path.join(tmpDir, 'route-health.json'),
         evidenceDir,
+        decisionDir: path.join(tmpDir, 'decisions'),
         home,
         exit,
         log,

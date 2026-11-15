@@ -930,7 +930,7 @@ test('TASK-AI-147 Review R2-3: scanAllFullRoutes overwrites previously OK scope 
   );
 });
 
-test('TASK-AI-147 Review R3: dispatch launch does not record execution success; confirmed outcome and launch failure record to health', async (t) => {
+test('TASK-AI-147 Review R3: unconfirmed background launch does not change health; confirmed outcome records health', async (t) => {
   const dir = fixture(t);
   const healthFile = path.join(dir, 'model-route-health.json');
   const evidenceDir = path.join(dir, 'evidence');
@@ -1010,11 +1010,11 @@ test('TASK-AI-147 Review R3: dispatch launch does not record execution success; 
   );
 
   assert.equal(exitCodeFail, 1);
-  const storeAfterFail = loadStore(healthFile);
-  const healthRecFail = storeAfterFail.paths['m-alpha|mock-up'];
-  assert.ok(healthRecFail);
-  assert.notEqual(healthRecFail.status, 'AVAILABLE', 'status should reflect failure');
-  assert.equal(healthRecFail.concurrency, 1);
+  assert.equal(
+    fs.existsSync(healthFile),
+    false,
+    'unconfirmed background launch must not become health evidence'
+  );
 
   // 3. routingApi.reportDispatchOutcome on CONFIRMED EXECUTION SUCCESS
   const candReport = [
@@ -1190,18 +1190,8 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
     DEFAULT_ROUTE_HEALTH_PATH,
     'dispatch failure must load from DEFAULT_ROUTE_HEALTH_PATH'
   );
-  assert.equal(
-    interceptedSaveFile,
-    DEFAULT_ROUTE_HEALTH_PATH,
-    'dispatch failure without injected store must persist to DEFAULT_ROUTE_HEALTH_PATH'
-  );
-  assert.ok(interceptedStore.paths['m-prod-fail|mock-up-prod']);
-  assert.notEqual(interceptedStore.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
-
-  // Verify temporary-file persistence
-  const persistedStore1 = JSON.parse(fs.readFileSync(tempHealthFile, 'utf8'));
-  assert.ok(persistedStore1.paths['m-prod-fail|mock-up-prod']);
-  assert.notEqual(persistedStore1.paths['m-prod-fail|mock-up-prod'].status, 'AVAILABLE');
+  assert.equal(interceptedSaveFile, null, 'unconfirmed background launch must not persist health');
+  assert.deepEqual(JSON.parse(fs.readFileSync(tempHealthFile, 'utf8')).paths, {});
 
   // Outcome report without injected routeHealth / routeHealthFile / root
   interceptedLoadFile = null;

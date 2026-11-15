@@ -994,3 +994,8 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Narrow scope amendment: lane-launcher.js adds opt-in onlyIfAbsent publication under its existing operation lock. A causal interleaving test proved cleanup could overwrite a native result between inspection and save; the new check preserves it. Normal result publication is unchanged. Paseo errors without attributable non-start evidence remain unconfirmed; no unsafe automatic release.
 
 - Review limitation: onlyIfAbsent serializes Node saveResult publishers. The native PowerShell worker publishes without lane.op, so a residual native publication race remains; no general cross-process race-free claim. Scheduler exit 0 is an acknowledgement, never proof of worker start or task completion.
+
+### Background lifecycle compatibility tests
+
+- Test-only scope amendment covers dispatch-wiring, quota-scan health consumers, gateway-error consumer, INT1, AGY lane ownership and redirected-HOME quota fixtures. Private decisionDir prevents fake sessions reaching the default decision log; prior history is not rewritten.
+- Background launch acknowledgement/error now asserts retained ownership, no unattributed cooldown, no alternate launch and no passed evidence. Confirmed outcome health assertions remain. AGY fixtures supply unique durable report paths; quota fixtures explicitly advertise the model named in their group reading.

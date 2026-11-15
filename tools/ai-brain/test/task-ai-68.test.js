@@ -74,6 +74,13 @@ describe('TASK-AI-68: pool candidates reach the live ranking', () => {
       }),
     });
 
+    // Advertised model identity must match the quota fixture, not runtime defaults.
+    for (const account of ['agy01', 'agy02'])
+      fs.writeFileSync(
+        path.join(runsDir, account, 'models-out.txt'),
+        'gemini-test-pro\tGemini Test Pro'
+      );
+
     // We must run refresh quota so the evidence/ranking stores the quota
     const refreshScript = path.join(__dirname, '..', 'refresh-quota.js');
     const refreshCode = `

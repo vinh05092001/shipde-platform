@@ -97,8 +97,8 @@ describe('TASK-AI-171 Item 1: 9Router gateway error classification', () => {
   });
 });
 
-describe('TASK-AI-171 Item 2: failed launch records to route-health', () => {
-  it('records route-health with future nextCheckAt for failed model+route and leaves other provider untouched', async (t) => {
+describe('TASK-AI-171 Item 2: background handoff and attributed route-health feedback', () => {
+  it('unconfirmed background launch preserves ownership without health mutation', async (t) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-'));
     t.after(() => {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -182,23 +182,13 @@ describe('TASK-AI-171 Item 2: failed launch records to route-health', () => {
 
     assert.equal(exitCode, 1);
 
-    const store = routeHealthApi.loadStore(routeHealthFile);
-    assert.ok(store.paths, 'route health store must have paths');
-
-    const recA = store.paths['m-alpha|ag'];
-    assert.ok(recA, 'failed model+route record must exist in route health');
-    assert.notEqual(recA.status, 'AVAILABLE', 'status must not be AVAILABLE');
-    assert.ok(
-      Date.parse(recA.nextCheckAt) > now,
-      `nextCheckAt (${recA.nextCheckAt}) must be in the future (after ${now})`
+    assert.equal(
+      fs.existsSync(routeHealthFile),
+      false,
+      'unconfirmed background error must not persist provider health'
     );
-
-    const recB = store.paths['m-beta|other-provider'];
-    assert.strictEqual(
-      recB,
-      undefined,
-      'different model on another provider must remain untouched'
-    );
+    const open = require('../decisions').openWritersDetailed({ dir: decisionDir }).writers;
+    assert.equal(open.length, 1, 'ownership must remain open instead of starting fallback');
   });
 
   it('feedback path: model concurrency capacity cools only that model while credential failure cools upstream provider', () => {
