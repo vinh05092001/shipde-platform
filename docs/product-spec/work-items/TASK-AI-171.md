@@ -1001,3 +1001,5 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Background launch acknowledgement/error now asserts retained ownership, no unattributed cooldown, no alternate launch and no passed evidence. Confirmed outcome health assertions remain. AGY fixtures supply unique durable report paths; quota fixtures explicitly advertise the model named in their group reading.
 
 - Independent compatibility review found missing positive synchronous coverage. Added real foreground Hermes fixtures (guarded backgroundLaunch !== true), retaining original assertions for upstream cooldown/fallback, reservation release, scoped nextCheckAt and default-path persistence. These are separate from real Paseo/AGY background tests; no adapter behavior is overridden under another production harness name.
+
+- Final fixture hardening: synchronous Hermes stdout is response text, not an invented JSON session receipt. R4 guards real-store reads/writes in this process instead of hashing shared data that unrelated parallel tests may change.

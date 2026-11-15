@@ -1123,7 +1123,21 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
 
   // 2. Intercept both loadStore and saveStore to verify production-style invocation without injected dependencies
   // uses DEFAULT_ROUTE_HEALTH_PATH while ensuring the real store is never read or written, proving temp-file persistence
-  const initialRealStoreContent = fs.readFileSync(DEFAULT_ROUTE_HEALTH_PATH, 'utf8');
+  // Guard this process's I/O instead of hashing shared state another test may update.
+  let realStoreAccesses = 0;
+  for (const operation of ['readFileSync', 'writeFileSync']) {
+    const original = fs[operation];
+    t.mock.method(fs, operation, (file, ...args) => {
+      if (
+        typeof file === 'string' &&
+        path.resolve(file) === path.resolve(DEFAULT_ROUTE_HEALTH_PATH)
+      ) {
+        realStoreAccesses++;
+        throw new Error('TEST_REFUSED_REAL_ROUTE_HEALTH_IO');
+      }
+      return original.call(fs, file, ...args);
+    });
+  }
   const tempHealthFile = path.join(dir, 'temp-backing-health.json');
   fs.writeFileSync(tempHealthFile, JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2));
 
@@ -1241,9 +1255,9 @@ test('TASK-AI-147 Review R4: production default destination is restored and reco
 
   // Assert real production store was never read or modified
   assert.equal(
-    fs.readFileSync(DEFAULT_ROUTE_HEALTH_PATH, 'utf8'),
-    initialRealStoreContent,
-    'Real production store must never be read or modified during test'
+    realStoreAccesses,
+    0,
+    'all route-health I/O must use the intercepted temporary store'
   );
 
   // 3. Injected in-memory store object is mutated without disk file writes
@@ -1317,7 +1331,7 @@ test('TASK-AI-147 Review R3: synchronous Hermes: dispatch launch does not record
       decisionDir: path.join(dir, 'decisions'),
       run: () => ({
         exitCode: 0,
-        stdout: JSON.stringify({ session_id: 'sess-01', status: 'running' }),
+        stdout: 'Hermes response text',
         elapsedMs: 150,
       }),
       routeHealthFile: healthFile,
@@ -1474,7 +1488,21 @@ test('TASK-AI-147 Review R4: synchronous Hermes: production default destination 
 
   // 2. Intercept both loadStore and saveStore to verify production-style invocation without injected dependencies
   // uses DEFAULT_ROUTE_HEALTH_PATH while ensuring the real store is never read or written, proving temp-file persistence
-  const initialRealStoreContent = fs.readFileSync(DEFAULT_ROUTE_HEALTH_PATH, 'utf8');
+  // Guard this process's I/O instead of hashing shared state another test may update.
+  let realStoreAccesses = 0;
+  for (const operation of ['readFileSync', 'writeFileSync']) {
+    const original = fs[operation];
+    t.mock.method(fs, operation, (file, ...args) => {
+      if (
+        typeof file === 'string' &&
+        path.resolve(file) === path.resolve(DEFAULT_ROUTE_HEALTH_PATH)
+      ) {
+        realStoreAccesses++;
+        throw new Error('TEST_REFUSED_REAL_ROUTE_HEALTH_IO');
+      }
+      return original.call(fs, file, ...args);
+    });
+  }
   const tempHealthFile = path.join(dir, 'temp-backing-health.json');
   fs.writeFileSync(tempHealthFile, JSON.stringify({ version: 1, paths: {}, events: [] }, null, 2));
 
@@ -1602,9 +1630,9 @@ test('TASK-AI-147 Review R4: synchronous Hermes: production default destination 
 
   // Assert real production store was never read or modified
   assert.equal(
-    fs.readFileSync(DEFAULT_ROUTE_HEALTH_PATH, 'utf8'),
-    initialRealStoreContent,
-    'Real production store must never be read or modified during test'
+    realStoreAccesses,
+    0,
+    'all route-health I/O must use the intercepted temporary store'
   );
 
   // 3. Injected in-memory store object is mutated without disk file writes

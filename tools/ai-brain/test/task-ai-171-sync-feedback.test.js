@@ -68,7 +68,7 @@ describe('Synchronous dispatch feedback remains distinct from background handoff
     const calls = [];
     const run = (adapter, args) => {
       calls.push({ command: adapter.command, args });
-      return { exitCode: 0, stdout: '{"session_id":"sess-01","status":"running"}' };
+      return { exitCode: 0, stdout: 'Hermes response text' };
     };
 
     let exitCode = null;
@@ -133,7 +133,7 @@ describe('Synchronous dispatch feedback remains distinct from background handoff
           stderr: 'HTTP 503: [402]: {"message":"Payment required, budget exhausted"}',
         };
       }
-      return { exitCode: 0, stdout: '{"session_id":"sess-fallback","status":"running"}' };
+      return { exitCode: 0, stdout: 'Hermes response text' };
     };
 
     let exitCode = null;
@@ -202,7 +202,7 @@ describe('Synchronous dispatch feedback remains distinct from background handoff
         const reservations = quotaStore.getReservations({ home });
         if (Object.keys(reservations).some((k) => k.startsWith('TASK-RES-SUCCESS::')))
           reservedDuringLaunch = true;
-        return { exitCode: 0, stdout: '{"session_id":"sess-res-1"}' };
+        return { exitCode: 0, stdout: 'Hermes response text' };
       };
 
       dispatchCommand(
