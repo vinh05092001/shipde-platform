@@ -383,11 +383,16 @@ const agyPool = {
       const lane = require('./lane-launcher');
       if (lane.readResult(dir, stored)) return { pending: true };
       if (
-        !lane.saveResult(dir, stored, {
-          state: 'error',
-          exitCode: 1,
-          reason: 'SCHEDULER_LAUNCH_FAILED',
-        })
+        !lane.saveResult(
+          dir,
+          stored,
+          {
+            state: 'error',
+            exitCode: 1,
+            reason: 'SCHEDULER_LAUNCH_FAILED',
+          },
+          { onlyIfAbsent: true }
+        )
       )
         return { pending: true };
       lane.releaseLaneLock(dir, stored);

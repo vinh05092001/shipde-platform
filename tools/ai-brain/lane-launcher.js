@@ -242,6 +242,9 @@ function saveResult(lane, job, outcome = {}, options = {}) {
     // Validate again immediately before publication with `launch`'s replacement
     // serialized: while this process was paused, the lane may have moved on.
     if (isStale(readStoredJob(dir))) return null;
+    // Failure reconciliation must not replace a native result published while
+    // it waited for this operation lock. Normal result updates stay unchanged.
+    if (options.onlyIfAbsent && readResult(dir, { jobId })) return null;
     const result = Object.assign({}, outcome, {
       jobId,
       exitCode: outcome.exitCode !== undefined ? outcome.exitCode : 0,

@@ -254,6 +254,11 @@ test('scheduler rejection finalizes only the allocated native job', (t) => {
   assert.equal(result.jobId, job.jobId);
   assert.equal(result.state, 'error');
   assert.equal(result.exitCode, 1);
+  assert.equal(
+    fs.existsSync(path.join(lane, 'lock')),
+    false,
+    'only the rejected allocation lock is released'
+  );
 });
 test('scheduler timeout retains open ownership and exits without retry', (t) => {
   const x = dispatch(t, 'agy-pool', 'timeout');
@@ -269,4 +274,34 @@ test('scheduler timeout retains open ownership and exits without retry', (t) => 
     false
   );
   assert.equal(JSON.parse(fs.readFileSync(x.checkpoint, 'utf8')).outcome, 'unknown');
+});
+
+test('native result published between cleanup inspection and save is preserved', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-cleanup-race-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const adapter = getHarness('agy-pool');
+  const lane = require('../lane-launcher');
+  const job = {
+    accountId: 'agy01',
+    candidateKey: 'owned',
+    cwd: root,
+    prompt: 'fixture',
+    model: 'gemini-4-argon-high',
+    usageFile: path.join(root, 'usage.json'),
+  };
+  const opts = { fakeRunsDir: path.join(root, 'pool') };
+  adapter.launch(job, opts);
+  const dir = path.join(root, 'pool', 'agy01');
+  const stored = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+  const original = lane.saveResult;
+  lane.saveResult = (dir, stored, outcome, options) => {
+    original(dir, stored, { state: 'ok', exitCode: 0, reason: 'NATIVE_RESULT' });
+    return original(dir, stored, outcome, options);
+  };
+  try {
+    assert.equal(adapter.onLaunchFailed(job, { exitCode: 1 }, opts).pending, true);
+    assert.equal(lane.readResult(dir, stored).reason, 'NATIVE_RESULT');
+  } finally {
+    lane.saveResult = original;
+  }
 });

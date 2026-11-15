@@ -990,3 +990,5 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - A positive scheduler rejection is finalized only after the durable report, account, native job and candidate key match the stored allocation and no native result is present. The matching allocation is marked error and its lane lock released.
 - Timeout, lost acknowledgement or corrupt post-launch report returns LAUNCH_UNCONFIRMED with unknown outcome, preserving the open claim, quota and native slot without retry. This is not task completion; L3 reconciliation remains required.
 - Invalid account validation precedes the required-report guard. Causal rejection and timeout tests failed before repair; lifecycle plus TASK-AI-69 now pass 27/27.
+
+- Narrow scope amendment: lane-launcher.js adds opt-in onlyIfAbsent publication under its existing operation lock. A causal interleaving test proved cleanup could overwrite a native result between inspection and save; the new check preserves it. Normal result publication is unchanged. Paseo errors without attributable non-start evidence remain unconfirmed; no unsafe automatic release.
