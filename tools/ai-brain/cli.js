@@ -4288,6 +4288,9 @@ function shadowCommand(args) {
  * credential, and never fabricates or promotes a proof.
  */
 function discoveryCommand(args, deps) {
+  if (Object.keys(args).some((key) => key.startsWith('source='))) {
+    throw new Error('DISCOVERY_SOURCE_SYNTAX');
+  }
   const d = deps || {};
   const log = d.log || console.log;
   const error = d.error || console.error;

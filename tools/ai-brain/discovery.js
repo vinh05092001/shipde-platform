@@ -161,7 +161,7 @@ async function cmdRun(flags, deps = {}) {
   const freshnessFile = flags['freshness-file'] || path.join(dataDir, 'freshness.json');
   const stampFile = flags['stamp-file'] || path.join(dataDir, 'refreshed.stamp');
   const previous = readJson(freshnessFile);
-  const complete = successful.length > 0 && failed.length === 0;
+  const complete = !selectedSource && successful.length > 0 && failed.length === 0;
   // The stamp claims a complete refresh: with any failed source it must not advance.
   if (complete) {
     fs.writeFileSync(stampFile, String(Date.now()) + '\n', 'utf8');
@@ -206,7 +206,9 @@ async function cmdRun(flags, deps = {}) {
     sources,
     listedSources: listed.length,
     lastAttemptAt: now,
-    lastSuccessfulAt: listed.length > 0 ? now : previous.lastSuccessfulAt || null,
+    lastSuccessfulAt:
+      !selectedSource && listed.length > 0 ? now : previous.lastSuccessfulAt || null,
+    ...(selectedSource ? { scope: { source: selectedSource } } : {}),
     complete,
     failedSources: failed.map(([id, result]) => ({
       id,
@@ -393,6 +395,7 @@ async function main(argv) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a.startsWith('--source=')) throw new Error('DISCOVERY_SOURCE_SYNTAX');
     if (a === '--json') flags['json'] = true;
     else if (a.startsWith('--') && args[i + 1] && !args[i + 1].startsWith('--')) {
       flags[a.slice(2)] = args[++i];

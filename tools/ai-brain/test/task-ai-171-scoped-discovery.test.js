@@ -187,6 +187,69 @@ test('partial refresh preserves unrelated listing and timestamps; failure does n
   assert.equal(fs.readFileSync(path.join(dir, 'catalogue.jsonl'), 'utf8'), before);
 });
 
+test('scoped success cannot claim full refresh or replace the global success timestamp/stamp', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-scoped-global-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const oldSuccess = '2026-01-01T00:00:00.000Z';
+  fs.writeFileSync(
+    path.join(dir, 'freshness.json'),
+    JSON.stringify({
+      sources: [],
+      lastSuccessfulAt: oldSuccess,
+    })
+  );
+  const stamp = path.join(dir, 'full-refresh.stamp');
+  fs.writeFileSync(stamp, 'previous full refresh');
+  await cmdRun(
+    { source: '9router', 'data-dir': dir, 'stamp-file': stamp },
+    {
+      registry: { sources: [router] },
+      httpGet: async () => response,
+    }
+  );
+  const freshness = JSON.parse(fs.readFileSync(path.join(dir, 'freshness.json'), 'utf8'));
+  assert.equal(freshness.complete, false);
+  assert.equal(freshness.lastSuccessfulAt, oldSuccess);
+  assert.deepEqual(freshness.scope, { source: '9router' });
+  assert.notEqual(freshness.sources[0].lastSuccessfulAt, oldSuccess);
+  assert.equal(fs.readFileSync(stamp, 'utf8'), 'previous full refresh');
+});
+
+test('equals syntax refuses at the public consumer instead of silently scanning all sources', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-scoped-equals-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let calls = 0;
+  await assert.rejects(
+    Promise.resolve().then(() =>
+      require('../cli').discoveryCommand(
+        {
+          _: ['discovery', 'run'],
+          'source=9router': true,
+          'discovery-dir': path.join(dir, 'out'),
+        },
+        {
+          registry: { sources: [router] },
+          config: { provider: {} },
+          lanes: [],
+          log: () => {},
+          error: () => {},
+          httpGet: async () => {
+            calls++;
+            return response;
+          },
+          runCommand: async () => {
+            calls++;
+            return { exitCode: 0, stdout: '' };
+          },
+        }
+      )
+    ),
+    /DISCOVERY_SOURCE_SYNTAX/
+  );
+  assert.equal(calls, 0);
+  assert.equal(fs.existsSync(path.join(dir, 'out')), false);
+});
+
 test('unsupported source kinds and missing --source value cannot fall back to full discovery', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-scoped-refusal-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
