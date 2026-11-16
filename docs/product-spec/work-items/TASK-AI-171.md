@@ -1023,3 +1023,10 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Review scope amendment: removed the same hidden 80 from non-planner Hermes selection and default Work Item planning. Added causal caller-level tests (both returned 80 before repair); explicit Hermes options and registry planner configuration remain preserved. Existing planner regression now expects no invented quality requirement. No new numeric floor replaces them.
 
 - Floor-removal compatibility: TASK-AI-94 R-R03 repair fixture now shares the writer failure domain, so reviewer independence preserves the intended single-reviewer-domain scenario without relying on the removed implicit 75 floor. All existing launch-cap, R3/R4 exclusion and BLOCKED assertions remain unchanged. RED: 5/6; GREEN: 6/6. Test-only scope amendment.
+
+### P03 route-health response verification (local, not deployed)
+
+- Base CODE SHA 91a815d3; GRAPH SHA 1abfdf26 query probeGatewayModel identified runDueCli; source/grep confirmed CLI consumers. Claude separately refreshed graph91a815d3. Old P03 ticket reused: only route-health.js, new probe-content test and this WI.
+- Causal RED: all 3 new grouped tests failed before fix. GREEN: probe/reprobe/content 17/17; evidence suite alone 12/12. A combined run exposed existing shared-store fixture interference; no assertions were weakened.
+- Probe sends stream:false and requires terminal plain-text completion; SSE/error/empty/malformed/tool responses never become AVAILABLE. Success stores safe summary only. Failure stores fixed legacy classifier label plus existing reasonCode, no provider text; this deliberately narrows the old ticket's short error-message allowance to prevent echoed secrets/prompts. Malformed Retry-After preserves HTTP status and uses no reset time.
+- Scope limit: route-probe.js probeRoute is a separate producer still needing its own bounded response-validation slice; no claim all preflights fixed. No live probes or worker launches performed for this repair. Protocol validation proves only a probe response, never writer/tool capacity.
