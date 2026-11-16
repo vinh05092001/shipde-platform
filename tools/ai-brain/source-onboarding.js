@@ -244,17 +244,14 @@ async function step3ProbeModels(source, modelsToProbe, env, options) {
     let status = probeRes.status;
     let body = probeRes.body || '';
 
-    // 9router stream SSE returns 200 with data: chunk — mark as alive
-    if (status === 200) {
-      isOk = true;
-    }
-
-    const cause = isOk ? null : routeProbe.classifyProbeFailure({ status, body });
+    const cause = isOk ? null : routeProbe.classifyProbeFailure(probeRes);
     return {
       modelId,
       ok: isOk,
       status,
       body,
+      reasonCode: probeRes.reasonCode,
+      provider: probeRes.provider,
       cause: cause ? routeProbe.failureReason(cause) : null,
       rawCause: cause,
       candidate,
@@ -345,7 +342,7 @@ function step5RecordEvidence(source, probedResults, options) {
 
     const rec = routeHealth.rememberProbe(
       candidate,
-      { ok: p.ok, status: p.status, body: p.body },
+      { ok: p.ok, status: p.status, body: p.body, reasonCode: p.reasonCode, provider: p.provider },
       {
         routeHealth: store,
         routeHealthFile: tmpHealthFile,
@@ -974,6 +971,8 @@ module.exports = {
   sanitizeFixtureData,
   verifyFixtureSanitization,
   step4ScoreModels,
+  step3ProbeModels,
+  step5RecordEvidence,
   step6ControllerVisibility,
   DEFAULT_FIXTURES_DIR,
 };

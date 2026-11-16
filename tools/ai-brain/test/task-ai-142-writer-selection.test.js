@@ -238,7 +238,10 @@ test('quota comes only from numeric provider headers, never from HTTP success', 
           ok: true,
           status: 200,
           headers: new Headers(headers),
-          text: async () => 'OK',
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            }),
         }),
       }
     );

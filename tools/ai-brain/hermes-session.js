@@ -519,15 +519,7 @@ function linkGoalToSession(goalId, options, deps) {
  * Selects the reasoning candidate using existing routing/ranking.
  * Candidate key is 7-part: harness=hermes::accessPath::gateway::upstream::account::quotaScope::modelId.
  */
-const PROVIDER_LEVEL_FAILURE_CAUSES = new Set([
-  'upstream_credit_exhausted',
-  'quota_exhausted',
-  'account_auth_failed',
-  'upstream_entitlement',
-  'account_quota_exhausted',
-  'upstream_monthly_limit',
-  'upstream_credential',
-]);
+const { PROVIDER_LEVEL_FAILURE_CAUSES } = routeProbe;
 
 function isProviderLevelFailure(cause) {
   if (!cause) return false;
@@ -2552,6 +2544,7 @@ async function launchHermesSession(options, deps) {
                   timeoutMs,
                   fetch: d.fetch || opts.fetch,
                   signal: controller.signal,
+                  failureClassifier: classifier,
                 }
               )
             )
@@ -2577,25 +2570,18 @@ async function launchHermesSession(options, deps) {
       });
       if (result?.ok === true) return true;
       const status = Number(result?.status) || 0;
-      const body = String(result?.body || 'Probe failed');
-      // Explicit provider codes take precedence over generic 503 capacity classification.
-      const providerCausesRegex = new RegExp(
-        `\\b(${[...PROVIDER_LEVEL_FAILURE_CAUSES].join('|')})\\b`,
-        'i'
-      );
-      const providerCause = body.match(providerCausesRegex)?.[1]?.toLowerCase();
-      const classification = classifier.classifyFailure({
-        httpStatus: status,
-        exitCode: status === 0 ? 1 : 0,
-        cause: status === 0 ? classifier.Cause.TIMEOUT : undefined,
-        body:
-          status === 503 && /insufficient[_ ]credits?|quota|credit_exhausted/i.test(body)
-            ? `[402] ${body}`
-            : body,
-        stderr: status === 0 ? 'timeout' : '',
-        candidateKey: candidate.candidateKey,
-        accountId: candidate.accountId,
-      });
+      const classification =
+        routeProbe.safeProbeClassification(result?.classification, classifier) ||
+        routeProbe.classifyRouteProbeFailure(
+          {
+            status,
+            body: result?.body,
+            candidateKey: candidate.candidateKey,
+            accountId: candidate.accountId,
+          },
+          classifier
+        );
+      const providerCause = classification?.providerCause;
       const cause = providerCause || classification.cause;
       if (!(
         providerCause ||
@@ -2603,6 +2589,7 @@ async function launchHermesSession(options, deps) {
         status === 402 ||
         status === 429 ||
         status >= 500 ||
+        (status === 200 && result?.reasonCode === 'HTTP_200') ||
         [
           classifier.Scope.MODEL,
           classifier.Scope.UPSTREAM,

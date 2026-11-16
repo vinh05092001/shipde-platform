@@ -111,7 +111,10 @@ test('probeRoute handles direct-http candidate without throwing invalid URL on a
       ok: true,
       status: 200,
       headers: new Map(),
-      text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
+      text: async () =>
+        JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+        }),
     };
   };
 

@@ -258,7 +258,14 @@ test('H3 realistic probe uses the candidate output limit and a substantial promp
     {
       fetch: async (_url, init) => {
         request = JSON.parse(init.body);
-        return { ok: true, status: 200, text: async () => 'OK' };
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            }),
+        };
       },
     }
   );
@@ -310,6 +317,65 @@ test('route probe decision-log failure is reported but does not block fallback',
     assert.deepEqual(probed, [c1.candidateKey, c2.candidateKey]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('invalid 2xx probe responses refuse only that route and preserve Hermes fallback', async () => {
+  for (const body of ['data: {}', JSON.stringify({ error: 'invalid api key' })]) {
+    const root = fixtureRoot('hermes-invalid-completion-');
+    const first = sampleCandidate({
+      gateway: '9router',
+      upstream: 'kr',
+      modelId: 'kr/first',
+      quality: 99,
+    });
+    const second = sampleCandidate({
+      gateway: 'rqsty',
+      upstream: 'rq',
+      modelId: 'rq/second',
+      quality: 90,
+    });
+    const probed = [];
+    try {
+      const res = await launchHermesSession(
+        { rootDir: root, skipDecisionLog: true },
+        {
+          candidates: [first, second],
+          registry: sampleRegistry(),
+          priorsData: { ranking: [] },
+          probe: async (candidate) => {
+            probed.push(candidate.candidateKey);
+            return require('../route-probe').probeRoute(
+              candidate,
+              'FIXTURE_KEY',
+              { FIXTURE_KEY: 'fixture-only' },
+              {
+                fetch: async () =>
+                  new Response(
+                    candidate.candidateKey === first.candidateKey
+                      ? body
+                      : JSON.stringify({
+                          choices: [
+                            {
+                              message: { role: 'assistant', content: 'OK' },
+                              finish_reason: 'stop',
+                            },
+                          ],
+                        }),
+                    { status: 200 }
+                  ),
+              }
+            );
+          },
+          spawn: async () => ({ exitCode: 0 }),
+        }
+      );
+      assert.equal(res.candidateKey, second.candidateKey);
+      assert.deepEqual(probed, [first.candidateKey, second.candidateKey]);
+      assert.ok(res.refusalReasons.some((reason) => /HERMES_ROUTE_PROBE_FAILED/.test(reason)));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 

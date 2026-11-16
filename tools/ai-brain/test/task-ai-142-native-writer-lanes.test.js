@@ -213,7 +213,14 @@ test('gateway refresh and inference preflight use injected HTTP only: 200 admits
             ok: status === 200,
             status,
             headers: new Map(),
-            text: async () => (status === 200 ? 'OK' : 'unavailable'),
+            text: async () =>
+              status === 200
+                ? JSON.stringify({
+                    choices: [
+                      { message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' },
+                    ],
+                  })
+                : 'unavailable',
           };
         },
       }

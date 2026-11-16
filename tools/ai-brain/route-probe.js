@@ -2,6 +2,76 @@
 
 const CLASSIFIER_VERSION = 2;
 const DEFAULT_TIMEOUT_MS = 8000;
+const PROVIDER_LEVEL_FAILURE_CAUSES = new Set([
+  'upstream_credit_exhausted',
+  'quota_exhausted',
+  'account_auth_failed',
+  'upstream_entitlement',
+  'account_quota_exhausted',
+  'upstream_monthly_limit',
+  'upstream_credential',
+]);
+
+// The existing Hermes classification policy, applied before provider text is
+// discarded. Only enum/scalar metadata may cross the producer boundary.
+function classifyRouteProbeFailure(input, classifier) {
+  const status = Number(input.status) || 0;
+  const body = String(input.body || 'Probe failed');
+  const providerCausesRegex = new RegExp(
+    `\\b(${[...PROVIDER_LEVEL_FAILURE_CAUSES].join('|')})\\b`,
+    'i'
+  );
+  const providerCause = body.match(providerCausesRegex)?.[1]?.toLowerCase();
+  const classification = classifier.classifyFailure({
+    httpStatus: status,
+    exitCode: status === 0 ? 1 : 0,
+    cause: status === 0 ? classifier.Cause.TIMEOUT : undefined,
+    body:
+      status === 503 && /insufficient[_ ]credits?|quota|credit_exhausted/i.test(body)
+        ? `[402] ${body}`
+        : body,
+    stderr: status === 0 ? 'timeout' : '',
+    candidateKey: input.candidateKey,
+    accountId: input.accountId,
+  });
+  const safe = { cause: classification.cause, scope: classification.scope };
+  for (const key of ['cooldownMs', 'retryAfterMs', 'resetTime']) {
+    if (
+      classification[key] === null ||
+      (typeof classification[key] === 'number' && Number.isFinite(classification[key]))
+    ) {
+      safe[key] = classification[key];
+    }
+  }
+  if (typeof classification.retryable === 'boolean') safe.retryable = classification.retryable;
+  if (providerCause) safe.providerCause = providerCause;
+  return safeProbeClassification(safe, classifier);
+}
+
+function safeProbeClassification(value, classifier) {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !Object.values(classifier.Cause).includes(value.cause) ||
+    !Object.values(classifier.Scope).includes(value.scope) ||
+    (value.providerCause !== undefined && !PROVIDER_LEVEL_FAILURE_CAUSES.has(value.providerCause))
+  )
+    return null;
+  const safe = { cause: value.cause, scope: value.scope };
+  for (const key of ['cooldownMs', 'retryAfterMs', 'resetTime']) {
+    if (value[key] !== undefined) {
+      if (value[key] !== null && (typeof value[key] !== 'number' || !Number.isFinite(value[key])))
+        return null;
+      safe[key] = value[key];
+    }
+  }
+  if (value.retryable !== undefined) {
+    if (typeof value.retryable !== 'boolean') return null;
+    safe.retryable = value.retryable;
+  }
+  if (value.providerCause !== undefined) safe.providerCause = value.providerCause;
+  return safe;
+}
 
 /** Shared OpenAI-compatible route preflight for Hermes and isolated workers. */
 async function probeRoute(candidate, apiKeyEnv, env, options) {
@@ -43,6 +113,7 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
         // a 1-token probe passed while real requests failed 403. Keep a realistic
         // budget; the one-word reply instruction keeps actual output spend tiny.
         max_tokens: Number(candidate.maxOutputTokens || candidate.max_output_tokens || 8192),
+        stream: false,
       }),
       signal: controller.signal,
     });
@@ -83,10 +154,40 @@ async function probeRoute(candidate, apiKeyEnv, env, options) {
       clearTimeout(bodyTimer);
     }
     const tpm = tokenLimitEvidence(response.headers, body);
+    const summary = require('./probe-response').completionSummary(response, body);
+    const cause = summary.valid ? null : classifyProbeFailure({ status: response.status, body });
+    const classification = summary.valid
+      ? null
+      : classifyRouteProbeFailure(
+          {
+            status: response.status,
+            body,
+            candidateKey: candidate.candidateKey,
+            accountId: candidate.accountId,
+          },
+          opts.failureClassifier || require('./failure-classifier')
+        );
+    const provider =
+      cause &&
+      typeof cause === 'object' &&
+      typeof cause.provider === 'string' &&
+      /^[\w.-]{1,100}$/.test(cause.provider)
+        ? cause.provider
+        : null;
     return {
-      ok: response.ok,
+      ok: summary.valid,
       status: response.status,
-      body,
+      ...(summary.valid
+        ? {
+            finishReason: summary.finishReason,
+            ...(summary.model ? { model: summary.model } : {}),
+          }
+        : {
+            reasonCode: failureReason(cause),
+            body: `HTTP_${response.status}`,
+            ...(classification ? { classification } : {}),
+            ...(provider ? { provider } : {}),
+          }),
       ...tpm,
       quota: {
         status: Object.keys(remaining).length
@@ -136,7 +237,13 @@ function classifyProbeFailure(result) {
   const status = Number(result && result.status) || 0;
   const body = String((result && result.body) || 'Probe failed');
   if (status !== 0) {
-    const providerMatch = body.match(/No active credentials for provider:\s*([\w.-]+)/i);
+    const providerMatch =
+      body.match(/No active credentials for provider:\s*([\w.-]+)/i) ||
+      (result?.reasonCode === 'PROVIDER_UNAVAILABLE' &&
+      typeof result.provider === 'string' &&
+      /^[\w.-]{1,100}$/.test(result.provider)
+        ? [null, result.provider]
+        : null);
     if (providerMatch) {
       const obj = { reason: 'PROVIDER_UNAVAILABLE', provider: providerMatch[1] };
       Object.defineProperty(obj, 'toString', {
@@ -235,4 +342,7 @@ module.exports = {
   classifyProbeFailure,
   boundedProbe,
   failureReason,
+  classifyRouteProbeFailure,
+  safeProbeClassification,
+  PROVIDER_LEVEL_FAILURE_CAUSES,
 };
