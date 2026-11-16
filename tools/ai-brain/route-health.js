@@ -1442,23 +1442,77 @@ async function probeGatewayModel(modelId, routeId, options) {
         model: modelId,
         messages: [{ role: 'user', content: 'Reply with OK.' }],
         max_tokens: 1,
+        stream: false,
       }),
     });
     const body = await response.text();
     const retry = response.headers && response.headers.get('retry-after');
-    const resetAt = retry
+    const retryTime = retry
       ? /^\d+$/.test(retry)
-        ? new Date(Date.now() + Number(retry) * 1000).toISOString()
-        : new Date(retry).toISOString()
-      : null;
-    return {
-      ok: response.ok,
+        ? Date.now() + Number(retry) * 1000
+        : Date.parse(retry)
+      : NaN;
+    const resetAt =
+      Number.isFinite(retryTime) && Math.abs(retryTime) <= 8640000000000000
+        ? new Date(retryTime).toISOString()
+        : null;
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch {}
+    const choice = parsed?.choices?.[0];
+    const message = choice?.message;
+    const eventStream = /text\/event-stream/i.test(response.headers?.get('content-type') || '');
+    const unexpectedTool =
+      choice?.finish_reason === 'tool_calls' || message?.tool_calls !== undefined;
+    const valid =
+      response.ok &&
+      !eventStream &&
+      parsed &&
+      !Object.prototype.hasOwnProperty.call(parsed, 'error') &&
+      Array.isArray(parsed.choices) &&
+      choice &&
+      typeof choice === 'object' &&
+      message?.role === 'assistant' &&
+      typeof message.content === 'string' &&
+      !unexpectedTool &&
+      (choice.finish_reason === 'length' ||
+        (choice.finish_reason === 'stop' && message.content.trim().length > 0));
+    if (valid) {
+      return {
+        ok: true,
+        status: response.status,
+        finishReason: choice.finish_reason,
+        ...(typeof parsed.model === 'string' && /^[\w./:-]{1,200}$/.test(parsed.model)
+          ? { model: parsed.model }
+          : {}),
+        resetAt,
+      };
+    }
+    // Classify before discarding provider text, then persist only a fixed
+    // classifier label. Error bodies can echo credentials, prompts or content.
+    const failure = require('./route-probe').classifyProbeFailure({
       status: response.status,
-      message: body.slice(0, PROBE_BODY_LIMIT),
+      body,
+    });
+    const legacyFailure = classifyFailure(response.status, body);
+    return {
+      ok: false,
+      status: response.status,
+      reasonCode: require('./route-probe').failureReason(failure),
+      message: unexpectedTool
+        ? 'unexpected tool response'
+        : legacyFailure === 'UNSUPPORTED'
+          ? 'unsupported model'
+          : legacyFailure,
       resetAt,
     };
-  } catch (error) {
-    return { ok: false, status: 0, error: String((error && error.message) || error) };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      error: 'probe transport failed',
+    };
   } finally {
     clearTimeout(timer);
   }

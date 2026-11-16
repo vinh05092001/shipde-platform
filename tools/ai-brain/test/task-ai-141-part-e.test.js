@@ -157,7 +157,15 @@ test('probeGatewayModel accepts account scoped route keys', async () => {
       fetch: async (url, options) => {
         called = url === 'http://gateway/chat/completions';
         redirectMode = options.redirect;
-        return { ok: true, status: 200, text: async () => 'ok', headers: { get: () => null } };
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            }),
+          headers: { get: () => null },
+        };
       },
     }
   );
