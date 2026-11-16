@@ -208,6 +208,7 @@ describe('TASK-AI-171 R3-REPRO: AGY lane ownership before launcher execution', (
             cwd: env.wt,
             'prompt-file': env.pFile2,
             item: 'TASK-AI-171-TASK-2',
+            'usage-report': path.join(env.dir, 'task2-usage.json'),
           },
           Object.assign(env.testDeps(now, [cA]), {
             run: runner,
@@ -239,6 +240,7 @@ describe('TASK-AI-171 R3-REPRO: AGY lane ownership before launcher execution', (
         cwd: env.wt,
         'prompt-file': env.pFile1,
         item: 'TASK-AI-171-TASK-1',
+        'usage-report': path.join(env.dir, 'task1-usage.json'),
       },
       Object.assign(env.testDeps(now, [cA]), {
         run: runner,

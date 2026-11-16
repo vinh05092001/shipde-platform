@@ -280,7 +280,12 @@ describe('TASK-AI-171 INT-1: Controller execute launch, argv identity, and outco
     assert.equal(isoLauncherCalls, 1);
     assert.equal(ordinaryCalls, 0);
     assert.equal(exitCode, 1);
-    assert.equal(res?.outcome?.status, 'failed');
+    assert.equal(res?.outcome?.status, 'unknown');
+    assert.equal(
+      decisionsStore.openWritersDetailed({ dir: received.options.decisionDir }).writers.length,
+      1,
+      'unconfirmed launch preserves its claim'
+    );
     assert.match(res?.outcome?.reason || '', /ISOLATION_PROVISIONING_HOOK_FAILED/);
 
     // 2. Chosen model/account/harness/effort unchanged in isolated launcher call

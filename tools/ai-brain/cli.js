@@ -3681,6 +3681,9 @@ function dispatchCommand(args, deps = {}) {
     let thrownError = null;
     let isFailure = true;
     let sessionHandle = null;
+    let handedOff = false;
+    let launchPending = false;
+    let launchAttempted = false;
     let launchedArgvIdentity = null;
     try {
       let launcher = (deps && deps.run) || runHarness;
@@ -3794,40 +3797,46 @@ function dispatchCommand(args, deps = {}) {
       const usageFile = usageReportFile(args, deps, item, now);
       let launchArgs = null;
       try {
-        launchArgs = adapter.launch({
-          candidateKey: finalChosenKey,
-          provider:
-            (route && route.provider) ||
-            finalChosenCandidate.source ||
-            finalChosenCandidate.upstream,
-          model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
-          accountId: finalChosenCandidate.accountId,
-          gateway: finalChosenCandidate.gateway || '',
-          upstream: finalChosenCandidate.upstream,
-          quotaScope: finalChosenCandidate.quotaScope,
-          prompt: promptText,
-          branch: item.branch,
-          base: resolvedBaseSha,
-          cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
-          usageFile: usageFile,
-          checkpoint: checkpointFile,
-          maxAttempts: 1,
-          title: workerName(item.workItemId),
-          labels: {
-            workItem: item.workItemId,
-            role: item.role,
-            project: args.project || 'shipde-platform',
-          },
-          printTimeoutSec:
-            Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
-            (args.timeout ? Number(args.timeout) : 3600),
-          timeoutMs: launchTimeoutMs,
-          workerTimeoutMs,
-          tokenBudget,
-          outputCeiling,
-          mode: selectedMode,
-          effort: finalChosenCandidate.effort || args.effort || deps?.effort,
-        });
+        const validation = adapter.validateLaunch?.({ accountId: finalChosenCandidate.accountId });
+        if (validation) launchArgs = validation;
+        else if (adapter.requiresUsageReport && !usageFile) {
+          throw new Error('HARNESS_USAGE_REPORT_REQUIRED');
+        }
+        if (!launchArgs)
+          launchArgs = adapter.launch({
+            candidateKey: finalChosenKey,
+            provider:
+              (route && route.provider) ||
+              finalChosenCandidate.source ||
+              finalChosenCandidate.upstream,
+            model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
+            accountId: finalChosenCandidate.accountId,
+            gateway: finalChosenCandidate.gateway || '',
+            upstream: finalChosenCandidate.upstream,
+            quotaScope: finalChosenCandidate.quotaScope,
+            prompt: promptText,
+            branch: item.branch,
+            base: resolvedBaseSha,
+            cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
+            usageFile: usageFile,
+            checkpoint: checkpointFile,
+            maxAttempts: 1,
+            title: workerName(item.workItemId),
+            labels: {
+              workItem: item.workItemId,
+              role: item.role,
+              project: args.project || 'shipde-platform',
+            },
+            printTimeoutSec:
+              Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
+              (args.timeout ? Number(args.timeout) : 3600),
+            timeoutMs: launchTimeoutMs,
+            workerTimeoutMs,
+            tokenBudget,
+            outputCeiling,
+            mode: selectedMode,
+            effort: finalChosenCandidate.effort || args.effort || deps?.effort,
+          });
       } catch (err) {
         log('Harness launch preparation failed: ' + (err.message || String(err)));
         thrownError = err;
@@ -3905,6 +3914,7 @@ function dispatchCommand(args, deps = {}) {
         }
 
         try {
+          launchAttempted = true;
           launchRes = launcher(adapter, launchArgs, {
             cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
             // The pinned base the worker root is provisioned at (AI-64-R15).
@@ -3952,8 +3962,16 @@ function dispatchCommand(args, deps = {}) {
 
       // The durable handle, read from the report the launch was given. Never a
       // pid, a timestamp or a stdout guess.
-      sessionHandle = readSessionId(adapter, { usageFile: usageFile }, launchRes || {}).id;
-      if (usageFile && !sessionHandle) {
+      const sessionReceipt = readSessionId(
+        adapter,
+        {
+          usageFile,
+          accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
+        },
+        launchRes || {}
+      );
+      sessionHandle = sessionReceipt.id;
+      if ((usageFile || adapter.backgroundLaunch) && !sessionHandle) {
         // The caller asked for a durable report and the report carries no
         // session id, so this launch cannot be resumed or stopped. A launch the
         // loop cannot find again is a failed launch (AI-64-R04), not a success
@@ -3989,57 +4007,117 @@ function dispatchCommand(args, deps = {}) {
         isFailure = true;
       }
 
+      handedOff = adapter.backgroundLaunch === true && !isFailure && Boolean(sessionHandle);
+      if (adapter.backgroundLaunch === true && launchAttempted && isFailure) {
+        launchPending = true;
+        try {
+          const reconciliation = adapter.onLaunchFailed?.(
+            {
+              usageFile,
+              accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
+              candidateKey: finalChosenKey,
+            },
+            launchRes
+          );
+          if (reconciliation?.pending === false) launchPending = false;
+        } catch {
+          /* Uncertainty preserves ownership. */
+        }
+      }
+
       try {
-        decisionsStore.recordDecision(
-          {
-            stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
-            workItemId: item.workItemId,
-            role: item.role,
-            chosen: finalChosenKey,
-            harness: harnessName,
-            branch: item.branch,
-            sessionId: sessionHandle,
-            worktree: args.cwd || rootDir,
-            area: item.area,
-            outcome: isFailure ? 'failed' : 'passed',
-            detail: usageFile && !sessionHandle ? 'HARNESS_NO_SESSION_ID' : null,
-            firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
-            selected: finalChosenKey,
-            excluded: lastDecision
-              ? (lastDecision.rejected || []).map((r) => ({
-                  candidateKey: r.offeringId,
-                  reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
-                  reason: r.reason,
-                }))
-              : [],
-            quota:
-              lastDecision && lastDecision.candidates
-                ? lastDecision.candidates.map((c) => ({
-                    candidateKey: c.offeringId,
-                    score: c.score,
-                    headroom: c.headroom,
+        if (!handedOff && !launchPending)
+          decisionsStore.recordDecision(
+            {
+              stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
+              workItemId: item.workItemId,
+              role: item.role,
+              chosen: finalChosenKey,
+              harness: harnessName,
+              branch: item.branch,
+              sessionId: sessionHandle,
+              worktree: args.cwd || rootDir,
+              area: item.area,
+              outcome: isFailure ? 'failed' : 'passed',
+              detail:
+                (usageFile || adapter.backgroundLaunch) && !sessionHandle
+                  ? launchRes?.exitCode !== 0
+                    ? 'LAUNCH_FAILED'
+                    : sessionReceipt.cause || 'HARNESS_NO_SESSION_ID'
+                  : null,
+              firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
+              selected: finalChosenKey,
+              excluded: lastDecision
+                ? (lastDecision.rejected || []).map((r) => ({
+                    candidateKey: r.offeringId,
+                    reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
+                    reason: r.reason,
                   }))
                 : [],
-            resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
-            checkpoint: checkpointFile,
-          },
-          { dir: decisionDir, now }
-        );
+              quota:
+                lastDecision && lastDecision.candidates
+                  ? lastDecision.candidates.map((c) => ({
+                      candidateKey: c.offeringId,
+                      score: c.score,
+                      headroom: c.headroom,
+                    }))
+                  : [],
+              resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
+              checkpoint: checkpointFile,
+            },
+            { dir: decisionDir, now }
+          );
       } catch (err) {}
     } finally {
-      quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
+      if (!handedOff && !launchPending)
+        quotaStore.releaseReservation(item.workItemId, finalChosenKey, reservationOpts);
     }
 
     if (checkpointFile && finalDecisionLog) {
       const finalLogData = buildDryRunLog(finalDecisionLog);
       finalLogData.dryRunDispatch.executeTouched = true;
       finalLogData.dryRunDispatch.launched = true;
-      finalLogData.outcome = isFailure ? 'failed' : 'passed';
+      finalLogData.outcome = launchPending
+        ? 'unknown'
+        : handedOff
+          ? 'launched'
+          : isFailure
+            ? 'failed'
+            : 'passed';
       try {
         writeJsonFile(checkpointFile, finalLogData);
       } catch (err) {}
     }
 
+    if (launchPending) {
+      return makeExecuteResult(
+        1,
+        finalChosenKey,
+        launchedArgvIdentity,
+        structuredOutcome(finalChosenKey, launchRes, null, {
+          status: 'unknown',
+          detail: 'LAUNCH_UNCONFIRMED',
+          checkpoint: checkpointFile,
+          sessionId: sessionHandle,
+        }),
+        { status: 'unknown' },
+        { result: launchRes, attempts: attempt }
+      );
+    }
+    if (handedOff) {
+      return makeExecuteResult(
+        0,
+        finalChosenKey,
+        launchedArgvIdentity,
+        structuredOutcome(finalChosenKey, launchRes, null, {
+          status: 'launched',
+          checkpoint: checkpointFile,
+          sessionId: sessionHandle,
+        }),
+        { status: 'launched' },
+        { result: launchRes, attempts: attempt }
+      );
+    }
     if (!isFailure) {
       evidence.recordOutcome(evidenceDir, finalChosenCandidate, {
         status: 'passed',

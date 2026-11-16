@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const pool = require('../agy-pool-runtime');
-const { poolAccountCandidates } = require('../candidates');
+const { poolAccountCandidates, annotateCandidates } = require('../candidates');
 
 const fixturePath = path.join(__dirname, 'fixtures', 'task-ai-171-real-quota-out.json');
 
@@ -93,4 +93,34 @@ test('case (d): model with no group mapping -> QUOTA_GROUP_UNKNOWN', () => {
   ]).find((c) => c.modelId === 'gemini-custom-unmapped');
   assert.equal(cand?.blocked, true);
   assert.equal(cand?.blockReason, 'QUOTA_GROUP_UNKNOWN');
+});
+
+test('assembly quota-group refusal survives annotation without blocking a proven different group', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-qg-consumer-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const lane = path.join(dir, 'agy01');
+  fs.mkdirSync(lane, { recursive: true });
+  fs.writeFileSync(path.join(lane, 'out.txt'), JSON.stringify(geminiQuota));
+  fs.writeFileSync(
+    path.join(lane, 'models-out.txt'),
+    'gemini-custom-unmapped\tGemini Custom Unmapped\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)'
+  );
+  const generated = poolAccountCandidates({
+    fakeRunsDir: dir,
+    keepExhausted: true,
+    catalogue: ['gemini-custom-unmapped', 'gemini-3.8-flash-high'].map((modelId) => ({
+      modelId,
+      upstream: 'antigravity',
+    })),
+  });
+  const unknown = generated.find((c) => c.modelId === 'gemini-custom-unmapped');
+  const known = generated.find((c) => c.modelId === 'gemini-3.8-flash-high');
+  assert.equal(unknown?.blocked, true);
+  assert.equal(unknown?.blockReason, 'QUOTA_GROUP_UNKNOWN');
+  assert.equal(known?.blocked, false);
+  const annotated = annotateCandidates([unknown, known], {}, { quotaState: { scopes: {} } });
+  assert.equal(annotated[0].blocked, true, 'absence of a cached block cannot prove quota binding');
+  assert.equal(annotated[0].blockReason, 'QUOTA_GROUP_UNKNOWN');
+  assert.equal(annotated[0].blockScope, 'account');
+  assert.equal(annotated[1].blocked, false, 'another mapped group must retain eligibility');
 });

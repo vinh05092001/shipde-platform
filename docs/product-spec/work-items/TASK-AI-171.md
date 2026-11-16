@@ -958,7 +958,20 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 - `task-ai-171-int1-execute.test.js` and `task-ai-171-launch-fidelity.test.js` read the tree's live scoring policy. After the live AA snapshot refresh in the runtime tree, the policy activated and the synthetic candidates had no finite score, so 6 tests failed there (28/28 on a clean checkout). The harnesses now pass `scoringPolicyFile` pointing at a non-existent file (policy missing, as on clean CI). Test-only; assertions unchanged.
 - Evidence: with the live AA snapshot copied into the test tree, 28 pass / 0 fail (before: 22/6); without it, unchanged.
 
-## Scoped router discovery repair — 2026-11-15
+## Truthful background handoff and native AGY receipt — 2026-11-15
+
+- Background launch used to write COMPLETED/passed, release the writer reservation, and promote checkpoint/evidence immediately after the launcher returned. Declare Paseo and agy-pool background; shared ticket dispatch returns launched, retains the exact open claim/reservation, writes no passed evidence and never promotes task success from the handoff. Explicit immediate failure still records FAILED and releases only its own reservation.
+- The normal AGY harness dropped laneLauncher native job-UUID and runHarness has only scheduler process output, so readSessionId could never bind it. Reuse the existing usage-report channel: reserve a new report exclusively before allocating, write accountId/nativeJobId/namespaced launchHandle from the real allocation, and read it only after an exit0 scheduler ack with an exact account check. CLI now passes that account; missing required report refuses before allocation. No new executor/runner or hidden argv metadata; allocation identity is not task-result proof.
+- Four causal RED failures preceded production edits: allocator-to-consumer handle absent, Paseo and AGY handoffs incorrectly terminal, and missing report still scheduling. Regression tests use the actual AGY allocation producer, temporary stores, scheduler boundary fixtures, native report/account validation and stop-argv roundtrip. Both background paths retain only their own claims/reservations and cannot write passed outcome/checkpoint/evidence; malformed/invalid reports, failed ack and report collision refuse. Synchronous Hermes process-outcome behavior remains unchanged as a known L3 task-verification gap, not a task-success or live-qualification claim.
+- Observer/terminal reconciliation, renewal beyond existing TTL, resume re-admission and legacy executor/defaultLauncher migration remain separate work. No unattended live qualification or claim that stop argv actually stopped a process is made by these tests.
+
+## Preserve quota-group admission refusal evidence — 2026-11-15
+
+- A fresh single-lane quota observation can leave a model's group unmapped. The actual pool producer correctly marks that route QUOTA_GROUP_UNKNOWN; annotateCandidates previously preserved only QUOTA_EXHAUSTED, so absent cached blocking evidence could clear the group's refusal and allow selection without quota binding.
+- Preserve that existing producer refusal through annotation. No group/brand mapping, quality threshold, quota reset or model preference is introduced. A producer-to-consumer regression first fails after annotation while a distinct mapped group stays eligible; the fix keeps the original account-scoped unknown block without blocking the proven group. Local fixture uses the real poolAccountCandidates and annotateCandidates path, no provider calls.
+- Independent exact-SHA review, affected tests and a fresh actual-data dry-run are required; no author launch or capacity proof is inferred from this patch.
+
+## Scoped router discovery repair evidence — 2026-11-15
 
 - Observed GET /v1/models: HTTP200, 3824 models, 27869ms; listing only, no completion/capacity proof. The router adapter previously forced a 10000ms timeout and discovery always enumerated live CLI/pool sources.
 - `discovery run --source <registered-router-id>` now validates the exact router before creating output and skips all unrelated registry/live/AGY enumeration. Non-router or unknown IDs and a missing source value refuse; omitting the filter preserves existing full-run behavior. The public cli forwards this option. Isolated `--discovery-dir` output remains supported; no hidden priors refresh or quota scan.
@@ -971,3 +984,24 @@ Scope: `tools/ai-brain/agy-pool-runtime.js` (`submitJob`/`submitLocked`), `tools
 The historical CMC launch resumed a selectedCandidate-only checkpoint. Candidate keys omit source, so reconstruction lost source=9router and selected upstream cmc as the launcher provider. Recover source from the current eligible candidate with the exact same candidateKey, falling back to checkpoint.source when no current source exists. No gateway policy, scoring, quota, candidate availability or lifecycle change. Existing absent-candidate behavior remains unchanged, not newly validated. Three causal cases cover a legacy checkpoint without source, stale checkpoint source, and unchanged fresh selection. Together with base-pinning/fidelity tests31/31pass locally. Independent exact-SHA review and CI remain required before release.
 
 Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gitleaks8.30.1 falsely classifies two existing main dashboard register descriptions as generic-api-key. A rule-specific allowlist matches only the two exact anchored prose values (regexTarget secret), not a key, line, path or fingerprint. No dashboard encoding/data changes. Controls: unchanged dashboard exit0; random generic api_key appended on the SAME minified line115 exit1; random GitHub token exit1. Fingerprint and whole-line exemptions were rejected because they conceal same-line secrets. Raw temporary scan reports and synthetic values were deleted. Full actual pre-push still required; this amendment is not a bypass or general scanner exemption.
+
+### Background scheduler ownership amendment
+
+- A positive scheduler rejection is finalized only after the durable report, account, native job and candidate key match the stored allocation and no native result is present. The matching allocation is marked error and its lane lock released.
+- Timeout, lost acknowledgement or corrupt post-launch report returns LAUNCH_UNCONFIRMED with unknown outcome, preserving the open claim, quota and native slot without retry. This is not task completion; L3 reconciliation remains required.
+- Invalid account validation precedes the required-report guard. Causal rejection and timeout tests failed before repair; lifecycle plus TASK-AI-69 now pass 27/27.
+
+- Narrow scope amendment: lane-launcher.js adds opt-in onlyIfAbsent publication under its existing operation lock. A causal interleaving test proved cleanup could overwrite a native result between inspection and save; the new check preserves it. Normal result publication is unchanged. Paseo errors without attributable non-start evidence remain unconfirmed; no unsafe automatic release.
+
+- Review limitation: onlyIfAbsent serializes Node saveResult publishers. The native PowerShell worker publishes without lane.op, so a residual native publication race remains; no general cross-process race-free claim. Scheduler exit 0 is an acknowledgement, never proof of worker start or task completion.
+
+### Background lifecycle compatibility tests
+
+- Test-only scope amendment covers dispatch-wiring, quota-scan health consumers, gateway-error consumer, INT1, AGY lane ownership and redirected-HOME quota fixtures. Private decisionDir prevents fake sessions reaching the default decision log; prior history is not rewritten.
+- Background launch acknowledgement/error now asserts retained ownership, no unattributed cooldown, no alternate launch and no passed evidence. Confirmed outcome health assertions remain. AGY fixtures supply unique durable report paths; quota fixtures explicitly advertise the model named in their group reading.
+
+- Independent compatibility review found missing positive synchronous coverage. Added real foreground Hermes fixtures (guarded backgroundLaunch !== true), retaining original assertions for upstream cooldown/fallback, reservation release, scoped nextCheckAt and default-path persistence. These are separate from real Paseo/AGY background tests; no adapter behavior is overridden under another production harness name.
+
+- Final fixture hardening: synchronous Hermes stdout is response text, not an invented JSON session receipt. R4 guards real-store reads/writes in this process instead of hashing shared data that unrelated parallel tests may change.
+
+- R4 real-store guards cover normalized default path and .tmp sibling, reads/opens/appends/writes/removal and rename/copy source or destination. Separate isolation defect located: TASK-AI-65 report-outcome fixtures provide evidence/home but omit routeHealthFile, so their m-65 health observations reach the checkout default store. This slice does not rewrite those observations or live runtime history.

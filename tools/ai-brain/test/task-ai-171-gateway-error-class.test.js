@@ -97,8 +97,8 @@ describe('TASK-AI-171 Item 1: 9Router gateway error classification', () => {
   });
 });
 
-describe('TASK-AI-171 Item 2: failed launch records to route-health', () => {
-  it('records route-health with future nextCheckAt for failed model+route and leaves other provider untouched', async (t) => {
+describe('TASK-AI-171 Item 2: background handoff and attributed route-health feedback', () => {
+  it('unconfirmed background launch preserves ownership without health mutation', async (t) => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-'));
     t.after(() => {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -182,23 +182,13 @@ describe('TASK-AI-171 Item 2: failed launch records to route-health', () => {
 
     assert.equal(exitCode, 1);
 
-    const store = routeHealthApi.loadStore(routeHealthFile);
-    assert.ok(store.paths, 'route health store must have paths');
-
-    const recA = store.paths['m-alpha|ag'];
-    assert.ok(recA, 'failed model+route record must exist in route health');
-    assert.notEqual(recA.status, 'AVAILABLE', 'status must not be AVAILABLE');
-    assert.ok(
-      Date.parse(recA.nextCheckAt) > now,
-      `nextCheckAt (${recA.nextCheckAt}) must be in the future (after ${now})`
+    assert.equal(
+      fs.existsSync(routeHealthFile),
+      false,
+      'unconfirmed background error must not persist provider health'
     );
-
-    const recB = store.paths['m-beta|other-provider'];
-    assert.strictEqual(
-      recB,
-      undefined,
-      'different model on another provider must remain untouched'
-    );
+    const open = require('../decisions').openWritersDetailed({ dir: decisionDir }).writers;
+    assert.equal(open.length, 1, 'ownership must remain open instead of starting fallback');
   });
 
   it('feedback path: model concurrency capacity cools only that model while credential failure cools upstream provider', () => {
@@ -274,4 +264,104 @@ describe('TASK-AI-171 Item 2: failed launch records to route-health', () => {
     assert.match(credCooldown, /PROVIDER_UNAVAILABLE/);
     assert.equal(routeHealthApi.isEligible(store, azureCandB.modelId, '9router', now), false);
   });
+});
+
+it('synchronous Hermes records route-health with future nextCheckAt for failed model+route and leaves other provider untouched', async (t) => {
+  assert.notEqual(require('../harness').getHarness('hermes').backgroundLaunch, true);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-171-'));
+  t.after(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const routeHealthFile = path.join(tempDir, 'model-route-health.json');
+  const decisionDir = path.join(tempDir, 'decisions');
+  const evidenceDir = path.join(tempDir, 'evidence');
+  const quotaStateFile = path.join(tempDir, 'quota-state.json');
+
+  const candidateA = {
+    harness: 'hermes',
+    accessPath: 'http://127.0.0.1:20128/v1',
+    gateway: '9router',
+    upstream: 'ag',
+    accountId: 'mock-scope-a',
+    quotaScope: 'mock-scope-a',
+    modelId: 'm-alpha',
+    qualifiedRoles: ['author.foundation'],
+    cost: 1,
+    quality: 90,
+  };
+  candidateA.candidateKey = [
+    candidateA.harness,
+    candidateA.accessPath,
+    candidateA.gateway,
+    candidateA.upstream,
+    candidateA.accountId,
+    candidateA.quotaScope,
+    candidateA.modelId,
+  ].join('\u241f');
+
+  const candidateB = {
+    harness: 'hermes',
+    accessPath: 'http://127.0.0.1:20128/v1',
+    gateway: '9router',
+    upstream: 'other-provider',
+    accountId: 'mock-scope-b',
+    quotaScope: 'mock-scope-b',
+    modelId: 'm-beta',
+    qualifiedRoles: ['author.foundation'],
+    cost: 2,
+    quality: 80,
+  };
+  candidateB.candidateKey = [
+    candidateB.harness,
+    candidateB.accessPath,
+    candidateB.gateway,
+    candidateB.upstream,
+    candidateB.accountId,
+    candidateB.quotaScope,
+    candidateB.modelId,
+  ].join('\u241f');
+
+  const now = Date.now();
+  let exitCode = -1;
+
+  dispatchCommand(
+    { execute: true, item: 'TASK-AI-171-TEST' },
+    {
+      candidates: [candidateA, candidateB],
+      quotaStateFile,
+      decisionDir,
+      evidenceDir,
+      routeHealthFile,
+      now,
+      run: () => ({
+        exitCode: 1,
+        stderr: 'No active credentials for provider: ag',
+        elapsedMs: 150,
+      }),
+      home: tempDir,
+      exit: (code) => {
+        exitCode = code;
+      },
+      log: () => {},
+      maxAttempts: 1,
+      concurrency: 1,
+    }
+  );
+
+  assert.equal(exitCode, 1);
+
+  const store = routeHealthApi.loadStore(routeHealthFile);
+  assert.ok(store.paths, 'route health store must have paths');
+
+  const recA = store.paths['m-alpha|ag'];
+  assert.ok(recA, 'failed model+route record must exist in route health');
+  assert.notEqual(recA.status, 'AVAILABLE', 'status must not be AVAILABLE');
+  assert.ok(
+    Date.parse(recA.nextCheckAt) > now,
+    `nextCheckAt (${recA.nextCheckAt}) must be in the future (after ${now})`
+  );
+
+  const recB = store.paths['m-beta|other-provider'];
+  assert.strictEqual(recB, undefined, 'different model on another provider must remain untouched');
 });

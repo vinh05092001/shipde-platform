@@ -43,6 +43,7 @@ const RETIRED = Object.freeze({
 const paseo = {
   id: 'paseo',
   command: 'paseo',
+  backgroundLaunch: true,
   launch(job) {
     if (job.isolatedWorker) {
       const { isWorkerPath } = require('./isolation-launcher');
@@ -348,6 +349,58 @@ function structuredOutcome(candidateKey, res, classification, extra) {
 const agyPool = {
   id: 'agy-pool',
   command: 'schtasks',
+  backgroundLaunch: true,
+  requiresUsageReport: true,
+  validateLaunch(job) {
+    return require('./agy-pool-runtime').isValidAccountId(job?.accountId)
+      ? null
+      : { refusal: 'INVALID_ACCOUNT_ID', reason: 'INVALID_ACCOUNT_ID', exitCode: 1 };
+  },
+  onLaunchFailed(job, result, opts) {
+    if (!(result?.exitCode > 0)) return { pending: true };
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const pool = require('./agy-pool-runtime');
+      if (!pool.isValidAccountId(job?.accountId) || fs.statSync(job.usageFile).size > 65536)
+        return { pending: true };
+      const report = JSON.parse(fs.readFileSync(job.usageFile, 'utf8'));
+      if (
+        report.accountId !== job.accountId ||
+        typeof report.nativeJobId !== 'string' ||
+        !report.nativeJobId.trim() ||
+        report.launchHandle !== job.accountId + '/' + report.nativeJobId
+      )
+        return { pending: true };
+      const dir = pool.accountDir(job.accountId, opts);
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8'));
+      if (
+        stored.jobId !== report.nativeJobId ||
+        stored.accountId !== job.accountId ||
+        stored.candidateKey !== job.candidateKey
+      )
+        return { pending: true };
+      const lane = require('./lane-launcher');
+      if (lane.readResult(dir, stored)) return { pending: true };
+      if (
+        !lane.saveResult(
+          dir,
+          stored,
+          {
+            state: 'error',
+            exitCode: 1,
+            reason: 'SCHEDULER_LAUNCH_FAILED',
+          },
+          { onlyIfAbsent: true }
+        )
+      )
+        return { pending: true };
+      lane.releaseLaneLock(dir, stored);
+      return { pending: false };
+    } catch {
+      return { pending: true };
+    }
+  },
   launch(job, opts) {
     const fs = require('fs');
     const path = require('path');
@@ -377,25 +430,72 @@ const agyPool = {
     if (job.timeoutSec) payload.timeoutSec = job.timeoutSec;
     if (job.pid !== undefined) payload.pid = job.pid;
 
-    const launchResult = laneLauncher.launch(accountDir, payload, opts);
-    if (!launchResult.ok) {
-      const code = launchResult.cause || 'LANE_BUSY';
-      const refusal = code === 'LOCK_HELD' ? 'LANE_BUSY' : code;
-      return {
-        refusal,
-        reason: `${refusal}: ${launchResult.error || launchResult.cause || 'lane is busy'}`,
-        exitCode: 1,
-        state: 'error',
-      };
+    let reportFd;
+    let launchResult;
+    try {
+      if (job.usageFile) {
+        fs.mkdirSync(path.dirname(job.usageFile), { recursive: true });
+        // A report belongs to one allocation; never overwrite a prior receipt.
+        reportFd = fs.openSync(job.usageFile, 'wx');
+      }
+      launchResult = laneLauncher.launch(accountDir, payload, opts);
+      if (!launchResult.ok) {
+        const code = launchResult.cause || 'LANE_BUSY';
+        const refusal = code === 'LOCK_HELD' ? 'LANE_BUSY' : code;
+        return {
+          refusal,
+          reason: `${refusal}: ${launchResult.error || launchResult.cause || 'lane is busy'}`,
+          exitCode: 1,
+          state: 'error',
+        };
+      }
+      if (reportFd !== undefined) {
+        fs.writeFileSync(
+          reportFd,
+          JSON.stringify({
+            accountId: job.accountId,
+            nativeJobId: launchResult.job.jobId,
+            launchHandle: job.accountId + '/' + launchResult.job.jobId,
+          })
+        );
+      }
+      return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
+    } catch (error) {
+      if (launchResult?.ok) {
+        // Scheduling has not happened: a local report failure is not model work.
+        laneLauncher.saveResult(accountDir, launchResult.job, {
+          state: 'error',
+          exitCode: 1,
+          reason: 'HARNESS_USAGE_REPORT_WRITE_FAILED',
+        });
+        laneLauncher.releaseLaneLock(accountDir, launchResult.job);
+      }
+      throw error;
+    } finally {
+      if (reportFd !== undefined) fs.closeSync(reportFd);
     }
-
-    if (job.usageFile) {
-      fs.writeFileSync(job.usageFile, JSON.stringify({ accountId: job.accountId }));
-    }
-
-    return ['/run', '/tn', `ShipDe\\ShipDe-${job.accountId}`];
   },
   sessionIdFromResult(job, result) {
+    if (!require('./agy-pool-runtime').isValidAccountId(job?.accountId)) return null;
+    if (result?.exitCode !== undefined && result.exitCode !== 0) return null;
+    if (result?.accountId && result.accountId !== job?.accountId) return null;
+    if (!result?.jobId && !result?.launchHandle && result?.exitCode === 0 && job?.usageFile) {
+      try {
+        const fs = require('fs');
+        if (fs.statSync(job.usageFile).size > 65536) return null;
+        const report = JSON.parse(fs.readFileSync(job.usageFile, 'utf8'));
+        if (
+          report.accountId !== job.accountId ||
+          typeof report.nativeJobId !== 'string' ||
+          !report.nativeJobId.trim() ||
+          report.launchHandle !== report.accountId + '/' + report.nativeJobId
+        )
+          return null;
+        result = report;
+      } catch {
+        return null;
+      }
+    }
     if (result?.accountId && result.accountId !== job?.accountId) return null;
     const id = result?.jobId || result?.launchHandle;
     if (typeof id !== 'string' || !id.trim() || id === job?.accountId) return null;
