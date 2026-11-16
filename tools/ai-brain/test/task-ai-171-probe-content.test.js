@@ -98,3 +98,18 @@ test('HTTP failure stays failure and retains retry/classification without echoed
   assert.equal(invalidRetry.result.status, 429);
   assert.equal(invalidRetry.result.resetAt, null);
 });
+
+test('aborted probe remains no response without incrementing route failures', async () => {
+  const result = await health.probeGatewayModel('fixture-model', 'fixture-router', {
+    registry,
+    fetch: async () => {
+      throw new DOMException('untrusted abort detail', 'AbortError');
+    },
+  });
+  const key = health.healthKey('fixture-model', 'fixture-router');
+  const store = { version: 1, paths: { [key]: { failures: 2 } }, events: [] };
+  health.recordResult(store, 'fixture-model', 'fixture-router', result, 1000);
+  assert.equal(store.paths[key].failures, 2);
+  assert.equal(store.paths[key].status, 'PROBE_NO_RESPONSE');
+  assert.equal(Date.parse(store.paths[key].nextCheckAt), 1000);
+});

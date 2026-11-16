@@ -1507,11 +1507,11 @@ async function probeGatewayModel(modelId, routeId, options) {
           : legacyFailure,
       resetAt,
     };
-  } catch (error) {
+  } catch {
     return {
       ok: false,
       status: 0,
-      error: error?.name === 'AbortError' ? 'probe timeout' : 'probe transport failed',
+      error: 'probe transport failed',
     };
   } finally {
     clearTimeout(timer);

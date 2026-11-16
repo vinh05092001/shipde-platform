@@ -1032,3 +1032,5 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Scope limit: route-probe.js probeRoute is a separate producer still needing its own bounded response-validation slice; no claim all preflights fixed. No live probes or worker launches performed for this repair. Protocol validation proves only a probe response, never writer/tool capacity.
 
 - P03 test-only scope amendment: task-ai-141-part-e.test.js account-route fixture returned plain 'ok' while asserting success. Updated only its response to a valid terminal completion, retaining account and redirect assertions. Direct caller suite RED 56/57 before fixture correction.
+
+- Review correction: aborted transport retains PROBE_NO_RESPONSE, unchanged failure count and immediate recheck; no provider text is exposed. Known conservative limit: reasoning responses with null content are refused even with length; an empty string with length is accepted. A probe with 200 but invalid body parks as existing UNAVAILABLE_NOW/HTTP_200 with bounded backoff, not permanent exclusion or model-quality evidence.
