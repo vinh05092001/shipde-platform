@@ -18,6 +18,11 @@
       "dependsOn": ["build", "^build"],
       "inputs": ["$TURBO_DEFAULT$"]
     },
+    "@shipde/api#test": {
+      "dependsOn": ["build", "^build"],
+      "inputs": ["$TURBO_DEFAULT$"],
+      "env": ["DATABASE_URL", "S3_ACCESS_KEY", "S3_SECRET_KEY"]
+    },
     "test:audit": {
       "dependsOn": ["build", "^build"],
       "cache": false

@@ -659,7 +659,7 @@ function defaultPlanningDeps(rootDir, overrides) {
         role,
         complexity: 'complex',
         riskDomains: ['documentation'],
-        qualityFloor: 80,
+        qualityFloor: null,
         proofFloor: 'NONE',
         contextSize: 0,
         costCeiling: 5000,

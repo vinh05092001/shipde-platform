@@ -324,8 +324,10 @@ describe('TASK-AI-94: reviewer lane re-selection and launch attempt counting', (
     });
     const candRepair = sampleCandidate({
       gateway: '9router',
-      upstream: 'up-repair-r03',
-      modelId: 'up-repair-r03/m1',
+      // Share the writer domain so independence, rather than an implicit
+      // quality floor, excludes this repair writer from the reviewer lane.
+      upstream: 'up-0-writer',
+      modelId: 'up-0-writer/repair',
       quality: 70,
     });
 

@@ -334,7 +334,7 @@ test('G2 Operator decision 2026-10-12: default planner ranking has no proof entr
     });
     await deps.rankPlanner({ workItemId: 'FEAT-AUTH-07', role: 'planner.default' });
     assert.equal(profile.proofFloor, 'NONE');
-    assert.equal(profile.qualityFloor, 80);
+    assert.equal(profile.qualityFloor, null);
     assert.equal(profile.costCeiling, 5000);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

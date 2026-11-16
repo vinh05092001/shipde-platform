@@ -93,6 +93,7 @@ function parseTicket(content, filePath = null) {
   const riskDomains = parseRiskDomains(text);
   const ac = parseAcceptance(text);
   const explicitComplexity = sec(text, /^COMPLEXITY\s*:\s*(.+)$/im);
+  const explicitFloor = sec(text, /^QUALITY\s+FLOOR\s*:\s*(.+)$/im);
 
   return {
     id,
@@ -109,6 +110,7 @@ function parseTicket(content, filePath = null) {
     ticketText: text,
     ticketPath: filePath,
     ...(explicitComplexity ? { complexity: explicitComplexity.toLowerCase().trim() } : {}),
+    ...(explicitFloor ? { qualityFloor: explicitFloor } : {}),
   };
 }
 

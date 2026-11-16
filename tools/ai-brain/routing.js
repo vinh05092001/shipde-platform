@@ -171,7 +171,11 @@ const PROFILE_SCHEMA = Object.freeze([
   },
   {
     field: 'qualityFloor',
-    check: (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100,
+    check: (v) =>
+      (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) &&
+      Number.isFinite(Number(v)) &&
+      Number(v) >= 0 &&
+      Number(v) <= 100,
     code: 'MALFORMED_QUALITY_FLOOR',
   },
   {
@@ -214,7 +218,7 @@ function validateTaskProfile(profile) {
   for (const rule of PROFILE_SCHEMA) {
     const value = profile[rule.field];
     const missing = value === undefined || value === null;
-    if (missing && rule.field !== 'requiredHarness') {
+    if (missing && rule.field !== 'requiredHarness' && rule.field !== 'qualityFloor') {
       errors.push({ field: rule.field, code: 'MISSING_FIELD' });
       continue;
     }
@@ -2003,8 +2007,9 @@ function rankForProfile(candidates, profile, assessment, ctx) {
     assessment.weightSource ||
     (assessment.weights ? JSON.stringify(assessment.weights) : 'default');
   const reason = chosen
-    ? 'fastest candidate meeting quality floor ' +
-      profile.qualityFloor +
+    ? (profile.qualityFloor === null || profile.qualityFloor === undefined
+        ? 'ranked eligible candidate with no task quality floor specified'
+        : 'fastest candidate meeting quality floor ' + profile.qualityFloor) +
       ' and proof floor ' +
       profile.proofFloor +
       ' (score ' +

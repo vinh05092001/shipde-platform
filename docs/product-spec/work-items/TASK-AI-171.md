@@ -1005,3 +1005,21 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Final fixture hardening: synchronous Hermes stdout is response text, not an invented JSON session receipt. R4 guards real-store reads/writes in this process instead of hashing shared data that unrelated parallel tests may change.
 
 - R4 real-store guards cover normalized default path and .tmp sibling, reads/opens/appends/writes/removal and rename/copy source or destination. Separate isolation defect located: TASK-AI-65 report-outcome fixtures provide evidence/home but omit routeHealthFile, so their m-65 health observations reach the checkout default store. This slice does not rewrite those observations or live runtime history.
+
+### Local verification prerequisite — API test environment
+
+- Canonical Turbo strict mode stripped DATABASE_URL, so process-only IPv4 configuration never reached API tests. The named invitations failure reproduced; direct same-spec IPv4 passed. Cold connect measured localhost 2063 ms versus 127.0.0.1 19 ms against 2000 ms readiness. This is local environment evidence, not an API timeout change.
+- Companion scope: turbo.json adds DATABASE_URL to only @shipde/api#test env (hashed), with explicit original build dependencies and inputs. Actual Turbo dry-run confirms strict mode, the same four dependencies, and zero other tasks receiving this variable. Initial env-only task override removed dependencies; caught and corrected before execution. No loose mode, gate skip, provider key, timeout, migration or auth-file change.
+- OpenAPI checkout had CRLF although HEAD is LF; restored exact HEAD bytes with no tracked contract change. RBAC unit test then passed 80/80.
+
+- API live test configuration follow-up: Shops suite uses real AppModule validation rather than a test APP_CONFIG override, requiring the two S3 credential variables as well as DATABASE_URL. API-only hashed env now declares those three required non-production inputs. Values for verification come solely from the repo testkit local fixture configuration; no auth/provider credential files. Targeted Shops suite passed with that fixture. Strict mode and four dependencies remain unchanged.
+
+### Remove implicit role-based quality floors — operator instruction 2026-11-16
+
+- Scope: orchestrate profile producer and reviewer producer, routing profile validation/reason, explicit ticket field, causal tests. CODE base 0ae444fc; GRAPH 1abfdf26 (orchestrate/routing unchanged since graph). Queries buildProfile/buildTaskProfile identified their selection callers; source then checked.
+- Deleted automatic writer/reviewer 70, other-role 40 and review-launch 75. Missing requirement is null, not a replacement number, and logs say no task quality floor specified. Explicit QUALITY FLOOR ticket or item/profile value remains bounded and enforced; malformed explicit values refuse rather than disappear. Other proof, capability, health, budget, quota and account gates are unchanged. This does not implement JEV tier mapping or claim JEV selected a model.
+- Causal RED: 5/6 initial tests failed on role defaults and required-floor validation. GREEN: profile producer through actual rankForProfile admits known-quality fixture with no implicit floor, explicit owner floor still rejects it, quota block remains, malformed input is diagnosed. Existing quality-floor and JEV pipeline regressions pass (60/60 before final invalid-type additions). No live launch under old floor after the operator correction.
+
+- Review scope amendment: removed the same hidden 80 from non-planner Hermes selection and default Work Item planning. Added causal caller-level tests (both returned 80 before repair); explicit Hermes options and registry planner configuration remain preserved. Existing planner regression now expects no invented quality requirement. No new numeric floor replaces them.
+
+- Floor-removal compatibility: TASK-AI-94 R-R03 repair fixture now shares the writer failure domain, so reviewer independence preserves the intended single-reviewer-domain scenario without relying on the removed implicit 75 floor. All existing launch-cap, R3/R4 exclusion and BLOCKED assertions remain unchanged. RED: 5/6; GREEN: 6/6. Test-only scope amendment.

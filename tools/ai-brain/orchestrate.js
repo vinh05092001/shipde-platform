@@ -3193,6 +3193,14 @@ function buildCheckpointReviews(log, prior, completedIds, logOpts) {
   return result;
 }
 
+function explicitQualityFloor(item) {
+  const value = item && item.qualityFloor;
+  if (value === undefined || value === null) return null;
+  const numericInput =
+    typeof value === 'number' || (typeof value === 'string' && value.trim() !== '');
+  return numericInput && Number.isFinite(Number(value)) ? Number(value) : value;
+}
+
 function buildProfile(item, o, forbiddenFailureDomains) {
   const role = routingRoleOf(item);
   const roleCaps = (item && item.roleRequirement && item.roleRequirement.requires) || {};
@@ -3262,15 +3270,7 @@ function buildProfile(item, o, forbiddenFailureDomains) {
         ? Number(item.expectedDuration)
         : 30 * 60 * 1000,
     latencyPriority: item.latencyPriority || (codingOrReview ? 'normal' : 'high'),
-    qualityFloor:
-      item.qualityFloor !== null &&
-      item.qualityFloor !== undefined &&
-      Number.isFinite(Number(item.qualityFloor)) &&
-      Number(item.qualityFloor) >= 0
-        ? Number(item.qualityFloor)
-        : codingOrReview
-          ? 70
-          : 40,
+    qualityFloor: explicitQualityFloor(item),
     costCeiling:
       item.costCeiling !== null &&
       item.costCeiling !== undefined &&
@@ -8192,13 +8192,7 @@ async function reviewItem(
   // allowing reviewer candidates on the same gateway with distinct upstreams
   // without forbidding the shared router account.
   const forbiddenDomains = [writerUpstream || writerGateway].filter(Boolean);
-  const reviewerQualityFloor =
-    item.qualityFloor !== null &&
-    item.qualityFloor !== undefined &&
-    Number.isFinite(Number(item.qualityFloor)) &&
-    Number(item.qualityFloor) >= 0
-      ? Number(item.qualityFloor)
-      : 75;
+  const reviewerQualityFloor = explicitQualityFloor(item);
   const reviewerAttempt =
     options.attempt !== undefined
       ? options.attempt
