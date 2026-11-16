@@ -1050,3 +1050,9 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Live follow-through found a proven route still rejected as ROUTE_PROBE_UNPROVEN. Claude independently confirmed ticket candidate assembly ignored the CLI --route-health file while scoring read it, producing inconsistent admission/scoring inputs. Prior receipts claiming admission used that flag are not authoritative about the referenced store.
 - Scope: cli.js, one causal ticket-dispatch test, this evidence. Pass the CLI route-health path into ticketRoute before assembly, with CLI precedence over dependency default. No eligibility rule, health record or provider policy changes. Root-directory override behavior is outside this explicit-file repair.
 - RED: actual dispatchCommand with ticket/dry-run and an isolated AVAILABLE store rejected the route when a conflicting empty dependency default existed. GREEN after one-line production repair: the route ranks; both stores remain byte-identical. No inference or worker launch in the test.
+
+
+### Shared launch lifecycle extraction evidence
+
+- The preparation, pre-launch claim, runner, durable-session read and L2 handoff/terminal handling are moved into one cli-local executeDispatchLaunch helper. The normal dispatch caller preserves its payload, metadata and caller-owned reservation finally; frozen wiring remains a separate dependent slice.
+- Source commit 11e8cc67 received independent exact-SHA PASS from Claude and Gemini. Eight unchanged named regression files passed 86/86. Full local brain initially reported five environment failures (vendored CRLF bytes and pnpm virtual-store configuration); restoring canonical LF bytes and the process-only local pnpm setting gave 31/31 in the affected files. Full corrected-environment and remote gates remain required. No gate config or test assertion was changed.
