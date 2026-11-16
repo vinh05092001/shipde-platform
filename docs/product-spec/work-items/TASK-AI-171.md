@@ -1057,3 +1057,9 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - This slice adds the pure local freeze/validate library and direct module tests only. No CLI mode or worker launch is exposed at this cut; the shared dispatch launch spine is the independently reviewed parent 11e8cc67.
 - The code is byte-identical to the library reviewed in 90ccf577. The direct tests cover original-receipt digest binding, captured input bytes, manifest/input drift and missing profile/provenance refusal. Integration wiring remains the following dependent slice.
 - Reviewability plan for this cohesive library: review path/schema and profile identity, captured-buffer hash/use, atomic freeze receipt, external digest gate, then provenance/input verification. Measure production, fixture and assertion lines separately in the PR. Do not infer full L1 release acceptance from this library-only cut; each intermediate cut requires its own regression/CI evidence.
+
+
+### Shared launch lifecycle extraction evidence
+
+- The preparation, pre-launch claim, runner, durable-session read and L2 handoff/terminal handling are moved into one cli-local executeDispatchLaunch helper. The normal dispatch caller preserves its payload, metadata and caller-owned reservation finally; frozen wiring remains a separate dependent slice.
+- Source commit 11e8cc67 received independent exact-SHA PASS from Claude and Gemini. Eight unchanged named regression files passed 86/86. Full local brain initially reported five environment failures (vendored CRLF bytes and pnpm virtual-store configuration); restoring canonical LF bytes and the process-only local pnpm setting gave 31/31 in the affected files. Full corrected-environment and remote gates remain required. No gate config or test assertion was changed.
