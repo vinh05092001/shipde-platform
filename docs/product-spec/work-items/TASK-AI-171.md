@@ -1005,3 +1005,9 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Final fixture hardening: synchronous Hermes stdout is response text, not an invented JSON session receipt. R4 guards real-store reads/writes in this process instead of hashing shared data that unrelated parallel tests may change.
 
 - R4 real-store guards cover normalized default path and .tmp sibling, reads/opens/appends/writes/removal and rename/copy source or destination. Separate isolation defect located: TASK-AI-65 report-outcome fixtures provide evidence/home but omit routeHealthFile, so their m-65 health observations reach the checkout default store. This slice does not rewrite those observations or live runtime history.
+
+### Local verification prerequisite — API test environment
+
+- Canonical Turbo strict mode stripped DATABASE_URL, so process-only IPv4 configuration never reached API tests. The named invitations failure reproduced; direct same-spec IPv4 passed. Cold connect measured localhost 2063 ms versus 127.0.0.1 19 ms against 2000 ms readiness. This is local environment evidence, not an API timeout change.
+- Companion scope: turbo.json adds DATABASE_URL to only @shipde/api#test env (hashed), with explicit original build dependencies and inputs. Actual Turbo dry-run confirms strict mode, the same four dependencies, and zero other tasks receiving this variable. Initial env-only task override removed dependencies; caught and corrected before execution. No loose mode, gate skip, provider key, timeout, migration or auth-file change.
+- OpenAPI checkout had CRLF although HEAD is LF; restored exact HEAD bytes with no tracked contract change. RBAC unit test then passed 80/80.
