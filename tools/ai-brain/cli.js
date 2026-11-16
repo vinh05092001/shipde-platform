@@ -3424,10 +3424,13 @@ function dispatchCommand(args, deps = {}) {
     finalChosenKey = checkpoint.chosen || checkpoint.selectedCandidate || checkpoint.candidateKey;
     const parsedCheckpoint =
       require('./discovery/identity').parseCandidateKey(finalChosenKey) || {};
+    const currentCheckpointCandidate = eligibleCandidates.find(
+      (candidate) => candidatesApi.candidateKey(candidate) === finalChosenKey
+    );
     finalChosenCandidate = {
       offeringId: finalChosenKey,
       harness: checkpoint.harness || parsedCheckpoint.harness,
-      source: checkpoint.source,
+      source: currentCheckpointCandidate?.source || checkpoint.source,
       accessPath: checkpoint.accessPath || parsedCheckpoint.accessPath,
       upstream: checkpoint.upstream || parsedCheckpoint.upstream,
       gateway: checkpoint.gateway || parsedCheckpoint.gateway,
