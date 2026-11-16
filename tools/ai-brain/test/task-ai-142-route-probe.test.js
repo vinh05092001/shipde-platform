@@ -17,7 +17,14 @@ test('shared route probe sends the worker model id and realistic request to its 
     {
       fetch: async (url, init) => {
         request = { url, init, body: JSON.parse(init.body) };
-        return { ok: true, status: 200, text: async () => 'OK' };
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            }),
+        };
       },
     }
   );
@@ -40,7 +47,14 @@ test('probe default budget is realistic while requesting a one-word reply (PR #2
         const body = JSON.parse(init.body);
         assert.equal(body.max_tokens, 8192);
         assert.match(body.messages[0].content, /^Reply only OK\./);
-        return { ok: true, status: 200, text: async () => 'OK' };
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            }),
+        };
       },
     }
   );

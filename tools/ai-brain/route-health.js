@@ -1456,36 +1456,13 @@ async function probeGatewayModel(modelId, routeId, options) {
       Number.isFinite(retryTime) && Math.abs(retryTime) <= 8640000000000000
         ? new Date(retryTime).toISOString()
         : null;
-    let parsed;
-    try {
-      parsed = JSON.parse(body);
-    } catch {}
-    const choice = parsed?.choices?.[0];
-    const message = choice?.message;
-    const eventStream = /text\/event-stream/i.test(response.headers?.get('content-type') || '');
-    const unexpectedTool =
-      choice?.finish_reason === 'tool_calls' || message?.tool_calls !== undefined;
-    const valid =
-      response.ok &&
-      !eventStream &&
-      parsed &&
-      !Object.prototype.hasOwnProperty.call(parsed, 'error') &&
-      Array.isArray(parsed.choices) &&
-      choice &&
-      typeof choice === 'object' &&
-      message?.role === 'assistant' &&
-      typeof message.content === 'string' &&
-      !unexpectedTool &&
-      (choice.finish_reason === 'length' ||
-        (choice.finish_reason === 'stop' && message.content.trim().length > 0));
-    if (valid) {
+    const summary = require('./probe-response').completionSummary(response, body);
+    if (summary.valid) {
       return {
         ok: true,
         status: response.status,
-        finishReason: choice.finish_reason,
-        ...(typeof parsed.model === 'string' && /^[\w./:-]{1,200}$/.test(parsed.model)
-          ? { model: parsed.model }
-          : {}),
+        finishReason: summary.finishReason,
+        ...(summary.model ? { model: summary.model } : {}),
         resetAt,
       };
     }
@@ -1500,7 +1477,7 @@ async function probeGatewayModel(modelId, routeId, options) {
       ok: false,
       status: response.status,
       reasonCode: require('./route-probe').failureReason(failure),
-      message: unexpectedTool
+      message: summary.unexpectedTool
         ? 'unexpected tool response'
         : legacyFailure === 'UNSUPPORTED'
           ? 'unsupported model'
