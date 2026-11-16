@@ -4288,6 +4288,9 @@ function shadowCommand(args) {
  * credential, and never fabricates or promotes a proof.
  */
 function discoveryCommand(args, deps) {
+  if (Object.keys(args).some((key) => key.startsWith('source='))) {
+    throw new Error('DISCOVERY_SOURCE_SYNTAX');
+  }
   const d = deps || {};
   const log = d.log || console.log;
   const error = d.error || console.error;
@@ -4301,7 +4304,10 @@ function discoveryCommand(args, deps) {
 
   if (sub === 'run') {
     return require('./discovery')
-      .cmdRun({ 'data-dir': dataDir, 'freshness-file': args['freshness-file'] }, d)
+      .cmdRun(
+        { 'data-dir': dataDir, 'freshness-file': args['freshness-file'], source: args.source },
+        d
+      )
       .then((result) => {
         log(JSON.stringify(result, null, 2));
         if (result.exitCode)

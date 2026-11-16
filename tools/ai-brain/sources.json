@@ -31,7 +31,8 @@
       },
       "verify": {
         "method": "models-list",
-        "path": "/models"
+        "path": "/models",
+        "timeoutMs": 60000
       },
       "modelPrefix": "ninerouter/",
       "comment": "A gateway, not a model vendor. Its catalog is the union of the accounts logged into it, so a model id here is evidence of routing, never of capacity."
