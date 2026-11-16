@@ -2933,6 +2933,7 @@ function dispatchCommand(args, deps = {}) {
     resolveFixturePaths(args, deps);
   const ticketRoute = {
     scanFile: args['scan-file'] || deps.scanFile,
+    routeHealthFile: args['route-health'] || args.routeHealthFile || deps.routeHealthFile,
     role: item.role,
     routeScope: routeScopeOf(args['route-scope'] ?? item.routeScope),
     ...(noInference ? { refreshRoutes: false } : {}),

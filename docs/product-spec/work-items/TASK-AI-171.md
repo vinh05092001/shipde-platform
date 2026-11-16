@@ -1044,3 +1044,9 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Publication remains pending exact-SHA review, complete gates and CI. Helper extraction and producer/consumer repair will be separated into reviewable slices; no intermediate release may weaken response verification. This is protocol/liveness evidence only, not task-success, quality or all-source capacity proof.
 
 - Separate pre-existing classification defect (Gemini causal review): HTTP 403 model_requires_purchase or model-locked text is MODEL_LOCKED in the probe classifier but upstream_entitlement in the legacy Hermes failure classifier, which can cool the whole account and suppress unlocked models. This protocol slice preserves that legacy policy; it does not claim correct model-only cooldown. A separate classifier repair must prove actual Hermes account-cooldown and next-model eligibility behavior before changing the policy.
+
+### Ticket health-input propagation repair
+
+- Live follow-through found a proven route still rejected as ROUTE_PROBE_UNPROVEN. Claude independently confirmed ticket candidate assembly ignored the CLI --route-health file while scoring read it, producing inconsistent admission/scoring inputs. Prior receipts claiming admission used that flag are not authoritative about the referenced store.
+- Scope: cli.js, one causal ticket-dispatch test, this evidence. Pass the CLI route-health path into ticketRoute before assembly, with CLI precedence over dependency default. No eligibility rule, health record or provider policy changes. Root-directory override behavior is outside this explicit-file repair.
+- RED: actual dispatchCommand with ticket/dry-run and an isolated AVAILABLE store rejected the route when a conflicting empty dependency default existed. GREEN after one-line production repair: the route ranks; both stores remain byte-identical. No inference or worker launch in the test.
