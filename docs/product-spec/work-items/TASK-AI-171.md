@@ -1050,3 +1050,10 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 - Live follow-through found a proven route still rejected as ROUTE_PROBE_UNPROVEN. Claude independently confirmed ticket candidate assembly ignored the CLI --route-health file while scoring read it, producing inconsistent admission/scoring inputs. Prior receipts claiming admission used that flag are not authoritative about the referenced store.
 - Scope: cli.js, one causal ticket-dispatch test, this evidence. Pass the CLI route-health path into ticketRoute before assembly, with CLI precedence over dependency default. No eligibility rule, health record or provider policy changes. Root-directory override behavior is outside this explicit-file repair.
 - RED: actual dispatchCommand with ticket/dry-run and an isolated AVAILABLE store rejected the route when a conflicting empty dependency default existed. GREEN after one-line production repair: the route ranks; both stores remain byte-identical. No inference or worker launch in the test.
+
+
+### Frozen-manifest library publication slice
+
+- This slice adds the pure local freeze/validate library and direct module tests only. No CLI mode or worker launch is exposed at this cut; the shared dispatch launch spine is the independently reviewed parent 11e8cc67.
+- The code is byte-identical to the library reviewed in 90ccf577. The direct tests cover original-receipt digest binding, captured input bytes, manifest/input drift and missing profile/provenance refusal. Integration wiring remains the following dependent slice.
+- Reviewability plan for this cohesive library: review path/schema and profile identity, captured-buffer hash/use, atomic freeze receipt, external digest gate, then provenance/input verification. Measure production, fixture and assertion lines separately in the PR. Do not infer full L1 release acceptance from this library-only cut; each intermediate cut requires its own regression/CI evidence.
