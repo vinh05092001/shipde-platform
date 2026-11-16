@@ -109,3 +109,55 @@ test('invalid explicit floor types cannot coerce into zero or an unspecified con
     assert.equal(routing.validateTaskProfile(p).valid, false);
   }
 });
+
+test('Hermes non-planner selection has no hidden floor and preserves explicit config', () => {
+  const hermes = require('../hermes-session');
+  const select = (options) => {
+    let profile;
+    hermes.selectReasoningCandidate(
+      { skipDecisionLog: true, quotaState: { scopes: {} }, dispatchConfig: {}, ...options },
+      {
+        candidateList: [],
+        registry: { sources: [] },
+        accountList: [],
+        evidenceData: {},
+        priorsData: { ranking: [] },
+        routeHealth: { version: 1, paths: {}, events: [] },
+        rankForProfile: (rows, p) => {
+          profile = p;
+          return { chosen: null, ranking: [], top3: [], rejected: [] };
+        },
+      }
+    );
+    return profile;
+  };
+  assert.equal(select({ role: 'writer' }).qualityFloor, null);
+  assert.equal(select({ role: 'writer', qualityFloor: 82 }).qualityFloor, 82);
+  assert.equal(
+    select({
+      role: 'planner.default',
+      dispatchConfig: {
+        hermesOrchestrator: {
+          qualityFloor: 66,
+          costCeiling: 5000,
+          complexity: 'standard',
+          weightProfile: 'QUALITY_FIRST',
+        },
+      },
+    }).qualityFloor,
+    66
+  );
+});
+test('default work-item planner does not invent its own quality floor', async () => {
+  const { defaultPlanningDeps } = require('../work-item-planner');
+  let profile;
+  const deps = defaultPlanningDeps(process.cwd(), {
+    loadPool: () => ({ annotated: [], evidenceData: {}, accounts: [] }),
+    rankForProfile: (rows, p) => {
+      profile = p;
+      return { chosen: null, ranking: [] };
+    },
+  });
+  await deps.rankPlanner({ workItemId: 'TASK-AI-171', role: 'planner.default' });
+  assert.equal(profile.qualityFloor, null);
+});

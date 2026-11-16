@@ -1366,8 +1366,8 @@ function selectReasoningCandidate(options, deps) {
       opts.qualityFloor !== undefined
         ? opts.qualityFloor
         : isPlannerDefault
-          ? hermesOrch.qualityFloor
-          : 80,
+          ? (hermesOrch.qualityFloor ?? null)
+          : null,
     // Operator decision 2026-10-12: drop the proof floor for model selection;
     // the output gates (independent exact-SHA review and CI) stay.
     proofFloor: opts.proofFloor || 'NONE',
