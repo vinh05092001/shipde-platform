@@ -2799,7 +2799,451 @@ function executeDispatchLaunch(context) {
   return { launchRes, thrownError, isFailure, sessionHandle, handedOff, launchPending };
 }
 
+function executeFrozenCommand(frozenContext, manifestPath, args, deps = {}) {
+  const fs = require('fs');
+  const path = require('path');
+  const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
+  const output = deps.log || console.log;
+  const log = args.json && !args.plan ? () => {} : output;
+  const error = deps.error || console.error;
+  const exit = deps.exit || process.exit;
+
+  if ((frozenContext.checkpoint.failedCandidates || []).includes(frozenContext.chosenKey)) {
+    error('Dispatch refused: FROZEN_CANDIDATE_PREVIOUSLY_FAILED');
+    exit(1);
+    return { exitCode: 1, error: 'FROZEN_CANDIDATE_PREVIOUSLY_FAILED' };
+  }
+
+  const makeExecuteResult = (code, chosen, launchedId, outcome, recorded, extra = {}) => {
+    const maskValue = (v) =>
+      typeof v === 'string'
+        ? maskEmailsInString(v)
+        : Array.isArray(v)
+          ? v.map(maskValue)
+          : v && typeof v === 'object'
+            ? Object.fromEntries(
+                Object.entries(v).map(([k, val]) => [maskValue(k), maskValue(val)])
+              )
+            : v;
+    const res = maskValue({
+      chosen: chosen || null,
+      launchedArgvIdentity: launchedId || null,
+      outcome: outcome || null,
+      recorded: recorded || null,
+      ...extra,
+    });
+    if (args.json) output(JSON.stringify(res, null, 2));
+    exit(code);
+    return { exitCode: code, ...res };
+  };
+
+  // 1. Verify candidate in discovery directory
+  const { readDiscoveryCatalogue } = require('./discovery/read');
+  const candidatesApi = require('./candidates');
+  let discCat;
+  try {
+    discCat = readDiscoveryCatalogue({ dataDir: frozenContext.realDiscoveryDir });
+  } catch {
+    discCat = null;
+  }
+  let listed = (discCat?.candidates || []).some(
+    (c) => (c.key || candidatesApi.candidateKey(c)) === frozenContext.chosenKey
+  );
+  if (frozenContext.chosenCandidate.harness === 'agy-pool') {
+    const pool = require('./agy-pool-runtime');
+    // Passing a non-empty cached model list prevents discoverPoolModels from
+    // invoking any live CLI listing; poolAccountCandidates then applies its
+    // existing per-account model/group/auth admission to this exact identity.
+    const models = pool.readAccountModels(frozenContext.chosenCandidate.accountId, deps);
+    const current = models.length
+      ? candidatesApi
+          .poolAccountCandidates({
+            ...deps,
+            models,
+            keepExhausted: true,
+          })
+          .find((c) => candidatesApi.candidateKey(c) === frozenContext.chosenKey)
+      : null;
+    listed = Boolean(current);
+    if (current?.blocked) {
+      error('Dispatch refused: OFFERING_NOT_ELIGIBLE');
+      exit(1);
+      return { exitCode: 1, error: 'OFFERING_NOT_ELIGIBLE' };
+    }
+  }
+  if (!listed) {
+    error(`Dispatch refused: MISSING_LOCAL_LISTING (${frozenContext.chosenKey})`);
+    exit(1);
+    return { exitCode: 1, error: 'MISSING_LOCAL_LISTING' };
+  }
+
+  // 2. Read local health and quota for exact-key admission
+  const routeHealthApi = require('./route-health');
+  const routeHealthInput = routeHealthApi.resolveRouteHealthFile(args, deps);
+  let routeHealthStore;
+  try {
+    routeHealthStore =
+      deps.routeHealth !== undefined
+        ? deps.routeHealth
+        : typeof routeHealthInput === 'object'
+          ? routeHealthInput
+          : routeHealthApi.loadStore(routeHealthInput, { allowMissing: true });
+  } catch {
+    error('Dispatch refused: ROUTE_HEALTH_UNREADABLE');
+    exit(1);
+    return { exitCode: 1, error: 'ROUTE_HEALTH_UNREADABLE' };
+  }
+  if (
+    !isCandidateRouteEligible(
+      routeHealthStore,
+      frozenContext.chosenCandidate,
+      { requireRouteHealth: true },
+      routeHealthApi,
+      true
+    )
+  ) {
+    error('Dispatch refused: OFFERING_NOT_ELIGIBLE');
+    exit(1);
+    return { exitCode: 1, error: 'OFFERING_NOT_ELIGIBLE' };
+  }
+  const quotaScan = require('./quota-scan');
+  const quotaState =
+    deps.quotaState ||
+    (deps.loadQuotaState
+      ? deps.loadQuotaState()
+      : quotaScan.loadQuotaState({ quotaStateFile: deps.quotaStateFile }));
+  const quotaOptions = {
+    candidate: frozenContext.chosenCandidate,
+    registry: deps.registry,
+    now: deps.now || Date.now(),
+  };
+  const quotaScope = quotaScan.getQuotaScopeState(
+    frozenContext.chosenCandidate,
+    quotaState,
+    quotaOptions
+  );
+  if (quotaScan.isScopeBlocked(quotaScope, quotaOptions.now, quotaOptions)) {
+    error('Dispatch refused: OFFERING_NOT_ELIGIBLE');
+    exit(1);
+    return { exitCode: 1, error: 'OFFERING_NOT_ELIGIBLE' };
+  }
+
+  // 3. Target verification with execute-target
+  const { resolveExecuteTarget } = require('./execute-target');
+  const baseResolution = resolveExecuteTarget(
+    {
+      execute: true,
+      cwd: frozenContext.target.cwd,
+      baseSha: frozenContext.target.baseSha,
+      branch: frozenContext.target.branch,
+    },
+    deps
+  );
+  if (!baseResolution.ok) {
+    error(`Dispatch refused: ${baseResolution.code || 'TARGET_BASE_UNRESOLVED'}`);
+    exit(1);
+    return { exitCode: 1, error: baseResolution.code || 'TARGET_BASE_UNRESOLVED' };
+  }
+
+  const item = {
+    workItemId: frozenContext.ticket.id,
+    role: frozenContext.selection.profile?.role || 'writer',
+    branch: frozenContext.target.branch,
+    baseSha: frozenContext.target.baseSha,
+    allowedFiles: frozenContext.ticket.allowedFiles,
+    acceptanceCriteria: frozenContext.ticket.acceptanceCriteria,
+    promptFile: frozenContext.manifest.prompt.file,
+  };
+
+  const decisionDir = deps.decisionDir || undefined;
+  const decisionsStore = require('./decisions');
+  const quotaStore = require('./quota-store');
+  const now = (deps && deps.now) || Date.now();
+  const nowForWriter = now;
+
+  // 4. Writer claim check
+  const activeWriter = decisionsStore.writerFor(item.workItemId, {
+    dir: decisionDir,
+    now: nowForWriter,
+  });
+  if (activeWriter) {
+    log(`Work item ${item.workItemId} is already claimed by session ${activeWriter.sessionId}`);
+    exit(1);
+    return { exitCode: 1, error: 'ALREADY_CLAIMED' };
+  }
+
+  // 5. Reserve candidate in quota store
+  const reservationOpts = { home: deps && deps.home, storePath: deps && deps.storePath, now };
+  quotaStore.recordReservation(
+    item.workItemId,
+    item.role,
+    frozenContext.chosenCandidate.accountId || '*',
+    frozenContext.chosenKey,
+    100000,
+    reservationOpts
+  );
+
+  // 6. Drift recheck immediately before launch
+  const { validateFrozenManifest } = require('./frozen-dispatch');
+  try {
+    validateFrozenManifest(manifestPath, args, deps);
+  } catch (driftErr) {
+    quotaStore.releaseReservation(item.workItemId, frozenContext.chosenKey, reservationOpts);
+    error('Dispatch refused: ' + (driftErr.message || driftErr.code));
+    exit(1);
+    return { exitCode: 1, error: driftErr.message };
+  }
+
+  // 7. Adapter launch
+  const sourcesApi = require('./sources');
+  const { getHarness, runHarness, parseLastJson, structuredOutcome } = require('./harness');
+  const { readSessionId, workerName } = require('./executor');
+  let launcher = (deps && deps.run) || runHarness;
+  const harnessName = frozenContext.chosenCandidate.harness || 'paseo';
+  const adapter =
+    (deps && (deps.harnessAdapter || (deps.getHarness && deps.getHarness(harnessName)))) ||
+    getHarness(harnessName);
+
+  const route = sourcesApi.dispatchRoute(
+    frozenContext.chosenCandidate.source ||
+      frozenContext.chosenCandidate.upstream ||
+      frozenContext.chosenCandidate.gateway,
+    deps.registry || sourcesApi.loadSources(args.sources || (deps && deps.sources))
+  );
+
+  const chosenIdentity =
+    require('./discovery/identity').parseCandidateKey(frozenContext.chosenKey) || {};
+  const launchedArgvIdentity = {
+    harness: frozenContext.chosenCandidate.harness || chosenIdentity.harness || harnessName,
+    accessPath: frozenContext.chosenCandidate.accessPath || chosenIdentity.accessPath || '',
+    gateway: frozenContext.chosenCandidate.gateway || chosenIdentity.gateway || '',
+    upstream: frozenContext.chosenCandidate.upstream || chosenIdentity.upstream || '',
+    account:
+      frozenContext.chosenCandidate.accountId ||
+      frozenContext.chosenCandidate.account ||
+      chosenIdentity.account ||
+      '*',
+    quotaScope: frozenContext.chosenCandidate.quotaScope || chosenIdentity.quotaScope || '',
+    modelId:
+      frozenContext.chosenCandidate.modelId ||
+      frozenContext.chosenCandidate.model ||
+      chosenIdentity.modelId ||
+      '',
+  };
+
+  const singleAttempt = Number(
+    args['max-attempts'] !== undefined
+      ? args['max-attempts']
+      : args.maxAttempts !== undefined
+        ? args.maxAttempts
+        : '1'
+  );
+
+  const usageFile =
+    usageReportFile(args, deps, item, now) ||
+    (adapter.requiresUsageReport ? manifestPath + '.usage.json' : null);
+  let launchRes = null;
+  let thrownError = null;
+  let isFailure = true;
+  let sessionHandle = null;
+  let handedOff = false;
+  let launchPending = false;
+  try {
+    const launchState = executeDispatchLaunch({
+      args: {
+        ...args,
+        cwd: frozenContext.target.cwd,
+        'timeout-sec': Math.ceil(frozenContext.workerTimeoutMs / 1000),
+      },
+      deps,
+      item,
+      now,
+      adapter,
+      finalChosenCandidate: frozenContext.chosenCandidate,
+      finalChosenKey: frozenContext.chosenKey,
+      harnessName,
+      rootDir,
+      decisionDir,
+      checkpointFile: frozenContext.realCheckpointPath,
+      checkpoint: null,
+      lastDecision: frozenContext.selection,
+      limitsEnforcement: {},
+      launcher,
+      baseResolution,
+      resolvedBaseSha: frozenContext.target.baseSha,
+      launchTimeoutMs: frozenContext.workerTimeoutMs,
+      workerTimeoutMs: frozenContext.workerTimeoutMs,
+      tokenBudget: undefined,
+      outputCeiling: undefined,
+      selectedMode: undefined,
+      log,
+      exit,
+      route,
+      promptText: frozenContext.promptText,
+      usageFile,
+    });
+    ({ launchRes, thrownError, isFailure, sessionHandle, handedOff, launchPending } = launchState);
+    if (launchState.fatal) return launchState.fatal;
+  } finally {
+    if (!handedOff && !launchPending)
+      quotaStore.releaseReservation(item.workItemId, frozenContext.chosenKey, reservationOpts);
+  }
+
+  if (frozenContext.realCheckpointPath) {
+    const finalLogData = buildDryRunLog({
+      item,
+      now,
+      annotated: [frozenContext.chosenCandidate],
+      decision: {
+        chosen: frozenContext.chosenKey,
+        ranking: frozenContext.selection.ranking || [],
+        rejected: [],
+      },
+      decisionLogFile: null,
+      chosenCandidate: frozenContext.chosenCandidate,
+      resumed: true,
+      lastDecision: null,
+      candidatesApi: require('./candidates'),
+    });
+    finalLogData.dryRunDispatch = { executeTouched: true, launched: true };
+    finalLogData.outcome = launchPending
+      ? 'unknown'
+      : handedOff
+        ? 'launched'
+        : isFailure
+          ? 'failed'
+          : 'passed';
+    try {
+      writeJsonFile(frozenContext.realCheckpointPath, finalLogData);
+    } catch {}
+  }
+
+  if (launchPending) {
+    return makeExecuteResult(
+      1,
+      frozenContext.chosenKey,
+      launchedArgvIdentity,
+      structuredOutcome(frozenContext.chosenKey, launchRes, null, {
+        status: 'unknown',
+        detail: 'LAUNCH_UNCONFIRMED',
+        checkpoint: frozenContext.realCheckpointPath,
+        sessionId: sessionHandle,
+      }),
+      { status: 'unknown' },
+      { result: launchRes, attempts: singleAttempt }
+    );
+  }
+  if (handedOff) {
+    return makeExecuteResult(
+      0,
+      frozenContext.chosenKey,
+      launchedArgvIdentity,
+      structuredOutcome(frozenContext.chosenKey, launchRes, null, {
+        status: 'launched',
+        checkpoint: frozenContext.realCheckpointPath,
+        sessionId: sessionHandle,
+      }),
+      { status: 'launched' },
+      { result: launchRes, attempts: singleAttempt }
+    );
+  }
+  return makeExecuteResult(
+    isFailure ? 1 : 0,
+    frozenContext.chosenKey,
+    launchedArgvIdentity,
+    structuredOutcome(frozenContext.chosenKey, launchRes, null, {
+      status: isFailure ? 'failed' : 'passed',
+      checkpoint: frozenContext.realCheckpointPath,
+      sessionId: sessionHandle,
+    }),
+    { status: isFailure ? 'failed' : 'passed' },
+    { result: launchRes, attempts: singleAttempt }
+  );
+}
+
 function dispatchCommand(args, deps = {}) {
+  const isFreeze = args && args.freeze !== undefined;
+  const isExecuteFrozen =
+    args && (args['execute-frozen'] !== undefined || args.executeFrozen !== undefined);
+
+  if (isFreeze && isExecuteFrozen) {
+    const error = deps?.error || console.error;
+    const exit = deps?.exit || process.exit;
+    error('Dispatch refused: MODES_MUTUALLY_EXCLUSIVE');
+    exit(1);
+    return { exitCode: 1, error: 'MODES_MUTUALLY_EXCLUSIVE' };
+  }
+
+  if (isFreeze) {
+    const allowedFreezeKeys = new Set(['freeze', 'output', 'json', '_']);
+    const unknown = Object.keys(args).filter((k) => !allowedFreezeKeys.has(k));
+    const error = deps?.error || console.error;
+    const exit = deps?.exit || process.exit;
+    if (unknown.length > 0) {
+      error('Dispatch refused: CONFLICTING_FLAGS_IN_FREEZE_MODE');
+      exit(1);
+      return { exitCode: 1, error: 'CONFLICTING_FLAGS_IN_FREEZE_MODE' };
+    }
+    if (!args.output) {
+      error('Dispatch refused: FREEZE_OUTPUT_REQUIRED');
+      exit(1);
+      return { exitCode: 1, error: 'FREEZE_OUTPUT_REQUIRED' };
+    }
+    const { freeze } = require('./frozen-dispatch');
+    try {
+      const receipt = freeze(args.freeze, args.output, args, deps);
+      if (args.json) {
+        (deps?.log || console.log)(JSON.stringify(receipt, null, 2));
+      }
+      (deps?.exit || process.exit)(0);
+      return { exitCode: 0, ...receipt };
+    } catch (err) {
+      error('Dispatch refused: ' + (err.code || err.message));
+      exit(1);
+      return { exitCode: 1, error: err.message };
+    }
+  }
+
+  if (isExecuteFrozen) {
+    const allowedExecuteKeys = new Set([
+      'execute-frozen',
+      'executeFrozen',
+      'json',
+      'max-attempts',
+      'maxAttempts',
+      'manifest-sha256',
+      'manifestSha256',
+      '_',
+    ]);
+    const unknown = Object.keys(args).filter((k) => !allowedExecuteKeys.has(k));
+    const error = deps?.error || console.error;
+    const exit = deps?.exit || process.exit;
+    if (unknown.length > 0) {
+      error('Dispatch refused: CONFLICTING_FLAGS_IN_EXECUTE_FROZEN_MODE');
+      exit(1);
+      return { exitCode: 1, error: 'CONFLICTING_FLAGS_IN_EXECUTE_FROZEN_MODE' };
+    }
+    const rawAttempts =
+      args['max-attempts'] !== undefined ? args['max-attempts'] : args.maxAttempts;
+    if (rawAttempts !== undefined && rawAttempts !== 1 && rawAttempts !== '1') {
+      error('Dispatch refused: MAX_ATTEMPTS_MUST_BE_ONE');
+      exit(1);
+      return { exitCode: 1, error: 'MAX_ATTEMPTS_MUST_BE_ONE' };
+    }
+
+    const { validateFrozenManifest } = require('./frozen-dispatch');
+    const manifestPath = args['execute-frozen'] || args.executeFrozen;
+    let frozenContext;
+    try {
+      frozenContext = validateFrozenManifest(manifestPath, args, deps);
+    } catch (err) {
+      error('Dispatch refused: ' + (err.message || err.code));
+      exit(1);
+      return { exitCode: 1, error: err.message };
+    }
+    return executeFrozenCommand(frozenContext, manifestPath, args, deps);
+  }
+
   if (args.offline !== undefined) return coordinatorDispatchCommand(args, deps);
   const fs = require('fs');
   const rootDir = args.root || (deps && deps.rootDir) || process.cwd();
