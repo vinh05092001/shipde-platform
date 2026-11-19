@@ -3309,17 +3309,6 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
   return [...Array.from(map.values()), ...noId];
 }
 
-function resolveEvidenceAccounts(o) {
-  const inputAccounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
-  const registryAccounts =
-    o && Array.isArray(o.registryAccounts)
-      ? o.registryAccounts
-      : o && typeof o.listAccounts === 'function'
-        ? o.listAccounts()
-        : [];
-  return mergeEvidenceAccounts(inputAccounts, registryAccounts);
-}
-
 function buildCandidates(options) {
   // Combo-only routing (TASK-AI-171 re-plan 2026-11-19): one 9router combo
   // candidate; 9router owns member order, failover and health.

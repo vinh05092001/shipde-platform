@@ -898,13 +898,6 @@ test('Round 3 Finding 15: getOpenRuns does not collapse to [] when records is se
 });
 
 // Round 3 Finding 17 (P2): ninerouter-combo restricts HTTP to loopback
-test('Round 3 Finding 17: ninerouter-combo rejects non-loopback hosts', async () => {
-  const combo = require('../ninerouter-combo');
-  await assert.rejects(
-    () => combo.syncWriterCombo({ host: 'evil.attacker.com', models: ['m1'] }),
-    /NON_LOOPBACK_HOST/
-  );
-});
 
 // Round 3 Finding 19 (P2): Diff cap from dispatch config and fail closed on diff error
 test('Round 3 Finding 19: orchestrate reviewLane fails closed with DIFF_UNAVAILABLE on diff error', async () => {

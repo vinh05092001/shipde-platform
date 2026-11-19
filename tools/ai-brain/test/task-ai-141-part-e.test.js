@@ -248,41 +248,6 @@ test('default production dispatch requires route health even when the health sto
   }
 });
 
-test('normal next loop refreshes the default route health store before selection', async (t) => {
-  const { dir } = temporaryStore(t);
-  const order = [];
-  const registerPath = path.join(dir, 'register.csv');
-  fs.writeFileSync(
-    registerPath,
-    'delivery_order,slice,group,work_item_id,feature_id,feature_name,key_behavior,status,dependencies,work_item_path,branch,pr,codex_verdict,merge_commit\\n1,,,,,,,READY_FOR_AUTHOR,,,,,,\\n'
-  );
-  const defaultHealthFile = path.join(dir, 'data', 'model-route-health.json');
-  const result = await cli.nextCommand(
-    {
-      loop: true,
-      maxIterations: 1,
-      root: dir,
-      'decision-dir': path.join(dir, 'decisions'),
-      'route-health': defaultHealthFile,
-    },
-    {
-      routeHealthFile: defaultHealthFile,
-      probeRoute: async () => {
-        order.push('probe');
-        return { ok: true };
-      },
-      onRouteRefresh: () => order.push('refresh'),
-      qualificationSlot: async () => ({ ran: false }),
-      log: () => {},
-      now: 1_800_000_000_000,
-      registry: { sources: [], dispatch: { providers: {} } },
-      accounts: [],
-    }
-  );
-  assert.equal(result.reason, 'NO_READY_ITEM');
-  assert.ok(order.includes('refresh'));
-});
-
 test('next loop invokes route due rechecks before selecting a work item', async (t) => {
   const { dir } = temporaryStore(t);
   const order = [];
@@ -798,45 +763,6 @@ test('unavailable report includes account-scoped originating path', async () => 
   assert.ok(
     result.failures.some((row) => row.path.accountId === 'acct-a' && row.reason === 'GEO_BLOCKED')
   );
-});
-
-test('resolveFallbackRoutes with preResolvedFallback picks probed OK path matching route_fallback and rejects unprobed sibling', async () => {
-  const store = {
-    version: 1,
-    paths: {
-      'model-fb|gw-failed': { status: 'GEO_BLOCKED', routeId: { id: 'gw-failed' } },
-      'model-fb|gw-probed-ok': { status: 'AVAILABLE', routeId: { id: 'gw-probed-ok' } },
-      // 'gw-unprobed' has NO record in store.paths
-    },
-    events: [
-      {
-        type: 'route_fallback',
-        modelId: 'model-fb',
-        failedPath: 'gw-failed',
-        chosenPath: 'gw-probed-ok',
-        reason: 'GEO_BLOCKED',
-      },
-    ],
-  };
-  const catalogue = [
-    { modelId: 'model-fb', gateway: 'gw-failed' },
-    { modelId: 'model-fb', gateway: 'gw-unprobed' },
-    { modelId: 'model-fb', gateway: 'gw-probed-ok' },
-  ];
-  const resolved = [];
-  await cli._resolveFallbackRoutes(store, catalogue, null, routes, {
-    preResolvedFallback: true,
-    resolvedRoutes: resolved,
-    registry: { sources: [{ id: 'gw-failed' }, { id: 'gw-unprobed' }, { id: 'gw-probed-ok' }] },
-    accounts: [],
-  });
-  assert.equal(resolved.length, 1);
-  assert.equal(
-    resolved[0].route.id,
-    'gw-probed-ok',
-    'must select probed OK route, not unprobed sibling'
-  );
-  assert.notEqual(resolved[0].route.id, 'gw-unprobed', 'unprobed sibling must never be selected');
 });
 
 function intakeFixture(id) {

@@ -159,24 +159,6 @@ const { candidateKey, parseCandidateKey } = require('./discovery/identity');
  * Account key = candidateKey's 2nd and 3rd "::" fields (base URL + source id).
  * For 9router (base http://127.0.0.1:20128/v1), also includes the 4th field (upstream prefix).
  */
-function candidateAccountKey(candidateOrKey) {
-  const key =
-    typeof candidateOrKey === 'string'
-      ? candidateOrKey
-      : (candidateOrKey && candidateOrKey.candidateKey) || candidateKey(candidateOrKey);
-  if (!key || typeof key !== 'string') return '';
-  const parts = key.split('::');
-  const baseUrl = parts[1] || '';
-  const sourceId = parts[2] || '';
-  const is9router =
-    baseUrl === 'http://127.0.0.1:20128/v1' || baseUrl.includes('20128') || sourceId === '9router';
-  if (is9router) {
-    const upstream = parts[3] || '';
-    return `${baseUrl}::${sourceId}::${upstream}`;
-  }
-  return `${baseUrl}::${sourceId}`;
-}
-
 const HERMES_MIN_CONTEXT = 32000;
 const DEFAULT_HERMES_DIR = 'data/hermes';
 const CONTROLLER_SKILL_NAME = 'shipde-controller';
@@ -843,145 +825,6 @@ function readCodexConfigModels(options, deps) {
     }
   } catch {}
   return o.strict ? [] : ['gpt-6.1-sol'];
-}
-
-function isCodexContextEligible(options, deps) {
-  const o = options || {};
-  const d = deps || {};
-  const cand = o.candidate || d.candidate;
-  if (cand) {
-    return cand.provider === 'openai-codex' || cand.accessPath === 'openai-codex';
-  }
-  // Without a concrete provider or candidate identifying a codex source,
-  // session-wide flags (includeOpenAiCodex, codexAuthPath, isCodex, …) are
-  // NOT eligibility evidence — they describe session auth/config, not the
-  // model being resolved.  Borrowing another source's context window must
-  // stay limited to an actual openai-codex candidate.
-  return o.provider === 'openai-codex' || d.provider === 'openai-codex';
-}
-
-function resolveHermesContextWindow(modelId, options, deps) {
-  const o = options || {};
-  const d = deps || {};
-  const fsApi = d.fs || o.fs || fs;
-  const canonical = canonicalHermesModelId(modelId);
-  const registry = d.registry || (d.sources || sourcesApi).loadSources(d.sourceOpts);
-
-  // 0. Own source modelMeta (non-codex candidates retain their own producing source context;
-  // openai-codex candidates participate in the cross-source conservative reducer below)
-  if (!isCodexContextEligible(o, d)) {
-    const candidate = o.candidate || d.candidate;
-    const sourceId =
-      (candidate && (candidate.sourceId || candidate.source || candidate.provider)) ||
-      o.provider ||
-      d.provider;
-    const source = ((registry && registry.sources) || []).find((s) => s.id === sourceId);
-    let meta =
-      source &&
-      source.modelMeta &&
-      (source.modelMeta[modelId] || (canonical && source.modelMeta[canonical]));
-    if (!meta && source && source.modelMeta && canonical) {
-      for (const [id, m] of Object.entries(source.modelMeta)) {
-        if (id === modelId || canonicalHermesModelId(id) === canonical) {
-          meta = m;
-          break;
-        }
-      }
-    }
-    if (meta) {
-      const { toPositiveInteger } = require('./source-discovery');
-      const cw =
-        toPositiveInteger(typeof meta === 'number' ? meta : undefined) ??
-        toPositiveInteger(meta.contextWindow) ??
-        toPositiveInteger(meta.capabilities?.contextWindow) ??
-        toPositiveInteger(meta.context_window) ??
-        toPositiveInteger(meta.context_length) ??
-        toPositiveInteger(meta.contextTokens);
-      if (cw !== undefined) return cw;
-    }
-  }
-
-  // 1. Injected hermesModelCatalogue
-  const cat =
-    d.hermesModelCatalogue || o.hermesModelCatalogue || d.hermesCatalogue || o.hermesCatalogue;
-  if (cat && typeof cat === 'object') {
-    const meta =
-      cat[modelId] ||
-      cat[canonical] ||
-      (cat.models && (cat.models[modelId] || cat.models[canonical]));
-    if (meta) {
-      const cw = Number(
-        typeof meta === 'number'
-          ? meta
-          : meta.contextWindow || meta.context_window || meta.context_length || meta.contextTokens
-      );
-      if (Number.isFinite(cw) && cw > 0) return cw;
-    }
-  }
-
-  // 2. models_dev_cache.json in Hermes local directories
-  const { home } = getCodexPaths(o, d);
-  const local =
-    o.localAppData ||
-    d.localAppData ||
-    process.env.LOCALAPPDATA ||
-    path.join(home, 'AppData', 'Local');
-  const hermesHome = o.hermesHome || d.hermesHome || getHermesHomeDir(resolveRootDir(o, d));
-  const candidateCacheFiles = [
-    path.join(local, 'hermes', 'models_dev_cache.json'),
-    path.join(hermesHome, 'models_dev_cache.json'),
-    path.join(home, '.hermes', 'models_dev_cache.json'),
-  ];
-
-  for (const cacheFile of candidateCacheFiles) {
-    try {
-      if (fsApi.existsSync(cacheFile)) {
-        const raw = fsApi.readFileSync(cacheFile, 'utf8');
-        const parsed = JSON.parse(raw);
-        const providers = (parsed && (parsed.providers || parsed)) || {};
-        for (const provKey of ['openai-codex', 'openai', 'codex']) {
-          const provider = providers[provKey];
-          if (provider && provider.models) {
-            const m = provider.models[modelId] || provider.models[canonical];
-            if (m) {
-              const cw = Number(
-                m.contextWindow || m.context_window || m.context_length || m.contextTokens
-              );
-              if (Number.isFinite(cw) && cw > 0) return cw;
-            }
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // 3. Same canonical model on registered provider catalogues (codex source included).
-  // Allowed ONLY for openai-codex candidates when catalogue/cache metadata is absent.
-  // For every other Hermes candidate, a model without window on its producing source stays unverified.
-  // Keep the most conservative reported window; priors are not context evidence.
-  if (isCodexContextEligible(o, d)) {
-    const { toPositiveInteger } = require('./source-discovery');
-    const reportedWindows = [];
-    for (const source of (registry && registry.sources) || []) {
-      for (const [id, meta] of Object.entries((source && source.modelMeta) || {})) {
-        const isSameModel =
-          id === modelId ||
-          (canonical && (id === canonical || canonicalHermesModelId(id) === canonical));
-        if (!isSameModel || !meta) continue;
-        const cw =
-          toPositiveInteger(typeof meta === 'number' ? meta : undefined) ??
-          toPositiveInteger(meta.contextWindow) ??
-          toPositiveInteger(meta.capabilities?.contextWindow) ??
-          toPositiveInteger(meta.context_window) ??
-          toPositiveInteger(meta.context_length) ??
-          toPositiveInteger(meta.contextTokens);
-        if (cw !== undefined) reportedWindows.push(cw);
-      }
-    }
-    if (reportedWindows.length) return Math.min(...reportedWindows);
-  }
-
-  return undefined;
 }
 
 function selectReasoningCandidate(options, deps) {
@@ -1736,7 +1579,7 @@ async function launchHermesSession(options, deps) {
       return {
         status: 'dry_run',
         decisionLine,
-        modelRanking: initialModelRanking,
+        modelRanking: selection.ranking,
         chosenRoute: selection.chosenRoute,
         sessionId: session.sessionId,
         candidateKey: session.candidateKey,
@@ -2094,14 +1937,11 @@ module.exports = {
   hasCodexAuth,
   parseCodexModelsFromToml,
   readCodexConfigModels,
-  resolveHermesContextWindow,
-  candidateAccountKey,
   fileExists,
   dirExists,
   getFsCheckReasons,
   clearFsCheckReasons,
   createFsCheckTracker,
-  isCodexContextEligible,
   canonicalHermesModelId,
   PROVIDER_LEVEL_FAILURE_CAUSES,
 };

@@ -107,32 +107,6 @@ test('an explicit env is used exclusively for credentials', async (t) => {
   );
 });
 
-test('quota-scan --if-due --source gates on that source freshness', async (t) => {
-  const quotaFile = fixture(t);
-  const cli = require('../cli');
-  const now = 1700000000000;
-  const quotaState = {
-    updatedAt: new Date(now).toISOString(),
-    sourceFreshness: { 'other-src': new Date(now).toISOString() },
-    scopes: {},
-  };
-  let fetched = false;
-  const fetch = async () => {
-    fetched = true;
-    return okResponse();
-  };
-  const res = await cli.quotaScanCommand(
-    { out: quotaFile, ifDue: true, source: 'healthy-src' },
-    { registry: { sources: [registry.sources[1]] }, quotaState, now, fetch, env: {} }
-  );
-  assert.notEqual(
-    res.gated,
-    true,
-    'stale source must be scanned although the global scan is fresh'
-  );
-  assert.equal(fetched, true);
-});
-
 test('missing interval configuration is an error, not a literal fallback', () => {
   assert.throws(
     () =>

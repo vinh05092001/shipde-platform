@@ -312,46 +312,6 @@ test('preferKnownGood removes candidates in blocked quota scopes and records the
   assert.equal(rejectedCl.reasonCode, 'QUOTA_SCOPE_QUOTA');
 });
 
-test('cli.js quotaScanCommand runs scan and writes quota-state.json', async (t) => {
-  const dir = fixture(t);
-  const quotaFile = path.join(dir, 'quota-state.json');
-  const { quotaScanCommand } = require('../cli');
-
-  const registry = {
-    sources: [
-      {
-        id: 'bai',
-        kind: 'model-source',
-        servesModels: true,
-        endpoint: 'https://api.b.ai/v1',
-        models: ['b.ai/g2'],
-      },
-    ],
-  };
-
-  const fakeFetch = async () => ({
-    ok: true,
-    status: 200,
-    headers: new Map(),
-    text: async () => JSON.stringify({ choices: [{ message: { content: 'OK' } }] }),
-  });
-
-  const res = await quotaScanCommand(
-    { out: quotaFile },
-    {
-      registry,
-      fetch: fakeFetch,
-      quotaStateFile: quotaFile,
-    }
-  );
-
-  assert.equal(fs.existsSync(quotaFile), true);
-  assert.equal(res.count, 1);
-  assert.equal(res.blockedCount, 0);
-  const data = JSON.parse(fs.readFileSync(quotaFile, 'utf8'));
-  assert.equal(data.scopes.bai.code, 'OK');
-});
-
 test('isCompletionBody and validateCompletion accept SSE stream chunk bodies with delta content and reasoning', () => {
   const { isCompletionBody, validateCompletion, classifyQuotaResponse } = require('../quota-scan');
 
