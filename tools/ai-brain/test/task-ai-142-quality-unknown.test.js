@@ -182,67 +182,6 @@ test('TASK-AI-142 T5: unscored model is assigned QUALITY_UNKNOWN and ordered aft
   );
 });
 
-test('TASK-AI-142 T5: dispatch --dry-run prints QUALITY_UNKNOWN for unscored models', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dryrun-t5-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-
-  const now = Date.now();
-  const candidateUnscored = {
-    harness: 'opencode',
-    accessPath: 'https://fixture.example/v1',
-    gateway: 'gw',
-    upstream: 'up',
-    accountId: 'acc-unscored',
-    quotaScope: 'acc-unscored',
-    modelId: 'gw/brand-new-unscored-model',
-    capabilities: { contextWindow: 64000 },
-    contextWindow: 64000,
-    qualifiedRoles: ['author.foundation'],
-    cost: 1,
-    evidence: [],
-  };
-  candidateUnscored.candidateKey = routing.candidateKey(candidateUnscored);
-
-  const customPriors = {
-    generatedAt: new Date(now).toISOString(),
-    ranking: [], // completely empty priors table
-  };
-
-  const item = { workItemId: 'TASK-AI-142', role: 'author.foundation', qualityFloor: 0 };
-  const logs = [];
-
-  const actual = await cli.dispatchCommand(
-    { 'dry-run': true, root },
-    {
-      candidates: [candidateUnscored],
-      items: [item],
-      accounts: [],
-      registry: { sources: [] },
-      now,
-      priors: customPriors,
-      headrooms: { default: 'open' },
-      evidenceDir: path.join(root, 'evidence'),
-      decisionDir: path.join(root, 'decisions'),
-      log: (msg) => logs.push(msg),
-      exit: () => {},
-    }
-  );
-
-  assert.equal(actual.exitCode, 0);
-
-  // Check that the terminal log output for dry-run printed QUALITY_UNKNOWN
-  const rankedLine = logs.find((line) => line.includes(candidateUnscored.candidateKey));
-  assert.ok(rankedLine, 'ranked candidate line must be logged: ' + logs.join('\n'));
-  assert.match(
-    rankedLine,
-    /QUALITY_UNKNOWN/,
-    'printed line must include QUALITY_UNKNOWN label: ' + rankedLine
-  );
-
-  // Check decision log structure
-  assert.equal(actual.decision.candidates[0].qualityLabel, 'QUALITY_UNKNOWN');
-});
-
 test('TASK-AI-142 regression: null benchmark prior does not set QUALITY_UNKNOWN when internal quality is finite', () => {
   const sources = require('../sources.json');
   const modelPrefix = sources.dispatch.providers.oc.modelPrefix;

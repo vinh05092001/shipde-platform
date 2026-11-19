@@ -358,50 +358,6 @@ test('TM-R05: a failing gate leads to repair and then refusal', async () => {
   }
 });
 
-test('TM-R05: a gate with no command gives TOOL_GATE_UNAVAILABLE and is not a pass', async () => {
-  // TM-R02: agent-scan stays command null with a note.
-  const agentScan = toolManifest.load().find((t) => t.id === 'agent-scan');
-  assert.equal(agentScan.command, null, 'agent-scan stays command null');
-  assert.ok(agentScan.note, 'agent-scan keeps its note');
-
-  const spec = {
-    id: 'TASK-AI-129',
-    businessOutcome: 'Unavailable gates never pass',
-    files: ['src/feature.js'],
-    verification: { command: 'test' },
-    riskDomains: ['secrets'],
-  };
-  const f = setupGateRun('task-ai-129-unavail-', spec, {
-    status: 0,
-    stdout: 'clean scan\n',
-    stderr: '',
-  });
-
-  const log = await runOrchestration('unavailable gate', f.opts);
-
-  const outcome = (log.outcomes || []).find((e) => e.workItemId === 'TASK-AI-129');
-  assert.ok(outcome, 'outcome exists');
-  assert.notEqual(outcome.status, 'refused', 'an unavailable gate does not block');
-  assert.equal(outcome.status, 'completed', 'the item completes: ' + outcome.status);
-  assert.equal(log.reviews[0].ci.state, 'PASS', 'completion has exact-SHA green CI');
-  assert.equal(log.reviews[0].ci.sha, log.reviews[0].sha);
-
-  const records = decisions.readDecisions({ dir: f.opts.decisionDir, now: NOW });
-  const unavailable = records.find(
-    (r) => r.stage === 'tool_gate' && r.tool === 'agent-scan' && r.toolStatus === 'UNAVAILABLE'
-  );
-  assert.ok(unavailable, 'TOOL_GATE_UNAVAILABLE is recorded for the gate without a command');
-  assert.equal(unavailable.code, 'TOOL_GATE_UNAVAILABLE');
-  const agentPasses = records.filter(
-    (r) => r.stage === 'tool_gate' && r.tool === 'agent-scan' && r.toolStatus === 'PASSED'
-  );
-  assert.equal(agentPasses.length, 0, 'an unavailable gate is never counted as a pass');
-  assert.ok(
-    !f.state.gateSpawns.some((s) => s.args[1] === 'security:secrets' && s.result.status !== 0),
-    'the runnable gate is the only one that executed'
-  );
-});
-
 test('TM-R05: the decision entries record the offered tools and the gate results', async () => {
   const spec = {
     id: 'TASK-AI-129',

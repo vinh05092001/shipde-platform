@@ -179,48 +179,6 @@ test('route success without quota headers remains unknown; exhausted quota block
   assert.equal(sibling.blocked, undefined);
 });
 
-test('light tasks prefer an equally capable cheaper route; hard tasks retain their quality floor', async (t) => {
-  const dir = temp(t);
-  const cheap = candidate({ modelId: 'vendor/cheap-fixture', quality: 80, cost: 1 });
-  const dear = candidate({ modelId: 'vendor/dear-fixture', quality: 80, cost: 50 });
-  const strong = candidate({ modelId: 'vendor/strong-fixture', quality: 99, cost: 60 });
-  const options = {
-    registry: registry(),
-    jevAsk: async () => {
-      throw Error('offline');
-    },
-    ranking: { priors: {} },
-  };
-  const item = {
-    id: 'FIXTURE',
-    roleRequirement: { role: 'writer' },
-    proofFloor: 'NONE',
-    qualityFloor: 70,
-    complexity: 'trivial',
-  };
-  const light = await selectCandidateForProfile(
-    item,
-    [dear, cheap],
-    [],
-    null,
-    options,
-    { dir },
-    Date.now()
-  );
-  assert.equal(light.chosen, cheap.candidateKey);
-  const hard = await selectCandidateForProfile(
-    { ...item, complexity: 'complex', qualityFloor: 95 },
-    [cheap, strong],
-    [],
-    null,
-    options,
-    { dir },
-    Date.now()
-  );
-  assert.equal(hard.chosen, strong.candidateKey);
-  assert.equal(hard.decisionRecorded.weightProfile, 'QUALITY_FIRST');
-});
-
 test('quota comes only from numeric provider headers, never from HTTP success', async () => {
   const { probeRoute } = require('../route-probe');
   for (const [headers, status] of [
@@ -248,73 +206,6 @@ test('quota comes only from numeric provider headers, never from HTTP success', 
     assert.equal(result.quota.status, status);
     assert.equal(result.ok, true);
   }
-});
-
-test('credential and route configuration gates refuse before an inference probe', async (t) => {
-  const dir = temp(t);
-  const c = candidate({ harness: 'opencode', accessPath: 'https://fixture.invalid/v1' });
-  const o = {
-    registry: registry(),
-    isolatedWorker: true,
-    enforceCredentialCheck: true,
-    candidates: [c],
-    env: { FIXTURE_KEY: '' },
-    jevAsk: async () => {
-      throw Error('offline');
-    },
-    ranking: { priors: {} },
-  };
-  const result = await selectCandidateForProfile(
-    { id: 'FIXTURE', roleRequirement: { role: 'writer' }, proofFloor: 'NONE' },
-    [c],
-    [],
-    null,
-    o,
-    { dir },
-    Date.now()
-  );
-  assert.equal(result.chosen, null);
-  assert.match(JSON.stringify(result.result.rejected), /PROVIDER_CREDENTIAL_UNAVAILABLE/);
-});
-
-test('selection rejects missing capabilities, low quality, exhausted quota and failed route before choosing', async (t) => {
-  const dir = temp(t);
-  const base = candidate();
-  const low = candidate({ modelId: 'vendor/low', quality: 1 });
-  const missing = candidate({ modelId: 'vendor/no-tools', capabilities: { contextWindow: 64000 } });
-  const quota = candidate({ modelId: 'vendor/exhausted' });
-  selection.applyProbe(quota, { ok: true, quota: { status: 'exhausted' } });
-  const failed = candidate({
-    modelId: 'vendor/failed',
-    blocked: true,
-    blockReason: 'ROUTE_UNAVAILABLE',
-  });
-  const options = {
-    registry: registry(),
-    jevAsk: async () => {
-      throw Error('offline');
-    },
-    ranking: { priors: {} },
-  };
-  const item = {
-    id: 'FIXTURE',
-    roleRequirement: { role: 'writer' },
-    requiredCapabilities: ['tools'],
-    qualityFloor: 70,
-    proofFloor: 'NONE',
-  };
-  const result = await selectCandidateForProfile(
-    item,
-    [low, missing, quota, failed, base],
-    [],
-    null,
-    options,
-    { dir },
-    Date.now()
-  );
-  assert.equal(result.chosen, base.candidateKey);
-  assert.equal(result.result.rejected.length, 4);
-  assert.equal(result.result.ranking[0].headroomStatus, 'unknown');
 });
 
 test('34 direct source inventories remain independent of the unrelated shared catalogue', () => {

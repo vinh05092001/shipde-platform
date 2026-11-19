@@ -98,37 +98,6 @@ test('B03/B15/B54: import needs no scratch note, user configuration or process s
   assert.equal(typeof require('../coordinator-options').coordinatorOptions, 'function');
   assert.deepEqual(effects, []);
 });
-test('B75: offline ordinary dispatch uses Controller ranking with zero side effects', async (t) => {
-  const { run, effects, lines } = guarded(t, snapshot());
-  const values = Object.entries(options()).filter(([, v]) => typeof v === 'string');
-  const argv = values.flatMap(([k, v]) => ['--' + k, v]);
-  const result = await run(parseArgs(['dispatch', '--offline', '--dry-run', ...argv]));
-  assert.equal(result.exitCode, 0);
-  assert.equal(result.output.selected.modelId, candidate.modelId);
-  assert.equal(result.output.codeSha, options()['code-sha']);
-  assert.deepEqual(JSON.parse(lines.at(-1)), result.output);
-  assert.deepEqual(effects, []);
-});
-test('B23/B74: discovery updates launcher eligibility; all 401 refusals retain identity', async (t) => {
-  const data = snapshot();
-  data.candidates = Array.from({ length: 401 }, (_, i) => ({
-    ...candidate,
-    accountId: 'account-' + i,
-  }));
-  data.launcherModels = [];
-  const { run, effects } = guarded(t, data);
-  const first = await run();
-  assert.equal(first.output.chosen, null);
-  assert.equal(first.output.rejected.length, data.candidates.length);
-  assert.ok(
-    first.output.rejected.every((r) => r.reasonCode === 'LAUNCHER_MODEL_UNKNOWN' && r.accountId)
-  );
-  data.launcherModels.push(candidate.modelId);
-  assert.equal((await run()).output.chosen, null, 'a bare model cannot prove the launch prefix');
-  data.launcherModels.push('registry/' + candidate.modelId);
-  assert.equal((await run()).output.selected.modelId, candidate.modelId);
-  assert.deepEqual(effects, []);
-});
 test('B02/B75: invalid offline flags refuse before selection or maintenance', async (t) => {
   const { run, effects } = guarded(t, snapshot());
   for (const extra of [{ execute: true }, { checkpoint: 'cache.json' }, { task: true }])

@@ -445,33 +445,6 @@ test('PR C (Item 3): orchestrate launcher refuses agy-pool when writer is disabl
   assert.match(result.refusal, /WRITER_LAUNCH_NOT_AUTHORIZED.*disabled by configuration/);
 });
 
-test('PR C (Item 1): probeRankedRoutes enforces maxConcurrentProbes from configuration', async () => {
-  const { probeRankedRoutes } = require('../hermes-session');
-  let currentInFlight = 0;
-  let maxObservedInFlight = 0;
-
-  const routes = Array.from({ length: 12 }, (_, i) =>
-    makeCandidate({
-      accountId: `acct-${i}`,
-      candidateKey: `test::key-${i}`,
-    })
-  );
-
-  await probeRankedRoutes(routes, {
-    maxConcurrentProbes: 3,
-    accountKey: (r) => r.accountId,
-    runProbe: async () => {
-      currentInFlight++;
-      maxObservedInFlight = Math.max(maxObservedInFlight, currentInFlight);
-      await new Promise((r) => setTimeout(r, 20));
-      currentInFlight--;
-      return false; // all fail so all get probed
-    },
-  });
-
-  assert.equal(maxObservedInFlight, 3, 'concurrency must be capped at 3');
-});
-
 test('TASK-AI-142 Finding 8: sources.js does not contain test-only isFixture branches', () => {
   const sourcesCode = fs.readFileSync(path.join(__dirname, '..', 'sources.js'), 'utf8');
   assert.equal(

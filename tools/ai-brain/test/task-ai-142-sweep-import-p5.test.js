@@ -34,45 +34,6 @@ function rejectedKeys(evidenceDir, candidates, at) {
   return (res.decision.rejected || []).map((r) => r.offeringId || r.candidateKey);
 }
 
-test('TASK-AI-142 P1: failure on one harness does not exclude another credential path sharing account, gateway and model', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-p5-harness-'));
-  const evidenceDir = path.join(tmpDir, 'evidence');
-  const registry = sourcesApi.loadSources();
-  const src = registry.sources.find((s) => s.kind !== 'router');
-  const shared = {
-    gateway: src.id,
-    upstream: src.id,
-    accountId: 'acc-shared',
-    quotaScope: 'acc-shared',
-    modelId: `${src.id}/shared-model`,
-    source: src.id,
-  };
-  const candHttp = { ...shared, harness: 'direct-http', accessPath: 'https://a.example/v1' };
-  candHttp.candidateKey = candidateKey(candHttp);
-  const candCli = { ...shared, harness: 'opencode-direct', accessPath: 'https://a.example/v1' };
-  candCli.candidateKey = candidateKey(candCli);
-  const candidates = [candHttp, candCli];
-
-  const at = '2026-10-20T01:00:00.000Z';
-  const file = writeSweep(tmpDir, at, [
-    {
-      source: src.id,
-      model: `${src.id}/shared-model`,
-      accountId: 'acc-shared',
-      harness: 'direct-http',
-      accessPath: 'https://a.example/v1',
-      status: 'HTTP_401',
-      err: 'Unauthorized: invalid token',
-    },
-  ]);
-  sweepImport.runSweepImport(file, { evidenceDir, registry, candidates });
-
-  const rej = rejectedKeys(evidenceDir, candidates, at);
-  assert.ok(rej.includes(candHttp.candidateKey), 'probed route must be excluded');
-  assert.ok(!rej.includes(candCli.candidateKey), 'unprobed harness must stay routable');
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
 test('TASK-AI-142 P1: failure row without harness is not attributed to every credential path', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-p5-ambig-'));
   const evidenceDir = path.join(tmpDir, 'evidence');
@@ -210,42 +171,6 @@ test('TASK-AI-142 P1: a row naming an unmatched harness does not fall back to a 
   ]);
   sweepImport.runSweepImport(file, { evidenceDir, registry, candidates: [candHttp] });
   assert.ok(!rejectedKeys(evidenceDir, [candHttp], at).includes(candHttp.candidateKey));
-  fs.rmSync(tmpDir, { recursive: true, force: true });
-});
-
-test('TASK-AI-142 P1: a success on another credential path does not withhold a later failure', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sweep-p5-othersuccess-'));
-  const evidenceDir = path.join(tmpDir, 'evidence');
-  const registry = sourcesApi.loadSources();
-  const src = registry.sources.find((s) => s.kind !== 'router');
-  const candHttp = { ...sharedRoute(src), harness: 'direct-http' };
-  candHttp.candidateKey = candidateKey(candHttp);
-  const candCli = { ...sharedRoute(src), harness: 'opencode-direct' };
-  candCli.candidateKey = candidateKey(candCli);
-  const candidates = [candHttp, candCli];
-  const base = {
-    source: src.id,
-    model: `${src.id}/shared-model`,
-    accountId: 'acc-shared',
-    accessPath: 'https://a.example/v1',
-  };
-
-  const tFail = '2026-10-20T02:10:00.000Z';
-  const tPass = '2026-10-20T02:20:00.000Z';
-  // Success on opencode-direct imported first but observed later than the direct-http failure.
-  sweepImport.runSweepImport(
-    writeSweep(tmpDir, tPass, [{ ...base, harness: 'opencode-direct', status: 'OK' }]),
-    { evidenceDir, registry, candidates }
-  );
-  sweepImport.runSweepImport(
-    writeSweep(tmpDir, tFail, [
-      { ...base, harness: 'direct-http', status: 'HTTP_401', err: 'Unauthorized' },
-    ]),
-    { evidenceDir, registry, candidates }
-  );
-  const rej = rejectedKeys(evidenceDir, candidates, tPass);
-  assert.ok(rej.includes(candHttp.candidateKey), 'failed route must stay excluded');
-  assert.ok(!rej.includes(candCli.candidateKey));
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

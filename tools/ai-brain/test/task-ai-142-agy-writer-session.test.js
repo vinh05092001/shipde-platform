@@ -197,32 +197,6 @@ async function runFixture(t, limit, allFail, overrides = {}) {
     checkpoint: JSON.parse(fs.readFileSync(checkpointFile, 'utf8')),
   };
 }
-test('one local session failure selects the next equal-score writer without blaming its source', async (t) => {
-  const { log, calls, candidates } = await runFixture(t, 2, false);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0], candidateKey(candidates[0]));
-  assert.equal(calls[1], candidateKey(candidates[1]));
-  assert.equal(log.sessions[0]?.sessionId, 'pool-result-fixture');
-});
-test('local writer fallback stops at the configured limit and keeps each failure reason', async (t) => {
-  const { log, calls, checkpoint } = await runFixture(t, 1, true);
-  assert.equal(calls.length, 2);
-  assert.match(log.outcomes[0].reason, /LOCAL_WRITER_FALLBACK_LIMIT/);
-  assert.equal(log.outcomes[0].reasonCode, 'LOCAL_WRITER_FALLBACK_LIMIT');
-  assert.equal(checkpoint.liveSteps.TRIAL14.failures.length, 2);
-  assert.ok(
-    checkpoint.liveSteps.TRIAL14.failures.every(
-      (f) => f.failureScope === 'local' && f.cause === 'HARNESS_INVALID_JSON'
-    )
-  );
-  assert.match(log.outcomes[0].reason, /HARNESS_INVALID_JSON/);
-});
-
-test('local candidate failures do not exhaust the shared upstream attempt budget', async (t) => {
-  const { calls, checkpoint } = await runFixture(t, 2, true);
-  assert.equal(calls.length, 3);
-  assert.equal(checkpoint.liveSteps.TRIAL14.failures.length, 3);
-});
 
 test('goal orchestration uses the authorized pool submission and keeps its durable job session', async (t) => {
   const runsDir = root(t);
@@ -268,11 +242,4 @@ test('goal orchestration uses the authorized pool submission and keeps its durab
   assert.ok(submitted?.jobId);
   assert.equal(log.sessions[0]?.sessionId, submitted.jobId);
   assert.equal(harness.runHarness.mock.callCount(), 0);
-});
-
-test('a zero local fallback configuration never launches another writer', async (t) => {
-  const { calls, log } = await runFixture(t, 0, true);
-  assert.equal(calls.length, 1);
-  assert.match(log.outcomes[0].reason, /LOCAL_WRITER_FALLBACK_LIMIT/);
-  assert.equal(log.outcomes[0].reasonCode, 'LOCAL_WRITER_FALLBACK_LIMIT');
 });

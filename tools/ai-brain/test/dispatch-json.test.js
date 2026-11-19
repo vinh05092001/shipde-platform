@@ -105,62 +105,6 @@ async function fixture(t) {
   return { run, deps, candidates, root };
 }
 
-test('item JSON preserves identity, score provenance and filter reasons through the CLI', async (t) => {
-  const { run, candidates } = await fixture(t);
-  const { code, value } = await run(['--item', 'TASK-FIXTURE']);
-  assert.equal(code, 0);
-  assert.equal(value.selected.modelId, candidates[0].modelId);
-  for (const field of ['source', 'gateway', 'accountId'])
-    assert.equal(value.selected[field], candidates[0][field]);
-  assert.equal(value.chosen, candidateKey(candidates[0]));
-  assert.ok(value.ranking[0].scoreBreakdown);
-  assert.match(value.scoreScale, /controller/i);
-  assert.ok(value.rejected.some((c) => c.reasonCode === 'HARNESS_WRITER_UNSUPPORTED'));
-  const rank = value.filters.find((f) => f.stage === 'ranking');
-  assert.equal(rank.before.length, candidates.length);
-  assert.equal(rank.after.length, 1);
-});
-
-test('item and profile make identical decisions with the same registry, quota and pins', async (t) => {
-  const { run } = await fixture(t);
-  const item = await run(['--item', 'TASK-FIXTURE', '--model', 'absent']);
-  const profile = await run(['--profile', 'profile.json', '--model', 'absent']);
-  assert.equal(item.code, 1);
-  assert.equal(profile.code, 1);
-  assert.equal(item.value.chosen, null);
-  assert.deepEqual(profile.value.ranking, item.value.ranking);
-  const refused = (v) => v.filters.flatMap((f) => f.rejected);
-  assert.ok(refused(item.value).length > 0);
-  assert.deepEqual(refused(profile.value), refused(item.value));
-  assert.ok(item.value.filters.some((f) => f.stage === 'pin:model' && f.after.length === 0));
-});
-
-test('route exclusions retain identities before ranking and cannot win on score', async (t) => {
-  const { run, candidates } = await fixture(t);
-  const routeHealth = { paths: {}, events: [] };
-  require('../route-health').recordResult(
-    routeHealth,
-    candidates[0].modelId,
-    { id: candidates[0].gateway, accountId: candidates[0].accountId },
-    { ok: false, httpStatus: 503 },
-    Date.now()
-  );
-  const { code, value } = await run(['--item', 'TASK-FIXTURE'], {
-    routeHealth,
-    allowUnprobedCandidates: false,
-  });
-  assert.equal(code, 1);
-  assert.equal(value.chosen, null);
-  const route = value.filters.find((f) => f.stage === 'route-health');
-  assert.equal(route.before.length, candidates.length);
-  assert.equal(route.after.length, 0);
-  assert.ok(
-    value.rejected.some(
-      (c) => c.modelId === candidates[0].modelId && c.source === candidates[0].source
-    )
-  );
-});
-
 test('successful item/profile ranking and registry-qualified launch argv agree', async (t) => {
   const { run, deps, candidates } = await fixture(t);
   const item = await run(['--item', 'TASK-FIXTURE']);

@@ -69,55 +69,6 @@ function assertMixedResult(res) {
   );
 }
 
-test('(a) source listed this run -> admitted', () => checkSource('9router', true, null, false));
-test('(b) source failed this run with last good 3 days ago -> rejected with reason', () =>
-  checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE'));
-test('(c) source failed with last good 1 hour ago -> admitted, marked stale-listing-retained', () =>
-  checkSource('agy-gateway', true, null, true));
-test('(d) global lastSuccessfulAt alone cannot admit a failed source', () =>
-  checkSource('opencode:scaleway', false, 'SOURCE_CATALOGUE_STALE'));
-
-test('(1) legacy freshness file with only global lastSuccessfulAt -> explicit stale for all sources', () => {
-  const legacyDoc = {
-    lastSuccessfulAt: new Date(NOW).toISOString(),
-    sources: [S('s1', 'enumerated', 5, null), S('s2', 'unavailable', 0, null)],
-  };
-  ['s1', 's2'].forEach((s) =>
-    checkSource(s, false, 'SOURCE_CATALOGUE_STALE', undefined, legacyDoc)
-  );
-});
-
-test('(2) mixed fixture: listed this run + failed 1h + failed 3d + legacy without timestamp', () => {
-  checkSource('9router', true, null, false);
-  checkSource('agy-gateway', true, null, true);
-  checkSource('opencode:agentrouter', false, 'SOURCE_CATALOGUE_STALE');
-  checkSource('legacy-src', false, 'SOURCE_CATALOGUE_STALE');
-  const ids = ['9router', 'agy-gateway', 'opencode:agentrouter', 'legacy-src'];
-  assertMixedResult(dispatchCandidates(ids, FIXTURE));
-});
-
-test('(3) empty-success: completed enumeration with 0 models follows contract', () => {
-  ['empty-enum', 'empty-nomodels'].forEach((s) => checkSource(s, false, 'SOURCE_CATALOGUE_STALE'));
-  checkSource('empty-retained', true, null, true);
-});
-
-test('(4) ordinary dispatch loads persisted freshness through normal reader without injection', (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-disp-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(dir, 'freshness.json'), JSON.stringify(FIXTURE));
-  const ids = ['9router', 'agy-gateway', 'opencode:agentrouter', 'legacy-src'];
-  const candidates = ids.map(cand);
-  const freshness = catalogueFreshness({ dataDir: dir, now: NOW });
-  assertMixedResult(
-    assembleForDispatch(
-      { candidates, freshness, freshnessDoc: freshness.doc },
-      [],
-      { sources: ids.map((id) => ({ id })), dispatch: { providers: {} } },
-      { candidates, now: NOW, allowUnprobedCandidates: true }
-    )
-  );
-});
-
 test('(5) refresh publication retains prior sources missing from new list (survives in failedSources)', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-pub-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -170,32 +121,4 @@ test('(7) agy-pool runtime accounts are not catalogue-listed sources and stay ad
     { freshness: FIXTURE, now: NOW }
   );
   assert.equal(fresh.admitted && !fresh.stale, true);
-});
-
-test('(8) missing/unreadable freshness rejects catalogue sources while admitting pool', (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-miss-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const candidates = [cand('9router'), { harness: 'agy-pool', gateway: 'agy-pool', modelId: 'm1' }];
-  const freshness = catalogueFreshness({ dataDir: dir, now: NOW });
-  const res = assembleForDispatch(
-    { candidates, freshness, freshnessDoc: freshness.doc },
-    [],
-    { sources: [{ id: '9router' }], dispatch: { providers: {} } },
-    { candidates, now: NOW, allowUnprobedCandidates: true }
-  );
-  assert.equal(res.length, 1);
-  assert.equal(res[0].gateway, 'agy-pool');
-  assert.equal(res.excludedRoutes[0]?.reasonCode, 'SOURCE_CATALOGUE_STALE');
-});
-
-test('(9) successful fresh listing clears staleListingRetained marker on candidate', () => {
-  const candidates = [{ ...cand('9router'), staleListingRetained: true }];
-  const res = assembleForDispatch(
-    { candidates, freshness: FIXTURE, freshnessDoc: FIXTURE },
-    [],
-    { sources: [{ id: '9router' }], dispatch: { providers: {} } },
-    { candidates, freshness: FIXTURE, now: NOW, allowUnprobedCandidates: true }
-  );
-  assert.equal(res.length, 1);
-  assert.equal(res[0].staleListingRetained, undefined);
 });

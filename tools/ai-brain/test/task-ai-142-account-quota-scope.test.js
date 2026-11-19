@@ -18,47 +18,6 @@ test('agy-pool exit 3 with bare "quota" is an account-scoped quota failure', () 
   );
 });
 
-test('an exhausted account blocks its own models only, not the other pool accounts', async () => {
-  const mk = (accountId, modelId, quality) => {
-    const c = {
-      harness: 'agy-pool',
-      gateway: 'g',
-      upstream: 'antigravity',
-      accountId,
-      modelId,
-      quality,
-    };
-    c.candidateKey = candidateKey(c);
-    return c;
-  };
-  const a1 = mk('fixture-acct-a', 'claude-opus', 95);
-  const a2 = mk('fixture-acct-a', 'claude-sonnet', 94);
-  const b1 = mk('fixture-acct-b', 'claude-opus', 93);
-  const failedKeys = [a1.candidateKey, 'account-exhausted::agy-pool::fixture-acct-a'];
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-quota-'));
-  try {
-    const decision = await selectCandidateForProfile(
-      { id: 'ITEM-ACCT-UNIT', roleRequirement: { role: 'reviewer' }, failedKeys },
-      [a1, a2, b1],
-      [],
-      null,
-      {
-        registry: { sources: [] },
-        jevAsk: async () => {
-          throw new Error('no JEV');
-        },
-      },
-      { dir, now: Date.now() },
-      Date.now(),
-      { failedKeys, decisionDir: dir }
-    );
-    const chosen = decision.chosen || decision.chosenKey || '';
-    assert.equal(chosen, b1.candidateKey, 'the other account is chosen');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('account quota failure path writes exhaustedAccountKey into failedKeys without pre-seeding', async () => {
   const orchestrate = require('../orchestrate');
   const mk = (accountId, modelId, quality) => {

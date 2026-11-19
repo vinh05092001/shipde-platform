@@ -110,66 +110,6 @@ describe('TASK-AI-142 Audit Repairs: Score display shows "chưa rõ", not 100', 
   });
 });
 
-describe('TASK-AI-142 Audit Repairs: Ineligible and unprobed routes appear in rejected list', () => {
-  test('assembleForDispatch records excluded candidates in excludedRoutes with reason code', () => {
-    const candidateUnprobed = {
-      modelId: '9router/model-unprobed',
-      gateway: '9router',
-      accountId: 'acc-9router',
-    };
-    const candidateFailing = {
-      modelId: '9router/model-failing',
-      gateway: '9router',
-      accountId: 'acc-9router',
-    };
-
-    const failingKey = routeHealth.healthKey('9router/model-failing', {
-      id: '9router',
-      accountId: 'acc-9router',
-    });
-    const mockHealth = {
-      version: 1,
-      paths: {
-        [failingKey]: {
-          status: 'UNAVAILABLE_NOW',
-          lastCheckedAt: new Date().toISOString(),
-        },
-      },
-      events: [],
-    };
-
-    const registry = {
-      sources: [{ id: '9router', kind: 'router' }],
-    };
-
-    const eligible = cli.assembleForDispatch({}, [], registry, {
-      candidates: [candidateUnprobed, candidateFailing],
-      routeHealth: mockHealth,
-      requireRouteHealth: true,
-    });
-
-    // Both are excluded from eligible
-    assert.equal(eligible.length, 0);
-
-    // Both are captured in eligible.excludedRoutes
-    assert.ok(Array.isArray(eligible.excludedRoutes));
-    assert.equal(eligible.excludedRoutes.length, 2);
-
-    const unprobedRec = eligible.excludedRoutes.find((r) =>
-      r.candidateKey.includes('model-unprobed')
-    );
-    assert.ok(unprobedRec);
-    assert.equal(unprobedRec.reasonCode, 'ROUTE_PROBE_UNPROVEN');
-    assert.equal(unprobedRec.scope, 'route');
-
-    const failingRec = eligible.excludedRoutes.find((r) =>
-      r.candidateKey.includes('model-failing')
-    );
-    assert.ok(failingRec);
-    assert.equal(failingRec.reasonCode, 'UNAVAILABLE_NOW');
-  });
-});
-
 describe('TASK-AI-142 Audit Repairs: Transient cooldown for TIMEOUT and PROBE_NO_RESPONSE', () => {
   test('TIMEOUT and PROBE_NO_RESPONSE expire after 30 minutes to allow re-probing', () => {
     const cooldownMs = routeHealth.probeCooldownMs('TIMEOUT');

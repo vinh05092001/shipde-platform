@@ -78,48 +78,6 @@ test('producer persists stale labels with the default clock used by priors refre
   assert.equal(doc.ranking[0].benchmarks[0].source.retrievedAt, iso(OLD));
 });
 
-test('dispatch labels old benchmark scores and excludes them from quality despite fresh row metadata', () => {
-  const doc = documentWithBenchmark(iso(OLD));
-  const candidate = {
-    harness: 'opencode',
-    accessPath: 'https://route.invalid/v1',
-    gateway: 'fixture',
-    upstream: 'fixture',
-    accountId: 'fixture-account',
-    quotaScope: 'fixture-account',
-    modelId: 'fixture-model',
-    contextWindow: 128000,
-    capabilities: { contextWindow: 128000 },
-    qualifiedRoles: ['author.foundation'],
-    cost: 1,
-    evidence: [],
-  };
-  const result = dispatchCommand(
-    { 'dry-run': true },
-    {
-      now: NOW,
-      candidates: [candidate],
-      items: [{ workItemId: 'TASK-AI-166', role: 'author.foundation', qualityFloor: 0 }],
-      accounts: [],
-      registry: { sources: [] },
-      evidenceData: [],
-      priors: doc,
-      assessment: { weights: { quality: 100, latency: 0, cost: 0 } },
-      headrooms: { default: 'open' },
-      ranking: { useStoredQuota: false, loadQuotaState: false },
-      log: () => {},
-      exit: () => {},
-    }
-  );
-  assert.equal(result.exitCode, 0);
-  const breakdown = result.decision.candidates[0].scoreBreakdown;
-  assert.equal(breakdown.stalePriorWarning, true);
-  assert.equal(breakdown.prior.stale, true);
-  assert.equal(breakdown.prior.bonus, 0);
-  assert.equal(breakdown.prior.weight, 0);
-  assert.equal(breakdown.quality, null);
-});
-
 test('benchmark provenance keeps the existing age boundary and rejects missing, invalid and future dates', () => {
   for (const [date, stale] of [
     [iso(NOW - priors.STALE_AFTER_MS), false],

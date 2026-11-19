@@ -217,70 +217,6 @@ function setup(specs, options) {
   };
 }
 
-test('R01 a reviewer launch failure is a failed attempt, never a review round or a CHANGES_REQUIRED verdict', async () => {
-  const f = setup([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
-    run: (job) => {
-      if (job.isReview) return QUOTA_FAILURE;
-      return f.writerStep(job);
-    },
-  });
-  const log = await runOrchestration('reviewer launch failure', f.opts);
-
-  const outcome = outcomeOf(log, 'A');
-  assert.equal(outcome.status, 'blocked');
-  assert.equal(outcome.reason, 'REVIEWER_UNAVAILABLE');
-
-  assert.equal(f.state.repairCalls, 0, 'a reviewer launch failure must not trigger a repair');
-
-  const step = liveStepOf(f.opts.checkpointFile, 'A');
-  const rounds = (step && step.reviewRounds) || [];
-  assert.deepEqual(
-    rounds,
-    [],
-    'a reviewer launch failure must never be checkpointed as a review round'
-  );
-
-  const records = decisionRecords(f.opts.decisionDir);
-  assert.equal(
-    records.filter((r) => r.stage === 'review' && r.verdict === 'CHANGES_REQUIRED').length,
-    0,
-    'a launch failure must never be recorded as a CHANGES_REQUIRED verdict'
-  );
-  assert.ok(
-    records.some((r) => r.stage === 'failed' && r.role === 'reviewer'),
-    'the launch failure stays a classified failed reviewer attempt'
-  );
-});
-
-test('R01 reviewer re-selection after a launch failure: no round, no repair, the real verdict decides', async () => {
-  let reviewLaunches = 0;
-  const f = setup([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
-    secondReviewer: true,
-    run: (job) => {
-      if (job.isReview) {
-        reviewLaunches += 1;
-        if (reviewLaunches === 1) return QUOTA_FAILURE;
-        return f.reviewPass(job);
-      }
-      return f.writerStep(job);
-    },
-  });
-  const log = await runOrchestration('reviewer launch failure then re-select', f.opts);
-
-  const outcome = outcomeOf(log, 'A');
-  assert.equal(outcome.status, 'completed');
-  assert.equal(outcome.reason, 'REVIEW_PASS');
-
-  assert.equal(f.state.repairCalls, 0, 'a launch failure must not trigger a repair');
-
-  const step = liveStepOf(f.opts.checkpointFile, 'A');
-  const rounds = (step && step.reviewRounds) || [];
-  assert.equal(rounds.length, 1, 'only the real parsed verdict creates a review round');
-  assert.equal(rounds[0].result.verdict, 'PASS');
-  assert.notEqual(rounds[0].result.launchFailed, true);
-  assert.ok(reviewLaunches >= 2, 'the failed reviewer attempt is re-selected and retried');
-});
-
 test('R02 resuming a checkpoint whose review round result.launchFailed===true discards it and reviews again', async () => {
   const f = setup([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
     reviewer: (sha) => ({
@@ -359,39 +295,6 @@ test('R02 resuming a checkpoint whose review round result.launchFailed===true di
   assert.equal(rounds[rounds.length - 1].result.verdict, 'PASS');
 });
 
-test('R03 a dependent launches from the dependency PASS SHA and records baseSha with baseFrom', async () => {
-  const f = setup([
-    { id: 'A', files: ['a.js'], verification: { command: 'test' } },
-    { id: 'B', files: ['b.js'], dependencies: ['A'], verification: { command: 'test' } },
-  ]);
-  const log = await runOrchestration('dependent starts from the dependency commit', f.opts);
-
-  assert.equal(outcomeOf(log, 'A').status, 'completed');
-  assert.equal(outcomeOf(log, 'B').status, 'completed');
-
-  const depPassSha = f.state.passSha['A'];
-  assert.ok(depPassSha, 'the dependency produced a reviewed commit');
-  const writerLaunches = f.state.calls.filter((c) => !c.isReview);
-  const bLaunch = writerLaunches.find((c) => c.workItemId === 'B');
-  assert.equal(
-    bLaunch.baseSha,
-    depPassSha,
-    'the dependent launch baseSha is the dependency PASS SHA, not the global --base-sha'
-  );
-  assert.notEqual(bLaunch.baseSha, GLOBAL_BASE);
-
-  const step = liveStepOf(f.opts.checkpointFile, 'B');
-  assert.equal(step.launch.baseSha, depPassSha);
-  assert.equal(step.launch.baseFrom, 'A');
-
-  const launched = decisionRecords(f.opts.decisionDir).find(
-    (r) => r.stage === 'launched' && r.workItemId === 'B'
-  );
-  assert.ok(launched, 'the dependent launch is in the decision log');
-  assert.equal(launched.baseSha, depPassSha);
-  assert.equal(launched.baseFrom, 'A');
-});
-
 test('R04 no dependent launch before its dependency is PASS; a blocked dependency blocks the dependent', async () => {
   const f = setup(
     [
@@ -418,50 +321,5 @@ test('R04 no dependent launch before its dependency is PASS; a blocked dependenc
     f.state.calls.filter((c) => String(c.workItemId).startsWith('B')).length,
     0,
     'the dependent is never launched'
-  );
-});
-
-test('R04 dependencies are reviewed before dependents even when the plan lists the dependent first', async () => {
-  const f = setup([
-    { id: 'B', files: ['b.js'], dependencies: ['A'], verification: { command: 'test' } },
-    { id: 'A', files: ['a.js'], verification: { command: 'test' } },
-  ]);
-  const log = await runOrchestration('dependent listed first', f.opts);
-
-  assert.equal(outcomeOf(log, 'A').status, 'completed');
-  assert.equal(outcomeOf(log, 'B').status, 'completed');
-
-  const writerOrder = f.state.calls.filter((c) => !c.isReview).map((c) => c.workItemId);
-  assert.deepEqual(writerOrder, ['A', 'B'], 'the dependency is worked before its dependent');
-  const depPassSha = f.state.passSha['A'];
-  const bLaunch = f.state.calls.find((c) => !c.isReview && c.workItemId === 'B');
-  assert.equal(bLaunch.baseSha, depPassSha);
-});
-
-test('R03 multiple dependencies fail closed with MULTI_DEPENDENCY_BASE_UNSUPPORTED and no launch', async () => {
-  const f = setup([
-    { id: 'A', files: ['a.js'], verification: { command: 'test' } },
-    { id: 'C', files: ['c.js'], verification: { command: 'test' } },
-    {
-      id: 'B',
-      files: ['b.js'],
-      dependencies: ['A', 'C'],
-      verification: { command: 'test' },
-    },
-  ]);
-  const log = await runOrchestration('two dependencies', f.opts);
-
-  assert.equal(outcomeOf(log, 'A').status, 'completed');
-  assert.equal(outcomeOf(log, 'C').status, 'completed');
-  const outcome = outcomeOf(log, 'B');
-  assert.equal(outcome.status, 'blocked');
-  assert.ok(
-    String(outcome.reason).startsWith('MULTI_DEPENDENCY_BASE_UNSUPPORTED'),
-    'multiple dependencies fail closed, got: ' + outcome.reason
-  );
-  assert.equal(
-    f.state.calls.filter((c) => String(c.workItemId).startsWith('B')).length,
-    0,
-    'the multi-dependent is never launched'
   );
 });

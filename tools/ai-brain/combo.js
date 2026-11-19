@@ -21,7 +21,9 @@ function loadRegistry(registry) {
 
 function routerSource(registry) {
   const list = Array.isArray(registry && registry.sources) ? registry.sources : [];
-  return list.find((s) => s && s.kind === 'router' && s.servesModels !== false && s.endpoint) || null;
+  return (
+    list.find((s) => s && s.kind === 'router' && s.servesModels !== false && s.endpoint) || null
+  );
 }
 
 /**
@@ -35,7 +37,8 @@ function comboCandidate(options) {
   const name = opts.comboName || dispatch.nineRouterWriterCombo;
   if (!name) return { error: 'COMBO_NOT_CONFIGURED: dispatch.nineRouterWriterCombo is empty' };
   const source = routerSource(registry);
-  if (!source) return { error: 'COMBO_ROUTER_MISSING: no source with kind "router" and an endpoint' };
+  if (!source)
+    return { error: 'COMBO_ROUTER_MISSING: no source with kind "router" and an endpoint' };
 
   const keyEnv = (source.credential && source.credential.env) || null;
   const env = opts.env || process.env;

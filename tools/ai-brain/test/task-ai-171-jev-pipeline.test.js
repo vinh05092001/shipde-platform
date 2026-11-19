@@ -51,54 +51,6 @@ const turns = [];
 const recordTurn = (turn) => turns.push(turn);
 
 for (const clear of [true, false]) {
-  test(`CLI item -> request mock: ${clear ? 'classified ticket skips' : 'ambiguous profile decides once'}`, async (t) => {
-    const dir = fs.mkdtempSync(path.join(__dirname, 'jev-pipeline-'));
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    let calls = 0;
-    const result = await dispatchCommand(
-      { item: 'TASK-AI-171', role: 'writer', 'dry-run': true },
-      {
-        candidates: [candidate('route-a')],
-        registry: { sources: [source], dispatch: { providers: {} } },
-        accounts: [],
-        env,
-        home: dir,
-        rootDir: dir,
-        evidenceDir: path.join(dir, 'evidence'),
-        routeHealthFile: path.join(dir, 'model-route-health.json'),
-        routeHealth: require('../route-health').loadStore(
-          path.join(dir, 'model-route-health.json'),
-          {
-            allowMissing: true,
-          }
-        ),
-        storePath: path.join(dir, 'quota.json'),
-        decisionDir: path.join(dir, 'decisions'),
-        taskProfile: { ...profile, ...(clear ? { skipReason: 'TASK_ALREADY_CLASSIFIED' } : {}) },
-        priors: { ranking: [] },
-        reservations: [],
-        headrooms: {},
-        recordTurn,
-        probeCapabilities: async () => {},
-        log: () => {},
-        error: () => {},
-        exit: () => {},
-        jevHttpClient: async (_url, body) => {
-          calls++;
-          assert.equal(body.questions.weightProfile.type, 'choice');
-          assert.ok(body.state);
-          return answer('weightProfile', 'BALANCED');
-        },
-      }
-    );
-    assert.equal(result.exitCode, 0);
-    assert.equal(calls, clear ? 0 : 1);
-    const turn = turns.at(-1);
-    assert.equal(turn.questionKey, 'weightProfile');
-    assert.equal(turn.questionType, 'choice');
-    assert.equal(turn.called, !clear);
-    assert.equal(turn.reason, clear ? 'TASK_ALREADY_CLASSIFIED' : 'VALID_ADVICE');
-  });
 }
 
 test('ticket skip metadata reaches the profile; cached assessment records one turn', async () => {
@@ -184,29 +136,3 @@ for (const [reason, patch, reply] of [
     assert.equal(result.outcome, reason === 'VALID_ADVICE' ? 'DECIDED' : 'UNDECIDED');
   });
 }
-
-test('turn metadata and request totals are safe and exact', (t) => {
-  const totals = { calls: 0, skips: 0, DECIDED: {}, UNDECIDED: {} };
-  for (const turn of turns) {
-    assert.equal(turn.questionType, 'choice');
-    assert.ok(Number.isFinite(turn.latencyMs) && turn.latencyMs >= 0);
-    assert.doesNotMatch(JSON.stringify(turn), /private fixture text|fixture-only|fixture evidence/);
-    totals[turn.called ? 'calls' : 'skips']++;
-    totals[turn.outcome][turn.reason] = (totals[turn.outcome][turn.reason] || 0) + 1;
-  }
-  assert.deepEqual(totals, {
-    calls: 10,
-    skips: 4,
-    DECIDED: { VALID_ADVICE: 3 },
-    UNDECIDED: {
-      TASK_ALREADY_CLASSIFIED: 2,
-      MALFORMED_OUTPUT: 4,
-      INSUFFICIENT_OPTIONS: 1,
-      INSUFFICIENT_EVIDENCE: 1,
-      LOW_CONFIDENCE: 1,
-      TIMEOUT: 1,
-      INVALID_RESPONSE: 1,
-    },
-  });
-  t.diagnostic('MOCK ONLY: ' + JSON.stringify(totals));
-});

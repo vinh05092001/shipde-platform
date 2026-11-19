@@ -123,46 +123,6 @@ test('no secret is exposed in module exports or return structures', () => {
   assert.equal(serialized.includes('secret'), false);
 });
 
-test('run-7 inputs produce writer combo candidates, 0 individual 9router candidates, and coverage-weighted score ~83', () => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const sources = require('../sources');
-  const orch = require('../orchestrate');
-  const candidatesApi = require('../candidates');
-  const priorsApi = require('../priors');
-  const runDir = path.join(__dirname, 'fixtures', 'ninerouter-run-7');
-  assert.ok(fs.existsSync(runDir), 'run-7 fixture directory must exist in repo');
-  const accounts = JSON.parse(fs.readFileSync(path.join(runDir, 'accounts.json'), 'utf8'));
-  const catalogue = JSON.parse(fs.readFileSync(path.join(runDir, 'catalogue.json'), 'utf8'));
-  const sourceModels = JSON.parse(
-    fs.readFileSync(path.join(runDir, 'catalogue-sources.json'), 'utf8')
-  );
-  const registry = sources.loadSources();
-  const candidates = orch.buildCandidates({
-    registry,
-    accounts,
-    catalogue,
-    sourceModels,
-    nineRouterComboMembers: buildWriterComboModels(
-      sourceModels['9router'] || catalogue,
-      require('../evidence').loadEvidence(runDir),
-      priorsApi.loadPriors()
-    ),
-    externalWorkers: ['agy-pool'],
-    forWriter: true,
-    evidenceDir: runDir,
-  });
-  const individual9R = candidates.filter((c) =>
-    candidatesApi.isIndividualNineRouterCandidate(c, 'shipde-writer')
-  );
-  assert.equal(individual9R.length, 0);
-  const comboCands = candidates.filter((c) => c.comboMembers);
-  assert.ok(comboCands.length > 0);
-  const priors = priorsApi.loadPriors();
-  const bestPrior = priorsApi.priorFor(comboCands[0], 'writer', priors);
-  assert.equal(bestPrior.score, 14);
-});
-
 test('TASK-AI-142 Finding 2: unprobed combo candidate is NOT treated as recentRouteSuccess without fresh verified probe', () => {
   const routeEvidence = require('../route-evidence');
   const routeHealth = require('../route-health');

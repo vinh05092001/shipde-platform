@@ -1056,3 +1056,22 @@ Release blocker (operator-authorized gate amendment,2026-11-14): working-tree Gi
 
 - The preparation, pre-launch claim, runner, durable-session read and L2 handoff/terminal handling are moved into one cli-local executeDispatchLaunch helper. The normal dispatch caller preserves its payload, metadata and caller-owned reservation finally; frozen wiring remains a separate dependent slice.
 - Source commit 11e8cc67 received independent exact-SHA PASS from Claude and Gemini. Eight unchanged named regression files passed 86/86. Full local brain initially reported five environment failures (vendored CRLF bytes and pnpm virtual-store configuration); restoring canonical LF bytes and the process-only local pnpm setting gave 31/31 in the affected files. Full corrected-environment and remote gates remain required. No gate config or test assertion was changed.
+
+## Combo-only routing (operator decision, 2026-11-19)
+
+The operator decided in the Claude chat on 2026-11-19 that every Controller model call goes through one 9router combo. The combo name is `dispatch.nineRouterWriterCombo`, and the router is the source with `kind: "router"`. The old ranking, probe, reselect and route-scope logic is deleted, not kept behind a flag.
+
+9router now owns member order, failover between members, model health and quota.
+
+- `tools/ai-brain/combo.js` builds the single candidate from registry data only. It sets `blocked` when the credential env var is missing; it never reads the value.
+- Each consumer takes that combo candidate and does nothing else:
+  - Hermes reasoning selection: `hermes-session.selectReasoningCandidate`;
+  - dispatch: `cli.assembleForDispatch`;
+  - orchestrate writer and reviewer selection: `buildCandidates` and `selectCandidateForProfile`.
+- Removed:
+  - pre-launch route probes for the writer, the reviewer and Hermes;
+  - the probe budget loop;
+  - the stale-catalogue dispatch gate;
+  - `route-launch.js` and `scan-liveness.js`;
+  - every test that asserted the removed ranking, probe or route-scope behaviour.
+- Known conflict: one combo serves Hermes, the writer and the reviewer. That gives up the reviewer model-independence rule in AGENTS.md. The operator accepted this ("1 combo cho tất cả"). AGENTS.md is unchanged until the operator says otherwise.

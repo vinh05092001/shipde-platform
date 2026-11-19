@@ -58,59 +58,6 @@ test('PR02 regression: profile dispatch keeps explicit required-health admission
   }
 });
 
-test('PR02 regression: legacy unverified evidence cannot admit an account-bound offline route', (t) => {
-  const dir = tempDir(t);
-  const candidate = {
-    source: 'fixture',
-    gateway: 'fixture',
-    upstream: 'vendor',
-    harness: 'opencode',
-    accountId: 'account-b',
-    modelId: 'vendor/Exact.Case',
-  };
-  const data = evidence.migrateEvidence({
-    version: 1,
-    combinations: [
-      {
-        harness: 'opencode',
-        gateway: 'fixture',
-        upstream: 'vendor',
-        modelId: candidate.modelId,
-        evidence: [{ status: 'passed' }],
-      },
-    ],
-  });
-  assert.equal(data.combinations[0].legacy, true, 'migrated row must be legacy');
-  assert.equal(data.combinations[0].verified, false, 'migrated row must be unverified');
-  const snapshot = {
-    candidates: [candidate],
-    launcherModels: ['registry/' + candidate.modelId],
-    registry: { sources: [], dispatch: { providers: { fixture: { modelPrefix: 'registry/' } } } },
-    profile: buildTaskProfile({ id: 'TASK-AI-171' }, { enforceProofFloors: false }),
-    evidenceData: data,
-  };
-  fs.writeFileSync(path.join(dir, 'snapshot.json'), JSON.stringify(snapshot));
-  const result = dispatchCommand(
-    {
-      offline: true,
-      root: dir,
-      runtime: '.',
-      cwd: '.',
-      task: 'task.md',
-      item: 'TASK-AI-171',
-      snapshot: 'snapshot.json',
-      'code-sha': 'a'.repeat(40),
-    },
-    { log: () => {}, error: () => {} }
-  );
-  assert.ok(result.output, 'offline dispatch must produce a decision');
-  assert.equal(
-    result.output.chosen,
-    null,
-    'unverified accountless evidence admitted an account-bound route'
-  );
-});
-
 test('PR02 regression: pre-upgrade keys keep literal percent-encoded identity fields', () => {
   const { readDiscoveryCatalogue } = require('../discovery/read');
   const identity = {

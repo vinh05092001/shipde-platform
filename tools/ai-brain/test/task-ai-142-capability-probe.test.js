@@ -299,61 +299,6 @@ test('evidence history plus account declarations still requires a real capabilit
   assert.equal(ranked.needsCapabilityProbe.length, 1);
 });
 
-test('reviewer candidates also verify unknown capabilities before ranking', async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-review-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  let calls = 0;
-  const result = await require('../orchestrate').selectCandidateForProfile(
-    {
-      id: 'CAP-REVIEW',
-      role: 'reviewer.primary',
-      requiredCapabilities: ['jsonSchema', 'tools'],
-      qualityFloor: 0,
-    },
-    [candidate()],
-    [],
-    {},
-    {
-      registry,
-      env: { FIXTURE_KEY: 'fixture-only' },
-      fetch: async (_url, init) => {
-        calls++;
-        const req = JSON.parse(init.body);
-        const schema = req.response_format?.json_schema.schema;
-        const message = schema
-          ? {
-              content: JSON.stringify({
-                candidateKey: schema.properties.candidateKey.enum[0],
-                nonce: schema.properties.nonce.enum[0],
-                status: 'completed',
-                artifacts: [],
-              }),
-            }
-          : {
-              tool_calls: [
-                {
-                  type: 'function',
-                  function: {
-                    name: req.tools[0].function.name,
-                    arguments: JSON.stringify({
-                      nonce: req.tools[0].function.parameters.properties.nonce.enum[0],
-                    }),
-                  },
-                },
-              ],
-            };
-        return { ok: true, status: 200, json: async () => ({ choices: [{ message }] }) };
-      },
-    },
-    { dir },
-    Date.now()
-  );
-  assert.equal(calls, 2);
-  assert.ok(
-    !result.result.rejected.some((r) => String(r.reasonCode).startsWith('CAPABILITY_UNVERIFIED'))
-  );
-});
-
 test('direct-source discovery HTTP identities use HTTP probes, not a CLI launch gate', async () => {
   const c = candidate({ harness: 'http', accessPath: 'fixture', source: 'fixture' });
   let calls = 0;
@@ -391,48 +336,6 @@ test('direct-source discovery HTTP identities use HTTP probes, not a CLI launch 
   assert.equal(c.capabilities.jsonSchema, true);
 });
 
-test('item dry-run probes declared capabilities instead of treating them as evidence', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-dryrun-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  let calls = 0;
-  const result = await require('../cli').dispatchCommand(
-    { 'dry-run': true, root },
-    {
-      candidates: [
-        candidate({
-          capabilities: { jsonSchema: true, tools: true },
-          capabilityDeclarations: { jsonSchema: true, tools: true },
-        }),
-      ],
-      items: [
-        {
-          workItemId: 'CAP-ITEM',
-          role: 'author.foundation',
-          requiredCapabilities: ['jsonSchema', 'tools'],
-          qualityFloor: 0,
-        },
-      ],
-      accounts: [],
-      registry,
-      env: { FIXTURE_KEY: 'fixture-only' },
-      evidenceDir: path.join(root, 'evidence'),
-      assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
-      fetch: async () => {
-        calls++;
-        return { ok: false, status: 451, json: async () => ({ message: 'region blocked' }) };
-      },
-      log: () => {},
-      exit: () => {},
-    }
-  );
-  assert.equal(calls, 2);
-  assert.ok(
-    result.decision.rejected.some(
-      (row) => row.reasonCode === 'CAPABILITY_MISSING:jsonSchema' && row.reason === 'GEO_BLOCKED'
-    )
-  );
-});
-
 test('review P1: daemon URL stays on CLI capability seam', async () => {
   let http = 0,
     cli = 0;
@@ -451,40 +354,6 @@ test('review P1: daemon URL stays on CLI capability seam', async () => {
   });
   assert.equal(http, 0);
   assert.equal(cli, 2);
-});
-
-test('review P1: dispatch dry-run honors injected probe and never uses ambient fetch', async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-seam-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  let ambient = 0,
-    injected = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
-    ambient++;
-    throw Error('ambient network forbidden');
-  });
-  const opts = {
-    candidates: [candidate()],
-    items: [{ workItemId: 'CAP-SEAM', requiredCapabilities: ['tools'], qualityFloor: 0 }],
-    registry,
-    accounts: [],
-    env: { FIXTURE_KEY: 'fixture' },
-    evidenceDir: path.join(root, 'evidence'),
-    assessment: { weightProfile: 'BALANCED', weights: routing.WEIGHT_PROFILES.BALANCED },
-    log: () => {},
-    exit: () => {},
-  };
-  await require('../cli').dispatchCommand(
-    { 'dry-run': true, root },
-    {
-      ...opts,
-      probeCapabilities: async () => {
-        injected++;
-      },
-    }
-  );
-  assert.equal(injected, 1);
-  await require('../cli').dispatchCommand({ 'dry-run': true, root }, opts);
-  assert.equal(ambient, 0);
 });
 
 test('review P2: selection without registry never reads host sources or probes HTTP', async (t) => {
