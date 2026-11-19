@@ -3435,7 +3435,6 @@ async function reviewPrCommand(args, deps) {
 async function orchestrateCommand(args, deps = {}) {
   const d = deps || {};
   const { runOrchestration } = d.runOrchestration ? d : require('./orchestrate');
-  const { generateCandidates } = require('./candidates');
   const sourcesApi = require('./sources');
   const decisionsApi = require('./decisions');
   const fsx = require('fs');
@@ -3508,22 +3507,21 @@ async function orchestrateCommand(args, deps = {}) {
       discoveryCatalogue = readDiscoveryCatalogue({ dataDir: discDir });
     } catch {}
   }
-  const candidates = Array.isArray(d.candidates)
-    ? d.candidates
-    : generateCandidates({
-        registry,
-        catalogue: readJsonArg(args.catalogue) || [],
-        sourceModels,
-        discoveryCatalogue,
-        nineRouterComboConfig: readJsonArg(args['combo-config']) || undefined,
-        accounts: inputAccounts,
-        externalWorkers: args['external-workers'],
-        openCodeIds: Array.isArray(args['opencode-ids'])
-          ? args['opencode-ids']
-          : typeof args['opencode-ids'] === 'string'
-            ? args['opencode-ids'].split(',').filter(Boolean)
-            : [],
-      });
+  // Combo-only (TASK-AI-171): the live Controller writer is the single 9router
+  // combo. Tests may inject a candidate list to exercise selection; production
+  // never generates, ranks or probes individual model routes.
+  let candidates;
+  if (Array.isArray(d.candidates)) {
+    candidates = d.candidates;
+  } else {
+    const comboResult = require('./combo').comboCandidate({ registry, env: d.env });
+    if (!comboResult.candidate) {
+      console.error('orchestrate: ' + (comboResult.error || 'combo route unavailable'));
+      exit(2);
+      return Promise.resolve({ exitCode: 2 });
+    }
+    candidates = [comboResult.candidate];
+  }
   const pool = require('./agy-pool-runtime');
   const discoveryWarning = poolEnabled ? pool.getLastDiscoveryWarning() : null;
   if (discoveryWarning && typeof console !== 'undefined' && console.warn) {
@@ -3585,12 +3583,8 @@ async function orchestrateCommand(args, deps = {}) {
   // silently, so it is caught here and turned into a non-zero exit instead.
   return runOrchestration(goal, {
     specs,
-    refreshWriterModels:
-      d.refreshWriterModels ??
-      (!Array.isArray(d.candidates) &&
-        !d.registry &&
-        typeof d.run !== 'function' &&
-        typeof d.runOrchestration !== 'function'),
+    // Combo-only (TASK-AI-171): nothing to refresh; 9router owns the member list.
+    refreshWriterModels: false,
     fetchModels: d.fetchModels,
     env: d.env,
     specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,

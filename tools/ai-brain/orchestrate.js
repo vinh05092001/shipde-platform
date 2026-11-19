@@ -3799,50 +3799,10 @@ async function runOrchestration(goal, opts) {
       : evidenceDir
         ? evidence.loadEvidence(evidenceDir)
         : null;
-  if (
-    (o.isolatedWorker || o.refreshWriterModels === true) &&
-    !testsInjectedCandidates &&
-    o.autoOnboard !== false
-  ) {
-    const rollingOnboard = require('./rolling-onboard');
-    const env = o.env || process.env;
-    const currentReg = o.registry || sourcesApi.loadSources();
-    const newSources = rollingOnboard.detectNewSources(currentReg, evidenceData, env);
-    if (newSources.length > 0) {
-      await rollingOnboard.autoOnboardNewSources(newSources, {
-        ...o,
-        evidenceData,
-        evidenceDir,
-        registry: currentReg,
-        env,
-      });
-      if (evidenceDir) evidenceData = evidence.loadEvidence(evidenceDir);
-    }
-  }
-
-  // Opt-in: the CLI turns this on for real runs; a direct runOrchestration call
-  // (tests, embedded use) never reaches live /models with host credentials.
-  if (o.refreshWriterModels === true) {
-    o.registry = await require('./writer-selection').refreshWriterRegistry(
-      o.registry || sourcesApi.loadSources(),
-      o
-    );
-    o.candidates = candidatesApi.mergeCandidates(
-      o.candidates || [],
-      candidatesApi.generateCandidates({
-        ...o,
-        candidates: undefined,
-        catalogue: o.catalogue || [],
-        accounts: o.accounts || [],
-        registry: o.registry,
-      })
-    );
-    // Inventory describes this selection; do not insert a record ahead of the
-    // selection that existing decision-log consumers expect to read first.
-    o.writerInventory = o.registry.sources
-      .filter((s) => s.writerInventory)
-      .map((s) => ({ sourceId: s.id, ...s.writerInventory }));
-  }
+  // Combo-only (TASK-AI-171): 9router owns the combo's member list, failover
+  // and health, so the Controller has no writer models to refresh, regenerate
+  // or rank. The candidate is always the single combo (buildCandidates); the
+  // old generateCandidates pool is never merged on top of it.
   const rawCandidates = buildCandidates(o, evidenceData);
   const candidates = candidatesApi.annotateCandidates(
     rawCandidates.map((c) => Object.assign({}, c)),
