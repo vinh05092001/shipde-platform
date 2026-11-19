@@ -708,7 +708,26 @@ function reviewLane(
   const item = typeof itemOrWriterKey === 'object' ? itemOrWriterKey : null;
   const reviewerIdentity = (o && o.reviewerIdentity) || null;
 
-  if (reviewerIdentity && writerKey && reviewerIdentity === writerKey) {
+  // Operator decision 2026-11-19 ("1 combo cho tất cả"): under combo-only routing
+  // the single 9router combo is the only candidate, so the reviewer necessarily
+  // resolves to the same combo as the writer. The operator accepted reviewer ==
+  // writer for that case — 9router still dispatches the review call across the
+  // combo's members, and the review stays an independent exact-SHA task with a
+  // fail-closed verdict. The REVIEWER_EQUALS_WRITER refusal therefore applies only
+  // to a NON-combo candidate, where a distinct reviewer is expected and self-review
+  // would violate the AGENTS.md prohibition on an author approving its own work.
+  const reviewerCandidateForIdentity =
+    (Array.isArray(candidates) ? candidates : []).find(
+      (c) => candidateKey(c) === reviewerIdentity
+    ) || parseCandidateKey(reviewerIdentity);
+  const reviewerIsCombo = Boolean(
+    (reviewerCandidateForIdentity &&
+      (reviewerCandidateForIdentity.comboMembers ||
+        candidatesApi.isNineRouterCandidate(reviewerCandidateForIdentity))) ||
+      (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
+  );
+
+  if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
     return () => ({
       pass: false,
       sha: null,
@@ -766,7 +785,7 @@ function reviewLane(
       };
     }
 
-    if (writerKey && reviewerIdentity === writerKey) {
+    if (writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
       return {
         pass: false,
         sha: null,
@@ -780,6 +799,23 @@ function reviewLane(
           },
         ],
       };
+    }
+    if (writerKey && reviewerIdentity === writerKey && reviewerIsCombo) {
+      // Record the operator-accepted residual risk (reviewer == writer combo) so
+      // the audit trail shows the self-review was a deliberate combo-only decision.
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.SELECTED,
+          workItemId: item && item.id,
+          role: 'reviewer',
+          chosen: reviewerIdentity,
+          reason:
+            'REVIEWER_EQUALS_WRITER_COMBO_ACCEPTED: combo-only routing, operator decision 2026-11-19 ("1 combo cho tất cả")',
+          detail:
+            'the single 9router combo reviews its own work; 9router dispatches the review across combo members and the review remains an independent exact-SHA task with a fail-closed verdict',
+        },
+        logOpts
+      );
     }
 
     const candidateList = Array.isArray(candidates) ? candidates : [];
@@ -3433,7 +3469,31 @@ async function selectCandidateForProfile(
       return null;
     }
   };
-  const eligible = pool.filter((c) => c && !c.blocked && !failedSet.has(candidateKey(c)));
+  // Honor the same exclusions the retry loop records (restored after the
+  // combo-only carve, agy09 P1-3): an exhausted-account mark blocks every route
+  // under that account, an excluded failure domain is off-limits, and a domain
+  // that has already had two attempts is spent.
+  const excludedDomains =
+    options.excludedDomains instanceof Set
+      ? options.excludedDomains
+      : new Set(Array.isArray(options.excludedDomains) ? options.excludedDomains : []);
+  const domainAttempts =
+    options.domainAttempts instanceof Map
+      ? options.domainAttempts
+      : new Map(
+          options.domainAttempts && typeof options.domainAttempts === 'object'
+            ? Object.entries(options.domainAttempts)
+            : []
+        );
+  const eligible = pool.filter((c) => {
+    if (!c || c.blocked || failedSet.has(candidateKey(c))) return false;
+    const accMark = exhaustedAccountKey(c);
+    if (accMark && failedSet.has(accMark)) return false;
+    const dom = domainOf(c);
+    if (dom && excludedDomains.has(dom)) return false;
+    if (dom && (domainAttempts.get(dom) || 0) >= 2) return false;
+    return true;
+  });
   const chosenCandidate =
     eligible.find(
       (c) => (!writerKey || candidateKey(c) !== writerKey) && !forbidden.has(domainOf(c))

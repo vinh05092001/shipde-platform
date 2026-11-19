@@ -848,6 +848,22 @@ function selectReasoningCandidate(options, deps) {
     };
   }
   const candidate = result.candidate;
+  // The combo carries its own block state (combo.js marks it blocked with a
+  // blockReason such as CREDENTIAL_ENV_MISSING when the key env is absent).
+  // A blocked combo is not a usable reasoning route, so refuse rather than
+  // hand back a route that cannot run (agy09 P1-4).
+  if (candidate.blocked) {
+    return {
+      chosen: null,
+      candidate: null,
+      ranking: [],
+      top3: [],
+      rejected: [candidate],
+      refused: candidate.blockReason || 'REASONING_CANDIDATE_BLOCKED',
+      reason: candidate.blockReason || 'reasoning combo blocked',
+      decisionRecord: null,
+    };
+  }
   const chosenRoute = {
     candidateKey: candidate.candidateKey,
     modelId: candidate.modelId,
