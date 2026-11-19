@@ -147,11 +147,9 @@ function defaultSpawn(cmd, argv, spawnOpts) {
 }
 
 const sourcesApi = require('./sources');
-const evidenceApi = require('./evidence');
 const priorsApi = require('./priors');
-const candidatesApi = require('./candidates');
-const routingApi = require('./routing');
 const decisionsApi = require('./decisions');
+const comboApi = require('./combo');
 const failureClassifier = require('./failure-classifier');
 const routeProbe = require('./route-probe');
 const { candidateKey, parseCandidateKey } = require('./discovery/identity');
@@ -520,39 +518,6 @@ function linkGoalToSession(goalId, options, deps) {
  * Candidate key is 7-part: harness=hermes::accessPath::gateway::upstream::account::quotaScope::modelId.
  */
 const { PROVIDER_LEVEL_FAILURE_CAUSES } = routeProbe;
-
-function isProviderLevelFailure(cause) {
-  if (!cause) return false;
-  const c = String(cause).toLowerCase().trim();
-  return PROVIDER_LEVEL_FAILURE_CAUSES.has(c);
-}
-
-function getCandidateProviderKey(candidate) {
-  if (!candidate) return null;
-  const parsed =
-    candidate.candidateKey && typeof candidate.candidateKey === 'string'
-      ? parseCandidateKey(candidate.candidateKey)
-      : null;
-  const gateway =
-    candidate.gateway || (parsed && parsed.gateway) || candidate.sourceId || candidate.source || '';
-  let upstream = candidate.upstream || (parsed && parsed.upstream) || '';
-  const modelId = candidate.modelId || candidate.model || (parsed && parsed.modelId) || '';
-  const stripped = String(modelId)
-    .trim()
-    .replace(/^ninerouter\//i, '')
-    .replace(/^\/+/, '');
-  const slash = stripped.indexOf('/');
-  const modelPrefix = slash > 0 ? stripped.slice(0, slash) : '';
-
-  if (gateway === '9router' && modelPrefix) {
-    upstream = modelPrefix;
-  } else if (!upstream && modelPrefix) {
-    upstream = modelPrefix;
-  }
-
-  if (!gateway) return null;
-  return `${gateway}::${upstream || gateway}`;
-}
 
 function canonicalHermesModelId(modelId) {
   return priorsApi.normaliseModelId(modelId) || '';
@@ -1019,618 +984,38 @@ function resolveHermesContextWindow(modelId, options, deps) {
   return undefined;
 }
 
-function assembleOpenAiCodexCandidates(options, deps) {
-  const o = options || {};
-  const d = deps || {};
-  if (!hasCodexAuth(o, d)) {
-    return [];
-  }
-
-  const modelIds = readCodexConfigModels(o, d);
-  const candidates = [];
-
-  for (const modelId of modelIds) {
-    const contextWindow = resolveHermesContextWindow(
-      modelId,
-      { ...o, provider: 'openai-codex' },
-      d
-    );
-    const candidate = {
-      harness: 'hermes',
-      accessPath: 'openai-codex',
-      gateway: 'openai-codex',
-      upstream: 'openai',
-      accountId: 'codex',
-      quotaScope: 'codex-chatgpt',
-      quotaGroup: 'codex-chatgpt',
-      modelId,
-      provider: 'openai-codex',
-      sourceId: 'openai-codex',
-      source: 'openai-codex',
-      sharedQuota: 'codex-chatgpt',
-    };
-    if (contextWindow !== undefined) {
-      candidate.contextWindow = contextWindow;
-      candidate.capabilities = { contextWindow };
-    }
-    candidate.candidateKey = candidateKey(candidate);
-    candidates.push(candidate);
-  }
-
-  return candidates;
-}
-
 function selectReasoningCandidate(options, deps) {
   const d = deps || {};
   const opts = options || {};
-  const rootDir = resolveRootDir(opts, d);
-  const now = opts.now || d.now || Date.now();
-
-  const sourcesMod = d.sources || sourcesApi;
-  const evidenceMod = d.evidence || evidenceApi;
-  const priorsMod = d.priors || priorsApi;
-  const candidatesMod =
-    d.candidatesApi ||
-    (d.candidates && typeof d.candidates.annotateCandidates === 'function'
-      ? d.candidates
-      : candidatesApi);
-  const routingMod = d.routing || routingApi;
   const decisionsMod = d.decisions || decisionsApi;
-  const accountsMod = d.accounts || require('./accounts');
-
-  const registry = d.registry || sourcesMod.loadSources(d.sourceOpts);
-  const priors = d.priorsData !== undefined ? d.priorsData : priorsMod.loadPriors();
-  const evidenceDir = opts.evidenceDir || d.evidenceDir || path.join(__dirname, 'data', 'evidence');
-  const evidenceData = d.evidenceData || evidenceMod.loadEvidence(evidenceDir);
-  const accounts = d.accountList || accountsMod.listAccounts() || [];
-
-  let poolCandidates = [];
-  if (Array.isArray(d.candidateList)) {
-    poolCandidates = d.candidateList;
-  } else if (Array.isArray(d.candidates)) {
-    poolCandidates = d.candidates;
-  } else {
-    let discovery;
-    const readDiscoveryCatalogue =
-      (d.discovery && d.discovery.readDiscoveryCatalogue) ||
-      (d.discoveryRead && d.discoveryRead.readDiscoveryCatalogue) ||
-      d.readDiscoveryCatalogue ||
-      require('./discovery/read').readDiscoveryCatalogue;
-    const discoveryDir =
-      opts.discoveryDir || d.discoveryDir || path.join(__dirname, 'data', 'discovery');
-    try {
-      discovery = readDiscoveryCatalogue({ dataDir: discoveryDir });
-    } catch (readErr) {
-      const reason = 'DISCOVERY_READ_ERROR: ' + (readErr.message || String(readErr));
-      return {
-        chosen: null,
-        candidate: null,
-        ranking: [],
-        top3: [],
-        rejected: [],
-        refused: 'DISCOVERY_READ_ERROR',
-        reason,
-        decisionRecord: null,
-      };
-    }
-
-    const cliApi = d.cli || require('./cli');
-    const assembleFn = d.assembleForDispatch || cliApi.assembleForDispatch;
-    poolCandidates = assembleFn(discovery, accounts, registry, {
-      harness: 'hermes',
-      evidenceData,
-      requireRouteHealth: true,
-      allowMissingRouteHealth: true,
-      routeHealth: d.routeHealth,
-      routeHealthFile:
-        opts.routeHealthFile ||
-        d.routeHealthFile ||
-        path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'model-route-health.json'),
-    });
-  }
-
-  // Assemble only with the selection registry, refreshed by the async entrypoints.
-  // Explicit candidate fixtures opt in; production discovery always includes Codex.
-  if (
-    (!Array.isArray(d.candidateList) && !Array.isArray(d.candidates)) ||
-    opts.includeOpenAiCodex ||
-    d.includeOpenAiCodex
-  ) {
-    poolCandidates = [...poolCandidates];
-    const codexCandidates = assembleOpenAiCodexCandidates(opts, { ...d, registry });
-    for (const cc of codexCandidates) {
-      if (!poolCandidates.some((c) => c.candidateKey === cc.candidateKey)) {
-        poolCandidates.push(cc);
-      }
-    }
-  }
-
-  const cooldownRejected = [];
-  const routeHealthMod = require('./route-health');
-  const routeHealthFile =
-    opts.routeHealthFile ||
-    d.routeHealthFile ||
-    path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  const routeStore =
-    d.routeHealth ||
-    opts.routeHealth ||
-    routeHealthMod.loadStore(routeHealthFile, { allowMissing: true });
-  const healthOpts = {
-    ...opts,
-    routeHealth: routeStore,
-    routeHealthFile,
-  };
-  poolCandidates = poolCandidates.filter((candidate) => {
-    const reason =
-      routeHealthMod.probeCooldown(candidate, healthOpts) ||
-      routeHealthMod.contextOverflowObserved(candidate, healthOpts);
-    if (reason)
-      cooldownRejected.push({
-        candidateKey: candidate.candidateKey || candidateKey(candidate),
-        reason,
-      });
-    return !reason;
+  const result = (d.combo || comboApi).comboCandidate({
+    registry: d.registry || opts.registry,
+    env: Object.assign({}, process.env, opts.env || {}, d.env || {}),
   });
-  const excluded = new Set(opts.excludedCandidates || []);
-  const excludedModels = new Set(opts.excludedModels || []);
-  const deadProviders = opts.deadProviderPrefixes || opts.deadProviders || null;
-  const hermesKeys = new Set();
-  const deadProviderRejected = [];
-
-  // Adapt candidates for Hermes harness: set harness=hermes, verify contextWindow >= 32000
-  const hermesCandidates = poolCandidates
-    .map((c) => {
-      const candidate = Object.assign({}, c);
-      const preRewriteKey = candidate.candidateKey || candidateKey(candidate);
-      candidate.harness = 'hermes';
-
-      let rawContext =
-        candidate.contextWindow !== undefined
-          ? candidate.contextWindow
-          : candidate.context_window !== undefined
-            ? candidate.context_window
-            : candidate.capabilities && candidate.capabilities.contextWindow !== undefined
-              ? candidate.capabilities.contextWindow
-              : candidate.capabilities && candidate.capabilities.context_window !== undefined
-                ? candidate.capabilities.context_window
-                : candidate.capabilities && candidate.capabilities.contextTokens !== undefined
-                  ? candidate.capabilities.contextTokens
-                  : undefined;
-
-      if (rawContext === undefined) {
-        const meta = candidatesMod.resolveCandidateContextMeta
-          ? candidatesMod.resolveCandidateContextMeta(candidate, registry)
-          : null;
-        if (meta && meta.contextWindow !== undefined) {
-          rawContext = meta.contextWindow;
-          if (meta.maxOutputTokens !== undefined && candidate.maxOutputTokens === undefined) {
-            candidate.maxOutputTokens = meta.maxOutputTokens;
-          }
-          if (meta.contextSource && !candidate.contextSource) {
-            candidate.contextSource = meta.contextSource;
-          }
-        }
-      }
-
-      candidate.contextWindow = rawContext;
-      if (candidate.capabilities) {
-        candidate.capabilities = Object.assign({}, candidate.capabilities, {
-          contextWindow: rawContext,
-        });
-      } else if (rawContext !== undefined) {
-        candidate.capabilities = { contextWindow: rawContext };
-      }
-
-      if (
-        candidate.gateway === 'openai-codex' ||
-        candidate.provider === 'openai-codex' ||
-        candidate.source === 'openai-codex' ||
-        candidate.sourceId === 'openai-codex'
-      ) {
-        candidate.accessPath = 'openai-codex';
-      } else if (
-        !candidate.accessPath ||
-        candidate.accessPath === 'cli' ||
-        candidate.accessPath.startsWith('cli-') ||
-        candidate.accessPath === '*'
-      ) {
-        let src = null;
-        const srcId = candidate.sourceId || candidate.source;
-        if (srcId && registry && registry.sources) {
-          src = registry.sources.find((s) => s.id === srcId);
-        }
-        if (!src && candidate.sourceEndpoint && registry && registry.sources) {
-          src = registry.sources.find((s) => s.endpoint === candidate.sourceEndpoint);
-        }
-        if (!src && registry && registry.sources) {
-          src = registry.sources.find(
-            (s) => s.id === candidate.gateway || s.id === candidate.upstream
-          );
-        }
-        if (src && !src.endpoint && !src.accessPath && src.reachedVia) {
-          const gw = registry.sources.find((s) => s.id === src.reachedVia);
-          if (gw) src = gw;
-        }
-        candidate.accessPath =
-          (src && (src.accessPath || src.endpoint)) ||
-          candidate.sourceEndpoint ||
-          candidate.endpoint ||
-          null;
-      }
-
-      candidate.candidateKey = candidateKey(candidate);
-      candidate._preRewriteKey = preRewriteKey;
-      return candidate;
-    })
-    .filter(
-      (c) =>
-        !excluded.has(c.candidateKey) &&
-        !excluded.has(c._preRewriteKey) &&
-        !excludedModels.has(canonicalHermesModelId(c.modelId || c.model))
-    )
-    .filter((c) => {
-      const isAgyLane =
-        c.gateway === 'agy-gateway' ||
-        c.sourceId === 'agy-gateway' ||
-        c.source === 'agy-gateway' ||
-        c.harness === 'agy-pool' ||
-        (typeof c.accountId === 'string' && /^agy\d{2}$/.test(c.accountId));
-      if (
-        isAgyLane &&
-        typeof (c.modelId || c.model) === 'string' &&
-        (c.modelId || c.model).includes('/')
-      ) {
-        return false;
-      }
-      return true;
-    })
-    .filter((c) => {
-      const provKey = getCandidateProviderKey(c);
-      if (
-        provKey &&
-        deadProviders &&
-        (deadProviders instanceof Map
-          ? deadProviders.has(provKey)
-          : Object.prototype.hasOwnProperty.call(deadProviders, provKey))
-      ) {
-        const deadInfo =
-          deadProviders instanceof Map ? deadProviders.get(provKey) : deadProviders[provKey];
-        const cause = (deadInfo && deadInfo.cause) || 'exhausted';
-        deadProviderRejected.push({
-          candidateKey: c.candidateKey,
-          reasonCode: 'SKIPPED_DEAD_PROVIDER',
-          reason: `SKIPPED_DEAD_PROVIDER: provider ${provKey} failed with ${cause}`,
-        });
-        return false;
-      }
-      return true;
-    })
-    // Hermes reaches a model either through an OpenAI-compatible base_url or via
-    // the built-in openai-codex provider (hermes-agent 0.21.4 auth_codex.py).
-    .filter(
-      (c) =>
-        (typeof c.accessPath === 'string' && /^https?:\/\//i.test(c.accessPath)) ||
-        c.gateway === 'openai-codex' ||
-        c.provider === 'openai-codex' ||
-        c.source === 'openai-codex' ||
-        c.sourceId === 'openai-codex'
-    )
-    // Discovery and generated routes can converge on the same seven-part key
-    // after replacing the original harness/access path. Probe that route once.
-    .filter((c) => {
-      if (hermesKeys.has(c.candidateKey)) return false;
-      hermesKeys.add(c.candidateKey);
-      return true;
-    });
-
-  const quotaScanMod = d.quotaScan || require('./quota-scan');
-  const quotaState =
-    opts.quotaState || d.quotaState || quotaScanMod.loadQuotaState({ ...opts, ...d, rootDir });
-
-  const annotated = candidatesMod.annotateCandidates(hermesCandidates, evidenceData, {
-    now,
-    quotaState,
-  });
-
-  const getDispatchCfg =
-    (sourcesMod && sourcesMod.getDispatchConfig) || sourcesApi.getDispatchConfig;
-  const dispatchConfig =
-    opts.dispatchConfig ||
-    d.dispatchConfig ||
-    (getDispatchCfg ? getDispatchCfg(registry, opts) : null) ||
-    {};
-
-  const isPlannerDefault = (opts.role || 'planner.default') === 'planner.default';
-  const hermesOrch = dispatchConfig.hermesOrchestrator;
-
-  if (isPlannerDefault && !hermesOrch) {
-    throw new Error(
-      'CONFIG_MISSING: dispatch.hermesOrchestrator is required for planner.default model selection'
-    );
+  if (!result.candidate) {
+    return { chosen: null, candidate: null, ranking: [], top3: [], rejected: [], refused: 'NO_REASONING_CANDIDATE', reason: result.error, decisionRecord: null };
   }
-
-  const profile = {
-    taskId: opts.taskId || opts.sessionId || 'hermes-reasoning-session',
-    role: opts.role || 'planner.default',
-    complexity: opts.complexity || (isPlannerDefault ? hermesOrch.complexity : 'complex'),
-    riskDomains: opts.riskDomains || ['reasoning', 'planning'],
-    qualityFloor:
-      opts.qualityFloor !== undefined
-        ? opts.qualityFloor
-        : isPlannerDefault
-          ? (hermesOrch.qualityFloor ?? null)
-          : null,
-    // Operator decision 2026-10-12: drop the proof floor for model selection;
-    // the output gates (independent exact-SHA review and CI) stay.
-    proofFloor: opts.proofFloor || 'NONE',
-    contextSize: opts.contextSize !== undefined ? opts.contextSize : HERMES_MIN_CONTEXT,
-    costCeiling:
-      opts.costCeiling !== undefined
-        ? opts.costCeiling
-        : isPlannerDefault
-          ? hermesOrch.costCeiling
-          : 5000,
-    currentWorkload: 0,
-    resourceCeiling: 100,
-    requiredHarness: 'hermes',
-    forbiddenFailureDomains: opts.forbiddenFailureDomains || [],
-    requiredCapabilities: [],
-  };
-
-  const defaultWeightProfile = isPlannerDefault ? hermesOrch.weightProfile : 'QUALITY_FIRST';
-  const weightProfileName =
-    opts.weightProfile ||
-    (opts.assessment && opts.assessment.weightProfile) ||
-    defaultWeightProfile;
-
-  const weights =
-    (opts.assessment && opts.assessment.weights) ||
-    opts.weights ||
-    routingApi.WEIGHT_PROFILES[weightProfileName];
-  if (!weights) {
-    throw new Error(
-      `DISPATCH_CONFIG_INVALID: weightProfile "${weightProfileName}" is not defined in routing.WEIGHT_PROFILES`
-    );
-  }
-
-  const assessment = {
-    weightProfile: weightProfileName,
-    weights,
-    renormalizeKnownScores: true,
-  };
-  const rankCtx = {
-    now,
-    priors,
-    evidenceData,
-    accounts,
-    useStoredQuota: true,
-    quotaState,
-    explorationBudget: opts.explorationBudget !== undefined ? Number(opts.explorationBudget) : 0,
-    enforceKnownQuota: opts.enforceKnownQuota,
-  };
-
-  const rankResult = (d.rankForProfile || routingMod.rankForProfile)(
-    annotated,
-    profile,
-    assessment,
-    rankCtx
-  );
-
-  rankResult.rejected = [
-    ...(rankResult.rejected || []),
-    ...cooldownRejected,
-    ...deadProviderRejected,
-  ];
-  // Model quality excludes route price, latency, quota and route count.
-  const health = routeHealthMod;
-  const groups = new Map();
-  for (const c of rankResult.ranking) {
-    const model = canonicalHermesModelId(c.modelId || c.model);
-    let group = groups.get(model);
-    if (!group) {
-      group = { modelId: model, score: null, routes: [] };
-      groups.set(model, group);
-    }
-    const quality = c.scoreBreakdown?.quality ?? routingApi.qualityScoreOf(c, now);
-    const prior = priorsMod.priorFor(c, profile.role, priors, now);
-    const modelScore = quality ?? (prior && !prior.stale ? prior.score : null);
-    if (Number.isFinite(modelScore)) group.score = Math.max(group.score ?? -Infinity, modelScore);
-    const record = health.getPathRecord(routeStore, c.modelId || c.model, {
-      id: c.gateway || c.sourceId || c.source,
-      accountId: c.accountId,
-    });
-    c.routeSelection = {
-      knownGood:
-        record?.status === 'AVAILABLE' &&
-        Number.isFinite(Date.parse(record.lastCheckedAt)) &&
-        now >= Date.parse(record.lastCheckedAt) &&
-        now - Date.parse(record.lastCheckedAt) <= 24 * 60 * 60 * 1000,
-      cost: c.scoreBreakdown?.cost ?? null,
-      latency: c.scoreBreakdown?.latency ?? null,
-      quota: c.headroomStatus || 'unknown',
-    };
-    group.routes.push(c);
-  }
-  const compareKnown = (a, b) =>
-    Number.isFinite(a) && Number.isFinite(b)
-      ? b - a
-      : Number(Number.isFinite(b)) - Number(Number.isFinite(a));
-  const modelGroups = [...groups.values()].sort(
-    (a, b) => compareKnown(a.score, b.score) || a.modelId.localeCompare(b.modelId)
-  );
-  for (const group of modelGroups) {
-    group.routes.sort((a, b) => {
-      const x = a.routeSelection,
-        y = b.routeSelection;
-      return (
-        Number(y.knownGood) - Number(x.knownGood) ||
-        compareKnown(x.cost, y.cost) ||
-        compareKnown(x.latency, y.latency) ||
-        ({ open: 2, tight: 1 }[y.quota] ?? 0) - ({ open: 2, tight: 1 }[x.quota] ?? 0) ||
-        Number(b.candidateKey === opts.preferredCandidateKey) -
-          Number(a.candidateKey === opts.preferredCandidateKey) ||
-        a.candidateKey.localeCompare(b.candidateKey)
-      );
-    });
-  }
-  const modelRanking = modelGroups.map((g) => ({
-    modelId: g.modelId,
-    score: g.score,
-    routeCount: g.routes.length,
-  }));
-  rankResult.ranking = modelGroups.flatMap((g) => g.routes);
-  const chosenGroup = modelGroups.find((g) => g.modelId === opts.probeModel) || modelGroups[0];
-  const chosenCandidate = rankResult.chosen ? chosenGroup?.routes[0] || null : null;
-  const chosenKey = chosenCandidate?.candidateKey || null;
-  const chosenRoute = chosenCandidate
-    ? {
-        candidateKey: chosenKey,
-        modelId: chosenGroup.modelId,
-        routeModelId: chosenCandidate.modelId,
-        gateway: chosenCandidate.gateway || chosenCandidate.sourceId || null,
-        ...(chosenCandidate.quotaGroup ? { quotaGroup: chosenCandidate.quotaGroup } : {}),
-        ...chosenCandidate.routeSelection,
-        reason:
-          'Highest ranked eligible model; routes ordered by live/known-good, known cost, known latency, quota, stored binding, then candidate key',
-      }
-    : null;
-
-  const isChosen = Boolean(chosenCandidate);
-  const refused = isChosen ? null : 'NO_REASONING_CANDIDATE';
-  let reason = isChosen ? chosenRoute.reason : null;
-  if (!isChosen) {
-    if (rankResult.rejected && rankResult.rejected.length > 0) {
-      reason =
-        'NO_REASONING_CANDIDATE: ' +
-        rankResult.rejected.map((r) => `${r.candidateKey}: ${r.reason || r.reasonCode}`).join('; ');
-    } else {
-      reason =
-        'NO_REASONING_CANDIDATE: ' + (rankResult.reason || 'no candidate meets requirements');
-    }
-  }
-
-  // Record decision record Linking candidates, reasons, prior scores and source links
-  const decisionDir =
-    opts.decisionDir ||
-    d.decisionDir ||
-    (opts.rootDir || d.rootDir || opts.root || d.root
-      ? path.join(resolveRootDir(opts, d), 'tools', 'ai-brain', 'data', 'decisions')
-      : path.join(__dirname, 'data', 'decisions'));
-  // Retain rejected routes for every ranked model.
-  const topModelIds = new Set(modelRanking.map((m) => m.modelId));
-  rankResult.rejected.sort((a, b) => {
-    const aParsed = a.candidateKey ? parseCandidateKey(a.candidateKey) : null;
-    const bParsed = b.candidateKey ? parseCandidateKey(b.candidateKey) : null;
-    const aModel = canonicalHermesModelId((aParsed && aParsed.modelId) || a.modelId || '');
-    const bModel = canonicalHermesModelId((bParsed && bParsed.modelId) || b.modelId || '');
-    const aTop = topModelIds.has(aModel);
-    const bTop = topModelIds.has(bModel);
-    if (aTop && !bTop) return -1;
-    if (!aTop && bTop) return 1;
-    return 0;
-  });
-
-  const skippedRoutes = rankResult.rejected
-    .filter((r) => {
-      const parsed = r.candidateKey ? parseCandidateKey(r.candidateKey) : null;
-      const m = canonicalHermesModelId((parsed && parsed.modelId) || r.modelId || '');
-      return topModelIds.has(m);
-    })
-    .map((r) => ({
-      candidateKey: r.candidateKey,
-      reason: r.reason || r.reasonCode,
-    }));
-
-  const decisionRecord = {
-    stage: decisionsMod.Stage.SELECTED,
-    workItemId: profile.taskId,
-    role: profile.role,
-    chosen: chosenKey,
-    chosenCandidate,
-    modelRanking: modelRanking,
-    chosenRoute,
-    reason,
-    harness: 'hermes',
-    candidates: rankResult.ranking.map((c) => ({
-      candidateKey: c.candidateKey,
-      score: c.score,
-      scoreBreakdown: c.scoreBreakdown,
-      priorScore:
-        (c.scoreBreakdown && c.scoreBreakdown.prior && c.scoreBreakdown.prior.score) ?? null,
-      headroom: c.headroomStatus,
-      reasons: c.quotaReasonCode ? [c.quotaReasonCode] : [],
-      sourceLinks: c.source ? [c.source] : [],
-      ...(c.quotaGroup ? { quotaGroup: c.quotaGroup } : {}),
-    })),
-    rejected: rankResult.rejected.map((r) => ({
-      candidateKey: r.candidateKey,
-      reasonCode: r.reasonCode,
-      reason: r.reason || r.reasonCode,
-    })),
-    skippedRoutes,
-    detail:
-      opts.decisionDetail ||
-      (opts.preferredCandidateKey && chosenKey === opts.preferredCandidateKey
-        ? 'HERMES_REASONING_REUSE_STORED_BINDING'
-        : 'HERMES_REASONING_SELECTION'),
-  };
-
-  if (!opts.skipDecisionLog) {
-    try {
-      const rankingFile = path.join(decisionDir, `ranking-${crypto.randomUUID()}.json`);
-      fs.mkdirSync(decisionDir, { recursive: true });
-      fs.writeFileSync(
-        rankingFile,
-        JSON.stringify(
-          decisionsApi.scrub({
-            modelRanking,
-            candidates: decisionRecord.candidates,
-            rejected: decisionRecord.rejected,
-            skippedRoutes,
-          }),
-          null,
-          2
-        ),
-        { encoding: 'utf8', flag: 'wx' }
-      );
-      decisionRecord.rankingFile = rankingFile;
-      const {
-        modelRanking: models,
-        candidates,
-        rejected,
-        skippedRoutes: skipped,
-        ...summary
-      } = decisionRecord;
-      decisionsMod.recordDecision(
-        {
-          ...summary,
-          modelRankingCount: models.length,
-          candidatesCount: candidates.length,
-          rejectedCount: rejected.length,
-          skippedRoutesCount: skipped.length,
-        },
-        { dir: decisionDir, now }
-      );
-    } catch (logErr) {
-      const err = new Error('DECISION_LOG_WRITE_FAILURE: ' + (logErr.message || String(logErr)));
-      err.code = 'DECISION_LOG_WRITE_FAILURE';
-      err.cause = logErr;
-      throw err;
-    }
-  }
-
+  const candidate = result.candidate;
+  const chosenRoute = { candidateKey: candidate.candidateKey, modelId: candidate.modelId, routeModelId: candidate.modelId, gateway: candidate.gateway, reason: 'combo-only routing' };
   return {
-    chosen: chosenCandidate ? chosenKey : null,
-    candidate: chosenCandidate,
-    ranking: rankResult.ranking,
-    top3: modelRanking,
-    modelRanking: modelRanking,
+    chosen: candidate.candidateKey,
+    candidate,
+    ranking: [candidate],
+    top3: [candidate],
+    rejected: [],
     chosenRoute,
-    rejected: rankResult.rejected,
-    skippedRoutes,
-    refused,
-    reason,
-    decisionRecord,
+    decisionRecord: {
+      stage: decisionsMod.Stage.SELECTED,
+      workItemId: opts.taskId || opts.sessionId || 'hermes-reasoning-session',
+      chosen: candidate.candidateKey,
+      chosenCandidate: candidate,
+      chosenRoute,
+      reason: 'combo-only routing',
+      harness: 'hermes',
+      candidates: [{ candidateKey: candidate.candidateKey }],
+      rejected: [],
+      detail: 'HERMES_REASONING_COMBO',
+    },
   };
 }
 
@@ -1929,11 +1314,6 @@ function writeProvidersConfig(candidate, options, deps) {
   };
 }
 
-/** Sends a realistic-cost OpenAI-compatible request without exposing the credential. */
-async function probeHermesCandidate(candidate, apiKeyEnv, env, options) {
-  return routeProbe.probeRoute(candidate, apiKeyEnv, env, options);
-}
-
 /**
  * Returns default prompt for Hermes when orchestrating a goal.
  */
@@ -2093,115 +1473,6 @@ function resolveHermesLaunchCommand(argv, options, deps) {
 }
 
 // Eight concurrent accounts is the existing transport safety invariant, not an attempt cap.
-async function probeRankedRoutes(
-  ordered,
-  {
-    runProbe,
-    accountKey,
-    skip = () => null,
-    refusal = () => {},
-    deadline = Infinity,
-    now = Date.now,
-    maxConcurrentProbes = 8,
-    maxProbes = Infinity,
-    // When given, a failed probe only settles its account if the failure was
-    // account-wide; a model-level failure (e.g. 404 alias) leaves the account's
-    // other, possibly stronger, routes in contention.
-    accountExhausted = null,
-  }
-) {
-  if (accountKey === undefined) accountKey = candidateAccountKey;
-  const outcomes = new Map();
-  const inFlight = new Map();
-  const busyAccounts = new Set();
-  let winner = null;
-  let firstNonRouteError = null;
-  let probesStarted = 0;
-  try {
-    while (!winner) {
-      let bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
-      for (let index = 0; index < ordered.length; index += 1) {
-        const route = ordered[index];
-        if (outcomes.has(route.candidateKey) || inFlight.has(route.candidateKey)) continue;
-        const account = accountKey(route);
-        const reason = skip(route, account);
-        if (reason) {
-          refusal(route, reason);
-          outcomes.set(route.candidateKey, false);
-          continue;
-        }
-        if (
-          (bestSuccess >= 0 && index > bestSuccess) ||
-          inFlight.size >= maxConcurrentProbes ||
-          busyAccounts.has(account) ||
-          now() >= deadline ||
-          probesStarted >= maxProbes
-        )
-          continue;
-        probesStarted += 1;
-        busyAccounts.add(account);
-        const promise = runProbe(route)
-          .then((ok) => ({ route, account, ok }))
-          .catch((error) => ({ route, account, ok: false, error }));
-        inFlight.set(route.candidateKey, promise);
-      }
-      bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
-      // Each higher account gets its best-ranked probe before a lower success wins;
-      // its remaining routes cannot starve a live route on another account.
-      const resolvedAccounts = new Set(
-        ordered
-          .slice(0, Math.max(bestSuccess, 0))
-          .filter(
-            (c) =>
-              outcomes.has(c.candidateKey) &&
-              (typeof accountExhausted !== 'function' ||
-                outcomes.get(c.candidateKey) === true ||
-                accountExhausted(accountKey(c)))
-          )
-          .map((c) => accountKey(c))
-      );
-      if (
-        bestSuccess >= 0 &&
-        ordered
-          .slice(0, bestSuccess)
-          .every((c) => outcomes.has(c.candidateKey) || resolvedAccounts.has(accountKey(c)))
-      ) {
-        winner = ordered[bestSuccess];
-        break;
-      }
-      if (!inFlight.size) {
-        // The deadline may leave higher routes untested on a busy account.
-        // A completed live success remains usable; missing probes are never successes.
-        winner = bestSuccess >= 0 ? ordered[bestSuccess] : null;
-        break;
-      }
-      const finished = await Promise.race(inFlight.values());
-      inFlight.delete(finished.route.candidateKey);
-      busyAccounts.delete(finished.account);
-      outcomes.set(finished.route.candidateKey, finished.ok);
-      if (finished.error) {
-        firstNonRouteError ||= finished.error;
-        refusal(finished.route, finished.error.message || String(finished.error));
-      }
-    }
-  } finally {
-    // Settle started work, including on fatal errors, before another launch can bind config.
-    const remaining = await Promise.allSettled(inFlight.values());
-    for (const result of remaining) {
-      if (result.status === 'fulfilled') {
-        outcomes.set(result.value.route.candidateKey, result.value.ok);
-        if (result.value.error) {
-          firstNonRouteError ||= result.value.error;
-          refusal(result.value.route, result.value.error.message || String(result.value.error));
-        }
-      }
-    }
-  }
-
-  if (!winner) winner = ordered.find((c) => outcomes.get(c.candidateKey) === true) || null;
-  return { winner, outcomes, firstNonRouteError };
-}
-
 /**
  * Launches an interactive Hermes chat session bound to a Controller-selected candidate.
  * Handles failure classification, candidate reselection, and resume relaunching.
@@ -2288,431 +1559,19 @@ async function launchHermesSession(options, deps) {
     }
   }
 
-  const forbiddenDomains = [...(opts.forbiddenFailureDomains || [])];
-  const excludedCandidates = [...(opts.excludedCandidates || [])];
-  const excludedModels = new Set();
-  const failedAccountKeys = new Map();
-  const health = require('./route-health');
-  const probeAccountKey = (candidate) =>
-    candidate.gateway === '9router'
-      ? health.extractAccountKey(candidate, { ...opts, registry: d.registry || opts.registry })
-      : candidateAccountKey(candidate);
   const probeReasons = [];
-  const deadProviders = new Map();
-  const recordedSkippedKeys = new Set();
-  let initialModelRanking;
   let initialRejected;
-  const sourcesApi = require('./sources');
-  const dispatchConfig = sourcesApi.getDispatchConfig(d.registry || opts.registry, opts);
-  const probeTimeoutMs = dispatchConfig.probeTimeoutMs;
-  const probeBudgetMs = dispatchConfig.probeBudgetMs;
-  let probeDeadline = Date.now() + probeBudgetMs;
   let attempt = 0;
-  const routeHealthFile =
-    opts.routeHealthFile ||
-    d.routeHealthFile ||
-    path.join(rootDir, 'tools', 'ai-brain', 'data', 'model-route-health.json');
-  const routeHealth =
-    d.routeHealth || opts.routeHealth || health.loadStore(routeHealthFile, { allowMissing: true });
-
-  const recordProbeRefusal = (candidate, reason) => {
-    if (opts.skipDecisionLog) return null;
-    try {
-      (d.decisions || decisionsApi).recordDecision(
-        {
-          stage: decisionsApi.Stage.REFUSED,
-          workItemId: opts.taskId || 'hermes-reasoning-session',
-          harness: 'hermes',
-          chosen: null,
-          rejected: [{ candidateKey: candidate.candidateKey, reason }],
-          detail: reason,
-        },
-        {
-          dir:
-            opts.decisionDir ||
-            d.decisionDir ||
-            path.join(rootDir, 'tools', 'ai-brain', 'data', 'decisions'),
-        }
-      );
-    } catch (logErr) {
-      const err = new Error('DECISION_LOG_WRITE_FAILURE: ' + (logErr.message || String(logErr)));
-      err.code = 'DECISION_LOG_WRITE_FAILURE';
-      return err;
-    }
-  };
-
-  while (true) {
-    // Each selection round (initial or after a runtime route failure) gets its own probe window.
-    probeDeadline = Date.now() + probeBudgetMs;
-    const isRetry = attempt > 0;
-    const shouldReselect = Boolean(opts.reselect) || isRetry || !session.candidateKey;
-    const preferredCandidateKey = shouldReselect ? null : session.candidateKey;
-
+  {
     const selectFn = d.selectReasoningCandidate || selectReasoningCandidate;
-    const selection = selectFn(
-      Object.assign({}, opts, {
-        sessionId: session.sessionId,
-        forbiddenFailureDomains: forbiddenDomains,
-        excludedCandidates,
-        excludedModels: [...excludedModels],
-        deadProviderPrefixes: deadProviders,
-        preferredCandidateKey,
-      }),
-      d
-    );
-
-    for (const rejection of selection?.rejected || []) {
-      if (!recordedSkippedKeys.has(rejection.candidateKey)) {
-        recordedSkippedKeys.add(rejection.candidateKey);
-        const logError = recordProbeRefusal(rejection, rejection.reason || rejection.reasonCode);
-        if (logError) probeReasons.push(logError.message);
-      }
-    }
+    const selection = selectFn(Object.assign({}, opts, { sessionId: session.sessionId }), d);
     if (!selection || !selection.candidate) {
-      const baseReason =
-        (selection && (selection.reason || selection.refused)) || 'NO_REASONING_CANDIDATE';
-      const err = new Error(
-        probeReasons.length ? `NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}` : baseReason
-      );
+      const err = new Error((selection && (selection.reason || selection.refused)) || 'NO_REASONING_CANDIDATE');
       err.code = (selection && selection.refused) || 'NO_REASONING_CANDIDATE';
-      err.reasons = [...((selection && selection.rejected) || []), ...probeReasons];
       throw err;
     }
-    initialModelRanking ||= selection.modelRanking;
-    initialRejected ||= selection.rejected;
-
-    const outcomes = new Map();
-    let winner = null;
-    let firstNonRouteError = null;
-    const refusal = (candidate, reason, { exclude = true } = {}) => {
-      if (exclude) {
-        excludedCandidates.push(candidate.candidateKey);
-        if (candidate._preRewriteKey) {
-          excludedCandidates.push(candidate._preRewriteKey);
-        }
-      }
-      probeReasons.push(`${candidate.candidateKey}: ${reason}`);
-      const logError = recordProbeRefusal(candidate, reason);
-      if (logError) probeReasons.push(logError.message);
-    };
-
-    // Drop candidates whose canonical quota-state scope is QUOTA/AUTH/NO_CHANNEL/REGION
-    const quotaScanApi = d.quotaScan || require('./quota-scan');
-    const sessionQuotaState =
-      opts.quotaState || d.quotaState || quotaScanApi.loadQuotaState({ ...opts, ...d, rootDir });
-    const nowProbe = Date.now();
-    const blockedCodes = new Set(['QUOTA', 'AUTH', 'NO_CHANNEL', 'REGION']);
-
-    const qualifiedRoutes = [];
-    for (const c of selection.ranking) {
-      const scopeState = quotaScanApi.getQuotaScopeState(c, sessionQuotaState, {
-        ...opts,
-        now: nowProbe,
-      });
-      const isBlocked =
-        scopeState &&
-        blockedCodes.has(scopeState.code) &&
-        (quotaScanApi.isScopeBlocked
-          ? quotaScanApi.isScopeBlocked(scopeState, nowProbe, { ...opts, routeCandidate: c })
-          : true);
-      if (isBlocked) {
-        const reason = `QUOTA_SCOPE_${scopeState.code}: ${scopeState.scope || scopeState.source || scopeState.reason || 'blocked'}`;
-        refusal(c, reason, { exclude: true });
-        continue;
-      }
-      qualifiedRoutes.push(c);
-    }
-
-    // Cap the number of probe candidates
-    const maxHermesProbes =
-      opts.maxHermesProbes ||
-      dispatchConfig.hermesOrchestrator?.maxProbes ||
-      dispatchConfig.maxHermesProbes;
-
-    if (!maxHermesProbes) {
-      throw new Error('CONFIG_MISSING: dispatch.hermesOrchestrator.maxProbes is required');
-    }
-
-    const maxRoutesPerAccount =
-      opts.maxRoutesPerAccount || dispatchConfig.hermesOrchestrator?.maxRoutesPerAccount;
-
-    if (!maxRoutesPerAccount) {
-      throw new Error(
-        'CONFIG_MISSING: dispatch.hermesOrchestrator.maxRoutesPerAccount is required'
-      );
-    }
-    const accountRouteCounts = new Map();
-    const candidatePool = [];
-    const overflowRoutes = [];
-
-    // Controller-ranked route is probed first and must never be dropped by account caps
-    const chosenRoute = qualifiedRoutes.find((c) => c.candidateKey === selection.chosen);
-    if (chosenRoute) {
-      const accKey = probeAccountKey(chosenRoute);
-      accountRouteCounts.set(accKey, 1);
-      candidatePool.push(chosenRoute);
-    }
-
-    for (const route of qualifiedRoutes) {
-      if (chosenRoute && route.candidateKey === chosenRoute.candidateKey) continue;
-      const accKey = probeAccountKey(route);
-      const count = accountRouteCounts.get(accKey) || 0;
-      if (count < maxRoutesPerAccount) {
-        accountRouteCounts.set(accKey, count + 1);
-        candidatePool.push(route);
-      } else {
-        overflowRoutes.push(route);
-      }
-    }
-    const ordered = candidatePool.concat(overflowRoutes);
-
-    if (!ordered.length) {
-      const err = new Error(
-        probeReasons.length
-          ? `NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`
-          : 'NO_REASONING_CANDIDATE: no qualified live route for orchestrator'
-      );
-      err.code = 'NO_REASONING_CANDIDATE';
-      err.reasons = probeReasons.slice();
-      throw err;
-    }
-    // Probe accounts whose failure was account-wide (credit, login, provider dead).
-    const exhaustedProbeAccounts = new Set();
-    const runProbe = async (candidate) => {
-      let config;
-      try {
-        config = writeProvidersConfig(candidate, opts, d);
-      } catch (error) {
-        if (
-          (opts.dryRun && !opts.probe) ||
-          !['UNKNOWN_CREDENTIAL_ENV', 'UNKNOWN_ENDPOINT'].includes(error.code)
-        )
-          throw error;
-        refusal(candidate, `HERMES_ROUTE_PROBE_FAILED ${error.code}`);
-        return false;
-      }
-      if (opts.dryRun && !opts.probe) return true;
-      const isAgyLane =
-        candidate.gateway === 'agy-gateway' ||
-        candidate.sourceId === 'agy-gateway' ||
-        candidate.source === 'agy-gateway' ||
-        candidate.harness === 'agy-pool' ||
-        (typeof candidate.accountId === 'string' && /^agy\d{2}$/.test(candidate.accountId));
-      if (
-        isAgyLane &&
-        typeof (candidate.modelId || candidate.model) === 'string' &&
-        (candidate.modelId || candidate.model).includes('/')
-      ) {
-        refusal(
-          candidate,
-          'HERMES_ROUTE_PROBE_FAILED 9router model ids must never reach agy lanes'
-        );
-        return false;
-      }
-      const isCodexProvider =
-        (candidate &&
-          (candidate.provider === 'openai-codex' ||
-            candidate.gateway === 'openai-codex' ||
-            candidate.sourceId === 'openai-codex' ||
-            candidate.source === 'openai-codex')) ||
-        config.providerName === 'openai-codex';
-      if (isCodexProvider && !d.probe && !opts.probeFn) {
-        return true;
-      }
-      const controller = new AbortController();
-      const remainingMs = probeDeadline - Date.now();
-      const identity = health.probeIdentity(candidate);
-      const record = health.getPathRecord(routeHealth, identity.model, identity.route);
-      const baseTimeout = sourcesApi.resolveProbeTimeout(candidate, record, dispatchConfig);
-      const budgetLimited = remainingMs < baseTimeout;
-      const timeoutMs = Math.max(1, Math.min(baseTimeout, remainingMs));
-      if (remainingMs <= 0) {
-        refusal(candidate, 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted');
-        return false;
-      }
-      let timer;
-      let result;
-      try {
-        result = await Promise.race([
-          Promise.resolve()
-            .then(() =>
-              (d.probe || opts.probeFn || probeHermesCandidate)(
-                config.headers ? { ...candidate, headers: config.headers } : candidate,
-                config.apiKeyEnv,
-                env,
-                {
-                  timeoutMs,
-                  fetch: d.fetch || opts.fetch,
-                  signal: controller.signal,
-                  failureClassifier: classifier,
-                }
-              )
-            )
-            .catch(() => ({ ok: false, status: 0, body: 'Probe transport failed' })),
-          new Promise((resolve) => {
-            timer = setTimeout(() => {
-              controller.abort();
-              resolve({
-                ok: false,
-                status: 0,
-                body: budgetLimited ? 'Probe budget exhausted' : 'Probe request timed out',
-              });
-            }, timeoutMs);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-      const healthRecord = health.rememberProbe(candidate, result, {
-        ...opts,
-        routeHealth,
-        routeHealthFile,
-      });
-      if (result?.ok === true) return true;
-      const status = Number(result?.status) || 0;
-      const classification =
-        routeProbe.safeProbeClassification(result?.classification, classifier) ||
-        routeProbe.classifyRouteProbeFailure(
-          {
-            status,
-            body: result?.body,
-            candidateKey: candidate.candidateKey,
-            accountId: candidate.accountId,
-          },
-          classifier
-        );
-      const providerCause = classification?.providerCause;
-      const cause = providerCause || classification.cause;
-      if (!(
-        providerCause ||
-        status === 0 ||
-        status === 402 ||
-        status === 429 ||
-        status >= 500 ||
-        (status === 200 && result?.reasonCode === 'HTTP_200') ||
-        [
-          classifier.Scope.MODEL,
-          classifier.Scope.UPSTREAM,
-          classifier.Scope.GATEWAY,
-          classifier.Scope.ACCESS_PATH,
-          classifier.Scope.ACCOUNT,
-        ].includes(classification.scope)
-      )) {
-        const error = new Error(`HERMES_ROUTE_PROBE_FAILED: ${cause}`);
-        error.code = 'HERMES_ROUTE_PROBE_FAILED';
-        error.classification = classification;
-        throw error;
-      }
-      const accountCauses = new Set([
-        'upstream_credit_exhausted',
-        'quota_exhausted',
-        'account_auth_failed',
-        'upstream_entitlement',
-      ]);
-      if (accountCauses.has(classification.cause)) {
-        health.rememberAccountCooldown(
-          candidate,
-          classification.cause,
-          healthRecord && healthRecord.nextCheckAt ? healthRecord.nextCheckAt : null,
-          {
-            ...opts,
-            routeHealth,
-            routeHealthFile,
-          }
-        );
-      }
-      refusal(candidate, `HERMES_ROUTE_PROBE_FAILED ${cause} status=${status || 'timeout'}`);
-      if (
-        isProviderLevelFailure(cause) ||
-        status === 402 ||
-        accountCauses.has(classification.cause)
-      ) {
-        const specificAcc = health.extractAccountKey(candidate, {
-          ...opts,
-          registry: d.registry || opts.registry,
-        });
-        if (specificAcc) failedAccountKeys.set(specificAcc, cause);
-        if (
-          (status === 402 || cause === 'upstream_credit_exhausted') &&
-          candidate.gateway !== '9router'
-        ) {
-          const gwAcc = candidateAccountKey(candidate);
-          if (gwAcc) failedAccountKeys.set(gwAcc, cause);
-        }
-        const provKey = getCandidateProviderKey(candidate);
-        if (provKey) deadProviders.set(provKey, { cause, account: specificAcc });
-        exhaustedProbeAccounts.add(probeAccountKey(candidate));
-      }
-      return false;
-    };
-    const probeBatch = await probeRankedRoutes(ordered, {
-      runProbe,
-      accountKey: probeAccountKey,
-      accountExhausted: (account) => exhaustedProbeAccounts.has(account),
-      refusal,
-      maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
-      maxProbes: maxHermesProbes,
-      deadline: opts.dryRun && !opts.probe ? Infinity : probeDeadline,
-      skip: (route, account) => {
-        const specificAcc = health.extractAccountKey(route, {
-          ...opts,
-          registry: d.registry || opts.registry,
-        });
-        const provKey = getCandidateProviderKey(route);
-        const deadInfo = provKey ? deadProviders.get(provKey) : null;
-        const isHardProviderFailure =
-          deadInfo &&
-          (deadInfo.cause === 'upstream_credential' ||
-            deadInfo.cause === 'upstream_monthly_limit' ||
-            !deadInfo.account ||
-            !specificAcc ||
-            deadInfo.account === specificAcc);
-        const gwAcc = route.gateway !== '9router' ? candidateAccountKey(route) : null;
-        const matchedExhaustedKey =
-          (specificAcc && failedAccountKeys.has(specificAcc) && specificAcc) ||
-          (gwAcc && failedAccountKeys.has(gwAcc) && gwAcc) ||
-          null;
-        const isAccountExhausted = Boolean(matchedExhaustedKey);
-        const cooldown = health.probeCooldown(route, { ...opts, routeHealth, routeHealthFile });
-        return isHardProviderFailure
-          ? `HERMES_ROUTE_PROBE_SKIPPED provider ${provKey} failed with ${deadInfo.cause}`
-          : isAccountExhausted
-            ? `HERMES_PROBE_SKIPPED_ACCOUNT_EXHAUSTED: ${matchedExhaustedKey} failed with ${failedAccountKeys.get(matchedExhaustedKey)}`
-            : cooldown;
-      },
-    });
-    winner = probeBatch.winner;
-    firstNonRouteError = probeBatch.firstNonRouteError;
-    for (const [key, ok] of probeBatch.outcomes) outcomes.set(key, ok);
-    if (!winner) {
-      const bestSuccess = ordered.findIndex((c) => outcomes.get(c.candidateKey) === true);
-      if (bestSuccess >= 0) {
-        winner = ordered[bestSuccess];
-      }
-    }
-    const winnerIndex = winner ? ordered.indexOf(winner) : -1;
-    for (const [index, route] of ordered.entries()) {
-      if (!outcomes.has(route.candidateKey)) {
-        const higherWon = Boolean(winner && Date.now() < probeDeadline);
-        refusal(
-          route,
-          !higherWon
-            ? 'HERMES_ROUTE_PROBE_SKIPPED wall-clock budget exhausted'
-            : index < winnerIndex
-              ? 'HERMES_ROUTE_PROBE_SKIPPED account already settled by an account-level failure'
-              : 'HERMES_ROUTE_PROBE_SKIPPED higher-ranked route succeeded',
-          { exclude: !higherWon }
-        );
-      }
-    }
-    if (!winner) {
-      if (firstNonRouteError) throw firstNonRouteError;
-      if (Date.now() >= probeDeadline) probeReasons.push('probe wall-clock budget exhausted');
-      const error = new Error(`NO_REASONING_CANDIDATE: ${probeReasons.join('; ')}`);
-      error.code = 'NO_REASONING_CANDIDATE';
-      error.reasons = probeReasons.slice();
-      throw error;
-    }
+    initialRejected = selection.rejected;
+    const winner = selection.candidate;
     const candidate = winner;
     selection.candidate = candidate;
     selection.chosen = candidate.candidateKey;
@@ -2909,19 +1768,7 @@ async function launchHermesSession(options, deps) {
         const missing = String((acpErr && acpErr.message) || '').match(
           /No [a-z0-9 -]*credentials stored\b[^\r\n]*/i
         );
-        if (!missing) throw acpErr;
-        health.rememberAccountCooldown(candidate, 'account_auth_failed', undefined, {
-          ...opts,
-          registry: d.registry || opts.registry,
-          routeHealth,
-          routeHealthFile,
-        });
-        excludedCandidates.push(candidate.candidateKey);
-        if (candidate._preRewriteKey) excludedCandidates.push(candidate._preRewriteKey);
-        const runtimeReason = `HERMES_RUNTIME_ROUTE_FAILURE ${missing[0].slice(0, 400)}`;
-        probeReasons.push(`${candidate.candidateKey}: ${runtimeReason}`);
-        recordProbeRefusal(candidate, runtimeReason);
-        continue;
+        throw acpErr;
       }
       return {
         status: acpStatus.state,
@@ -3048,35 +1895,16 @@ async function launchHermesSession(options, deps) {
       };
     }
 
-    // Route/model/quota failure: exclude failed route and reselect
-    // A missing Hermes-side login is account-scoped: remember it so the next launch skips this candidate.
-    if (liveRouteFailure && /^No [a-z0-9 -]*credentials stored\b/i.test(String(liveRouteFailure))) {
-      health.rememberAccountCooldown(candidate, 'account_auth_failed', undefined, {
-        ...opts,
-        registry: d.registry || opts.registry,
-        routeHealth,
-        routeHealthFile,
-      });
-    }
-    excludedCandidates.push(candidate.candidateKey);
-    if (candidate._preRewriteKey) {
-      excludedCandidates.push(candidate._preRewriteKey);
-    }
+    // Route failure: 9router already failed over inside the combo, so stop here.
     const runtimeReason = liveRouteFailure
       ? `HERMES_RUNTIME_ROUTE_FAILURE ${liveRouteFailure}`
       : classification.reason || classification.cause;
     probeReasons.push(`${candidate.candidateKey}: ${runtimeReason}`);
-    recordProbeRefusal(candidate, runtimeReason);
-    const domain =
-      candidate.gateway && candidate.gateway !== '*' ? candidate.gateway : candidate.upstream;
-    if (domain && domain !== '*') forbiddenDomains.push(domain);
-
-    // Reselects on the next iteration with the SAME sessionId
+    const err = new Error('COMBO_ROUTE_FAILURE: ' + runtimeReason);
+    err.code = 'COMBO_ROUTE_FAILURE';
+    err.classification = classification;
+    throw err;
   }
-
-  const err = new Error('HERMES_MAX_RETRIES_EXCEEDED');
-  err.code = 'HERMES_MAX_RETRIES_EXCEEDED';
-  throw err;
 }
 
 /**
@@ -3238,7 +2066,6 @@ module.exports = {
   writeProvidersConfig,
   defaultGoalPrompt,
   buildHermesArgv,
-  probeHermesCandidate,
   resolveHermesLaunchCommand,
   resolveHermesLaunch: resolveHermesLaunchCommand,
   resolveHermesCommand: resolveHermesLaunchCommand,
@@ -3252,7 +2079,6 @@ module.exports = {
   parseCodexModelsFromToml,
   readCodexConfigModels,
   resolveHermesContextWindow,
-  assembleOpenAiCodexCandidates,
   candidateAccountKey,
   fileExists,
   dirExists,
@@ -3261,7 +2087,5 @@ module.exports = {
   createFsCheckTracker,
   isCodexContextEligible,
   canonicalHermesModelId,
-  getCandidateProviderKey,
-  isProviderLevelFailure,
   PROVIDER_LEVEL_FAILURE_CAUSES,
 };
