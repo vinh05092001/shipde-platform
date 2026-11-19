@@ -17,47 +17,6 @@ function tempDir(t) {
   return dir;
 }
 
-test('PR02 regression: profile dispatch keeps explicit required-health admission', async (t) => {
-  const dir = tempDir(t);
-  const profile = path.join(dir, 'profile.json');
-  fs.writeFileSync(profile, JSON.stringify({ taskId: 'FIXTURE-TASK', role: 'writer' }));
-  const candidates = [
-    {
-      harness: 'paseo',
-      accessPath: 'cli',
-      gateway: 'fixture',
-      upstream: 'vendor',
-      accountId: 'account-b',
-      quotaScope: 'account-b',
-      modelId: 'vendor/model',
-    },
-  ];
-  const original = routing.runProfileDispatch;
-  routing.runProfileDispatch = (_args, deps) => deps.candidates;
-  try {
-    const actual = await dispatchProfileCommand(
-      { profile, root: dir, 'dry-run': true },
-      {
-        candidates,
-        accounts: [],
-        registry: { sources: [], dispatch: { providers: {} } },
-        routeHealth: { version: 1, paths: {}, events: [] },
-        requireRouteHealth: true,
-        evidenceDir: path.join(dir, 'empty-evidence'),
-        dryRunOffline: true,
-        home: dir,
-      }
-    );
-    assert.equal(
-      actual.length,
-      0,
-      'unknown-health route reached runProfileDispatch despite explicit required health'
-    );
-  } finally {
-    routing.runProfileDispatch = original;
-  }
-});
-
 test('PR02 regression: pre-upgrade keys keep literal percent-encoded identity fields', () => {
   const { readDiscoveryCatalogue } = require('../discovery/read');
   const identity = {

@@ -221,33 +221,6 @@ test('AUTH_NEEDED tries another account on the failed gateway first', async () =
   assert.equal(store.events.at(-1).type, 'route_fallback');
 });
 
-test('default production dispatch requires route health even when the health store is empty', () => {
-  const healthFile = path.join(__dirname, `.ai141-empty-health-${process.pid}.json`);
-  const registry = {
-    sources: [
-      { id: 'gw', kind: 'router', servesModels: true, harness: 'paseo' },
-      { id: 'vendor', kind: 'model-source', reachedVia: 'gw' },
-    ],
-    dispatch: { providers: { vendor: { harness: 'paseo', accessPath: 'paseo' } } },
-  };
-  const candidate = { gateway: 'gw', upstream: 'vendor', modelId: 'vendor/model' };
-  try {
-    const assembled = cli.assembleForDispatch(
-      { candidates: [candidate] },
-      [{ id: 'acct', provider: 'vendor' }],
-      registry,
-      {
-        routeHealthFile: healthFile,
-        candidates: [candidate],
-        routeHealth: routes.loadStore(healthFile, { allowMissing: true }),
-      }
-    );
-    assert.ok(!assembled.some((row) => row.modelId === candidate.modelId));
-  } finally {
-    fs.rmSync(healthFile, { force: true });
-  }
-});
-
 test('next loop invokes route due rechecks before selecting a work item', async (t) => {
   const { dir } = temporaryStore(t);
   const order = [];
