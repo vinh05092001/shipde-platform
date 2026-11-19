@@ -711,6 +711,9 @@ function assembleForDispatch(discoveryCat, accounts, registry, options) {
   // Combo-only routing: every role calls the single 9router combo; 9router owns
   // member order, failover and health (operator decision 2026-11-19).
   const opts = options || {};
+  // A caller may inject a ready candidate pool (tests, replay, a pinned route);
+  // use it verbatim. Otherwise build the single 9router combo candidate.
+  if (Array.isArray(opts.candidates)) return opts.candidates;
   const { comboCandidate } = require('./combo');
   const result = comboCandidate({ registry: registry || opts.registry, env: opts.env });
   return result.candidate ? [result.candidate] : [];
