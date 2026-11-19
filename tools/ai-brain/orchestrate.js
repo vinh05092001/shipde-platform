@@ -3417,8 +3417,30 @@ async function selectCandidateForProfile(
   const failedSet = failed instanceof Set ? failed : new Set(failed);
   const pool = Array.isArray(annotatedCandidates) ? annotatedCandidates : [];
   const blocked = pool.find((c) => c && c.blocked);
+  // Combo-only still selects per profile: the reviewer passes the writer's key
+  // and forbidden failure domain so, when the pool has a distinct candidate, the
+  // review lane does not resolve to the writer. When only the single combo
+  // candidate is available it is reused for every role (operator decision
+  // 2026-11-19 "1 combo cho tất cả", which accepts reviewer == writer).
+  const writerKey = (item && item.writerCandidateKey) || options.writerCandidateKey || null;
+  const forbidden = new Set(
+    (Array.isArray(forbiddenDomains) ? forbiddenDomains : []).filter(Boolean)
+  );
+  const domainOf = (c) => {
+    try {
+      return routing.canonicalFailureDomain(c);
+    } catch (_) {
+      return null;
+    }
+  };
+  const eligible = pool.filter((c) => c && !c.blocked && !failedSet.has(candidateKey(c)));
   const chosenCandidate =
-    pool.find((c) => c && !c.blocked && !failedSet.has(candidateKey(c))) || null;
+    eligible.find(
+      (c) => (!writerKey || candidateKey(c) !== writerKey) && !forbidden.has(domainOf(c))
+    ) ||
+    eligible.find((c) => !writerKey || candidateKey(c) !== writerKey) ||
+    eligible[0] ||
+    null;
   const chosen = chosenCandidate ? candidateKey(chosenCandidate) : null;
   const reason = chosen
     ? 'combo-only routing'
