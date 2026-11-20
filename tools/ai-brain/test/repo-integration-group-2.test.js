@@ -163,7 +163,7 @@ test('unavailable tool has an explicit unavailable record, never an individual p
   assert.equal(missing.log.toolGates.length, 1);
   assert.equal(missing.log.toolGates[0].status, 'UNAVAILABLE');
   assert.ok(!missing.log.toolGates.some((r) => r.status === 'PASSED'));
-  const source = read('tools/ai-brain/orchestrate.js');
+  const source = require('./helpers/orchestrate-sources').readOrchestrateSources();
   const call = source.indexOf('const toolGate = await runToolGates(');
   assert.ok(call > 0);
   assert.match(source.slice(call, call + 1700), /toolGate.status === ToolGate.REFUSED/);

@@ -10,10 +10,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const { readOrchestrateSources } = require('./helpers/orchestrate-sources');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'orchestrate.js'), 'utf8');
+const source = readOrchestrateSources();
 
 test('the writer route-probe window is not charged with capability proof time', () => {
   assert.doesNotMatch(
