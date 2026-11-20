@@ -113,3 +113,39 @@ test('F4: a combo that only spent its domain attempts is still selectable for re
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('F1 round 4: reviewLane trusts the full candidate over its key', () => {
+  const c = comboOf({ TEST_COMBO_KEY_NOT_SET: 'x' });
+  const key = candidateKey(c);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'combo-lane-'));
+  let launches = 0;
+  const launcher = () => {
+    launches += 1;
+    throw new Error('launcher must not run in this test');
+  };
+  const lane = (cand) =>
+    orchestrate.reviewLane(
+      { reviewerIdentity: key, registry, decisionDir: dir },
+      key,
+      { candidateKey: key },
+      { stage: () => {}, reviews: [] },
+      { dir },
+      launcher,
+      dir,
+      Date.now(),
+      [cand],
+      { combinations: [] },
+      registry,
+      {}
+    );
+  try {
+    // Same key, but the candidate says it is served by another source.
+    const contradicting = { ...c, source: 'other', sourceId: 'other' };
+    assert.equal(candidateKey(contradicting), key);
+    const refused = lane(contradicting)();
+    assert.equal(refused.cause, 'REVIEWER_EQUALS_WRITER');
+    assert.equal(launches, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

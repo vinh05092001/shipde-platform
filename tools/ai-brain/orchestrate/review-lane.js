@@ -200,6 +200,18 @@ function provisionReviewRoot(workerRoot, reviewRoot, targetSha, options) {
  * Gives the reviewer a compiled review prompt requiring a machine-readable verdict file (verdict.json).
  * Parses the verdict file fail-closed (missing/malformed/sha mismatch -> not PASS) and feeds findings into the repair path.
  */
+/**
+ * Is this reviewer key the configured combo? A key does not carry every source
+ * field, so when the run holds the full candidate for the key, that candidate
+ * decides; the key alone decides only when no candidate exists (#605, F1).
+ */
+function isComboReviewerKey(key, candidates, registry, launched) {
+  const comboApi = require('../combo');
+  const full =
+    launched || (Array.isArray(candidates) ? candidates : []).find((c) => candidateKey(c) === key);
+  return full ? comboApi.isComboCandidate(full, registry) : comboApi.isComboIdentity(key, registry);
+}
+
 function reviewLane(
   o,
   itemOrWriterKey,
@@ -229,16 +241,13 @@ function reviewLane(
   // fail-closed verdict. The REVIEWER_EQUALS_WRITER refusal therefore applies only
   // to a NON-combo candidate, where a distinct reviewer is expected and self-review
   // would violate the AGENTS.md prohibition on an author approving its own work.
-  const reviewerCandidateForIdentity =
-    (Array.isArray(candidates) ? candidates : []).find(
-      (c) => candidateKey(c) === reviewerIdentity
-    ) || parseCandidateKey(reviewerIdentity);
   // Only the configured combo itself qualifies; an individual model reached
   // through 9router still needs a distinct reviewer (review of #605, F1).
-  const comboApi = require('../combo');
-  const reviewerIsCombo =
-    comboApi.isComboCandidate(reviewerCandidateForIdentity, o && o.registry) ||
-    comboApi.isComboIdentity(reviewerIdentity, o && o.registry);
+  const reviewerIsCombo = isComboReviewerKey(
+    reviewerIdentity,
+    candidates,
+    registry || (o && o.registry)
+  );
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
     return () => ({
@@ -871,6 +880,7 @@ function repairSpec(item, findings, round) {
 module.exports = {
   provisionReviewRoot,
   reviewLane,
+  isComboReviewerKey,
   formatFindingDetail,
   repairSpec,
 };
