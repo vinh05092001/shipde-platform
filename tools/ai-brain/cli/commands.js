@@ -346,7 +346,7 @@ async function orchestrateCommand(args, deps = {}) {
       : null);
   const sourceModels = readJsonArg(catSourcesPath) || undefined;
   const discDir =
-    (d && d.discoveryDataDir) || args['discovery-dir'] || path.join(__dirname, 'data', 'discovery');
+    (d && d.discoveryDataDir) || args['discovery-dir'] || path.join(__dirname, '..', 'data', 'discovery');
   let discoveryCatalogue = null;
   if (fsx.existsSync(discDir)) {
     try {
@@ -377,7 +377,7 @@ async function orchestrateCommand(args, deps = {}) {
   const evidenceDir =
     typeof args['evidence-dir'] === 'string' && args['evidence-dir']
       ? args['evidence-dir']
-      : path.join(__dirname, 'data', 'evidence');
+      : path.join(__dirname, '..', 'data', 'evidence');
   const registryAccounts = Array.isArray(d.registryAccounts)
     ? d.registryAccounts
     : typeof d.listAccounts === 'function'
@@ -393,7 +393,7 @@ async function orchestrateCommand(args, deps = {}) {
       (args.root
         ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
         : null) ||
-      path.join(__dirname, 'data', 'model-route-health.json');
+      path.join(__dirname, '..', 'data', 'model-route-health.json');
     const healthStore = require('../route-health').loadStore(healthFile, { allowMissing: true });
     const routeHealthApi = require('../route-health');
     const probeRoute =
@@ -529,7 +529,7 @@ async function orchestrateCommand(args, deps = {}) {
 
 function tokenReportCommand(args, deps = {}) {
   const fsx = (deps && deps.fs) || require('fs');
-  const dir = typeof args.dir === 'string' ? args.dir : path.join(__dirname, 'data', 'usage');
+  const dir = typeof args.dir === 'string' ? args.dir : path.join(__dirname, '..', 'data', 'usage');
   const records = [];
   const decisionsDir = typeof args['decision-dir'] === 'string' ? args['decision-dir'] : null;
   if (decisionsDir && fsx.existsSync(decisionsDir)) {

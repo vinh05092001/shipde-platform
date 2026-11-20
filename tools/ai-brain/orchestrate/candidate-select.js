@@ -297,7 +297,7 @@ function resolveEvidenceDir(options, o) {
   return (
     (options && options.evidenceDir) ||
     (o && o.evidenceDir) ||
-    (Array.isArray(o && o.candidates) ? null : path.join(__dirname, 'data', 'evidence'))
+    (Array.isArray(o && o.candidates) ? null : path.join(__dirname, '..', 'data', 'evidence'))
   );
 }
 

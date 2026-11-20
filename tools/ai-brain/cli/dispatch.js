@@ -29,7 +29,6 @@ const {
   dispatchProfileCommand,
   coordinatorDispatchCommand,
   resolveExecuteBase,
-  executeDispatchLaunch,
 } = require('./dispatch-helpers');
 
 function dispatchCommand(args, deps = {}) {
@@ -136,7 +135,7 @@ function dispatchCommand(args, deps = {}) {
       evidenceDir:
         (deps && deps.evidenceDir) ||
         args['evidence-dir'] ||
-        path.join(__dirname, 'data', 'evidence'),
+        path.join(__dirname, '..', 'data', 'evidence'),
       decisionDir: args['decision-dir'] || (deps && deps.decisionDir) || undefined,
       now: deps && deps.now,
       storePath: deps && deps.storePath,
@@ -202,7 +201,7 @@ function dispatchCommand(args, deps = {}) {
       (args && args.root
         ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
         : null) ||
-      path.join(__dirname, 'data', 'model-route-health.json');
+      path.join(__dirname, '..', 'data', 'model-route-health.json');
     const registryForProbe = deps.registry || require('../sources').loadSources();
     const healthStore =
       deps.routeHealth || routeHealthApi.loadStore(healthFile, { allowMissing: true });
@@ -380,7 +379,7 @@ function dispatchCommand(args, deps = {}) {
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
   const evidenceDir =
-    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, 'data', 'evidence');
+    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, '..', 'data', 'evidence');
   const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
 
   // 1. Candidates from discovery + offerings
@@ -389,7 +388,7 @@ function dispatchCommand(args, deps = {}) {
     const discDir =
       (deps && deps.discoveryDataDir) ||
       args['discovery-dir'] ||
-      path.join(__dirname, 'data', 'discovery');
+      path.join(__dirname, '..', 'data', 'discovery');
     try {
       discCat = readDiscoveryCatalogue({ dataDir: discDir });
       const { catalogueFreshness } = require('../catalogue-refresh');
@@ -1308,7 +1307,7 @@ function dispatchCommand(args, deps = {}) {
       // the final response prose, so the session id can only come from the
       // report (TASK-AI-63), and a launch that cannot produce one is a launch
       // that cannot be resumed.
-      const launchState = executeDispatchLaunch({
+      const launchState = require('../cli').executeDispatchLaunch({
         args,
         deps,
         item,

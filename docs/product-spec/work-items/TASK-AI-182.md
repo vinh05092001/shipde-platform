@@ -33,6 +33,8 @@ The operator approved this work on 2026-11-20. In that approval, cleanup and spl
 3. **Large files split by moving code only.**
    - `orchestrate.js` → `orchestrate/*.js`, `cli.js` → `cli/*.js`, `isolation-launcher.js` → `isolation/*.js`.
    - Code is moved, not rewritten. Each original file keeps its full `module.exports` surface: export parity holds for `orchestrate` (40/40), `cli` (24/24) and `isolation-launcher` (29/29).
+   - `cli.js` also exports `executeDispatchLaunch`, which `cli/dispatch.js` calls lazily. The function stays in `cli.js` because its baselined `maxAttempts: 1` is keyed to that file, and the hardcode baseline may only shrink (operator decision, 2026-11-20).
+   - Submodules resolve data paths through the parent directory: `path.join(__dirname, '..', 'data', …)`. `test/task-ai-182-split-paths.test.js` refuses any `__dirname` path in `cli/`, `orchestrate/` or `isolation/` that does not start with `'..'`.
 4. **One definition per shared constant.** `PublicationStatus`, `ACCEPTED_VERDICTS`, `SHA_40` and `roleOf` live once in `orchestrate/shared.js`.
 5. **Source-text tests stay strict.** Tests that read source text read the parent file plus its submodules (`test/helpers/orchestrate-sources.js`, `test/helpers/isolation-sources.js`), so negative assertions still cover the moved code.
 6. **No unresolved identifiers.** An ESLint `no-undef` scan of every split module reports none.

@@ -289,7 +289,7 @@ function ensureGoalRegistrationInWorker(hostCwd, workerRoot, workItemId) {
   }
 }
 
-const EXERCISE_CASES = path.join(__dirname, 'exercise', 'e1-branch-name.cases.json');
+const EXERCISE_CASES = path.join(__dirname, '..', 'exercise', 'e1-branch-name.cases.json');
 const EXERCISE_RUNNER = path.join('tools', 'ai-brain', 'test', 'e1-branch-name.test.js');
 const THROWS = 'THROWS:';
 
@@ -298,7 +298,7 @@ function exerciseCasesPath(exerciseName) {
   if (name === 'e1' || name === 'e1-branch-name' || name === 'true' || !name) {
     return EXERCISE_CASES;
   }
-  const candidate = path.join(__dirname, 'exercise', `${name}.cases.json`);
+  const candidate = path.join(__dirname, '..', 'exercise', `${name}.cases.json`);
   if (fs.existsSync(candidate)) return candidate;
   return EXERCISE_CASES;
 }
