@@ -724,7 +724,7 @@ function reviewLane(
     (reviewerCandidateForIdentity &&
       (reviewerCandidateForIdentity.comboMembers ||
         candidatesApi.isNineRouterCandidate(reviewerCandidateForIdentity))) ||
-      (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
+    (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
   );
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
