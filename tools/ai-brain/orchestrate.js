@@ -687,6 +687,18 @@ function provisionReviewRoot(workerRoot, reviewRoot, targetSha, options) {
  * Gives the reviewer a compiled review prompt requiring a machine-readable verdict file (verdict.json).
  * Parses the verdict file fail-closed (missing/malformed/sha mismatch -> not PASS) and feeds findings into the repair path.
  */
+/**
+ * Is this reviewer key the configured combo? A key does not carry every source
+ * field, so when the run holds the full candidate for the key, that candidate
+ * decides; the key alone decides only when no candidate exists (#605, F1).
+ */
+function isComboReviewerKey(key, candidates, registry, launched) {
+  const comboApi = require('./combo');
+  const full =
+    launched || (Array.isArray(candidates) ? candidates : []).find((c) => candidateKey(c) === key);
+  return full ? comboApi.isComboCandidate(full, registry) : comboApi.isComboIdentity(key, registry);
+}
+
 function reviewLane(
   o,
   itemOrWriterKey,
@@ -716,16 +728,13 @@ function reviewLane(
   // fail-closed verdict. The REVIEWER_EQUALS_WRITER refusal therefore applies only
   // to a NON-combo candidate, where a distinct reviewer is expected and self-review
   // would violate the AGENTS.md prohibition on an author approving its own work.
-  const reviewerCandidateForIdentity =
-    (Array.isArray(candidates) ? candidates : []).find(
-      (c) => candidateKey(c) === reviewerIdentity
-    ) || parseCandidateKey(reviewerIdentity);
   // Only the configured combo itself qualifies; an individual model reached
   // through 9router still needs a distinct reviewer (review of #605, F1).
-  const comboApi = require('./combo');
-  const reviewerIsCombo =
-    comboApi.isComboCandidate(reviewerCandidateForIdentity, o && o.registry) ||
-    comboApi.isComboIdentity(reviewerIdentity, o && o.registry);
+  const reviewerIsCombo = isComboReviewerKey(
+    reviewerIdentity,
+    candidates,
+    registry || (o && o.registry)
+  );
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
     return () => ({
@@ -7230,10 +7239,8 @@ async function reviewItem(
   // first reviewer launch already spend its two domain attempts, so the review
   // of a repaired SHA must not be refused on the domain cap (#605, F4). Real
   // failures still refuse it through failedKeySet / reviewerTriedKeySet.
-  const comboApi = require('./combo');
-  const isRunCombo = (cand, key) =>
-    comboApi.isComboCandidate(cand, registry || (o && o.registry)) ||
-    comboApi.isComboIdentity(key, registry || (o && o.registry));
+  const isRunCombo = (key, launched) =>
+    isComboReviewerKey(key, candidates, registry || (o && o.registry), launched);
   const failedKeys =
     options.failedKeys ||
     (item && item.failedKeys) ||
@@ -7489,7 +7496,7 @@ async function reviewItem(
     !controllerJudgedCandidates &&
     !failedKeySet.has(configuredReviewerKey) &&
     !failedKeySet.has(configuredReviewer) &&
-    (isRunCombo(configuredReviewerCandidate, configuredReviewerKey) ||
+    (isRunCombo(configuredReviewerKey) ||
       (!excludedDomainSet.has(configuredReviewerDomain) &&
         (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2))
   );
@@ -7878,7 +7885,7 @@ async function reviewItem(
         if (
           failedKeySet.has(activeReviewerKey) ||
           reviewerTriedKeySet.has(activeReviewerKey) ||
-          (!isRunCombo(activeReviewerCandidate, activeReviewerKey) &&
+          (!isRunCombo(activeReviewerKey) &&
             (excludedDomainSet.has(activeReviewerDomain) ||
               (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2))
         ) {
@@ -7935,10 +7942,7 @@ async function reviewItem(
                 reviewerDomain,
                 (reviewerDomainAttempts.get(reviewerDomain) || 0) + 1
               );
-              if (
-                attempts >= 2 &&
-                !isRunCombo(candidate || activeReviewerCandidate, activeReviewerKey)
-              ) {
+              if (attempts >= 2 && !isRunCombo(activeReviewerKey, candidate)) {
                 excludedDomainSet.add(reviewerDomain);
                 if (item && item.excludedDomains instanceof Set) {
                   item.excludedDomains.add(reviewerDomain);
