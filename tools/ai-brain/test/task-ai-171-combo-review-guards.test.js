@@ -54,6 +54,11 @@ test('F1: only the configured combo on the router source counts as a combo', () 
   assert.equal(combo.isComboCandidate({ ...individual, comboMembers: ['a'] }, registry), false);
   const elsewhere = { ...c, gateway: 'x', source: 'x', sourceId: 'x', upstream: 'x' };
   assert.equal(combo.isComboCandidate(elsewhere, registry), false);
+  // Round 3: one matching alias next to a contradicting one is refused.
+  const mixed = { ...c, source: 'other', sourceId: 'other' };
+  assert.equal(combo.isComboCandidate(mixed, registry), false);
+  const mixedKey = candidateKey({ ...c, gateway: 'other' });
+  assert.equal(combo.isComboIdentity(mixedKey, registry), false);
 });
 
 test('F2: evidence that finds no block keeps the missing-credential block', () => {

@@ -7223,6 +7223,9 @@ async function reviewItem(
   opts
 ) {
   const options = opts || {};
+  // One run registry for the whole review: selection and reviewLane read
+  // o.registry, so a registry passed positionally is carried on o (#605, F5).
+  if (registry && o && !o.registry) o = Object.assign({}, o, { registry });
   // The single configured combo is its own failover domain: the writer and the
   // first reviewer launch already spend its two domain attempts, so the review
   // of a repaired SHA must not be refused on the domain cap (#605, F4). Real

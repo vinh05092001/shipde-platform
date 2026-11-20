@@ -104,8 +104,12 @@ function isComboCandidate(c, registry) {
   const model = c.modelId || c.model;
   if (model !== cfg.name) return false;
   if (c.combo !== undefined && c.combo !== cfg.name) return false;
-  const via = [c.gateway, c.source, c.sourceId, c.upstream];
-  if (!via.includes(cfg.source.id)) return false;
+  // Every source field the identity carries must name the router source; one
+  // matching alias next to a contradicting one is refused (#605 round 3, F1).
+  const via = [c.gateway, c.source, c.sourceId, c.upstream, c.provider].filter(
+    (v) => v !== undefined && v !== null && v !== ''
+  );
+  if (via.length === 0 || via.some((v) => v !== cfg.source.id)) return false;
   const endpoint = c.endpoint || c.accessPath || c.sourceEndpoint;
   return endpoint === undefined || sameEndpoint(endpoint, cfg.source.endpoint);
 }
