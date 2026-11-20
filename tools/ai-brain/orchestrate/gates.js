@@ -5,16 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const decisions = require('../decisions');
 const { hardenedGitEnv, hardenedGitArgs, runHardenedGit } = require('./hardened-git');
-
-const SHA_40 = /^[0-9a-f]{40}$/i;
-
-function roleOf(item) {
-  return (
-    (item && item.roleRequirement && item.roleRequirement.role) ||
-    (item && item.role) ||
-    'author.foundation'
-  );
-}
+const { SHA_40, roleOf } = require('./shared');
 
 const FormatGate = Object.freeze({
   PASSED: 'PASSED',

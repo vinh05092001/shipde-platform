@@ -5,14 +5,7 @@ const os = require('os');
 const path = require('path');
 const { runHardenedGit, assertGitOk } = require('./hardened-git');
 const { Status: ReviewStatus } = require('../review-loop');
-
-const SHA_40 = /^[0-9a-f]{40}$/i;
-const ACCEPTED_VERDICTS = Object.freeze(['PASS', 'FALLBACK_PASS']);
-const PublicationStatus = Object.freeze({
-  PUBLISHED_DRAFT: 'PUBLISHED_DRAFT',
-  NOT_REQUESTED: 'NOT_REQUESTED',
-  REFUSED: 'REFUSED',
-});
+const { PublicationStatus, SHA_40, ACCEPTED_VERDICTS } = require('./shared');
 
 const WORK_ITEM_ID = /\b(?:FEAT|TASK-FOUND|TASK-AI)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/g;
 const DRAFT_TITLE_LIMIT = 72;
