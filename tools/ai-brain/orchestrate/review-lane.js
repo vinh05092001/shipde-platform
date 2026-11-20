@@ -5,7 +5,6 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { compileReviewPrompt } = require('../prompt-compiler');
-const candidatesApi = require('../candidates');
 const { candidateKey } = require('../candidates');
 const { parseCandidateKey } = require('../discovery/identity');
 const decisions = require('../decisions');
@@ -234,12 +233,12 @@ function reviewLane(
     (Array.isArray(candidates) ? candidates : []).find(
       (c) => candidateKey(c) === reviewerIdentity
     ) || parseCandidateKey(reviewerIdentity);
-  const reviewerIsCombo = Boolean(
-    (reviewerCandidateForIdentity &&
-      (reviewerCandidateForIdentity.comboMembers ||
-        candidatesApi.isNineRouterCandidate(reviewerCandidateForIdentity))) ||
-    (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
-  );
+  // Only the configured combo itself qualifies; an individual model reached
+  // through 9router still needs a distinct reviewer (review of #605, F1).
+  const comboApi = require('../combo');
+  const reviewerIsCombo =
+    comboApi.isComboCandidate(reviewerCandidateForIdentity) ||
+    comboApi.isComboIdentity(reviewerIdentity, o && o.registry);
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
     return () => ({

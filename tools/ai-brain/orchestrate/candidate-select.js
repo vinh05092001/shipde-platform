@@ -349,10 +349,17 @@ async function selectCandidateForProfile(
             ? Object.entries(options.domainAttempts)
             : []
         );
+  // The domain caps exist to spread attempts across routes. The single combo is
+  // its own failover domain (9router fails over between members), and the
+  // writer and reviewer launches alone reach the cap, which left no repair
+  // candidate (#605, F4). A combo that actually failed is still refused through
+  // failedSet and the exhausted-account mark.
+  const comboApi = require('../combo');
   const eligible = pool.filter((c) => {
     if (!c || c.blocked || failedSet.has(candidateKey(c))) return false;
     const accMark = exhaustedAccountKey(c);
     if (accMark && failedSet.has(accMark)) return false;
+    if (comboApi.isComboCandidate(c)) return true;
     const dom = domainOf(c);
     if (dom && excludedDomains.has(dom)) return false;
     if (dom && (domainAttempts.get(dom) || 0) >= 2) return false;

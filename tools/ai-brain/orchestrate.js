@@ -3198,6 +3198,7 @@ module.exports = {
   rtkPolicyForItem,
   buildCandidates,
   selectCandidateForProfile,
+  verifyReceiptReviewerSeparation,
   repairRound,
   reviewLane,
   reviewItem,

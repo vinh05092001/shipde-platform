@@ -146,6 +146,14 @@ function annotateCandidates(candidates, evidenceData, opts) {
       (String(c.blockReason || '').startsWith('QUOTA_EXHAUSTED') ||
         c.blockReason === 'QUOTA_GROUP_UNKNOWN');
     if (assembledQuotaBlock && !block.blocked) continue;
+    // A missing credential is a fact about this process, not evidence about the
+    // route, so evidence that finds no block must not clear it (#605, F2).
+    if (c.credentialEnvMissing === true) {
+      c.blocked = true;
+      c.blockReason = 'CREDENTIAL_ENV_MISSING';
+      c.blockScope = c.blockScope || 'credential';
+      continue;
+    }
     c.blocked = block.blocked;
     if (block.blocked) {
       c.blockReason = block.reason;

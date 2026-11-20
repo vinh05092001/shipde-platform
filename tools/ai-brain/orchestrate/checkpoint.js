@@ -429,6 +429,13 @@ function verifyReceiptReviewerSeparation(rec) {
     return 'PUBLISH_REFUSED: receipt cannot parse writer/reviewer failure domain';
   }
   if (writerDomain === reviewerDomain) {
+    // reviewLane accepts reviewer == writer only for the single configured combo
+    // (operator decision 2026-11-19); the receipt carries the same exception so
+    // a completed combo review is not refused on publish or resume (#605, F3).
+    const comboApi = require('../combo');
+    if (rec.writerCandidateKey === rec.reviewer && comboApi.isComboIdentity(rec.reviewer)) {
+      return null;
+    }
     return 'PUBLISH_REFUSED: reviewer shares writer failure domain';
   }
   return null;

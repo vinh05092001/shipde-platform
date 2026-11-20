@@ -74,4 +74,41 @@ function comboCandidate(options) {
   return { candidate };
 }
 
-module.exports = { comboCandidate, routerSource };
+/**
+ * True only for the configured combo itself: a candidate built by comboCandidate,
+ * or one that carries its member list. An individual model reached through
+ * 9router is NOT a combo (review of #605, F1).
+ */
+function isComboCandidate(c) {
+  if (!c || typeof c !== 'object') return false;
+  if (Array.isArray(c.comboMembers) && c.comboMembers.length > 0) return true;
+  return typeof c.combo === 'string' && c.combo !== '' && c.modelId === c.combo;
+}
+
+/**
+ * True when a candidate identity (key string or parsed object) names the
+ * configured combo on the router source: `combo::…` keys, or a key whose model
+ * is dispatch.nineRouterWriterCombo and whose gateway is the router source.
+ */
+function isComboIdentity(identity, registry) {
+  if (!identity) return false;
+  if (typeof identity === 'string' && identity.startsWith('combo::')) return true;
+  const reg = loadRegistry(registry);
+  const name = reg && reg.dispatch && reg.dispatch.nineRouterWriterCombo;
+  const source = routerSource(reg);
+  if (!name || !source) return false;
+  let parsed = identity;
+  if (typeof identity === 'string') {
+    try {
+      parsed = require('./discovery/identity').parseCandidateKey(identity);
+    } catch (_) {
+      return false;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return false;
+  const model = parsed.modelId || parsed.model;
+  const via = [parsed.gateway, parsed.source, parsed.sourceId, parsed.upstream];
+  return model === name && via.includes(source.id);
+}
+
+module.exports = { comboCandidate, routerSource, isComboCandidate, isComboIdentity };
