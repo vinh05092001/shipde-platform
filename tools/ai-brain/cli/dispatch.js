@@ -5,7 +5,7 @@ const { currentBranch, headSha, commitExists } = require('../facts');
 const { toPositiveInteger } = require('../source-discovery');
 const { atomicRenameSync } = require('../atomic-rename');
 const { maskEmailsInString } = require('../route-identity-utils');
-const { pick, quotaCommand } = require('./reconcile-manifest');
+const { pick, readJsonOrExit, quotaCommand } = require('./reconcile-manifest');
 const {
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,

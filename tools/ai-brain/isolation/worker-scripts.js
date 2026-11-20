@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const cp = require('child_process');
+const crypto = require('crypto');
 const { executableFor } = require('../harness');
 const {
   WORKER_USERNAME,
@@ -771,13 +772,6 @@ $output = @{
 $output | ConvertTo-Json -Depth 10 | Out-File "${launchResultPath}" -Encoding UTF8
 `;
 }
-
-const CARRY_IDENTITY = [
-  '-c',
-  'user.name=Ship De Carry-over',
-  '-c',
-  'user.email=carry-over@shipde.invalid',
-];
 
 module.exports = {
   buildBoundaryVerifyScript,

@@ -33,6 +33,13 @@ const {
   queryWorkerSid,
 } = require('./git-workspace');
 
+const CARRY_IDENTITY = [
+  '-c',
+  'user.name=Ship De Carry-over',
+  '-c',
+  'user.email=carry-over@shipde.invalid',
+];
+
 function carryRef(branch) {
   return 'refs/shipde/carry/' + branch;
 }

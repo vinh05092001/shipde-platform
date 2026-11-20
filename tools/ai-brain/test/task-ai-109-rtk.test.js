@@ -131,7 +131,7 @@ test('RTK-R02: repair round blocks RTK even when enabled', () => {
 });
 
 test('RTK-R03: worker prompt hint mentions rtk is optional for long outputs', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     launcherSrc.includes('rtk test') ||
       launcherSrc.includes('rtk err') ||
@@ -147,7 +147,7 @@ test('RTK-R03: worker prompt hint mentions rtk is optional for long outputs', ()
 });
 
 test('RTK-R04: fail-before command string contains no rtk', () => {
-  const captureFailBeforeSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const captureFailBeforeSrc = require('./helpers/isolation-sources').readIsolationSources();
   const failBeforeMatch = captureFailBeforeSrc.match(
     /function captureFailBefore[\s\S]*?(?=\n\/\*\*|\nfunction |\nmodule\.exports)/
   );
