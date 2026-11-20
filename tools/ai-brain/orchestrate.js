@@ -720,12 +720,12 @@ function reviewLane(
     (Array.isArray(candidates) ? candidates : []).find(
       (c) => candidateKey(c) === reviewerIdentity
     ) || parseCandidateKey(reviewerIdentity);
-  const reviewerIsCombo = Boolean(
-    (reviewerCandidateForIdentity &&
-      (reviewerCandidateForIdentity.comboMembers ||
-        candidatesApi.isNineRouterCandidate(reviewerCandidateForIdentity))) ||
-    (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
-  );
+  // Only the configured combo itself qualifies; an individual model reached
+  // through 9router still needs a distinct reviewer (review of #605, F1).
+  const comboApi = require('./combo');
+  const reviewerIsCombo =
+    comboApi.isComboCandidate(reviewerCandidateForIdentity) ||
+    comboApi.isComboIdentity(reviewerIdentity, o && o.registry);
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
     return () => ({
@@ -2940,6 +2940,13 @@ function verifyReceiptReviewerSeparation(rec) {
     return 'PUBLISH_REFUSED: receipt cannot parse writer/reviewer failure domain';
   }
   if (writerDomain === reviewerDomain) {
+    // reviewLane accepts reviewer == writer only for the single configured combo
+    // (operator decision 2026-11-19); the receipt carries the same exception so
+    // a completed combo review is not refused on publish or resume (#605, F3).
+    const comboApi = require('./combo');
+    if (rec.writerCandidateKey === rec.reviewer && comboApi.isComboIdentity(rec.reviewer)) {
+      return null;
+    }
     return 'PUBLISH_REFUSED: reviewer shares writer failure domain';
   }
   return null;
@@ -3485,10 +3492,17 @@ async function selectCandidateForProfile(
             ? Object.entries(options.domainAttempts)
             : []
         );
+  // The domain caps exist to spread attempts across routes. The single combo is
+  // its own failover domain (9router fails over between members), and the
+  // writer and reviewer launches alone reach the cap, which left no repair
+  // candidate (#605, F4). A combo that actually failed is still refused through
+  // failedSet and the exhausted-account mark.
+  const comboApi = require('./combo');
   const eligible = pool.filter((c) => {
     if (!c || c.blocked || failedSet.has(candidateKey(c))) return false;
     const accMark = exhaustedAccountKey(c);
     if (accMark && failedSet.has(accMark)) return false;
+    if (comboApi.isComboCandidate(c)) return true;
     const dom = domainOf(c);
     if (dom && excludedDomains.has(dom)) return false;
     if (dom && (domainAttempts.get(dom) || 0) >= 2) return false;
@@ -9033,6 +9047,7 @@ module.exports = {
   rtkPolicyForItem,
   buildCandidates,
   selectCandidateForProfile,
+  verifyReceiptReviewerSeparation,
   repairRound,
   reviewLane,
   reviewItem,
