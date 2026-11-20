@@ -237,7 +237,7 @@ function reviewLane(
   // through 9router still needs a distinct reviewer (review of #605, F1).
   const comboApi = require('../combo');
   const reviewerIsCombo =
-    comboApi.isComboCandidate(reviewerCandidateForIdentity) ||
+    comboApi.isComboCandidate(reviewerCandidateForIdentity, o && o.registry) ||
     comboApi.isComboIdentity(reviewerIdentity, o && o.registry);
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {

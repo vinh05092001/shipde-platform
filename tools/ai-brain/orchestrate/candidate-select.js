@@ -359,7 +359,7 @@ async function selectCandidateForProfile(
     if (!c || c.blocked || failedSet.has(candidateKey(c))) return false;
     const accMark = exhaustedAccountKey(c);
     if (accMark && failedSet.has(accMark)) return false;
-    if (comboApi.isComboCandidate(c)) return true;
+    if (comboApi.isComboCandidate(c, o && o.registry)) return true;
     const dom = domainOf(c);
     if (dom && excludedDomains.has(dom)) return false;
     if (dom && (domainAttempts.get(dom) || 0) >= 2) return false;

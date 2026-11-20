@@ -164,6 +164,14 @@ async function reviewItem(
   opts
 ) {
   const options = opts || {};
+  // The single configured combo is its own failover domain: the writer and the
+  // first reviewer launch already spend its two domain attempts, so the review
+  // of a repaired SHA must not be refused on the domain cap (#605, F4). Real
+  // failures still refuse it through failedKeySet / reviewerTriedKeySet.
+  const comboApi = require('../combo');
+  const isRunCombo = (cand, key) =>
+    comboApi.isComboCandidate(cand, registry || (o && o.registry)) ||
+    comboApi.isComboIdentity(key, registry || (o && o.registry));
   const failedKeys =
     options.failedKeys ||
     (item && item.failedKeys) ||
@@ -419,8 +427,9 @@ async function reviewItem(
     !controllerJudgedCandidates &&
     !failedKeySet.has(configuredReviewerKey) &&
     !failedKeySet.has(configuredReviewer) &&
-    !excludedDomainSet.has(configuredReviewerDomain) &&
-    (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2
+    (isRunCombo(configuredReviewerCandidate, configuredReviewerKey) ||
+      (!excludedDomainSet.has(configuredReviewerDomain) &&
+        (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2))
   );
   // A configured reviewer that is the writer is passed through only so the
   // review lane refuses it with REVIEWER_EQUALS_WRITER; it is never launched.
@@ -807,8 +816,9 @@ async function reviewItem(
         if (
           failedKeySet.has(activeReviewerKey) ||
           reviewerTriedKeySet.has(activeReviewerKey) ||
-          excludedDomainSet.has(activeReviewerDomain) ||
-          (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
+          (!isRunCombo(activeReviewerCandidate, activeReviewerKey) &&
+            (excludedDomainSet.has(activeReviewerDomain) ||
+              (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2))
         ) {
           activeReviewerKey = null;
           if (launchFailures > 0) {
@@ -863,7 +873,10 @@ async function reviewItem(
                 reviewerDomain,
                 (reviewerDomainAttempts.get(reviewerDomain) || 0) + 1
               );
-              if (attempts >= 2) {
+              if (
+                attempts >= 2 &&
+                !isRunCombo(candidate || activeReviewerCandidate, activeReviewerKey)
+              ) {
                 excludedDomainSet.add(reviewerDomain);
                 if (item && item.excludedDomains instanceof Set) {
                   item.excludedDomains.add(reviewerDomain);

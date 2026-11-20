@@ -75,28 +75,57 @@ function comboCandidate(options) {
 }
 
 /**
- * True only for the configured combo itself: a candidate built by comboCandidate,
- * or one that carries its member list. An individual model reached through
- * 9router is NOT a combo (review of #605, F1).
+ * The configured combo: dispatch.nineRouterWriterCombo on the router source.
+ * Returns null when the registry does not describe one.
  */
-function isComboCandidate(c) {
-  if (!c || typeof c !== 'object') return false;
-  if (Array.isArray(c.comboMembers) && c.comboMembers.length > 0) return true;
-  return typeof c.combo === 'string' && c.combo !== '' && c.modelId === c.combo;
-}
-
-/**
- * True when a candidate identity (key string or parsed object) names the
- * configured combo on the router source: `combo::…` keys, or a key whose model
- * is dispatch.nineRouterWriterCombo and whose gateway is the router source.
- */
-function isComboIdentity(identity, registry) {
-  if (!identity) return false;
-  if (typeof identity === 'string' && identity.startsWith('combo::')) return true;
+function configuredCombo(registry) {
   const reg = loadRegistry(registry);
   const name = reg && reg.dispatch && reg.dispatch.nineRouterWriterCombo;
   const source = routerSource(reg);
-  if (!name || !source) return false;
+  return name && source ? { name, source } : null;
+}
+
+const sameEndpoint = (a, b) =>
+  typeof a === 'string' &&
+  typeof b === 'string' &&
+  a.replace(/[/]+$/, '') === b.replace(/[/]+$/, '');
+
+/**
+ * True only for the configured combo itself: its name is the configured
+ * combo name, it is reached through the router source, and, when it carries an
+ * endpoint, that is the router endpoint. Member metadata alone, another combo
+ * name, another source, or an individual 9router model do not qualify
+ * (review of #605, F1).
+ */
+function isComboCandidate(c, registry) {
+  if (!c || typeof c !== 'object') return false;
+  const cfg = configuredCombo(registry);
+  if (!cfg) return false;
+  const model = c.modelId || c.model;
+  if (model !== cfg.name) return false;
+  if (c.combo !== undefined && c.combo !== cfg.name) return false;
+  const via = [c.gateway, c.source, c.sourceId, c.upstream];
+  if (!via.includes(cfg.source.id)) return false;
+  const endpoint = c.endpoint || c.accessPath || c.sourceEndpoint;
+  return endpoint === undefined || sameEndpoint(endpoint, cfg.source.endpoint);
+}
+
+/**
+ * The same test for a candidate identity: a `combo::<endpoint>::<name>` key, a
+ * candidate key string, or an already parsed identity object.
+ */
+function isComboIdentity(identity, registry) {
+  if (!identity) return false;
+  const cfg = configuredCombo(registry);
+  if (!cfg) return false;
+  if (typeof identity === 'string' && identity.startsWith('combo::')) {
+    const rest = identity.slice('combo::'.length);
+    const cut = rest.lastIndexOf('::');
+    if (cut < 0) return false;
+    return (
+      rest.slice(cut + 2) === cfg.name && sameEndpoint(rest.slice(0, cut), cfg.source.endpoint)
+    );
+  }
   let parsed = identity;
   if (typeof identity === 'string') {
     try {
@@ -105,10 +134,7 @@ function isComboIdentity(identity, registry) {
       return false;
     }
   }
-  if (!parsed || typeof parsed !== 'object') return false;
-  const model = parsed.modelId || parsed.model;
-  const via = [parsed.gateway, parsed.source, parsed.sourceId, parsed.upstream];
-  return model === name && via.includes(source.id);
+  return isComboCandidate(parsed, registry);
 }
 
 module.exports = { comboCandidate, routerSource, isComboCandidate, isComboIdentity };
