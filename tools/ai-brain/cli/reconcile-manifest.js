@@ -38,7 +38,7 @@ const REFUSAL_PROTECTED =
 
 function loadRegister(filePath, preferredBranch, rootDir) {
   try {
-    return require('../ai-dashboard/register-adapter').loadRegister(
+    return require('../../ai-dashboard/register-adapter').loadRegister(
       filePath,
       preferredBranch,
       rootDir
@@ -47,7 +47,7 @@ function loadRegister(filePath, preferredBranch, rootDir) {
     if (
       err &&
       err.code === 'MODULE_NOT_FOUND' &&
-      String(err.message || '').includes('../ai-dashboard/register-adapter')
+      String(err.message || '').includes('../../ai-dashboard/register-adapter')
     ) {
       return {
         health: {
