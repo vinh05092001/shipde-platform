@@ -473,7 +473,9 @@ async function dispatchProfileCommand(args, deps) {
     : require('../accounts').listAccounts() || [];
 
   const evidenceDir =
-    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, '..', 'data', 'evidence');
+    (deps && deps.evidenceDir) ||
+    args['evidence-dir'] ||
+    path.join(__dirname, '..', 'data', 'evidence');
   let evidenceData;
   try {
     evidenceData = require('../evidence').loadEvidence(evidenceDir);

@@ -14,7 +14,12 @@ const routing = require('../routing');
 const sourcesApi = require('../sources');
 const { SHA_40, roleOf } = require('./shared');
 const { resolveLaunchRoute, routeProbeCandidate } = require('./route-probe');
-const { resolveIsolatedWorkerRoot, harnessFor, prepareUsageReport, writeUsageReportFromHarnessResult } = require('./writer-loop');
+const {
+  resolveIsolatedWorkerRoot,
+  harnessFor,
+  prepareUsageReport,
+  writeUsageReportFromHarnessResult,
+} = require('./writer-loop');
 const { normalizeAccount } = require('./checkpoint');
 
 function provisionReviewRoot(workerRoot, reviewRoot, targetSha, options) {
@@ -233,7 +238,7 @@ function reviewLane(
     (reviewerCandidateForIdentity &&
       (reviewerCandidateForIdentity.comboMembers ||
         candidatesApi.isNineRouterCandidate(reviewerCandidateForIdentity))) ||
-      (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
+    (typeof reviewerIdentity === 'string' && reviewerIdentity.startsWith('combo::'))
   );
 
   if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {

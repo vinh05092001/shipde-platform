@@ -100,9 +100,7 @@ const {
   coordinatorDispatchCommand,
   resolveExecuteBase,
 } = require('./cli/dispatch-helpers');
-const {
-  dispatchCommand,
-} = require('./cli/dispatch');
+const { dispatchCommand } = require('./cli/dispatch');
 const {
   shadowCommand,
   reviewCommand,

@@ -346,7 +346,9 @@ async function orchestrateCommand(args, deps = {}) {
       : null);
   const sourceModels = readJsonArg(catSourcesPath) || undefined;
   const discDir =
-    (d && d.discoveryDataDir) || args['discovery-dir'] || path.join(__dirname, '..', 'data', 'discovery');
+    (d && d.discoveryDataDir) ||
+    args['discovery-dir'] ||
+    path.join(__dirname, '..', 'data', 'discovery');
   let discoveryCatalogue = null;
   if (fsx.existsSync(discDir)) {
     try {

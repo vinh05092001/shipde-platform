@@ -10,7 +10,11 @@ const evidence = require('../evidence');
 const { candidateKey } = require('../candidates');
 const decisions = require('../decisions');
 const { classifyFailure, Cause, Scope, isReplayable } = require('../failure-classifier');
-const { failureMessageOf, failedDecisionDetail, markIsolationVerdictStop } = require('./decisions-log');
+const {
+  failureMessageOf,
+  failedDecisionDetail,
+  markIsolationVerdictStop,
+} = require('./decisions-log');
 const { resolveLaunchRoute } = require('./route-probe');
 const { exhaustedAccountKey, SHA_40, roleOf } = require('./shared');
 const { normalizeAccount } = require('./checkpoint');
@@ -309,7 +313,9 @@ function repairRound(
     }
 
     const adapter = harnessFor({ harness: repairJob.harness });
-    const handle = adapter ? require('../executor').readSessionId(adapter, repairJob, res).id : null;
+    const handle = adapter
+      ? require('../executor').readSessionId(adapter, repairJob, res).id
+      : null;
     const nextSha = headShaOf(repairWorkerRoot);
 
     if (nextSha && nextSha !== sha) {

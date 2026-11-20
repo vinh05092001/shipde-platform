@@ -379,7 +379,9 @@ function dispatchCommand(args, deps = {}) {
 
   const registry = (deps && deps.registry) || sourcesApi.loadSources();
   const evidenceDir =
-    (deps && deps.evidenceDir) || args['evidence-dir'] || path.join(__dirname, '..', 'data', 'evidence');
+    (deps && deps.evidenceDir) ||
+    args['evidence-dir'] ||
+    path.join(__dirname, '..', 'data', 'evidence');
   const decisionDir = (deps && deps.decisionDir) || args['decision-dir'] || undefined;
 
   // 1. Candidates from discovery + offerings

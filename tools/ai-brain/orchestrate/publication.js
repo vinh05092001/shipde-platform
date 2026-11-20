@@ -33,7 +33,6 @@ function draftTitleForItem(item, goal) {
   return draftTitleFor(item && item.id, outcome, 'work item');
 }
 
-
 function publishCwdForReceipt(o, workerRoot) {
   const opts = o || {};
   if (opts.publisherCwd) return String(opts.publisherCwd);
@@ -153,7 +152,6 @@ function importReviewedCommitForPublish(o, entry, request) {
     throw err;
   }
 }
-
 
 function approvalIdsOf(request) {
   if (!request) return [];
