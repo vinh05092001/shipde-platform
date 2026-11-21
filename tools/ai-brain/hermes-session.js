@@ -147,7 +147,7 @@ function defaultSpawn(cmd, argv, spawnOpts) {
 }
 
 const sourcesApi = require('./sources');
-const priorsApi = require('./priors');
+const priorsApi = require('./priors-read');
 const decisionsApi = require('./decisions');
 const comboApi = require('./combo');
 const failureClassifier = require('./failure-classifier');
