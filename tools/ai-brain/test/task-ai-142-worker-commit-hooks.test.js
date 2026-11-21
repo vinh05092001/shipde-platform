@@ -157,7 +157,7 @@ test('no metadata change needs no hook, and only private carry-over save bypasse
   fs.writeFileSync(path.join(f.root, f.workItem), 'base\n');
   assert.equal(commitMetadata(f), null);
 
-  const source = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const source = require('./helpers/isolation-sources').readIsolationSources();
   const saveStart = source.indexOf('function carryOverSave');
   const restoreStart = source.indexOf('function carryOverRestore');
   assert.match(source.slice(saveStart, restoreStart), /--no-verify/);

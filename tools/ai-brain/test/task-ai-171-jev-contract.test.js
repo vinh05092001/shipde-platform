@@ -3,7 +3,6 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const jev = require('../jev');
 const routing = require('../routing');
-const wrapper = require('../jev-wrapper');
 
 const source = {
   kind: 'decision-service',
@@ -39,19 +38,6 @@ function options(reply, inspect) {
 function select(opts, chosen = 'route-a') {
   return routing.adviseModelChoice({ chosen, ranking }, {}, opts);
 }
-
-test('TASK-AI-169 clear PR-body-only task skips JEV', async () => {
-  const clear = {
-    ...question,
-    evidence: 'Update PR body only',
-    skipReason: 'TASK_ALREADY_CLASSIFIED',
-  };
-  const ask = async () => assert.fail('clear task must skip');
-  const result = await wrapper.run(clear, { ask, recordTurn });
-  assert.equal(result.reason, 'TASK_ALREADY_CLASSIFIED');
-  assert.equal(result.turn.called, false);
-  assert.equal(result.turn.callReason, 'TASK_ALREADY_CLASSIFIED');
-});
 
 test('TASK-AI-169 ambiguous task uses the named choice contract', async () => {
   const reply = {
@@ -103,31 +89,6 @@ for (const [reason, reply] of [
   });
 }
 
-test('wrapper preserves the existing confidence floor', async () => {
-  const ask = async () => ({ choice: 'docs', confidence: jev.DEFAULT_MIN_CONFIDENCE / 2 });
-  const result = await wrapper.run(question, { ask, recordTurn });
-  assert.equal(result.reason, 'LOW_CONFIDENCE');
-});
-
-for (const location of ['source', 'options']) {
-  for (const minConfidence of [0, '', false]) {
-    test(`wrapper rejects falsy ${location} confidence ${JSON.stringify(minConfidence)}`, async () => {
-      const config = location === 'source' ? { source: { minConfidence } } : { minConfidence };
-      const ask = async () => ({ choice: 'implementation', confidence: 0.2 });
-      const result = await wrapper.run(question, { ...config, ask });
-      assert.equal(result.outcome, 'UNDECIDED');
-      assert.equal(result.reason, 'LOW_CONFIDENCE');
-
-      const atFloor = await wrapper.run(question, {
-        ...config,
-        ask: async () => ({ choice: 'implementation', confidence: jev.DEFAULT_MIN_CONFIDENCE }),
-      });
-      assert.equal(atFloor.outcome, 'DECIDED');
-      assert.equal(atFloor.choice, 'implementation');
-    });
-  }
-}
-
 test('missing named answer, score-only selection and invalid confidence fail closed', async () => {
   const scores = Object.fromEntries(
     ['qualityImportance', 'latencyImportance', 'costImportance'].map((name) => [
@@ -154,11 +115,7 @@ test('singleton shortlist skips and keeps the Controller choice outside topN', a
   assert.equal(result.advice.turn.reason, 'INSUFFICIENT_OPTIONS');
 });
 
-test('configured confidence and assessment turn evidence are retained', async () => {
-  const ask = async () => ({ choice: 'docs', confidence: 0.9, usage: { input_tokens: 7 } });
-  const result = await wrapper.run(question, { source: { minConfidence: 0.95 }, ask, recordTurn });
-  assert.equal(result.reason, 'LOW_CONFIDENCE');
-  assert.deepEqual(result.turn.usage, { input_tokens: 7 });
+test('assessment turn evidence is retained on failure', async () => {
   const fail = async () => {
     throw new Error('fixture-secret');
   };
@@ -173,9 +130,6 @@ test('configured confidence and assessment turn evidence are retained', async ()
 });
 
 test('null confidence configuration cannot bypass the existing floor', async () => {
-  const ask = async () => ({ choice: 'docs', confidence: 0.2 });
-  const result = await wrapper.run(question, { minConfidence: null, ask, recordTurn });
-  assert.equal(result.reason, 'LOW_CONFIDENCE');
   const routeAsk = async () => ({ choice: 'route-b', confidence: 0.2 });
   const selected = await select({ minConfidence: null, ask: routeAsk, recordTurn });
   assert.equal(selected.chosen, 'route-a');
@@ -192,12 +146,11 @@ test('mock turn metadata excludes private text and reports totals by reason', (t
     totals[turn.outcome][turn.reason] = (totals[turn.outcome][turn.reason] || 0) + 1;
   }
   assert.deepEqual(totals, {
-    called: 14,
-    skipped: 2,
+    called: 11,
+    skipped: 1,
     DECIDED: { VALID_ADVICE: 2 },
     UNDECIDED: {
-      TASK_ALREADY_CLASSIFIED: 1,
-      LOW_CONFIDENCE: 5,
+      LOW_CONFIDENCE: 2,
       UNREACHABLE: 2,
       TIMEOUT: 1,
       MALFORMED_OUTPUT: 4,

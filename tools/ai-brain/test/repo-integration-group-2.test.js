@@ -102,7 +102,7 @@ test('existing role loader selects review/UI skills and refuses unknown roles', 
 // Execute the unchanged Controller gate implementation with offline boundary fixtures.
 // No commits, GitHub writes, providers or external scanner are invoked.
 async function gateFixture(mode) {
-  const source = read('tools/ai-brain/orchestrate.js');
+  const source = read('tools/ai-brain/orchestrate/gates.js');
   const start = source.indexOf('async function runToolGates(params)');
   const end = source.indexOf('\n/**', start);
   assert.ok(start > 0 && end > start);
@@ -116,7 +116,7 @@ async function gateFixture(mode) {
   const log = {};
   const context = {
     require: (id) => {
-      assert.equal(id, './tool-manifest');
+      assert.equal(id, '../tool-manifest');
       return { gatesFor: () => [tool], appliesTo: () => true };
     },
     ToolGate: { PASSED: 'PASSED', UNAVAILABLE: 'UNAVAILABLE', REFUSED: 'REFUSED' },
@@ -163,7 +163,7 @@ test('unavailable tool has an explicit unavailable record, never an individual p
   assert.equal(missing.log.toolGates.length, 1);
   assert.equal(missing.log.toolGates[0].status, 'UNAVAILABLE');
   assert.ok(!missing.log.toolGates.some((r) => r.status === 'PASSED'));
-  const source = read('tools/ai-brain/orchestrate.js');
+  const source = require('./helpers/orchestrate-sources').readOrchestrateSources();
   const call = source.indexOf('const toolGate = await runToolGates(');
   assert.ok(call > 0);
   assert.match(source.slice(call, call + 1700), /toolGate.status === ToolGate.REFUSED/);

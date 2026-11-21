@@ -71,7 +71,7 @@ test('RTK-R01: buildWorkerLaunchScript prepends .shipde-bin to PATH when rtkPath
 });
 
 test('RTK-R01: when rtk source is missing, launch continues without rtk', () => {
-  const src = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const src = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     src.includes('RTK_UNAVAILABLE') || src.includes('rtkUnavailable'),
     'launcher must log RTK_UNAVAILABLE when source is missing'
@@ -131,7 +131,7 @@ test('RTK-R02: repair round blocks RTK even when enabled', () => {
 });
 
 test('RTK-R03: worker prompt hint mentions rtk is optional for long outputs', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     launcherSrc.includes('rtk test') ||
       launcherSrc.includes('rtk err') ||
@@ -147,7 +147,7 @@ test('RTK-R03: worker prompt hint mentions rtk is optional for long outputs', ()
 });
 
 test('RTK-R04: fail-before command string contains no rtk', () => {
-  const captureFailBeforeSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const captureFailBeforeSrc = require('./helpers/isolation-sources').readIsolationSources();
   const failBeforeMatch = captureFailBeforeSrc.match(
     /function captureFailBefore[\s\S]*?(?=\n\/\*\*|\nfunction |\nmodule\.exports)/
   );
@@ -159,7 +159,7 @@ test('RTK-R04: fail-before command string contains no rtk', () => {
 });
 
 test('RTK-R04: verification command strings contain no rtk', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     !launcherSrc.match(/verification.*rtk/) && !launcherSrc.match(/rtk.*verification/),
     'verification commands must not reference rtk'
@@ -167,7 +167,7 @@ test('RTK-R04: verification command strings contain no rtk', () => {
 });
 
 test('RTK-R04: git commands in the launcher contain no rtk', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   const gitMatches = launcherSrc.match(/spawnSync\(['"]git['"][\s\S]*?(?=\);)/g) || [];
   for (const match of gitMatches) {
     assert.ok(!match.includes('rtk'), 'git spawn must not include rtk: ' + match);
@@ -175,7 +175,7 @@ test('RTK-R04: git commands in the launcher contain no rtk', () => {
 });
 
 test('RTK-R05: RTK path is constructed correctly from sourcePath or env SHIPDE_RTK_PATH', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     launcherSrc.includes('SHIPDE_RTK_PATH') || launcherSrc.includes('rtkSource'),
     'launcher must check SHIPDE_RTK_PATH env or sourcePath option for rtk.exe location'
@@ -187,7 +187,7 @@ test('RTK-R05: RTK path is constructed correctly from sourcePath or env SHIPDE_R
 });
 
 test('RTK-R05: launch result records rtk decision as {provided, reason}', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     launcherSrc.includes('rtk') && launcherSrc.includes('provided'),
     'launch result must record rtk decision with {provided, reason} structure'
@@ -218,7 +218,7 @@ test('RTK-R01: default rtk is disabled', () => {
 });
 
 test('RTK: lowRisk:true flag allows RTK even without riskDomains check', () => {
-  const launcherSrc = fs.readFileSync(require.resolve('../isolation-launcher'), 'utf8');
+  const launcherSrc = require('./helpers/isolation-sources').readIsolationSources();
   assert.ok(
     launcherSrc.includes('lowRisk') || launcherSrc.includes('low_risk'),
     'launcher must recognize lowRisk flag in job item'
