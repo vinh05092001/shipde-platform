@@ -2116,12 +2116,6 @@ async function runOrchestration(goal, opts) {
           );
         }
 
-        require('./route-health').rememberLaunchTpm(candidate, launchFailureText(res), o);
-        require('./route-health').rememberLaunchContextOverflow(
-          candidate,
-          launchFailureText(res),
-          o
-        );
         const attemptsInDomain = domainAttempts.get(candDomain) || 0;
         const domainExhausted = attemptsInDomain >= 2;
         const scopeExcludesDomain =
