@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('path');
 const { loadPriors, priorFor } = require('./priors');
 const evidenceApi = require('./evidence');
 const {

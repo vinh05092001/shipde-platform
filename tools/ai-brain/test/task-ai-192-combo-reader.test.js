@@ -29,6 +29,21 @@ test('TASK-AI-192 AC1: combo-reader.js exports match writer-combo.js re-exports 
   });
   assert.equal(res.state, 'READ');
   assert.deepEqual(res.members, ['grok-4.7', 'claude-4.5']);
+
+  // Regression: writer-combo.syncWriterCombo default evidenceDir still resolves path.join
+  await assert.rejects(
+    () =>
+      writerCombo.syncWriterCombo({
+        name: 'vinh',
+        host: '127.0.0.1',
+        port: 1,
+        protocol: 'http:',
+      }),
+    (err) => {
+      assert.notEqual(err.name, 'ReferenceError');
+      return true;
+    }
+  );
 });
 
 test('TASK-AI-192 AC2: live callers require combo-reader instead of writer-combo', () => {
