@@ -20,7 +20,7 @@ try {
 function buildComboConfig(options) {
   const opts = options && typeof options === 'object' ? options : {};
   const liveIds = Array.isArray(opts.liveIds) ? opts.liveIds : [];
-  return { ...defaultDescriptor, ...opts, liveIds };
+  return { ...defaultDescriptor, ...opts, liveIds, liveModels: liveIds };
 }
 
 function loadPriors(file) {

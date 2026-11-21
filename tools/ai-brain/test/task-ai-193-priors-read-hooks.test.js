@@ -65,6 +65,22 @@ test('TASK-AI-193 AC1: priors-read.js scores combo members with zero global cata
   assert.equal(scored[3].modelId, 'customgw/unknown-model');
   assert.equal(scored[3].priorUnknown, true);
   assert.equal(priorsRead.normaliseModelId('9router/model-strong'), 'model-strong');
+
+  // Inherited priors.config.liveModels (empty or unrelated) must not override combo-local liveIds
+  for (const inheritedLiveModels of [[], ['othergw/unrelated-1']]) {
+    const res = priorsRead.scoreComboMembers(members, 'writer', {
+      priors: { ...fakePriors, config: { liveModels: inheritedLiveModels } },
+    });
+    assert.equal(globalCalls, 0);
+    assert.equal(res[0].modelId, 'customgw/model-strong-high-fast');
+    assert.equal(res[0].base, 'model-strong');
+    assert.equal(res[0].effort, 'high');
+    assert.equal(res[0].score, scored[0].score);
+    assert.deepEqual(
+      res.map((r) => r.modelId),
+      scored.map((r) => r.modelId)
+    );
+  }
 });
 
 test('TASK-AI-193 AC2: hermes-session, next-runner, and orchestrate no longer require priors.js or route-health.js', () => {
