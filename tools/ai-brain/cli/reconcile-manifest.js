@@ -3,7 +3,7 @@
 const path = require('path');
 const { reconcileRegister, planReconciliation, applyStatusMutations } = require('../reconcile');
 const { auditManifest } = require('../manifest-audit');
-const { runCheck, currentBranch, headSha, commitExists } = require('../facts');
+const { currentBranch, headSha, commitExists } = require('../facts');
 const { atomicRenameSync } = require('../atomic-rename');
 
 const SEVERITY_LABEL = { error: 'LỖI ', warn: 'CẢNH', info: 'GHI ' };
@@ -453,53 +453,6 @@ function manifestCommand(args) {
   if (failed > 0) process.exit(1);
 }
 
-function proveCommand(args) {
-  const commands = [];
-  const raw = args.tests;
-  if (typeof raw === 'string') commands.push(raw);
-  for (const extra of args._.slice(1)) commands.push(extra);
-
-  if (commands.length === 0) {
-    console.error('Không có lệnh nào để chạy. Dùng --tests "<lệnh>".');
-    process.exit(2);
-  }
-
-  console.log('');
-  console.log('  Nhánh: ' + (currentBranch() || '(không rõ)'));
-  console.log('  HEAD : ' + (headSha('HEAD') || '(không rõ)'));
-  console.log('');
-
-  let allPassed = true;
-  for (const command of commands) {
-    const parts = command.split(/\s+/).filter(Boolean);
-    const result = runCheck(parts[0], parts.slice(1), { cwd: process.cwd() });
-    allPassed = allPassed && result.passed;
-    console.log(
-      '  ' +
-        (result.passed ? 'ĐẠT ' : 'HỎNG') +
-        '  ' +
-        command +
-        '  (' +
-        result.durationMs +
-        'ms, mã thoát ' +
-        result.exitCode +
-        ')'
-    );
-    if (!result.passed && result.tail) {
-      for (const line of result.tail.split('\n')) console.log('          ' + line);
-    }
-  }
-
-  console.log('');
-  console.log(
-    allPassed
-      ? '  Mọi kiểm tra đều chạy thật và đều đạt.'
-      : '  CÓ KIỂM TRA HỎNG — đừng ghi nhận đầu mục này là đã xong.'
-  );
-  console.log('');
-  if (!allPassed) process.exit(1);
-}
-
 /**
  * Reads each account's quota from the provider and caches it.
  *
@@ -619,6 +572,5 @@ module.exports = {
   writeAudit,
   printReport,
   manifestCommand,
-  proveCommand,
   quotaCommand,
 };
