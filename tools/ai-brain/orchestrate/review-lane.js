@@ -9,7 +9,6 @@ const { candidateKey } = require('../candidates');
 const { parseCandidateKey } = require('../discovery/identity');
 const decisions = require('../decisions');
 const evidence = require('../evidence');
-const routing = require('../routing');
 const sourcesApi = require('../sources');
 const { SHA_40, roleOf } = require('./shared');
 const { resolveLaunchRoute, routeProbeCandidate } = require('./route-probe');
