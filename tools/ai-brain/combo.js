@@ -141,4 +141,10 @@ function isComboIdentity(identity, registry) {
   return isComboCandidate(parsed, registry);
 }
 
-module.exports = { comboCandidate, routerSource, isComboCandidate, isComboIdentity };
+module.exports = {
+  comboCandidate,
+  routerSource,
+  configuredCombo,
+  isComboCandidate,
+  isComboIdentity,
+};
