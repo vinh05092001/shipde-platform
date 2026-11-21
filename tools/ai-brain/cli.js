@@ -5,17 +5,14 @@
  * Ship Dễ — Brain CLI
  *
  *   node tools/ai-brain/cli.js reconcile [--json] [--strict]
- *   node tools/ai-brain/cli.js prove --tests "<command>" [...]
  *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
  *                                       [--profile <file.json>] [--report-outcome <file.json>]
- *   node tools/ai-brain/cli.js shadow --project|--compare [--register <p>] [--shadow <p>] [--json] [--dry-run]
  *   node tools/ai-brain/cli.js probe --account <id> [--model <m>] [--json]
  *                                   [--file <p>] [--timeout <ms>] [--cache-window <ms>]
  *   node tools/ai-brain/cli.js qualify --account <id> --model <m> [--role <roleId>]
  *                                      [--json] [--file <p>]
  *
  * `reconcile` asks whether the register can back up what it claims.
- * `prove` runs the checks an agent says it ran, and reports what happened.
  * `probe` runs the one bounded, recorded account-qualification probe
  * (TASK-AI-30): a cheapest-model real request through the account's own
  * launch path, whose outcome — pass, fail, timeout or refused — is recorded
@@ -73,7 +70,6 @@ const {
   writeAudit,
   printReport,
   manifestCommand,
-  proveCommand,
   quotaCommand,
 } = require('./cli/reconcile-manifest');
 const {
@@ -102,7 +98,6 @@ const {
 } = require('./cli/dispatch-helpers');
 const { dispatchCommand } = require('./cli/dispatch');
 const {
-  shadowCommand,
   reviewCommand,
   reviewPrCommand,
   orchestrateCommand,
@@ -116,23 +111,9 @@ function main(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv);
   const command = args._[0] || 'reconcile';
 
-  if (command === 'agy-gateway') {
-    require('./agy-gateway')
-      .start({ port: args.port ? Number(args.port) : undefined })
-      .then((srv) =>
-        console.log(`agy-gateway listening on http://127.0.0.1:${srv.address().port}/v1`)
-      )
-      .catch((err) => {
-        console.error(err.message);
-        process.exitCode = 1;
-      });
-    return;
-  }
-
   if (command === 'reconcile') return reconcileCommand(args);
   if (command === 'report' && args._[1] === 'tokens') return tokenReportCommand(args);
   if (command === 'manifest') return manifestCommand(args);
-  if (command === 'prove') return proveCommand(args);
   if (command === 'dispatch') {
     const result = dispatchCommand(args, {
       ...deps,
@@ -158,7 +139,6 @@ function main(argv = process.argv.slice(2), deps = {}) {
     if (result?.exitCode) process.exitCode = result.exitCode;
     return result;
   }
-  if (command === 'shadow') return shadowCommand(args);
   // review manifest validate (TASK-AI-77): check a review manifest against git
   // before anything is published or promoted on the strength of it.
   if (command === 'review') return reviewCommand(args);
