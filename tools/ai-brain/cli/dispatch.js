@@ -163,7 +163,7 @@ function dispatchCommand(args, deps = {}) {
       }
       return dispatchCommand(args, { ...deps, registry, nineRouterComboConfig: config });
     }
-    const read = deps.readDispatchComboConfig || require('../writer-combo').readComboConfig;
+    const read = deps.readDispatchComboConfig || require('../combo-reader').readComboConfig;
     return Promise.resolve()
       .then(() =>
         read({

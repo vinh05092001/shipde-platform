@@ -547,7 +547,7 @@ async function realRead9routerModels(deps) {
     // falls back to the models listing.
     const cfg = require('./combo').configuredCombo(registry);
     if (cfg && !deps.httpGet) {
-      const read = deps.readComboConfig || require('./writer-combo').readComboConfig;
+      const read = deps.readComboConfig || require('./combo-reader').readComboConfig;
       // Bounded like the models listing it replaces: the router source's
       // verify.timeoutMs, else the discovery HTTP default. A router that
       // accepts the connection but never answers fails closed (#608 review, F1).
