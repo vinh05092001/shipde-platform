@@ -105,11 +105,11 @@ function prettierCheck(files, options) {
         if (!firstDetail) firstDetail = 'git show failed for ' + relative;
         continue;
       }
-      const res = spawnSync(
-        process.execPath,
-        [entry, '--check', '--stdin-filepath', relative],
-        { cwd: hostCwd, input: blob.stdout, windowsHide: true }
-      );
+      const res = spawnSync(process.execPath, [entry, '--check', '--stdin-filepath', relative], {
+        cwd: hostCwd,
+        input: blob.stdout,
+        windowsHide: true,
+      });
       if (res.error) return { status: 'UNAVAILABLE', detail: String(res.error.message) };
       const out = stripAnsi(String(res.stderr || '') + String(res.stdout || ''));
       if (/Cannot find module/.test(out)) {
