@@ -71,7 +71,7 @@ function toRepoRelative(workerRoot, file) {
 }
 
 /** `prettier --check` over exactly these files, run from the host repository. */
-function prettierCheck(files) {
+function prettierCheck(files, options) {
   let entry = null;
   try {
     entry = prettierEntry();
@@ -80,6 +80,59 @@ function prettierCheck(files) {
   }
   if (!entry) return { status: 'UNAVAILABLE', detail: 'prettier has no executable entry point' };
   const hostCwd = path.resolve(__dirname, '..', '..', '..');
+
+  // TASK-AI-190: when checking a committed SHA, feed the raw Git blob bytes
+  // (LF as stored in Git and checked by Linux CI) to `prettier --check --stdin-filepath`
+  // so Windows `core.autocrlf=true` CRLF checkouts do not false-fail `endOfLine: "lf"`.
+  const opts = options || {};
+  if (opts.workerRoot && opts.sha && SHA_40.test(String(opts.sha))) {
+    const failingFiles = [];
+    let firstDetail = null;
+    for (const file of files) {
+      const relative = toRepoRelative(opts.workerRoot, file);
+      const blob = spawnSync(
+        'git',
+        hardenedGitArgs(opts.workerRoot).concat(['show', opts.sha + ':' + relative]),
+        {
+          cwd: opts.workerRoot,
+          windowsHide: true,
+          env: hardenedGitEnv(),
+          maxBuffer: 20 * 1024 * 1024,
+        }
+      );
+      if (!blob || blob.status !== 0) {
+        failingFiles.push(file);
+        if (!firstDetail) firstDetail = 'git show failed for ' + relative;
+        continue;
+      }
+      const res = spawnSync(process.execPath, [entry, '--check', '--stdin-filepath', relative], {
+        cwd: hostCwd,
+        input: blob.stdout,
+        windowsHide: true,
+      });
+      if (res.error) return { status: 'UNAVAILABLE', detail: String(res.error.message) };
+      const out = stripAnsi(String(res.stderr || '') + String(res.stdout || ''));
+      if (/Cannot find module/.test(out)) {
+        return {
+          status: 'UNAVAILABLE',
+          detail: out.split(/\r?\n/)[0] || 'prettier could not be loaded',
+        };
+      }
+      if (res.status !== 0 || /^\[error\]/m.test(out)) {
+        failingFiles.push(file);
+        if (!firstDetail) {
+          firstDetail =
+            out
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean)[0] || 'prettier --check exited with code ' + res.status;
+        }
+      }
+    }
+    if (failingFiles.length === 0) return { status: 'PASSED', detail: null, files: [] };
+    return { status: 'FAILED', detail: firstDetail, files: failingFiles };
+  }
+
   const result = spawnSync(
     process.execPath,
     [entry, '--check', '--ignore-unknown', '--'].concat(files),
@@ -550,7 +603,7 @@ async function runFormatGate(params) {
   }
   if (changed.files.length === 0) return { status: FormatGate.PASSED, files: [] };
 
-  const first = prettierCheck(changed.files);
+  const first = prettierCheck(changed.files, { workerRoot, sha: targetSha });
   if (first.status === 'UNAVAILABLE') {
     record('UNAVAILABLE', { files: repoNames(changed.files), reason: first.detail });
     return { status: FormatGate.UNAVAILABLE, reason: first.detail };
@@ -585,7 +638,7 @@ async function runFormatGate(params) {
     // Syntax/formatter failures can be handled by the existing repair lane.
   }
   if (formatted.status === 'PASSED') {
-    const verification = prettierCheck(changed.files);
+    const verification = prettierCheck(changed.files, { workerRoot, sha: formatted.sha });
     if (verification.status === 'PASSED') {
       const fixedNames = formatted.files ? repoNames(formatted.files) : failingNames;
       decisions.recordDecision(
@@ -677,7 +730,9 @@ async function runFormatGate(params) {
     return { status: FormatGate.REFUSED, reason, files: again.files, sha: repairedSha };
   }
   const second =
-    again.files.length === 0 ? { status: 'PASSED', detail: null } : prettierCheck(again.files);
+    again.files.length === 0
+      ? { status: 'PASSED', detail: null }
+      : prettierCheck(again.files, { workerRoot, sha: repairedSha });
   if (second.status === 'UNAVAILABLE') {
     record('UNAVAILABLE', { files: repoNames(again.files), reason: second.detail });
     return { status: FormatGate.UNAVAILABLE, reason: second.detail };
