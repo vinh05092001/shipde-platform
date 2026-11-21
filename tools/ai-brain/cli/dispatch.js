@@ -953,11 +953,13 @@ function dispatchCommand(args, deps = {}) {
     // credential is a fact about this process. Re-check it before resuming, so
     // a key removed after the checkpoint is refused instead of launched.
     const envMap = (deps && deps.env) || process.env;
+    // Same source the launch below uses (source first), so an AGY replay whose
+    // gateway names the router is not judged by the router's key (#608, F2).
     const sourceId =
       (currentCheckpointCandidate &&
-        (currentCheckpointCandidate.gateway || currentCheckpointCandidate.source)) ||
-      checkpoint.gateway ||
+        (currentCheckpointCandidate.source || currentCheckpointCandidate.gateway)) ||
       checkpoint.source ||
+      checkpoint.gateway ||
       parsedCheckpoint.gateway;
     const checkpointSource = (
       Array.isArray(registry && registry.sources) ? registry.sources : []

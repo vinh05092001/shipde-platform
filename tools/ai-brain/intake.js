@@ -548,7 +548,20 @@ async function realRead9routerModels(deps) {
     const cfg = require('./combo').configuredCombo(registry);
     if (cfg && !deps.httpGet) {
       const read = deps.readComboConfig || require('./writer-combo').readComboConfig;
-      const combo = await read({ name: cfg.name, endpoint: cfg.source.endpoint, registry });
+      // Bounded like the models listing it replaces: the router source's
+      // verify.timeoutMs, else the discovery HTTP default. A router that
+      // accepts the connection but never answers fails closed (#608 review, F1).
+      const verifyTimeout = Number(cfg.source.verify && cfg.source.verify.timeoutMs);
+      const timeoutMs =
+        Number.isFinite(verifyTimeout) && verifyTimeout > 0
+          ? verifyTimeout
+          : require('./discovery/http').DEFAULT_TIMEOUT_MS;
+      const combo = await read({
+        name: cfg.name,
+        endpoint: cfg.source.endpoint,
+        registry,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
       if (combo && combo.state === 'READ') return { ok: true, models: [cfg.name], modelMeta: {} };
       const status = combo && (combo.status || combo.state);
       if (status !== 404 && status !== 405) {

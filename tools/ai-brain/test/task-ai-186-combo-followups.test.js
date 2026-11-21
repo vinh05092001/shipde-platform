@@ -61,32 +61,43 @@ test('B: a down router or a missing combo fails closed with no models-list fallb
   }
 });
 
+test('B: a router that never answers is bounded by verify.timeoutMs and fails closed', async (t) => {
+  let signal = null;
+  const started = Date.now();
+  const result = await catalogue(t, (o) => {
+    signal = o.signal || null;
+    if (!signal) return { name: o.name, state: 'READ', members: ['a/b'] };
+    return new Promise((resolve) => {
+      signal.addEventListener('abort', () =>
+        resolve({
+          name: o.name,
+          members: null,
+          state: 'COMBO_CONFIG_UNAVAILABLE',
+          status: 'REQUEST_FAILED',
+        })
+      );
+    });
+  });
+  assert.ok(signal instanceof AbortSignal, 'the combo read carries an abort signal');
+  assert.ok(Date.now() - started >= 400, 'it waits for verify.timeoutMs');
+  assert.equal(result.sourceStatus['9router'], 'failed');
+});
+
 test('B: an empty combo is refused', async (t) => {
   const result = await catalogue(t, async (o) => ({ name: o.name, state: 'EMPTY', members: [] }));
   assert.equal(result.sourceStatus['9router'], 'failed');
 });
 
-test('C: a checkpoint resume refuses when the combo key is gone now', (t) => {
+function resume(t, c, env) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-186-resume-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const c = {
-    harness: 'opencode-direct',
-    source: '9router',
-    gateway: '9router',
-    upstream: '9router',
-    accessPath: 'http://127.0.0.1:1/v1',
-    accountId: '9router',
-    quotaScope: '9router',
-    modelId: 'vinh',
-    qualifiedRoles: ['author.foundation'],
-  };
   const key = candidateKey(c);
   const checkpointFile = path.join(root, 'checkpoint.json');
-  fs.writeFileSync(checkpointFile, JSON.stringify({ chosen: key, harness: 'opencode-direct' }));
+  fs.writeFileSync(checkpointFile, JSON.stringify({ chosen: key, harness: c.harness }));
   const prompt = path.join(root, 'prompt.md');
   fs.writeFileSync(prompt, 'Bounded fixture task.');
-  let launches = 0;
   const errors = [];
+  let launches = 0;
   const result = dispatchCommand(
     {
       execute: true,
@@ -99,7 +110,7 @@ test('C: a checkpoint resume refuses when the combo key is gone now', (t) => {
     {
       candidates: [c],
       registry,
-      env: {},
+      env,
       maxAttempts: 1,
       checkpointFile,
       quotaState: { scopes: {} },
@@ -121,7 +132,38 @@ test('C: a checkpoint resume refuses when the combo key is gone now', (t) => {
       },
     }
   );
+  return { result, errors, launches };
+}
+
+const comboCand = {
+  harness: 'opencode-direct',
+  source: '9router',
+  gateway: '9router',
+  upstream: '9router',
+  accessPath: 'http://127.0.0.1:1/v1',
+  accountId: '9router',
+  quotaScope: '9router',
+  modelId: 'vinh',
+  qualifiedRoles: ['author.foundation'],
+};
+
+test('C: a checkpoint resume refuses when the combo key is gone now', (t) => {
+  const { result, errors, launches } = resume(t, comboCand, {});
   assert.equal(launches, 0);
   assert.equal(result && result.refusal, 'CREDENTIAL_ENV_MISSING');
   assert.ok(errors.some((m) => m.includes('TEST_COMBO_KEY_NOT_SET')));
+});
+
+test('C: an AGY replay whose gateway names the router is judged by its own source', (t) => {
+  const agy = {
+    ...comboCand,
+    harness: 'agy-pool',
+    source: 'agy-pool',
+    accessPath: 'ShipDe\ShipDe-agy01',
+    accountId: 'agy01',
+    quotaScope: 'agy01:gemini',
+    modelId: 'gemini-4-argon-high',
+  };
+  const { result } = resume(t, agy, {});
+  assert.notEqual(result && result.refusal, 'CREDENTIAL_ENV_MISSING');
 });
