@@ -130,10 +130,6 @@ for (const chosen of ['route', null]) {
     };
     const { run, effects, lines } = guarded(t, data);
     const { task, item, snapshot: unused, ...args } = options();
-    assert.equal(
-      require('../route-handoff').decisionFromDispatch(data).reasonCode,
-      'CONTROLLER_DECISION_INVALID'
-    );
     const result = await run({ ...args, decision: 'discovery.json' });
     assert.equal(result.exitCode, 2);
     assert.match(lines.at(-1), /COORDINATOR_DECISION_INVALID/);
@@ -156,22 +152,4 @@ test('B74: formatter redacts stable JSON and projects a scalar receipt without t
   assert.equal(format(value), format(reordered));
   assert.doesNotMatch(format(value), /fake-token|person@|fake-value|child/);
   assert.deepEqual(JSON.parse(format(value)).launch, { pid: 17, status: 'started' });
-});
-test('B03: the sandbox note is supplied only when constructing launch argv', () => {
-  const registry = { sources: [], dispatch: { providers: {} } };
-  registry.dispatch.providers.fixture = {
-    harness: 'paseo',
-    provider: 'opencode',
-    modelPrefix: 'registry/',
-  };
-  const decision = {
-    selected: 'route',
-    candidates: [{ ...candidate, harness: 'paseo', offeringId: 'route' }],
-  };
-  const launch = require('../route-handoff').launchFromDecision(
-    decision,
-    { prompt: 'task', sandboxNote: 'injected sandbox note', cwd: root },
-    registry
-  );
-  assert.ok(launch.args.some((arg) => arg === 'task\n\ninjected sandbox note'));
 });

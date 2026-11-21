@@ -42,7 +42,7 @@ test('F2: writer claim expiry', () => {
 });
 
 test('F3: sameFailureDomain excludes based on quotaScope for upstream failures', () => {
-  const cliPath = '../cli.js';
+  const cliPath = '../cli/dispatch-helpers.js';
   const fs = require('fs');
   const cliCode = fs.readFileSync(require.resolve(cliPath), 'utf8');
   // Need to test sameFailureDomain function which is not exported.

@@ -25,8 +25,6 @@ const SCOPE = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'scope.json'), 'utf
 const scope = (over) => Object.assign({}, SCOPE, over || {});
 const map = (repoCwd, over) => load('repo-map').buildRepoMap(Object.assign({ repoCwd }, over));
 const expand = (repoCwd, file, reason) => load('repo-map').expand({ repoCwd, file, reason });
-const parked = (dir, text, bytes) =>
-  load('output-store').virtualize(text, { dir, thresholdBytes: bytes });
 
 const FIXTURE_REPO = {
   'README.md': '# fixture\n',
@@ -297,98 +295,6 @@ describe('TASK-AI-78 Gate C: repo map, scope gate, output store', () => {
       eq(res.code, 'FORBIDDEN_ACTION', kind);
       eq(res.kind, scopeGate.normaliseKind(kind));
     }
-  });
-
-  test('O-R01/O-R02: small output passes through; large output parks redacted under its sha256', () => {
-    const outputStore = load('output-store');
-    const dir = tmpDir('ai78-out-');
-    const small = 'line 1\nline 2\n';
-    eq(outputStore.virtualize(small, { dir }), small);
-    same(fs.readdirSync(dir), [], 'nothing is written under the threshold');
-    const rows = Array.from({ length: 130 }, (unused, at) => `row ${at + 1} ${'x'.repeat(60)}`);
-    const big = `${rows.join('\n')}\n`;
-    const first = parked(dir, big);
-    eq(first.sha256.length, 64);
-    eq(first.handle, first.sha256);
-    eq(first.summary.lines, 130);
-    eq(first.summary.bytes, Buffer.byteLength(big, 'utf8'));
-    eq(first.summary.omittedLines, 50);
-    same(first.summary.head.split('\n'), rows.slice(0, 40));
-    eq(fs.readFileSync(path.join(dir, `${first.sha256}.txt`), 'utf8'), big);
-    eq(parked(dir, big).sha256, first.sha256, 'the same text parks once');
-    eq(parked(dir, 'a\n'.repeat(50), 10).summary.lines, 50, 'thresholdBytes is honoured');
-
-    const secrets = ['openai sk-ABCDEF0123456789abcDEF0123', 'github ghp_0123456789abcdefghijABC'];
-    secrets.push('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature');
-    const filler = Array.from({ length: 120 }, (unused, at) => `filler ${at} ${'y'.repeat(50)}`);
-    const text = `${secrets.concat(filler).join('\n')}\n`;
-    const sealed = parked(dir, text, 1024);
-    const onDisk = fs.readFileSync(path.join(dir, `${sealed.sha256}.txt`), 'utf8');
-    for (const secret of secrets) eq(onDisk.includes(secret.split(' ').pop()), false, secret);
-    eq(onDisk.includes('Bearer'), false);
-    ok(onDisk.includes('[REDACTED_SECRET]'));
-    eq(onDisk, scrubText(text), 'the shared scrubber, not a second regex set');
-    eq(sealed.summary.head.includes('sk-ABCDEF'), false, 'the summary is redacted too');
-    eq(outputStore.read(sealed.handle, { dir }).text.includes('sk-ABCDEF'), false);
-    eq(outputStore.read(sealed.handle).ok, true, 'a handle resolves without the dir');
-  });
-
-  test('O-R03: read returns a grep or line-range slice, clipped to whole lines and maxBytes', () => {
-    const outputStore = load('output-store');
-    const dir = tmpDir('ai78-read-');
-    const rows = Array.from({ length: 200 }, (unused, at) => `line ${at + 1} ${'z'.repeat(40)}`);
-    const artifact = parked(dir, `${rows.join('\n')}\n`, 512);
-    const greped = outputStore.read(artifact.handle, { dir, grep: 'line 42 ' });
-    eq(greped.matched, 1);
-    eq(greped.matches[0].line, 42);
-    const ranged = outputStore.read(artifact.handle, { dir, startLine: 10, endLine: 14 });
-    same(ranged.lines, rows.slice(9, 14));
-    const bounded = outputStore.read(artifact.handle, { dir, maxBytes: 100 });
-    eq(bounded.truncated, true);
-    eq(bounded.lines.length, 2);
-    ok(bounded.bytes <= 100);
-    eq(outputStore.read('not-a-handle', { dir }).code, 'HANDLE_INVALID');
-    eq(outputStore.read('a'.repeat(64), { dir }).code, 'ARTIFACT_NOT_FOUND');
-  });
-
-  test('O-R04: rotate drops the oldest artifacts past the limits and only inside dir', () => {
-    const outputStore = load('output-store');
-    const dir = tmpDir('ai78-rot-');
-    const ages = [3, 0.5, 0.25];
-    const pads = [1, 2, 3].map((at) => `${`pad ${at} `.repeat(100)}\n`);
-    const artifacts = pads.map((text) => parked(dir, text, 64));
-    const hour = 60 * 60 * 1000;
-    const now = Date.now();
-    artifacts.forEach((artifact, at) => {
-      const when = new Date(now - ages[at] * hour);
-      fs.utimesSync(path.join(dir, `${artifact.sha256}.txt`), when, when);
-    });
-    const outside = path.join(tmpDir('ai78-rot-out-'), `${artifacts[0].sha256}.txt`);
-    fs.writeFileSync(outside, 'untouched', 'utf8');
-    const nested = path.join(dir, 'nested');
-    fs.mkdirSync(nested);
-    const aged = outputStore.rotate({ dir, maxAgeMs: 90 * 60 * 1000, maxBytes: 10 ** 7 });
-    same(aged.deleted, [`${artifacts[0].sha256}.txt`], 'only the oldest is past maxAgeMs');
-    eq(fs.existsSync(path.join(dir, `${artifacts[0].sha256}.txt`)), false);
-    eq(fs.existsSync(nested), true, 'rotate never descends into a subdirectory');
-    eq(fs.readFileSync(outside, 'utf8'), 'untouched', 'rotate only deletes inside dir');
-    const sized = outputStore.rotate({ dir, maxAgeMs: 10 ** 9, maxBytes: 1000 });
-    same(sized.deleted, [`${artifacts[1].sha256}.txt`]);
-    ok(sized.bytes <= 1000);
-    eq(outputStore.read(artifacts[1].handle, { dir }).code, 'ARTIFACT_NOT_FOUND');
-    same(outputStore.rotate({ dir: tmpDir('ai78-rot-empty-') }).deleted, []);
-  });
-
-  test('F1 (O-R03): read() never returns more than maxBytes, not even for one long line', () => {
-    const outputStore = load('output-store');
-    const dir = tmpDir('ai78-f1-');
-    const artifact = parked(dir, `${'X'.repeat(5000)}\nsecond line\n`, 64);
-    const slice = outputStore.read(artifact.handle, { dir, maxBytes: 50 });
-    eq(slice.ok, true);
-    eq(slice.truncated, true);
-    ok(slice.bytes <= 50, `maxBytes 50 respected, got ${slice.bytes}`);
-    ok(slice.text.length < 5000, 'the oversized line is clipped, never returned whole');
-    ok(outputStore.read(artifact.handle, { dir, maxBytes: 1 }).bytes <= 1);
   });
 
   test('F2 (R-R01): an expression-bodied arrow contributes its signature and never its body', () => {

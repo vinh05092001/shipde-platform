@@ -383,7 +383,7 @@ test('29 plan input count = completed + blocked + deferred', async () => {
 });
 
 test('30 no second state store or ranking engine', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'orchestrate.js'), 'utf8');
+  const src = require('./helpers/orchestrate-sources').readOrchestrateSources();
   assert.ok(src.includes("require('./ranking')"));
   assert.ok(src.includes("require('./decisions')"));
   assert.ok(src.includes('ranking.rankAndRecord'));

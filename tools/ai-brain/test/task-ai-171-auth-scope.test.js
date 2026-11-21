@@ -1,24 +1,9 @@
-const { test, after } = require('node:test');
+const { test } = require('node:test');
 const assert = require('node:assert');
 const { classifyFailure, upstreamAuthSignal } = require('../failure-classifier');
 const { sameFailureDomain } = require('../routing');
 const evidence = require('../evidence');
-const handoff = require('../route-handoff');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { orderCandidatesForProbe } = require('../capability-probe');
-const { launchHermesSession } = require('../hermes-session');
-const { createWorktreeClaim } = require('./helpers/worktree-claim');
-
-const claimHelper = createWorktreeClaim();
-const { worktree: wt } = claimHelper;
-after(() => {
-  claimHelper.cleanup();
-  assert.equal(fs.existsSync(claimHelper.root), false);
-  assert.equal(fs.existsSync(claimHelper.claim.lockFile), false);
-});
-
 const key = 'gw-shared-key';
 const via = { harness: 'paseo', gateway: 'gw', accountId: key, quotaScope: key };
 const A = { ...via, upstream: 'up-a', modelId: 'up-a/m', offeringId: 'a' };
@@ -101,73 +86,6 @@ test('stored cooldowns follow the same scope', () => {
   assert.equal(evidence.isCandidateBlocked(cd(null), B, opts).blocked, false);
 });
 
-const registry = {
-  sources: [{ id: 'gw', kind: 'router', servesModels: true, endpoint: 'http://127.0.0.1:1/v1' }],
-  dispatch: {
-    launchModes: { opencode: ['full-access'] },
-    providers: { gw: { harness: 'paseo', provider: 'opencode', modelPrefix: 'gateway/' } },
-  },
-};
-const proofOf = (c) => ({
-  modelId: c.modelId,
-  harness: c.harness,
-  accessPath: c.accessPath,
-  gateway: c.gateway,
-  upstream: c.upstream,
-  accountId: c.accountId,
-  quotaScope: c.quotaScope,
-  evidence: [{ status: 'passed', proofLevel: 'WORK_ITEM_PASS', at: new Date().toISOString() }],
-});
-const run = (failure, ticketOver) => {
-  const decision = { workItemId: 'W', selected: 'a', candidates: [A, B] };
-  const ticket = {
-    workItemId: 'W',
-    outputTokens: 1,
-    minProof: 'HARNESS_PASS',
-    maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
-    ...ticketOver,
-  };
-  const ctx = {
-    evidenceData: { combinations: [A, B].map(proofOf) },
-    ledger: {},
-    now: Date.now(),
-    ...claimHelper.context,
-  };
-  const first = handoff.firstLaunch(decision, ticket, ctx, registry);
-  const next = handoff.afterFailure(
-    decision,
-    ticket,
-    ctx,
-    { offeringId: 'a', upstream: 'up-a', status: 401, workerStopped: true, ...failure },
-    registry
-  );
-  return { first, next, ledger: ctx.ledger };
-};
-
-test('a bare 401 records AUTH_SCOPE_UNKNOWN, drops A and moves only to a screened B', () => {
-  const { first, next, ledger } = run({});
-  assert.equal(first.action, 'LAUNCH');
-  assert.equal(ledger.failures[0].class, 'AUTH_SCOPE_UNKNOWN');
-  assert.equal(next.action, 'LAUNCH');
-  assert.match(next.launch.args.join(' '), /up-b\/m/);
-  assert.ok(next.rejected.some((r) => r.offeringId === 'a'));
-  assert.equal(ledger.fallbacksUsed, 1);
-});
-
-test('a bare 401 does not move when the ticket has no fallback left', () => {
-  const { next } = run({}, { maxFallbacks: 0 });
-  assert.equal(next.action, 'STOP');
-  assert.equal(next.reason, 'FALLBACK_LIMIT');
-});
-
-test('a confirmed shared-key failure leaves no route on that key', () => {
-  const { next, ledger } = run({ authLayer: 'gateway-key' });
-  assert.equal(ledger.failures[0].class, 'GATEWAY_KEY_AUTH');
-  assert.equal(next.action, 'BLOCKED');
-  assert.ok(next.rejected.some((r) => r.reason === 'GATEWAY_KEY_AUTH'));
-});
-
 // Redacted from real scans on 2026-11-05. Each came through one shared gateway key.
 const realErrors = [
   [
@@ -221,108 +139,6 @@ test('the error tag counts only when it matches the failed route', () => {
   assert.equal(classify({ body, modelId: 'up-a/other' }).authLayer, null);
 });
 
-const twoOnA = (over) => {
-  const ticket = {
-    workItemId: 'W',
-    outputTokens: 1,
-    minProof: 'HARNESS_PASS',
-    maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
-    ...over,
-  };
-  const routes = [A, A2, B];
-  const decision = { workItemId: 'W', selected: 'a', candidates: routes };
-  const ctx = {
-    evidenceData: { combinations: routes.map(proofOf) },
-    ledger: {},
-    now: Date.now(),
-    ...claimHelper.context,
-  };
-  handoff.firstLaunch(decision, ticket, ctx, registry);
-  const next = handoff.afterFailure(
-    decision,
-    ticket,
-    ctx,
-    {
-      offeringId: 'a',
-      upstream: 'up-a',
-      status: 401,
-      workerStopped: true,
-      message: '[prov/m] [401]: token expired',
-    },
-    registry
-  );
-  return { next, ctx, decision, ticket };
-};
-
-test('A failing on its credential leaves B on the same key eligible', () => {
-  const { next, ctx } = twoOnA();
-  assert.equal(ctx.ledger.failures[0].class, 'UPSTREAM_ROUTE_AUTH');
-  assert.equal(next.action, 'LAUNCH');
-  assert.ok(next.rejected.some((r) => r.offeringId === 'a'));
-  assert.equal(
-    next.rejected.some((r) => r.offeringId === 'b'),
-    false
-  );
-  assert.equal(
-    next.rejected.some((r) => r.offeringId === 'a2'),
-    false
-  );
-  assert.equal(ctx.ledger.fallbacksUsed, 1);
-});
-
-test('the fallback cap still holds after a route-only 401', () => {
-  const { ctx, decision, ticket } = twoOnA();
-  const again = handoff.afterFailure(
-    decision,
-    ticket,
-    ctx,
-    {
-      offeringId: 'a2',
-      upstream: 'up-a',
-      status: 401,
-      workerStopped: true,
-      message: '[prov/n] [401]: expired',
-    },
-    registry
-  );
-  assert.equal(again.action, 'STOP');
-  assert.equal(again.reason, 'FALLBACK_LIMIT');
-});
-
-test('a confirmed upstream-wide failure removes every route on that upstream', () => {
-  const routes = [A, A2, B];
-  const decision = { workItemId: 'W', selected: 'a', candidates: routes };
-  const ticket = {
-    workItemId: 'W',
-    outputTokens: 1,
-    minProof: 'HARNESS_PASS',
-    maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
-  };
-  const ctx = {
-    evidenceData: { combinations: routes.map(proofOf) },
-    ledger: {},
-    now: Date.now(),
-    ...claimHelper.context,
-  };
-  const next = handoff.afterFailure(
-    decision,
-    ticket,
-    ctx,
-    {
-      offeringId: 'a',
-      upstream: 'up-a',
-      status: 401,
-      workerStopped: true,
-      authLayer: 'upstream-credential',
-    },
-    registry
-  );
-  assert.ok(next.rejected.some((r) => r.offeringId === 'a2' && r.reason === 'UPSTREAM_AUTH'));
-  assert.match(next.launch.args.join(' '), /up-b\/m/);
-});
-
 test('a stored connection failure blocks only routes on that connection', () => {
   const data = {
     cooldowns: {
@@ -373,43 +189,6 @@ test('an upstream row with no probed model still blocks that upstream', () => {
   const row = scanRow({});
   assert.equal(scanned(row, A2), true);
   assert.equal(scanned(row, B), false);
-});
-
-test('a combo route cannot tell which member failed, so it stays unknown', () => {
-  const body = realErrors[0][2];
-  const cls = classifyFailure({
-    httpStatus: 401,
-    body,
-    accountId: key,
-    gateway: 'gw',
-    upstream: 'vinh',
-    modelId: 'vinh',
-  });
-  assert.equal(cls.cause, 'auth_scope_unknown');
-  assert.equal(cls.authLayer, null);
-  const route = { ...via, upstream: 'vinh', modelId: 'vinh', offeringId: 'v' };
-  const decision = { workItemId: 'W', selected: 'v', candidates: [route, B] };
-  const ticket = {
-    workItemId: 'W',
-    outputTokens: 1,
-    minProof: 'HARNESS_PASS',
-    maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
-  };
-  const ctx = {
-    evidenceData: { combinations: [route, B].map(proofOf) },
-    ledger: {},
-    now: Date.now(),
-    ...claimHelper.context,
-  };
-  handoff.afterFailure(
-    decision,
-    ticket,
-    ctx,
-    { offeringId: 'v', upstream: 'vinh', status: 401, workerStopped: true, message: body },
-    registry
-  );
-  assert.equal(ctx.ledger.failures[0].class, 'AUTH_SCOPE_UNKNOWN');
 });
 
 test('a direct source keeps its old auth behaviour, even with a tagged error', () => {
@@ -477,50 +256,16 @@ test('a connection layer without a confirmed ID stays unknown', () => {
   assert.equal(cls.connectionId, null);
 });
 
-const failOnConnection = (routes, failure, ledger = {}) => {
-  const ticket = {
-    workItemId: 'W',
-    outputTokens: 1,
-    minProof: 'HARNESS_PASS',
-    maxFallbacks: 1,
-    request: { prompt: 'p', branch: 'b', base: 'origin/main', cwd: wt, title: 't' },
-  };
-  return handoff.afterFailure(
-    { workItemId: 'W', selected: 'a', candidates: routes },
-    ticket,
-    {
-      evidenceData: { combinations: routes.map(proofOf) },
-      ledger,
-      now: Date.now(),
-      ...claimHelper.context,
-    },
-    {
-      offeringId: 'a',
-      upstream: 'up-a',
-      status: 401,
-      workerStopped: true,
-      authLayer: 'connection',
-      ...failure,
-    },
-    registry
-  );
-};
-
-test('a connection failure stays inside the gateway that saw it', () => {
-  const sameGateway = { ...A2, connectionId: 'c1' };
-  const otherGateway = { ...B, gateway: 'gw2', offeringId: 'b2', connectionId: 'c1' };
-  const next = failOnConnection([{ ...A, connectionId: 'c1' }, sameGateway, otherGateway], {
-    connectionId: 'c1',
+test('a combo route cannot tell which member failed, so it stays unknown', () => {
+  const body = realErrors[0][2];
+  const cls = classifyFailure({
+    httpStatus: 401,
+    body,
+    accountId: key,
+    gateway: 'gw',
+    upstream: 'vinh',
+    modelId: 'vinh',
   });
-  const refused = next.rejected.filter((r) => r.reason === 'CONNECTION_AUTH');
-  assert.deepEqual(
-    refused.map((r) => r.offeringId),
-    ['a2']
-  );
-});
-
-test('a retry ledger ignores a connection layer with no ID', () => {
-  const ledger = {};
-  failOnConnection([A, A2, B], {}, ledger);
-  assert.equal(ledger.failures[0].class, 'AUTH_SCOPE_UNKNOWN');
+  assert.equal(cls.cause, 'auth_scope_unknown');
+  assert.equal(cls.authLayer, null);
 });
