@@ -12,7 +12,7 @@ const cp = require('node:child_process');
 const decisions = require('../decisions');
 const { candidateKey } = require('../candidates');
 const { repairRound } = require('../orchestrate');
-const { recordWriterResult } = require('../orchestrate/writer-loop');
+const { recordWriterResult, resolveLauncher } = require('../orchestrate/writer-loop');
 const { retainedRootHasOwnWriterRecord } = require('../isolation-launcher');
 
 function temp(t) {
@@ -53,8 +53,9 @@ test('a real writer-launch-result owns the dirty retained root for a repair of t
       workerRoot: root,
       cwd: root,
       baseSha: base,
+      isolatedWorker: true,
     },
-    { exitCode: 0, stdout: '' },
+    { exitCode: 0, stdout: '', isolatedWorker: true, sessionId: 'ses_fixture' },
     'writer',
     logOpts,
     {}
@@ -163,4 +164,72 @@ test('a launched record carries enough for the ownership check through its workt
     ),
     true
   );
+});
+
+test('a refused launch or an unreadable HEAD records no ownership', (t) => {
+  const dir = temp(t);
+  const root = path.join(dir, 'worker');
+  fs.mkdirSync(root);
+  const base = gitRepo(root);
+  const logOpts = { dir: path.join(dir, 'decisions'), runId: 'run-188-refused' };
+  const job = {
+    workItemId: 'TASK-Z-repair-1',
+    candidateKey: 'combo-key',
+    harness: 'opencode-direct',
+    workerRoot: root,
+    cwd: root,
+    baseSha: base,
+    isolatedWorker: true,
+  };
+  // Refused before any worker started: no session id.
+  recordWriterResult(
+    job,
+    { exitCode: -1, stderr: 'WORKER_HEAD_MISMATCH', isolatedWorker: true },
+    'review-repair',
+    logOpts,
+    {}
+  );
+  // Ran, but its root has no readable HEAD.
+  const missing = path.join(dir, 'gone');
+  recordWriterResult(
+    { ...job, workerRoot: missing, cwd: missing },
+    { exitCode: 0, isolatedWorker: true, sessionId: 'ses_x' },
+    'review-repair',
+    logOpts,
+    {}
+  );
+  for (const rec of decisions.readDecisionsSafe(logOpts)) {
+    assert.equal(rec.workerRoot, undefined);
+    assert.equal(rec.sha, undefined);
+  }
+  assert.equal(
+    retainedRootHasOwnWriterRecord(
+      { workItemId: 'TASK-Z-repair-2', decisionDir: logOpts.dir, runId: logOpts.runId },
+      { workerRoot: root, retainedHeadSha: base, runId: logOpts.runId }
+    ),
+    false
+  );
+});
+
+test('resolveLauncher forwards runId and allowedPaths to the isolated launcher', () => {
+  const seen = [];
+  const launch = resolveLauncher({}, (adapter, args, options) => {
+    seen.push(options);
+    return { exitCode: 0, stdout: '' };
+  });
+  launch({
+    workItemId: 'TASK-W-repair-1',
+    harness: 'opencode-direct',
+    model: 'ninerouter/vinh',
+    prompt: 'p',
+    branch: 'b',
+    cwd: '.',
+    workerRoot: '.',
+    runId: 'run-188-forward',
+    isolatedWorker: true,
+    allowedPaths: ['tools/x.js'],
+  });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].runId, 'run-188-forward');
+  assert.deepEqual(seen[0].allowedPaths, ['tools/x.js']);
 });
