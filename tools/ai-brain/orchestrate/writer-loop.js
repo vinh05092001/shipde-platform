@@ -195,6 +195,10 @@ function recordWriterResult(job, result, kind, logOpts, env) {
   const res = result || {};
   const redact = decisions.createSecretRedactor({ ...process.env, ...env });
   const stderr = redact(launchFailureText(res));
+  // TASK-AI-188: the ownership check for a later repair needs the worker root
+  // and the commit the writer left there, next to this run's id.
+  const workerRoot = job.workerRoot || job.cwd || null;
+  const workerSha = workerRoot ? headShaOf(workerRoot) : null;
   return decisions.recordDecision(
     {
       stage: 'writer-launch-result',
@@ -205,6 +209,8 @@ function recordWriterResult(job, result, kind, logOpts, env) {
       model: job.model,
       harness: job.harness,
       usageFile: job.usageFile,
+      workerRoot,
+      sha: workerSha || job.baseSha || null,
       exitCode: res.exitCode ?? null,
       timedOut: res.timedOut === true,
       httpStatus: res.httpStatus ?? null,
