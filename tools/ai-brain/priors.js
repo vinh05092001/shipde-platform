@@ -408,8 +408,14 @@ function priorFor(candidate, role, priors, now) {
       }
     }
   }
-  const matchOptions = candidatePrefixes.length ? { routerPrefixes: candidatePrefixes } : undefined;
-  const resolved = matchModelPrior(modelId, ranking, matchOptions);
+  const matchOptions = {};
+  if (candidatePrefixes.length) matchOptions.routerPrefixes = candidatePrefixes;
+  if (priors && priors.config) matchOptions.config = priors.config;
+  const resolved = matchModelPrior(
+    modelId,
+    ranking,
+    Object.keys(matchOptions).length ? matchOptions : undefined
+  );
   const match = resolved && resolved.entry;
   if (!match) return neutralPrior(canonical);
 

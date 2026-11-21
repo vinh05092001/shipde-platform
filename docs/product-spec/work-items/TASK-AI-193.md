@@ -10,7 +10,7 @@
 | Dependencies | `TASK-AI-191`; `TASK-AI-192` |
 | Assigned author | Antigravity (`agy08`, Gemini) — operator instruction 2026-11-21 |
 | Risk | `LOW`: adds combo-local read facade and removes dead legacy hooks in `next-runner.js` and `orchestrate.js` |
-| Allowed paths | `tools/ai-brain/priors-read.js`; `tools/ai-brain/hermes-session.js`; `tools/ai-brain/next-runner.js`; `tools/ai-brain/orchestrate.js`; `tools/ai-brain/test/task-ai-193-priors-read-hooks.test.js`; `docs/product-spec/work-items/TASK-AI-193.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
+| Allowed paths | `tools/ai-brain/priors-read.js`; `tools/ai-brain/priors.js`; `tools/ai-brain/hermes-session.js`; `tools/ai-brain/next-runner.js`; `tools/ai-brain/orchestrate.js`; `tools/ai-brain/test/task-ai-193-priors-read-hooks.test.js`; `docs/product-spec/work-items/TASK-AI-193.md`; `docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv` |
 | Reviewer | Independent reviewer on a different model (`gpt-6.1-sol` via AgentRouter) |
 | Branch | `feat/task-ai-193-priors-read-hooks` |
 

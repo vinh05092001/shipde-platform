@@ -10,6 +10,19 @@
 
 const priors = require('./priors');
 
+let defaultDescriptor;
+try {
+  defaultDescriptor = require('./priors-sources/public.json');
+} catch {
+  defaultDescriptor = {};
+}
+
+function buildComboConfig(options) {
+  const opts = options && typeof options === 'object' ? options : {};
+  const liveIds = Array.isArray(opts.liveIds) ? opts.liveIds : [];
+  return { ...defaultDescriptor, ...opts, liveIds };
+}
+
 function loadPriors(file) {
   return priors.loadPriors(file);
 }
@@ -19,9 +32,7 @@ function normaliseModelId(value) {
 }
 
 function splitModelEffort(value, options) {
-  const opts = options && typeof options === 'object' ? options : {};
-  const liveIds = Array.isArray(opts.liveIds) ? opts.liveIds : [];
-  return priors.splitModelEffort(value, { ...opts, liveIds });
+  return priors.splitModelEffort(value, buildComboConfig(options));
 }
 
 function priorFor(candidate, role, loadedPriors, now) {
@@ -38,13 +49,16 @@ function scoreComboMembers(members, role = 'writer', options = {}) {
     : [];
   if (list.length === 0) return [];
   const loaded = options.priors || loadPriors(options.priorsFile);
+  const comboConfig = buildComboConfig({
+    ...(loaded && loaded.config ? loaded.config : {}),
+    registry: options.registry,
+    liveIds: list,
+  });
+  const scopedPriors = { ...(loaded || { ranking: [] }), config: comboConfig };
   const now = options.now ?? Date.now();
   const scored = list.map((modelId) => {
-    const { base, effort } = splitModelEffort(modelId, {
-      liveIds: list,
-      registry: options.registry,
-    });
-    const prior = priorFor({ modelId }, role, loaded, now) || {};
+    const { base, effort } = priors.splitModelEffort(modelId, comboConfig);
+    const prior = priorFor({ modelId }, role, scopedPriors, now) || {};
     return {
       modelId,
       base: base || normaliseModelId(modelId) || modelId,

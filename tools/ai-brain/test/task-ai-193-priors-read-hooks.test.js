@@ -8,7 +8,18 @@ const path = require('node:path');
 const BRAIN_DIR = path.resolve(__dirname, '..');
 const priorsRead = require('../priors-read');
 
-test('TASK-AI-193 AC1: priors-read.js scores and sorts combo members using combo-local IDs', () => {
+test('TASK-AI-193 AC1: priors-read.js scores combo members with zero global catalogue calls and preserves descriptor rules', (t) => {
+  const priorsPublic = require('../priors-public');
+  const origLiveModelIds = priorsPublic.liveModelIds;
+  let globalCalls = 0;
+  priorsPublic.liveModelIds = () => {
+    globalCalls += 1;
+    return [];
+  };
+  t.after(() => {
+    priorsPublic.liveModelIds = origLiveModelIds;
+  });
+
   const fakePriors = {
     ranking: [
       {
@@ -23,21 +34,36 @@ test('TASK-AI-193 AC1: priors-read.js scores and sorts combo members using combo
         reviewTier: 'T3',
         benchmarks: [{ name: 'aaCodingIndex', score: 60 }],
       },
+      {
+        canonical: 'qwen-3.8-max',
+        codingTier: 'T2',
+        reviewTier: 'T2',
+        benchmarks: [{ name: 'aaCodingIndex', score: 75 }],
+      },
     ],
   };
-  const scored = priorsRead.scoreComboMembers(
-    ['9router/model-fast-low', '9router/model-strong-high', '9router/unknown-model'],
-    'writer',
-    { priors: fakePriors }
-  );
-  assert.equal(scored.length, 3);
-  assert.equal(scored[0].modelId, '9router/model-strong-high');
+
+  // Unregistered combo prefix (`customgw/`), combined effort+deployment suffix (`-high-fast`), and `:free` + digit alias
+  const members = [
+    'customgw/model-fast-low',
+    'customgw/model-strong-high-fast',
+    'customgw/qwen3.8-max:free',
+    'customgw/unknown-model',
+  ];
+  const scored = priorsRead.scoreComboMembers(members, 'writer', { priors: fakePriors });
+
+  assert.equal(globalCalls, 0, 'scoreComboMembers must never call priors-public.liveModelIds()');
+  assert.equal(scored.length, 4);
+  assert.equal(scored[0].modelId, 'customgw/model-strong-high-fast');
+  assert.equal(scored[0].base, 'model-strong');
   assert.equal(scored[0].effort, 'high');
   assert.equal(scored[0].priorUnknown, false);
-  assert.equal(scored[1].modelId, '9router/model-fast-low');
-  assert.equal(scored[1].effort, 'low');
-  assert.equal(scored[2].modelId, '9router/unknown-model');
-  assert.equal(scored[2].priorUnknown, true);
+  assert.equal(scored[1].modelId, 'customgw/qwen3.8-max:free');
+  assert.equal(scored[1].priorUnknown, false);
+  assert.equal(scored[2].modelId, 'customgw/model-fast-low');
+  assert.equal(scored[2].effort, 'low');
+  assert.equal(scored[3].modelId, 'customgw/unknown-model');
+  assert.equal(scored[3].priorUnknown, true);
   assert.equal(priorsRead.normaliseModelId('9router/model-strong'), 'model-strong');
 });
 
