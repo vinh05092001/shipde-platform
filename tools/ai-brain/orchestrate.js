@@ -1776,6 +1776,10 @@ async function runOrchestration(goal, opts) {
         // Repair the completed run in place. A fresh provision here discards
         // its commit while the checkpoint still names that deleted object.
         repairJob.retainWorkerHead = retainedHead;
+        // TASK-AI-188 (#610 review, R3): the host-gate repair also names its
+        // run and the item's allowed paths, so it can adopt the writer's work.
+        repairJob.runId = logOpts.runId;
+        if (Array.isArray(item && item.allowedPaths)) repairJob.allowedPaths = item.allowedPaths;
         let gateRepairResult;
         try {
           gateRepairResult = launcher(repairJob);
