@@ -120,7 +120,7 @@ function main(argv = process.argv.slice(2), deps = {}) {
       readDispatchComboConfig:
         args.offline !== undefined
           ? undefined
-          : deps.readDispatchComboConfig || require('./writer-combo').readComboConfig,
+          : deps.readDispatchComboConfig || require('./combo-reader').readComboConfig,
     });
     // The profile path (TASK-AI-65) is async: the JEV advisory returns a
     // promise. An unhandled rejection would crash silently, so it is caught
