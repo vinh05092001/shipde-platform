@@ -118,7 +118,7 @@ function prettierCheck(files, options) {
           detail: out.split(/\r?\n/)[0] || 'prettier could not be loaded',
         };
       }
-      if (res.status !== 0) {
+      if (res.status !== 0 || /^\[error\]/m.test(out)) {
         failingFiles.push(file);
         if (!firstDetail) {
           firstDetail =

@@ -65,6 +65,17 @@ test('TASK-AI-190 AC1: prettierCheck verifies raw Git blob LF bytes even when di
   const badCheck = prettierCheck([filePath], { workerRoot: repo, sha: badSha });
   assert.equal(badCheck.status, 'FAILED', 'unformatted committed blob must still fail');
   assert.deepEqual(badCheck.files, [filePath]);
+
+  // Verify a syntax error in a committed blob also fails closed (Prettier --check --stdin-filepath
+  // prints [error] to stderr even when exiting 0).
+  fs.writeFileSync(filePath, 'function broken( {\n', 'utf8');
+  git(repo, ['add', 'sample.js']);
+  git(repo, ['commit', '-m', 'syntax error commit']);
+  const syntaxSha = git(repo, ['rev-parse', 'HEAD']);
+
+  const syntaxCheck = prettierCheck([filePath], { workerRoot: repo, sha: syntaxSha });
+  assert.equal(syntaxCheck.status, 'FAILED', 'syntax-error committed blob must fail closed');
+  assert.deepEqual(syntaxCheck.files, [filePath]);
 });
 
 test('TASK-AI-190 AC2: carryOverSave excludes .shipde-bin while preserving allowed edits', (t) => {
