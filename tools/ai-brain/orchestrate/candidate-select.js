@@ -386,7 +386,9 @@ async function selectCandidateForProfile(
     return true;
   };
 
+  let comboJevRan = false;
   if (shouldUseComboJevSelect(pool, o, comboApi)) {
+    comboJevRan = true;
     const role = roleOf(item);
     const writerCandidate = writerKey ? pool.find((c) => c && candidateKey(c) === writerKey) : null;
     const parsedWriter = writerKey ? parseCandidateKey(writerKey) : null;
@@ -396,6 +398,24 @@ async function selectCandidateForProfile(
       (writerCandidate && writerCandidate.modelId) ||
       (parsedWriter && parsedWriter.modelId) ||
       null;
+
+    if (role === 'reviewer' && o.strictIndependentComboReview === true && !writerModelId) {
+      const reason = 'NO_INDEPENDENT_REVIEWER';
+      const result = { chosen: null, reason, ranking: [], top3: [], rejected: [], comboJev: null };
+      const decisionRecorded = {
+        stage: decisions.Stage.SELECTED,
+        workItemId: item && item.id,
+        role,
+        chosen: null,
+        chosenCandidate: null,
+        reason,
+        rejected: [],
+        selected: null,
+        chosenKey: null,
+      };
+      decisions.recordDecision(decisionRecorded, logOpts);
+      return { chosen: null, reason, result, decisionRecorded };
+    }
 
     let rawMembers = Array.isArray(o.comboMembers) ? o.comboMembers : null;
     if (!rawMembers) {
@@ -447,7 +467,13 @@ async function selectCandidateForProfile(
       });
     }
 
-    if (sel && sel.ok && sel.candidate && sel.selected) {
+    if (
+      sel &&
+      sel.ok &&
+      sel.candidate &&
+      sel.selected &&
+      !(role === 'reviewer' && o.strictIndependentComboReview === true && !sel.independentApplied)
+    ) {
       const chosen = candidateKey(sel.candidate);
       if (
         Array.isArray(annotatedCandidates) &&
@@ -482,9 +508,8 @@ async function selectCandidateForProfile(
 
     if (
       role === 'reviewer' &&
-      writerModelId &&
       o.strictIndependentComboReview === true &&
-      (!sel || sel.handledBy === 'refused')
+      (!sel || !sel.ok || !sel.independentApplied)
     ) {
       const reason = (sel && sel.reason) || 'NO_INDEPENDENT_REVIEWER';
       const result = { chosen: null, reason, ranking: [], top3: [], rejected: [], comboJev: sel };
@@ -504,7 +529,11 @@ async function selectCandidateForProfile(
     }
   }
 
-  const eligible = pool.filter(isCandidateEligible);
+  // When combo-JEV selection ran and rejected every member, fall back only to
+  // non-member pool entries (the configured combo), never a previously cached
+  // comboMember that independence or eligibility just rejected.
+  const fallbackPool = comboJevRan ? pool.filter((c) => !c || !c.comboMember) : pool;
+  const eligible = fallbackPool.filter(isCandidateEligible);
   const chosenCandidate =
     eligible.find(
       (c) => (!writerKey || candidateKey(c) !== writerKey) && !forbidden.has(domainOf(c))

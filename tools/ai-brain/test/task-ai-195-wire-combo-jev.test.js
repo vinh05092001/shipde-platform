@@ -193,6 +193,61 @@ test('TASK-AI-195 AC2: reviewer selects independent combo member and honors stri
   );
   assert.equal(nonStrictFallback.chosen, candidateKey(baseCombo));
   assert.equal(nonStrictFallback.reason, 'combo-only routing');
+
+  // Regression 1: strict reviewer with absent or unparseable writer identity must refuse
+  for (const badWriter of [undefined, 'not-a-valid-candidate-key']) {
+    const strictUnresolved = await selectCandidateForProfile(
+      {
+        id: 'TASK-R4-review',
+        roleRequirement: { role: 'reviewer' },
+        ...(badWriter ? { writerCandidateKey: badWriter } : {}),
+      },
+      [baseCombo],
+      [],
+      {},
+      {
+        registry: REGISTRY,
+        env,
+        priors: PRIORS,
+        comboMembers: ['gh/gpt-5.2-high', 'ag/claude-4.5-medium'],
+        strictIndependentComboReview: true,
+      },
+      logOpts,
+      logOpts.now,
+      {}
+    );
+    assert.equal(strictUnresolved.chosen, null);
+    assert.equal(strictUnresolved.reason, 'NO_INDEPENDENT_REVIEWER');
+  }
+
+  // Regression 2: fallback after independence rejects all members must never pick a
+  // previously appended same-family comboMember when the configured combo has failed
+  const comboJev = require('../combo-jev-select');
+  const staleSameFamily = comboJev.buildMemberCandidate(
+    { modelId: 'ag/gpt-5.2-low', base: 'gpt-5.2', effort: 'low', score: 85, tier: 'T1' },
+    { registry: REGISTRY, env }
+  ).candidate;
+  const failedComboFallback = await selectCandidateForProfile(
+    {
+      id: 'TASK-R5-review',
+      roleRequirement: { role: 'reviewer' },
+      writerCandidateKey: writerDecision.chosen,
+    },
+    [baseCombo, writerDecision.decisionRecorded.chosenCandidate, staleSameFamily],
+    ['gh'],
+    {},
+    {
+      registry: REGISTRY,
+      env,
+      priors: PRIORS,
+      comboMembers: ['gh/gpt-5.2-high', 'ag/gpt-5.2-low'],
+    },
+    logOpts,
+    logOpts.now,
+    { failedKeys: new Set([candidateKey(baseCombo)]) }
+  );
+  assert.equal(failedComboFallback.chosen, null);
+  assert.match(failedComboFallback.reason, /^NO_ELIGIBLE_CANDIDATE/);
 });
 
 test('TASK-AI-195 AC3: failed member is skipped on retry and falls back to remaining member or combo', async () => {
