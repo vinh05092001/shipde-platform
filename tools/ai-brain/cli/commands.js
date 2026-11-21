@@ -400,7 +400,7 @@ async function orchestrateCommand(args, deps = {}) {
     autoMerge: Boolean(args['auto-merge'] || args.merge),
     mergeConfig: args['merge-config'] || args.config,
     out,
-    now: (d && d.now) || Date.now(),
+    ...(d && d.now !== undefined ? { now: d.now } : {}),
   })
     .then((result) => {
       if (result.status !== 'COMPLETED' && result.status !== 'PUBLISHED_DRAFT') {
