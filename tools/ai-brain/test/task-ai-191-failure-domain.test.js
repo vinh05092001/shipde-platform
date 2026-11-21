@@ -9,8 +9,10 @@ const BRAIN_DIR = path.resolve(__dirname, '..');
 const fd = require('../failure-domain');
 const routing = require('../routing');
 
-test('TASK-AI-191 AC1: failure-domain.js exports match routing.js re-exports', () => {
+test('TASK-AI-191 AC1: failure-domain.js exports match routing.js re-exports and publisher normalization', () => {
+  const publisher = require('../publisher');
   for (const name of [
+    'failureDomainFromCandidateKey',
     'canonicalFailureDomain',
     'failureDomainOf',
     'sameFailureDomain',
@@ -19,12 +21,20 @@ test('TASK-AI-191 AC1: failure-domain.js exports match routing.js re-exports', (
     assert.equal(typeof fd[name], 'function', `failure-domain.${name} must be a function`);
     assert.equal(routing[name], fd[name], `routing.${name} must re-export failure-domain.${name}`);
   }
-  assert.equal(
-    fd.canonicalFailureDomain(
-      'opencode-direct::http://127.0.0.1:20128/v1::9router::9router::9router::9router::vinh'
-    ),
-    '9router/9router'
-  );
+  const cases = [
+    [
+      'opencode-direct::http://127.0.0.1:20128/v1::9router::9router::9router::9router::vinh',
+      '9router/9router',
+    ],
+    ['h::p::gateway-a::*::acc::scope::m', 'gateway-a/*'],
+    ['h::p::::agy07::acc::scope::m', 'agy/agy07'],
+    ['h::p::::::acc::scope::m', 'unknown'],
+    ['not-a-candidate-key', null],
+  ];
+  for (const [key, expected] of cases) {
+    assert.equal(fd.failureDomainFromCandidateKey(key), expected, `fd key=${key}`);
+    assert.equal(publisher.failureDomainFromCandidateKey(key), expected, `publisher key=${key}`);
+  }
   assert.equal(
     fd.sameFailureDomain(
       { gateway: '9router', upstream: 'grok' },

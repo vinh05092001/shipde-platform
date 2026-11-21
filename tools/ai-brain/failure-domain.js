@@ -14,8 +14,7 @@ const path = require('path');
 function failureDomainFromCandidateKey(key) {
   const parts = String(key || '').split('::');
   if (parts.length !== 7) return null;
-  const domain = [parts[2], parts[3]].filter((p) => p && p !== '*');
-  return domain.length ? domain.join('/') : 'unknown';
+  return canonicalFailureDomain({ gateway: parts[2], upstream: parts[3] });
 }
 
 let upstreamGatewayIndex = null;

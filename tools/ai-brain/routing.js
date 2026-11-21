@@ -2739,6 +2739,7 @@ module.exports = {
   controllerFallbackProfile,
   assessTask,
   claudeFamilyExclusion,
+  failureDomainFromCandidateKey,
   canonicalFailureDomain,
   failureDomainOf,
   sameFailureDomain,
