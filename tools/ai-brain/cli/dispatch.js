@@ -685,7 +685,14 @@ function dispatchCommand(args, deps = {}) {
       checkpoint &&
       checkpoint.step === 'fallback_selected' &&
       checkpoint.fallbackCandidate &&
-      annotated.some((c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate)
+      // A saved fallback is resumed only while it is still usable now: a
+      // blocked or credential-less candidate is not re-chosen (TASK-AI-186).
+      annotated.some(
+        (c) =>
+          candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate &&
+          !c.blocked &&
+          !c.credentialEnvMissing
+      )
     ) {
       const resumedCandidate = annotated.find(
         (c) => candidatesApi.candidateKey(c) === checkpoint.fallbackCandidate
@@ -942,6 +949,41 @@ function dispatchCommand(args, deps = {}) {
     const currentCheckpointCandidate = eligibleCandidates.find(
       (candidate) => candidatesApi.candidateKey(candidate) === finalChosenKey
     );
+    // TASK-AI-186 (#605 review, P2): the checkpoint names the candidate, but its
+    // credential is a fact about this process. Re-check it before resuming, so
+    // a key removed after the checkpoint is refused instead of launched.
+    const envMap = (deps && deps.env) || process.env;
+    // Same source the launch below uses (source first), so an AGY replay whose
+    // gateway names the router is not judged by the router's key (#608, F2).
+    const sourceId =
+      (currentCheckpointCandidate &&
+        (currentCheckpointCandidate.source || currentCheckpointCandidate.gateway)) ||
+      checkpoint.source ||
+      checkpoint.gateway ||
+      parsedCheckpoint.gateway;
+    const checkpointSource = (
+      Array.isArray(registry && registry.sources) ? registry.sources : []
+    ).find((src) => src && src.id === sourceId);
+    const checkpointKeyEnv =
+      (currentCheckpointCandidate && currentCheckpointCandidate.apiKeyEnv) ||
+      (checkpointSource && checkpointSource.credential && checkpointSource.credential.env) ||
+      null;
+    const checkpointCredentialMissing = Boolean(
+      (currentCheckpointCandidate &&
+        (currentCheckpointCandidate.credentialEnvMissing ||
+          currentCheckpointCandidate.blockReason === 'CREDENTIAL_ENV_MISSING')) ||
+      (checkpointKeyEnv && !envMap[checkpointKeyEnv])
+    );
+    if (checkpointCredentialMissing) {
+      const reason =
+        'CREDENTIAL_ENV_MISSING: cannot resume ' +
+        finalChosenKey +
+        ' without ' +
+        (checkpointKeyEnv || 'its configured credential env');
+      error(reason);
+      exit(1);
+      return { exitCode: 1, refusal: 'CREDENTIAL_ENV_MISSING', reason };
+    }
     finalChosenCandidate = {
       offeringId: finalChosenKey,
       harness: checkpoint.harness || parsedCheckpoint.harness,

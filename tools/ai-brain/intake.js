@@ -539,6 +539,38 @@ function parseModelListing(output) {
 async function realRead9routerModels(deps) {
   try {
     const registry = deps.sourcesRegistry || sourcesApi.loadSources();
+    // Combo-only (TASK-AI-186, proposal by agy08): the Controller only needs to
+    // know that 9router serves the configured combo. GET /api/combos answers
+    // that in milliseconds, where /v1/models lists every model (about 3,700,
+    // about 18 s). A down router or a missing combo still fails closed here.
+    // Only an endpoint without /api/combos (404/405), or an injected httpGet,
+    // falls back to the models listing.
+    const cfg = require('./combo').configuredCombo(registry);
+    if (cfg && !deps.httpGet) {
+      const read = deps.readComboConfig || require('./writer-combo').readComboConfig;
+      // Bounded like the models listing it replaces: the router source's
+      // verify.timeoutMs, else the discovery HTTP default. A router that
+      // accepts the connection but never answers fails closed (#608 review, F1).
+      const verifyTimeout = Number(cfg.source.verify && cfg.source.verify.timeoutMs);
+      const timeoutMs =
+        Number.isFinite(verifyTimeout) && verifyTimeout > 0
+          ? verifyTimeout
+          : require('./discovery/http').DEFAULT_TIMEOUT_MS;
+      const combo = await read({
+        name: cfg.name,
+        endpoint: cfg.source.endpoint,
+        registry,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (combo && combo.state === 'READ') return { ok: true, models: [cfg.name], modelMeta: {} };
+      const status = combo && (combo.status || combo.state);
+      if (status !== 404 && status !== 405) {
+        return {
+          ok: false,
+          error: `9router combo "${cfg.name}" unavailable: ${status || 'unavailable'}`,
+        };
+      }
+    }
     const source = (registry.sources || []).find(
       (s) => s && s.endpoint && s.verify && s.verify.method === 'models-list'
     );
