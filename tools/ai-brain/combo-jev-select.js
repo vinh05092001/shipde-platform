@@ -102,23 +102,32 @@ function upstreamOfMember(modelId, fallbackUpstream = null) {
 
 /**
  * Filter combo members for independent review (different model family AND
- * different explicit upstream provider prefix from writer).
- * Fail-closed: never re-admits same-upstream, same-family, or writer-only members.
+ * different established upstream provider prefix from writer).
+ * Fail-closed: never re-admits same-upstream, unprefixed/unknown-upstream,
+ * same-family, or writer-only members.
  */
-function filterForIndependence(scoredMembers, writerModelId, allMembers) {
+function filterForIndependence(scoredMembers, writerModelId, allMembers, fallbackUpstream = null) {
   if (!writerModelId) return { eligible: scoredMembers, independentApplied: false };
   const writerSplit = priorsRead.splitModelEffort(writerModelId, { liveIds: allMembers });
   const writerBase =
     writerSplit.base || priorsRead.normaliseModelId(writerModelId) || writerModelId;
   const writerFamily = modelFamilyOf(writerBase);
-  const writerUpstream = upstreamOfMember(writerModelId, null);
+  const explicitWriterUpstream = upstreamOfMember(writerModelId, null);
+  const resolvedWriterUpstream = upstreamOfMember(writerModelId, fallbackUpstream);
+
+  if (!explicitWriterUpstream || !resolvedWriterUpstream) {
+    return { eligible: [], independentApplied: true };
+  }
 
   const distinct = scoredMembers.filter((m) => {
     if (m.modelId === writerModelId) return false;
     if (m.base === writerBase) return false;
     if (modelFamilyOf(m.base) === writerFamily) return false;
-    const memberUpstream = upstreamOfMember(m.modelId, null);
-    if (writerUpstream && memberUpstream && memberUpstream === writerUpstream) return false;
+    const explicitMemberUpstream = upstreamOfMember(m.modelId, null);
+    const resolvedMemberUpstream = upstreamOfMember(m.modelId, fallbackUpstream);
+    if (!explicitMemberUpstream || !resolvedMemberUpstream) return false;
+    if (explicitMemberUpstream === explicitWriterUpstream) return false;
+    if (resolvedMemberUpstream === resolvedWriterUpstream) return false;
     return true;
   });
   return { eligible: distinct, independentApplied: true };
@@ -232,6 +241,7 @@ async function selectComboMember(options = {}) {
   const readCombo = options.readComboConfig || comboReader.readComboConfig;
   const cfg = combo.configuredCombo(options.registry);
   const comboName = options.comboName || (cfg && cfg.name) || null;
+  const fallbackUpstream = (cfg && cfg.source && cfg.source.id) || null;
 
   let rawMembers = Array.isArray(options.members) ? options.members : null;
   let comboConfig = null;
@@ -258,6 +268,19 @@ async function selectComboMember(options = {}) {
       : [];
 
   if (scored.length === 0) {
+    if (assessment.role === 'reviewer' && options.writerModelId) {
+      return {
+        ok: false,
+        assessment,
+        selected: null,
+        candidate: null,
+        eligibleCount: 0,
+        independentApplied: true,
+        handledBy: 'refused',
+        reason: 'NO_INDEPENDENT_REVIEWER',
+        error: 'NO_INDEPENDENT_REVIEWER',
+      };
+    }
     const fallback = combo.comboCandidate({
       registry: options.registry,
       env: options.env,
@@ -276,7 +299,7 @@ async function selectComboMember(options = {}) {
 
   const { eligible, independentApplied } =
     assessment.role === 'reviewer' && options.writerModelId
-      ? filterForIndependence(scored, options.writerModelId, members)
+      ? filterForIndependence(scored, options.writerModelId, members, fallbackUpstream)
       : { eligible: scored, independentApplied: false };
 
   if (eligible.length === 0) {

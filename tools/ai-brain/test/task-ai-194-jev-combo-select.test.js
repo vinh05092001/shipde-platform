@@ -141,6 +141,57 @@ test('TASK-AI-194 AC2: reviewer selection enforces distinct upstream and model f
   assert.equal(writerOnly.candidate, null);
   assert.equal(writerOnly.handledBy, 'refused');
   assert.equal(writerOnly.reason, 'NO_INDEPENDENT_REVIEWER');
+
+  // Fail-closed rejection: unprefixed writer and unprefixed reviewer -> refused (shared fallback upstream)
+  const unprefixedBoth = await selectComboMember({
+    item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
+    role: 'reviewer',
+    writerModelId: 'grok-4.7-high',
+    members: ['grok-4.7-high', 'claude-4.5-low'],
+    priors: PRIORS,
+    registry: REGISTRY,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(unprefixedBoth.ok, false);
+  assert.equal(unprefixedBoth.candidate, null);
+  assert.equal(unprefixedBoth.handledBy, 'refused');
+  assert.equal(unprefixedBoth.reason, 'NO_INDEPENDENT_REVIEWER');
+
+  // Fail-closed rejection: prefixed writer with unprefixed reviewer -> refused (upstream independence unproven)
+  const unprefixedReviewer = await selectComboMember({
+    item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
+    role: 'reviewer',
+    writerModelId: 'gh/gpt-5.2-high',
+    members: ['gh/gpt-5.2-high', 'claude-4.5-low'],
+    priors: PRIORS,
+    registry: REGISTRY,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(unprefixedReviewer.ok, false);
+  assert.equal(unprefixedReviewer.candidate, null);
+  assert.equal(unprefixedReviewer.handledBy, 'refused');
+  assert.equal(unprefixedReviewer.reason, 'NO_INDEPENDENT_REVIEWER');
+
+  // Fail-closed rejection: reviewer with empty, blank-only, or unavailable combo members -> refused
+  for (const emptyOpts of [
+    { members: [] },
+    { members: ['', ' '] },
+    { readComboConfig: async () => ({ status: 'COMBO_UNAVAILABLE', members: [] }) },
+  ]) {
+    const emptyReviewer = await selectComboMember({
+      item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
+      role: 'reviewer',
+      writerModelId: 'gh/gpt-5.2-high',
+      priors: PRIORS,
+      registry: REGISTRY,
+      env: { NINEROUTER_API_KEY: 'test-key' },
+      ...emptyOpts,
+    });
+    assert.equal(emptyReviewer.ok, false);
+    assert.equal(emptyReviewer.candidate, null);
+    assert.equal(emptyReviewer.handledBy, 'refused');
+    assert.equal(emptyReviewer.reason, 'NO_INDEPENDENT_REVIEWER');
+  }
 });
 
 test('TASK-AI-194 P2 regressions: IPv6 endpoint candidateKey round-trip and blank-member fallback', async () => {
