@@ -16,6 +16,7 @@ const combo = require('./combo');
 const comboReader = require('./combo-reader');
 const priorsRead = require('./priors-read');
 const jev = require('./jev');
+const { candidateKey } = require('./discovery/identity');
 
 const EFFORT_RANK = Object.freeze({
   xhigh: 5,
@@ -86,8 +87,23 @@ function modelFamilyOf(baseOrId) {
 }
 
 /**
- * Filter combo members for independent review (different model family from writer).
- * Falls back to full list only if every member shares the writer's family.
+ * Extract explicit upstream prefix from a `provider/model` combo member ID
+ * (e.g. `gh/gpt-5.2-high` -> `gh`). Falls back to `fallbackUpstream` when unprefixed.
+ */
+function upstreamOfMember(modelId, fallbackUpstream = null) {
+  const raw = String(modelId || '').trim();
+  const slash = raw.indexOf('/');
+  if (slash > 0) {
+    const prefix = raw.slice(0, slash).trim().toLowerCase();
+    if (prefix) return prefix;
+  }
+  return fallbackUpstream ? String(fallbackUpstream).trim().toLowerCase() : null;
+}
+
+/**
+ * Filter combo members for independent review (different model family AND
+ * different explicit upstream provider prefix from writer).
+ * Falls back to different exact model/base if no fully independent member exists.
  */
 function filterForIndependence(scoredMembers, writerModelId, allMembers) {
   if (!writerModelId) return { eligible: scoredMembers, independentApplied: false };
@@ -95,15 +111,19 @@ function filterForIndependence(scoredMembers, writerModelId, allMembers) {
   const writerBase =
     writerSplit.base || priorsRead.normaliseModelId(writerModelId) || writerModelId;
   const writerFamily = modelFamilyOf(writerBase);
+  const writerUpstream = upstreamOfMember(writerModelId, null);
 
   const distinct = scoredMembers.filter((m) => {
     if (m.modelId === writerModelId) return false;
     if (m.base === writerBase) return false;
-    return modelFamilyOf(m.base) !== writerFamily;
+    if (modelFamilyOf(m.base) === writerFamily) return false;
+    const memberUpstream = upstreamOfMember(m.modelId, null);
+    if (writerUpstream && memberUpstream && memberUpstream === writerUpstream) return false;
+    return true;
   });
   if (distinct.length > 0) return { eligible: distinct, independentApplied: true };
 
-  // Secondary: at least a different exact modelId/base if all members share one family
+  // Secondary: at least a different exact modelId/base if all members share family or upstream
   const diffModel = scoredMembers.filter(
     (m) => m.modelId !== writerModelId && m.base !== writerBase
   );
@@ -193,19 +213,20 @@ function buildMemberCandidate(member, options = {}) {
   });
   if (baseRes.error || !baseRes.candidate) return baseRes;
   const base = baseRes.candidate;
-  const upstream = modelFamilyOf(member.base) || base.upstream;
+  const upstream = upstreamOfMember(member.modelId, base.upstream) || base.upstream;
   const candidate = {
     ...base,
-    candidateKey: `opencode-direct::${base.endpoint}::${base.gateway}::${upstream}::${base.accountId}::${base.quotaScope}::${member.modelId}`,
     upstream,
     modelId: member.modelId,
     model: member.modelId,
+    modelFamily: modelFamilyOf(member.base),
     comboMember: true,
     comboName: base.combo,
     reasoningEffort: member.effort || null,
     memberScore: member.score,
     memberTier: member.tier,
   };
+  candidate.candidateKey = candidateKey(candidate);
   return { candidate };
 }
 
@@ -219,19 +240,31 @@ async function selectComboMember(options = {}) {
   const cfg = combo.configuredCombo(options.registry);
   const comboName = options.comboName || (cfg && cfg.name) || null;
 
-  let members = Array.isArray(options.members) ? options.members : null;
+  let rawMembers = Array.isArray(options.members) ? options.members : null;
   let comboConfig = null;
-  if (!members) {
+  if (!rawMembers) {
     comboConfig = await readCombo({
       name: comboName,
       registry: options.registry,
       env: options.env,
       fixture: options.comboFixture,
     });
-    members = Array.isArray(comboConfig && comboConfig.members) ? comboConfig.members : [];
+    rawMembers = Array.isArray(comboConfig && comboConfig.members) ? comboConfig.members : [];
   }
 
-  if (members.length === 0) {
+  const members = rawMembers.filter((m) => typeof m === 'string' && m.trim()).map((m) => m.trim());
+
+  const scored =
+    members.length > 0
+      ? priorsRead.scoreComboMembers(members, assessment.role, {
+          priors: options.priors,
+          priorsFile: options.priorsFile,
+          registry: options.registry,
+          now: options.now,
+        })
+      : [];
+
+  if (scored.length === 0) {
     const fallback = combo.comboCandidate({
       registry: options.registry,
       env: options.env,
@@ -247,13 +280,6 @@ async function selectComboMember(options = {}) {
       error: fallback.error || null,
     };
   }
-
-  const scored = priorsRead.scoreComboMembers(members, assessment.role, {
-    priors: options.priors,
-    priorsFile: options.priorsFile,
-    registry: options.registry,
-    now: options.now,
-  });
 
   const { eligible, independentApplied } =
     assessment.role === 'reviewer' && options.writerModelId
@@ -306,6 +332,7 @@ async function selectComboMember(options = {}) {
 module.exports = {
   assessComboTask,
   modelFamilyOf,
+  upstreamOfMember,
   filterForIndependence,
   deterministicPick,
   buildJevComboQuestion,

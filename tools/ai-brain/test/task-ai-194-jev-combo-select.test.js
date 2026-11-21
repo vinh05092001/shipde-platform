@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { assessComboTask, selectComboMember, modelFamilyOf } = require('../combo-jev-select');
+const { parseCandidateKey } = require('../discovery/identity');
 
 const REGISTRY = {
   sources: [
@@ -68,15 +69,17 @@ test('TASK-AI-194 AC1: JEV receives opaque options with score & reasoning and pi
   assert.equal(res.selected.modelId, '9router/claude-4.5-low');
   assert.equal(res.candidate.modelId, '9router/claude-4.5-low');
   assert.equal(res.candidate.comboMember, true);
-  assert.equal(res.candidate.upstream, 'claude');
+  assert.equal(res.candidate.upstream, '9router');
+  assert.equal(res.candidate.modelFamily, 'claude');
 });
 
-test('TASK-AI-194 AC2: reviewer selection excludes writer model family for independent review', async () => {
+test('TASK-AI-194 AC2: reviewer selection enforces distinct upstream and model family truthfully', async () => {
+  // Distinct upstream (`ag/` vs `gh/`) AND distinct model family -> independentApplied: true
   const res = await selectComboMember({
     item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
     role: 'reviewer',
-    writerModelId: '9router/grok-4.7-high',
-    members: ['9router/grok-4.7-high', '9router/grok-4.7-low', '9router/claude-4.5-medium'],
+    writerModelId: 'gh/grok-4.7-high',
+    members: ['gh/grok-4.7-high', 'gh/claude-4.5-medium', 'ag/claude-4.5-medium'],
     priors: PRIORS,
     registry: REGISTRY,
     env: { NINEROUTER_API_KEY: 'test-key' },
@@ -85,9 +88,62 @@ test('TASK-AI-194 AC2: reviewer selection excludes writer model family for indep
   assert.equal(res.ok, true);
   assert.equal(res.independentApplied, true);
   assert.equal(res.eligibleCount, 1);
-  assert.equal(res.selected.modelId, '9router/claude-4.5-medium');
+  assert.equal(res.selected.modelId, 'ag/claude-4.5-medium');
   assert.notEqual(modelFamilyOf(res.selected.base), modelFamilyOf('grok-4.7'));
-  assert.equal(res.candidate.upstream, 'claude');
+  assert.equal(res.candidate.upstream, 'ag');
+  assert.equal(res.candidate.modelFamily, 'claude');
+
+  // Regression (Finding 1): same upstream (`gh/`), different family must NOT claim independentApplied: true
+  const sameUpstream = await selectComboMember({
+    item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
+    role: 'reviewer',
+    writerModelId: 'gh/gpt-5.2-high',
+    members: ['gh/gpt-5.2-high', 'gh/claude-4.5-low'],
+    priors: PRIORS,
+    registry: REGISTRY,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(sameUpstream.ok, true);
+  assert.equal(sameUpstream.independentApplied, false);
+  assert.equal(sameUpstream.candidate.upstream, 'gh');
+  assert.equal(sameUpstream.candidate.modelFamily, 'claude');
+});
+
+test('TASK-AI-194 P2 regressions: IPv6 endpoint candidateKey round-trip and blank-member fallback', async () => {
+  // Finding 2: IPv6 endpoint round-trips through parseCandidateKey
+  const ipv6Registry = {
+    ...REGISTRY,
+    sources: [
+      {
+        ...REGISTRY.sources[0],
+        endpoint: 'http://[::1]:20128/v1',
+      },
+    ],
+  };
+  const ipv6Res = await selectComboMember({
+    item: { id: 'TASK-IPV6', complexity: 'high' },
+    members: ['ag/claude-4.5-high'],
+    priors: PRIORS,
+    registry: ipv6Registry,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(ipv6Res.ok, true);
+  const parsed = parseCandidateKey(ipv6Res.candidate.candidateKey);
+  assert.ok(parsed, 'IPv6 candidateKey must parse cleanly');
+  assert.equal(parsed.modelId, 'ag/claude-4.5-high');
+  assert.equal(parsed.upstream, 'ag');
+  assert.equal(parsed.gateway, '9router');
+
+  // Finding 3: whitespace-only members fall back cleanly to configured combo `vinh`
+  const blankRes = await selectComboMember({
+    item: { id: 'TASK-BLANK' },
+    members: ['', ' '],
+    registry: REGISTRY,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(blankRes.ok, true);
+  assert.equal(blankRes.handledBy, 'combo-fallback');
+  assert.equal(blankRes.candidate.modelId, 'vinh');
 });
 
 test('TASK-AI-194 AC3: deterministic complexity fallback when JEV is undecided and combo fallback when empty', async () => {
