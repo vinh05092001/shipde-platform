@@ -270,9 +270,11 @@ async function runOrchestration(goal, opts) {
   // happens to sit in.
   const hostCwd =
     o.hostCwd || o.cwd || o.workdir || (o && o.host && o.host.cwd) || (o && o.root) || null;
+  // A fixed o.now keeps tests deterministic; a live run stamps each decision
+  // with its own time instead of the run start (TASK-AI-188).
   const logOpts = {
     dir: decisionDir,
-    now,
+    ...(o.now !== undefined ? { now: o.now } : {}),
     goal: o.goal,
     runId: o.runId || `${now}-${process.pid}`,
   };
@@ -1774,6 +1776,10 @@ async function runOrchestration(goal, opts) {
         // Repair the completed run in place. A fresh provision here discards
         // its commit while the checkpoint still names that deleted object.
         repairJob.retainWorkerHead = retainedHead;
+        // TASK-AI-188 (#610 review, R3): the host-gate repair also names its
+        // run and the item's allowed paths, so it can adopt the writer's work.
+        repairJob.runId = logOpts.runId;
+        if (Array.isArray(item && item.allowedPaths)) repairJob.allowedPaths = item.allowedPaths;
         let gateRepairResult;
         try {
           gateRepairResult = launcher(repairJob);
@@ -2408,6 +2414,7 @@ async function runOrchestration(goal, opts) {
           branch: job.branch,
           sessionId: reported.id,
           detail: 'DURABLE_SESSION_ID',
+          runId: logOpts.runId,
           worktree: isIsolated ? workerClone : job.cwd || null,
           sha: session.headSha || null,
           ...(session.headSha

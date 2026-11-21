@@ -434,7 +434,7 @@ function retainedRootHasOwnWriterRecord(opts, extra = {}) {
         (rec.stage === decisions.Stage.LAUNCHED && !!rec.sha);
       if (!validStage) return false;
 
-      const recRoot = rec.workerRoot || rec.root;
+      const recRoot = rec.workerRoot || rec.root || rec.worktree;
       if (!recRoot) return false;
       if (path.resolve(recRoot).toLowerCase() !== path.resolve(targetRoot).toLowerCase()) {
         return false;

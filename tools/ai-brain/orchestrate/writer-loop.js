@@ -143,6 +143,10 @@ function resolveLauncher(o, isolatedLauncher) {
       workItemId: job.title || (job.labels && job.labels.workItem) || null,
       commitFileOnlyWriter: /^author(?:\.|$)|^(?:writer|repair)$/.test(job.labels?.role || ''),
       retainWorkerHead: job.retainWorkerHead || undefined,
+      // TASK-AI-188: the dirty-root adoption check needs the run that owns the
+      // retained root and the Work Item's allowed paths.
+      runId: job.runId || undefined,
+      allowedPaths: job.allowedPaths || undefined,
       verdictPath: job.verdictPath,
       exercise: job.exercise || o.exercise || null,
       onProvisioned: (root, details) => {
@@ -195,6 +199,16 @@ function recordWriterResult(job, result, kind, logOpts, env) {
   const res = result || {};
   const redact = decisions.createSecretRedactor({ ...process.env, ...env });
   const stderr = redact(launchFailureText(res));
+  // TASK-AI-188: a later repair may adopt the dirty root this writer left, but
+  // only on evidence that the worker actually ran there (a session id) and a
+  // HEAD read from that root. A refused launch or an unreadable HEAD records no
+  // ownership (#610 review, R2).
+  const sessionId = redact(
+    require('../executor').readSessionId(harnessFor(job), job, res).id || ''
+  );
+  const candidateRoot = job.workerRoot || job.cwd || null;
+  const workerSha = sessionId && candidateRoot ? headShaOf(candidateRoot) : null;
+  const ownership = workerSha ? { workerRoot: candidateRoot, sha: workerSha } : {};
   return decisions.recordDecision(
     {
       stage: 'writer-launch-result',
@@ -205,10 +219,11 @@ function recordWriterResult(job, result, kind, logOpts, env) {
       model: job.model,
       harness: job.harness,
       usageFile: job.usageFile,
+      ...ownership,
       exitCode: res.exitCode ?? null,
       timedOut: res.timedOut === true,
       httpStatus: res.httpStatus ?? null,
-      sessionId: redact(require('../executor').readSessionId(harnessFor(job), job, res).id || ''),
+      sessionId,
       stderr: stderr.slice(0, 4096),
       stderrTruncated: stderr.length > 4096,
     },

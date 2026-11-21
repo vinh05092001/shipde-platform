@@ -206,6 +206,10 @@ function repairRound(
       isolatedWorker: Boolean(o.isolatedWorker),
       usageFile,
       decisionDir: o.decisionDir || null,
+      // TASK-AI-188: the launcher adopts a dirty retained root only when a
+      // writer record of this run owns it, so the repair job names its run.
+      runId: (logOpts && logOpts.runId) || o.runId || null,
+      allowedPaths: Array.isArray(item && item.allowedPaths) ? item.allowedPaths : null,
       checkpoint: o.checkpointFile || null,
       title: planned.id,
       labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
