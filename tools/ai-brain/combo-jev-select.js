@@ -103,7 +103,7 @@ function upstreamOfMember(modelId, fallbackUpstream = null) {
 /**
  * Filter combo members for independent review (different model family AND
  * different explicit upstream provider prefix from writer).
- * Falls back to different exact model/base if no fully independent member exists.
+ * Fail-closed: never re-admits same-upstream, same-family, or writer-only members.
  */
 function filterForIndependence(scoredMembers, writerModelId, allMembers) {
   if (!writerModelId) return { eligible: scoredMembers, independentApplied: false };
@@ -121,14 +121,7 @@ function filterForIndependence(scoredMembers, writerModelId, allMembers) {
     if (writerUpstream && memberUpstream && memberUpstream === writerUpstream) return false;
     return true;
   });
-  if (distinct.length > 0) return { eligible: distinct, independentApplied: true };
-
-  // Secondary: at least a different exact modelId/base if all members share family or upstream
-  const diffModel = scoredMembers.filter(
-    (m) => m.modelId !== writerModelId && m.base !== writerBase
-  );
-  if (diffModel.length > 0) return { eligible: diffModel, independentApplied: false };
-  return { eligible: scoredMembers, independentApplied: false };
+  return { eligible: distinct, independentApplied: true };
 }
 
 /**
@@ -285,6 +278,20 @@ async function selectComboMember(options = {}) {
     assessment.role === 'reviewer' && options.writerModelId
       ? filterForIndependence(scored, options.writerModelId, members)
       : { eligible: scored, independentApplied: false };
+
+  if (eligible.length === 0) {
+    return {
+      ok: false,
+      assessment,
+      selected: null,
+      candidate: null,
+      eligibleCount: 0,
+      independentApplied,
+      handledBy: 'refused',
+      reason: 'NO_INDEPENDENT_REVIEWER',
+      error: 'NO_INDEPENDENT_REVIEWER',
+    };
+  }
 
   let chosen = null;
   let handledBy = 'fallback';

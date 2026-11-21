@@ -28,7 +28,7 @@ Implements the operator-approved 5-step model selection architecture over the cu
 | ID | Criterion | Evidence |
 |---|---|---|
 | AC1 | `selectComboMember` assesses task difficulty, scores combo members, asks JEV with opaque option IDs, and returns a 9router candidate for the JEV-selected member | `tools/ai-brain/test/task-ai-194-jev-combo-select.test.js` |
-| AC2 | Reviewer selection excludes members sharing the writer's model family (`independentApplied: true`), producing distinct upstream/failure-domain candidates | `tools/ai-brain/test/task-ai-194-jev-combo-select.test.js` |
+| AC2 | Reviewer selection excludes members sharing the writer's upstream or model family (`independentApplied: true`), refusing fail-closed (`NO_INDEPENDENT_REVIEWER`) when no independent member qualifies | `tools/ai-brain/test/task-ai-194-jev-combo-select.test.js` |
 | AC3 | When JEV is unavailable or undecided, deterministic fallback picks by complexity (`high` -> top score/effort, `low` -> lower-effort within score band), and empty combo falls back cleanly to the configured combo candidate | `tools/ai-brain/test/task-ai-194-jev-combo-select.test.js` |
 
 ## Verification

@@ -93,7 +93,7 @@ test('TASK-AI-194 AC2: reviewer selection enforces distinct upstream and model f
   assert.equal(res.candidate.upstream, 'ag');
   assert.equal(res.candidate.modelFamily, 'claude');
 
-  // Regression (Finding 1): same upstream (`gh/`), different family must NOT claim independentApplied: true
+  // Fail-closed rejection: same upstream (`gh/`), different family -> refused
   const sameUpstream = await selectComboMember({
     item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
     role: 'reviewer',
@@ -103,10 +103,44 @@ test('TASK-AI-194 AC2: reviewer selection enforces distinct upstream and model f
     registry: REGISTRY,
     env: { NINEROUTER_API_KEY: 'test-key' },
   });
-  assert.equal(sameUpstream.ok, true);
-  assert.equal(sameUpstream.independentApplied, false);
-  assert.equal(sameUpstream.candidate.upstream, 'gh');
-  assert.equal(sameUpstream.candidate.modelFamily, 'claude');
+  assert.equal(sameUpstream.ok, false);
+  assert.equal(sameUpstream.candidate, null);
+  assert.equal(sameUpstream.selected, null);
+  assert.equal(sameUpstream.eligibleCount, 0);
+  assert.equal(sameUpstream.independentApplied, true);
+  assert.equal(sameUpstream.handledBy, 'refused');
+  assert.equal(sameUpstream.reason, 'NO_INDEPENDENT_REVIEWER');
+  assert.equal(sameUpstream.error, 'NO_INDEPENDENT_REVIEWER');
+
+  // Fail-closed rejection: different upstream (`ag/` vs `gh/`), same model family -> refused
+  const sameFamily = await selectComboMember({
+    item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
+    role: 'reviewer',
+    writerModelId: 'gh/gpt-5.2-high',
+    members: ['gh/gpt-5.2-high', 'ag/gpt-5.2-low'],
+    priors: PRIORS,
+    registry: REGISTRY,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(sameFamily.ok, false);
+  assert.equal(sameFamily.candidate, null);
+  assert.equal(sameFamily.handledBy, 'refused');
+  assert.equal(sameFamily.reason, 'NO_INDEPENDENT_REVIEWER');
+
+  // Fail-closed rejection: writer-only combo list -> refused
+  const writerOnly = await selectComboMember({
+    item: { id: 'TASK-X', complexity: 'standard', allowedPaths: ['a.js'] },
+    role: 'reviewer',
+    writerModelId: 'gh/gpt-5.2-high',
+    members: ['gh/gpt-5.2-high'],
+    priors: PRIORS,
+    registry: REGISTRY,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+  });
+  assert.equal(writerOnly.ok, false);
+  assert.equal(writerOnly.candidate, null);
+  assert.equal(writerOnly.handledBy, 'refused');
+  assert.equal(writerOnly.reason, 'NO_INDEPENDENT_REVIEWER');
 });
 
 test('TASK-AI-194 P2 regressions: IPv6 endpoint candidateKey round-trip and blank-member fallback', async () => {
