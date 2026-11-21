@@ -64,6 +64,8 @@ allowBuilds:
 overrides:
   body-parser: ^2.4.0
   deepmerge-ts: ^8.0.0
+  # TASK-AI-185: CVE-2026-121707 (ReDoS in Schema.TemplateLiteral), via @prisma/config.
+  effect: ^3.22.1
   multer: ^2.5.0
   postcss: ^8.5.18
   proxy-addr: ^2.0.8
