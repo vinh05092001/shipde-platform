@@ -389,9 +389,9 @@ function isReviewerIndependent(authorKey, reviewerKey) {
       return false;
     }
   }
-  const routing = require('./routing');
-  const dAuthor = routing.canonicalFailureDomain(authorKey);
-  const dReviewer = routing.canonicalFailureDomain(reviewerKey);
+  const failureDomain = require('./failure-domain');
+  const dAuthor = failureDomain.canonicalFailureDomain(authorKey);
+  const dReviewer = failureDomain.canonicalFailureDomain(reviewerKey);
   if (dAuthor && dReviewer && dAuthor === dReviewer) {
     return false;
   }
@@ -779,7 +779,9 @@ function createPlanningServices(ctx) {
     const parsedAuthor = authorKey
       ? require('./discovery/identity').parseCandidateKey(authorKey)
       : null;
-    const authorDomain = authorKey ? require('./routing').canonicalFailureDomain(authorKey) : null;
+    const authorDomain = authorKey
+      ? require('./failure-domain').canonicalFailureDomain(authorKey)
+      : null;
     const forbidden = [
       parsedAuthor && parsedAuthor.upstream,
       parsedAuthor && parsedAuthor.gateway,

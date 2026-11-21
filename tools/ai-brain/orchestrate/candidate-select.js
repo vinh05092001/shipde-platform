@@ -2,8 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const routing = require('../routing');
-const ranking = require('../ranking');
+const routing = require('../failure-domain');
 const evidence = require('../evidence');
 const candidatesApi = require('../candidates');
 const { candidateKey } = require('../candidates');

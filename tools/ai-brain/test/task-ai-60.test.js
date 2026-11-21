@@ -384,10 +384,9 @@ test('29 plan input count = completed + blocked + deferred', async () => {
 
 test('30 no second state store or ranking engine', () => {
   const src = require('./helpers/orchestrate-sources').readOrchestrateSources();
-  assert.ok(src.includes("require('./ranking')"));
   assert.ok(src.includes("require('./decisions')"));
-  assert.ok(src.includes('ranking.rankAndRecord'));
   assert.ok(src.includes('decisions.recordDecision'));
+  assert.ok(src.includes("require('../combo')"));
   assert.ok(!src.includes('function rankAndRecord'));
   assert.ok(!src.includes('function recordDecision'));
   assert.ok(!/class\s+\w*Store\b/.test(src));

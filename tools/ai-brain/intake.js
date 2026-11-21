@@ -1077,7 +1077,7 @@ function runIsolatedReviewed(options, deps) {
       (receipt.reviewedSha && receipt.reviewedSha !== receipt.sha)
     )
       return { verdict: 'REFUSED' };
-    const routing = require('./routing');
+    const routing = require('./failure-domain');
     const writerDomain = routing.canonicalFailureDomain(candidate);
     const reviewerDomain = routing.canonicalFailureDomain(receipt.reviewer);
     return {

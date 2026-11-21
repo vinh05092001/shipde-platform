@@ -41,9 +41,7 @@ const approvals = require('./approval-registry');
 const { isWorkerPath } = require('./isolation-launcher');
 const { resolveWorkerGitDir, safeCopyObjects } = require('./supervisor');
 
-// Load lazily because routing has a runtime dependency on this publisher module.
-// Routing owns the canonical implementation; this module only forwards to it.
-const routingFailureDomain = (candidate) => require('./routing').canonicalFailureDomain(candidate);
+const { canonicalFailureDomain: routingFailureDomain } = require('./failure-domain');
 
 // Compatibility adapter for existing publisher consumers. Pass the parsed
 // route dimensions to routing so its candidate-key adapter cannot recurse here.

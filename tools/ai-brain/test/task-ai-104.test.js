@@ -237,6 +237,6 @@ test('PG-R05: publisher failure domains use routing canonical behavior', () => {
   assert.equal(publisher.failureDomainFromCandidateKey(keys[5]), '9router/ocz');
   assert.match(
     fs.readFileSync(path.join(__dirname, '..', 'publisher.js'), 'utf8'),
-    /require\(['"]\.\/routing['"]\)/
+    /require\(['"]\.\/failure-domain['"]\)/
   );
 });
