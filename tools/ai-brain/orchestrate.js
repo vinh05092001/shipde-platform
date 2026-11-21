@@ -68,12 +68,6 @@ const {
   ISOLATION_VERDICT_HUMAN_ACTION,
 } = require('./failure-classifier');
 const { materialiseExercise, captureFailBefore } = require('./isolation-launcher');
-const sharedRouteProbe = require('./route-probe');
-const {
-  probeRankedRoutes,
-  candidateAccountKey,
-  PROVIDER_LEVEL_FAILURE_CAUSES,
-} = require('./hermes-session');
 const {
   launchFailureText,
   failureMessageOf,
@@ -91,13 +85,6 @@ const {
 function exhaustedAccountKey(c) {
   if (!c || !c.accountId || c.accountId === '*') return null;
   return `account-exhausted::${c.harness || ''}::${c.accountId}`;
-}
-
-function providerFailureBodyMatches(body) {
-  return [...PROVIDER_LEVEL_FAILURE_CAUSES].some((cause) => {
-    const escaped = String(cause).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp('(?<!\\w)' + escaped + '(?!\\w)', 'i').test(String(body || ''));
-  });
 }
 
 const ItemStatus = Object.freeze({
@@ -700,6 +687,18 @@ function provisionReviewRoot(workerRoot, reviewRoot, targetSha, options) {
  * Gives the reviewer a compiled review prompt requiring a machine-readable verdict file (verdict.json).
  * Parses the verdict file fail-closed (missing/malformed/sha mismatch -> not PASS) and feeds findings into the repair path.
  */
+/**
+ * Is this reviewer key the configured combo? A key does not carry every source
+ * field, so when the run holds the full candidate for the key, that candidate
+ * decides; the key alone decides only when no candidate exists (#605, F1).
+ */
+function isComboReviewerKey(key, candidates, registry, launched) {
+  const comboApi = require('./combo');
+  const full =
+    launched || (Array.isArray(candidates) ? candidates : []).find((c) => candidateKey(c) === key);
+  return full ? comboApi.isComboCandidate(full, registry) : comboApi.isComboIdentity(key, registry);
+}
+
 function reviewLane(
   o,
   itemOrWriterKey,
@@ -714,8 +713,6 @@ function reviewLane(
   registry,
   opts
 ) {
-  const reviewerProbeStartedAt = Date.now();
-  let reviewerProbeAttempts = 0;
   const writerKey =
     typeof itemOrWriterKey === 'string'
       ? itemOrWriterKey
@@ -723,7 +720,23 @@ function reviewLane(
   const item = typeof itemOrWriterKey === 'object' ? itemOrWriterKey : null;
   const reviewerIdentity = (o && o.reviewerIdentity) || null;
 
-  if (reviewerIdentity && writerKey && reviewerIdentity === writerKey) {
+  // Operator decision 2026-11-19 ("1 combo cho tất cả"): under combo-only routing
+  // the single 9router combo is the only candidate, so the reviewer necessarily
+  // resolves to the same combo as the writer. The operator accepted reviewer ==
+  // writer for that case — 9router still dispatches the review call across the
+  // combo's members, and the review stays an independent exact-SHA task with a
+  // fail-closed verdict. The REVIEWER_EQUALS_WRITER refusal therefore applies only
+  // to a NON-combo candidate, where a distinct reviewer is expected and self-review
+  // would violate the AGENTS.md prohibition on an author approving its own work.
+  // Only the configured combo itself qualifies; an individual model reached
+  // through 9router still needs a distinct reviewer (review of #605, F1).
+  const reviewerIsCombo = isComboReviewerKey(
+    reviewerIdentity,
+    candidates,
+    registry || (o && o.registry)
+  );
+
+  if (reviewerIdentity && writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
     return () => ({
       pass: false,
       sha: null,
@@ -781,7 +794,7 @@ function reviewLane(
       };
     }
 
-    if (writerKey && reviewerIdentity === writerKey) {
+    if (writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
       return {
         pass: false,
         sha: null,
@@ -795,6 +808,23 @@ function reviewLane(
           },
         ],
       };
+    }
+    if (writerKey && reviewerIdentity === writerKey && reviewerIsCombo) {
+      // Record the operator-accepted residual risk (reviewer == writer combo) so
+      // the audit trail shows the self-review was a deliberate combo-only decision.
+      decisions.recordDecision(
+        {
+          stage: decisions.Stage.SELECTED,
+          workItemId: item && item.id,
+          role: 'reviewer',
+          chosen: reviewerIdentity,
+          reason:
+            'REVIEWER_EQUALS_WRITER_COMBO_ACCEPTED: combo-only routing, operator decision 2026-11-19 ("1 combo cho tất cả")',
+          detail:
+            'the single 9router combo reviews its own work; 9router dispatches the review across combo members and the review remains an independent exact-SHA task with a fail-closed verdict',
+        },
+        logOpts
+      );
     }
 
     const candidateList = Array.isArray(candidates) ? candidates : [];
@@ -832,77 +862,6 @@ function reviewLane(
           },
         ],
       };
-    }
-
-    const probeCandidate = routeProbeCandidate(candidate, route, registry, false);
-    if (!probeCandidate) {
-      // CLI-only reviewers remain eligible; skipping HTTP preflight with a WARNING
-      // preserves valid CLI reviewers that would otherwise be excluded.
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.WARNING,
-          workItemId: (item ? item.id : 'item') + '-review',
-          role: 'reviewer',
-          candidateKey: reviewerIdentity,
-          detail: 'REVIEWER_ROUTE_PROBE_SKIPPED: NO_HTTP_ROUTE_OR_PROBE_CREDENTIAL_CONFIG',
-        },
-        logOpts
-      );
-    } else {
-      // Every route of a model may be probed; only the wall-clock budget bounds it.
-      let result = { ok: false, status: 0, body: 'Probe route configuration unavailable' };
-      if (probeCandidate && Date.now() - reviewerProbeStartedAt < PROBE_BUDGET_MS) {
-        reviewerProbeAttempts += 1;
-        // Invoke the caller-provided probe directly through the timeout wrapper.
-        result = await sharedRouteProbe.boundedProbe(
-          o.routeProbe || sharedRouteProbe.probeRoute,
-          probeCandidate,
-          probeCandidate.apiKeyEnv,
-          Object.assign({}, process.env, o.env || {}),
-          { timeoutMs: 8000, fetch: o.fetch }
-        );
-      } else if (Date.now() - reviewerProbeStartedAt >= PROBE_BUDGET_MS) {
-        result = { ok: false, status: 0, body: 'Probe budget exhausted' };
-      }
-      if (result) {
-        require('./route-health').rememberProbe(candidate, result, {
-          ...o,
-          workItemId: (item ? item.id : 'item') + '-review',
-        });
-      }
-      if (!result || result.ok !== true) {
-        const reasonCode = sharedRouteProbe.failureReason(
-          sharedRouteProbe.classifyProbeFailure(result)
-        );
-        const failure = {
-          exitCode: 1,
-          httpStatus: result ? result.status : undefined,
-          body: (result && result.body) || 'REVIEWER_ROUTE_PROBE_FAILED ' + reasonCode,
-          stderr: 'REVIEWER_ROUTE_PROBE_FAILED ' + reasonCode,
-          failureReason: 'REVIEWER_ROUTE_PROBE_FAILED',
-        };
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.REFUSED,
-            workItemId: (item ? item.id : 'item') + '-review',
-            role: 'reviewer',
-            rejected: [{ candidateKey: reviewerIdentity, reason: reasonCode }],
-            detail: failure.stderr,
-          },
-          logOpts
-        );
-        if (opts && typeof opts.onReviewerLaunchFailure === 'function')
-          opts.onReviewerLaunchFailure(failure, candidate, opts.attempt);
-        return {
-          pass: false,
-          sha: targetSha,
-          cause: 'REVIEWER_ROUTE_PROBE_FAILED',
-          verdict: 'REFUSED',
-          reviewer: reviewerIdentity,
-          launchFailed: true,
-          findings: [{ id: 'REVIEWER_ROUTE_PROBE_FAILED', open: true, detail: reasonCode }],
-        };
-      }
     }
 
     const hostWorktree = o.cwd || process.cwd();
@@ -2990,6 +2949,13 @@ function verifyReceiptReviewerSeparation(rec) {
     return 'PUBLISH_REFUSED: receipt cannot parse writer/reviewer failure domain';
   }
   if (writerDomain === reviewerDomain) {
+    // reviewLane accepts reviewer == writer only for the single configured combo
+    // (operator decision 2026-11-19); the receipt carries the same exception so
+    // a completed combo review is not refused on publish or resume (#605, F3).
+    const comboApi = require('./combo');
+    if (rec.writerCandidateKey === rec.reviewer && comboApi.isComboIdentity(rec.reviewer)) {
+      return null;
+    }
     return 'PUBLISH_REFUSED: reviewer shares writer failure domain';
   }
   return null;
@@ -3395,58 +3361,13 @@ function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
   return [...Array.from(map.values()), ...noId];
 }
 
-function resolveEvidenceAccounts(o) {
-  const inputAccounts = (o && o.accounts) || (o && o.ranking && o.ranking.accounts) || [];
-  const registryAccounts =
-    o && Array.isArray(o.registryAccounts)
-      ? o.registryAccounts
-      : o && typeof o.listAccounts === 'function'
-        ? o.listAccounts()
-        : [];
-  return mergeEvidenceAccounts(inputAccounts, registryAccounts);
-}
-
-function buildCandidates(options, evidenceData) {
+function buildCandidates(options) {
+  // Combo-only routing (TASK-AI-171 re-plan 2026-11-19): one 9router combo
+  // candidate; 9router owns member order, failover and health.
   const o = options || {};
-  let baseCandidates = [];
-  if (Array.isArray(o.candidates)) {
-    baseCandidates = o.candidates;
-  } else if (o.accounts || o.catalogue) {
-    baseCandidates = candidatesApi.generateCandidates(
-      Object.assign(
-        {
-          registry: o.registry || sourcesApi.loadSources(),
-          catalogue: o.catalogue || [],
-          accounts: o.accounts || [],
-          externalWorkers: o.externalWorkers,
-          fakeRunsDir: o.fakeRunsDir || o.runsDir,
-          poolRuntimeDir: o.poolRuntimeDir,
-          discoverPool: o.discoverPool,
-          openCodeIds: o.openCodeIds || [],
-          codexOpts: o.codexOpts,
-          sourceModels: o.sourceModels,
-        },
-        o
-      )
-    );
-  }
-  const testsInjectedCandidates = Array.isArray(o.candidates);
-  const evData =
-    evidenceData !== undefined
-      ? evidenceData
-      : o.evidenceData !== undefined
-        ? o.evidenceData
-        : o.evidenceDir
-          ? evidence.loadEvidence(o.evidenceDir)
-          : testsInjectedCandidates
-            ? null
-            : evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
-  const accounts = resolveEvidenceAccounts(o);
-  const evCandidates =
-    evData && Array.isArray(evData.combinations)
-      ? candidatesApi.candidatesFromEvidence(evData, { accounts }).filter((c) => !c.legacy)
-      : [];
-  return candidatesApi.mergeCandidates(baseCandidates, evCandidates);
+  if (Array.isArray(o.candidates)) return o.candidates;
+  const result = require('./combo').comboCandidate({ registry: o.registry, env: o.env });
+  return result.candidate ? [result.candidate] : [];
 }
 
 function recordLaunchFailureEvidence(
@@ -3542,393 +3463,87 @@ async function selectCandidateForProfile(
   now,
   opts
 ) {
+  // Combo-only routing: take the first candidate that has not failed this item.
   const options = opts || {};
-  const failedKeys = options.failedKeys || (item && item.failedKeys) || (o && o.failedKeys) || null;
-  const failedKeySet =
-    failedKeys instanceof Set ? failedKeys : new Set(Array.isArray(failedKeys) ? failedKeys : []);
-  const excludedDomains = options.excludedDomains || (item && item.excludedDomains) || null;
-  const excludedDomainSet =
-    excludedDomains instanceof Set
-      ? excludedDomains
-      : new Set(Array.isArray(excludedDomains) ? excludedDomains : []);
-  const domainAttemptsMap = resolveDomainAttempts(options, item, null, o);
-  const attemptNumber = options.attempt !== undefined ? options.attempt : item && item.attempt;
-
-  const profile = buildProfile(item, o, forbiddenDomains);
-  const registry = (o && o.registry) || { sources: [] };
-  const jevSource = sourcesApi.getSource('jev', registry);
-  const jevAsk =
-    o.jevAsk ||
-    jev.buildJevAsk(jevSource, {
-      home: o && o.home,
-      env: (o && o.env) || process.env,
-      httpClient: o && o.jevHttpClient,
-      timeoutMs: Math.min(
-        o.jevTimeoutMs || jev.DEFAULT_HTTP_TIMEOUT_MS,
-        (o.itemDeadline || Infinity) - Date.now()
-      ),
-    });
-
-  const evData =
-    evidenceData && (evidenceData.combinations || Object.keys(evidenceData).length > 0)
-      ? evidenceData
-      : o && o.evidenceDir
-        ? evidence.loadEvidence(o.evidenceDir)
-        : evidenceData;
-
-  let candidates = Array.isArray(annotatedCandidates) ? annotatedCandidates : [];
-  if (evData && Array.isArray(evData.combinations) && evData.combinations.length > 0) {
-    const accounts = resolveEvidenceAccounts(o);
-    const evCandidates = candidatesApi
-      .candidatesFromEvidence(evData, { accounts })
-      .filter((c) => !c.legacy);
-    candidates = candidatesApi.mergeCandidates(candidates, evCandidates);
-    candidates = candidatesApi.annotateCandidates(
-      candidates.map((c) => Object.assign({}, c)),
-      evData,
-      { now }
-    );
-  }
-
-  if (failedKeySet.size > 0 || excludedDomainSet.size > 0 || domainAttemptsMap.size > 0) {
-    candidates = candidates.map((c) => {
-      const k = candidateKey(c);
-      if (failedKeySet.has(k)) {
-        return Object.assign({}, c, {
-          blocked: true,
-          blockReason: 'LAUNCH_FAILED',
-          blockScope: 'candidate',
-        });
-      }
-      const accountMark = exhaustedAccountKey(c);
-      if (accountMark && failedKeySet.has(accountMark)) {
-        return Object.assign({}, c, {
-          blocked: true,
-          blockReason: 'ACCOUNT_QUOTA_EXHAUSTED',
-          blockScope: 'account',
-        });
-      }
-      const cDomain = routing.canonicalFailureDomain(c);
-      if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
-        return Object.assign({}, c, {
-          blocked: true,
-          blockReason: excludedDomainSet.has(cDomain)
-            ? 'FAILURE_DOMAIN_EXCLUDED'
-            : 'DOMAIN_ATTEMPTS_EXHAUSTED',
-          blockScope: 'domain',
-        });
-      }
-      return c;
-    });
-  }
-
-  // The weighting assessment is the Controller's own, obtained through the real
-  // JEV source declared in sources.json. The ask is closed and only about
-  // weighting profiles, never a model, provider, account or gateway.
-  if (o.isolatedWorker && (o.refreshWriterModels === true || o.enforceCredentialCheck === true)) {
-    const env = { ...process.env, ...o.env };
-    const selectionApi = require('./writer-selection');
-    const { hasLauncherWriter } = require('./harness');
-    candidates = candidates.map((c) => {
-      if (c.blocked) return c;
-      let route;
-      try {
-        route = resolveLaunchRoute(c, o, registry);
-      } catch {
-        route = null;
-      }
-      if (!route)
-        return {
-          ...c,
-          blocked: true,
-          blockReason: 'ROUTE_CONFIGURATION_UNAVAILABLE',
-          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
-        };
-      if (!hasLauncherWriter(route.harnessName, { registry }))
-        return {
-          ...c,
-          blocked: true,
-          blockReason: 'HARNESS_WRITER_UNSUPPORTED',
-          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
-        };
-      if (route.harnessName !== 'opencode-direct') return c;
-      const configured = routeProbeCandidate(c, route, registry);
-      if (!configured || !env[configured.apiKeyEnv])
-        return {
-          ...c,
-          blocked: true,
-          blockReason: 'PROVIDER_CREDENTIAL_UNAVAILABLE',
-          routeEvidence: selectionApi.inventoryEvidence(c, registry, false),
-        };
-      return { ...c, routeEvidence: selectionApi.inventoryEvidence(c, registry, true) };
-    });
-  }
-  const assessment = await require('./writer-selection').assessOnce(
-    profile,
-    jevSource,
-    jevAsk,
-    o,
-    routing
+  const failed = options.failedKeys || (item && item.failedKeys) || [];
+  const failedSet = failed instanceof Set ? failed : new Set(failed);
+  const pool = Array.isArray(annotatedCandidates) ? annotatedCandidates : [];
+  const blocked = pool.find((c) => c && c.blocked);
+  // Combo-only still selects per profile: the reviewer passes the writer's key
+  // and forbidden failure domain so, when the pool has a distinct candidate, the
+  // review lane does not resolve to the writer. When only the single combo
+  // candidate is available it is reused for every role (operator decision
+  // 2026-11-19 "1 combo cho tất cả", which accepts reviewer == writer).
+  const writerKey = (item && item.writerCandidateKey) || options.writerCandidateKey || null;
+  const forbidden = new Set(
+    (Array.isArray(forbiddenDomains) ? forbiddenDomains : []).filter(Boolean)
   );
-
-  const rankCtx = {
-    now,
-    taskId: profile.taskId,
-    evidenceData: evData,
-    priors: o && o.ranking && o.ranking.priors,
-    headrooms: {
-      ...Object.fromEntries(
-        candidates
-          .filter((c) => c.probeQuota && c.probeQuota.status !== 'unknown')
-          .map((c) => [candidateKey(c), c.probeQuota])
-      ),
-      ...(o && o.ranking && o.ranking.headrooms),
-    },
-    reservations: o && o.ranking && o.ranking.reservations,
-    accounts: o && o.ranking && o.ranking.accounts,
-    useStoredQuota: true,
-    home: (o && o.home) || (o && o.ranking && o.ranking.home),
-    storePath: o && o.ranking && o.ranking.storePath,
-    explorationBudget:
-      o && o.ranking && o.ranking.explorationBudget !== undefined
-        ? Number(o.ranking.explorationBudget)
-        : item && item.exploration
-          ? 1
-          : 0,
-    enforceKnownQuota:
-      o && o.ranking && o.ranking.enforceKnownQuota === true
-        ? true
-        : o && o.ranking && o.ranking.enforceKnownQuota === false
-          ? false
-          : hasQuotaAccountReadings(o),
+  const domainOf = (c) => {
+    try {
+      return routing.canonicalFailureDomain(c);
+    } catch (_) {
+      return null;
+    }
   };
-
-  if (
-    profile.role === 'writer' ||
-    (profile.requiredCapabilities || []).some((cap) => ['jsonSchema', 'tools'].includes(cap))
-  ) {
-    const schemaApi = require('./writer-schema');
-    const sourcesApi = require('./sources');
-    const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
-    const schemaBudgetMs =
-      o.schemaProbeBudgetMs ?? o.schemaBudgetMs ?? dispatchConfig.schemaProbeBudgetMs;
-    const cache = o.writerSchemaEvidence || (o.writerSchemaEvidence = new Map());
-    const failedSchemaAccounts =
-      o.writerSchemaFailedAccounts || (o.writerSchemaFailedAccounts = new Map());
-    o.capabilityProbeStartedAt = Date.now();
-    await require('./capability-probe').probeCapabilities(candidates, profile, {
-      ...o,
-      deadline: Math.min(o.capabilityProbeStartedAt + schemaBudgetMs, o.itemDeadline || Infinity),
-      preflightHttp: o.preflightHttp === true,
-      capabilityEvidence: o.capabilityEvidence || (o.capabilityEvidence = {}),
-      httpRoute: (c) => {
-        if (!o.registry) return null;
-        try {
-          return routeProbeCandidate(c, resolveLaunchRoute(c, o, registry), registry, false);
-        } catch {
-          return null;
-        }
-      },
-      probeCli: async (c, capability, remainingMs) => {
-        const key = candidateKey(c);
-        const account = c.harness + '::' + c.accountId;
-        let proof = capability === 'jsonSchema' ? cache.get(key) : null;
-        if (!proof && failedSchemaAccounts.has(account)) proof = failedSchemaAccounts.get(account);
-        if (!proof && c.harness === 'agy-pool' && sourcesApi.isAgyPoolWriterEnabled(registry, o)) {
-          proof = await schemaApi.verify(c, { ...o, capability, schemaTimeoutMs: remainingMs });
-          if (proof && !proof.ok && /^WRITER_SCHEMA_POOL_/.test(String(proof.reason)))
-            failedSchemaAccounts.set(account, proof);
-        } else if (!proof && o.isolatedWorker && c.harness !== 'agy-pool') {
-          const isolation = require('./isolation-launcher');
-          const root = resolveIsolatedWorkerRoot(o, o.cwd || process.cwd()) + '-schema-probe';
-          const route = resolveLaunchRoute(c, o, registry);
-          const run = resolveLauncher(
-            {
-              ...o,
-              exercise: null,
-              onProvisioned: undefined,
-              workerTimeoutMs: schemaApi.probeTimeoutMs(o, remainingMs),
-            },
-            isolation.getIsolatedLauncher()
-          );
-          proof = await schemaApi.verify(c, {
-            ...o,
-            capability,
-            schemaTimeoutMs: remainingMs,
-            workerRoot: root,
-            run: (job) =>
-              run({
-                ...job,
-                harness: route?.harnessName || job.harness,
-                provider: route?.provider,
-                model: route?.model || job.model,
-                isolatedWorker: true,
-                cwd: root,
-                workerRoot: root,
-                hostWorktree: o.cwd || process.cwd(),
-                baseSha: o.baseSha,
-                title: `${item.id}-schema-probe`,
-                workerTimeoutMs: schemaApi.probeTimeoutMs(o, remainingMs),
-                isolationVerdict: isolation.readClosedIsolationVerdict(),
-              }),
-          });
-        } else if (!proof)
-          proof = { unverified: true, reason: 'WRITER_SCHEMA_LAUNCH_NOT_AUTHORIZED' };
-        if (capability === 'jsonSchema' && !proof.unverified) cache.set(key, proof);
-        return proof;
-      },
-    });
-    o.capabilityProbeDurationMs = Date.now() - o.capabilityProbeStartedAt;
-  }
-  const result = routing.rankForProfile(candidates, profile, assessment, rankCtx);
-  if (o.isolatedWorker && profile.role !== 'reviewer') {
-    require('./probe-order').preferKnownGood(result, candidates, { ...o, now });
-  }
-
-  if (result.chosen) {
-    if (failedKeySet.has(result.chosen)) {
-      result.chosen = null;
-      result.reason = 'REFUSED: candidate launch previously failed';
-    } else {
-      const chosenCand = candidates.find((c) => candidateKey(c) === result.chosen);
-      if (chosenCand) {
-        const cDomain = routing.canonicalFailureDomain(chosenCand);
-        if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
-          result.chosen = null;
-          result.reason = excludedDomainSet.has(cDomain)
-            ? 'REFUSED: failure domain previously excluded'
-            : 'REFUSED: failure domain attempt budget exhausted';
-        }
-      }
-    }
-  }
-
-  const writerKey = (item && item.writerCandidateKey) || null;
-  if (writerKey) {
-    if (result.chosen && result.chosen === writerKey) {
-      result.chosen = null;
-      result.reason = 'REFUSED: reviewer equals writer';
-    }
-    const existingRejection = result.rejected.find((r) => r.candidateKey === writerKey);
-    if (existingRejection) {
-      existingRejection.reasonCode = 'REVIEWER_EQUALS_WRITER';
-      existingRejection.reason = 'reviewer must not equal writer';
-      existingRejection.scope = 'candidate';
-    }
-    const alreadyRejected = Boolean(existingRejection);
-    if (!alreadyRejected) {
-      const writerCand = (candidates || []).find((c) => candidateKey(c) === writerKey);
-      if (writerCand) {
-        result.rejected.push({
-          candidateKey: writerKey,
-          reasonCode: 'REVIEWER_EQUALS_WRITER',
-          reason: 'reviewer must not equal writer',
-          scope: 'candidate',
-          upstream: writerCand.upstream,
-          modelId: writerCand.modelId,
-          accountId: writerCand.accountId || '*',
-        });
-      }
-    }
-  }
-
-  const stage =
-    profile.role === 'reviewer'
-      ? (decisions.Stage && decisions.Stage.REVIEWER_SELECTION) || 'reviewer-selection'
-      : (decisions.Stage && decisions.Stage.SELECTED) || 'selected';
-
-  const allExcluded = new Set(failedKeySet);
-  for (const c of candidates) {
-    const k = candidateKey(c);
-    const cDomain = routing.canonicalFailureDomain(c);
-    if (excludedDomainSet.has(cDomain) || (domainAttemptsMap.get(cDomain) || 0) >= 2) {
-      allExcluded.add(k);
-    }
-  }
-  for (const d of excludedDomainSet) {
-    allExcluded.add(d);
-  }
-  for (const [d, count] of domainAttemptsMap.entries()) {
-    if (count >= 2) {
-      allExcluded.add(d);
-    }
-  }
-
+  // Honor the same exclusions the retry loop records (restored after the
+  // combo-only carve, agy09 P1-3): an exhausted-account mark blocks every route
+  // under that account, an excluded failure domain is off-limits, and a domain
+  // that has already had two attempts is spent.
+  const excludedDomains =
+    options.excludedDomains instanceof Set
+      ? options.excludedDomains
+      : new Set(Array.isArray(options.excludedDomains) ? options.excludedDomains : []);
+  const domainAttempts =
+    options.domainAttempts instanceof Map
+      ? options.domainAttempts
+      : new Map(
+          options.domainAttempts && typeof options.domainAttempts === 'object'
+            ? Object.entries(options.domainAttempts)
+            : []
+        );
+  // The domain caps exist to spread attempts across routes. The single combo is
+  // its own failover domain (9router fails over between members), and the
+  // writer and reviewer launches alone reach the cap, which left no repair
+  // candidate (#605, F4). A combo that actually failed is still refused through
+  // failedSet and the exhausted-account mark.
+  const comboApi = require('./combo');
+  const eligible = pool.filter((c) => {
+    if (!c || c.blocked || failedSet.has(candidateKey(c))) return false;
+    const accMark = exhaustedAccountKey(c);
+    if (accMark && failedSet.has(accMark)) return false;
+    if (comboApi.isComboCandidate(c, o && o.registry)) return true;
+    const dom = domainOf(c);
+    if (dom && excludedDomains.has(dom)) return false;
+    if (dom && (domainAttempts.get(dom) || 0) >= 2) return false;
+    return true;
+  });
+  const chosenCandidate =
+    eligible.find(
+      (c) => (!writerKey || candidateKey(c) !== writerKey) && !forbidden.has(domainOf(c))
+    ) ||
+    eligible.find((c) => !writerKey || candidateKey(c) !== writerKey) ||
+    eligible[0] ||
+    null;
+  const chosen = chosenCandidate ? candidateKey(chosenCandidate) : null;
+  const reason = chosen
+    ? 'combo-only routing'
+    : 'NO_ELIGIBLE_CANDIDATE: ' +
+      ((blocked && blocked.blockReason) || 'combo unavailable or failed');
+  const ranking = chosenCandidate ? [{ ...chosenCandidate, candidateKey: chosen }] : [];
+  const result = { chosen, reason, ranking, top3: ranking, rejected: [] };
   const decisionRecorded = {
-    stage,
-    inventory: o.writerInventory,
-    workItemId: profile.taskId,
+    stage: decisions.Stage.SELECTED,
+    workItemId: item && item.id,
     role: roleOf(item),
-    attempt: attemptNumber !== undefined ? attemptNumber : undefined,
-    attemptNumber: attemptNumber !== undefined ? attemptNumber : undefined,
-    profile,
-    taskProfile: profile,
-    jev: assessment,
-    weightProfile: assessment.weightProfile,
-    weightSource: assessment.weightSource,
-    scores: assessment.scores,
-    dimensionConfidences: assessment.dimensionConfidences,
-    weights: assessment.weights,
-    jevModel: assessment.jevModel || null,
-    confidence: assessment.confidence !== undefined ? assessment.confidence : null,
-    probabilities: assessment.probabilities || null,
-    top3: result.top3.map((c) => ({
-      candidateKey: c.candidateKey,
-      score: c.score,
-      scoreBreakdown: c.scoreBreakdown,
-      proof: routing.proofObserved(evData, c) || 'NONE',
-      capabilityEvidence: c.capabilities || {},
-      jsonSchemaEvidence: c.jsonSchemaEvidence || null,
-      routeEvidence: c.routeEvidence || null,
-      quotaEvidence: c.probeQuota || null,
-      account: normalizeAccount(c.accountId),
-      quota: {
-        headroom: c.headroomStatus || 'unknown',
-        reasonCode: c.quotaReasonCode || null,
-        quotaScope: c.quotaScope || null,
-        accountId: normalizeAccount(c.accountId),
-      },
-      failureDomain: routing.failureDomainOf(c),
-      reservationsHeld: c.reservationsHeld || 0,
-      sessions: c.sessionsHeld || 0,
-    })),
-    chosenCandidate: result.ranking.find((c) => c.candidateKey === result.chosen) || null,
-    ranking: result.ranking.map((c) => ({
-      candidateKey: c.candidateKey,
-      score: c.score,
-      scoreBreakdown: c.scoreBreakdown,
-      proof: routing.proofObserved(evData, c) || 'NONE',
-      capabilityEvidence: c.capabilities || {},
-      jsonSchemaEvidence: c.jsonSchemaEvidence || null,
-      routeEvidence: c.routeEvidence || null,
-      quotaEvidence: c.probeQuota || null,
-      headroom: c.headroomStatus || 'unknown',
-      quotaReasonCode: c.quotaReasonCode || null,
-      failureDomain: routing.failureDomainOf(c),
-      account: normalizeAccount(c.accountId),
-      reservationsHeld: c.reservationsHeld || 0,
-    })),
-    rejected: result.rejected,
-    knownGoodRejected: result.knownGoodRejected || [],
-    isolatedLaneRejected: result.isolatedLaneRejected || [],
-    rejectedCount: result.rejected.length,
-    fallbackSequence: [],
-    firstChoice: result.top3[0] ? result.top3[0].candidateKey : null,
-    selected: result.chosen,
-    chosen: result.chosen,
-    chosenKey: result.chosen,
-    reason: result.reason,
-    excluded: Array.from(allExcluded),
-    excludedSet: Array.from(allExcluded),
+    chosen,
+    chosenCandidate,
+    reason,
+    rejected: [],
+    selected: chosen,
+    chosenKey: chosen,
   };
   decisions.recordDecision(decisionRecorded, logOpts);
-
-  return {
-    chosen: result.chosen,
-    reason: result.reason,
-    result,
-    decisionRecorded,
-  };
+  return { chosen, reason, result, decisionRecorded };
 }
 
 /**
@@ -4267,50 +3882,10 @@ async function runOrchestration(goal, opts) {
       : evidenceDir
         ? evidence.loadEvidence(evidenceDir)
         : null;
-  if (
-    (o.isolatedWorker || o.refreshWriterModels === true) &&
-    !testsInjectedCandidates &&
-    o.autoOnboard !== false
-  ) {
-    const rollingOnboard = require('./rolling-onboard');
-    const env = o.env || process.env;
-    const currentReg = o.registry || sourcesApi.loadSources();
-    const newSources = rollingOnboard.detectNewSources(currentReg, evidenceData, env);
-    if (newSources.length > 0) {
-      await rollingOnboard.autoOnboardNewSources(newSources, {
-        ...o,
-        evidenceData,
-        evidenceDir,
-        registry: currentReg,
-        env,
-      });
-      if (evidenceDir) evidenceData = evidence.loadEvidence(evidenceDir);
-    }
-  }
-
-  // Opt-in: the CLI turns this on for real runs; a direct runOrchestration call
-  // (tests, embedded use) never reaches live /models with host credentials.
-  if (o.refreshWriterModels === true) {
-    o.registry = await require('./writer-selection').refreshWriterRegistry(
-      o.registry || sourcesApi.loadSources(),
-      o
-    );
-    o.candidates = candidatesApi.mergeCandidates(
-      o.candidates || [],
-      candidatesApi.generateCandidates({
-        ...o,
-        candidates: undefined,
-        catalogue: o.catalogue || [],
-        accounts: o.accounts || [],
-        registry: o.registry,
-      })
-    );
-    // Inventory describes this selection; do not insert a record ahead of the
-    // selection that existing decision-log consumers expect to read first.
-    o.writerInventory = o.registry.sources
-      .filter((s) => s.writerInventory)
-      .map((s) => ({ sourceId: s.id, ...s.writerInventory }));
-  }
+  // Combo-only (TASK-AI-171): 9router owns the combo's member list, failover
+  // and health, so the Controller has no writer models to refresh, regenerate
+  // or rank. The candidate is always the single combo (buildCandidates); the
+  // old generateCandidates pool is never merged on top of it.
   const rawCandidates = buildCandidates(o, evidenceData);
   const candidates = candidatesApi.annotateCandidates(
     rawCandidates.map((c) => Object.assign({}, c)),
@@ -4964,228 +4539,7 @@ async function runOrchestration(goal, opts) {
       launch.scope = scope;
     };
 
-    const recordProbeSkip = (candidate, reasonCode) => {
-      // Exclude only in this invocation; no provider failure or cooldown was observed.
-      failedKeys.add(candidateKey(candidate));
-      const reason = 'WRITER_ROUTE_PROBE_SKIPPED ' + reasonCode;
-      decisions.recordDecision(
-        {
-          stage: decisions.Stage.REFUSED,
-          workItemId: item.id,
-          role: roleOf(item),
-          rejected: [{ candidateKey: candidateKey(candidate), reason }],
-          detail: reason,
-        },
-        logOpts
-      );
-      launch.fallbackReason = reason;
-    };
-    const unattemptedProbeReason = (result) => {
-      if (result?.ok === true) return null;
-      const reason = sharedRouteProbe.failureReason(sharedRouteProbe.classifyProbeFailure(result));
-      return ['PROBE_BUDGET_EXHAUSTED', 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE'].includes(reason)
-        ? reason
-        : null;
-    };
-
-    const writerProbeFailureReason = (result) => {
-      const cause = sharedRouteProbe.classifyProbeFailure(result);
-      // Keep provider-scoped health memory, but report the operator action accurately.
-      return cause && cause.reason === 'PROVIDER_UNAVAILABLE' && cause.provider
-        ? 'AUTH_NEEDED'
-        : sharedRouteProbe.failureReason(cause);
-    };
-    const needsWriterHttpProbe = (candidate, route) =>
-      Boolean(
-        route &&
-        o.isolatedWorker &&
-        (route.harnessName === 'opencode-direct' ||
-          routeProbeCandidate(candidate, route, registry, false))
-      );
-    let writerProbeStartedAt = Date.now();
-    const writerProbeBudgetMs = o.probeBudgetMs ?? itemDispatchConfig.probeBudgetMs;
     let lastWriterFailureReason = null;
-    const exhaustedAccountKeys = new Set();
-    const writerProbeResults = new Map();
-    if (!session && o.isolatedWorker) {
-      const ranked = await selectCandidateForProfile(
-        item,
-        candidates,
-        [...new Set(forbiddenDomains)],
-        evidenceData,
-        o,
-        logOpts,
-        now,
-        { failedKeys, excludedDomains, domainAttempts, attempt: 1 }
-      );
-      const ordered = require('./route-health').orderProbeRoutes(
-        ranked.result.ranking.filter((candidate) => {
-          try {
-            const route = resolveLaunchRoute(candidate, o, registry);
-            return needsWriterHttpProbe(candidate, route);
-          } catch {
-            return false;
-          }
-        }),
-        o
-      );
-      // Ranking work (jsonSchema proofs share their own budget) must not spend the probe budget.
-      writerProbeStartedAt = Date.now();
-      const preProbeCooldowns = [];
-      const refuse = (candidate, reason, exclude = true) => {
-        if (exclude) failedKeys.add(candidateKey(candidate));
-        if (/^PROBE_COOLDOWN/.test(reason)) {
-          preProbeCooldowns.push({ candidateKey: candidateKey(candidate), reason });
-          return;
-        }
-        decisions.recordDecision(
-          {
-            stage: decisions.Stage.REFUSED,
-            workItemId: item.id,
-            role: roleOf(item),
-            chosen: null,
-            rejected: [{ candidateKey: candidateKey(candidate), reason }],
-            detail: reason,
-          },
-          logOpts
-        );
-      };
-      const recordWriterPrompt = (candidate) => {
-        const key = candidateKey(candidate);
-        log.prompts.push({
-          workItemId: item.id,
-          candidateKey: key,
-          prompt: compilePrompt(item, {
-            goal,
-            specText: o.specText,
-            candidateKey: key,
-            branch: o.branch || 'feat/' + String(item.id).toLowerCase(),
-            isolatedWorker: true,
-            focusedTestsOnly: true,
-            contextPack: contextPack && contextPack.path,
-            hostGateFailures: item.hostGateFailures || [],
-          }),
-        });
-      };
-      const sourcesApi = require('./sources');
-      const dispatchConfig = sourcesApi.getDispatchConfig(registry, o);
-      const probeBudgetMs = writerProbeBudgetMs;
-      const batch = await probeRankedRoutes(ordered, {
-        deadline: Math.min(writerProbeStartedAt + probeBudgetMs, o.itemDeadline),
-        maxConcurrentProbes: dispatchConfig.maxConcurrentProbes,
-        skip: (candidate, account) =>
-          exhaustedAccountKeys.has(account)
-            ? 'WRITER_PROBE_SKIPPED_ACCOUNT_EXHAUSTED'
-            : require('./route-health').probeCooldown(candidate, o) ||
-              require('./route-health').tpmTooSmall(candidate, o) ||
-              require('./route-health').contextOverflowObserved(candidate, o),
-        refusal: refuse,
-        runProbe: async (candidate) => {
-          const route = resolveLaunchRoute(candidate, o, registry);
-          const routeCandidate = routeProbeCandidate(candidate, route, registry);
-          const remainingMs = Math.min(
-            probeBudgetMs - (Date.now() - writerProbeStartedAt),
-            o.itemDeadline - Date.now()
-          );
-          const store =
-            o.routeHealth ||
-            (typeof require('./route-health').probeMemoryFile === 'function'
-              ? require('./route-health').loadStore(require('./route-health').probeMemoryFile(o), {
-                  allowMissing: true,
-                })
-              : null);
-          const identity = require('./route-health').probeIdentity(candidate);
-          const record = store
-            ? require('./route-health').getPathRecord(store, identity.model, identity.route)
-            : null;
-          const timeoutMs = sourcesApi.resolveProbeTimeout(
-            candidate,
-            record,
-            dispatchConfig,
-            remainingMs
-          );
-          const result =
-            routeCandidate && remainingMs > 0
-              ? await sharedRouteProbe.boundedProbe(
-                  o.routeProbe || sharedRouteProbe.probeRoute,
-                  routeCandidate,
-                  routeCandidate.apiKeyEnv,
-                  Object.assign({}, process.env, o.env || {}),
-                  { timeoutMs, fetch: o.fetch }
-                )
-              : {
-                  ok: false,
-                  status: 0,
-                  reasonCode:
-                    remainingMs <= 0
-                      ? 'PROBE_BUDGET_EXHAUSTED'
-                      : 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
-                  body:
-                    remainingMs <= 0
-                      ? 'Probe budget exhausted'
-                      : 'Probe route configuration unavailable',
-                };
-          const skippedReason = unattemptedProbeReason(result);
-          if (skippedReason) {
-            recordProbeSkip(candidate, skippedReason);
-            recordWriterPrompt(candidate);
-            return false;
-          }
-          require('./writer-selection').applyProbe(
-            candidates.find((c) => candidateKey(c) === candidateKey(candidate)) || candidate,
-            result
-          );
-          writerProbeResults.set(candidateKey(candidate), result);
-          require('./route-health').rememberProbe(candidate, result, { ...o, workItemId: item.id });
-          if (result?.ok === true && result?.quota?.status !== 'exhausted') return true;
-          if (result?.quota?.status === 'exhausted') {
-            refuse(candidate, 'QUOTA_EXHAUSTED: route probe');
-            return false;
-          }
-          const reasonCode = writerProbeFailureReason(result);
-          const key = candidateKey(candidate);
-          const reason =
-            Date.now() - writerProbeStartedAt >= writerProbeBudgetMs
-              ? 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted'
-              : 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
-          const unknown = require('./route-health').isUnverifiedProbe(result);
-          if (unknown) writerProbeResults.delete(key);
-          recordWriterFailure(key, reason, reasonCode, unknown ? 'local' : 'candidate');
-          recordWriterPrompt(candidate);
-          refuse(candidate, reason, !unknown);
-          const cause = String(result?.cause || result?.reasonCode || reasonCode)
-            .toLowerCase()
-            .trim();
-          if (
-            PROVIDER_LEVEL_FAILURE_CAUSES.has(cause) ||
-            providerFailureBodyMatches(result?.body)
-          ) {
-            exhaustedAccountKeys.add(candidateAccountKey(candidate));
-          }
-          return false;
-        },
-      });
-      decisions.recordRouteRefusals(
-        preProbeCooldowns,
-        routeRefusalStates,
-        { workItemId: item.id },
-        logOpts
-      );
-      if (batch.winner) {
-        for (const [key, result] of writerProbeResults) {
-          if (result?.ok !== true) failedKeys.add(key);
-        }
-      }
-      // Unstarted routes remain eligible for fallback while time remains.
-      if (Date.now() - writerProbeStartedAt >= writerProbeBudgetMs) {
-        for (const candidate of ordered) {
-          if (!batch.outcomes.has(candidateKey(candidate))) {
-            // Recorded only: an unprobed route is not a failed route and stays a fallback.
-            refuse(candidate, 'WRITER_ROUTE_PROBE_SKIPPED wall-clock budget exhausted', false);
-          }
-        }
-      }
-    }
     const itemLimitReason = (code, rounds) => {
       const reasons = {};
       const add = (reason) => {
@@ -5233,11 +4587,7 @@ async function runOrchestration(goal, opts) {
       const failedForSelection = new Set([...failedKeys, ...localCandidateFailures.keys()]);
       const routeRefusals = candidates.map((offered) => {
         const key = candidateKey(offered);
-        const reason = writerProbeResults.has(key)
-          ? null
-          : require('./route-health').probeCooldown(offered, o) ||
-            require('./route-health').tpmTooSmall(offered, o) ||
-            require('./route-health').contextOverflowObserved(offered, o);
+        const reason = null;
         if (reason) failedForSelection.add(key);
         return { candidateKey: key, reason };
       });
@@ -5247,23 +4597,6 @@ async function runOrchestration(goal, opts) {
         { workItemId: item.id, attempt },
         logOpts
       );
-      // Prefer completed live probes, retaining Controller eligibility checks.
-      const liveKeys = candidates
-        .filter(
-          (offered) =>
-            !failedForSelection.has(candidateKey(offered)) &&
-            !excludedDomains.has(routing.canonicalFailureDomain(offered)) &&
-            !forbiddenDomains.includes(offered.gateway) &&
-            !forbiddenDomains.includes(offered.upstream) &&
-            writerProbeResults.get(candidateKey(offered))?.ok === true
-        )
-        .map(candidateKey);
-      if (liveKeys.length) {
-        for (const offered of candidates) {
-          if (!liveKeys.includes(candidateKey(offered)))
-            failedForSelection.add(candidateKey(offered));
-        }
-      }
       const excludedForSelection = new Set(excludedDomains);
       const selectedCheckpoint =
         attempt === 1 &&
@@ -5293,8 +4626,6 @@ async function runOrchestration(goal, opts) {
             }
           );
 
-      // Each retry owns a probe window; ranking and prior writer runtime are excluded.
-      if (attempt > 1) writerProbeStartedAt = Date.now();
       log.selections.push({ workItemId: item.id, attempt, decision });
       if (Date.now() >= o.itemDeadline && reachedItemLimit(attempt)) break;
       if (!decision.chosen) {
@@ -5415,108 +4746,6 @@ async function runOrchestration(goal, opts) {
         blockedReason = 'HARNESS_UNKNOWN: no dispatch route for ' + String(decision.chosen);
         recordPostSelectFailure(blockedReason, 'HARNESS_UNKNOWN');
         break;
-      }
-      if (!replayedLaunch && needsWriterHttpProbe(candidate, route)) {
-        let probeResult = writerProbeResults.get(decision.chosen);
-        if (!probeResult) {
-          // Runtime fallback may reach a route below the pre-probe winner.
-          const routeCandidate = routeProbeCandidate(candidate, route, registry);
-          const remainingMs = Math.min(
-            PROBE_BUDGET_MS - (Date.now() - writerProbeStartedAt),
-            o.itemDeadline - Date.now()
-          );
-          probeResult =
-            routeCandidate && remainingMs > 0
-              ? await sharedRouteProbe.boundedProbe(
-                  o.routeProbe || sharedRouteProbe.probeRoute,
-                  routeCandidate,
-                  routeCandidate.apiKeyEnv,
-                  Object.assign({}, process.env, o.env || {}),
-                  { timeoutMs: Math.min(8000, remainingMs), fetch: o.fetch }
-                )
-              : {
-                  ok: false,
-                  status: 0,
-                  reasonCode:
-                    remainingMs <= 0
-                      ? 'PROBE_BUDGET_EXHAUSTED'
-                      : 'PROBE_ROUTE_CONFIGURATION_UNAVAILABLE',
-                  body:
-                    remainingMs <= 0
-                      ? 'Probe budget exhausted'
-                      : 'Probe route configuration unavailable',
-                };
-        }
-        const skippedReason = unattemptedProbeReason(probeResult);
-        if (skippedReason) {
-          recordProbeSkip(candidate, skippedReason);
-          if (skippedReason === 'PROBE_BUDGET_EXHAUSTED') {
-            blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
-            break;
-          }
-          continue;
-        }
-        require('./writer-selection').applyProbe(candidate, probeResult);
-        writerProbeResults.set(decision.chosen, probeResult);
-        if (probeResult?.quota?.status === 'exhausted') {
-          failedKeys.add(decision.chosen);
-          const accMark = exhaustedAccountKey(candidate);
-          if (accMark) {
-            failedKeys.add(accMark);
-            if (item && item.failedKeys instanceof Set) item.failedKeys.add(accMark);
-          }
-          recordPostSelectFailure('QUOTA_EXHAUSTED: route probe', 'QUOTA_EXHAUSTED', 'candidate');
-          continue;
-        }
-        require('./route-health').rememberProbe(candidate, probeResult, {
-          ...o,
-          workItemId: item.id,
-        });
-        if (!probeResult || probeResult.ok !== true) {
-          const reasonCode = writerProbeFailureReason(probeResult);
-          const reason = 'WRITER_ROUTE_PROBE_FAILED ' + reasonCode;
-          const unknown = require('./route-health').isUnverifiedProbe(probeResult);
-          recordPostSelectFailure(reason, reasonCode, unknown ? 'local' : 'candidate');
-          if (unknown) writerProbeResults.delete(decision.chosen);
-          else failedKeys.add(decision.chosen);
-
-          const rawCause =
-            (probeResult && (probeResult.cause || probeResult.reasonCode)) || reasonCode;
-          const isProviderLevel =
-            (rawCause &&
-              PROVIDER_LEVEL_FAILURE_CAUSES.has(String(rawCause).toLowerCase().trim())) ||
-            (probeResult && probeResult.body && providerFailureBodyMatches(probeResult.body));
-          if (isProviderLevel) {
-            const accKey = candidateAccountKey(candidate);
-            if (accKey) {
-              exhaustedAccountKeys.add(accKey);
-              for (const other of candidates) {
-                if (candidateAccountKey(other) === accKey) {
-                  failedKeys.add(candidateKey(other));
-                }
-              }
-            }
-          }
-
-          decisions.recordDecision(
-            {
-              stage: decisions.Stage.REFUSED,
-              workItemId: item.id,
-              role: roleOf(item),
-              chosen: null,
-              rejected: [{ candidateKey: decision.chosen, reason: reasonCode }],
-              detail: reason,
-            },
-            logOpts
-          );
-          launch.fallbackReason = reason;
-          launch.cause = reasonCode;
-          if (Date.now() - writerProbeStartedAt >= writerProbeBudgetMs) {
-            blockedReason = 'PROBE_BUDGET_EXHAUSTED: writer route probe budget exhausted';
-            break;
-          }
-          continue;
-        }
       }
       const candDomain = routing.canonicalFailureDomain(candidate);
       domainAttempts.set(candDomain, (domainAttempts.get(candDomain) || 0) + 1);
@@ -8003,6 +7232,15 @@ async function reviewItem(
   opts
 ) {
   const options = opts || {};
+  // One run registry for the whole review: selection and reviewLane read
+  // o.registry, so a registry passed positionally is carried on o (#605, F5).
+  if (registry && o && !o.registry) o = Object.assign({}, o, { registry });
+  // The single configured combo is its own failover domain: the writer and the
+  // first reviewer launch already spend its two domain attempts, so the review
+  // of a repaired SHA must not be refused on the domain cap (#605, F4). Real
+  // failures still refuse it through failedKeySet / reviewerTriedKeySet.
+  const isRunCombo = (key, launched) =>
+    isComboReviewerKey(key, candidates, registry || (o && o.registry), launched);
   const failedKeys =
     options.failedKeys ||
     (item && item.failedKeys) ||
@@ -8258,8 +7496,9 @@ async function reviewItem(
     !controllerJudgedCandidates &&
     !failedKeySet.has(configuredReviewerKey) &&
     !failedKeySet.has(configuredReviewer) &&
-    !excludedDomainSet.has(configuredReviewerDomain) &&
-    (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2
+    (isRunCombo(configuredReviewerKey) ||
+      (!excludedDomainSet.has(configuredReviewerDomain) &&
+        (domainAttemptsMap.get(configuredReviewerDomain) || 0) < 2))
   );
   // A configured reviewer that is the writer is passed through only so the
   // review lane refuses it with REVIEWER_EQUALS_WRITER; it is never launched.
@@ -8646,8 +7885,9 @@ async function reviewItem(
         if (
           failedKeySet.has(activeReviewerKey) ||
           reviewerTriedKeySet.has(activeReviewerKey) ||
-          excludedDomainSet.has(activeReviewerDomain) ||
-          (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2
+          (!isRunCombo(activeReviewerKey) &&
+            (excludedDomainSet.has(activeReviewerDomain) ||
+              (domainAttemptsMap.get(activeReviewerDomain) || 0) >= 2))
         ) {
           activeReviewerKey = null;
           if (launchFailures > 0) {
@@ -8702,7 +7942,7 @@ async function reviewItem(
                 reviewerDomain,
                 (reviewerDomainAttempts.get(reviewerDomain) || 0) + 1
               );
-              if (attempts >= 2) {
+              if (attempts >= 2 && !isRunCombo(activeReviewerKey, candidate)) {
                 excludedDomainSet.add(reviewerDomain);
                 if (item && item.excludedDomains instanceof Set) {
                   item.excludedDomains.add(reviewerDomain);
@@ -9827,6 +9067,7 @@ module.exports = {
   rtkPolicyForItem,
   buildCandidates,
   selectCandidateForProfile,
+  verifyReceiptReviewerSeparation,
   repairRound,
   reviewLane,
   reviewItem,

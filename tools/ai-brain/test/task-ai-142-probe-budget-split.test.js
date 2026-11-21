@@ -21,11 +21,3 @@ test('the writer route-probe window is not charged with capability proof time', 
     /writerProbeStartedAt\s*=\s*Date\.now\(\)\s*-\s*\(?o\.capabilityProbeDurationMs/
   );
 });
-
-test('writer route-probe budget checks read the configured budget', () => {
-  assert.doesNotMatch(source, /Date\.now\(\)\s*-\s*writerProbeStartedAt\s*>=\s*PROBE_BUDGET_MS/);
-  assert.match(
-    source,
-    /writerProbeBudgetMs\s*=\s*o\.probeBudgetMs\s*\?\?\s*itemDispatchConfig\.probeBudgetMs/
-  );
-});

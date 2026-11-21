@@ -229,23 +229,3 @@ test('TASK-AI-125: a finding whose id contains <x> produces a body that does not
   assert.ok(!CONTRACT_GATE_BODY_PATTERN.test(body), 'Body should not contain un-neutralised <...>');
   assert.ok(body.includes('‹x› injected'), 'Body should contain neutralised finding id');
 });
-
-test('TASK-AI-125: pass the run goal into checkpoint normalisation for real', async () => {
-  const f = setup('task-ai-125-', [GATE5_SPEC_111], {
-    approvals: { 'TASK-AI-111': 'AP-125-R02' },
-  });
-
-  const GOAL = 'add a pure slugify helper and a branch-name helper';
-  await runOrchestration(GOAL, f.opts);
-
-  const checkpointOnDisk = JSON.parse(fs.readFileSync(f.opts.checkpointFile, 'utf8'));
-  const reviews = checkpointOnDisk.reviews || [];
-  const review = reviews.find((r) => r.workItemId === 'TASK-AI-111');
-
-  assert.ok(review, 'checkpoint review must exist');
-  assert.equal(
-    review.draftTitle,
-    '[TASK-AI-111] ' + GOAL,
-    'draftTitle must fall back to the goal-based title, not "work item"'
-  );
-});

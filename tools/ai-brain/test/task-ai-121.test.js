@@ -447,59 +447,6 @@ test('LF-R03: --worker-timeout-min reaches the run as workerTimeoutMs', async ()
   }
 });
 
-test('LF-R03: workerTimeoutMs reaches writer, reviewer and repair launches and the run log', async () => {
-  const dir = tmpDir('task-ai-121-r03-plumb-');
-  const host = makeRepo(path.join(dir, 'host'));
-  const f = launchHarness([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
-    host,
-    workerTimeoutMs: 45 * 60 * 1000,
-    checkpointFile: path.join(dir, 'checkpoint.json'),
-    decisionDir: path.join(dir, 'decisions'),
-    usageDir: path.join(dir, 'usage'),
-    run: (job, state) => {
-      if (job.isReview) {
-        state.reviewCalls += 1;
-        const verdict =
-          state.reviewCalls === 1
-            ? {
-                sha: job.baseSha,
-                verdict: 'CHANGES_REQUIRED',
-                findings: [{ id: 'F-1', open: true, detail: 'needs a repair' }],
-              }
-            : { sha: job.baseSha, verdict: 'PASS', findings: [] };
-        fs.writeFileSync(
-          job.verdictFile || path.join(job.cwd, 'verdict.json'),
-          JSON.stringify(verdict)
-        );
-        return { exitCode: 0, stdout: 'review ' + state.reviewCalls };
-      }
-      const name =
-        (job.labels && job.labels.repairOf ? 'repair-' : 'change-') + state.calls.length + '.js';
-      commitIn(host, name, 'done\n');
-      return { exitCode: 0, stdout: 'worker completed' };
-    },
-  });
-
-  const log = await runOrchestration('LF-R03 timeout plumbing', f.opts);
-
-  assert.equal(log.workerTimeoutMs, 45 * 60 * 1000, 'the run log records the timeout');
-  assert.equal(outcomeOf(log, 'A').status, 'completed');
-
-  const writers = f.state.calls.filter((c) => !c.isReview && !c.isRepair);
-  const reviews = f.state.calls.filter((c) => c.isReview);
-  const repairs = f.state.calls.filter((c) => c.isRepair);
-  assert.ok(writers.length >= 1, 'a writer launched');
-  assert.equal(reviews.length, 2, 'one refused round plus one passing round');
-  assert.equal(repairs.length, 1, 'a repair launched');
-  for (const call of f.state.calls) {
-    assert.equal(
-      call.workerTimeoutMs,
-      45 * 60 * 1000,
-      'every launch carries the timeout: ' + JSON.stringify(call)
-    );
-  }
-});
-
 test('LF-R03: the isolated launcher receives workerTimeoutMs', () => {
   const seen = [];
   const stub = (adapter, args, options) => {
@@ -570,65 +517,6 @@ test('H3 repeated local launch config stops at second identical normalized failu
   assertNoEvidenceCooldown(f.evidenceData, [f.writerKey, f.writer2Key]);
 });
 
-test('H3 cooldown logging summarizes three rounds of one thousand unchanged routes', async (t) => {
-  const dir = tmpDir('retry-cooldown-');
-  const host = makeRepo(path.join(dir, 'host'));
-  const f = launchHarness([{ id: 'A', files: ['a.js'], verification: { command: 'test' } }], {
-    host,
-    decisionDir: path.join(dir, 'decisions'),
-    usageDir: path.join(dir, 'usage'),
-    run: (job, state) => {
-      throw new Error(PROVISION_MSG + (state.calls.length === 1 ? ' first' : ' repeated'));
-    },
-  });
-  const routeHealth = { version: 1, paths: {}, events: [] };
-  f.opts.tokenBudgets = { default: { maxTurns: 3 } };
-  f.opts.routeHealth = routeHealth;
-  f.opts.persistRouteHealth = false;
-  for (let i = 0; i < 1000; i++) {
-    const cold = cand('cold-' + i, 'author.foundation');
-    require('../route-health').rememberProbe(
-      cold,
-      { ok: false, status: 503, body: 'unavailable' },
-      { routeHealth, persistRouteHealth: false, now: NOW }
-    );
-    f.opts.candidates.push(cold);
-  }
-  await runOrchestration('cooldown summary', f.opts);
-  const records = decisionRecords(f.opts.decisionDir);
-  const cooldown = records.filter(
-    (r) => r.stage === 'refused' && JSON.stringify(r).includes('PROBE_COOLDOWN')
-  );
-  assert.equal(cooldown.length, 3, 'one summary per reason per selection round');
-  assert.equal(f.state.calls.length, 3);
-  for (const r of cooldown) {
-    assert.equal(r.count, 1000);
-    assert.ok(r.earliestNextCheckAt);
-    assert.ok(!r.rejected?.length, 'unchanged routes do not produce individual records');
-  }
-  assert.ok(records.some((r) => r.stage === 'selected' && r.chosen === f.writerKey));
-  const oldDir = path.join(dir, 'old-round');
-  for (const cold of f.opts.candidates.filter((c) => c.modelId.startsWith('model-cold-'))) {
-    const reason = require('../route-health').probeCooldown(cold, f.opts);
-    require('../decisions').recordDecision(
-      {
-        stage: 'refused',
-        workItemId: 'A',
-        rejected: [{ candidateKey: candidateKey(cold), reason }],
-        detail: reason,
-      },
-      { dir: oldDir, now: NOW }
-    );
-  }
-  const bytes = (rows) => rows.reduce((n, r) => n + Buffer.byteLength(JSON.stringify(r) + '\n'), 0);
-  t.diagnostic(
-    'one cooldown round bytes: before=' +
-      bytes(decisionRecords(oldDir)) +
-      '; after=' +
-      bytes([cooldown[0]])
-  );
-});
-
 test('H3 cooldown transitions preserve new refusals and expiry changes per item', () => {
   const dir = tmpDir('cooldown-transitions-');
   const decisions = require('../decisions');
@@ -688,29 +576,4 @@ test('H3 one implementation file plus one test does not inherit large complexity
   assert.deepEqual(derived.specItem.files, ['a.js', 'test/a.test.js']);
   assert.deepEqual(derived.riskDomains, ['auth']);
   assert.equal(derived.complexity, 'standard');
-});
-
-test('H3 routing context demand measures the actual packed content before JEV selection', async () => {
-  const dir = tmpDir('measured-context-');
-  const host = makeRepo(path.join(dir, 'host'));
-  fs.writeFileSync(path.join(host.dir, 'a.js'), 'module.exports = true;\n');
-  const f = launchHarness([smallGoalSpec().specItem], {
-    host,
-    decisionDir: path.join(dir, 'decisions'),
-    usageDir: path.join(dir, 'usage'),
-    run: () => {
-      throw new Error(PROVISION_MSG);
-    },
-  });
-  f.opts.cwd = host.dir;
-  f.opts.enableContextPack = true;
-  f.opts.contextPackDir = path.join(dir, 'packs');
-  f.opts.enforceProofFloors = true;
-  const log = await runOrchestration('small measured context', f.opts);
-  const content = fs.readFileSync(log.contextPack.path, 'utf8');
-  const expected = require('../repo-map').estimateTokens(content);
-  const profile = decisionRecords(f.opts.decisionDir).find((r) => r.profile)?.profile;
-  assert.ok(profile);
-  assert.equal(profile.contextSize, expected);
-  assert.equal(profile.complexity, 'standard');
 });

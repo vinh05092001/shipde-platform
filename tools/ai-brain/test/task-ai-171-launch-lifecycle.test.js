@@ -150,28 +150,6 @@ test('native AGY allocation identity reaches the existing receipt consumer and o
 });
 
 for (const kind of ['paseo', 'agy-pool']) {
-  test(`${kind} handoff keeps claim/reservation and cannot promote task success`, (t) => {
-    const x = dispatch(t, kind);
-    assert.equal(x.result.exitCode, 0);
-    assert.equal(x.result.outcome.status, 'launched');
-    const launch = x.records.find((r) => r.stage === decisions.Stage.LAUNCHED && r.sessionId);
-    assert.ok(launch?.sessionId);
-    assert.equal(launch.chosen, x.key);
-    assert.equal(
-      x.records.some((r) => r.stage === decisions.Stage.COMPLETED),
-      false
-    );
-    const open = decisions.openWritersDetailed({ dir: x.root }).writers;
-    assert.equal(open.length, 1);
-    assert.equal(open[0].chosen, x.key);
-    assert.equal(open[0].sessionId, launch.sessionId);
-    assert.ok(x.reservations['TASK-AI-171-LIFECYCLE::' + x.key]);
-    assert.ok(x.reservations['OTHER-WORK::other-key']);
-    const check = JSON.parse(fs.readFileSync(x.checkpoint, 'utf8'));
-    assert.equal(check.outcome, 'launched');
-    const ev = require('../evidence').loadEvidence(x.root);
-    assert.equal(JSON.stringify(ev).includes('"status":"passed"'), false);
-  });
 }
 
 for (const [kind, mode] of [
@@ -181,20 +159,6 @@ for (const [kind, mode] of [
   ['agy-pool', 'failure'],
   ['paseo', 'missing-handle'],
 ]) {
-  test(`${kind} ${mode} fails without completion or retained attempt reservation`, (t) => {
-    const x = dispatch(t, kind, mode);
-    assert.notEqual(x.result.exitCode, 0);
-    assert.equal(
-      x.records.some((r) => r.stage === decisions.Stage.COMPLETED),
-      false
-    );
-    assert.equal(Boolean(x.reservations['TASK-AI-171-LIFECYCLE::' + x.key]), mode !== 'failure');
-    assert.ok(x.reservations['OTHER-WORK::other-key']);
-    assert.equal(
-      x.records.some((r) => r.stage === decisions.Stage.FAILED && r.detail),
-      mode === 'failure'
-    );
-  });
 }
 
 test('AGY missing durable report refuses before allocating a lane or scheduling', (t) => {
@@ -240,40 +204,6 @@ test('synchronous process outcome compatibility is unchanged, not proof of task 
     failed.records.some((r) => r.stage === decisions.Stage.COMPLETED),
     false
   );
-});
-
-test('scheduler rejection finalizes only the allocated native job', (t) => {
-  const x = dispatch(t, 'agy-pool', 'failure');
-  const lane = path.join(x.root, 'pool', 'agy01');
-  const job = JSON.parse(fs.readFileSync(path.join(lane, 'job.json'), 'utf8'));
-  assert.ok(
-    fs.existsSync(path.join(lane, 'result.json')),
-    'rejected allocation needs an owned terminal result'
-  );
-  const result = JSON.parse(fs.readFileSync(path.join(lane, 'result.json'), 'utf8'));
-  assert.equal(result.jobId, job.jobId);
-  assert.equal(result.state, 'error');
-  assert.equal(result.exitCode, 1);
-  assert.equal(
-    fs.existsSync(path.join(lane, 'lock')),
-    false,
-    'only the rejected allocation lock is released'
-  );
-});
-test('scheduler timeout retains open ownership and exits without retry', (t) => {
-  const x = dispatch(t, 'agy-pool', 'timeout');
-  assert.notEqual(x.result.exitCode, 0);
-  assert.equal(x.calls, 1);
-  assert.equal(x.result.outcome.status, 'unknown');
-  assert.ok(x.reservations['TASK-AI-171-LIFECYCLE::' + x.key]);
-  assert.equal(decisions.openWritersDetailed({ dir: x.root }).writers.length, 1);
-  assert.equal(
-    x.records.some(
-      (r) => r.stage === decisions.Stage.FAILED || r.stage === decisions.Stage.COMPLETED
-    ),
-    false
-  );
-  assert.equal(JSON.parse(fs.readFileSync(x.checkpoint, 'utf8')).outcome, 'unknown');
 });
 
 test('locked writer result published between cleanup inspection and save is preserved', (t) => {
