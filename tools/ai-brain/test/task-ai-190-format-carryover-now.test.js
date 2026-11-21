@@ -78,10 +78,12 @@ test('TASK-AI-190 AC2: carryOverSave excludes .shipde-bin while preserving allow
   git(workerRepo, ['fetch', hostRepo, 'main']);
   git(workerRepo, ['checkout', '-b', 'feat/task-ai-190-test', 'FETCH_HEAD']);
 
-  // Create both a legitimate edit and a .shipde-bin binary artifact
+  // Create both a legitimate edit and a .shipde-bin binary artifact, and even
+  // pre-stage .shipde-bin/rtk.exe (simulating an interrupted `git add --all`).
   fs.writeFileSync(path.join(workerRepo, 'a.txt'), 'edited\n', 'utf8');
   fs.mkdirSync(path.join(workerRepo, '.shipde-bin'), { recursive: true });
   fs.writeFileSync(path.join(workerRepo, '.shipde-bin', 'rtk.exe'), Buffer.from('MZ-fake-binary'));
+  git(workerRepo, ['add', '-f', '.shipde-bin/rtk.exe']);
 
   const saved = carryOverSave(hostRepo, workerRepo, 'feat/task-ai-190-test', baseSha);
   assert.equal(saved, true);

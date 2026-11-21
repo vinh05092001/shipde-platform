@@ -122,16 +122,22 @@ function carryOverSave(hostCwd, oldRoot, branch, headSha) {
         ':!.local',
         ':!Microsoft',
       ]);
-      carryGit(
-        oldRoot,
-        CARRY_IDENTITY.concat([
-          'commit',
-          '--no-verify',
-          '--no-gpg-sign',
-          '-m',
-          'WIP: carried over from an interrupted writer attempt',
-        ])
-      );
+      // Unstage any previously-staged .shipde-bin artifacts (e.g. from an
+      // interrupted writer's `git add --all`) before committing carry-over.
+      carryGit(oldRoot, ['reset', '-q', 'HEAD', '--', '.shipde-bin']);
+      const staged = carryGit(oldRoot, ['diff', '--cached', '--name-only']);
+      if (staged.status === 0 && staged.stdout.trim()) {
+        carryGit(
+          oldRoot,
+          CARRY_IDENTITY.concat([
+            'commit',
+            '--no-verify',
+            '--no-gpg-sign',
+            '-m',
+            'WIP: carried over from an interrupted writer attempt',
+          ])
+        );
+      }
     }
     const ref = carryRef(branch);
     const fetched = carryGit(
