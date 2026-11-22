@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
+const { resolveRtkBinDir } = require('../isolation-launcher');
 const { getTreeStatus, isTreeDirty } = require('../orchestrate/writer-loop');
 const { orchestrateCommand } = require('../cli/commands');
 
@@ -21,22 +22,35 @@ function initTempGitRepo() {
   return dir;
 }
 
-test('TASK-AI-196 AC1: getTreeStatus and isTreeDirty ignore untracked .shipde-bin/rtk.exe but still flag other dirty files', () => {
+test('TASK-AI-196 AC1: trusted RTK shim resolves outside workerRoot and worker-created .shipde-bin inside repo stays fail-closed', () => {
   const dir = initTempGitRepo();
-  fs.mkdirSync(path.join(dir, '.shipde-bin'), { recursive: true });
-  fs.writeFileSync(path.join(dir, '.shipde-bin', 'rtk.exe'), 'fake-rtk-binary', 'utf8');
+  const rtkBin = resolveRtkBinDir(dir);
 
-  const statusOnlyRtk = getTreeStatus(dir, { untracked: 'all' });
-  assert.equal(statusOnlyRtk.isDirty, false);
-  assert.deepEqual(statusOnlyRtk.dirtyPaths, []);
+  // Producer places RTK shim OUTSIDE the worker git repo, isolated per worker basename
+  const rel = path.relative(dir, rtkBin);
+  assert.ok(
+    rel.startsWith('..') || path.isAbsolute(rel),
+    `RTK bin dir must be outside workerRoot (got ${rtkBin} vs ${dir})`
+  );
+  assert.ok(rtkBin.includes('.shipde-bin'), 'RTK bin path must preserve .shipde-bin directory');
+  assert.equal(path.basename(rtkBin), path.basename(dir));
+
+  // Staging rtk.exe in resolveRtkBinDir(dir) leaves workerRoot completely clean
+  fs.mkdirSync(rtkBin, { recursive: true });
+  fs.writeFileSync(path.join(rtkBin, 'rtk.exe'), 'trusted-rtk-binary', 'utf8');
   assert.equal(isTreeDirty(dir), false);
+  assert.deepEqual(getTreeStatus(dir, { untracked: 'all' }).dirtyPaths, []);
 
-  // Any real untracked file outside .shipde-bin MUST still be flagged dirty
-  fs.writeFileSync(path.join(dir, 'rogue.txt'), 'outside allowed paths', 'utf8');
-  const statusWithRogue = getTreeStatus(dir, { untracked: 'all' });
-  assert.equal(statusWithRogue.isDirty, true);
-  assert.deepEqual(statusWithRogue.dirtyPaths, ['rogue.txt']);
+  // Fail-closed proof: an arbitrary worker-created .shipde-bin file INSIDE workerRoot
+  // MUST still be reported dirty (even with no activeWorkItemId)
+  fs.mkdirSync(path.join(dir, '.shipde-bin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.shipde-bin', 'evil.exe'), 'untrusted', 'utf8');
+  const status = getTreeStatus(dir, { untracked: 'all' });
+  assert.equal(status.isDirty, true);
+  assert.deepEqual(status.dirtyPaths, ['.shipde-bin/evil.exe']);
   assert.equal(isTreeDirty(dir), true);
+
+  fs.rmSync(rtkBin, { recursive: true, force: true });
 });
 
 test('TASK-AI-196 AC2: orchestrateCommand enables comboJevSelect on live isolated-worker runs and disables it when candidates or run are injected', async () => {

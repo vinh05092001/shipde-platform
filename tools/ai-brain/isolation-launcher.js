@@ -1300,7 +1300,9 @@ function getIsolatedLauncher() {
             'rtk-ai.rtk_Microsoft.Winget.Source_8wekyb3d8bbwe',
             'rtk.exe'
           );
-        const rtkDestBin = path.join(workerRoot, '.shipde-bin');
+        // Place the trusted RTK shim outside the worker git repository so it
+        // never dirties workerRoot or weakens allowed-path dirty-tree checks.
+        const rtkDestBin = resolveRtkBinDir(workerRoot);
         const rtkDestExe = path.join(rtkDestBin, 'rtk.exe');
         try {
           if (fs.existsSync(rtkSource)) {
@@ -1674,7 +1676,18 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   };
 }
 
+function resolveRtkBinDir(workerRoot) {
+  const resolved = path.resolve(workerRoot);
+  const parent = path.dirname(resolved);
+  const base = path.basename(resolved) || 'worker';
+  if (!parent || parent === resolved) {
+    return path.join(os.tmpdir(), '.shipde-bin', base);
+  }
+  return path.join(parent, '.shipde-bin', base);
+}
+
 module.exports = {
+  resolveRtkBinDir,
   retainedRootHasOwnWriterRecord,
   retargetSharedDepsWorkspaceLinks,
   provisionedHeadMatchesBase,

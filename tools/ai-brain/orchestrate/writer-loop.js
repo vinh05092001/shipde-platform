@@ -539,18 +539,13 @@ function getTreeStatus(cwd, options) {
           .filter(Boolean);
         const activeWorkItemId = options && (options.workItemId || options.workItem);
         const filteredLines = lines.filter((line) => {
+          if (!activeWorkItemId) return true;
           if (line.trimStart().startsWith('??')) {
-            const pathPart = line
-              .replace(/^[A-Z? ]{1,2}\s+/, '')
-              .trim()
-              .replace(/^"|"$/g, '')
-              .replace(/\\/g, '/');
-            // Ignore Controller-managed RTK binary shim directory (.shipde-bin/)
-            // copied into isolated worker roots by isolation-launcher.js.
-            if (pathPart === '.shipde-bin' || pathPart.startsWith('.shipde-bin/')) {
-              return false;
-            }
-            if (activeWorkItemId && pathPart.startsWith('docs/product-spec/work-items/')) {
+            const pathPart = line.replace(/^[A-Z? ]{1,2}\s+/, '').trim();
+            if (
+              pathPart.startsWith('docs/product-spec/work-items/') ||
+              pathPart.startsWith('docs\\product-spec\\work-items\\')
+            ) {
               const basename = path.basename(pathPart);
               if (basename.endsWith('.md') && basename !== `${activeWorkItemId}.md`) {
                 return false;
