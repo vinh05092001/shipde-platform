@@ -1300,24 +1300,22 @@ function getIsolatedLauncher() {
             'rtk-ai.rtk_Microsoft.Winget.Source_8wekyb3d8bbwe',
             'rtk.exe'
           );
-        // Place the trusted RTK shim outside the worker git repository so it
-        // never dirties workerRoot or weakens allowed-path dirty-tree checks.
-        const rtkDestBin = resolveRtkBinDir(workerRoot);
-        const rtkDestExe = path.join(rtkDestBin, 'rtk.exe');
-        try {
-          if (fs.existsSync(rtkSource)) {
-            fs.mkdirSync(rtkDestBin, { recursive: true });
-            fs.copyFileSync(rtkSource, rtkDestExe);
-            rtkPathPrepend = rtkDestBin;
-          } else {
-            console.error('[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: source not found at ' + rtkSource);
-            rtkEnabled = false;
-            rtkDecision = 'rtk_unavailable_source_missing';
-          }
-        } catch (err) {
-          console.error('[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' + err.message);
+        // Place the trusted RTK shim in a host-owned, per-launch directory
+        // outside workerRoot with worker read/execute-only ACLs; fail safely
+        // to RTK unavailable if secure staging cannot be established.
+        const staged = stageTrustedRtkShim(workerRoot, rtkSource, {
+          workerUser: WORKER_USERNAME,
+        });
+        if (staged.ok) {
+          rtkPathPrepend = staged.dir;
+        } else {
+          console.error(
+            '[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' +
+              staged.reason +
+              (staged.detail ? ' (' + staged.detail + ')' : '')
+          );
           rtkEnabled = false;
-          rtkDecision = 'rtk_copy_failed';
+          rtkDecision = staged.reason;
         }
       }
     } else {
@@ -1676,18 +1674,128 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   };
 }
 
-function resolveRtkBinDir(workerRoot) {
+function isSymlinkOrJunction(targetPath) {
+  try {
+    const st = fs.lstatSync(targetPath);
+    if (st.isSymbolicLink()) return true;
+    const real = fs.realpathSync(targetPath);
+    if (path.resolve(real).toLowerCase() !== path.resolve(targetPath).toLowerCase()) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function resolveRtkBinDir(workerRoot, nonce) {
   const resolved = path.resolve(workerRoot);
   const parent = path.dirname(resolved);
   const base = path.basename(resolved) || 'worker';
+  const suffix = nonce ? `${base}-${nonce}` : base;
   if (!parent || parent === resolved) {
-    return path.join(os.tmpdir(), '.shipde-bin', base);
+    return path.join(os.tmpdir(), '.shipde-bin', suffix);
   }
-  return path.join(parent, '.shipde-bin', base);
+  return path.join(parent, '.shipde-bin', suffix);
+}
+
+function defaultLockRtkDirAcl(dirPath, workerUser) {
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(dirPath, 0o755);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, detail: err.message };
+    }
+  }
+  const hostUser = process.env.USERNAME || '';
+  const args = [
+    dirPath,
+    '/inheritance:r',
+    '/grant:r',
+    '*S-1-5-32-544:(OI)(CI)F',
+    '/grant:r',
+    '*S-1-5-18:(OI)(CI)F',
+  ];
+  if (hostUser) {
+    args.push('/grant:r', `${hostUser}:(OI)(CI)F`);
+  }
+  if (workerUser) {
+    args.push('/grant:r', `${workerUser}:(OI)(CI)RX`);
+  }
+  const res = spawnSync('icacls', args, { windowsHide: true, encoding: 'utf8' });
+  if (res.status !== 0) {
+    return {
+      ok: false,
+      detail: ((res.stderr || res.stdout || '') + '').trim() || `icacls exit ${res.status}`,
+    };
+  }
+  return { ok: true };
+}
+
+function stageTrustedRtkShim(workerRoot, rtkSource, deps) {
+  const d = deps || {};
+  const workerUser = d.workerUser !== undefined ? d.workerUser : WORKER_USERNAME;
+  const lockAcl = typeof d.lockAcl === 'function' ? d.lockAcl : defaultLockRtkDirAcl;
+  const nonce = d.nonce || crypto.randomBytes(8).toString('hex');
+
+  if (!rtkSource || !fs.existsSync(rtkSource)) {
+    return { ok: false, reason: 'rtk_unavailable_source_missing', detail: String(rtkSource || '') };
+  }
+  if (isSymlinkOrJunction(rtkSource)) {
+    return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'source is symlink/junction' };
+  }
+
+  const rtkDestBin = resolveRtkBinDir(workerRoot, nonce);
+  const containerDir = path.dirname(rtkDestBin);
+  const relFromWorker = path.relative(path.resolve(workerRoot), rtkDestBin);
+  if (!relFromWorker.startsWith('..') && !path.isAbsolute(relFromWorker)) {
+    return { ok: false, reason: 'rtk_unsafe_location', detail: 'shim inside workerRoot' };
+  }
+
+  if (fs.existsSync(containerDir) && isSymlinkOrJunction(containerDir)) {
+    return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'container is symlink/junction' };
+  }
+
+  let createdDir = false;
+  try {
+    fs.mkdirSync(containerDir, { recursive: true });
+    if (isSymlinkOrJunction(containerDir)) {
+      return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'container is symlink/junction' };
+    }
+    // Non-recursive mkdir fails closed with EEXIST if a pre-existing dir/junction occupies the path.
+    fs.mkdirSync(rtkDestBin);
+    createdDir = true;
+
+    const aclRes = lockAcl(rtkDestBin, workerUser);
+    if (!aclRes || !aclRes.ok) {
+      fs.rmSync(rtkDestBin, { recursive: true, force: true });
+      return {
+        ok: false,
+        reason: 'rtk_acl_failed',
+        detail: (aclRes && aclRes.detail) || 'acl lockdown failed',
+      };
+    }
+
+    const rtkDestExe = path.join(rtkDestBin, 'rtk.exe');
+    fs.copyFileSync(rtkSource, rtkDestExe, fs.constants.COPYFILE_EXCL);
+    if (isSymlinkOrJunction(rtkDestExe)) {
+      fs.rmSync(rtkDestBin, { recursive: true, force: true });
+      return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'staged exe is symlink' };
+    }
+    return { ok: true, dir: rtkDestBin, exe: rtkDestExe };
+  } catch (err) {
+    if (createdDir) {
+      try {
+        fs.rmSync(rtkDestBin, { recursive: true, force: true });
+      } catch {}
+    }
+    return { ok: false, reason: 'rtk_copy_failed', detail: err.message };
+  }
 }
 
 module.exports = {
   resolveRtkBinDir,
+  stageTrustedRtkShim,
+  isSymlinkOrJunction,
   retainedRootHasOwnWriterRecord,
   retargetSharedDepsWorkspaceLinks,
   provisionedHeadMatchesBase,

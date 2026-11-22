@@ -7,41 +7,82 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const { resolveRtkBinDir } = require('../isolation-launcher');
+const { resolveRtkBinDir, stageTrustedRtkShim } = require('../isolation-launcher');
 const { getTreeStatus, isTreeDirty } = require('../orchestrate/writer-loop');
 const { orchestrateCommand } = require('../cli/commands');
 
 function initTempGitRepo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-196-'));
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-196-root-'));
+  const dir = path.join(parent, 'worker-repo');
+  fs.mkdirSync(dir, { recursive: true });
   execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
   execFileSync('git', ['config', 'user.email', 'test@shipde.local'], { cwd: dir, stdio: 'ignore' });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir, stdio: 'ignore' });
   fs.writeFileSync(path.join(dir, 'README.md'), 'hello\n', 'utf8');
   execFileSync('git', ['add', 'README.md'], { cwd: dir, stdio: 'ignore' });
   execFileSync('git', ['commit', '-m', 'init'], { cwd: dir, stdio: 'ignore' });
-  return dir;
+  return { parent, dir };
 }
 
-test('TASK-AI-196 AC1: trusted RTK shim resolves outside workerRoot and worker-created .shipde-bin inside repo stays fail-closed', () => {
-  const dir = initTempGitRepo();
-  const rtkBin = resolveRtkBinDir(dir);
+test('TASK-AI-196 AC1: stageTrustedRtkShim stages outside workerRoot with ACL lockdown, rejects symlink/ACL failure, and keeps worker .shipde-bin fail-closed', () => {
+  const { parent, dir } = initTempGitRepo();
+  const fakeSrc = path.join(parent, 'trusted-rtk.exe');
+  fs.writeFileSync(fakeSrc, 'trusted-rtk-binary', 'utf8');
 
-  // Producer places RTK shim OUTSIDE the worker git repo, isolated per worker basename
-  const rel = path.relative(dir, rtkBin);
-  assert.ok(
-    rel.startsWith('..') || path.isAbsolute(rel),
-    `RTK bin dir must be outside workerRoot (got ${rtkBin} vs ${dir})`
-  );
-  assert.ok(rtkBin.includes('.shipde-bin'), 'RTK bin path must preserve .shipde-bin directory');
-  assert.equal(path.basename(rtkBin), path.basename(dir));
-
-  // Staging rtk.exe in resolveRtkBinDir(dir) leaves workerRoot completely clean
-  fs.mkdirSync(rtkBin, { recursive: true });
-  fs.writeFileSync(path.join(rtkBin, 'rtk.exe'), 'trusted-rtk-binary', 'utf8');
+  // 1. Happy path: stages in unpredictable per-launch dir outside workerRoot with ACL hook invoked
+  const aclCalls = [];
+  const staged = stageTrustedRtkShim(dir, fakeSrc, {
+    workerUser: 'ShipDeWorker',
+    lockAcl: (targetDir, workerUser) => {
+      aclCalls.push({ targetDir, workerUser });
+      return { ok: true };
+    },
+  });
+  assert.equal(staged.ok, true);
+  assert.equal(aclCalls.length, 1);
+  assert.equal(aclCalls[0].targetDir, staged.dir);
+  assert.equal(aclCalls[0].workerUser, 'ShipDeWorker');
+  const rel = path.relative(dir, staged.dir);
+  assert.ok(rel.startsWith('..') || path.isAbsolute(rel), 'RTK shim must be outside workerRoot');
+  assert.ok(staged.dir.includes('.shipde-bin'));
+  assert.equal(fs.existsSync(staged.exe), true);
   assert.equal(isTreeDirty(dir), false);
   assert.deepEqual(getTreeStatus(dir, { untracked: 'all' }).dirtyPaths, []);
 
-  // Fail-closed proof: an arbitrary worker-created .shipde-bin file INSIDE workerRoot
+  // 2. ACL failure fails safely to rtk_acl_failed and removes the staged directory
+  const aclFail = stageTrustedRtkShim(dir, fakeSrc, {
+    nonce: 'aclfail01',
+    lockAcl: () => ({ ok: false, detail: 'icacls denied' }),
+  });
+  assert.equal(aclFail.ok, false);
+  assert.equal(aclFail.reason, 'rtk_acl_failed');
+  assert.equal(fs.existsSync(resolveRtkBinDir(dir, 'aclfail01')), false);
+
+  // 3. Pre-existing directory at target nonce fails closed (non-recursive mkdir EEXIST)
+  const preExistDir = resolveRtkBinDir(dir, 'preexist01');
+  fs.mkdirSync(preExistDir, { recursive: true });
+  const preExistRes = stageTrustedRtkShim(dir, fakeSrc, {
+    nonce: 'preexist01',
+    lockAcl: () => ({ ok: true }),
+  });
+  assert.equal(preExistRes.ok, false);
+  assert.equal(preExistRes.reason, 'rtk_copy_failed');
+
+  // 4. Pre-existing junction/symlink at .shipde-bin container fails closed with rtk_unsafe_symlink
+  const symParent = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-196-sym-'));
+  const symWorker = path.join(symParent, 'worker-repo');
+  const decoyDir = path.join(symParent, 'decoy');
+  fs.mkdirSync(symWorker, { recursive: true });
+  fs.mkdirSync(decoyDir, { recursive: true });
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  fs.symlinkSync(decoyDir, path.join(symParent, '.shipde-bin'), linkType);
+  const symRes = stageTrustedRtkShim(symWorker, fakeSrc, {
+    lockAcl: () => ({ ok: true }),
+  });
+  assert.equal(symRes.ok, false);
+  assert.equal(symRes.reason, 'rtk_unsafe_symlink');
+
+  // 5. Fail-closed dirty-tree proof: arbitrary worker-created .shipde-bin/evil.exe INSIDE workerRoot
   // MUST still be reported dirty (even with no activeWorkItemId)
   fs.mkdirSync(path.join(dir, '.shipde-bin'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.shipde-bin', 'evil.exe'), 'untrusted', 'utf8');
@@ -50,7 +91,8 @@ test('TASK-AI-196 AC1: trusted RTK shim resolves outside workerRoot and worker-c
   assert.deepEqual(status.dirtyPaths, ['.shipde-bin/evil.exe']);
   assert.equal(isTreeDirty(dir), true);
 
-  fs.rmSync(rtkBin, { recursive: true, force: true });
+  fs.rmSync(parent, { recursive: true, force: true });
+  fs.rmSync(symParent, { recursive: true, force: true });
 });
 
 test('TASK-AI-196 AC2: orchestrateCommand enables comboJevSelect on live isolated-worker runs and disables it when candidates or run are injected', async () => {
