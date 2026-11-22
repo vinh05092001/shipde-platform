@@ -6,6 +6,9 @@ const routing = require('../failure-domain');
 const evidence = require('../evidence');
 const candidatesApi = require('../candidates');
 const { candidateKey } = require('../candidates');
+const { parseCandidateKey } = require('../discovery/identity');
+const comboReader = require('../combo-reader');
+const comboJev = require('../combo-jev-select');
 const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 const jev = require('../jev');
@@ -300,6 +303,24 @@ function resolveEvidenceDir(options, o) {
   );
 }
 
+function shouldUseComboJevSelect(pool, o, comboApi) {
+  if (!o || o.comboJevSelect === false) return false;
+  const hasCombo = pool.some((c) => c && comboApi.isComboCandidate(c, o.registry));
+  if (!hasCombo) return false;
+  const explicit =
+    o.comboJevSelect === true ||
+    Array.isArray(o.comboMembers) ||
+    typeof o.readComboConfig === 'function' ||
+    Boolean(o.comboFixture);
+  if (explicit) return true;
+  const isLiveUninjected =
+    !Array.isArray(o.candidates) && !o.injectedRun && typeof o.run !== 'function';
+  return (
+    isLiveUninjected &&
+    pool.every((c) => c && (comboApi.isComboCandidate(c, o.registry) || c.comboMember === true))
+  );
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -354,7 +375,7 @@ async function selectCandidateForProfile(
   // candidate (#605, F4). A combo that actually failed is still refused through
   // failedSet and the exhausted-account mark.
   const comboApi = require('../combo');
-  const eligible = pool.filter((c) => {
+  const isCandidateEligible = (c) => {
     if (!c || c.blocked || failedSet.has(candidateKey(c))) return false;
     const accMark = exhaustedAccountKey(c);
     if (accMark && failedSet.has(accMark)) return false;
@@ -363,7 +384,167 @@ async function selectCandidateForProfile(
     if (dom && excludedDomains.has(dom)) return false;
     if (dom && (domainAttempts.get(dom) || 0) >= 2) return false;
     return true;
-  });
+  };
+
+  let comboJevRan = false;
+  if (shouldUseComboJevSelect(pool, o, comboApi)) {
+    comboJevRan = true;
+    const role = roleOf(item);
+    const writerCandidate = writerKey ? pool.find((c) => c && candidateKey(c) === writerKey) : null;
+    const parsedWriter = writerKey ? parseCandidateKey(writerKey) : null;
+    const writerModelId =
+      (item && item.writerModelId) ||
+      options.writerModelId ||
+      (writerCandidate && writerCandidate.modelId) ||
+      (parsedWriter && parsedWriter.modelId) ||
+      null;
+    const writerIsOpaqueCombo = Boolean(
+      writerKey &&
+      (writerCandidate
+        ? comboApi.isComboCandidate(writerCandidate, o.registry)
+        : comboApi.isComboIdentity(writerKey, o.registry))
+    );
+    // M-R04 fail-closed by default on the live combo-JEV seam: concrete member
+    // writers and unknown/unparseable writer identities must obtain an
+    // independently established reviewer (distinct upstream + model family).
+    // Only when the writer itself ran as the opaque configured combo (operator
+    // decision 2026-11-19 "1 combo cho tất cả", audited as
+    // REVIEWER_EQUALS_WRITER_COMBO_ACCEPTED in review-lane.js) and strict mode
+    // is not forced may the reviewer fall back to the opaque configured combo.
+    const requireIndependentReviewer =
+      role === 'reviewer' && (!writerIsOpaqueCombo || o.strictIndependentComboReview === true);
+
+    const refuseNoIndependentReviewer = (sel) => {
+      const reason = (sel && sel.reason) || 'NO_INDEPENDENT_REVIEWER';
+      // Non-empty rejected ensures review-item.js sees controllerJudgedCandidates
+      // as true so an explicit o.reviewerIdentity cannot override this refusal.
+      const rejected = [{ candidateKey: writerKey || 'combo-jev', reason }];
+      const result = {
+        chosen: null,
+        reason,
+        ranking: [],
+        top3: [],
+        rejected,
+        comboJev: sel || null,
+      };
+      const decisionRecorded = {
+        stage: decisions.Stage.SELECTED,
+        workItemId: item && item.id,
+        role,
+        chosen: null,
+        chosenCandidate: null,
+        reason,
+        rejected,
+        selected: null,
+        chosenKey: null,
+      };
+      decisions.recordDecision(decisionRecorded, logOpts);
+      return { chosen: null, reason, result, decisionRecorded };
+    };
+
+    if (requireIndependentReviewer && !writerModelId) {
+      return refuseNoIndependentReviewer(null);
+    }
+
+    let rawMembers = Array.isArray(o.comboMembers) ? o.comboMembers : null;
+    if (!rawMembers) {
+      const readCombo =
+        typeof o.readComboConfig === 'function' ? o.readComboConfig : comboReader.readComboConfig;
+      const cfg = comboApi.configuredCombo(o.registry);
+      const comboConfig = await readCombo({
+        name: o.comboName || (cfg && cfg.name) || null,
+        registry: o.registry,
+        env: o.env,
+        fixture: o.comboFixture,
+      });
+      rawMembers = Array.isArray(comboConfig && comboConfig.members) ? comboConfig.members : [];
+    }
+
+    const eligibleMembers = rawMembers
+      .filter((m) => typeof m === 'string' && m.trim())
+      .map((m) => m.trim())
+      .filter((m) => {
+        const built = comboJev.buildMemberCandidate(
+          { modelId: m, base: m, effort: null, score: null, tier: null },
+          { registry: o.registry, env: o.env, comboName: o.comboName }
+        );
+        if (!built || !built.candidate) return false;
+        if (!isCandidateEligible(built.candidate)) return false;
+        if (role === 'reviewer') {
+          if (writerKey && candidateKey(built.candidate) === writerKey) return false;
+          const dom = domainOf(built.candidate);
+          if (dom && forbidden.has(dom)) return false;
+        }
+        return true;
+      });
+
+    let sel = null;
+    if (eligibleMembers.length > 0) {
+      sel = await comboJev.selectComboMember({
+        item,
+        role,
+        writerModelId: role === 'reviewer' ? writerModelId : null,
+        members: eligibleMembers,
+        priors: o.priors,
+        priorsFile: o.priorsFile,
+        registry: o.registry,
+        env: o.env,
+        now,
+        jevAsk: o.jevAsk,
+        minConfidence: o.jevMinConfidence,
+        comboName: o.comboName,
+      });
+    }
+
+    if (
+      sel &&
+      sel.ok &&
+      sel.candidate &&
+      sel.selected &&
+      !(requireIndependentReviewer && !sel.independentApplied)
+    ) {
+      const chosen = candidateKey(sel.candidate);
+      if (
+        Array.isArray(annotatedCandidates) &&
+        !annotatedCandidates.some((c) => c && candidateKey(c) === chosen)
+      ) {
+        annotatedCandidates.push(sel.candidate);
+      }
+      const reason = 'combo-jev:' + sel.handledBy + ' (' + sel.selected.modelId + ')';
+      const ranking = [{ ...sel.candidate, candidateKey: chosen }];
+      const result = { chosen, reason, ranking, top3: ranking, rejected: [], comboJev: sel };
+      const decisionRecorded = {
+        stage: decisions.Stage.SELECTED,
+        workItemId: item && item.id,
+        role,
+        chosen,
+        chosenCandidate: sel.candidate,
+        reason,
+        rejected: [],
+        selected: chosen,
+        chosenKey: chosen,
+        comboJev: {
+          handledBy: sel.handledBy,
+          assessment: sel.assessment,
+          independentApplied: Boolean(sel.independentApplied),
+          memberScore: sel.selected.score,
+          reasoningEffort: sel.selected.effort,
+        },
+      };
+      decisions.recordDecision(decisionRecorded, logOpts);
+      return { chosen, reason, result, decisionRecorded };
+    }
+
+    if (requireIndependentReviewer && (!sel || !sel.ok || !sel.independentApplied)) {
+      return refuseNoIndependentReviewer(sel);
+    }
+  }
+
+  // When combo-JEV selection ran and rejected every member, fall back only to
+  // non-member pool entries (the configured combo), never a previously cached
+  // comboMember that independence or eligibility just rejected.
+  const fallbackPool = comboJevRan ? pool.filter((c) => !c || !c.comboMember) : pool;
+  const eligible = fallbackPool.filter(isCandidateEligible);
   const chosenCandidate =
     eligible.find(
       (c) => (!writerKey || candidateKey(c) !== writerKey) && !forbidden.has(domainOf(c))
