@@ -1,4 +1,4 @@
-# TASK-AI-196 — Place trusted RTK shim outside workerRoot and activate comboJevSelect in orchestrateCommand
+# TASK-AI-196 — Omit optional RTK in isolated launches by default and activate comboJevSelect in orchestrateCommand
 
 ## Control
 
@@ -18,20 +18,20 @@
 
 Fixes the two live-loop defects exposed by the live `TASK-AI-187` run on `d04798d7` without weakening dirty-tree enforcement:
 
-1. `isolation-launcher.js` previously copied `.shipde-bin/rtk.exe` inside `workerRoot`, causing repair retention (`isolation-launcher.js:324`) to refuse with `WORKER_COMMIT_REFUSED: dirty file .shipde-bin/rtk.exe outside allowed paths`. Fixing at the producer (`resolveIsolatedRtkDecision`) omits optional RTK for isolated execution unless a pre-provisioned trusted directory outside `workerRoot` and its worker-writable parent is supplied (`trustedBinDir` / `SHIPDE_RTK_TRUSTED_BIN_DIR`, non-symlink with real `rtk.exe`), never writing into `workerRoot` or prepending an untrusted directory, and keeping `getTreeStatus`/`isTreeDirty` strictly fail-closed.
+1. `isolation-launcher.js` previously copied `.shipde-bin/rtk.exe` inside `workerRoot`, causing repair retention (`isolation-launcher.js:324`) to refuse with `WORKER_COMMIT_REFUSED: dirty file .shipde-bin/rtk.exe outside allowed paths`. Fixing at the producer (`resolveIsolatedRtkDecision`) omits optional RTK for isolated execution by default and only enables it when a host-provisioned trusted directory outside `workerRoot` and its worker-writable parent is supplied (`trustedBinDir` / `SHIPDE_RTK_TRUSTED_BIN_DIR`, non-symlink with a real non-symlink `rtk.exe`). Nothing is ever copied into `workerRoot` or under a worker-writable ancestor, and `getTreeStatus`/`isTreeDirty` remain strictly fail-closed.
 2. `cli/commands.js:orchestrateCommand` always passed `candidates: [comboResult.candidate]` into `runOrchestration`, which tripped `!Array.isArray(o.candidates)` in `shouldUseComboJevSelect` and kept live runs on `"combo-only routing"` instead of invoking `combo-jev-select.js`.
 
 ## Writer & repair caller checks
 
-- **Writer launch (`isolation-launcher.js:1290-1310`)**: stages `rtk.exe` in `resolveRtkBinDir(workerRoot)` (`<parent>/.shipde-bin/<basename>`) and prepends that external directory to `PATH`; `workerRoot` stays clean.
+- **Writer launch (`isolation-launcher.js:1290-1315`)**: calls `resolveIsolatedRtkDecision(workerRoot, rtkConfig, process.env)` — omits optional RTK by default (`rtk_omitted_isolated_no_trusted_bin`, `pathPrepend: null`) and never copies `rtk.exe` into `workerRoot` or under its parent directory. Only prepends a host-provisioned `trustedBinDir` (`SHIPDE_RTK_TRUSTED_BIN_DIR`) outside both `workerRoot` and its parent when non-symlink and containing a real `rtk.exe`.
 - **Repair launch (`isolation-launcher.js:250-338`, `1283-1284`)**: `isRepairRound` blocks RTK (`repair_round_blocks_rtk`), and dirty-work adoption runs `getTreeStatus(workerRoot, { untracked: 'all' })` unchanged so any arbitrary `.shipde-bin/*` created inside `workerRoot` is still refused with `WORKER_COMMIT_REFUSED`.
 
 ## Scope and acceptance
 
-| ID  | Criterion                                                                                                                                                                                                                | Evidence                                                        |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| AC1 | `resolveRtkBinDir(workerRoot)` places the trusted RTK shim outside `workerRoot` (isolated per worker basename), leaving `workerRoot` clean while arbitrary `.shipde-bin/*` inside `workerRoot` remains fail-closed dirty | `tools/ai-brain/test/task-ai-196-live-rtk-and-jev-wire.test.js` |
-| AC2 | `orchestrateCommand` passes `comboJevSelect: true` on live `--isolated-worker` runs (without injected `candidates` or `run`) and `false` when `candidates` or `run` are injected                                         | `tools/ai-brain/test/task-ai-196-live-rtk-and-jev-wire.test.js` |
+| ID  | Criterion                                                                                                                                                                                                                                                                                                                                                                                         | Evidence                                                        |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| AC1 | `resolveIsolatedRtkDecision` omits optional RTK by default for isolated execution (never copying `rtk.exe` into `workerRoot` or prepending an untrusted/repo/parent/symlink directory), only accepts a host-provisioned non-symlink external `trustedBinDir` with real `rtk.exe`, and leaves `getTreeStatus`/`isTreeDirty` fail-closed against worker-created `.shipde-bin/*` inside `workerRoot` | `tools/ai-brain/test/task-ai-196-live-rtk-and-jev-wire.test.js` |
+| AC2 | `orchestrateCommand` passes `comboJevSelect: true` on live `--isolated-worker` runs (without injected `candidates` or `run`) and `false` when `candidates` or `run` are injected                                                                                                                                                                                                                  | `tools/ai-brain/test/task-ai-196-live-rtk-and-jev-wire.test.js` |
 
 ## Verification
 
