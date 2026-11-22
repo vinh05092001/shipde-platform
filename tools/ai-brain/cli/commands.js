@@ -348,6 +348,12 @@ async function orchestrateCommand(args, deps = {}) {
     env: d.env,
     specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
     candidates,
+    comboJevSelect:
+      d.comboJevSelect !== undefined
+        ? d.comboJevSelect
+        : !Array.isArray(d.candidates) &&
+          Boolean(args['isolated-worker']) &&
+          typeof d.run !== 'function',
     accounts: evidenceAccounts,
     registryAccounts,
     registry,
