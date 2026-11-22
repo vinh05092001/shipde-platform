@@ -1287,8 +1287,9 @@ function getIsolatedLauncher() {
       } else if (!isLowRisk) {
         rtkDecision = 'not_low_risk';
       } else {
-        rtkEnabled = true;
-        rtkDecision = 'provided';
+        // RTK is optional for isolated execution: never write rtk.exe into
+        // workerRoot/.shipde-bin or stage under a worker-writable ancestor.
+        // Only use a pre-provisioned trusted directory outside workerRoot/parent.
         const rtkSource =
           rtkConfig.sourcePath ||
           process.env.SHIPDE_RTK_PATH ||
@@ -1300,22 +1301,14 @@ function getIsolatedLauncher() {
             'rtk-ai.rtk_Microsoft.Winget.Source_8wekyb3d8bbwe',
             'rtk.exe'
           );
-        // Place the trusted RTK shim in a host-owned, per-launch directory
-        // outside workerRoot with worker read/execute-only ACLs; fail safely
-        // to RTK unavailable if secure staging cannot be established.
-        const staged = stageTrustedRtkShim(workerRoot, rtkSource, {
-          workerUser: WORKER_USERNAME,
-        });
-        if (staged.ok) {
-          rtkPathPrepend = staged.dir;
-        } else {
+        const rtkResolved = resolveIsolatedRtkDecision(workerRoot, rtkConfig, process.env);
+        rtkEnabled = rtkResolved.enabled;
+        rtkPathPrepend = rtkResolved.pathPrepend;
+        rtkDecision = rtkResolved.reason;
+        if (!rtkEnabled) {
           console.error(
-            '[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' +
-              staged.reason +
-              (staged.detail ? ' (' + staged.detail + ')' : '')
+            '[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' + rtkDecision + ' (source=' + rtkSource + ')'
           );
-          rtkEnabled = false;
-          rtkDecision = staged.reason;
         }
       }
     } else {
@@ -1674,128 +1667,76 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   };
 }
 
+function isWithinPath(parentDir, childPath) {
+  const rel = path.relative(path.resolve(parentDir), path.resolve(childPath));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 function isSymlinkOrJunction(targetPath) {
   try {
     const st = fs.lstatSync(targetPath);
     if (st.isSymbolicLink()) return true;
     const real = fs.realpathSync(targetPath);
-    if (path.resolve(real).toLowerCase() !== path.resolve(targetPath).toLowerCase()) return true;
-    return false;
+    return path.resolve(real).toLowerCase() !== path.resolve(targetPath).toLowerCase();
   } catch {
     return false;
   }
 }
 
-function resolveRtkBinDir(workerRoot, nonce) {
-  const resolved = path.resolve(workerRoot);
-  const parent = path.dirname(resolved);
-  const base = path.basename(resolved) || 'worker';
-  const suffix = nonce ? `${base}-${nonce}` : base;
-  if (!parent || parent === resolved) {
-    return path.join(os.tmpdir(), '.shipde-bin', suffix);
-  }
-  return path.join(parent, '.shipde-bin', suffix);
-}
-
-function defaultLockRtkDirAcl(dirPath, workerUser) {
-  if (process.platform !== 'win32') {
-    try {
-      fs.chmodSync(dirPath, 0o755);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, detail: err.message };
-    }
-  }
-  const hostUser = process.env.USERNAME || '';
-  const args = [
-    dirPath,
-    '/inheritance:r',
-    '/grant:r',
-    '*S-1-5-32-544:(OI)(CI)F',
-    '/grant:r',
-    '*S-1-5-18:(OI)(CI)F',
-  ];
-  if (hostUser) {
-    args.push('/grant:r', `${hostUser}:(OI)(CI)F`);
-  }
-  if (workerUser) {
-    args.push('/grant:r', `${workerUser}:(OI)(CI)RX`);
-  }
-  const res = spawnSync('icacls', args, { windowsHide: true, encoding: 'utf8' });
-  if (res.status !== 0) {
+/**
+ * Minimal fail-closed RTK decision for isolated execution:
+ * Never copies rtk.exe into workerRoot or under a worker-writable ancestor.
+ * Only uses a pre-provisioned trustedBinDir outside workerRoot and its parent
+ * directory whose executable exists and is not a symlink/junction.
+ */
+function resolveIsolatedRtkDecision(workerRoot, rtkConfig, env) {
+  const cfg = rtkConfig && typeof rtkConfig === 'object' ? rtkConfig : {};
+  const e = env || process.env;
+  const rawDir = cfg.trustedBinDir || e.SHIPDE_RTK_TRUSTED_BIN_DIR || '';
+  if (!rawDir || typeof rawDir !== 'string' || !rawDir.trim()) {
     return {
-      ok: false,
-      detail: ((res.stderr || res.stdout || '') + '').trim() || `icacls exit ${res.status}`,
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_no_trusted_bin',
     };
   }
-  return { ok: true };
-}
-
-function stageTrustedRtkShim(workerRoot, rtkSource, deps) {
-  const d = deps || {};
-  const workerUser = d.workerUser !== undefined ? d.workerUser : WORKER_USERNAME;
-  const lockAcl = typeof d.lockAcl === 'function' ? d.lockAcl : defaultLockRtkDirAcl;
-  const nonce = d.nonce || crypto.randomBytes(8).toString('hex');
-
-  if (!rtkSource || !fs.existsSync(rtkSource)) {
-    return { ok: false, reason: 'rtk_unavailable_source_missing', detail: String(rtkSource || '') };
+  const trustedDir = path.resolve(rawDir.trim());
+  const resolvedWorker = path.resolve(workerRoot);
+  const workerParent = path.dirname(resolvedWorker);
+  if (
+    isWithinPath(resolvedWorker, trustedDir) ||
+    (workerParent && workerParent !== resolvedWorker && isWithinPath(workerParent, trustedDir))
+  ) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_untrusted_ancestor',
+    };
   }
-  if (isSymlinkOrJunction(rtkSource)) {
-    return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'source is symlink/junction' };
+  if (!fs.existsSync(trustedDir) || isSymlinkOrJunction(trustedDir)) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_untrusted_dir',
+    };
   }
-
-  const rtkDestBin = resolveRtkBinDir(workerRoot, nonce);
-  const containerDir = path.dirname(rtkDestBin);
-  const relFromWorker = path.relative(path.resolve(workerRoot), rtkDestBin);
-  if (!relFromWorker.startsWith('..') && !path.isAbsolute(relFromWorker)) {
-    return { ok: false, reason: 'rtk_unsafe_location', detail: 'shim inside workerRoot' };
+  const exePath = path.join(trustedDir, 'rtk.exe');
+  if (!fs.existsSync(exePath) || isSymlinkOrJunction(exePath)) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_exe_missing',
+    };
   }
-
-  if (fs.existsSync(containerDir) && isSymlinkOrJunction(containerDir)) {
-    return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'container is symlink/junction' };
-  }
-
-  let createdDir = false;
-  try {
-    fs.mkdirSync(containerDir, { recursive: true });
-    if (isSymlinkOrJunction(containerDir)) {
-      return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'container is symlink/junction' };
-    }
-    // Non-recursive mkdir fails closed with EEXIST if a pre-existing dir/junction occupies the path.
-    fs.mkdirSync(rtkDestBin);
-    createdDir = true;
-
-    const aclRes = lockAcl(rtkDestBin, workerUser);
-    if (!aclRes || !aclRes.ok) {
-      fs.rmSync(rtkDestBin, { recursive: true, force: true });
-      return {
-        ok: false,
-        reason: 'rtk_acl_failed',
-        detail: (aclRes && aclRes.detail) || 'acl lockdown failed',
-      };
-    }
-
-    const rtkDestExe = path.join(rtkDestBin, 'rtk.exe');
-    fs.copyFileSync(rtkSource, rtkDestExe, fs.constants.COPYFILE_EXCL);
-    if (isSymlinkOrJunction(rtkDestExe)) {
-      fs.rmSync(rtkDestBin, { recursive: true, force: true });
-      return { ok: false, reason: 'rtk_unsafe_symlink', detail: 'staged exe is symlink' };
-    }
-    return { ok: true, dir: rtkDestBin, exe: rtkDestExe };
-  } catch (err) {
-    if (createdDir) {
-      try {
-        fs.rmSync(rtkDestBin, { recursive: true, force: true });
-      } catch {}
-    }
-    return { ok: false, reason: 'rtk_copy_failed', detail: err.message };
-  }
+  return {
+    enabled: true,
+    pathPrepend: trustedDir,
+    reason: 'provided',
+  };
 }
 
 module.exports = {
-  resolveRtkBinDir,
-  stageTrustedRtkShim,
-  isSymlinkOrJunction,
+  resolveIsolatedRtkDecision,
   retainedRootHasOwnWriterRecord,
   retargetSharedDepsWorkspaceLinks,
   provisionedHeadMatchesBase,

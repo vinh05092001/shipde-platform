@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const { resolveRtkBinDir, stageTrustedRtkShim } = require('../isolation-launcher');
+const { resolveIsolatedRtkDecision } = require('../isolation-launcher');
 const { getTreeStatus, isTreeDirty } = require('../orchestrate/writer-loop');
 const { orchestrateCommand } = require('../cli/commands');
 
@@ -24,63 +24,57 @@ function initTempGitRepo() {
   return { parent, dir };
 }
 
-test('TASK-AI-196 AC1: stageTrustedRtkShim stages outside workerRoot with ACL lockdown, rejects symlink/ACL failure, and keeps worker .shipde-bin fail-closed', () => {
+test('TASK-AI-196 AC1: isolated RTK omits untrusted/repo locations, never writes into workerRoot, and keeps worker .shipde-bin fail-closed', () => {
   const { parent, dir } = initTempGitRepo();
-  const fakeSrc = path.join(parent, 'trusted-rtk.exe');
-  fs.writeFileSync(fakeSrc, 'trusted-rtk-binary', 'utf8');
 
-  // 1. Happy path: stages in unpredictable per-launch dir outside workerRoot with ACL hook invoked
-  const aclCalls = [];
-  const staged = stageTrustedRtkShim(dir, fakeSrc, {
-    workerUser: 'ShipDeWorker',
-    lockAcl: (targetDir, workerUser) => {
-      aclCalls.push({ targetDir, workerUser });
-      return { ok: true };
-    },
-  });
-  assert.equal(staged.ok, true);
-  assert.equal(aclCalls.length, 1);
-  assert.equal(aclCalls[0].targetDir, staged.dir);
-  assert.equal(aclCalls[0].workerUser, 'ShipDeWorker');
-  const rel = path.relative(dir, staged.dir);
-  assert.ok(rel.startsWith('..') || path.isAbsolute(rel), 'RTK shim must be outside workerRoot');
-  assert.ok(staged.dir.includes('.shipde-bin'));
-  assert.equal(fs.existsSync(staged.exe), true);
+  // 1. Default isolated launch without pre-provisioned trustedBinDir omits optional RTK cleanly
+  const omitted = resolveIsolatedRtkDecision(dir, { enabled: true }, {});
+  assert.equal(omitted.enabled, false);
+  assert.equal(omitted.pathPrepend, null);
+  assert.equal(omitted.reason, 'rtk_omitted_isolated_no_trusted_bin');
+  assert.equal(fs.existsSync(path.join(dir, '.shipde-bin')), false);
   assert.equal(isTreeDirty(dir), false);
-  assert.deepEqual(getTreeStatus(dir, { untracked: 'all' }).dirtyPaths, []);
 
-  // 2. ACL failure fails safely to rtk_acl_failed and removes the staged directory
-  const aclFail = stageTrustedRtkShim(dir, fakeSrc, {
-    nonce: 'aclfail01',
-    lockAcl: () => ({ ok: false, detail: 'icacls denied' }),
-  });
-  assert.equal(aclFail.ok, false);
-  assert.equal(aclFail.reason, 'rtk_acl_failed');
-  assert.equal(fs.existsSync(resolveRtkBinDir(dir, 'aclfail01')), false);
+  // 2. Rejects any directory inside workerRoot OR under workerRoot's parent (worker-writable ancestor)
+  const insideRepo = resolveIsolatedRtkDecision(
+    dir,
+    { enabled: true, trustedBinDir: path.join(dir, '.shipde-bin') },
+    {}
+  );
+  assert.equal(insideRepo.enabled, false);
+  assert.equal(insideRepo.pathPrepend, null);
+  assert.equal(insideRepo.reason, 'rtk_omitted_isolated_untrusted_ancestor');
 
-  // 3. Pre-existing directory at target nonce fails closed (non-recursive mkdir EEXIST)
-  const preExistDir = resolveRtkBinDir(dir, 'preexist01');
-  fs.mkdirSync(preExistDir, { recursive: true });
-  const preExistRes = stageTrustedRtkShim(dir, fakeSrc, {
-    nonce: 'preexist01',
-    lockAcl: () => ({ ok: true }),
-  });
-  assert.equal(preExistRes.ok, false);
-  assert.equal(preExistRes.reason, 'rtk_copy_failed');
+  const underParent = resolveIsolatedRtkDecision(
+    dir,
+    { enabled: true, trustedBinDir: path.join(parent, '.shipde-bin') },
+    {}
+  );
+  assert.equal(underParent.enabled, false);
+  assert.equal(underParent.pathPrepend, null);
+  assert.equal(underParent.reason, 'rtk_omitted_isolated_untrusted_ancestor');
 
-  // 4. Pre-existing junction/symlink at .shipde-bin container fails closed with rtk_unsafe_symlink
-  const symParent = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-196-sym-'));
-  const symWorker = path.join(symParent, 'worker-repo');
-  const decoyDir = path.join(symParent, 'decoy');
-  fs.mkdirSync(symWorker, { recursive: true });
-  fs.mkdirSync(decoyDir, { recursive: true });
+  // 3. Accepts an external pre-provisioned trustedBinDir outside workerRoot/parent with real rtk.exe
+  const externalTrusted = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-196-trusted-'));
+  fs.writeFileSync(path.join(externalTrusted, 'rtk.exe'), 'trusted-rtk', 'utf8');
+  const allowed = resolveIsolatedRtkDecision(
+    dir,
+    { enabled: true, trustedBinDir: externalTrusted },
+    {}
+  );
+  assert.equal(allowed.enabled, true);
+  assert.equal(allowed.pathPrepend, path.resolve(externalTrusted));
+  assert.equal(allowed.reason, 'provided');
+  assert.equal(isTreeDirty(dir), false);
+
+  // 4. Rejects symlink/junction trustedBinDir
+  const symDir = path.join(os.tmpdir(), 'shipde-196-sym-' + Date.now());
   const linkType = process.platform === 'win32' ? 'junction' : 'dir';
-  fs.symlinkSync(decoyDir, path.join(symParent, '.shipde-bin'), linkType);
-  const symRes = stageTrustedRtkShim(symWorker, fakeSrc, {
-    lockAcl: () => ({ ok: true }),
-  });
-  assert.equal(symRes.ok, false);
-  assert.equal(symRes.reason, 'rtk_unsafe_symlink');
+  fs.symlinkSync(externalTrusted, symDir, linkType);
+  const symRes = resolveIsolatedRtkDecision(dir, { enabled: true, trustedBinDir: symDir }, {});
+  assert.equal(symRes.enabled, false);
+  assert.equal(symRes.pathPrepend, null);
+  assert.equal(symRes.reason, 'rtk_omitted_isolated_untrusted_dir');
 
   // 5. Fail-closed dirty-tree proof: arbitrary worker-created .shipde-bin/evil.exe INSIDE workerRoot
   // MUST still be reported dirty (even with no activeWorkItemId)
@@ -91,8 +85,9 @@ test('TASK-AI-196 AC1: stageTrustedRtkShim stages outside workerRoot with ACL lo
   assert.deepEqual(status.dirtyPaths, ['.shipde-bin/evil.exe']);
   assert.equal(isTreeDirty(dir), true);
 
+  fs.rmSync(symDir, { recursive: true, force: true });
+  fs.rmSync(externalTrusted, { recursive: true, force: true });
   fs.rmSync(parent, { recursive: true, force: true });
-  fs.rmSync(symParent, { recursive: true, force: true });
 });
 
 test('TASK-AI-196 AC2: orchestrateCommand enables comboJevSelect on live isolated-worker runs and disables it when candidates or run are injected', async () => {
