@@ -1287,8 +1287,9 @@ function getIsolatedLauncher() {
       } else if (!isLowRisk) {
         rtkDecision = 'not_low_risk';
       } else {
-        rtkEnabled = true;
-        rtkDecision = 'provided';
+        // RTK is optional for isolated execution: never write rtk.exe into
+        // workerRoot/.shipde-bin or stage under a worker-writable ancestor.
+        // Only use a pre-provisioned trusted directory outside workerRoot/parent.
         const rtkSource =
           rtkConfig.sourcePath ||
           process.env.SHIPDE_RTK_PATH ||
@@ -1300,22 +1301,14 @@ function getIsolatedLauncher() {
             'rtk-ai.rtk_Microsoft.Winget.Source_8wekyb3d8bbwe',
             'rtk.exe'
           );
-        const rtkDestBin = path.join(workerRoot, '.shipde-bin');
-        const rtkDestExe = path.join(rtkDestBin, 'rtk.exe');
-        try {
-          if (fs.existsSync(rtkSource)) {
-            fs.mkdirSync(rtkDestBin, { recursive: true });
-            fs.copyFileSync(rtkSource, rtkDestExe);
-            rtkPathPrepend = rtkDestBin;
-          } else {
-            console.error('[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: source not found at ' + rtkSource);
-            rtkEnabled = false;
-            rtkDecision = 'rtk_unavailable_source_missing';
-          }
-        } catch (err) {
-          console.error('[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' + err.message);
-          rtkEnabled = false;
-          rtkDecision = 'rtk_copy_failed';
+        const rtkResolved = resolveIsolatedRtkDecision(workerRoot, rtkConfig, process.env);
+        rtkEnabled = rtkResolved.enabled;
+        rtkPathPrepend = rtkResolved.pathPrepend;
+        rtkDecision = rtkResolved.reason;
+        if (!rtkEnabled) {
+          console.error(
+            '[ISOLATION_LAUNCHER] RTK_UNAVAILABLE: ' + rtkDecision + ' (source=' + rtkSource + ')'
+          );
         }
       }
     } else {
@@ -1674,7 +1667,76 @@ function readLaunchResult(launchResultPath, completionNonce, hostRes) {
   };
 }
 
+function isWithinPath(parentDir, childPath) {
+  const rel = path.relative(path.resolve(parentDir), path.resolve(childPath));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function isSymlinkOrJunction(targetPath) {
+  try {
+    const st = fs.lstatSync(targetPath);
+    if (st.isSymbolicLink()) return true;
+    const real = fs.realpathSync(targetPath);
+    return path.resolve(real).toLowerCase() !== path.resolve(targetPath).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Minimal fail-closed RTK decision for isolated execution:
+ * Never copies rtk.exe into workerRoot or under a worker-writable ancestor.
+ * Only uses a pre-provisioned trustedBinDir outside workerRoot and its parent
+ * directory whose executable exists and is not a symlink/junction.
+ */
+function resolveIsolatedRtkDecision(workerRoot, rtkConfig, env) {
+  const cfg = rtkConfig && typeof rtkConfig === 'object' ? rtkConfig : {};
+  const e = env || process.env;
+  const rawDir = cfg.trustedBinDir || e.SHIPDE_RTK_TRUSTED_BIN_DIR || '';
+  if (!rawDir || typeof rawDir !== 'string' || !rawDir.trim()) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_no_trusted_bin',
+    };
+  }
+  const trustedDir = path.resolve(rawDir.trim());
+  const resolvedWorker = path.resolve(workerRoot);
+  const workerParent = path.dirname(resolvedWorker);
+  if (
+    isWithinPath(resolvedWorker, trustedDir) ||
+    (workerParent && workerParent !== resolvedWorker && isWithinPath(workerParent, trustedDir))
+  ) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_untrusted_ancestor',
+    };
+  }
+  if (!fs.existsSync(trustedDir) || isSymlinkOrJunction(trustedDir)) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_untrusted_dir',
+    };
+  }
+  const exePath = path.join(trustedDir, 'rtk.exe');
+  if (!fs.existsSync(exePath) || isSymlinkOrJunction(exePath)) {
+    return {
+      enabled: false,
+      pathPrepend: null,
+      reason: 'rtk_omitted_isolated_exe_missing',
+    };
+  }
+  return {
+    enabled: true,
+    pathPrepend: trustedDir,
+    reason: 'provided',
+  };
+}
+
 module.exports = {
+  resolveIsolatedRtkDecision,
   retainedRootHasOwnWriterRecord,
   retargetSharedDepsWorkspaceLinks,
   provisionedHeadMatchesBase,
