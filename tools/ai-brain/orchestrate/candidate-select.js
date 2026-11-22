@@ -398,10 +398,35 @@ async function selectCandidateForProfile(
       (writerCandidate && writerCandidate.modelId) ||
       (parsedWriter && parsedWriter.modelId) ||
       null;
+    const writerIsOpaqueCombo = Boolean(
+      writerKey &&
+      (writerCandidate
+        ? comboApi.isComboCandidate(writerCandidate, o.registry)
+        : comboApi.isComboIdentity(writerKey, o.registry))
+    );
+    // M-R04 fail-closed by default on the live combo-JEV seam: concrete member
+    // writers and unknown/unparseable writer identities must obtain an
+    // independently established reviewer (distinct upstream + model family).
+    // Only when the writer itself ran as the opaque configured combo (operator
+    // decision 2026-11-19 "1 combo cho tất cả", audited as
+    // REVIEWER_EQUALS_WRITER_COMBO_ACCEPTED in review-lane.js) and strict mode
+    // is not forced may the reviewer fall back to the opaque configured combo.
+    const requireIndependentReviewer =
+      role === 'reviewer' && (!writerIsOpaqueCombo || o.strictIndependentComboReview === true);
 
-    if (role === 'reviewer' && o.strictIndependentComboReview === true && !writerModelId) {
-      const reason = 'NO_INDEPENDENT_REVIEWER';
-      const result = { chosen: null, reason, ranking: [], top3: [], rejected: [], comboJev: null };
+    const refuseNoIndependentReviewer = (sel) => {
+      const reason = (sel && sel.reason) || 'NO_INDEPENDENT_REVIEWER';
+      // Non-empty rejected ensures review-item.js sees controllerJudgedCandidates
+      // as true so an explicit o.reviewerIdentity cannot override this refusal.
+      const rejected = [{ candidateKey: writerKey || 'combo-jev', reason }];
+      const result = {
+        chosen: null,
+        reason,
+        ranking: [],
+        top3: [],
+        rejected,
+        comboJev: sel || null,
+      };
       const decisionRecorded = {
         stage: decisions.Stage.SELECTED,
         workItemId: item && item.id,
@@ -409,12 +434,16 @@ async function selectCandidateForProfile(
         chosen: null,
         chosenCandidate: null,
         reason,
-        rejected: [],
+        rejected,
         selected: null,
         chosenKey: null,
       };
       decisions.recordDecision(decisionRecorded, logOpts);
       return { chosen: null, reason, result, decisionRecorded };
+    };
+
+    if (requireIndependentReviewer && !writerModelId) {
+      return refuseNoIndependentReviewer(null);
     }
 
     let rawMembers = Array.isArray(o.comboMembers) ? o.comboMembers : null;
@@ -472,7 +501,7 @@ async function selectCandidateForProfile(
       sel.ok &&
       sel.candidate &&
       sel.selected &&
-      !(role === 'reviewer' && o.strictIndependentComboReview === true && !sel.independentApplied)
+      !(requireIndependentReviewer && !sel.independentApplied)
     ) {
       const chosen = candidateKey(sel.candidate);
       if (
@@ -506,26 +535,8 @@ async function selectCandidateForProfile(
       return { chosen, reason, result, decisionRecorded };
     }
 
-    if (
-      role === 'reviewer' &&
-      o.strictIndependentComboReview === true &&
-      (!sel || !sel.ok || !sel.independentApplied)
-    ) {
-      const reason = (sel && sel.reason) || 'NO_INDEPENDENT_REVIEWER';
-      const result = { chosen: null, reason, ranking: [], top3: [], rejected: [], comboJev: sel };
-      const decisionRecorded = {
-        stage: decisions.Stage.SELECTED,
-        workItemId: item && item.id,
-        role,
-        chosen: null,
-        chosenCandidate: null,
-        reason,
-        rejected: [],
-        selected: null,
-        chosenKey: null,
-      };
-      decisions.recordDecision(decisionRecorded, logOpts);
-      return { chosen: null, reason, result, decisionRecorded };
+    if (requireIndependentReviewer && (!sel || !sel.ok || !sel.independentApplied)) {
+      return refuseNoIndependentReviewer(sel);
     }
   }
 

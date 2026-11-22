@@ -9,6 +9,7 @@ const path = require('path');
 const combo = require('../combo');
 const { candidateKey } = require('../candidates');
 const { selectCandidateForProfile } = require('../orchestrate/candidate-select');
+const { reviewItem } = require('../orchestrate/review-item');
 
 const REGISTRY = {
   dispatch: { nineRouterWriterCombo: 'vinh', comboSource: '9router' },
@@ -147,56 +148,42 @@ test('TASK-AI-195 AC2: reviewer selects independent combo member and honors stri
   assert.equal(reviewerDecision.decisionRecorded.chosenCandidate.upstream, 'ag');
   assert.equal(reviewerDecision.decisionRecorded.comboJev.independentApplied, true);
 
-  // Strict refusal when no independent member exists
-  const strictRefused = await selectCandidateForProfile(
-    {
-      id: 'TASK-R2-review',
-      roleRequirement: { role: 'reviewer' },
-      writerCandidateKey: writerDecision.chosen,
-    },
-    [baseCombo],
-    ['gh'],
-    {},
-    {
-      registry: REGISTRY,
-      env,
-      priors: PRIORS,
-      comboMembers: ['gh/gpt-5.2-high', 'gh/claude-4.5-low'],
-      strictIndependentComboReview: true,
-    },
-    logOpts,
-    logOpts.now,
-    {}
-  );
-  assert.equal(strictRefused.chosen, null);
-  assert.equal(strictRefused.reason, 'NO_INDEPENDENT_REVIEWER');
+  // Live-shaped default (NO strictIndependentComboReview flag): concrete member writer
+  // MUST refuse fail-closed when only same-upstream or same-family members exist.
+  for (const nonIndependentMembers of [
+    ['gh/gpt-5.2-high', 'gh/claude-4.5-low'],
+    ['gh/gpt-5.2-high', 'ag/gpt-5.2-low'],
+  ]) {
+    const defaultRefused = await selectCandidateForProfile(
+      {
+        id: 'TASK-R2-review',
+        roleRequirement: { role: 'reviewer' },
+        writerCandidateKey: writerDecision.chosen,
+      },
+      [baseCombo],
+      ['gh'],
+      {},
+      {
+        registry: REGISTRY,
+        env,
+        priors: PRIORS,
+        comboMembers: nonIndependentMembers,
+      },
+      logOpts,
+      logOpts.now,
+      {}
+    );
+    assert.equal(defaultRefused.chosen, null);
+    assert.equal(defaultRefused.reason, 'NO_INDEPENDENT_REVIEWER');
+    assert.ok(
+      Array.isArray(defaultRefused.result.rejected) && defaultRefused.result.rejected.length > 0,
+      'refusal must populate rejected so review-item.js blocks o.reviewerIdentity override'
+    );
+  }
 
-  // Non-strict falls back cleanly to configured combo `vinh`
-  const nonStrictFallback = await selectCandidateForProfile(
-    {
-      id: 'TASK-R3-review',
-      roleRequirement: { role: 'reviewer' },
-      writerCandidateKey: writerDecision.chosen,
-    },
-    [baseCombo],
-    ['gh'],
-    {},
-    {
-      registry: REGISTRY,
-      env,
-      priors: PRIORS,
-      comboMembers: ['gh/gpt-5.2-high', 'gh/claude-4.5-low'],
-    },
-    logOpts,
-    logOpts.now,
-    {}
-  );
-  assert.equal(nonStrictFallback.chosen, candidateKey(baseCombo));
-  assert.equal(nonStrictFallback.reason, 'combo-only routing');
-
-  // Regression 1: strict reviewer with absent or unparseable writer identity must refuse
+  // Live-shaped default: absent or unparseable writer identity must refuse fail-closed
   for (const badWriter of [undefined, 'not-a-valid-candidate-key']) {
-    const strictUnresolved = await selectCandidateForProfile(
+    const unresolvedRefused = await selectCandidateForProfile(
       {
         id: 'TASK-R4-review',
         roleRequirement: { role: 'reviewer' },
@@ -210,18 +197,65 @@ test('TASK-AI-195 AC2: reviewer selects independent combo member and honors stri
         env,
         priors: PRIORS,
         comboMembers: ['gh/gpt-5.2-high', 'ag/claude-4.5-medium'],
-        strictIndependentComboReview: true,
       },
       logOpts,
       logOpts.now,
       {}
     );
-    assert.equal(strictUnresolved.chosen, null);
-    assert.equal(strictUnresolved.reason, 'NO_INDEPENDENT_REVIEWER');
+    assert.equal(unresolvedRefused.chosen, null);
+    assert.equal(unresolvedRefused.reason, 'NO_INDEPENDENT_REVIEWER');
+    assert.ok(unresolvedRefused.result.rejected.length > 0);
   }
 
-  // Regression 2: fallback after independence rejects all members must never pick a
-  // previously appended same-family comboMember when the configured combo has failed
+  // Opaque-combo writer (2026-11-19 "1 combo cho tất cả" contract) preserves combo fallback
+  const opaqueFallback = await selectCandidateForProfile(
+    {
+      id: 'TASK-R3-review',
+      roleRequirement: { role: 'reviewer' },
+      writerCandidateKey: candidateKey(baseCombo),
+    },
+    [baseCombo],
+    ['9router'],
+    {},
+    {
+      registry: REGISTRY,
+      env,
+      priors: PRIORS,
+      comboMembers: [],
+    },
+    logOpts,
+    logOpts.now,
+    {}
+  );
+  assert.equal(opaqueFallback.chosen, candidateKey(baseCombo));
+  assert.equal(opaqueFallback.reason, 'combo-only routing');
+
+  // Strict mode refuses even an opaque-combo writer
+  const strictOpaqueRefused = await selectCandidateForProfile(
+    {
+      id: 'TASK-R3S-review',
+      roleRequirement: { role: 'reviewer' },
+      writerCandidateKey: candidateKey(baseCombo),
+    },
+    [baseCombo],
+    ['9router'],
+    {},
+    {
+      registry: REGISTRY,
+      env,
+      priors: PRIORS,
+      comboMembers: [],
+      strictIndependentComboReview: true,
+    },
+    logOpts,
+    logOpts.now,
+    {}
+  );
+  assert.equal(strictOpaqueRefused.chosen, null);
+  assert.equal(strictOpaqueRefused.reason, 'NO_INDEPENDENT_REVIEWER');
+
+  // Regression: opaque-combo fallback must never pick a previously cached comboMember
+  // when the configured combo has failed
   const comboJev = require('../combo-jev-select');
   const staleSameFamily = comboJev.buildMemberCandidate(
     { modelId: 'ag/gpt-5.2-low', base: 'gpt-5.2', effort: 'low', score: 85, tier: 'T1' },
@@ -231,16 +265,16 @@ test('TASK-AI-195 AC2: reviewer selects independent combo member and honors stri
     {
       id: 'TASK-R5-review',
       roleRequirement: { role: 'reviewer' },
-      writerCandidateKey: writerDecision.chosen,
+      writerCandidateKey: candidateKey(baseCombo),
     },
     [baseCombo, writerDecision.decisionRecorded.chosenCandidate, staleSameFamily],
-    ['gh'],
+    ['9router'],
     {},
     {
       registry: REGISTRY,
       env,
       priors: PRIORS,
-      comboMembers: ['gh/gpt-5.2-high', 'ag/gpt-5.2-low'],
+      comboMembers: [],
     },
     logOpts,
     logOpts.now,
@@ -248,6 +282,41 @@ test('TASK-AI-195 AC2: reviewer selects independent combo member and honors stri
   );
   assert.equal(failedComboFallback.chosen, null);
   assert.match(failedComboFallback.reason, /^NO_ELIGIBLE_CANDIDATE/);
+
+  // Causal downstream proof: reviewItem refusal survives an explicit o.reviewerIdentity override
+  let launchCount = 0;
+  const reviewRes = await reviewItem(
+    {
+      registry: REGISTRY,
+      env,
+      priors: PRIORS,
+      comboMembers: ['gh/gpt-5.2-high', 'gh/claude-4.5-low'],
+      reviewerIdentity: candidateKey(baseCombo),
+      reviewBudget: 1,
+      formatCheck: false,
+      tests: async () => ({ pass: true, command: 'noop', detail: 'ok' }),
+    },
+    { id: 'TASK-R6', complexity: 'standard', allowedPaths: ['a.js'] },
+    {
+      candidateKey: writerDecision.chosen,
+      headSha: 'a'.repeat(40),
+      branch: 'feat/task-r6',
+    },
+    { goal: 'test', reviews: [], formatChecks: [], toolGates: [] },
+    logOpts,
+    async () => {
+      launchCount += 1;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    logOpts.dir,
+    logOpts.now,
+    [baseCombo, writerDecision.decisionRecorded.chosenCandidate],
+    {},
+    REGISTRY,
+    {}
+  );
+  assert.equal(launchCount, 0, 'downstream reviewer launcher must never be invoked on refusal');
+  assert.notEqual(reviewRes.status, 'PASSED');
 });
 
 test('TASK-AI-195 AC3: failed member is skipped on retry and falls back to remaining member or combo', async () => {
