@@ -3,8 +3,23 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
-const { sanitizeErrorSnippet } = require('./quota-scan');
 const { safeText } = require('./coordinator-text');
+
+function sanitizeErrorSnippet(text, maxLength = 200, env = {}) {
+  if (!text) return '';
+  let str = typeof text === 'string' ? text : JSON.stringify(text);
+  const allEnv = { ...process.env, ...(env || {}) };
+  for (const v of Object.values(allEnv)) {
+    if (typeof v === 'string' && v.length >= 8 && str.includes(v)) {
+      str = str.split(v).join('[REDACTED]');
+    }
+  }
+  str = str.replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]');
+  str = str.replace(/(?:api[-_]?key|token|secret)[=:][\s"']*[A-Za-z0-9._-]+/gi, 'key=[REDACTED]');
+  str = str.replace(/sk-[A-Za-z0-9_-]+/gi, '[REDACTED]');
+  str = str.replace(/[\r\n\t]+/g, ' ').trim();
+  return str.length > maxLength ? str.slice(0, maxLength) : str;
+}
 const DATA_DIR = path.join(__dirname, 'data', 'discovery');
 const MAX_AGE_MS = 48 * 60 * 60 * 1000;
 // Filesystem timestamp granularity tolerance when proving a stage wrote its
