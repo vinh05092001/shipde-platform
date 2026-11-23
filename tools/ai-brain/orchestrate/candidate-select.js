@@ -9,6 +9,7 @@ const { candidateKey } = require('../candidates');
 const { parseCandidateKey } = require('../discovery/identity');
 const comboReader = require('../combo-reader');
 const comboJev = require('../combo-jev-select');
+const agyPoolCandidates = require('../agy-pool-candidates');
 const decisions = require('../decisions');
 const sourcesApi = require('../sources');
 const jev = require('../jev');
@@ -322,12 +323,14 @@ function shouldUseComboJevSelect(pool, o, comboApi) {
 }
 
 /**
- * Agy-pool accounts that already failed for this item in this run. failedKeys
- * lives on the item for one run, so this never reads failures from another run:
- * it holds the failed agy-pool candidate keys and the account-exhausted marks.
+ * Agy-pool failures for this item earlier in this run. failedKeys lives on the
+ * item for one run, so this never reads failures from another run. Only an
+ * account-exhausted mark excludes a whole account; a failed candidate key
+ * excludes just its model on its account.
  */
-function failedAgyAccounts(failedSet) {
+function failedAgyExclusions(failedSet) {
   const accounts = new Set();
+  const modelAccounts = new Set();
   for (const key of failedSet) {
     if (typeof key !== 'string') continue;
     const mark = /^account-exhausted::agy-pool::(.+)$/.exec(key);
@@ -336,9 +339,11 @@ function failedAgyAccounts(failedSet) {
       continue;
     }
     const parsed = parseCandidateKey(key);
-    if (parsed && parsed.harness === 'agy-pool' && parsed.account) accounts.add(parsed.account);
+    if (parsed && parsed.harness === 'agy-pool' && parsed.account && parsed.modelId) {
+      modelAccounts.add(agyPoolCandidates.modelAccountKey(parsed.modelId, parsed.account));
+    }
   }
-  return Array.from(accounts);
+  return { accounts: Array.from(accounts), modelAccounts: Array.from(modelAccounts) };
 }
 
 async function selectCandidateForProfile(
@@ -521,6 +526,7 @@ async function selectCandidateForProfile(
       });
     jevEligibleCount = eligibleMembers.length;
 
+    const agyExclusions = failedAgyExclusions(failedSet);
     let sel = null;
     if (eligibleMembers.length > 0) {
       sel = await comboJev.selectComboMember({
@@ -538,7 +544,8 @@ async function selectCandidateForProfile(
         maxOptions: o.jevMaxOptions,
         comboName: o.comboName,
         agyPoolOptions: o.agyPoolOptions,
-        excludedAccounts: failedAgyAccounts(failedSet),
+        excludedAccounts: agyExclusions.accounts,
+        excludedModelAccounts: agyExclusions.modelAccounts,
       });
       jevSelReason = (sel && (sel.reason || sel.error)) || null;
     }

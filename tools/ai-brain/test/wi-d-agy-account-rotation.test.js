@@ -44,6 +44,11 @@ const PRIORS = {
       codingTier: 'T1',
       benchmarks: [{ name: 'aaCodingIndex', score: 90 }],
     },
+    {
+      canonical: 'claude-sonnet-5.5',
+      codingTier: 'T2',
+      benchmarks: [{ name: 'aaCodingIndex', score: 70 }],
+    },
   ],
 };
 
@@ -52,7 +57,7 @@ function snapshot(claude) {
     groups: [
       {
         name: 'Claude and GPT models',
-        description: 'Models within this group: Claude Opus 5.5',
+        description: 'Models within this group: Claude Opus 5.5, Claude Sonnet 5.5',
         buckets: [{ id: '3p-weekly', window: 'weekly', remaining_fraction: claude }],
       },
     ],
@@ -62,12 +67,18 @@ function snapshot(claude) {
 const QUOTA = { agy02: snapshot(0.85), agy03: snapshot(0.3) };
 const ENV = { NINEROUTER_API_KEY: 'test-key' };
 
-// JEV picks the agy-pool member when it is offered, otherwise the first option.
-async function pickAgy(question) {
-  const members = JSON.parse(question.evidence).members || [];
-  const agy = members.find((m) => m.headroomStatus);
-  return { choice: agy ? agy.option : question.options[0], confidence: 0.9, reason: 'fixture' };
+// JEV picks an offered agy-pool member (best score, or worst with pickAgyLowest),
+// otherwise the first option. Scores tell the two agy models apart.
+function agyPicker(lowest) {
+  return async (question) => {
+    const members = (JSON.parse(question.evidence).members || []).filter((m) => m.headroomStatus);
+    members.sort((a, b) => (lowest ? a.score - b.score : b.score - a.score));
+    const choice = members.length ? members[0].option : question.options[0];
+    return { choice, confidence: 0.9, reason: 'fixture' };
+  };
 }
+const pickAgy = agyPicker(false);
+const pickAgyLowest = agyPicker(true);
 
 async function select({ failedKeys = [], enabled = true, evidenceData = {}, jevAsk = pickAgy }) {
   const reg = registry(enabled);
@@ -154,4 +165,31 @@ test('WI-D: with the agy flag off, failed agy keys change nothing', async () => 
   assert.equal(withFailures.chosen, plain.chosen);
   assert.deepEqual(asked[1], asked[0]);
   assert.equal(accountOf(plain), null, 'no agy-pool member is offered while the flag is off');
+});
+
+const modelOf = (decision) => parseCandidateKey(decision.chosen).modelId;
+
+test('WI-D: a failed model on an account leaves the other model on that account', async () => {
+  const opus = await select({});
+  const sonnet = await select({ jevAsk: pickAgyLowest });
+  assert.notEqual(modelOf(opus), modelOf(sonnet));
+  assert.equal(accountOf(sonnet), 'agy02');
+
+  const opusAgain = await select({ failedKeys: [opus.chosen] });
+  assert.equal(modelOf(opusAgain), modelOf(opus));
+  assert.equal(accountOf(opusAgain), 'agy03');
+
+  const sonnetAgain = await select({ failedKeys: [opus.chosen], jevAsk: pickAgyLowest });
+  assert.equal(modelOf(sonnetAgain), modelOf(sonnet));
+  assert.equal(
+    accountOf(sonnetAgain),
+    'agy02',
+    'a failed Opus key does not exclude Sonnet on agy02'
+  );
+});
+
+test('WI-D: an account-exhausted mark excludes every model on that account', async () => {
+  const failedKeys = ['account-exhausted::agy-pool::agy02'];
+  assert.equal(accountOf(await select({ failedKeys })), 'agy03');
+  assert.equal(accountOf(await select({ failedKeys, jevAsk: pickAgyLowest })), 'agy03');
 });
