@@ -76,11 +76,18 @@ function resolveLauncher(o, isolatedLauncher) {
         .map(Number)
         .filter((v) => Number.isFinite(v) && v >= 0);
       const poolTimeoutMs = bounds.length > 0 ? Math.min(...bounds) : undefined;
+      const agyCandidates = require('../agy-pool-candidates');
+      const readQuota =
+        typeof o.readAgyQuota === 'function'
+          ? o.readAgyQuota
+          : (accountId) => agyCandidates.readAccountQuotaSnapshot(accountId, o);
+      const quotaBefore = readQuota(job.accountId);
+      const runStartedAt = Date.now();
       const result = pool.submitJob(job.accountId, job, {
         ...o,
         timeoutMs: poolTimeoutMs,
       });
-      return {
+      const launched = {
         ...result,
         exitCode: result.state === 'ok' ? result.exitCode : result.exitCode || 1,
         stdout: result.jobId && result.state === 'ok' ? pool.readOutText(job.accountId, o) : '',
@@ -88,6 +95,42 @@ function resolveLauncher(o, isolatedLauncher) {
         refusal: result.state === 'error' ? result.reason : undefined,
         launchHandle: result.jobId || null,
       };
+      if (result.state !== 'ok') return launched;
+      // The pool reports no served model, so quota groups are the only run
+      // evidence. Evidence that contradicts the request refuses the run; a
+      // writer may continue on group evidence (F2 still checks its diff), but a
+      // reviewer needs the served model itself to prove family independence.
+      const scope = String(job.quotaScope || '');
+      const identityProof = agyCandidates.verifyAgyServedIdentity({
+        requestedModel: job.model,
+        expectedBucket: scope.includes(':') ? scope.slice(scope.indexOf(':') + 1) : null,
+        quotaBefore,
+        quotaAfter: readQuota(job.accountId),
+        receipt: {
+          accountId: result.accountId,
+          jobId: result.jobId,
+          servedModel: result.servedModel,
+        },
+        accountId: job.accountId,
+        runStartedAt,
+      });
+      const contradicting = [
+        'AGY_RECEIPT_MISSING',
+        'AGY_ACCOUNT_MISMATCH',
+        'AGY_RUN_BINDING_MISMATCH',
+        'AGY_SERVED_MODEL_MISMATCH',
+        'AGY_GROUP_DELTA_MISMATCH',
+      ];
+      const refusal = contradicting.includes(identityProof.error)
+        ? 'AGY_IDENTITY_REFUSED: ' + identityProof.error
+        : job.isReview && identityProof.modelVerified !== true
+          ? 'REVIEWER_SERVED_MODEL_UNVERIFIED: ' +
+            (identityProof.error || identityProof.evidenceKind)
+          : null;
+      if (refusal) {
+        return { ...launched, exitCode: 1, stderr: refusal, refusal, identityProof };
+      }
+      return { ...launched, identityProof };
     }
     let launchArgs;
     try {
