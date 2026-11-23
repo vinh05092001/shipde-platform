@@ -12,8 +12,8 @@
  *     using the existing `scope-gate` matcher. Any violation fails closed.
  */
 
-const cp = require('child_process');
 const { matchGlobs } = require('./scope-gate');
+const { runHardenedGit } = require('./orchestrate/hardened-git');
 
 const GLOB_CHARS = /[*?[\]{}]/;
 const DRIVE_PREFIX = /^[A-Za-z]:/;
@@ -203,11 +203,7 @@ function checkWriterCommitDiff({ workerRoot, baseSha, headSha, writerPaths, allo
   if (!baseSha || !headSha || baseSha === headSha) {
     return { ok: true, files: [], scope };
   }
-  const res = cp.spawnSync(
-    'git',
-    ['-c', 'safe.directory=*', 'diff', '--name-status', '-M', '-z', baseSha, headSha],
-    { cwd: workerRoot, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 }
-  );
+  const res = runHardenedGit(workerRoot, ['diff', '--name-status', '-M', '-z', baseSha, headSha]);
   if (res.error || res.status !== 0) {
     return {
       ok: false,

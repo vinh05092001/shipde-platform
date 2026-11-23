@@ -1561,40 +1561,7 @@ function getIsolatedLauncher() {
         }
       } catch {}
     }
-    if (
-      opts.commitFileOnlyWriter === true &&
-      !launchResult.localFailure &&
-      launchResult.exitCode === 0 &&
-      launchResult.workerSha &&
-      opts.baseSha &&
-      launchResult.workerSha !== opts.baseSha &&
-      Array.isArray(opts.allowedPaths) &&
-      opts.allowedPaths.length > 0 &&
-      fs.existsSync(workerRoot) &&
-      fs.existsSync(path.join(workerRoot, '.git'))
-    ) {
-      const diffCheck = require('./writer-scope').checkWriterCommitDiff({
-        workerRoot,
-        baseSha: opts.baseSha,
-        headSha: launchResult.workerSha,
-        allowedPaths: opts.allowedPaths,
-      });
-      if (!diffCheck.ok) {
-        launchResult.exitCode = 1;
-        launchResult.localFailure = diffCheck.code;
-        launchResult.failureReason =
-          diffCheck.code +
-          (diffCheck.offending && diffCheck.offending.length
-            ? ': ' + diffCheck.offending.join(', ')
-            : '');
-        launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
-          .filter(Boolean)
-          .join('\n');
-        delete launchResult.workerSha;
-        delete launchResult.retainedHeadSha;
-      }
-    }
-    return launchResult;
+    return enforceWriterCommitScope(launchResult, opts, workerRoot);
   };
 }
 
@@ -1778,7 +1745,48 @@ function resolveIsolatedRtkDecision(workerRoot, rtkConfig, env) {
   };
 }
 
+function enforceWriterCommitScope(launchResult, opts, workerRoot) {
+  if (
+    opts &&
+    opts.commitFileOnlyWriter === true &&
+    launchResult &&
+    !launchResult.localFailure &&
+    launchResult.exitCode === 0 &&
+    launchResult.workerSha &&
+    opts.baseSha &&
+    launchResult.workerSha !== opts.baseSha &&
+    Array.isArray(opts.allowedPaths) &&
+    opts.allowedPaths.length > 0 &&
+    workerRoot &&
+    fs.existsSync(workerRoot) &&
+    fs.existsSync(path.join(workerRoot, '.git'))
+  ) {
+    const diffCheck = require('./writer-scope').checkWriterCommitDiff({
+      workerRoot,
+      baseSha: opts.baseSha,
+      headSha: launchResult.workerSha,
+      allowedPaths: opts.allowedPaths,
+    });
+    if (!diffCheck.ok) {
+      launchResult.exitCode = 1;
+      launchResult.localFailure = diffCheck.code;
+      launchResult.failureReason =
+        diffCheck.code +
+        (diffCheck.offending && diffCheck.offending.length
+          ? ': ' + diffCheck.offending.join(', ')
+          : '');
+      launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
+        .filter(Boolean)
+        .join('\n');
+      delete launchResult.workerSha;
+      delete launchResult.retainedHeadSha;
+    }
+  }
+  return launchResult;
+}
+
 module.exports = {
+  enforceWriterCommitScope,
   resolveIsolatedRtkDecision,
   retainedRootHasOwnWriterRecord,
   retargetSharedDepsWorkspaceLinks,

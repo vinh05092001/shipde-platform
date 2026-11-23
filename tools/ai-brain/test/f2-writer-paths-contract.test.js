@@ -13,6 +13,9 @@ const { pinpointTarget } = require('../pinpoint');
 const { compilePrompt } = require('../prompt-compiler');
 const { createContextPack } = require('../context-pack');
 const { repairSpec } = require('../orchestrate/review-lane');
+const { repairRound } = require('../orchestrate/repair-round');
+const { runOrchestration } = require('../orchestrate');
+const { enforceWriterCommitScope } = require('../isolation-launcher');
 const scopeGate = require('../scope-gate');
 const writerScope = require('../writer-scope');
 
@@ -293,4 +296,159 @@ test('F2 writer diff gate checks turnBase..head against writerPaths while PR gat
     scope: prScope.scope,
   });
   assert.equal(prDiff.ok, true);
+});
+
+test('F2 isolation-launcher enforceWriterCommitScope strips workerSha and fails closed on WRITER_DIFF_OUTSIDE_SCOPE', () => {
+  const { dir, turnBase, write } = makeGitFixtureRepo();
+  const writerPaths = [
+    'tools/ai-brain/review-manifest.js',
+    'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
+  ];
+
+  // In-scope commit passes through launcher gate with workerSha intact
+  write(
+    'tools/ai-brain/review-manifest.js',
+    'const path = require("path");\nmodule.exports = path;\n'
+  );
+  git(dir, ['add', 'tools/ai-brain/review-manifest.js']);
+  git(dir, ['commit', '-m', 'in-scope writer commit']);
+  const goodHead = git(dir, ['rev-parse', 'HEAD']);
+
+  const okRes = enforceWriterCommitScope(
+    { exitCode: 0, workerSha: goodHead, retainedHeadSha: goodHead, stderr: '' },
+    { commitFileOnlyWriter: true, baseSha: turnBase, allowedPaths: writerPaths },
+    dir
+  );
+  assert.equal(okRes.exitCode, 0);
+  assert.equal(okRes.localFailure, undefined);
+  assert.equal(okRes.workerSha, goodHead);
+
+  // Out-of-writerPaths commit (PR-only allowedPaths file) is refused and workerSha is stripped
+  write('tools/ai-brain/cli/commands.js', '// out of writerPaths\nmodule.exports = { x: 1 };\n');
+  git(dir, ['add', 'tools/ai-brain/cli/commands.js']);
+  git(dir, ['commit', '-m', 'out-of-writer-scope commit']);
+  const badHead = git(dir, ['rev-parse', 'HEAD']);
+
+  const badRes = enforceWriterCommitScope(
+    { exitCode: 0, workerSha: badHead, retainedHeadSha: badHead, stderr: '' },
+    { commitFileOnlyWriter: true, baseSha: turnBase, allowedPaths: writerPaths },
+    dir
+  );
+  assert.equal(badRes.exitCode, 1);
+  assert.equal(badRes.localFailure, 'WRITER_DIFF_OUTSIDE_SCOPE');
+  assert.match(badRes.failureReason, /tools\/ai-brain\/cli\/commands\.js/);
+  assert.equal(badRes.workerSha, undefined);
+  assert.equal(badRes.retainedHeadSha, undefined);
+});
+
+test('F2 orchestrate writer job and repairRound job receive effective writerPaths and per-turn baseSha', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-f2-jobs-'));
+  const prAllowedPaths = [
+    'tools/ai-brain/combo-reader.js',
+    'tools/ai-brain/cli/commands.js',
+    'tools/ai-brain/review-manifest.js',
+    'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
+  ];
+  const writerPaths = [
+    'tools/ai-brain/review-manifest.js',
+    'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
+  ];
+  const registry = {
+    dispatch: { nineRouterWriterCombo: 'vinh', comboSource: '9router' },
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        servesModels: true,
+        harness: 'opencode-direct',
+        endpoint: 'http://127.0.0.1:20128/v1',
+        credential: { type: 'api-key', env: 'NINEROUTER_API_KEY' },
+      },
+    ],
+  };
+
+  const writerJobs = [];
+  await runOrchestration('F2 writer job scope', {
+    specs: [
+      {
+        id: 'TASK-AI-187',
+        objective: 'Fix review-manifest CLI',
+        allowedPaths: prAllowedPaths,
+        writerPaths,
+        acceptanceCriteria: ['AC1 | ok'],
+        verification: { command: 'echo ok' },
+      },
+    ],
+    registry,
+    env: { NINEROUTER_API_KEY: 'test-key' },
+    decisionDir: dir,
+    evidenceDir: dir,
+    comboJevSelect: false,
+    run: (job) => {
+      writerJobs.push(job);
+      return { exitCode: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+  assert.equal(writerJobs.length, 1);
+  assert.deepEqual(writerJobs[0].allowedPaths, writerPaths);
+
+  const repairJobs = [];
+  const turnHeadSha = 'a'.repeat(40);
+  const candidate = {
+    harness: 'opencode-direct',
+    endpoint: 'http://127.0.0.1:20128/v1',
+    gateway: '9router',
+    source: '9router',
+    upstream: '9router',
+    accountId: '9router',
+    quotaScope: '9router',
+    modelId: 'vinh',
+    combo: 'vinh',
+  };
+  const runRepair = repairRound(
+    {
+      registry,
+      env: { NINEROUTER_API_KEY: 'test-key' },
+      decisionDir: dir,
+      evidenceDir: dir,
+      comboJevSelect: false,
+      baseSha: 'b'.repeat(40),
+      specs: [
+        {
+          id: 'TASK-AI-187',
+          allowedPaths: prAllowedPaths,
+          writerPaths,
+          acceptanceCriteria: ['AC1 | ok'],
+          verification: { command: 'echo ok' },
+        },
+      ],
+    },
+    {
+      id: 'TASK-AI-187',
+      allowedPaths: prAllowedPaths,
+      writerPaths,
+      verification: { command: 'echo ok' },
+    },
+    {
+      candidateKey:
+        'opencode-direct::http://127.0.0.1:20128/v1::9router::9router::9router::9router::vinh',
+    },
+    { goal: 'F2 repair job scope', prompts: [], selections: [], launches: [] },
+    { dir, now: Date.now(), runId: 'run-f2' },
+    async (job) => {
+      repairJobs.push(job);
+      return { exitCode: 0, stdout: 'ok', stderr: '', workerSha: 'c'.repeat(40) };
+    },
+    dir,
+    Date.now(),
+    [candidate],
+    {},
+    registry,
+    {}
+  );
+  const repairRes = await runRepair([{ id: 'F1', detail: 'fix test' }], turnHeadSha);
+  assert.equal(repairJobs.length, 1);
+  assert.deepEqual(repairJobs[0].allowedPaths, writerPaths);
+  assert.equal(repairJobs[0].baseSha, turnHeadSha);
+  assert.ok(repairRes && (repairRes.ok === true || repairRes.repaired === true || repairRes.sha));
 });
