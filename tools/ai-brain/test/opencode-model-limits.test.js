@@ -86,7 +86,20 @@ test('opencode limits resolve from modelMeta -> candidate opts -> nineRouterWrit
   });
   assert.deepEqual(partialLimits, { context: 200000, output: 6144 });
 
-  // 5. Router source with no modelMeta/opts/dispatchConfig returns nulls (never guesses 32000/4096)
+  // 4b. Partial modelMeta (context only) with no opts/dispatchConfig keeps historical 4096 for missing output
+  const partialMissingOutput = resolveOpencodeModelLimits({
+    selectedSource: {
+      ...routerSource,
+      modelMeta: { 'ninerouter/partial-only-ctx': { limit: { context: 200000 } } },
+    },
+    pinnedModel: 'ninerouter/partial-only-ctx',
+    isRouter: true,
+    opts: {},
+    dispatchConfig: null,
+  });
+  assert.deepEqual(partialMissingOutput, { context: 200000, output: 4096 });
+
+  // 5. Router source with invalid/missing modelMeta/opts/dispatchConfig preserves historical 32000/4096 fallback
   const missingRouterLimits = resolveOpencodeModelLimits({
     selectedSource: routerSource,
     pinnedModel: 'ninerouter/unknown',
@@ -94,7 +107,7 @@ test('opencode limits resolve from modelMeta -> candidate opts -> nineRouterWrit
     opts: { contextWindow: Number.NaN, maxOutputTokens: 0 },
     dispatchConfig: null,
   });
-  assert.deepEqual(missingRouterLimits, { context: null, output: null });
+  assert.deepEqual(missingRouterLimits, { context: 32000, output: 4096 });
 
   // 6. Non-router direct source without modelMeta/opts preserves legacy 32000/4096
   const nonRouterLimits = resolveOpencodeModelLimits({

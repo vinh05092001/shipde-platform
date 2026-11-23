@@ -1094,14 +1094,10 @@ function getIsolatedLauncher() {
         const modelEntry = {
           id: wireId,
           name: relativeId,
-          ...(resolvedLimits.context || resolvedLimits.output
-            ? {
-                limit: {
-                  ...(resolvedLimits.context ? { context: resolvedLimits.context } : {}),
-                  ...(resolvedLimits.output ? { output: resolvedLimits.output } : {}),
-                },
-              }
-            : {}),
+          limit: {
+            context: resolvedLimits.context,
+            output: resolvedLimits.output,
+          },
         };
         modelsMap[pinnedModel] = modelEntry;
         if (relativeId && relativeId !== pinnedModel) {
@@ -1842,13 +1838,13 @@ function resolveOpencodeModelLimits({
     positiveInt(metaLimit && metaLimit.context) ||
     positiveInt(opts && opts.contextWindow) ||
     positiveInt(comboLimits && comboLimits.contextWindow) ||
-    (isRouter ? null : 32000);
+    32000;
   const output =
     positiveInt(metaLimit && metaLimit.output) ||
     positiveInt(opts && opts.maxOutputTokens) ||
     positiveInt(comboLimits && comboLimits.maxOutputTokens) ||
     positiveInt(selectedSource && selectedSource.options && selectedSource.options.max_tokens) ||
-    (isRouter ? null : 4096);
+    4096;
   return { context, output };
 }
 
