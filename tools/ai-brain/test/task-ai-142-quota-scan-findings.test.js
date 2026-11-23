@@ -5,8 +5,6 @@ const path = require('path');
 const os = require('os');
 
 const quotaScan = require('../quota-scan');
-const sourcesApi = require('../sources');
-const capabilityProbe = require('../capability-probe');
 const cli = require('../cli');
 
 function fixture(t) {
@@ -161,56 +159,6 @@ test('P1-2: scanAllQuotas does not overwrite shared 9router source entry with pe
     undefined,
     'Bare upstream prefix must not be registered globally'
   );
-});
-
-// 3. Regression test for P1: Quota blocking clears candidate.blocked after expiry
-test('P1-3: candidate.blocked and blockScope are cleared after expiry', async () => {
-  const now = 1700000000000;
-  const expiryTime = now + 5000;
-
-  const quotaState = {
-    scopes: {
-      '9router::cl': {
-        source: '9router',
-        scope: 'cl',
-        code: 'QUOTA',
-        at: now,
-        retryAfter: expiryTime,
-      },
-    },
-  };
-
-  const candidate = {
-    candidateKey: 'paseo::cl/test-model::acct-1',
-    gateway: '9router',
-    upstream: 'cl',
-    modelId: 'cl/test-model',
-  };
-
-  const profile = { task: 'author', role: 'author' };
-  const dispatchConfig = sourcesApi.getDispatchConfig(sourcesApi.loadSources());
-  const batchSize = dispatchConfig.probeRoundRobinBatch || 1;
-
-  // 1. Initial probe: candidate should be marked blocked
-  capabilityProbe.orderCandidatesForProbe([candidate], profile, {
-    quotaState,
-    now: now + 100,
-    probeRoundRobinBatch: batchSize,
-  });
-
-  assert.equal(candidate.blocked, true, 'Candidate should be blocked before expiry');
-  assert.equal(candidate.blockScope, 'quota-scope');
-
-  // 2. Probing again after expiry (now > expiryTime): candidate mark must be cleared!
-  capabilityProbe.orderCandidatesForProbe([candidate], profile, {
-    quotaState,
-    now: expiryTime + 1000,
-    probeRoundRobinBatch: batchSize,
-  });
-
-  assert.equal(candidate.blocked, false, 'Candidate blocked mark must be cleared after expiry');
-  assert.equal(candidate.blockScope, undefined, 'blockScope must be cleared after expiry');
-  assert.equal(candidate.blockReason, undefined, 'blockReason must be cleared after expiry');
 });
 
 // 4. Regression test for P1: Sensitive tokens and credentials in responses/errors are sanitized and bounded

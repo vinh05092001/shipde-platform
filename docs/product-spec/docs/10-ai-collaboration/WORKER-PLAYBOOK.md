@@ -128,8 +128,8 @@ and tests, not code, and keep each repository's licence notice where code is ada
 quality scores, provider or account lists, and numeric attempt or probe caps under
 `tools/ai-brain` (code and `data/*.json`).
 
-- Values come from live sources: provider `/models`, leaderboards, route health, quota scans,
-  policy files (`data/scoring-policy.json`) or configuration.
+- Values come from live sources: provider `/models`, leaderboards, route health, quota scans
+  or configuration.
 - Data that names models and is fetched at runtime is written by a script and gitignored, like
   `data/model-priors-live.json` and `data/aa-intelligence.json` (written by `aa-snapshot.js`).
 - Tests use fixtures under `tools/ai-brain/test/fixtures/`, which the guard excludes.

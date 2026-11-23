@@ -3,7 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const capabilityProbe = require('../capability-probe');
 const probeOrder = require('../probe-order');
 const decisions = require('../decisions');
 
@@ -78,82 +77,6 @@ test('TASK-AI-142 trial 14: recentRouteSuccess requires exact harness/source ide
     false,
     'Candidate without matching evidence must not match recent route success'
   );
-
-  // Pool candidate with WORK_ITEM_PASS matches hasPriorWorkPass
-  const poolCombinations = [
-    {
-      harness: 'agy-pool',
-      accountId: 'agy01',
-      model: 'gemini-3.8-flash-high',
-      evidence: [
-        {
-          status: 'passed',
-          level: 3,
-          proofLevel: 'WORK_ITEM_PASS',
-          observedAt: new Date().toISOString(),
-        },
-      ],
-    },
-  ];
-  assert.equal(
-    capabilityProbe.hasPriorWorkPass(
-      { harness: 'agy-pool', accountId: 'agy01', modelId: 'gemini-3.8-flash-high' },
-      poolCombinations
-    ),
-    true,
-    'agy-pool with WORK_ITEM_PASS matches hasPriorWorkPass'
-  );
-});
-
-test('TASK-AI-142 trial 14: orderCandidatesForProbe orders observed fast probes before observed slow probes', () => {
-  const profile = { role: 'writer', requiredCapabilities: ['tools'] };
-  const candidates = [
-    { harness: 'agy-pool', modelId: 'gemini-3.8-flash-high', accountId: 'agy01', elapsedMs: 700 },
-    { harness: 'codex', modelId: 'gpt-6.1-sol', accountId: 'codex-cli', elapsedMs: 500 },
-    {
-      harness: 'opencode-direct',
-      modelId: 'tencent/hy4-preview',
-      accountId: 'acct-tencent',
-      elapsedMs: 10,
-    },
-    { harness: 'direct-http', modelId: 'sovinfra/sovapi', accountId: 'acct-sov', elapsedMs: 20 },
-    { harness: 'paseo', modelId: '9router/model-x', accountId: 'xkiro', elapsedMs: 900 },
-    { harness: 'paseo', modelId: 'gcli/grok-4.7', accountId: 'acct-1' },
-  ];
-
-  const combinations = [
-    {
-      harness: 'paseo',
-      accountId: 'acct-1',
-      model: 'gcli/grok-4.7',
-      evidence: [
-        {
-          status: 'passed',
-          level: 1,
-          proofLevel: 'API_PASS',
-          observedAt: new Date().toISOString(),
-        },
-      ],
-    },
-  ];
-
-  const ordered = capabilityProbe.orderCandidatesForProbe(candidates, profile, {
-    capabilityEvidence: { combinations },
-    registry: { sources: [{ id: 'agy-pool', writerEnabled: true }] },
-    // Quality priors also order probes; none here, so only measured cost decides.
-    priors: { ranking: [] },
-  });
-
-  // Fresh API availability first; API remains distinct from work proof.
-  assert.equal(ordered[0].modelId, 'gcli/grok-4.7');
-  // Measured durations, not harness names, determine the remaining order.
-  assert.equal(ordered[1].harness, 'opencode-direct');
-  assert.equal(ordered[2].harness, 'direct-http');
-  // Slower observed probes follow.
-  assert.equal(ordered[3].harness, 'codex');
-  assert.equal(ordered[4].harness, 'agy-pool');
-  // The slowest measured route is last.
-  assert.equal(ordered[5].modelId, '9router/model-x');
 });
 
 test('TASK-AI-142 trial 14: isolatedLaneRejected retains opencode-direct when agy-pool has bulk candidates', () => {

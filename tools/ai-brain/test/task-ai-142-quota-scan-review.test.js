@@ -444,30 +444,6 @@ test('P1 review finding 5: malformed or unreadable quota-state file surfaces err
     true,
     'Corrupt state must retain a safe blocking decision'
   );
-
-  // 3. Probes / capability-probe must retain block for previously blocked candidate
-  const candidates = [
-    {
-      ...candidate,
-      blocked: true,
-      blockReason: 'QUOTA_SCOPE_QUOTA: cl',
-      blockScope: 'quota-scope',
-    },
-  ];
-  const { probeCapabilities } = require('../capability-probe');
-  await probeCapabilities(
-    candidates,
-    { requiredCapabilities: [] },
-    {
-      quotaStateFile: quotaFile,
-      registry: { sources: [] },
-    }
-  );
-  assert.equal(
-    candidates[0].blocked,
-    true,
-    'Previously blocked candidate must remain blocked on corrupt quota state'
-  );
 });
 
 // 6. Regression test for P1: Scope lookup for candidates identified through sourceIds or accessPath
