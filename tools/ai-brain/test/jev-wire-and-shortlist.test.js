@@ -72,11 +72,15 @@ test('JEV-1: orchestrateCommand wires jevAsk and jevMaxOptions from registry for
 
   // Live isolated run builds jevAsk via jev.buildJevAsk and forwards registry maxOptions/minConfidence
   let liveOpts = null;
+  const exitCodes = [];
   await orchestrateCommand(
     { goal: 'jev wire goal', specs: specsFile, 'isolated-worker': true, 'decision-dir': dir },
     {
       registry: REGISTRY,
       env: { NINEROUTER_API_KEY: 'k', TYPESAFE_API_KEY: 'tk' },
+      log: () => {},
+      error: () => {},
+      exit: (code) => exitCodes.push(code),
       runOrchestration: async (_goal, opts) => {
         liveOpts = opts;
         return { status: 'COMPLETED', outcomes: [] };
@@ -87,6 +91,7 @@ test('JEV-1: orchestrateCommand wires jevAsk and jevMaxOptions from registry for
   assert.equal(typeof liveOpts.jevAsk, 'function');
   assert.equal(liveOpts.jevMinConfidence, 0.7);
   assert.equal(liveOpts.jevMaxOptions, 6);
+  assert.equal(exitCodes[0], 0);
 
   // Explicit d.jevAsk stub is preserved and drives comboJev.handledBy === 'jev'
   const baseCombo = combo.comboCandidate({
@@ -101,6 +106,9 @@ test('JEV-1: orchestrateCommand wires jevAsk and jevMaxOptions from registry for
     {
       registry: REGISTRY,
       env: { NINEROUTER_API_KEY: 'k' },
+      log: () => {},
+      error: () => {},
+      exit: (code) => exitCodes.push(code),
       jevAsk: jevStub,
       runOrchestration: async (_goal, opts) => {
         stubOpts = opts;
@@ -109,6 +117,7 @@ test('JEV-1: orchestrateCommand wires jevAsk and jevMaxOptions from registry for
     }
   );
   assert.equal(stubOpts.jevAsk, jevStub);
+  assert.equal(exitCodes[1], 0);
 
   const decision = await selectCandidateForProfile(
     { id: 'TASK-JEV1', complexity: 'standard', allowedPaths: ['a.js'] },
