@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
@@ -352,4 +353,129 @@ test('R2 CLI orchestrateCommand enables strictIndependentComboReview on live iso
     }
   );
   assert.equal(injectedOpts.strictIndependentComboReview, false);
+});
+
+test('R1 readError records allowlisted socket code, maps unknown codes to UNKNOWN, and never leaks secrets', async () => {
+  const env = { NINEROUTER_API_KEY: 'super-secret-key-999' };
+  const baseCombo = combo.comboCandidate({ registry: REGISTRY, env }).candidate;
+  const logOpts = makeLogOpts('r1-readerror-');
+
+  const knownErr = Object.assign(
+    new Error('read ECONNRESET http://127.0.0.1:20128/api/combos super-secret-key-999'),
+    { code: 'ECONNRESET' }
+  );
+  const d1 = await selectCandidateForProfile(
+    { id: 'TASK-ERR-1', complexity: 'standard' },
+    [baseCombo],
+    [],
+    {},
+    {
+      registry: REGISTRY,
+      env,
+      priors: PRIORS,
+      readComboConfig: (opts) =>
+        comboReader.readComboConfig({
+          ...opts,
+          loadCliToken: () => 'cli-secret-token-xyz',
+          httpRequest: async () => {
+            throw knownErr;
+          },
+        }),
+    },
+    logOpts,
+    logOpts.now,
+    {}
+  );
+  assert.equal(d1.reason, 'combo-only routing');
+  assert.deepEqual(d1.decisionRecorded.comboJevFallback, {
+    gate: true,
+    poolKinds: ['combo'],
+    readState: 'COMBO_CONFIG_UNAVAILABLE',
+    readStatus: 'REQUEST_FAILED',
+    readError: 'ECONNRESET',
+    rawCount: 0,
+    eligibleCount: 0,
+  });
+  const serialized1 = JSON.stringify(d1.decisionRecorded);
+  assert.doesNotMatch(serialized1, /super-secret-key-999|cli-secret-token-xyz|api\/combos/);
+
+  const unknownErr = Object.assign(new Error('CUSTOM_LEAK: Bearer super-secret-key-999'), {
+    code: 'CUSTOM_SENSITIVE_CODE',
+  });
+  const d2 = await selectCandidateForProfile(
+    { id: 'TASK-ERR-2', complexity: 'standard' },
+    [baseCombo],
+    [],
+    {},
+    {
+      registry: REGISTRY,
+      env,
+      priors: PRIORS,
+      readComboConfig: (opts) =>
+        comboReader.readComboConfig({
+          ...opts,
+          loadCliToken: () => 'cli-secret-token-xyz',
+          httpRequest: async () => {
+            throw unknownErr;
+          },
+        }),
+    },
+    logOpts,
+    logOpts.now,
+    {}
+  );
+  assert.equal(d2.reason, 'combo-only routing');
+  assert.equal(d2.decisionRecorded.comboJevFallback.readError, 'UNKNOWN');
+  const serialized2 = JSON.stringify(d2.decisionRecorded);
+  assert.doesNotMatch(
+    serialized2,
+    /CUSTOM_SENSITIVE_CODE|CUSTOM_LEAK|super-secret-key-999|cli-secret-token-xyz/
+  );
+});
+
+test('R1 combo-reader uses agent:false so sync worker blocks never hit stale keep-alive ECONNRESET', async (t) => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({ combos: [{ name: 'vinh', models: ['bzl/glm-5.3', 'ag/claude-4.5'] }] })
+    );
+  });
+  server.keepAliveTimeout = 50;
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const { port } = server.address();
+  const localRegistry = {
+    dispatch: { nineRouterWriterCombo: 'vinh', comboSource: '9router' },
+    sources: [
+      {
+        id: '9router',
+        kind: 'router',
+        servesModels: true,
+        harness: 'opencode-direct',
+        endpoint: `http://127.0.0.1:${port}/v1`,
+        credential: { type: 'api-key', env: 'NINEROUTER_API_KEY' },
+      },
+    ],
+  };
+
+  const r1 = await comboReader.readComboConfig({
+    name: 'vinh',
+    registry: localRegistry,
+    loadCliToken: () => '',
+  });
+  assert.equal(r1.state, 'READ');
+  assert.deepEqual(r1.members, ['bzl/glm-5.3', 'ag/claude-4.5']);
+
+  // Simulate cp.spawnSync blocking the event loop past server.keepAliveTimeout
+  const sab = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(sab, 0, 0, 120);
+
+  const r2 = await comboReader.readComboConfig({
+    name: 'vinh',
+    registry: localRegistry,
+    loadCliToken: () => '',
+  });
+  assert.equal(r2.state, 'READ');
+  assert.deepEqual(r2.members, ['bzl/glm-5.3', 'ag/claude-4.5']);
 });

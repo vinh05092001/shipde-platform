@@ -396,6 +396,7 @@ async function selectCandidateForProfile(
   let comboJevRan = false;
   let jevReadState = null;
   let jevReadStatus = null;
+  let jevReadError = null;
   let jevRawCount = 0;
   let jevEligibleCount = 0;
   let jevSelReason = null;
@@ -473,6 +474,10 @@ async function selectCandidateForProfile(
       });
       jevReadState = (comboConfig && comboConfig.state) || null;
       jevReadStatus = comboConfig && comboConfig.status !== undefined ? comboConfig.status : null;
+      jevReadError =
+        comboConfig && typeof comboConfig.error === 'string' && comboConfig.error
+          ? comboConfig.error
+          : null;
       rawMembers = Array.isArray(comboConfig && comboConfig.members) ? comboConfig.members : [];
     }
     jevRawCount = rawMembers.length;
@@ -581,6 +586,7 @@ async function selectCandidateForProfile(
     poolKinds,
     readState: jevReadState,
     readStatus: jevReadStatus,
+    ...(jevReadError ? { readError: jevReadError } : {}),
     rawCount: jevRawCount,
     eligibleCount: jevEligibleCount,
     ...(jevSelReason ? { selReason: jevSelReason } : {}),
