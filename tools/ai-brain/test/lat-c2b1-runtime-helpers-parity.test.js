@@ -135,14 +135,11 @@ test('applyFailureBlocks and sameFailureDomain match dispatch-helpers parity', (
   ];
   const classification = { scope: 'account', failureClass: 'quota' };
 
-  assert.equal(
-    runtimeHelpers.sameFailureDomain(candidates[1], failed, classification),
-    dispatchHelpers.sameFailureDomain(candidates[1], failed, classification)
-  );
-  assert.equal(
-    runtimeHelpers.sameFailureDomain(candidates[2], failed, classification),
-    dispatchHelpers.sameFailureDomain(candidates[2], failed, classification)
-  );
+  // Fixed golden expectations from base ea00c3cf (avoid comparing against re-export)
+  assert.equal(runtimeHelpers.sameFailureDomain(candidates[1], failed, classification), true);
+  assert.equal(runtimeHelpers.sameFailureDomain(candidates[2], failed, classification), false);
+  assert.equal(dispatchHelpers.sameFailureDomain(candidates[1], failed, classification), true);
+  assert.equal(dispatchHelpers.sameFailureDomain(candidates[2], failed, classification), false);
 
   const failedKeys = new Set([require('../candidates').candidateKey(failed)]);
   runtimeHelpers.applyFailureBlocks(
