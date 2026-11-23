@@ -127,9 +127,14 @@ function discoverAgyPoolMembers(options = {}) {
       ? Object.keys(options.quotaSnapshots).sort()
       : agyPoolRuntime.discoverAccounts(options);
 
+  // Accounts that already failed in this run are skipped, so a model whose best
+  // account failed falls back to its next eligible account, and drops out of the
+  // shortlist when none is left.
+  const excluded = new Set(Array.from(options.excludedAccounts || []));
   const byModel = new Map();
 
   for (const accountId of accountIds) {
+    if (excluded.has(accountId)) continue;
     const groups = readAccountQuotaGroups(accountId, options);
     if (!Array.isArray(groups)) continue;
     for (const group of groups) {

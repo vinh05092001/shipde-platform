@@ -321,6 +321,26 @@ function shouldUseComboJevSelect(pool, o, comboApi) {
   );
 }
 
+/**
+ * Agy-pool accounts that already failed for this item in this run. failedKeys
+ * lives on the item for one run, so this never reads failures from another run:
+ * it holds the failed agy-pool candidate keys and the account-exhausted marks.
+ */
+function failedAgyAccounts(failedSet) {
+  const accounts = new Set();
+  for (const key of failedSet) {
+    if (typeof key !== 'string') continue;
+    const mark = /^account-exhausted::agy-pool::(.+)$/.exec(key);
+    if (mark) {
+      accounts.add(mark[1]);
+      continue;
+    }
+    const parsed = parseCandidateKey(key);
+    if (parsed && parsed.harness === 'agy-pool' && parsed.account) accounts.add(parsed.account);
+  }
+  return Array.from(accounts);
+}
+
 async function selectCandidateForProfile(
   item,
   annotatedCandidates,
@@ -517,6 +537,8 @@ async function selectCandidateForProfile(
         minConfidence: o.jevMinConfidence,
         maxOptions: o.jevMaxOptions,
         comboName: o.comboName,
+        agyPoolOptions: o.agyPoolOptions,
+        excludedAccounts: failedAgyAccounts(failedSet),
       });
       jevSelReason = (sel && (sel.reason || sel.error)) || null;
     }
