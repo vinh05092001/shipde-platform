@@ -221,10 +221,103 @@ function buildAgyMemberCandidate(member, options = {}) {
   return { candidate };
 }
 
+/**
+ * Verify an AGY pool run's served identity using the pinned requestedModel and
+ * before/after per-bucket quota snapshots (WI-B2: option (a) requested+group-delta,
+ * failing closed when a different bucket drained or quota snapshots are missing).
+ */
+function verifyAgyServedIdentity({ requestedModel, expectedBucket, quotaBefore, quotaAfter } = {}) {
+  const normModel = priorsRead.normaliseModelId(requestedModel);
+  if (!normModel || !expectedBucket) {
+    return {
+      ok: false,
+      error: 'AGY_IDENTITY_INPUT_INVALID',
+      requestedModel: requestedModel || null,
+      bucket: expectedBucket || null,
+      identityProof: 'unverified',
+    };
+  }
+  const groupsBefore = Array.isArray(quotaBefore && quotaBefore.groups)
+    ? quotaBefore.groups
+    : quotaBefore?.command?.data?.groups || null;
+  const groupsAfter = Array.isArray(quotaAfter && quotaAfter.groups)
+    ? quotaAfter.groups
+    : quotaAfter?.command?.data?.groups || null;
+  if (!Array.isArray(groupsBefore) || !Array.isArray(groupsAfter)) {
+    return {
+      ok: false,
+      error: 'AGY_QUOTA_PROOF_MISSING',
+      requestedModel: normModel,
+      bucket: expectedBucket,
+      identityProof: 'unverified',
+    };
+  }
+
+  const mapBuckets = (groups) => {
+    const m = new Map();
+    for (const g of groups) {
+      const b = bucketKeyFromGroup(g);
+      const rem = minBucketRemaining(g);
+      if (b && rem !== null) m.set(b, rem);
+    }
+    return m;
+  };
+  const beforeMap = mapBuckets(groupsBefore);
+  const afterMap = mapBuckets(groupsAfter);
+  if (!beforeMap.has(expectedBucket) || !afterMap.has(expectedBucket)) {
+    return {
+      ok: false,
+      error: 'AGY_EXPECTED_BUCKET_MISSING',
+      requestedModel: normModel,
+      bucket: expectedBucket,
+      identityProof: 'unverified',
+    };
+  }
+
+  const beforeVal = beforeMap.get(expectedBucket);
+  const afterVal = afterMap.get(expectedBucket);
+  const expectedDelta = Math.round((beforeVal - afterVal) * 10000) / 10000;
+
+  let foreignDrainedBucket = null;
+  for (const [bKey, bBefore] of beforeMap.entries()) {
+    if (bKey === expectedBucket) continue;
+    const bAfter = afterMap.get(bKey);
+    if (typeof bAfter === 'number' && bBefore - bAfter > 0.0001) {
+      foreignDrainedBucket = bKey;
+      break;
+    }
+  }
+
+  if (expectedDelta < -0.0001 || (expectedDelta <= 0.0001 && foreignDrainedBucket)) {
+    return {
+      ok: false,
+      error: 'AGY_GROUP_DELTA_MISMATCH',
+      requestedModel: normModel,
+      bucket: expectedBucket,
+      foreignDrainedBucket,
+      quotaBefore: beforeVal,
+      quotaAfter: afterVal,
+      delta: expectedDelta,
+      identityProof: 'mismatch',
+    };
+  }
+
+  return {
+    ok: true,
+    requestedModel: normModel,
+    bucket: expectedBucket,
+    quotaBefore: beforeVal,
+    quotaAfter: afterVal,
+    delta: expectedDelta,
+    identityProof: expectedDelta > 0 ? 'requested+group-delta' : 'requested+group-unchanged',
+  };
+}
+
 module.exports = {
   resolveAgyPoolConfig,
   bucketKeyFromGroup,
   modelsFromGroup,
   discoverAgyPoolMembers,
   buildAgyMemberCandidate,
+  verifyAgyServedIdentity,
 };
