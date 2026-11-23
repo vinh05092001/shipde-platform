@@ -97,6 +97,9 @@ function resolveLauncher(o, isolatedLauncher) {
         launchHandle: result.jobId || null,
       };
       if (result.state !== 'ok') return launched;
+      // The job binding itself comes from agy-pool-runtime: waitForResult only
+      // returns a result whose jobId is the submitted one. The receipt checks
+      // below are a second guard on that, not a replacement for it.
       // The pool reports no served model, so quota groups are the only run
       // evidence. Evidence that contradicts the request refuses the run; a
       // writer may continue on group evidence (F2 still checks its diff), but a

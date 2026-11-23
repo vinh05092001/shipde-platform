@@ -108,3 +108,28 @@ test('WI-C1: an after-snapshot written before the run ended is not group evidenc
   assert.equal(res.identityProof.error, 'AGY_QUOTA_SNAPSHOT_STALE');
   assert.equal(res.identityProof.groupVerified, false);
 });
+
+test('WI-C1: the pool runtime only returns the submitted job result', (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-wi-c1-runs-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'agy03'), { recursive: true });
+  const write = (jobId) =>
+    fs.writeFileSync(
+      path.join(dir, 'agy03', 'result.json'),
+      JSON.stringify({ state: 'ok', exitCode: 0, jobId })
+    );
+  const opts = { fakeRunsDir: dir, timeoutMs: 150, expectedJobId: 'agy03/mine' };
+
+  write('agy03/other');
+  const foreign = pool.waitForResult('agy03', 0, opts);
+  assert.equal(foreign.state, 'error');
+  assert.equal(foreign.reason, 'POOL_TIMEOUT', 'a result naming another job is never returned');
+
+  write('agy03/mine');
+  const own = pool.waitForResult('agy03', 0, opts);
+  assert.equal(own.state, 'ok');
+  assert.equal(own.jobId, 'agy03/mine');
+});
