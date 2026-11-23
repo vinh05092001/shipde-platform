@@ -102,6 +102,42 @@ test('WI-B2 fix: a stale after-snapshot or a quota rise is not group evidence', 
   );
   assert.equal(lateBefore.error, 'AGY_QUOTA_SNAPSHOT_STALE');
 
+  const midRun = agyPoolCandidates.verifyAgyServedIdentity({
+    ...BASE,
+    receipt: RUN,
+    quotaBefore: quota({ claude: 0.8 }, 1900),
+    quotaAfter: quota({ claude: 0.7 }, 2500),
+    runStartedAt: 2000,
+    runEndedAt: 3000,
+  });
+  assert.equal(
+    midRun.ok,
+    false,
+    'an after-snapshot taken before the run ended does not bracket it'
+  );
+  assert.equal(midRun.error, 'AGY_QUOTA_SNAPSHOT_STALE');
+
+  const backwards = agyPoolCandidates.verifyAgyServedIdentity({
+    ...BASE,
+    receipt: RUN,
+    quotaBefore: quota({ claude: 0.8 }, 1900),
+    quotaAfter: quota({ claude: 0.7 }, 4000),
+    runStartedAt: 3000,
+    runEndedAt: 2000,
+  });
+  assert.equal(backwards.error, 'AGY_QUOTA_SNAPSHOT_STALE');
+
+  const bracketed = agyPoolCandidates.verifyAgyServedIdentity({
+    ...BASE,
+    receipt: RUN,
+    quotaBefore: quota({ claude: 0.8 }, 1900),
+    quotaAfter: quota({ claude: 0.7 }, 3100),
+    runStartedAt: 2000,
+    runEndedAt: 3000,
+  });
+  assert.equal(bracketed.ok, true);
+  assert.equal(bracketed.groupVerified, true);
+
   const reset = agyPoolCandidates.verifyAgyServedIdentity({
     ...BASE,
     receipt: RUN,

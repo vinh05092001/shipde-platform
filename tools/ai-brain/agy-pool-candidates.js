@@ -261,6 +261,7 @@ function verifyAgyServedIdentity({
   accountId,
   expectedJobId,
   runStartedAt,
+  runEndedAt,
 } = {}) {
   const normModel = priorsRead.normaliseModelId(requestedModel);
   const base = {
@@ -312,15 +313,18 @@ function verifyAgyServedIdentity({
   if (!Array.isArray(groupsBefore) || !Array.isArray(groupsAfter)) {
     return modelVerified ? receiptOnly() : refuse('AGY_QUOTA_PROOF_MISSING');
   }
-  // The snapshots must bracket the run: before at or before the start, after
-  // at or after it. Otherwise the delta may belong to another run.
+  // The snapshots must bracket the whole run: before at or before its start,
+  // after at or after its end. Otherwise the delta may belong to another run.
   const beforeAt = quotaBefore && quotaBefore.at;
   const afterAt = quotaAfter && quotaAfter.at;
+  const endedAt = Number.isFinite(runEndedAt) ? runEndedAt : runStartedAt;
   if (
-    Number.isFinite(runStartedAt) &&
+    (Number.isFinite(runStartedAt) || Number.isFinite(runEndedAt)) &&
     !(
+      Number.isFinite(runStartedAt) &&
+      endedAt >= runStartedAt &&
       Number.isFinite(afterAt) &&
-      afterAt >= runStartedAt &&
+      afterAt >= endedAt &&
       (!Number.isFinite(beforeAt) || beforeAt <= runStartedAt)
     )
   ) {
