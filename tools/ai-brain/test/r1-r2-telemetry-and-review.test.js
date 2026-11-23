@@ -455,11 +455,11 @@ test('R1 combo-reader uses agent:false so sync worker blocks never hit stale kee
   // the server closes idle keep-alive sockets after keepAliveTimeout=50ms.
   const serverScript = [
     "const http = require('http');",
-    'const s = http.createServer((_req, res) => {',
-    "  res.writeHead(200, { 'Content-Type': 'application/json' });",
+    'const s = http.createServer((req, res) => {',
+    "  res.on('finish', () => setTimeout(() => { try { req.socket.destroy(); } catch {} }, 30));",
+    "  res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'keep-alive' });",
     "  res.end(JSON.stringify({ combos: [{ name: 'vinh', models: ['bzl/glm-5.3', 'ag/claude-4.5'] }] }));",
     '});',
-    's.keepAliveTimeout = 50;',
     "s.listen(0, '127.0.0.1', () => { process.stdout.write(String(s.address().port) + '\\n'); });",
   ].join('\n');
   const child = cp.spawn(process.execPath, ['-e', serverScript], {
