@@ -1082,15 +1082,7 @@ function getIsolatedLauncher() {
         const useFullWireId = isRouter && routerProvider && providerId !== routerProvider;
         const wireId = useFullWireId ? pinnedModel : relativeId;
 
-        let dispatchConfig = (opts && opts.registry && opts.registry.dispatch) || null;
-        if (!dispatchConfig) {
-          try {
-            dispatchConfig =
-              typeof sourcesModule.loadSources === 'function'
-                ? sourcesModule.loadSources()?.dispatch || null
-                : null;
-          } catch {}
-        }
+        const dispatchConfig = (opts && opts.registry && opts.registry.dispatch) || null;
         const resolvedLimits = resolveOpencodeModelLimits({
           selectedSource,
           pinnedModel,
@@ -1850,13 +1842,13 @@ function resolveOpencodeModelLimits({
     positiveInt(metaLimit && metaLimit.context) ||
     positiveInt(opts && opts.contextWindow) ||
     positiveInt(comboLimits && comboLimits.contextWindow) ||
-    null;
+    (isRouter ? null : 32000);
   const output =
     positiveInt(metaLimit && metaLimit.output) ||
     positiveInt(opts && opts.maxOutputTokens) ||
     positiveInt(comboLimits && comboLimits.maxOutputTokens) ||
     positiveInt(selectedSource && selectedSource.options && selectedSource.options.max_tokens) ||
-    null;
+    (isRouter ? null : 4096);
   return { context, output };
 }
 

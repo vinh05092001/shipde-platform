@@ -73,15 +73,38 @@ test('opencode limits resolve from modelMeta -> candidate opts -> nineRouterWrit
   });
   assert.deepEqual(metaLimits, { context: 200000, output: 16384 });
 
-  // 4. Unknown non-router source with no modelMeta/opts returns nulls (never guesses 32000/4096)
-  const unknownLimits = resolveOpencodeModelLimits({
+  // 4. Partial modelMeta (context only) falls through to candidate output; invalid values ignored
+  const partialLimits = resolveOpencodeModelLimits({
+    selectedSource: {
+      ...routerSource,
+      modelMeta: { 'ninerouter/partial': { limit: { context: 200000, output: 'bad' } } },
+    },
+    pinnedModel: 'ninerouter/partial',
+    isRouter: true,
+    opts: { contextWindow: -5, maxOutputTokens: 6144 },
+    dispatchConfig: null,
+  });
+  assert.deepEqual(partialLimits, { context: 200000, output: 6144 });
+
+  // 5. Router source with no modelMeta/opts/dispatchConfig returns nulls (never guesses 32000/4096)
+  const missingRouterLimits = resolveOpencodeModelLimits({
+    selectedSource: routerSource,
+    pinnedModel: 'ninerouter/unknown',
+    isRouter: true,
+    opts: { contextWindow: Number.NaN, maxOutputTokens: 0 },
+    dispatchConfig: null,
+  });
+  assert.deepEqual(missingRouterLimits, { context: null, output: null });
+
+  // 6. Non-router direct source without modelMeta/opts preserves legacy 32000/4096
+  const nonRouterLimits = resolveOpencodeModelLimits({
     selectedSource: { id: 'custom', endpoint: 'http://127.0.0.1:1/v1' },
     pinnedModel: 'custom/model',
     isRouter: false,
     opts: {},
     dispatchConfig,
   });
-  assert.deepEqual(unknownLimits, { context: null, output: null });
+  assert.deepEqual(nonRouterLimits, { context: 32000, output: 4096 });
 });
 
 test('writer-loop forwards candidate contextWindow and maxOutputTokens to isolatedLauncher', () => {
@@ -111,7 +134,7 @@ test('writer-loop forwards candidate contextWindow and maxOutputTokens to isolat
   assert.equal(captured[0].maxOutputTokens, 8192);
 });
 
-test('Mutation C: getIsolatedLauncher() writes limit {context:128000, output:8192} into worker opencode.json for 9router member', (t) => {
+test('Mutation C: getIsolatedLauncher() writes candidate/registry limits into worker opencode.json for both vinh combo and member', (t) => {
   const area = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-opencode-limits-'));
   t.after(() => fs.rmSync(area, { recursive: true, force: true }));
   t.mock.method(os, 'tmpdir', () => area);
@@ -179,30 +202,48 @@ test('Mutation C: getIsolatedLauncher() writes limit {context:128000, output:819
     return { status: 0, stdout: baseSha };
   });
 
-  const res = getIsolatedLauncher()(
-    { id: 'opencode-direct', command: 'node' },
-    ['run', '--model', 'ninerouter/rc/zai-org/GLM-5.3', 'fix'],
-    {
-      cwd: host,
-      workerRoot: workerDir,
-      baseSha,
-      verdictPath,
-      decisionDir: path.join(area, 'decisions'),
-      gateway: '9router',
-      model: 'ninerouter/rc/zai-org/GLM-5.3',
-      contextWindow: 128000,
-      maxOutputTokens: 8192,
-      getWorkerSid: () => 'fixture-sid',
-      verifyBoundary: () => true,
-      isolatedWorker: true,
-    }
-  );
-  assert.equal(res.exitCode, 0);
+  const injectedRegistry = {
+    dispatch: {
+      nineRouterWriterComboLimits: { contextWindow: 96000, maxOutputTokens: 4096 },
+    },
+  };
+  for (const [modelArg, modelKey, ctxWin, maxOut, expected] of [
+    ['ninerouter/vinh', 'vinh', 64000, 2048, { context: 64000, output: 2048 }],
+    [
+      'ninerouter/rc/zai-org/GLM-5.3',
+      'rc/zai-org/GLM-5.3',
+      64000,
+      2048,
+      { context: 64000, output: 2048 },
+    ],
+    ['ninerouter/vinh', 'vinh', undefined, undefined, { context: 96000, output: 4096 }],
+  ]) {
+    const res = getIsolatedLauncher()(
+      { id: 'opencode-direct', command: 'node' },
+      ['run', '--model', modelArg, 'fix'],
+      {
+        cwd: host,
+        workerRoot: workerDir,
+        baseSha,
+        verdictPath,
+        decisionDir: path.join(area, 'decisions'),
+        gateway: '9router',
+        model: modelArg,
+        registry: injectedRegistry,
+        ...(ctxWin !== undefined ? { contextWindow: ctxWin } : {}),
+        ...(maxOut !== undefined ? { maxOutputTokens: maxOut } : {}),
+        getWorkerSid: () => 'fixture-sid',
+        verifyBoundary: () => true,
+        isolatedWorker: true,
+      }
+    );
+    assert.equal(res.exitCode, 0);
 
-  const opencodeCfg = JSON.parse(fs.readFileSync(path.join(workerDir, 'opencode.json'), 'utf8'));
-  const modelEntry = opencodeCfg.provider.ninerouter.models['rc/zai-org/GLM-5.3'];
-  assert.ok(modelEntry, 'opencode.json must contain pinned member entry');
-  assert.deepEqual(modelEntry.limit, { context: 128000, output: 8192 });
+    const opencodeCfg = JSON.parse(fs.readFileSync(path.join(workerDir, 'opencode.json'), 'utf8'));
+    const modelEntry = opencodeCfg.provider.ninerouter.models[modelKey];
+    assert.ok(modelEntry, `opencode.json must contain pinned entry for ${modelKey}`);
+    assert.deepEqual(modelEntry.limit, expected);
+  }
 });
 
 test('Mutation D: orchestrate writer job and repairRound job forward candidate contextWindow and maxOutputTokens', async () => {
@@ -211,7 +252,7 @@ test('Mutation D: orchestrate writer job and repairRound job forward candidate c
     dispatch: {
       nineRouterWriterCombo: 'vinh',
       comboSource: '9router',
-      nineRouterWriterComboLimits: { contextWindow: 128000, maxOutputTokens: 8192 },
+      nineRouterWriterComboLimits: { contextWindow: 64000, maxOutputTokens: 2048 },
     },
     sources: [
       {
@@ -247,8 +288,8 @@ test('Mutation D: orchestrate writer job and repairRound job forward candidate c
     },
   });
   assert.equal(writerJobs.length, 1);
-  assert.equal(writerJobs[0].contextWindow, 128000);
-  assert.equal(writerJobs[0].maxOutputTokens, 8192);
+  assert.equal(writerJobs[0].contextWindow, 64000);
+  assert.equal(writerJobs[0].maxOutputTokens, 2048);
 
   const repairJobs = [];
   const candidate = {
@@ -261,8 +302,8 @@ test('Mutation D: orchestrate writer job and repairRound job forward candidate c
     quotaScope: '9router',
     modelId: 'vinh',
     combo: 'vinh',
-    contextWindow: 128000,
-    maxOutputTokens: 8192,
+    contextWindow: 64000,
+    maxOutputTokens: 2048,
   };
   const runRepair = repairRound(
     {
@@ -305,6 +346,6 @@ test('Mutation D: orchestrate writer job and repairRound job forward candidate c
   );
   await runRepair([{ id: 'F1', detail: 'fix' }], 'a'.repeat(40));
   assert.equal(repairJobs.length, 1);
-  assert.equal(repairJobs[0].contextWindow, 128000);
-  assert.equal(repairJobs[0].maxOutputTokens, 8192);
+  assert.equal(repairJobs[0].contextWindow, 64000);
+  assert.equal(repairJobs[0].maxOutputTokens, 2048);
 });
