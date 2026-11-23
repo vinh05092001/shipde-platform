@@ -552,8 +552,9 @@ test('CK-R03 a publication recorded in the checkpoint is returned as-is on resum
     testMode: true,
     cwd: f.cwd,
   };
-  const originalWrite = cli.writeJsonFile;
-  cli.writeJsonFile = (file, value) => {
+  const runtimeHelpers = require('../orchestrate/runtime-helpers');
+  const originalWrite = runtimeHelpers.writeJsonFile;
+  runtimeHelpers.writeJsonFile = (file, value) => {
     originalWrite(file, value);
     const live = value && value.liveSteps && value.liveSteps[itemId];
     if (live && live.publication) throw new Error('interrupt after the publication write');
@@ -564,7 +565,7 @@ test('CK-R03 a publication recorded in the checkpoint is returned as-is on resum
       /interrupt after the publication write/
     );
   } finally {
-    cli.writeJsonFile = originalWrite;
+    runtimeHelpers.writeJsonFile = originalWrite;
   }
   assert.equal(publishes, 1, 'the draft pull request is published once');
   const recorded = JSON.parse(fs.readFileSync(f.checkpointFile, 'utf8')).liveSteps[itemId]
