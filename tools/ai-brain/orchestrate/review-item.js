@@ -73,7 +73,9 @@ function writeReviewManifestAndArtifact(opts) {
     '## Findings',
     findingsList.length === 0
       ? reviewerNotRunReason
-        ? `Reviewer not run: ${reviewerNotRunReason}`
+        ? /^(?:VERIFICATION_|FORMAT_GATE|TOOL_GATE)/i.test(String(reviewerNotRunReason))
+          ? `Reviewer not run: ${reviewerNotRunReason}`
+          : `No reviewer verdict: ${reviewerNotRunReason}`
         : 'No open findings.'
       : findingsList
           .map((f) => {

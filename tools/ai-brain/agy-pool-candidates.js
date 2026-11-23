@@ -288,9 +288,10 @@ function verifyAgyServedIdentity({ requestedModel, expectedBucket, quotaBefore, 
     }
   }
 
-  if (expectedDelta < -0.0001 || (expectedDelta <= 0.0001 && foreignDrainedBucket)) {
+  if (expectedDelta < -0.0001 || foreignDrainedBucket) {
     return {
       ok: false,
+      verified: false,
       error: 'AGY_GROUP_DELTA_MISMATCH',
       requestedModel: normModel,
       bucket: expectedBucket,
@@ -302,14 +303,29 @@ function verifyAgyServedIdentity({ requestedModel, expectedBucket, quotaBefore, 
     };
   }
 
+  if (expectedDelta <= 0.0001) {
+    return {
+      ok: false,
+      verified: false,
+      error: 'AGY_GROUP_DELTA_UNOBSERVED',
+      requestedModel: normModel,
+      bucket: expectedBucket,
+      quotaBefore: beforeVal,
+      quotaAfter: afterVal,
+      delta: expectedDelta,
+      identityProof: 'unverified',
+    };
+  }
+
   return {
     ok: true,
+    verified: true,
     requestedModel: normModel,
     bucket: expectedBucket,
     quotaBefore: beforeVal,
     quotaAfter: afterVal,
     delta: expectedDelta,
-    identityProof: expectedDelta > 0 ? 'requested+group-delta' : 'requested+group-unchanged',
+    identityProof: 'requested+group-delta',
   };
 }
 

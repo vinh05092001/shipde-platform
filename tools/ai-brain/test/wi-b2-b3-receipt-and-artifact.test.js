@@ -75,20 +75,34 @@ test('WI-B2: verifyAgyServedIdentity proves requested+group-delta and fails clos
     quotaAfter: afterMatched,
   });
   assert.equal(okRes.ok, true);
+  assert.equal(okRes.verified, true);
   assert.equal(okRes.identityProof, 'requested+group-delta');
   assert.equal(okRes.delta, 0.04);
 
-  // Foreign bucket drained (gemini drained while 3p stayed 0.8) -> fail-closed mismatch
-  const afterForeign = makeQuotaGroups({ gemini: 0.92, claude: 0.8, argon: 1.0 });
-  const mismatch = agyPoolCandidates.verifyAgyServedIdentity({
+  // Zero delta (unchanged bucket) -> fail-closed AGY_GROUP_DELTA_UNOBSERVED
+  const unchanged = agyPoolCandidates.verifyAgyServedIdentity({
     requestedModel: 'claude-opus-5.5',
     expectedBucket: '3p',
     quotaBefore: before,
-    quotaAfter: afterForeign,
+    quotaAfter: before,
   });
-  assert.equal(mismatch.ok, false);
-  assert.equal(mismatch.error, 'AGY_GROUP_DELTA_MISMATCH');
-  assert.equal(mismatch.foreignDrainedBucket, 'gemini');
+  assert.equal(unchanged.ok, false);
+  assert.equal(unchanged.verified, false);
+  assert.equal(unchanged.error, 'AGY_GROUP_DELTA_UNOBSERVED');
+  assert.equal(unchanged.identityProof, 'unverified');
+
+  // Foreign bucket drained (even when expected bucket also drained) -> fail-closed mismatch
+  const afterBothDrained = makeQuotaGroups({ gemini: 0.92, claude: 0.76, argon: 1.0 });
+  const noisy = agyPoolCandidates.verifyAgyServedIdentity({
+    requestedModel: 'claude-opus-5.5',
+    expectedBucket: '3p',
+    quotaBefore: before,
+    quotaAfter: afterBothDrained,
+  });
+  assert.equal(noisy.ok, false);
+  assert.equal(noisy.verified, false);
+  assert.equal(noisy.error, 'AGY_GROUP_DELTA_MISMATCH');
+  assert.equal(noisy.foreignDrainedBucket, 'gemini');
 
   // Missing quotaAfter -> fail-closed
   const missing = agyPoolCandidates.verifyAgyServedIdentity({
@@ -162,4 +176,39 @@ test('WI-B3: writeReviewManifestAndArtifact records Reviewer not run when verifi
   const md = fs.readFileSync(res.artifactPath, 'utf8');
   assert.match(md, /Reviewer not run: VERIFICATION_EXIT/);
   assert.doesNotMatch(md, /No open findings\./);
+
+  // Reviewer ran or failed mid-review (e.g. REVIEWER_TIMEOUT) -> 'No reviewer verdict: REVIEWER_TIMEOUT'
+  const resTimeout = writeReviewManifestAndArtifact({
+    dir: outDir,
+    repoCwd: repoDir,
+    workItemId: 'TASK-AI-187',
+    baseSha,
+    reviewedSha: headSha,
+    writerCandidateKey: candidateKey({
+      harness: 'opencode-direct',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'bzl',
+      accountId: '9router',
+      quotaScope: '9router:bzl',
+      modelId: 'bzl/glm-5.3',
+    }),
+    reviewerCandidateKey: candidateKey({
+      harness: 'opencode-direct',
+      accessPath: 'http://127.0.0.1:20128/v1',
+      gateway: '9router',
+      upstream: 'gcli',
+      accountId: '9router',
+      quotaScope: '9router:gcli',
+      modelId: 'gcli/grok-4.7',
+    }),
+    verdict: 'CHANGES_REQUIRED',
+    findings: [],
+    tests: [{ command: 'node --test', result: 'pass', summary: 'ok' }],
+    roundNumber: 4,
+    reviewerNotRunReason: 'REVIEWER_TIMEOUT',
+  });
+  const mdTimeout = fs.readFileSync(resTimeout.artifactPath, 'utf8');
+  assert.match(mdTimeout, /No reviewer verdict: REVIEWER_TIMEOUT/);
+  assert.doesNotMatch(mdTimeout, /Reviewer not run:/);
 });
