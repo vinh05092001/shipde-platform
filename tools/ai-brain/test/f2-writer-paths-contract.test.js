@@ -16,7 +16,13 @@ const { repairSpec } = require('../orchestrate/review-lane');
 const { repairRound } = require('../orchestrate/repair-round');
 const { resolveLauncher } = require('../orchestrate/writer-loop');
 const { runOrchestration } = require('../orchestrate');
-const { enforceWriterCommitScope, finalizeIsolatedLaunchResult } = require('../isolation-launcher');
+const {
+  enforceWriterCommitScope,
+  finalizeIsolatedLaunchResult,
+  getIsolatedLauncher,
+  getFolderHash,
+} = require('../isolation-launcher');
+const supervisor = require('../supervisor');
 const scopeGate = require('../scope-gate');
 const writerScope = require('../writer-scope');
 
@@ -527,4 +533,112 @@ test('F2 wiring M1: isolation-launcher finalizeIsolatedLaunchResult reads HEAD f
   assert.match(res.failureReason, /tools\/ai-brain\/cli\/commands\.js/);
   assert.equal(res.workerSha, undefined);
   assert.equal(res.retainedHeadSha, undefined);
+});
+
+test('F2 wiring M1b: getIsolatedLauncher() entry invokes finalize and refuses WRITER_DIFF_OUTSIDE_SCOPE on real git diff', (t) => {
+  const { dir: workerDir, turnBase, write } = makeGitFixtureRepo();
+  const writerPaths = [
+    'tools/ai-brain/review-manifest.js',
+    'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
+  ];
+
+  // Worker commits a file outside writerPaths (only allowed in broader PR allowedPaths)
+  write(
+    'tools/ai-brain/cli/commands.js',
+    '// out of writerPaths\nmodule.exports = { m1b: true };\n'
+  );
+  git(workerDir, ['add', 'tools/ai-brain/cli/commands.js']);
+  git(workerDir, ['commit', '-m', 'writer illegally touched controller']);
+  const badHead = git(workerDir, ['rev-parse', 'HEAD']);
+
+  const area = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-f2-m1b-'));
+  t.after(() => fs.rmSync(area, { recursive: true, force: true }));
+  t.mock.method(os, 'tmpdir', () => area);
+  const prevLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = area;
+  t.after(() => {
+    if (prevLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = prevLocalAppData;
+  });
+
+  const host = path.join(area, 'host');
+  fs.mkdirSync(host, { recursive: true });
+  const verdictPath = path.join(host, 'verdict.json');
+  fs.writeFileSync(
+    verdictPath,
+    JSON.stringify({
+      worktree: host,
+      verdict: 'CLOSED',
+      timestamp: new Date(Date.now() - 1000).toISOString(),
+      policyHash: getFolderHash(path.join(host, 'scripts/ai/isolation')),
+      sid: 'fixture-sid',
+      details: { boundary: 'PASS' },
+    })
+  );
+
+  const realRm = fs.rmSync.bind(fs);
+  t.mock.method(fs, 'rmSync', (target, options) => {
+    if (path.resolve(String(target)) === path.resolve(workerDir)) return;
+    return realRm(target, options);
+  });
+
+  let launched = false;
+  t.mock.method(supervisor, 'withCleanGitEnv', (_dir, cb) => cb('safegit'));
+  t.mock.method(supervisor, 'safeGit', () => ({
+    status: 0,
+    stdout: launched ? badHead : turnBase,
+  }));
+
+  const realSpawnSync = cp.spawnSync.bind(cp);
+  t.mock.method(cp, 'spawnSync', (command, args, opts) => {
+    if (command === 'git' && Array.isArray(args) && args.includes('diff')) {
+      return realSpawnSync(command, args, opts);
+    }
+    if (
+      command === 'git' &&
+      Array.isArray(args) &&
+      args.some((a) => String(a).startsWith('refs/shipde/carry/'))
+    ) {
+      return { status: 1, stdout: '' };
+    }
+    if (command === 'powershell.exe') {
+      const script = fs.readFileSync(args[args.length - 1], 'utf8');
+      const nonce = script.match(/\$completionNonce = "([^"]+)"/)[1];
+      const output = script.match(/\$output \| ConvertTo-Json.*Out-File "([^"]+)"/)[1];
+      fs.writeFileSync(
+        output,
+        JSON.stringify({
+          exitCode: 0,
+          stdout: 'ok',
+          stderr: '',
+          completed: true,
+          completionNonce: nonce,
+        })
+      );
+      launched = true;
+      return { status: 0, stdout: 'ok' };
+    }
+    return { status: 0, stdout: turnBase };
+  });
+
+  const decisionDir = path.join(area, 'decisions');
+  const result = getIsolatedLauncher()({ id: 'dummy', command: 'node' }, [], {
+    cwd: host,
+    workerRoot: workerDir,
+    baseSha: turnBase,
+    verdictPath,
+    decisionDir,
+    getWorkerSid: () => 'fixture-sid',
+    verifyBoundary: () => true,
+    isolatedWorker: true,
+    commitFileOnlyWriter: true,
+    allowedPaths: writerPaths,
+    workItemId: 'TASK-AI-187',
+  });
+
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.localFailure, 'WRITER_DIFF_OUTSIDE_SCOPE');
+  assert.match(result.failureReason, /tools\/ai-brain\/cli\/commands\.js/);
+  assert.equal(result.workerSha, undefined);
+  assert.equal(result.retainedHeadSha, undefined);
 });
