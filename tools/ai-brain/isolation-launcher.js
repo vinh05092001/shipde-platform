@@ -351,13 +351,13 @@ function getIsolatedLauncher() {
             retainWorkerHead = committed;
             const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
             if (opts.checkpoint) {
-              const cli = require('./cli');
-              const onDisk = cli.readCheckpoint(opts.checkpoint);
+              const runtimeHelpers = require('./orchestrate/runtime-helpers');
+              const onDisk = runtimeHelpers.readCheckpoint(opts.checkpoint);
               const step = onDisk && onDisk.liveSteps && onDisk.liveSteps[baseId];
               if (step) {
                 if (step.launch) step.launch.workerSha = committed;
                 if (step.repair) step.repair.sha = committed;
-                cli.writeJsonFile(opts.checkpoint, onDisk);
+                runtimeHelpers.writeJsonFile(opts.checkpoint, onDisk);
               }
             }
             require('./decisions').recordDecision(
@@ -453,8 +453,8 @@ function getIsolatedLauncher() {
                           adopted = true;
 
                           if (opts.checkpoint) {
-                            const cli = require('./cli');
-                            const checkpointOnDisk = cli.readCheckpoint(opts.checkpoint);
+                            const runtimeHelpers = require('./orchestrate/runtime-helpers');
+                            const checkpointOnDisk = runtimeHelpers.readCheckpoint(opts.checkpoint);
                             if (
                               checkpointOnDisk &&
                               checkpointOnDisk.liveSteps &&
@@ -471,7 +471,7 @@ function getIsolatedLauncher() {
                                 updated = true;
                               }
                               if (updated) {
-                                cli.writeJsonFile(opts.checkpoint, checkpointOnDisk);
+                                runtimeHelpers.writeJsonFile(opts.checkpoint, checkpointOnDisk);
                               }
                             }
                           }

@@ -224,10 +224,7 @@ function buildDefaults() {
 
 /** The Controller seams this loop consumes instead of reimplementing. */
 function controller() {
-  // Required lazily: cli.js is the Controller entrypoint and requires this
-  // module back for its own `orchestrate` command, so the two must not load each
-  // other at module scope.
-  return require('./cli');
+  return require('./orchestrate/runtime-helpers');
 }
 
 /**
