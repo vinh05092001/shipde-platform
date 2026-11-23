@@ -14,8 +14,9 @@ const { compilePrompt } = require('../prompt-compiler');
 const { createContextPack } = require('../context-pack');
 const { repairSpec } = require('../orchestrate/review-lane');
 const { repairRound } = require('../orchestrate/repair-round');
+const { resolveLauncher } = require('../orchestrate/writer-loop');
 const { runOrchestration } = require('../orchestrate');
-const { enforceWriterCommitScope } = require('../isolation-launcher');
+const { enforceWriterCommitScope, finalizeIsolatedLaunchResult } = require('../isolation-launcher');
 const scopeGate = require('../scope-gate');
 const writerScope = require('../writer-scope');
 
@@ -455,4 +456,75 @@ test('F2 orchestrate writer job and repairRound job receive effective writerPath
   assert.deepEqual(repairJobs[0].allowedPaths, writerPaths);
   assert.equal(repairJobs[0].baseSha, turnHeadSha);
   assert.ok(repairRes && (repairRes.ok === true || repairRes.repaired === true || repairRes.sha));
+});
+
+test('F2 wiring M2: writer-loop passes commitFileOnlyWriter=true, baseSha, and writerPaths to isolatedLauncher for author and repair roles', () => {
+  const writerPaths = [
+    'tools/ai-brain/review-manifest.js',
+    'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
+  ];
+  const turnBase = 'd'.repeat(40);
+  const captured = [];
+  const launcher = resolveLauncher({ isolatedWorker: true }, (_adapter, _args, opts) => {
+    captured.push(opts);
+    return { exitCode: 0, stdout: 'ok', stderr: '' };
+  });
+
+  for (const role of ['author.foundation', 'repair']) {
+    const res = launcher({
+      harness: 'opencode-direct',
+      isolatedWorker: true,
+      gateway: '9router',
+      endpoint: 'http://127.0.0.1:20128/v1',
+      model: 'ninerouter/vinh',
+      prompt: 'fix review-manifest',
+      cwd: REPO_ROOT,
+      baseSha: turnBase,
+      branch: 'feat/task-ai-187',
+      title: 'TASK-AI-187',
+      allowedPaths: writerPaths,
+      labels: { workItem: 'TASK-AI-187', role },
+    });
+    assert.equal(res.exitCode, 0, res.stderr || res.refusal || '');
+  }
+
+  assert.equal(captured.length, 2);
+  for (const opts of captured) {
+    assert.equal(opts.commitFileOnlyWriter, true);
+    assert.equal(opts.baseSha, turnBase);
+    assert.deepEqual(opts.allowedPaths, writerPaths);
+  }
+});
+
+test('F2 wiring M1: isolation-launcher finalizeIsolatedLaunchResult reads HEAD from git and refuses WRITER_DIFF_OUTSIDE_SCOPE', () => {
+  const { dir, turnBase, write } = makeGitFixtureRepo();
+  const writerPaths = [
+    'tools/ai-brain/review-manifest.js',
+    'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
+  ];
+
+  write(
+    'tools/ai-brain/cli/commands.js',
+    '// out of writerPaths\nmodule.exports = { m1: true };\n'
+  );
+  git(dir, ['add', 'tools/ai-brain/cli/commands.js']);
+  git(dir, ['commit', '-m', 'writer illegally touched controller']);
+
+  const res = finalizeIsolatedLaunchResult({
+    launchResult: { exitCode: 0, stdout: 'ok', stderr: '' },
+    adapter: { id: 'opencode-direct' },
+    opts: {
+      commitFileOnlyWriter: true,
+      baseSha: turnBase,
+      allowedPaths: writerPaths,
+      workItemId: 'TASK-AI-187',
+    },
+    hostCwd: dir,
+    workerRoot: dir,
+  });
+  assert.equal(res.exitCode, 1);
+  assert.equal(res.localFailure, 'WRITER_DIFF_OUTSIDE_SCOPE');
+  assert.match(res.failureReason, /tools\/ai-brain\/cli\/commands\.js/);
+  assert.equal(res.workerSha, undefined);
+  assert.equal(res.retainedHeadSha, undefined);
 });
