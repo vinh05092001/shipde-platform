@@ -490,6 +490,8 @@ async function selectCandidateForProfile(
     }
 
     let rawMembers = Array.isArray(o.comboMembers) ? o.comboMembers : null;
+    // Whether the combo member list was read at all, as opposed to read but empty.
+    let comboRead = Boolean(rawMembers);
     if (rawMembers) {
       jevReadState = 'PROVIDED';
     } else {
@@ -508,7 +510,8 @@ async function selectCandidateForProfile(
         comboConfig && typeof comboConfig.error === 'string' && comboConfig.error
           ? comboConfig.error
           : null;
-      rawMembers = Array.isArray(comboConfig && comboConfig.members) ? comboConfig.members : [];
+      comboRead = Array.isArray(comboConfig && comboConfig.members);
+      rawMembers = comboRead ? comboConfig.members : [];
     }
     jevRawCount = rawMembers.length;
 
@@ -532,8 +535,16 @@ async function selectCandidateForProfile(
     jevEligibleCount = eligibleMembers.length;
 
     const agyExclusions = failedAgyExclusions(failedSet);
+    // When the combo was read but no 9router member is eligible (all failed or
+    // excluded), the agy-pool members can still be offered if that lane is on.
+    // If the combo could not be read, or agy-pool is off or yields nothing,
+    // selection falls back exactly as before.
+    const agyOnly =
+      eligibleMembers.length === 0 &&
+      comboRead &&
+      Boolean(o.registry && o.registry.dispatch && o.registry.dispatch.agyPoolShortlistEnabled);
     let sel = null;
-    if (eligibleMembers.length > 0) {
+    if (eligibleMembers.length > 0 || agyOnly) {
       sel = await comboJev.selectComboMember({
         item,
         role,
@@ -553,6 +564,7 @@ async function selectCandidateForProfile(
         excludedModelAccounts: agyExclusions.modelAccounts,
       });
       jevSelReason = (sel && (sel.reason || sel.error)) || null;
+      if (agyOnly && !(sel && sel.ok)) sel = null;
     }
 
     if (
