@@ -21,9 +21,10 @@ function registry(enabled) {
       comboSource: '9router',
       agyPoolShortlistEnabled: enabled,
       agyPool: { minHeadroom: 0.15, openHeadroom: 0.4 },
-      jev: { maxOptions: 4 },
     },
     sources: [
+      // The JEV shortlist cap, which a mixed agy-pool shortlist requires.
+      { id: 'jev', kind: 'decision-service', servesModels: false, maxOptions: 4 },
       {
         id: '9router',
         kind: 'router',

@@ -113,15 +113,15 @@ function readAccountQuotaGroups(accountId, options = {}) {
   }
 }
 
-/**
- * Discover eligible AGY pool models deduplicated by model ID.
- * Fails closed (returns []) when `agyPool` config is absent or invalid.
- */
 /** The key for one model on one agy account, as used by excludedModelAccounts. */
 function modelAccountKey(bareModel, accountId) {
   return String(bareModel) + '@' + String(accountId);
 }
 
+/**
+ * Discover eligible AGY pool models deduplicated by model ID.
+ * Fails closed (returns []) when `agyPool` config is absent or invalid.
+ */
 function discoverAgyPoolMembers(options = {}) {
   const cfg = resolveAgyPoolConfig(options);
   if (!cfg) return [];
