@@ -69,10 +69,12 @@ function makeGitFixtureRepo() {
 
 test('F2 end-to-end intake -> planner -> pinpoint/context-pack/prompt on real TASK-AI-187.md with Writer paths', () => {
   const raw187 = fs.readFileSync(REAL_187_PATH, 'utf8');
-  const wiWithWriterPaths = raw187.replace(
-    /(\|\s*Allowed paths\s*\|[^\r\n]+\r?\n)/i,
-    '$1| Writer paths | `tools/ai-brain/review-manifest.js`, `tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js` |\n'
-  );
+  const wiWithWriterPaths = /\|\s*Writer paths\s*\|/i.test(raw187)
+    ? raw187
+    : raw187.replace(
+        /(\|\s*Allowed paths\s*\|[^\r\n]+\r?\n)/i,
+        '$1| Writer paths | `tools/ai-brain/review-manifest.js`, `tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js` |\n'
+      );
 
   const derived = intake.deriveSpec({
     id: 'TASK-AI-187',
@@ -147,9 +149,11 @@ test('F2 end-to-end intake -> planner -> pinpoint/context-pack/prompt on real TA
 
 test('F2 legacy Work Item without Writer paths preserves allowedPaths without AC heuristic dropping review-manifest.js', () => {
   const raw187 = fs.readFileSync(REAL_187_PATH, 'utf8');
+  const legacyText = raw187.replace(/^\|\s*Writer paths\s*\|[^\r\n]*\r?\n?/gim, '');
+  assert.doesNotMatch(legacyText, /^\|\s*Writer paths\s*\|/im);
   const derived = intake.deriveSpec({
     id: 'TASK-AI-187',
-    workItemText: raw187,
+    workItemText: legacyText,
     registerItem: { id: 'TASK-AI-187', dependencies: '' },
     root: REPO_ROOT,
   });
