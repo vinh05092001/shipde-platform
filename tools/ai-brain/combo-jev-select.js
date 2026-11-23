@@ -77,15 +77,39 @@ function assessComboTask(item, roleOverride) {
   };
 }
 
+function resolveStemAliases(options = {}) {
+  if (options && options.stemAliases && typeof options.stemAliases === 'object') {
+    return options.stemAliases;
+  }
+  const regAliases =
+    options &&
+    options.registry &&
+    options.registry.dispatch &&
+    options.registry.dispatch.modelStemAliases;
+  return regAliases && typeof regAliases === 'object' ? regAliases : null;
+}
+
 /**
  * Extract model family stem (e.g. `grok-4.7` -> `grok`, `claude-4.5-sonnet` -> `claude`,
- * `gpt-5.2-codex` -> `gpt`) for writer/reviewer family independence checks.
+ * `gpt-5.2-codex` -> `gpt`, `o3` -> `gpt` via config `modelStemAliases`) for
+ * writer/reviewer family independence checks. Returns null if no alphabetic stem exists.
  */
-function modelFamilyOf(baseOrId) {
+function modelFamilyOf(baseOrId, stemAliases = null) {
   const norm = priorsRead.normaliseModelId(baseOrId) || String(baseOrId || '').toLowerCase();
   const leaf = norm.includes('/') ? norm.split('/').pop() : norm;
   const match = /^([a-z]+)/.exec(leaf);
-  return match ? match[1] : leaf;
+  if (!match) return null;
+  const stem = match[1];
+  if (
+    stemAliases &&
+    typeof stemAliases === 'object' &&
+    Object.prototype.hasOwnProperty.call(stemAliases, stem) &&
+    typeof stemAliases[stem] === 'string' &&
+    stemAliases[stem].trim()
+  ) {
+    return stemAliases[stem].trim().toLowerCase();
+  }
+  return stem;
 }
 
 /**
@@ -108,23 +132,31 @@ function upstreamOfMember(modelId, fallbackUpstream = null) {
  * Fail-closed: never re-admits same-upstream, unprefixed/unknown-upstream,
  * same-family, or writer-only members.
  */
-function filterForIndependence(scoredMembers, writerModelId, allMembers, fallbackUpstream = null) {
+function filterForIndependence(
+  scoredMembers,
+  writerModelId,
+  allMembers,
+  fallbackUpstream = null,
+  options = {}
+) {
   if (!writerModelId) return { eligible: scoredMembers, independentApplied: false };
+  const stemAliases = resolveStemAliases(options);
   const writerSplit = priorsRead.splitModelEffort(writerModelId, { liveIds: allMembers });
   const writerBase =
     writerSplit.base || priorsRead.normaliseModelId(writerModelId) || writerModelId;
-  const writerFamily = modelFamilyOf(writerBase);
+  const writerFamily = modelFamilyOf(writerBase, stemAliases);
   const explicitWriterUpstream = upstreamOfMember(writerModelId, null);
   const resolvedWriterUpstream = upstreamOfMember(writerModelId, fallbackUpstream);
 
-  if (!explicitWriterUpstream || !resolvedWriterUpstream) {
+  if (!writerFamily || !explicitWriterUpstream || !resolvedWriterUpstream) {
     return { eligible: [], independentApplied: true };
   }
 
   const distinct = scoredMembers.filter((m) => {
     if (m.modelId === writerModelId) return false;
     if (m.base === writerBase) return false;
-    if (modelFamilyOf(m.base) === writerFamily) return false;
+    const memberFamily = modelFamilyOf(m.base, stemAliases);
+    if (!memberFamily || memberFamily === writerFamily) return false;
     const explicitMemberUpstream = upstreamOfMember(m.modelId, null);
     const resolvedMemberUpstream = upstreamOfMember(m.modelId, fallbackUpstream);
     if (!explicitMemberUpstream || !resolvedMemberUpstream) return false;
@@ -425,7 +457,10 @@ async function selectComboMember(options = {}) {
 
   const { eligible, independentApplied } =
     assessment.role === 'reviewer' && options.writerModelId
-      ? filterForIndependence(scored, options.writerModelId, combinedMemberIds, fallbackUpstream)
+      ? filterForIndependence(scored, options.writerModelId, combinedMemberIds, fallbackUpstream, {
+          registry: options.registry,
+          stemAliases: options.stemAliases,
+        })
       : { eligible: scored, independentApplied: false };
 
   if (eligible.length === 0) {
