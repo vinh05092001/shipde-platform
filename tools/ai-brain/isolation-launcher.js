@@ -1082,13 +1082,15 @@ function getIsolatedLauncher() {
         const useFullWireId = isRouter && routerProvider && providerId !== routerProvider;
         const wireId = useFullWireId ? pinnedModel : relativeId;
 
-        let dispatchConfig = null;
-        try {
-          dispatchConfig =
-            typeof sourcesModule.loadSources === 'function'
-              ? sourcesModule.loadSources()?.dispatch || null
-              : null;
-        } catch {}
+        let dispatchConfig = (opts && opts.registry && opts.registry.dispatch) || null;
+        if (!dispatchConfig) {
+          try {
+            dispatchConfig =
+              typeof sourcesModule.loadSources === 'function'
+                ? sourcesModule.loadSources()?.dispatch || null
+                : null;
+          } catch {}
+        }
         const resolvedLimits = resolveOpencodeModelLimits({
           selectedSource,
           pinnedModel,
