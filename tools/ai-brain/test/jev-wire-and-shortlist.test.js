@@ -73,7 +73,7 @@ test('JEV-1: orchestrateCommand wires jevAsk and jevMaxOptions from registry for
   // Live isolated run builds jevAsk via jev.buildJevAsk and forwards registry maxOptions/minConfidence
   let liveOpts = null;
   await orchestrateCommand(
-    { goal: 'test', specs: specsFile, 'isolated-worker': true, 'decision-dir': dir },
+    { goal: 'jev wire goal', specs: specsFile, 'isolated-worker': true, 'decision-dir': dir },
     {
       registry: REGISTRY,
       env: { NINEROUTER_API_KEY: 'k', TYPESAFE_API_KEY: 'tk' },
@@ -97,7 +97,7 @@ test('JEV-1: orchestrateCommand wires jevAsk and jevMaxOptions from registry for
   let stubOpts = null;
   const jevStub = async () => ({ choice: 'M1', confidence: 0.92, reason: 'best fit' });
   await orchestrateCommand(
-    { goal: 'test', specs: specsFile, 'isolated-worker': true, 'decision-dir': dir },
+    { goal: 'jev wire goal', specs: specsFile, 'isolated-worker': true, 'decision-dir': dir },
     {
       registry: REGISTRY,
       env: { NINEROUTER_API_KEY: 'k' },

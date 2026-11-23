@@ -19,9 +19,6 @@ const jev = require('./jev');
 const sourcesApi = require('./sources');
 const { candidateKey } = require('./discovery/identity');
 
-// Default option cap aligned with JEV's closed-choice contract when sources.json omits maxOptions.
-const DEFAULT_JEV_MAX_OPTIONS = 8;
-
 const EFFORT_RANK = Object.freeze({
   xhigh: 5,
   high: 4,
@@ -184,19 +181,21 @@ function resolveJevMaxOptions(options = {}) {
     const configured = Number(jevSource && jevSource.maxOptions);
     if (Number.isInteger(configured) && configured >= 2) return configured;
   } catch {}
-  return DEFAULT_JEV_MAX_OPTIONS;
+  return null;
 }
 
 /**
  * Controller-side shortlist before calling JEV: keeps top-ranked members while
  * preserving effort diversity (e.g. high/medium/low/default) within `maxOptions`,
  * without mutating `eligibleMembers` (deterministicPick still sees the full pool).
+ * When `maxOptions` is unset/null, returns the full eligible list uncapped.
  */
 function shortlistForJev(eligibleMembers, maxOptions) {
   const list = Array.isArray(eligibleMembers) ? eligibleMembers : [];
-  const cap =
-    Number.isInteger(maxOptions) && maxOptions >= 2 ? maxOptions : DEFAULT_JEV_MAX_OPTIONS;
-  if (list.length <= cap) return list.slice();
+  if (!Number.isInteger(maxOptions) || maxOptions < 2 || list.length <= maxOptions) {
+    return list.slice();
+  }
+  const cap = maxOptions;
   const picked = [];
   const seenIdx = new Set();
   const seenEffort = new Set();
