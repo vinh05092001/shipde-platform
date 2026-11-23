@@ -306,7 +306,8 @@ function reviewLane(
       };
     }
 
-    if (writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
+    const strictComboReview = Boolean(o && o.strictIndependentComboReview === true);
+    if (writerKey && reviewerIdentity === writerKey && (!reviewerIsCombo || strictComboReview)) {
       return {
         pass: false,
         sha: null,
@@ -321,7 +322,7 @@ function reviewLane(
         ],
       };
     }
-    if (writerKey && reviewerIdentity === writerKey && reviewerIsCombo) {
+    if (writerKey && reviewerIdentity === writerKey && reviewerIsCombo && !strictComboReview) {
       // Record the operator-accepted residual risk (reviewer == writer combo) so
       // the audit trail shows the self-review was a deliberate combo-only decision.
       decisions.recordDecision(

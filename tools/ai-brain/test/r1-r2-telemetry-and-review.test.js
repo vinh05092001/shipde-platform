@@ -11,6 +11,7 @@ const comboReader = require('../combo-reader');
 const { candidateKey } = require('../candidates');
 const { selectCandidateForProfile } = require('../orchestrate/candidate-select');
 const { reviewItem } = require('../orchestrate/review-item');
+const { reviewLane } = require('../orchestrate/review-lane');
 const { runOrchestration } = require('../orchestrate');
 const { orchestrateCommand } = require('../cli/commands');
 
@@ -215,6 +216,64 @@ test('R2 strictIndependentComboReview refuses opaque-combo writer reuse even acr
   );
   assert.equal(launchCount, 0);
   assert.notEqual(reviewRes.status, 'PASSED');
+
+  // R2-a: blocked/failed combo pool + comboJevSelect: false + reviewerIdentity override still refuses
+  const blockedCombo = { ...baseCombo, blocked: true, blockReason: 'CANDIDATE_FAILED' };
+  const blockedReviewRes = await reviewItem(
+    {
+      registry: REGISTRY,
+      env,
+      comboJevSelect: false,
+      strictIndependentComboReview: true,
+      reviewerIdentity: candidateKey(baseCombo),
+      reviewBudget: 1,
+      formatCheck: false,
+      tests: async () => ({ pass: true, command: 'noop', detail: 'ok' }),
+    },
+    { id: 'TASK-R2-blocked-override', complexity: 'standard', allowedPaths: ['a.js'] },
+    {
+      candidateKey: candidateKey(baseCombo),
+      headSha: 'a'.repeat(40),
+      branch: 'feat/task-r2-blocked-override',
+    },
+    { goal: 'test', reviews: [], formatChecks: [], toolGates: [] },
+    logOpts,
+    async () => {
+      launchCount += 1;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    logOpts.dir,
+    logOpts.now,
+    [blockedCombo],
+    {},
+    REGISTRY,
+    {}
+  );
+  assert.equal(launchCount, 0);
+  assert.notEqual(blockedReviewRes.status, 'PASSED');
+
+  // R2-a defense-in-depth: reviewLane directly refuses reviewer == writer combo under strict mode
+  const strictLane = reviewLane(
+    { registry: REGISTRY, env, strictIndependentComboReview: true },
+    { id: 'TASK-R2-lane', allowedPaths: ['a.js'] },
+    { candidateKey: candidateKey(baseCombo) },
+    { goal: 'test' },
+    logOpts,
+    async () => {
+      launchCount += 1;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    logOpts.dir,
+    logOpts.now,
+    candidateKey(baseCombo),
+    [baseCombo],
+    REGISTRY
+  );
+  const laneVerdict = await strictLane('a'.repeat(40), 1);
+  assert.equal(laneVerdict.pass, false);
+  assert.equal(laneVerdict.cause, 'REVIEWER_EQUALS_WRITER');
+  assert.equal(laneVerdict.verdict, 'REFUSED');
+  assert.equal(launchCount, 0);
 
   // Legacy behavior preserved outside strictIndependentComboReview
   const legacyAllowed = await selectCandidateForProfile(

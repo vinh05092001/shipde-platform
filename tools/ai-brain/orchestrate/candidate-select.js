@@ -594,8 +594,8 @@ async function selectCandidateForProfile(
     o &&
     o.strictIndependentComboReview === true &&
     currentRole === 'reviewer' &&
-    chosenCandidate &&
-    ((writerKey && chosen === writerKey) ||
+    (!chosenCandidate ||
+      (writerKey && chosen === writerKey) ||
       comboApi.isComboCandidate(chosenCandidate, o.registry) ||
       !writerKey)
   ) {
