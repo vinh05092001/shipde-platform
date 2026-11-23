@@ -82,6 +82,26 @@ test('F2 end-to-end intake -> planner -> pinpoint/context-pack/prompt on real TA
     'tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js',
   ]);
   assert.ok(derived.allowedPaths.includes('tools/ai-brain/cli/commands.js'));
+  assert.equal(derived.complexity, 'standard');
+  assert.deepEqual(derived.riskDomains, []);
+
+  // Even when PR Allowed paths expands to 15+ prereq files, Writer paths (2 files) keeps writer complexity at 'standard'
+  const expandedAllowedRow =
+    '| Allowed paths | `tools/ai-brain/review-manifest.js`, `tools/ai-brain/test/task-ai-187-review-manifest-cli.test.js`, `tools/ai-brain/combo-reader.js`, `tools/ai-brain/writer-scope.js`, `tools/ai-brain/intake.js`, `tools/ai-brain/planner.js`, `tools/ai-brain/orchestrate.js`, `tools/ai-brain/orchestrate/candidate-select.js`, `tools/ai-brain/orchestrate/review-lane.js`, `tools/ai-brain/orchestrate/repair-round.js`, `tools/ai-brain/isolation-launcher.js`, `tools/ai-brain/pinpoint.js`, `tools/ai-brain/context-pack.js`, `tools/ai-brain/prompt-compiler.js`, `tools/ai-brain/cli/commands.js` |\n';
+  const wiExpandedPr = wiWithWriterPaths.replace(
+    /\|\s*Allowed paths\s*\|[^\r\n]+\r?\n/i,
+    expandedAllowedRow
+  );
+  const derivedExpanded = intake.deriveSpec({
+    id: 'TASK-AI-187',
+    workItemText: wiExpandedPr,
+    registerItem: { id: 'TASK-AI-187', dependencies: '' },
+    root: REPO_ROOT,
+  });
+  assert.equal(derivedExpanded.complexity, 'standard');
+  assert.deepEqual(derivedExpanded.riskDomains, []);
+  assert.equal(derivedExpanded.allowedPaths.length, 15);
+  assert.equal(derivedExpanded.writerPaths.length, 2);
 
   const planned = planner.plan('Fix review-manifest CLI', { specs: [derived.specItem] });
   const plannedItem = planned.workItems[0];

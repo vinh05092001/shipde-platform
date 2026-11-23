@@ -342,6 +342,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
   const rawWriterPaths = deriveWriterPaths(workItemText);
   const writerPaths =
     rawWriterPaths !== undefined ? validateWriterPaths(rawWriterPaths, allowedPaths) : undefined;
+  const complexityPaths = writerPaths !== undefined ? writerPaths : allowedPaths;
 
   if (!registerItem) missing.push('register row');
   const dependencies = registerItem ? parseDependencies(registerItem.dependencies) : [];
@@ -355,7 +356,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     workItemText,
     acceptanceCriteria,
     riskDomains,
-    allowedPaths
+    complexityPaths
   );
   const complexityRank = { standard: 0, large: 1, complex: 2 };
   const normalizedExplicitComplexity = explicitComplexity
