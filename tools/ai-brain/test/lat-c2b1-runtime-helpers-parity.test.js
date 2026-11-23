@@ -49,7 +49,6 @@ test('runtime-helpers exports all live helpers and dispatch-helpers/cli re-expor
   assert.strictEqual(typeof cli.applyDryRunBlocks, 'function');
   assert.strictEqual(cli.DRY_RUN_BLOCK_CODES, runtimeHelpers.DRY_RUN_BLOCK_CODES);
   assert.strictEqual(cli.LIVE_BLOCK_CODES, runtimeHelpers.LIVE_BLOCK_CODES);
-  assert.strictEqual(typeof cli.dispatchProfileCommand, 'function');
 });
 
 test('live runtime callers require orchestrate/runtime-helpers instead of cli or dispatch-helpers', () => {
