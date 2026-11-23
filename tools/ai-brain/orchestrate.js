@@ -543,7 +543,7 @@ async function runOrchestration(goal, opts) {
   const candidates = candidatesApi.annotateCandidates(
     rawCandidates.map((c) => Object.assign({}, c)),
     evidenceData,
-    { now }
+    { now, loadQuotaState: false }
   );
 
   const externalWorkersList =
