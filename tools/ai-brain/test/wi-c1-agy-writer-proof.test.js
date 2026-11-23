@@ -76,3 +76,35 @@ test('WI-C1: a reviewer without a served model is refused', (t) => {
   assert.equal(res.exitCode, 1);
   assert.match(res.refusal, /^REVIEWER_SERVED_MODEL_UNVERIFIED/);
 });
+
+test('WI-C1: an after-snapshot written before the run ended is not group evidence', (t) => {
+  let submittedAt = null;
+  t.mock.method(pool, 'submitJob', (accountId) => {
+    submittedAt = Date.now();
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    return { state: 'ok', exitCode: 0, accountId, jobId: accountId + '/run-1' };
+  });
+  t.mock.method(pool, 'readOutText', () => '{}');
+  let reads = 0;
+  const launch = resolveLauncher(
+    {
+      externalWorkers: 'agy-pool',
+      allowAgyPoolWriter: true,
+      poolTimeoutMs: 1000,
+      readAgyQuota: () =>
+        reads++ === 0 ? quota({ claude: 0.8 }, 1) : quota({ claude: 0.7 }, submittedAt + 1),
+    },
+    null
+  );
+  const res = launch({
+    harness: 'agy-pool',
+    accountId: 'agy03',
+    model: 'claude-opus-5.5',
+    quotaScope: 'agy03:3p',
+    prompt: 'fixture',
+    resultSchema: {},
+  });
+  assert.equal(res.exitCode, 0, 'missing group evidence does not refuse a writer');
+  assert.equal(res.identityProof.error, 'AGY_QUOTA_SNAPSHOT_STALE');
+  assert.equal(res.identityProof.groupVerified, false);
+});

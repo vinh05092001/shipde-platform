@@ -87,6 +87,7 @@ function resolveLauncher(o, isolatedLauncher) {
         ...o,
         timeoutMs: poolTimeoutMs,
       });
+      const runEndedAt = Date.now();
       const launched = {
         ...result,
         exitCode: result.state === 'ok' ? result.exitCode : result.exitCode || 1,
@@ -113,6 +114,7 @@ function resolveLauncher(o, isolatedLauncher) {
         },
         accountId: job.accountId,
         runStartedAt,
+        runEndedAt,
       });
       const contradicting = [
         'AGY_RECEIPT_MISSING',
