@@ -409,16 +409,6 @@ function extractBaseName(modelId) {
  * excluded and the total is renormalised over the weights that are present.
  */
 function scoreCandidate(candidate, allCandidates, workKind, ctx) {
-  if (ctx?.assessment?.scoringPolicy) {
-    const scored = require('./routing').scoreForProfile(candidate, ctx.assessment, {
-      ...ctx,
-      taskId: ctx.profile?.taskId ?? ctx.taskId,
-      kind: workKind,
-      candidates: allCandidates,
-    });
-    return { total: scored.score, breakdown: scored.breakdown };
-  }
-
   const scores = {
     evidence: evidenceScore(candidate),
     capability: capabilityScore(candidate, workKind),
@@ -489,7 +479,6 @@ function resolveCatalogue(candidate, cataloguesByPath) {
  */
 function rankAndRecord(candidates, context) {
   const ctx = context || {};
-  const profileScoring = Boolean(ctx.assessment?.scoringPolicy);
   const workItemId = ctx.workItemId || 'unassigned';
   const role = ctx.role || 'author.foundation';
   const kind = ctx.kind || role;
@@ -678,18 +667,11 @@ function rankAndRecord(candidates, context) {
     } else if (c.scoreBreakdown && c.scoreBreakdown.qualityLabel) {
       delete c.scoreBreakdown.qualityLabel;
     }
-    if (profileScoring) {
-      c.qualityLabel = Number.isFinite(breakdown.quality) ? undefined : 'QUALITY_UNKNOWN';
-      if (!c.qualityLabel) delete breakdown.qualityLabel;
-    }
-    c.scoreSource = breakdown.policy
-      ? 'profile-measurements'
-      : 'evidence+capability+headroom+spread+cost';
+    c.scoreSource = 'evidence+capability+headroom+spread+cost';
   }
 
   // ── 3. Sort by score (descending), scored models before unscored ──
   eligible.sort((a, b) => {
-    if (profileScoring) return require('./routing').compareProfileScores(a, b, ctx);
     const aKnown = a.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(a.quality);
     const bKnown = b.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(b.quality);
     if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
@@ -708,7 +690,6 @@ function rankAndRecord(candidates, context) {
   let winner = null;
   for (const cand of eligible) {
     if (pinned && sevenWayKey(cand) !== pinned) continue;
-    if (ctx.assessment?.scoringPolicy && !Number.isFinite(cand.score)) continue;
     const proven =
       Array.isArray(cand.qualifiedRoles) &&
       cand.qualifiedRoles.some((r) => r === kind || r === '*');
@@ -734,42 +715,27 @@ function rankAndRecord(candidates, context) {
   let pinnedRefusal = null;
   if (pinned && !winner) {
     const rej = rejected.filter((r) => r.offeringId === pinned).pop();
-    pinnedRefusal = rej
-      ? 'OFFERING_NOT_ELIGIBLE: ' + rej.reason
-      : eligible.some((c) => sevenWayKey(c) === pinned)
-        ? 'OFFERING_NOT_ELIGIBLE: SCORING_INPUTS_UNVERIFIED'
-        : 'OFFERING_NOT_FOUND';
+    pinnedRefusal = rej ? 'OFFERING_NOT_ELIGIBLE: ' + rej.reason : 'OFFERING_NOT_FOUND';
   }
   const reason = pinnedRefusal
     ? 'REFUSED: ' + pinnedRefusal
     : winner
-      ? winner.scoreBreakdown.policy
-        ? 'Score ' + winner.score + ' (policy ' + winner.scoreBreakdown.policy.version + ')'
-        : 'Score ' +
-          winner.score +
-          ' (evidence=' +
-          winner.scoreBreakdown.evidence +
-          ', capability=' +
-          winner.scoreBreakdown.capability +
-          ', headroom=' +
-          winner.scoreBreakdown.headroom +
-          ', spread=' +
-          winner.scoreBreakdown.spread +
-          ', cost=' +
-          winner.scoreBreakdown.cost +
-          ')'
+      ? 'Score ' +
+        winner.score +
+        ' (evidence=' +
+        winner.scoreBreakdown.evidence +
+        ', capability=' +
+        winner.scoreBreakdown.capability +
+        ', headroom=' +
+        winner.scoreBreakdown.headroom +
+        ', spread=' +
+        winner.scoreBreakdown.spread +
+        ', cost=' +
+        winner.scoreBreakdown.cost +
+        ')'
       : 'REFUSED: no candidate qualifies';
 
   const decisionEntry = {
-    ...(ctx.assessment?.scoringPolicyStatus
-      ? { scoringPolicyStatus: ctx.assessment.scoringPolicyStatus }
-      : {}),
-    ...(ctx.assessment?.scoringPolicy &&
-    !winner &&
-    eligible.length &&
-    eligible.every((c) => !Number.isFinite(c.score))
-      ? { reasonCode: 'SCORING_INPUTS_UNVERIFIED' }
-      : {}),
     ...(pinned ? { pinnedOffering: pinned } : {}),
     ...(pinnedRefusal ? { reasonCode: pinnedRefusal.split(':')[0] } : {}),
     stage: decisions.Stage.SELECTED,
@@ -799,7 +765,7 @@ function rankAndRecord(candidates, context) {
   };
 
   // Write through decisions.js — the single writer for the log.
-  if (!ctx.dryRun && (chosen || ctx.assessment?.scoringPolicyStatus)) {
+  if (!ctx.dryRun && chosen) {
     try {
       decisions.recordDecision(decisionEntry, ctx.decisionOpts);
     } catch (err) {
