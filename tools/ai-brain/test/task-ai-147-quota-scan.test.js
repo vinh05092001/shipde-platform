@@ -19,7 +19,7 @@ const routeHealthApi = require('../route-health');
 const { recordExecutionResult, loadStore, resolveRouteHealthFile, DEFAULT_ROUTE_HEALTH_PATH } =
   routeHealthApi;
 const routingApi = require('../routing');
-const { quotaScanCommand, dispatchCommand } = require('../cli');
+const { quotaScanCommand } = require('../cli');
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'task-ai-147-test-'));

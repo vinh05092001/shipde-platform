@@ -3,7 +3,6 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { dispatchCommand } = require('../cli');
 const { candidateKey } = require('../candidates');
 const now = Date.parse('2026-11-07T00:00:00Z');
 const policy = () => ({

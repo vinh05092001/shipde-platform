@@ -3,7 +3,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { dispatchCommand, parseArgs } = require('../cli');
+const { coordinatorDispatchCommand } = require('../cli/dispatch-helpers');
+const { parseArgs } = require('../cli');
 const { buildTaskProfile } = require('../orchestrate');
 const output = require('../dispatch-output');
 const root = path.resolve('fixture-root');
@@ -69,7 +70,7 @@ function guarded(t, data) {
     probeCapabilities: forbidden,
     refreshRoutes: true,
   };
-  return { effects, lines, run: (args = options()) => dispatchCommand(args, deps) };
+  return { effects, lines, run: (args = options()) => coordinatorDispatchCommand(args, deps) };
 }
 test('B01/B02: explicit roots, runtime, task-relative cwd and decision/ordinary validation', () => {
   const normalize = require('../coordinator-options').coordinatorOptions;
@@ -94,7 +95,7 @@ test('B01/B02: explicit roots, runtime, task-relative cwd and decision/ordinary 
 test('B03/B15/B54: import needs no scratch note, user configuration or process setup', (t) => {
   const { effects } = guarded(t, snapshot());
   delete require.cache[require.resolve('../cli')];
-  assert.equal(typeof require('../cli').dispatchCommand, 'function');
+  assert.equal(typeof require('../cli').orchestrateCommand, 'function');
   assert.equal(typeof require('../coordinator-options').coordinatorOptions, 'function');
   assert.deepEqual(effects, []);
 });

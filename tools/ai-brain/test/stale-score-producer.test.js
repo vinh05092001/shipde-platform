@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const priors = require('../priors');
-const { dispatchCommand } = require('../cli');
 
 const NOW = Date.parse('2026-11-07T00:00:00.000Z');
 const iso = (time) => new Date(time).toISOString();
