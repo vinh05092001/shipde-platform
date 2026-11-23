@@ -2,8 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const cp = require('child_process');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
 
@@ -127,10 +127,12 @@ test('R1 live-shaped orchestrate replay excludes 402 upstream on attempt 2 and f
     priors: PRIORS,
     env: { NINEROUTER_API_KEY: 'test-key' },
     decisionDir: logOpts.dir,
+    evidenceDir: logOpts.dir,
     // Matches real CLI wiring in cli/commands.js (no readComboConfig/comboMembers injected)
     comboJevSelect: true,
     run: () => ({
       exitCode: 1,
+      httpStatus: 402,
       stderr:
         'OPENCODE_ERROR: [bazaarlink/glm-5.3] [402]: {"error":{"message":"This request requires more credits","type":"invalid_request_error","code":402}} (reset after 19s) (HTTP 503)',
     }),
@@ -255,7 +257,12 @@ test('R2 strictIndependentComboReview refuses opaque-combo writer reuse even acr
 
   // R2-a defense-in-depth: reviewLane directly refuses reviewer == writer combo under strict mode
   const strictLane = reviewLane(
-    { registry: REGISTRY, env, strictIndependentComboReview: true },
+    {
+      registry: REGISTRY,
+      env,
+      strictIndependentComboReview: true,
+      reviewerIdentity: candidateKey(baseCombo),
+    },
     { id: 'TASK-R2-lane', allowedPaths: ['a.js'] },
     { candidateKey: candidateKey(baseCombo) },
     { goal: 'test' },
@@ -266,8 +273,8 @@ test('R2 strictIndependentComboReview refuses opaque-combo writer reuse even acr
     },
     logOpts.dir,
     logOpts.now,
-    candidateKey(baseCombo),
     [baseCombo],
+    {},
     REGISTRY
   );
   const laneVerdict = await strictLane('a'.repeat(40), 1);
@@ -316,6 +323,7 @@ test('R2 CLI orchestrateCommand enables strictIndependentComboReview on live iso
     ])
   );
 
+  const exitCodes = [];
   await orchestrateCommand(
     {
       goal: 'test',
@@ -326,6 +334,9 @@ test('R2 CLI orchestrateCommand enables strictIndependentComboReview on live iso
     {
       registry: REGISTRY,
       env: { NINEROUTER_API_KEY: 'k' },
+      log: () => {},
+      error: () => {},
+      exit: (code) => exitCodes.push(code),
       runOrchestration: async (_goal, opts) => {
         capturedOpts = opts;
         return { status: 'COMPLETED', outcomes: [] };
@@ -333,6 +344,7 @@ test('R2 CLI orchestrateCommand enables strictIndependentComboReview on live iso
     }
   );
   assert.equal(capturedOpts.strictIndependentComboReview, true);
+  assert.equal(exitCodes[0], 0);
 
   let injectedOpts = null;
   await orchestrateCommand(
@@ -345,6 +357,9 @@ test('R2 CLI orchestrateCommand enables strictIndependentComboReview on live iso
     {
       registry: REGISTRY,
       env: { NINEROUTER_API_KEY: 'k' },
+      log: () => {},
+      error: () => {},
+      exit: (code) => exitCodes.push(code),
       run: () => ({ exitCode: 0 }),
       runOrchestration: async (_goal, opts) => {
         injectedOpts = opts;
@@ -353,6 +368,7 @@ test('R2 CLI orchestrateCommand enables strictIndependentComboReview on live iso
     }
   );
   assert.equal(injectedOpts.strictIndependentComboReview, false);
+  assert.equal(exitCodes[1], 0);
 });
 
 test('R1 readError records allowlisted socket code, maps unknown codes to UNKNOWN, and never leaks secrets', async () => {
@@ -434,17 +450,38 @@ test('R1 readError records allowlisted socket code, maps unknown codes to UNKNOW
 });
 
 test('R1 combo-reader uses agent:false so sync worker blocks never hit stale keep-alive ECONNRESET', async (t) => {
-  const server = http.createServer((_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({ combos: [{ name: 'vinh', models: ['bzl/glm-5.3', 'ag/claude-4.5'] }] })
-    );
+  // Spawn HTTP server in a separate child process so Atomics.wait in this
+  // process blocks ONLY the client event loop (matching cp.spawnSync) while
+  // the server closes idle keep-alive sockets after keepAliveTimeout=50ms.
+  const serverScript = [
+    "const http = require('http');",
+    'const s = http.createServer((_req, res) => {',
+    "  res.writeHead(200, { 'Content-Type': 'application/json' });",
+    "  res.end(JSON.stringify({ combos: [{ name: 'vinh', models: ['bzl/glm-5.3', 'ag/claude-4.5'] }] }));",
+    '});',
+    's.keepAliveTimeout = 50;',
+    "s.listen(0, '127.0.0.1', () => { process.stdout.write(String(s.address().port) + '\\n'); });",
+  ].join('\n');
+  const child = cp.spawn(process.execPath, ['-e', serverScript], {
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  server.keepAliveTimeout = 50;
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise((resolve) => server.close(resolve)));
+  t.after(() => {
+    try {
+      child.kill();
+    } catch {}
+  });
 
-  const { port } = server.address();
+  const port = await new Promise((resolve, reject) => {
+    let buf = '';
+    child.stdout.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl !== -1) resolve(Number(buf.slice(0, nl).trim()));
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => reject(new Error('fixture server exited early: ' + code)));
+  });
+
   const localRegistry = {
     dispatch: { nineRouterWriterCombo: 'vinh', comboSource: '9router' },
     sources: [
@@ -467,9 +504,9 @@ test('R1 combo-reader uses agent:false so sync worker blocks never hit stale kee
   assert.equal(r1.state, 'READ');
   assert.deepEqual(r1.members, ['bzl/glm-5.3', 'ag/claude-4.5']);
 
-  // Simulate cp.spawnSync blocking the event loop past server.keepAliveTimeout
+  // Simulate cp.spawnSync blocking the client event loop past server.keepAliveTimeout
   const sab = new Int32Array(new SharedArrayBuffer(4));
-  Atomics.wait(sab, 0, 0, 120);
+  Atomics.wait(sab, 0, 0, 200);
 
   const r2 = await comboReader.readComboConfig({
     name: 'vinh',
