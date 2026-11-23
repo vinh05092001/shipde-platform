@@ -64,38 +64,45 @@ test('WI-B1 P2 follow-up: buildMemberCandidate and buildAgyMemberCandidate apply
   assert.equal(builtAgy.candidate.modelFamily, 'gpt');
 });
 
-test('WI-B2: verifyAgyServedIdentity proves requested+group-delta and fails closed on foreign bucket drain or missing proof', () => {
+test('WI-B2: verifyAgyServedIdentity reports group evidence only, never model identity, and fails closed on foreign drain or missing proof', () => {
   const before = makeQuotaGroups({ gemini: 1.0, claude: 0.8, argon: 1.0 });
   const afterMatched = makeQuotaGroups({ gemini: 1.0, claude: 0.76, argon: 1.0 });
-
-  const okRes = agyPoolCandidates.verifyAgyServedIdentity({
+  const receipt = { accountId: 'agy03', jobId: 'agy03/run-1' };
+  const common = {
     requestedModel: 'claude-opus-5.5',
     expectedBucket: '3p',
+    receipt,
+    accountId: 'agy03',
+  };
+
+  const okRes = agyPoolCandidates.verifyAgyServedIdentity({
+    ...common,
     quotaBefore: before,
     quotaAfter: afterMatched,
   });
   assert.equal(okRes.ok, true);
-  assert.equal(okRes.verified, true);
-  assert.equal(okRes.identityProof, 'requested+group-delta');
+  assert.equal(okRes.verified, false, 'group evidence is not model identity');
+  assert.equal(okRes.modelVerified, false);
+  assert.equal(okRes.groupVerified, true);
+  assert.equal(okRes.servedModel, null);
+  assert.equal(okRes.evidenceKind, 'requested+group-delta');
   assert.equal(okRes.delta, 0.04);
 
   // Zero delta (unchanged bucket) -> fail-closed AGY_GROUP_DELTA_UNOBSERVED
   const unchanged = agyPoolCandidates.verifyAgyServedIdentity({
-    requestedModel: 'claude-opus-5.5',
-    expectedBucket: '3p',
+    ...common,
     quotaBefore: before,
     quotaAfter: before,
   });
   assert.equal(unchanged.ok, false);
   assert.equal(unchanged.verified, false);
   assert.equal(unchanged.error, 'AGY_GROUP_DELTA_UNOBSERVED');
-  assert.equal(unchanged.identityProof, 'unverified');
+  assert.equal(unchanged.evidenceKind, 'requested+group-unchanged');
 
   // Foreign bucket drained (even when expected bucket also drained) -> fail-closed mismatch
   const afterBothDrained = makeQuotaGroups({ gemini: 0.92, claude: 0.76, argon: 1.0 });
   const noisy = agyPoolCandidates.verifyAgyServedIdentity({
-    requestedModel: 'claude-opus-5.5',
-    expectedBucket: '3p',
+    ...common,
     quotaBefore: before,
     quotaAfter: afterBothDrained,
   });
@@ -106,8 +113,7 @@ test('WI-B2: verifyAgyServedIdentity proves requested+group-delta and fails clos
 
   // Missing quotaAfter -> fail-closed
   const missing = agyPoolCandidates.verifyAgyServedIdentity({
-    requestedModel: 'claude-opus-5.5',
-    expectedBucket: '3p',
+    ...common,
     quotaBefore: before,
     quotaAfter: null,
   });

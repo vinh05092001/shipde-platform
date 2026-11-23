@@ -222,35 +222,109 @@ function buildAgyMemberCandidate(member, options = {}) {
 }
 
 /**
- * Verify an AGY pool run's served identity using the pinned requestedModel and
- * before/after per-bucket quota snapshots (WI-B2: option (a) requested+group-delta,
- * failing closed when a different bucket drained or quota snapshots are missing).
+ * Read one account's `/quota` snapshot together with the time it was written,
+ * so a caller can tell a snapshot taken after a run from one taken before it.
  */
-function verifyAgyServedIdentity({ requestedModel, expectedBucket, quotaBefore, quotaAfter } = {}) {
-  const normModel = priorsRead.normaliseModelId(requestedModel);
-  if (!normModel || !expectedBucket) {
+function readAccountQuotaSnapshot(accountId, options = {}) {
+  if (options.quotaSnapshots && options.quotaSnapshots[accountId]) {
+    const snap = options.quotaSnapshots[accountId];
     return {
-      ok: false,
-      error: 'AGY_IDENTITY_INPUT_INVALID',
-      requestedModel: requestedModel || null,
-      bucket: expectedBucket || null,
-      identityProof: 'unverified',
+      groups: Array.isArray(snap.groups) ? snap.groups : snap.command?.data?.groups || [],
+      at: Number.isFinite(snap.at) ? snap.at : null,
     };
   }
+  const quotaFile = path.join(agyPoolRuntime.accountDir(accountId, options), 'quota-out.txt');
+  try {
+    if (!fs.existsSync(quotaFile)) return null;
+    const parsed = JSON.parse(fs.readFileSync(quotaFile, 'utf8').replace(/^﻿/, ''));
+    return { groups: parsed?.command?.data?.groups || [], at: fs.statSync(quotaFile).mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check the evidence an AGY pool run leaves behind (WI-B2, corrected in WI-C1).
+ *
+ * The pool reports no served model, so quota snapshots can only show that the
+ * requested model's quota group was drawn from. That is group evidence, never
+ * model identity: `modelVerified` is true only when the run receipt names the
+ * served model explicitly and it matches the request. The receipt must belong
+ * to this account and run, and the after-snapshot must postdate the run start.
+ */
+function verifyAgyServedIdentity({
+  requestedModel,
+  expectedBucket,
+  quotaBefore,
+  quotaAfter,
+  receipt,
+  accountId,
+  expectedJobId,
+  runStartedAt,
+} = {}) {
+  const normModel = priorsRead.normaliseModelId(requestedModel);
+  const base = {
+    requestedModel: normModel || requestedModel || null,
+    bucket: expectedBucket || null,
+    accountId: accountId || null,
+    jobId: (receipt && typeof receipt.jobId === 'string' && receipt.jobId) || null,
+    servedModel: null,
+    modelVerified: false,
+    groupVerified: false,
+  };
+  const refuse = (error, extra) => ({
+    ...base,
+    ok: false,
+    verified: false,
+    error,
+    evidenceKind: 'none',
+    ...extra,
+  });
+  if (!normModel || !expectedBucket || !accountId) return refuse('AGY_IDENTITY_INPUT_INVALID');
+  if (!receipt || typeof receipt !== 'object') return refuse('AGY_RECEIPT_MISSING');
+  if (receipt.accountId !== accountId) return refuse('AGY_ACCOUNT_MISMATCH');
+  const jobId = typeof receipt.jobId === 'string' ? receipt.jobId : '';
+  if (!jobId.startsWith(accountId + '/') || (expectedJobId && jobId !== expectedJobId)) {
+    return refuse('AGY_RUN_BINDING_MISMATCH');
+  }
+  const servedModel = receipt.servedModel
+    ? priorsRead.normaliseModelId(receipt.servedModel) || null
+    : null;
+  if (servedModel && servedModel !== normModel) {
+    return refuse('AGY_SERVED_MODEL_MISMATCH', { servedModel });
+  }
+  const modelVerified = Boolean(servedModel);
+
   const groupsBefore = Array.isArray(quotaBefore && quotaBefore.groups)
     ? quotaBefore.groups
     : quotaBefore?.command?.data?.groups || null;
   const groupsAfter = Array.isArray(quotaAfter && quotaAfter.groups)
     ? quotaAfter.groups
     : quotaAfter?.command?.data?.groups || null;
+  const receiptOnly = () => ({
+    ...base,
+    ok: true,
+    verified: true,
+    modelVerified: true,
+    servedModel,
+    evidenceKind: 'receipt',
+  });
   if (!Array.isArray(groupsBefore) || !Array.isArray(groupsAfter)) {
-    return {
-      ok: false,
-      error: 'AGY_QUOTA_PROOF_MISSING',
-      requestedModel: normModel,
-      bucket: expectedBucket,
-      identityProof: 'unverified',
-    };
+    return modelVerified ? receiptOnly() : refuse('AGY_QUOTA_PROOF_MISSING');
+  }
+  // The snapshots must bracket the run: before at or before the start, after
+  // at or after it. Otherwise the delta may belong to another run.
+  const beforeAt = quotaBefore && quotaBefore.at;
+  const afterAt = quotaAfter && quotaAfter.at;
+  if (
+    Number.isFinite(runStartedAt) &&
+    !(
+      Number.isFinite(afterAt) &&
+      afterAt >= runStartedAt &&
+      (!Number.isFinite(beforeAt) || beforeAt <= runStartedAt)
+    )
+  ) {
+    return modelVerified ? receiptOnly() : refuse('AGY_QUOTA_SNAPSHOT_STALE');
   }
 
   const mapBuckets = (groups) => {
@@ -265,13 +339,7 @@ function verifyAgyServedIdentity({ requestedModel, expectedBucket, quotaBefore, 
   const beforeMap = mapBuckets(groupsBefore);
   const afterMap = mapBuckets(groupsAfter);
   if (!beforeMap.has(expectedBucket) || !afterMap.has(expectedBucket)) {
-    return {
-      ok: false,
-      error: 'AGY_EXPECTED_BUCKET_MISSING',
-      requestedModel: normModel,
-      bucket: expectedBucket,
-      identityProof: 'unverified',
-    };
+    return modelVerified ? receiptOnly() : refuse('AGY_EXPECTED_BUCKET_MISSING');
   }
 
   const beforeVal = beforeMap.get(expectedBucket);
@@ -288,44 +356,31 @@ function verifyAgyServedIdentity({ requestedModel, expectedBucket, quotaBefore, 
     }
   }
 
-  if (expectedDelta < -0.0001 || foreignDrainedBucket) {
-    return {
-      ok: false,
-      verified: false,
-      error: 'AGY_GROUP_DELTA_MISMATCH',
-      requestedModel: normModel,
-      bucket: expectedBucket,
-      foreignDrainedBucket,
-      quotaBefore: beforeVal,
-      quotaAfter: afterVal,
-      delta: expectedDelta,
-      identityProof: 'mismatch',
-    };
-  }
+  const figures = { quotaBefore: beforeVal, quotaAfter: afterVal, delta: expectedDelta };
 
+  // Another quota group drained during the run: the evidence points away from
+  // the requested model, whatever the receipt says.
+  if (foreignDrainedBucket) {
+    return refuse('AGY_GROUP_DELTA_MISMATCH', { foreignDrainedBucket, ...figures });
+  }
+  // No drop (rounding hides small runs; a rise is a window reset): no group evidence.
   if (expectedDelta <= 0.0001) {
-    return {
-      ok: false,
-      verified: false,
-      error: 'AGY_GROUP_DELTA_UNOBSERVED',
-      requestedModel: normModel,
-      bucket: expectedBucket,
-      quotaBefore: beforeVal,
-      quotaAfter: afterVal,
-      delta: expectedDelta,
-      identityProof: 'unverified',
-    };
+    return modelVerified
+      ? { ...receiptOnly(), ...figures }
+      : refuse('AGY_GROUP_DELTA_UNOBSERVED', {
+          evidenceKind: 'requested+group-unchanged',
+          ...figures,
+        });
   }
-
   return {
+    ...base,
     ok: true,
-    verified: true,
-    requestedModel: normModel,
-    bucket: expectedBucket,
-    quotaBefore: beforeVal,
-    quotaAfter: afterVal,
-    delta: expectedDelta,
-    identityProof: 'requested+group-delta',
+    verified: modelVerified,
+    modelVerified,
+    groupVerified: true,
+    servedModel,
+    evidenceKind: modelVerified ? 'receipt+group-delta' : 'requested+group-delta',
+    ...figures,
   };
 }
 
@@ -335,5 +390,6 @@ module.exports = {
   modelsFromGroup,
   discoverAgyPoolMembers,
   buildAgyMemberCandidate,
+  readAccountQuotaSnapshot,
   verifyAgyServedIdentity,
 };
