@@ -44,15 +44,6 @@ function routeScopeOf(value) {
  * own answer, and never the host-owned launch-results directory a worker
  * cannot write.
  */
-function usageReportFile(args, deps, item, now) {
-  const explicit = (args && args['usage-report']) || (deps && deps.usageFile);
-  if (typeof explicit === 'string' && explicit) return explicit;
-  const dir = (args && args['usage-dir']) || (deps && deps.usageDir);
-  if (typeof dir !== 'string' || !dir) return null;
-  const stem = String((item && item.workItemId) || 'session').replace(/[^A-Za-z0-9._-]/g, '-');
-  return path.join(dir, stem + '-' + (now || Date.now()) + '.json');
-}
-
 function sevenFields(candidate) {
   return {
     harness: candidate.harness || '',
@@ -75,27 +66,6 @@ function quotaSnapshot(candidate) {
   };
 }
 
-function candidateFromDecision(decision, key) {
-  return (decision.candidates || []).find((c) => c.offeringId === key) || null;
-}
-
-function simulatedFailureFor(candidate) {
-  const c = candidate || {};
-  return {
-    exitCode: 1,
-    httpStatus: 503,
-    body:
-      'HTTP 503 from gateway: [402]: upstream ' +
-      (c.upstream || 'unknown') +
-      ' budget exhausted; reset after 1h 00m',
-    stderr:
-      'HTTP 503 from gateway: [402]: upstream ' +
-      (c.upstream || 'unknown') +
-      ' budget exhausted; reset after 1h 00m',
-    accountId: c.accountId || '*',
-  };
-}
-
 function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classification, avoidDomain) {
   return applyFailureBlocks(
     candidates,
@@ -105,27 +75,6 @@ function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classificati
     avoidDomain,
     DRY_RUN_BLOCK_CODES
   );
-}
-
-function candidateContextWindow(candidate) {
-  const caps = candidate && candidate.capabilities;
-  return (
-    candidate &&
-    (candidate.contextWindow ||
-      candidate.context_window ||
-      (caps && (caps.contextWindow || caps.context_window || caps.contextTokens)))
-  );
-}
-
-function applyHarnessVerification(candidates) {
-  const { contextRefusal } = require('../harness');
-  for (const c of candidates || []) {
-    const reason = contextRefusal(c.harness, candidateContextWindow(c), { allowUnknown: true });
-    if (!reason) continue;
-    c.blocked = true;
-    c.blockReason = reason;
-    c.blockScope = 'model';
-  }
 }
 
 function buildDryRunLog(parts) {
@@ -555,16 +504,6 @@ function coordinatorDispatchCommand(args, deps) {
   }
 }
 
-function resolveExecuteBase({ targetWorktree, args = {}, deps = {}, provenance } = {}) {
-  // TASK-AI-171 R2: delegate to the one shared execute-target module.
-  const { resolveExecuteTarget } = require('../execute-target');
-  return resolveExecuteTarget(args, {
-    ...deps,
-    treePath: deps?.treePath || targetWorktree || undefined,
-    provenance: provenance || deps?.provenance || args?.provenance,
-  });
-}
-
 module.exports = {
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,
@@ -573,19 +512,13 @@ module.exports = {
   assembleForDispatch,
   readCheckpoint,
   writeJsonFile,
-  usageReportFile,
   sevenFields,
   quotaSnapshot,
-  candidateFromDecision,
-  simulatedFailureFor,
   sameFailureDomain,
   applyFailureBlocks,
   applyDryRunBlocks,
-  candidateContextWindow,
-  applyHarnessVerification,
   buildDryRunLog,
   resolveFixturePaths,
   dispatchProfileCommand,
   coordinatorDispatchCommand,
-  resolveExecuteBase,
 };

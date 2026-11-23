@@ -75,26 +75,14 @@ const {
 const {
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,
-  mergeEvidenceAccounts,
-  routeScopeOf,
   assembleForDispatch,
   readCheckpoint,
   writeJsonFile,
-  usageReportFile,
-  sevenFields,
-  quotaSnapshot,
-  candidateFromDecision,
-  simulatedFailureFor,
   sameFailureDomain,
   applyFailureBlocks,
   applyDryRunBlocks,
-  candidateContextWindow,
-  applyHarnessVerification,
   buildDryRunLog,
-  resolveFixturePaths,
   dispatchProfileCommand,
-  coordinatorDispatchCommand,
-  resolveExecuteBase,
 } = require('./cli/dispatch-helpers');
 const {
   reviewCommand,
@@ -398,7 +386,6 @@ function main(argv = process.argv.slice(2), deps = {}) {
 }
 
 module.exports = {
-  resolveExecuteBase,
   parseArgs,
   main,
   // The Controller seams the live loop consumes rather than reimplements: the
