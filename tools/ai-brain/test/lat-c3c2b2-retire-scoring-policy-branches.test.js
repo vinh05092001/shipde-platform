@@ -1,8 +1,8 @@
 'use strict';
 
 // Lat C-3c-2b-ii: nothing produces assessment.scoringPolicy since the policy module was
-// retired, so ranking.js and routing.js no longer read it. Residual: cli/dispatch-helpers.js
-// buildDryRunLog still copies scoringPolicyStatus and is retired separately (C-3c-2b-iii).
+// retired, so ranking.js and routing.js no longer read it. C-3c-2b-iii closed the last
+// residual (the dry-run log in cli/dispatch-helpers.js).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -17,9 +17,9 @@ const RETIRED = [
   'profile-measurements',
 ];
 
-test('Lat C-3c-2b-ii: ranking.js and routing.js no longer read the retired scoring policy', () => {
+test('Lat C-3c-2b-ii/iii: ranking, routing and dispatch helpers no longer read the retired scoring policy', () => {
   const offenders = [];
-  for (const file of ['ranking.js', 'routing.js']) {
+  for (const file of ['ranking.js', 'routing.js', 'cli/dispatch-helpers.js']) {
     const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
     for (const name of RETIRED) if (src.includes(name)) offenders.push(file + ': ' + name);
   }

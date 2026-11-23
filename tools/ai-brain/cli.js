@@ -80,8 +80,6 @@ const {
   writeJsonFile,
   sameFailureDomain,
   applyFailureBlocks,
-  applyDryRunBlocks,
-  buildDryRunLog,
 } = require('./cli/dispatch-helpers');
 const {
   reviewCommand,
@@ -391,10 +389,8 @@ module.exports = {
   // ranking decision, the failure-domain rule, the atomic checkpoint store.
   readCheckpoint,
   writeJsonFile,
-  buildDryRunLog,
   sameFailureDomain,
   applyFailureBlocks,
-  applyDryRunBlocks,
   DRY_RUN_BLOCK_CODES,
   LIVE_BLOCK_CODES,
   // TASK-AI-70: one candidate assembly for both dispatch paths and for the

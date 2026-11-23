@@ -8,7 +8,6 @@ const path = require('path');
 const seed = require('../seed-accounts');
 const benchmarks = require('../benchmarks');
 const routing = require('../routing');
-const cli = require('../cli');
 const ranking = require('../ranking');
 const refreshQuota = require('../refresh-quota');
 const routeHealth = require('../route-health');
@@ -85,28 +84,6 @@ describe('TASK-AI-142 Audit Repairs: Score display shows "chưa rõ", not 100', 
     assert.match(ranked.reason || '', /score chưa rõ/);
     assert.ok(!ranked.reason.includes('weights null'));
     assert.match(ranked.reason, /weights jev-score/);
-
-    // Dry-run log formatting
-    const logData = cli.buildDryRunLog({
-      item: { workItemId: 'TASK-AUDIT-1' },
-      now: Date.now(),
-      annotated: [ranked.ranking[0]],
-      candidatesApi: require('../candidates'),
-      decision: {
-        chosen: ranked.chosen,
-        reason: ranked.reason,
-        candidates: ranked.ranking.map((c) => ({
-          offeringId: c.candidateKey,
-          score: c.score,
-          scoreBreakdown: c.scoreBreakdown,
-          headroom: 'open',
-        })),
-        rejected: [],
-      },
-    });
-
-    assert.equal(logData.candidates[0].score, 'chưa rõ');
-    assert.equal(logData.ranking.ordered[0].score, 'chưa rõ');
   });
 });
 
