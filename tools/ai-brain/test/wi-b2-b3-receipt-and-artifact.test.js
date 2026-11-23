@@ -65,14 +65,17 @@ test('WI-B1 P2 follow-up: buildMemberCandidate and buildAgyMemberCandidate apply
 });
 
 test('WI-B2: verifyAgyServedIdentity reports group evidence only, never model identity, and fails closed on foreign drain or missing proof', () => {
-  const before = makeQuotaGroups({ gemini: 1.0, claude: 0.8, argon: 1.0 });
-  const afterMatched = makeQuotaGroups({ gemini: 1.0, claude: 0.76, argon: 1.0 });
+  // Snapshots at 1900 and 3100 bracket a run from 2000 to 3000.
+  const before = { ...makeQuotaGroups({ gemini: 1.0, claude: 0.8, argon: 1.0 }), at: 1900 };
+  const afterMatched = { ...makeQuotaGroups({ gemini: 1.0, claude: 0.76, argon: 1.0 }), at: 3100 };
   const receipt = { accountId: 'agy03', jobId: 'agy03/run-1' };
   const common = {
     requestedModel: 'claude-opus-5.5',
     expectedBucket: '3p',
     receipt,
     accountId: 'agy03',
+    runStartedAt: 2000,
+    runEndedAt: 3000,
   };
 
   const okRes = agyPoolCandidates.verifyAgyServedIdentity({
@@ -92,7 +95,7 @@ test('WI-B2: verifyAgyServedIdentity reports group evidence only, never model id
   const unchanged = agyPoolCandidates.verifyAgyServedIdentity({
     ...common,
     quotaBefore: before,
-    quotaAfter: before,
+    quotaAfter: { ...before, at: 3100 },
   });
   assert.equal(unchanged.ok, false);
   assert.equal(unchanged.verified, false);
@@ -100,7 +103,10 @@ test('WI-B2: verifyAgyServedIdentity reports group evidence only, never model id
   assert.equal(unchanged.evidenceKind, 'requested+group-unchanged');
 
   // Foreign bucket drained (even when expected bucket also drained) -> fail-closed mismatch
-  const afterBothDrained = makeQuotaGroups({ gemini: 0.92, claude: 0.76, argon: 1.0 });
+  const afterBothDrained = {
+    ...makeQuotaGroups({ gemini: 0.92, claude: 0.76, argon: 1.0 }),
+    at: 3100,
+  };
   const noisy = agyPoolCandidates.verifyAgyServedIdentity({
     ...common,
     quotaBefore: before,

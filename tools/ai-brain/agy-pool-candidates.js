@@ -313,21 +313,19 @@ function verifyAgyServedIdentity({
   if (!Array.isArray(groupsBefore) || !Array.isArray(groupsAfter)) {
     return modelVerified ? receiptOnly() : refuse('AGY_QUOTA_PROOF_MISSING');
   }
-  // The snapshots must bracket the whole run: before at or before its start,
-  // after at or after its end. Otherwise the delta may belong to another run.
-  const beforeAt = quotaBefore && quotaBefore.at;
-  const afterAt = quotaAfter && quotaAfter.at;
-  const endedAt = Number.isFinite(runEndedAt) ? runEndedAt : runStartedAt;
-  if (
-    (Number.isFinite(runStartedAt) || Number.isFinite(runEndedAt)) &&
-    !(
-      Number.isFinite(runStartedAt) &&
-      endedAt >= runStartedAt &&
-      Number.isFinite(afterAt) &&
-      afterAt >= endedAt &&
-      (!Number.isFinite(beforeAt) || beforeAt <= runStartedAt)
-    )
-  ) {
+  // Group evidence needs all four times, in order: the before-snapshot at or
+  // before the run start, the after-snapshot at or after the run end. A missing
+  // time means the delta cannot be tied to this run.
+  const times = [
+    quotaBefore && quotaBefore.at,
+    runStartedAt,
+    runEndedAt,
+    quotaAfter && quotaAfter.at,
+  ];
+  if (!times.every(Number.isFinite)) {
+    return modelVerified ? receiptOnly() : refuse('AGY_QUOTA_TIMING_MISSING');
+  }
+  if (!times.every((t, i) => i === 0 || times[i - 1] <= t)) {
     return modelVerified ? receiptOnly() : refuse('AGY_QUOTA_SNAPSHOT_STALE');
   }
 
