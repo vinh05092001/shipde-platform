@@ -560,6 +560,11 @@
       "contextWindow": 128000,
       "maxOutputTokens": 8192
     },
+    "agyPoolShortlistEnabled": false,
+    "agyPool": {
+      "minHeadroom": 0.15,
+      "openHeadroom": 0.4
+    },
     "fullRouteScan": {
       "timeoutMs": 45000,
       "maxTokens": 5,
