@@ -1082,21 +1082,32 @@ function getIsolatedLauncher() {
         const useFullWireId = isRouter && routerProvider && providerId !== routerProvider;
         const wireId = useFullWireId ? pinnedModel : relativeId;
 
-        const outputLimit =
-          (selectedSource.modelMeta && selectedSource.modelMeta[pinnedModel]?.limit?.output) ||
-          (selectedSource.options && selectedSource.options.max_tokens) ||
-          4096;
-        const contextLimit =
-          (selectedSource.modelMeta && selectedSource.modelMeta[pinnedModel]?.limit?.context) ||
-          32000;
+        let dispatchConfig = null;
+        try {
+          dispatchConfig =
+            typeof sourcesModule.loadSources === 'function'
+              ? sourcesModule.loadSources()?.dispatch || null
+              : null;
+        } catch {}
+        const resolvedLimits = resolveOpencodeModelLimits({
+          selectedSource,
+          pinnedModel,
+          isRouter,
+          opts,
+          dispatchConfig,
+        });
 
         const modelEntry = {
           id: wireId,
           name: relativeId,
-          limit: {
-            context: contextLimit,
-            output: outputLimit,
-          },
+          ...(resolvedLimits.context || resolvedLimits.output
+            ? {
+                limit: {
+                  ...(resolvedLimits.context ? { context: resolvedLimits.context } : {}),
+                  ...(resolvedLimits.output ? { output: resolvedLimits.output } : {}),
+                },
+              }
+            : {}),
         };
         modelsMap[pinnedModel] = modelEntry;
         if (relativeId && relativeId !== pinnedModel) {
@@ -1817,7 +1828,38 @@ function enforceWriterCommitScope(launchResult, opts, workerRoot) {
   return launchResult;
 }
 
+function positiveInt(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
+
+function resolveOpencodeModelLimits({
+  selectedSource,
+  pinnedModel,
+  isRouter,
+  opts,
+  dispatchConfig,
+}) {
+  const metaLimit =
+    selectedSource && selectedSource.modelMeta && selectedSource.modelMeta[pinnedModel]?.limit;
+  const comboLimits =
+    isRouter && dispatchConfig ? dispatchConfig.nineRouterWriterComboLimits : null;
+  const context =
+    positiveInt(metaLimit && metaLimit.context) ||
+    positiveInt(opts && opts.contextWindow) ||
+    positiveInt(comboLimits && comboLimits.contextWindow) ||
+    null;
+  const output =
+    positiveInt(metaLimit && metaLimit.output) ||
+    positiveInt(opts && opts.maxOutputTokens) ||
+    positiveInt(comboLimits && comboLimits.maxOutputTokens) ||
+    positiveInt(selectedSource && selectedSource.options && selectedSource.options.max_tokens) ||
+    null;
+  return { context, output };
+}
+
 module.exports = {
+  resolveOpencodeModelLimits,
   enforceWriterCommitScope,
   finalizeIsolatedLaunchResult,
   resolveIsolatedRtkDecision,

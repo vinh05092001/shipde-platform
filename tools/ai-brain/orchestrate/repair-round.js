@@ -212,6 +212,8 @@ function repairRound(
       allowedPaths: Array.isArray(item && item.allowedPaths)
         ? require('../writer-scope').effectiveWriterScope(item)
         : null,
+      contextWindow: candidate && candidate.contextWindow ? candidate.contextWindow : null,
+      maxOutputTokens: candidate && candidate.maxOutputTokens ? candidate.maxOutputTokens : null,
       checkpoint: o.checkpointFile || null,
       title: planned.id,
       labels: { workItem: planned.id, role: roleOf(planned), repairOf: item.id },
