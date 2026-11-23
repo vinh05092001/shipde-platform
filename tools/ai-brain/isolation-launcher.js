@@ -277,7 +277,12 @@ function getIsolatedLauncher() {
           if (dirtyPaths.some(isSecretPath)) {
             throw new Error('WORKER_COMMIT_REFUSED: dirty tree contains sensitive files');
           }
-          let allowedPaths = opts.allowedPaths || (opts.item && opts.item.allowedPaths);
+          const writerScope = require('./writer-scope');
+          let allowedPaths = opts.allowedPaths
+            ? opts.allowedPaths
+            : opts.item
+              ? writerScope.effectiveWriterScope(opts.item)
+              : null;
           if (!allowedPaths && opts.workItemId) {
             const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
             const itemPath = path.join(
@@ -291,7 +296,12 @@ function getIsolatedLauncher() {
               try {
                 const text = fs.readFileSync(itemPath, 'utf8');
                 const intake = require('./intake');
-                allowedPaths = intake.deriveAllowedPaths(text);
+                const parsedAllowed = intake.deriveAllowedPaths(text);
+                const parsedWriter = intake.deriveWriterPaths(text);
+                allowedPaths = writerScope.effectiveWriterScope({
+                  allowedPaths: parsedAllowed,
+                  writerPaths: parsedWriter,
+                });
               } catch (err) {
                 throw new Error(
                   'WORKER_COMMIT_REFUSED: failed to read allowed paths from ' +
@@ -1550,6 +1560,39 @@ function getIsolatedLauncher() {
           launchResult.retainedHeadSha = headSha;
         }
       } catch {}
+    }
+    if (
+      opts.commitFileOnlyWriter === true &&
+      !launchResult.localFailure &&
+      launchResult.exitCode === 0 &&
+      launchResult.workerSha &&
+      opts.baseSha &&
+      launchResult.workerSha !== opts.baseSha &&
+      Array.isArray(opts.allowedPaths) &&
+      opts.allowedPaths.length > 0 &&
+      fs.existsSync(workerRoot) &&
+      fs.existsSync(path.join(workerRoot, '.git'))
+    ) {
+      const diffCheck = require('./writer-scope').checkWriterCommitDiff({
+        workerRoot,
+        baseSha: opts.baseSha,
+        headSha: launchResult.workerSha,
+        allowedPaths: opts.allowedPaths,
+      });
+      if (!diffCheck.ok) {
+        launchResult.exitCode = 1;
+        launchResult.localFailure = diffCheck.code;
+        launchResult.failureReason =
+          diffCheck.code +
+          (diffCheck.offending && diffCheck.offending.length
+            ? ': ' + diffCheck.offending.join(', ')
+            : '');
+        launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
+          .filter(Boolean)
+          .join('\n');
+        delete launchResult.workerSha;
+        delete launchResult.retainedHeadSha;
+      }
     }
     return launchResult;
   };

@@ -866,6 +866,7 @@ function repairSpec(item, findings, round) {
     role: roleOf(item),
     files: [],
     allowedPaths: (item.allowedPaths || []).slice(),
+    ...(item.writerPaths !== undefined ? { writerPaths: item.writerPaths.slice() } : {}),
     dependencies: [item.id],
     acceptanceCriteria: repairFindings.map(
       (f) => (f && f.id ? f.id : 'finding') + ': ' + formatFindingDetail(f)

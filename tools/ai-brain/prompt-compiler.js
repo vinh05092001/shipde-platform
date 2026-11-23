@@ -33,6 +33,10 @@ const TOKEN_DISCIPLINE =
 const ISOLATED_WORKER_VERIFICATION_NOTE =
   'You can now run pnpm lint, pnpm typecheck, pnpm format:check, prettier --write on your own files, and the focused tests. API supertests skip without a database (CI is the evidence).';
 
+const ISOLATED_WORKER_ENV_AND_SKILL_NOTE =
+  'Worker shell: Windows PowerShell (do not run bash-only commands like ls -la or grep; use PowerShell cmdlets or the built-in read/grep/edit/write tools). ' +
+  'Skill guidance: all required ShipDe skill instructions are already inlined below in this prompt — do NOT invoke any external skill tool (such as writing-plans or test-driven-development); proceed directly to editing the target files and running the verification tests.';
+
 /**
  * The item's role, resolved the same way orchestrate.js resolves it: the
  * roleRequirement the plan pinned, else the item role, else the default
@@ -250,7 +254,7 @@ function compilePrompt(item, ctx) {
   lines.push('Role requirement: ' + JSON.stringify(i.roleRequirement || {}));
 
   const isGoalItem = typeof i.id === 'string' && i.id.toUpperCase().startsWith('GOAL-');
-  const allowed = (i.allowedPaths || []).slice();
+  const allowed = require('./writer-scope').effectiveWriterScope(i).slice();
   if (isGoalItem) {
     const regRel = 'docs/product-spec/docs/10-ai-collaboration/FEATURE-DELIVERY-REGISTER.csv';
     const specRel = `docs/product-spec/work-items/${i.id}.md`;
@@ -289,7 +293,9 @@ function compilePrompt(item, ctx) {
   }
   if (c.focusedTestsOnly) {
     lines.push(
-      "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
+      c.isolatedWorker
+        ? 'Run only focused tests for this change (e.g. node --test <file>). Keep only the summary and failure lines; do not run or print the full brain suite (the Controller runs that host-side gate).'
+        : "Run only focused tests for this change. Print concise test output only: node --test ... 2>&1 | grep -E '^ℹ (pass|fail)|^✖ ' (or an equivalent concise reporter). Do not run or print the full brain suite; the Controller runs that host-side gate and returns failing test names only."
     );
   }
   lines.push(TOKEN_DISCIPLINE);
@@ -334,7 +340,10 @@ function compilePrompt(item, ctx) {
     lines.push('Focused context pack: read ' + c.contextPack + ' before exploring files.');
     lines.push('Use the pack for orientation and read only additional files under Allowed files.');
   }
-  if (c.isolatedWorker) lines.push(ISOLATED_WORKER_VERIFICATION_NOTE);
+  if (c.isolatedWorker) {
+    lines.push(ISOLATED_WORKER_VERIFICATION_NOTE);
+    lines.push(ISOLATED_WORKER_ENV_AND_SKILL_NOTE);
+  }
   lines.push('Evidence to submit: test output, the diff, and the acceptance matrix.');
   lines.push('Checkpoint: ' + (i.checkpointPolicy || 'resume-by-work-item'));
   lines.push(
