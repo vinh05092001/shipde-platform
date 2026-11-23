@@ -109,6 +109,10 @@ function postJson(url, body, headers, options) {
         port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
         path: parsed.pathname + parsed.search,
         method: 'POST',
+        // A fresh socket per request: the Controller blocks its event loop
+        // during spawnSync worker runs, so a pooled keep-alive socket may have
+        // been closed by the server and would fail with ECONNRESET.
+        agent: false,
         timeout: (options && options.timeoutMs) || DEFAULT_HTTP_TIMEOUT_MS,
         headers: Object.assign(
           {
