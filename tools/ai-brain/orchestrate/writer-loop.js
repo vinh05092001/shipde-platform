@@ -102,8 +102,10 @@ function resolveLauncher(o, isolatedLauncher) {
       // below are a second guard on that, not a replacement for it.
       // The pool reports no served model, so quota groups are the only run
       // evidence. Evidence that contradicts the request refuses the run; a
-      // writer may continue on group evidence (F2 still checks its diff), but a
-      // reviewer needs the served model itself to prove family independence.
+      // writer may continue on group evidence only after its commit passes the
+      // writer-scope diff check below (the pool bypasses the isolated launcher,
+      // so that check is not applied anywhere else), and a reviewer needs the
+      // served model itself to prove family independence.
       const scope = String(job.quotaScope || '');
       const identityProof = agyCandidates.verifyAgyServedIdentity({
         requestedModel: job.model,
@@ -134,6 +136,31 @@ function resolveLauncher(o, isolatedLauncher) {
           : null;
       if (refusal) {
         return { ...launched, exitCode: 1, stderr: refusal, refusal, identityProof };
+      }
+      if (!job.isReview && WRITER_ROLE.test(job.labels?.role || '')) {
+        const scoped = verifyAgyWriterCommit(job, o);
+        if (!scoped.ok) {
+          const reason =
+            scoped.code +
+            (scoped.offending && scoped.offending.length
+              ? ': ' + scoped.offending.map((f) => (f && f.path) || String(f)).join(', ')
+              : scoped.detail
+                ? ': ' + scoped.detail
+                : '');
+          const refused = {
+            ...launched,
+            exitCode: 1,
+            localFailure: scoped.code,
+            refusal: reason,
+            failureReason: reason,
+            stderr: [launched.stderr, reason].filter(Boolean).join('\n'),
+            identityProof,
+          };
+          delete refused.workerSha;
+          delete refused.retainedHeadSha;
+          return refused;
+        }
+        return { ...launched, identityProof, workerSha: scoped.headSha };
       }
       return { ...launched, identityProof };
     }
@@ -395,6 +422,56 @@ function runVerificationCommand(item, options) {
  * Hardened git per PR #184/#187/#189: never consults worker config, copies sanitized objects,
  * configures safe line endings and filemode, and verifies HEAD matches targetSha via hardened rev-parse.
  */
+
+// The roles whose commit is a writer commit; the isolated launcher uses the same rule.
+const WRITER_ROLE = /^author(?:\.|$)|^(?:writer|repair)$/;
+
+/**
+ * Writer-scope check for an agy-pool writer, which runs outside the isolated
+ * launcher. The root, base and head all come from the job the Controller bound
+ * to this run: a missing or unreadable one refuses, and nothing falls back to
+ * the Controller's own checkout or HEAD.
+ */
+function verifyAgyWriterCommit(job, options) {
+  const root = job.workerRoot || job.cwd || null;
+  if (!root || !fs.existsSync(path.join(root, '.git'))) {
+    return { ok: false, code: 'AGY_WRITER_ROOT_UNBOUND' };
+  }
+  const baseSha = typeof job.baseSha === 'string' && SHA_40.test(job.baseSha) ? job.baseSha : null;
+  if (!baseSha) return { ok: false, code: 'AGY_WRITER_BASE_UNBOUND' };
+  const headSha = headShaOf(root, options);
+  if (!headSha) return { ok: false, code: 'AGY_WRITER_HEAD_UNREADABLE' };
+  if (headSha !== baseSha) {
+    const { runHardenedGit } = require('./hardened-git');
+    const anc = runHardenedGit(root, ['merge-base', '--is-ancestor', baseSha, headSha]);
+    if (anc.error || anc.status !== 0) {
+      return { ok: false, code: 'AGY_WRITER_HEAD_NOT_FROM_BASE', detail: headSha };
+    }
+  }
+  const diff = require('../writer-scope').checkWriterCommitDiff({
+    workerRoot: root,
+    baseSha,
+    headSha,
+    writerPaths: job.writerPaths,
+    allowedPaths: job.allowedPaths,
+  });
+  if (!diff.ok) return diff;
+  return { ok: true, headSha, root };
+}
+
+/**
+ * The worker sha of a launch that did not run in an isolated root. An agy-pool
+ * writer's commit is the one its scope check verified in the job's own root, never
+ * that root's later HEAD or the Controller's sha; other harnesses keep their rule.
+ */
+function nonIsolatedWorkerSha(job, res, controllerSha) {
+  if (job && job.harness === 'agy-pool') {
+    const sha = res && !res.localFailure && res.workerSha ? res.workerSha : null;
+    const unverified = !sha && Boolean(res && res.exitCode === 0 && !job.isReview);
+    return { sha, unverified };
+  }
+  return { sha: headShaOf(job && job.cwd) || controllerSha || null, unverified: false };
+}
 
 function headShaOf(cwd, options) {
   if (!cwd || !fs.existsSync(path.join(cwd, '.git'))) return null;
@@ -921,4 +998,5 @@ module.exports = {
   progressOf,
   prepareUsageReport,
   unique,
+  nonIsolatedWorkerSha,
 };

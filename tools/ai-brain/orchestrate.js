@@ -148,6 +148,7 @@ const {
   progressOf,
   prepareUsageReport,
   unique,
+  nonIsolatedWorkerSha,
 } = require('./orchestrate/writer-loop');
 const {
   buildProfile,
@@ -1612,7 +1613,9 @@ async function runOrchestration(goal, opts) {
             workerShaUnverified = true;
           }
         } else {
-          verifiedWorkerSha = headShaOf(job.cwd) || o.sha || null;
+          const nonIsolated = nonIsolatedWorkerSha(job, res, o.sha);
+          verifiedWorkerSha = nonIsolated.sha;
+          workerShaUnverified = nonIsolated.unverified;
         }
 
         persistStep(item.id, 'worker_launch_finished', {
