@@ -310,6 +310,36 @@ async function orchestrateCommand(args, deps = {}) {
   } else if (args['isolated-worker']) {
     tokenBudgets = require('../intake').DEFAULT_TOKEN_BUDGETS;
   }
+  const comboJevSelect =
+    d.comboJevSelect !== undefined
+      ? d.comboJevSelect
+      : !Array.isArray(d.candidates) &&
+        Boolean(args['isolated-worker']) &&
+        typeof d.run !== 'function';
+  const jevSource = sourcesApi.getSource ? sourcesApi.getSource('jev', registry) : null;
+  const jevAsk =
+    typeof d.jevAsk === 'function'
+      ? d.jevAsk
+      : comboJevSelect && jevSource
+        ? require('../jev').buildJevAsk(jevSource, {
+            home: typeof args.home === 'string' ? args.home : d.home,
+            env: d.env || process.env,
+            httpClient: d.jevHttpClient,
+            timeoutMs: d.jevTimeoutMs,
+          })
+        : undefined;
+  const jevMinConfidence =
+    d.jevMinConfidence !== undefined
+      ? d.jevMinConfidence
+      : jevSource && jevSource.minConfidence !== undefined
+        ? jevSource.minConfidence
+        : undefined;
+  const jevMaxOptions =
+    d.jevMaxOptions !== undefined
+      ? d.jevMaxOptions
+      : jevSource && jevSource.maxOptions !== undefined
+        ? jevSource.maxOptions
+        : undefined;
   // The live loop is async (TASK-AI-65): the JEV assessment behind every
   // Controller selection returns a promise. An unhandled rejection would crash
   // silently, so it is caught here and turned into a non-zero exit instead.
@@ -321,18 +351,16 @@ async function orchestrateCommand(args, deps = {}) {
     env: d.env,
     specText: typeof args['spec-text'] === 'string' ? args['spec-text'] : null,
     candidates,
-    comboJevSelect:
-      d.comboJevSelect !== undefined
-        ? d.comboJevSelect
-        : !Array.isArray(d.candidates) &&
-          Boolean(args['isolated-worker']) &&
-          typeof d.run !== 'function',
+    comboJevSelect,
     strictIndependentComboReview:
       d.strictIndependentComboReview !== undefined
         ? d.strictIndependentComboReview
         : !Array.isArray(d.candidates) &&
           Boolean(args['isolated-worker']) &&
           typeof d.run !== 'function',
+    ...(typeof jevAsk === 'function' ? { jevAsk } : {}),
+    ...(jevMinConfidence !== undefined ? { jevMinConfidence } : {}),
+    ...(jevMaxOptions !== undefined ? { jevMaxOptions } : {}),
     accounts: evidenceAccounts,
     registryAccounts,
     registry,

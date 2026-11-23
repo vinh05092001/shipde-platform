@@ -16,7 +16,11 @@ const combo = require('./combo');
 const comboReader = require('./combo-reader');
 const priorsRead = require('./priors-read');
 const jev = require('./jev');
+const sourcesApi = require('./sources');
 const { candidateKey } = require('./discovery/identity');
+
+// Default option cap aligned with JEV's closed-choice contract when sources.json omits maxOptions.
+const DEFAULT_JEV_MAX_OPTIONS = 8;
 
 const EFFORT_RANK = Object.freeze({
   xhigh: 5,
@@ -171,6 +175,49 @@ function deterministicPick(scoredMembers, assessment) {
   return scoredMembers[0];
 }
 
+function resolveJevMaxOptions(options = {}) {
+  const direct = Number(options.maxOptions ?? options.jevMaxOptions);
+  if (Number.isInteger(direct) && direct >= 2) return direct;
+  try {
+    const reg = options.registry || (sourcesApi.loadSources ? sourcesApi.loadSources() : null);
+    const jevSource = sourcesApi.getSource ? sourcesApi.getSource('jev', reg) : null;
+    const configured = Number(jevSource && jevSource.maxOptions);
+    if (Number.isInteger(configured) && configured >= 2) return configured;
+  } catch {}
+  return DEFAULT_JEV_MAX_OPTIONS;
+}
+
+/**
+ * Controller-side shortlist before calling JEV: keeps top-ranked members while
+ * preserving effort diversity (e.g. high/medium/low/default) within `maxOptions`,
+ * without mutating `eligibleMembers` (deterministicPick still sees the full pool).
+ */
+function shortlistForJev(eligibleMembers, maxOptions) {
+  const list = Array.isArray(eligibleMembers) ? eligibleMembers : [];
+  const cap =
+    Number.isInteger(maxOptions) && maxOptions >= 2 ? maxOptions : DEFAULT_JEV_MAX_OPTIONS;
+  if (list.length <= cap) return list.slice();
+  const picked = [];
+  const seenIdx = new Set();
+  const seenEffort = new Set();
+  const addAt = (idx) => {
+    if (idx < 0 || idx >= list.length || seenIdx.has(idx)) return;
+    seenIdx.add(idx);
+    picked.push(idx);
+    seenEffort.add(String(list[idx].effort || 'default').toLowerCase());
+  };
+  // Always keep the top half purely by benchmark rank, then fill distinct efforts, then remaining rank.
+  const topRankSlots = Math.max(2, Math.ceil(cap / 2));
+  for (let i = 0; i < list.length && picked.length < topRankSlots; i += 1) addAt(i);
+  for (let i = 0; i < list.length && picked.length < cap; i += 1) {
+    const eff = String(list[i].effort || 'default').toLowerCase();
+    if (!seenEffort.has(eff)) addAt(i);
+  }
+  for (let i = 0; i < list.length && picked.length < cap; i += 1) addAt(i);
+  picked.sort((a, b) => a - b);
+  return picked.map((idx) => list[idx]);
+}
+
 /**
  * Build a closed JEV question using opaque option IDs (`M0`, `M1`, ...) so
  * provider/account identities are never leaked to JEV (`IDENTITY_PROHIBITED`).
@@ -319,12 +366,20 @@ async function selectComboMember(options = {}) {
   let chosen = null;
   let handledBy = 'fallback';
   let jevOutcome = null;
+  let shortlistCount = eligible.length;
+  let shortlistOptions = [];
 
   if (eligible.length === 1) {
     chosen = eligible[0];
     handledBy = 'single-eligible';
+    shortlistCount = 1;
+    shortlistOptions = ['M0'];
   } else if (typeof options.jevAsk === 'function') {
-    const { question, optionMap } = buildJevComboQuestion(assessment, eligible);
+    const maxOptions = resolveJevMaxOptions(options);
+    const shortlist = shortlistForJev(eligible, maxOptions);
+    shortlistCount = shortlist.length;
+    const { question, optionMap } = buildJevComboQuestion(assessment, shortlist);
+    shortlistOptions = question.options.slice();
     jevOutcome = await jev.advise(question, {
       ask: options.jevAsk,
       minConfidence: options.minConfidence,
@@ -352,6 +407,8 @@ async function selectComboMember(options = {}) {
     selected: chosen,
     candidate: built.candidate || null,
     eligibleCount: eligible.length,
+    shortlistCount,
+    shortlistOptions,
     independentApplied,
     handledBy,
     jevOutcome,
@@ -365,6 +422,8 @@ module.exports = {
   upstreamOfMember,
   filterForIndependence,
   deterministicPick,
+  resolveJevMaxOptions,
+  shortlistForJev,
   buildJevComboQuestion,
   buildMemberCandidate,
   selectComboMember,

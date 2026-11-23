@@ -435,6 +435,7 @@
       },
       "mayWriteCode": false,
       "minConfidence": 0.7,
+      "maxOptions": 8,
       "weightingMinConfidence": 0.5,
       "comment": "Closed choices retain minConfidence. Numeric weighting uses weightingMinConfidence per dimension; low-confidence dimensions fall back to Controller presets."
     },
