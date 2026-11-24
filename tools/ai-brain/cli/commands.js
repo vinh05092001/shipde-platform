@@ -296,33 +296,6 @@ async function orchestrateCommand(args, deps = {}) {
       ? d.listAccounts()
       : require('../accounts').listAccounts();
   const evidenceAccounts = mergeEvidenceAccounts(inputAccounts, registryAccounts);
-  if (d.refreshRoutes === true) {
-    const healthFile =
-      args['route-health'] ||
-      args.routeHealthFile ||
-      d.routeHealthFile ||
-      d['route-health'] ||
-      (args.root
-        ? path.join(args.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-        : null) ||
-      path.join(__dirname, '..', 'data', 'model-route-health.json');
-    const healthStore = require('../route-health').loadStore(healthFile, { allowMissing: true });
-    const routeHealthApi = require('../route-health');
-    const probeRoute =
-      d.probeRoute ||
-      ((model, route, probeOptions) =>
-        routeHealthApi.probeGatewayModel(model, route, Object.assign({ registry }, probeOptions)));
-    await routeHealthApi.recheckBeforeSelection(healthStore, probeRoute, {
-      now: d.now,
-      cap: d.probeCap,
-      timeoutMs: d.probeTimeoutMs,
-      catalogue: readJsonArg(args.catalogue) || [],
-      registry,
-      accounts: inputAccounts,
-    });
-    routeHealthApi.saveStore(healthFile, healthStore);
-    d.refreshRoutes = false;
-  }
   let tokenBudgets = null;
   if (typeof args['token-budgets'] === 'string') {
     try {
