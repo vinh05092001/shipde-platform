@@ -149,29 +149,6 @@ function normalizeAdvice(raw, key) {
   if (!raw || typeof raw !== 'object') return raw;
   if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
   if (raw.answers && typeof raw.answers === 'object') {
-    const dimensions = ['qualityImportance', 'latencyImportance', 'costImportance'];
-    const scores = {};
-    for (const name of dimensions) {
-      const answer = raw.answers[name];
-      if (answer && answer.type === 'score') {
-        scores[name] = {
-          score: answer.score,
-          distribution: answer.distribution || answer.probabilities,
-          confidence: answer.confidence,
-        };
-      }
-    }
-    if ((!key || key === 'weightProfile') && Object.keys(scores).length) {
-      const legacy = raw.answers.weightProfile;
-      return {
-        scores,
-        choice: legacy && legacy.choice,
-        confidence: legacy && legacy.confidence,
-        probabilities: legacy && legacy.probabilities,
-        jevModel: raw.model || null,
-        usage: raw.usage || null,
-      };
-    }
     const answer = key
       ? raw.answers[key]
       : raw.answers.weightProfile ||

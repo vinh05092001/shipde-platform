@@ -18,6 +18,7 @@ const RETIRED = [
   'assess-task-profile',
   'scoreDimensions',
   'JEV_MAX_SCORE_LEVELS',
+  'qualityImportance',
 ];
 
 test('Lat C-3e-2b: the task-profile assessment exports are gone, the live JEV call stays', () => {
