@@ -337,9 +337,14 @@ function loadPool(rootDir, ctx) {
     // an empty discovery leaves the pool to the remaining sources
   }
   const evidenceData = evidence.loadEvidence(path.join(__dirname, 'data', 'evidence'));
-  const assembled = require('./cli').assembleForDispatch(discovery, accounts, registry, {
-    evidenceData,
-  });
+  const assembled = require('./orchestrate/runtime-helpers').assembleForDispatch(
+    discovery,
+    accounts,
+    registry,
+    {
+      evidenceData,
+    }
+  );
   const annotated = candidatesApi.annotateCandidates(assembled, evidenceData, { now: Date.now() });
   return { annotated, evidenceData, accounts, registry };
 }

@@ -6,104 +6,33 @@ const { toPositiveInteger } = require('../source-discovery');
 const { atomicRenameSync } = require('../atomic-rename');
 const { maskEmailsInString } = require('../route-identity-utils');
 const { pick } = require('./reconcile-manifest');
+const {
+  mergeEvidenceAccounts,
+  assembleForDispatch,
+  readCheckpoint,
+  writeJsonFile,
+  applyFailureBlocks,
+  DRY_RUN_BLOCK_CODES,
+  LIVE_BLOCK_CODES,
+} = require('../orchestrate/runtime-helpers');
 
-function mergeEvidenceAccounts(inputAccounts, registryAccounts) {
-  const input = Array.isArray(inputAccounts) ? inputAccounts : [];
-  const registry = Array.isArray(registryAccounts) ? registryAccounts : [];
-  if (registry.length === 0) return input;
-  const map = new Map();
-  const noId = [];
-  const hasCaps = (a) => Boolean(a && a.capabilities && Object.keys(a.capabilities).length > 0);
-
-  for (const acc of input) {
-    if (!acc || typeof acc !== 'object') continue;
-    if (!acc.id) {
-      noId.push(acc);
-      continue;
-    }
-    map.set(acc.id, Object.assign({}, acc));
-  }
-  for (const reg of registry) {
-    if (!reg || typeof reg !== 'object' || !reg.id) continue;
-    if (map.has(reg.id)) {
-      const existing = map.get(reg.id);
-      if (!hasCaps(existing) && hasCaps(reg)) {
-        map.set(reg.id, Object.assign({}, reg, existing, { capabilities: reg.capabilities }));
-      }
-    } else {
-      map.set(reg.id, Object.assign({}, reg));
-    }
-  }
-  return [...Array.from(map.values()), ...noId];
+function sameFailureDomain(candidate, failed, classification) {
+  // mvp-repair.test.js:66-70 evaluates this function via new Function without CommonJS require scope.
+  const failureDomain =
+    typeof require === 'function'
+      ? require('../failure-domain')
+      : process.getBuiltinModule('module').createRequire(`${process.cwd()}/tools/ai-brain/cli.js`)(
+          './failure-domain'
+        );
+  return failureDomain.sameFailureDomain(candidate, failed, classification);
 }
 
-/**
- * Assemble candidates for a live dispatch run.
- *
- * Combines candidates generated from catalogue, openCodeIds, and accounts, with
- * gateway-derived and pool-derived candidates. Merges evidence-only candidates
- * so models seen in evidence history participate in selection.
- *
- * Injected candidates skip inventory generation, but still obey health and scope.
- */
 // The ticket decides whether routes outside the combo may compete. Absent means they may.
 const ROUTE_SCOPES = new Set(['combo-only', 'combo-and-routes']);
 function routeScopeOf(value) {
   if (value === undefined || value === null) return 'combo-and-routes';
   if (!ROUTE_SCOPES.has(value)) throw new Error('ROUTE_SCOPE_INVALID: ' + value);
   return value;
-}
-
-function assembleForDispatch(discoveryCat, accounts, registry, options) {
-  // Combo-only routing: every role calls the single 9router combo; 9router owns
-  // member order, failover and health (operator decision 2026-11-19).
-  const opts = options || {};
-  // A caller may inject a ready candidate pool (tests, replay, a pinned route);
-  // use it verbatim. Otherwise build the single 9router combo candidate.
-  if (Array.isArray(opts.candidates)) return opts.candidates;
-  const { comboCandidate } = require('../combo');
-  const result = comboCandidate({ registry: registry || opts.registry, env: opts.env });
-  return result.candidate ? [result.candidate] : [];
-}
-
-function readCheckpoint(file) {
-  const fs = require('fs');
-  if (!file) return null;
-  // A `.tmp` next to the checkpoint is a writeJsonFile write whose rename was
-  // interrupted: the file itself is complete (a torn write is not valid JSON)
-  // and it is newer than the checkpoint below it. Adopt it and finish the
-  // rename, so a one-step-stale checkpoint cannot silently relaunch work the
-  // decision log already records as launched (TASK-AI-105 P2-4). A torn
-  // half-write is dropped instead: the checkpoint is the last complete state.
-  const tmp = file + '.tmp';
-  if (fs.existsSync(tmp)) {
-    let adopted = null;
-    try {
-      adopted = JSON.parse(fs.readFileSync(tmp, 'utf8'));
-    } catch (err) {
-      adopted = null;
-    }
-    if (adopted && typeof adopted === 'object' && !Array.isArray(adopted)) {
-      try {
-        atomicRenameSync(tmp, file);
-      } catch (err) {}
-      return adopted;
-    }
-    try {
-      fs.unlinkSync(tmp);
-    } catch (err) {}
-  }
-  if (!fs.existsSync(file)) return null;
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
-function writeJsonFile(file, value, options) {
-  const fsApi = (options && options.fs) || require('fs');
-  const path = require('path');
-  fsApi.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.tmp';
-  fsApi.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
-  atomicRenameSync(tmp, file, Object.assign({}, options, { fs: fsApi }));
 }
 
 /**
@@ -166,60 +95,6 @@ function simulatedFailureFor(candidate) {
     accountId: c.accountId || '*',
   };
 }
-
-function sameFailureDomain(candidate, failed, classification) {
-  // mvp-repair.test.js:66-70 evaluates this function via new Function without CommonJS require scope.
-  const failureDomain =
-    typeof require === 'function'
-      ? require('../failure-domain')
-      : process.getBuiltinModule('module').createRequire(`${process.cwd()}/tools/ai-brain/cli.js`)(
-          './failure-domain'
-        );
-  return failureDomain.sameFailureDomain(candidate, failed, classification);
-}
-
-/**
- * Marks a failed candidate, and every candidate in the same failure domain, as
- * blocked, so the next ranking round cannot pick either. One implementation, two
- * vocabularies: the dry run says SIMULATED_*, a live run says the plain reason.
- * The domain rule is the Controller's (sameFailureDomain, driven by
- * failure-classifier.js), never a second, simpler "different gateway" test.
- */
-function applyFailureBlocks(
-  candidates,
-  failedKeys,
-  failedCandidate,
-  classification,
-  avoidDomain,
-  codes
-) {
-  const candidatesApi = require('../candidates');
-  for (const c of candidates) {
-    if (c.blocked) continue;
-    const key = candidatesApi.candidateKey(c);
-    if (failedKeys.has(key)) {
-      c.blocked = true;
-      c.blockReason = codes.failed;
-      c.blockScope = 'candidate';
-      continue;
-    }
-    if (avoidDomain && sameFailureDomain(c, failedCandidate, classification)) {
-      c.blocked = true;
-      c.blockReason = codes.sameDomain;
-      c.blockScope = classification.scope || 'unknown';
-    }
-  }
-}
-
-const DRY_RUN_BLOCK_CODES = Object.freeze({
-  failed: 'SIMULATED_CANDIDATE_FAILED',
-  sameDomain: 'SIMULATED_FAILURE_DOMAIN_AVOIDED',
-});
-
-const LIVE_BLOCK_CODES = Object.freeze({
-  failed: 'CANDIDATE_FAILED',
-  sameDomain: 'FAILURE_DOMAIN_AVOIDED',
-});
 
 function applyDryRunBlocks(candidates, failedKeys, failedCandidate, classification, avoidDomain) {
   return applyFailureBlocks(

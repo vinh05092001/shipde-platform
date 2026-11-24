@@ -4,7 +4,7 @@ const path = require('path');
 const { toPositiveInteger } = require('../source-discovery');
 const { atomicRenameSync } = require('../atomic-rename');
 const { pick } = require('./reconcile-manifest');
-const { mergeEvidenceAccounts } = require('./dispatch-helpers');
+const { mergeEvidenceAccounts } = require('../orchestrate/runtime-helpers');
 
 /**
  * `discovery import` and `discovery candidates` (TASK-AI-70).
