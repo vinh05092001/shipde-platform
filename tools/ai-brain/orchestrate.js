@@ -1449,6 +1449,7 @@ async function runOrchestration(goal, opts) {
         hostGate: Boolean(controllerGate),
         decisionDir: o.decisionDir || null,
         workItemId: item.id,
+        allowedPaths: require('./writer-scope').effectiveWriterScope(item),
       };
 
       // The exercise runner exists in the worker's own tree before the agent
@@ -1778,7 +1779,9 @@ async function runOrchestration(goal, opts) {
         // TASK-AI-188 (#610 review, R3): the host-gate repair also names its
         // run and the item's allowed paths, so it can adopt the writer's work.
         repairJob.runId = logOpts.runId;
-        if (Array.isArray(item && item.allowedPaths)) repairJob.allowedPaths = item.allowedPaths;
+        if (Array.isArray(item && item.allowedPaths)) {
+          repairJob.allowedPaths = require('./writer-scope').effectiveWriterScope(item);
+        }
         let gateRepairResult;
         try {
           gateRepairResult = launcher(repairJob);

@@ -277,7 +277,12 @@ function getIsolatedLauncher() {
           if (dirtyPaths.some(isSecretPath)) {
             throw new Error('WORKER_COMMIT_REFUSED: dirty tree contains sensitive files');
           }
-          let allowedPaths = opts.allowedPaths || (opts.item && opts.item.allowedPaths);
+          const writerScope = require('./writer-scope');
+          let allowedPaths = opts.allowedPaths
+            ? opts.allowedPaths
+            : opts.item
+              ? writerScope.effectiveWriterScope(opts.item)
+              : null;
           if (!allowedPaths && opts.workItemId) {
             const baseId = String(opts.workItemId).replace(/-(repair-\d+|review)$/, '');
             const itemPath = path.join(
@@ -291,7 +296,12 @@ function getIsolatedLauncher() {
               try {
                 const text = fs.readFileSync(itemPath, 'utf8');
                 const intake = require('./intake');
-                allowedPaths = intake.deriveAllowedPaths(text);
+                const parsedAllowed = intake.deriveAllowedPaths(text);
+                const parsedWriter = intake.deriveWriterPaths(text);
+                allowedPaths = writerScope.effectiveWriterScope({
+                  allowedPaths: parsedAllowed,
+                  writerPaths: parsedWriter,
+                });
               } catch (err) {
                 throw new Error(
                   'WORKER_COMMIT_REFUSED: failed to read allowed paths from ' +
@@ -1447,112 +1457,136 @@ function getIsolatedLauncher() {
     } catch (e) {}
 
     const launchResult = readLaunchResult(launchResultPath, completionNonce, hostRes);
-    if (opts.usageFile && !fs.existsSync(opts.usageFile)) {
-      const { writeUsageReportFromHarnessResult } = require('./orchestrate');
-      const job = Object.assign({}, opts, opts.job, {
-        harness: (adapter && adapter.id) || (opts.job && opts.job.harness),
-        usageFile: opts.usageFile || (opts.job && opts.job.usageFile),
-      });
-      delete job.run;
-      writeUsageReportFromHarnessResult(job, launchResult);
-    }
-    enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);
-    if (exerciseResult) {
-      launchResult.exercise = exerciseResult;
-      launchResult.failBefore = exerciseResult.failBefore;
-    }
-    launchResult.carriedOver = carriedOver;
-    launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
-    launchResult.tokenBudget = opts.tokenBudget || null;
-    launchResult.workerRoot = launchResult.workerRoot || workerRoot;
-    launchResult.worktree = launchResult.worktree || workerRoot;
-
-    if (
-      adapter?.id === 'codex' &&
-      opts.commitFileOnlyWriter === true &&
-      launchResult.exitCode === 0 &&
-      !launchResult.timedOut
-    ) {
-      try {
-        launchResult.workerSha = commitNativeWriterChanges({
-          workerRoot,
-          hostRoot: hostCwd,
-          workItemId: opts.workItemId,
-        });
-        launchResult.retainedHeadSha = launchResult.workerSha;
-      } catch {
-        launchResult.exitCode = 1;
-        launchResult.localFailure = 'NATIVE_WRITER_COMMIT_FAILED';
-        launchResult.failureReason = 'NATIVE_WRITER_COMMIT_FAILED';
-        delete launchResult.workerSha;
-        delete launchResult.retainedHeadSha;
-      }
-    }
-
-    // Ensure any modified register row or staged work item spec for a GOAL item
-    // is committed into the workerSha so the PR contract passes
-    if (
-      adapter?.id !== 'codex' &&
-      opts.workItemId &&
-      typeof opts.workItemId === 'string' &&
-      opts.workItemId.toUpperCase().startsWith('GOAL-') &&
-      fs.existsSync(workerRoot) &&
-      fs.existsSync(path.join(workerRoot, '.git'))
-    ) {
-      try {
-        const amended = commitWorkerMetadata({
-          hostRoot: hostCwd,
-          workerRoot,
-          workItemId: opts.workItemId,
-          headSha: opts.headSha,
-        });
-        if (amended) {
-          launchResult.workerSha = amended;
-          launchResult.retainedHeadSha = amended;
-        }
-      } catch (error) {
-        launchResult.exitCode = 1;
-        launchResult.localFailure = 'WORKER_COMMIT_FAILED';
-        launchResult.failureReason = String(error.message);
-        launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
-          .filter(Boolean)
-          .join('\n');
-        delete launchResult.workerSha;
-        delete launchResult.retainedHeadSha;
-      }
-    }
-
-    if (
-      !launchResult.localFailure &&
-      !launchResult.workerSha &&
-      fs.existsSync(workerRoot) &&
-      fs.existsSync(path.join(workerRoot, '.git'))
-    ) {
-      try {
-        const { withCleanGitEnv, safeGit } = require('./supervisor');
-        const headSha = withCleanGitEnv(
-          workerRoot,
-          (safeGitDir) => {
-            const curHeadRes = safeGit(
-              safeGitDir,
-              workerRoot,
-              ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-              20000
-            );
-            return curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout
-              ? curHeadRes.stdout.trim()
-              : null;
-          },
-          { workerWritable: true }
-        );
-        if (headSha) {
-          launchResult.workerSha = headSha;
-          launchResult.retainedHeadSha = headSha;
-        }
-      } catch {}
-    }
-    return launchResult;
+    return finalizeIsolatedLaunchResult({
+      launchResult,
+      adapter,
+      opts,
+      hostCwd,
+      workerRoot,
+      exerciseResult,
+      carriedOver,
+      rtkEnabled,
+      rtkDecision,
+    });
   };
+}
+
+function finalizeIsolatedLaunchResult({
+  launchResult,
+  adapter,
+  opts,
+  hostCwd,
+  workerRoot,
+  exerciseResult = null,
+  carriedOver = false,
+  rtkEnabled = false,
+  rtkDecision = null,
+}) {
+  if (opts.usageFile && !fs.existsSync(opts.usageFile)) {
+    const { writeUsageReportFromHarnessResult } = require('./orchestrate');
+    const job = Object.assign({}, opts, opts.job, {
+      harness: (adapter && adapter.id) || (opts.job && opts.job.harness),
+      usageFile: opts.usageFile || (opts.job && opts.job.usageFile),
+    });
+    delete job.run;
+    writeUsageReportFromHarnessResult(job, launchResult);
+  }
+  enforceTokenBudget(launchResult, opts.tokenBudget, opts.usageFile);
+  if (exerciseResult) {
+    launchResult.exercise = exerciseResult;
+    launchResult.failBefore = exerciseResult.failBefore;
+  }
+  launchResult.carriedOver = carriedOver;
+  launchResult.rtk = { provided: rtkEnabled, reason: rtkDecision };
+  launchResult.tokenBudget = opts.tokenBudget || null;
+  launchResult.workerRoot = launchResult.workerRoot || workerRoot;
+  launchResult.worktree = launchResult.worktree || workerRoot;
+
+  if (
+    adapter?.id === 'codex' &&
+    opts.commitFileOnlyWriter === true &&
+    launchResult.exitCode === 0 &&
+    !launchResult.timedOut
+  ) {
+    try {
+      launchResult.workerSha = commitNativeWriterChanges({
+        workerRoot,
+        hostRoot: hostCwd,
+        workItemId: opts.workItemId,
+      });
+      launchResult.retainedHeadSha = launchResult.workerSha;
+    } catch {
+      launchResult.exitCode = 1;
+      launchResult.localFailure = 'NATIVE_WRITER_COMMIT_FAILED';
+      launchResult.failureReason = 'NATIVE_WRITER_COMMIT_FAILED';
+      delete launchResult.workerSha;
+      delete launchResult.retainedHeadSha;
+    }
+  }
+
+  // Ensure any modified register row or staged work item spec for a GOAL item
+  // is committed into the workerSha so the PR contract passes
+  if (
+    adapter?.id !== 'codex' &&
+    opts.workItemId &&
+    typeof opts.workItemId === 'string' &&
+    opts.workItemId.toUpperCase().startsWith('GOAL-') &&
+    fs.existsSync(workerRoot) &&
+    fs.existsSync(path.join(workerRoot, '.git'))
+  ) {
+    try {
+      const amended = commitWorkerMetadata({
+        hostRoot: hostCwd,
+        workerRoot,
+        workItemId: opts.workItemId,
+        headSha: opts.headSha,
+      });
+      if (amended) {
+        launchResult.workerSha = amended;
+        launchResult.retainedHeadSha = amended;
+      }
+    } catch (error) {
+      launchResult.exitCode = 1;
+      launchResult.localFailure = 'WORKER_COMMIT_FAILED';
+      launchResult.failureReason = String(error.message);
+      launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
+        .filter(Boolean)
+        .join('\n');
+      delete launchResult.workerSha;
+      delete launchResult.retainedHeadSha;
+    }
+  }
+
+  if (
+    !launchResult.localFailure &&
+    !launchResult.workerSha &&
+    fs.existsSync(workerRoot) &&
+    fs.existsSync(path.join(workerRoot, '.git'))
+  ) {
+    try {
+      const { withCleanGitEnv, safeGit } = require('./supervisor');
+      const headSha = withCleanGitEnv(
+        workerRoot,
+        (safeGitDir) => {
+          const curHeadRes = safeGit(
+            safeGitDir,
+            workerRoot,
+            ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+            20000
+          );
+          return curHeadRes && curHeadRes.status === 0 && curHeadRes.stdout
+            ? curHeadRes.stdout.trim()
+            : null;
+        },
+        { workerWritable: true }
+      );
+      if (headSha) {
+        launchResult.workerSha = headSha;
+        launchResult.retainedHeadSha = headSha;
+      }
+    } catch {}
+  }
+  return enforceWriterCommitScope(launchResult, opts, workerRoot);
 }
 
 /**
@@ -1735,7 +1769,49 @@ function resolveIsolatedRtkDecision(workerRoot, rtkConfig, env) {
   };
 }
 
+function enforceWriterCommitScope(launchResult, opts, workerRoot) {
+  if (
+    opts &&
+    opts.commitFileOnlyWriter === true &&
+    launchResult &&
+    !launchResult.localFailure &&
+    launchResult.exitCode === 0 &&
+    launchResult.workerSha &&
+    opts.baseSha &&
+    launchResult.workerSha !== opts.baseSha &&
+    Array.isArray(opts.allowedPaths) &&
+    opts.allowedPaths.length > 0 &&
+    workerRoot &&
+    fs.existsSync(workerRoot) &&
+    fs.existsSync(path.join(workerRoot, '.git'))
+  ) {
+    const diffCheck = require('./writer-scope').checkWriterCommitDiff({
+      workerRoot,
+      baseSha: opts.baseSha,
+      headSha: launchResult.workerSha,
+      allowedPaths: opts.allowedPaths,
+    });
+    if (!diffCheck.ok) {
+      launchResult.exitCode = 1;
+      launchResult.localFailure = diffCheck.code;
+      launchResult.failureReason =
+        diffCheck.code +
+        (diffCheck.offending && diffCheck.offending.length
+          ? ': ' + diffCheck.offending.join(', ')
+          : '');
+      launchResult.stderr = [launchResult.stderr, launchResult.failureReason]
+        .filter(Boolean)
+        .join('\n');
+      delete launchResult.workerSha;
+      delete launchResult.retainedHeadSha;
+    }
+  }
+  return launchResult;
+}
+
 module.exports = {
+  enforceWriterCommitScope,
+  finalizeIsolatedLaunchResult,
   resolveIsolatedRtkDecision,
   retainedRootHasOwnWriterRecord,
   retargetSharedDepsWorkspaceLinks,

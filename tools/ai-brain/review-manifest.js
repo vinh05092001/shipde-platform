@@ -21,6 +21,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 const cp = require('child_process');
 
 const SCHEMA_VERSION = 1;

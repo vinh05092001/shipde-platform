@@ -306,7 +306,8 @@ function reviewLane(
       };
     }
 
-    if (writerKey && reviewerIdentity === writerKey && !reviewerIsCombo) {
+    const strictComboReview = Boolean(o && o.strictIndependentComboReview === true);
+    if (writerKey && reviewerIdentity === writerKey && (!reviewerIsCombo || strictComboReview)) {
       return {
         pass: false,
         sha: null,
@@ -321,7 +322,7 @@ function reviewLane(
         ],
       };
     }
-    if (writerKey && reviewerIdentity === writerKey && reviewerIsCombo) {
+    if (writerKey && reviewerIdentity === writerKey && reviewerIsCombo && !strictComboReview) {
       // Record the operator-accepted residual risk (reviewer == writer combo) so
       // the audit trail shows the self-review was a deliberate combo-only decision.
       decisions.recordDecision(
@@ -865,6 +866,7 @@ function repairSpec(item, findings, round) {
     role: roleOf(item),
     files: [],
     allowedPaths: (item.allowedPaths || []).slice(),
+    ...(item.writerPaths !== undefined ? { writerPaths: item.writerPaths.slice() } : {}),
     dependencies: [item.id],
     acceptanceCriteria: repairFindings.map(
       (f) => (f && f.id ? f.id : 'finding') + ': ' + formatFindingDetail(f)

@@ -73,6 +73,20 @@ const STOP_WORDS = new Set([
   'item',
   'spec',
   'pass',
+  'not',
+  'defined',
+  'exists',
+  'existing',
+  'running',
+  'argument',
+  'unchanged',
+  'next',
+  'uses',
+  'exits',
+  'file',
+  'files',
+  'line',
+  'lines',
 ]);
 
 const EXPLICIT_LOCATION_REGEX =
@@ -186,7 +200,7 @@ function pinpointTarget(item, options = {}, deps = {}) {
   const rootDir = path.resolve(opts.rootDir || (d && d.rootDir) || process.cwd());
   const i = item || {};
 
-  const allowedPaths = Array.isArray(i.allowedPaths) ? i.allowedPaths : [];
+  const allowedPaths = require('./writer-scope').effectiveWriterScope(i);
   const specText = String(i.specText || i.sourceText || '');
   const criteria = Array.isArray(i.acceptanceCriteria) ? i.acceptanceCriteria : [];
   const outcome = String(i.businessOutcome || i.title || '');

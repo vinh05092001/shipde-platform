@@ -219,6 +219,8 @@ function pathLike(token) {
   return /[\\/]/.test(token) || /\.[a-z0-9]+$/i.test(token);
 }
 
+const { parseWriterPaths, validateWriterPaths } = require('./writer-scope');
+
 function deriveAllowedPaths(text) {
   const value = controlValue(text, ['allowed paths', 'allowed files', 'files']);
   let tokens = value ? extractBackticks(value) : [];
@@ -234,6 +236,12 @@ function deriveAllowedPaths(text) {
     paths = extractBackticks(body).filter(pathLike);
   }
   return unique(paths);
+}
+
+function deriveWriterPaths(text) {
+  const value = controlValue(text, ['writer paths', 'writer files']);
+  if (value === null) return undefined;
+  return parseWriterPaths(value);
 }
 
 function deriveAcceptanceCriteria(text) {
@@ -331,6 +339,11 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
   const allowedPaths = deriveAllowedPaths(workItemText);
   if (allowedPaths.length === 0) missing.push('allowedPaths');
 
+  const rawWriterPaths = deriveWriterPaths(workItemText);
+  const writerPaths =
+    rawWriterPaths !== undefined ? validateWriterPaths(rawWriterPaths, allowedPaths) : undefined;
+  const complexityPaths = writerPaths !== undefined ? writerPaths : allowedPaths;
+
   if (!registerItem) missing.push('register row');
   const dependencies = registerItem ? parseDependencies(registerItem.dependencies) : [];
 
@@ -343,7 +356,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     workItemText,
     acceptanceCriteria,
     riskDomains,
-    allowedPaths
+    complexityPaths
   );
   const complexityRank = { standard: 0, large: 1, complex: 2 };
   const normalizedExplicitComplexity = explicitComplexity
@@ -371,6 +384,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     complexity,
     riskDomains,
     allowedPaths: allowedPaths.slice(),
+    ...(writerPaths !== undefined ? { writerPaths: writerPaths.slice() } : {}),
     files: allowedPaths.slice(),
     dependencies: dependencies.slice(),
     acceptanceCriteria: acceptanceCriteria.slice(),
@@ -386,6 +400,7 @@ function deriveSpec({ id, workItemText, registerItem, root, deps }) {
     complexity,
     riskDomains,
     allowedPaths,
+    ...(writerPaths !== undefined ? { writerPaths } : {}),
     dependencies,
     acceptanceCriteria,
     verification,
@@ -1381,6 +1396,7 @@ module.exports = {
   DEFAULT_TOKEN_BUDGETS,
   deriveSpec,
   deriveAllowedPaths,
+  deriveWriterPaths,
   deriveAcceptanceCriteria,
   deriveRiskDomains,
   resolveDependencies,

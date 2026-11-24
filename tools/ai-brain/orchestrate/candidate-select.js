@@ -386,8 +386,21 @@ async function selectCandidateForProfile(
     return true;
   };
 
+  const poolKinds = pool.map((c) => {
+    if (!c || typeof c !== 'object') return 'other';
+    if (comboApi.isComboCandidate(c, o && o.registry)) return 'combo';
+    if (c.comboMember === true) return 'comboMember';
+    return 'other';
+  });
+  const jevGate = shouldUseComboJevSelect(pool, o, comboApi);
   let comboJevRan = false;
-  if (shouldUseComboJevSelect(pool, o, comboApi)) {
+  let jevReadState = null;
+  let jevReadStatus = null;
+  let jevReadError = null;
+  let jevRawCount = 0;
+  let jevEligibleCount = 0;
+  let jevSelReason = null;
+  if (jevGate) {
     comboJevRan = true;
     const role = roleOf(item);
     const writerCandidate = writerKey ? pool.find((c) => c && candidateKey(c) === writerKey) : null;
@@ -447,7 +460,9 @@ async function selectCandidateForProfile(
     }
 
     let rawMembers = Array.isArray(o.comboMembers) ? o.comboMembers : null;
-    if (!rawMembers) {
+    if (rawMembers) {
+      jevReadState = 'PROVIDED';
+    } else {
       const readCombo =
         typeof o.readComboConfig === 'function' ? o.readComboConfig : comboReader.readComboConfig;
       const cfg = comboApi.configuredCombo(o.registry);
@@ -457,8 +472,15 @@ async function selectCandidateForProfile(
         env: o.env,
         fixture: o.comboFixture,
       });
+      jevReadState = (comboConfig && comboConfig.state) || null;
+      jevReadStatus = comboConfig && comboConfig.status !== undefined ? comboConfig.status : null;
+      jevReadError =
+        comboConfig && typeof comboConfig.error === 'string' && comboConfig.error
+          ? comboConfig.error
+          : null;
       rawMembers = Array.isArray(comboConfig && comboConfig.members) ? comboConfig.members : [];
     }
+    jevRawCount = rawMembers.length;
 
     const eligibleMembers = rawMembers
       .filter((m) => typeof m === 'string' && m.trim())
@@ -477,6 +499,7 @@ async function selectCandidateForProfile(
         }
         return true;
       });
+    jevEligibleCount = eligibleMembers.length;
 
     let sel = null;
     if (eligibleMembers.length > 0) {
@@ -494,6 +517,7 @@ async function selectCandidateForProfile(
         minConfidence: o.jevMinConfidence,
         comboName: o.comboName,
       });
+      jevSelReason = (sel && (sel.reason || sel.error)) || null;
     }
 
     if (
@@ -557,18 +581,69 @@ async function selectCandidateForProfile(
     ? 'combo-only routing'
     : 'NO_ELIGIBLE_CANDIDATE: ' +
       ((blocked && blocked.blockReason) || 'combo unavailable or failed');
+  const comboJevFallback = {
+    gate: jevGate,
+    poolKinds,
+    readState: jevReadState,
+    readStatus: jevReadStatus,
+    ...(jevReadError ? { readError: jevReadError } : {}),
+    rawCount: jevRawCount,
+    eligibleCount: jevEligibleCount,
+    ...(jevSelReason ? { selReason: jevSelReason } : {}),
+  };
+
+  // Strict proof lane R2 guard: even when combo-JEV gate did not fire, never
+  // allow a reviewer in strict mode to silently reuse the writer's key or an
+  // opaque combo when an independent reviewer cannot be proven.
+  const currentRole = roleOf(item);
+  if (
+    o &&
+    o.strictIndependentComboReview === true &&
+    currentRole === 'reviewer' &&
+    (!chosenCandidate ||
+      (writerKey && chosen === writerKey) ||
+      comboApi.isComboCandidate(chosenCandidate, o.registry) ||
+      !writerKey)
+  ) {
+    const reason = 'NO_INDEPENDENT_REVIEWER';
+    const rejected = [{ candidateKey: writerKey || chosen || 'combo-jev', reason }];
+    const result = {
+      chosen: null,
+      reason,
+      ranking: [],
+      top3: [],
+      rejected,
+      comboJevFallback,
+    };
+    const decisionRecorded = {
+      stage: decisions.Stage.SELECTED,
+      workItemId: item && item.id,
+      role: currentRole,
+      chosen: null,
+      chosenCandidate: null,
+      reason,
+      rejected,
+      selected: null,
+      chosenKey: null,
+      comboJevFallback,
+    };
+    decisions.recordDecision(decisionRecorded, logOpts);
+    return { chosen: null, reason, result, decisionRecorded };
+  }
+
   const ranking = chosenCandidate ? [{ ...chosenCandidate, candidateKey: chosen }] : [];
-  const result = { chosen, reason, ranking, top3: ranking, rejected: [] };
+  const result = { chosen, reason, ranking, top3: ranking, rejected: [], comboJevFallback };
   const decisionRecorded = {
     stage: decisions.Stage.SELECTED,
     workItemId: item && item.id,
-    role: roleOf(item),
+    role: currentRole,
     chosen,
     chosenCandidate,
     reason,
     rejected: [],
     selected: chosen,
     chosenKey: chosen,
+    comboJevFallback,
   };
   decisions.recordDecision(decisionRecorded, logOpts);
   return { chosen, reason, result, decisionRecorded };

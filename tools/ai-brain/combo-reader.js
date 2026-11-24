@@ -64,6 +64,23 @@ function resolveComboName(opts = {}) {
 const DEFAULT_COMBO_NAME = resolveComboName();
 const CLI_TOKEN_SALT = '9r-cli-auth';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const REQUEST_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ERR_SOCKET_CLOSED',
+  'ABORT_ERR',
+]);
+
+function classifyRequestErrorCode(err) {
+  const code = err && typeof err.code === 'string' ? err.code : '';
+  return REQUEST_ERROR_CODES.has(code) ? code : 'UNKNOWN';
+}
 
 function assertLoopbackHost(host) {
   const norm = String(host || '')
@@ -168,6 +185,7 @@ function httpRequest({
         method: method || 'GET',
         headers: reqHeaders,
         signal,
+        ...(hasInjectedTransport ? {} : { agent: false }),
       },
       (res) => {
         let data = '';
@@ -271,11 +289,12 @@ async function readComboConfig(opts = {}) {
   if (!name || !resolved.host || !resolved.port || !resolved.protocol) {
     throw new Error('CONFIG_MISSING: combo name and 9router endpoint are required');
   }
-  const unavailable = (status) => ({
+  const unavailable = (status, error) => ({
     name,
     members: null,
     state: 'COMBO_CONFIG_UNAVAILABLE',
     status,
+    ...(error ? { error } : {}),
   });
   const cliToken = (opts.loadCliToken || loadCliToken)();
   let res;
@@ -289,8 +308,8 @@ async function readComboConfig(opts = {}) {
       signal: opts.signal,
       headers: cliToken ? { 'x-9r-cli-token': cliToken } : {},
     });
-  } catch {
-    return unavailable('REQUEST_FAILED');
+  } catch (err) {
+    return unavailable('REQUEST_FAILED', classifyRequestErrorCode(err));
   }
   if (res.status !== 200 || !res.data) return unavailable(res.status);
   const combo = (res.data.combos || []).find((c) => c && c.name === name);

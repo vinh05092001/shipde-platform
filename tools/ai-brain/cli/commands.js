@@ -327,6 +327,12 @@ async function orchestrateCommand(args, deps = {}) {
         : !Array.isArray(d.candidates) &&
           Boolean(args['isolated-worker']) &&
           typeof d.run !== 'function',
+    strictIndependentComboReview:
+      d.strictIndependentComboReview !== undefined
+        ? d.strictIndependentComboReview
+        : !Array.isArray(d.candidates) &&
+          Boolean(args['isolated-worker']) &&
+          typeof d.run !== 'function',
     accounts: evidenceAccounts,
     registryAccounts,
     registry,

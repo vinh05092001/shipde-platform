@@ -107,13 +107,19 @@ function plan(goal, opts) {
       const role = String(
         (roleRequirement && roleRequirement.role) || spec.role || 'author.foundation'
       );
+      const allowedPaths = (spec.allowedPaths || spec.files || []).slice();
+      const writerPaths =
+        spec.writerPaths !== undefined && spec.writerPaths !== null
+          ? require('./writer-scope').validateWriterPaths(spec.writerPaths, allowedPaths)
+          : undefined;
       workItems.push({
         id: spec.id,
         title: spec.title || null,
         businessOutcome: spec.businessOutcome || spec.outcome || null,
         roleRequirement,
         dependencies: (spec.dependencies || []).slice(),
-        allowedPaths: (spec.allowedPaths || spec.files || []).slice(),
+        allowedPaths,
+        ...(writerPaths !== undefined ? { writerPaths } : {}),
         fileOwnership: (spec.files || []).slice(),
         acceptanceCriteria: (spec.acceptanceCriteria || []).slice(),
         complexity: spec.complexity || 'standard',

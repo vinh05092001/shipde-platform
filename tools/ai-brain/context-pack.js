@@ -34,9 +34,11 @@ function resolveSource(root, file) {
 }
 
 function collectManifest(items, root, sources, refusals) {
-  const files = new Set();
+  const { effectiveWriterScope } = require('./writer-scope');
+  const priorityFiles = [];
+  const otherFiles = new Set();
   const seen = new Set();
-  function add(candidate) {
+  function add(candidate, priority) {
     const relative = safeRelative(candidate);
     if (!relative || seen.has(relative)) return;
     seen.add(relative);
@@ -47,17 +49,28 @@ function collectManifest(items, root, sources, refusals) {
       refusals.push({ file: relative, reason: error.message });
       return;
     }
-    if (fs.statSync(resolved).isFile()) files.add(relative);
+    if (!fs.statSync(resolved).isFile()) return;
+    if (priority) priorityFiles.push(relative);
+    else otherFiles.add(relative);
   }
   for (const item of items || []) {
-    for (const candidate of [...(item.allowedPaths || []), ...(sources || [])]) add(candidate);
+    const hasWriterPaths = item && item.writerPaths !== undefined && item.writerPaths !== null;
+    if (hasWriterPaths) {
+      const scope = effectiveWriterScope(item);
+      for (const candidate of scope) add(candidate, true);
+      for (const candidate of sources || []) add(candidate, false);
+    } else {
+      for (const candidate of [...(item.allowedPaths || []), ...(sources || [])]) {
+        add(candidate, false);
+      }
+    }
     const specText = String(item.specText || item.sourceText || '');
     const citedPaths = [
       ...specText.matchAll(/(?:^|[\s(])((?:docs|tools)\/[A-Za-z0-9_./-]+\.md)(?::\d+(?:-\d+)?)?/gm),
     ].map((match) => match[1]);
-    for (const candidate of citedPaths) add(candidate);
+    for (const candidate of citedPaths) add(candidate, false);
   }
-  return [...files].sort();
+  return [...priorityFiles, ...[...otherFiles].sort()];
 }
 
 function assertPackSize(files, root, options = {}) {
