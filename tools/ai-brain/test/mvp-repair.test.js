@@ -108,21 +108,39 @@ test('F4: writerFor fails closed on unreadable log', () => {
 });
 
 test('F5: wildcard account is excluded in ranking', () => {
-  const { rankAndRecord } = require('../ranking.js');
+  const { rankForProfile } = require('../routing.js');
   const candidates = [
     {
       source: 'test-src',
+      harness: 'opencode-direct',
       accessPath: 'ap1',
       upstream: 'up1',
       accountId: '*',
       modelId: 'm1',
     },
   ];
-
-  const decision = rankAndRecord(candidates, { workItemId: 'w1', registry: { sources: [] } });
+  const profile = {
+    taskId: 'w1',
+    role: 'author.foundation',
+    proofFloor: 'NONE',
+    requiredCapabilities: [],
+    qualityFloor: null,
+    contextSize: 1,
+    costCeiling: 100,
+  };
+  const decision = rankForProfile(
+    candidates,
+    profile,
+    {},
+    {
+      loadQuotaState: false,
+      useStoredQuota: false,
+      quotaState: {},
+    }
+  );
   assert.equal(decision.chosen, null);
   assert.equal(decision.rejected.length, 1);
-  assert.equal(decision.rejected[0].reason.includes('WILDCARD_ACCOUNT'), true);
+  assert.equal(decision.rejected[0].reasonCode, 'WILDCARD_ACCOUNT');
 });
 
 test('F6: resume preserves original firstChoice', () => {

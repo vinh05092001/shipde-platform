@@ -9,13 +9,11 @@
  *
  * What changed at the live level, and why each seam is the way it is:
  *
- *   - Selection is the Controller's alone (AI-64-P01). The loop calls
- *     ranking.rankAndRecord — the single ranking engine — as a live decision
- *     with the decision log's own options, so the choice is written *before* the
- *     launch instead of being computed and discarded. There is no second
- *     ranking, no second fallback scan and no queue here: the failure-domain
- *     rule is the Controller's sameFailureDomain, driven by the shared failure
- *     classifier.
+ *   - Selection is the Controller's alone (AI-64-P01). The loop selects through
+ *     orchestrate/candidate-select.js (combo members chosen with JEV) and records
+ *     the choice in the decision log *before* the launch. There is no second
+ *     fallback scan and no queue here: the failure-domain rule is the
+ *     Controller's sameFailureDomain, driven by the shared failure classifier.
  *   - A launch is a launch only with evidence (AI-64-P08). The no-op default
  *     launcher is gone. A run handed no launcher, or a launch that produced no
  *     durable session report, is a refusal that writes no `launched` record and

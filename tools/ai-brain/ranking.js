@@ -1,33 +1,17 @@
 'use strict';
 
 /**
- * Ship Dễ — Candidate Ranking (Slices B+C)
+ * Ship Dễ — candidate score parts.
  *
- * Ranks seven-part candidates per AGENTS.md §7:
- *
- *   1. Filter  – credentials absent, upstream blocked, model not in catalogue,
- *                unresolved wildcard → out
- *   2. Narrow  – capability gate (proven-in, proven-out, unproven-with-budget)
- *   3. Score   – evidence, capability, headroom, spread, cost
- *   4. Spread  – penalise over-concentration on one upstream in the live load
- *                and in outstanding reservations
- *   5. Select  – winner or REFUSE (never guess)
- *
- * Rejects are named so the caller can act on the cause: MODEL_NOT_IN_CATALOG,
- * WILDCARD_UNRESOLVED, EXPLORATION_BUDGET_EXHAUSTED, no credential, upstream
- * blocked. A wildcard candidate that the caller cannot resolve to a concrete
- * model is refused, never passed through. A capability that was never proven
- * is never neutral — it is only selectable inside an explicit exploration
- * budget. Cost that is unknown is excluded from the total rather than scored
- * as neutral.
- *
- * The decision is recorded through decisions.js (the single writer for the
- * decision log) and never written directly.
+ * The weighted score of one seven-part candidate (evidence, capability,
+ * headroom, spread, cost) and the headroom and reservation reads it needs.
+ * routing.scoreForProfile uses scoreCandidate when it is given neither
+ * weights nor a profile; selection itself is the Controller's (candidate-select
+ * and routing.rankForProfile). Cost that is unknown is excluded from the total
+ * rather than scored as neutral.
  */
 
-const sourcesApi = require('./sources');
 const evidence = require('./evidence');
-const decisions = require('./decisions');
 const { candidateKey: sevenWayKey } = require('./candidates');
 const quota = require('./quota');
 const quotaStore = require('./quota-store');
@@ -68,8 +52,7 @@ function evidenceScore(candidate) {
  * Capability sub-score. A capability that the candidate is qualified for
  * scores high; a role it is explicitly not qualified for scores zero; a role
  * with no qualification data at all is unproven and scores low (never 50).
- * Unproven selection is separately gated by the exploration budget in
- * rankAndRecord — this is the score, that is the gate.
+ * This is only the score; it gates nothing.
  */
 function capabilityScore(candidate, workKind) {
   try {
@@ -457,327 +440,6 @@ function resolveCatalogue(candidate, cataloguesByPath) {
 }
 
 /**
- * Rank candidates for a work item and record the decision.
- *
- * @param {object[]} candidates – annotated candidates (from annotateCandidates)
- * @param {object} context
- * @param {string} context.workItemId
- * @param {string} context.role – AGENTS.md role id
- * @param {string} [context.kind] – work-item kind for capability filter
- * @param {object} [context.registry] – source registry
- * @param {object} [context.evidenceData]
- * @param {object} [context.decisionOpts] – { dir, now } for decisions.js
- * @param {boolean} [context.dryRun] – if true, do not write decision log
- * @param {object} [context.headrooms] – real quota status readings,
- * keyed by accountId / quotaScope / candidateKey
- * @param {object[]} [context.load] – active sessions:
- * { upstream, accountId, quotaScope }
- * @param {object[]} [context.reservations] – outstanding fair reservations
- * @param {object} [context.cataloguesByPath] – accessPath → catalogue map
- * @param {number} [context.explorationBudget] – how many unproven picks allowed
- * @returns {object} decision record
- */
-function rankAndRecord(candidates, context) {
-  const ctx = context || {};
-  const workItemId = ctx.workItemId || 'unassigned';
-  const role = ctx.role || 'author.foundation';
-  const kind = ctx.kind || role;
-  const registry = ctx.registry;
-  const explorationBudget = Number.isFinite(Number(ctx.explorationBudget))
-    ? Number(ctx.explorationBudget)
-    : 0;
-
-  if (ctx && ctx.reported === undefined && ctx.useStoredQuota !== false) {
-    try {
-      const idRes = readIdentity({ home: ctx.home });
-      ctx.reported = quotaStore.usableReadings(idRes, {
-        home: ctx.home,
-        path: ctx.storePath || ctx.quotaFile,
-        now: ctx.now || Date.now(),
-      }).reported;
-    } catch {
-      ctx.reported = {};
-    }
-  }
-
-  const rejected = [...(ctx.excludedRoutes || [])];
-  const eligible = [];
-
-  // ── 1. Filter ───────────────────────────────────────────────────
-  for (const c of candidates) {
-    // Legacy unverified evidence without concrete account cannot be dispatched.
-    if (c.legacy) {
-      rejected.push({
-        offeringId: sevenWayKey(c),
-        reason: 'UNVERIFIED_LEGACY_EVIDENCE',
-        scope: 'candidate',
-        upstream: c.upstream,
-        modelId: c.modelId,
-        accountId: c.accountId || '*',
-      });
-      continue;
-    }
-
-    // Blocked upstream/candidate → reject.
-    if (c.blocked) {
-      rejected.push({
-        offeringId: sevenWayKey(c),
-        reason: c.blockReason || 'upstream blocked',
-        scope: c.blockScope || 'upstream',
-        upstream: c.upstream,
-        modelId: c.modelId,
-        accountId: c.accountId || '*',
-      });
-      continue;
-    }
-
-    // No credential check: if the source requires a credential and it is
-    // known absent, reject.
-    if (registry) {
-      const src = sourcesApi.getSource(c.source, registry);
-      if (src) {
-        const cred = sourcesApi.credentialPresence(src, ctx.credentialOpts);
-        if (cred.required && cred.present === false) {
-          rejected.push({
-            offeringId: sevenWayKey(c),
-            reason: 'no credential: ' + cred.how,
-            scope: 'source',
-            upstream: c.upstream,
-            modelId: c.modelId,
-            accountId: c.accountId || '*',
-          });
-          continue;
-        }
-      }
-    }
-
-    // Wildcard model placeholder: must be resolved to a concrete model by the
-    // caller (e.g. from the live `opencode models` list). An unresolved
-    // wildcard is a named rejection, never a silent pass-through.
-    if (c.modelId === '*') {
-      if (!c.resolvedModel) {
-        rejected.push({
-          offeringId: sevenWayKey(c),
-          reason: 'WILDCARD_UNRESOLVED',
-          scope: 'model',
-          upstream: c.upstream,
-          modelId: c.modelId,
-          accountId: c.accountId || '*',
-        });
-        continue;
-      }
-      c.modelId = c.resolvedModel;
-    }
-
-    // Catalogue validation: before dispatch, the chosen model id must exist
-    // in the current catalogue FOR THAT ACCESS PATH (and account, when the
-    // catalogue is per-account). A model that has left the catalogue is not
-    // silently substituted — it is rejected with a named cause.
-    const catalogue = resolveCatalogue(c, ctx.cataloguesByPath);
-    if (catalogue) {
-      const inCatalogue =
-        catalogue.has(c.modelId) ||
-        (c.upstream &&
-          c.modelId.startsWith(c.upstream + '/') &&
-          catalogue.has(c.modelId.slice(c.upstream.length + 1)));
-      if (!inCatalogue) {
-        rejected.push({
-          offeringId: sevenWayKey(c),
-          reason: 'MODEL_NOT_IN_CATALOG',
-          scope: 'model',
-          upstream: c.upstream,
-          modelId: c.modelId,
-          accountId: c.accountId || '*',
-        });
-        continue;
-      }
-    } else {
-      // No enumerable catalogue for this access path (like cli) → the
-      // candidate's presence cannot be verified here; keep it, marked unknown.
-      if (!c.status || c.status === 'passed') c.status = 'unknown';
-    }
-
-    // Quota headroom & cooldown check:
-    // Read quota remaining for candidate's account and quotaScope, and active cooldown
-    const headroom = resolveCandidateHeadroom(c, ctx);
-    c.headroomStatus = headroom.status;
-    c.headroomReason = headroom.reason;
-
-    if (headroom.status === 'exhausted') {
-      rejected.push({
-        offeringId: sevenWayKey(c),
-        reason: headroom.reason || 'QUOTA_EXHAUSTED',
-        scope:
-          c.accountId && c.accountId !== '*'
-            ? 'account'
-            : c.quotaScope
-              ? 'quotaScope'
-              : 'candidate',
-        upstream: c.upstream,
-        modelId: c.modelId,
-        accountId: c.accountId || '*',
-      });
-      continue;
-    }
-
-    if (headroom.status === 'cooling') {
-      rejected.push({
-        offeringId: sevenWayKey(c),
-        reason: headroom.reason || 'COOLDOWN_ACTIVE',
-        scope:
-          c.accountId && c.accountId !== '*'
-            ? 'account'
-            : c.quotaScope
-              ? 'quotaScope'
-              : 'candidate',
-        upstream: c.upstream,
-        modelId: c.modelId,
-        accountId: c.accountId || '*',
-      });
-      continue;
-    }
-
-    if (!c.accountId || c.accountId === '*') {
-      rejected.push({
-        offeringId: sevenWayKey(c),
-        reason: 'WILDCARD_ACCOUNT',
-        scope: 'account',
-        upstream: c.upstream,
-        modelId: c.modelId,
-        accountId: '*',
-      });
-      continue;
-    }
-
-    eligible.push(c);
-  }
-
-  // ── 2. Score ───────────────────────────────────────────────────
-  for (const c of eligible) {
-    if (!Number.isFinite(c.quality) && c.quality !== 0) {
-      c.qualityLabel = 'QUALITY_UNKNOWN';
-    } else {
-      delete c.qualityLabel;
-    }
-    const { total, breakdown } = scoreCandidate(c, eligible, kind, ctx);
-    c.score = total;
-    c.scoreBreakdown = breakdown;
-    if (c.qualityLabel) {
-      c.scoreBreakdown.qualityLabel = c.qualityLabel;
-    } else if (c.scoreBreakdown && c.scoreBreakdown.qualityLabel) {
-      delete c.scoreBreakdown.qualityLabel;
-    }
-    c.scoreSource = 'evidence+capability+headroom+spread+cost';
-  }
-
-  // ── 3. Sort by score (descending), scored models before unscored ──
-  eligible.sort((a, b) => {
-    const aKnown = a.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(a.quality);
-    const bKnown = b.qualityLabel !== 'QUALITY_UNKNOWN' && Number.isFinite(b.quality);
-    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-    if (b.score !== a.score) return b.score - a.score;
-    return a.upstream.localeCompare(b.upstream);
-  });
-
-  // ── 4. Capability gate via exploration budget ──────────────────
-  // Unproven capability (qualifiedRoles absent) only gets selected inside an
-  // explicit budget. Each prior unproven selection (priorUntested) counts
-  // against it. Proving is the escape hatch, not the default.
-  // A pinned offering (dispatch --offering) runs through the same gates and is
-  // the only candidate that may win: never a different key.
-  const pinned =
-    typeof ctx.pinnedOffering === 'string' && ctx.pinnedOffering ? ctx.pinnedOffering : null;
-  let winner = null;
-  for (const cand of eligible) {
-    if (pinned && sevenWayKey(cand) !== pinned) continue;
-    const proven =
-      Array.isArray(cand.qualifiedRoles) &&
-      cand.qualifiedRoles.some((r) => r === kind || r === '*');
-    if (!proven) {
-      const prior = Number.isFinite(Number(ctx.priorUntested)) ? Number(ctx.priorUntested) : 0;
-      if (prior + 1 > explorationBudget) {
-        rejected.push({
-          offeringId: sevenWayKey(cand),
-          reason: 'EXPLORATION_BUDGET_EXHAUSTED',
-          scope: 'capability',
-          upstream: cand.upstream,
-          modelId: cand.modelId,
-          accountId: cand.accountId || '*',
-        });
-        continue;
-      }
-    }
-    winner = cand;
-    break;
-  }
-
-  const chosen = winner ? sevenWayKey(winner) : null;
-  let pinnedRefusal = null;
-  if (pinned && !winner) {
-    const rej = rejected.filter((r) => r.offeringId === pinned).pop();
-    pinnedRefusal = rej ? 'OFFERING_NOT_ELIGIBLE: ' + rej.reason : 'OFFERING_NOT_FOUND';
-  }
-  const reason = pinnedRefusal
-    ? 'REFUSED: ' + pinnedRefusal
-    : winner
-      ? 'Score ' +
-        winner.score +
-        ' (evidence=' +
-        winner.scoreBreakdown.evidence +
-        ', capability=' +
-        winner.scoreBreakdown.capability +
-        ', headroom=' +
-        winner.scoreBreakdown.headroom +
-        ', spread=' +
-        winner.scoreBreakdown.spread +
-        ', cost=' +
-        winner.scoreBreakdown.cost +
-        ')'
-      : 'REFUSED: no candidate qualifies';
-
-  const decisionEntry = {
-    ...(pinned ? { pinnedOffering: pinned } : {}),
-    ...(pinnedRefusal ? { reasonCode: pinnedRefusal.split(':')[0] } : {}),
-    stage: decisions.Stage.SELECTED,
-    workItemId,
-    role,
-    candidates: eligible.map((c) => ({
-      offeringId: sevenWayKey(c),
-      harness: c.harness,
-      accessPath: c.accessPath,
-      gateway: c.gateway || '',
-      upstream: c.upstream,
-      accountId: c.accountId || '*',
-      quotaScope: c.quotaScope || '',
-      modelId: c.modelId,
-      score: c.score,
-      scoreBreakdown: c.scoreBreakdown,
-      evidence: (c.evidence || []).length,
-      headroom: c.headroomStatus || 'unknown',
-      sharedQuota: c.sharedQuota || 'unknown',
-    })),
-    rejected,
-    chosen,
-    harness: winner ? winner.harness : null,
-    sessionId: null,
-    branch: null,
-    reason,
-  };
-
-  // Write through decisions.js — the single writer for the log.
-  if (!ctx.dryRun && chosen) {
-    try {
-      decisions.recordDecision(decisionEntry, ctx.decisionOpts);
-    } catch (err) {
-      // An unwritable log is noted, not swallowed.
-      decisionEntry.logError = err.message;
-    }
-  }
-
-  return decisionEntry;
-}
-
-/**
  * Build a Set of model ids from an array, normalising each id by trimming
  * whitespace and stripping trailing carriage returns.
  *
@@ -804,7 +466,6 @@ module.exports = {
   costScore,
   resolveCatalogue,
   scoreCandidate,
-  rankAndRecord,
   extractBaseName,
   buildCatalogueSet,
   getActiveReservations,
