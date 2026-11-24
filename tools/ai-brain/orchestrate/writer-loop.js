@@ -157,6 +157,8 @@ function resolveLauncher(o, isolatedLauncher) {
       gateway: job.gateway || null,
       model: job.model || null,
       upstream: job.upstream || null,
+      contextWindow: job.contextWindow || null,
+      maxOutputTokens: job.maxOutputTokens || null,
       usageFile: job.usageFile || null,
       tokenBudget: job.tokenBudget || null,
       progressTimeoutMs: job.progressTimeoutMs || o.progressTimeoutMs || null,

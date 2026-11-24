@@ -1447,6 +1447,8 @@ async function runOrchestration(goal, opts) {
         decisionDir: o.decisionDir || null,
         workItemId: item.id,
         allowedPaths: require('./writer-scope').effectiveWriterScope(item),
+        contextWindow: candidate && candidate.contextWindow ? candidate.contextWindow : null,
+        maxOutputTokens: candidate && candidate.maxOutputTokens ? candidate.maxOutputTokens : null,
       };
 
       // The exercise runner exists in the worker's own tree before the agent
