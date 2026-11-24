@@ -812,7 +812,15 @@ function getIsolatedLauncher() {
 
             failedPath = 'node_modules';
             const runPnpmInstall = (offline) => {
-              const args = ['install', '--frozen-lockfile'];
+              // Keep pnpm's virtual store inside this staging tree. A user or
+              // global pnpm config may set virtualStoreDir to another checkout;
+              // the cache would then link outside itself and every launch
+              // would lose its dependencies (WORKER_DEPS_LINK_OUTSIDE_CACHE).
+              const args = [
+                'install',
+                '--frozen-lockfile',
+                '--virtual-store-dir=node_modules/.pnpm',
+              ];
               if (offline) args.push('--offline');
               const pnpmExecutable = resolvePnpmCommand();
               const result = cp.spawnSync(pnpmExecutable, args, {
