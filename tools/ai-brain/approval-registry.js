@@ -31,8 +31,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { isWorkerPath } = require('./isolation-launcher');
-const { atomicRenameSync } = require('./atomic-rename');
 
 const State = Object.freeze({
   APPROVED: 'APPROVED',
