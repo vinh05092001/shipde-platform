@@ -1492,9 +1492,8 @@ async function nextLoop(options, deps) {
         );
 
         try {
-          const quotaScan = d.quotaScan || require('./quota-scan');
-          if (quotaScan && typeof quotaScan.scanAllQuotas === 'function') {
-            await quotaScan.scanAllQuotas({ ifDue: true, cwd: rootDir }).catch(() => {});
+          if (d.quotaScan && typeof d.quotaScan.scanAllQuotas === 'function') {
+            await d.quotaScan.scanAllQuotas({ ifDue: true, cwd: rootDir }).catch(() => {});
           }
         } catch (_) {}
 

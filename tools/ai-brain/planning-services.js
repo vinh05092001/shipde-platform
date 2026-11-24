@@ -510,7 +510,6 @@ function createPlanningServices(ctx) {
       Object.assign({}, process.env, o.env || {}),
       { timeoutMs: c.probeTimeoutMs, fetch: c.fetch }
     );
-    require('./route-health').rememberProbe(candidate, result, o);
     return result || { ok: false };
   }
 
