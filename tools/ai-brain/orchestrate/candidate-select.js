@@ -515,6 +515,7 @@ async function selectCandidateForProfile(
         now,
         jevAsk: o.jevAsk,
         minConfidence: o.jevMinConfidence,
+        maxOptions: o.jevMaxOptions,
         comboName: o.comboName,
       });
       jevSelReason = (sel && (sel.reason || sel.error)) || null;
@@ -551,6 +552,9 @@ async function selectCandidateForProfile(
           handledBy: sel.handledBy,
           assessment: sel.assessment,
           independentApplied: Boolean(sel.independentApplied),
+          eligibleCount: sel.eligibleCount,
+          shortlistCount: sel.shortlistCount,
+          shortlistOptions: Array.isArray(sel.shortlistOptions) ? sel.shortlistOptions : [],
           memberScore: sel.selected.score,
           reasoningEffort: sel.selected.effort,
         },
