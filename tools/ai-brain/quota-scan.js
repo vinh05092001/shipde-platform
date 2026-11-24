@@ -2866,94 +2866,6 @@ function validateCompletion(bodyText) {
   return { ok: true };
 }
 
-async function scanTargetsForSource(src, options = {}) {
-  if (!src || src.servesModels === false) return [];
-  if (src.kind === 'router') {
-    return discover9RouterScopes(src, options);
-  }
-  if (src.kind !== 'model-source' && !src.endpoint) return [];
-  let repModel =
-    (Array.isArray(src.models) && src.models.length > 0
-      ? selectRepresentativeModel(src.models, options)
-      : null) || src.verify?.model;
-
-  if (!repModel && src.servesModels === true) {
-    try {
-      const liveModels = await fetchSourceModels(src, options);
-      if (liveModels.length > 0) {
-        repModel = selectRepresentativeModel(liveModels, options);
-      }
-    } catch {
-      // Source cannot be scanned if live models fetch fails
-    }
-  }
-
-  // A source with no configured, verified or live model has nothing honest to scan.
-  if (!repModel) return [];
-  return [
-    {
-      source: src.id,
-      scope: src.id,
-      upstream: src.routerAlias || src.id,
-      model: repModel,
-      endpoint: src.endpoint,
-      apiKeyEnv: src.credential?.env,
-      headers: src.headers,
-    },
-  ];
-}
-
-// Keys are always source-qualified so a router prefix can never collide with another source.
-function recordScanResult(quotaState, target, result) {
-  const scopeKey = `${target.source}::${target.scope}`;
-  quotaState.scopes[scopeKey] = result;
-  if (target.source === target.scope) {
-    quotaState.scopes[target.source] = result;
-  }
-}
-
-// Scans one source's quota scopes (per key, or per router upstream) and records them.
-// Unlike a full scan it leaves the full-scan timestamp alone.
-async function scanSourceQuotas(src, options = {}) {
-  const quotaState = loadQuotaState(options);
-  quotaState.scopes = quotaState.scopes || {};
-  const reg = options.registry || sourcesApi.loadSources(options.sourceOpts);
-  const isCliSrc =
-    src &&
-    (src.id === 'agy-pool' ||
-      src.kind === 'agent-cli' ||
-      Object.prototype.hasOwnProperty.call(reg?.dispatch?.providers || {}, src.id));
-  if (isCliSrc) {
-    await scanCliLanes(quotaState, {
-      ...options,
-      now: options.now ?? Date.now(),
-      source: src.id,
-      registry: reg,
-    });
-    if (options.persist !== false) {
-      saveQuotaState(quotaState, options);
-    }
-    // The state holds every source's scopes; a caller records what is returned as this source's proof.
-    return [...new Set(Object.values(quotaState.scopes))].filter((r) => r && r.source === src.id);
-  }
-  const targets = Array.isArray(options.targets)
-    ? options.targets
-    : await scanTargetsForSource(src, options);
-  const results = await Promise.all(
-    targets.map(async (target) => {
-      const result = await scanScope(target, options);
-      return { target, result };
-    })
-  );
-  for (const { target, result } of results) {
-    recordScanResult(quotaState, target, result);
-  }
-  if (targets.length > 0 && options.persist !== false) {
-    saveQuotaState(quotaState, options);
-  }
-  return results.map((r) => r.result);
-}
-
 async function syncNinerouterModelsToOpenCode(options = {}) {
   const fetchFn = options.fetch || globalThis.fetch;
   const registry = options.registry || sourcesApi.loadSources?.(options.sourceOpts);
@@ -3090,8 +3002,6 @@ module.exports = {
   discover9RouterScopes,
   scanAllQuotas,
   scanAllFullRoutes,
-  scanSourceQuotas,
-  scanTargetsForSource,
   scanCliLanes,
   validateCompletion,
   withinSignal,

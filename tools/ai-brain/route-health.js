@@ -481,11 +481,6 @@ function setAccountRecord(store, account, entry) {
   store.accounts[account] = entry;
 }
 
-function getAccountRecord(store, account) {
-  if (!store || !store.accounts || !account) return null;
-  return store.accounts[account] || null;
-}
-
 function deleteAccountRecord(store, account) {
   if (!store || !store.accounts || !account) return;
   delete store.accounts[account];
@@ -1495,27 +1490,6 @@ async function probeGatewayModel(modelId, routeId, options) {
   }
 }
 
-async function runDueCli(options) {
-  const o = options || {};
-  const file =
-    o.file ||
-    o.routeHealthFile ||
-    o['route-health'] ||
-    (o.cwd || o.root
-      ? path.join(o.cwd || o.root, 'tools', 'ai-brain', 'data', 'model-route-health.json')
-      : null) ||
-    path.join(__dirname, 'data', 'model-route-health.json');
-  const store = loadStore(file);
-  const result = await recheckDue(
-    store,
-    o.probe || ((modelId, routeId) => probeGatewayModel(modelId, routeId)),
-    { cap: o.cap || 20, registry: o.registry }
-  );
-  saveStore(file, store);
-  (o.log || console.log)(JSON.stringify(result));
-  return result.checked > 0 && result.restored.length === 0 ? 1 : 0;
-}
-
 module.exports = {
   routeModelKey,
   unverifiedRecord,
@@ -1553,14 +1527,12 @@ module.exports = {
   discoverModelPaths,
   refreshCatalogueRoutes,
   probeGatewayModel,
-  runDueCli,
   BACKOFF_MS,
   getProviderRecord,
   extractProvider,
   extractAccountKey,
   rememberAccountCooldown,
   setAccountRecord,
-  getAccountRecord,
   deleteAccountRecord,
   probeCooldownMs,
   isLegacyUnverified,
