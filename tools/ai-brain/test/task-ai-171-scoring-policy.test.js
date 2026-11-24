@@ -2,6 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { candidateKey } = require('../candidates');
 const now = Date.parse('2026-11-07T00:00:00Z');
@@ -22,7 +23,7 @@ const policy = () => ({
   },
 });
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(__dirname, '../../../.oc/policy-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const rows = ['slow', 'fast'].map((id) => ({
     harness: 'paseo',
