@@ -145,8 +145,32 @@ function postJson(url, body, headers, options) {
   });
 }
 
-function normalizeAdvice(raw, key) {
+function normalizeAdvice(raw, key, kind) {
   if (!raw || typeof raw !== 'object') return raw;
+  if (
+    kind === 'select-combo-member' &&
+    raw.answers &&
+    typeof raw.answers === 'object' &&
+    !Array.isArray(raw.answers)
+  ) {
+    const answer =
+      key && Object.prototype.hasOwnProperty.call(raw.answers, key) ? raw.answers[key] : null;
+    if (answer && typeof answer === 'object' && answer.type === 'choice') {
+      return {
+        choice: answer.choice,
+        confidence: answer.confidence,
+        probabilities: answer.probabilities,
+        jevModel: raw.model || null,
+        usage: raw.usage || null,
+      };
+    }
+    return {
+      choice: null,
+      confidence: null,
+      jevModel: raw.model || null,
+      usage: raw.usage || null,
+    };
+  }
   if (raw.choice !== undefined || raw.confidence !== undefined) return raw;
   if (raw.answers && typeof raw.answers === 'object') {
     const answer = key
@@ -255,7 +279,7 @@ function buildJevAsk(source, options) {
       { authorization: 'Bearer ' + credential.value },
       options
     );
-    return normalizeAdvice(raw, key);
+    return normalizeAdvice(raw, key, question.kind);
   };
 }
 

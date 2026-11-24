@@ -154,6 +154,24 @@ test('select-combo-member fails closed when raw.answers.comboMember is missing o
     },
     {
       model: 'system-one',
+      answers: { weightProfile: { type: 'choice', choice: 'M0', confidence: 0.95 } },
+      choice: 'M0',
+      confidence: 0.95,
+    },
+    {
+      model: 'system-one',
+      answers: { weightProfile: { type: 'choice', choice: 'M0', confidence: 0.95 } },
+      answer: { choice: 'M0', confidence: 0.95 },
+    },
+    {
+      model: 'system-one',
+      answers: { comboMember: { type: 'score', score: 9 } },
+      choice: 'M0',
+      confidence: 0.95,
+      decision: { choice: 'M0', confidence: 0.95 },
+    },
+    {
+      model: 'system-one',
       answers: { comboMember: { type: 'choice', choice: 'M99', confidence: 0.95 } },
     },
     { model: 'system-one', answers: { comboMember: { type: 'score', score: 9 } } },
@@ -165,6 +183,68 @@ test('select-combo-member fails closed when raw.answers.comboMember is missing o
     });
     const outcome = await jev.advise(question, { ask, minConfidence: 0.6 });
     assert.equal(outcome.outcome, jev.Outcome.UNDECIDED);
+  }
+});
+
+test('select-combo-member prefers valid named answer over conflicting top-level fields and preserves flat shape when no answers map exists', async () => {
+  const { question } = comboJev.buildJevComboQuestion(
+    {
+      workItemId: 'TASK-AI-194',
+      role: 'writer',
+      complexity: 'standard',
+      risk: 'MEDIUM',
+      fileCount: 3,
+    },
+    [
+      {
+        modelId: 'gh/model-a',
+        base: 'model-a',
+        score: 85,
+        tier: 'T1',
+        effort: 'high',
+        priorUnknown: false,
+      },
+      {
+        modelId: 'cx/model-b',
+        base: 'model-b',
+        score: 78,
+        tier: 'T2',
+        effort: 'low',
+        priorUnknown: false,
+      },
+    ]
+  );
+
+  // Valid named answers.comboMember must win over conflicting flat/wrapper fields.
+  {
+    const { httpClient } = mockHttpClient({
+      model: 'system-one',
+      choice: 'M0',
+      confidence: 0.99,
+      answer: { choice: 'M0', confidence: 0.99 },
+      answers: {
+        comboMember: { type: 'choice', choice: 'M1', confidence: 0.89 },
+      },
+    });
+    const ask = jev.buildJevAsk(MOCK_SOURCE, {
+      env: { JEV_TEST_KEY: 'sk-test-token' },
+      httpClient,
+    });
+    const outcome = await jev.advise(question, { ask, minConfidence: 0.6 });
+    assert.equal(outcome.outcome, jev.Outcome.DECIDED);
+    assert.equal(outcome.choice, 'M1');
+  }
+
+  // Flat transport shape without an answers map remains supported.
+  {
+    const { httpClient } = mockHttpClient({ choice: 'M1', confidence: 0.85 });
+    const ask = jev.buildJevAsk(MOCK_SOURCE, {
+      env: { JEV_TEST_KEY: 'sk-test-token' },
+      httpClient,
+    });
+    const outcome = await jev.advise(question, { ask, minConfidence: 0.6 });
+    assert.equal(outcome.outcome, jev.Outcome.DECIDED);
+    assert.equal(outcome.choice, 'M1');
   }
 });
 
