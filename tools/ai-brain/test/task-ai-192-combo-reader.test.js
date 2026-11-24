@@ -36,7 +36,7 @@ test('TASK-AI-192 AC2 / Lat C-2: dead writer-combo.js is removed and candidates 
     false,
     'writer-combo.js must be deleted'
   );
-  for (const rel of ['intake.js', 'cli.js', 'cli/dispatch.js', 'candidates.js']) {
+  for (const rel of ['intake.js', 'cli.js', 'candidates.js']) {
     const src = fs.readFileSync(path.join(BRAIN_DIR, rel), 'utf8');
     assert.doesNotMatch(
       src,
@@ -44,7 +44,7 @@ test('TASK-AI-192 AC2 / Lat C-2: dead writer-combo.js is removed and candidates 
       `${rel} should not require writer-combo.js`
     );
   }
-  for (const rel of ['intake.js', 'cli.js', 'cli/dispatch.js']) {
+  for (const rel of ['intake.js']) {
     const src = fs.readFileSync(path.join(BRAIN_DIR, rel), 'utf8');
     assert.match(
       src,

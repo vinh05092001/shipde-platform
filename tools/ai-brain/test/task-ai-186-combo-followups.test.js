@@ -8,8 +8,6 @@ const os = require('node:os');
 const path = require('node:path');
 
 const intake = require('../intake');
-const { dispatchCommand } = require('../cli');
-const { candidateKey } = require('../candidates');
 
 const registry = {
   sources: [
@@ -86,84 +84,4 @@ test('B: a router that never answers is bounded by verify.timeoutMs and fails cl
 test('B: an empty combo is refused', async (t) => {
   const result = await catalogue(t, async (o) => ({ name: o.name, state: 'EMPTY', members: [] }));
   assert.equal(result.sourceStatus['9router'], 'failed');
-});
-
-function resume(t, c, env) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'shipde-186-resume-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const key = candidateKey(c);
-  const checkpointFile = path.join(root, 'checkpoint.json');
-  fs.writeFileSync(checkpointFile, JSON.stringify({ chosen: key, harness: c.harness }));
-  const prompt = path.join(root, 'prompt.md');
-  fs.writeFileSync(prompt, 'Bounded fixture task.');
-  const errors = [];
-  let launches = 0;
-  const result = dispatchCommand(
-    {
-      execute: true,
-      json: true,
-      cwd: root,
-      item: 'TASK-AI-186-RESUME',
-      'base-sha': '0123456789abcdef0123456789abcdef01234567',
-      'prompt-file': prompt,
-    },
-    {
-      candidates: [c],
-      registry,
-      env,
-      maxAttempts: 1,
-      checkpointFile,
-      quotaState: { scopes: {} },
-      routeHealth: { version: 1, paths: {}, events: [] },
-      scoringPolicyFile: path.join(root, 'no-scoring-policy.json'),
-      home: root,
-      decisionDir: root,
-      evidenceDir: root,
-      baseSha: '0123456789abcdef0123456789abcdef01234567',
-      gitRoot: () => root,
-      commitExists: () => true,
-      log: () => {},
-      error: (m) => errors.push(String(m)),
-      exit: () => {},
-      probeEvidence: () => true,
-      run: () => {
-        launches += 1;
-        return { exitCode: 0, stdout: '{}' };
-      },
-    }
-  );
-  return { result, errors, launches };
-}
-
-const comboCand = {
-  harness: 'opencode-direct',
-  source: '9router',
-  gateway: '9router',
-  upstream: '9router',
-  accessPath: 'http://127.0.0.1:1/v1',
-  accountId: '9router',
-  quotaScope: '9router',
-  modelId: 'vinh',
-  qualifiedRoles: ['author.foundation'],
-};
-
-test('C: a checkpoint resume refuses when the combo key is gone now', (t) => {
-  const { result, errors, launches } = resume(t, comboCand, {});
-  assert.equal(launches, 0);
-  assert.equal(result && result.refusal, 'CREDENTIAL_ENV_MISSING');
-  assert.ok(errors.some((m) => m.includes('TEST_COMBO_KEY_NOT_SET')));
-});
-
-test('C: an AGY replay whose gateway names the router is judged by its own source', (t) => {
-  const agy = {
-    ...comboCand,
-    harness: 'agy-pool',
-    source: 'agy-pool',
-    accessPath: 'ShipDe\ShipDe-agy01',
-    accountId: 'agy01',
-    quotaScope: 'agy01:gemini',
-    modelId: 'gemini-4-argon-high',
-  };
-  const { result } = resume(t, agy, {});
-  assert.notEqual(result && result.refusal, 'CREDENTIAL_ENV_MISSING');
 });

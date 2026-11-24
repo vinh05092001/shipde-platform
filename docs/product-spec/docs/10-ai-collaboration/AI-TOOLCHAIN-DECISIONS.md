@@ -533,7 +533,7 @@ devDependency pin that the manifest audit probes as `dependency "lefthook"`
 
 - `tools/ai-brain/scheduler.js` (`planDispatch`) plans and never launches; it references no process-launching API (`AC-AI-24-06`).
 - `tools/ai-brain/executor.js` (`executePlan`) is the only consumer of a plan and its only side effect is one `ao spawn` per `plan.assignments[]` entry, with the argument vector of `New-ShipDeAoSpawnArguments` in `scripts/ai/control.ps1` (`AC-AI-24-02`), passed as an array without a shell.
-- Dry run is the default (`node tools/ai-brain/cli.js dispatch`); launching requires `--execute`. Deferred entries and alternatives are never launched, a second writer or an implementation beyond `plan.utilisation.maxImplementation` is refused, and any AO failure is `FAILED`, never `LAUNCHED`, with no in-call retry.
+- Historical note (Lat C-2b-2): `cli.js dispatch` has been retired in favor of `node tools/ai-brain/cli.js intake` and `node tools/ai-brain/cli.js orchestrate` (dry-run by default; live launch requires `--run`). Deferred entries and alternatives are never launched, a second writer or an implementation beyond `plan.utilisation.maxImplementation` is refused, and any AO failure is `FAILED`, never `LAUNCHED`, with no in-call retry.
 - A provider without a harness the controller already uses (`antigravity`/`gemini` → `agy`, `9router`/`anthropic`/`claude` → `claude-code`) is refused as `INCOMPLETE_ASSIGNMENT` rather than guessed.
 - The controller keeps its own launch path; switching it to the executor is a separate Work Item.
 

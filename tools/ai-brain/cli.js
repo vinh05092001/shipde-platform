@@ -5,8 +5,8 @@
  * Ship Dễ — Brain CLI
  *
  *   node tools/ai-brain/cli.js reconcile [--json] [--strict]
- *   node tools/ai-brain/cli.js dispatch [--dry-run | --execute] [--plan <file>]
- *                                       [--profile <file.json>] [--report-outcome <file.json>]
+ *   node tools/ai-brain/cli.js intake --item <ID> [--run] [--wait]
+ *   node tools/ai-brain/cli.js orchestrate --item <ID> [--dry-run | --run]
  *   node tools/ai-brain/cli.js probe --account <id> [--model <m>] [--json]
  *                                   [--file <p>] [--timeout <ms>] [--cache-window <ms>]
  *   node tools/ai-brain/cli.js qualify --account <id> --model <m> [--role <roleId>]
@@ -96,7 +96,6 @@ const {
   coordinatorDispatchCommand,
   resolveExecuteBase,
 } = require('./cli/dispatch-helpers');
-const { dispatchCommand } = require('./cli/dispatch');
 const {
   reviewCommand,
   reviewPrCommand,
@@ -115,29 +114,11 @@ function main(argv = process.argv.slice(2), deps = {}) {
   if (command === 'report' && args._[1] === 'tokens') return tokenReportCommand(args);
   if (command === 'manifest') return manifestCommand(args);
   if (command === 'dispatch') {
-    const result = dispatchCommand(args, {
-      ...deps,
-      readDispatchComboConfig:
-        args.offline !== undefined
-          ? undefined
-          : deps.readDispatchComboConfig || require('./combo-reader').readComboConfig,
-    });
-    // The profile path (TASK-AI-65) is async: the JEV advisory returns a
-    // promise. An unhandled rejection would crash silently, so it is caught
-    // here and turned into a non-zero exit instead.
-    if (result && typeof result.then === 'function') {
-      result.then(
-        (value) => {
-          if (value?.exitCode) process.exitCode = value.exitCode;
-        },
-        (err) => {
-          console.error('Dispatch lỗi: ' + (err && err.message ? err.message : err));
-          process.exitCode = 1;
-        }
-      );
-    }
-    if (result?.exitCode) process.exitCode = result.exitCode;
-    return result;
+    const err =
+      "DISPATCH_RETIRED: 'cli.js dispatch' has been retired (Lat C-2b-2). Use 'cli.js intake' or 'cli.js orchestrate'.";
+    console.error(err);
+    process.exitCode = 1;
+    return { exitCode: 1, error: 'DISPATCH_RETIRED', message: err };
   }
   // review manifest validate (TASK-AI-77): check a review manifest against git
   // before anything is published or promoted on the strength of it.
@@ -411,335 +392,13 @@ function main(argv = process.argv.slice(2), deps = {}) {
 
   console.error('Lệnh không rõ: ' + command);
   console.error(
-    'Dùng: reconcile | manifest | prove | dispatch | shadow | account | serena | docs | review | orchestrate | intake | plan | next | merge | goal | chat | goal session'
+    'Dùng: reconcile | manifest | prove | shadow | account | serena | docs | review | orchestrate | intake | plan | next | merge | goal | chat | goal session'
   );
   process.exit(2);
 }
 
-function executeDispatchLaunch(context) {
-  const {
-    args,
-    deps,
-    item,
-    now,
-    adapter,
-    finalChosenCandidate,
-    finalChosenKey,
-    harnessName,
-    rootDir,
-    decisionDir,
-    checkpointFile,
-    checkpoint,
-    lastDecision,
-    limitsEnforcement,
-    launcher,
-    baseResolution,
-    resolvedBaseSha,
-    launchTimeoutMs,
-    workerTimeoutMs,
-    tokenBudget,
-    outputCeiling,
-    selectedMode,
-    log,
-    exit,
-    route,
-    promptText,
-    usageFile,
-  } = context;
-  const decisionsStore = require('./decisions');
-  const sourcesApi = require('./sources');
-  const { readSessionId, workerName } = require('./executor');
-  const { parseLastJson } = require('./harness');
-  let launchRes = null;
-  let thrownError = null;
-  let isFailure = true;
-  let sessionHandle = null;
-  let handedOff = false;
-  let launchPending = false;
-  let launchAttempted = false;
-  let launchArgs = null;
-  try {
-    const validation = adapter.validateLaunch?.({ accountId: finalChosenCandidate.accountId });
-    if (validation) launchArgs = validation;
-    else if (adapter.requiresUsageReport && !usageFile) {
-      throw new Error('HARNESS_USAGE_REPORT_REQUIRED');
-    }
-    if (!launchArgs)
-      launchArgs = adapter.launch({
-        candidateKey: finalChosenKey,
-        provider:
-          (route && route.provider) || finalChosenCandidate.source || finalChosenCandidate.upstream,
-        model: sourcesApi.qualifyModel(finalChosenCandidate.modelId, route),
-        accountId: finalChosenCandidate.accountId,
-        gateway: finalChosenCandidate.gateway || '',
-        upstream: finalChosenCandidate.upstream,
-        quotaScope: finalChosenCandidate.quotaScope,
-        prompt: promptText,
-        branch: item.branch,
-        base: resolvedBaseSha,
-        cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
-        usageFile: usageFile,
-        checkpoint: checkpointFile,
-        maxAttempts: 1,
-        title: workerName(item.workItemId),
-        labels: {
-          workItem: item.workItemId,
-          role: item.role,
-          project: args.project || 'shipde-platform',
-        },
-        printTimeoutSec:
-          Number(args['timeout-sec'] || args.timeoutSec || deps?.timeoutSec) ||
-          (args.timeout ? Number(args.timeout) : 3600),
-        timeoutMs: launchTimeoutMs,
-        workerTimeoutMs,
-        tokenBudget,
-        outputCeiling,
-        mode: selectedMode,
-        effort: finalChosenCandidate.effort || args.effort || deps?.effort,
-      });
-  } catch (err) {
-    log('Harness launch preparation failed: ' + (err.message || String(err)));
-    thrownError = err;
-    launchRes = {
-      exitCode: err.exitCode !== undefined ? err.exitCode : 1,
-      stdout: '',
-      stderr: err.stderr || err.message || String(err),
-      error: err,
-    };
-  }
-
-  if (launchArgs && !Array.isArray(launchArgs)) {
-    const reason = launchArgs.reason || launchArgs.refusal || launchArgs.error || 'LAUNCH_REFUSED';
-    log('Harness launch refused: ' + reason);
-    thrownError = new Error(reason);
-    launchRes = {
-      exitCode: launchArgs.exitCode !== undefined ? launchArgs.exitCode : 1,
-      stdout: '',
-      stderr: reason,
-      error: thrownError,
-    };
-    launchArgs = null;
-  }
-
-  if (launchArgs) {
-    try {
-      decisionsStore.recordDecision(
-        {
-          stage:
-            checkpoint && checkpoint.chosen
-              ? decisionsStore.Stage.RESUMED
-              : decisionsStore.Stage.LAUNCHED,
-          workItemId: item.workItemId,
-          role: item.role,
-          chosen: finalChosenKey,
-          harness: harnessName,
-          branch: item.branch,
-          // The claim on the branch, written before the launch. It is a claim,
-          // not a handle: the durable session id is only knowable once the
-          // harness has written its report, and it is recorded on the line
-          // below. It was `process.pid` here, which is a Node process id and
-          // not a session — decisions.js then treated that value as the
-          // session to resume (audit section 4, Gap C).
-          sessionId: null,
-          worktree: args.cwd || rootDir,
-          area: item.area,
-          firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
-          selected: finalChosenKey,
-          excluded: lastDecision
-            ? (lastDecision.rejected || []).map((r) => ({
-                candidateKey: r.offeringId,
-                reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
-                reason: r.reason,
-              }))
-            : [],
-          quota:
-            lastDecision && lastDecision.candidates
-              ? lastDecision.candidates.map((c) => ({
-                  candidateKey: c.offeringId,
-                  score: c.score,
-                  headroom: c.headroom,
-                }))
-              : [],
-          resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
-          checkpoint: checkpointFile,
-          limitsEnforcement,
-        },
-        { dir: decisionDir, now }
-      );
-    } catch (err) {
-      log('Failed to append LAUNCHED to decision log');
-      exit(1);
-      return {
-        fatal: { exitCode: 1, error: err },
-        launchRes,
-        thrownError,
-        isFailure,
-        sessionHandle,
-        handedOff,
-        launchPending,
-      };
-    }
-
-    try {
-      launchAttempted = true;
-      launchRes = launcher(adapter, launchArgs, {
-        cwd: baseResolution.cwd || args.cwd || (deps && deps.cwd) || rootDir,
-        // The pinned base the worker root is provisioned at (AI-64-R15).
-        baseSha: resolvedBaseSha,
-        branch: item.branch,
-        workItemId: item.workItemId,
-        // TASK-AI-127 WD-R03: WORKER_DEPS_UNAVAILABLE warnings land in the
-        // same decision log this dispatch records its launch in.
-        decisionDir,
-        checkpoint: checkpointFile,
-        timeoutMs: launchTimeoutMs,
-        workerTimeoutMs,
-        tokenBudget,
-        outputCeiling,
-        mode: selectedMode,
-        candidateKey: finalChosenKey,
-        candidate: finalChosenCandidate,
-        model: finalChosenCandidate.modelId || finalChosenCandidate.model,
-        modelId: finalChosenCandidate.modelId || finalChosenCandidate.model,
-        account: finalChosenCandidate.accountId || finalChosenCandidate.account,
-        accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
-        harness: harnessName,
-        effort: finalChosenCandidate.effort || args.effort || deps?.effort,
-      });
-    } catch (err) {
-      thrownError = err;
-      launchRes = {
-        exitCode: err.exitCode !== undefined ? err.exitCode : -1,
-        stdout: '',
-        stderr: err.stderr || err.message || String(err),
-        error: err,
-      };
-    }
-  }
-
-  if (deps && deps.rethrow && thrownError) {
-    throw thrownError;
-  }
-
-  isFailure =
-    thrownError !== null ||
-    !launchRes ||
-    launchRes.exitCode !== 0 ||
-    (typeof launchRes.httpStatus === 'number' && launchRes.httpStatus >= 400);
-
-  // The durable handle, read from the report the launch was given. Never a
-  // pid, a timestamp or a stdout guess.
-  const sessionReceipt = readSessionId(
-    adapter,
-    {
-      usageFile,
-      accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
-    },
-    launchRes || {}
-  );
-  sessionHandle = sessionReceipt.id;
-  if ((usageFile || adapter.backgroundLaunch) && !sessionHandle) {
-    // The caller asked for a durable report and the report carries no
-    // session id, so this launch cannot be resumed or stopped. A launch the
-    // loop cannot find again is a failed launch (AI-64-R04), not a success
-    // with a null handle.
-    isFailure = true;
-  }
-  if (sessionHandle) {
-    // The claim now carries the session it is a claim about, so a restart
-    // resumes that session instead of starting a second writer.
-    decisionsStore.recordDecision(
-      {
-        stage: decisionsStore.Stage.LAUNCHED,
-        workItemId: item.workItemId,
-        role: item.role,
-        chosen: finalChosenKey,
-        harness: harnessName,
-        branch: item.branch,
-        sessionId: sessionHandle,
-        worktree: args.cwd || rootDir,
-        area: item.area,
-        detail: 'DURABLE_SESSION_ID',
-      },
-      { dir: decisionDir, now }
-    );
-  }
-
-  const parsed = launchRes && launchRes.stdout ? parseLastJson(launchRes.stdout) : null;
-  if (parsed && parsed.status && /fail|error|refus|stalled|timeout/i.test(String(parsed.status))) {
-    isFailure = true;
-  }
-
-  handedOff = adapter.backgroundLaunch === true && !isFailure && Boolean(sessionHandle);
-  if (adapter.backgroundLaunch === true && launchAttempted && isFailure) {
-    launchPending = true;
-    try {
-      const reconciliation = adapter.onLaunchFailed?.(
-        {
-          usageFile,
-          accountId: finalChosenCandidate.accountId || finalChosenCandidate.account,
-          candidateKey: finalChosenKey,
-        },
-        launchRes
-      );
-      if (reconciliation?.pending === false) launchPending = false;
-    } catch {
-      /* Uncertainty preserves ownership. */
-    }
-  }
-
-  try {
-    if (!handedOff && !launchPending)
-      decisionsStore.recordDecision(
-        {
-          stage: isFailure ? decisionsStore.Stage.FAILED : decisionsStore.Stage.COMPLETED,
-          workItemId: item.workItemId,
-          role: item.role,
-          chosen: finalChosenKey,
-          harness: harnessName,
-          branch: item.branch,
-          sessionId: sessionHandle,
-          worktree: args.cwd || rootDir,
-          area: item.area,
-          outcome: isFailure ? 'failed' : 'passed',
-          detail:
-            (usageFile || adapter.backgroundLaunch) && !sessionHandle
-              ? launchRes?.exitCode !== 0
-                ? 'LAUNCH_FAILED'
-                : sessionReceipt.cause || 'HARNESS_NO_SESSION_ID'
-              : null,
-          firstChoice: lastDecision ? lastDecision.chosen || finalChosenKey : finalChosenKey,
-          selected: finalChosenKey,
-          excluded: lastDecision
-            ? (lastDecision.rejected || []).map((r) => ({
-                candidateKey: r.offeringId,
-                reasonCode: String(r.reason || 'UNKNOWN').split(':')[0],
-                reason: r.reason,
-              }))
-            : [],
-          quota:
-            lastDecision && lastDecision.candidates
-              ? lastDecision.candidates.map((c) => ({
-                  candidateKey: c.offeringId,
-                  score: c.score,
-                  headroom: c.headroom,
-                }))
-              : [],
-          resourceCeiling: deps && deps.resourceCeiling ? deps.resourceCeiling() : undefined,
-          checkpoint: checkpointFile,
-        },
-        { dir: decisionDir, now }
-      );
-  } catch (err) {}
-  return { launchRes, thrownError, isFailure, sessionHandle, handedOff, launchPending };
-}
-
 module.exports = {
   resolveExecuteBase,
-  // Called lazily by cli/dispatch.js. It stays in cli.js so the baselined
-  // `maxAttempts: 1` keeps its file (TASK-AI-182).
-  executeDispatchLaunch,
-  dispatchCommand,
   parseArgs,
   main,
   // The Controller seams the live loop consumes rather than reimplements: the

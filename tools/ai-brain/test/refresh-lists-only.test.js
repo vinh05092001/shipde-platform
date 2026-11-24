@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const { refreshCatalogue, catalogueFreshness } = require('../catalogue-refresh');
 const { scanScope } = require('../quota-scan');
-const { dispatchCommand } = require('../cli');
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(__dirname, 'refresh-fixture-'));
@@ -77,42 +76,4 @@ test('explicit probe runs inference after discovery freshness is durable', async
     },
   });
   assert.ok(f.posts() > 0);
-});
-
-test('dry-run makes no inference call through onboarding, route probes or JEV', async (t) => {
-  const f = fixture(t);
-  const rolling = require('../rolling-onboard');
-  t.mock.method(rolling, 'autoOnboardNewSources', async () => {
-    await f.fetch('https://fixture.invalid/chat/completions', { method: 'POST' });
-  });
-  await dispatchCommand(
-    { item: 'TASK-AI-166', 'dry-run': true },
-    {
-      registry: {
-        sources: [{ id: 'fixture', servesModels: true, credential: { env: 'FIXTURE_KEY' } }],
-      },
-      env: { FIXTURE_KEY: 'fake' },
-      discoveryCatalogue: { candidates: [] },
-      evidenceDir: f.dir,
-      decisionDir: f.dir,
-      accounts: [],
-      home: f.dir,
-      storePath: path.join(f.dir, 'quota.json'),
-      dryRunOffline: true,
-      refreshRoutes: true,
-      routeHealth: { models: {} },
-      readDispatchComboConfig: async () => ({ name: 'fixture', state: 'READ', members: [] }),
-      probeRoute: async () => {
-        throw new Error('unexpected route probe');
-      },
-      jevAsk: async () => {
-        await f.fetch('https://fixture.invalid/chat/completions', { method: 'POST' });
-        throw new Error('fixture');
-      },
-      log: () => {},
-      error: () => {},
-      exit: () => {},
-    }
-  );
-  assert.equal(f.posts(), 0);
 });

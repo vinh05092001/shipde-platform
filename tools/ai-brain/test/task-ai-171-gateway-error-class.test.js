@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 
 const { classifyFailure, Cause, Scope, DEFAULT_COOLDOWNS } = require('../failure-classifier');
-const { dispatchCommand, sameFailureDomain } = require('../cli');
+const { sameFailureDomain } = require('../cli');
 const routeHealthApi = require('../route-health');
 
 describe('TASK-AI-171 Item 1: 9Router gateway error classification', () => {

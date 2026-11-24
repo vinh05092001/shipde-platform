@@ -8,7 +8,7 @@ model and every route. `AGENTS.md` (source of truth, roles, prohibitions) takes 
 
 | Step | Who | Rule |
 | --- | --- | --- |
-| Choose the writer | Controller (`cli.js dispatch`, `route.js` until the route slices land) | Never hand-pick a model. Difficulty comes from JEV; the score scale is the AA policy. |
+| Choose the writer | Controller (`cli.js intake` / `cli.js orchestrate`) | Never hand-pick a model. Difficulty comes from JEV; the score scale is the AA policy. |
 | Write | The chosen writer | Works in its own worktree; never reviews its own work. |
 | Review | An independent reviewer on a different model from the writer | `PASS`, `CHANGES_REQUIRED` or `BLOCKED` at an exact SHA. |
 | Repair | The writer; after two rounds without convergence, the coordinator or another strong model | The repairer never reviews its own repair. |
