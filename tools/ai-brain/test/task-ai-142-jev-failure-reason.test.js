@@ -4,7 +4,6 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const jev = require('../jev');
-const routing = require('../routing');
 
 const SECRET = 'never-print-this-key';
 
@@ -19,30 +18,24 @@ function source(endpoint) {
   };
 }
 
-function profile() {
+// The live JEV call: combo-jev-select asks a select-combo-member question through
+// jev.advise, which maps a failed ask to a reason with jev.failureReason.
+function question() {
   return {
-    taskId: 'TASK-AI-142-H3',
-    role: 'writer',
-    complexity: 'standard',
-    requiredCapabilities: [],
-    proofFloor: 'NONE',
-    contextSize: 1000,
-    expectedDuration: 10000,
-    latencyPriority: 'normal',
-    qualityFloor: 0,
-    costCeiling: 100,
-    requiredHarness: null,
-    forbiddenFailureDomains: [],
-    riskDomains: [],
+    kind: 'select-combo-member',
+    prompt: 'pick the single best option ID',
+    evidence: JSON.stringify({ task: { complexity: 'standard' }, members: [] }),
+    options: ['M0', 'M1'],
   };
 }
 
-async function reasonCodesFor(ask) {
-  const assessment = await routing.assessTask(profile(), { ask });
-  const text = JSON.stringify(assessment);
+async function reasonFor(ask) {
+  const result = await jev.advise(question(), { ask });
+  const text = JSON.stringify(result);
   assert.equal(text.includes(SECRET), false);
-  assert.equal(text.includes('UNREACHABLE'), false);
-  return assessment.reasonCodes;
+  assert.equal(result.outcome, jev.Outcome.UNDECIDED);
+  assert.notEqual(result.reason, 'UNREACHABLE');
+  return result.reason;
 }
 
 function askWith(httpClient, env) {
@@ -54,46 +47,45 @@ function askWith(httpClient, env) {
 }
 
 test('missing credential is reported as CREDENTIAL_MISSING', async () => {
-  const codes = await reasonCodesFor(askWith(async () => ({}), {}));
-  assert.ok(codes.includes('JEV_UNDECIDED:CREDENTIAL_MISSING'), codes.join(','));
+  assert.equal(await reasonFor(askWith(async () => ({}), {})), 'CREDENTIAL_MISSING');
 });
 
 test('timeout is reported as TIMEOUT', async () => {
-  const codes = await reasonCodesFor(
+  const reason = await reasonFor(
     askWith(async () => {
       throw new Error('JEV_TIMEOUT');
     })
   );
-  assert.ok(codes.includes('JEV_UNDECIDED:TIMEOUT'), codes.join(','));
+  assert.equal(reason, 'TIMEOUT');
 });
 
 test('HTTP status is reported as HTTP_<status>', async () => {
-  const codes = await reasonCodesFor(
+  const reason = await reasonFor(
     askWith(async () => {
       throw new Error('JEV_HTTP_422');
     })
   );
-  assert.ok(codes.includes('JEV_UNDECIDED:HTTP_422'), codes.join(','));
+  assert.equal(reason, 'HTTP_422');
 });
 
 test('unparseable body is reported as INVALID_RESPONSE', async () => {
-  const codes = await reasonCodesFor(
+  const reason = await reasonFor(
     askWith(async () => {
       JSON.parse('<html>');
     })
   );
-  assert.ok(codes.includes('JEV_UNDECIDED:INVALID_RESPONSE'), codes.join(','));
+  assert.equal(reason, 'INVALID_RESPONSE');
 });
 
 test('socket failure is reported as NETWORK_ERROR', async () => {
-  const codes = await reasonCodesFor(
+  const reason = await reasonFor(
     askWith(async () => {
       const err = new Error('connect ECONNREFUSED 127.0.0.1:1');
       err.code = 'ECONNREFUSED';
       throw err;
     })
   );
-  assert.ok(codes.includes('JEV_UNDECIDED:NETWORK_ERROR'), codes.join(','));
+  assert.equal(reason, 'NETWORK_ERROR');
 });
 
 test('real transport maps HTTP status and invalid JSON without echoing the body', async () => {
@@ -114,9 +106,9 @@ test('real transport maps HTTP status and invalid JSON without echoing the body'
   try {
     const url = 'http://127.0.0.1:' + server.address().port + '/ask';
     const ask = jev.buildJevAsk(source(url), { env: { TYPESAFE_API_KEY: SECRET } });
-    assert.ok((await reasonCodesFor(ask)).includes('JEV_UNDECIDED:HTTP_422'));
+    assert.equal(await reasonFor(ask), 'HTTP_422');
     mode = 'html';
-    assert.ok((await reasonCodesFor(ask)).includes('JEV_UNDECIDED:INVALID_RESPONSE'));
+    assert.equal(await reasonFor(ask), 'INVALID_RESPONSE');
   } finally {
     server.close();
   }

@@ -115,20 +115,6 @@ test('singleton shortlist skips and keeps the Controller choice outside topN', a
   assert.equal(result.advice.turn.reason, 'INSUFFICIENT_OPTIONS');
 });
 
-test('assessment turn evidence is retained on failure', async () => {
-  const fail = async () => {
-    throw new Error('fixture-secret');
-  };
-  const assessment = await routing.assessTask(
-    { role: 'writer', riskDomains: [] },
-    {
-      ask: fail,
-      recordTurn,
-    }
-  );
-  assert.equal(assessment.jevTurn.reason, 'UNREACHABLE');
-});
-
 test('null confidence configuration cannot bypass the existing floor', async () => {
   const routeAsk = async () => ({ choice: 'route-b', confidence: 0.2 });
   const selected = await select({ minConfidence: null, ask: routeAsk, recordTurn });
@@ -146,12 +132,14 @@ test('mock turn metadata excludes private text and reports totals by reason', (t
     totals[turn.outcome][turn.reason] = (totals[turn.outcome][turn.reason] || 0) + 1;
   }
   assert.deepEqual(totals, {
-    called: 11,
+    // Totals over the turns recorded by the cases above (the retired assessTask case
+    // used to add one UNREACHABLE turn; C-3e-2b).
+    called: 10,
     skipped: 1,
     DECIDED: { VALID_ADVICE: 2 },
     UNDECIDED: {
       LOW_CONFIDENCE: 2,
-      UNREACHABLE: 2,
+      UNREACHABLE: 1,
       TIMEOUT: 1,
       MALFORMED_OUTPUT: 4,
       INSUFFICIENT_OPTIONS: 1,
