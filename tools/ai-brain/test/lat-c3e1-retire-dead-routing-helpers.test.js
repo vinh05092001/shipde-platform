@@ -9,6 +9,8 @@ const routing = require('../routing');
 const RETIRED_SYMBOLS = [
   'reportDispatchOutcome',
   'stallAssessment',
+  'STALL_REQUEST_FINISH_MS',
+  'STALL_STRUCTURED_FAILURE_MS',
   'adviseRankedModelChoice',
   'candidateIdentityKey',
   'claudeFamilyExclusion',

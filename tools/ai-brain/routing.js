@@ -108,15 +108,6 @@ const ROLE_FALLBACK_PROFILE = Object.freeze({
   integrator: 'BALANCED',
 });
 
-/**
- * Stall thresholds for a pinned execution (TASK-AI-65 contract):
- * a request that has not finished within 7 minutes is stalled at the request
- * level; a structured failure that has gone unresolved for 12 minutes forces
- * reselection rather than another wait.
- */
-const STALL_REQUEST_FINISH_MS = 7 * 60 * 1000;
-const STALL_STRUCTURED_FAILURE_MS = 12 * 60 * 1000;
-
 /** A busy candidate loses this much score per reservation it already holds. */
 const BUSY_PENALTY_PER_RESERVATION = 20;
 
@@ -1723,8 +1714,6 @@ module.exports = {
   ROLE_FALLBACK_PROFILE,
   CLAUDE_FAMILY_PATTERN,
   CLAUDE_FAMILY_REASON,
-  STALL_REQUEST_FINISH_MS,
-  STALL_STRUCTURED_FAILURE_MS,
   PROFILE_SCHEMA,
   validateTaskProfile,
   jevQuestion,
