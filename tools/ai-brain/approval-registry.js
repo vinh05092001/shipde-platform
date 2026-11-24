@@ -114,80 +114,6 @@ function approvalExpiry(entry) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/**
- * Writes one approval. Refuses, in order: a path inside the worker boundary, a
- * missing id, a state outside the enum, a reviewed commit that is not a
- * 40-character SHA, a verdict outside the enum, a reviewer that names nobody, a
- * missing or past expiry, and a second write to an id that already exists —
- * an approval is a human decision taken once, and a loop that can re-approve
- * itself has proved nothing.
- *
- * Returns the entry as written.
- */
-function recordApproval(approval, options) {
-  const o = options || {};
-  const file = registryPath(o.registryPath);
-
-  if (isWorkerPath(file)) {
-    throw new Error(
-      'APPROVAL_REFUSED: the approval registry must live operator-side, not inside the worker root'
-    );
-  }
-  const id = approval && approval.approvalId;
-  if (typeof id !== 'string' || id.trim() === '') {
-    throw new Error('APPROVAL_REFUSED: missing approvalId');
-  }
-  const state = approvalState(approval);
-  if (!Object.values(State).includes(state)) {
-    throw new Error('APPROVAL_REFUSED: state must be one of ' + Object.values(State).join(', '));
-  }
-  const reviewedSha = approvalReviewedSha(approval);
-  if (!reviewedSha || !SHA_40.test(reviewedSha)) {
-    throw new Error('APPROVAL_REFUSED: reviewedSha must be the exact 40-character commit reviewed');
-  }
-  const verdict = approvalVerdict(approval);
-  if (!verdict || !Object.values(Verdict).includes(verdict)) {
-    throw new Error(
-      'APPROVAL_REFUSED: verdict must be one of ' + Object.values(Verdict).join(', ')
-    );
-  }
-  if (!approvalReviewer(approval)) {
-    throw new Error('APPROVAL_REFUSED: reviewer must name who reviewed the commit');
-  }
-  const expiry = approvalExpiry(approval);
-  if (expiry === null) {
-    throw new Error('APPROVAL_REFUSED: expiry is required and must be a date');
-  }
-  if (expiry <= (o.now || Date.now())) {
-    throw new Error('APPROVAL_REFUSED: expiry is in the past');
-  }
-
-  const existing = readRegistry(o.registryPath);
-  if (approvalEntry(existing, id) !== null) {
-    throw new Error('APPROVAL_REFUSED: ' + id + ' is already registered');
-  }
-
-  const entry = {
-    approvalId: id,
-    state,
-    reviewedSha,
-    verdict,
-    reviewer: approval.reviewer,
-    issuedAt: approval.issuedAt || new Date(o.now || Date.now()).toISOString(),
-    expiry: approval.expiry,
-  };
-
-  const next = Object.assign({}, existing);
-  next[id] = entry;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  // Same atomic tmp+rename the dispatch checkpoint uses: an approval that is
-  // half-written is an approval the publisher cannot read.
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n', 'utf8');
-  atomicRenameSync(tmp, file);
-  return entry;
-}
-
 module.exports = {
   State,
   Verdict,
@@ -200,5 +126,4 @@ module.exports = {
   approvalVerdict,
   approvalReviewer,
   approvalExpiry,
-  recordApproval,
 };

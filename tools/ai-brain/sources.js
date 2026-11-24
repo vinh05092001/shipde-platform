@@ -293,13 +293,6 @@ function capacitySources(registry) {
   return registry.sources.filter((s) => CAPACITY_KINDS.has(s.kind) && s.servesModels !== false);
 }
 
-/** Sources that can run a coding session. */
-function harnessSources(registry) {
-  return registry.sources.filter(
-    (s) => s.kind === Kind.AGENT_CLI || s.kind === Kind.HARNESS || s.kind === Kind.ORCHESTRATOR
-  );
-}
-
 /**
  * Whether the credential this source needs is present — presence only.
  *
@@ -687,52 +680,6 @@ function getDispatchConfig(registry, options = {}) {
   };
 }
 
-function isAgyPoolWriterEnabled(registry, options = {}) {
-  if (options.allowAgyPoolWriter !== undefined) return Boolean(options.allowAgyPoolWriter);
-  let dispatch = {};
-  try {
-    dispatch = registry?.dispatch || {};
-  } catch {
-    dispatch = {};
-  }
-  let sources = [];
-  try {
-    sources = registry?.sources || [];
-  } catch {
-    sources = [];
-  }
-  const source = sources.find((s) => s.id === 'agy-pool');
-  if (source?.writerEnabled !== undefined) {
-    const enabled = Boolean(source.writerEnabled);
-    if (!enabled) return false;
-    if (options.externalWorkers !== undefined) {
-      return String(options.externalWorkers || '')
-        .split(',')
-        .includes('agy-pool');
-    }
-    return true;
-  }
-  if (source?.allowWriter !== undefined) {
-    const enabled = Boolean(source.allowWriter);
-    if (!enabled) return false;
-    if (options.externalWorkers !== undefined) {
-      return String(options.externalWorkers || '')
-        .split(',')
-        .includes('agy-pool');
-    }
-    return true;
-  }
-  if (dispatch.agyPoolWriterEnabled !== undefined) {
-    return Boolean(dispatch.agyPoolWriterEnabled);
-  }
-  if (options.externalWorkers !== undefined) {
-    return String(options.externalWorkers || '')
-      .split(',')
-      .includes('agy-pool');
-  }
-  return false;
-}
-
 function resolveProbeTimeout(candidate, record, dispatchConfig, remainingMs) {
   const cfg = dispatchConfig || {};
   const safetyMarginMs = Number(cfg.probeSafetyMarginMs ?? cfg.safetyMarginMs) || 2000;
@@ -776,7 +723,6 @@ module.exports = {
   isDeferred,
   refuseReason,
   capacitySources,
-  harnessSources,
   credentialPresence,
   describeAll,
   dispatchRoute,
@@ -784,6 +730,5 @@ module.exports = {
   providerFromPrefix,
   runsOpenCodeHarness,
   getDispatchConfig,
-  isAgyPoolWriterEnabled,
   resolveProbeTimeout,
 };

@@ -996,118 +996,6 @@ function assertIsolationClosed({ verdictPath, now, stat, readFile }) {
   return verdict;
 }
 
-function runIsolatedReviewed(options, deps) {
-  const o = options || {};
-  const d = deps || {};
-  const root = path.resolve(d.root || path.join(__dirname, '..', '..'));
-  const now = typeof d.now === 'function' ? d.now() : d.now || Date.now();
-  assertIsolationClosed({
-    verdictPath: d.verdictPath || defaultVerdictPath(),
-    now,
-    stat: d.stat,
-    readFile: d.readFile,
-  });
-  if (!o.item || o.item.kind !== 'qualification' || o.item.risk !== 'low') {
-    throw intakeError('QUALIFICATION_ITEM_INVALID', 'QUALIFICATION_ITEM_INVALID');
-  }
-  const candidate = o.candidate || {};
-  const candidateKey = o.candidateKey || candidate.candidateKey;
-  const candidates = Array.isArray(o.candidates) ? o.candidates : [candidate];
-  const reviewerKey = o.reviewerKey;
-  const baseSha = o.baseSha || (typeof d.baseSha === 'function' ? d.baseSha() : d.baseSha);
-  if (!/^[a-f0-9]{40}$/i.test(String(baseSha || ''))) {
-    throw intakeError('QUALIFICATION_BASE_INVALID', 'QUALIFICATION_BASE_INVALID');
-  }
-  const runStamp = new Date(now).toISOString().replace(/[:.]/g, '-');
-  const runDir = path.join(
-    root,
-    'tools',
-    'ai-brain',
-    'data',
-    'qualification-runs',
-    String(o.item.id),
-    runStamp + '-' + require('crypto').randomBytes(6).toString('hex')
-  );
-  fs.mkdirSync(runDir, { recursive: true });
-  const decisionDir = path.join(runDir, 'decisions');
-  fs.mkdirSync(decisionDir, { recursive: true });
-  const spec = Object.assign({}, o.item, {
-    id: o.item.id,
-    title: o.item.title || 'Bounded qualification: ' + o.item.id,
-    role: o.item.role || 'author.foundation',
-    proofFloor: o.item.proofFloor || 'NONE',
-    complexity: o.item.complexity || 'standard',
-    allowedPaths: o.item.allowedPaths || [],
-    verification: o.item.verification || null,
-    exploration: true,
-    kind: 'qualification',
-  });
-  const { runOrchestration } = require('./orchestrate');
-  const { listAccounts } = require('./accounts');
-  const sources = require('./sources');
-  const registry = d.registry || sources.loadSources();
-  const accountList = Array.isArray(d.accounts) ? d.accounts : listAccounts() || [];
-  const run = d.runOrchestration || runOrchestration;
-  return Promise.resolve(
-    run('Bounded model qualification', {
-      specs: [spec],
-      specText: JSON.stringify(spec),
-      candidates,
-      accounts: accountList,
-      registry,
-      evidenceDir: d.evidenceDir || path.join(__dirname, 'data', 'evidence'),
-      run: d.run,
-      tests: d.tests,
-      reviewer: d.reviewer,
-      isolatedWorker: true,
-      enforceProofFloors: false,
-      decisionDir,
-      cwd: root,
-      baseSha,
-      sha: null,
-      workerRoot: d.workerRoot,
-      reviewerIdentity: reviewerKey,
-      now,
-      publication: null,
-      autoMerge: false,
-      merge: false,
-      mergeAfterPublish: false,
-      checkpointFile: path.join(runDir, 'checkpoint.json'),
-    })
-  ).then((result) => {
-    const checkpoint = result && result.checkpoint;
-    const rawReceipt =
-      checkpoint && (checkpoint.reviews || []).find((entry) => entry.workItemId === o.item.id);
-    const receipt = rawReceipt && {
-      ...rawReceipt,
-      sha: rawReceipt.sha || rawReceipt.reviewedSha,
-      reviewedSha: rawReceipt.reviewedSha || rawReceipt.sha,
-      workerHead: rawReceipt.workerHead || rawReceipt.headSha || null,
-    };
-    if (
-      !receipt ||
-      result.status !== 'COMPLETED' ||
-      !/^[a-f0-9]{40}$/i.test(String(receipt.reviewedSha || receipt.sha || '')) ||
-      (receipt.workerHead && receipt.reviewedSha !== receipt.workerHead) ||
-      (receipt.reviewedSha && receipt.reviewedSha !== receipt.sha)
-    )
-      return { verdict: 'REFUSED' };
-    const routing = require('./failure-domain');
-    const writerDomain = routing.canonicalFailureDomain(candidate);
-    const reviewerDomain = routing.canonicalFailureDomain(receipt.reviewer);
-    return {
-      verdict: receipt.verdict,
-      sha: receipt.sha || receipt.reviewedSha,
-      reviewedSha: receipt.reviewedSha || receipt.sha,
-      workerHead: receipt.workerHead || receipt.headSha || receipt.sha,
-      reviewer: receipt.reviewer,
-      independent: Boolean(reviewerDomain && writerDomain && reviewerDomain !== writerDomain),
-      productItem: false,
-      workItemId: receipt.workItemId,
-    };
-  });
-}
-
 /**
  * Isolation pre-flight: the verdict must be fresh (24h) and the
  * pinned base must be contained in local main. This never changes an ACL or a
@@ -1406,7 +1294,6 @@ module.exports = {
   composeOrchestrateCommand,
   assertIsolationFresh,
   assertIsolationClosed,
-  runIsolatedReviewed,
   revParseOriginMain,
   parseModelListing,
   extractModelIds,
