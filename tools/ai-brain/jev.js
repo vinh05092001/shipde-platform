@@ -183,9 +183,10 @@ function normalizeAdvice(raw, key) {
 }
 
 function questionKey(question) {
-  return (
-    question.key || (question.kind === 'select-eligible-model' ? 'eligibleModel' : 'weightProfile')
-  );
+  if (question && question.key) return question.key;
+  if (question && question.kind === 'select-combo-member') return 'comboMember';
+  if (question && question.kind === 'select-eligible-model') return 'eligibleModel';
+  return 'weightProfile';
 }
 
 function advisoryNamesIdentity(raw) {
@@ -219,9 +220,22 @@ function buildJevAsk(source, options) {
   }
   return async (question) => {
     const criteria = {};
+    const providedCriteria =
+      question.criteria &&
+      typeof question.criteria === 'object' &&
+      !Array.isArray(question.criteria)
+        ? question.criteria
+        : null;
     for (const option of question.options || []) {
       const value = String(option);
-      criteria[value] = 'Choose ' + value + ' when it best fits the supplied state.';
+      const custom =
+        providedCriteria && Object.prototype.hasOwnProperty.call(providedCriteria, value)
+          ? providedCriteria[value]
+          : null;
+      criteria[value] =
+        typeof custom === 'string' && custom.trim()
+          ? custom.trim()
+          : 'Choose ' + value + ' when it best fits the supplied state.';
     }
     const key = questionKey(question);
     const questions = {
@@ -321,14 +335,33 @@ async function evaluateAdvice(question, options) {
 
   let raw;
   try {
-    raw = await ask({
+    const askPayload = {
       kind: question.kind || 'advisory',
       key: questionKey(question),
       prompt: String(question.prompt || ''),
       evidence: String(question.evidence),
       options: question.options.slice(),
       state: question.state,
-    });
+    };
+    if (
+      question.criteria &&
+      typeof question.criteria === 'object' &&
+      !Array.isArray(question.criteria)
+    ) {
+      const sanitized = {};
+      for (const option of question.options) {
+        const value = String(option);
+        if (
+          Object.prototype.hasOwnProperty.call(question.criteria, value) &&
+          typeof question.criteria[value] === 'string' &&
+          question.criteria[value].trim()
+        ) {
+          sanitized[value] = question.criteria[value].trim();
+        }
+      }
+      if (Object.keys(sanitized).length > 0) askPayload.criteria = sanitized;
+    }
+    raw = await ask(askPayload);
   } catch (err) {
     return undecided(failureReason(err));
   }

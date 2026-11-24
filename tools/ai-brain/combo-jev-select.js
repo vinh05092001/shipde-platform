@@ -217,6 +217,28 @@ function shortlistForJev(eligibleMembers, maxOptions) {
   return picked.map((idx) => list[idx]);
 }
 
+function formatMemberCriterion(optId, member) {
+  const m = member || {};
+  const effort = m.effort || 'default';
+  const hasScore = typeof m.score === 'number' && Number.isFinite(m.score);
+  const tierPart = m.tier ? 'tier ' + String(m.tier) : 'tier unknown';
+  const scorePart = hasScore ? 'score ' + String(m.score) : 'score unknown';
+  const priorPart = m.priorUnknown ? 'prior unknown' : 'prior known';
+  return (
+    'Option ' +
+    optId +
+    ': ' +
+    tierPart +
+    ', ' +
+    scorePart +
+    ', reasoning effort ' +
+    effort +
+    ', ' +
+    priorPart +
+    '.'
+  );
+}
+
 /**
  * Build a closed JEV question using opaque option IDs (`M0`, `M1`, ...) so
  * provider/account identities are never leaked to JEV (`IDENTITY_PROHIBITED`).
@@ -225,6 +247,7 @@ function buildJevComboQuestion(assessment, eligibleMembers) {
   const options = [];
   const optionMap = new Map();
   const table = [];
+  const criteria = {};
   for (let i = 0; i < eligibleMembers.length; i += 1) {
     const optId = 'M' + i;
     const m = eligibleMembers[i];
@@ -237,14 +260,17 @@ function buildJevComboQuestion(assessment, eligibleMembers) {
       reasoningEffort: m.effort || 'default',
       priorUnknown: m.priorUnknown,
     });
+    criteria[optId] = formatMemberCriterion(optId, m);
   }
   return {
     question: {
+      key: 'comboMember',
       kind: 'select-combo-member',
       prompt:
         'Given the task assessment (complexity, risk, role) and the available combo members with their benchmark score and reasoning effort, pick the single best option ID.',
       evidence: JSON.stringify({ task: assessment, members: table }),
       options,
+      criteria,
     },
     optionMap,
   };
